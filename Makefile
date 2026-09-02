@@ -1,4 +1,4 @@
-.PHONY: lint test build typecheck depcruise migrate up down gen-models
+.PHONY: lint test build typecheck depcruise ci migrate up down gen-models
 
 lint:
 	corepack pnpm -r lint
@@ -14,6 +14,12 @@ typecheck:
 
 depcruise:
 	corepack pnpm depcruise
+
+# R3 CI (docs/development-tasks.md R3): everything the `quality`/`test` GitHub Actions jobs run,
+# plus the local guards (kernel purity + shell script LF/executable checks; gitleaks and the
+# internal-IP guard run only in CI - see .github/workflows/ci.yml `guards` job).
+ci: lint typecheck test build depcruise
+	corepack pnpm ci:guards
 
 # TODO(R2): packages/kernel/src/adapters/db migration runner (docs/development-tasks.md R2).
 migrate:
