@@ -336,26 +336,36 @@ describe.runIf(DATABASE_URL !== undefined)(
       const TURN_COUNT = 6;
       const totalMessages = TURN_COUNT * 2; // one user + one assistant message per turn
 
-      // Concurrently with the send loop below: repeatedly page get_chat_history from the very
-      // start (limit 2, deliberately small) on its own timer, independent of how many turns have
-      // completed so far — the "script injecting events while paging" half of the acceptance
-      // criterion. Both this loop and the send loop below share one WS connection/one WsRpcClient;
-      // concurrent in-flight `call()`s are tracked independently by JSON-RPC id, so they interleave
-      // freely on the wire.
+      // Walks get_chat_history from the very start (limit 2, deliberately small) exactly once,
+      // adding every observed sequence to `seenViaPaging`. Extracted so it can be both (a) run
+      // repeatedly on a timer, concurrently with the send loop below, and (b) run once more,
+      // deterministically, after every write has committed (see the final sweep below).
+      async function pageAllMessagesOnce(): Promise<void> {
+        let cursor: string | undefined;
+        for (;;) {
+          const page = await client.call<{
+            messages: { sequence: number }[];
+            nextCursor?: string;
+          }>('get_chat_history', { chatId, cursor, limit: 2 });
+          for (const m of page.messages) seenViaPaging.add(m.sequence);
+          if (!page.nextCursor) break;
+          cursor = page.nextCursor;
+        }
+      }
+
+      // Concurrently with the send loop below: repeatedly page get_chat_history on its own timer,
+      // independent of how many turns have completed so far — the "script injecting events while
+      // paging" half of the acceptance criterion. Both this loop and the send loop below share one
+      // WS connection/one WsRpcClient; concurrent in-flight `call()`s are tracked independently by
+      // JSON-RPC id, so they interleave freely on the wire. This loop is corroborating evidence,
+      // not the source of the "paging alone covers every sequence" guarantee below — see the final
+      // sweep's own comment for why: `pagingActive` is only checked between passes, so nothing here
+      // guarantees a pass starts *after* the very last write commits.
       const seenViaPaging = new Set<number>();
       let pagingActive = true;
       const pagingLoop = (async () => {
         while (pagingActive) {
-          let cursor: string | undefined;
-          for (;;) {
-            const page = await client.call<{
-              messages: { sequence: number }[];
-              nextCursor?: string;
-            }>('get_chat_history', { chatId, cursor, limit: 2 });
-            for (const m of page.messages) seenViaPaging.add(m.sequence);
-            if (!page.nextCursor) break;
-            cursor = page.nextCursor;
-          }
+          await pageAllMessagesOnce();
           await new Promise((resolve) => setTimeout(resolve, 15));
         }
       })();
@@ -376,25 +386,46 @@ describe.runIf(DATABASE_URL !== undefined)(
       pagingActive = false;
       await pagingLoop;
 
+      // Deterministic final sweep: `waitUntil` above only resolved once the *last* turn's
+      // chat.metadata was observed, and application/chat/event-sink.ts commits a turn's
+      // chat_messages row (in its own transaction) strictly before it commits/pushes that turn's
+      // chat.metadata — so every one of this test's `totalMessages` rows is guaranteed already
+      // committed at this point. `pagingLoop` above cannot be relied on for full coverage by
+      // itself: `pagingActive` is only checked *between* passes (in the 15ms sleep), so the pass
+      // that happens to be in flight when the last write commits — or the fact that no further
+      // pass ever starts once `pagingActive` flips — can both leave the tail end of the range
+      // unobserved by that loop alone, independent of anything push-related. A single fresh walk
+      // starting now has no such gap: it reads directly from the database after every write above
+      // is known to have committed.
+      await pageAllMessagesOnce();
+
       const seenViaPush = new Set(
         client.notifications
           .filter((n) => n.method === 'chat.message')
           .map((n) => (n.params as { message: { sequence: number } }).message.sequence),
       );
 
-      // The union of what live push delivered and what concurrent paging observed must be exactly
-      // the full, gap-free range — a message missing from both would mean it was lost; this is the
-      // guarantee subscribing before paging exists to provide.
-      const union = new Set<number>([...seenViaPaging, ...seenViaPush]);
       const expectedSequences = Array.from({ length: totalMessages }, (_, i) => i + 1);
-      expect([...union].sort((a, b) => a - b)).toEqual(expectedSequences);
 
       // get_chat_history's own cursor semantics are gap-free and duplicate-free by construction
       // (each page's nextCursor is the last row's own sequence — chat/service.test.ts covers this
-      // directly at the service layer); the concurrent paging loop above accumulating exactly the
-      // full range into a Set (which cannot itself hold duplicates) is the transport-level
-      // corroboration of that same guarantee under real concurrent writes.
+      // directly at the service layer); paging (including the deterministic final sweep above)
+      // accumulating exactly the full range into a Set (which cannot itself hold duplicates) is
+      // the transport-level corroboration of that same guarantee under real concurrent writes.
       expect([...seenViaPaging].sort((a, b) => a - b)).toEqual(expectedSequences);
+
+      // Live push must independently cover the same full, gap-free range — the fix under test
+      // (interfaces/ws/server.ts's `shouldDeliver`): chat.message pushes for one chat do not
+      // always arrive in ascending sequence order (the user's own message is pushed by this
+      // transport's publishSentMessagePush *after* its request resolves, while the assistant's
+      // reply is pushed independently by application/chat/event-sink.ts off the outbox
+      // dispatcher's own poll tick — two unsynchronized paths racing on delivery, though never on
+      // DB commit order). A per-sequence Set dedupe tolerates that; the previous monotonic
+      // high-water-mark dedupe did not, and could silently drop a lower sequence that arrived
+      // after a higher one already had. Asserted on its own (not just as part of the push∪paging
+      // union) so a regression here fails this assertion specifically, rather than being masked
+      // by paging's coverage.
+      expect([...seenViaPush].sort((a, b) => a - b)).toEqual(expectedSequences);
 
       client.close();
     });

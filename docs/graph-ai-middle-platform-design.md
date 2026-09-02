@@ -640,6 +640,10 @@ services:
     build: { context: ., dockerfile: packages/kernel/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/kernel.env          # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
     secrets: [handle_key]                                   # Handle 签名私钥只进这一个容器：/run/secrets/handle_key
+    # AGENT_RUNTIME=agent-host 是默认值（S1.5 后半：真正的 AgentHostRuntime 落地）；仍可用 .env
+    # 里的 AGENT_RUNTIME=fake 切回 S1.4 的 FakeAgentRuntime。KERNEL_LLM_URL 是 AgentHostRuntime
+    # 塞进每个 startTurn 命令里的 llmUrl（agent-host 再转给 worker-supervisor 的 /resident/spawn）。
+    environment: { AGENT_RUNTIME: "${AGENT_RUNTIME:-agent-host}", KERNEL_LLM_URL: http://llm-proxy:8082 }
     volumes: ["${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/sessions:/data/sessions:ro"]
     depends_on: { postgres: { condition: service_healthy } }
     networks: [control, workers]
@@ -647,7 +651,13 @@ services:
 
   agent-host:
     build: { context: ., dockerfile: packages/agent-host/Dockerfile }
-    environment: { KERNEL_URL: http://kernel:8080, SUPERVISOR_URL: http://worker-supervisor:8081 }
+    environment: { KERNEL_URL: http://kernel:8080, SUPERVISOR_URL: http://worker-supervisor:8081, KERNEL_LLM_URL: http://llm-proxy:8082 }
+    # docker.sock 只读挂载：容器 stdio 附着（attach）放在 agent-host 自己，不扩到 worker-supervisor
+    # 的 API（S1.5 后半的选择——见 packages/agent-host/src/container-io.ts 模块注释：保持已通过
+    # S1.5a 主机验收的 worker-supervisor 完全不动）。group_add 理由同 worker-supervisor：非 root
+    # （uid 10001）需要主机 docker 组 gid 才能连 socket，即使只读也一样。
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    group_add: ["${DOCKER_GID:-999}"]
     networks: [control]                                      # 只到 kernel 与 supervisor；不挂载任何用户目录
     restart: unless-stopped
 
@@ -708,6 +718,12 @@ services:
     build: { context: ., dockerfile: packages/egress-proxy/Dockerfile }
     environment: { KERNEL_URL: http://kernel:8080 }
     networks: [control, workers]
+    restart: unless-stopped
+
+  fake-llm:                                                  # S1.10 与主机验收专用：确定性 OpenAI
+    build: { context: ., dockerfile: deploy/fake-llm/Dockerfile } # 兼容假上游，见 deploy/fake-llm/
+    profiles: ["test"]                                       # 默认 up 不拉起；见 config/llm-providers.fake.example.yaml
+    networks: [control]
     restart: unless-stopped
 
   backup:

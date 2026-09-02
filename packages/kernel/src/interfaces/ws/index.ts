@@ -12,6 +12,8 @@
 export { registerWsRoute } from './server.js';
 export type { WsRouteDeps } from './server.js';
 
+export { registerAgentHostWsRoute, setAgentHostRuntimeForWsRoute } from './agent-host.js';
+
 export {
   WS_ERROR_CODES,
   errorResponse,

@@ -1,0 +1,28 @@
+# Example llm-proxy provider configuration pointing at deploy/fake-llm (design doc S1.10;
+# docs/development-tasks.md S1.5, second half, deliverable 4). Copy to
+# ${NEXTTIME_DATA}/config/llm-providers.yaml on the target host for the S1.10 acceptance path (and
+# for any other testing/demo that needs deterministic, no-real-provider-key chat replies) — see
+# docs/runbooks/host-worker-runtime.md for how this fits into the S1.5b host verification flow,
+# and config/llm-providers.example.yaml for the full schema reference and field-by-field comments
+# (unrepeated here).
+#
+# Unlike llm-providers.example.yaml's placeholder domains, `upstream_base_url` here is a real,
+# reachable compose service name (`fake-llm`, the compose service deploy/fake-llm/Dockerfile
+# builds) — this file is meant to be used as-is, not edited before copying.
+#
+# `api_key_env: FAKE_LLM_API_KEY` — add `FAKE_LLM_API_KEY=fake` (or any non-empty string;
+# deploy/fake-llm/server.mjs never validates it) to ${NEXTTIME_DATA}/secrets/llm-proxy.env. A real
+# provider replaces this whole file by editing ${NEXTTIME_DATA}/config/llm-providers.yaml (from
+# config/llm-providers.example.yaml instead) and secrets/llm-proxy.env — no code change needed
+# either way (design doc §7.7: provider/model is configuration).
+
+providers:
+  fake:
+    api: openai-completions
+    upstream_base_url: http://fake-llm:8090
+    api_key_env: FAKE_LLM_API_KEY
+    auth:
+      header: authorization
+      scheme: Bearer
+    models:
+      - id: fake-echo

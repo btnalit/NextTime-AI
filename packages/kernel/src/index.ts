@@ -5,13 +5,23 @@ import { createPool } from './adapters/db/pool.js';
 import { createChatEventSink, interruptStaleRunningTurns } from './application/chat/index.js';
 import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
 import type { AgentRuntime } from './application/host-bridge/index.js';
-import { FakeAgentRuntime, registerTurnStartedConsumer } from './application/host-bridge/index.js';
+import {
+  AgentHostRuntime,
+  FakeAgentRuntime,
+  registerTurnStartedConsumer,
+} from './application/host-bridge/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
+import type { HandleKeyPair } from './governance/capability/index.js';
+import { loadHandleKeyPair } from './governance/capability/index.js';
 import type { CapabilityRouteDeps } from './interfaces/http/index.js';
 import { registerCapabilityRoutes } from './interfaces/http/index.js';
 import type { InternalRoutesDeps } from './interfaces/http/internal/index.js';
 import { registerInternalRoutes } from './interfaces/http/internal/index.js';
-import { registerWsRoute } from './interfaces/ws/index.js';
+import {
+  registerAgentHostWsRoute,
+  registerWsRoute,
+  setAgentHostRuntimeForWsRoute,
+} from './interfaces/ws/index.js';
 
 /**
  * Builds the kernel's Fastify instance. This is the composition root (design doc §7.1, §7.10):
@@ -43,6 +53,11 @@ export function createServer(
   app.register(async (instance) => {
     await registerInternalRoutes(instance, deps);
   });
+  // `/internal/agent-host` (S1.5, second half): agent-host's event-bridge WebSocket — same
+  // `control`-network-only trust boundary as the `/internal/*` HTTP routes above. Registered
+  // unconditionally (independent of AGENT_RUNTIME) — see interfaces/ws/agent-host.ts's own doc
+  // comment for why a connection is simply closed when no AgentHostRuntime has been registered.
+  registerAgentHostWsRoute(app);
 
   return app;
 }
@@ -63,19 +78,20 @@ export interface CreateServerOptions {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * `AGENT_RUNTIME` values this kernel build knows how to construct. `"fake"` is the only one until
- * S1.5 lands the real agent-host-backed runtime (design doc §7.1 host-bridge: "pi 是唯一计划的实
- * 现") — `resolveAgentRuntimeKind` below fails fast (before opening a DB pool or binding a port)
- * on anything else, rather than silently falling back, so a misconfigured deployment finds out
+ * `AGENT_RUNTIME` values this kernel build knows how to construct: `"fake"` (`FakeAgentRuntime`,
+ * S1.4 default) or `"agent-host"` (`AgentHostRuntime`, S1.5 second half — the real, pi-backed
+ * runtime over agent-host's WebSocket bridge, design doc §7.1 host-bridge: "pi 是唯一计划的实现").
+ * `resolveAgentRuntimeKind` below fails fast (before opening a DB pool or binding a port) on
+ * anything else, rather than silently falling back, so a misconfigured deployment finds out
  * immediately instead of quietly running degraded.
  */
-export type AgentRuntimeKind = 'fake';
+export type AgentRuntimeKind = 'fake' | 'agent-host';
 
 export function resolveAgentRuntimeKind(env: NodeJS.ProcessEnv = process.env): AgentRuntimeKind {
   const raw = env.AGENT_RUNTIME ?? 'fake';
-  if (raw !== 'fake') {
+  if (raw !== 'fake' && raw !== 'agent-host') {
     throw new Error(
-      `AGENT_RUNTIME="${raw}" is not implemented yet — only "fake" exists until S1.5 ships the real agent-host-backed runtime. Unset AGENT_RUNTIME or set it to "fake".`,
+      `AGENT_RUNTIME="${raw}" is not a recognized kind — use "fake" or "agent-host". Unset AGENT_RUNTIME to default to "fake".`,
     );
   }
   return raw;
@@ -102,13 +118,65 @@ export interface BackgroundServices {
 export interface CreateBackgroundServicesOptions {
   readonly pool: Pool;
   /** Overrides the constructed `AgentRuntime` — for tests. Production always goes through
-   *  `main()`'s `AGENT_RUNTIME` env switch (`resolveAgentRuntimeKind`), which as of S1.4 always
-   *  resolves to a fresh `FakeAgentRuntime`. */
+   *  `main()`'s `AGENT_RUNTIME` env switch (`resolveAgentRuntimeKind`/`kind` below). */
   readonly runtime?: AgentRuntime;
+  /** Which `AgentRuntime` to construct when `runtime` is not given. Defaults to
+   *  `resolveAgentRuntimeKind()` (reads `AGENT_RUNTIME`, defaults to `"fake"`) — `main()` passes
+   *  its own already-resolved value explicitly so this function never re-reads `process.env` on
+   *  its own. */
+  readonly kind?: AgentRuntimeKind;
+  /** The kernel's Handle-signing keypair (governance/capability/keys.ts `loadHandleKeyPair`) —
+   *  required when `kind === 'agent-host'` (or when `runtime` is omitted and `AGENT_RUNTIME=
+   *  agent-host`): `AgentHostRuntime` issues entry Handles and therefore needs the private half.
+   *  `main()` loads this asynchronously before calling `createBackgroundServices` (this function
+   *  itself stays synchronous, matching its pre-existing signature and every current caller,
+   *  e.g. interfaces/ws/server.test.ts). Ignored for `kind === 'fake'`. */
+  readonly handleKeyPair?: HandleKeyPair;
+  /** `AgentHostRuntime`'s `kernelLlmUrl` (forwarded verbatim in every `startTurn` command — see
+   *  its own doc comment). `main()` reads this from `KERNEL_LLM_URL`; defaults to
+   *  `http://llm-proxy:8082` (worker-supervisor's own `config.ts` default for the same value) so
+   *  a `kind: 'agent-host'` caller that omits it still gets a sane compose-network default. */
+  readonly kernelLlmUrl?: string;
+  /** `AgentHostRuntime`'s entry-Handle ttl override — `main()` reads this from
+   *  `ENTRY_HANDLE_TTL_SECONDS` (design doc S1.5b architecture point 2: "default 86400"). */
+  readonly entryHandleTtlSeconds?: number;
+  /** `AgentHostRuntime`'s `turnAccepted`/`turnRejected` wait timeout override — `main()` reads
+   *  this from `AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS` (architecture point 2: "e.g. 30s"). */
+  readonly turnAcceptedTimeoutMs?: number;
   /** Overrides `interruptStaleRunningTurns`'s staleness threshold (default `DEFAULT_STALE_TURN_
    *  TIMEOUT_MS`, 15 minutes) — `main()` reads this from `TURN_INTERRUPT_TIMEOUT_MS` (docs/
    *  development-tasks.md S1.4 deliverable 7: "configurable timeout"). */
   readonly turnInterruptTimeoutMs?: number;
+}
+
+const DEFAULT_AGENT_HOST_KERNEL_LLM_URL = 'http://llm-proxy:8082';
+
+/** Builds the default `AgentRuntime` (used whenever `options.runtime` is not given) per
+ *  `options.kind` (or `resolveAgentRuntimeKind()` when `kind` itself is omitted). Wiring an
+ *  `AgentHostRuntime` into `interfaces/ws/agent-host.ts`'s connection seam
+ *  (`setAgentHostRuntimeForWsRoute`) happens unconditionally whenever the resolved runtime *is*
+ *  one — by `instanceof`, not by `kind` — so a test that passes a pre-built `AgentHostRuntime` as
+ *  `options.runtime` gets wired the same way a freshly constructed one does. */
+function buildDefaultRuntime(options: CreateBackgroundServicesOptions): AgentRuntime {
+  const kind = options.kind ?? resolveAgentRuntimeKind();
+  const sink = createChatEventSink({ pool: options.pool });
+
+  if (kind === 'fake') return new FakeAgentRuntime({ sink });
+
+  if (!options.handleKeyPair) {
+    throw new Error(
+      'createBackgroundServices: AGENT_RUNTIME=agent-host requires options.handleKeyPair ' +
+        '(main() loads it via loadHandleKeyPair() before calling this function)',
+    );
+  }
+  return new AgentHostRuntime({
+    pool: options.pool,
+    sink,
+    privateKey: options.handleKeyPair.privateKey,
+    kernelLlmUrl: options.kernelLlmUrl ?? DEFAULT_AGENT_HOST_KERNEL_LLM_URL,
+    entryHandleTtlSeconds: options.entryHandleTtlSeconds,
+    turnAcceptedTimeoutMs: options.turnAcceptedTimeoutMs,
+  });
 }
 
 /**
@@ -126,10 +194,10 @@ export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
 ): BackgroundServices {
   const dispatcher = new OutboxDispatcher(options.pool);
-  const runtime =
-    options.runtime ?? new FakeAgentRuntime({ sink: createChatEventSink({ pool: options.pool }) });
+  const runtime = options.runtime ?? buildDefaultRuntime(options);
 
   setAgentRuntimeForHandlers(runtime);
+  if (runtime instanceof AgentHostRuntime) setAgentHostRuntimeForWsRoute(runtime);
   const unsubscribeTurnStarted = registerTurnStartedConsumer(dispatcher, runtime);
 
   return {
@@ -152,40 +220,63 @@ export function createBackgroundServices(
 export function main(): void {
   // Fail fast on a misconfigured AGENT_RUNTIME before doing anything else (opening the DB pool,
   // binding a port).
-  resolveAgentRuntimeKind();
+  const kind = resolveAgentRuntimeKind();
 
   const pool = createPool();
   const app = createServer({ pool }, { logger: true });
-  const rawTurnInterruptTimeoutMs = process.env.TURN_INTERRUPT_TIMEOUT_MS;
-  const background = createBackgroundServices({
-    pool,
-    turnInterruptTimeoutMs: rawTurnInterruptTimeoutMs
-      ? Number(rawTurnInterruptTimeoutMs)
-      : undefined,
-  });
-
-  // Not awaited: startup recovery + the dispatcher's first poll should not block the port from
-  // opening. A request that races the still-in-flight recovery scan is not unsafe — the partial
-  // unique index (migrations/core/0008_chat_messages.sql) still prevents two Turns from ever
-  // running for the same Chat at once regardless of how far recovery has gotten.
-  background.start().catch((err: unknown) => {
-    app.log.error(err);
-  });
 
   const port = Number(process.env.KERNEL_PORT ?? 8080);
   const host = process.env.KERNEL_BIND_ADDR ?? '0.0.0.0';
-
   app.listen({ port, host }).catch((err: unknown) => {
     app.log.error(err);
     process.exitCode = 1;
   });
 
+  // Background services (the outbox dispatcher + AgentRuntime wiring) are built asynchronously
+  // and only *after* the port is already opening — same "do not block the port on background
+  // init" rule the pre-existing recovery-scan comment below already establishes, now also
+  // covering `kind === 'agent-host'`'s async `loadHandleKeyPair()` read (PEM files off disk).
+  // `background` starts `undefined` so `shutdown` (registered synchronously, before either
+  // `await` below can run) is always safe to call even if a signal arrives before this IIFE
+  // finishes — there is nothing to stop yet in that case.
+  let background: BackgroundServices | undefined;
   const shutdown = (): void => {
-    background.stop();
+    background?.stop();
     void app.close();
   };
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
+
+  void (async (): Promise<void> => {
+    const handleKeyPair = kind === 'agent-host' ? await loadHandleKeyPair() : undefined;
+
+    const rawTurnInterruptTimeoutMs = process.env.TURN_INTERRUPT_TIMEOUT_MS;
+    const rawEntryHandleTtlSeconds = process.env.ENTRY_HANDLE_TTL_SECONDS;
+    const rawTurnAcceptedTimeoutMs = process.env.AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS;
+
+    background = createBackgroundServices({
+      pool,
+      kind,
+      handleKeyPair,
+      kernelLlmUrl: process.env.KERNEL_LLM_URL,
+      entryHandleTtlSeconds: rawEntryHandleTtlSeconds
+        ? Number(rawEntryHandleTtlSeconds)
+        : undefined,
+      turnAcceptedTimeoutMs: rawTurnAcceptedTimeoutMs
+        ? Number(rawTurnAcceptedTimeoutMs)
+        : undefined,
+      turnInterruptTimeoutMs: rawTurnInterruptTimeoutMs
+        ? Number(rawTurnInterruptTimeoutMs)
+        : undefined,
+    });
+
+    // A request that races the still-in-flight recovery scan is not unsafe — the partial unique
+    // index (migrations/core/0008_chat_messages.sql) still prevents two Turns from ever running
+    // for the same Chat at once regardless of how far recovery has gotten.
+    await background.start();
+  })().catch((err: unknown) => {
+    app.log.error(err);
+  });
 }
 
 const isMainModule =
