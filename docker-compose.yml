@@ -57,8 +57,8 @@ services:
   llm-proxy:
     build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/llm-proxy.env # provider keys 只在这里
-    volumes: ["${NEXTTIME_DATA}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro"]
-    environment: { KERNEL_URL: http://kernel:8080, HANDLE_PUBLIC_KEY_FILE: /data/config/handle.pub }
+    volumes: ["${NEXTTIME_DATA}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro", "${NEXTTIME_DATA}/config/handle.pub:/data/config/handle.pub:ro"]
+    environment: { KERNEL_URL: http://kernel:8080, HANDLE_PUBLIC_KEY_FILE: /data/config/handle.pub, LLM_PROXY_PORT: 8082 }
     networks: [control, workers]
     restart: unless-stopped
 

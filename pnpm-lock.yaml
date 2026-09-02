@@ -62,7 +62,21 @@ importers:
         specifier: ^8.11.10
         version: 8.23.1
 
-  packages/llm-proxy: {}
+  packages/llm-proxy:
+    dependencies:
+      '@nexttime/shared':
+        specifier: workspace:*
+        version: link:../shared
+      yaml:
+        specifier: ^2.7.0
+        version: 2.9.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      jose:
+        specifier: ^6.2.10
+        version: 6.2.10
 
   packages/platform-extension:
     dependencies:

@@ -103,17 +103,21 @@ else
 fi
 chmod 600 "$KERNEL_ENV"
 
-# --- secrets/llm-proxy.env: commented template, no values (S1.7 defines the real key names) ---
+# --- secrets/llm-proxy.env: commented template, no values (S1.7: packages/llm-proxy/src/config.ts
+# defines the real schema) -----------------------------------------------------------------------
 LLM_PROXY_ENV="$SECRETS_DIR/llm-proxy.env"
 if [ ! -f "$LLM_PROXY_ENV" ]; then
 	cat >"$LLM_PROXY_ENV" <<'EOF'
-# llm-proxy secrets template (design doc §7.7). Real provider API keys go here — never commit.
-# S1.7 (packages/llm-proxy) defines the exact key names read from this file; each must match the
-# `key_env` referenced by the corresponding provider entry in config/llm-providers.yaml.
+# llm-proxy secrets template (design doc §7.7; docs/development-tasks.md S1.7). Real provider API
+# keys go here — never commit. Each var name must exactly match some provider entry's
+# `api_key_env` in config/llm-providers.yaml (see config/llm-providers.example.yaml for the full
+# schema) — llm-proxy reads the real key from process.env[api_key_env], never from this file's
+# key names themselves.
 #
-# Example (uncomment and fill in when connecting a real provider):
-# OPENAI_API_KEY=
-# ANTHROPIC_API_KEY=
+# Example (uncomment and fill in when connecting a real provider — names must match
+# llm-providers.yaml's own `api_key_env` values, these two are only an example pairing):
+# EXAMPLE_OPENAI_API_KEY=
+# EXAMPLE_ANTHROPIC_API_KEY=
 EOF
 	CREATED="$CREATED secrets/llm-proxy.env"
 else
@@ -139,25 +143,34 @@ else
 fi
 chmod 600 "$RAGFLOW_ENV"
 
-# --- config/llm-providers.yaml: draft shape per design §7.5/§7.7, no keys ---------------------
+# --- config/llm-providers.yaml: empty (valid) config, no keys — real schema is packages/llm-
+# proxy/src/config.ts `LlmProvidersFileSchema`, illustrated in full in
+# config/llm-providers.example.yaml (design doc §7.7; docs/development-tasks.md S1.7) -----------
 LLM_PROVIDERS_YAML="$CONFIG_DIR/llm-providers.yaml"
 if [ ! -f "$LLM_PROVIDERS_YAML" ]; then
 	cat >"$LLM_PROVIDERS_YAML" <<'EOF'
-# Placeholder — no real provider endpoints or keys here. S1.7 (packages/llm-proxy) defines the
-# authoritative shape this file must have; scripts/gen-models-json.ts (S1.7) then derives
-# config/models.json and the kernel's route table from it. See design doc §7.5, §7.7.
-providers: []
-# Example provider entry (commented draft — uncomment and adapt once S1.7 lands):
+# Placeholder — no real provider endpoints or keys here. `providers: {}` (an empty map) is valid
+# and is exactly what an idle llm-proxy needs — see config/llm-providers.example.yaml at the repo
+# root for the full schema (api / upstream_base_url / api_key_env / auth / models) and a worked
+# example; scripts/gen-models-json.ts (S1.7) then derives config/models.json from whatever you
+# put here. See design doc §7.7.
+providers: {}
+# Example provider entry (uncomment and adapt — matches config/llm-providers.example.yaml):
 # providers:
-#   - id: example-provider
-#     base_url: https://api.example.invalid/v1
+#   example-openai:
+#     api: openai-completions   # or: openai-responses | anthropic-messages
+#     upstream_base_url: https://api.example-openai-compatible.invalid   # never ends in /v1
+#     api_key_env: EXAMPLE_OPENAI_API_KEY   # name of a var in secrets/llm-proxy.env
 #     auth:
-#       header: Authorization
-#       value_prefix: "Bearer "
-#       key_env: EXAMPLE_PROVIDER_API_KEY   # name of a key in secrets/llm-proxy.env
+#       header: authorization   # or: x-api-key (Anthropic's convention — omit scheme below)
+#       scheme: Bearer
 #     models:
 #       - id: example-model-id
-#         alias: example-alias
+#         cost:                 # optional — USD per 1,000,000 tokens
+#           input: 2.5
+#           output: 10
+#           cacheRead: 0.25
+#           cacheWrite: 3.75
 EOF
 	CREATED="$CREATED config/llm-providers.yaml"
 else
