@@ -1,28 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { PLATFORM_EVENT_NAMES, PlatformEventNameSchema } from './index.js';
+import {
+  ACTION_REQUEST_STATUS_VALUES,
+  ActionDescriptionSchema,
+  CAPABILITY_REGISTRY,
+  PLATFORM_EVENT_NAMES,
+  PlatformEventSchema,
+  VERSION,
+  assertRegistryConsistent,
+  transition,
+} from './index.js';
 
-describe('PLATFORM_EVENT_NAMES', () => {
-  it('lists the nine canonical domain events from design doc §7.10', () => {
-    expect(PLATFORM_EVENT_NAMES).toEqual([
-      'TurnStarted',
-      'TurnCompleted',
-      'TaskUpdated',
-      'ActionRequestPending',
-      'ActionRequestUpdated',
-      'ConnectionCreated',
-      'FactAsserted',
-      'EgressObserved',
-      'BudgetWarning',
-    ]);
+/** Smoke test: every module's public surface is reachable through the package's single entry point. */
+describe('index re-exports', () => {
+  it('exposes enums', () => {
+    expect(ACTION_REQUEST_STATUS_VALUES).toContain('proposed');
   });
 
-  it('accepts every listed event name via the Zod schema', () => {
-    for (const name of PLATFORM_EVENT_NAMES) {
-      expect(PlatformEventNameSchema.parse(name)).toBe(name);
-    }
+  it('exposes transitions', () => {
+    expect(typeof transition).toBe('function');
   });
 
-  it('rejects an unknown event name', () => {
-    expect(() => PlatformEventNameSchema.parse('NotARealEvent')).toThrow();
+  it('exposes the capability registry', () => {
+    expect(CAPABILITY_REGISTRY.length).toBeGreaterThan(0);
+    expect(() => assertRegistryConsistent()).not.toThrow();
+  });
+
+  it('exposes the event vocabulary', () => {
+    expect(PLATFORM_EVENT_NAMES).toContain('TurnStarted');
+    expect(typeof PlatformEventSchema.parse).toBe('function');
+  });
+
+  it('exposes ActionDescription', () => {
+    expect(typeof ActionDescriptionSchema.parse).toBe('function');
+  });
+
+  it('exports a package VERSION', () => {
+    expect(VERSION).toBe('0.1.0');
   });
 });
