@@ -163,6 +163,18 @@
     与 worker-supervisor 都挂的顶层 `sessions/<uid>/`——`worker-supervisor` 的 compose 改动去掉
     了它未使用的 `sessions` 挂载；kernel 的挂载未动（不在本任务所有权范围）。这条留给主会话
     决定，见 PR body 与 `docs/runbooks/host-worker-runtime.md` §10。
+  - 主机验收（在目标主机上实测，非本地）暴露并修了四个之前没预料到的问题——细节均在
+    `docs/runbooks/host-worker-runtime.md` §10：(1) `worker-supervisor` 以非 root 运行连
+    docker.sock 要主机 docker 组 gid，`docker-compose.yml` 加 `group_add`；(2) bind-mount
+    `models.json` 会让 Docker 以 root 建出 `.pi/`，非 root 入口容器建不了兄弟目录
+    `.pi/sessions`——`resident-service.ts` 改成 supervisor 自己先建好这个目录；(3) egress 登记
+    写文件失败不应该拖垮 spawn，改成 best-effort；(4) plain `http://` 请求只认小写
+    `http_proxy`（"httpoxy" 规避的历史遗留），额外注入了小写三件套。
+  - 主机验收还发现一个**不是代码 bug、但会让 `curl https://example.com` 验收失败**的环境问题：
+    目标主机的 DNS 把公网域名解析到该主机自己网络的一个内网段（那个内网段确实可达，像是一层
+    透明网关代理），`egress-proxy` 的私网判定（I10 防 DNS rebinding 的既有设计）因此正确地把它
+    当私有地址拒绝——这是主机网络本身的特性，不是这几个服务的缺陷，未做任何"放宽私网判定"来
+    迁就这一台主机。详见 `docs/runbooks/host-worker-runtime.md` §10。
 
 ### S1.6 platform-extension `entry` 模式
 - 交付物：`packages/platform-extension/src/{index,kernel-client,modes/entry}.ts`：S1 只注册 observe 组工具（`get_object / traverse / search / explain / get_task`），`find_workers` 与 `invoke_worker` 随 S2.7 加入；`context` 事件注入该用户待审批、进行中 Task、相关 Fact 与先例；`session_*` 事件把 `turn_id` 写入会话条目并回传 Turn 结果；契约测试用 pi 的 faux provider + fake kernel。

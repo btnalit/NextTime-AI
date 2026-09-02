@@ -51,6 +51,11 @@ describe('buildSpawnSpec', () => {
         'NO_PROXY',
         'PI_CODING_AGENT_DIR',
         'WORKSPACE_ID',
+        // Lowercase proxy mirrors — see spawn-spec.ts's doc comment (httpoxy mitigation: most
+        // HTTP clients only honor lowercase http_proxy for plain http:// requests).
+        'http_proxy',
+        'https_proxy',
+        'no_proxy',
       ].sort(),
     );
   });
@@ -64,6 +69,9 @@ describe('buildSpawnSpec', () => {
     expect(spec.env).toContain('HTTP_PROXY=http://egress-proxy:3128');
     expect(spec.env).toContain('HTTPS_PROXY=http://egress-proxy:3128');
     expect(spec.env).toContain('NO_PROXY=kernel,llm-proxy,localhost,127.0.0.1');
+    expect(spec.env).toContain('http_proxy=http://egress-proxy:3128');
+    expect(spec.env).toContain('https_proxy=http://egress-proxy:3128');
+    expect(spec.env).toContain('no_proxy=kernel,llm-proxy,localhost,127.0.0.1');
     expect(spec.env).toContain('PI_CODING_AGENT_DIR=/workspace/.pi/agent');
     expect(spec.env).toContain('HOME=/workspace');
   });

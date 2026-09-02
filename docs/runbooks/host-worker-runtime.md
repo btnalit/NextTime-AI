@@ -118,8 +118,9 @@ docker exec nexttime-entry-demo-alice env | sort
 ```
 
 期望：只有 `KERNEL_URL KERNEL_LLM_URL CAPABILITY_HANDLE WORKSPACE_ID NEXTTIME_MODE HTTP_PROXY
-HTTPS_PROXY NO_PROXY PI_CODING_AGENT_DIR HOME` 加镜像自带的 `PIP_USER PYTHONUSERBASE PATH
-NODE_ENV` 等——**没有任何 `*_API_KEY`**，也没有 supervisor 自己进程的其他 env（未继承宿主 env）。
+HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy PI_CODING_AGENT_DIR HOME`（大小写代理变量
+都设，见 §10 "httpoxy" 说明）加镜像自带的 `PIP_USER PYTHONUSERBASE PATH NODE_ENV` 等
+——**没有任何 `*_API_KEY`**，也没有 supervisor 自己进程的其他 env（未继承宿主 env）。
 
 ```bash
 docker exec nexttime-entry-demo-alice curl -sS -o /dev/null -w '%{http_code}\n' https://example.com
@@ -133,9 +134,13 @@ docker exec nexttime-entry-demo-alice sh -c 'touch /workspace/ok && echo workspa
 docker exec nexttime-entry-demo-alice sh -c 'touch /ok' && echo "UNEXPECTED: root fs writable" || echo "readonly root (expected)"
 ```
 
-期望：`https://example.com` → `200`；`postgres:5432` 与 `100.64.0.1` 均超时/拒绝（代理内部一律
-拒绝，且 `workers` 网络本身到不了这些地址）；`pip install --user` 成功；`/workspace/ok` 可写；
-`/ok` 失败（只读根）。
+期望：`https://example.com` → `200`；`postgres:5432` 与 `100.64.0.1` 均拒绝（`403`，代理判定为
+内部/私有地址）；`pip install --user` 成功；`/workspace/ok` 可写；`/ok` 失败（只读根）。
+
+**若 `https://example.com` 不是 `200` 而是 `403`，且 `docker compose logs egress-proxy` 显示
+`"reason":"private-address"`，这大概率是目标主机自己的网络的问题，不是这几个服务的 bug**——见
+§10 "目标主机 DNS 会把公网域名解析成内网地址" 这条，S1.5a 主机验收时实测遇到过；换一个真正把
+公网域名解析到公网地址的主机/网络再测一次。
 
 ## 7. `docker kill` 后重新 spawn
 
@@ -192,6 +197,27 @@ git checkout main
 
 ## 10. 已知偏离 / 待确认（PR 中一并说明）
 
+- **纯 `HTTP_PROXY`（大写）对 plain `http://` 请求不可靠（主机验收才发现）**：`curl`（以及很多
+  遵循同一惯例的 HTTP 客户端）出于历史上的 "httpoxy" CGI 环境变量注入漏洞规避考虑，plain
+  `http://` 请求只认小写 `http_proxy`，大写 `HTTP_PROXY` 会被忽略——`HTTPS_PROXY` 没有这个问题
+  （`https://` 两种大小写都认）。实测：容器内 `curl http://postgres:5432`（只设了大写）直接本地
+  DNS 解析失败，从没走到代理；额外 export 小写 `http_proxy` 后才正确经代理拿到 `403`。修法：
+  `spawn-spec.ts` 现在给每个入口容器同时注入大写与小写三对（`HTTP_PROXY`/`http_proxy`、
+  `HTTPS_PROXY`/`https_proxy`、`NO_PROXY`/`no_proxy`）——这是本任务派发文字给的 env 清单之外的
+  第二个必要追加项（第一个是 `WORKSPACE_ID`，见下）。
+- **目标主机 DNS 会把公网域名解析成内网地址（主机验收才发现，不是本任务代码的 bug）**：S1.5a
+  主机验收时，目标主机的 DNS 把 `example.com`、`google.com`、`github.com` 等公网域名统一解析成
+  该主机自己网络里的一个内网段地址（这段地址本身是可达的、host 直接 curl 这些域名能拿到
+  `200`——这台主机的网络看起来是靠 DNS 把公网域名指向一层内部网关/透明代理，再由那层转发到真正
+  的公网，而不是普通的公网直连）；直连任何真正的公网 IP（如 `1.1.1.1`）反而超时。`egress-proxy`
+  按 I10 的既定设计"代理自己解析域名，解析出的地址若落在 RFC1918/CGNAT/loopback 等私有段就拒绝
+  （防 DNS rebinding）"——这段代理逻辑没有错，是它正确地把这台主机 DNS 解析出的私有段地址判定
+  为"私有"并拒绝了（日志 `"reason":"private-address"`），所以从这几个入口容器里
+  `curl https://example.com` 会拿到 `403` 而不是 `200`。这是**这台主机网络本身的特性**，不是
+  `worker-runtime` / `worker-supervisor` / `egress-proxy` 的缺陷，也不在本任务所有权范围内可以
+  修——放宽 `egress-proxy` 的私网判定会真的削弱 I10 的 DNS-rebinding 防护，不能为了适配这一台
+  主机就做。留给主会话与后续任务判断：换一台网络更"标准"的主机验收，或者如果这确实是量产环境
+  的常态网络拓扑，需要专门评审 I10 的私网判定策略该怎么和这类透明代理网络共存。
 - **`worker-supervisor` 需要 `DOCKER_GID`（主机验收才发现）**：`packages/worker-supervisor/
   Dockerfile` 是 R1 就有的、非本任务写的既有文件，以非 root uid 10001 运行；但目标主机
   `/var/run/docker.sock` 是 `root:docker`（组 gid 因主机而异）660——两者原来对不上，容器一起来

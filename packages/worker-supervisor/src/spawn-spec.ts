@@ -5,13 +5,26 @@
  *
  * Env is the security-critical part: **exactly** `KERNEL_URL`, `KERNEL_LLM_URL`,
  * `CAPABILITY_HANDLE`, `NEXTTIME_MODE=entry`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`,
- * `PI_CODING_AGENT_DIR`, `HOME=/workspace` — plus one addition beyond the task brief's list,
- * `WORKSPACE_ID`: `@nexttime/platform-extension`'s `index.ts` (`readRequiredEnv('WORKSPACE_ID')`)
- * throws on activation without it — verified by reading that file; it is not something this
- * package may edit (see this task's "Ownership" — platform-extension is out of scope), so the
- * container's env has to carry what the extension it must run actually requires. Nothing from
- * this process's own env is ever forwarded (`docker-client.ts` passes exactly the array built
- * here, never inherits `process.env`).
+ * `PI_CODING_AGENT_DIR`, `HOME=/workspace` — plus two additions beyond the task brief's list:
+ *
+ * - `WORKSPACE_ID`: `@nexttime/platform-extension`'s `index.ts` (`readRequiredEnv('WORKSPACE_ID')`)
+ *   throws on activation without it — verified by reading that file; it is not something this
+ *   package may edit (see this task's "Ownership" — platform-extension is out of scope), so the
+ *   container's env has to carry what the extension it must run actually requires.
+ * - lowercase `http_proxy`/`https_proxy`/`no_proxy` mirrors: host verification (S1.5a) found
+ *   `curl` (and, per its own documented rationale, most other HTTP clients) does **not** honor
+ *   uppercase `HTTP_PROXY` for plain `http://` requests — only the lowercase form — a long-
+ *   standing deliberate mitigation for the "httpoxy" class of CGI environment-variable-injection
+ *   vulnerabilities (an incoming `Proxy:` header rewritten into `HTTP_PROXY` by some web servers'
+ *   CGI environments); `HTTPS_PROXY` has no such ambiguity and both cases work for `https://`.
+ *   Verified empirically in the entry container: `curl http://postgres:5432` failed local DNS
+ *   resolution (never reached the proxy) with only `HTTP_PROXY` set, then correctly tunneled and
+ *   got denied (403) once `http_proxy` was also present. Both cases are set so every tool inside
+ *   the container — not just ones that happen to check the uppercase form — actually routes
+ *   through the egress proxy instead of silently attempting (and failing) a direct connection.
+ *
+ * Nothing from this process's own env is ever forwarded (`docker-client.ts` passes exactly the
+ * array built here, never inherits `process.env`).
  */
 
 import type { SupervisorConfig } from './config.js';
@@ -56,6 +69,11 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
     `HTTP_PROXY=${config.httpProxyForWorkers}`,
     `HTTPS_PROXY=${config.httpProxyForWorkers}`,
     `NO_PROXY=${config.noProxyForWorkers}`,
+    // Lowercase mirrors — see this module's doc comment ("httpoxy" mitigation in most HTTP
+    // clients means only lowercase http_proxy is honored for plain http:// requests).
+    `http_proxy=${config.httpProxyForWorkers}`,
+    `https_proxy=${config.httpProxyForWorkers}`,
+    `no_proxy=${config.noProxyForWorkers}`,
     `PI_CODING_AGENT_DIR=${paths.piAgentDirInContainer}`,
     'HOME=/workspace',
   ];
