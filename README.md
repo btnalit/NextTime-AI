@@ -1,5 +1,7 @@
 # NextTime-AI — 基于 Graph 的 AI 中台
 
+[![CI](https://github.com/btnalit/NextTime-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/btnalit/NextTime-AI/actions/workflows/ci.yml)
+
 一个 Web 中台入口。每个用户有自己的、隔离的 AI agent（pi）和一个对话框；说出需求，agent 在图上找到能干活的 Worker（也是 pi），动态拉起它们，各自通过统一的门（Gatekeeper）对接不同系统，把结果和决策带着来龙去脉写回图里，再决定下一步。所有 agent 共享同一份带类型、双时态、逐边溯源的图，受同一套规则约束，每一步可追溯、可审批、可重建。
 
 **状态**：设计阶段（v0.2）。仓库只有文档，尚无可运行组件。技术栈：全 TypeScript（Node + Postgres），pi 为 agent 运行底层。

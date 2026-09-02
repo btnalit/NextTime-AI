@@ -1,0 +1,24 @@
+# Concrete system names that must never appear in packages/kernel/src - design doc
+# graph-ai-middle-platform-design.md section 7.10. The kernel is mechanism, not content: which
+# systems it talks to lives in gatekeepers/<system>/ content packages - Operation manifests,
+# policy, mappings - and ontology/<domain>/ content packages - types, skills, procedures,
+# workers - published through git and PR, not baked into kernel source. A hit here means a
+# concrete system name leaked into the mechanism layer.
+# Format read by scripts/check-kernel-purity.sh via grep -rniE -f: one extended regex per line,
+# matched case-insensitively against packages/kernel/src, excluding __fixtures__ and *.test.ts.
+# Every line here is a whole, independent regex pattern with no comment syntax of its own, so
+# each line must be self-contained: never leave a blank line or a line containing only "#" -
+# either would match every source line - and never split a parenthesis, bracket or brace across
+# lines, since grep -f compiles each line on its own and an unbalanced one is a syntax error.
+# To extend: add one line per new gatekeeper or ontology package system name below. Use \b word
+# boundaries for short or otherwise ambiguous names, see erp and oa, to avoid false positives on
+# unrelated English words, and keep every added line specific enough that it cannot match
+# ordinary kernel source - identifiers, comments, private #fields - by accident.
+docker
+ragflow
+routeros
+\berp\b
+\boa\b
+semantica
+hermes
+mikrotik
