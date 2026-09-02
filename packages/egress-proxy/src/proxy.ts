@@ -22,6 +22,8 @@ export interface EgressReporterLike {
 export interface ProxyServerOptions {
   denyHosts: readonly string[];
   platformSubnets: readonly CidrRange[];
+  /** See policy.ts `PolicyConfig.trustedResolvedCidrs` (`EGRESS_TRUSTED_RESOLVED_CIDRS`). */
+  trustedResolvedCidrs?: readonly CidrRange[];
   /** Test-only: see policy.ts `PolicyConfig.allowLoopbackForTests`. Never set in production. */
   allowLoopbackForTests?: boolean;
   resolveSource: (clientIp: string) => SourcePolicy | undefined;
@@ -62,6 +64,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
   const policyConfig: PolicyConfig = {
     denyHosts: options.denyHosts,
     platformSubnets: options.platformSubnets,
+    trustedResolvedCidrs: options.trustedResolvedCidrs,
     allowLoopbackForTests: options.allowLoopbackForTests,
   };
 

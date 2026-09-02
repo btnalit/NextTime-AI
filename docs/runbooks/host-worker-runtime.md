@@ -240,18 +240,14 @@ git checkout main
   `egress-proxy` 自己的 reporter 都是排队重试、不阻塞调用方）。**主机侧仍需要**
   `chown 10001:10001 "${NEXTTIME_DATA}/config/egress-sources.json"`（或等价的组可写方案）egress
   登记才会真正生效——这条留给 `scripts/host-env-init.sh`（E2，不在本任务所有权范围）或主会话决定
-  是否把这个文件也纳入它现有的 chown 列表（`sessions/ workspaces/ artifacts/ caddy/`）。
+  是否把这个文件也纳入它现有的 chown 列表（`workspaces/ artifacts/ caddy/`）。
 - **`--system-prompt-file` 不存在**：pi 0.84.4 没有这个 flag；用 `--system-prompt <path>`
   代替——`resource-loader.ts` 的 `resolvePromptInput` 在路径存在时按文件内容读取，效果等价。
-- **`sessions/` 顶层目录未被本任务使用**：设计文档 §10.2 的 compose 骨架给 kernel 与
-  worker-supervisor 都挂了 `${NEXTTIME_DATA}/sessions`（"会话 JSONL 回流为私有 Source"的读取
-  路径），但本任务的入口容器 `--session-dir` 是 `/workspace/.pi/sessions`（在
-  `workspaces/<uid>/` 内，按本任务派发文字的字面指示），不是顶层 `sessions/<uid>/`。两者不一致
-  ——worker-supervisor 这次的 compose 改动移除了它未使用的 `sessions` 挂载，**未改动 kernel 的**
-  （不在本任务所有权范围）。留给主会话决定：（a）未来的会话摄取改成递归读
-  `workspaces/*/.pi/sessions/`（kernel 需要更大范围的读权限），还是（b）把 `--session-dir`
-  改到顶层 `sessions/<uid>/`（需要改 entrypoint.sh 与 worker-supervisor 的 spawn spec，多一个
-  挂载）。
+- **`sessions/` 顶层目录已废弃（2026-09-02 决定）**：入口容器的 `--session-dir` 是
+  `/workspace/.pi/sessions`（在 `workspaces/<uid>/` 内），一个用户只有一个挂载点（I15）。顶层
+  `${NEXTTIME_DATA}/sessions`、kernel 的 `sessions:ro` 挂载、备份里的 `sessions/` 已随清理 PR 去掉；
+  `scripts/host-bootstrap.sh` 不再创建它，已有主机上可以直接 `rmdir`（空目录）。将来若需要内核读
+  会话 JSONL，走 `workspaces/*/.pi/sessions/` 的只读挂载。
 - **`WORKSPACE_ID` 环境变量**：本任务派发文字给的"仅这些 env"清单没有 `WORKSPACE_ID`，但
   `@nexttime/platform-extension` 的 `index.ts`（`readRequiredEnv('WORKSPACE_ID')`）在缺它时
   直接抛错——不在本任务所有权范围内改动 platform-extension，因此 spawn spec 额外注入了

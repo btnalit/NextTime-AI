@@ -394,7 +394,7 @@ flowchart TB
 
 ### 7.9 出网代理
 
-一个小的转发代理容器（几百行 Node，或 tinyproxy 加策略脚本），挂在 `control` 与 `workers` 两个网络上。规则：放行公网；拒绝 RFC1918、链路本地与平台内部服务名；按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 / 拒绝清单；记录每个目标域名与字节数到该次 Activity 的 `metadata`。不解密 TLS。这是 I10 的实现，也是「agent 能抓公网、装包、clone 公开仓库」的前提。
+一个小的转发代理容器（几百行 Node，或 tinyproxy 加策略脚本），挂在 `control` 与 `workers` 两个网络上。规则：放行公网；拒绝 RFC1918、链路本地与平台内部服务名；按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 / 拒绝清单；记录每个目标域名与字节数到该次 Activity 的 `metadata`。不解密 TLS。这是 I10 的实现，也是「agent 能抓公网、装包、clone 公开仓库」的前提。宿主网络若是 fake-IP 式透明代理（解析器把所有公网域名答成某个私有段，由本地代理映射回真实目标），用 `EGRESS_TRUSTED_RESOLVED_CIDRS` 声明该段：**域名**解析进该段视为公网，字面 IP 与平台子网仍拒绝；正常网络留空。
 
 ### 7.10 内核内部分层、模块契约、领域事件
 
@@ -644,7 +644,8 @@ services:
     # 里的 AGENT_RUNTIME=fake 切回 S1.4 的 FakeAgentRuntime。KERNEL_LLM_URL 是 AgentHostRuntime
     # 塞进每个 startTurn 命令里的 llmUrl（agent-host 再转给 worker-supervisor 的 /resident/spawn）。
     environment: { AGENT_RUNTIME: "${AGENT_RUNTIME:-agent-host}", KERNEL_LLM_URL: http://llm-proxy:8082 }
-    volumes: ["${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/sessions:/data/sessions:ro"]
+    # sessions/ 顶层挂载已移除（未使用——见 §10.1 目录结构与 S1.5a/S1.5b 实现说明）。
+    volumes: ["${NEXTTIME_DATA}/config:/data/config:ro"]
     depends_on: { postgres: { condition: service_healthy } }
     networks: [control, workers]
     restart: unless-stopped
@@ -728,7 +729,7 @@ services:
 
   backup:
     image: postgres:17-alpine                                # 与 postgres 同大版本
-    entrypoint: ["/bin/sh", "/backup.sh"]                    # 每日 pg_dump + sessions/workspaces rsync，保留 7 份
+    entrypoint: ["/bin/sh", "/backup.sh"]                    # 每日 pg_dump + workspaces/config tar.gz，保留 N 份
     volumes: ["./deploy/backup/backup.sh:/backup.sh:ro", "${NEXTTIME_DATA}:/data"]
     secrets: [pg_password]
     networks: [control]
@@ -803,7 +804,7 @@ nexttime explain <turn_activity_id>
 | `llm-proxy` 或 `egress-proxy` 重启 | 无状态；进行中的流式请求失败一次，pi 自行重试；用量上报有 outbox 式重放 |
 | outbox 派发器崩溃 | 事件已在事务内落库；重启后重放未投递事件；消费者幂等 |
 | 内核重启 | 无内存态；扫描 `executing` 超时项与 `running` Turn |
-| 库损坏 | `backup` 容器每日 `pg_dump` 与 `sessions/`、`workspaces/` 备份（S1.12），`scripts/restore.sh` 恢复并跑验收脚本 |
+| 库损坏 | `backup` 容器每日 `pg_dump` 与 `workspaces/`、`config/` 备份（S1.12），`scripts/restore.sh` 恢复并跑验收脚本 |
 
 ---
 
