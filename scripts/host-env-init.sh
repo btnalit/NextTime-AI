@@ -15,8 +15,11 @@
 # fix-up on a few of those directories.
 #
 # Scope: writes secrets/{kernel,llm-proxy,gatekeeper-ragflow}.env and
-# config/{llm-providers.yaml,models.json,handle.pub} as placeholders/templates — no real
-# credentials exist yet at this point in the task list (S1.7/S1.9/S3.4 fill them in later).
+# config/{llm-providers.yaml,models.json,handle.pub,egress-sources.json} as placeholders/
+# templates — no real credentials exist yet at this point in the task list (S1.7/S1.9/S3.4 fill
+# them in later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc
+# §7.9 — an empty object is a valid "no sources registered yet" map, not a stub for a later
+# task to overwrite).
 # Then chowns sessions/ workspaces/ artifacts/ caddy/ to the non-root uid:gid the platform's
 # containers run as, and makes config/ world-readable (it holds no secrets). Never echoes
 # secret file contents. Touches nothing outside $NEXTTIME_DATA.
@@ -175,6 +178,17 @@ if [ ! -f "$HANDLE_PUB" ]; then
 	CREATED="$CREATED config/handle.pub"
 else
 	SKIPPED="$SKIPPED config/handle.pub"
+fi
+
+# --- config/egress-sources.json: empty object; docker-compose.yml bind-mounts this file -------
+# read-only into egress-proxy (SOURCE_MAP_FILE) — if missing, Docker would create a directory
+# at that path instead of a file.
+EGRESS_SOURCES_JSON="$CONFIG_DIR/egress-sources.json"
+if [ ! -f "$EGRESS_SOURCES_JSON" ]; then
+	echo "{}" >"$EGRESS_SOURCES_JSON"
+	CREATED="$CREATED config/egress-sources.json"
+else
+	SKIPPED="$SKIPPED config/egress-sources.json"
 fi
 
 # --- ownership: sessions/ workspaces/ artifacts/ caddy/ must be usable by the platform's ------
