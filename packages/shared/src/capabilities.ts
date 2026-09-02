@@ -640,10 +640,48 @@ const governanceCapabilities: readonly Capability[] = [
 ];
 
 // -------------------------------------------------------------------------------------------
-// task — §9.3 row constrains this group to propose or observe (never execute).
+// task — §9.3 row constrains this group to propose or observe (never execute). `get_entry_context`
+// and `report_turn` are S1.6 additions, not named in §9.3's table: §7.4's mode table describes
+// their behavior ("该用户的待审批、进行中 Task 及其结果、相关 Fact、先例…" injected via `context`;
+// "每轮回传 Turn 与决策") without naming the capabilities. Assumption (see PR body "假设"): grouped
+// under `task` rather than a new group, since both are per-Turn/Task-lifecycle facilities for the
+// entry agent (bootstrap read / write-back), not graph reads (`graph`) or provenance queries
+// (`epistemic`). `get_entry_context` takes no params — the kernel derives the caller and workspace
+// from the Handle. `report_turn`'s field names follow this file's established camelCase param
+// convention (`turnId`, not the task brief's prose `turn_id`) for consistency with every other
+// capability here.
 // -------------------------------------------------------------------------------------------
 
 const taskCapabilities: readonly Capability[] = [
+  {
+    name: 'get_entry_context',
+    group: 'task',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: noParams,
+    description:
+      'Entry-mode context bootstrap (§7.4 `context` injection, S1 scope): the calling principal’s ' +
+      'pending approvals, running Tasks and their results, relevant Facts (with epistemic_status), ' +
+      'and precedents. Called once per LLM call from the entry agent’s pi `context` event handler.',
+  },
+  {
+    name: 'report_turn',
+    group: 'task',
+    mode: 'propose',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        turnId: id,
+        summary: z.string(),
+        decisions: z.array(id).optional(),
+      })
+      .strict(),
+    description:
+      'Report a completed Turn’s outcome back to the kernel (§7.2 "每轮回传 Turn 与决策"); called ' +
+      'from the entry agent’s pi `agent_end` handler.',
+  },
   {
     name: 'create_task',
     group: 'task',
