@@ -48,13 +48,14 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:2.10 # pin 具体版本；E8
+    build: { context: ., dockerfile: deploy/caddy/Dockerfile } # caddy:2.10 + 内建 web 静态产物（E8 + S1.8）
+    image: nexttime-ai-caddy
     ports: ["${KERNEL_BIND_ADDR}:8443:8443"]
-    # Static roots: placeholder builds until S1.8 (web) / S3 (explorer) publish the real ones —
-    # see docs/runbooks/host-caddy.md for the one-line switch to ./packages/web/dist and
-    # ./explorer/dist once those exist. ${NEXTTIME_DATA}/caddy:/data persists the internal CA
-    # and issued certs (chowned by scripts/host-env-init.sh).
-    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "./deploy/caddy/placeholder:/srv/web:ro", "./deploy/caddy/explorer-placeholder:/srv/explorer:ro", "${NEXTTIME_DATA}/caddy:/data"]
+    # Static roots ship inside the image: deploy/caddy/Dockerfile builds packages/web and copies
+    # dist/ to /srv/web (/srv/explorer stays a placeholder until S3). Rebuild the image to deploy
+    # a web change. ${NEXTTIME_DATA}/caddy:/data persists the internal CA and issued certs
+    # (chowned by scripts/host-env-init.sh).
+    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA}/caddy:/data"]
     depends_on: [kernel]
     networks: [control]
     restart: unless-stopped

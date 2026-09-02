@@ -71,8 +71,8 @@ https://:8443 {
 		try_files {path} /index.html
 	}
 
-	# Web UI (S1.8) static build. Serves deploy/caddy/placeholder/index.html until
-	# packages/web/dist exists — see docs/runbooks/host-caddy.md for the switch.
+	# Web UI (S1.8) static build, baked into this image by deploy/caddy/Dockerfile from
+	# packages/web/dist — see docs/runbooks/host-caddy.md §E8.5 for the rebuild step.
 	handle {
 		root * /srv/web
 		file_server

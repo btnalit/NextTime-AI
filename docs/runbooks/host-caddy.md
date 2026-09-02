@@ -14,6 +14,7 @@
 ```bash
 cd <CODE_DIR>
 docker compose config >/dev/null && echo "config ok"
+docker compose build caddy        # 构建 web 静态产物并打进 caddy 镜像（§E8.5）
 docker compose up -d kernel caddy
 docker compose ps --format json
 ```
@@ -55,7 +56,7 @@ echo "kernel published ports: $(docker port "$(docker compose ps -q kernel)")"
 docker compose exec caddy ls /data/caddy/pki/authorities/local
 ```
 
-期望：`health: 200`；`/` 返回占位页（见 §E8.5）或 web 构建首页；`docker port` 对 kernel 空
+期望：`health: 200`；`/` 返回 web 首页（镜像内的 S1.8 构建产物，见 §E8.5）；`docker port` 对 kernel 空
 输出（内核不发布任何主机端口）；`pki/authorities/local` 下能看到 `root.crt` / `root.key`。
 
 ## E8.4 回滚
@@ -68,32 +69,31 @@ docker compose stop caddy
 已导入的信任不失效）。要重新生成 CA（例如怀疑私钥泄露）则先 `docker compose stop caddy`，清空
 `${NEXTTIME_DATA}/caddy` 内容后再 `up`——这会让所有已导入的客户端重新提示信任，谨慎操作。
 
-## E8.5 占位静态根 ↔ 真实构建的切换
+## E8.5 静态根随镜像走（web 已随 S1.8 落地）
 
-S1.8（web）与 S3（Explorer）落地前，`docker-compose.yml` 的 `caddy` 服务把 `/srv/web` 与
-`/srv/explorer` 分别挂载到仓库内的占位目录：
+`caddy` 服务不再 bind mount 静态目录，而是自带镜像（`deploy/caddy/Dockerfile`，多阶段）：
+第一阶段在 `node:24` 里 `corepack pnpm install --frozen-lockfile && corepack pnpm --filter
+@nexttime/web... build`，第二阶段基于 `caddy:2.10` 把 `packages/web/dist` 拷到 `/srv/web`、把
+`deploy/caddy/explorer-placeholder`（空目录，S3 前占位）拷到 `/srv/explorer`。主机不需要 Node
+工具链，仓库工作树里也不会出现 root 属主的 `dist/`。
 
-| 挂载点 | 当前（占位） | 落地后 |
-|--------|-------------|--------|
-| `/srv/web` | `./deploy/caddy/placeholder`（一行 `index.html`） | `./packages/web/dist`（S1.8 产物） |
-| `/srv/explorer` | `./deploy/caddy/explorer-placeholder`（空目录） | `./explorer/dist`（S3 产物） |
+| 路径 | 来源 |
+|------|------|
+| `/srv/web` | 镜像内，来自 `packages/web/dist`（S1.8） |
+| `/srv/explorer` | 镜像内，占位目录；S3 落地后同样在 Dockerfile 里拷入 Explorer 构建产物 |
+| `/etc/caddy/Caddyfile` | 仍是 bind mount，改路由不必重建镜像 |
 
-切换步骤（以 web 为例，explorer 同理）：
+部署一次 web 改动：
 
-1. 确认 `packages/web/dist` 已由 `corepack pnpm --filter @nexttime/web build` 产出且非空。
-2. 编辑 `docker-compose.yml` 的 `caddy.volumes`，把
-   `./deploy/caddy/placeholder:/srv/web:ro` 改成 `./packages/web/dist:/srv/web:ro`。
-3. `docker compose up -d caddy`（只重建 caddy 容器，不影响 kernel 等其他服务）。
-4. `curl -sk https://<bind>:8443/` 应返回真实首页而非占位页。
+```bash
+cd <CODE_DIR>
+docker compose build caddy
+docker compose up -d caddy      # 只重建 caddy 容器，不影响 kernel 等其他服务
+curl -sk https://<bind>:8443/ | head -1   # 应是 web 首页的 <!doctype html>
+```
 
-Caddyfile（`deploy/caddy/Caddyfile`）本身不需要改动——两条路径都是 `/srv/web`
-`/srv/explorer`，切换只发生在 compose 的宿主机挂载源。
-
-**S1.8 补充说明（构建产物已存在）**：`packages/web`（design doc §7.6：登录、对话页、`lib/ws-client.ts`）
-已随 S1.8 落地。确切构建命令是 `corepack pnpm --filter @nexttime/web build`（注意包名带
-`@nexttime/` 前缀，上面步骤 1 的旧写法 `pnpm --filter web build` 按包名精确匹配会找不到该包）；
-产物目录固定是 `packages/web/dist`（Vite 默认 `outDir`，`packages/web/vite.config.ts` 未覆盖），
-即上表"落地后"一列与步骤 2 里已经写的挂载源——不需要另建目录或改 `outDir`。
+回滚：`docker compose down caddy` 后用上一版镜像（`docker image ls nexttime-ai-caddy` 看历史，
+或重新 `git checkout <上一版> && docker compose build caddy`）。
 
 ## 已知偏离 / 待确认（PR 中一并说明）
 
