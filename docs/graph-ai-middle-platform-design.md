@@ -638,7 +638,8 @@ services:
 
   kernel:
     build: { context: ., dockerfile: packages/kernel/Dockerfile }
-    env_file: ${NEXTTIME_DATA}/secrets/kernel.env          # DB URL、Handle 签名私钥；无任何外部凭证（I9）
+    env_file: ${NEXTTIME_DATA}/secrets/kernel.env          # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
+    secrets: [handle_key]                                   # Handle 签名私钥只进这一个容器：/run/secrets/handle_key
     volumes: ["${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/sessions:/data/sessions:ro"]
     depends_on: { postgres: { condition: service_healthy } }
     networks: [control, workers]
@@ -703,6 +704,7 @@ networks:
   workers: { internal: true, ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_WORKERS}" }] } }
 secrets:
   pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
+  handle_key: { file: "${NEXTTIME_DATA}/secrets/handle.key" }   # 私钥在 secrets/，公钥 config/handle.pub
 ```
 
 `${NEXTTIME_DATA}` 下：`pgdata/ sessions/ workspaces/ secrets/ config/ artifacts/ backups/ caddy/`。环境值在目标主机 `.env`，取值记录在 `docs/private/`。内核不对主机发布端口，只有 caddy 的 8443。
