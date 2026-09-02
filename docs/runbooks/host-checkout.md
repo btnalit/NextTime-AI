@@ -24,7 +24,7 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/host-env-init.
 artifacts caddy` 属主改成容器非 root 用户（uid:gid 见脚本注释），`config/` 设为可读；
 `pgdata/`、`secrets/` 目录本身、`backups/` 不动。用 `stat` / `ls -ln` 验证，**不要 `cat` 密钥**。
 
-紧接着跑 `ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/gen-handle-keys.sh` 生成 Handle 签名密钥对（S1.9，幂等）。
+紧接着跑 `ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/gen-handle-keys.sh` 生成 Handle 签名密钥对（S1.9，幂等）：私钥落在 `secrets/handle.key`（0640，组 10001，只经 compose secret `handle_key` 挂进 kernel），公钥在 `config/handle.pub`。若 `secrets/kernel.env` 是在此之前生成的，用 `sed -i` 把其中 `HANDLE_PRIVATE_KEY_FILE` 改成 `/run/secrets/handle_key` 并补一行 `HANDLE_PUBLIC_KEY_FILE=/data/config/handle.pub`（不要 `cat` 该文件）。
 
 ## E3.4 校验 compose
 `cd <CODE_DIR> && docker compose config >/dev/null && echo ok`；失败则回仓库改脚本或 compose
