@@ -14,6 +14,29 @@ import type { Pool, PoolClient } from 'pg';
 
 const MIGRATIONS_TABLE = 'schema_migrations';
 
+/**
+ * Session-level advisory lock (`pg_advisory_lock`) held by one `runMigrations()` call for its
+ * whole duration — from creating `schema_migrations` through the last applied file. Two runners
+ * against the same database (two Vitest test files each calling `runMigrations()`, or two
+ * kernel processes starting at once) are thereby fully serialized: the second one blocks, then
+ * recomputes its plan against the table the first one just finished writing, and sees nothing
+ * pending. This is what actually closes the bootstrap race observed in CI —
+ * `create table if not exists schema_migrations` itself is not concurrency-safe in Postgres
+ * (two sessions creating the same table name race on the `pg_type` catalog and one fails with
+ * `duplicate key value violates unique constraint "pg_type_typname_nsp_index"`), and the
+ * per-file `pg_advisory_xact_lock` that each module's migration files take as their first
+ * statement can only protect DDL *inside* a migration file, never the runner's own bootstrap.
+ *
+ * Session-level (not transaction-level): `applyMigrationFile` runs each file in its own
+ * BEGIN/COMMIT, and a transaction-scoped lock would be released at the first COMMIT. The lock is
+ * released explicitly in `finally`, and by Postgres automatically if the session dies.
+ *
+ * The key is a fixed, arbitrary bigint, distinct from the per-module keys the migration files
+ * use (core: 7241000101, governance: 7241000201) — see the header comment of
+ * packages/kernel/migrations/core/0001_identity.sql for that convention.
+ */
+const MIGRATION_RUN_LOCK_KEY = 7241000001;
+
 /** `NNNN_name.sql` — version is one or more digits, name is lowercase snake_case. */
 const FILENAME_PATTERN = /^(\d+)_([a-z0-9]+(?:_[a-z0-9]+)*)\.sql$/;
 
@@ -410,25 +433,32 @@ export async function runMigrations(
 
   const client = await pool.connect();
   try {
-    await ensureMigrationsTable(client);
-    const applied = await loadAppliedMigrations(client);
-    const plan = planMigrations(files, applied);
+    await client.query('select pg_advisory_lock($1)', [MIGRATION_RUN_LOCK_KEY]);
+    try {
+      await ensureMigrationsTable(client);
+      const applied = await loadAppliedMigrations(client);
+      const plan = planMigrations(files, applied);
 
-    if (plan.mismatched.length > 0) {
-      throw new ChecksumMismatchError(plan.mismatched);
+      if (plan.mismatched.length > 0) {
+        throw new ChecksumMismatchError(plan.mismatched);
+      }
+
+      if (dryRun) {
+        return { applied: [], pending: plan.pending, dryRun: true };
+      }
+
+      const appliedNow: MigrationFile[] = [];
+      for (const file of plan.pending) {
+        await applyMigrationFile(client, file);
+        appliedNow.push(file);
+      }
+
+      return { applied: appliedNow, pending: [], dryRun: false };
+    } finally {
+      // If the session is already gone, Postgres has released the lock for us; the unlock
+      // failing must not mask the error that is (in that case) already propagating.
+      await client.query('select pg_advisory_unlock($1)', [MIGRATION_RUN_LOCK_KEY]).catch(() => {});
     }
-
-    if (dryRun) {
-      return { applied: [], pending: plan.pending, dryRun: true };
-    }
-
-    const appliedNow: MigrationFile[] = [];
-    for (const file of plan.pending) {
-      await applyMigrationFile(client, file);
-      appliedNow.push(file);
-    }
-
-    return { applied: appliedNow, pending: [], dryRun: false };
   } finally {
     client.release();
   }
