@@ -91,37 +91,22 @@ P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
 - 需人工批准：否（新增容器，不触碰现有服务；但会占用主机上已确认空闲的资源）。
 - 不做：不发布 5432 到主机。
 
-### E5 [建议] Docker 日志轮转与 live-restore
-- 目标：`/etc/docker/daemon.json` 加 `log-opts`（`max-size`、`max-file`）与 `live-restore: true`。
-- 影响：修改后需重启 dockerd；**没有 live-restore 时会重启全部现有容器**（含 RAGFlow、Hermes 相关）。先加 `live-restore` 再重启一次，之后再改日志选项则不再影响容器。
-- 验收：`docker info --format '{{.LiveRestoreEnabled}}'` 为 true；新容器 `docker inspect -f '{{.HostConfig.LogConfig}}'` 显示 max-size。
-- 建议执行者：人（维护窗口）。
-- 需人工批准：**是**。
+### E5 Docker 日志轮转与 live-restore
+- 已决定不做（2026-09-01）。发现与建议保留在 `docs/private/`；编号保留以维持依赖图稳定。
 
-### E6 [建议] 收敛暴露在 0.0.0.0 的本机服务端口
-- 目标：embedding 网关与 Ollama 只监听 loopback / 内网地址，或加 nft 规则限制来源。
-- 影响：依赖它们的服务（Hermes 等）若用的是 0.0.0.0 地址需同步改。
-- 验收：`ss -tlnp | grep -E ':(8091|11434)'` 不再出现 `0.0.0.0` / `*`。
-- 建议执行者：人。
-- 需人工批准：**是**。
-- 不做：本平台不依赖这两个服务。
+### E6 收敛暴露在 0.0.0.0 的本机服务端口
+- 已决定不做（2026-09-01）。同上。本平台不依赖这两个服务。
 
-### E7 [建议] 平台备份定时器
-- 目标：systemd timer 每日 `pg_dump` + `sessions/` rsync 到 `${NEXTTIME_DATA}/backups/`，保留 7 份；写恢复脚本。
-- 交付物：`deploy/systemd/nexttime-backup.{service,timer}`、`scripts/backup.sh`、`scripts/restore.sh`。
-- 依赖：E4。
-- 验收：手动 `systemctl start nexttime-backup.service` 后 `backups/` 出现当日 dump；`scripts/restore.sh --dry-run` 通过。
-- 建议执行者：Codex 写脚本，人安装 timer。
-- 需人工批准：是（安装 systemd 单元）。
-- 注意：LVM 卷组无空余，备份占用根 LV 空间，保留份数不要大。
+### E7 平台备份定时器
+- 按 2026-09-01 的答复暂不做。但设计 §10.4 的回滚依赖每日 `pg_dump` 与 `sessions/` 备份，建议 P2 完成后重新评估；届时交付物为 `deploy/systemd/nexttime-backup.{service,timer}`、`scripts/backup.sh`、`scripts/restore.sh`，注意 LVM 卷组无空余、保留份数不要大。
 
-### E8 TLS 反向代理（P1 内完成）
-- 目标：gateway 只监听 loopback，外部经 TLS（内网 CA 或自签）访问 8443。
-- 交付物：`deploy/tls/README.md`（nginx 或 caddy 两种配置模板）；`.env` 增加 `KERNEL_PUBLIC_URL`。
+### E8 TLS 反向代理（P1 内完成，caddy）
+- 目标：新起一个 `caddy` 容器做 TLS 反代（内网 CA 或自签），gateway 改为只监听 loopback / compose 内网，外部经 8443 访问。不复用主机上已有的反向代理。
+- 交付物：`deploy/caddy/Caddyfile`；`docker-compose.yml` 增加 `caddy` 服务（镜像 pin 到具体版本，挂载 `${NEXTTIME_DATA}/caddy` 存证书）；`.env` 增加 `KERNEL_PUBLIC_URL`；kernel 的 `ports` 改为不对外发布。
 - 依赖：T1.8。
-- 验收：`curl -k https://${KERNEL_BIND_ADDR}:8443/health` 200；`curl http://${KERNEL_BIND_ADDR}:8080/health` 拒绝连接。
-- 建议执行者：Codex 写模板，人部署。
-- 需人工批准：是（若复用主机已有 nginx）。
+- 验收：`curl -k https://${KERNEL_BIND_ADDR}:8443/health` 200；`curl http://${KERNEL_BIND_ADDR}:8080/health` 拒绝连接；Claude Code 的 `.mcp.json` 改用 https 后 T1.10 仍通过。
+- 建议执行者：Codex 写配置，Claude Code@host 部署。
+- 需人工批准：否（新增容器，不触碰现有服务）。
 
 ---
 
@@ -175,7 +160,7 @@ P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
 
 ### T0.2 本体注册表
 - 目标：YAML 本体 → 校验 → 发布版本；写入路径能按 LinkType 的 domain / range 校验（I2）。
-- 交付物：`kernel/app/ontology/schema.py`（Pydantic：ObjectType / PropertyType / LinkType / ActionType，ActionType 含 `reversibility / blast_radius / auto_approvable`）、`kernel/app/ontology/registry.py`（`publish_version / get_published / validate_link / json_schema_for(object_type)`）、`ontology/ops-assets-v1.yaml`（ObjectType：Host / ComposeProject / Container / Image / SystemdService / Volume / Network / Endpoint / Repository / Owner；LinkType：runs_on / part_of / uses_image / mounts / attached_to / exposes / depends_on / built_from / owned_by；ActionType 先只声明 `docker.container_restart`、`docker.compose_up`、`docker.compose_down`，全部 `auto_approvable: false`）、`kernel/tests/test_ontology.py`。
+- 交付物：`kernel/app/ontology/schema.py`（Pydantic：ObjectType / PropertyType / LinkType / ActionType，ActionType 含 `reversibility / blast_radius / auto_approvable`）、`kernel/app/ontology/registry.py`（`publish_version / get_published / validate_link / json_schema_for(object_type)`）、`ontology/ops-assets-v1.yaml`（ObjectType：Host / ComposeProject / Container / Image / SystemdService / Process / Volume / Network / Endpoint / Repository / Owner；LinkType：runs_on / part_of / uses_image / mounts / attached_to / exposes / depends_on / built_from / owned_by / spawned_by；ActionType 先只声明 `docker.container_restart`、`docker.compose_up`、`docker.compose_down`，全部 `auto_approvable: false`）、`kernel/tests/test_ontology.py`。
 - 依赖：T0.1。
 - 验收：发布 v1 后再次发布同内容得到 v2（发布不可变）；`validate_link("runs_on", Container, Host)` 通过，`validate_link("runs_on", Host, Container)` 拒绝。
 - 建议执行者：Codex。
@@ -233,13 +218,13 @@ P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
 
 ### T0.9 只读采集器 `host-inventory`
 - 目标：把目标主机的**结构性**事实以 `observed` 状态写入图；重复运行幂等。
-- 交付物：`collectors/host-inventory/collector.py`（数据源：`docker inspect`（容器、镜像、挂载、网络、发布端口、compose 标签）、`docker compose ls`、`systemctl list-unit-files --state=enabled` + `systemctl cat`（ExecStart / WorkingDirectory）、指定目录列表下的 `git remote -v`）；映射到本体 v1；一次运行 = 一个 Activity(kind=`ingest_run`)；Source = `host-inventory@<hostname>`；只读命令，运行身份为 `service` Principal。
+- 交付物：`collectors/host-inventory/collector.py`（数据源：`docker inspect`（容器、镜像、挂载、网络、发布端口、compose 标签）、`docker compose ls`、`systemctl list-unit-files --state=enabled` + `systemctl cat`（ExecStart / WorkingDirectory）、指定目录列表下的 `git remote -v`、进程树（`ps -eo pid,ppid,exe,cwd,args` 加 `ss -tlnp`，只保留 agent 运行时进程树下的非 systemd 子进程：可执行路径、工作目录、监听端点、父进程；**命令行在形成 Observation 之前按 `key|token|password|secret|passwd|api[-_]?key` 等模式脱敏为 `***`，`/proc/<pid>/environ` 完全不读**））；映射到本体 v1；一次运行 = 一个 Activity(kind=`ingest_run`)；Source = `host-inventory@<hostname>`；只读命令，运行身份为 `service` Principal。
 - 排除：容器状态、启动时间、CPU / 内存、日志内容等每次都变的字段（它们会在 I4 下每次产生新行）。
 - 依赖：T0.3、T0.4、T0.8。
-- 验收：在目标主机跑两遍：第二遍 `links` 行数不变、`conflicts` 为 0；手动改一个容器的发布端口后第三遍：旧 Fact `superseded_at` 非空、新 Fact 存在、仍无 Conflict；`explain` 任一条到 `host-inventory@<hostname>` Source。不在目标主机时用 `tests/fixtures/docker-inspect-sample.json` 跑单元测试。
+- 验收：在目标主机跑两遍：第二遍 `links` 行数不变、`conflicts` 为 0；手动改一个容器的发布端口后第三遍：旧 Fact `superseded_at` 非空、新 Fact 存在、仍无 Conflict；`explain` 任一条到 `host-inventory@<hostname>` Source；fixture 里含 `--token=abc` 与 `API_KEY=xyz` 的命令行入库后值为 `***`（`test_collector_masking`，脱敏失败则整批 Observation 不提交）。不在目标主机时用 `tests/fixtures/docker-inspect-sample.json`、`tests/fixtures/ps-sample.txt` 跑单元测试。
 - 建议执行者：Codex 写；Claude Code@host 跑验收。
 - 需人工批准：否（只读）。
-- 不做：不 `docker exec`；不读 env 值；不采 Hermes 拉起的非 systemd 子进程（待 §19.2 决定）。
+- 不做：不 `docker exec`；不读任何进程的 `environ`；不在脱敏前把命令行传给任何其他函数或日志；不采 pid / 启动时间等每次都变的字段。
 
 ### T0.10 P0 验收脚本
 - 目标：一条命令跑完 G1 的证明。
@@ -307,7 +292,18 @@ P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
 - 目标：官方 MCP Python SDK（streamable HTTP）暴露 capability 工具；工具名 = capability 名；参数 schema 从本体投影；bearer = Handle。
 - 交付物：`kernel/app/gateway/mcp/server.py`、`kernel/app/gateway/mcp/tools.py`（由 capability 注册表生成）、`kernel/tests/test_mcp.py`（用 MCP client 列工具并调用 `get_object`）。
 - 依赖：T1.3、T0.7。
-- 验收：`tools/list` 集合 == capability 注册表中 Handle 通道可用的集合（`scripts/check-capability-consistency.py` 三方一致：注册表 / HTTP / MCP）；无 Handle 的 MCP 连接被拒。
+- 验收：`tools/list` 集合 == capability 注册表中 Handle 通道可用的集合（`scripts/check-capability-consistency.py` 三方一致：注册表 / HTTP / MCP）；无 Handle 的 MCP 连接被拒；**Semantica 兼容别名**同时出现且必填参数名与类型一致（对照其 `mcp/schemas.py`）：
+
+| Semantica 工具 | 本平台 capability | 必填参数 | 差异 |
+|---------------|------------------|---------|------|
+| `record_decision` | `record_decision` | `category, scenario, reasoning, outcome, confidence` | `decision_maker` 忽略，改用认证 Principal；写入状态 `proposed` |
+| `query_decisions` | `query_decisions` | 无（`query / category / outcome / limit` 可选） | — |
+| `find_precedents` | `find_precedents` | `scenario` | — |
+| `get_causal_chain` | `causal_chain` | `decision_id`（`direction / max_depth` 可选） | 别名 |
+| `analyze_decision_impact` | `decision_impact` | `decision_id` | 别名 |
+| `get_provenance` | `explain` | `entity_id` | 别名；接受 Fact id 或 Object id |
+
+  用 Semantica 仓库 `plugins/` 里任一面向 Claude Code 的 decision skill，只改端点即可对本平台调用成功。
 - 建议执行者：Codex。需人工批准：否。
 
 ### T1.9 `gatekeeper-ragflow` 与本体扩展
@@ -328,7 +324,14 @@ P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
 - 需人工批准：否（只对测试容器）。
 
 ### T1.11 TLS
-- 见 E8。
+- 见 E8（caddy）。
+
+### T1.12 WorkerDefinition 注册表与 `invoke_worker`
+- 目标：「随时调用独立 AI Worker」作为一等能力：WorkerDefinition 有版本与生命周期（`draft → published → deprecated`），`invoke_worker(definition@version, input, wait, timeout) → result | task_id`。
+- 交付物：`kernel/migrations/0005_worker_definitions.sql`（版本化、状态、模型白名单、capability 需求、prompt / skills 引用；Task 记录启动时引用的版本）、`kernel/app/worker/definitions.py`（`propose / publish / deprecate`；`publish` 只能 human 通道）、`kernel/app/task/invoke.py`（human 通道 = `create_task` + 等待；Handle 通道 = 子 Handle 衰减 + `parent_worker_run_id`）、`kernel/tests/test_invoke_worker.py`。
+- 依赖：T1.1、T1.2、T1.5。实际拉起 Worker 依赖 P2 的 T2.5；P1 内用 fake supervisor 验证语义。
+- 验收：引用 `draft` 版本被拒；Worker 请求超出自身 Handle 范围的子 Handle 被拒；子 WorkerRun 的 ActionRequest 审计能沿 `parent_worker_run_id` 回到父 Task；`wait=true` 超时返回 `task_id` 而不挂死；同一 `definition@version` 在 `deprecated` 后不可再被引用但历史 Task 仍能重建。
+- 建议执行者：Codex。需人工批准：否。
 
 ---
 
@@ -350,7 +353,7 @@ P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
 - 建议执行者：Codex。需人工批准：否。
 
 ### T2.3 平台扩展（TS）
-- 目标：pi 扩展做五件事（设计 §7.2）：注册 capability 工具、`tool_call` 拦截转 `request_action`、`context` 注入 Task 上下文、`session_*` 回传 JSONL、上报 pi-ai 记录的每条 assistant 消息 usage / cost（与内核代理侧计量交叉核对；成本来自 pi-ai 的 `ModelCost` 元数据，不自算）。
+- 目标：pi 扩展做五件事（设计 §7.2）：注册 capability 工具、`tool_call` 拦截转 `request_action`、`context` 注入 Task 上下文、`session_*` 回传 JSONL、上报 pi-ai 记录的每条 assistant 消息 usage / cost（与内核代理侧计量交叉核对；成本来自 pi-ai 的 `ModelCost` 元数据，不自算）。扩展同时支持两种运行模式，只由环境变量 `NEXTTIME_MODE` 区分：`worker`（容器内，回传会话）与 `interactive`（用户本机 pi，默认不回传会话，可选开启）；后者是「日常用的 pi 成为平台客户端」的落点，安装方式写进 `docs/howto-connect-pi.md`。
 - 交付物：`worker-runtime/platform-extension/index.ts`（≤ 500 行）、`worker-runtime/platform-extension/kernel-client.ts`、契约测试 `worker-runtime/platform-extension/test/`（用 pi 的 faux provider + fake kernel；锁定 `@earendil-works/pi-coding-agent@0.84.4`）。
 - 依赖：T1.8（capability 列表与 schema）、T2.1。
 - 验收：`npm test` 通过；fake kernel 收到 `request_action` 后返回 `pending_approval` 时，工具结果里带 `status: pending_approval` 与 simulate 内容且 agent 循环不阻塞。
@@ -395,6 +398,19 @@ P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
 
 ---
 
+## 5A. 推荐执行顺序（垂直切片）
+
+按「先跑通一条最薄的端到端，再加厚」排，任务定义不变，只改顺序：
+
+| 切片 | 目标 | 任务 |
+|------|------|------|
+| **S1 观察链** | 本机采集 → 图 → Claude Code / pi 经 MCP 读到图并能 `explain` | R1 R2 R4 → T0.1 T0.2 T0.3 T0.5 T0.7 → T0.9 → T1.1 T1.2 T1.3 T1.8 |
+| **S2 治理链** | Claude Code 发起 docker 动作 → 人批 → Gatekeeper 执行 → 审计重建 | T0.6 T1.4 T1.5 T1.6 T1.7 T1.10 → E8 |
+| **S3 Worker 链** | `invoke_worker` 拉起 pi Worker → 经代理调外部 LLM → 会话回流 | T2.2 T2.1 T2.3 T2.4 T1.12 T2.5 T2.6 T2.7 |
+| **补厚** | 冲突检测、CLI 全集、ragflow、一致性校验、混沌与不变量监控 | T0.4 T0.8 T0.10 T1.9 T1.11 T2.8 |
+
+S1 完成即可让你日常的 pi / Claude Code 通过同一个 gateway 看见目标主机的服务与依赖图；S2 完成即有第一条受治理的写操作；S3 完成即最小当前版本。
+
 ## 6. 验收矩阵
 
 | 设计目标 | 证明脚本 | 关键断言 |
@@ -429,7 +445,8 @@ flowchart LR
   T2.2 --> T2.3
   T1.8 & T2.1 --> T2.3
   T2.2 & E1 --> T2.4
-  T1.2 & T1.5 & T2.4 --> T2.5 --> T2.6 --> T2.7 --> T2.8
+  T1.1 & T1.2 & T1.5 --> T1.12
+  T1.2 & T1.5 & T1.12 & T2.4 --> T2.5 --> T2.6 --> T2.7 --> T2.8
 ```
 
 可并行的起点：R1 → {R2, R3, R4}；E1 / E2 与 R 系列无关可同时做；T2.2 不依赖 P0 / P1，可提前。
@@ -444,6 +461,7 @@ flowchart LR
 | 采集器把「状态」当「结构」 | 每次运行产生大量 supersede | T0.9 明确排除字段列表；CI 里用 fixture 跑两遍断言行数不变 |
 | Handle 明文跨 LAN | 见设计 §11.2 | E8 在 P1 内完成 |
 | Gatekeeper-docker 与 supervisor 都持 docker socket | 两个高权限容器 | 分离容器、非 root 用户、后续评估 docker-socket-proxy 只暴露所需 API |
-| 环境整改（E5 / E6 / E7）未做 | 不影响平台运行，但影响主机整体健康 | 由你决定时机 |
-| 是否采集 Hermes 拉起的子进程 | 见设计 §19.2 | 默认不采 |
+| 环境整改（E5 / E6）已决定不做 | 不影响平台运行，但主机日志与暴露端口的风险仍在 | 记录在 `docs/private/`，不再跟踪 |
+| 平台自身备份（E7）暂不做 | §10.4 回滚缺少数据源 | P2 后重新评估 |
+| 采集器把进程命令行中的密钥写入 Observation | 脱敏必须是形成 Observation 的前置条件，失败则整批不提交；`environ` 不读 | T0.9 `test_collector_masking` 守门 |
 | 各厂商 OpenAI 兼容端点的细节差异（工具调用、流式 `usage` 字段、JSON 模式） | Worker 侧由 pi-ai 的 `compat` 标志处理；内核自用调用只用 OpenAI 兼容子集，并在 T2.1 验收里做「换厂商零改动」测试 | — |

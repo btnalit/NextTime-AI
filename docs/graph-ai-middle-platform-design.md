@@ -11,11 +11,14 @@
 
 - 只想要结论：读 §1 总体判断、§4 五类图的重新定位、§16 最小当前版本。
 - 要做建模评审：读 §5 Domain Model（这是全文的核心，其余章节都是它的投影）。
-- 要开始动手：读 §9 数据 / API 设计、§10 部署、§15 路线图、§19 待你决策的问题。
+- 要开始动手：读 §9 数据 / API 设计、§10 部署、§15 路线图、§19 决策记录。
+- 设计对照原始需求的复盘与由此产生的修订：`design-review-2026-09-01.md`。
 
 ---
 
 ## 1. 总体判断（Overall Judgment）
+
+**设计重心（不可偏移）**：(a) **基于 Graph 的 AI 中台**——一份带类型、双时态、逐边溯源的共享图，既是所有 agent 的记忆，也是控制面；(b) **模块化**——内核 / Gatekeeper / Worker 各自独立部署、独立失效；(c) **分权**——读写分离、capability 授权、审批、审计，靠系统边界而非 prompt；(d) **随时调用独立的 AI Worker**——`invoke_worker` 是一等能力，WorkerDefinition 是有版本的「可执行文件」；(e) **pi 是 agent 运行底层**——Worker 里跑 pi，你日常用的 pi 也是客户端，LLM 协议复用 pi-ai。目标主机的运维资产只是第一份数据，不是产品；Semantica 工具兼容只是复用其生态，不是目标。
 
 1. **「基于 Graph」应当理解为领域模型的形状，而不是「必须上图数据库」。** 形状 = 带类型的对象 + 带类型的有向关系 + 双时态（业务时间 / 系统时间）+ 每条边都有溯源（provenance）。这个形状可以先落在 PostgreSQL 上，图数据库是按需加的遍历投影（§9.1）。否则「AI 中台」会退化成「又一个 Neo4j 项目」。
 
@@ -92,9 +95,9 @@
 | **Knowledge Graph** | 普遍为真的事实 | **World Model 的实例层**：Object / Link，每条 Link 是一个带溯源的 Fact | 摄取抽取（Semantica）/ 人工断言 / 系统同步 | 业务有效期 `valid_from / valid_until` |
 | **Code Graph** | 代码结构与依赖 | **World Model 的派生子本体**：Repository / Commit / File / Symbol + defines / calls / imports；真源是 `repo@commit`，索引可重建、不可手编 | 联邦现有 `codegraph` SQLite 索引，不重造 indexer | 绑定 commit |
 | **Context Graph** | 当前业务上下文、状态、决策轨迹、血缘、责任人 | **Epistemic + 运行态**：Source / Observation / Activity / Decision / Conflict / Evidence / Task / Dataset / Owner / Lineage | agent 会话、审批、摄取运行、人工决策 | 双时态：业务时间 + 系统时间 `recorded_at / superseded_at` |
-| **Graph Engineering** | 系统怎么干活 | **Governance Model**：Capability / Policy / ActionRequest / Approval / Workflow / Audit | 管理员定义 + 运行时事件 | 事件流，append-only |
+| **Graph Engineering** | 系统怎么干活 | **把图建起来、跑起来的工程**，四部分：数据工程（采集 / 抽取 / 冲突 / 取代 → Fact）、图谱建模（Ontology 版本）、检索推理（traverse / search / explain）、Agent 编排（WorkerDefinition 为节点、Capability 为允许的边、Policy 为边上的守卫、一次执行为图上实例化的路径）。Governance Model 是其中「编排」部分的骨架 | 管理员定义 + 运行时事件 | 执行路径写回同一个图，append-only |
 
-**对「Graph Engineering」的重新解释**：视频把它定义为「agent 编排图」。本设计把它收进 Capability + Policy + Workflow + Audit，原因只有一句：**没有权限模型的编排正是 agent 失控的来源**。所以 Workflow 在这里是「在受治理 capability 之上的持久状态机」，节点是 Step，边是合法状态转移，而不是任意可连的流程框。
+**对「Graph Engineering」的理解**：视频把它定义为「agent 的运行轨道」，由数据工程、图谱建模、检索推理、Agent 编排四部分组成。本设计完整保留这四部分，并加一条统一原则：**执行本身也是图，且写回同一个图**。WorkerDefinition 是节点，Capability 是允许的边，Policy 是边上的守卫，一次执行（Task → WorkerRun → ActionRequest → Gatekeeper → Activity → Fact / Decision）是图上被实例化的一条路径，带溯源写回 Context Graph。于是「系统知道什么」与「系统怎么干活」用同一套存储、同一套查询、同一个 `explain` 回答。与 LangGraph 一类「图即代码」的区别：这里的图是数据——节点、允许的边、守卫都可查询、可版本化、可授权；LLM 在允许的边内动态规划，人通过 Policy / Approval 守边。这也是「随时调用独立的 AI Worker」的确切含义：Worker 是随时可调的节点，被允许走的边是 capability，实际走过的路径就是审计。**没有权限模型的编排正是 agent 失控的来源**，所以 Workflow 是「受治理 capability 之上的持久状态机」，不是任意可连的流程框。
 
 三者对应本体方法论的三个模型：
 
@@ -164,8 +167,9 @@ Governance Model = Graph Engineering(能力 / 策略 / 审批 / 工作流 / 审�
 | **Approval** | 人对 ActionRequest 的决定；本身是一个 Decision。`approve(action_request_id)` 在同一事务内写入 Approval Decision、推进 ActionRequest、并把关联的 agent Decision 推进到 `approved`——审批真源只有这一处。**`approve` / `reject` 只能经 human 认证通道调用，不能经 CapabilityHandle 调用** |
 | **Task** | 分派给 Worker 的工作单元；持久状态；幂等键；owner |
 | **WorkflowRun / Step** | 多步任务的持久状态机；Step 类型：`agent` / `tool` / `approval` / `verify` / `compensate`；边 = 合法转移 |
-| **WorkerDefinition** | 「可执行文件」：模型、system prompt、skills、扩展集合、需要的 Capability 集合 |
-| **WorkerRun** | 一次 Worker 进程实例：绑定 Task、持有 CapabilityHandle、拥有 `agent` 类型 Principal；其会话日志回流为 Source |
+| **WorkerDefinition** | 「可执行文件」（cloudflare-os 的 Blueprint 类比）：模型白名单、system prompt、skills、扩展集合、需要的 Capability 集合；**有版本与生命周期**（`draft → published → deprecated`），存在数据库而非只在镜像里；Task 启动时固定引用当时的版本（与 Object → OntologyVersion 同一模式） |
+| **WorkerRun** | 一次 Worker 进程实例：绑定 Task、持有 CapabilityHandle、拥有 `agent` 类型 Principal；其会话日志回流为 Source；由 `invoke_worker` 派生时记录 `parent_worker_run_id` |
+| **invoke_worker** | 「随时调用独立 AI Worker」的一等 capability：`invoke_worker(definition@version, input, wait, timeout) → result \| task_id`。human 通道 = `create_task` + 等待；Worker 调用它时得到的子 Handle 是自身 Handle 的衰减，子 WorkerRun 的 ActionRequest 由子 WorkerRun `requested_by`，审计链父子可追溯 |
 | **Gatekeeper** | 外部系统连接器（借 cloudflare-os）：独立部署、持有凭证、暴露 `describe_actions` / `observe` / `simulate` / `apply` / `revert` |
 | **AuditRecord** | 每次受治理状态转移的 append-only 记录 |
 
@@ -293,7 +297,9 @@ stateDiagram-v2
 
 **WorkerRun**：`provisioning → running → suspended → terminated`；`terminated` 时撤销全部 CapabilityHandle。
 
-**OntologyVersion**：`draft → published → deprecated`。Object 保留其创建时版本引用；迁移 = Activity。
+**OntologyVersion**：`draft → published → deprecated`。`draft` 可由 human 编写，也可由 Worker / 摄取经 `propose_ontology_change` 提议（借 Semantica「从数据推断本体」的能力，但推断结果只能是 draft）；`publish` 只能经 human 通道。Object 保留其创建时版本引用；迁移 = Activity。
+
+**WorkerDefinition**：`draft → published → deprecated`，同 OntologyVersion；只有 `published` 版本可被 `invoke_worker` / `create_task` 引用。
 
 **CapabilityGrant**：`active → revoked | expired`。撤销即时使所有派生 Handle 失效。
 
@@ -423,7 +429,8 @@ flowchart TB
   4. `session_*` 事件：把 JSONL 会话树增量回传内核，作为 Source；`agent_end` 时内核把 turn 投影为 Activity，工具结果中的显式决策投影为 Decision（proposed）。
 - **LLM 访问**：Worker 不持有任何 provider key。**协议实现复用 pi-ai，不重造**：pi-ai 内置 `openai-completions` / `openai-responses` / `anthropic-messages` / `google-generative-ai` / `bedrock-converse-stream` / `mistral-conversations` 等 wire 实现和几十个 provider（DeepSeek、Moonshot、Qwen、MiniMax、智谱、OpenRouter、Groq、xAI、Mistral，以及任意 OpenAI 兼容服务，含中国区独立 provider），并按消息记录 usage 与 cost。平台只在镜像内置的 `~/.pi/agent/models.json` 里，把每个允许的 provider 的 `baseUrl` 改成内核 `llm` 模块的对应路由 `${KERNEL_LLM_URL}/<provider>`、`apiKey` 改成 CapabilityHandle（内置 provider 用 pi 的「Override defaults」方式，模型元数据原样继承；非内置的按 `api` 类型声明）。内核代理按路由注入真实 key 并转发，不转换格式，厂商特有能力（thinking、prompt caching、工具流式）由 pi-ai 对应实现处理，内核不感知。目标主机上的 Ollama 因显存耗尽不可用，**不作为后端**。pi 官方容器化文档明确指出「纯 Docker 模式下 provider key 会进入容器」，这条代理正是为了在保持 Worker 无出网的前提下消除该问题。
 - **隔离**：容器级；默认拒绝出网，只放行到 gateway（含 `llm` 端点）；只读根文件系统 + 任务工作目录卷。pi 明确声明自己没有沙箱，所以隔离必须由容器提供。
-- **多 Worker 协作**：Worker 通过 `create_task`（若其 Handle 允许）派生子 Task，子 Worker 的结果写回 Context Graph，父 Worker 通过 Task 状态与 Decision 读取，不靠会话上下文传递（对应 A5 多 agent 原则）。
+- **多 Worker 协作**：Worker 通过 `invoke_worker` / `create_task`（若其 Handle 允许）派生子 Task，子 Handle 是自身 Handle 的衰减，子 Worker 的结果写回 Context Graph，父 Worker 通过 Task 状态与 Decision 读取，不靠会话上下文传递（对应 A5 多 agent 原则）。
+- **你日常交互用的 pi 也是客户端**：同一个平台扩展装进本机 pi 的 `~/.pi/agent/extensions/`，配一个经 human 通道签发的 Handle，交互式 pi 就获得与 Worker 相同的 capability 工具与 Context Graph 上下文注入（默认不回传会话，可选开启）。这是 G3 对 pi 的落点，也是「非常喜欢的 agent」在平台里的位置。
 
 ### 7.3 Ingest Worker（Semantica）
 
@@ -658,6 +665,7 @@ create table action_requests (
   requested_by uuid not null,       -- Principal：WorkerRun 的 agent Principal，或外部运行时代表的 human Principal
   session_id uuid not null,         -- 持有 Handle 的会话（WorkerRun / MCP 会话 / service 会话）
   worker_run_id uuid,               -- 仅平台拉起的 Worker 有值
+  parent_worker_run_id uuid,        -- 由 invoke_worker 派生的子 Worker 记录父运行，审计链父子可追溯
   actor_runtime text not null,      -- pi-worker / claude-code / codex / hermes / ingest-worker
   gatekeeper text not null,
   action_kind text not null,
@@ -697,7 +705,8 @@ create table audit_records (        -- append-only；应用账号无 UPDATE / DE
 
 | 分组 | capability | 模式 | 说明 |
 |------|-----------|------|------|
-| ontology | `publish_ontology_version` | execute（admin） | draft → published |
+| ontology | `publish_ontology_version` | execute（admin） | draft → published；只能 human 通道 |
+| | `propose_ontology_change` | propose | agent / 摄取提议 draft（借 Semantica 的本体推断能力，结果只能是 draft） |
 | | `get_type` / `list_types` / `validate` | observe | |
 | graph | `get_object` / `traverse` / `search` / `state_at` | observe | `search` 返回结果带 `epistemic_status` |
 | | `assert_fact` | propose | 认知状态由调用方决定：human → `asserted`；agent（Handle 通道）→ `inferred`；`service` 类 Principal 的采集器从系统 API 直接读取 → `observed`。同一 `source_id` 对同一主谓再次给出不同值 = supersede 旧 Fact；不同 source → Conflict |
@@ -710,10 +719,14 @@ create table audit_records (        -- append-only；应用账号无 UPDATE / DE
 | | `approve` / `reject` / `list_pending` / `get_action` | execute（human）/ observe | |
 | | `grant_capability` / `revoke_capability` / `set_policy` | execute（admin） | |
 | task | `create_task` / `get_task` / `cancel_task` | propose / observe | Worker 派生子任务需 Handle 内含 `create_task` |
+| | `invoke_worker` | propose | 「随时调用独立 Worker」：`definition@version + input`，`wait=true` 时阻塞到 Task 终态（有超时，超时返回 `task_id`）；Worker 调用时子 Handle 为父的衰减 |
+| worker | `propose_worker_definition` / `publish_worker_definition` / `deprecate_worker_definition` | propose / execute（human） | WorkerDefinition 注册表，同本体的版本语义 |
 | code | `code_explore` / `code_impact` / `link_symbol` | observe / propose | 联邦 codegraph |
 | audit | `audit_query` / `reconstruct` / `export_prov` | observe（audit 角色） | |
 
 MCP 工具 = 上表每一行的机器可调投影：工具名 = capability 名，参数 schema 从 ontology 投影，每次调用先过 gateway 的 Handle 验证与 policy。MCP 遵循 2026-07-28 规范（stateless core、认证加固）。
+
+**与 Semantica MCP 工具兼容**：epistemic 组同时暴露 Semantica 的工具名与必填参数（已对照其 `mcp/schemas.py` 核实）：`record_decision(category, scenario, reasoning, outcome, confidence[, valid_from, valid_until])`、`query_decisions(query?, category?, outcome?, limit?)`、`find_precedents(scenario[, max_results])`、`get_causal_chain(decision_id[, direction, max_depth])` = `causal_chain`、`analyze_decision_impact(decision_id)`、`get_provenance(entity_id)` = `explain`。差异只有两点：`decision_maker` 由认证的 Principal 决定而非参数；Decision 以 `proposed` 状态写入。目的是让 Semantica 已有的面向 Claude Code / Codex / Cursor / Windsurf 的 skills 只换端点即可复用。
 
 ---
 
@@ -872,7 +885,7 @@ cloudflare-os 用不可伪造 RPC stub，这个机制在自托管栈里没有等
 
 权衡：token 是 bearer 型，泄露即可用；缓解 = 短 TTL + 绑定 `worker_run_id`（gateway 校验来源容器身份）+ Worker 无出网 + 撤销表。相比「代理进程持凭证暴露 scoped RPC」方案，token 方案不需要每个 Worker 一个代理进程，运维更轻；保留的核心不变量是同一个：**凭证永不进入 Worker 进程**。
 
-**传输安全**：MVP 阶段 gateway 是明文 HTTP，只绑定目标主机的内网地址；Handle 作为 bearer 跨局域网传输存在被嗅探的风险，用短 TTL 与撤销表缓解。P1 用主机上已有的 nginx（或 caddy）做 TLS 反向代理（内网 CA 或自签），之后 gateway 只监听 loopback。这是已知的、有时限的妥协，不是设计。
+**传输安全**：MVP 阶段 gateway 是明文 HTTP，只绑定目标主机的内网地址；Handle 作为 bearer 跨局域网传输存在被嗅探的风险，用短 TTL 与撤销表缓解。P1 新起一个 caddy 容器做 TLS 反向代理（内网 CA 或自签），之后 gateway 只监听 loopback；不复用主机上已有的反向代理。这是已知的、有时限的妥协，不是设计。
 
 **来源绑定的具体做法**：Supervisor 创建 Worker 容器后向内核注册 `(worker_run_id, container_id, 容器网络地址)`；gateway 对 Handle 通道的请求校验源地址与注册记录一致，不一致即拒绝并撤销该 Handle。外部运行时没有这层校验，用更短 TTL（默认 1 小时，可续期）补偿。
 
@@ -948,7 +961,7 @@ P0–P2 是最小闭环，P3 起才引入 Semantica 的重依赖。
 
 ## 16. 最小当前版本（Minimal Current Version = P0 + P1 + P2）
 
-**包含**：Postgres 17（pgvector 镜像，未启用向量）；内核 Python 单进程；本体 v1 = 目标主机的服务与数据资产，只含采集器能填充的类型：ObjectType `Host / ComposeProject / Container / Image / SystemdService / Volume / Network / Endpoint / Repository / Owner`，LinkType `runs_on / part_of / uses_image / mounts / attached_to / exposes / depends_on / built_from / owned_by`（`KnowledgeBase / Dataset / Model` 随 P1 的 `gatekeeper-ragflow` 加入，不提前建空类型）；只读采集器 `host-inventory`（只采结构性事实，不采状态 / 运行时长等每次都变的字段）；`gatekeeper-docker` 与 `gatekeeper-ragflow`；worker-runtime（pi + 平台扩展）；Supervisor；一个 WorkerDefinition（`ops-runner`）；HTTP + MCP；`assert_fact` 路径的冲突检测（不含摄取）；外部运行时的 Handle 签发（让 Claude Code / Codex 能接入同一 gateway）；`llm` 按 provider 透传代理（首批配置 1–2 个 OpenAI 兼容厂商）；审计与 `explain`。
+**包含**：Postgres 17（pgvector 镜像，未启用向量）；内核 Python 单进程；本体 v1 = 目标主机的服务与数据资产，只含采集器能填充的类型：ObjectType `Host / ComposeProject / Container / Image / SystemdService / Process / Volume / Network / Endpoint / Repository / Owner`，LinkType `runs_on / part_of / uses_image / mounts / attached_to / exposes / depends_on / built_from / owned_by / spawned_by`（`Process` 覆盖 agent 运行时自行拉起的非 systemd 子进程：可执行路径、工作目录、监听端点、父进程；命令行在形成 Observation 之前脱敏，`environ` 完全不读；`KnowledgeBase / Dataset / Model` 随 P1 的 `gatekeeper-ragflow` 加入，不提前建空类型）；只读采集器 `host-inventory`（只采结构性事实，不采状态 / 运行时长等每次都变的字段）；`gatekeeper-docker` 与 `gatekeeper-ragflow`；worker-runtime（pi + 平台扩展）；Supervisor；一个 WorkerDefinition（`ops-runner`）；HTTP + MCP；`assert_fact` 路径的冲突检测（不含摄取）；外部运行时的 Handle 签发（让 Claude Code / Codex 能接入同一 gateway）；`llm` 按 provider 透传代理（首批配置 1–2 个 OpenAI 兼容厂商）；审计与 `explain`。
 
 **明确不包含**：Semantica 摄取与语义级冲突检测、向量检索、Code Graph、Workflow 多步、Explorer 图可视化、任何图数据库扩展。
 
@@ -964,6 +977,9 @@ P0–P2 是最小闭环，P3 起才引入 Semantica 的重依赖。
 - Memory 晋升工作流：把 Hermes 的 preference / procedure / reflection 作为 ObjectType 接入，`extracted → verified` 走 P5 的 Workflow。
 - LightRAG / Graphiti 式社区摘要与时序检索：作为 `search` 的另一实现，不改领域层。
 - Gatekeeper 生态：Android / ReDroid、Linux RPA、Home Assistant 等。
+- Semantica Explorer 复用：它的 Graph / Decision / Lineage 工作区若能经适配层读本平台 API，可省掉自建图可视化；P3 做一次 spike 再定，不承诺。
+- Semantica 推理引擎（Rete / Datalog / SPARQL / abductive）：P3 随抽取 Worker 一起评估，作为 `search` / `explain` 的另一实现。
+- Worker 预热池：`invoke_worker` 目前是冷启动一个容器；「随时调用」的延迟要求高时再加常驻池。
 
 ---
 
@@ -1001,14 +1017,16 @@ P0–P2 是最小闭环，P3 起才引入 Semantica 的重依赖。
 | 4 | 产品化边界 | **开源项目，暂不考虑商用**；仓库公开，入库文档去环境化 | §3.3、§18 |
 | 5 | Hermes 记忆接入 | **暂不接入**，不复杂化、不强绑定；Memory-OS 的 SQLite 只是未来的 Source 候选 | §17 |
 | 6 | LLM | **全部外部 provider，不绑定单一厂商**：内核用 OpenAI SDK（OpenAI 兼容端点覆盖多厂商），Worker 复用 pi-ai 的多 provider 实现，内核代理只按 provider 透传、不转格式；本机 Ollama 不可用 | §7.2、§7.5 |
-| 7 | 代码仓库 | GitHub `btnalit/NextTime-AI`（公开），首个分支 `design/v0.1` | README |
+| 7 | 代码仓库 | GitHub `btnalit/NextTime-AI`（公开），首个分支 `design/v0.1`；此后改动走分支 + PR | README |
+| 8 | 环境整改建议（端口收敛、日志轮转、备份定时器、散落文件清理） | **不做**；发现记录保留在 `docs/private/`；平台自身备份建议 P2 后重新评估 | 任务清单 E5–E7 |
+| 9 | TLS 反代 | **新起 caddy 容器** | §11.2、任务 E8 |
+| 10 | 采集器范围 | **纳入** agent 运行时自行拉起的非 systemd 子进程（`Process` 类型；命令行先脱敏，不读 `environ`） | §16、任务 T0.9 |
+| 11 | 开源许可证 | **MIT** | `LICENSE` |
+| 12 | 复盘产生的修订（`invoke_worker`、WorkerDefinition 生命周期、交互式 pi 作为客户端、Semantica MCP 工具兼容、本体可由 agent 提议） | 采纳 | `design-review-2026-09-01.md` |
 
 ### 19.2 仍待你决定
 
-1. 环境整改建议（见 `docs/private/` 第 4 节：暴露端口收敛、Docker 日志轮转、备份定时器、散落文件清理）是否执行、何时执行。平台部署不依赖它们。
-2. TLS 反代用主机已有的 nginx 还是新起 caddy（P1 前定即可）。
-3. 采集器是否也纳入 agent 运行时自行拉起的非 systemd 子进程；默认只采 docker / systemd / git 三类。
-4. 开源许可证（MIT / Apache-2.0 / 其他）；仓库目前没有 `LICENSE` 文件。
+暂无。新的待决问题记入本节。
 
 ---
 
