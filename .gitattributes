@@ -1,0 +1,5 @@
+# Shell scripts must keep LF line endings regardless of the checkout
+# platform's core.autocrlf — several of them (e.g. scripts/host-bootstrap.sh)
+# are piped directly into a remote `sh` over SSH, where a CRLF breaks the
+# shebang / options parsing.
+*.sh text eol=lf
