@@ -5,14 +5,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import { hashApiKey } from '../application/gateway/index.js';
-import { createWorkspace } from './bootstrap.js';
+import { addPrincipal, createWorkspace } from './bootstrap.js';
 
 /**
  * cli/bootstrap.test: integration tests (real Postgres; auto-skip without DATABASE_URL) for
- * `create-workspace` (docs/development-tasks.md S1.3, item 6) — the workspace and its owner
- * Principal exist afterward, the printed API key resolves back to that Principal via the human
- * channel's own hashing (`application/gateway/auth.ts`'s `hashApiKey`, which `bootstrap.ts`
- * itself calls — see its module doc), and only the hash, never the raw key, is stored.
+ * `create-workspace` (docs/development-tasks.md S1.3, item 6) and `add-principal`
+ * (docs/development-tasks.md S1.10) — the workspace/principal rows exist afterward, the printed
+ * API key resolves back to that Principal via the human channel's own hashing
+ * (`application/gateway/auth.ts`'s `hashApiKey`, which `bootstrap.ts` itself calls — see its
+ * module doc), and only the hash, never the raw key, is stored.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -77,5 +78,46 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
     expect(a.workspaceId).not.toBe(b.workspaceId);
     expect(a.ownerPrincipalId).not.toBe(b.ownerPrincipalId);
     expect(a.apiKey).not.toBe(b.apiKey);
+  });
+
+  it('adds a second, member-role Principal to an existing Workspace with its own API key', async () => {
+    const owner = await createWorkspace(pool, 'bootstrap-test-workspace-add-principal', 'Alice');
+
+    const bob = await addPrincipal(pool, owner.workspaceId, 'Bob');
+
+    expect(bob.principalId).not.toBe(owner.ownerPrincipalId);
+    expect(bob.apiKey).not.toBe(owner.apiKey);
+
+    const row = await withWorkspace(
+      pool,
+      { workspaceId: owner.workspaceId, principalId: bob.principalId },
+      async (client) => {
+        const result = await client.query<{
+          kind: string;
+          role: string;
+          display_name: string;
+          api_key_hash: string;
+        }>(
+          'select kind, role, display_name, api_key_hash from principals where workspace_id = $1 and id = $2',
+          [owner.workspaceId, bob.principalId],
+        );
+        return result.rows[0];
+      },
+    );
+
+    expect(row?.kind).toBe('human');
+    expect(row?.role).toBe('member');
+    expect(row?.display_name).toBe('Bob');
+    expect(row?.api_key_hash).toBe(hashApiKey(bob.apiKey));
+  });
+
+  it("rejects a role outside principals.role's CHECK constraint", async () => {
+    // addPrincipal() itself does not re-validate `role` (the CLI's --role flag is what
+    // RoleSchema.safeParse guards, in runAddPrincipal, before this function is ever called) —
+    // this exercises the DB's own CHECK as the backstop for any other caller.
+    const owner = await createWorkspace(pool, 'bootstrap-test-workspace-bad-role', 'Alice');
+    await expect(
+      addPrincipal(pool, owner.workspaceId, 'Eve', 'not-a-role' as never),
+    ).rejects.toThrow();
   });
 });
