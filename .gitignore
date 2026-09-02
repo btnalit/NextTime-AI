@@ -23,6 +23,7 @@ build/
 
 # Node（worker-runtime/platform-extension）
 node_modules/
+*.tsbuildinfo
 
 # 环境与密钥
 .env

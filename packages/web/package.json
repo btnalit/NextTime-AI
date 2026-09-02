@@ -1,0 +1,22 @@
+{
+  "name": "@nexttime/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "React + Vite SPA served statically by caddy: chat, approvals, tasks, connections, audit/explain (design doc §7.6). `dist/` is the Vite static build, mounted read-only by the caddy service in docker-compose.yml (§10.2).",
+  "scripts": {
+    "lint": "biome check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "vite": "^6.0.7"
+  }
+}
