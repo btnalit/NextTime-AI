@@ -56,38 +56,40 @@ cat "${NEXTTIME_DATA}/config/models.json"   # S1.7 未接入真实 provider 时�
 cd <CODE_DIR>
 docker compose up -d egress-proxy worker-supervisor
 docker compose ps egress-proxy worker-supervisor
-curl -s http://localhost:0 >/dev/null 2>&1 || true   # worker-supervisor 不发布主机端口，见下
 ```
 
 `worker-supervisor` 只在 `control` 网络（compose 未发布任何主机端口），从主机 `curl` 不到；
-用 `docker compose exec` 或另一个 `control` 网络容器访问：
+它自己的镜像（`packages/worker-supervisor/Dockerfile`，`node:24-bookworm-slim` 基础，未装
+`curl`/`wget`）也没有现成的 HTTP 客户端命令行工具——用容器自带的 Node `fetch()` 代替：
 
 ```bash
-docker compose exec worker-supervisor wget -qO- http://localhost:8081/healthz
-# 或（若镜像没有 wget/curl）：
-docker compose exec kernel wget -qO- http://worker-supervisor:8081/healthz 2>/dev/null || true
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/healthz').then(r=>r.text()).then(t=>console.log(t))
+"
 ```
 
-期望 `{"status":"ok"}`。
+期望 `{"status":"ok"}`。下面的每个 `/resident/*` 调用都用这个 `node -e fetch(...)` 模式
+（`-T` 关掉伪 TTY，避免 `docker compose exec` 吞掉后续脚本的 stdin）。
 
 ## 5. 拉起两个用户的入口容器
 
 ```bash
 cd <CODE_DIR>
-SPAWN_ALICE='{"workspaceId":"ws-demo","principalId":"demo-alice","handle":"dummy-handle-alice"}'
-SPAWN_BOB='{"workspaceId":"ws-demo","principalId":"demo-bob","handle":"dummy-handle-bob"}'
-
-docker compose exec worker-supervisor wget -qO- \
-  --header='Content-Type: application/json' --post-data="$SPAWN_ALICE" \
-  http://localhost:8081/resident/spawn
-docker compose exec worker-supervisor wget -qO- \
-  --header='Content-Type: application/json' --post-data="$SPAWN_BOB" \
-  http://localhost:8081/resident/spawn
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/resident/spawn', {
+  method: 'POST',
+  headers: {'content-type': 'application/json'},
+  body: JSON.stringify({workspaceId: 'ws-demo', principalId: 'demo-alice', handle: 'dummy-handle-alice'}),
+}).then(r => r.text()).then(t => console.log(t))
+"
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/resident/spawn', {
+  method: 'POST',
+  headers: {'content-type': 'application/json'},
+  body: JSON.stringify({workspaceId: 'ws-demo', principalId: 'demo-bob', handle: 'dummy-handle-bob'}),
+}).then(r => r.text()).then(t => console.log(t))
+"
 ```
-
-（`wget` 的 busybox 版本没有 `--post-data`/`--header` 时，改用
-`docker compose exec worker-supervisor node -e '...'` 拼一个最小 fetch 脚本，或临时装
-`curl`——`node:24-bookworm-slim` 基础镜像默认没有 `curl`。）
 
 期望：两次都 `200`，`created:true`，各自不同的 `containerId`/`ip`，`restarts:0`。
 
@@ -130,9 +132,13 @@ docker exec nexttime-entry-demo-alice sh -c 'touch /ok' && echo "UNEXPECTED: roo
 
 ```bash
 docker kill nexttime-entry-demo-alice
-docker compose exec worker-supervisor wget -qO- \
-  --header='Content-Type: application/json' --post-data="$SPAWN_ALICE" \
-  http://localhost:8081/resident/spawn
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/resident/spawn', {
+  method: 'POST',
+  headers: {'content-type': 'application/json'},
+  body: JSON.stringify({workspaceId: 'ws-demo', principalId: 'demo-alice', handle: 'dummy-handle-alice'}),
+}).then(r => r.text()).then(t => console.log(t))
+"
 ```
 
 期望：`created:true`，新的 `containerId`，`restarts:1`；`ls "${NEXTTIME_DATA}/workspaces/demo-alice"`
@@ -141,12 +147,20 @@ docker compose exec worker-supervisor wget -qO- \
 ## 8. 收尾
 
 ```bash
-docker compose exec worker-supervisor wget -qO- \
-  --header='Content-Type: application/json' --post-data='{"principalId":"demo-alice"}' \
-  http://localhost:8081/resident/stop
-docker compose exec worker-supervisor wget -qO- \
-  --header='Content-Type: application/json' --post-data='{"principalId":"demo-bob"}' \
-  http://localhost:8081/resident/stop
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/resident/stop', {
+  method: 'POST',
+  headers: {'content-type': 'application/json'},
+  body: JSON.stringify({principalId: 'demo-alice'}),
+}).then(r => console.log(r.status))
+"
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/resident/stop', {
+  method: 'POST',
+  headers: {'content-type': 'application/json'},
+  body: JSON.stringify({principalId: 'demo-bob'}),
+}).then(r => console.log(r.status))
+"
 # 仅在验收前它们不在跑时才停：
 docker compose stop worker-supervisor egress-proxy
 git checkout main
