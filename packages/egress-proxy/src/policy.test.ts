@@ -275,6 +275,66 @@ describe('decideEgress', () => {
     expect(decision).toEqual({ allowed: true, address: '192.0.2.50' });
   });
 
+  describe('trustedResolvedCidrs (transparent-proxy fake-IP ranges)', () => {
+    // A host whose resolver answers every public name from a private "fake-IP" range that a
+    // local transparent proxy maps back to the real destination (design doc §7.9 note).
+    const fakeRange = parseCidr(`${quad(10, 199, 0, 0)}/16`);
+
+    it('allows a hostname that resolves into a trusted range', async () => {
+      const decision = await decideEgress({
+        hostname: 'public.example.com',
+        source: undefined,
+        config: baseConfig({ trustedResolvedCidrs: [fakeRange] }),
+        resolve: resolverReturning(quad(10, 199, 12, 34)),
+      });
+      expect(decision).toEqual({ allowed: true, address: quad(10, 199, 12, 34) });
+    });
+
+    it('still denies a hostname that resolves into a private range outside the trusted one', async () => {
+      const decision = await decideEgress({
+        hostname: 'rebound.example.com',
+        source: undefined,
+        config: baseConfig({ trustedResolvedCidrs: [fakeRange] }),
+        resolve: resolverReturning(quad(10, 20, 3, 4)),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'private-address' });
+    });
+
+    it('denies a literal-IP target inside the trusted range (only resolved names qualify)', async () => {
+      const literal = quad(10, 199, 12, 34);
+      const decision = await decideEgress({
+        hostname: literal,
+        source: undefined,
+        config: baseConfig({ trustedResolvedCidrs: [fakeRange] }),
+        resolve: resolverReturning(literal),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'private-address' });
+    });
+
+    it('platform subnets stay denied even when a trusted range covers them', async () => {
+      const decision = await decideEgress({
+        hostname: 'inside.example.com',
+        source: undefined,
+        config: baseConfig({
+          trustedResolvedCidrs: [fakeRange],
+          platformSubnets: [parseCidr(`${quad(10, 199, 50, 0)}/24`)],
+        }),
+        resolve: resolverReturning(quad(10, 199, 50, 7)),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'private-address' });
+    });
+
+    it('is a no-op when the list is empty or unset', async () => {
+      const decision = await decideEgress({
+        hostname: 'public.example.com',
+        source: undefined,
+        config: baseConfig({ trustedResolvedCidrs: [] }),
+        resolve: resolverReturning(quad(10, 199, 12, 34)),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'private-address' });
+    });
+  });
+
   it('denies with dns-error when resolution throws', async () => {
     const decision = await decideEgress({
       hostname: 'broken.example.com',

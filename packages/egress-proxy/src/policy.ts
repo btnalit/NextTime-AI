@@ -1,5 +1,5 @@
 import type { CidrRange } from './net-utils.js';
-import { classifyAddress } from './net-utils.js';
+import { classifyAddress, isInCidr, parseIPv4, parseIPv6 } from './net-utils.js';
 
 /**
  * Egress decision policy (design doc §7.9, §5.4 I10). Pure aside from the injected `resolve`
@@ -21,6 +21,23 @@ export interface PolicyConfig {
   denyHosts: readonly string[];
   /** `NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS`, parsed. */
   platformSubnets: readonly CidrRange[];
+  /**
+   * `EGRESS_TRUSTED_RESOLVED_CIDRS`, parsed: address ranges owned by a transparent ("fake-IP")
+   * proxy on the host's network. Some networks hand out DNS answers from a private range for
+   * *every* public name and let a local transparent proxy map that fake address back to the real
+   * destination; to this proxy's rebinding check such an answer is indistinguishable from an
+   * attack, so without this list every public egress on such a host is denied.
+   *
+   * Semantics, deliberately narrow: a range listed here is treated as public **only for an
+   * address obtained by resolving a hostname**. A literal-IP request into the range is still
+   * denied (nothing legitimate targets a fake address by number), the platform's own subnets are
+   * still denied even if a listed range happens to cover them (checked first), and every other
+   * private/loopback/link-local/CGNAT range keeps its normal treatment. The trust this expresses
+   * is exactly "connections into this range go to the transparent proxy, never to a real internal
+   * host" — the operator asserts that about their network by setting the variable; it is unset
+   * by default. Host-specific values belong in `.env`, never in the repo.
+   */
+  trustedResolvedCidrs?: readonly CidrRange[];
   /**
    * Test-only escape hatch (`ALLOW_LOOPBACK_FOR_TESTS`): treat loopback addresses as allowed so
    * integration tests can point a resolved hostname at a local upstream. Must never be set in
@@ -120,13 +137,34 @@ export async function decideEgress(input: DecideEgressInput): Promise<PolicyDeci
     return { allowed: false, reason: 'dns-error' };
   }
 
+  // A literal-IP target never qualifies for the trusted-resolved-CIDR exemption (see
+  // PolicyConfig.trustedResolvedCidrs): the exemption is about what the network's resolver
+  // answered for a *name*, not about letting callers dial into that range directly.
+  const targetIsLiteral = parseIPv4(hostname) !== null || parseIPv6(hostname) !== null;
+
   for (const address of addresses) {
     const addressClass = classifyAddress(address, config.platformSubnets);
     if (addressClass === 'public') return { allowed: true, address };
     if (addressClass === 'loopback' && config.allowLoopbackForTests) {
       return { allowed: true, address };
     }
+    if (
+      !targetIsLiteral &&
+      addressClass !== 'platform-subnet' &&
+      addressClass !== 'invalid' &&
+      isInTrustedResolvedCidr(address, config.trustedResolvedCidrs)
+    ) {
+      return { allowed: true, address };
+    }
   }
 
   return { allowed: false, reason: 'private-address' };
+}
+
+function isInTrustedResolvedCidr(
+  address: string,
+  ranges: readonly CidrRange[] | undefined,
+): boolean {
+  if (!ranges || ranges.length === 0) return false;
+  return ranges.some((range) => isInCidr(address, range));
 }

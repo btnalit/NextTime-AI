@@ -18,6 +18,8 @@ export interface EgressProxyConfig {
   kernelUrl: string | undefined;
   denyHosts: string[];
   platformSubnets: CidrRange[];
+  /** `EGRESS_TRUSTED_RESOLVED_CIDRS` — see `PolicyConfig.trustedResolvedCidrs` (policy.ts). */
+  trustedResolvedCidrs: CidrRange[];
   sourceMapFile: string | undefined;
   maxTunnelsPerSource: number;
   idleTimeoutMs: number;
@@ -74,12 +76,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EgressProxyCon
     );
   }
 
+  // Comma-separated CIDRs; each parsed independently so one bad entry is logged and dropped
+  // (same policy as an invalid platform subnet) rather than silently disabling the whole list
+  // or, worse, crashing a proxy every agent container depends on.
+  const trustedResolvedCidrs: CidrRange[] = (env.EGRESS_TRUSTED_RESOLVED_CIDRS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((s) => parseSubnetEnv(s, 'EGRESS_TRUSTED_RESOLVED_CIDRS'))
+    .filter((r): r is CidrRange => r !== undefined);
+  if (trustedResolvedCidrs.length > 0) {
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        msg: 'egress-proxy: EGRESS_TRUSTED_RESOLVED_CIDRS set — hostnames resolving into these ranges are treated as public (transparent-proxy fake-IP ranges); literal IPs and platform subnets are still denied',
+        count: trustedResolvedCidrs.length,
+      }),
+    );
+  }
+
   return {
     proxyPort: parseIntEnv(env.PROXY_PORT, 3128),
     adminPort: parseIntEnv(env.ADMIN_PORT, 3129),
     kernelUrl: env.KERNEL_URL,
     denyHosts,
     platformSubnets,
+    trustedResolvedCidrs,
     sourceMapFile: env.SOURCE_MAP_FILE,
     maxTunnelsPerSource: parseIntEnv(env.MAX_TUNNELS_PER_SOURCE, 32),
     idleTimeoutMs: parseIntEnv(env.IDLE_TIMEOUT_MS, 120_000),
