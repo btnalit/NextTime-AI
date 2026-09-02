@@ -2,7 +2,7 @@
 # docs/development-tasks.md S1.5, second half, deliverable 4). Copy to
 # ${NEXTTIME_DATA}/config/llm-providers.yaml on the target host for the S1.10 acceptance path (and
 # for any other testing/demo that needs deterministic, no-real-provider-key chat replies) — see
-# docs/runbooks/host-worker-runtime.md for how this fits into the S1.5b host verification flow,
+# docs/runbooks/host-agent-host.md for how this fits into the S1.5b host verification flow,
 # and config/llm-providers.example.yaml for the full schema reference and field-by-field comments
 # (unrepeated here).
 #
