@@ -33,6 +33,10 @@ up:
 down:
 	docker compose down
 
-# TODO(S3): scripts/gen-models-json.ts (docs/graph-ai-middle-platform-design.md §7.7, §10.1).
+# Generates ${NEXTTIME_DATA}/config/models.json from ${NEXTTIME_DATA}/config/llm-providers.yaml
+# (docs/graph-ai-middle-platform-design.md §7.7, §10.1; docs/development-tasks.md S1.7). Builds
+# @nexttime/llm-proxy first — scripts/gen-models-json.ts imports its built dist output, not the
+# TS source, so this works the same regardless of which Node 22.x patch runs it.
 gen-models:
-	@echo "TODO(S3): generate models.json from \$$NEXTTIME_DATA/config/llm-providers.yaml (scripts/gen-models-json.ts)"
+	corepack pnpm --filter @nexttime/llm-proxy build
+	node scripts/gen-models-json.ts

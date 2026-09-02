@@ -1,0 +1,60 @@
+# Example llm-proxy provider configuration (design doc §7.7; docs/development-tasks.md S1.7).
+# Copy to ${NEXTTIME_DATA}/config/llm-providers.yaml on the target host and edit — every value
+# below is a placeholder (invalid domains, made-up model ids). Never put a real provider API key
+# in this file: only the *name* of the env var that holds it (`api_key_env`) goes here; the real
+# value lives in ${NEXTTIME_DATA}/secrets/llm-proxy.env (gitignored, never committed).
+#
+# Schema (packages/llm-proxy/src/config.ts `LlmProvidersFileSchema` is the authoritative
+# definition — this file is illustrative, not itself validated at commit time):
+#
+#   providers:
+#     <name>:                      # arbitrary id; becomes the inbound path segment /<name>/v1/...
+#                                   # and the key under models.json's own "providers" (gen-models-json.ts)
+#       api: openai-completions | openai-responses | anthropic-messages
+#       upstream_base_url: <bare origin, NEVER ending in /v1 — see the field's own doc comment
+#                            in config.ts for exactly why both api-kind families need this>
+#       api_key_env: <name of an env var in secrets/llm-proxy.env holding the real provider key>
+#       auth:
+#         header: authorization | x-api-key   # which header the *inbound* request carries the
+#                                              # Handle in — the same header the real key replaces
+#         scheme: Bearer                      # optional; omit for x-api-key (Anthropic's raw-key
+#                                              # convention — no "Bearer " prefix)
+#       models:
+#         - id: <model id, passed through verbatim to the upstream request body's "model" field>
+#           cost:                  # optional — pi-ai's ModelCost shape; omit if you don't want
+#                                   # cost_usd estimated for this model's llm_usage rows
+#             input: <USD per 1,000,000 input tokens>
+#             output: <USD per 1,000,000 output tokens>
+#             cacheRead: <USD per 1,000,000 cache-read tokens>
+#             cacheWrite: <USD per 1,000,000 cache-write tokens>
+
+providers:
+  example-openai:
+    api: openai-completions
+    upstream_base_url: https://api.example-openai-compatible.invalid
+    api_key_env: EXAMPLE_OPENAI_API_KEY
+    auth:
+      header: authorization
+      scheme: Bearer
+    models:
+      - id: example-gpt-large
+        cost:
+          input: 2.5
+          output: 10
+          cacheRead: 0.25
+          cacheWrite: 3.75
+      - id: example-gpt-small
+
+  example-anthropic:
+    api: anthropic-messages
+    upstream_base_url: https://api.example-anthropic-compatible.invalid
+    api_key_env: EXAMPLE_ANTHROPIC_API_KEY
+    auth:
+      header: x-api-key
+    models:
+      - id: example-claude-large
+        cost:
+          input: 3
+          output: 15
+          cacheRead: 0.3
+          cacheWrite: 3.75

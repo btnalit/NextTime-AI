@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { generateKeyPair, importPKCS8, importSPKI } from 'jose';
+import { HANDLE_SIGNING_ALG, importHandlePublicKey } from '@nexttime/shared';
+import { generateKeyPair, importPKCS8 } from 'jose';
 import type { CryptoKey } from 'jose';
 
 /**
@@ -19,10 +20,14 @@ import type { CryptoKey } from 'jose';
  * brief: "内核公钥导出到 ${NEXTTIME_DATA}/config/handle.pub 供 llm-proxy 本地验签") — the copy
  * `llm-proxy` reads is written by scripts/gen-handle-keys.sh directly from the same key material,
  * not re-derived by this module at runtime.
+ *
+ * `HANDLE_SIGNING_ALG` and the public-key import are re-exported/delegated from
+ * `@nexttime/shared`'s `handle-token` module (S1.7 "共享 Handle-token 原语") rather than defined
+ * here, so the kernel and `llm-proxy` can never drift on which algorithm or PEM-import path a
+ * Handle's public half uses. Only the private-key half (`importPKCS8`, signing) stays kernel-only
+ * — `llm-proxy` and the shared module never see a private key.
  */
-
-/** JWA algorithm identifier used for every Handle signature (design doc §11: "EdDSA"). */
-export const HANDLE_SIGNING_ALG = 'EdDSA' as const;
+export { HANDLE_SIGNING_ALG };
 
 /** The Ed25519 curve `generateKeyPair`/PEM-import must produce — the only curve EdDSA Handles use. */
 const HANDLE_KEY_CURVE = 'Ed25519' as const;
@@ -67,7 +72,7 @@ export async function loadHandleKeyPair(
 
   const [privateKey, publicKey] = await Promise.all([
     importPKCS8(privatePem, HANDLE_SIGNING_ALG),
-    importSPKI(publicPem, HANDLE_SIGNING_ALG),
+    importHandlePublicKey(publicPem),
   ]);
 
   return { privateKey, publicKey };
