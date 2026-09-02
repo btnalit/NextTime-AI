@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
@@ -117,11 +117,20 @@ describe.runIf(DATABASE_URL !== undefined)(
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
       workspaceId = await adminInsertWorkspace('egress-observations-integration-test');
-      principalId = await adminInsertPrincipal(workspaceId);
     });
 
     afterAll(async () => {
       await pool.end();
+    });
+
+    // A fresh principal per test (not one shared across the whole describe block, in beforeAll):
+    // `startRunningTurn()` deliberately leaves its Turn `status = 'running'` in several tests
+    // (that's the scenario under test) — sharing one principal across tests would let an earlier
+    // test's still-running Turn leak into a later test's "no running Turn" / "most recent Turn"
+    // assertions. `workspaceId` itself is still shared; only identity, not the workspace, needs to
+    // be test-local here.
+    beforeEach(async () => {
+      principalId = await adminInsertPrincipal(workspaceId);
     });
 
     it('appends the observation to a running Turn and enqueues one EgressObserved event', async () => {
