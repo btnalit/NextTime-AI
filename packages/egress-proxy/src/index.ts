@@ -64,11 +64,21 @@ export async function startEgressProxy(
 
   // Proxy listens on every interface (agent containers on the `workers` network reach it there);
   // admin/healthz is loopback-only, per the task spec, so it's never reachable from either
-  // network.
-  await Promise.all([
+  // network. Bind both with allSettled, not all — a plain Promise.all would reject as soon as
+  // either failed while leaving whichever one *did* bind still open and orphaned (no reference
+  // ever reaches a caller who could close it). On any failure here, close whatever did bind
+  // before rethrowing, so a partial startup can't leave a zombie listener behind.
+  const results = await Promise.allSettled([
     listen(proxyServer, config.proxyPort),
     listen(adminServer, config.adminPort, '127.0.0.1'),
   ]);
+  const failure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+  if (failure) {
+    sourceMap.close();
+    reporter.close();
+    await Promise.allSettled([closeServer(proxyServer), closeServer(adminServer)]);
+    throw failure.reason;
+  }
 
   return {
     proxyServer,

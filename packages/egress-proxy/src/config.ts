@@ -61,6 +61,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EgressProxyCon
   const workers = parseSubnetEnv(env.NEXTTIME_SUBNET_WORKERS, 'NEXTTIME_SUBNET_WORKERS');
   if (control) platformSubnets.push(control);
   if (workers) platformSubnets.push(workers);
+  if (platformSubnets.length === 0) {
+    // Not necessarily fatal — RFC1918/loopback/link-local/CGNAT/unique-local-v6 are still denied
+    // regardless — but I10 also expects the platform's own subnets denied, and those aren't
+    // always inside a well-known private block (.env.example uses the RFC5737 203.0.113.0/24
+    // documentation range, which classifies as public on its own). Cheap insurance: say so.
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        msg: 'egress-proxy: no platform subnets configured (NEXTTIME_SUBNET_CONTROL / NEXTTIME_SUBNET_WORKERS unset or invalid) — only well-known private/CGNAT ranges are denied',
+      }),
+    );
+  }
 
   return {
     proxyPort: parseIntEnv(env.PROXY_PORT, 3128),

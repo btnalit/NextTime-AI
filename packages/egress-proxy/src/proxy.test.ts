@@ -1,9 +1,13 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Resolver, SourcePolicy } from './policy.js';
 import { createProxyServer } from './proxy.js';
 import type { EgressObservation } from './report.js';
+import { createSourceMap } from './source-map.js';
 
 /**
  * Integration tests for the forward proxy (design doc §7.9 task spec, scenarios (a)-(d) from the
@@ -249,12 +253,25 @@ describe('createProxyServer', () => {
   it('(d) a per-source deny list from SOURCE_MAP_FILE blocks an otherwise-allowed host', async () => {
     const upstream = await startUpstream('should-not-reach');
     cleanups.push(upstream.close);
-    const source: SourcePolicy = { sourceId: 'worker-1', deny: ['allowed.example.test'] };
+
+    // Routed through the real SOURCE_MAP_FILE loader (not a hand-built SourcePolicy) so this
+    // matches the acceptance criterion's own wording literally: "per-source deny list from
+    // SOURCE_MAP_FILE". source-map.test.ts covers loading/hot-reload in isolation.
+    const dir = mkdtempSync(join(tmpdir(), 'egress-proxy-proxy-test-'));
+    cleanups.push(async () => rmSync(dir, { recursive: true, force: true }));
+    const sourceMapFile = join(dir, 'sources.json');
+    writeFileSync(
+      sourceMapFile,
+      JSON.stringify({ '127.0.0.1': { sourceId: 'worker-1', deny: ['allowed.example.test'] } }),
+    );
+    const sourceMap = createSourceMap(sourceMapFile);
+    cleanups.push(async () => sourceMap.close());
+
     const resolveHost: Resolver = async () => ['127.0.0.1'];
     const proxy = await startTestProxy({
       allowLoopbackForTests: true,
       resolveHost,
-      resolveSource: () => source,
+      resolveSource: (clientIp) => sourceMap.resolveSource(clientIp),
     });
     cleanups.push(proxy.close);
 

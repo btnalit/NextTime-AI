@@ -45,11 +45,14 @@ describe('@nexttime/egress-proxy', () => {
       dir = mkdtempSync(join(tmpdir(), 'egress-proxy-index-'));
       const sourceMapFile = join(dir, 'sources.json');
       writeFileSync(sourceMapFile, JSON.stringify({}));
-      const config: EgressProxyConfig = loadConfig({
-        PROXY_PORT: '0',
-        ADMIN_PORT: '0',
-        SOURCE_MAP_FILE: sourceMapFile,
-      });
+      // loadConfig() treats '0' as an invalid PROXY_PORT/ADMIN_PORT (parseIntEnv requires > 0)
+      // and falls back to the real defaults 3128/3129 — set the ephemeral port directly on the
+      // loaded config instead, so this test never binds a fixed, possibly-in-use port.
+      const config: EgressProxyConfig = {
+        ...loadConfig({ SOURCE_MAP_FILE: sourceMapFile }),
+        proxyPort: 0,
+        adminPort: 0,
+      };
 
       app = await startEgressProxy(config);
 

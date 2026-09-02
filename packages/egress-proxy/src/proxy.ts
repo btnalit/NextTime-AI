@@ -215,6 +215,13 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       path: `${target.pathname}${target.search}`,
       headers,
       timeout: connectTimeoutMs,
+      agent: false, // always a fresh socket, so 'connect' below fires for every request
+    });
+
+    // `timeout: connectTimeoutMs` above covers the TCP handshake; once connected, swap to the
+    // (usually much longer) idle timeout so a slow-but-alive download isn't cut off at 10s.
+    upstreamReq.on('socket', (socket) => {
+      socket.once('connect', () => socket.setTimeout(idleTimeoutMs));
     });
 
     upstreamReq.on('response', (upstreamRes) => {

@@ -9,11 +9,8 @@
  * is the kernel host-bridge's job (S1.5), not this proxy's, so `EgressObservation` is shaped like
  * that event (same `type: 'EgressObserved'` discriminator, a `domain` field, byte accounting) but
  * keyed by `sourceId` — the kernel is expected to lift this into the real domain event once it
- * resolves that id. (Also: as of this task no `@nexttime/*` package can yet import
- * `@nexttime/shared` from a fresh checkout — its `exports` point at `dist/`, but CI's `test` job
- * runs `pnpm -r test` without ever building, and the `quality` job runs `typecheck` before
- * `build`; every package is a self-contained skeleton today because nothing has hit this. Out of
- * scope for this task — see the PR description.)
+ * resolves that id. (Separately, no `@nexttime/*` package can yet import `@nexttime/shared` from
+ * a fresh checkout at all — see PR #10's description for that finding.)
  */
 
 export interface EgressObservation {
