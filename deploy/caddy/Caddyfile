@@ -1,0 +1,81 @@
+# deploy/caddy/Caddyfile
+#
+# caddy is NextTime-AI's only public-facing service (design doc §11: 只有 caddy 有公网面；内核
+# 不发布端口). TLS uses Caddy's internal CA (`tls internal`) — self-signed is acceptable for S1
+# (design doc §11: 内网 CA 或自签). See docs/runbooks/host-caddy.md for how to trust the
+# generated root CA on a client and for the placeholder-vs-real static root switch.
+#
+# No plaintext :80 listener: docs/development-tasks.md §E8 does not ask for an HTTP->HTTPS
+# redirect. `auto_https disable_redirects` turns off Caddy's default "also add a :80 redirect
+# helper" behavior that otherwise applies to any TLS-enabled site, hostname or not.
+{
+	auto_https disable_redirects
+}
+
+# The scheme prefix is required, not decorative: a bare ":8443" (no scheme, no hostname, non-
+# standard port) is a documented Caddy ambiguity (caddyserver/caddy#5747) — Caddy ends up
+# without a real TLS connection policy for the listener, and handshakes fail with a
+# "tlsv1 alert internal error". "https://:8443" makes the connection policy explicit.
+#
+# `on_demand` is required too: automatic HTTPS only provisions certificates for hostnames it
+# knows about from the Caddyfile (docs: "Caddy implicitly activates automatic HTTPS when it
+# knows a domain name or IP address it is serving") — a hostless catch-all like this one has no
+# name to provision eagerly, so without on_demand every handshake fails the same way (no
+# certificate for the connection → TLS "internal error" alert), regardless of the scheme fix
+# above. Caddy's docs flag unrestricted on_demand as insecure in production unless paired with
+# a global `on_demand_tls { ask ... }` permission check; accepted here for S1 (design doc §11:
+# 自签 acceptable for S1) because the issuer is `internal` (self-signed, not rate-limited public
+# ACME — the only abuse cost is local CPU/disk generating extra certs for junk SNI values on an
+# internal-only tool) and KERNEL_BIND_ADDR is not meant to be internet-reachable. Revisit if
+# this deployment is ever exposed beyond a trusted network.
+https://:8443 {
+	tls internal {
+		on_demand
+	}
+
+	# Access log to stdout as JSON. Caddy's access log never includes request/response bodies
+	# (there is no body-logging directive to accidentally enable) — only method/path/status/
+	# duration/size-shaped fields.
+	log {
+		output stdout
+		format json
+	}
+
+	# Baseline security headers reasonable for an internal tool. No Strict-Transport-Security:
+	# this deployment's TLS is an internal/self-signed CA (see runbook), and HSTS pinning could
+	# strand a client across a future CA rotation.
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Reverse-proxied to the kernel exactly as docs/development-tasks.md §E8 states ("反代 /api
+	# /ws /mcp /llm 到 kernel"). reverse_proxy handles the WebSocket upgrade for /ws
+	# transparently — no extra directives needed.
+	#
+	# NOTE raised in the PR, not decided here: design doc §7.7 / §10.2 describe a separate
+	# `llm-proxy` service for provider traffic. Routing /llm/* to `kernel` instead of
+	# `llm-proxy` may be a documentation gap in §E8 — kept as the task doc states.
+	@backend path /api/* /ws /mcp/* /llm/*
+	handle @backend {
+		reverse_proxy kernel:8080
+	}
+
+	# Explorer (S3) static build. Empty placeholder mount until S3 lands — see
+	# docs/runbooks/host-caddy.md.
+	handle_path /explorer/* {
+		root * /srv/explorer
+		file_server
+		try_files {path} /index.html
+	}
+
+	# Web UI (S1.8) static build. Serves deploy/caddy/placeholder/index.html until
+	# packages/web/dist exists — see docs/runbooks/host-caddy.md for the switch.
+	handle {
+		root * /srv/web
+		file_server
+		try_files {path} /index.html
+	}
+}
