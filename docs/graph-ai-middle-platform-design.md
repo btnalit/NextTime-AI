@@ -640,7 +640,7 @@ services:
     build: { context: ., dockerfile: packages/kernel/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/kernel.env          # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
     secrets: [handle_key]                                   # Handle 签名私钥只进这一个容器：/run/secrets/handle_key
-    volumes: ["${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/sessions:/data/sessions:ro"]
+    volumes: ["${NEXTTIME_DATA}/config:/data/config:ro"]
     depends_on: { postgres: { condition: service_healthy } }
     networks: [control, workers]
     restart: unless-stopped
@@ -712,7 +712,7 @@ services:
 
   backup:
     image: postgres:17-alpine                                # 与 postgres 同大版本
-    entrypoint: ["/bin/sh", "/backup.sh"]                    # 每日 pg_dump + sessions/workspaces rsync，保留 7 份
+    entrypoint: ["/bin/sh", "/backup.sh"]                    # 每日 pg_dump + workspaces/config tar.gz，保留 N 份
     volumes: ["./deploy/backup/backup.sh:/backup.sh:ro", "${NEXTTIME_DATA}:/data"]
     secrets: [pg_password]
     networks: [control]
@@ -787,7 +787,7 @@ nexttime explain <turn_activity_id>
 | `llm-proxy` 或 `egress-proxy` 重启 | 无状态；进行中的流式请求失败一次，pi 自行重试；用量上报有 outbox 式重放 |
 | outbox 派发器崩溃 | 事件已在事务内落库；重启后重放未投递事件；消费者幂等 |
 | 内核重启 | 无内存态；扫描 `executing` 超时项与 `running` Turn |
-| 库损坏 | `backup` 容器每日 `pg_dump` 与 `sessions/`、`workspaces/` 备份（S1.12），`scripts/restore.sh` 恢复并跑验收脚本 |
+| 库损坏 | `backup` 容器每日 `pg_dump` 与 `workspaces/`、`config/` 备份（S1.12），`scripts/restore.sh` 恢复并跑验收脚本 |
 
 ---
 

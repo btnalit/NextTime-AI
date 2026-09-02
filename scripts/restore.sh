@@ -16,7 +16,7 @@
 #                         live database. Refused otherwise.
 #   --files <tgz>         also restore a $NEXTTIME_DATA/backups/files/files-<ts>.tgz — extracted
 #                         into a staging dir ($NEXTTIME_DATA/restore/<ts>/), never over the live
-#                         sessions/ workspaces/ config/ directories. Requires NEXTTIME_DATA set
+#                         workspaces/ config/ directories. Requires NEXTTIME_DATA set
 #                         in the environment.
 #   --dry-run              validate only: `pg_restore -l` the dump's TOC (via a throwaway
 #                         postgres:17-alpine container — the live postgres service is never

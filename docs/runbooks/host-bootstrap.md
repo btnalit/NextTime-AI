@@ -18,7 +18,6 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=/path/to/data sh -s' < scripts/host-bootstrap.s
 | 目录 | 挂载到 |
 |------|--------|
 | `pgdata/` | `postgres`（数据卷） |
-| `sessions/` | `kernel`（只读）、`worker-supervisor`（读写） |
 | `workspaces/` | `worker-supervisor`（读写；子目录挂载规则见下） |
 | `secrets/` | `postgres`（Docker secret `pg_password`）、`backup` |
 | `config/` | `kernel`、`worker-supervisor`（均只读）、`llm-proxy`（只读） |
