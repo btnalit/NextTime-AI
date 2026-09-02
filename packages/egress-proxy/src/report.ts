@@ -1,20 +1,25 @@
 /**
  * Egress observation reporting (design doc §7.9, §5.4 I10, §7.10 `EgressObserved`).
  *
- * The wire shape below is deliberately a *local* type, not an import of
- * `@nexttime/shared`'s `EgressObserved` domain event: this proxy only ever knows a request's
- * `sourceId` (resolved from `SOURCE_MAP_FILE`, or a future supervisor registry — design doc
- * §7.9 "来源 ip → WorkerRun / 入口会话由 supervisor 注册表解析") — never the `workspaceId` /
- * `activityId` that event carries. Turning a `sourceId` into a WorkerRun/entry-session Activity
- * is the kernel host-bridge's job (S1.5), not this proxy's, so `EgressObservation` is shaped like
- * that event (same `type: 'EgressObserved'` discriminator, a `domain` field, byte accounting) but
- * keyed by `sourceId` — the kernel is expected to lift this into the real domain event once it
- * resolves that id. (Separately, no `@nexttime/*` package can yet import `@nexttime/shared` from
- * a fresh checkout at all — see PR #10's description for that finding.)
+ * The wire shape below is deliberately *not* `@nexttime/shared`'s `EgressObserved` domain
+ * event: this proxy only ever knows a request's `sourceId` (resolved from `SOURCE_MAP_FILE`, or
+ * a future supervisor registry — design doc §7.9 "来源 ip → WorkerRun / 入口会话由 supervisor
+ * 注册表解析") — never the `workspaceId` / `activityId` that event carries. Turning a `sourceId`
+ * into a WorkerRun/entry-session Activity is the kernel host-bridge's job (S1.5), not this
+ * proxy's, so `EgressObservation` is shaped like that event (same `type: 'EgressObserved'`
+ * discriminator, a `domain` field, byte accounting) but keyed by `sourceId` — the kernel is
+ * expected to lift this into the real domain event once it resolves that id.
+ *
+ * What *is* imported from `@nexttime/shared` is the `type` discriminator itself
+ * (`PlatformEvent`'s `'EgressObserved'` member): pinning it to the canonical event vocabulary
+ * means this local wire shape cannot silently drift from the domain event name it is later
+ * lifted into, without pretending the rest of the shape is identical.
  */
 
+import type { PlatformEvent } from '@nexttime/shared';
+
 export interface EgressObservation {
-  type: 'EgressObserved';
+  type: Extract<PlatformEvent, { type: 'EgressObserved' }>['type'];
   sourceId: string;
   clientIp: string;
   domain: string;

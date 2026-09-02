@@ -86,9 +86,20 @@ module.exports = {
       name: 'no-cross-package-internal-import',
       severity: 'error',
       comment:
-        "A package may only be consumed via its @nexttime/<pkg> entry point, never by reaching into another package's src/ directly.",
+        "A package may only be consumed via its @nexttime/<pkg> entry point, never by reaching into " +
+        "another package's src/ directly. Every workspace package's `exports` field (package.json) " +
+        "resolves the bare `@nexttime/<pkg>` specifier straight to that package's own `src/index.ts` " +
+        "under the `types`/`development` conditions (so typecheck and tests run against source, no " +
+        "build required first) — with `tsPreCompilationDeps` on, dependency-cruiser's own resolver " +
+        "follows that same condition and legitimately lands on `src/index.ts` for a plain package-root " +
+        "import, which is exempted below. A deeper path (`@nexttime/<pkg>/src/...`) is not published in " +
+        "`exports` at all and cannot resolve there through package resolution, so anything that does " +
+        "land elsewhere under another package's `src/` only got there via a forbidden deep import.",
       from: { path: '^packages/([^/]+)/src/' },
-      to: { path: '^packages/(?!$1/)[^/]+/src/' },
+      to: {
+        path: '^packages/(?!$1/)[^/]+/src/',
+        pathNot: '^packages/(?!$1/)[^/]+/src/index\\.ts$',
+      },
     },
   ],
   options: {

@@ -1,3 +1,4 @@
+import { PLATFORM_EVENT_NAMES } from '@nexttime/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EgressObservation } from './report.js';
 import { EgressReporter } from './report.js';
@@ -17,6 +18,17 @@ function observation(overrides: Partial<EgressObservation> = {}): EgressObservat
     ...overrides,
   };
 }
+
+describe('EgressObservation type discriminator', () => {
+  // Value-level (not type-only) import of a runtime export from `@nexttime/shared` — proves the
+  // workspace source-resolution guarantee at test time, not just at typecheck time:
+  // `EgressObservation` deliberately isn't the shared `EgressObserved` domain event (see
+  // report.ts), but its `type` discriminator must still be a real member of the canonical event
+  // vocabulary.
+  it("stays inside @nexttime/shared's canonical event vocabulary", () => {
+    expect(PLATFORM_EVENT_NAMES).toContain(observation().type);
+  });
+});
 
 beforeEach(() => {
   vi.useFakeTimers();
