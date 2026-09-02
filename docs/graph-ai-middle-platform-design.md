@@ -655,6 +655,11 @@ services:
     build: { context: ., dockerfile: packages/worker-supervisor/Dockerfile }
     # config/ ro, except egress-sources.json re-mounted rw on top (no admin endpoint on
     # egress-proxy — the SOURCE_MAP_FILE is the documented registration contract, S1.5a).
+    # group_add: non-root uid 10001 needs the host's `docker` group gid as a supplementary group
+    # to reach /var/run/docker.sock (root:docker 660) — verified missing on the target host
+    # (crash loop, EACCES) during S1.5a host verification; DOCKER_GID varies by host (`stat -c
+    # '%g' /var/run/docker.sock`), 999 is only a common default.
+    group_add: ["${DOCKER_GID:-999}"]
     volumes: ["/var/run/docker.sock:/var/run/docker.sock", "${NEXTTIME_DATA}/workspaces:/data/workspaces", "${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/config/egress-sources.json:/data/config/egress-sources.json"]
     # NEXTTIME_DATA: HOST path — bind-mount sources for spawned containers are resolved by the
     # daemon against the host fs, not this container's own /data/workspaces mount.

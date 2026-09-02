@@ -3,7 +3,9 @@
 对应任务：development-tasks.md § S1.5（本 runbook 覆盖前半：`worker-runtime` 镜像 +
 `worker-supervisor` 常驻模式）。占位符取值见 `docs/private/`（不入库）。前置：E1–E4（gVisor 已
 验证或已在 `.env` 回退 `runc`、数据目录已建、`.env` 已生成、Postgres 已起）；`config/models.json`
-须是有效的 pi `models.json`（见 §3）。
+须是有效的 pi `models.json`（见 §3）；`.env` 里 `DOCKER_GID` 须是本机真实的 `docker` 组 gid
+（`stat -c '%g' /var/run/docker.sock`）——`worker-supervisor` 以非 root uid 10001 运行，缺这个
+补充组会导致连接 socket 时 `EACCES` 而 crash loop（S1.5a 主机验收时发现）。
 
 ## 1. 目的
 
@@ -183,6 +185,12 @@ git checkout main
 
 ## 10. 已知偏离 / 待确认（PR 中一并说明）
 
+- **`worker-supervisor` 需要 `DOCKER_GID`（主机验收才发现）**：`packages/worker-supervisor/
+  Dockerfile` 是 R1 就有的、非本任务写的既有文件，以非 root uid 10001 运行；但目标主机
+  `/var/run/docker.sock` 是 `root:docker`（组 gid 因主机而异）660——两者原来对不上，容器一起来
+  就 `EACCES` crash loop。修的位置是 `docker-compose.yml` 的 `worker-supervisor.group_add:
+  ["${DOCKER_GID:-999}"]`（`.env.example` 新增 `DOCKER_GID` 占位符与说明），不是改
+  Dockerfile——本任务 `packages/worker-supervisor/**` 所有权范围内的最小修复。
 - **`--system-prompt-file` 不存在**：pi 0.84.4 没有这个 flag；用 `--system-prompt <path>`
   代替——`resource-loader.ts` 的 `resolvePromptInput` 在路径存在时按文件内容读取，效果等价。
 - **`sessions/` 顶层目录未被本任务使用**：设计文档 §10.2 的 compose 骨架给 kernel 与

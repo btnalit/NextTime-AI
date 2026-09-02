@@ -39,6 +39,14 @@ services:
     # (S1.5a task brief: that package exposes no admin registration endpoint — verified reading
     # packages/egress-proxy/src/admin.ts — so the documented file-based contract is the only
     # integration point; see packages/worker-supervisor/src/egress-map.ts).
+    # group_add: the container runs as non-root uid 10001 (packages/worker-supervisor/Dockerfile,
+    # same as every other @nexttime/* image), but /var/run/docker.sock on the host is owned
+    # root:docker mode 660 — verified on the target host (host-worker-runtime.md verification):
+    # without this, connecting to the socket fails EACCES and the process exits immediately
+    # (crash loop). DOCKER_GID must be the *host's* `docker` group gid (`stat -c '%g'
+    # /var/run/docker.sock`), which varies by host — set it in `.env`; 999 is only a common
+    # Debian/Ubuntu default, not guaranteed.
+    group_add: ["${DOCKER_GID:-999}"]
     volumes:
       [
         "/var/run/docker.sock:/var/run/docker.sock",
