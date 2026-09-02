@@ -106,14 +106,43 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     return cachedNetworkName;
   }
 
+  // Best-effort: a broken SOURCE_MAP_FILE (missing, wrong ownership/permissions on the host —
+  // host verification hit exactly this) must never fail a spawn/stop. The entry container being
+  // usable matters far more than egress attribution for that one source; this matches how the
+  // rest of the platform treats egress/usage reporting as best-effort elsewhere (e.g.
+  // @nexttime/llm-proxy's usage reporter, @nexttime/egress-proxy's own reporter — both queue and
+  // retry rather than block their caller).
   function registerEgress(workspaceId: string, principalId: string, ip: string | undefined): void {
     if (!ip) return;
-    egressMap.register(ip, { sourceId: entrySourceId(workspaceId, principalId) });
+    try {
+      egressMap.register(ip, { sourceId: entrySourceId(workspaceId, principalId) });
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'egress registration failed (spawn still succeeds)',
+          principalId,
+          ip,
+          error: String(err),
+        }),
+      );
+    }
   }
 
   function unregisterEgress(ip: string | undefined): void {
     if (!ip) return;
-    egressMap.unregister(ip);
+    try {
+      egressMap.unregister(ip);
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'egress unregistration failed (stop still succeeds)',
+          ip,
+          error: String(err),
+        }),
+      );
+    }
   }
 
   return {
@@ -125,8 +154,12 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // The supervisor's own container runs as uid:gid 10001 (Dockerfile `USER nexttime`,
       // matching every other @nexttime/* image) — a directory this process creates is therefore
       // already owned by that uid, satisfying I15 ("only that user's dir") without a separate
-      // chown step.
+      // chown step. localPiAgentDir must be pre-created here too (not left for Docker or
+      // entrypoint.sh) — see its doc comment in host-paths.ts for why: Docker auto-creating it
+      // as root (as the parent of the models.json bind-mount target) would block the non-root
+      // entry container from creating its sibling `.pi/sessions`.
       mkdirSync(paths.localWorkspaceDir, { recursive: true });
+      mkdirSync(paths.localPiAgentDir, { recursive: true });
 
       const existing = await docker.inspectByName(name);
 

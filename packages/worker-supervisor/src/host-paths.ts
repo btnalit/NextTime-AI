@@ -22,6 +22,15 @@ export interface WorkspacePaths {
   /** `models.json`'s bind-mount target inside the container
    *  (`${piAgentDirInContainer}/models.json`). */
   readonly modelsJsonTargetInContainer: string;
+  /** This container's own view of `piAgentDirInContainer` — `resident-service.ts`'s spawn()
+   *  `mkdirSync`s this *before* asking Docker to create the entry container. Host verification
+   *  (S1.5a) found that skipping this step lets Docker auto-create `.pi/agent` (as the parent of
+   *  the models.json bind-mount target) as **root**, while running as root — the entry
+   *  container's own non-root `nexttime` (uid 10001) then can't `mkdir` the sibling
+   *  `.pi/sessions` under that root-owned `.pi/`, and pi's own writes under `PI_CODING_AGENT_DIR`
+   *  would fail the same way. Pre-creating it here (this process also runs as uid 10001) means
+   *  Docker's bind-mount setup finds it already correctly owned. */
+  readonly localPiAgentDir: string;
 }
 
 export const WORKSPACE_MOUNT_TARGET = '/workspace';
@@ -33,6 +42,7 @@ export function workspacePaths(config: SupervisorConfig, principalId: string): W
     piAgentDirInContainer: `${WORKSPACE_MOUNT_TARGET}/.pi/agent`,
     piSessionDirInContainer: `${WORKSPACE_MOUNT_TARGET}/.pi/sessions`,
     modelsJsonTargetInContainer: `${WORKSPACE_MOUNT_TARGET}/.pi/agent/models.json`,
+    localPiAgentDir: `${config.localDataDir}/workspaces/${principalId}/.pi/agent`,
   };
 }
 

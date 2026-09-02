@@ -5,7 +5,10 @@
 验证或已在 `.env` 回退 `runc`、数据目录已建、`.env` 已生成、Postgres 已起）；`config/models.json`
 须是有效的 pi `models.json`（见 §3）；`.env` 里 `DOCKER_GID` 须是本机真实的 `docker` 组 gid
 （`stat -c '%g' /var/run/docker.sock`）——`worker-supervisor` 以非 root uid 10001 运行，缺这个
-补充组会导致连接 socket 时 `EACCES` 而 crash loop（S1.5a 主机验收时发现）。
+补充组会导致连接 socket 时 `EACCES` 而 crash loop（S1.5a 主机验收时发现，见 §10）；
+`${NEXTTIME_DATA}/config/egress-sources.json` 建议 `chown 10001:10001`（同一原因——写入会
+`EACCES`，但 S1.5a 已把这个失败改成 best-effort，不会挡住 spawn，只是那次 egress 登记不生效，
+见 §10）。
 
 ## 1. 目的
 
@@ -56,6 +59,10 @@ cat "${NEXTTIME_DATA}/config/models.json"   # S1.7 未接入真实 provider 时�
 
 ```bash
 cd <CODE_DIR>
+set -a; . ./.env; set +a
+# 让 worker-supervisor（非 root uid 10001）能写 egress 登记文件 —— 不做这步 spawn 仍会成功
+# （S1.5a 把这个失败改成了 best-effort），只是那次的 egress 来源登记不会真的写进去。
+chown 10001:10001 "${NEXTTIME_DATA}/config/egress-sources.json" || true
 docker compose up -d egress-proxy worker-supervisor
 docker compose ps egress-proxy worker-supervisor
 ```
@@ -191,6 +198,23 @@ git checkout main
   就 `EACCES` crash loop。修的位置是 `docker-compose.yml` 的 `worker-supervisor.group_add:
   ["${DOCKER_GID:-999}"]`（`.env.example` 新增 `DOCKER_GID` 占位符与说明），不是改
   Dockerfile——本任务 `packages/worker-supervisor/**` 所有权范围内的最小修复。
+- **`.pi/agent` 必须由 supervisor 自己先建好，不能让 Docker 隐式建（主机验收才发现）**：
+  bind-mount `models.json` 到 `/workspace/.pi/agent/models.json` 时，若 `.pi/agent` 目录还不
+  存在，Docker（准备挂载点这一步本身以 root 跑）会以 root 身份建出 `.pi/`——entrypoint.sh 随后
+  以 uid 10001 身份 `mkdir -p /workspace/.pi/sessions`（`.pi/` 的兄弟目录）就会 `Permission
+  denied`，容器立刻退出（exitcode 1）。修法：`resident-service.ts` 的 `spawn()` 在起容器前，用
+  自己的 uid（同样是 10001）先 `mkdirSync` 好 `<workspace>/.pi/agent`，这样 Docker 看到目标已
+  存在、属主已经正确，不会再自己建。`host-paths.ts` 新增 `localPiAgentDir` 承载这个路径。
+- **egress 登记失败不应该拖垮 spawn（主机验收才发现）**：目标主机上
+  `${NEXTTIME_DATA}/config/egress-sources.json` 是 `root:root 644`（`scripts/host-env-init.sh`
+  只把 `config/` 设成 world-**readable**，没有单独给这个后来才需要写的文件设属主/组）——非 root
+  的 worker-supervisor 写它会 `EACCES`。这暴露了一个真实的健壮性缺口，不只是这台主机的权限问题：
+  `resident-service.ts` 原来让这个失败直接冒泡成整个 `spawn`/`stop` 的 500，现在改成 best-effort
+  （记警告日志、继续）——与平台其它 egress/用量上报模块的既有做法一致（`llm-proxy`、
+  `egress-proxy` 自己的 reporter 都是排队重试、不阻塞调用方）。**主机侧仍需要**
+  `chown 10001:10001 "${NEXTTIME_DATA}/config/egress-sources.json"`（或等价的组可写方案）egress
+  登记才会真正生效——这条留给 `scripts/host-env-init.sh`（E2，不在本任务所有权范围）或主会话决定
+  是否把这个文件也纳入它现有的 chown 列表（`sessions/ workspaces/ artifacts/ caddy/`）。
 - **`--system-prompt-file` 不存在**：pi 0.84.4 没有这个 flag；用 `--system-prompt <path>`
   代替——`resource-loader.ts` 的 `resolvePromptInput` 在路径存在时按文件内容读取，效果等价。
 - **`sessions/` 顶层目录未被本任务使用**：设计文档 §10.2 的 compose 骨架给 kernel 与

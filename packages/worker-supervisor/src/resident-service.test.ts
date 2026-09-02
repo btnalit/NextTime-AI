@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 import { createEgressMapStore } from './egress-map.js';
+import type { EgressMapStore } from './egress-map.js';
 import { createResidentService } from './resident-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
 
@@ -104,6 +105,34 @@ describe('resident-service spawn', () => {
     expect(outcome.ip).toBeDefined();
     expect(map[outcome.ip as string]).toEqual({ sourceId: 'entry:ws-1:alice' });
   });
+
+  it('pre-creates .pi/agent under the local workspace dir before asking Docker to create the container', async () => {
+    // Host verification (S1.5a) found Docker auto-creating .pi/agent as root (as the parent of
+    // the models.json bind-mount target) blocks the non-root entry container from creating the
+    // sibling .pi/sessions. This pre-creation (as this process's own uid, like localWorkspaceDir
+    // itself) is the fix — assert the directory exists with the right shape before spawn returns.
+    const { service, config } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    const stat = statSync(join(config.localDataDir, 'workspaces', 'alice', '.pi', 'agent'));
+    expect(stat.isDirectory()).toBe(true);
+  });
+
+  it('spawn still succeeds when the egress map store throws (best-effort registration)', async () => {
+    const { config, docker } = setup();
+    const throwingEgressMap: EgressMapStore = {
+      register: () => {
+        throw new Error('EACCES: permission denied');
+      },
+      unregister: () => {
+        throw new Error('EACCES: permission denied');
+      },
+      read: () => ({}),
+    };
+    const service = createResidentService({ config, docker, egressMap: throwingEgressMap });
+    const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(outcome.created).toBe(true);
+    expect(outcome.status).toBe('running');
+  });
 });
 
 describe('resident-service stop', () => {
@@ -120,6 +149,21 @@ describe('resident-service stop', () => {
     const { service, docker } = setup();
     await expect(service.stop('nobody')).resolves.toBeUndefined();
     expect(docker.stopCalls).toEqual([{ name: 'nexttime-entry-nobody', timeoutSeconds: 10 }]);
+  });
+
+  it('stop still succeeds when the egress map store throws (best-effort unregistration)', async () => {
+    const { config, docker } = setup();
+    const throwingEgressMap: EgressMapStore = {
+      register: () => {},
+      unregister: () => {
+        throw new Error('EACCES: permission denied');
+      },
+      read: () => ({}),
+    };
+    const service = createResidentService({ config, docker, egressMap: throwingEgressMap });
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    await expect(service.stop('alice')).resolves.toBeUndefined();
+    expect(docker.stopCalls).toEqual([{ name: 'nexttime-entry-alice', timeoutSeconds: 10 }]);
   });
 });
 
