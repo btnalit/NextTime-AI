@@ -13,7 +13,9 @@ describe('capabilityRoute', () => {
   });
 
   it('projects every registered capability name onto a distinct route', () => {
-    const routes = new Set(CAPABILITY_REGISTRY.map((capability) => capabilityRoute(capability.name)));
+    const routes = new Set(
+      CAPABILITY_REGISTRY.map((capability) => capabilityRoute(capability.name)),
+    );
     expect(routes.size).toBe(CAPABILITY_REGISTRY.length);
   });
 });
