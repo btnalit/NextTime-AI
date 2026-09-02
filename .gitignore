@@ -1,0 +1,44 @@
+# 本地参考项目（第三方源码，仅供阅读，不入库）
+semantica-0.6.7/
+cloudflare-os-main/
+pi-0.84.4/
+
+# 环境具体值（主机地址、网段、路径、盘点结果）——仓库公开，不入库
+docs/private/
+
+# Claude Code 本地状态
+.claude/
+.codegraph/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Node（worker-runtime/platform-extension）
+node_modules/
+
+# 环境与密钥
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# 运行数据
+data/
+sessions/
+*.log
+
+# 编辑器 / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
