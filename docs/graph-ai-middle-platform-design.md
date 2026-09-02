@@ -685,11 +685,12 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:2.10                                        # pin 具体版本
+    build: { context: ., dockerfile: deploy/caddy/Dockerfile }  # caddy:2.10 + 内建 web 静态产物
+    image: nexttime-ai-caddy
     ports: ["${KERNEL_BIND_ADDR}:8443:8443"]
-    # /srv/web、/srv/explorer 在 S1.8 / S3 落地前指向 deploy/caddy/{placeholder,explorer-placeholder}
-    # 占位物（E8；切换步骤见 docs/runbooks/host-caddy.md）；下面写的是最终目标形态。
-    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "./packages/web/dist:/srv/web:ro", "./explorer/dist:/srv/explorer:ro", "${NEXTTIME_DATA}/caddy:/data"]
+    # 静态根随镜像走：Dockerfile 里构建 packages/web 并拷进 /srv/web（/srv/explorer 在 S3 前是占位目录，
+    # 之后同样拷进镜像）；改 web 就重建镜像。Caddyfile 仍 bind mount，改路由不必重建。
+    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA}/caddy:/data"]
     depends_on: [kernel]
     networks: [control]
     restart: unless-stopped                                  # 以 root 运行（E8：官方镜像 /config 卷非
