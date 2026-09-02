@@ -136,7 +136,7 @@
 - 验收：Playwright：登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整。依赖：S1.4。
 
 ### S1.9 Handle 最小实现（入口 Handle）
-- 交付物：`capability/{model,handles}.ts`：EdDSA JWT，含 `workspace / session / on_behalf_of / scope / exp / jti`；撤销表；宿主拉起子进程前向内核申请入口 Handle（能力上限 = 入口 WorkerDefinition 固定集合）。
+- 交付物：`capability/{model,handles}.ts`：EdDSA JWT，含 `workspace / session / on_behalf_of / scope / exp / jti`；撤销表；agent-host 在申请入口容器前向内核申请入口 Handle（能力上限 = 入口 WorkerDefinition 固定集合）；内核公钥导出到 `${NEXTTIME_DATA}/config/handle.pub` 供 `llm-proxy` 本地验签。
 - 验收：过期 / 撤销 / 篡改 401；请求体带 `on_behalf_of` 被拒（I13）。依赖：S1.1。
 
 ### S1.10 S1 验收脚本
@@ -318,7 +318,7 @@ flowchart LR
 
 | 项 | 处理 |
 |----|------|
-| 常驻 pi 子进程被当真源 | S1.5 验收含杀进程续聊；真源在 Postgres + JSONL |
+| 常驻入口容器被当真源 | S1.5 验收含杀容器续聊；真源在 Postgres + JSONL |
 | `invoke_worker` 阻塞等审批 | 90 秒超时返回 `task_id`；入口 prompt 教异步；S2.11 联动 |
 | Worker 往入口目录塞扩展 | I15：E2 目录归属 + S2.8 不挂载 |
 | Explorer 契约成本 | S3.5 只做 9 个端点，其余隐藏 |
