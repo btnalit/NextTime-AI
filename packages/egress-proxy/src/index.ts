@@ -53,6 +53,7 @@ export async function startEgressProxy(
   const proxyServer = createProxyServer({
     denyHosts: config.denyHosts,
     platformSubnets: config.platformSubnets,
+    trustedResolvedCidrs: config.trustedResolvedCidrs,
     allowLoopbackForTests: config.allowLoopbackForTests,
     resolveSource: (clientIp) => sourceMap.resolveSource(clientIp),
     reporter,

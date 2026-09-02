@@ -51,6 +51,14 @@ describe('loadConfig', () => {
     expect(config.platformSubnets).toHaveLength(2);
   });
 
+  it('parses EGRESS_TRUSTED_RESOLVED_CIDRS as a comma-separated list, dropping invalid entries', () => {
+    const config = loadConfig({
+      EGRESS_TRUSTED_RESOLVED_CIDRS: ' 198.18.0.0/15 , not-a-cidr, 198.51.100.0/24 ',
+    });
+    expect(config.trustedResolvedCidrs).toHaveLength(2);
+    expect(loadConfig({}).trustedResolvedCidrs).toEqual([]);
+  });
+
   it('logs and ignores an invalid subnet instead of throwing', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const config = loadConfig({ NEXTTIME_SUBNET_CONTROL: 'not-a-cidr' });
