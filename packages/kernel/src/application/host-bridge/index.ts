@@ -38,3 +38,10 @@ export type { AgentHostLink, AgentHostRuntimeDeps } from './agent-host-runtime.j
 
 export { registerTurnStartedConsumer } from './turn-started-consumer.js';
 export type { TurnStartedSource } from './turn-started-consumer.js';
+
+export { recordEgressObservations } from './egress-observations.js';
+export type {
+  EgressObservationInput,
+  RecordEgressObservationsDeps,
+  RecordEgressObservationsResult,
+} from './egress-observations.js';
