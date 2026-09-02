@@ -139,7 +139,7 @@ Governance Model = Capability / Policy / Approval / Task / Audit
 | **Task / WorkerRun** | 同 v0.1；WorkerRun 记 `parent_worker_run_id` |
 | **WorkerDefinition** | 「可执行文件」：`kind`（`entry` / `worker`）、模型白名单、system prompt、skills、扩展、所需 Capability、能力上限；`draft → published → deprecated`；Task 固定引用启动时版本。`entry` 类的能力上限：图的 observe、门上的 **observe 类 Operation**、`find_*`、`invoke_worker`、`request_connection`、`record_decision`、`propose_*`；没有门上的 execute |
 | **EntryAgent（入口 agent 实例）** | 每用户一个常驻容器（与 Worker 同镜像，`NEXTTIME_MODE=entry`），带该用户的持久工作目录；由 supervisor 管理生命周期，agent-host 只做事件桥；持有该用户的入口 Handle |
-| **Connection（连接）** | 某个门实例与某个系统之间的一次受治理的建立：由 agent `request_connection(kind, target)` 或人在「连接系统」页发起，人填地址与凭证，凭证只进门；产生 `Gatekeeper` 实例对象、系统对象与 `connects_to` 边；永久复用 |
+| **Connection（连接）** | 两个不同的动作。**建立**：某个门实例与某个系统之间的一次受治理的建立，由 agent `request_connection(kind, target)` 或人在「连接系统」页发起，人填地址与凭证，凭证只进门；产生 `Gatekeeper` 实例对象、系统对象与 `connects_to` 边；永久复用。**授权**：让某个用户的入口 agent 能用一个已存在的门是 `connect_gatekeeper`，本质是一条 CapabilityGrant，由 owner 执行。分权落在第二个动作上 |
 | **InterfaceManifest / Operation（接口清单）** | 一个门实例暴露的操作集合。每个 Operation：`name`、`binding`（`http`: 方法 + 路径；`cli`: 命令模板；`mcp`: 工具名；`ssh`: 命令模板或命令模式）、`params_schema`、`mode`（observe / execute）、`blast_radius`、`reversibility`、`auto_approvable`、`await_decision`、`reads/writes` 的 ObjectType、可选的结果映射（JMESPath → 对象身份键与属性）。来源：从 OpenAPI 或 MCP `tools/list` 导入；agent 探索后 `propose_operation`；手写 YAML。**未分类的操作默认 `require_approval`** |
 | **Skill（做法）** | 一份步骤文档（pi skill 格式），写明用哪些 Operation、怎么解析、有什么坑；`draft → published → deprecated`；Worker 结束时可 `propose_skill`，人发布；WorkerDefinition `uses` Skill，容器启动时装载 |
 | **Procedure（沉淀的流程）** | 跨系统、重复出现的业务流程：有序步骤引用 Operation 与 WorkerDefinition，含审批步与验证步；由成功的 Task 沉淀（`propose_procedure`），人发布；P5 起可由 Workflow 引擎持久执行、由 Trigger 驱动 |
@@ -453,7 +453,7 @@ sequenceDiagram
 
 入口 agent 的循环：理解需求 → 查图（Fact、先例、Procedure、可用手段）→ 单次观察够就直接答 → 否则选 Procedure 或 Worker 定义（没有专用就用通用 `ops-runner`）→ 衰减出只含所需门的 Handle → `invoke_worker` → 缺手段就 `request_connection` 或问用户 → 收到结果后把持久知识写图、记 Decision、成功且新颖时提议 Skill / Procedure。没有预画的流程图；顺序依赖逐轮推进，独立子任务并行拉起。
 
-**写入业务系统的审批路由**：Worker 的 execute 类 ActionRequest 按 I14 路由给**持有该动作范围的人**，不一定是发起对话的用户。例如报销提交由申请人的入口 agent 发起，卡片出现在财务 operator 的队列与对话里；排班写回由 HR owner 批。请求者若同时持有范围且 `requester_can_approve` 允许，卡片出现在自己的对话里。
+**写入业务系统的审批路由**：Worker 的 execute 类 ActionRequest 按 I14 路由给**持有该动作范围的人**，不一定是发起对话的用户。例如报销提交由申请人的入口 agent 发起，卡片出现在财务 operator 的队列与对话里；排班写回由 HR owner 批。请求者若同时持有范围且 `requester_can_approve` 允许，卡片出现在自己的对话里。**卡片出现的位置**：进入每个持有范围者自己的对话（作为系统消息）与审批队列；请求者的对话里只显示该动作的状态，没有批准按钮，除非请求者本人持有范围。Chat 仍然对其 owner 私有，跨用户传递的只是 ActionRequest，不是对话内容。
 
 ### 8.6 三个场景在全新平台上的走法
 
