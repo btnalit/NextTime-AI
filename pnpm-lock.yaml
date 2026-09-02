@@ -42,12 +42,18 @@ importers:
 
   packages/kernel:
     dependencies:
+      '@nexttime/shared':
+        specifier: workspace:*
+        version: link:../shared
       fastify:
         specifier: ^5.2.1
         version: 5.12.1
       pg:
         specifier: ^8.13.1
         version: 8.23.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@types/pg':
         specifier: ^8.11.10
