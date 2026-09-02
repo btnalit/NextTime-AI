@@ -116,8 +116,24 @@ describe('withWorkspace — transaction orchestration (fake client, no Postgres)
       text: "select set_config('app.principal_id', $1, true)",
       values: ['p1'],
     });
+    expect(calls[3]).toEqual({ text: 'set local role nexttime_app', values: undefined });
     expect(calls.map((c) => c.text).at(-1)).toBe('COMMIT');
     expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the role switch when skipRoleSwitch is set, for admin/bootstrap operations', async () => {
+    const { pool, calls } = createFakePool();
+
+    await withWorkspace(pool, { workspaceId: 'w1', principalId: 'p1' }, async () => 'ok', {
+      skipRoleSwitch: true,
+    });
+
+    expect(calls.map((c) => c.text)).toEqual([
+      'BEGIN',
+      "select set_config('app.workspace_id', $1, true)",
+      "select set_config('app.principal_id', $1, true)",
+      'COMMIT',
+    ]);
   });
 
   it('rolls back and rethrows the original error when fn throws, and still releases the client', async () => {
@@ -134,6 +150,7 @@ describe('withWorkspace — transaction orchestration (fake client, no Postgres)
       'BEGIN',
       "select set_config('app.workspace_id', $1, true)",
       "select set_config('app.principal_id', $1, true)",
+      'set local role nexttime_app',
       'ROLLBACK',
     ]);
     expect(isReleased()).toBe(true);
@@ -163,12 +180,63 @@ describe.runIf(DATABASE_URL !== undefined)('withWorkspace — integration (real 
   // exactly what the leak-prevention test below needs to prove.
   let pool!: Pool;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     pool = createPool({ poolConfig: { max: 1 } });
+    // withWorkspace's default `SET LOCAL ROLE nexttime_app` (S1.1) needs that role to exist.
+    // Deliberately not a full `runMigrations()` call here (that's migrate.test.ts's and
+    // invariants.test.ts's job, against the same database, and running it a third time from
+    // this file too would race table-creation statements that have no `IF NOT EXISTS` guard —
+    // see PR body "假设"). Creating just the role is safe under that same concurrency because
+    // `CREATE ROLE` is atomic and migrations/core/0001_identity.sql's own
+    // `EXCEPTION WHEN duplicate_object` idiom is mirrored here.
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        do $$
+        begin
+          create role nexttime_app nologin;
+        exception
+          when duplicate_object then
+            null;
+        end
+        $$;
+      `);
+    } finally {
+      client.release();
+    }
   });
 
   afterAll(async () => {
     await pool.end();
+  });
+
+  it('switches the transaction onto the non-login nexttime_app role by default (S1.1)', async () => {
+    const workspaceId = randomUUID();
+    const principalId = randomUUID();
+
+    const currentRole = await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+      const result = await client.query<{ current_user: string }>('select current_user');
+      return result.rows[0]?.current_user;
+    });
+
+    expect(currentRole).toBe('nexttime_app');
+  });
+
+  it('stays on the login role when skipRoleSwitch is set', async () => {
+    const workspaceId = randomUUID();
+    const principalId = randomUUID();
+
+    const currentRole = await withWorkspace(
+      pool,
+      { workspaceId, principalId },
+      async (client) => {
+        const result = await client.query<{ current_user: string }>('select current_user');
+        return result.rows[0]?.current_user;
+      },
+      { skipRoleSwitch: true },
+    );
+
+    expect(currentRole).not.toBe('nexttime_app');
   });
 
   it('makes app.workspace_id and app.principal_id visible inside the transaction', async () => {

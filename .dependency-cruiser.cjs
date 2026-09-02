@@ -96,7 +96,11 @@ module.exports = {
       path: 'node_modules',
     },
     exclude: {
-      path: '(^|/)(dist|node_modules)/',
+      // Test files are integration harnesses, not part of the layered production import graph —
+      // e.g. packages/kernel/src/substrate/invariants.test.ts legitimately drives real Postgres
+      // through adapters/db/{pool,migrate}.ts to verify RLS/trigger invariants, which the
+      // substrate layer's own (non-test) source must never do (§7.10 six-layer rule below).
+      path: '(^|/)(dist|node_modules)/|\\.test\\.tsx?$',
     },
     tsPreCompilationDeps: true,
     enhancedResolveOptions: {
