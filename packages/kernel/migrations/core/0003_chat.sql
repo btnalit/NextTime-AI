@@ -5,6 +5,11 @@
 -- activities' workspace-only RLS policy from 0002 with the chat-visibility-aware version, now
 -- that `chats` exists (docs/development-tasks.md S1.1 dispatch: "0003_chat.sql — FK from
 -- activities.chat_id").
+--
+-- Cross-process bootstrap lock: see 0001_identity.sql's comment for the full rationale — the
+-- same `pg_advisory_xact_lock` call is the first statement of every file in this module.
+select pg_advisory_xact_lock(7241000101);
+
 create table if not exists chats (
   workspace_id uuid not null,
   id uuid not null default gen_random_uuid(),

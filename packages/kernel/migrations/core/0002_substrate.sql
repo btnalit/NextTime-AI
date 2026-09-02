@@ -10,6 +10,10 @@
 -- plain FK on the id column, is what makes I1's "cross-workspace reference" case impossible at
 -- the data layer: a row in workspace A can never foreign-key to a row that physically lives in
 -- workspace B, because no `(A, <that id>)` tuple exists in the referenced table.
+--
+-- Cross-process bootstrap lock: see 0001_identity.sql's comment for the full rationale — the
+-- same `pg_advisory_xact_lock` call is the first statement of every file in this module.
+select pg_advisory_xact_lock(7241000101);
 
 -- ontology_versions (§5.1.2, I12, §5.5): versioned per `id` (a stable ontology identifier), each
 -- version `draft -> published -> deprecated` (packages/shared PublishableStatus). Once

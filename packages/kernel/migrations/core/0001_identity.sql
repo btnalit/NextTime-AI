@@ -22,22 +22,29 @@
 -- from a single read of `schema_migrations`, before executing any of them. Two independent test
 -- files (packages/kernel/src/adapters/db/migrate.test.ts and .../substrate/invariants.test.ts)
 -- each call `runMigrations()` against the same fresh, empty database; under real (not
--- hypothetical) concurrency this was observed to fail with
--- `duplicate key value violates unique constraint "pg_proc_proname_args_nsp_index"` on
--- `create or replace function app_workspace()` — two sessions inserting the same new pg_proc row
--- simultaneously, before either had committed, which "or replace" cannot protect against (it can
--- only replace a row it can already see). A session-scoped advisory lock, acquired here as the
--- very first statement of the module and released as the very last statement of
--- 0005_outbox.sql, serializes the whole five-file bootstrap across concurrent callers — the
--- second caller blocks until the first fully commits. That still leaves the second caller
--- holding a stale "all five files are pending" plan once it unblocks, which is why every object
--- below is *also* written to be idempotent (`if not exists` / `or replace` / `drop ... if
--- exists` + create / an `exception when duplicate_object` guard for the one constraint that
--- supports neither) — the lock prevents the raw concurrent-insert race, idempotency makes the
--- second caller's now-redundant replay a no-op instead of an error. The key (a fixed, arbitrary
--- bigint) only needs to be unique within this Postgres cluster; nothing else in this codebase
--- takes an advisory lock.
-select pg_advisory_lock(7241000101);
+-- hypothetical) concurrency this was observed to fail two different ways in turn while this fix
+-- was being developed: first `duplicate key value violates unique constraint
+-- "pg_proc_proname_args_nsp_index"` on `create or replace function app_workspace()` (two sessions
+-- inserting the same new pg_proc row simultaneously, before either had committed — "or replace"
+-- cannot protect against that, it can only replace a row it can already see); then, after adding
+-- a lock only to *this* file, the identical failure shape on `pg_type` from 0002_substrate.sql —
+-- because a caller whose upfront read landed after the winner committed 0001 but before it
+-- committed 0002 sees 0001 as already-applied and *skips straight to 0002 without ever running
+-- this file*, so a lock that only lived in 0001 never protected it. The fix that actually closes
+-- this: `pg_advisory_xact_lock` (transaction-scoped, auto-released at this file's own COMMIT or
+-- ROLLBACK — no matching unlock statement needed) as the very first statement of *every one* of
+-- this module's five files (0001–0005), not just this one. Whichever file a session is about to
+-- run, it takes the same lock first; no two sessions can have DDL from this module in flight at
+-- the same time, regardless of which arbitrary subset of files each one's stale plan considers
+-- pending. That still leaves a session holding a now-stale "this file is pending" plan once it
+-- gets the lock and finds the objects already there, which is why every object below is *also*
+-- written to be idempotent (`if not exists` / `or replace` / `drop ... if exists` + create / an
+-- `exception when duplicate_object` guard for the one constraint that supports neither) — the
+-- lock prevents the raw concurrent-insert race, idempotency makes a stale-plan replay a no-op
+-- instead of an error. The key (a fixed, arbitrary bigint, the same in all five files) only needs
+-- to be unique within this Postgres cluster; nothing else in this codebase takes an advisory
+-- lock.
+select pg_advisory_xact_lock(7241000101);
 
 -- Role creation is additionally guarded on its own terms: roles are cluster-wide (not
 -- per-database), so a second migration run against a *different* database in the same Postgres

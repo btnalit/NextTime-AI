@@ -7,6 +7,11 @@
 -- owner: `nexttime_app` gets INSERT + SELECT only (no UPDATE/DELETE grant), and the trigger
 -- below raises on UPDATE/DELETE unconditionally — triggers fire regardless of role or
 -- ownership, so this holds even for the superuser login role migrations run as.
+--
+-- Cross-process bootstrap lock: see 0001_identity.sql's comment for the full rationale — the
+-- same `pg_advisory_xact_lock` call is the first statement of every file in this module.
+select pg_advisory_xact_lock(7241000101);
+
 create table if not exists audit_records (
   workspace_id uuid not null,
   id uuid not null default gen_random_uuid(),
