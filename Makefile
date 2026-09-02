@@ -21,9 +21,11 @@ depcruise:
 ci: lint typecheck test build depcruise
 	corepack pnpm ci:guards
 
-# TODO(R2): packages/kernel/src/adapters/db migration runner (docs/development-tasks.md R2).
+# Runs the idempotent migration runner (packages/kernel/src/adapters/db/migrate.ts) against
+# DATABASE_URL. Pass MIGRATE_ARGS=--dry-run to list pending migrations without applying them.
 migrate:
-	@echo "TODO(R2): run the migration runner against \$$NEXTTIME_DATA's postgres (see packages/kernel/migrations/)"
+	corepack pnpm --filter @nexttime/kernel build
+	corepack pnpm --filter @nexttime/kernel run migrate -- $(MIGRATE_ARGS)
 
 up:
 	docker compose up -d

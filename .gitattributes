@@ -1,3 +1,14 @@
+# Normalize all text files to LF regardless of the checkout platform's
+# core.autocrlf, so a Windows checkout (autocrlf=true) doesn't reintroduce
+# CRLF noise into diffs and lint runs.
+* text=auto eol=lf
+
+# Explicit binary types: never subject to any EOL/text conversion.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
+
 # Shell scripts must keep LF line endings regardless of the checkout
 # platform's core.autocrlf — several of them (e.g. scripts/host-bootstrap.sh)
 # are piped directly into a remote `sh` over SSH, where a CRLF breaks the
