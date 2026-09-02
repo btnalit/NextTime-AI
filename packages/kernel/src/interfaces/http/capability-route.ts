@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import {
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
@@ -39,9 +40,19 @@ interface ErrorMapping {
  * echoed back to the caller; it is still available server-side via the `outcome`/error passed to
  * the structured log below (never persisted with credentials, see log() call).
  */
-function mapCapabilityError(err: unknown): ErrorMapping {
+export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof UnauthorizedError) {
     return { status: 401, code: 'unauthorized', message: 'unauthorized' };
+  }
+  // application/chat domain errors (S1.4) — the HTTP transport's equivalents of interfaces/ws/
+  // rpc.ts's `-32010` / `-32004` codes: §9.4 "进行中时 send_chat_message 被拒" is a 409, a Chat that
+  // does not exist or is not visible to the caller is a 404 (never distinguishing the two, same as
+  // the service itself).
+  if (err instanceof TurnAlreadyRunningError) {
+    return { status: 409, code: 'turn_already_running', message: err.message };
+  }
+  if (err instanceof ChatNotFoundError) {
+    return { status: 404, code: 'chat_not_found', message: err.message };
   }
   if (err instanceof CapabilityNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };

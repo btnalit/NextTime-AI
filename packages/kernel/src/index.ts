@@ -9,6 +9,8 @@ import { FakeAgentRuntime, registerTurnStartedConsumer } from './application/hos
 import { OutboxDispatcher } from './application/outbox/index.js';
 import type { CapabilityRouteDeps } from './interfaces/http/index.js';
 import { registerCapabilityRoutes } from './interfaces/http/index.js';
+import type { InternalRoutesDeps } from './interfaces/http/internal/index.js';
+import { registerInternalRoutes } from './interfaces/http/internal/index.js';
 import { registerWsRoute } from './interfaces/ws/index.js';
 
 /**
@@ -35,11 +37,17 @@ export function createServer(
 
   registerCapabilityRoutes(app, deps);
   registerWsRoute(app, deps);
+  // `/internal/*` (S1.7): service-to-service routes for `llm-proxy` (usage reports, revocation
+  // sync). Reachable only on the `control` compose network — the kernel publishes no host port
+  // (design doc §11) — so they carry no additional auth of their own.
+  app.register(async (instance) => {
+    await registerInternalRoutes(instance, deps);
+  });
 
   return app;
 }
 
-export interface KernelServerDeps extends CapabilityRouteDeps {}
+export interface KernelServerDeps extends CapabilityRouteDeps, InternalRoutesDeps {}
 
 export interface CreateServerOptions {
   /** Fastify's own `logger` option — the structured per-call log (§12) is written regardless of
