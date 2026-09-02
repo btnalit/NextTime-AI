@@ -1,0 +1,82 @@
+# Deployment skeleton per docs/graph-ai-middle-platform-design.md §10.2.
+# All ${...} placeholders are resolved from .env on the target host (see .env.example);
+# real values live in docs/private/ (not tracked). Do not hardcode real hosts/paths/credentials
+# here.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment: { POSTGRES_DB: nexttime, POSTGRES_USER: nexttime, POSTGRES_PASSWORD_FILE: /run/secrets/pg_password }
+    volumes: ["${NEXTTIME_DATA}/pgdata:/var/lib/postgresql/data"]
+    secrets: [pg_password]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U nexttime"], interval: 10s, retries: 5 }
+    restart: unless-stopped
+    networks: [control]
+
+  kernel:
+    build: { context: ., dockerfile: packages/kernel/Dockerfile }
+    env_file: ${NEXTTIME_DATA}/secrets/kernel.env # DB URL、Handle 签名私钥；无任何外部凭证（I9）
+    volumes: ["${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/sessions:/data/sessions:ro"]
+    depends_on: { postgres: { condition: service_healthy } }
+    networks: [control, workers]
+    restart: unless-stopped
+
+  agent-host:
+    build: { context: ., dockerfile: packages/agent-host/Dockerfile }
+    environment: { KERNEL_URL: http://kernel:8080, SUPERVISOR_URL: http://worker-supervisor:8081 }
+    networks: [control] # 只到 kernel 与 supervisor；不挂载任何用户目录
+    restart: unless-stopped
+
+  worker-supervisor:
+    build: { context: ., dockerfile: packages/worker-supervisor/Dockerfile }
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock", "${NEXTTIME_DATA}/workspaces:/data/workspaces", "${NEXTTIME_DATA}/sessions:/data/sessions", "${NEXTTIME_DATA}/config:/data/config:ro"]
+    environment: { ALLOWED_IMAGES: "nexttime/worker-runtime:*", WORKER_NETWORK: workers, WORKER_RUNTIME: "${WORKER_RUNTIME:-runc}" }
+    networks: [control]
+    restart: unless-stopped
+
+  gatekeeper-docker:
+    build: { context: ., dockerfile: gatekeepers/docker/Dockerfile }
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+    networks: [control]
+    restart: unless-stopped
+
+  gatekeeper-ragflow:
+    build: { context: ., dockerfile: gatekeepers/ragflow/Dockerfile }
+    env_file: ${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env
+    networks: [control]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10 # pin 具体版本
+    ports: ["${KERNEL_BIND_ADDR}:8443:8443"]
+    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "./packages/web/dist:/srv/web:ro", "./explorer/dist:/srv/explorer:ro", "${NEXTTIME_DATA}/caddy:/data"]
+    networks: [control]
+    restart: unless-stopped
+
+  llm-proxy:
+    build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }
+    env_file: ${NEXTTIME_DATA}/secrets/llm-proxy.env # provider keys 只在这里
+    volumes: ["${NEXTTIME_DATA}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro"]
+    environment: { KERNEL_URL: http://kernel:8080, HANDLE_PUBLIC_KEY_FILE: /data/config/handle.pub }
+    networks: [control, workers]
+    restart: unless-stopped
+
+  egress-proxy:
+    build: { context: ., dockerfile: packages/egress-proxy/Dockerfile }
+    environment: { KERNEL_URL: http://kernel:8080 }
+    networks: [control, workers]
+    restart: unless-stopped
+
+  backup:
+    image: postgres:17-alpine # 与 postgres 同大版本
+    entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + sessions/workspaces rsync，保留 7 份
+    volumes: ["./deploy/backup/backup.sh:/backup.sh:ro", "${NEXTTIME_DATA}:/data"]
+    secrets: [pg_password]
+    networks: [control]
+    restart: unless-stopped
+
+networks:
+  control: { ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_CONTROL}" }] } }
+  workers: { internal: true, ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_WORKERS}" }] } }
+secrets:
+  pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
