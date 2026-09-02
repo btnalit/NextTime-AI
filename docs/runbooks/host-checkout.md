@@ -20,7 +20,7 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/host-env-init.
 ```
 幂等，依赖 E2（`secrets/pg_password` 存在）。创建 `secrets/kernel.env`（`DATABASE_URL` 取自
 `pg_password`，特殊字符 URL-encode）、`secrets/{llm-proxy,gatekeeper-ragflow}.env`（无值模
-板）、`config/{llm-providers.yaml,models.json,handle.pub,egress-sources.json}`（占位）；把 `sessions workspaces
+板）、`config/{llm-providers.yaml,models.json,handle.pub,egress-sources.json}`（占位）；把 `workspaces
 artifacts caddy` 属主改成容器非 root 用户（uid:gid 见脚本注释），`config/` 设为可读；
 `pgdata/`、`secrets/` 目录本身、`backups/` 不动。用 `stat` / `ls -ln` 验证，**不要 `cat` 密钥**。
 

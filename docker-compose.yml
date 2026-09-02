@@ -17,7 +17,7 @@ services:
     build: { context: ., dockerfile: packages/kernel/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/kernel.env # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
     secrets: [handle_key] # Handle 签名私钥只进这一个容器：/run/secrets/handle_key
-    volumes: ["${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/sessions:/data/sessions:ro"]
+    volumes: ["${NEXTTIME_DATA}/config:/data/config:ro"]
     depends_on: { postgres: { condition: service_healthy } }
     networks: [control, workers]
     restart: unless-stopped
@@ -135,7 +135,7 @@ services:
 
   backup:
     image: postgres:17-alpine # 与 postgres 同大版本
-    entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + sessions/workspaces/config tar.gz，保留 N 份（S1.12）
+    entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config tar.gz，保留 N 份（S1.12）
     volumes: ["./deploy/backup/backup.sh:/backup.sh:ro", "${NEXTTIME_DATA}:/data"]
     environment: { TZ: "${TZ:-UTC}", BACKUP_TIME: "${BACKUP_TIME:-03:30}", RETENTION: "${BACKUP_RETENTION:-7}", PGHOST: postgres }
     depends_on: { postgres: { condition: service_healthy } }

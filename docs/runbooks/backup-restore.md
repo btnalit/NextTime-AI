@@ -6,7 +6,7 @@
 
 `backup` 容器（`postgres:17-alpine`）每日 `BACKUP_TIME`（容器 `TZ`，默认 UTC 03:30）跑一次：
 - `pg_dump -Fc` 整个 `nexttime` 库 → `${NEXTTIME_DATA}/backups/db/nexttime-<UTC时间戳>.dump`
-- `tar -czf` 打包 `sessions/ workspaces/ config/`（**不含** `secrets/`）→
+- `tar -czf` 打包 `workspaces/ config/`（**不含** `secrets/`）→
   `${NEXTTIME_DATA}/backups/files/files-<ts>.tgz`
 
 每类各保留最新 `BACKUP_RETENTION`（默认 7）份，旧的自动删除；成功后写
@@ -34,7 +34,7 @@ docker compose exec -T postgres psql -U nexttime -d nexttime_restore_<ts> -c '\d
 docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE "nexttime_restore_<ts>";'
 ```
 要恢复到活库 `nexttime`（危险，仅故障恢复时用）：加 `--target-db nexttime --i-know`。`--files`
-恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `sessions/ workspaces/`。
+恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `workspaces/ config/`。
 
 ## LVM 提醒
 

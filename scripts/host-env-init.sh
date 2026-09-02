@@ -20,7 +20,7 @@
 # them in later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc
 # §7.9 — an empty object is a valid "no sources registered yet" map, not a stub for a later
 # task to overwrite).
-# Then chowns sessions/ workspaces/ artifacts/ caddy/ to the non-root uid:gid the platform's
+# Then chowns workspaces/ artifacts/ caddy/ to the non-root uid:gid the platform's
 # containers run as, and makes config/ world-readable (it holds no secrets). Never echoes
 # secret file contents. Touches nothing outside $NEXTTIME_DATA.
 
@@ -206,12 +206,12 @@ else
 	SKIPPED="$SKIPPED config/egress-sources.json"
 fi
 
-# --- ownership: sessions/ workspaces/ artifacts/ caddy/ must be usable by the platform's ------
+# --- ownership: workspaces/ artifacts/ caddy/ must be usable by the platform's ------
 # non-root containers (uid:gid 10001:10001). pgdata/ (the postgres image manages its own
 # ownership), secrets/ (root-owned, 0700 — compose passes its contents via env_file / Docker
 # secrets, not a bind-mounted directory read by a container process) and backups/ are left
 # untouched, per task scope.
-for d in sessions workspaces artifacts caddy; do
+for d in workspaces artifacts caddy; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
 
@@ -236,7 +236,7 @@ echo "host-env-init: config/ (mode, owner:group, path):"
 find "$CONFIG_DIR" -maxdepth 1 -printf '  %M %U:%G %p\n'
 echo ""
 echo "host-env-init: ownership fix-up (uid:gid ${CONTAINER_UID}:${CONTAINER_GID}) applied to:"
-for d in sessions workspaces artifacts caddy; do
+for d in workspaces artifacts caddy; do
 	echo "  $NEXTTIME_DATA/$d -> $(stat -c '%U:%G' "$NEXTTIME_DATA/$d")"
 done
 echo ""

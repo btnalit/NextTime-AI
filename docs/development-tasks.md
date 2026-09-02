@@ -50,8 +50,8 @@
 - 执行者：Claude Code@host。批准：否。
 
 ### E2 目录树与密钥目录
-- 目标：`${NEXTTIME_DATA}/{pgdata,sessions,workspaces,secrets,config,artifacts,backups,caddy}`；`secrets/` 0700；`workspaces/<uid>/` 只挂给该用户的入口容器，`workspaces/tasks/<task_id>/` 只挂给该 Task 的 Worker（I15）。
-- 验收：`stat -c '%a %n' ${NEXTTIME_DATA}/secrets` 为 `700 …`；八个子目录齐全。
+- 目标：`${NEXTTIME_DATA}/{pgdata,workspaces,secrets,config,artifacts,backups,caddy}`；`secrets/` 0700；`workspaces/<uid>/` 只挂给该用户的入口容器，`workspaces/tasks/<task_id>/` 只挂给该 Task 的 Worker（I15）。
+- 验收：`stat -c '%a %n' ${NEXTTIME_DATA}/secrets` 为 `700 …`；七个子目录齐全。
 - 执行者：Claude Code@host。批准：否。
 
 ### E3 代码检出与 `.env`
@@ -158,11 +158,10 @@
     `sourceId` 编码为 `entry:<workspaceId>:<principalId>`（该包把 `sourceId`
     当作不透明字符串，`report.ts` 自己的注释也说明"把它变回 workspaceId/activityId 是内核
     host-bridge 的事"——留给后半任务解析这个格式）。
-  - `${NEXTTIME_DATA}/sessions` 顶层目录本次未使用：`--session-dir` 落在
-    `/workspace/.pi/sessions`（按本条文字字面指示），不是设计文档 §10.2 compose 骨架里 kernel
-    与 worker-supervisor 都挂的顶层 `sessions/<uid>/`——`worker-supervisor` 的 compose 改动去掉
-    了它未使用的 `sessions` 挂载；kernel 的挂载未动（不在本任务所有权范围）。这条留给主会话
-    决定，见 PR body 与 `docs/runbooks/host-worker-runtime.md` §10。
+  - pi 的会话目录落在各用户工作区内（`/workspace/.pi/sessions`，即 `workspaces/<uid>/.pi/sessions`），
+    一个用户只有一个挂载点（I15）。原设计里的顶层 `${NEXTTIME_DATA}/sessions` 目录、kernel 与
+    worker-supervisor 对它的挂载、以及备份里的 `sessions/` 都已在 S1.5a 之后的清理 PR 中去掉
+    （2026-09-02 决定）；将来若需要内核读会话 JSONL，走 `workspaces/*/.pi/sessions/` 的只读挂载。
   - 主机验收（在目标主机上实测，非本地）暴露并修了四个之前没预料到的问题——细节均在
     `docs/runbooks/host-worker-runtime.md` §10：(1) `worker-supervisor` 以非 root 运行连
     docker.sock 要主机 docker 组 gid，`docker-compose.yml` 加 `group_add`；(2) bind-mount
@@ -211,7 +210,7 @@
 - 不做：不解密 TLS；不做内容过滤。
 
 ### S1.12 最小备份（compose 内，不改主机）
-- 目标：每日 `pg_dump` + `sessions/` 与 `workspaces/` 的 rsync 到 `${NEXTTIME_DATA}/backups/`，保留 7 份；恢复脚本可演练。之前 E7 被暂缓，这里以 compose 内容器形式回归，理由：设计 §10.4 与 §13 的回滚依赖它，且不触碰主机上任何现有服务。
+- 目标：每日 `pg_dump` + `workspaces/` 与 `config/` 的 tar 到 `${NEXTTIME_DATA}/backups/`，保留 7 份；恢复脚本可演练。之前 E7 被暂缓，这里以 compose 内容器形式回归，理由：设计 §10.4 与 §13 的回滚依赖它，且不触碰主机上任何现有服务。
 - 交付物：`deploy/backup/backup.sh`、`scripts/restore.sh`、compose `backup` 服务（`postgres:17-alpine`）。
 - 验收：`docker compose exec backup /backup.sh` 后 `backups/` 出现当日 dump；`scripts/restore.sh --dry-run` 通过；在临时库上真实恢复一次并跑 `accept_s1.sh`。依赖：E4。需人工批准：否。
 
