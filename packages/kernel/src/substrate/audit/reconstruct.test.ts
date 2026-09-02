@@ -55,30 +55,35 @@ describe.runIf(DATABASE_URL !== undefined)('reconstruct (integration, real Postg
   });
 
   it('returns the current object state plus AuditRecords touching it, newest first', async () => {
-    const objectId = await withWorkspace(
-      pool,
-      { workspaceId, principalId: ownerId },
-      async (client) => {
-        const object = await store.upsertObject(client, workspaceId, {
+    const objectId = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+      store
+        .upsertObject(client, workspaceId, {
           objectType: 'test.reconstruct-thing',
           properties: { name: 'first' },
-        });
-        await writeAudit(client, {
-          workspaceId,
-          actorPrincipalId: ownerId,
-          action: 'get_object',
-          resourceType: 'object',
-          resourceId: object.id,
-        });
-        await writeAudit(client, {
-          workspaceId,
-          actorPrincipalId: ownerId,
-          action: 'traverse',
-          resourceType: 'object',
-          resourceId: object.id,
-        });
-        return object.id;
-      },
+        })
+        .then((object) => object.id),
+    );
+
+    // Two separate transactions (like two separate capability calls) rather than two writeAudit
+    // calls in one transaction — Postgres's `now()` is stable for the lifetime of a transaction,
+    // so same-transaction writes would tie on `created_at` and "newest first" would be undefined.
+    await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+      writeAudit(client, {
+        workspaceId,
+        actorPrincipalId: ownerId,
+        action: 'get_object',
+        resourceType: 'object',
+        resourceId: objectId,
+      }),
+    );
+    await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+      writeAudit(client, {
+        workspaceId,
+        actorPrincipalId: ownerId,
+        action: 'traverse',
+        resourceType: 'object',
+        resourceId: objectId,
+      }),
     );
 
     const result = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>

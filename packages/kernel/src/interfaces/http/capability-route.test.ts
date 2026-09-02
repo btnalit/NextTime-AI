@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SignJWT, generateKeyPair } from 'jose';
+import { generateKeyPair } from 'jose';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { hashApiKey } from '../../application/gateway/index.js';
-import { HANDLE_SIGNING_ALG } from '../../governance/capability/keys.js';
+import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
 
 /**
@@ -227,17 +227,29 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       );
 
-      const token = await new SignJWT({
-        ws: workspaceId,
-        sid: randomUUID(),
-        obo: memberId,
-        scope: { capabilities: ['get_object'], resources: {} },
-        jti: randomUUID(),
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 3600,
-      })
-        .setProtectedHeader({ alg: HANDLE_SIGNING_ALG })
-        .sign(privateKey);
+      // A real Handle, not a hand-crafted JWT: `issueHandle` both signs the token and records the
+      // `capability_handles` row `createDbRevocationCheck` looks up — a jti with no such row is
+      // treated as revoked (fail-closed), so a token that skips this step would always 401.
+      const token = await withWorkspace(
+        pool,
+        { workspaceId, principalId: memberId },
+        async (client) => {
+          const sessionResult = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'entry', $2, 'active') returning id`,
+            [workspaceId, memberId],
+          );
+          const sessionRow = sessionResult.rows[0];
+          if (!sessionRow) throw new Error('fixture: session insert produced no row');
+          const issued = await issueHandle(client, {
+            sessionId: sessionRow.id,
+            scope: { capabilities: ['get_object'], resources: {} },
+            ttlSeconds: 3600,
+            privateKey,
+          });
+          return issued.token;
+        },
+      );
 
       const app = createServer({ pool, loadHandlePublicKey: async () => publicKey });
       const response = await app.inject({
