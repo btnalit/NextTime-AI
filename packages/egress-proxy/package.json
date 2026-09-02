@@ -20,6 +20,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@nexttime/shared": "workspace:*"
+    "@nexttime/shared": "workspace:*",
+    "zod": "^3.24.1"
   }
 }

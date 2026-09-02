@@ -371,8 +371,20 @@ async function applyMigrationFile(client: PoolClient, file: MigrationFile): Prom
     for (const statement of statements) {
       await client.query(statement);
     }
+    // ON CONFLICT DO NOTHING (rather than a plain INSERT): `plan.pending` above is computed once
+    // from a single upfront read of this table, so two independent runMigrations() callers can
+    // both decide the same file is pending, each execute it, and race to record it here — this
+    // is a real, observed failure mode (two Vitest test files each calling runMigrations()
+    // against the same fresh database; see packages/kernel/migrations/core/0001_identity.sql's
+    // advisory-lock comment for the matching fix on the statement-execution side). Silently
+    // accepting the "loser" here is safe: it was recording the identical (module, version,
+    // checksum) the winner already committed, not a conflicting one — a genuinely different
+    // checksum for this file is still caught by planMigrations's ChecksumMismatchError on the
+    // *next* run, which reads this table fresh and compares against the file on disk,
+    // independent of this statement's outcome.
     await client.query(
-      `insert into ${MIGRATIONS_TABLE} (module, version, name, checksum) values ($1, $2, $3, $4)`,
+      `insert into ${MIGRATIONS_TABLE} (module, version, name, checksum) values ($1, $2, $3, $4)
+       on conflict (module, version) do nothing`,
       [file.module, file.version, file.name, file.checksum],
     );
     await client.query('COMMIT');

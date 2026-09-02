@@ -50,6 +50,17 @@ export interface WorkspaceContext {
   principalId: string;
 }
 
+export interface WithWorkspaceOptions {
+  /**
+   * Skip `SET LOCAL ROLE nexttime_app` and stay on the connection's login role for this
+   * transaction (design doc S1.1: the compose Postgres login user is a superuser and therefore
+   * bypasses RLS). Only for admin/bootstrap operations that must run before RLS can even apply
+   * — e.g. creating a workspace before any principal exists in it, or looking a principal up by
+   * `api_key_hash` before its workspace is known. Default `false`.
+   */
+  skipRoleSwitch?: boolean;
+}
+
 /**
  * The subset of `pg.Pool` that `withWorkspace` needs. Declared explicitly (rather than
  * requiring the concrete `Pool` class) so unit tests can exercise the transaction/session-var
@@ -66,10 +77,18 @@ export interface PoolLike {
  *   set_config('app.workspace_id', <workspaceId>, true)
  *   set_config('app.principal_id', <principalId>, true)
  *
- * The third argument (`is_local = true`) is load-bearing: it scopes both settings to the
- * current transaction so they are cleared automatically on COMMIT/ROLLBACK. Pool connections
- * are reused across unrelated requests — a session-wide `set_config` would leak one caller's
- * workspace/principal into the next request served by the same pooled connection.
+ * ...and then, unless `options.skipRoleSwitch` is set, switching the transaction onto the
+ * non-login `nexttime_app` role (`SET LOCAL ROLE nexttime_app`) so RLS actually applies —
+ * the connection authenticates as a superuser, which would otherwise bypass every policy below
+ * (design doc S1.1). A superuser can `SET ROLE` to any role regardless of membership, so this
+ * needs no additional grant.
+ *
+ * The third argument to `set_config` (`is_local = true`) is load-bearing, and so is running the
+ * role switch as `SET LOCAL ROLE` rather than plain `SET ROLE`: both scope to the current
+ * transaction and are cleared automatically on COMMIT/ROLLBACK. Pool connections are reused
+ * across unrelated requests — a session-wide `set_config` or role change would leak one
+ * caller's workspace/principal/privilege level into the next request served by the same pooled
+ * connection.
  *
  * On any error thrown by `fn` (or by a statement inside the transaction), the transaction is
  * rolled back and the original error is rethrown unchanged.
@@ -78,6 +97,7 @@ export async function withWorkspace<T>(
   pool: PoolLike,
   context: WorkspaceContext,
   fn: (client: PoolClient) => Promise<T>,
+  options: WithWorkspaceOptions = {},
 ): Promise<T> {
   if (!context.workspaceId || !context.principalId) {
     throw new InvalidWorkspaceContextError(
@@ -90,6 +110,9 @@ export async function withWorkspace<T>(
     await client.query('BEGIN');
     await client.query("select set_config('app.workspace_id', $1, true)", [context.workspaceId]);
     await client.query("select set_config('app.principal_id', $1, true)", [context.principalId]);
+    if (!options.skipRoleSwitch) {
+      await client.query('set local role nexttime_app');
+    }
 
     const result = await fn(client);
 

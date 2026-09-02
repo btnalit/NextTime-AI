@@ -2,4 +2,9 @@ packages:
   - "packages/*"
 allowBuilds:
   '@biomejs/biome': true
+  # Transitive deps of @earendil-works/pi-ai (S1.6, platform-extension devDependency) for
+  # provider integrations this repo does not use (Google Generative AI, Bedrock protobuf
+  # codegen) — declined rather than trusted, since their build scripts are unnecessary here.
+  '@google/genai': false
   esbuild: true
+  protobufjs: false
