@@ -122,12 +122,12 @@
 - 验收：两个用户各自子进程、各自目录；`kill -9` 某用户子进程后再发消息，对话可续且历史完整；子进程 env 中无任何 `*_API_KEY`。依赖：S1.4、S1.7。
 
 ### S1.6 platform-extension `entry` 模式
-- 交付物：`packages/platform-extension/src/{index,kernel-client,modes/entry}.ts`：注册 observe 组工具（`get_object / traverse / search / explain / get_task`）；`context` 事件注入该用户待审批、进行中 Task、相关 Fact 与先例；`session_*` 事件把 `turn_id` 写入会话条目并回传 Turn 结果；契约测试用 pi 的 faux provider + fake kernel。
+- 交付物：`packages/platform-extension/src/{index,kernel-client,modes/entry}.ts`：S1 只注册 observe 组工具（`get_object / traverse / search / explain / get_task`），`find_workers` 与 `invoke_worker` 随 S2.7 加入；`context` 事件注入该用户待审批、进行中 Task、相关 Fact 与先例；`session_*` 事件把 `turn_id` 写入会话条目并回传 Turn 结果；契约测试用 pi 的 faux provider + fake kernel。
 - 验收：`pnpm --filter platform-extension test`；fake kernel 收到带 `turn_id` 的回传。依赖：R4。
 
 ### S1.7 `llm` 按 provider 透传代理
 - 交付物：`kernel/src/llm/{providers,proxy,usage}.ts`（读 `${NEXTTIME_DATA}/config/llm-providers.yaml`；入站 Handle 从该 provider `auth` 指定的头读取；换真实 key；模型白名单；SSE 原样；OpenAI 兼容与 Anthropic 两种 `usage` 解析）；`scripts/gen-models-json.ts`；`migrations/0002_llm_usage.sql`。
-- 验收：无 Handle 401；白名单外 403；流式逐块转发且与直连 fake upstream 逐字节一致；`llm_usage` 记 provider / model / tokens / turn_id。依赖：S1.3。
+- 验收：无 Handle 401；白名单外 403；流式逐块转发且与直连 fake upstream 逐字节一致；`llm_usage` 记 provider / model / tokens / turn_id。依赖：S1.3、S1.9。
 
 ### S1.8 web：登录与对话
 - 交付物：`packages/web`：登录（API key）、对话页（流式文本、工具调用行、Turn 状态）、WS 客户端（先订阅再翻页规则封装进 client）。
@@ -292,3 +292,5 @@ flowchart LR
 | 每用户一个 pi 进程的内存 | S1.5 空闲超时停进程 |
 | E7 备份暂缓 | S3 后重评 |
 | 各厂商 OpenAI 兼容差异 | pi-ai `compat`；内核不做协议 |
+| pi 的 `extension_ui_request` 子协议（对话内即时提问）尚无任务承接 | 未决：归入 S2.10 或 P5，实现前定 |
+| Explorer 契约的服务端 facade（游标分页、分析端点）工作量未估 | S3.5 开工前先估 |

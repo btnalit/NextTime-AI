@@ -350,7 +350,7 @@ flowchart TB
 
 | 模式 | 运行处 | 注册的工具 | `context` 注入 | 会话回传 |
 |------|--------|-----------|---------------|---------|
-| `entry` | agent-host 子进程 | observe 组、`find_workers`、`invoke_worker`、`record_decision`、`get_task` | 该用户的待审批、进行中 Task 及其结果、相关 Fact 与先例 | 每轮回传 Turn 与决策 |
+| `entry` | agent-host 子进程 | observe 组（含 `get_task`）、`find_workers`、`invoke_worker`、`record_decision`，与 §5.1.4 的能力上限一致；S1 只注册 observe 组，`find_workers` / `invoke_worker` 随 S2.7 加入 | 该用户的待审批、进行中 Task 及其结果、相关 Fact 与先例 | 每轮回传 Turn 与决策 |
 | `worker` | Worker 容器 | Handle 内的 capability（含 `request_action`、`observe`） | Task 输入、相关 Fact | 全量 JSONL |
 | `interactive` | 你本机的 pi | 同 `entry` 或按 Handle | 同 `entry` | 默认不回传 |
 
