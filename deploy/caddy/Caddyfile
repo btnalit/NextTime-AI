@@ -6,11 +6,17 @@
 # generated root CA on a client and for the placeholder-vs-real static root switch.
 #
 # No plaintext :80 listener: docs/development-tasks.md §E8 does not ask for an HTTP->HTTPS
-# redirect, and this site's address (":8443", no hostname) does not trigger Caddy's automatic
-# HTTP->HTTPS redirect — that only fires for domain-name site addresses on the standard 80/443
-# pair, not a bare port.
+# redirect. `auto_https disable_redirects` turns off Caddy's default "also add a :80 redirect
+# helper" behavior that otherwise applies to any TLS-enabled site, hostname or not.
+{
+	auto_https disable_redirects
+}
 
-:8443 {
+# The scheme prefix is required, not decorative: a bare ":8443" (no scheme, no hostname, non-
+# standard port) is a documented Caddy ambiguity (caddyserver/caddy#5747) — Caddy ends up
+# without a real TLS connection policy for the listener, and handshakes fail with a
+# "tlsv1 alert internal error". "https://:8443" makes the connection policy explicit.
+https://:8443 {
 	tls internal
 
 	# Access log to stdout as JSON. Caddy's access log never includes request/response bodies
