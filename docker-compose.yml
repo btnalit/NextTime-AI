@@ -30,10 +30,53 @@ services:
 
   worker-supervisor:
     build: { context: ., dockerfile: packages/worker-supervisor/Dockerfile }
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock", "${NEXTTIME_DATA}/workspaces:/data/workspaces", "${NEXTTIME_DATA}/sessions:/data/sessions", "${NEXTTIME_DATA}/config:/data/config:ro"]
-    environment: { ALLOWED_IMAGES: "nexttime/worker-runtime:*", WORKER_NETWORK: workers, WORKER_RUNTIME: "${WORKER_RUNTIME:-runc}" }
+    # docker.sock: talks to the Engine API directly (dockerode), no docker CLI needed in the
+    # image. workspaces: rw — this is where per-principal directories get created (I15) and
+    # bind-mounted (as HOST paths, via NEXTTIME_DATA below) into spawned containers. config: ro
+    # for models.json's bind-mount source and general config visibility, EXCEPT
+    # egress-sources.json — that single file is re-mounted read-write on top so this service can
+    # register/unregister spawned containers' IPs with @nexttime/egress-proxy's SOURCE_MAP_FILE
+    # (S1.5a task brief: that package exposes no admin registration endpoint — verified reading
+    # packages/egress-proxy/src/admin.ts — so the documented file-based contract is the only
+    # integration point; see packages/worker-supervisor/src/egress-map.ts).
+    volumes:
+      [
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "${NEXTTIME_DATA}/workspaces:/data/workspaces",
+        "${NEXTTIME_DATA}/config:/data/config:ro",
+        "${NEXTTIME_DATA}/config/egress-sources.json:/data/config/egress-sources.json",
+      ]
+    # NEXTTIME_DATA here is the HOST path (not this container's own /data/workspaces mount) —
+    # required to compute bind-mount *sources* for the containers this service asks the Docker
+    # daemon to create: the daemon resolves those against the host filesystem, not this
+    # container's mount namespace (packages/worker-supervisor/src/config.ts doc comment).
+    # KERNEL_URL/KERNEL_LLM_URL/HTTP_PROXY_FOR_WORKERS are this service's own defaults for a
+    # `/resident/spawn` request that omits `kernelUrl`/`llmUrl`, and the fixed value every
+    # spawned container's HTTP(S)_PROXY gets. NETWORK_WORKERS is left unset here — the actual
+    # Compose-prefixed network name is resolved at startup from the `com.docker.compose.network`
+    # label Compose stamps on the `workers` network (docker-client.ts
+    # `resolveNetworkByComposeLabel`); set it explicitly only if that resolution ever needs a
+    # manual override.
+    environment:
+      {
+        WORKER_IMAGE: nexttime-ai-worker-runtime,
+        WORKER_RUNTIME: "${WORKER_RUNTIME:-runc}",
+        NEXTTIME_DATA: "${NEXTTIME_DATA}",
+        KERNEL_URL: http://kernel:8080,
+        KERNEL_LLM_URL: http://llm-proxy:8082,
+        HTTP_PROXY_FOR_WORKERS: http://egress-proxy:3128,
+      }
     networks: [control]
     restart: unless-stopped
+
+  # build-only: exists so `docker compose build worker-runtime` produces the
+  # `nexttime-ai-worker-runtime` image worker-supervisor's resident mode spawns by name (its
+  # `WORKER_IMAGE` env above) — this service itself is never `up` (deploy/worker-runtime/
+  # Dockerfile; docs/runbooks/host-worker-runtime.md has the build/spawn walkthrough).
+  worker-runtime:
+    build: { context: ., dockerfile: deploy/worker-runtime/Dockerfile }
+    image: nexttime-ai-worker-runtime
+    profiles: ["build-only"]
 
   gatekeeper-docker:
     build: { context: ., dockerfile: gatekeepers/docker/Dockerfile }
