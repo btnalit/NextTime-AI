@@ -9,5 +9,6 @@ export * from './transitions.js';
 export * from './capabilities.js';
 export * from './events.js';
 export * from './action-description.js';
+export * from './http.js';
 
 export const VERSION = '0.1.0';
