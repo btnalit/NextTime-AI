@@ -16,8 +16,22 @@
 # standard port) is a documented Caddy ambiguity (caddyserver/caddy#5747) — Caddy ends up
 # without a real TLS connection policy for the listener, and handshakes fail with a
 # "tlsv1 alert internal error". "https://:8443" makes the connection policy explicit.
+#
+# `on_demand` is required too: automatic HTTPS only provisions certificates for hostnames it
+# knows about from the Caddyfile (docs: "Caddy implicitly activates automatic HTTPS when it
+# knows a domain name or IP address it is serving") — a hostless catch-all like this one has no
+# name to provision eagerly, so without on_demand every handshake fails the same way (no
+# certificate for the connection → TLS "internal error" alert), regardless of the scheme fix
+# above. Caddy's docs flag unrestricted on_demand as insecure in production unless paired with
+# a global `on_demand_tls { ask ... }` permission check; accepted here for S1 (design doc §11:
+# 自签 acceptable for S1) because the issuer is `internal` (self-signed, not rate-limited public
+# ACME — the only abuse cost is local CPU/disk generating extra certs for junk SNI values on an
+# internal-only tool) and KERNEL_BIND_ADDR is not meant to be internet-reachable. Revisit if
+# this deployment is ever exposed beyond a trusted network.
 https://:8443 {
-	tls internal
+	tls internal {
+		on_demand
+	}
 
 	# Access log to stdout as JSON. Caddy's access log never includes request/response bodies
 	# (there is no body-logging directive to accidentally enable) — only method/path/status/
