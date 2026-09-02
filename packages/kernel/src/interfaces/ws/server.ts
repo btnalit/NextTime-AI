@@ -83,9 +83,7 @@ interface ConnectionState {
   authFailed: boolean;
   authReady: boolean;
   readonly pendingFrames: RawData[];
-  subscription:
-    | { chatId: string; unsubscribe: () => void; lastDeliveredSequence: number }
-    | undefined;
+  subscription: { chatId: string; unsubscribe: () => void } | undefined;
 }
 
 type WsOutgoingMessage = JsonRpcSuccessResponse | JsonRpcErrorResponse | JsonRpcNotification;
@@ -178,24 +176,43 @@ async function handleSubscribeChat(
   // active chat subscription per socket (S1 simplicity; §9.4 does not describe multi-chat sockets).
   state.subscription?.unsubscribe();
 
-  let lastDeliveredSequence = startAfter !== undefined ? Number(startAfter) : 0;
-  if (!Number.isFinite(lastDeliveredSequence) || lastDeliveredSequence < 0)
-    lastDeliveredSequence = 0;
+  let normalizedStartAfter = startAfter !== undefined ? Number(startAfter) : 0;
+  if (!Number.isFinite(normalizedStartAfter) || normalizedStartAfter < 0) normalizedStartAfter = 0;
+
+  // Sequences already sent to this socket for *this* subscription (live push and replay below
+  // share the same set) — membership-tested, not a monotonic high-water mark. A high-water mark
+  // (the previous implementation: "sequence <= highest sequence seen so far => already delivered")
+  // is only correct if chat.message pushes for one chat always arrive in ascending sequence order,
+  // which they do not: the user's own message is pushed by interfaces/ws/server.ts's
+  // publishSentMessagePush *after* its dispatchCapability call resolves, while the assistant's
+  // reply is pushed independently by application/chat/event-sink.ts, driven by the outbox
+  // dispatcher's own poll tick picking up the just-committed TurnStarted event — two unsynchronized
+  // code paths. The DB commit order between the two is still guaranteed (the assistant's row can
+  // only be inserted after the user's row + TurnStarted have committed in the same transaction),
+  // but which one's *push* reaches this listener first is not. Under the old high-water-mark
+  // dedupe, an assistant push (sequence N+1) arriving before its own turn's user push (sequence N)
+  // would bump the mark to N+1 and then silently drop N as "already delivered" when it arrived
+  // moments later — never actually sent, never replayed (the replay cursor tracked the same
+  // polluted mark). A plain per-sequence Set has no such ordering assumption: each sequence is
+  // deduped independently of every other, so an out-of-order arrival is delivered exactly once,
+  // whichever path (live or replay) reaches it first.
+  const deliveredSequences = new Set<number>();
+
+  function shouldDeliver(sequence: number): boolean {
+    if (sequence <= normalizedStartAfter || deliveredSequences.has(sequence)) return false;
+    deliveredSequences.add(sequence);
+    return true;
+  }
 
   // Registered *before* the replay read below, and before the success response is even sent — any
   // chat.message committed from this point on is guaranteed to reach this socket via the live
-  // path, so the replay query below can never create a gap, only (harmlessly, given the sequence
-  // dedupe) an overlap with it.
+  // path, so the replay query below can never create a gap, only (harmlessly, given the shared
+  // dedupe set) an overlap with it.
   const unsubscribe = subscribeToChatPushEvents(chatId, (event: ChatPushEvent) => {
-    if (event.type === 'chat.message') {
-      const sequence = event.message.sequence;
-      if (sequence <= lastDeliveredSequence) return; // already delivered via replay — dedupe
-      lastDeliveredSequence = sequence;
-    }
+    if (event.type === 'chat.message' && !shouldDeliver(event.message.sequence)) return;
     send(socket, notification(event.type, event));
   });
-  const subscription = { chatId, unsubscribe, lastDeliveredSequence };
-  state.subscription = subscription;
+  state.subscription = { chatId, unsubscribe };
 
   send(socket, successResponse(id, { subscribed: true, chatId }));
 
@@ -203,12 +220,14 @@ async function handleSubscribeChat(
   // page history" rule turned into an automatic catch-up on (re)subscribe, rather than requiring
   // the client to separately call get_chat_history for the exact gap it just closed by
   // subscribing) — reuses the get_chat_history capability (and its audit trail) rather than a
-  // bespoke read.
+  // bespoke read. The cursor is the fixed `normalizedStartAfter` (not a value mutated by live
+  // delivery) — the shared `deliveredSequences` set is what prevents double-delivery against
+  // whatever the live path has already sent while this query was in flight.
   let replayResult: unknown;
   try {
     replayResult = await dispatchCapability(deps, caller, 'get_chat_history', {
       chatId,
-      cursor: String(subscription.lastDeliveredSequence),
+      cursor: String(normalizedStartAfter),
       limit: SUBSCRIBE_REPLAY_LIMIT,
     });
   } catch {
@@ -220,8 +239,7 @@ async function handleSubscribeChat(
   if (!isChatHistoryResult(replayResult)) return;
 
   for (const message of replayResult.messages) {
-    if (message.sequence <= subscription.lastDeliveredSequence) continue;
-    subscription.lastDeliveredSequence = message.sequence;
+    if (!shouldDeliver(message.sequence)) continue;
     send(
       socket,
       notification('chat.message', {

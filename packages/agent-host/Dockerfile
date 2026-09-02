@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1.7
 #
 # Multi-stage build for @nexttime/agent-host (design doc §7.2, §10.1, §10.2).
-# NOTE (R1): image build is unverified on this machine — Docker is not installed here. It must
-# be built and smoke-tested on the target host before E3 sign-off.
+# Build-verified and smoke-tested end-to-end on the target host (S1.5b host acceptance,
+# docs/private/host-s1-5b-*.md) — this machine still has no Docker (R1's original note), but the
+# image itself is no longer unverified.
 #
 # Build context is the repo root: docker build -f packages/agent-host/Dockerfile .
 
