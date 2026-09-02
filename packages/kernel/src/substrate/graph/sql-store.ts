@@ -1,6 +1,7 @@
 import type { EpistemicStatus } from '@nexttime/shared';
 import { FACT_LIFECYCLE_TRANSITIONS, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { enqueue } from '../outbox/index.js';
 import {
   buildGetFactForUpdateQuery,
   buildGetObjectQuery,
@@ -43,18 +44,10 @@ import {
  * sets superseded_at/supersedes_id in one transaction", "a failed assertFact leaves no partial
  * rows") comes entirely from the caller's surrounding `withWorkspace()` BEGIN…COMMIT/ROLLBACK.
  *
- * Outbox write path (assumption — see PR body "假设"): the S1.2 dispatch describes enqueuing the
- * `FactAsserted` outbox row "via a tiny packages/kernel/src/adapters/db/outbox.ts enqueue(client,
- * event) helper". That helper exists (this module's sibling deliverable) for the application/
- * interfaces layers that are allowed to import `adapters/*` — but `.dependency-cruiser.cjs`'s
- * `kernel-adapters-imported-only-by-application-or-interfaces` rule forbids `substrate` (this
- * module's own layer) from importing anything under `packages/kernel/src/adapters/`, matching
- * the design doc §7.10 layer table ("substrate ... 允许依赖: domain" — domain only, not adapters).
- * So `assertFact`/`supersedeFact` insert the `FactAsserted` outbox row with one inline `insert
- * into outbox (...)` statement instead — same table, same event shape (validated structurally by
- * TypeScript against `@nexttime/shared`'s `PlatformEvent` union, domain-layer and therefore a
- * legal substrate dependency), still in the same transaction as the Fact insert. `outbox.ts`'s
- * `enqueue()` remains the helper future upper-layer write paths (chat/task, S1.4) should use.
+ * Outbox write path: `assertFact`/`supersedeFact` append their `FactAsserted` domain event through
+ * `substrate/outbox`'s `enqueue()` (the single sanctioned outbox writer — schema-validated against
+ * `@nexttime/shared`'s `PlatformEventSchema`, never a hand-written INSERT), on the same `client`
+ * and therefore in the same transaction as the Fact insert (design doc §7.10 "领域事件与 outbox").
  */
 
 interface ObjectRow {
@@ -131,26 +124,21 @@ function mapFactRow(row: FactRow): Fact {
 }
 
 /**
- * Inline `FactAsserted` outbox write — see this module's doc comment for why it isn't
- * `adapters/db/outbox.ts`'s `enqueue()`. Shape matches `FactAssertedEvent` in
- * packages/shared/src/events.ts exactly.
+ * `FactAsserted` (packages/shared/src/events.ts) for a freshly inserted Fact row. `objectId`
+ * carries the Fact's target Object — the endpoint a consumer most often wants to refresh.
  */
 async function enqueueFactAsserted(
   client: PoolClient,
   workspaceId: string,
   fact: Fact,
 ): Promise<void> {
-  const payload = {
+  await enqueue(client, {
     type: 'FactAsserted',
     workspaceId,
     factId: fact.id,
     objectId: fact.targetObjectId,
     epistemicStatus: fact.epistemicStatus,
-  };
-  await client.query(
-    'insert into outbox (workspace_id, event_type, payload) values ($1, $2, $3::jsonb)',
-    [workspaceId, payload.type, JSON.stringify(payload)],
-  );
+  });
 }
 
 function firstRowOrThrow<T>(rows: readonly T[], onMissing: () => Error): T {

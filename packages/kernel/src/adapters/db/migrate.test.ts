@@ -334,6 +334,43 @@ describe.runIf(DATABASE_URL !== undefined)('runMigrations — integration (real 
     }
   });
 
+  it('serializes concurrent runMigrations() calls: each file is applied exactly once, none fail', async () => {
+    // Regression for the CI flake fixed by MIGRATION_RUN_LOCK_KEY: without the run-level lock,
+    // several runners racing on a fresh module each see both files as pending and race on the
+    // (deliberately non-idempotent) `create table` below — the losers fail with "relation
+    // already exists". With the lock, the first runner applies both, the rest block, re-plan,
+    // and find nothing pending.
+    const moduleName = uniqueModuleName();
+    const { root, moduleDir } = await makeModuleDir(moduleName);
+    await writeFile(
+      path.join(moduleDir, '0000_init.sql'),
+      `create table ${moduleName}_t (id int primary key);`,
+    );
+    await writeFile(
+      path.join(moduleDir, '0001_more.sql'),
+      `create table ${moduleName}_u (id int primary key);`,
+    );
+
+    const results = await Promise.all(Array.from({ length: 4 }, () => runMigrations(pool, root)));
+
+    const totalApplied = results.reduce((n, r) => n + r.applied.length, 0);
+    expect(totalApplied).toBe(2);
+    for (const result of results) {
+      expect(result.pending).toHaveLength(0);
+    }
+
+    const client = await pool.connect();
+    try {
+      const count = await client.query(
+        'select count(*)::int as n from schema_migrations where module = $1',
+        [moduleName],
+      );
+      expect(count.rows[0]?.n).toBe(2);
+    } finally {
+      client.release();
+    }
+  });
+
   it('refuses to run when an already-applied migration file was tampered with', async () => {
     const moduleName = uniqueModuleName();
     const { root, moduleDir } = await makeModuleDir(moduleName);

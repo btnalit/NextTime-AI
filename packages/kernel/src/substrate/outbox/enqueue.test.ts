@@ -1,9 +1,9 @@
 import type { PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
-import { enqueue } from './outbox.js';
+import { enqueue } from './enqueue.js';
 
 /**
- * Unit tests (fake `pg` client, no Postgres) for adapters/db/outbox.ts's `enqueue()` — mirrors
+ * Unit tests (fake `pg` client, no Postgres) for substrate/outbox/enqueue.ts's `enqueue()` — mirrors
  * the fake-client pattern already used by adapters/db/pool.test.ts.
  */
 

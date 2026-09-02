@@ -13,8 +13,8 @@ import type { PoolClient } from 'pg';
  * `app.workspace_id` / `app.principal_id` RLS session variables and switched onto the
  * `nexttime_app` role, and which wraps the whole call in one transaction (BEGIN…COMMIT/ROLLBACK).
  * This module must not import that adapter directly (§7.10 six-layer rule: substrate may depend
- * only on domain) — see sql-store.ts's module doc for how that constraint shapes the outbox
- * write path.
+ * only on domain); the `FactAsserted` outbox write goes through `substrate/outbox` (see
+ * sql-store.ts).
  */
 
 // -------------------------------------------------------------------------------------------
