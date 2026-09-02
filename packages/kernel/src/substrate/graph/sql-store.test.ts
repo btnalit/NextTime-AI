@@ -398,6 +398,40 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
         ),
       ).rejects.toThrow(IllegalTransition);
     });
+
+    it('persists a given reason on invalidationReason; omitting it leaves invalidationReason null', async () => {
+      const { fact1, fact2 } = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const activity = await makeActivity(client);
+        const fact1 = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity.id,
+        });
+        const fact2 = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel2',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity.id,
+        });
+        return { fact1, fact2 };
+      });
+
+      const invalidatedWithReason = await inTx((client) =>
+        store.invalidateFact(client, workspaceId, humanCaller(), {
+          factId: fact1.id,
+          reason: 'superseded by external correction',
+        }),
+      );
+      expect(invalidatedWithReason.invalidationReason).toBe('superseded by external correction');
+
+      const invalidatedWithoutReason = await inTx((client) =>
+        store.invalidateFact(client, workspaceId, humanCaller(), { factId: fact2.id }),
+      );
+      expect(invalidatedWithoutReason.invalidationReason).toBeNull();
+    });
   });
 
   describe('traverse — depth ≤ 3, direction, link_type filter (§9.3)', () => {

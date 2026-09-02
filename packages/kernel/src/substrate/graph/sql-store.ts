@@ -72,6 +72,7 @@ interface FactRow {
   recorded_at: Date;
   superseded_at: Date | null;
   invalidated_at: Date | null;
+  invalidation_reason: string | null;
   supersedes_id: string | null;
   epistemic_status: EpistemicStatus;
   confidence: number | null;
@@ -114,6 +115,7 @@ function mapFactRow(row: FactRow): Fact {
     recordedAt: row.recorded_at,
     supersededAt: row.superseded_at,
     invalidatedAt: row.invalidated_at,
+    invalidationReason: row.invalidation_reason,
     supersedesId: row.supersedes_id,
     epistemicStatus: row.epistemic_status,
     confidence: row.confidence,
@@ -289,9 +291,13 @@ export class SqlGraphStore implements GraphStore {
     });
     transition(FACT_LIFECYCLE_TRANSITIONS, currentState, 'invalidate');
 
-    // `input.reason`, if given, is intentionally not persisted here — see InvalidateFactInput's
-    // doc comment in store.ts (I4 blocks writing `links.properties` on an existing row).
-    const markQuery = buildMarkFactInvalidatedQuery(workspaceId, input.factId);
+    // `input.reason`, if given, is persisted to `links.invalidation_reason` (migrations/core/
+    // 0007) — see InvalidateFactInput's doc comment in store.ts.
+    const markQuery = buildMarkFactInvalidatedQuery(
+      workspaceId,
+      input.factId,
+      input.reason ?? null,
+    );
     const markResult = await client.query<FactRow>(markQuery.text, markQuery.values as unknown[]);
     return mapFactRow(
       firstRowOrThrow(markResult.rows, () => new FactNotFoundError(workspaceId, input.factId)),
