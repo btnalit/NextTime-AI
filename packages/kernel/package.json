@@ -20,7 +20,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "build": "tsc -p tsconfig.json",
-    "migrate": "node dist/cli/migrate.js"
+    "migrate": "node dist/cli/migrate.js",
+    "bootstrap": "node dist/cli/bootstrap.js"
   },
   "dependencies": {
     "@nexttime/shared": "workspace:*",

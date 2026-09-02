@@ -1,21 +1,41 @@
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { createPool } from './adapters/db/pool.js';
+import type { CapabilityRouteDeps } from './interfaces/http/index.js';
+import { registerCapabilityRoutes } from './interfaces/http/index.js';
 
 /**
- * Builds the kernel's Fastify instance. This is deliberately minimal for R1 (repo skeleton) —
- * the six-layer module tree under src/{substrate,governance,application,adapters,interfaces}
- * is wired in starting with R4/S1; see design doc §7.1 and §7.10.
+ * Builds the kernel's Fastify instance. This is the composition root (design doc §7.1, §7.10):
+ * it is the one place allowed to import across every layer (substrate/governance/application/
+ * adapters/interfaces) — `createPool()` (adapters) is built here and injected into
+ * `interfaces/http` as `CapabilityRouteDeps`, so `interfaces/http` itself never imports adapters
+ * or substrate directly.
  */
-export function createServer(): FastifyInstance {
-  const app = Fastify({ logger: false });
+export function createServer(
+  deps: KernelServerDeps,
+  options: CreateServerOptions = {},
+): FastifyInstance {
+  const app = Fastify({ logger: options.logger ?? false });
 
   app.get('/api/health', async () => ({ status: 'ok' }));
+
+  registerCapabilityRoutes(app, deps);
 
   return app;
 }
 
+export interface KernelServerDeps extends CapabilityRouteDeps {}
+
+export interface CreateServerOptions {
+  /** Fastify's own `logger` option — the structured per-call log (§12) is written regardless of
+   *  this setting (interfaces/http/capability-route.ts uses `request.log`, a no-op sink when
+   *  `logger` is `false`); this only controls Fastify's own request/response access log. */
+  logger?: boolean;
+}
+
 export function main(): void {
-  const app = createServer();
+  const pool = createPool();
+  const app = createServer({ pool }, { logger: true });
   const port = Number(process.env.KERNEL_PORT ?? 8080);
   const host = process.env.KERNEL_BIND_ADDR ?? '0.0.0.0';
 

@@ -23,8 +23,8 @@ export interface SqlQuery {
 }
 
 const FACT_COLUMNS = `workspace_id, id, link_type, source_object_id, target_object_id, properties,
-  valid_from, valid_until, recorded_at, superseded_at, invalidated_at, supersedes_id,
-  epistemic_status, confidence, activity_id, asserted_by, verified_by`;
+  valid_from, valid_until, recorded_at, superseded_at, invalidated_at, invalidation_reason,
+  supersedes_id, epistemic_status, confidence, activity_id, asserted_by, verified_by`;
 
 const OBJECT_COLUMNS =
   'workspace_id, id, object_type, identity_key, properties, created_at, updated_at';
@@ -163,14 +163,19 @@ export function buildMarkFactSupersededQuery(workspaceId: string, factId: string
   };
 }
 
-export function buildMarkFactInvalidatedQuery(workspaceId: string, factId: string): SqlQuery {
+/** `reason` (migrations/core/0007) is caller-supplied free text, or `null` when omitted. */
+export function buildMarkFactInvalidatedQuery(
+  workspaceId: string,
+  factId: string,
+  reason: string | null,
+): SqlQuery {
   return {
     text: `
-      update links set invalidated_at = now()
+      update links set invalidated_at = now(), invalidation_reason = $3
       where workspace_id = $1 and id = $2
       returning ${FACT_COLUMNS}
     `,
-    values: [workspaceId, factId],
+    values: [workspaceId, factId, reason],
   };
 }
 

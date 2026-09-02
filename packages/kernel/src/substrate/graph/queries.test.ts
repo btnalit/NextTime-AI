@@ -130,10 +130,16 @@ describe('buildGetFactForUpdateQuery / buildMarkFactSupersededQuery / buildMarkF
     expect(q.text).not.toContain('invalidated_at =');
   });
 
-  it('invalidate sets only invalidated_at', () => {
-    const q = buildMarkFactInvalidatedQuery('ws1', 'fact1');
+  it('invalidate sets invalidated_at and invalidation_reason', () => {
+    const q = buildMarkFactInvalidatedQuery('ws1', 'fact1', 'no longer accurate');
     expect(q.text).toContain('set invalidated_at = now()');
     expect(q.text).not.toContain('superseded_at =');
+    expect(q.values).toEqual(['ws1', 'fact1', 'no longer accurate']);
+  });
+
+  it('invalidate with no reason binds null', () => {
+    const q = buildMarkFactInvalidatedQuery('ws1', 'fact1', null);
+    expect(q.values).toEqual(['ws1', 'fact1', null]);
   });
 });
 

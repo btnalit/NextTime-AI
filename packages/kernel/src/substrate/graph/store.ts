@@ -48,6 +48,8 @@ export interface Fact {
   readonly recordedAt: Date;
   readonly supersededAt: Date | null;
   readonly invalidatedAt: Date | null;
+  /** Caller-supplied free-text reason for `invalidateFact`, or `null` (migrations/core/0007). */
+  readonly invalidationReason: string | null;
   readonly supersedesId: string | null;
   /** Independent belief-strength axis (§5.6). */
   readonly epistemicStatus: EpistemicStatus;
@@ -115,12 +117,11 @@ export interface SupersedeFactInput extends AssertFactInput {
 export interface InvalidateFactInput {
   readonly factId: string;
   /**
-   * Not currently persisted — see sql-store.ts's `invalidateFact` doc comment: I4's
-   * content-column trigger blocks writing to `links.properties` on an already-recorded row
-   * (invalidation only ever touches `invalidated_at`), so there is nowhere in the current schema
-   * to durably record a free-text reason without either an I4 exception or a new column. Kept in
-   * the input shape now (accepted, silently not persisted) so the call site doesn't have to
-   * change again once a column exists.
+   * Persisted to `links.invalidation_reason` (migrations/core/0007_fact_invalidation_reason.sql,
+   * docs/development-tasks.md S1.3 item 7). I4's content-column immutability trigger
+   * (`links_block_content_update`, 0002_substrate.sql) does not block this column — it is a new
+   * nullable column that trigger's explicit blocklist never names, the same way it already never
+   * named `invalidated_at`.
    */
   readonly reason?: string;
 }
