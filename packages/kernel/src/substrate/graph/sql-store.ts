@@ -9,6 +9,7 @@ import {
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
   buildNeighborsQuery,
+  buildRecentFactsQuery,
   buildSearchQuery,
   buildStateAtFactsQuery,
   buildTraverseQuery,
@@ -377,5 +378,20 @@ export class SqlGraphStore implements GraphStore {
     const query = buildSearchQuery(workspaceId, input);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     return result.rows.map(mapObjectRow);
+  }
+
+  /**
+   * Additive S1.4 method (see store.ts's doc comment on this method, and the S1.4 dispatch's
+   * ownership note: "if GraphStore lacks something you need ... a small additive method in
+   * substrate/graph"). `get_entry_context` (gateway/handlers.ts) is the only caller.
+   */
+  async listRecentFacts(
+    client: PoolClient,
+    workspaceId: string,
+    limit?: number,
+  ): Promise<readonly Fact[]> {
+    const query = buildRecentFactsQuery(workspaceId, limit);
+    const result = await client.query<FactRow>(query.text, query.values as unknown[]);
+    return result.rows.map(mapFactRow);
   }
 }

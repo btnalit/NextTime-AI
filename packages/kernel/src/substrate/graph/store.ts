@@ -176,6 +176,16 @@ export interface SearchInput {
 
 export const DEFAULT_SEARCH_LIMIT = 50;
 
+/**
+ * `listRecentFacts` (docs/development-tasks.md S1.4 `get_entry_context`: "up to N recent
+ * non-superseded Facts for the workspace with epistemic_status"): a small additive `GraphStore`
+ * method, not part of the S1.2 method set. `application/gateway/handlers.ts`'s
+ * `get_entry_context` handler is the only caller — see this method's own note in sql-store.ts for
+ * why it was added here (the ownership carve-out for GraphStore in the S1.4 dispatch) rather than
+ * as a hand-written query in gateway/handlers.ts.
+ */
+export const DEFAULT_RECENT_FACTS_LIMIT = 20;
+
 // -------------------------------------------------------------------------------------------
 // Errors
 // -------------------------------------------------------------------------------------------
@@ -314,4 +324,12 @@ export interface GraphStore {
     workspaceId: string,
     input: SearchInput,
   ): Promise<readonly GraphObject[]>;
+
+  /** Up to `limit` (default `DEFAULT_RECENT_FACTS_LIMIT`) currently-active (non-superseded,
+   *  non-invalidated) Facts for the workspace, newest `recorded_at` first. */
+  listRecentFacts(
+    client: PoolClient,
+    workspaceId: string,
+    limit?: number,
+  ): Promise<readonly Fact[]>;
 }

@@ -29,7 +29,14 @@ describe('PLATFORM_EVENT_NAMES', () => {
 });
 
 const SAMPLE_EVENTS: PlatformEvent[] = [
-  { type: 'TurnStarted', workspaceId: 'ws1', chatId: 'chat1', turnId: 'turn1', principalId: 'p1' },
+  {
+    type: 'TurnStarted',
+    workspaceId: 'ws1',
+    chatId: 'chat1',
+    turnId: 'turn1',
+    principalId: 'p1',
+    prompt: 'hello',
+  },
   {
     type: 'TurnCompleted',
     workspaceId: 'ws1',
@@ -59,7 +66,13 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
   {
     type: 'chat.message',
     chatId: 'chat1',
-    message: { id: 'm1', role: 'assistant', text: 'hello', createdAt: '2026-09-01T00:00:00Z' },
+    message: {
+      id: 'm1',
+      role: 'assistant',
+      text: 'hello',
+      createdAt: '2026-09-01T00:00:00Z',
+      sequence: 2,
+    },
   },
   {
     type: 'chat.stream',

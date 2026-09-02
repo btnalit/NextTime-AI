@@ -516,4 +516,48 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
       expect(results.some((obj) => obj.properties.label === marker)).toBe(true);
     });
   });
+
+  describe('listRecentFacts — S1.4 get_entry_context', () => {
+    it('returns currently-active facts newest-first, excluding a superseded one, respecting limit', async () => {
+      const [a, b] = await inTx(async (client) => [
+        await makeObject(client, `recent-a-${randomUUID()}`),
+        await makeObject(client, `recent-b-${randomUUID()}`),
+      ]);
+      if (!a || !b) throw new Error('makeObject produced no object');
+
+      const originalFactId = await inTx(async (client) => {
+        const activity = await makeActivity(client);
+        const fact = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.recent',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity.id,
+        });
+        return fact.id;
+      });
+
+      // Supersede the first fact, then assert a second, unrelated fact — the superseded original
+      // must never appear in listRecentFacts.
+      const newFactId = await inTx(async (client) => {
+        const activity = await makeActivity(client);
+        const fact = await store.supersedeFact(client, workspaceId, humanCaller(), {
+          factId: originalFactId,
+          linkType: 'test.recent',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity.id,
+        });
+        return fact.id;
+      });
+
+      const recent = await inTx((client) => store.listRecentFacts(client, workspaceId, 500));
+      const ids = recent.map((fact) => fact.id);
+      expect(ids).toContain(newFactId);
+      expect(ids).not.toContain(originalFactId);
+      expect(recent.every((fact) => typeof fact.epistemicStatus === 'string')).toBe(true);
+
+      const limited = await inTx((client) => store.listRecentFacts(client, workspaceId, 1));
+      expect(limited).toHaveLength(1);
+    });
+  });
 });
