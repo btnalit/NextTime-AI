@@ -28,7 +28,8 @@
 2. **「基于 Graph」是领域模型的形状**：带类型对象 + 带类型有向关系 + 双时态 + 逐边溯源。Postgres 是唯一真源，图库是可后加的投影。
 3. **五类图是一个 Domain Model 的三种视图**（§4）；Graph Engineering 的四部分完整保留，并加「执行本身也是图并写回同一个图」。
 4. **常驻 agent 是缓存不是真源**。每用户的 pi 子进程会崩会重启；对话与决策在 Postgres，pi 的上下文在它自己的 JSONL 会话目录，两者以 turn id 关联，重启后恢复（§7.2）。
-5. **动态编排在受治理的边上进行**。入口 agent 只有调度权与观察权，专用 Worker 只拿最小能力，写动作必过策略，凭证永不进任何 agent 进程。
+5. **动态编排在受治理的边上进行，但 agent 必须真的能干活。** 入口 agent 与 Worker 都有真实工作环境：文件、bash、装包、经代理的公网访问、模型。治理只压在三条底线上：凭证永不进任何 agent 进程；碰有凭证、在内网、有状态的系统才走门与审批；用户隔离与审计不减。
+6. **接入任意系统靠「通用传输种类 + 接口清单」，不靠逐系统写代码。** 门只有 `http` / `mcp` / `cli` / `ssh`（后续 `db` / `browser`）几种传输，系统能做什么由图里的接口清单描述；Worker 拿到的是清单投影出来的工具，永远看不到地址与凭证。编排分三档：单次观察直接调、多步或含写入交给 Worker、跨系统且重复的流程沉淀为 Procedure 与 Workflow（§8.5）。
 
 ---
 
@@ -115,7 +116,7 @@ Governance Model = Capability / Policy / Approval / Task / Audit
 |------|------|
 | **OntologyVersion / ObjectType / LinkType / PropertyType / ActionType** | 同 v0.1；ActionType 带 `reversibility`、`blast_radius`、`auto_approvable`、`await_decision`、`requester_can_approve` |
 | **Object / Link(=Fact) / PropertyAssertion** | 同 v0.1 |
-| **平台元本体（对象化的平台自身）** | `WorkerDefinition`、`Gatekeeper`、`Capability` 也是 Object；`WorkerDefinition --can_act_on--> Gatekeeper | ObjectType`，`Gatekeeper --connects_to--> 系统对象`，`WorkerDefinition --requires--> Capability`。入口 agent 找 Worker = 一次 `traverse`。这些对象只能经 human 通道写入（不变量 I16） |
+| **平台元本体（对象化的平台自身）** | `WorkerDefinition`、`Gatekeeper`、`Operation`、`Capability`、`Skill`、`Procedure` 也是 Object。`Gatekeeper --exposes--> Operation`，`Operation --reads|writes--> ObjectType`，`Gatekeeper --connects_to--> 系统对象`，`WorkerDefinition --can_act_on--> Gatekeeper | Operation | ObjectType`，`WorkerDefinition --requires--> Capability`，`WorkerDefinition --uses--> Skill`，`Procedure --steps--> Operation | WorkerDefinition`。入口 agent 找手段 = 一次 `traverse`（`find_operations` / `find_workers` / `find_procedures`）。这些对象的**发布**只能经 human 通道（I16）；agent 可以提议草稿 |
 | **Code 子本体** | Repository / Commit / File / Symbol；`implemented_by` 跨图边 |
 
 #### 5.1.3 Epistemic Model
@@ -136,10 +137,14 @@ Governance Model = Capability / Policy / Approval / Task / Audit
 | **Policy** | `allow` / `require_approval` / `deny`；双信号自动批准；`requester_can_approve` 按 `blast_radius` |
 | **ActionRequest / Approval** | 同 v0.1；增加 `await_decision`、`parent_worker_run_id`、`actor_runtime`、`on_behalf_of` |
 | **Task / WorkerRun** | 同 v0.1；WorkerRun 记 `parent_worker_run_id` |
-| **WorkerDefinition** | 「可执行文件」：`kind`（`entry` / `worker`）、模型白名单、system prompt、skills、扩展、所需 Capability、能力上限；`draft → published → deprecated`；Task 固定引用启动时版本。`entry` 类的能力上限固定为 observe + `find_workers` + `invoke_worker` + `record_decision`，没有 execute |
-| **EntryAgent（入口 agent 实例）** | 每用户一个，`WorkerDefinition.kind=entry` 的常驻 Session；由 agent 宿主管理；持有该用户的入口 Handle |
+| **WorkerDefinition** | 「可执行文件」：`kind`（`entry` / `worker`）、模型白名单、system prompt、skills、扩展、所需 Capability、能力上限；`draft → published → deprecated`；Task 固定引用启动时版本。`entry` 类的能力上限：图的 observe、门上的 **observe 类 Operation**、`find_*`、`invoke_worker`、`request_connection`、`record_decision`、`propose_*`；没有门上的 execute |
+| **EntryAgent（入口 agent 实例）** | 每用户一个常驻容器（与 Worker 同镜像，`NEXTTIME_MODE=entry`），带该用户的持久工作目录；由 supervisor 管理生命周期，agent-host 只做事件桥；持有该用户的入口 Handle |
+| **Connection（连接）** | 某个门实例与某个系统之间的一次受治理的建立：由 agent `request_connection(kind, target)` 或人在「连接系统」页发起，人填地址与凭证，凭证只进门；产生 `Gatekeeper` 实例对象、系统对象与 `connects_to` 边；永久复用 |
+| **InterfaceManifest / Operation（接口清单）** | 一个门实例暴露的操作集合。每个 Operation：`name`、`binding`（`http`: 方法 + 路径；`cli`: 命令模板；`mcp`: 工具名；`ssh`: 命令模板或命令模式）、`params_schema`、`mode`（observe / execute）、`blast_radius`、`reversibility`、`auto_approvable`、`await_decision`、`reads/writes` 的 ObjectType、可选的结果映射（JMESPath → 对象身份键与属性）。来源：从 OpenAPI 或 MCP `tools/list` 导入；agent 探索后 `propose_operation`；手写 YAML。**未分类的操作默认 `require_approval`** |
+| **Skill（做法）** | 一份步骤文档（pi skill 格式），写明用哪些 Operation、怎么解析、有什么坑；`draft → published → deprecated`；Worker 结束时可 `propose_skill`，人发布；WorkerDefinition `uses` Skill，容器启动时装载 |
+| **Procedure（沉淀的流程）** | 跨系统、重复出现的业务流程：有序步骤引用 Operation 与 WorkerDefinition，含审批步与验证步；由成功的 Task 沉淀（`propose_procedure`），人发布；P5 起可由 Workflow 引擎持久执行、由 Trigger 驱动 |
 | **invoke_worker** | `invoke_worker(definition@version, input, wait, timeout) → result | task_id`；入口 agent 调用时子 Handle 是自身 Handle 的衰减且继承 `on_behalf_of` |
-| **Gatekeeper** | 独立部署，持凭证；`describe_actions / observe / simulate / apply / revert / health`；每个动作种类声明 `auto_approvable`、`await_decision`、`reversibility`、`blast_radius`；凭证两种：共享 / ConnectedAccount |
+| **Gatekeeper** | 通用传输种类的一个实例：`http` / `mcp` / `cli` / `ssh`（后续 `db` / `browser`），加一份接口清单与一份凭证。协议 `describe_operations / observe / simulate / apply / revert / health`；`ssh` 与 `cli` 类另带命令策略表（模式 → 只读 / 执行 / 影响半径）；凭证两种：共享 / ConnectedAccount，按 `on_behalf_of` 取用。**门不是逐系统写的代码** |
 | **ConnectedAccount** | 某 Principal 在某 Gatekeeper 的个人凭证引用，只存在 Gatekeeper 内；Gatekeeper 按 `on_behalf_of` 取用 |
 | **Trigger** | 系统事件模式 → WorkerDefinition 的映射，受策略约束；P5 |
 | **AuditRecord** | 每次受治理转移的 append-only 记录 |
@@ -196,12 +201,13 @@ graph LR
 | I7 | 执行前必有 Policy 决策记录 | 状态机前置 + CHECK |
 | I8 | 自动批准 = ActionType 声明 且 Workspace 规则开启 | 双信号 |
 | I9 | Worker 与入口 agent 进程内无任何凭证 | 凭证只在 Gatekeeper 与内核 `llm`；启动自检扫描 env |
-| I10 | Worker 只能到达内核 gateway（含 `llm` 端点） | internal 网络；外连测试必须失败 |
+| I10 | agent 容器（入口与 Worker）的出网只经出网代理：公网放行，内网地址段与平台内部服务拒绝，目标域名记录到本次 Activity | 容器无直接路由，`HTTP_PROXY` / `HTTPS_PROXY` 指向代理；从容器直连内网必须失败；代理按 WorkerDefinition 的允许 / 拒绝清单过滤 |
 | I11 | 所有受治理转移写 AuditRecord | 同事务 |
 | I12 | 已发布 OntologyVersion / WorkerDefinition 不可改 | 只读触发器 |
 | I13 | `on_behalf_of` 只来自 Handle；子 Handle 继承且不可改 | gateway 从会话解析；`capability_handles` 列；请求体同名字段被拒 |
 | I14 | 审批者必须持有所审批的 `action_kind × resource_scope` | `approve` 前置检查；角色只决定能否进队列 |
-| I15 | 入口 agent 的 cwd 与 `PI_CODING_AGENT_DIR` 为平台所有，对该用户的任何 Worker 只读 | 宿主创建目录、独立 OS 用户或只读挂载；Worker 容器不挂载它 |
+| I15 | 每用户入口容器的工作目录与 pi 目录只挂载给该用户的入口容器；其他用户的容器与任何 Worker 容器都不挂载 | 容器边界 + supervisor 的挂载规则 |
+| I17 | 未在接口清单中分类的操作一律 `require_approval`；分类只能经 human 通道发布 | 门在 `describe_operations` 之外的调用默认走审批；`propose_operation` 只产草稿 |
 | I16 | 平台元本体对象只能经 human 通道写入 | gateway 按 ObjectType 拒绝 Handle 通道写 |
 
 ### 5.5 状态机
@@ -328,21 +334,22 @@ flowchart TB
 | audit | append-only；`reconstruct`；PROV-O 导出 | AuditRecord |
 | codegraph | 联邦 `.codegraph/` SQLite（P4） | `implemented_by` |
 
-### 7.2 agent 宿主（agent-host）：每用户一个常驻 pi
+### 7.2 每用户一个常驻入口容器，agent-host 只做事件桥
 
-- **形态**：一个 Node 服务；每个用户一个 `pi --mode rpc` 子进程（pi 0.84.4 锁版本）。启动参数：`--no-session` 不用，改用 `--session-dir ${HOST_DATA}/users/<uid>/sessions`；`PI_CODING_AGENT_DIR=${HOST_DATA}/users/<uid>/agent`（配置、`models.json`、扩展）；`--system-prompt` 来自该用户入口 WorkerDefinition 的已发布版本；`-e platform-extension`；`--tools` 只留平台工具（不给 read / write / edit / bash）。
-- **I15**：`cwd` 与 `PI_CODING_AGENT_DIR` 由宿主创建，属于平台的 OS 用户；该用户的 Worker 容器不挂载它。否则一个有文件系统门的 Worker 能往自己用户的入口 agent 里塞扩展。
-- **事件桥**：读子进程 stdout 的 JSONL 事件（`message_update` / `tool_execution_*` / `agent_end` 等）→ 内核 `host-bridge` → chat 模块 → 该用户的 WS。`extension_ui_request` 子协议用于需要用户即时回答的交互。
-- **连续性规则（真源）**：对话、Turn、决策、任务在 Postgres；pi 的上下文在它的 JSONL 会话目录；两者以 `turn_id` 关联（扩展在每轮把 `turn_id` 写入会话条目）。子进程崩溃或宿主重启后，宿主以同一 `--session-dir` 重新拉起，pi 从 JSONL 恢复上下文；内核侧未完成的 Turn 标记 `interrupted`，下一轮 `context` 注入「上轮中断」。**子进程是缓存，不是真源。**
-- **隔离**：进程级；可选每用户独立 OS 用户；资源 cgroup 上限；空闲超时后停止子进程，下次对话再拉起（冷启动数秒，可接受）。
-- **不做**：不用 `packages/server`（实验性，无连接身份）；不在宿主进程内用 SDK 托管多用户。
+- **形态**：入口 agent 与 Worker 用同一个镜像（§7.3）。每个用户一个常驻容器，`NEXTTIME_MODE=entry`，挂载该用户的持久工作目录 `${NEXTTIME_DATA}/workspaces/<uid>/`（含 pi 的 `--session-dir` 与 `PI_CODING_AGENT_DIR`）。容器里跑 `pi --mode rpc`，`--system-prompt` 来自该用户入口 WorkerDefinition 的已发布版本，`-e platform-extension`，**内置工具全开**（read / write / edit / bash / grep / find / ls）。
+- **agent-host**：一个 Node 服务，只负责：向 supervisor 申请 / 停止入口容器、向内核申请入口 Handle、把容器 stdout 的 JSONL 事件（`message_update` / `tool_execution_*` / `agent_end`）桥到内核 `host-bridge` → chat → 该用户的 WS，以及把 `prompt` / `stop` 写回。`extension_ui_request` 子协议承接需要用户即时回答的交互。
+- **I15** 由容器边界成立：该目录只挂给这个用户的入口容器。
+- **连续性规则（真源）**：对话、Turn、决策、任务在 Postgres；pi 的上下文在它的 JSONL 会话目录；两者以 `turn_id` 关联（扩展每轮把 `turn_id` 写入会话条目）。容器崩溃或重启后以同一目录重拉，pi 从 JSONL 恢复；内核侧未完成的 Turn 标 `interrupted`，下一轮 `context` 注入「上轮中断」。**容器是缓存，不是真源。**
+- **资源**：cgroup 上限；空闲超时停容器，下次对话再拉起（冷启动数秒）。
+- **不做**：不用 pi `packages/server`；不在宿主进程内用 SDK 托管多用户；不在共享进程里跑用户的 pi。
 
-### 7.3 Worker 运行时
+### 7.3 agent 运行时（入口与 Worker 同一镜像）
 
-- 镜像：`node:24-bookworm-slim` + `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4` + 平台扩展；非 root；只读根文件系统；`runsc`。
-- 启动：supervisor 以 `pi --mode rpc` 或 pi subagent 示例同款的 `--mode json -p` 一次性运行；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID`；**不继承宿主 env**（pi 的 subagent 示例默认继承父 env，我们显式传空基底）。
-- 会话 JSONL 回流为 Source（私有给 `on_behalf_of`）；结果作为 Task 结果返回。
-- 网络：只到内核；LLM 经内核 `llm` 端点。
+- **镜像**：`node:24-bookworm-slim` + pi 0.84.4 + 平台扩展 + 常用工具链（git、curl、python3、pip、build-essential、ripgrep）；非 root；根文件系统只读，工作目录与 `/tmp` 可写；`runsc`。
+- **真实工作环境（默认全开、只记录）**：读写自己的工作目录；跑 bash / python / node；装包（pip / npm / apt 经代理）；抓公网（HTTP / HTTPS、公开仓库 clone）；调模型（经内核 `llm`）；观察图。**只有经门去动有凭证的系统才受策略与审批。**
+- **出网**：容器没有直接路由；`HTTP_PROXY` / `HTTPS_PROXY` 指向出网代理（§7.9）。
+- **启动**：Worker 由 supervisor 一次性运行 `pi --mode rpc`（或 pi subagent 示例同款的 `--mode json -p`）；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE / HTTP(S)_PROXY`；**不继承宿主 env**。Task 工作目录 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>/` 挂载，Task 结束后保留为 artifact，按保留策略清理。
+- **结果契约**：Worker 结束时返回结构化结果 `{summary, findings, facts_to_assert[], evidence[], artifacts[], proposed_skill?, proposed_operations?}`；内核把 `facts_to_assert` 以 `inferred` 状态写入、把证据挂到 Activity、把提议存为草稿。会话 JSONL 回流为私有 Source。
 
 ### 7.4 平台扩展（唯一的共享 TS 扩展，三种模式）
 
@@ -350,17 +357,20 @@ flowchart TB
 
 | 模式 | 运行处 | 注册的工具 | `context` 注入 | 会话回传 |
 |------|--------|-----------|---------------|---------|
-| `entry` | agent-host 子进程 | observe 组（含 `get_task`）、`find_workers`、`invoke_worker`、`record_decision`，与 §5.1.4 的能力上限一致；S1 只注册 observe 组，`find_workers` / `invoke_worker` 随 S2.7 加入 | 该用户的待审批、进行中 Task 及其结果、相关 Fact 与先例 | 每轮回传 Turn 与决策 |
-| `worker` | Worker 容器 | Handle 内的 capability（含 `request_action`、`observe`） | Task 输入、相关 Fact | 全量 JSONL |
+| `entry` | 每用户入口容器 | 图的 observe 组（含 `get_task`）、Handle 内各门的 **observe 类 Operation**（投影为 `<gate>.<op>` 工具）、`find_operations` / `find_workers` / `find_procedures`、`invoke_worker`、`request_connection`、`record_decision`、`propose_*`；与 §5.1.4 能力上限一致；S1 只注册图的 observe 组 | 该用户的待审批、进行中 Task 及其结果、相关 Fact、先例、可用的门与 Procedure 摘要 | 每轮回传 Turn 与决策 |
+| `worker` | Worker 容器 | Handle 内各门的 Operation（observe 直接调、execute 经 `request_action`）、图的 observe 与 `assert_fact`、`propose_*` | Task 输入、相关 Fact、装载的 Skill | 全量 JSONL + 结果契约 |
 | `interactive` | 你本机的 pi | 同 `entry` 或按 Handle | 同 `entry` | 默认不回传 |
 
-`tool_call` 拦截把 execute 类调用转成 `request_action`；这是便利闸门，安全边界在 gateway。
+**接口注入的机制**：扩展启动时向内核请求 Handle 内允许的 Operation 列表（含参数 schema 与说明），逐个注册为 pi 工具 `<gate>.<op>`；工具调用 → observe 类直接经内核转门；execute 类由 `tool_call` 拦截转 `request_action`。Worker 从头到尾只看到工具名与参数，看不到传输、地址、凭证。拦截是便利闸门，安全边界在 gateway。
 
-### 7.5 Gatekeeper
+### 7.5 Gatekeeper：通用传输种类 + 接口清单
 
-- 协议同 v0.1（HTTP + JSON）：`describe_actions`（每动作：`action_kind, params_schema, auto_approvable, await_decision, reversibility, blast_radius, read_only, title, description_template`）、`observe`、`simulate`、`apply`（以 `action_request_id` 幂等）、`revert`、`health`。
-- 基类（TS）内置两种凭证解析：共享（env）与 ConnectedAccount（Gatekeeper 本地加密存储，按 `on_behalf_of` 取）。
-- 传输种类：HTTP API、docker socket、SSH 远程命令、本地 CLI、MCP 代理。S2 交付 `docker` 与 `ragflow`；P5 交付 `ssh` / `cli` / `mcp` 通用基类，把命令包装为带 `blast_radius` 标注的动作。
+- **传输种类（S2 全部交付通用基类）**：`http`（REST / GraphQL，清单可从 OpenAPI 导入，GET 默认 observe、其余默认 execute 并按动词给默认影响半径）、`mcp`（代理外部 MCP server，`tools/list` 即清单，`readOnlyHint` 为 observe，其余 execute；自动批准需 `vetted`）、`cli`（门容器内的命令模板，如 `kubectl`、`gh`、厂商 CLI）、`ssh`（远程命令模板 + 命令策略表，兼容 RouterOS 这类只有 CLI 的设备）。后续：`db`（默认只读 SQL，写入以声明的存储过程为 Operation）、`browser`（无 API 系统的 RPA）。`docker` 是 `cli` 种类的一个预置清单。
+- **协议**：`describe_operations`、`observe`、`simulate`、`apply`（以 `action_request_id` 幂等）、`revert`、`health`。
+- **命令策略表（`ssh` / `cli`）**：正则模式 → `mode / blast_radius / auto_approvable`；未命中默认 `require_approval`（I17）；审批卡片上的「此类总是允许」把模式写入工作区策略。
+- **结果映射**：Operation 可声明 JMESPath 映射把响应变成对象身份键与属性，门返回时内核写为 `observed` Fact；没有映射的结果只作为 Observation 挂在 Activity 上，仍可在对话里使用。
+- **凭证**：基类内置共享（env）与 ConnectedAccount（门本地加密存储，按 `on_behalf_of`）；报销、审批这类必须以本人身份操作的系统用后者，库存、基础设施用前者。
+- **连接流程**：`request_connection(kind, target)` 或「连接系统」页 → 卡片 → 人填地址与凭证（凭证直达门，不经内核持久化）→ 门实例注册 → 图里生成 `Gatekeeper` 与系统对象 → 若是 `http` / `mcp` 自动导入清单草稿 → owner 发布清单。
 - 系统一侧的适配可以用任何语言；对平台一侧的协议不变。
 
 ### 7.6 Web（中台入口）
@@ -376,6 +386,10 @@ flowchart TB
 ### 7.8 采集器（TS）
 
 `collectors/host-inventory`：dockerode + `systemctl` + `git remote` + 进程树；只采结构性事实；命令行在形成 Observation 前脱敏，`environ` 不读；service Principal，写 `observed` Fact；同源变化 supersede。
+
+### 7.9 出网代理
+
+一个小的转发代理容器（几百行 Node，或 tinyproxy 加策略脚本），挂在 `control` 与 `workers` 两个网络上。规则：放行公网；拒绝 RFC1918、链路本地与平台内部服务名；按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 / 拒绝清单；记录每个目标域名与字节数到该次 Activity 的 `metadata`。不解密 TLS。这是 I10 的实现，也是「agent 能抓公网、装包、clone 公开仓库」的前提。
 
 ---
 
@@ -425,9 +439,33 @@ sequenceDiagram
 
 同 v0.1 §8.1。
 
-### 8.4 Worker 发现
+### 8.4 手段发现
 
-`find_workers(need)`：在平台元本体上 `traverse`，按 `can_act_on` 的 Gatekeeper / ObjectType 与 `requires` 的 Capability 与用户 Grant 交集过滤，返回可用的 `WorkerDefinition@version` 列表与简介；入口 agent 据此选择。
+`find_operations(need)` / `find_workers(need)` / `find_procedures(need)`：在平台元本体上 `traverse`，与用户的 Grant 取交集，返回可用的 Operation、`WorkerDefinition@version`、Procedure 及摘要；入口 agent 据此选择三档编排之一。
+
+### 8.5 编排模型：三档，由入口 agent 按图上的状态选择
+
+| 档 | 何时 | 谁执行 | 例子 |
+|----|------|--------|------|
+| **直接观察** | 一次 observe 类 Operation 就能回答 | 入口 agent 自己调 `<gate>.<op>` | 「库存里 SKU X 还有多少」→ `inventory.stock.get` |
+| **委派任务** | 多步、需要探索、含写入、跨少数系统 | `invoke_worker(定义, 任务, gates=[…])`，Handle 衰减到所需的门 | 「查最大流量 IP 并找出进程」；「把这张发票提交报销」 |
+| **沉淀流程** | 跨系统且重复、有固定审批点 | 第一次作为委派任务跑通 → `propose_procedure` → 人发布 → P5 起由 Workflow 持久执行、Trigger 驱动 | 「每周一生成排班并通知」 |
+
+入口 agent 的循环：理解需求 → 查图（Fact、先例、Procedure、可用手段）→ 单次观察够就直接答 → 否则选 Procedure 或 Worker 定义（没有专用就用通用 `ops-runner`）→ 衰减出只含所需门的 Handle → `invoke_worker` → 缺手段就 `request_connection` 或问用户 → 收到结果后把持久知识写图、记 Decision、成功且新颖时提议 Skill / Procedure。没有预画的流程图；顺序依赖逐轮推进，独立子任务并行拉起。
+
+**写入业务系统的审批路由**：Worker 的 execute 类 ActionRequest 按 I14 路由给**持有该动作范围的人**，不一定是发起对话的用户。例如报销提交由申请人的入口 agent 发起，卡片出现在财务 operator 的队列与对话里；排班写回由 HR owner 批。请求者若同时持有范围且 `requester_can_approve` 允许，卡片出现在自己的对话里。
+
+### 8.6 三个场景在全新平台上的走法
+
+**运维：RouterOS 找流量大户并定位进程。** 图里没有 RouterOS 门 → 入口 agent `request_connection(ssh, RouterOS)` → 你填地址与凭证 → 门与设备对象入图。`invoke_worker(ops-runner, "找出当前内网流量最大的 IP", gates=[routeros-1])` → Worker 经 `ssh` 门跑 RouterOS 命令，`print` 类自动放行，未知命令第一次要你批并可勾「总是允许」→ 得到 IP。IP 对应主机：查图；没有就再 `request_connection(ssh, 那台服务器)`。第二个 Worker 在主机上 `ss -tnp` 定位进程，装 `nethogs` 是中影响动作走审批。入口 agent 合成答案，`record_decision`。留下：两道永久的门、IP 与主机的 Fact、两次 Task 与会话、命令与审批记录、一条 Decision；Worker 提议的「RouterOS 找流量大户」Skill 你发布后成为下次的手段。
+
+**库存：从 ERP 拉库存。** 「连接系统」页填 ERP 的 OpenAPI 地址与服务账号 → `http` 门自动导入清单草稿：`GET /stock` 为 observe，`POST /adjust` 为 execute 高影响 → owner 发布。此后「SKU X 还有多少」是直接观察，入口 agent 自己调 `erp.stock.get`，结果按映射写成 `Stock` 对象的 `observed` Fact；「把 X 的库存调成 100」是委派任务或直接一次 `request_action`，由持有 `erp.adjust` 范围的人批。
+
+**报销：提交并推进一张报销单。** OA 系统用 `http` 或 `mcp` 门接入，凭证种类是 ConnectedAccount，每个用户绑定自己的 OA 账号，门按 `on_behalf_of` 取用，所以报销单以本人身份提交。申请人上传发票作为对话附件（artifact），入口 agent 委派 Worker 填单并 `request_action(oa.expense.submit)`；审批卡片按范围路由到财务 operator 的对话；执行后回写 `ExpenseClaim` 对象与状态 Fact。跑通两次后沉淀为 Procedure：校验发票 → 填单 → 提交 → 等财务批 → 回写通知。
+
+**排班：每周生成排班表。** HR 系统（`http`）提供人员与可用时间，规则在知识库（`ragflow` 门），排班结果写回 HR 并经消息门通知。第一次是委派任务；成功后 `propose_procedure` 固化为五步（拉人员、拉规则、生成、写回需 HR owner 批、通知）；P5 起 Trigger 每周一触发 Workflow。图里留下 `Staff / Shift / Rule` 对象与每周的 Decision，下次任何人问「为什么小王排了周三夜班」，`explain` 给出规则与证据。
+
+三个场景用的是同一套机制：通用门 + 接口清单 + 三档编排 + 按范围路由的审批 + 结果契约写回图。不同的只是本体模块（运维资产、库存、报销、排班各一份）与清单。
 
 ---
 
@@ -621,17 +659,23 @@ nexttime explain <turn_activity_id>
 
 ---
 
-## 11. 权限与安全
+## 11. 权限与安全（刻意简化）
 
-1. **网络**：只有 caddy 有公网面；内核不发布端口；宿主与 Worker 只到内核；Gatekeeper 只被内核访问；Postgres 只对内核。
-2. **gateway 两通道**：human（Web 登录 / API key，可审批、授权）；Handle（入口 agent、Worker、MCP 会话、service；只能调用 Handle 内能力；永不能审批）。
-3. **Handle**：内核签发的短期可衰减 token，绑定 session 与 `on_behalf_of`（I13）；撤销表；来源绑定（supervisor 注册容器 ip；宿主注册子进程）。
-4. **入口 agent**：能力上限固定；无内置文件 / bash 工具；I15 目录隔离；每用户一个实例。
-5. **Worker**：容器、runsc、只读根、无出网、不继承 env、Handle 衰减。
-6. **Gatekeeper**：自身信任域；`apply` 幂等；两种凭证；`describe_actions` 声明风险标注。
-7. **审批**：I14；`requester_can_approve` 按 `blast_radius`；高影响 ActionType 默认 `require_approval` 且工作区不能关闭。
-8. **TLS**：caddy，内网 CA 或自签；Handle 不再明文跨 LAN。
-9. **身份**：S1 用 API key / 本地账号；P5 经 caddy forward-auth 接自托管 OIDC；身份配置留在环境变量层。
+**三条底线，其余放开。**
+
+1. **凭证不进任何 agent 进程**：凭证只在门与内核 `llm`；agent 容器 env 与文件系统里没有任何密钥（I9）。
+2. **碰有凭证、在内网、有状态的系统才走门与审批**：公网上不需要认证就能做的事是观察，只记录不审批。一句话：凭证在哪，审批就在哪。
+3. **用户隔离与审计不减**：两通道；Handle 带 `on_behalf_of`（I13）；审批者持有范围（I14）；每步入图。
+
+在此之上的机制：
+
+- **网络**：只有 caddy 有公网面；内核不发布端口；agent 容器经出网代理上公网、到不了内网（I10）；Gatekeeper 只被内核访问；Postgres 只对内核。
+- **agent 容器**：入口与 Worker 同镜像，内置工具全开，runsc，只读根 + 可写工作目录，不继承 env，Handle 衰减，来源绑定（supervisor 注册容器 ip）。
+- **审批默认值**：`blast_radius=low` 默认自动批准（双信号中的工作区规则默认开启 low），`medium` / `high` 要人批；未分类操作要人批（I17）；`requester_can_approve` 按影响半径；高影响的工作区规则不能关闭审批。
+- **门**：自身信任域；`apply` 幂等；两种凭证；接口清单声明风险标注。
+- **TLS**：caddy。**身份**：S1 用 API key / 本地账号，P5 接自托管 OIDC；身份配置留在环境变量层。
+
+去掉的东西：入口 agent 的子进程模式、每用户 OS 账号、无出网网络、内置工具白名单。加上的东西：一个出网代理容器和一张默认策略表。
 
 ---
 
@@ -677,12 +721,12 @@ nexttime explain <turn_activity_id>
 
 | 切片 | 目标 | 内容 | 验收 |
 |------|------|------|------|
-| **S1 一个用户能聊，每轮入图** | 登录 → 对话 → 自己的 pi 回答 → Turn 成为 Activity | postgres；kernel 核心（workspace / principal / session / API key、graph 最小、activities、audit、chat WS）；agent-host；platform-extension `entry` 模式（observe 工具 + context）；web 聊天页；caddy TLS；`llm` 透传 | 两个用户各自对话互不可见；杀掉 pi 子进程后对话可续；`explain(turn)` 完整 |
-| **S2 能经审批做事，动态拉起 Worker** | 说需求 → 入口 agent `find_workers` → `invoke_worker` → Worker 经门动作 → 审批卡片 → 执行 → 写回 | capability / Handle / policy / ActionRequest / approval；平台元本体与 WorkerDefinition 注册表；supervisor + worker-runtime；`gatekeeper-docker`；审批卡片 UI；Task 视图；I13 / I14 / I15 测试 | 用户 A 请求重启测试容器：卡片出现、A 批准、门执行、`explain` 全链；用户 B 看不到也批不了 |
+| **S1 一个用户能聊，每轮入图** | 登录 → 对话 → 自己的入口容器回答 → Turn 成为 Activity | postgres；kernel 核心（workspace / principal / session / API key、graph 最小、activities、audit、chat WS）；agent 镜像 + supervisor + 出网代理；agent-host 事件桥；platform-extension `entry` 模式（图 observe 工具 + context）；web 聊天页；caddy TLS；`llm` 透传 | 两个用户各自对话互不可见；杀掉入口容器后对话可续；入口 agent 能抓公网、跑脚本、写文件；从容器直连内网失败；`explain(turn)` 完整 |
+| **S2 能经审批做事，动态拉起 Worker，接入任意系统** | 说需求 → `find_*` → `invoke_worker` → Worker 经门操作 → 审批按范围路由 → 执行 → 结果契约写回；「连接系统」把新系统接进来 | capability / Handle / policy / ActionRequest / approval（含范围路由）；平台元本体（WorkerDefinition / Gatekeeper / Operation / Skill / Procedure）；通用门基类 `http` / `mcp` / `cli` / `ssh` + 接口清单（OpenAPI / MCP 导入）+ 命令策略表；`request_connection` 流程；`docker` 预置清单；`ragflow` 作 `http` 门实例；结果契约；`propose_skill / operation / procedure`；审批卡片与连接卡片 UI；Task 视图 | 用户 A 接入一台 SSH 主机并请求重启测试容器：卡片出现、A 批准、门执行、`explain` 全链；A 用 OpenAPI 接入一个测试 API，入口 agent 直接观察其 GET；未分类命令第一次要批、勾选后第二次不批；用户 B 看不到也批不了 |
 | **S3 图有内容、看得见、找得到** | 本体 v1 + 采集器让图有真实服务与依赖；Explorer 浏览；Claude Code 经 MCP 接入 | `ontology/ops-assets-v1.yaml`（含 Process）；采集器；冲突检测；`gatekeeper-ragflow`；Explorer 契约与挂载；MCP gateway；`interactive` 模式 | 入口 agent 能回答「哪个服务依赖哪个」并 explain；Explorer 展示图与决策链；Claude Code 经 MCP 观察同一图 |
 | P3 | Semantica 抽取 Worker（Python） | `submit_observations`；语义级冲突 | 两个矛盾文档产生 Conflict |
 | P4 | Code Graph 联邦与影响分析 | | |
-| P5 | Trigger；ssh / cli / mcp 门基类；多步 Workflow；ConnectedAccount；turn 挂起式审批评估；OIDC | | |
+| P5 | Trigger 与 Workflow 引擎（Procedure 的持久执行）；`db` / `browser` 门；ConnectedAccount 的 OAuth 流程；turn 挂起式审批评估；OIDC；各业务领域本体模块（库存 / 报销 / 排班）按需 | | |
 | P6 | 加固：备份、AGE 或图库投影、ReBAC 评估、性能 | | |
 
 S1 + S2 + S3 = 最小当前版本。
@@ -691,9 +735,9 @@ S1 + S2 + S3 = 最小当前版本。
 
 ## 16. 最小当前版本
 
-包含：Postgres 17；kernel（全部 §7.1 模块，codegraph 除外）；agent-host；platform-extension 三模式；worker-supervisor + worker-runtime；web；caddy；`gatekeeper-docker`、`gatekeeper-ragflow`；采集器；本体 v1 + 平台元本体 + 入口 agent 定义；Explorer 挂载（Graph / Decision / Lineage）；MCP gateway。
+包含：Postgres 17；kernel（全部 §7.1 模块，codegraph 除外）；agent 镜像（入口与 Worker）+ supervisor + 出网代理 + agent-host 事件桥；platform-extension 三模式；web；caddy；通用门基类 `http` / `mcp` / `cli` / `ssh` 与接口清单、命令策略表、连接流程；`docker` 预置清单与 `ragflow` 实例；结果契约与 `propose_*`；采集器；本体 v1 + 平台元本体 + 入口与 `ops-runner` 定义；Explorer 挂载（Graph / Decision / Lineage）；MCP gateway。
 
-不包含：Semantica 抽取、Code Graph、多步 Workflow、Trigger、ConnectedAccount、OIDC、图数据库扩展、turn 挂起式审批。
+不包含：Semantica 抽取、Code Graph、Workflow 引擎与 Trigger、`db` / `browser` 门、ConnectedAccount 的 OAuth 流程（S2 只做静态个人凭证录入）、OIDC、图数据库扩展、turn 挂起式审批。
 
 ---
 
@@ -709,8 +753,11 @@ Trigger 与事件驱动；ssh / cli / mcp 通用门；ConnectedAccount；OIDC；
 |------|------|
 | 常驻 pi 子进程被当成真源 | §7.2 连续性规则；S1 验收含杀进程续聊 |
 | `invoke_worker` 阻塞工具调用等人审批 | §8.2 超时返回 `task_id`；prompt 教异步 |
-| Worker 往入口 agent 目录塞扩展 | I15 |
-| 入口 agent 拿到 execute 能力 | 能力上限在 WorkerDefinition，gateway 强制 |
+| Worker 往入口 agent 目录塞扩展 | I15（容器边界 + 挂载规则） |
+| 入口 agent 拿到门的 execute 能力 | 能力上限在 WorkerDefinition，gateway 强制 |
+| 接口清单把写操作误分类为观察 | 导入时按动词给默认值，owner 发布前必须过目；未分类默认要批（I17）；`ssh` / `cli` 的策略表只放行明确只读模式 |
+| agent 经公网把数据带出去 | 出网代理记录目标域名；WorkerDefinition 可加拒绝清单；敏感工作区可切到「仅允许清单」模式。这是有意接受的剩余风险，换取 agent 能干活 |
+| 安全模型再次复杂化 | §11 只有三条底线；任何新增限制必须回答「不加它 agent 会拿到凭证吗、会越过用户边界吗」，否则不加 |
 | Explorer 契约成本失控 | 只做 §9.5 的 9 个端点，其余工作区隐藏 |
 | Semantica skills 误以为可直接复用 | 已纠正：只借 UX 规范 |
 | 每用户一个 pi 进程的内存 | 空闲超时停进程，按需拉起 |
@@ -741,6 +788,9 @@ Trigger 与事件驱动；ssh / cli / mcp 通用门；ConnectedAccount；OIDC；
 | 13 | `invoke_worker` 短超时异步；turn 挂起留 P5 | §8.2 |
 | 14 | Explorer 复用限 Graph / Decision / Lineage；skills 不复用 | §3.2、§9.5 |
 | 15 | 改动走分支 + PR | README |
+| 16 | 安全模型简化为三条底线；agent 有真实工作环境（内置工具全开、经代理出网、装包）；入口 agent 改为每用户常驻容器 | §7.2、§7.3、§7.9、§11 |
+| 17 | 接入任意系统靠通用门种类 `http` / `mcp` / `cli` / `ssh` + 接口清单 + 命令策略表 + 连接流程，全部进 S2 | §5.1.4、§7.5 |
+| 18 | 编排三档：直接观察 / 委派任务 / 沉淀流程；审批按范围路由；Worker 结果契约；Skill 与 Procedure 入元本体 | §8.5、§8.6 |
 
 待决：无。
 
