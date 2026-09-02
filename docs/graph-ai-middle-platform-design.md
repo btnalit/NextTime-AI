@@ -673,9 +673,13 @@ services:
   caddy:
     image: caddy:2.10                                        # pin 具体版本
     ports: ["${KERNEL_BIND_ADDR}:8443:8443"]
+    # /srv/web、/srv/explorer 在 S1.8 / S3 落地前指向 deploy/caddy/{placeholder,explorer-placeholder}
+    # 占位物（E8；切换步骤见 docs/runbooks/host-caddy.md）；下面写的是最终目标形态。
     volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "./packages/web/dist:/srv/web:ro", "./explorer/dist:/srv/explorer:ro", "${NEXTTIME_DATA}/caddy:/data"]
+    depends_on: [kernel]
     networks: [control]
-    restart: unless-stopped
+    restart: unless-stopped                                  # 以 root 运行（E8：官方镜像 /config 卷非
+                                                                # root 场景需自定义 Dockerfile，超出范围）
 
   llm-proxy:
     build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }

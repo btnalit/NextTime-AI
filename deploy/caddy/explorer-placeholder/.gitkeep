@@ -1,0 +1,3 @@
+This directory is intentionally empty. It is caddy's /srv/explorer mount until S3 publishes a
+real Semantica Explorer static build to explorer/dist (design doc §10.1, §7.6). See
+docs/runbooks/host-caddy.md for the placeholder-vs-real static root switch.

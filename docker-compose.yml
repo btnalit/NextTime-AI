@@ -48,11 +48,23 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:2.10 # pin 具体版本
+    image: caddy:2.10 # pin 具体版本；E8
     ports: ["${KERNEL_BIND_ADDR}:8443:8443"]
-    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "./packages/web/dist:/srv/web:ro", "./explorer/dist:/srv/explorer:ro", "${NEXTTIME_DATA}/caddy:/data"]
+    # Static roots: placeholder builds until S1.8 (web) / S3 (explorer) publish the real ones —
+    # see docs/runbooks/host-caddy.md for the one-line switch to ./packages/web/dist and
+    # ./explorer/dist once those exist. ${NEXTTIME_DATA}/caddy:/data persists the internal CA
+    # and issued certs (chowned by scripts/host-env-init.sh).
+    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "./deploy/caddy/placeholder:/srv/web:ro", "./deploy/caddy/explorer-placeholder:/srv/explorer:ro", "${NEXTTIME_DATA}/caddy:/data"]
+    depends_on: [kernel]
     networks: [control]
     restart: unless-stopped
+    # Runs as the image's default root user: the official caddy:2.10 image declares /config as
+    # a second VOLUME (autosave state) that isn't bind-mounted here, and it is root-owned inside
+    # the image — a non-root `user:` override here would need that path pre-chowned too (or
+    # redirected via XDG_CONFIG_HOME), which needs a custom Dockerfile out of E8's scope. Only
+    # /data (TLS private keys) is security-sensitive here, and it is already the pre-chowned,
+    # bind-mounted, persisted volume regardless of which user writes to it. Raised in the PR
+    # body as a follow-up candidate, not decided unilaterally here.
 
   llm-proxy:
     build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }

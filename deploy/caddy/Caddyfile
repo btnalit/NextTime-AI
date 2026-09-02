@@ -1,0 +1,61 @@
+# deploy/caddy/Caddyfile
+#
+# caddy is NextTime-AI's only public-facing service (design doc §11: 只有 caddy 有公网面；内核
+# 不发布端口). TLS uses Caddy's internal CA (`tls internal`) — self-signed is acceptable for S1
+# (design doc §11: 内网 CA 或自签). See docs/runbooks/host-caddy.md for how to trust the
+# generated root CA on a client and for the placeholder-vs-real static root switch.
+#
+# No plaintext :80 listener: docs/development-tasks.md §E8 does not ask for an HTTP->HTTPS
+# redirect, and this site's address (":8443", no hostname) does not trigger Caddy's automatic
+# HTTP->HTTPS redirect — that only fires for domain-name site addresses on the standard 80/443
+# pair, not a bare port.
+
+:8443 {
+	tls internal
+
+	# Access log to stdout as JSON. Caddy's access log never includes request/response bodies
+	# (there is no body-logging directive to accidentally enable) — only method/path/status/
+	# duration/size-shaped fields.
+	log {
+		output stdout
+		format json
+	}
+
+	# Baseline security headers reasonable for an internal tool. No Strict-Transport-Security:
+	# this deployment's TLS is an internal/self-signed CA (see runbook), and HSTS pinning could
+	# strand a client across a future CA rotation.
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Reverse-proxied to the kernel exactly as docs/development-tasks.md §E8 states ("反代 /api
+	# /ws /mcp /llm 到 kernel"). reverse_proxy handles the WebSocket upgrade for /ws
+	# transparently — no extra directives needed.
+	#
+	# NOTE raised in the PR, not decided here: design doc §7.7 / §10.2 describe a separate
+	# `llm-proxy` service for provider traffic. Routing /llm/* to `kernel` instead of
+	# `llm-proxy` may be a documentation gap in §E8 — kept as the task doc states.
+	@backend path /api/* /ws /mcp/* /llm/*
+	handle @backend {
+		reverse_proxy kernel:8080
+	}
+
+	# Explorer (S3) static build. Empty placeholder mount until S3 lands — see
+	# docs/runbooks/host-caddy.md.
+	handle_path /explorer/* {
+		root * /srv/explorer
+		file_server
+		try_files {path} /index.html
+	}
+
+	# Web UI (S1.8) static build. Serves deploy/caddy/placeholder/index.html until
+	# packages/web/dist exists — see docs/runbooks/host-caddy.md for the switch.
+	handle {
+		root * /srv/web
+		file_server
+		try_files {path} /index.html
+	}
+}
