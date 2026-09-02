@@ -80,7 +80,7 @@ S1.8（web）与 S3（Explorer）落地前，`docker-compose.yml` 的 `caddy` �
 
 切换步骤（以 web 为例，explorer 同理）：
 
-1. 确认 `packages/web/dist` 已由 `pnpm --filter web build` 产出且非空。
+1. 确认 `packages/web/dist` 已由 `corepack pnpm --filter @nexttime/web build` 产出且非空。
 2. 编辑 `docker-compose.yml` 的 `caddy.volumes`，把
    `./deploy/caddy/placeholder:/srv/web:ro` 改成 `./packages/web/dist:/srv/web:ro`。
 3. `docker compose up -d caddy`（只重建 caddy 容器，不影响 kernel 等其他服务）。
@@ -88,6 +88,12 @@ S1.8（web）与 S3（Explorer）落地前，`docker-compose.yml` 的 `caddy` �
 
 Caddyfile（`deploy/caddy/Caddyfile`）本身不需要改动——两条路径都是 `/srv/web`
 `/srv/explorer`，切换只发生在 compose 的宿主机挂载源。
+
+**S1.8 补充说明（构建产物已存在）**：`packages/web`（design doc §7.6：登录、对话页、`lib/ws-client.ts`）
+已随 S1.8 落地。确切构建命令是 `corepack pnpm --filter @nexttime/web build`（注意包名带
+`@nexttime/` 前缀，上面步骤 1 的旧写法 `pnpm --filter web build` 按包名精确匹配会找不到该包）；
+产物目录固定是 `packages/web/dist`（Vite 默认 `outDir`，`packages/web/vite.config.ts` 未覆盖），
+即上表"落地后"一列与步骤 2 里已经写的挂载源——不需要另建目录或改 `outDir`。
 
 ## 已知偏离 / 待确认（PR 中一并说明）
 

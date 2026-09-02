@@ -1,14 +1,10 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { App } from './App.js';
+import './styles.css';
 
-/**
- * Trivial Vite entry point for the R1 repo skeleton. The real chat/approvals/tasks/connections
- * SPA (design doc §7.6) lands starting with S1.
- */
-function App() {
-  return <p>NextTime AI web — skeleton placeholder (design doc §7.6).</p>;
-}
-
+/** Vite entry point — the chat/approvals/tasks/connections SPA (design doc §7.6). S1.8 ships
+ *  login + chat; approvals/tasks/connections land with their respective S2 tasks. */
 const container = document.getElementById('root');
 if (container !== null) {
   createRoot(container).render(
