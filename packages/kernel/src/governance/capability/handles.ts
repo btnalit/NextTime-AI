@@ -1,10 +1,25 @@
 import { randomUUID } from 'node:crypto';
-import { CAPABILITY_REGISTRY, getCapability } from '@nexttime/shared';
-import { SignJWT, errors as joseErrors, jwtVerify } from 'jose';
+import {
+  CAPABILITY_REGISTRY,
+  type CapabilityScope,
+  CapabilityScopeSchema,
+  type HandleClaims,
+  HandleClaimsSchema,
+  HandleTokenExpired,
+  HandleTokenInvalid,
+  getCapability,
+  verifyHandleToken,
+} from '@nexttime/shared';
+import { SignJWT } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
-import { z } from 'zod';
 import { HANDLE_SIGNING_ALG } from './keys.js';
+
+/** Re-exported unchanged so every existing importer of `./handles.js` keeps working — the schema
+ *  and type now live in `@nexttime/shared`'s `handle-token` module (S1.7 "共享 Handle-token 原语"),
+ *  this module's own public API (names, shapes, behavior) is otherwise untouched. */
+export { CapabilityScopeSchema, HandleClaimsSchema };
+export type { CapabilityScope, HandleClaims };
 
 /**
  * governance/capability/handles: issue / verify / attenuate / revoke Capability Handles (design
@@ -26,23 +41,8 @@ import { HANDLE_SIGNING_ALG } from './keys.js';
  */
 
 // -------------------------------------------------------------------------------------------
-// CapabilityScope
+// CapabilityScope — schema/type now defined in @nexttime/shared, re-exported above.
 // -------------------------------------------------------------------------------------------
-
-/**
- * `resources` maps a resource-scope key (e.g. a Gatekeeper id, an ObjectType name — the exact
- * key vocabulary is defined by each capability's own semantics, not fixed here) to the specific
- * resource ids/names a Handle may act on within that key. An absent key means "no access under
- * that key" (not "unrestricted") — `attenuate`'s subset check below treats a missing parent entry
- * as an empty set.
- */
-export const CapabilityScopeSchema = z
-  .object({
-    capabilities: z.array(z.string().min(1)),
-    resources: z.record(z.string(), z.array(z.string())),
-  })
-  .strict();
-export type CapabilityScope = z.infer<typeof CapabilityScopeSchema>;
 
 /** Thrown when a `CapabilityScope` names an unknown or human-channel-only capability. */
 export class ScopeValidationError extends Error {
@@ -170,29 +170,8 @@ export function entryScope(definition: EntryWorkerDefinitionInput = {}): Capabil
 }
 
 // -------------------------------------------------------------------------------------------
-// HandleClaims
+// HandleClaims — schema/type now defined in @nexttime/shared, re-exported above.
 // -------------------------------------------------------------------------------------------
-
-const uuidClaim = z.string().uuid();
-
-/**
- * The JWT Claims Set every Handle carries (design doc S1.9 task brief): `ws`=workspace_id,
- * `sid`=session_id, `obo`=on_behalf_of (I13), `scope`, `jti`, `exp`/`iat` (standard JWT claims,
- * seconds since epoch), `par`=parent_jti (present only on an attenuated child Handle).
- */
-export const HandleClaimsSchema = z
-  .object({
-    ws: uuidClaim,
-    sid: uuidClaim,
-    obo: uuidClaim,
-    scope: CapabilityScopeSchema,
-    jti: uuidClaim,
-    iat: z.number(),
-    exp: z.number(),
-    par: uuidClaim.optional(),
-  })
-  .strict();
-export type HandleClaims = z.infer<typeof HandleClaimsSchema>;
 
 // -------------------------------------------------------------------------------------------
 // Errors
@@ -367,34 +346,32 @@ export interface VerifyHandleOptions {
  * decoded claims against `HandleClaimsSchema`, and checks revocation. Returns the validated
  * `HandleClaims` on success; throws `HandleExpired`, `HandleRevoked`, or `HandleInvalid`
  * otherwise — never the raw `jose` error.
+ *
+ * The signature/claims-shape half delegates to `@nexttime/shared`'s `verifyHandleToken` (S1.7
+ * "共享 Handle-token 原语" — the same function `llm-proxy` calls); this function's own job is
+ * layering the kernel's revocation check on top and translating the shared module's
+ * `HandleTokenExpired`/`HandleTokenInvalid` into this module's pre-existing `HandleExpired`/
+ * `HandleInvalid` classes, so every existing caller of `verifyHandle` sees the exact same error
+ * types and behavior as before this refactor.
  */
 export async function verifyHandle(
   token: string,
   options: VerifyHandleOptions,
 ): Promise<HandleClaims> {
-  let rawPayload: unknown;
+  let claims: HandleClaims;
   try {
-    const result = await jwtVerify(token, options.publicKey, {
-      algorithms: [HANDLE_SIGNING_ALG],
-    });
-    rawPayload = result.payload;
+    claims = await verifyHandleToken(token, options.publicKey);
   } catch (err) {
-    if (err instanceof joseErrors.JWTExpired) {
+    if (err instanceof HandleTokenExpired) {
       throw new HandleExpired('handle token is expired');
     }
-    throw new HandleInvalid('handle token failed signature or claims verification', {
-      cause: err,
-    });
+    if (err instanceof HandleTokenInvalid) {
+      throw new HandleInvalid('handle token failed signature or claims verification', {
+        cause: err,
+      });
+    }
+    throw err;
   }
-
-  const parsed = HandleClaimsSchema.safeParse(rawPayload);
-  if (!parsed.success) {
-    throw new HandleInvalid(
-      `handle token claims do not match the expected shape: ${parsed.error.message}`,
-      { cause: parsed.error },
-    );
-  }
-  const claims = parsed.data;
 
   if (await options.isRevoked(claims.jti)) {
     throw new HandleRevoked(`handle ${claims.jti} has been revoked`);
