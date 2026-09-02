@@ -17,17 +17,35 @@
 -- RoleSwitch: true })`, which keeps the connection on the superuser role and therefore bypasses
 -- RLS by design — the same escape hatch Postgres itself expects a trusted admin path to use.
 --
--- Role creation is the one place in this module where idempotency guarding is load-bearing
--- rather than cosmetic: roles are cluster-wide (not per-database), so a second migration run
--- against a different database in the same Postgres cluster — or a second `runMigrations()`
--- call racing this one from a concurrent test process against the same fresh database — would
--- otherwise hit "role already exists". `EXCEPTION WHEN duplicate_object` (rather than a
+-- Cross-process bootstrap lock (empirically required — see PR body "假设"): the migration
+-- runner (packages/kernel/src/adapters/db/migrate.ts) computes "which files are pending" once,
+-- from a single read of `schema_migrations`, before executing any of them. Two independent test
+-- files (packages/kernel/src/adapters/db/migrate.test.ts and .../substrate/invariants.test.ts)
+-- each call `runMigrations()` against the same fresh, empty database; under real (not
+-- hypothetical) concurrency this was observed to fail with
+-- `duplicate key value violates unique constraint "pg_proc_proname_args_nsp_index"` on
+-- `create or replace function app_workspace()` — two sessions inserting the same new pg_proc row
+-- simultaneously, before either had committed, which "or replace" cannot protect against (it can
+-- only replace a row it can already see). A session-scoped advisory lock, acquired here as the
+-- very first statement of the module and released as the very last statement of
+-- 0005_outbox.sql, serializes the whole five-file bootstrap across concurrent callers — the
+-- second caller blocks until the first fully commits. That still leaves the second caller
+-- holding a stale "all five files are pending" plan once it unblocks, which is why every object
+-- below is *also* written to be idempotent (`if not exists` / `or replace` / `drop ... if
+-- exists` + create / an `exception when duplicate_object` guard for the one constraint that
+-- supports neither) — the lock prevents the raw concurrent-insert race, idempotency makes the
+-- second caller's now-redundant replay a no-op instead of an error. The key (a fixed, arbitrary
+-- bigint) only needs to be unique within this Postgres cluster; nothing else in this codebase
+-- takes an advisory lock.
+select pg_advisory_lock(7241000101);
+
+-- Role creation is additionally guarded on its own terms: roles are cluster-wide (not
+-- per-database), so a second migration run against a *different* database in the same Postgres
+-- cluster (not covered by the advisory lock above, which is per-database) would otherwise hit
+-- "role already exists". `EXCEPTION WHEN duplicate_object` (rather than a
 -- `SELECT ... WHERE NOT EXISTS` guard) closes that race completely: `CREATE ROLE` itself is the
 -- atomic operation, so there is no check-then-act gap for two concurrent sessions to both slip
--- through. Every other object in this module is protected purely by the migration runner's
--- once-only accounting (packages/kernel/src/adapters/db/migrate.ts), per the S1.1 dispatch note
--- that idempotency here comes from the runner, not from `IF NOT EXISTS` in the SQL — roles are
--- the documented exception.
+-- through.
 do $$
 begin
   create role nexttime_app nologin;
@@ -59,7 +77,7 @@ $$;
 -- predicate would add nothing. Creating a workspace is a bootstrap operation (no principal or
 -- session exists in it yet) and runs over the admin/skip-role-switch path; `nexttime_app` gets
 -- read-only access for ordinary lookups (e.g. rendering a workspace name).
-create table workspaces (
+create table if not exists workspaces (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   created_at timestamptz not null default now()
@@ -71,7 +89,7 @@ grant select on workspaces to nexttime_app;
 -- API key hash used by the human channel's gateway auth (S1.3). `api_key_hash` is globally
 -- unique (not per-workspace) because the gateway looks a principal up by key before it knows
 -- which workspace the key belongs to — that lookup runs over the admin/skip-role-switch path.
-create table principals (
+create table if not exists principals (
   workspace_id uuid not null references workspaces (id),
   id uuid not null default gen_random_uuid(),
   kind text not null check (kind in ('human', 'agent', 'service')),
@@ -84,6 +102,8 @@ create table principals (
 );
 
 alter table principals enable row level security;
+
+drop policy if exists principals_workspace_isolation on principals;
 
 create policy principals_workspace_isolation on principals
   for all
@@ -99,7 +119,7 @@ grant select, insert, update on principals to nexttime_app;
 -- unconstrained by a CHECK — no shared enum exists for generic session status across all five
 -- session kinds (assumption — see PR body "假设"); `EntryAgentSessionStatus` in packages/shared
 -- covers only the `entry` kind's own lifecycle and would be the wrong fit for e.g. `worker_run`.
-create table sessions (
+create table if not exists sessions (
   workspace_id uuid not null,
   id uuid not null default gen_random_uuid(),
   principal_id uuid not null,
@@ -114,6 +134,8 @@ create table sessions (
 );
 
 alter table sessions enable row level security;
+
+drop policy if exists sessions_workspace_isolation on sessions;
 
 create policy sessions_workspace_isolation on sessions
   for all

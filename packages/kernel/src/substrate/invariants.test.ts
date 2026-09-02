@@ -64,7 +64,9 @@ function extractTableChecks(sql: string): TableCheck[] {
   const checkRe = /check\s*\(\s*(\w+)\s+in\s*\(([^()]*)\)\s*\)/gi;
 
   for (const statement of splitSqlStatements(sql)) {
-    const table = /^create table (\w+)/i.exec(stripLeadingLineComments(statement))?.[1];
+    const table = /^create table (?:if not exists )?(\w+)/i.exec(
+      stripLeadingLineComments(statement),
+    )?.[1];
     if (!table) continue;
 
     checkRe.lastIndex = 0;

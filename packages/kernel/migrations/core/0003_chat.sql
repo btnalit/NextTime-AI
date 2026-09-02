@@ -5,7 +5,7 @@
 -- activities' workspace-only RLS policy from 0002 with the chat-visibility-aware version, now
 -- that `chats` exists (docs/development-tasks.md S1.1 dispatch: "0003_chat.sql — FK from
 -- activities.chat_id").
-create table chats (
+create table if not exists chats (
   workspace_id uuid not null,
   id uuid not null default gen_random_uuid(),
   owner_principal_id uuid not null,
@@ -17,6 +17,8 @@ create table chats (
 );
 
 alter table chats enable row level security;
+
+drop policy if exists chats_visibility on chats;
 
 create policy chats_visibility on chats
   for all
@@ -31,11 +33,23 @@ create policy chats_visibility on chats
 
 grant select, insert, update, delete on chats to nexttime_app;
 
-alter table activities
-  add constraint activities_chat_id_fkey
-  foreign key (workspace_id, chat_id) references chats (workspace_id, id);
+-- `alter table ... add constraint` has no `if not exists` form; a stale-plan replay (see
+-- 0001_identity.sql's advisory-lock comment) that reaches this statement after another session
+-- already added the same constraint hits `duplicate_object`, guarded the same way role creation
+-- is guarded in 0001_identity.sql.
+do $$
+begin
+  alter table activities
+    add constraint activities_chat_id_fkey
+    foreign key (workspace_id, chat_id) references chats (workspace_id, id);
+exception
+  when duplicate_object then
+    null;
+end
+$$;
 
-drop policy activities_workspace_isolation on activities;
+drop policy if exists activities_workspace_isolation on activities;
+drop policy if exists activities_visibility on activities;
 
 create policy activities_visibility on activities
   for all

@@ -7,7 +7,7 @@
 -- inside the same `(workspace_id, id)` composite primary key every other table in this module
 -- uses, so cross-workspace references into the outbox (none exist yet, but consistency matters
 -- more than the savings from a plain PK here) stay possible.
-create table outbox (
+create table if not exists outbox (
   workspace_id uuid not null,
   id bigserial not null,
   event_type text not null,
@@ -19,9 +19,11 @@ create table outbox (
 );
 
 -- Partial index on the undispatched tail — the only slice the dispatcher scans.
-create index outbox_undispatched_idx on outbox (workspace_id, id) where dispatched_at is null;
+create index if not exists outbox_undispatched_idx on outbox (workspace_id, id) where dispatched_at is null;
 
 alter table outbox enable row level security;
+
+drop policy if exists outbox_workspace_isolation on outbox;
 
 create policy outbox_workspace_isolation on outbox
   for all
@@ -30,3 +32,9 @@ create policy outbox_workspace_isolation on outbox
 
 grant select, insert, update, delete on outbox to nexttime_app;
 grant usage, select on outbox_id_seq to nexttime_app;
+
+-- Releases the session-scoped advisory lock acquired as the very first statement of
+-- 0001_identity.sql (see its comment for the full rationale). `pg_advisory_unlock` on a lock
+-- this session never held returns `false` (not an error) — harmless when this run only executed
+-- a subset of the module's files that didn't include 0001 (already applied earlier).
+select pg_advisory_unlock(7241000101);

@@ -7,7 +7,7 @@
 -- owner: `nexttime_app` gets INSERT + SELECT only (no UPDATE/DELETE grant), and the trigger
 -- below raises on UPDATE/DELETE unconditionally — triggers fire regardless of role or
 -- ownership, so this holds even for the superuser login role migrations run as.
-create table audit_records (
+create table if not exists audit_records (
   workspace_id uuid not null,
   id uuid not null default gen_random_uuid(),
   actor_principal_id uuid not null,
@@ -22,6 +22,8 @@ create table audit_records (
 
 alter table audit_records enable row level security;
 
+drop policy if exists audit_records_workspace_isolation on audit_records;
+
 create policy audit_records_workspace_isolation on audit_records
   for all
   using (workspace_id = app_workspace())
@@ -29,17 +31,17 @@ create policy audit_records_workspace_isolation on audit_records
 
 grant select, insert on audit_records to nexttime_app;
 
-create function audit_records_block_mutation() returns trigger
+create or replace function audit_records_block_mutation() returns trigger
 language plpgsql as $$
 begin
   raise exception 'audit_records is append-only: % is not permitted (I11)', tg_op;
 end;
 $$;
 
-create trigger audit_records_no_update
+create or replace trigger audit_records_no_update
   before update on audit_records
   for each row execute function audit_records_block_mutation();
 
-create trigger audit_records_no_delete
+create or replace trigger audit_records_no_delete
   before delete on audit_records
   for each row execute function audit_records_block_mutation();
