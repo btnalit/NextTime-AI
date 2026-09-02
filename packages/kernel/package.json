@@ -24,13 +24,16 @@
     "bootstrap": "node dist/cli/bootstrap.js"
   },
   "dependencies": {
+    "@fastify/websocket": "^11.3.0",
     "@nexttime/shared": "workspace:*",
     "fastify": "^5.2.1",
     "jose": "^6.2.10",
     "pg": "^8.13.1",
+    "ws": "^8.18.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.10"
+    "@types/pg": "^8.11.10",
+    "@types/ws": "^8.5.13"
   }
 }

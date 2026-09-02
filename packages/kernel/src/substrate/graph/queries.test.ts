@@ -6,12 +6,18 @@ import {
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
   buildNeighborsQuery,
+  buildRecentFactsQuery,
   buildSearchQuery,
   buildStateAtFactsQuery,
   buildTraverseQuery,
   buildUpsertObjectQuery,
 } from './queries.js';
-import { DEFAULT_SEARCH_LIMIT, MAX_TRAVERSE_DEPTH, TraverseDepthError } from './store.js';
+import {
+  DEFAULT_RECENT_FACTS_LIMIT,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_TRAVERSE_DEPTH,
+  TraverseDepthError,
+} from './store.js';
 
 /**
  * Unit tests (no database) for substrate/graph/queries.ts's pure SQL builders —
@@ -226,5 +232,25 @@ describe('buildSearchQuery', () => {
   it('binds an explicit objectType and limit', () => {
     const q = buildSearchQuery('ws1', { query: 'widget', objectType: 'test.thing', limit: 10 });
     expect(q.values).toEqual(['ws1', 'test.thing', '%widget%', 10]);
+  });
+});
+
+describe('buildRecentFactsQuery', () => {
+  it('defaults the limit to DEFAULT_RECENT_FACTS_LIMIT', () => {
+    const q = buildRecentFactsQuery('ws1', undefined);
+    expect(q.values).toEqual(['ws1', DEFAULT_RECENT_FACTS_LIMIT]);
+  });
+
+  it('binds an explicit limit', () => {
+    const q = buildRecentFactsQuery('ws1', 5);
+    expect(q.values).toEqual(['ws1', 5]);
+  });
+
+  it('only reads currently-active facts, newest first, with no anchor object', () => {
+    const q = buildRecentFactsQuery('ws1', 5);
+    expect(q.text).toContain('superseded_at is null');
+    expect(q.text).toContain('invalidated_at is null');
+    expect(q.text).toContain('order by recorded_at desc');
+    expect(q.text).not.toContain('source_object_id = $2');
   });
 });

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_RECENT_FACTS_LIMIT,
   DEFAULT_SEARCH_LIMIT,
   DEFAULT_TRAVERSE_DIRECTION,
   type NeighborsInput,
@@ -253,6 +254,27 @@ export function buildTraverseQuery(workspaceId: string, input: TraverseInput): S
       order by depth, link_id
     `,
     values: [workspaceId, input.fromId, direction, input.linkType ?? null, depth],
+  };
+}
+
+/**
+ * `listRecentFacts` (docs/development-tasks.md S1.4 `get_entry_context`): currently-active Facts
+ * for the workspace, newest `recorded_at` first — the same "active" filter
+ * `buildNeighborsQuery`/`buildTraverseQuery` already use (`superseded_at is null and
+ * invalidated_at is null`), with no anchor Object (workspace-wide, not `traverse`-from-a-node).
+ */
+export function buildRecentFactsQuery(workspaceId: string, limit: number | undefined): SqlQuery {
+  return {
+    text: `
+      select ${FACT_COLUMNS}
+      from links
+      where workspace_id = $1
+        and superseded_at is null
+        and invalidated_at is null
+      order by recorded_at desc
+      limit $2
+    `,
+    values: [workspaceId, limit ?? DEFAULT_RECENT_FACTS_LIMIT],
   };
 }
 

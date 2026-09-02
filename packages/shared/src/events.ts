@@ -45,6 +45,14 @@ const TurnStartedEvent = z.object({
   chatId: z.string(),
   turnId: z.string(),
   principalId: z.string(),
+  // S1.4 addition (docs/development-tasks.md S1.4, design doc §7.10 "outbox domain events are
+  // the coupling mechanism"): `application/chat` and `application/host-bridge` never import each
+  // other (.dependency-cruiser.cjs forbids chat/host-bridge -> application/task, and by
+  // convention neither reaches into the other's module internals either) — this event is the
+  // only channel between them, so it must carry everything host-bridge's TurnStarted consumer
+  // needs to call `AgentRuntime.startTurn` without querying chat's own `chat_messages` table.
+  // `prompt` is the user message text that triggered this Turn.
+  prompt: z.string(),
 });
 
 const TurnCompletedEvent = z.object({
@@ -120,9 +128,17 @@ const ChatMessageEvent = z.object({
   chatId: z.string(),
   message: z.object({
     id: z.string(),
-    role: z.enum(['user', 'assistant', 'system']),
+    // S1.4 addition: `tool` (migrations/core/0008_chat_messages.sql `chat_messages.role` CHECK,
+    // docs/development-tasks.md S1.4 deliverable 1) — a persisted tool-result message, distinct
+    // from the ephemeral `chat.stream` toolCallStarted/toolCallEnded deltas.
+    role: z.enum(['user', 'assistant', 'tool', 'system']),
     text: z.string(),
     createdAt: z.string(),
+    // S1.4 addition: the `chat_messages.sequence` cursor this message was persisted at
+    // (migrations/core/0008_chat_messages.sql). §9.4's subscribe_chat(chatId, startAfter) needs
+    // this on every pushed `chat.message` to replay-then-dedupe against live delivery without
+    // gaps or duplicates (docs/development-tasks.md S1.4 acceptance criterion).
+    sequence: z.number(),
   }),
 });
 
