@@ -200,7 +200,7 @@ graph LR
 | I6 | ActionRequest 只沿转移表走 | 转移表驱动 + CHECK |
 | I7 | 执行前必有 Policy 决策记录 | 状态机前置 + CHECK |
 | I8 | 自动批准 = ActionType 声明 且 Workspace 规则开启 | 双信号 |
-| I9 | Worker 与入口 agent 进程内无任何凭证 | 凭证只在 Gatekeeper 与内核 `llm`；启动自检扫描 env |
+| I9 | 任何 agent 进程与内核进程内都没有外部凭证 | 系统凭证只在 Gatekeeper，LLM provider key 只在 `llm-proxy`；**内核进程零外部凭证**；agent 容器启动自检扫描 env |
 | I10 | agent 容器（入口与 Worker）的出网只经出网代理：公网放行，内网地址段与平台内部服务拒绝，目标域名记录到本次 Activity | 容器无直接路由，`HTTP_PROXY` / `HTTPS_PROXY` 指向代理；从容器直连内网必须失败；代理按 WorkerDefinition 的允许 / 拒绝清单过滤 |
 | I11 | 所有受治理转移写 AuditRecord | 同事务 |
 | I12 | 已发布 OntologyVersion / WorkerDefinition 不可改 | 只读触发器 |
@@ -208,6 +208,7 @@ graph LR
 | I14 | 审批者必须持有所审批的 `action_kind × resource_scope` | `approve` 前置检查；角色只决定能否进队列 |
 | I15 | 每用户入口容器的工作目录与 pi 目录只挂载给该用户的入口容器；其他用户的容器与任何 Worker 容器都不挂载 | 容器边界 + supervisor 的挂载规则 |
 | I17 | 未在接口清单中分类的操作一律 `require_approval`；分类只能经 human 通道发布 | 门在 `describe_operations` 之外的调用默认走审批；`propose_operation` 只产草稿 |
+| I18 | 失控防护：`invoke_worker` 派生链深度 ≤ 3；每用户并发 WorkerRun、每 Task 的 token 与时长、每工作区日成本都有上限 | 深度超限时内核拒绝 `invoke_worker` 并返回入口 agent 可转述的错误；token 到 80% 时 `llm-proxy` 上报、内核经 `context` 注入警告，到 100% 时 `llm-proxy` 返回预算耗尽错误，Worker 本轮结束、Task 进入 `failed: budget_exhausted`、入口 agent 得知；时长超限由 reaper 终止；配额是工作区策略数据，owner 可调 |
 | I16 | 平台元本体对象只能经 human 通道写入 | gateway 按 ObjectType 拒绝 Handle 通道写 |
 
 ### 5.5 状态机
@@ -277,14 +278,15 @@ flowchart TB
     CAP[capability / Handle]
     TASK[task / invoke_worker]
     AUD[audit]
-    LLM[llm 按 provider 透传]
     MCP[MCP gateway]
     EXP[Explorer 契约<br/>Graph / Decision / Lineage]
   end
-  subgraph Host[agent-host（Node）]
-    E1[user A: pi --mode rpc]
-    E2[user B: pi --mode rpc]
+  subgraph Host[每用户入口容器（agent-host 只做事件桥）]
+    E1[user A 入口容器: pi]
+    E2[user B 入口容器: pi]
   end
+  LLMP[llm-proxy<br/>按 provider 透传 · 持 provider key]
+  EGRESS[egress-proxy<br/>公网放行 · 内网拒绝 · 记录域名]
   subgraph Workers[worker-supervisor + 一次性 pi Worker 容器]
     W1[Worker run]
   end
@@ -299,11 +301,13 @@ flowchart TB
   CC --> CADDY
   GW --> CHAT & ONT & GRAPH & EPI & POL & AQ & CAP & TASK & AUD & MCP & EXP
   CHAT <--> Host
-  Host -->|capability calls · llm| GW
+  Host -->|capability calls| GW
   TASK --> Workers
-  W1 -->|capability calls · llm| GW
+  W1 -->|capability calls| GW
+  Host & W1 -->|llm| LLMP --> MODELS
+  Host & W1 -->|公网| EGRESS
+  LLMP -->|usage| GW
   AQ --> GD & GR & GS
-  LLM --> MODELS
   Kernel --> PG
 ```
 
@@ -328,7 +332,7 @@ flowchart TB
 | task | Task / WorkerRun；`invoke_worker`；调用 supervisor；崩溃回队；超时 | Task / WorkerRun |
 | host-bridge | 与 agent-host 的内部 RPC：`ensureEntryAgent(user)`、`prompt(turn)`、`stop`、事件回流 | 无 |
 | gatekeeper-registry | 部署时注册；`describe_actions` 缓存；健康 | 元数据 |
-| llm | 按 provider 透传（§7.7） | LlmUsage |
+| llm-usage | 接收 `llm-proxy` 上报的用量，按 Task / Turn 记账；配额判定（I18）；provider 配置的发布 | LlmUsage / Quota |
 | mcp | MCP TS SDK；工具 = capability 投影；Semantica 工具名契约 | 无 |
 | explorer-contract | 实现 Semantica Explorer 的 Graph / Decision / Lineage 端点（§9.5） | 无 |
 | audit | append-only；`reconstruct`；PROV-O 导出 | AuditRecord |
@@ -381,7 +385,7 @@ flowchart TB
 
 ### 7.7 模型策略
 
-不绑定单一厂商。Worker 与入口 agent 侧复用 pi-ai 的 provider 实现；内核只做按 provider 的透传代理（注入真实 key、模型白名单、计量、SSE 原样）；内核自用调用（P3 起）用 OpenAI 兼容子集。厂商与模型是配置 `${NEXTTIME_DATA}/config/llm-providers.yaml`，同一份配置生成内核路由表与 `models.json`。成本元数据复用 pi-ai 的 `ModelCost`。
+不绑定单一厂商。Worker 与入口 agent 侧复用 pi-ai 的 provider 实现；独立的 `llm-proxy` 服务做按 provider 的透传代理：用内核公钥在本地验证 Handle 签名（不逐请求回调内核）、注入真实 key、模型白名单、SSE 原样、用量与 80% 预算警告上报内核；内核进程不持有任何 provider key。内核自用调用（P3 起）用 OpenAI 兼容子集，同样经 `llm-proxy`。厂商与模型是配置 `${NEXTTIME_DATA}/config/llm-providers.yaml`，同一份配置生成内核路由表与 `models.json`。成本元数据复用 pi-ai 的 `ModelCost`。
 
 ### 7.8 采集器（TS）
 
@@ -390,6 +394,34 @@ flowchart TB
 ### 7.9 出网代理
 
 一个小的转发代理容器（几百行 Node，或 tinyproxy 加策略脚本），挂在 `control` 与 `workers` 两个网络上。规则：放行公网；拒绝 RFC1918、链路本地与平台内部服务名；按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 / 拒绝清单；记录每个目标域名与字节数到该次 Activity 的 `metadata`。不解密 TLS。这是 I10 的实现，也是「agent 能抓公网、装包、clone 公开仓库」的前提。
+
+### 7.10 内核内部分层、模块契约、领域事件
+
+**六层单向依赖**，用 dependency-cruiser 在 CI 强制（R1 / R3）：
+
+| 层 | 内容 | 允许依赖 |
+|----|------|---------|
+| domain | `packages/shared`：枚举、转移表、capability 注册表、事件与 ActionDescription 的 Zod schema | 无 |
+| substrate（图基底） | ontology、graph、epistemic、audit | domain |
+| governance | capability、policy、approval、connections、llm-usage | domain、substrate |
+| application | chat、task、host-bridge、worker（定义与 `find_*`） | domain、substrate、governance 的**服务接口与事件**，不读其表 |
+| adapters | db、gatekeeper client、egress / llm-proxy 上报接收、supervisor client | 实现上层声明的 port |
+| interfaces | http、ws、mcp、explorer-contract | application 与 governance 的服务接口 |
+
+**模块契约**：每个模块拥有自己的表与迁移文件（`migrations/<module>/NNNN.sql`），只经 `index.ts` 暴露服务接口；不 import 其他模块的内部文件，不查询其他模块的表；跨模块联动经**领域事件**。
+
+**领域事件与 outbox**：状态转移与业务写入在同一事务里写 `outbox` 表；一个派发器把事件投给进程内订阅者并标记已投递，重启后未投递的重放。事件词表在 domain 层（`TurnStarted / TurnCompleted / TaskUpdated / ActionRequestPending / ActionRequestUpdated / ConnectionCreated / FactAsserted / EgressObserved / BudgetWarning`）。规则：`chat` 与 `web` 只消费事件与只读视图，永不 import `approval` / `task`；审批路由是 `approval` 发事件、`chat` 订阅后写各持有者的系统消息。没有这条，outbox 只是更慢的函数调用。
+
+**运行时适配层**：`host-bridge` 定义 `AgentRuntime` 接口：`start / prompt / stop` 与平台事件词表的事件流。pi 是**唯一计划的实现**，接口存在的目的是让 chat 与 web 永远看不到 pi 的事件名，而不是为了引入第二种运行时。
+
+**机制与内容分离的物理形态**：内核是机制；内容以两种包交付，都是版本化 YAML 加文件，走 git 与 PR，经 human 通道发布进图：
+- **领域包** `ontology/<domain>/`：`types.yaml`（ObjectType / LinkType / ActionType）、`skills/`、`procedures/`、`workers/`（WorkerDefinition）。`ops-assets` 是第一个，库存 / 报销 / 排班各一个。
+- **接入包** `gatekeepers/<system>/`：`manifest.yaml`（Operation）、`policy.yaml`（命令策略表）、`mappings/`（结果映射）、`skills/`。`docker` 与 `ragflow` 是预置的两个。
+- **CI 规则**：`packages/kernel/src` 下（测试 fixture 除外）不得出现任何具体系统名（`docker / ragflow / routeros / erp / oa` 等一张可维护的清单），命中即失败。内核里出现系统名，就是机制被内容污染的信号。
+
+**规模门槛（review 时检查）**：单模块 ≤ 3000 行，单文件 ≤ 600 行，函数 ≤ 80 行；超过即拆，不等重构。这是 cloudflare-os 那个 11k 行 Overseer 的教训。
+
+**测试分层**：domain 用纯单元测试（转移表穷举）；substrate 与 governance 用内核 + Postgres 集成测试；平台扩展与 gatekeeper 基类用契约测试（pi faux provider、fake 系统）；接口层用生成式一致性校验；端到端用 Playwright 与三个验收脚本。每层的失败都能定位到一层。
 
 ---
 
@@ -565,16 +597,20 @@ NextTime-AI/
 │   ├── worker-supervisor/    # docker socket；runsc；只允许 nexttime/worker-runtime
 │   ├── platform-extension/   # 唯一的 pi 扩展，三种模式
 │   ├── web/                  # React + Vite：聊天、审批、任务、连接系统、审计
-│   ├── gatekeeper-base/      # 协议、凭证解析（共享 / ConnectedAccount）、幂等存储
-│   └── shared/               # 类型：capability 注册表、事件、ActionDescription、Zod schema
-├── gatekeepers/docker  gatekeepers/ragflow            # S2；P5: ssh cli mcp
-├── worker-runtime/           # Dockerfile：pi 0.84.4 + platform-extension
+│   ├── gatekeeper-base/      # 协议、四种传输种类、清单模型、凭证解析、幂等存储
+│   ├── llm-proxy/            # 按 provider 透传；本地验 Handle 签名；持 provider key；用量上报
+│   ├── egress-proxy/         # 公网放行、内网拒绝、域名记录
+│   └── shared/               # domain 层：枚举、转移表、capability 注册表、事件与 Zod schema
+├── gatekeepers/              # 接入包：<system>/{manifest.yaml, policy.yaml, mappings/, skills/}
+│   ├── docker/  ragflow/     # 预置两个
+├── worker-runtime/           # Dockerfile：pi 0.84.4 + platform-extension + 工具链（入口与 Worker 共用）
 ├── collectors/host-inventory # TS
 ├── explorer/                 # Semantica Explorer 静态构建的挂载说明与构建脚本（S3）
-├── ontology/                 # ops-assets-v1.yaml、platform-meta.yaml、entry-agent.yaml
-├── deploy/caddy/Caddyfile
-├── scripts/                  # accept_s1.sh accept_s2.sh accept_s3.sh check-capability-consistency.ts gen-models-json.ts
-└── docs/  (docs/private/ 不入库)
+├── ontology/                 # 领域包：platform-meta/、ops-assets/{types.yaml, skills/, procedures/, workers/}
+├── deploy/caddy/Caddyfile  deploy/backup/
+├── scripts/                  # accept_s1.sh accept_s2.sh accept_s3.sh check-capability-consistency.ts gen-models-json.ts check-kernel-purity.sh
+├── .dependency-cruiser.cjs   # §7.10 的六层依赖规则
+└── docs/  docs/runbooks/  (docs/private/ 不入库)
 ```
 
 ### 10.2 docker-compose 骨架
@@ -592,7 +628,7 @@ services:
 
   kernel:
     build: { context: ., dockerfile: packages/kernel/Dockerfile }
-    env_file: ${NEXTTIME_DATA}/secrets/kernel.env          # DB URL、Handle 签名密钥、LLM provider keys；无 Gatekeeper 凭证
+    env_file: ${NEXTTIME_DATA}/secrets/kernel.env          # DB URL、Handle 签名私钥；无任何外部凭证（I9）
     volumes: ["${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/sessions:/data/sessions:ro"]
     depends_on: { postgres: { condition: service_healthy } }
     networks: [control, workers]
@@ -628,6 +664,28 @@ services:
     image: caddy:2.10                                        # pin 具体版本
     ports: ["${KERNEL_BIND_ADDR}:8443:8443"]
     volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "./packages/web/dist:/srv/web:ro", "./explorer/dist:/srv/explorer:ro", "${NEXTTIME_DATA}/caddy:/data"]
+    networks: [control]
+    restart: unless-stopped
+
+  llm-proxy:
+    build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }
+    env_file: ${NEXTTIME_DATA}/secrets/llm-proxy.env       # provider keys 只在这里
+    volumes: ["${NEXTTIME_DATA}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro"]
+    environment: { KERNEL_URL: http://kernel:8080, HANDLE_PUBLIC_KEY_FILE: /data/config/handle.pub }
+    networks: [control, workers]
+    restart: unless-stopped
+
+  egress-proxy:
+    build: { context: ., dockerfile: packages/egress-proxy/Dockerfile }
+    environment: { KERNEL_URL: http://kernel:8080 }
+    networks: [control, workers]
+    restart: unless-stopped
+
+  backup:
+    image: postgres:17-alpine                                # 与 postgres 同大版本
+    entrypoint: ["/bin/sh", "/backup.sh"]                    # 每日 pg_dump + sessions/workspaces rsync，保留 7 份
+    volumes: ["./deploy/backup/backup.sh:/backup.sh:ro", "${NEXTTIME_DATA}:/data"]
+    secrets: [pg_password]
     networks: [control]
     restart: unless-stopped
 
@@ -694,6 +752,9 @@ nexttime explain <turn_activity_id>
 | Worker 崩溃 | Task 回 `queued`，attempt+1；已 executed 的 ActionRequest 不重复 |
 | Gatekeeper apply 超时 | 幂等重试；失败 → revert → compensated 或人工队列 |
 | 审批超时 | `expired`；卡片更新；入口 agent 下一轮得知 |
+| Worker 预算耗尽 / 派生链过深 / 并发超限 | I18：Task `failed: budget_exhausted` 或 `invoke_worker` 被拒，入口 agent 得到可转述的错误；owner 可调配额 |
+| `llm-proxy` 或 `egress-proxy` 重启 | 无状态；进行中的流式请求失败一次，pi 自行重试；用量上报有 outbox 式重放 |
+| outbox 派发器崩溃 | 事件已在事务内落库；重启后重放未投递事件；消费者幂等 |
 | 内核重启 | 无内存态；扫描 `executing` 超时项与 `running` Turn |
 | 库损坏 | `pg_dump` + WAL；`sessions/`、`host/` 备份（E7 暂缓，P2 后重评） |
 
@@ -743,7 +804,7 @@ S1 + S2 + S3 = 最小当前版本。
 
 ## 17. 未来增强
 
-Trigger 与事件驱动；ssh / cli / mcp 通用门；ConnectedAccount；OIDC；turn 挂起式审批；Worker 预热池；Semantica 推理引擎与 Explorer Ontology 工作区；ReBAC（OpenFGA）；Apache AGE；A2A；Hermes 记忆作为 Source。
+Trigger 与事件驱动；`db` / `browser` 门；ConnectedAccount 的 OAuth；OIDC；turn 挂起式审批；Worker 预热池；每门熔断器；`docs/adr/` 拆分与 capability 文档自动生成；把 MCP gateway 与 Explorer 契约拆成独立的接口进程；Semantica 推理引擎与 Explorer Ontology 工作区；ReBAC（OpenFGA）；Apache AGE；A2A；Hermes 记忆作为 Source。
 
 ---
 
@@ -791,6 +852,10 @@ Trigger 与事件驱动；ssh / cli / mcp 通用门；ConnectedAccount；OIDC；
 | 16 | 安全模型简化为三条底线；agent 有真实工作环境（内置工具全开、经代理出网、装包）；入口 agent 改为每用户常驻容器 | §7.2、§7.3、§7.9、§11 |
 | 17 | 接入任意系统靠通用门种类 `http` / `mcp` / `cli` / `ssh` + 接口清单 + 命令策略表 + 连接流程，全部进 S2 | §5.1.4、§7.5 |
 | 18 | 编排三档：直接观察 / 委派任务 / 沉淀流程；审批按范围路由；Worker 结果契约；Skill 与 Procedure 入元本体 | §8.5、§8.6 |
+| 19 | 内核六层单向依赖 + 模块契约 + outbox 领域事件，CI 强制；chat 与 web 只消费事件 | §7.10 |
+| 20 | `llm-proxy` 拆出内核，本地验 Handle 签名；内核进程零外部凭证（I9 改写） | §7.7、§10.2 |
+| 21 | 机制与内容分离：领域包与接入包是版本化 YAML；内核代码不得出现具体系统名（CI） | §7.10、§10.1 |
+| 22 | 失控防护配额（I18）；备份以 compose 内容器回到 S1（不改主机，回滚依赖它） | §5.4、§10.2、§13 |
 
 待决：无。
 
