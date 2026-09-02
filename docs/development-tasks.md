@@ -404,8 +404,8 @@ P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
 
 | 切片 | 目标 | 任务 |
 |------|------|------|
-| **S1 观察链** | 本机采集 → 图 → Claude Code / pi 经 MCP 读到图并能 `explain` | R1 R2 R4 → T0.1 T0.2 T0.3 T0.5 T0.7 → T0.9 → T1.1 T1.2 T1.3 T1.8 |
-| **S2 治理链** | Claude Code 发起 docker 动作 → 人批 → Gatekeeper 执行 → 审计重建 | T0.6 T1.4 T1.5 T1.6 T1.7 T1.10 → E8 |
+| **S1 观察链** | 本机采集 → 图 → Claude Code / pi 经 MCP 读到图并能 `explain` | R1 R2 R4 → T0.1 T0.2 T0.3 T0.5 T0.6 T0.7 → T0.9 → T1.1 T1.2 T1.3 T1.8（T0.6 在 S1：采集器的 `assert_fact` 是受治理写入，I11 要求同事务落审计） |
+| **S2 治理链** | Claude Code 发起 docker 动作 → 人批 → Gatekeeper 执行 → 审计重建 | T1.4 T1.5 T1.6 T1.7 T1.10 → E8 |
 | **S3 Worker 链** | `invoke_worker` 拉起 pi Worker → 经代理调外部 LLM → 会话回流 | T2.2 T2.1 T2.3 T2.4 T1.12 T2.5 T2.6 T2.7 |
 | **补厚** | 冲突检测、CLI 全集、ragflow、一致性校验、混沌与不变量监控 | T0.4 T0.8 T0.10 T1.9 T1.11 T2.8 |
 
