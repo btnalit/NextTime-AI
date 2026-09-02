@@ -11,7 +11,8 @@
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "depcruise": "depcruise --config .dependency-cruiser.cjs --output-type err packages/*/src"
+    "depcruise": "depcruise --config .dependency-cruiser.cjs --output-type err packages/*/src",
+    "ci:guards": "sh scripts/check-kernel-purity.sh && sh -c \"! git ls-files -s 'scripts/*.sh' | grep -qv '^100755 ' && ! grep -Uql \\\"$(printf '\\r')\\\" scripts/*.sh\""
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

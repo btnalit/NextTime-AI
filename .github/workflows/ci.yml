@@ -1,0 +1,130 @@
+name: CI
+
+# R3 CI (docs/development-tasks.md R3; design doc graph-ai-middle-platform-design.md section
+# 7.10 CI purity rule). Three independent jobs: quality (lint/typecheck/build/dependency-cruiser
+# purity), test (workspace tests against a real pgvector/pgvector:pg17 service container), and
+# guards (secret scanning, internal-IP literals, kernel purity, shell script hygiene).
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write # gitleaks-action (guards job) comments on the PR when it finds a leak
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # pnpm/action-setup does not support pnpm v11+ (root package.json pins
+      # packageManager: pnpm@11.25.0) - its own README points to pnpm/setup for v11 and newer,
+      # which also installs the Node.js runtime in the same step (replacing actions/setup-node).
+      - name: Setup pnpm and Node 22
+        uses: pnpm/setup@v2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm -r lint
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Dependency graph purity (dependency-cruiser)
+        run: pnpm depcruise
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nexttime
+          POSTGRES_PASSWORD: nexttime
+          POSTGRES_DB: nexttime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U nexttime"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgres://nexttime:nexttime@localhost:5432/nexttime_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm and Node 22
+        uses: pnpm/setup@v2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        run: pnpm -r test
+
+  guards:
+    name: guards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks (secret scanning)
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No GITLEAKS_LICENSE: only required for organization accounts, not personal ones
+          # (this repo is under a personal account) - see gitleaks/gitleaks-action's README.
+
+      - name: Internal IP literal guard
+        # docs/development-tasks.md is excluded because its own R3 and E-task acceptance-
+        # criteria prose cites the literal 10.x example address this guard must catch (as an
+        # example, not a real internal address); verified no other tracked file matches.
+        run: |
+          ! grep -rnE '10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+' --exclude-dir=node_modules --exclude-dir=.git --exclude=pnpm-lock.yaml --exclude=development-tasks.md .
+
+      - name: Kernel purity guard
+        run: sh scripts/check-kernel-purity.sh
+
+      - name: Shell scripts must be LF and executable
+        run: |
+          bad=$(git ls-files -s 'scripts/*.sh' | grep -v '^100755 ') || true
+          if [ -n "$bad" ]; then
+            echo "scripts/*.sh must be executable (mode 100755):" >&2
+            echo "$bad" >&2
+            exit 1
+          fi
+          crlf=$(grep -l $'\r' scripts/*.sh) || true
+          if [ -n "$crlf" ]; then
+            echo "scripts/*.sh must use LF line endings:" >&2
+            echo "$crlf" >&2
+            exit 1
+          fi
