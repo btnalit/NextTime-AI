@@ -126,7 +126,7 @@ function createFakeSupervisorClient() {
   const touchCalls: string[] = [];
   let spawnResult: SpawnResult = {
     containerId: 'c1',
-    ip: '10.0.0.2',
+    ip: '100.64.0.2',
     status: 'running',
     created: true,
     restarts: 0,
@@ -500,7 +500,7 @@ describe('createHost — container stdio closing', () => {
 
     supervisor.setSpawnResult({
       containerId: 'c2',
-      ip: '10.0.0.3',
+      ip: '100.64.0.3',
       status: 'running',
       created: true,
       restarts: 1,

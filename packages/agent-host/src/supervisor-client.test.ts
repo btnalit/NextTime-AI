@@ -30,7 +30,7 @@ describe('SupervisorClient.spawn', () => {
       });
       return jsonResponse(200, {
         containerId: 'c1',
-        ip: '10.0.0.2',
+        ip: '100.64.0.2',
         status: 'running',
         created: true,
         restarts: 0,
@@ -51,7 +51,7 @@ describe('SupervisorClient.spawn', () => {
 
     expect(result).toEqual({
       containerId: 'c1',
-      ip: '10.0.0.2',
+      ip: '100.64.0.2',
       status: 'running',
       created: true,
       restarts: 0,
@@ -169,7 +169,7 @@ describe('SupervisorClient.status', () => {
     const status = {
       principalId: 'p-1',
       containerId: 'c1',
-      ip: '10.0.0.2',
+      ip: '100.64.0.2',
       running: true,
       status: 'running',
       startedAt: '2026-01-01T00:00:00.000Z',
