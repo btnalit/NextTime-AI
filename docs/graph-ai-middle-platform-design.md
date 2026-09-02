@@ -651,12 +651,26 @@ services:
     networks: [control]                                      # 只到 kernel 与 supervisor；不挂载任何用户目录
     restart: unless-stopped
 
-  worker-supervisor:
+  worker-supervisor:                                         # resident mode: S1.5a; one-shot Task mode: S2.8
     build: { context: ., dockerfile: packages/worker-supervisor/Dockerfile }
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock", "${NEXTTIME_DATA}/workspaces:/data/workspaces", "${NEXTTIME_DATA}/sessions:/data/sessions", "${NEXTTIME_DATA}/config:/data/config:ro"]
-    environment: { ALLOWED_IMAGES: "nexttime/worker-runtime:*", WORKER_NETWORK: workers, WORKER_RUNTIME: "${WORKER_RUNTIME:-runc}" }
+    # config/ ro, except egress-sources.json re-mounted rw on top (no admin endpoint on
+    # egress-proxy — the SOURCE_MAP_FILE is the documented registration contract, S1.5a).
+    # group_add: non-root uid 10001 needs the host's `docker` group gid as a supplementary group
+    # to reach /var/run/docker.sock (root:docker 660) — verified missing on the target host
+    # (crash loop, EACCES) during S1.5a host verification; DOCKER_GID varies by host (`stat -c
+    # '%g' /var/run/docker.sock`), 999 is only a common default.
+    group_add: ["${DOCKER_GID:-999}"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock", "${NEXTTIME_DATA}/workspaces:/data/workspaces", "${NEXTTIME_DATA}/config:/data/config:ro", "${NEXTTIME_DATA}/config/egress-sources.json:/data/config/egress-sources.json"]
+    # NEXTTIME_DATA: HOST path — bind-mount sources for spawned containers are resolved by the
+    # daemon against the host fs, not this container's own /data/workspaces mount.
+    environment: { WORKER_IMAGE: nexttime-ai-worker-runtime, WORKER_RUNTIME: "${WORKER_RUNTIME:-runc}", NEXTTIME_DATA: "${NEXTTIME_DATA}", KERNEL_URL: http://kernel:8080, KERNEL_LLM_URL: http://llm-proxy:8082, HTTP_PROXY_FOR_WORKERS: http://egress-proxy:3128 }
     networks: [control]
     restart: unless-stopped
+
+  worker-runtime:                                            # build-only — produces the image worker-supervisor spawns by name (§7.3)
+    build: { context: ., dockerfile: deploy/worker-runtime/Dockerfile }
+    image: nexttime-ai-worker-runtime
+    profiles: ["build-only"]
 
   gatekeeper-docker:
     build: { context: ., dockerfile: gatekeepers/docker/Dockerfile }

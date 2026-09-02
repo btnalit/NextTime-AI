@@ -6,5 +6,12 @@ allowBuilds:
   # provider integrations this repo does not use (Google Generative AI, Bedrock protobuf
   # codegen) — declined rather than trusted, since their build scripts are unnecessary here.
   '@google/genai': false
+  # Transitive deps of dockerode (worker-supervisor, S1.5) for its optional SSH transport
+  # (connecting to a *remote* Docker daemon over ssh) — this package only ever connects over the
+  # local unix socket (docker-client.ts `socketPath`), so ssh2's native crypto acceleration
+  # addon (cpu-features) is never exercised; declined rather than trusted, same as the other
+  # unused-integration entries in this file.
+  cpu-features: false
   esbuild: true
   protobufjs: false
+  ssh2: false
