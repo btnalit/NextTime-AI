@@ -7,9 +7,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { hashApiKey } from '../../application/gateway/index.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
+import { mapCapabilityError } from './capability-route.js';
 
 /**
  * interfaces/http/capability-route.test: HTTP-level tests through Fastify `inject` (no real
@@ -28,6 +30,26 @@ const neverConnectPool: PoolLike = {
     throw new Error('should not touch the database for this request');
   },
 };
+
+describe('mapCapabilityError — application/chat domain errors (unit)', () => {
+  it('TurnAlreadyRunningError → 409 turn_already_running (§9.4, HTTP twin of WS -32010)', () => {
+    const mapped = mapCapabilityError(new TurnAlreadyRunningError('chat-1'));
+    expect(mapped.status).toBe(409);
+    expect(mapped.code).toBe('turn_already_running');
+  });
+
+  it('ChatNotFoundError → 404 chat_not_found', () => {
+    const mapped = mapCapabilityError(new ChatNotFoundError('ws-1', 'chat-1'));
+    expect(mapped.status).toBe(404);
+    expect(mapped.code).toBe('chat_not_found');
+  });
+
+  it('an unknown error still maps to a generic 500 that never echoes its message', () => {
+    const mapped = mapCapabilityError(new Error('secret detail'));
+    expect(mapped.status).toBe(500);
+    expect(mapped.message).toBe('internal error');
+  });
+});
 
 describe('POST /api/cap/:name — no database access when unauthenticated (unit)', () => {
   it('no Authorization header → 401', async () => {
