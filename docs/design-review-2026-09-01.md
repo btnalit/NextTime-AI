@@ -126,8 +126,36 @@ v0.1 到第一个端到端闭环要 29 个任务。任务清单本轮增加「�
 ## 7. 未变的判断（避免反复）
 
 - Postgres 唯一真源，图库只作投影。
-- 内核 Python，模块化单体，不拆微服务。
+- 内核是模块化单体，不拆微服务。
 - Semantica 是 P3 的抽取 Worker，不是内核。
 - cloudflare-os 借概念不借代码。
 - 治理靠系统边界（DB 约束、网络、gateway 收口），不靠 prompt。
 - 公开仓库不含任何环境具体值。
+
+## 8. v0.2 重写：触发与变化（2026-09-01 补）
+
+### 8.1 触发
+
+你在复盘后给出 MVP 的权威表述：**一个 Web 中台入口；每个用户有自己的、隔离的 AI agent（pi）和对话框；说出需求，agent 在图上找到能干活的 Worker（也是 pi），动态拉起，各自经统一的门对接系统，结果与决策带溯源写回图，再决定下一步；所有 agent 共享同一份图与同一套规则。** v0.1 把入口放在 CLI 与 MCP、把 Worker 放到 P2，与此不符，于是整体重写为 v0.2，并对三个项目做了第二轮针对该形态的源码研究（见参考文档第三部分）。
+
+### 8.2 v0.1 → v0.2 的变化
+
+| 项 | v0.1 | v0.2 | 依据 |
+|----|------|------|------|
+| 入口 | CLI + MCP | Web + 每用户一个常驻 pi agent（agent-host 管理的 `pi --mode rpc` 子进程） | 你的 MVP 表述；pi 研究：RPC 子进程是唯一既有文档又真隔离的托管方式，`packages/server` 无连接身份不可用 |
+| 技术栈 | Python 内核 + TS 扩展 | 全 TypeScript | 你的决定；入口层必须是 TS，两种语言只剩桥接成本 |
+| 切片 | P0 图内核 → P1 治理 → P2 Worker | S1 能聊入图 → S2 审批与动态 Worker → S3 图有内容与 Explorer | MVP 的最薄端到端 |
+| 常驻 agent 的真源 | 未定义 | 子进程是缓存；Postgres 存对话与决策，pi 的 JSONL 存上下文，`turn_id` 关联，崩溃后恢复 | Advisor 指出的洞 |
+| `invoke_worker(wait)` | 阻塞 | 90 秒超时返回 `task_id`，下一轮 `context` 取结果；turn 挂起式留 P5 | 人审批可能数小时 |
+| 入口目录 | 未定义 | I15：入口 agent 的 cwd 与 pi 目录对该用户的 Worker 只读 | pi 研究：`ResourceLoader` 沿 cwd 自动加载扩展 |
+| Worker 发现 | 配置 | 平台元本体：WorkerDefinition / Gatekeeper / Capability 是图对象，`find_workers` 是 traverse；元本体只 human 通道写（I16） | 「在图上找到能干活的 Worker」 |
+| 审批模式 | 单一 | `await_decision` 逐动作声明：模拟不阻塞 / 等待到超时 | cloudflare-os 研究 |
+| 聊天协议 | 无 | JSON-RPC over WS + 推送；先订阅再翻页 | cloudflare-os 的 `AiChatSubscriber` 纪律 |
+| Explorer | 未计划 | 复用 Semantica Explorer 前端，内核实现 Graph / Decision / Lineage 九个端点；Ontology 等隐藏 | Semantica 研究：前端只依赖 HTTP 契约 |
+| Semantica skills | 承诺「只换端点可复用」 | **撤回**：skills 直接 `import semantica.context`，不走 MCP；只借子命令与输出格式；17 个工具名与必填参数仍作契约 | Semantica 研究读了 `plugins/skills/decision` 与 `query` |
+| 用户隔离 | 四角色 + Handle | 三层两横切；五角色；I13 / I14；`requester_can_approve`；两种凭证；Source 可见性；每用户入口实例且能力上限固定 | 分权讨论 |
+| 采集器 | Python | TS（dockerode） | 全 TS，避免 P3 前的孤立 Python 组件 |
+
+### 8.3 未变
+
+设计重心五条；Domain Model 的三模型；Fact 的认知状态与双时态；十二条原不变量与 DDL 骨架；两通道 gateway；凭证隔离；厂商中立 LLM；`docs/private/` 规则。

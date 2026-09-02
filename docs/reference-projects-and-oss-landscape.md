@@ -301,3 +301,35 @@ TypeScript（Node ≥ 22.19，erasable-syntax-only）；Bun 编译独立二进�
 - **已从一手来源核实**（本会话直接抓取 GitHub 仓库页或官方规范页）：LangGraph（40.9k，MIT）、Graphiti（30.5k，Apache-2.0）、Mem0（64.5k，Apache-2.0）、Cedar（1.7k，Apache-2.0）、Neo4j Community 许可（GPLv3）、MCP 规范版本（2026-07-28）、PROV-O（W3C Rec. 2013-04-30）。
 - **来自可信二手 / 媒体来源，未直接抓取仓库**：Microsoft GraphRAG 维护模式与 v3.1.1 日期；LightRAG；Kùzu 归档与 LadybugDB 时间线；A2A v1.0；Foundation Capital 文章作者与日期；AGE / NebulaGraph / Oxigraph 星数；n8n / Dify 许可；Cognee、Letta、Serena、Aider 数据。
 - 表中 `(unverified)`：来源冲突、LICENSE 未直接确认（Glean、code-graph-rag、Restate、agentgateway、Obot）、或星数无法锚定到单一时间戳。
+
+---
+
+## 第三部分：面向 v0.2 MVP 形态的第二轮源码研究（2026-09-01）
+
+> 问题：Web 入口 + 每用户一个常驻 pi agent + 动态 Worker 经门对接系统。三个项目里直接决定这个形态的部分。
+
+### 1. pi：服务端托管多用户会话的三种方式
+
+| 方式 | 隔离 | Web 接入 | 认证 / 租约 | 稳定性 | 结论 |
+|------|------|---------|------------|--------|------|
+| A 进程内 `createAgentSession` 每用户一个 | 只有逻辑隔离：同进程、同 OS 用户、同文件系统；内置 bash / edit / write 以宿主 UID 运行；`DefaultResourceLoader` 沿 `cwd` 向上自动加载 `.pi/extensions/*.ts`（`docs/sdk.md:344-350`），不覆盖即任意代码执行 | `session.subscribe(listener)` 自行桥接 WS | 无 | 文档化但非 semver 稳定 | 后期优化，不用于 MVP |
+| **B 每用户一个 `pi --mode rpc` 子进程** | 真进程隔离；`PI_CODING_AGENT_DIR`（`src/config.ts:503-505`）与 `--session-dir` 按用户分目录；可独立 OS 用户 / cgroup | 宿主转发 stdout 的 JSONL 事件（`message_update` / `tool_execution_*` / `bash_execution_update`，`docs/rpc.md:855-1055`） | 宿主管理 | RPC 协议有文档、有版本 | **MVP 采用** |
+| C `packages/server` PiServer + PiClient | 自标实验性（`packages/server/README.md:3`）；到 coding-agent 零桥接（grep `PiSessionRuntime` 零命中）；只有 Unix socket 监听器；`openSession(sessionId)` 无调用者身份，任何连接报 sessionId 即可附着（`sessions.ts:66-74`）；租约只在客户端本地（`client.ts:56-58`），服务端 `locked: true` 硬编码 | 需自写 WS 监听与认证 | 无 | 实验性 | 不用 |
+
+每用户定制：`--system-prompt` / `--append-system-prompt`（`src/cli/args.ts:110-112`）；`-e 扩展`（`args.ts:166`）注册工具并从 env 读 Handle；`--tools` 白名单；`context` 事件在每次 LLM 调用前注入且不持久化（`docs/extensions.md:675-685`），`before_agent_start` 持久化注入。子 Worker：`examples/extensions/subagent/index.ts:346-350` 用 `child_process.spawn` 拉起 `pi --mode json -p --no-session …`，NDJSON 读回结果，可不同工具集 / cwd / 模型；**默认继承父进程 env**，Handle 必须显式注入、父 env 不能含密钥。pi 不提供：认证、多租户存储、Web UI、审批 UI（RPC 有 `extension_ui_request/response` 子协议，`docs/rpc.md:1184-1375`）。
+
+### 2. cloudflare-os：Web 聊天 → 每用户 agent → 门与审批
+
+- **一轮请求路径**：`workshop-frontend/src/main.tsx` 一个 `newWebSocketRpcSession`（Cap'n Web）；`ChatInterface.tsx` 调 `overseer.sendChatMessage(chatId, message, modelId, capsules, attachments, formats)`；`overseer.ts:5344` `assertChatNotActive` → 落用户消息 → `startAgent` → `agent.ts` 用 `runAgentLoopContinue`（pi-agent-core）；两段式 system prompt（`agent.ts:2061-2203`）；工具 `executeCode`（`agent.ts:2722`）里调用门的写方法 → `submitAction`（`overseer.ts:4666`）→ `ActionRecord(pending)` → 自动批准则 `AutoApprovalDrainer.drain()`；`approveAction`（`overseer.ts:9479`）→ `applyPendingAction`（`overseer.ts:4281`）→ `#maybeResumeAfterActionDecision`（`overseer.ts:9578`）恢复挂起的 turn；流事件经 `AiChatSubscriber.stream`（`api.ts:3255+`：`textDelta` / `toolCallStarted` / `toolCodeDelta` / …）。
+- **聊天 RPC 面**（`api.ts:1598` 起）：`listChats / newChat / sendChatMessage / stopAgent / retryAgent / getChatHistory / subscribeToChat / listActions / approveAction / rejectAction / subscribeToActions / setAutoApprovedActionKind / listAutoApprovedActionKinds / acceptConnectionRequest / denyConnectionRequest / newGatekeeper / listHooks …`。**没有 `steer`**：turn 进行中再发消息被拒，只能 `stopAgent`。**先订阅再翻页**避免丢事件。
+- **审批 UX**：`ActionLogEntry{id, gatekeeperId, resourceTitle, state, description: ActionDescription{title, description(Markdown), implementsRevert, awaitDecision?, autoApprovable?, actionKind?{tag,label}}}`（`gatekeeper.ts:1129`）。没有 `simulatedEffect` 字段；`awaitDecision=true` 表示门不模拟效果，turn 挂起、卡片阻塞样式，所有 awaited 动作批准后才恢复；否则 agent 基于模拟状态继续。「总是批准此类」按 `actionKind.tag` 落到连接级规则。
+- **工具集组成**：每 chat 一个 `chatBindings` 映射，工具含 `executeCode / describeBinding / requestConnection / createGadget / webFetch …`；被 spawn 的 agent 只有 `describeBinding + executeCode`。用户以「capsule」把系统授予 chat（`overseer.newGatekeeper(accountId, url)`），或 agent 用 `requestConnection` 发起、用户接受。
+- **多 agent**：`AgentSpawnerBinding.spawn` 即发即忘；`spawnCallable` 返回可调用 stub，promise 在子 agent turn 结束时 resolve。
+- **可移植**：RPC 面形状、`AiChatMessageBody` 日志 schema、`ActionDescription` 审批 schema、`AutoApprovalDrainer`（纯函数，Postgres 行 + 每门互斥即可）、`awaitDecision` 挂起状态机、先订阅再翻页。**替代**：DO → Postgres 行 + 每工作区 advisory lock；Cap'n Web → JSON-RPC over `ws`；`openSession() → RpcStub` → 服务端函数网关；`spawnCallable` stub → 任务表 + 相关 id 的完成事件；DO 事务 → Postgres 事务。
+
+### 3. Semantica：Explorer、REST 契约、MCP、skills
+
+- **Explorer**：React 19 + Vite 6 + TS，sigma / graphology、@xyflow/react、react-query；构建输出到 `semantica/static`，dev 代理 `/api` 与 `/ws`；**不 import 任何 Semantica 内部**，只依赖 HTTP 契约与 `X-API-Key`。Graph 工作区：`GET /api/graph/nodes?limit&cursor`、`GET /api/graph/edges`、`POST /api/graph/search`、`GET /api/temporal/bounds`、`GET /api/temporal/snapshot?at=`、`GET /api/provenance/report`；Decision：`GET /api/decisions`、`GET /api/decisions/{id}/chain`（含 `207` 部分成功约定）；Lineage：`GET /api/provenance?node_id=` → React Flow 节点 / 边；Ontology：约 30 个端点、路由 3540 行（不承诺）。服务端难点是 `GraphSession` 式 facade（分页游标、图算法）而非前端。
+- **MCP 17 工具**：`add_entity(id)`、`add_relationship(source, target)`、`search_graph(query)`、`get_graph_summary`、`get_graph_analytics`、`record_decision(category, scenario, reasoning, outcome, confidence)`、`query_decisions`、`find_precedents(scenario)`、`get_causal_chain(decision_id)`、`analyze_decision_impact(decision_id)`、`extract_entities(text)`、`extract_relations(text)`、`extract_all(text)`、`run_reasoning(facts, rules)`、`abductive_reasoning(observations)`、`export_graph`、`get_provenance(entity_id)`。
+- **skills**：`plugins/skills/decision` 与 `query` 是直接 `import semantica.context / semantica.query` 的 Python 脚本，不调 MCP、REST 或 CLI；插件清单没有 MCP 绑定。**换端点不能复用**，只能借子命令与输出格式。
+- **字段**：`Decision`：`decision_id, category, scenario, reasoning, outcome, confidence, timestamp, decision_maker, reasoning_embedding, node2vec_embedding, valid_from, valid_until, metadata`。`ProvenanceEntry`（PROV-O）：`entity_id, entity_type, activity_id, agent_id, agent_type, is_automated, role, source_document, source_location, source_quote, timestamp, first_seen, last_updated, confidence, checksum, sequence_id, previous_checksum, parent_entity_id, used_entities, previous_version_id, derived_from_id, activity_started_at_time, activity_ended_at_time, acted_on_behalf_of, informed_by_activities, valid_from, valid_until, revision_type, supersedes, bundle_id, invalidated, invalidated_at_time, invalidated_by, invalidation_reason, start_index, end_index, credibility, metadata, version`。本平台 schema 采用这两组字段名的超集。
