@@ -1,8 +1,7 @@
-# 开发任务清单 —— 基于 Graph 的 AI 中台（v0.1）
+# 开发任务清单 v0.2 —— 基于 Graph 的 AI 中台
 
-> 配套主文档：`graph-ai-middle-platform-design.md`（设计）、`reference-projects-and-oss-landscape.md`（参考）。
-> 用途：把设计拆成可以直接交给 Codex / Claude Code / 人的有界任务。每个任务都有交付物、验收命令和「不做」边界。
-> 环境具体值（目标主机地址、网段、路径）不出现在本文件；用占位符，取值见未入库的 `docs/private/`。
+> 配套：`graph-ai-middle-platform-design.md`（v0.2）。任务按三条垂直切片组织：S1 一个用户能聊且每轮入图；S2 能经审批做事并动态拉起 Worker；S3 图有内容、看得见、找得到。S1 + S2 + S3 = 最小当前版本。
+> 环境具体值不出现在本文件，用占位符，取值见未入库的 `docs/private/`。
 > 日期：2026-09-01
 
 ---
@@ -11,439 +10,325 @@
 
 ### 0.1 任务字段
 
-每个任务固定写：**目标 / 交付物 / 涉及路径 / 依赖 / 验收 / 建议执行者 / 需人工批准 / 不做**。
+**目标 / 交付物 / 涉及路径 / 依赖 / 验收 / 建议执行者 / 需人工批准 / 不做**。验收必须是可执行命令加期望结果。
 
-- **建议执行者**：`Codex` 或 `Claude Code`（代码实现）、`人`（需要登录目标主机或做决策）、`Claude Code@host`（经 SSH 在目标主机上跑只读或低风险命令）。
-- **需人工批准**：`是` 表示会影响目标主机上运行中的其他服务，或不可逆；这类任务只写建议与命令，不由 agent 自动执行。
-- **验收**：必须是可执行命令加期望结果。没有验收命令的任务不算定义完成。
+- 建议执行者：`Codex` 或 `Claude Code`（实现）、`人`（登录目标主机或决策）、`Claude Code@host`（经 SSH 在目标主机跑低风险命令）。
+- 需人工批准 = 会影响目标主机上运行中的其他服务或不可逆；这类只写建议，不由 agent 执行。
 
 ### 0.2 占位符
 
-| 占位符 | 含义 |
-|--------|------|
-| `<TARGET_HOST>` | 目标主机（SSH 别名） |
-| `${NEXTTIME_DATA}` | 平台数据根目录（含 `pgdata/ sessions/ secrets/ artifacts/ backups/ codegraph/`） |
-| `${KERNEL_BIND_ADDR}` | gateway 绑定的内网地址 |
-| `${NEXTTIME_SUBNET_CONTROL}` / `${NEXTTIME_SUBNET_WORKERS}` | 两个 Docker 网段 |
-| `${WORKER_RUNTIME}` | `runsc` 或 `runc` |
-| `<CODE_DIR>` | 目标主机上的代码检出目录 |
+`<TARGET_HOST>`、`${NEXTTIME_DATA}`、`${KERNEL_BIND_ADDR}`、`${NEXTTIME_SUBNET_CONTROL}` / `${NEXTTIME_SUBNET_WORKERS}`、`${WORKER_RUNTIME}`、`<CODE_DIR>`。
 
-### 0.3 工程约定（所有代码任务共同遵守）
+### 0.3 工程约定（全 TS）
 
-- Python 3.13，`uv` 管理；FastAPI + Pydantic v2 + `psycopg[binary,pool]`（v3）+ `httpx` + `openai`（内核自用 LLM 调用，`base_url` 指向任一 OpenAI 兼容端点，厂商可换）+ `mcp`（官方 Python SDK）+ `PyJWT`（Handle 签名，EdDSA）。不引入 ORM；SQL 显式写。
-- LLM 协议实现不自写：Worker 侧复用 pi-ai；内核只用 OpenAI 兼容子集。
-- `ruff`（lint + format）、`pytest`；测试需要 Postgres 的用 docker compose 起一个临时库（`scripts/test-db.sh`）。
-- 迁移：`kernel/migrations/NNNN_name.sql` 纯 SQL + `kernel/app/db/migrate.py`（记录 `schema_migrations`，幂等）。不用 alembic。
-- 每个任务一个分支、一个 PR；PR 描述贴验收命令输出。Conventional Commits。
-- 状态机一律「转移表驱动」：`(from_state, event) → to_state` 的数据表 + 一个通用 `transition()`，非法转移抛 `IllegalTransition`。
-- 所有受治理写入在同一事务内写 `audit_records`（I11）。
-- 不在代码或文档里写任何真实地址、密钥、知识库 ID；测试用 `example` 值。
+- Node 24、TypeScript strict、pnpm workspaces、`erasableSyntaxOnly`；Biome 做 lint 与 format；Vitest。
+- kernel：Fastify + `ws` + `pg`（原生驱动，显式 SQL，无 ORM）+ Zod + `@modelcontextprotocol/sdk` + `jose`（Handle 签名 EdDSA）+ pino + OpenTelemetry。
+- 迁移：`packages/kernel/migrations/NNNN_name.sql` + 幂等 runner（`schema_migrations` 表）。
+- 状态机一律转移表驱动，非法转移抛 `IllegalTransition`。
+- 所有受治理写入与 `audit_records` 同事务（I11）。
+- pi 锁 `@earendil-works/pi-coding-agent@0.84.4`；平台扩展只依赖文档化事件。
+- 共享类型在 `packages/shared`：capability 注册表、事件、`ActionDescription`、Zod schema；HTTP 路由、MCP 工具、WS 方法都由注册表生成或校验。
+- 不写任何真实地址、密钥、知识库 ID；测试用 `example` 值。每任务一分支一 PR。
 
 ### 0.4 里程碑
 
-| 里程碑 | 目标 | 对应设计目标 |
-|--------|------|-------------|
-| **E** 环境准备 | 目标主机可跑 Postgres + 内核 | — |
-| **R** 仓库骨架 | 能 lint / test / build | — |
-| **P0** 图内核骨架 | 本体发布 → 采集器写 observed Facts → explain → Conflict → reconstruct | G1 |
-| **P1** 治理闭环 | Claude Code 经 MCP 观察图、发起需审批动作 → 人批 → Gatekeeper 执行 → 审计 | G2、G3 |
-| **P2** Worker 运行时 | pi Worker 在隔离容器中跑 Task，经代理调 LLM，会话回流 | G5 |
-
-P0 + P1 + P2 = 设计文档 §16 的最小当前版本。
+| 里程碑 | 目标 | 设计目标 |
+|--------|------|---------|
+| E | 目标主机可跑 Postgres 与全部服务 | — |
+| R | monorepo 能 lint / test / build / migrate | — |
+| S1 | 登录 → 对话 → 自己的 pi 回答 → Turn 入图 | G3 部分、G4 部分 |
+| S2 | 说需求 → find_workers → invoke_worker → 门动作 → 审批卡片 → 执行 → 写回 | G1、G2、G4 |
+| S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | G3、G5、G6 |
 
 ---
 
 ## 1. E — 环境准备（目标主机）
 
-### E1 验证 gVisor 运行时
-- 目标：确认 `runsc` 真能跑容器；决定 `${WORKER_RUNTIME}`。
-- 交付物：`docs/private/` 里记录结果；`.env` 的 `WORKER_RUNTIME`。
-- 涉及路径：无代码。
-- 依赖：无。
-- 验收：`docker run --rm --runtime=runsc alpine:3.20 true; echo $?` 为 0。失败则 `WORKER_RUNTIME=runc` 并在 T2.4 走回退分支。
-- 建议执行者：Claude Code@host。
-- 需人工批准：否（一次性只读容器）。
-- 不做：不改 `daemon.json`。
+### E1 验证 gVisor
+- 验收：`docker run --rm --runtime=runsc alpine:3.20 true; echo $?` 为 0；失败则 `.env` 里 `WORKER_RUNTIME=runc`。
+- 执行者：Claude Code@host。批准：否。
 
-### E2 创建平台目录树与密钥目录
-- 目标：`${NEXTTIME_DATA}` 下建 `pgdata/ sessions/ secrets/ artifacts/ backups/ codegraph/ config/`，`secrets/` 权限 0700；`config/` 放 `llm-providers.yaml` 与生成的 `models.json`（不含密钥，密钥只在 `secrets/`）。
-- 交付物：目录；`${NEXTTIME_DATA}/secrets/pg_password`（随机 32 字节）。
-- 依赖：无。
-- 验收：`stat -c '%a %n' ${NEXTTIME_DATA}/secrets` 输出 `700 …`；`ls ${NEXTTIME_DATA}` 七个子目录齐全。
-- 建议执行者：Claude Code@host。
-- 需人工批准：否。
-- 不做：不使用 Hermes 的目录树；不复制任何现有密钥文件。
+### E2 目录树与密钥目录
+- 目标：`${NEXTTIME_DATA}/{pgdata,sessions,workspaces,secrets,config,artifacts,backups,caddy}`；`secrets/` 0700；`workspaces/<uid>/` 只挂给该用户的入口容器，`workspaces/tasks/<task_id>/` 只挂给该 Task 的 Worker（I15）。
+- 验收：`stat -c '%a %n' ${NEXTTIME_DATA}/secrets` 为 `700 …`；八个子目录齐全。
+- 执行者：Claude Code@host。批准：否。
 
 ### E3 代码检出与 `.env`
-- 目标：`git clone` 仓库到 `<CODE_DIR>`；从 `.env.example` 生成 `.env`，填 `NEXTTIME_DATA / KERNEL_BIND_ADDR / NEXTTIME_SUBNET_CONTROL / NEXTTIME_SUBNET_WORKERS / WORKER_RUNTIME`。
-- 交付物：`<CODE_DIR>/.env`（不入库）。
-- 依赖：R1（有 `.env.example`）、E1。
-- 验收：`docker compose config >/dev/null && echo ok`（变量全部解析）。
-- 建议执行者：人 / Claude Code@host。
-- 需人工批准：否。
+- 目标：clone 到 `<CODE_DIR>`；从 `.env.example` 生成 `.env`（`NEXTTIME_DATA / KERNEL_BIND_ADDR / NEXTTIME_SUBNET_* / WORKER_RUNTIME`）。
+- 验收：`docker compose config >/dev/null && echo ok`。依赖：R1、E1。批准：否。
 
-### E4 启动 Postgres
-- 目标：`postgres` 服务起来，`vector` 扩展可用。
-- 交付物：运行中的容器；`${NEXTTIME_DATA}/pgdata` 有数据。
-- 依赖：E2、E3、R1。
-- 验收：`docker compose up -d postgres && docker compose exec postgres pg_isready -U nexttime`；`docker compose exec postgres psql -U nexttime -c "create extension if not exists vector; select extversion from pg_extension where extname='vector';"` 有版本号。
-- 建议执行者：Claude Code@host。
-- 需人工批准：否（新增容器，不触碰现有服务；但会占用主机上已确认空闲的资源）。
-- 不做：不发布 5432 到主机。
+### E4 Postgres
+- 验收：`docker compose up -d postgres && docker compose exec postgres pg_isready -U nexttime`；`create extension if not exists vector` 成功。依赖：E2、E3、R1。批准：否。不做：不发布 5432。
 
-### E5 [建议] Docker 日志轮转与 live-restore
-- 目标：`/etc/docker/daemon.json` 加 `log-opts`（`max-size`、`max-file`）与 `live-restore: true`。
-- 影响：修改后需重启 dockerd；**没有 live-restore 时会重启全部现有容器**（含 RAGFlow、Hermes 相关）。先加 `live-restore` 再重启一次，之后再改日志选项则不再影响容器。
-- 验收：`docker info --format '{{.LiveRestoreEnabled}}'` 为 true；新容器 `docker inspect -f '{{.HostConfig.LogConfig}}'` 显示 max-size。
-- 建议执行者：人（维护窗口）。
-- 需人工批准：**是**。
+### E5 Docker 日志轮转与 live-restore
+- 已决定不做（2026-09-01）。发现保留在 `docs/private/`。
 
-### E6 [建议] 收敛暴露在 0.0.0.0 的本机服务端口
-- 目标：embedding 网关与 Ollama 只监听 loopback / 内网地址，或加 nft 规则限制来源。
-- 影响：依赖它们的服务（Hermes 等）若用的是 0.0.0.0 地址需同步改。
-- 验收：`ss -tlnp | grep -E ':(8091|11434)'` 不再出现 `0.0.0.0` / `*`。
-- 建议执行者：人。
-- 需人工批准：**是**。
-- 不做：本平台不依赖这两个服务。
+### E6 收敛 0.0.0.0 端口
+- 已决定不做（2026-09-01）。
 
-### E7 [建议] 平台备份定时器
-- 目标：systemd timer 每日 `pg_dump` + `sessions/` rsync 到 `${NEXTTIME_DATA}/backups/`，保留 7 份；写恢复脚本。
-- 交付物：`deploy/systemd/nexttime-backup.{service,timer}`、`scripts/backup.sh`、`scripts/restore.sh`。
-- 依赖：E4。
-- 验收：手动 `systemctl start nexttime-backup.service` 后 `backups/` 出现当日 dump；`scripts/restore.sh --dry-run` 通过。
-- 建议执行者：Codex 写脚本，人安装 timer。
-- 需人工批准：是（安装 systemd 单元）。
-- 注意：LVM 卷组无空余，备份占用根 LV 空间，保留份数不要大。
+### E7 平台备份定时器
+- 暂不做；设计 §13 的库损坏恢复依赖它，S3 完成后重评。届时交付 `deploy/systemd/nexttime-backup.{service,timer}`、`scripts/backup.sh`、`scripts/restore.sh`。
 
-### E8 TLS 反向代理（P1 内完成）
-- 目标：gateway 只监听 loopback，外部经 TLS（内网 CA 或自签）访问 8443。
-- 交付物：`deploy/tls/README.md`（nginx 或 caddy 两种配置模板）；`.env` 增加 `KERNEL_PUBLIC_URL`。
-- 依赖：T1.8。
-- 验收：`curl -k https://${KERNEL_BIND_ADDR}:8443/health` 200；`curl http://${KERNEL_BIND_ADDR}:8080/health` 拒绝连接。
-- 建议执行者：Codex 写模板，人部署。
-- 需人工批准：是（若复用主机已有 nginx）。
+### E8 caddy TLS 与静态服务
+- 目标：`caddy` 容器是唯一公网面：TLS（内网 CA 或自签）、`/` 服务 `packages/web/dist`、`/explorer` 服务 Explorer 构建、反代 `/api` `/ws` `/mcp` `/llm` 到 kernel。
+- 交付物：`deploy/caddy/Caddyfile`；compose `caddy` 服务；`.env` 增 `KERNEL_PUBLIC_URL`。
+- 验收：`curl -k https://${KERNEL_BIND_ADDR}:8443/api/health` 200；kernel 不对主机发布任何端口（`docker port` 为空）。
+- 依赖：S1.6。执行者：Codex 写，Claude Code@host 部署。批准：否。
 
 ---
 
 ## 2. R — 仓库骨架
 
-### R1 Python 工程与 compose 骨架
-- 目标：`kernel/` 可 lint、可测、可 build；`docker-compose.yml` 与 `.env.example` 齐全。
-- 交付物：`kernel/pyproject.toml`（uv，依赖见 0.3）、`kernel/app/__init__.py`、`kernel/app/main.py`（`/health`）、`kernel/Dockerfile`（多阶段，非 root 用户）、`kernel/tests/test_health.py`、`docker-compose.yml`（按设计 §10.2）、`.env.example`、`scripts/test-db.sh`、`Makefile`（`lint test migrate up down`）。
-- 依赖：无。
-- 验收：`cd kernel && uv sync && uv run ruff check . && uv run pytest -q` 通过；`docker compose config` 通过；`docker build -t nexttime/kernel:dev kernel/` 成功。
-- 建议执行者：Codex。
-- 需人工批准：否。
-- 不做：不写任何业务表。
+### R1 monorepo 骨架
+- 交付物：`pnpm-workspace.yaml`、根 `package.json`、`tsconfig.base.json`、`biome.json`、`vitest.base.ts`；`packages/{kernel,agent-host,worker-supervisor,platform-extension,web,gatekeeper-base,llm-proxy,egress-proxy,shared}` 各有 `package.json` / `src/index.ts` / 一个测试；`.dependency-cruiser.cjs`（设计 §7.10 的六层单向依赖与模块契约：`chat` / `web` 不得 import `approval` / `task`，模块不得 import 他模块内部文件）；`packages/kernel/Dockerfile`、`packages/agent-host/Dockerfile`、`packages/worker-supervisor/Dockerfile`（多阶段、非 root）；`docker-compose.yml`（设计 §10.2）；`.env.example`；`Makefile`（`lint test build migrate up down gen-models`）；`scripts/test-db.sh`。
+- 验收：`pnpm install && pnpm -r lint && pnpm -r test && pnpm -r build` 通过；`docker compose config` 通过；三个镜像 build 成功。
+- 执行者：Codex。批准：否。不做：业务表。
 
-### R2 迁移机制
-- 目标：纯 SQL 迁移 + 幂等 runner。
-- 交付物：`kernel/app/db/migrate.py`、`kernel/app/db/pool.py`（psycopg 连接池，按请求设置 `app.workspace_id` 会话变量）、`kernel/migrations/0000_extensions.sql`（`vector`、`pgcrypto`）、`kernel/tests/test_migrate.py`。
-- 依赖：R1。
-- 验收：`make migrate` 两次运行第二次为 no-op；`select count(*) from schema_migrations` = 1。
-- 建议执行者：Codex。
-- 需人工批准：否。
+### R2 迁移机制与连接池
+- 交付物：`packages/kernel/src/db/{migrate,pool}.ts`（每请求设置 `app.workspace_id` 与 `app.principal_id` 会话变量）、`migrations/0000_extensions.sql`。
+- 验收：`make migrate` 两次，第二次 no-op。依赖：R1。
 
 ### R3 CI
-- 目标：GitHub Actions 跑 ruff + pytest（`services: postgres`），加 secret / 内网 IP 扫描（gitleaks + 一条 `grep -rE '10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.'` 的守门步骤，命中即失败）。
-- 交付物：`.github/workflows/ci.yml`。
-- 依赖：R1。
-- 验收：PR 上 CI 绿；故意在 docs 里放一个 `10.0.0.1` 的测试提交被拦下。
-- 建议执行者：Codex。
-- 需人工批准：否。
+- 交付物：`.github/workflows/ci.yml`：Biome + Vitest（`services: postgres`）+ gitleaks + 内网 IP 守门（`grep -rE '10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.'` 命中即失败）+ `dependency-cruiser` 违规即失败 + 内核纯度守门 `scripts/check-kernel-purity.sh`（`grep -rniE -f scripts/system-names.txt packages/kernel/src --exclude-dir=__fixtures__ --exclude='*.test.ts'`，清单初始为 `docker|ragflow|routeros|erp|oa|semantica|hermes`，命中即失败）。
+- 验收：故意放一个 `10.0.0.1` 的提交被拦。依赖：R1。
 
-### R4 领域类型与转移表
-- 目标：把设计 §5 的枚举与状态机落成纯 Python，无 IO。
-- 交付物：`kernel/app/domain/enums.py`（PrincipalKind、Role、EpistemicStatus、ConflictType、ConflictStatus、DecisionStatus、ActionRequestStatus、TaskStatus、WorkerRunStatus、OntologyVersionStatus、GrantStatus）、`kernel/app/domain/transitions.py`（每个状态机一张转移表 + `transition()`）、`kernel/tests/test_transitions.py`（穷举：合法转移全部通过，非法转移全部抛错）。
-- 依赖：R1。
-- 验收：`uv run pytest kernel/tests/test_transitions.py -q`；ActionRequest 的 `proposed → executing` 必须抛 `IllegalTransition`。
-- 建议执行者：Codex。
-- 需人工批准：否。
-- 不做：不接数据库。
+### R4 领域类型、转移表、capability 注册表
+- 交付物：`packages/shared/src/{enums,transitions,capabilities,events,action-description}.ts`；转移表覆盖 Fact 生命周期、Conflict、Decision、ActionRequest、Task、WorkerRun、EntryAgent session、OntologyVersion / WorkerDefinition、Grant；capability 注册表含名字、模式、通道（human / handle）、所需角色、参数 Zod schema。
+- 验收：转移表穷举测试；`proposed → executing` 抛错；注册表中每个 capability 有且只有一个通道声明。依赖：R1。
 
 ---
 
-## 3. P0 — 图内核骨架
+## 3. S1 — 一个用户能聊，每轮入图
 
-### T0.1 核心表迁移与不变量约束
-- 目标：设计 §9.2 的核心表落地，DB 层承担 I1、I3、I4、I7、I12。
-- 交付物：`kernel/migrations/0001_core.sql`：`workspaces / principals / ontology_versions / objects / activities / sources / observations / links / property_assertions(可选) / evidence / conflicts / decisions / audit_records`；RLS 策略（所有业务表按 `current_setting('app.workspace_id', true)` 过滤）；触发器：`ontology_versions` 已发布行只读、`links` 的 `link_type / source_object_id / target_object_id / properties / valid_from / valid_until` 不可 UPDATE、`audit_records` 禁止 UPDATE / DELETE；应用账号 `nexttime_app` 无 `audit_records` 的 UPDATE / DELETE 权限。
+### S1.1 核心表迁移（含隔离列）
+- 交付物：`migrations/0001_core.sql`：`workspaces / principals(api_key_hash, role) / sessions(kind, on_behalf_of) / ontology_versions / objects / activities(kind, chat_id, sequence, status) / sources(owner_principal_id, visibility) / observations / links / conflicts / decisions / evidence / chats / audit_records`；RLS：workspace 匹配且（`visibility='workspace'` 或 owner = 当前 principal）；触发器：已发布本体只读、links 内容列不可改、audit 只增。
+- 验收：`test_invariants_db`：I1、I3、I4、I12、audit 不可删；用户 B 的会话读不到用户 A 的 `chats` 与私有 `sources`。
 - 依赖：R2、R4。
-- 验收：`kernel/tests/test_invariants_db.py`：跨 workspace 外键插入失败（I1）；缺 `activity_id` 插入失败（I3）；UPDATE `links.target_object_id` 失败（I4）；UPDATE 已发布 `ontology_versions.definition` 失败（I12）；DELETE `audit_records` 失败（I11 的 DB 半边）。
-- 建议执行者：Codex。
-- 需人工批准：否。
 
-### T0.2 本体注册表
-- 目标：YAML 本体 → 校验 → 发布版本；写入路径能按 LinkType 的 domain / range 校验（I2）。
-- 交付物：`kernel/app/ontology/schema.py`（Pydantic：ObjectType / PropertyType / LinkType / ActionType，ActionType 含 `reversibility / blast_radius / auto_approvable`）、`kernel/app/ontology/registry.py`（`publish_version / get_published / validate_link / json_schema_for(object_type)`）、`ontology/ops-assets-v1.yaml`（ObjectType：Host / ComposeProject / Container / Image / SystemdService / Volume / Network / Endpoint / Repository / Owner；LinkType：runs_on / part_of / uses_image / mounts / attached_to / exposes / depends_on / built_from / owned_by；ActionType 先只声明 `docker.container_restart`、`docker.compose_up`、`docker.compose_down`，全部 `auto_approvable: false`）、`kernel/tests/test_ontology.py`。
-- 依赖：T0.1。
-- 验收：发布 v1 后再次发布同内容得到 v2（发布不可变）；`validate_link("runs_on", Container, Host)` 通过，`validate_link("runs_on", Host, Container)` 拒绝。
-- 建议执行者：Codex。
-- 需人工批准：否。
-- 不做：不建 KnowledgeBase / Dataset / Model 类型（P1 随 ragflow Gatekeeper 加）。
+### S1.2 graph store 最小实现
+- 交付物：`packages/kernel/src/graph/{store,sql-store}.ts`：`upsert_object / assert_fact / supersede_fact / invalidate_fact / get_object / neighbors / traverse(≤3) / state_at`；`epistemic_status` 由调用方 Principal 类型决定。
+- 验收：`state_at(t0)` 在 supersede 后仍返回旧值；事务失败无半条记录。依赖：S1.1。
 
-### T0.3 GraphStore facade 与 SQL 实现
-- 目标：设计 §7.1 graph 模块的写入与读取。
-- 交付物：`kernel/app/graph/store.py`（抽象：`upsert_object / assert_fact / supersede_fact / invalidate_fact / get_object / neighbors / traverse(depth≤3) / state_at(t)`）、`kernel/app/graph/sql_store.py`、`kernel/tests/test_graph_store.py`。
-- 语义：`assert_fact` 输入 `(workspace, link_type, source_object, target_object, properties, valid_from, source_id, activity_id, asserted_by, epistemic_status)`；`epistemic_status` 由调用方 Principal 类型决定（human→`asserted`，agent→`inferred`，service→`observed`），不由调用方自选。
-- 依赖：T0.1、T0.2。
-- 验收：`state_at(t0)` 在 supersede 之后仍返回旧值；`traverse` 深度 3 内返回预期节点；同一事务内 `assert_fact` 失败不留下半条记录。
-- 建议执行者：Codex。
-- 需人工批准：否。
+### S1.3 gateway human 通道 + audit + explain
+- 交付物：`gateway/auth.ts`（API key → Principal，创建 `web` 会话）、`audit/{writer,reconstruct}.ts`、`epistemic/explain.ts`（Fact / Decision / Turn → Observation → Activity → Source + Principal）。
+- 验收：无 key 401；`member` 调 `grant_capability` 403；任一 Fact / Turn 的 `explain` 到 Source 与 Principal；audit 写失败整体回滚。依赖：S1.2。
 
-### T0.4 冲突检测（assert 路径）
-- 目标：I5：异源不一致 → Conflict；同源变化 → supersede。
-- 交付物：`kernel/app/epistemic/conflicts.py`（`detect_on_assert()`：按 `(workspace, source_object, link_type, target 或 property key)` 找当前 Fact；`source_id` 相同 → supersede；不同 → 两条并存 + `conflicts(open)`）、`kernel/tests/test_conflicts.py`。
-- 依赖：T0.3。
-- 验收：来源 A 断言 `X runs_on H1`，来源 A 再断言 `X runs_on H2` → 旧 Fact `superseded_at` 非空、无 Conflict；来源 B 断言 `X runs_on H3` → Conflict(open)，两条 Fact 都在。
-- 建议执行者：Codex。
-- 需人工批准：否。
+### S1.4 chat 模块与 WS RPC
+- 交付物：`chat/{service,ws}.ts`：`list_chats / new_chat / send_chat_message / stop_agent / get_chat_history / subscribe_chat`；Turn = `activities(kind='agent_turn')`；推送事件 `chat.message / chat.stream / chat.metadata`；同一 Chat 只允许一个进行中 Turn；`outbox` 表与派发器（`db/outbox.ts`：同事务写入、进程内派发、重启重放、消费者幂等）；`host-bridge` 定义 `AgentRuntime` 接口并把 pi 的 RPC 事件翻译为平台事件词表，chat 只消费平台事件。
+- 验收：WS 客户端先 `subscribe_chat` 再 `get_chat_history`，用脚本在翻页期间注入事件，不丢不重；进行中再发消息被拒。依赖：S1.3。
 
-### T0.5 explain 与 PROV 导出
-- 目标：任意 Fact / Object 回答「系统为什么相信」。
-- 交付物：`kernel/app/epistemic/explain.py`（Fact → Observation → Activity → Source + Principal + supersede 链 + 相关 Conflict）、`kernel/app/audit/prov_export.py`（PROV-O JSON-LD 最小映射：Entity / Activity / Agent / wasGeneratedBy / used / wasAttributedTo / wasInvalidatedBy）、`kernel/tests/test_explain.py`。
-- 依赖：T0.3。
-- 验收：随机抽 20 条 Fact，`explain` 都能到达 Source 与 Principal（属性测试）；导出的 JSON-LD 用 `pyld` 展开无错。
-- 建议执行者：Codex。
-- 需人工批准：否。
+### S1.5 每用户一个常驻入口容器：agent 镜像、supervisor 最小实现、agent-host 事件桥
+- 交付物：`worker-runtime/Dockerfile`（node:24-bookworm-slim、pi 0.84.4、平台扩展、工具链 git / curl / python3 / pip / build-essential / ripgrep；非 root；只读根，`/workspace` 与 `/tmp` 可写）；`packages/worker-supervisor` 的常驻模式：`spawnResident(user)` 以 `--runtime ${WORKER_RUNTIME}`、`--cap-drop ALL`、挂载 `${NEXTTIME_DATA}/workspaces/<uid>` 到 `/workspace`（含 `--session-dir` 与 `PI_CODING_AGENT_DIR`）、只读挂载 `models.json`，env 只含 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / NEXTTIME_MODE=entry / HTTP_PROXY / HTTPS_PROXY / NO_PROXY`，**不继承宿主 env**，容器内 `pi --mode rpc --system-prompt <入口定义> -e platform-extension`，**内置工具全开**；`packages/agent-host/src/{host,bridge}.ts`：向 supervisor 申请 / 停止入口容器、向内核申请入口 Handle、把容器 stdout 的 JSONL 事件桥到内核 `host-bridge`、写回 `prompt / stop`；崩溃自动重拉；空闲超时停容器。
+- 验收：两个用户各自容器、各自 `workspaces/<uid>`；`docker kill` 某用户入口容器后再发消息，对话可续且历史完整；容器 env 无任何 `*_API_KEY`；容器内能 `curl https://example.com`（经代理）、能 `pip install requests`、能写 `/workspace`；`curl http://postgres:5432` 与任一内网地址失败。依赖：S1.4、S1.7、S1.9、S1.11。
+- 不做：不给入口 Handle 任何门的 execute 能力；不在宿主进程内跑 pi。
 
-### T0.6 审计与重建
-- 目标：I11 的应用半边 + `reconstruct(object, t)`。
-- 交付物：`kernel/app/audit/writer.py`（`record(transition, target, principal, payload)`，与业务写入共用同一连接 / 事务）、`kernel/app/audit/reconstruct.py`、`kernel/tests/test_audit.py`。
-- 依赖：T0.3。
-- 验收：对一个 Object 做 5 次 assert / supersede 后，`reconstruct(object, t_i)` 与每次操作后的快照一致；任意受治理写入若 `audit_records` 插入失败则整体回滚。
-- 建议执行者：Codex。
-- 需人工批准：否。
+### S1.6 platform-extension `entry` 模式
+- 交付物：`packages/platform-extension/src/{index,kernel-client,modes/entry}.ts`：S1 只注册 observe 组工具（`get_object / traverse / search / explain / get_task`），`find_workers` 与 `invoke_worker` 随 S2.7 加入；`context` 事件注入该用户待审批、进行中 Task、相关 Fact 与先例；`session_*` 事件把 `turn_id` 写入会话条目并回传 Turn 结果；契约测试用 pi 的 faux provider + fake kernel。
+- 验收：`pnpm --filter platform-extension test`；fake kernel 收到带 `turn_id` 的回传。依赖：R4。
 
-### T0.7 HTTP API（P0 能力）与 human 认证
-- 目标：设计 §9.3 中 ontology / graph / epistemic（P0 子集）/ audit 分组的 HTTP 投影；每请求设置 workspace 会话变量。
-- 交付物：`kernel/app/gateway/auth.py`（MVP：`principals.api_key_hash`，`Authorization: Bearer` → Principal；P1 再加 Handle 通道）、`kernel/app/gateway/http/*.py`（路由）、`kernel/app/gateway/capabilities.py`（capability 注册表：名字、模式、所需角色；HTTP 路由由它生成或校验）、OpenAPI 输出、`kernel/tests/test_api.py`。
-- 依赖：T0.2–T0.6。
-- 验收：无 key 401；`use` 角色调用 `publish_ontology_version` 403；`audit` 角色能 `audit_query`；OpenAPI 中路由名集合 == capability 注册表中标记为 P0 的集合（脚本 `scripts/check-capability-consistency.py`）。
-- 建议执行者：Codex。
-- 需人工批准：否。
+### S1.7 `llm-proxy` 独立服务
+- 目标：按 provider 透传；provider key 只在这里；内核进程零外部凭证（I9）。
+- 交付物：`packages/llm-proxy`（读 `${NEXTTIME_DATA}/config/llm-providers.yaml`；入站 Handle 从该 provider `auth` 指定的头读取，用内核公钥 EdDSA **本地**验签与过期检查，撤销表按 `jti` 周期同步不逐请求回调；换真实 key；模型白名单；SSE 原样；OpenAI 兼容与 Anthropic 两种 `usage` 解析；用量与 80% 预算警告经 `POST /internal/llm-usage` 上报内核，失败本地队列重放）；内核 `llm-usage` 模块与 `migrations/llm-usage/0001.sql`；`scripts/gen-models-json.ts`。
+- 验收：无 Handle 401；过期 / 撤销 Handle 401；白名单外 403；流式逐块转发且与直连 fake upstream 逐字节一致；`llm_usage` 记 provider / model / tokens / turn_id；内核容器 env 与文件系统中不存在任何 provider key；杀掉内核后代理仍能转发并在内核恢复后补报用量。依赖：S1.3、S1.9。
 
-### T0.8 CLI
-- 目标：`nexttime` 命令行覆盖 P0 操作。
-- 交付物：`kernel/app/cli.py`（typer 或 argparse）：`workspace create`、`principal create --kind --role`、`ontology publish`、`fact assert`、`conflicts list`、`explain`、`audit reconstruct`、`collect host-inventory`（调 T0.9）；配置 `NEXTTIME_URL`、`NEXTTIME_API_KEY`。
-- 依赖：T0.7。
-- 验收：`nexttime --help` 列出全部子命令；`nexttime explain <id>` 输出可读的 PROV 链。
-- 建议执行者：Codex。
-- 需人工批准：否。
+### S1.8 web：登录与对话
+- 交付物：`packages/web`：登录（API key）、对话页（流式文本、工具调用行、Turn 状态）、WS 客户端（先订阅再翻页规则封装进 client）。
+- 验收：Playwright：登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整。依赖：S1.4。
 
-### T0.9 只读采集器 `host-inventory`
-- 目标：把目标主机的**结构性**事实以 `observed` 状态写入图；重复运行幂等。
-- 交付物：`collectors/host-inventory/collector.py`（数据源：`docker inspect`（容器、镜像、挂载、网络、发布端口、compose 标签）、`docker compose ls`、`systemctl list-unit-files --state=enabled` + `systemctl cat`（ExecStart / WorkingDirectory）、指定目录列表下的 `git remote -v`）；映射到本体 v1；一次运行 = 一个 Activity(kind=`ingest_run`)；Source = `host-inventory@<hostname>`；只读命令，运行身份为 `service` Principal。
-- 排除：容器状态、启动时间、CPU / 内存、日志内容等每次都变的字段（它们会在 I4 下每次产生新行）。
-- 依赖：T0.3、T0.4、T0.8。
-- 验收：在目标主机跑两遍：第二遍 `links` 行数不变、`conflicts` 为 0；手动改一个容器的发布端口后第三遍：旧 Fact `superseded_at` 非空、新 Fact 存在、仍无 Conflict；`explain` 任一条到 `host-inventory@<hostname>` Source。不在目标主机时用 `tests/fixtures/docker-inspect-sample.json` 跑单元测试。
-- 建议执行者：Codex 写；Claude Code@host 跑验收。
-- 需人工批准：否（只读）。
-- 不做：不 `docker exec`；不读 env 值；不采 Hermes 拉起的非 systemd 子进程（待 §19.2 决定）。
+### S1.9 Handle 最小实现（入口 Handle）
+- 交付物：`capability/{model,handles}.ts`：EdDSA JWT，含 `workspace / session / on_behalf_of / scope / exp / jti`；撤销表；agent-host 在申请入口容器前向内核申请入口 Handle（能力上限 = 入口 WorkerDefinition 固定集合）；内核公钥导出到 `${NEXTTIME_DATA}/config/handle.pub` 供 `llm-proxy` 本地验签。
+- 验收：过期 / 撤销 / 篡改 401；请求体带 `on_behalf_of` 被拒（I13）。依赖：S1.1。
 
-### T0.10 P0 验收脚本
-- 目标：一条命令跑完 G1 的证明。
-- 交付物：`scripts/accept_p0.sh`：建 workspace → 建 human / service Principal → 发布本体 → 跑采集器两遍 → 用第二个 Source 断言一条矛盾 Fact → `conflicts list` 非空 → `explain` → `audit reconstruct`；每步断言退出码与关键字段。
-- 依赖：T0.1–T0.9。
-- 验收：`scripts/accept_p0.sh` 退出码 0；输出末尾打印 `P0 OK`。
-- 建议执行者：Codex。
-- 需人工批准：否。
+### S1.10 S1 验收脚本
+- 交付物：`scripts/accept_s1.sh`：建 workspace、两个用户、发布入口 WorkerDefinition、各自对话、杀容器续聊、`explain(turn)`、隔离断言、出网代理断言（公网通、内网不通、目标域名出现在 Activity）。
+- 验收：退出 0 打印 `S1 OK`。
+
+### S1.11 出网代理
+- 目标：agent 容器上公网必经代理；公网放行、内网与平台内部服务拒绝；按来源容器套用 WorkerDefinition 的允许 / 拒绝清单；记录目标域名与字节数到该次 Activity（I10）。
+- 交付物：`packages/egress-proxy`（Node CONNECT / HTTP 转发代理，或 tinyproxy + 策略脚本；挂在 `control` 与 `workers` 网络；来源 ip → WorkerRun / 入口会话由 supervisor 注册表解析；拒绝 RFC1918、链路本地、`postgres` / `kernel` 等服务名；日志经内核 `host-bridge` 写 Activity `metadata.egress[]`）；compose 服务；`workers` 网络保持 `internal: true`。
+- 验收：容器内 `curl https://example.com` 200；`curl http://10.0.0.1` 与 `curl http://postgres:5432` 被拒；Activity 记录含 `example.com`；WorkerDefinition 加 `deny: [example.com]` 后被拒。依赖：R1。
+- 不做：不解密 TLS；不做内容过滤。
+
+### S1.12 最小备份（compose 内，不改主机）
+- 目标：每日 `pg_dump` + `sessions/` 与 `workspaces/` 的 rsync 到 `${NEXTTIME_DATA}/backups/`，保留 7 份；恢复脚本可演练。之前 E7 被暂缓，这里以 compose 内容器形式回归，理由：设计 §10.4 与 §13 的回滚依赖它，且不触碰主机上任何现有服务。
+- 交付物：`deploy/backup/backup.sh`、`scripts/restore.sh`、compose `backup` 服务（`postgres:17-alpine`）。
+- 验收：`docker compose exec backup /backup.sh` 后 `backups/` 出现当日 dump；`scripts/restore.sh --dry-run` 通过；在临时库上真实恢复一次并跑 `accept_s1.sh`。依赖：E4。需人工批准：否。
 
 ---
 
-## 4. P1 — 治理闭环
+## 4. S2 — 能经审批做事，动态拉起 Worker
 
-### T1.1 治理表迁移
-- 交付物：`kernel/migrations/0002_governance.sql`：`sessions`（principal 会话：kind = worker_run / mcp_session / service，`expires_at`）、`policies`、`capability_grants`、`capability_handles`（`jti`、`session_id`、`scope jsonb`、`revoked_at`）、`action_requests`（按设计 §9.2，`requested_by / session_id / worker_run_id nullable / actor_runtime`）、`gatekeepers`、`worker_definitions`（P1 只用于 Grant 的目标）。
-- 依赖：T0.1。
-- 验收：`action_requests` 的 CHECK：`status in ('executing','executed','verified','compensated')` 时 `policy_decision` 非空（I7 的 DB 半边）。
-- 建议执行者：Codex。需人工批准：否。
+### S2.1 治理表迁移
+- 交付物：`migrations/0003_governance.sql`：`policies / capability_grants / capability_handles(parent_jti, on_behalf_of) / action_requests(on_behalf_of, await_decision, parent_worker_run_id, actor_runtime, idempotency_key, policy_decision CHECK) / gatekeepers / worker_definitions(kind, version, status) / tasks / worker_runs(parent_worker_run_id)`。
+- 验收：I7 的 DB CHECK；`worker_definitions` 已发布只读。依赖：S1.1。
 
-### T1.2 Capability 与 Handle
-- 目标：Grant 管理；Handle 签发 / 验证 / 撤销 / 衰减。
-- 交付物：`kernel/app/capability/model.py`（Capability = `action_kind × mode × resource_scope`）、`kernel/app/capability/handles.py`（EdDSA JWT：`workspace_id / session_id / capability_set / resource_scopes / exp / jti`；验证含撤销表查询；`attenuate(parent, subset)` 只能收窄）、human 通道 API：`grant_capability / revoke_capability / issue_handle(scope, ttl, actor_runtime)`、`kernel/tests/test_handles.py`。
-- 依赖：T1.1。
-- 验收：过期 / 撤销 / 篡改的 Handle 全部 401；`attenuate` 试图超出父范围抛错；WorkerRun terminate 后其全部 Handle 立即失效。
-- 建议执行者：Codex。需人工批准：否。
+### S2.2 Policy 引擎
+- 交付物：`policy/engine.ts`：`evaluate → allow | require_approval | deny`；双信号（I8）；`requester_can_approve` 按 `blast_radius`，high 默认否，工作区可覆盖；高影响默认 `require_approval` 且工作区不能关闭。
+- 验收：三种判定的表驱动测试；试图为 high 开自动批准被拒。依赖：S2.1、S3.1 的 ActionType 元数据（S2 内先用平台元本体里的 docker 动作声明）。
 
-### T1.3 Handle 通道接入 gateway
-- 目标：gateway 双通道：human（API key）与 Handle；Handle 通道永不能调用 `approve / reject / grant_* / set_policy`。
-- 交付物：`kernel/app/gateway/auth.py` 扩展；每次调用解析为 `(principal, session, actor_runtime, capability, target)`；`kernel/tests/test_gateway_channels.py`。
-- 依赖：T1.2、T0.7。
-- 验收：持有含 `approve` 字样的伪造 Handle 调用 `approve` 仍 403（能力表里根本不允许 Handle 通道执行它）。
-- 建议执行者：Codex。需人工批准：否。
+### S2.3 ActionRequest 状态机与审批队列
+- 交付物：`approval/{service,drainer,routing}.ts`：`request_action / approve / reject / expire / mark_executed / mark_failed / compensate`；drain 每 Gatekeeper 单飞、升序、遇 pending 停；`approve` 前置 I14；**审批路由**：ActionRequest 进入所有持有该 `action_kind × resource_scope` 的 human Principal 的队列与对话，不限于发起者；同事务写 Approval Decision 并推进关联 agent Decision；`await_decision` 两种模式（模拟返回 / 等待到超时）；默认策略表：`low` 自动批准、`medium` / `high` 与未分类要人批；每次状态转移在同事务写 outbox 发布 `ActionRequestPending / ActionRequestUpdated`，chat 与 web 只订阅事件写各持有者的系统消息，`approval` 不 import `chat`。
+- 验收：转移穷举；幂等键；顺序 drain；I14：operator 无该资源范围时 403；`await_decision=true` 时 Task 进 `waiting_approval` 且超时后工具得到 `pending_approval`。依赖：R4、S2.1、S2.2。
 
-### T1.4 Policy 引擎
-- 目标：`evaluate(actor, capability, target, ctx) → allow | require_approval | deny`；双信号自动批准（I8）；高影响 ActionType 默认 `require_approval` 且不可被 workspace policy 关闭。
-- 交付物：`kernel/app/policy/engine.py`（规则数据化：按 `action_kind`、`blast_radius`、`actor_runtime`、资源范围）、`set_policy` API、`kernel/tests/test_policy.py`。
-- 依赖：T1.1、T0.2（ActionType 元数据）。
-- 验收：ActionType `auto_approvable: true` 但 workspace 未开启 → `require_approval`；两者都满足 → `allow`；`blast_radius: high` 且 workspace 试图开启自动 → 拒绝写入该 policy。
-- 建议执行者：Codex。需人工批准：否。
+### S2.4 通用门：协议、基类、四种传输、接口清单、命令策略表
+- 目标：门不是逐系统写的代码。一个基类 + 四种传输种类 + 一份接口清单就能接入任意系统。
+- 交付物：`packages/gatekeeper-base`（协议 Zod schema：`describe_operations / observe / simulate / apply / revert / health`；Operation 模型：`name / binding / params_schema / mode / blast_radius / reversibility / auto_approvable / await_decision / reads / writes / result_mapping(JMESPath)`；凭证解析两种：共享 env、ConnectedAccount 本地加密存储按 `on_behalf_of`；`apply` 幂等存储）；传输实现 `kinds/{http,mcp,cli,ssh}.ts`（`http`：从 OpenAPI 导入清单草稿，GET → observe，其余 → execute 并按动词给默认影响半径；`mcp`：`tools/list` 即清单，`readOnlyHint` → observe；`cli`：命令模板；`ssh`：命令模板 + 命令策略表，正则模式 → `mode / blast_radius / auto_approvable`，未命中 → `require_approval`）；kernel `gatekeepers/{client,registry,manifest}.ts`（清单入平台元本体为 `Operation` 对象；`propose_operation` 产草稿，owner 发布）。
+- 验收：fake 系统：OpenAPI 导入后 GET 为 observe、POST 为 execute；`ssh` 门对 `show …` 自动放行、对未知命令返回 `require_approval`（I17）、对 `rm -rf` 命中高影响；重复 `apply` 只执行一次；ConnectedAccount 按 `on_behalf_of` 取到不同凭证；结果映射把响应写成 `observed` Fact。依赖：S2.3、S2.6。
+- 不做：不做 `db` / `browser`；不解析 CLI help 自动生成清单（P5）。
 
-### T1.5 ActionRequest 状态机与审批队列
-- 目标：设计 §5.5 的 ActionRequest 状态机；严格顺序 drain；幂等键；审批与 Decision 联动。
-- 交付物：`kernel/app/approval/service.py`（`request_action / approve / reject / expire / mark_executed / mark_failed / compensate`）、`kernel/app/approval/drainer.py`（每 Gatekeeper 单飞、按 id 升序、遇 `pending_approval` 停）、`approve` 在同一事务内写 Approval Decision 并推进关联 agent Decision、`kernel/tests/test_action_requests.py`。
-- 依赖：R4、T1.1、T1.4、T0.6。
-- 验收：转移表穷举通过；同一 `idempotency_key` 第二次 `request_action` 返回同一条记录；队列中 id 更小的一条 `pending_approval` 时 id 更大的 `auto_approved` 不会先执行；审批超时进入 `expired`。
-- 建议执行者：Codex。需人工批准：否。
+### S2.5 `docker` 预置清单与 `ragflow` 门实例
+- 交付物：`gatekeepers/docker`（`cli` 种类的预置清单 + dockerode 绑定；observe：`containers.list / container.inspect / compose.ls / container.logs_tail`；execute：`container.restart`（medium，`await_decision=false`，simulate 返回将影响的容器）、`compose.up / compose.down`（high）；全部 `auto_approvable=false`）；`gatekeepers/ragflow`（`http` 种类的清单：observe `kb.list / kb.documents / retrieve`，execute `document.upload`（medium）、`document.parse`（low））。
+- 验收：对自建测试容器 `apply container.restart` 生效且重复不重启。执行者：Codex 写，Claude Code@host 验收。批准：否。不做：不对现有业务容器 execute。
 
-### T1.6 Gatekeeper 协议、client 与注册表
-- 目标：设计 §7.4 的 HTTP 协议；内核侧 client；部署时注册与健康检查。
-- 交付物：`gatekeepers/_protocol/README.md`（协议 + JSON Schema）、`gatekeepers/_protocol/base.py`（Python 基类，供各 Gatekeeper 复用：`describe_actions / observe / simulate / apply / revert / health`）、`kernel/app/gatekeepers/client.py`、`kernel/app/gatekeepers/registry.py`（从 compose 环境变量 `GATEKEEPERS=docker=http://gatekeeper-docker:8000,...` 注册）、`kernel/tests/test_gatekeeper_client.py`（用 fake gatekeeper）。
-- 依赖：T1.5。
-- 验收：`list_gatekeepers` 返回健康状态与 `describe_actions` 缓存；`apply` 重复同一 `action_request_id` 时 fake gatekeeper 只执行一次。
-- 建议执行者：Codex。需人工批准：否。
+### S2.6 平台元本体与 WorkerDefinition 注册表
+- 交付物：`ontology/platform-meta.yaml`（ObjectType：WorkerDefinition / Gatekeeper / Operation / Capability / Skill / Procedure；LinkType：exposes / reads / writes / can_act_on / requires / connects_to / uses / steps）；`ontology/entry-agent.yaml`（kind=entry，能力上限固定，system prompt 教异步模型）；`ontology/ops-runner.yaml`（kind=worker）；`worker/definitions.ts`（`propose / publish / deprecate`，publish 只 human 通道）；注册 Gatekeeper 时同步写元本体对象；I16：Handle 通道写这些类型被拒。
+- 验收：引用 draft 被拒；Handle 通道 `assert_fact(WorkerDefinition …)` 403。依赖：S2.1、S1.2。
 
-### T1.7 `gatekeeper-docker`
-- 目标：目标主机 docker 的 observe / execute 门。
-- 交付物：`gatekeepers/docker/`（FastAPI + docker SDK；`describe_actions`：`container.restart`（medium，可逆：否）、`compose.up`（high）、`compose.down`（high）；observe：`containers.list / container.inspect / compose.ls / container.logs_tail(n≤200)`；`apply` 以 `action_request_id` 去重（本地 SQLite 记录）；`simulate` 返回将影响的容器列表）、Dockerfile（非 root，socket 通过组权限）。
-- 依赖：T1.6。
-- 验收：`observe containers.list` 返回目标主机容器；`apply container.restart` 对一个**测试容器**（`alpine sleep`）生效且重复 `apply` 不重启第二次。
-- 建议执行者：Codex 写；Claude Code@host 用测试容器验收。
-- 需人工批准：否（验收只碰自建测试容器）。
-- 不做：不对任何现有业务容器执行 execute。
+### S2.7 `find_workers` 与 `invoke_worker`
+- 交付物：`graph/find-means.ts`（`find_operations / find_workers / find_procedures`：元本体 traverse × 用户 Grant 交集）；`task/{service,invoke,reaper}.ts`（`invoke_worker(def@v, input, wait, timeout=90s)`；子 Handle 衰减且继承 `on_behalf_of`；`parent_worker_run_id`；超时返回 `task_id`；崩溃回队；terminate 撤销 Handle；**配额（I18）**：派生链深度 ≤ 3、每用户并发 WorkerRun、每 Task token 与时长、每工作区日成本，作为工作区策略数据，`migrations/task/0002_quotas.sql`；深度或并发超限时 `invoke_worker` 返回入口 agent 可转述的错误；预算 80% 时经 `context` 注入警告，100% 时 Task `failed: budget_exhausted`）。
+- 验收：入口 Handle 请求含 execute 的子 Handle 被拒；`wait=true` 超时返回 `task_id` 不挂死；子 WorkerRun 的 ActionRequest 沿 `parent_worker_run_id` 回到父 Task；第四层派生被拒且错误可读；fake `llm-proxy` 上报 100% 后 Task 进入 `failed: budget_exhausted` 且入口 agent 下一轮 `context` 含该信息。依赖：S2.3、S2.6、S1.9、S1.7。
 
-### T1.8 MCP gateway
-- 目标：官方 MCP Python SDK（streamable HTTP）暴露 capability 工具；工具名 = capability 名；参数 schema 从本体投影；bearer = Handle。
-- 交付物：`kernel/app/gateway/mcp/server.py`、`kernel/app/gateway/mcp/tools.py`（由 capability 注册表生成）、`kernel/tests/test_mcp.py`（用 MCP client 列工具并调用 `get_object`）。
-- 依赖：T1.3、T0.7。
-- 验收：`tools/list` 集合 == capability 注册表中 Handle 通道可用的集合（`scripts/check-capability-consistency.py` 三方一致：注册表 / HTTP / MCP）；无 Handle 的 MCP 连接被拒。
-- 建议执行者：Codex。需人工批准：否。
+### S2.8 worker-supervisor
+- 交付物：`packages/worker-supervisor` 的一次性模式（常驻模式已在 S1.5）：`spawnTask / terminate / status`；`--runtime ${WORKER_RUNTIME}` 回退 runc；`--network workers --read-only --cap-drop ALL`；挂载 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>` 到 `/workspace`；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE=worker / HTTP(S)_PROXY`、**不继承宿主 env**；只读挂载 `models.json` 与该定义 `uses` 的 Skill；注册 `(worker_run_id, container_id, ip)` 供 gateway 来源绑定与出网代理解析；Task 结束保留工作目录为 artifact，按保留策略清理。
+- 验收：非允许镜像 403；源 ip 与注册不一致的 Handle 请求被拒并撤销；容器内 env 无 `*_API_KEY`。依赖：E1。
 
-### T1.9 `gatekeeper-ragflow` 与本体扩展
-- 目标：RAGFlow 知识库作为 Source 与 Gatekeeper；本体加 `KnowledgeBase / Document / Dataset` 与 `stored_in / indexed_by` 等关系。
-- 交付物：`gatekeepers/ragflow/`（observe：`kb.list / kb.documents / retrieve(query, kb)`；execute：`document.upload`（medium）、`document.parse`（low）；API key 只在其 env_file）、`ontology/ops-assets-v2.yaml`（在 v1 基础上增加类型）、采集器扩展 `collectors/host-inventory/ragflow_source.py`（经 Gatekeeper observe 把 KB / Document 结构写为 `observed` Facts）。
-- 依赖：T1.6、T0.2、T0.9。
-- 验收：`observe kb.list` 返回知识库；采集后图里有 `KnowledgeBase` Object 与 `Document part_of KnowledgeBase` Facts；`explain` 到 Source `ragflow@<gatekeeper>`。
-- 建议执行者：Codex 写；Claude Code@host 验收。
-- 需人工批准：否（observe 只读；execute 不在验收里）。
+### S2.9 `worker` 模式扩展与结果契约
+- 交付物：`entrypoint.sh` 增加 `worker` 模式自检（env 无 `*_API_KEY`；出网必经代理：直连内网失败、经代理公网通）；扩展 `modes/worker.ts`（向内核取 Handle 内允许的 Operation 列表并注册为 `<gate>.<op>` 工具，observe 直接经内核转门，execute 经 `tool_call` 拦截转 `request_action`；`context` 注入 Task 输入、相关 Fact、装载的 Skill；结束时按结果契约返回 `{summary, findings, facts_to_assert, evidence, artifacts, proposed_skill?, proposed_operations?}`；全量 JSONL 回传为私有 Source）；内核侧 `task/result.ts` 把 `facts_to_assert` 以 `inferred` 写入、证据挂 Activity、提议存草稿。镜像本身已在 S1.5 交付。
+- 验收：`pi --version` 0.84.4；带任意 `*_API_KEY` 启动退出非 0；`/model` 列表只出现白名单内的 `provider/model`；工具列表恰好等于 Handle 内的 Operation；fake kernel 返回 `pending_approval` 时工具结果带 simulate 且循环不阻塞；结果契约中的 Fact 入图为 `inferred` 且 `explain` 到该 WorkerRun。依赖：S1.5、S1.6、S2.4。
 
-### T1.10 Claude Code 接入验证（G3）
-- 目标：本机 Claude Code 通过 MCP 使用同一 gateway。
-- 交付物：`docs/howto-connect-claude-code.md`（`issue_handle` → `.mcp.json` 示例（URL 用占位符）→ 工具列表说明）、`scripts/accept_p1.sh`。
-- 流程：human 签发 1 小时 Handle → Claude Code 调 `traverse` 看某容器依赖 → 调 `request_action(docker.container_restart, 测试容器)` → 得到 `pending_approval` + simulate 结果 → 人用 CLI `nexttime actions approve` → Gatekeeper 执行 → `audit reconstruct` 能看到全链。
-- 依赖：T1.7、T1.8、T0.8。
-- 验收：`scripts/accept_p1.sh` 退出 0 并打印 `P1 OK`；审计中该 ActionRequest 的 `policy_decision` 非空、`decided_by` 为 human Principal、`actor_runtime = claude-code`。
-- 建议执行者：人 + Claude Code。
-- 需人工批准：否（只对测试容器）。
+### S2.10 审批卡片与任务视图（web）
+- 交付物：`action.pending / action.updated / task.updated` 推送；卡片：标题、Markdown 描述、模拟效果、动作种类、批准 / 拒绝 / 「总是批准此类」（`set_auto_approved_action_kind`）、`await_decision` 时的阻塞样式；任务与 Worker 列表；「连接系统」页与连接卡片（`request_connection` → 填地址、凭证、种类 → 门实例；`http` / `mcp` 自动导入清单草稿并展示给 owner 发布）；审批卡片出现在**持有范围者**的对话与队列（可能不是发起者）。
+- 验收：Playwright：卡片出现 → 批准 → 状态更新 → 对话里出现 Worker 完成消息；用户 B 的界面看不到 A 的卡片；把 B 授予该动作范围后，卡片出现在 B 自己的对话与队列里并可批准，A 的对话里只显示状态；连接卡片建门后图里出现 `Gatekeeper` 与系统对象。依赖：S2.3、S2.13、S1.8。
 
-### T1.11 TLS
-- 见 E8。
+### S2.11 chat 与 Task 联动
+- 交付物：Task 与 ActionRequest 状态变化推送到 `on_behalf_of` 用户的 Chat；下一轮 `context` 注入 Task 结果；Turn `generated` Task / Decision 的边写入。
+- 验收：超时返回 `task_id` 的 `invoke_worker` 在审批后，下一轮对话入口 agent 能引用结果。依赖：S2.7、S1.6。
+
+### S2.12 S2 验收脚本
+- 交付物：`scripts/accept_s2.sh`：(1) 用户 A 用连接卡片接入一台测试 SSH 主机（容器模拟）与一个测试 OpenAPI 服务；(2) A 对话「重启测试容器」→ `find_*` → `invoke_worker` → 卡片 → A 批准 → 执行 → `explain` 全链；(3) A 问「测试 API 的 GET 返回什么」→ 入口 agent 直接观察，不拉 Worker；(4) Worker 在 SSH 主机跑一条未分类命令 → 卡片 → 勾「总是允许」→ 第二次不再出卡片；(5) 用户 B 尝试批准 A 范围的动作 403；(6) Worker 容器 `env | grep -ci api_key` 为 0；Worker 经代理 `curl https://example.com` 成功、直连内网失败；(7) Worker 结果契约里的 Fact 入图为 `inferred`。
+- 验收：退出 0 打印 `S2 OK`。
+
+### S2.13 连接系统流程与清单导入
+- 目标：把一个新系统接进来只需要一张卡片。
+- 交付物：kernel `connections/service.ts`（`request_connection(kind, target)` 产生连接请求卡片；human 填地址、凭证、凭证种类 → 凭证直达门实例的存储，不经内核持久化 → 注册门 → 图里生成 `Gatekeeper` 与系统对象及 `connects_to`；`http` 从 OpenAPI URL 导入清单草稿，`mcp` 从 `tools/list` 导入；owner 发布清单）；`connect_gatekeeper` 把门授予某用户的入口 agent（写 Grant）。
+- 验收：接入 fake OpenAPI 后 `find_operations("stock")` 命中；内核数据库任何表中不存在凭证明文；未发布的清单对 agent 不可见。依赖：S2.4、S2.6。
+
+### S2.14 Skill、Procedure 与提议流程
+- 目标：做过的事沉淀成图里可发现的做法。
+- 交付物：元本体 `Skill`（pi skill 格式的 markdown + 适用的门种类与 ObjectType）与 `Procedure`（有序步骤引用 Operation / WorkerDefinition，含审批步与验证步）；`propose_skill / publish_skill / propose_procedure / publish_procedure`（提议私有、发布 human 通道）；supervisor 按 WorkerDefinition `uses` 把已发布 Skill 挂进容器的 pi skills 目录；`ops-runner` 定义的 system prompt 含「结束时提炼 Fact、记 Decision、成功且新颖时提议 Skill」；入口定义的 prompt 含三档编排规则与异步模型。
+- 验收：Worker 结束后草稿 Skill 出现且仅提议者可见；发布后 `find_procedures` / 下一次 Worker 容器内可读到该 Skill；Procedure 的步骤引用不存在的 Operation 时发布被拒。依赖：S2.6、S2.9。
 
 ---
 
-## 5. P2 — Worker 运行时
+## 5. S3 — 图有内容、看得见、找得到
 
-### T2.1 内核 `llm` 按 provider 透传代理
-- 目标：`/llm/<provider>/…` 每个 provider 一条路由；验证 Handle；`provider/model` 白名单；注入真实 key；SSE 流式原样转发；按 Task 计量。**不做格式转换**（wire 协议在 Worker 侧复用 pi-ai）。
-- 交付物：`kernel/app/llm/providers.py`（读 `${NEXTTIME_DATA}/config/llm-providers.yaml`：`api / base_url / key_env / auth（bearer | x-api-key | x-goog-api-key）/ models`）、`kernel/app/llm/proxy.py`（路由 → 上游；入站 Handle 从该 provider `auth` 指定的请求头读取：pi-ai 对 `anthropic-messages` 发 `x-api-key`、对 `openai-completions` 发 `Authorization: Bearer`、对 Google 发 `x-goog-api-key`，验证后把同一个头换成真实 key；从请求体取 `model` 校验白名单；OpenAI 兼容流式请求强制加 `stream_options.include_usage`；解析 OpenAI 兼容与 Anthropic 两种 `usage` 格式，其他格式只记请求数与字节数）、`kernel/app/llm/client.py`（内核自用：官方 `openai` SDK，`base_url` / `api_key` / `model` 来自配置 `defaults.kernel`；只用 chat completions + tools + JSON 输出 + 流式这个子集）、`kernel/migrations/0003_llm_usage.sql`、`kernel/tests/test_llm_proxy.py`（fake upstream 两种格式）。
-- 依赖：T1.2。
-- 验收：不带 Handle 401；白名单外 `provider/model` 403；流式逐块转发（fake upstream 发 3 个 chunk，客户端按序收到 3 个）；`llm_usage` 记录 provider / model / input / output / cache tokens / task_id；同一请求经代理与直连 fake upstream 的响应体逐字节一致；把配置里的 `defaults.kernel` 从一个厂商换成另一个 OpenAI 兼容厂商，`client.py` 的测试零改动通过。
-- 建议执行者：Codex。需人工批准：否。
-- 不做：不实现任何 wire 协议转换；不自写成本表（复用 pi-ai `ModelCost`，见 T2.3）；不用任何厂商专有参数。
+### S3.1 本体注册表与本体 v1
+- 交付物：`ontology/{schema,registry}.ts`（含 `identity_key` 每 ObjectType；ActionType 元数据）；`ontology/ops-assets-v1.yaml`：ObjectType `Host / ComposeProject / Container / Image / SystemdService / Process / Volume / Network / Endpoint / Repository / Owner`，LinkType `runs_on / part_of / uses_image / mounts / attached_to / exposes / depends_on / built_from / owned_by / spawned_by`；身份键：Container = 项目 + 服务名，Image = digest，Repository = 远程地址，Process = 可执行路径 + 工作目录 + 父进程；`propose_ontology_change` 走 Handle 通道生成私有 draft。
+- 验收：同内容再发布得 v2；`validate_link` domain / range；agent 提议的 draft 对他人不可见。依赖：S1.2。
 
-### T2.2 worker-runtime 镜像
-- 目标：pi 0.84.4 + 平台扩展 + `models.json` 覆盖，非 root，只读根文件系统。
-- 交付物：`worker-runtime/Dockerfile`（`node:24-bookworm-slim`，`npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4`，创建 `worker` 用户）、`scripts/gen-models-json.py`（由 `llm-providers.yaml` **生成** `models.json`；在目标主机部署时运行 `make gen-models`，输出 `${NEXTTIME_DATA}/config/models.json`，由 supervisor 只读挂载到 Worker 的 `~/.pi/agent/models.json`，镜像本身不含任何 provider 配置：对每个允许的 provider，pi 内置的用「Override defaults」只改 `baseUrl: "${KERNEL_LLM_URL}/<provider>"` 与 `apiKey: "$CAPABILITY_HANDLE"`，模型元数据与成本表原样继承；非内置的按 `api` 类型声明）、`worker-runtime/entrypoint.sh`（自检：env 里不得出现任何 `*_API_KEY`（`CAPABILITY_HANDLE` 除外）；无出网测试；然后 `exec pi --mode rpc --session-dir /data/sessions/$WORKER_RUN_ID`）、`worker-runtime/definitions/ops-runner.yaml`（模型白名单、effort、skills、所需 capability）。
-- 依赖：无（可并行）。
-- 验收：`docker run --rm nexttime/worker-runtime:dev pi --version` 输出 0.84.4；带任意 `*_API_KEY` 启动时 entrypoint 退出非 0；`pi --mode rpc` 下 `/model` 列表只出现白名单内的 `provider/model`；`docker run --network none` 下 entrypoint 的出网自检报「无出网 ok」。
-- 建议执行者：Codex。需人工批准：否。
+### S3.2 冲突检测
+- 交付物：`epistemic/conflicts.ts`：同 `source_id` → supersede；不同 → Conflict(open)；私有参与的 Conflict 只对私有方可见。
+- 验收：v0.1 T0.4 的三步测试 + 可见性测试。依赖：S3.1。
 
-### T2.3 平台扩展（TS）
-- 目标：pi 扩展做五件事（设计 §7.2）：注册 capability 工具、`tool_call` 拦截转 `request_action`、`context` 注入 Task 上下文、`session_*` 回传 JSONL、上报 pi-ai 记录的每条 assistant 消息 usage / cost（与内核代理侧计量交叉核对；成本来自 pi-ai 的 `ModelCost` 元数据，不自算）。
-- 交付物：`worker-runtime/platform-extension/index.ts`（≤ 500 行）、`worker-runtime/platform-extension/kernel-client.ts`、契约测试 `worker-runtime/platform-extension/test/`（用 pi 的 faux provider + fake kernel；锁定 `@earendil-works/pi-coding-agent@0.84.4`）。
-- 依赖：T1.8（capability 列表与 schema）、T2.1。
-- 验收：`npm test` 通过；fake kernel 收到 `request_action` 后返回 `pending_approval` 时，工具结果里带 `status: pending_approval` 与 simulate 内容且 agent 循环不阻塞。
-- 建议执行者：Codex（TS）。需人工批准：否。
-- 不做：不实现审批 UI；不在扩展内做任何权限判断（判断在内核）。
+### S3.3 采集器 `host-inventory`（TS）
+- 交付物：`collectors/host-inventory`：dockerode + `systemctl` + `git remote` + 进程树（只保留 agent 运行时进程树下的非 systemd 子进程；命令行在形成 Observation 前脱敏，`environ` 不读）；service Principal；只采结构性字段；一次运行一个 Activity。
+- 验收：跑两遍无重复无 Conflict；改一个端口后第三遍旧 Fact supersede；fixture 含 `--token=abc` 入库为 `***`（脱敏失败整批不提交）。依赖：S3.1、S3.2。批准：否（只读）。
 
-### T2.4 worker-supervisor
-- 目标：持有 docker socket 的小服务：按允许镜像拉起 / 终止 Worker，注册 `(worker_run_id, container_id, ip)`，`runsc` 失败回退。
-- 交付物：`worker-supervisor/main.py`（FastAPI：`POST /spawn`、`POST /terminate`、`GET /status`；`--runtime ${WORKER_RUNTIME}`、`--network workers`、`--read-only`、`--cap-drop ALL`、`--memory / --cpus` 上限、只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID`；只读挂载 `${NEXTTIME_DATA}/config/models.json` 到 Worker 的 `~/.pi/agent/models.json`）、`worker-supervisor/Dockerfile`、`worker-supervisor/tests/`。
-- 依赖：T2.2、E1。
-- 验收：`spawn` 非允许镜像 403；`spawn` 后内核能查到注册的 ip；`runsc` 不可用时自动用 `runc` 并在注册记录里标注。
-- 建议执行者：Codex。需人工批准：否。
+### S3.4 `gatekeeper-ragflow` 与本体 v2
+- 交付物：observe `kb.list / kb.documents / retrieve`；execute `document.upload`（medium）、`document.parse`（low）；`ops-assets-v2.yaml` 增 `KnowledgeBase / Document / Dataset`；采集器扩展经门 observe 写 `observed` Fact。
+- 验收：图里有 `Document part_of KnowledgeBase`；`explain` 到 `ragflow@<gatekeeper>`。依赖：S2.4、S3.3。
 
-### T2.5 Task 状态机、WorkerRun 与 Handle 生命周期
-- 目标：`create_task → queued → spawn → running ⇄ waiting_approval → completed | failed | cancelled`；崩溃回 `queued`；terminate 撤销全部 Handle；来源绑定校验（gateway 校验 Handle 通道请求源 ip 与注册一致）。
-- 交付物：`kernel/migrations/0004_tasks.sql`（`tasks / worker_runs`）、`kernel/app/task/service.py`、`kernel/app/task/reaper.py`（扫描 `running` 超时 / 容器消失）、gateway 源绑定检查、`kernel/tests/test_tasks.py`。
-- 依赖：T1.2、T1.5、T2.4。
-- 验收：`docker kill` 运行中的 Worker 后 Task 回 `queued` 且 attempt+1；已 `executed` 的 ActionRequest 不因重试再次执行；伪造源 ip 的 Handle 请求被拒并使 Handle 失效。
-- 建议执行者：Codex。需人工批准：否。
+### S3.5 Explorer 契约与挂载
+- 交付物：`kernel/src/explorer-contract/*`：设计 §9.5 的 9 个端点，响应形状按 Semantica `explorer/schemas.py`，`207` 约定，`X-API-Key`（human 通道）；`explorer/` 构建脚本从 Semantica 源码 `explorer/` 构建静态包，caddy 挂 `/explorer`，隐藏 Ontology 等工作区。
+- 验收：Explorer 的 Graph / Decision / Lineage 三个工作区能加载并显示采集器写入的图与 S2 的决策链。依赖：S3.3、E8。
 
-### T2.6 会话回流
-- 目标：Worker 的 JSONL 会话树成为 Source；turn → Activity；显式决策 → Decision(proposed)。
-- 交付物：`kernel/app/ingest/sessions.py`（解析 pi `SessionEntry` 树，按 `parentId` 顺序投影；幂等按 entry id）、`kernel/tests/test_session_ingest.py`（用 pi 仓库 `docs/session-format.md` 的样例）。
-- 依赖：T2.3、T0.3。
-- 验收：一段含 3 个 turn、1 次工具调用的会话导入后：3 个 Activity、工具调用产生的 ActionRequest 与 Activity 关联；重复导入不增行。
-- 建议执行者：Codex。需人工批准：否。
+### S3.6 MCP gateway 与 `interactive` 模式
+- 交付物：`kernel/src/mcp/*`（TS SDK，streamable HTTP，工具由注册表生成，Semantica 17 个工具名与必填参数别名）；扩展 `modes/interactive.ts`；`docs/howto-connect-claude-code.md`、`docs/howto-connect-pi.md`。
+- 验收：`tools/list` = 注册表 Handle 通道集合 + 别名；Claude Code 经 MCP `traverse` 到同一图；无 Handle 连接被拒。依赖：S1.9、S3.1。
 
-### T2.7 端到端场景与 P2 验收（G2、G5）
-- 目标：`ops-runner` 跑一个真实但安全的任务：「找出最近退出的测试容器，解释原因，提议重启」。
-- 交付物：`scripts/accept_p2.sh`（起测试容器并让它退出 → `nexttime task create --worker ops-runner …` → 等待 `waiting_approval` → 人批 → Gatekeeper 重启 → Task `completed` → `audit reconstruct` 全链）、`docs/howto-run-a-task.md`。
-- 依赖：T2.1–T2.6、T1.7、T1.10。
-- 验收：脚本退出 0 打印 `P2 OK`；Worker 容器内 `env` 无 provider key（脚本内 `docker exec … env | grep -ci api_key` 为 0）；Worker 容器 `curl https://example.com` 失败。
-- 建议执行者：Codex 写；人 + Claude Code@host 跑。
-- 需人工批准：否（只碰测试容器）。
+### S3.7 语义一致性校验
+- 交付物：`scripts/check-capability-consistency.ts`：注册表 = HTTP 路由 = MCP 工具 = WS 方法 = policy 可识别 `action_kind`。
+- 验收：CI 步骤；故意删一个路由被拦。依赖：S3.6。
 
-### T2.8 混沌与不变量监控
-- 目标：I9 / I10 的持续校验 + 设计 §12 的不变量监控。
-- 交付物：`kernel/app/audit/invariant_checks.py`（定时：无 policy 记录却 executed 的 ActionRequest 数、跨 workspace Link 数、无 Activity 的 Fact 数、过期未撤销 Handle 数 → 指标 + 日志）、`scripts/chaos-kill-worker.sh`。
-- 依赖：T2.5。
-- 验收：人为写入一条违反 I7 的记录（测试库）后监控告警计数为 1。
-- 建议执行者：Codex。需人工批准：否。
+### S3.8 不变量监控与混沌
+- 交付物：`audit/invariant-checks.ts`（I1–I16 定时校验 → 指标与日志）；`scripts/chaos-kill-worker.sh`、`scripts/chaos-kill-entry.sh`。
+- 验收：人为写入违反 I7 的记录后告警计数为 1；杀入口进程与 Worker 后系统状态符合 §13。依赖：S2.12。
+
+### S3.9 S3 验收脚本
+- 交付物：`scripts/accept_s3.sh`：采集 → 入口 agent 回答「哪个服务依赖哪个」并 explain → Explorer 端点返回图 → Claude Code 经 MCP 观察同一图。
+- 验收：退出 0 打印 `S3 OK`。
+
+### S3.10 运行手册与测试策略文档
+- 目标：换人能维护。
+- 交付物：`docs/runbooks/`：重启各服务与恢复顺序、从备份恢复、轮换 Handle 签名密钥与 provider key、新增一个接入包（含清单导入与发布）、新增一个领域包、升级 pi 版本（契约测试流程）、排查一次失败的 Task（沿 `explain` 与审计）；`docs/testing.md`：设计 §7.10 的测试分层与每层的运行命令。
+- 验收：按「从备份恢复」手册在临时环境走一遍成功；按「新增接入包」手册接入一个 fake 系统成功。依赖：S3.9、S1.12。
 
 ---
 
 ## 6. 验收矩阵
 
-| 设计目标 | 证明脚本 | 关键断言 |
-|---------|---------|---------|
-| G1 溯源 | `scripts/accept_p0.sh` | 任一 Fact `explain` 到 Source + Principal + 时间 |
-| G2 写操作必过策略与审计 | `scripts/accept_p1.sh`、`scripts/accept_p2.sh` | 已执行 ActionRequest 均有 `policy_decision`、`decided_by`、审计行 |
-| G3 多工具共享 Context Graph | `scripts/accept_p1.sh` | Claude Code 经 MCP 发起的动作与 CLI 审批在同一条审计链 |
-| G5 单机闭环 | `scripts/accept_p2.sh` | 本体 → 采集 → Worker → 审批 → 执行 → 重建 |
-| G4 业务 ↔ 代码影响分析 | P4（不在本清单） | — |
+| 设计目标 | 脚本 | 关键断言 |
+|---------|------|---------|
+| G1 Web 说需求 → 动态 Worker → 写回 | `accept_s2.sh` | 卡片、审批、执行、explain 全链 |
+| G2 写操作必过策略与审计 | `accept_s2.sh` | 已执行 ActionRequest 均有 `policy_decision`、`decided_by`、审计行 |
+| G3 溯源 | `accept_s1.sh`、`accept_s3.sh` | Turn 与 Fact 的 `explain` 到 Source 与 Principal |
+| G4 用户隔离 | `accept_s1.sh`、`accept_s2.sh` | B 看不到 A 的 Chat、卡片、私有 Source；B 批不了 A 范围的动作；I15 |
+| G5 图有内容看得见 | `accept_s3.sh` | 采集入图；Explorer 三工作区 |
+| G6 多运行时接入 | `accept_s3.sh` | Claude Code 经 MCP 观察同一图 |
 
 ---
 
-## 7. 任务依赖图
+## 7. 依赖图
 
 ```mermaid
 flowchart LR
-  R1 --> R2 --> T0.1
-  R1 --> R3
-  R1 --> R4 --> T0.1
+  R1 --> R2 & R3 & R4
+  R2 & R4 --> S1.1 --> S1.2 --> S1.3 --> S1.4 --> S1.8
+  S1.1 --> S1.9
+  S1.3 --> S1.7
+  R4 --> S1.6
+  R1 --> S1.11
+  S1.4 & S1.6 & S1.7 & S1.9 & S1.11 --> S1.5 --> S1.10
   E2 --> E3 --> E4
-  T0.1 --> T0.2 --> T0.3 --> T0.4
-  T0.3 --> T0.5
-  T0.3 --> T0.6
-  T0.2 & T0.3 & T0.4 & T0.5 & T0.6 --> T0.7 --> T0.8 --> T0.9 --> T0.10
-  T0.1 --> T1.1 --> T1.2 --> T1.3
-  T1.1 --> T1.4
-  R4 & T1.1 & T1.4 & T0.6 --> T1.5 --> T1.6 --> T1.7
-  T1.3 & T0.7 --> T1.8
-  T1.6 & T0.9 --> T1.9
-  T1.7 & T1.8 --> T1.10 --> E8
-  T1.2 --> T2.1
-  T2.2 --> T2.3
-  T1.8 & T2.1 --> T2.3
-  T2.2 & E1 --> T2.4
-  T1.2 & T1.5 & T2.4 --> T2.5 --> T2.6 --> T2.7 --> T2.8
+  S1.10 --> E8
+  S1.1 --> S2.1 --> S2.2 --> S2.3 --> S2.4 --> S2.5
+  S2.1 & S1.2 --> S2.6
+  S2.3 & S2.6 & S1.9 --> S2.7
+  E1 --> S2.8
+  S1.6 --> S2.9
+  S2.3 & S1.8 --> S2.10
+  S2.7 & S1.6 --> S2.11
+  S2.4 & S2.6 --> S2.13
+  S2.6 & S2.9 --> S2.14
+  S2.5 & S2.8 & S2.9 & S2.10 & S2.11 & S2.13 & S2.14 --> S2.12
+  S1.2 --> S3.1 --> S3.2 --> S3.3 --> S3.4
+  S3.3 & E8 --> S3.5
+  S1.9 & S3.1 --> S3.6 --> S3.7
+  S2.12 --> S3.8
+  E4 --> S1.12
+  S3.4 & S3.5 & S3.6 --> S3.9
+  S3.9 & S1.12 --> S3.10
 ```
 
-可并行的起点：R1 → {R2, R3, R4}；E1 / E2 与 R 系列无关可同时做；T2.2 不依赖 P0 / P1，可提前。
+可并行起点：R1 后 R2 / R3 / R4；E1 / E2 与 R 无关；S1.6、S1.7、S1.9 可与 S1.4 并行；S2.8、S2.9 不依赖 S2 其他任务。
 
 ---
 
 ## 8. 风险与未决
 
-| 项 | 说明 | 处理 |
-|----|------|------|
-| pi 升级破坏扩展 ABI | 扩展只依赖文档化事件 | 锁 0.84.4；T2.3 契约测试 |
-| 采集器把「状态」当「结构」 | 每次运行产生大量 supersede | T0.9 明确排除字段列表；CI 里用 fixture 跑两遍断言行数不变 |
-| Handle 明文跨 LAN | 见设计 §11.2 | E8 在 P1 内完成 |
-| Gatekeeper-docker 与 supervisor 都持 docker socket | 两个高权限容器 | 分离容器、非 root 用户、后续评估 docker-socket-proxy 只暴露所需 API |
-| 环境整改（E5 / E6 / E7）未做 | 不影响平台运行，但影响主机整体健康 | 由你决定时机 |
-| 是否采集 Hermes 拉起的子进程 | 见设计 §19.2 | 默认不采 |
-| 各厂商 OpenAI 兼容端点的细节差异（工具调用、流式 `usage` 字段、JSON 模式） | Worker 侧由 pi-ai 的 `compat` 标志处理；内核自用调用只用 OpenAI 兼容子集，并在 T2.1 验收里做「换厂商零改动」测试 | — |
+| 项 | 处理 |
+|----|------|
+| 常驻入口容器被当真源 | S1.5 验收含杀容器续聊；真源在 Postgres + JSONL |
+| `invoke_worker` 阻塞等审批 | 90 秒超时返回 `task_id`；入口 prompt 教异步；S2.11 联动 |
+| Worker 往入口目录塞扩展 | I15：E2 目录归属 + S2.8 不挂载 |
+| Explorer 契约成本 | S3.5 只做 9 个端点，其余隐藏 |
+| 接口清单把写操作误分类为观察 | 导入按动词给默认值；owner 发布前过目；未分类默认要批（I17） |
+| agent 经公网外带数据 | 出网代理记录域名；WorkerDefinition 拒绝清单；有意接受的剩余风险 |
+| S2 范围扩大（四种门 + 连接流程 + Skill） | 这是「能干活」的最小集合，不再拆到 P5；S2 验收脚本七步全过才算完成 |
+| Semantica skills | 不复用实现，只借 UX；工具名别名在 S3.6 |
+| pi ABI 变化 | 锁 0.84.4；S1.6 / S2.9 契约测试 |
+| 每用户一个 pi 进程的内存 | S1.5 空闲超时停进程 |
+| E7 备份暂缓 | S3 后重评 |
+| 各厂商 OpenAI 兼容差异 | pi-ai `compat`；内核不做协议 |
+| pi 的 `extension_ui_request` 子协议（对话内即时提问）尚无任务承接 | 未决：归入 S2.10 或 P5，实现前定 |
+| Explorer 契约的服务端 facade（游标分页、分析端点）工作量未估 | S3.5 开工前先估 |
