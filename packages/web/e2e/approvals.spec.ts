@@ -35,10 +35,23 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   await expect(page).toHaveURL(/#\/chats$/, { timeout: 15_000 });
 }
 
-/** Locates the approval card (or status-only line) whose description/scope text contains
- *  `marker` — resilient to other pending/decided rows from earlier runs coexisting on the page. */
+/** Locates the inline chat card (or status-only line) whose scope text contains `marker` —
+ *  resilient to other pending/decided rows from earlier runs coexisting on the page. */
 function cardByMarker(page: import('@playwright/test').Page, marker: string) {
   return page.locator('.action-card', { hasText: marker }).first();
+}
+
+/** The Approvals page lists requests as rows (`data-testid="approval-row"`, components/
+ *  ApprovalQueuePage.tsx); the decision controls live in the drawer that opens on selection. */
+function queueRowByMarker(page: import('@playwright/test').Page, marker: string) {
+  return page.getByTestId('approval-row').filter({ hasText: marker }).first();
+}
+
+async function openQueueRow(page: import('@playwright/test').Page, marker: string) {
+  await queueRowByMarker(page, marker).click();
+  const drawer = page.getByTestId('approval-drawer');
+  await expect(drawer).toBeVisible();
+  return drawer;
 }
 
 test.describe('S2.10 acceptance: approval card -> approve -> status update', () => {
@@ -53,17 +66,20 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     const apiKey = API_KEY as string; // guarded by test.skip above
     await login(page, apiKey);
 
-    // --- approval queue: the seeded card is visible with Approve/Reject/Always-approve buttons ---
+    // --- approval queue: the seeded request is a row; selecting it opens the drawer with
+    //     Approve / Reject / "Always allow" ---
     await page.goto('/#/approvals');
-    const queueCard = cardByMarker(page, E2E_APPROVE_SCOPE);
-    await expect(queueCard).toBeVisible({ timeout: 15_000 });
-    await expect(queueCard.getByRole('button', { name: 'Approve' })).toBeVisible();
+    await expect(queueRowByMarker(page, E2E_APPROVE_SCOPE)).toBeVisible({ timeout: 15_000 });
+    const drawer = await openQueueRow(page, E2E_APPROVE_SCOPE);
+    await expect(drawer.getByRole('button', { name: 'Approve' })).toBeVisible();
+    await expect(drawer.getByRole('checkbox', { name: /Always allow/ })).toBeVisible();
 
-    // --- approve from the queue; `list_pending` only ever returns `pending_approval` rows, so the
-    //     card leaves the queue once decided (ApprovalQueuePage.tsx `refresh()`) — the durable
-    //     record of "this card, now decided" lives in the chat instead, checked below ---
-    await queueCard.getByRole('button', { name: 'Approve' }).click();
-    await expect(cardByMarker(page, E2E_APPROVE_SCOPE)).toHaveCount(0, { timeout: 15_000 });
+    // --- approve from the drawer; the row leaves the Pending tab optimistically and
+    //     `list_pending` (pending rows only) confirms it on reconcile — the durable record of
+    //     "this card, now decided" lives in the chat instead, checked below ---
+    await drawer.getByRole('button', { name: 'Approve' }).click();
+    await expect(queueRowByMarker(page, E2E_APPROVE_SCOPE)).toHaveCount(0, { timeout: 15_000 });
+    await page.keyboard.press('Escape');
 
     // --- the same holder's chat (application/linkage writes to "the most recently created Chat")
     //     shows the *original* system.action_pending card with its buttons now gone (live
@@ -73,13 +89,17 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     await page.locator('.chat-list-item').first().click();
     const chatCard = cardByMarker(page, E2E_APPROVE_SCOPE);
     await expect(chatCard).toBeVisible({ timeout: 15_000 });
-    await expect(chatCard.locator('.action-card-status')).toHaveText('approved', {
-      timeout: 15_000,
-    });
+    // The status chip carries the raw kernel state in `data-status` (components/ui/StatusChip.tsx)
+    // and a human label as text — assert on the state, not the label.
+    await expect(chatCard.locator('.action-card-status')).toHaveAttribute(
+      'data-status',
+      'approved',
+      { timeout: 15_000 },
+    );
     await expect(chatCard.getByRole('button', { name: 'Approve' })).toHaveCount(0);
-    await expect(page.locator('.system-status-line', { hasText: 'approved' })).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      page.locator('.system-status-line').filter({ has: page.locator('[data-status="approved"]') }),
+    ).toBeVisible({ timeout: 15_000 });
   });
 });
 
@@ -96,16 +116,20 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     const apiKeyA = API_KEY as string;
     const apiKeyB = API_KEY_B as string;
 
-    // --- A sees the card (isHolder: true — A is on_behalf_of and the sole initial holder) ---
+    // --- A sees the row (isHolder: true — A is on_behalf_of and the sole initial holder) ---
     await login(page, apiKeyA);
     await page.goto('/#/approvals');
-    await expect(cardByMarker(page, E2E_ISOLATION_SCOPE)).toBeVisible({ timeout: 15_000 });
+    await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toBeVisible({ timeout: 15_000 });
 
     // --- B does not: neither the queue nor B's chat mentions this ActionRequest at all (§8.5 —
-    //     an unrelated principal is not even in the requester/holder target set) ---
+    //     an unrelated principal is not even in the requester/holder target set). Wait for the
+    //     queue to settle (empty state or a list) before asserting absence. ---
     await login(page, apiKeyB);
     await page.goto('/#/approvals');
-    await expect(page.locator('.action-card', { hasText: E2E_ISOLATION_SCOPE })).toHaveCount(0);
+    await expect(
+      page.getByTestId('approvals-empty').or(page.getByTestId('approvals-list')),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toHaveCount(0);
 
     // --- A grants B the matching action_kind scope (grant_capability, minRole:'owner' — done via
     //     a direct capability call, same HTTP contract the web app itself uses, since this PR does
@@ -129,10 +153,11 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     // --- B's queue now shows it, and B can approve; the card leaves B's queue once decided (same
     //     reasoning as the first test above — `list_pending` only lists `pending_approval` rows) ---
     await page.goto('/#/approvals');
-    const cardForB = cardByMarker(page, E2E_ISOLATION_SCOPE);
-    await expect(cardForB).toBeVisible({ timeout: 15_000 });
-    await cardForB.getByRole('button', { name: 'Approve' }).click();
-    await expect(cardByMarker(page, E2E_ISOLATION_SCOPE)).toHaveCount(0, { timeout: 15_000 });
+    await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toBeVisible({ timeout: 15_000 });
+    const drawerForB = await openQueueRow(page, E2E_ISOLATION_SCOPE);
+    await drawerForB.getByRole('button', { name: 'Approve' }).click();
+    await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toHaveCount(0, { timeout: 15_000 });
+    await page.keyboard.press('Escape');
 
     // --- A's chat shows only the status update, never Approve/Reject buttons for a decision B
     //     (not A) made — the original card A saw transitions to decided in place ---
@@ -141,9 +166,11 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     await page.locator('.chat-list-item').first().click();
     const chatCardForA = cardByMarker(page, E2E_ISOLATION_SCOPE);
     await expect(chatCardForA).toBeVisible({ timeout: 15_000 });
-    await expect(chatCardForA.locator('.action-card-status')).toHaveText('approved', {
-      timeout: 15_000,
-    });
+    await expect(chatCardForA.locator('.action-card-status')).toHaveAttribute(
+      'data-status',
+      'approved',
+      { timeout: 15_000 },
+    );
     await expect(chatCardForA.getByRole('button', { name: 'Approve' })).toHaveCount(0);
   });
 });

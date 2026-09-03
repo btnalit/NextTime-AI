@@ -13,8 +13,8 @@ import type { ChatMessage } from './ws-client.js';
  *  comment) converge on one `ActionCardData` shape. */
 
 describe('humanizeActionKind', () => {
-  it('replaces dot-segments with spaces', () => {
-    expect(humanizeActionKind('docker.container_restart')).toBe('docker container_restart');
+  it('replaces dot/underscore/dash segments with spaces (the kernel label convention)', () => {
+    expect(humanizeActionKind('docker.container_restart')).toBe('docker container restart');
   });
 });
 
@@ -68,7 +68,7 @@ describe('actionCardFromPendingContent', () => {
     const card = actionCardFromPendingContent(content());
     expect(card).toMatchObject({
       actionRequestId: 'ar-1',
-      title: 'docker container_restart',
+      title: 'docker container restart',
       description: 'docker container restart requested',
       actionKindTag: 'docker.container_restart',
       resourceScope: 'web-1',
@@ -101,14 +101,38 @@ describe('actionCardFromRow', () => {
       params: { container: 'web-1' },
     });
 
-    expect(card.title).toBe('docker container_restart');
-    expect(card.description).toContain('docker container_restart on web-1');
-    expect(card.description).toContain('"container": "web-1"');
+    expect(card.title).toBe('docker container restart');
+    expect(card.description).toBe('docker container restart on web-1');
+    expect(card.params).toEqual({ container: 'web-1' });
     expect(card.status).toBe('pending_approval');
     expect(card.isHolder).toBe(true);
   });
 
-  it('omits the params block when params is empty', () => {
+  it('carries the governance fields a get_action/list_pending row has', () => {
+    const card = actionCardFromRow({
+      id: 'ar-1',
+      status: 'approved',
+      gatekeeperId: 'gk-1',
+      actionKind: 'docker.container_restart',
+      resourceScope: null,
+      blastRadius: 'low',
+      awaitDecision: false,
+      params: {},
+      onBehalfOf: 'p-1',
+      actorRuntime: 'worker',
+      policyDecision: 'require_approval',
+      requestedAt: '2026-09-03T00:00:00.000Z',
+    });
+    expect(card).toMatchObject({
+      onBehalfOf: 'p-1',
+      actorRuntime: 'worker',
+      policyDecision: 'require_approval',
+      requestedAt: '2026-09-03T00:00:00.000Z',
+      status: 'approved',
+    });
+  });
+
+  it('keeps the description free of params (they render in their own block)', () => {
     const card = actionCardFromRow({
       id: 'ar-1',
       status: 'pending_approval',
@@ -119,7 +143,8 @@ describe('actionCardFromRow', () => {
       awaitDecision: false,
       params: {},
     });
-    expect(card.description).not.toContain('```');
+    expect(card.description).toBe('docker container restart');
+    expect(card.params).toEqual({});
   });
 });
 

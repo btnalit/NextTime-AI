@@ -1,54 +1,50 @@
+import type { BlastRadius } from '@nexttime/shared';
+import { humanizeKind } from './format.js';
 import type { ActionPendingPush, ChatMessage } from './ws-client.js';
 
 /**
  * lib/action-card: normalizes the three different shapes an ActionRequest can arrive in on the
- * web client into one `ActionCardData` a single `ActionRequestCard` component can render (docs/
- * development-tasks.md S2.10 deliverable 2: "title, Markdown description, simulate/effect block
- * when present, action kind tag").
+ * web client into one `ActionCardData` a single detail component (`components/ActionRequestDetail`)
+ * renders (docs/development-tasks.md S2.10 deliverable 2).
  *
  * The three sources, and why none of them alone is enough:
  *   - `action.pending` push (`ActionPendingPush`, ws-client.ts) — the *only* source carrying a
  *     `title`, a human-readable `description`, and `simulated`. Principal-scoped (no `chatId`),
- *     delivered once, live, the moment the ActionRequest is created — never replayed on a page
- *     reload or a fresh `list_pending` call (S2.11 implementation note: the kernel builds these
- *     three fields on the fly from `actionKind`/`resourceScope`/`gatekeeperId` inside
- *     `application/linkage`, a kernel-internal module never exposed to `list_pending`/`get_action`
- *     or persisted onto the `system.action_pending` chat message content).
+ *     delivered once, live — never replayed on reload or by `list_pending` (the kernel builds these
+ *     on the fly in `application/linkage/action-request-consumer.ts`).
  *   - persisted `system.action_pending` chat message content (`ChatMessage.content`,
- *     packages/shared/src/chat-message-content.ts `SystemActionPendingContent`) — durable (survives
- *     reload, `get_chat_history` replay), but only carries a one-line `text`, `actionKind` as a bare
- *     string (not `{tag,label}`), `resourceScope`, `blastRadius`, `awaitDecision`, `isHolder`. No
- *     `title`/no `description`/no `simulated`.
- *   - a `list_pending`/`get_action` row (`ActionRequestRow`, governance/approval/types.ts, read over
- *     HTTP — this module never imports kernel code, so the shape is duplicated locally as
- *     `ActionRequestRowLike` below) — the rawest source: `actionKind`, `resourceScope`,
- *     `blastRadius`, `awaitDecision`, `status`, and the Operation call's own `params`. No title/
- *     description/simulated either — `action_requests` itself has no such columns (S2.1/S2.11's own
- *     "已知偏离" notes).
+ *     packages/shared/src/chat-message-content.ts `SystemActionPendingContent`) — durable, but only
+ *     `text`, a bare `actionKind`, `resourceScope`, `blastRadius`, `awaitDecision`, `isHolder`.
+ *   - a `list_pending`/`get_action` row (`governance/approval/types.ts` `ActionRequestRow` over
+ *     HTTP — duplicated locally as `ActionRequestRowLike`, this module never imports kernel code)
+ *     — the rawest and richest for governance fields: `status`, `params`, `onBehalfOf`,
+ *     `actorRuntime`, `policyDecision`, timestamps. No title/description/simulated.
  *
- * Where a source lacks `title`/`description`, this module synthesizes them the same way the kernel
- * itself does today (S2.11: "由 actionKind 与 resourceScope/gatekeeperId 拼出") — `humanizeActionKind`
- * mirrors that convention (dot-segments joined by spaces) rather than inventing a different one, so
- * a card looks the same regardless of which source produced it. This is presentation-only
- * duplication of a *formatting* convention, not a governance decision — the real fix (real title/
- * description text from a published Operation's manifest) is S2.4/S2.13 scope, same as the kernel
- * side already documents.
+ * Where a source lacks `title`, this module synthesizes one with `humanizeKind` (the kernel's own
+ * label convention, `application/linkage/content.ts`) so a card looks the same whichever source
+ * produced it. Presentation-only; the real text (a published Operation's `name`/`description`)
+ * is S2.4/S2.13's to surface.
  */
 
-/** Local mirror of `governance/approval/types.ts`'s `ActionRequestRow`, narrowed to the fields this
- *  module needs, as the wire shape `list_pending`/`get_action` actually return (camelCase, ISO
- *  date strings — `application/gateway/handlers.ts`'s `getActionHandler`/`listPendingHandler`
- *  return the row as-is, `Date` fields included; `HttpClient.call`'s `response.json()` turns those
- *  into ISO strings on the wire, same as every other capability result in this codebase). */
+/** Local mirror of `ActionRequestRow` as `list_pending`/`get_action` return it over the wire
+ *  (camelCase; `Date` columns become ISO strings through `response.json()`). Fields beyond the
+ *  S2.10 set are optional so an older row shape still renders. */
 export interface ActionRequestRowLike {
   readonly id: string;
   readonly status: string;
   readonly gatekeeperId: string;
   readonly actionKind: string;
   readonly resourceScope: string | null;
-  readonly blastRadius: 'low' | 'medium' | 'high';
+  readonly blastRadius: BlastRadius;
   readonly awaitDecision: boolean;
   readonly params: Record<string, unknown>;
+  readonly onBehalfOf?: string;
+  readonly actorRuntime?: string;
+  readonly policyDecision?: string | null;
+  readonly parentWorkerRunId?: string | null;
+  readonly requestedAt?: string;
+  readonly executedAt?: string | null;
+  readonly failedAt?: string | null;
 }
 
 export interface ActionCardData {
@@ -56,40 +52,46 @@ export interface ActionCardData {
   readonly gatekeeperId: string;
   readonly title: string;
   /** Plain text (or, from a live push, whatever the kernel concatenated) — rendered with
-   *  `white-space: pre-wrap`, never `dangerouslySetInnerHTML` (no real Markdown source exists yet
-   *  on the kernel side either, per this module's own doc comment above). */
+   *  `white-space: pre-wrap`, never `dangerouslySetInnerHTML`. */
   readonly description: string;
   readonly actionKindTag: string;
   readonly actionKindLabel: string;
   readonly resourceScope: string | null;
-  readonly blastRadius: 'low' | 'medium' | 'high' | undefined;
+  readonly blastRadius: BlastRadius | undefined;
   readonly awaitDecision: boolean;
   readonly simulated: unknown;
-  /** `undefined` when the source (a `list_pending`/`get_action` row) carries no persisted status —
-   *  callers with a row always have one; callers building from a live push or a chat message
-   *  should pass their own known status (`'pending_approval'`, or an `action.updated` override). */
+  /** `undefined` when the source carries no persisted status — callers building from a live push
+   *  or a chat message pass their own known status (`'pending_approval'`, or an `action.updated`
+   *  override). */
   readonly status: string | undefined;
   readonly isHolder: boolean;
+  /** The Operation call's own arguments — only a `list_pending`/`get_action` row has them. */
+  readonly params: Record<string, unknown> | undefined;
+  readonly onBehalfOf: string | undefined;
+  readonly actorRuntime: string | undefined;
+  readonly policyDecision: string | null | undefined;
+  readonly parentWorkerRunId: string | null | undefined;
+  readonly requestedAt: string | undefined;
+  readonly executedAt: string | null | undefined;
+  readonly failedAt: string | null | undefined;
 }
 
-/** "docker.container_restart" -> "docker container restart" — the same convention the kernel's
- *  `application/linkage` title-builder uses (S2.11 implementation note), duplicated here as a pure
- *  formatting helper (see this module's own doc comment for why duplication, not import, is the
- *  right call). */
-export function humanizeActionKind(actionKind: string): string {
-  return actionKind.split('.').join(' ');
-}
+/** "docker.container_restart" -> "docker container restart" — the kernel's own convention
+ *  (`application/linkage/content.ts` `humanizeActionKind`), re-exported for existing callers. */
+export const humanizeActionKind = humanizeKind;
 
-function formatParams(params: Record<string, unknown> | undefined): string {
-  if (!params || Object.keys(params).length === 0) return '';
-  try {
-    return `\n\n\`\`\`\n${JSON.stringify(params, null, 2)}\n\`\`\``;
-  } catch {
-    return '';
-  }
-}
+const NO_ROW_FIELDS = {
+  params: undefined,
+  onBehalfOf: undefined,
+  actorRuntime: undefined,
+  policyDecision: undefined,
+  parentWorkerRunId: undefined,
+  requestedAt: undefined,
+  executedAt: undefined,
+  failedAt: undefined,
+} as const;
 
-/** Builds an `ActionCardData` from a live `action.pending` push — the richest source, used as-is. */
+/** Builds an `ActionCardData` from a live `action.pending` push — the richest source for text. */
 export function actionCardFromPush(
   push: ActionPendingPush,
   extra: {
@@ -111,20 +113,14 @@ export function actionCardFromPush(
     simulated: push.simulated,
     status: extra.status ?? 'pending_approval',
     isHolder: extra.isHolder,
+    ...NO_ROW_FIELDS,
   };
 }
 
-/** Builds an `ActionCardData` from a persisted `system.action_pending` chat message's `content`
- *  (loosened to a bare record on `ChatMessage`, per that field's own doc comment) — the fields
- *  `SystemActionPendingContent` guarantees. Title/description are synthesized (see module doc
- *  comment); `content.text` is used as the description since it is already the kernel's own
- *  one-line summary — better than fabricating a longer one from fields the kernel itself decided
- *  not to expose here.
- *
- *  Only `system.action_pending` ever renders as a card (docs/development-tasks.md S2.10
- *  deliverable 2: "system.action_update 和 system.task_update 作为紧凑状态行") — `system.action_update`
- *  is always a compact status line regardless of `isHolder`, formatted by
- *  `lib/system-status.ts` instead, never by this function. */
+/** Builds an `ActionCardData` from a persisted `system.action_pending` chat message's `content`.
+ *  `content.text` is the kernel's own one-line summary and serves as the description. Only
+ *  `system.action_pending` ever renders as a card — `system.action_update`/`system.task_update`
+ *  are compact status lines (`lib/system-status.ts`). */
 export function actionCardFromPendingContent(
   content: Readonly<Record<string, unknown>>,
 ): ActionCardData | undefined {
@@ -141,7 +137,7 @@ export function actionCardFromPendingContent(
     return undefined;
   }
 
-  const text = typeof content.text === 'string' ? content.text : humanizeActionKind(actionKind);
+  const text = typeof content.text === 'string' ? content.text : humanizeKind(actionKind);
   const resourceScope = typeof content.resourceScope === 'string' ? content.resourceScope : null;
   const blastRadius =
     content.blastRadius === 'low' ||
@@ -154,43 +150,54 @@ export function actionCardFromPendingContent(
   return {
     actionRequestId,
     gatekeeperId: typeof content.gatekeeperId === 'string' ? content.gatekeeperId : '',
-    title: humanizeActionKind(actionKind),
+    title: humanizeKind(actionKind),
     description: text,
     actionKindTag: actionKind,
-    actionKindLabel: humanizeActionKind(actionKind),
+    actionKindLabel: humanizeKind(actionKind),
     resourceScope,
     blastRadius,
     awaitDecision,
     simulated: undefined,
     status: 'pending_approval',
     isHolder,
+    ...NO_ROW_FIELDS,
   };
 }
 
-/** Builds an `ActionCardData` from a `list_pending`/`get_action` row (the approval queue view —
- *  always the caller's own, so always `isHolder: true`). */
-export function actionCardFromRow(row: ActionRequestRowLike): ActionCardData {
+/** Builds an `ActionCardData` from a `list_pending`/`get_action` row (the approval queue — always
+ *  the caller's own, so `isHolder: true` unless told otherwise). */
+export function actionCardFromRow(
+  row: ActionRequestRowLike,
+  extra: { readonly isHolder?: boolean } = {},
+): ActionCardData {
+  const label = humanizeKind(row.actionKind);
   return {
     actionRequestId: row.id,
     gatekeeperId: row.gatekeeperId,
-    title: humanizeActionKind(row.actionKind),
-    description: `${humanizeActionKind(row.actionKind)}${row.resourceScope ? ` on ${row.resourceScope}` : ''}${formatParams(row.params)}`,
+    title: label,
+    description: `${label}${row.resourceScope ? ` on ${row.resourceScope}` : ''}`,
     actionKindTag: row.actionKind,
-    actionKindLabel: humanizeActionKind(row.actionKind),
+    actionKindLabel: label,
     resourceScope: row.resourceScope,
     blastRadius: row.blastRadius,
     awaitDecision: row.awaitDecision,
     simulated: undefined,
     status: row.status,
-    isHolder: true,
+    isHolder: extra.isHolder ?? true,
+    params: row.params,
+    onBehalfOf: row.onBehalfOf,
+    actorRuntime: row.actorRuntime,
+    policyDecision: row.policyDecision,
+    parentWorkerRunId: row.parentWorkerRunId,
+    requestedAt: row.requestedAt,
+    executedAt: row.executedAt,
+    failedAt: row.failedAt,
   };
 }
 
-/** Merges a richer `action.pending` push into an already-built card (from a chat message or a row)
- *  when both are available in the same page session — the push arrives once, live; a page that has
- *  it in hand should prefer its `title`/`description`/`simulated` over the synthesized fallback,
- *  while keeping whatever the base card already knows (e.g. a live `status` override the push
- *  itself does not carry). */
+/** Merges a richer `action.pending` push into an already-built card when both are in hand — the
+ *  push arrives once, live; prefer its `title`/`description`/`simulated` over the synthesized
+ *  fallback while keeping whatever the base card already knows (e.g. a live `status` override). */
 export function enrichActionCard(base: ActionCardData, push: ActionPendingPush): ActionCardData {
   return {
     ...base,
@@ -203,9 +210,15 @@ export function enrichActionCard(base: ActionCardData, push: ActionPendingPush):
 }
 
 /** Whether `message` is the one system-message kind that renders as a full card
- *  (`system.action_pending`) — a small helper so `ChatPage.tsx` does not need to know
- *  `chat-message-content.ts`'s discriminant literal string itself. `system.action_update`/
- *  `system.task_update` are compact status lines instead (`lib/system-status.ts`). */
+ *  (`system.action_pending`). */
 export function isPendingCardMessage(message: ChatMessage): boolean {
   return message.kind === 'system.action_pending';
+}
+
+/** The one ActionRequest status in which a holder can still decide (`ACTION_REQUEST_TRANSITIONS`:
+ *  `approve`/`reject` edges leave `pending_approval` only). */
+export const DECIDABLE_STATUS = 'pending_approval';
+
+export function isDecidable(status: string | undefined): boolean {
+  return status === undefined || status === DECIDABLE_STATUS;
 }

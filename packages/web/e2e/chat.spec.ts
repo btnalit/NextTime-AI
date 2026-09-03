@@ -30,15 +30,20 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
     await page.getByRole('button', { name: 'New chat' }).click();
 
-    // --- chat page: send a message ---
-    await expect(page.getByRole('button', { name: '← Chats' })).toBeVisible();
+    // --- chat page: send a message (the header's back control is an icon button) ---
+    await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
     const prompt = `e2e-${Date.now()}`;
     await page.getByPlaceholder('Message…').fill(prompt);
     await page.getByRole('button', { name: 'Send' }).click();
 
+    // --- the product shell is up: sidebar connection indicator reads Connected ---
+    await expect(page.getByTestId('ws-status')).toHaveText('Connected');
+
     // --- see the streamed reply settle (fake runtime: "echo: <prompt>") ---
     const expectedReply = `echo: ${prompt}`;
     await expect(page.locator('.turn-badge')).toHaveText('Turn completed', { timeout: 15_000 });
+    // `.message-user .message-text` / `.message-assistant .message-text`: the bubble element
+    // carries both classes (components/ChatPage.tsx `renderMessage`) — stable across the redesign.
     await expect(page.locator('.message-user .message-text')).toHaveText(prompt);
     await expect(page.locator('.message-assistant .message-text')).toHaveText(expectedReply);
 

@@ -1,0 +1,95 @@
+/* Design tokens. Dark is the default; light overrides under prefers-color-scheme. Text colours
+ * are chosen for ≥ 4.5:1 against the surface they normally sit on (--text-3 is the floor, checked
+ * against --surface-1 in both themes). */
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0d12;
+  --surface-1: #12151c;
+  --surface-2: #181c25;
+  --surface-3: #1f2430;
+  --border: #262c38;
+  --border-strong: #3a4252;
+
+  --text: #e7eaf0;
+  --text-2: #a9b1c0;
+  --text-3: #8b94a5;
+  --text-on-accent: #0b0d12;
+
+  --accent: #6ea0ff;
+  --accent-hover: #86b0ff;
+  --accent-soft: rgba(110, 160, 255, 0.14);
+
+  --ok: #4fc38a;
+  --ok-soft: rgba(79, 195, 138, 0.14);
+  --warn: #e5b454;
+  --warn-soft: rgba(229, 180, 84, 0.16);
+  --danger: #f0716a;
+  --danger-soft: rgba(240, 113, 106, 0.16);
+  --info: #7fb2ff;
+  --info-soft: rgba(127, 178, 255, 0.14);
+
+  --radius-s: 6px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --overlay: rgba(4, 6, 10, 0.6);
+  --skeleton-a: var(--surface-2);
+  --skeleton-b: var(--surface-3);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC",
+    "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", "Noto Sans Mono",
+    monospace;
+
+  --sidebar-w: 240px;
+  --rail-w: 64px;
+  --content-max: 1120px;
+  --gutter: var(--space-5);
+  --thread-max: 820px;
+  --drawer-w: 480px;
+
+  --transition: 120ms ease;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #f4f5f8;
+    --surface-1: #ffffff;
+    --surface-2: #f2f4f7;
+    --surface-3: #e8ecf1;
+    --border: #dde2ea;
+    --border-strong: #bfc7d3;
+
+    --text: #15181e;
+    --text-2: #4a5262;
+    --text-3: #626b7b;
+    --text-on-accent: #ffffff;
+
+    --accent: #2f6fe4;
+    --accent-hover: #245cc4;
+    --accent-soft: rgba(47, 111, 228, 0.1);
+
+    --ok: #1f8f57;
+    --ok-soft: rgba(31, 143, 87, 0.12);
+    --warn: #8f6300;
+    --warn-soft: rgba(184, 132, 0, 0.14);
+    --danger: #c73a33;
+    --danger-soft: rgba(199, 58, 51, 0.1);
+    --info: #2b6cd9;
+    --info-soft: rgba(43, 108, 217, 0.1);
+
+    --shadow-1: 0 1px 2px rgba(20, 24, 33, 0.08), 0 8px 24px rgba(20, 24, 33, 0.1);
+    --overlay: rgba(20, 24, 33, 0.35);
+  }
+}

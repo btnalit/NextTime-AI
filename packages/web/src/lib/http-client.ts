@@ -8,8 +8,15 @@
  *
  * Mirrors `packages/platform-extension/src/kernel-client.ts`'s shape (same envelope, same error
  * taxonomy) rather than importing it — that package is Node-only tooling code, not published for
- * cross-package/browser import, and this file is deliberately smaller (no injectable `fetch`,
- * this codebase's browser target always has a global one).
+ * cross-package/browser import.
+ *
+ * `fetchImpl` defaults to a *wrapper* around the global `fetch`, never the bare function value:
+ * `this.fetchImpl = fetch` followed by `this.fetchImpl(...)` invokes the browser's native `fetch`
+ * with `this === HttpClient instance`, which every browser rejects with `TypeError: Failed to
+ * execute 'fetch' on 'Window': Illegal invocation` (found on the deployed console — every
+ * Approvals/Tasks/Connections call failed before reaching the kernel). `http-client.default-
+ * fetch.test.ts` pins the wrapper behavior against a stubbed `globalThis.fetch` that asserts it
+ * is never called with a foreign receiver.
  *
  * The path helper (`/api/cap/<name>`) is inlined rather than imported from `@nexttime/shared`'s
  * `capabilityRoute()` (packages/shared/src/http.ts) — same "type-only import, erased at compile
@@ -79,9 +86,15 @@ export interface HttpClientOptions {
   /** The API key sent as `Authorization: Bearer <apiKey>` — the same key `WsClient.authenticate`
    *  used, from `lib/session.ts`. Never logged. */
   readonly apiKey: string;
-  /** Injectable `fetch`, for tests. Defaults to the global `fetch`. */
+  /** Injectable `fetch`, for tests. Defaults to a wrapper around the global `fetch` (see module
+   *  doc comment — never the bare global, which would be invoked with the wrong receiver). */
   readonly fetchImpl?: typeof fetch;
 }
+
+/** Looks the global `fetch` up at call time (not at construction) and calls it unbound, so the
+ *  receiver is the global object as the platform requires — and so a test can stub
+ *  `globalThis.fetch` after the client has already been constructed. */
+const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
 
 export class HttpClient {
   private readonly apiKey: string;
@@ -89,7 +102,7 @@ export class HttpClient {
 
   constructor(options: HttpClientOptions) {
     this.apiKey = options.apiKey;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? defaultFetch;
   }
 
   /** Calls one capability. Resolves with `result` on `{ok:true}`; throws {@link HttpError}

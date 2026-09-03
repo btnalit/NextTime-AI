@@ -2,11 +2,11 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCardData } from '../lib/action-card.js';
-import { ActionRequestCard } from './ActionRequestCard.js';
+import { HttpError } from '../lib/http-client.js';
+import { ActionRequestCard, type ActionRequestCardProps } from './ActionRequestCard.js';
 
 // `globals: false` (vitest.base.ts) means `@testing-library/react`'s automatic afterEach cleanup
-// (which relies on globally-registered test hooks) never fires — every jsdom component test file
-// in this package must register it itself.
+// never fires — every jsdom component test file in this package registers it itself.
 afterEach(cleanup);
 
 function baseCard(overrides: Partial<ActionCardData> = {}): ActionCardData {
@@ -23,200 +23,136 @@ function baseCard(overrides: Partial<ActionCardData> = {}): ActionCardData {
     simulated: undefined,
     status: 'pending_approval',
     isHolder: true,
+    params: undefined,
+    onBehalfOf: undefined,
+    actorRuntime: undefined,
+    policyDecision: undefined,
+    parentWorkerRunId: undefined,
+    requestedAt: undefined,
+    executedAt: undefined,
+    failedAt: undefined,
     ...overrides,
   };
 }
 
-describe('ActionRequestCard', () => {
-  it('renders title, description, action kind tag, and buttons for a holder-pending card', () => {
-    render(
-      <ActionRequestCard
-        card={baseCard()}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
+function renderCard(overrides: Partial<ActionRequestCardProps> = {}) {
+  const props: ActionRequestCardProps = {
+    card: baseCard(),
+    busy: false,
+    error: null,
+    onApprove: vi.fn(),
+    onReject: vi.fn(),
+    canAlwaysAllow: true,
+    ...overrides,
+  };
+  return { ...render(<ActionRequestCard {...props} />), props };
+}
 
+describe('ActionRequestCard', () => {
+  it('renders title, description, action kind tag, status chip and decision buttons for a holder-pending card', () => {
+    renderCard();
     expect(screen.getByText('docker container restart')).toBeTruthy();
     expect(screen.getByText('Restart the web-1 container.')).toBeTruthy();
-    expect(screen.getByText('docker.container_restart')).toBeTruthy();
+    expect(document.querySelector('.tag')?.textContent).toBe('docker.container_restart');
     expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Reject' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Always approve this kind' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: /Always allow/ })).toBeTruthy();
+    const chip = document.querySelector('.action-card-status');
+    expect(chip?.getAttribute('data-status')).toBe('pending_approval');
   });
 
   it('renders a status-only line with no buttons when isHolder is false', () => {
-    render(
-      <ActionRequestCard
-        card={baseCard({ isHolder: false })}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
-
+    renderCard({ card: baseCard({ isHolder: false }) });
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
-    expect(screen.getByText('pending_approval')).toBeTruthy();
+    expect(document.querySelector('.action-card-status-only')).toBeTruthy();
+    expect(document.querySelector('.action-card-status')?.getAttribute('data-status')).toBe(
+      'pending_approval',
+    );
   });
 
-  it('hides buttons once status is no longer pending_approval', () => {
-    render(
-      <ActionRequestCard
-        card={baseCard({ status: 'approved' })}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
-
+  it('hides the decision form once status is no longer pending_approval', () => {
+    renderCard({ card: baseCard({ status: 'approved' }) });
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(screen.getByText('approved')).toBeTruthy();
+    expect(document.querySelector('.action-card-status')?.getAttribute('data-status')).toBe(
+      'approved',
+    );
+    expect(document.querySelector('.action-card-status')?.textContent).toBe('Approved');
   });
 
   it('applies the blocking style when awaitDecision is true and still pending', () => {
-    const { container } = render(
-      <ActionRequestCard
-        card={baseCard({ awaitDecision: true })}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
-    expect(container.querySelector('.action-card-blocking')).toBeTruthy();
+    renderCard({ card: baseCard({ awaitDecision: true }) });
+    expect(document.querySelector('.action-card-blocking')).toBeTruthy();
     expect(screen.getByText('Awaiting your decision.')).toBeTruthy();
   });
 
   it('renders the simulated block only when present', () => {
-    const { rerender, container } = render(
-      <ActionRequestCard
-        card={baseCard()}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
-    expect(container.querySelector('.action-card-simulated')).toBeNull();
-
+    const { rerender, props } = renderCard();
+    expect(document.querySelector('.action-card-simulated')).toBeNull();
     rerender(
-      <ActionRequestCard
-        card={baseCard({ simulated: { wouldStop: 'web-1' } })}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
+      <ActionRequestCard {...props} card={baseCard({ simulated: { wouldStop: 'web-1' } })} />,
     );
-    expect(container.querySelector('.action-card-simulated')?.textContent).toContain('wouldStop');
+    expect(document.querySelector('.action-card-simulated')?.textContent).toContain('wouldStop');
   });
 
-  it('calls onApprove with the actionRequestId', () => {
-    const onApprove = vi.fn();
-    render(
-      <ActionRequestCard
-        card={baseCard()}
-        busy={false}
-        error={null}
-        onApprove={onApprove}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
+  it('calls onApprove with the actionRequestId and the always-allow choice', () => {
+    const { props } = renderCard();
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    expect(onApprove).toHaveBeenCalledWith('ar-1');
+    expect(props.onApprove).toHaveBeenCalledWith('ar-1', { alwaysAllow: false });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Always allow/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(props.onApprove).toHaveBeenLastCalledWith('ar-1', { alwaysAllow: true });
   });
 
-  it('calls onAlwaysApprove with the actionKindTag', () => {
-    const onAlwaysApprove = vi.fn();
-    render(
-      <ActionRequestCard
-        card={baseCard()}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={onAlwaysApprove}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Always approve this kind' }));
-    expect(onAlwaysApprove).toHaveBeenCalledWith('docker.container_restart');
+  it('hides the always-allow checkbox when the session may not write auto-approval rules', () => {
+    renderCard({ canAlwaysAllow: false });
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
   });
 
-  it('reveals a reason field on Reject and calls onReject with the trimmed reason on confirm', () => {
-    const onReject = vi.fn();
-    render(
-      <ActionRequestCard
-        card={baseCard()}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={onReject}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
+  it('calls onReject with the trimmed reason, or undefined when blank', () => {
+    const { props } = renderCard();
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
-    const textarea = screen.getByPlaceholderText('Reason (optional)');
-    fireEvent.change(textarea, { target: { value: '  not needed  ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm reject' }));
-    expect(onReject).toHaveBeenCalledWith('ar-1', 'not needed');
-  });
+    expect(props.onReject).toHaveBeenCalledWith('ar-1', undefined);
 
-  it('calls onReject with undefined reason when left blank', () => {
-    const onReject = vi.fn();
-    render(
-      <ActionRequestCard
-        card={baseCard()}
-        busy={false}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={onReject}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
+    fireEvent.change(screen.getByLabelText('Decision reason'), {
+      target: { value: '  not needed  ' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm reject' }));
-    expect(onReject).toHaveBeenCalledWith('ar-1', undefined);
+    expect(props.onReject).toHaveBeenLastCalledWith('ar-1', 'not needed');
   });
 
-  it('disables buttons while busy', () => {
-    render(
-      <ActionRequestCard
-        card={baseCard()}
-        busy={true}
-        error={null}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
+  it('disables the decision controls while busy', () => {
+    renderCard({ busy: true });
     expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
   });
 
-  it('renders the error message when present', () => {
-    render(
-      <ActionRequestCard
-        card={baseCard()}
-        busy={false}
-        error="I8: high blast radius cannot be auto-approved"
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onAlwaysApprove={vi.fn()}
-      />,
-    );
-    expect(screen.getByRole('alert').textContent).toContain('high blast radius');
+  it('renders the decision error with its wire code', () => {
+    renderCard({
+      error: new HttpError(
+        'capability_error',
+        'I8: high blast radius cannot be auto-approved',
+        'invalid_params',
+      ),
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('high blast radius');
+    expect(alert.getAttribute('data-error-code')).toBe('invalid_params');
+  });
+
+  it('redacts sensitive-looking parameter keys in the params block', () => {
+    renderCard({
+      card: baseCard({ params: { container: 'web-1', apiKey: 'sk-secret-value' } }),
+    });
+    const block = document.querySelector('.params-block');
+    expect(block?.textContent).toContain('"container": "web-1"');
+    expect(block?.textContent).toContain('[redacted]');
+    expect(block?.textContent).not.toContain('sk-secret-value');
   });
 });

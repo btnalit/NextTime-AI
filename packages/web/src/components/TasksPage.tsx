@@ -1,157 +1,291 @@
-import { useCallback, useEffect, useState } from 'react';
-import { errorMessage } from '../lib/errors.js';
-import type { HttpClient } from '../lib/http-client.js';
-import type { WsClient } from '../lib/ws-client.js';
-import { NavBar } from './NavBar.js';
-
-/** The wire shape one `list_tasks`/`get_task` array entry carries (`toWireWorkerRun`/
- *  `listTasksHandler`, packages/kernel/src/application/gateway/handlers.ts) — same fields
- *  `get_task` already returns, just one array entry per Task instead of one object. */
-export interface TaskSummary {
-  readonly id: string;
-  readonly status: string;
-  readonly onBehalfOf: string;
-  readonly workerDefinitionId: string;
-  readonly workerDefinitionVersion: number;
-  readonly result: unknown;
-  readonly failureReason: string | null;
-  readonly createdAt: string;
-  readonly completedAt: string | null;
-  readonly failedAt: string | null;
-  readonly cancelledAt: string | null;
-  readonly workerRuns: readonly WorkerRunSummary[];
-}
-
-export interface WorkerRunSummary {
-  readonly id: string;
-  readonly status: string;
-  readonly containerId: string | null;
-  readonly depth: number;
-  readonly attempt: number;
-  readonly startedAt: string;
-  readonly terminatedAt: string | null;
-}
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { useResource } from '../hooks/useResource.js';
+import type { ActionRequestRowLike } from '../lib/action-card.js';
+import type { CapabilityCaller, PushSource } from '../lib/clients.js';
+import { isForbiddenError } from '../lib/errors.js';
+import { excerpt, formatDateTime, formatDuration, formatRelative } from '../lib/format.js';
+import {
+  type TaskSummary,
+  type WorkerDefinitionSummary,
+  definitionName,
+  isTerminalTaskStatus,
+  taskFinishedAt,
+  taskNeed,
+} from '../lib/tasks.js';
+import { TaskDetail } from './TaskDetail.js';
+import { Button } from './ui/Button.js';
+import { DataList, DataRow } from './ui/DataList.js';
+import { Drawer } from './ui/Drawer.js';
+import { EmptyState } from './ui/EmptyState.js';
+import { ErrorBanner } from './ui/ErrorBanner.js';
+import { Icon } from './ui/Icon.js';
+import { PageHeader } from './ui/PageHeader.js';
+import { SkeletonRows } from './ui/Skeleton.js';
+import { StatusChip } from './ui/StatusChip.js';
+import { Tabs } from './ui/Tabs.js';
+import { useToast } from './ui/Toast.js';
 
 export interface TasksPageProps {
-  readonly httpClient: HttpClient;
-  readonly wsClient: WsClient;
-  readonly onForgetKey: () => void;
+  readonly http: CapabilityCaller;
+  readonly pushes: PushSource;
+  readonly selectedId?: string;
+  readonly onSelect: (taskId: string | null) => void;
+  readonly onOpenApproval: (actionRequestId: string) => void;
 }
 
-/** `result` is arbitrary JSON from the worker's own result contract (S2.9) — no schema this page
- *  can rely on beyond "JSON-serializable". Rendered as a truncated one-line summary, not a full
- *  dump (a WorkerRun's own detail is already shown in the table below it). */
-function summarizeResult(result: unknown): string | undefined {
-  if (result === null || result === undefined) return undefined;
-  try {
-    const text = JSON.stringify(result);
-    return text.length > 200 ? `${text.slice(0, 200)}…` : text;
-  } catch {
-    return undefined;
-  }
-}
+type Filter = 'active' | 'all' | 'done';
 
 /**
- * components/TasksPage: the caller's own Tasks and their WorkerRuns (design doc §7.6; docs/
- * development-tasks.md S2.10 deliverable 4: "list the user's Tasks with status/failure reason/
- * result summary and their WorkerRuns; live task.updated"). Uses the S2.10-added `list_tasks`
- * capability (packages/shared/src/capabilities.ts) — `get_task`/§9.3 never defined a list
- * capability; see this component's own README section for why one had to be added.
+ * components/TasksPage: the caller's own Tasks (`list_tasks`, S2.10 deliverable 4) with a detail
+ * drawer. Live: `task.updated` re-reads that one Task (`get_task`) and swaps it into the list.
+ * Worker definition names come from `list_worker_definitions` (best effort — ids when it fails);
+ * linked approvals from `list_pending` rows whose `parentWorkerRunId` is one of the Task's runs
+ * (best effort — skipped for non-operators).
  */
-export function TasksPage({ httpClient, wsClient, onForgetKey }: TasksPageProps) {
-  const [tasks, setTasks] = useState<readonly TaskSummary[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const result = await httpClient.call<readonly TaskSummary[]>('list_tasks');
-      setTasks(result);
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(errorMessage(err));
+export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
+  const permissions = usePermissions();
+  const toast = useToast();
+  const load = useCallback(() => http.call<readonly TaskSummary[]>('list_tasks'), [http]);
+  const tasks = useResource(load);
+  const loadDefinitions = useCallback(
+    () => http.call<readonly WorkerDefinitionSummary[]>('list_worker_definitions', {}),
+    [http],
+  );
+  const definitions = useResource(loadDefinitions);
+  const pendingDenied = permissions.isDenied('list_pending');
+  const loadPending = useCallback(
+    () =>
+      pendingDenied
+        ? Promise.resolve<readonly ActionRequestRowLike[]>([])
+        : http.call<readonly ActionRequestRowLike[]>('list_pending'),
+    [http, pendingDenied],
+  );
+  const pendingApprovals = useResource(loadPending);
+  useEffect(() => {
+    if (
+      pendingApprovals.state.status === 'error' &&
+      isForbiddenError(pendingApprovals.state.error)
+    ) {
+      permissions.markDenied('list_pending');
     }
-  }, [httpClient]);
+  }, [pendingApprovals.state, permissions]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [cancelling, setCancelling] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<unknown | null>(null);
 
+  const refreshOne = useCallback(
+    async (taskId: string) => {
+      try {
+        const fresh = await http.call<TaskSummary>('get_task', { taskId });
+        tasks.mutate((rows) =>
+          rows.some((row) => row.id === fresh.id)
+            ? rows.map((row) => (row.id === fresh.id ? fresh : row))
+            : [fresh, ...rows],
+        );
+      } catch {
+        await tasks.reload();
+      }
+    },
+    [http, tasks.mutate, tasks.reload],
+  );
+
+  useEffect(
+    () => pushes.onTaskUpdated((event) => void refreshOne(event.taskId)),
+    [pushes, refreshOne],
+  );
   useEffect(() => {
-    return wsClient.onTaskUpdated(() => void refresh());
-  }, [wsClient, refresh]);
+    const unsubPending = pushes.onActionPending(() => void pendingApprovals.reload());
+    const unsubUpdated = pushes.onActionUpdated(() => void pendingApprovals.reload());
+    return () => {
+      unsubPending();
+      unsubUpdated();
+    };
+  }, [pushes, pendingApprovals.reload]);
+
+  const allRows = tasks.state.status === 'ready' ? tasks.state.data : [];
+  const rows = useMemo(() => {
+    if (filter === 'all') return allRows;
+    return allRows.filter((task) =>
+      filter === 'done' ? isTerminalTaskStatus(task.status) : !isTerminalTaskStatus(task.status),
+    );
+  }, [allRows, filter]);
+  const activeCount = allRows.filter((task) => !isTerminalTaskStatus(task.status)).length;
+  const definitionRows = definitions.state.status === 'ready' ? definitions.state.data : undefined;
+  const pendingRows = pendingApprovals.state.status === 'ready' ? pendingApprovals.state.data : [];
+
+  const selected = selectedId ? allRows.find((task) => task.id === selectedId) : undefined;
+  useEffect(() => {
+    if (selectedId && !selected && tasks.state.status === 'ready') void refreshOne(selectedId);
+  }, [selectedId, selected, tasks.state.status, refreshOne]);
+
+  async function handleCancel(taskId: string): Promise<void> {
+    setCancelling(taskId);
+    setCancelError(null);
+    try {
+      const result = await http.call<{ id: string; status: string }>('cancel_task', { taskId });
+      tasks.mutate((current) =>
+        current.map((task) => (task.id === result.id ? { ...task, status: result.status } : task)),
+      );
+      toast.push({ tone: 'info', title: 'Task cancelled' });
+      await refreshOne(taskId);
+    } catch (err) {
+      setCancelError(err);
+    } finally {
+      setCancelling(null);
+    }
+  }
 
   return (
     <div className="page">
-      <NavBar active="tasks" />
-      <header className="page-header">
-        <h1>Tasks</h1>
-        <div className="header-actions">
-          <button type="button" className="secondary" onClick={onForgetKey}>
-            Forget key
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        title="Tasks"
+        description="Work delegated to Workers on your behalf, with their runs and results."
+        actions={
+          <Button
+            variant="ghost"
+            icon="refresh"
+            onClick={() => void tasks.reload()}
+            loading={tasks.state.status === 'ready' && tasks.state.refreshing}
+          >
+            Refresh
+          </Button>
+        }
+      />
 
-      {loadError && (
-        <p className="error" role="alert">
-          {loadError}
-        </p>
-      )}
+      <div className="page-toolbar">
+        <Tabs<Filter>
+          ariaLabel="Filter tasks"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: 'all', label: 'All', count: allRows.length },
+            { value: 'active', label: 'Active', count: activeCount },
+            { value: 'done', label: 'Finished', count: allRows.length - activeCount },
+          ]}
+        />
+      </div>
 
-      {tasks === null ? (
-        <p className="hint">Loading…</p>
-      ) : tasks.length === 0 ? (
-        <p className="hint">No Tasks yet.</p>
+      {tasks.state.status === 'loading' ? (
+        <SkeletonRows count={4} label="Loading tasks" testId="tasks-loading" />
+      ) : tasks.state.status === 'error' ? (
+        <ErrorBanner
+          error={tasks.state.error}
+          title="Could not load tasks"
+          onRetry={() => void tasks.reload()}
+          testId="tasks-error"
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon="cpu"
+          title={allRows.length === 0 ? 'No tasks yet' : 'No tasks match this filter'}
+          body="A Task is created when the entry agent delegates work to a Worker (invoke_worker). Its runs, result contract and approvals show up here."
+          testId="tasks-empty"
+        />
       ) : (
-        <ul className="task-list">
-          {tasks.map((task) => {
-            const summary = summarizeResult(task.result);
-            return (
-              <li key={task.id} className="task-row">
-                <div className="task-row-header">
-                  <span>
-                    {task.workerDefinitionId}@{task.workerDefinitionVersion}
-                  </span>
-                  <span className={`action-card-status action-card-status-${task.status}`}>
-                    {task.status}
-                  </span>
-                </div>
-                {task.failureReason && <p className="hint">failure: {task.failureReason}</p>}
-                {summary && <p className="hint">result: {summary}</p>}
-
-                {task.workerRuns.length > 0 && (
-                  <table className="worker-run-table">
-                    <thead>
-                      <tr>
-                        <th>WorkerRun</th>
-                        <th>status</th>
-                        <th>depth</th>
-                        <th>attempt</th>
-                        <th>started</th>
-                        <th>terminated</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {task.workerRuns.map((run) => (
-                        <tr key={run.id}>
-                          <td>{run.id}</td>
-                          <td>{run.status}</td>
-                          <td>{run.depth}</td>
-                          <td>{run.attempt}</td>
-                          <td>{new Date(run.startedAt).toLocaleString()}</td>
-                          <td>
-                            {run.terminatedAt ? new Date(run.terminatedAt).toLocaleString() : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          {tasks.state.refreshError ? (
+            <ErrorBanner error={tasks.state.refreshError} onRetry={() => void tasks.reload()} />
+          ) : null}
+          <DataList ariaLabel="Tasks" testId="tasks-list">
+            {rows.map((task) => {
+              const finished = taskFinishedAt(task);
+              const name = definitionName(
+                definitionRows,
+                task.workerDefinitionId,
+                task.workerDefinitionVersion,
+              );
+              const need = taskNeed(task.input) ?? excerpt(task.input, 100);
+              return (
+                <DataRow
+                  key={task.id}
+                  testId="task-row"
+                  selected={task.id === selectedId}
+                  onSelect={() => onSelect(task.id)}
+                  leading={<StatusChip machine="task" status={task.status} size="s" />}
+                  title={
+                    <>
+                      <span className="truncate">{name ?? task.workerDefinitionId}</span>
+                      <span className="text-3 text-small">v{task.workerDefinitionVersion}</span>
+                    </>
+                  }
+                  meta={
+                    <>
+                      {need ? <span className="truncate">{excerpt(need, 90)}</span> : null}
+                      {need ? <span className="meta-sep" /> : null}
+                      <time title={formatDateTime(task.createdAt)}>
+                        {formatRelative(task.createdAt)}
+                      </time>
+                      <span className="meta-sep" />
+                      <span className="tabular">
+                        {finished ? 'took ' : task.status === 'running' ? 'running ' : 'waiting '}
+                        {formatDuration(task.createdAt, finished)}
+                      </span>
+                      {task.tokenBudget ? (
+                        <>
+                          <span className="meta-sep" />
+                          <span className="tabular">
+                            {task.tokensUsed.toLocaleString()} / {task.tokenBudget.toLocaleString()}{' '}
+                            tokens
+                          </span>
+                        </>
+                      ) : null}
+                      {task.failureReason ? (
+                        <>
+                          <span className="meta-sep" />
+                          <span className="text-danger truncate">{task.failureReason}</span>
+                        </>
+                      ) : null}
+                    </>
+                  }
+                  trailing={<Icon name="chevron-right" />}
+                />
+              );
+            })}
+          </DataList>
+        </>
       )}
+
+      <Drawer
+        open={selectedId !== undefined}
+        onClose={() => onSelect(null)}
+        title={
+          selected
+            ? (definitionName(
+                definitionRows,
+                selected.workerDefinitionId,
+                selected.workerDefinitionVersion,
+              ) ?? 'Task')
+            : 'Task'
+        }
+        subtitle={selectedId ? <span className="mono">{selectedId}</span> : undefined}
+        wide
+        testId="task-drawer"
+      >
+        {selected ? (
+          <TaskDetail
+            task={selected}
+            definitionName={definitionName(
+              definitionRows,
+              selected.workerDefinitionId,
+              selected.workerDefinitionVersion,
+            )}
+            linkedApprovals={pendingRows.filter(
+              (row) =>
+                row.parentWorkerRunId !== undefined &&
+                row.parentWorkerRunId !== null &&
+                selected.workerRuns.some((run) => run.id === row.parentWorkerRunId),
+            )}
+            onOpenApproval={onOpenApproval}
+            onCancel={(taskId) => void handleCancel(taskId)}
+            cancelling={cancelling === selected.id}
+            cancelError={cancelError}
+          />
+        ) : (
+          <SkeletonRows count={3} label="Loading task" />
+        )}
+      </Drawer>
     </div>
   );
 }

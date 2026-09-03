@@ -5,55 +5,35 @@ import { ChatPage } from './components/ChatPage.js';
 import { ConnectionsPage } from './components/ConnectionsPage.js';
 import { LoginPage } from './components/LoginPage.js';
 import { TasksPage } from './components/TasksPage.js';
-import { errorMessage } from './lib/errors.js';
+import { AppShell } from './components/shell/AppShell.js';
+import { ToastProvider } from './components/ui/Toast.js';
+import { PermissionsProvider } from './hooks/usePermissions.js';
+import { usePushToasts } from './hooks/usePushToasts.js';
 import { HttpClient } from './lib/http-client.js';
+import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
 import { clearApiKey, loadApiKey, saveApiKey } from './lib/session.js';
 import { WsClient } from './lib/ws-client.js';
 import { wsUrl } from './lib/ws-url.js';
 
-/**
- * Hash-based routing (no router library, per S1.8's own convention) — `#/chats/<id>` ↔ one open
- * chat, `#/chats` ↔ the chat list, `#/approvals`/`#/tasks`/`#/connections` ↔ the three S2.10
- * additions, anything else (including empty) falls back to the chat list. Hash-based so a hard
- * page reload (docs/development-tasks.md S1.8 acceptance: "刷新后历史完整") lands back on the same
- * view without any server-side routing.
- */
-type Route =
-  | { readonly kind: 'chat'; readonly chatId: string }
-  | { readonly kind: 'chats' }
-  | { readonly kind: 'approvals' }
-  | { readonly kind: 'tasks' }
-  | { readonly kind: 'connections' };
-
-function routeFromHash(hash: string): Route {
-  const chatMatch = /^#\/chats\/(.+)$/.exec(hash);
-  if (chatMatch?.[1]) return { kind: 'chat', chatId: decodeURIComponent(chatMatch[1]) };
-  if (hash === '#/approvals') return { kind: 'approvals' };
-  if (hash === '#/tasks') return { kind: 'tasks' };
-  if (hash === '#/connections') return { kind: 'connections' };
-  return { kind: 'chats' };
-}
-
-function navigateToChat(chatId: string): void {
-  window.location.hash = `#/chats/${encodeURIComponent(chatId)}`;
-}
-
-function navigateToChatList(): void {
-  window.location.hash = '#/chats';
+interface Session {
+  readonly ws: WsClient;
+  readonly http: HttpClient;
+  /** Increments per sign-in so per-session state (permissions, toasts) remounts on "Forget key". */
+  readonly generation: number;
 }
 
 /**
- * App: the top-level screen switch (design doc §7.6; docs/development-tasks.md S1.8, S2.10). Owns
- * the single `WsClient` (§7.6 "一个 WebSocket") and the single `HttpClient` (S2.10 addition — every
- * capability outside the `chat` group goes over `POST /api/cap/<name>` instead, lib/http-client.ts)
- * for the whole app; every page only ever receives them as props, never constructs its own.
+ * App: session + routing (design doc §7.6; S1.8, S2.10). Owns the single `WsClient` (§7.6 "一个
+ * WebSocket") and the single `HttpClient` — every page receives them as props, never constructs
+ * its own. Hash routes (`lib/router.ts`) so a hard reload lands back on the same view; the API key
+ * lives in `sessionStorage` only (`lib/session.ts`) and is re-used on reload to reconnect.
  */
 export function App() {
-  const [client, setClient] = useState<WsClient | null>(null);
-  const [httpClient, setHttpClient] = useState<HttpClient | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<unknown | null>(null);
   const [route, setRoute] = useState<Route>(() => routeFromHash(window.location.hash));
+  const generation = useRef(0);
 
   useEffect(() => {
     function onHashChange(): void {
@@ -66,27 +46,24 @@ export function App() {
   const connect = useCallback(async (apiKey: string): Promise<void> => {
     setConnecting(true);
     setAuthError(null);
-    const next = new WsClient({ url: wsUrl() });
+    const ws = new WsClient({ url: wsUrl() });
     try {
-      await next.connect();
-      await next.authenticate(apiKey);
+      await ws.connect();
+      await ws.authenticate(apiKey);
       saveApiKey(apiKey);
-      setClient(next);
-      setHttpClient(new HttpClient({ apiKey }));
+      generation.current += 1;
+      setSession({ ws, http: new HttpClient({ apiKey }), generation: generation.current });
     } catch (err) {
-      next.close();
+      ws.close();
       clearApiKey();
-      setAuthError(errorMessage(err));
+      setAuthError(err);
     } finally {
       setConnecting(false);
     }
   }, []);
 
-  // Auto-connect once on mount if a key survived from an earlier load in this tab (sessionStorage
-  // — src/lib/session.ts). A hard reload re-runs this, which is exactly what "刷新后历史完整"
-  // depends on: reload -> reconnect -> re-authenticate -> ChatPage re-subscribes from scratch.
-  // `attempted` guards against React 18 StrictMode's dev-only double-invoke of effects opening a
-  // second, redundant socket.
+  // Auto-connect once on mount if a key survived in this tab's sessionStorage. `attempted` guards
+  // React 18 StrictMode's dev-only double effect invocation from opening a second socket.
   const autoConnectAttempted = useRef(false);
   useEffect(() => {
     if (autoConnectAttempted.current) return;
@@ -96,47 +73,89 @@ export function App() {
   }, [connect]);
 
   const handleForgetKey = useCallback((): void => {
-    client?.close();
-    setClient(null);
-    setHttpClient(null);
+    session?.ws.close();
+    setSession(null);
     clearApiKey();
     setAuthError(null);
     window.location.hash = '';
-  }, [client]);
+  }, [session]);
 
-  if (!client || !httpClient) {
+  if (!session) {
     return (
       <LoginPage onLogin={(key) => void connect(key)} pending={connecting} error={authError} />
     );
   }
 
+  return (
+    <PermissionsProvider key={session.generation}>
+      <ToastProvider>
+        <Routed session={session} route={route} onForgetKey={handleForgetKey} />
+      </ToastProvider>
+    </PermissionsProvider>
+  );
+}
+
+function Routed({
+  session,
+  route,
+  onForgetKey,
+}: {
+  readonly session: Session;
+  readonly route: Route;
+  readonly onForgetKey: () => void;
+}) {
+  const active = sectionOf(route);
+  usePushToasts(session.ws, active);
+  const openApproval = (id: string) => navigate(hrefs.approval(id));
+  const openTask = (id: string) => navigate(hrefs.task(id));
+
+  let page: JSX.Element;
   switch (route.kind) {
     case 'chat':
-      return (
+      page = (
         <ChatPage
           key={route.chatId}
-          client={client}
-          httpClient={httpClient}
+          client={session.ws}
+          http={session.http}
           chatId={route.chatId}
-          onBack={navigateToChatList}
-          onForgetKey={handleForgetKey}
+          onBack={() => navigate(hrefs.chats())}
+          onOpenApproval={openApproval}
+          onOpenTask={openTask}
         />
       );
+      break;
     case 'approvals':
-      return (
+      page = (
         <ApprovalQueuePage
-          httpClient={httpClient}
-          wsClient={client}
-          onForgetKey={handleForgetKey}
+          http={session.http}
+          pushes={session.ws}
+          selectedId={route.actionRequestId}
+          onSelect={(id) => navigate(id ? hrefs.approval(id) : hrefs.approvals())}
         />
       );
+      break;
     case 'tasks':
-      return <TasksPage httpClient={httpClient} wsClient={client} onForgetKey={handleForgetKey} />;
-    case 'connections':
-      return <ConnectionsPage httpClient={httpClient} onForgetKey={handleForgetKey} />;
-    case 'chats':
-      return (
-        <ChatListPage client={client} onSelectChat={navigateToChat} onForgetKey={handleForgetKey} />
+      page = (
+        <TasksPage
+          http={session.http}
+          pushes={session.ws}
+          selectedId={route.taskId}
+          onSelect={(id) => navigate(id ? hrefs.task(id) : hrefs.tasks())}
+          onOpenApproval={openApproval}
+        />
       );
+      break;
+    case 'connections':
+      page = <ConnectionsPage http={session.http} />;
+      break;
+    case 'chats':
+      page = <ChatListPage client={session.ws} onSelectChat={(id) => navigate(hrefs.chat(id))} />;
+      break;
   }
+
+  return (
+    <AppShell active={active} http={session.http} pushes={session.ws} onForgetKey={onForgetKey}>
+      {page}
+    </AppShell>
+  );
 }
