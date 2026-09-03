@@ -52,7 +52,10 @@ create table if not exists connection_requests (
   -- transition produces — `completed` always has both `gatekeeper_id` and `completed_at`;
   -- `requested`/`cancelled` never do (a cancelled request never registered a Gatekeeper).
   check (status = 'completed' or (gatekeeper_id is null and completed_at is null)),
-  check (status <> 'completed' or (gatekeeper_id is not null and completed_at is not null))
+  check (
+    status <> 'completed'
+    or (gatekeeper_id is not null and completed_by is not null and completed_at is not null)
+  )
 );
 
 create index if not exists connection_requests_status_idx

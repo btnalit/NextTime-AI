@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg';
 import type { CapabilityGrantRow } from '../../governance/capability/index.js';
 import { grantCapability } from '../../governance/capability/index.js';
 import {
+  GatekeeperNotFoundError,
   getGatekeeper,
   importManifest,
   registerGatekeeper,
@@ -181,7 +182,17 @@ export async function completeConnection(
 ): Promise<CompleteConnectionResult> {
   let connectionRequest: ConnectionRequestRow | null = null;
   if (input.connectionRequestId) {
-    const existing = await getConnectionRequest(client, workspaceId, input.connectionRequestId);
+    // `for update`: two owners completing the same card concurrently must not both pass the
+    // transition check below and each register a Gatekeeper — the second blocks here until the
+    // first commits, then reads `completed` and fails I6 (same row-lock discipline as
+    // governance/approval's `decide`).
+    const locked = await client.query(
+      `select ${CONNECTION_REQUEST_ROW_COLUMNS} from connection_requests
+       where workspace_id = $1 and id = $2
+       for update`,
+      [workspaceId, input.connectionRequestId],
+    );
+    const existing = locked.rows[0] ? mapConnectionRequestRow(locked.rows[0]) : null;
     if (!existing) {
       throw new ConnectionRequestNotFoundError(workspaceId, input.connectionRequestId);
     }
@@ -212,12 +223,14 @@ export async function completeConnection(
     const result = await client.query(
       `update connection_requests
        set status = 'completed', gatekeeper_id = $3, completed_by = $4, completed_at = now()
-       where workspace_id = $1 and id = $2
+       where workspace_id = $1 and id = $2 and status = 'requested'
        returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
       [workspaceId, connectionRequest.id, gatekeeperId, input.completedBy.id],
     );
     const row = result.rows[0];
-    if (!row) throw new Error('completeConnection: UPDATE ... RETURNING produced no row');
+    // Unreachable while the row lock above is held — kept as the conditional-UPDATE belt to the
+    // lock's braces (governance/approval's status-transition.ts uses the same pair).
+    if (!row) throw new Error('completeConnection: connection request left `requested` under lock');
     connectionRequest = mapConnectionRequestRow(row);
   }
 
@@ -246,15 +259,10 @@ export async function completeConnection(
 // to populate a freshly issued entry Handle's own `resources.gatekeeper`.
 // -------------------------------------------------------------------------------------------
 
-/** Mirrors `application/gateway/request-action-handler.ts`'s own local `GatekeeperNotFoundError`
- *  (`governance/gatekeepers` exports no such class of its own — `getGatekeeper` simply returns
- *  `null` — so each consuming module declares its own, same precedent). */
-export class GatekeeperNotFoundError extends Error {
-  constructor(gatekeeperId: string) {
-    super(`Gatekeeper not found: ${gatekeeperId}`);
-    this.name = 'GatekeeperNotFoundError';
-  }
-}
+/** The same class `application/gateway/request-action-handler.ts` throws — owned by
+ *  `governance/gatekeepers` (registry.ts) so both transports map one `instanceof` to 404.
+ *  Re-exported here for this module's own consumers/tests. */
+export { GatekeeperNotFoundError };
 
 export interface ConnectGatekeeperInput {
   readonly gatekeeperId: string;

@@ -7,8 +7,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import {
+  GatekeeperClientError,
+  GatekeeperTimeoutError,
+} from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
-import { WorkerResultValidationError, hashApiKey } from '../../application/gateway/index.js';
+import {
+  ConnectionCredentialRequiredError,
+  ConnectionManifestFetchError,
+  WorkerResultValidationError,
+  hashApiKey,
+} from '../../application/gateway/index.js';
 import {
   ProcedureStepReferenceError,
   SkillValidationError,
@@ -16,6 +25,10 @@ import {
   WorkerDefinitionNotPublishedError,
 } from '../../application/worker/index.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
+import {
+  ConnectionRequestNotFoundError,
+  GatekeeperNotFoundError,
+} from '../../governance/connections/index.js';
 import { createServer } from '../../index.js';
 import { mapCapabilityError } from './capability-route.js';
 
@@ -36,6 +49,43 @@ const neverConnectPool: PoolLike = {
     throw new Error('should not touch the database for this request');
   },
 };
+
+describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
+  it('maps the connection-flow not-found classes to 404 not_found', () => {
+    expect(mapCapabilityError(new ConnectionRequestNotFoundError('ws-1', 'cr-1'))).toMatchObject({
+      status: 404,
+      code: 'not_found',
+    });
+    // The same class `request_action` throws — governance/gatekeepers owns it, so both consumers
+    // hit this one branch.
+    expect(mapCapabilityError(new GatekeeperNotFoundError('gk-1'))).toMatchObject({
+      status: 404,
+      code: 'not_found',
+    });
+  });
+
+  it('maps a missing credential to 400 and the inline network legs to 502/504', () => {
+    expect(mapCapabilityError(new ConnectionCredentialRequiredError())).toMatchObject({
+      status: 400,
+      code: 'invalid_params',
+    });
+    expect(
+      mapCapabilityError(new ConnectionManifestFetchError('http://example.invalid/openapi.json')),
+    ).toMatchObject({ status: 502, code: 'manifest_fetch_failed' });
+    expect(mapCapabilityError(new GatekeeperTimeoutError('gate timed out'))).toMatchObject({
+      status: 504,
+      code: 'gatekeeper_timeout',
+    });
+    const mapped = mapCapabilityError(
+      new GatekeeperClientError('no store', {
+        code: 'connected_account_store_not_configured',
+        status: 501,
+      }),
+    );
+    expect(mapped).toMatchObject({ status: 502, code: 'gatekeeper_error' });
+    expect(mapped.message).toContain('connected_account_store_not_configured');
+  });
+});
 
 describe('mapCapabilityError — application/chat domain errors (unit)', () => {
   it('TurnAlreadyRunningError → 409 turn_already_running (§9.4, HTTP twin of WS -32010)', () => {

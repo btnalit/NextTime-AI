@@ -38,6 +38,12 @@ import type { CapabilityHandler } from './capability-handler.js';
  * back either.
  */
 
+/** Upper bound on the `manifestSource` OpenAPI-document fetch — it runs inside the dispatch
+ *  transaction (see `resolveManifestOperations`). Same order of magnitude as
+ *  `HttpGatekeeperClient`'s own per-call timeout, which already bounds the other network calls in
+ *  this handler. */
+const MANIFEST_FETCH_TIMEOUT_MS = 15_000;
+
 export interface ConnectionHandlerDeps {
   readonly gatekeeperClient: GatekeeperClient;
   /** Injectable for tests — defaults to the global `fetch`. Only used for the `manifestSource`
@@ -136,7 +142,11 @@ async function resolveManifestOperations(
   if (manifestSource && kind === 'http') {
     let document: OpenApiDocumentLike;
     try {
-      const response = await fetchImpl(manifestSource);
+      // Bounded: this runs inside dispatch.ts's open DB transaction (see the module doc comment on
+      // ordering), so an unresponsive manifest URL must not pin a pool connection indefinitely.
+      const response = await fetchImpl(manifestSource, {
+        signal: AbortSignal.timeout(MANIFEST_FETCH_TIMEOUT_MS),
+      });
       if (!response.ok) {
         throw new Error(`responded ${response.status}`);
       }

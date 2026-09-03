@@ -1,10 +1,16 @@
 import { IllegalTransition } from '@nexttime/shared';
 import { z } from 'zod';
+import {
+  GatekeeperClientError,
+  GatekeeperTimeoutError,
+} from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import {
   AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
+  ConnectionCredentialRequiredError,
+  ConnectionManifestFetchError,
   ForbiddenError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
@@ -30,6 +36,7 @@ import {
 } from '../../application/worker/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
+import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
 import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
 import {
   HighBlastRadiusAutoApproveError,
@@ -121,6 +128,10 @@ export const WS_ERROR_CODES = {
   QUOTA_EXCEEDED: -32012,
   /** S2.7 — mirrors HTTP 403 `attenuation_denied` ("入口 Handle 请求含 execute 的子 Handle 被拒"). */
   ATTENUATION_DENIED: -32013,
+  /** S2.13 — mirrors HTTP 502/504 (`gatekeeper_error` / `gatekeeper_timeout` /
+   *  `manifest_fetch_failed`): a Gatekeeper instance or manifest URL `create_connection` talked to
+   *  inline failed or timed out. Not INTERNAL_ERROR — the kernel is fine, the upstream is not. */
+  UPSTREAM_ERROR: -32014,
 } as const;
 
 /** Maps an error thrown by `resolveCaller`/`dispatchCapability` (application/gateway) or by
@@ -167,12 +178,23 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     err instanceof ActionRequestNotFoundError ||
     err instanceof GrantNotFoundError ||
     err instanceof GatekeeperNotFoundError ||
-    err instanceof OperationNotFoundError
+    err instanceof OperationNotFoundError ||
+    err instanceof ConnectionRequestNotFoundError
   ) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   if (err instanceof IllegalTransition) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S2.13 `create_connection` — same additions as capability-route.ts's mapCapabilityError.
+  if (err instanceof ConnectionCredentialRequiredError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof ConnectionManifestFetchError || err instanceof GatekeeperTimeoutError) {
+    return { code: WS_ERROR_CODES.UPSTREAM_ERROR, message: err.message };
+  }
+  if (err instanceof GatekeeperClientError) {
+    return { code: WS_ERROR_CODES.UPSTREAM_ERROR, message: `${err.code}: ${err.message}` };
   }
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };

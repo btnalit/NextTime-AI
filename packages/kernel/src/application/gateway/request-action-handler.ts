@@ -13,6 +13,7 @@ import {
   startActionRequestExecution,
 } from '../../governance/approval/index.js';
 import {
+  GatekeeperNotFoundError,
   SYSTEM_ACTOR_PLACEHOLDER,
   getGatekeeper,
   getOrCreateGatekeeperServicePrincipal,
@@ -98,12 +99,11 @@ import { writeObservedFacts } from './observed-facts.js';
  * `resultMetadata`/`reason` payload — `readTerminalOutcome` below) instead.
  */
 
-export class GatekeeperNotFoundError extends Error {
-  constructor(gatekeeperId: string) {
-    super(`Gatekeeper not found: ${gatekeeperId}`);
-    this.name = 'GatekeeperNotFoundError';
-  }
-}
+// Re-exported for `application/gateway/index.ts`'s existing consumers; the class itself now lives
+// with the module that owns Gatekeeper Objects (`governance/gatekeepers/registry.ts`) so
+// `governance/connections` throws the very same class and one `instanceof` maps it on both
+// transports.
+export { GatekeeperNotFoundError };
 
 /** I7/§8.1 "denied → 403-shaped result": a policy `deny` decision (the requester's Handle scope
  *  does not cover this Gatekeeper) is a real authorization failure, not a domain outcome the

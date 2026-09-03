@@ -1,10 +1,16 @@
 import { IllegalTransition } from '@nexttime/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import {
+  GatekeeperClientError,
+  GatekeeperTimeoutError,
+} from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import {
   AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
+  ConnectionCredentialRequiredError,
+  ConnectionManifestFetchError,
   type DispatchDeps,
   ForbiddenError,
   GatekeeperNotFoundError,
@@ -36,6 +42,7 @@ import {
 } from '../../application/worker/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
+import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
 import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
 import {
   HighBlastRadiusAutoApproveError,
@@ -123,12 +130,30 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     err instanceof ActionRequestNotFoundError ||
     err instanceof GrantNotFoundError ||
     err instanceof GatekeeperNotFoundError ||
-    err instanceof OperationNotFoundError
+    err instanceof OperationNotFoundError ||
+    err instanceof ConnectionRequestNotFoundError
   ) {
     return { status: 404, code: 'not_found', message: err.message };
   }
   if (err instanceof IllegalTransition) {
     return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  // S2.13 `create_connection` (application/gateway/connection-handlers.ts): the two network legs
+  // that run inline in the handler surface as upstream failures, not internal errors — the gate
+  // (or the manifest URL) answered badly / not at all, and the caller can fix the endpoint or
+  // retry. The gate's own `{code,message}` is preserved verbatim in `message` (e.g.
+  // `connected_account_store_not_configured` → "use credentialKind: 'shared'").
+  if (err instanceof ConnectionCredentialRequiredError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  if (err instanceof ConnectionManifestFetchError) {
+    return { status: 502, code: 'manifest_fetch_failed', message: err.message };
+  }
+  if (err instanceof GatekeeperTimeoutError) {
+    return { status: 504, code: 'gatekeeper_timeout', message: err.message };
+  }
+  if (err instanceof GatekeeperClientError) {
+    return { status: 502, code: 'gatekeeper_error', message: `${err.code}: ${err.message}` };
   }
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
     return { status: 400, code: 'invalid_params', message: err.message };
