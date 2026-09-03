@@ -276,6 +276,23 @@ const graphCapabilities: readonly Capability[] = [
 
 const gateCapabilities: readonly Capability[] = [
   {
+    // The dispatchable capability behind the `<gate>.<op>` observe projection below (design doc
+    // §5.1.4 "门上的 observe 类 Operation" is in the entry ceiling; §11 "观察免审"): runs exactly one
+    // published observe-class Operation and returns its data — an execute-class Operation is
+    // refused (403), never turned into an ActionRequest here; that is `request_action`'s job, and
+    // an entry Handle deliberately does not hold it (governance/capability/handles.ts).
+    name: 'observe_operation',
+    group: 'gate',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z
+      .object({ gatekeeperId: id, operation: z.string().min(1), params: jsonRecord.optional() })
+      .strict(),
+    description:
+      'Run one published observe-class Operation on a Gatekeeper and return its data (the capability behind every <gate>.<op> observe tool); execute-class Operations are refused.',
+  },
+  {
     name: '<gate>.<op>',
     group: 'gate',
     mode: 'observe',
@@ -283,7 +300,7 @@ const gateCapabilities: readonly Capability[] = [
     minRole: 'member',
     paramsSchema: jsonRecord,
     description:
-      'Observe-class Operation projected from a Gatekeeper’s interface manifest as a tool; params validated against that Operation’s own params_schema at runtime. Available to entry and Worker Handles.',
+      'Observe-class Operation projected from a Gatekeeper’s interface manifest as a tool (placeholder pattern, not dispatchable — the tool calls `observe_operation`); params validated against that Operation’s own params_schema at runtime. Available to entry and Worker Handles.',
   },
   {
     name: '<gate>.<op>:execute',

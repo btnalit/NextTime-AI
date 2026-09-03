@@ -565,6 +565,8 @@ describe('entryScope', () => {
       'find_operations',
       'find_workers',
       'find_procedures',
+      // S2.12 fix: the capability behind every projected `<gate>.<op>` observe tool.
+      'observe_operation',
       // S2.6 bug fix: platform-extension's entry mode already registers `explain` as one of its
       // five S1 observe-group tools (design doc §5.1.2/§7.4) and calls it through the entry
       // Handle — it belongs on the ceiling even though its registry `group` is `'epistemic'`, not

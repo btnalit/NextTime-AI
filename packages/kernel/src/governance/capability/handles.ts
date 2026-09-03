@@ -127,6 +127,11 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   // latter's handler 403s on any `claims.sid` with no matching WorkerRun row.
   'list_allowed_operations',
   'report_task_result',
+  // The concrete capability behind the `<gate>.<op>` observe placeholder below (S2.12 fix): an
+  // entry agent's projected gate tools call it (packages/platform-extension modes/entry.ts). Mode
+  // `observe`, so the "no execute-mode capability in the entry ceiling" invariant holds by
+  // construction — an execute-class Operation is refused by its handler, never governed here.
+  'observe_operation',
 ] as const;
 
 /**
