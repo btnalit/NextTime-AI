@@ -320,11 +320,18 @@ curl -s http://kernel:8080/api/cap/connect_gatekeeper \
 ```
 
 期望：第 3 步 `importedOperationNames` 与 §5 注册 `docker` 门时看到的 7 个 Operation 名字一致；
-第 5 步之后，`member` 下一次开启对话（其入口容器重新签发入口 Handle 时——已缓存的 Handle 要么等
-自然重签、要么重启该用户的入口容器强制刷新）能对 `find_operations("container")`
-之类的查询看到这个门暴露的已发布 Operation；`docker compose exec -T kernel psql ...` 查
-`capability_grants` 表能看到 `capability='gatekeeper'`、`scope->>'resourceScope'` 等于
-`GATEKEEPER_ID_2` 的一行。
+`docker compose exec -T kernel psql ...` 查 `capability_grants` 表能在第 5 步之后看到
+`capability='gatekeeper'`、`scope->>'resourceScope'` 等于 `GATEKEEPER_ID_2` 的一行。
+
+`connect_gatekeeper` 对 `find_operations` 的效果具体落在哪——**只影响 execute 类 Operation**（§11
+"观察免审，只有 execute 受凭证门槛"，`application/task/service.ts` 的 `findOperations` 与
+`findProcedures` 的 `stepUsableByCaller` 遵守同一条规则）：`containers.list`/`container.inspect`/
+`compose.ls`/`container.logs_tail` 这四个 observe 类 Operation，`member` 的入口 agent 在第 5 步
+**之前**就已经能通过 `find_operations` 看到（观察不需要门授权）；`container.restart`/`compose.up`/
+`compose.down` 这三个 execute 类 Operation，只有第 5 步之后才会出现在 `member` 的
+`find_operations` 结果里，且要等 `member` 下一次（重新）签发入口 Handle 才生效——`ensureEntryHandle`
+已有的缓存策略（剩余 ttl < 10% 才重签）意味着这不是实时的，要么等自然重签、要么重启该用户的入口
+容器强制刷新。
 
 ## 11. `ragflow` 门——若本机有可用的 RAGFlow 实例
 
