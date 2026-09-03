@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -68,6 +76,51 @@ describe('task-service spawn', () => {
       join(config.localDataDir, 'workspaces', 'tasks', 'task-1', '.pi', 'agent'),
     );
     expect(stat.isDirectory()).toBe(true);
+  });
+
+  it('writes skillsInline files under <agentDir>/skills/<name>/ before creating the container', async () => {
+    const { service, config, docker } = setup();
+    await service.spawn({
+      ...spawnInput,
+      skillsInline: [
+        {
+          name: 'diagnose-network',
+          files: {
+            'SKILL.md': '---\nname: diagnose-network\n---\n\nRun `ss -tnp`.\n',
+            'references/notes.md': 'extra notes',
+          },
+        },
+      ],
+    });
+    const skillDir = join(
+      config.localDataDir,
+      'workspaces',
+      'tasks',
+      'task-1',
+      '.pi',
+      'agent',
+      'skills',
+      'diagnose-network',
+    );
+    expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf8')).toContain('diagnose-network');
+    expect(readFileSync(join(skillDir, 'references', 'notes.md'), 'utf8')).toBe('extra notes');
+    // The files are written *before* Docker is asked to create the container, not after.
+    expect(docker.createCalls).toHaveLength(1);
+  });
+
+  it('spawns without any skillsInline entries just as before (no directory created)', async () => {
+    const { service, config } = setup();
+    await service.spawn(spawnInput);
+    const skillsDir = join(
+      config.localDataDir,
+      'workspaces',
+      'tasks',
+      'task-1',
+      '.pi',
+      'agent',
+      'skills',
+    );
+    expect(existsSync(skillsDir)).toBe(false);
   });
 
   it('registers the spawned container IP in the egress source map as worker:<ws>:<workerRunId>', async () => {

@@ -20,7 +20,7 @@ import {
 import { explain } from '../../substrate/epistemic/index.js';
 import { invokeWorker, readWorkerRunRow } from '../task/index.js';
 import type { TaskRuntimeDeps } from '../task/runtime.js';
-import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import { listSkills, proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -278,6 +278,32 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(explained.activity?.kind).toBe('worker_result');
       expect(explained.activity?.metadata.taskId).toBe(taskId);
       expect(explained.activity?.metadata.workerRunId).toBe(workerRunId);
+    });
+
+    it('proposedSkill (S2.14) creates a draft Skill owned by the Task’s on_behalf_of principal, private until published', async () => {
+      const { taskId, claims } = await spawnWorkerRun();
+      const caller: ResolvedCaller = { channel: 'handle', claims };
+      const skillName = `worker-discovered-skill-${taskId}`;
+
+      await dispatchCapability({ pool }, caller, 'report_task_result', {
+        summary: 'found a reusable trick',
+        proposedSkill: {
+          name: skillName,
+          description: 'A genuinely new, reusable way to do the thing.',
+          markdown: 'Step one. Step two.',
+        },
+      });
+
+      // Owned by on_behalf_of (ownerId, per spawnWorkerRun's own `caller.principalId: ownerId`) —
+      // visible to ownerId's own listSkills, and (I16 read-privacy) not to another principal.
+      const ownList = await inTx(ownerId, (client) => listSkills(client, workspaceId, ownerId));
+      const draft = ownList.find((s) => s.name === skillName);
+      expect(draft?.status).toBe('draft');
+      expect(draft?.proposedBy).toBe(ownerId);
+
+      const otherId = await adminInsertPrincipal('operator', `other-${taskId}`);
+      const otherList = await inTx(otherId, (client) => listSkills(client, workspaceId, otherId));
+      expect(otherList.some((s) => s.name === skillName)).toBe(false);
     });
 
     it('rejects a report_task_result call from a session that is not a WorkerRun’s own session (403)', async () => {

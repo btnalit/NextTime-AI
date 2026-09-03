@@ -182,6 +182,84 @@ const TaskSkillSchema = z.object({
   hostPath: z.string().min(1),
 });
 
+/** A single skill mounted by *content*, not a host path (S2.14; docs/development-tasks.md S2.14
+ *  deliverable 4: "extend the supervisor Task spawn API additively with `skillsInline?: [{name,
+ *  files: {"SKILL.md": string, ...}}]`"). The kernel has no writable data mount of its own
+ *  (I9-adjacent — see `docs/development-tasks.md` S2.8's own read-first note "the kernel has NO
+ *  writable data mount, only `config:ro`"), so a published Skill's rendered file content travels
+ *  in the spawn request body itself; this service writes it to disk (`task-service.ts`'s `spawn()`)
+ *  under the Task's own workspace directory before the container starts — no bind mount needed,
+ *  the whole Task workspace is already bind-mounted at `/workspace`.
+ *
+ * `name` reuses the exact same safe-single-path-segment rule as `TaskSkillSchema.name` above (not
+ * refactored into a shared schema — the two are validated independently by design, so a future
+ * change to one's rule does not silently change the other's). Each entry in `files` becomes
+ * `<agentDir>/skills/<name>/<fileName>` (`host-paths.ts` `taskSkillTargetInContainer` — same target
+ * directory the host-path variant mounts to, just populated by writing instead of bind-mounting);
+ * `fileName` must be a safe relative path (`isSafeSkillInlineFileName` below) — no leading `/`, no
+ * `.`/`..` path segments, so it can never escape the skill's own directory. Every entry must
+ * include a `"SKILL.md"` file (pi's own required entry point, `docs/skills.md` "Skill Structure")
+ * — `application/worker/skills.ts`'s `renderSkillMarkdownFile` (kernel) is the one place that
+ * produces this shape today. Per-file and total-payload size caps
+ * (`MAX_SKILL_INLINE_FILE_BYTES`/`MAX_SKILL_INLINE_TOTAL_BYTES`) bound how much a single spawn
+ * request can make this process write to disk. */
+export const MAX_SKILL_INLINE_FILE_BYTES = 512 * 1024;
+export const MAX_SKILL_INLINE_TOTAL_BYTES = 2 * 1024 * 1024;
+
+function isSafeSkillInlineFileName(name: string): boolean {
+  if (name.length === 0 || name.length > 200) return false;
+  if (name.startsWith('/') || name.includes('\\')) return false;
+  return name
+    .split('/')
+    .every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+}
+
+const SkillInlineFilesSchema = z
+  .record(z.string(), z.string().max(MAX_SKILL_INLINE_FILE_BYTES))
+  .superRefine((files, ctx) => {
+    const names = Object.keys(files);
+    if (names.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'files must include at least one entry',
+      });
+      return;
+    }
+    if (!names.includes('SKILL.md')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'files must include a "SKILL.md" entry',
+      });
+    }
+    for (const name of names) {
+      if (!isSafeSkillInlineFileName(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `file name must be a safe relative path (no leading "/", no "."/".." segments): ${name}`,
+        });
+      }
+    }
+    const totalBytes = Object.values(files).reduce(
+      (sum, content) => sum + Buffer.byteLength(content, 'utf8'),
+      0,
+    );
+    if (totalBytes > MAX_SKILL_INLINE_TOTAL_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `total inline skill content exceeds ${MAX_SKILL_INLINE_TOTAL_BYTES} bytes`,
+      });
+    }
+  });
+
+const TaskSkillInlineSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/, 'must be a single safe path segment')
+    .refine((name) => name !== '.' && name !== '..', 'must not be "." or ".."'),
+  files: SkillInlineFilesSchema,
+});
+
 /** Same UUID rule as the resident schemas above (see `IdClaimSchema`'s doc comment). */
 const idClaim = IdClaimSchema;
 
@@ -212,10 +290,12 @@ export const TaskSpawnRequestSchema = z
     image: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
     skills: z.array(TaskSkillSchema).optional(),
+    skillsInline: z.array(TaskSkillInlineSchema).optional(),
     timeoutSec: z.number().int().positive().optional(),
   })
   .strict();
 export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;
+export type TaskSkillInline = z.infer<typeof TaskSkillInlineSchema>;
 
 /** `skills[].hostPath` must resolve under this supervisor's own host data root
  *  (`${config.nextTimeData}/`) — otherwise a caller could mount an arbitrary host path (e.g.

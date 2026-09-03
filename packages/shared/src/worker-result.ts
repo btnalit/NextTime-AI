@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { OperationSchema } from './action-description.js';
+import { ProposeSkillContentSchema } from './skill.js';
 
 /**
  * worker-result: the Zod shape of the S2.9 result contract (design doc §7.3 "结果契约: Worker
@@ -92,11 +93,13 @@ export const WorkerResultProposedOperationSchema = z
 export type WorkerResultProposedOperation = z.infer<typeof WorkerResultProposedOperationSchema>;
 
 /**
- * The model-facing contract (`report_result` pi tool params). `proposedSkill` is deliberately an
- * opaque `jsonRecord` — there is no Skill draft service yet (S2.14, downstream of S2.9); the
- * kernel stores it verbatim on `tasks.result` and does not project it into the graph (see
- * `application/task/result.ts`'s own doc comment — this is a documented seam for S2.14, not an
- * oversight).
+ * The model-facing contract (`report_result` pi tool params). `proposedSkill` (S2.14) is
+ * {@link ProposeSkillContentSchema} — the same shape `propose_skill` itself takes — rather than an
+ * opaque `jsonRecord`: S2.9 left it opaque because no Skill draft service existed yet ("inventing
+ * one now would define S2.14's own ontology decisions... out from under it" — this file's prior
+ * doc comment); S2.14 *is* that service, so the seam is now filled in with its real shape.
+ * `application/task/result.ts`'s `postWorkerResult` forwards it verbatim to `proposeSkill`
+ * (`application/worker/skills.ts`), owned by the Task's `on_behalf_of` principal.
  */
 export const WorkerResultContractSchema = z
   .object({
@@ -105,7 +108,7 @@ export const WorkerResultContractSchema = z
     factsToAssert: z.array(WorkerResultFactSchema).optional(),
     evidence: z.array(WorkerResultEvidenceSchema).optional(),
     artifacts: z.array(WorkerResultArtifactSchema).optional(),
-    proposedSkill: jsonRecord.optional(),
+    proposedSkill: ProposeSkillContentSchema.optional(),
     proposedOperations: z.array(WorkerResultProposedOperationSchema).optional(),
   })
   .strict();

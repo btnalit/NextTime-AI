@@ -12,7 +12,8 @@
  * agent-host's own client).
  *
  *   POST /task/spawn                {taskId, workerRunId, workspaceId, onBehalfOf,
- *                                     capabilityHandle, image?, model?, skills?, timeoutSec?}
+ *                                     capabilityHandle, image?, model?, skills?, skillsInline?,
+ *                                     timeoutSec?}
  *                                     -> 200 {containerId, ip} / 403 (image not allowlisted) / 400
  *   POST /task/:workerRunId/terminate -> 204 | 404
  *   GET  /task/:workerRunId         -> 200 TaskStatus | 404
@@ -63,6 +64,19 @@ export interface TaskSkillMountInput {
   readonly hostPath: string;
 }
 
+/** One Skill mounted by *content*, not a host path (S2.14; `packages/worker-supervisor`'s own
+ *  `config.ts` `TaskSkillInlineSchema` doc comment has the full rationale: the kernel has no
+ *  writable data mount of its own, I9-adjacent, so a published Skill's rendered `SKILL.md` text
+ *  travels in the spawn request body and `worker-supervisor` writes it to disk itself, under the
+ *  Task's own already-bind-mounted workspace directory — no new bind mount needed). `files` keys
+ *  are relative filenames under `<agentDir>/skills/<name>/` (`"SKILL.md"` at minimum;
+ *  `application/worker/skills.ts`'s `renderSkillMarkdownFile` produces exactly that one file
+ *  today — the map shape leaves room for a future Skill to ship more than one). */
+export interface TaskSkillInlineMountInput {
+  readonly name: string;
+  readonly files: Record<string, string>;
+}
+
 export interface TaskSpawnInput {
   readonly taskId: string;
   readonly workerRunId: string;
@@ -73,6 +87,7 @@ export interface TaskSpawnInput {
   readonly image?: string;
   readonly model?: string;
   readonly skills?: readonly TaskSkillMountInput[];
+  readonly skillsInline?: readonly TaskSkillInlineMountInput[];
   readonly timeoutSec?: number;
 }
 

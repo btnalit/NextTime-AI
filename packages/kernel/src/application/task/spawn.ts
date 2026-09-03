@@ -1,5 +1,6 @@
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
+import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import {
   type MintWorkerRunHandleInput,
@@ -43,6 +44,13 @@ export interface SpawnWorkerRunInput {
   readonly declaredGates: readonly string[];
   readonly requestedGates?: readonly string[];
   readonly model?: string;
+  /** Pre-resolved by the caller (`invoke.ts`'s `resolveSkillsInline`, S2.14 deliverable 4) —
+   *  mirrors `model` above: this function never re-derives it from the WorkerDefinition itself,
+   *  it only ever forwards what it is given. `undefined` on the requeue path
+   *  (`lifecycle.ts`'s `spawnWorkerRunForRetry`, which does not re-resolve `model` either — see
+   *  that function's own doc comment for why a retry re-derives nothing beyond the already-granted
+   *  Handle scope). */
+  readonly skillsInline?: readonly TaskSkillInlineMountInput[];
 }
 
 /** Creates one WorkerRun row (`provisioning`), its `kind='worker_run'` Activity (S2.7 egress
@@ -126,6 +134,7 @@ export async function spawnWorkerRun(
       onBehalfOf: input.onBehalfOf,
       capabilityHandle: created.handleToken,
       model: input.model,
+      skillsInline: input.skillsInline,
       timeoutSec: durationLimitSec,
     });
   } catch (err) {

@@ -1,9 +1,14 @@
 import type { CapabilityChannel, HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { sumTodayCostUsd } from '../../governance/llm-usage/index.js';
-import { requirePublishedWorkerDefinition } from '../worker/index.js';
+import {
+  renderSkillMarkdownFile,
+  requirePublishedWorkerDefinition,
+  resolvePublishedSkills,
+} from '../worker/index.js';
 import {
   computeChildHandleScope,
   defaultWorkerCapabilities,
@@ -124,6 +129,10 @@ interface WorkerDefinitionContentShape {
   readonly capabilities?: readonly string[];
   readonly gates?: readonly string[];
   readonly model?: string;
+  /** `WorkerDefinition --uses--> Skill` (design doc §5.1.2; `packages/shared/src/worker-
+   *  definition.ts`'s `skills` field, "published Skill names/ids this WorkerDefinition uses") —
+   *  resolved to mountable content by `resolveSkillsInline` below (S2.14 deliverable 4). */
+  readonly skills?: readonly string[];
 }
 
 function readDefinitionContent(definition: unknown): WorkerDefinitionContentShape {
@@ -137,7 +146,34 @@ function readDefinitionContent(definition: unknown): WorkerDefinitionContentShap
       ? record.gates.filter((g): g is string => typeof g === 'string')
       : undefined,
     model: typeof record.model === 'string' ? record.model : undefined,
+    skills: Array.isArray(record.skills)
+      ? record.skills.filter((s): s is string => typeof s === 'string')
+      : undefined,
   };
+}
+
+/**
+ * Resolves a WorkerDefinition's declared `skills[]` (id-or-name refs) to **published** Skill rows
+ * and renders each into pi's on-disk `SKILL.md` format (S2.14 deliverable 4) — the payload
+ * `worker-supervisor`'s `/task/spawn` writes to the Task's workspace directory before the
+ * container starts (`skillsInline`, `adapters/supervisor-client/index.ts`'s own doc comment has
+ * the full "why inline content, not a host-path bind mount" rationale). A `skills[]` entry that
+ * does not resolve to a published Skill is silently skipped — same "best effort, never blocks the
+ * caller" convention this file's own `computeChildHandleScope` gate-narrowing uses for a
+ * non-execute-class need the caller doesn't hold: a WorkerDefinition referencing a Skill that was
+ * since deprecated (or never published) should not make every future `invoke_worker` call fail.
+ */
+async function resolveSkillsInline(
+  client: PoolClient,
+  workspaceId: string,
+  skillRefs: readonly string[],
+): Promise<readonly TaskSkillInlineMountInput[]> {
+  if (skillRefs.length === 0) return [];
+  const skills = await resolvePublishedSkills(client, workspaceId, skillRefs);
+  return skills.map((skill) => ({
+    name: skill.name,
+    files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
+  }));
 }
 
 /**
@@ -224,10 +260,13 @@ export async function invokeWorker(
     },
   );
 
-  const parentAuthority = await withWorkspace(
+  const { parentAuthority, skillsInline } = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
-    (client) => resolveParentAuthority(client, workspaceId, caller),
+    async (client) => ({
+      parentAuthority: await resolveParentAuthority(client, workspaceId, caller),
+      skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+    }),
   );
 
   // Pre-check the child-Handle scope *before* creating anything (docs/development-tasks.md S2.7
@@ -297,6 +336,7 @@ export async function invokeWorker(
       declaredGates,
       requestedGates: input.gates,
       model: content.model,
+      skillsInline,
     });
   } catch (err) {
     await withWorkspace(

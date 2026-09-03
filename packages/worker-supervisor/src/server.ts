@@ -16,7 +16,7 @@
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404
  *   POST /resident/:principalId/touch -> 204 | 404
  *   POST /task/spawn              {taskId, workerRunId, workspaceId, onBehalfOf, capabilityHandle,
- *                                   image?, model?, skills?, timeoutSec?}
+ *                                   image?, model?, skills?, skillsInline?, timeoutSec?}
  *                                  -> 200 {containerId, ip} | 400 | 403 (image not allowlisted)
  *   POST /task/:workerRunId/terminate -> 204 | 404
  *   GET  /task/:workerRunId       -> 200 TaskStatus | 404

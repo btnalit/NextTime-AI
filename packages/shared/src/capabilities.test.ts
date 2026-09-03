@@ -53,6 +53,8 @@ const EXPECTED_CAPABILITY_NAMES = [
   'publish_procedure',
   'deprecate_skill',
   'deprecate_procedure',
+  'list_skills',
+  'list_procedures',
   'assert_fact',
   'supersede_fact',
   'invalidate_fact',

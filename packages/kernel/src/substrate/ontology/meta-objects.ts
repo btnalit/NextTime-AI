@@ -198,6 +198,62 @@ export async function registerOperationDraftObject(
   return { operationObjectId: operationObject.id, exposesFactId: exposesFact.id, status: 'draft' };
 }
 
+// -------------------------------------------------------------------------------------------
+// Skill / Procedure (application/worker/skills.ts and procedures.ts call these from their own
+// `publish()` — publish-time only, mirroring `projectWorkerDefinitionObject` above: every Skill/
+// Procedure Object in `objects` is therefore non-draft by construction, S2.14).
+// -------------------------------------------------------------------------------------------
+
+export interface SkillObjectInput {
+  readonly skillId: string;
+  readonly version: number;
+  readonly name: string;
+  readonly description: string;
+}
+
+/** Upserts (by `{skillId, version}` identity) the `Skill` Object for a just-published version
+ *  (design doc §5.1.2 Skill; docs/development-tasks.md S2.14). `properties` deliberately excludes
+ *  `markdown` — the graph Object is a *discovery* projection (`find_procedures`/`list_skills`
+ *  text-match ranking, `substrate/graph/find-means.ts`), not the mounting source of truth
+ *  (`application/worker/skills.ts`'s `skills` table row is; mounting reads that table directly,
+ *  never this projection). */
+export async function projectSkillObject(
+  client: PoolClient,
+  workspaceId: string,
+  input: SkillObjectInput,
+): Promise<GraphObject> {
+  return graphStore.upsertObject(client, workspaceId, {
+    objectType: 'Skill',
+    identity: { skillId: input.skillId, version: input.version },
+    properties: { name: input.name, description: input.description },
+  });
+}
+
+export interface ProcedureObjectInput {
+  readonly procedureId: string;
+  readonly version: number;
+  readonly name: string;
+  readonly description: string;
+}
+
+/** Upserts (by `{procedureId, version}` identity) the `Procedure` Object for a just-published
+ *  version (design doc §5.1.2 Procedure; docs/development-tasks.md S2.14). Same "discovery
+ *  projection, not the source of truth" note as `projectSkillObject` — `properties` excludes
+ *  `steps` (the `procedures` table row is authoritative; `Procedure --steps--> …` Links, asserted
+ *  separately by the caller via `SqlGraphStore.assertFact`, are what `find_procedures`/`traverse`
+ *  actually walk). */
+export async function projectProcedureObject(
+  client: PoolClient,
+  workspaceId: string,
+  input: ProcedureObjectInput,
+): Promise<GraphObject> {
+  return graphStore.upsertObject(client, workspaceId, {
+    objectType: 'Procedure',
+    identity: { procedureId: input.procedureId, version: input.version },
+    properties: { name: input.name, description: input.description },
+  });
+}
+
 /** Merges `{status}` into an existing Operation Object's properties (publish/deprecate). Callers
  *  must have already confirmed the Object exists and the transition is legal
  *  (`governance/gatekeepers/manifest.ts` reads it first via `GraphStore.getObjectByIdentity` and

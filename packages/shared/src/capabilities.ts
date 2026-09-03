@@ -427,6 +427,30 @@ const metaCapabilities: readonly Capability[] = [
     description: 'Deprecate a published Procedure.',
   },
   {
+    // S2.14 addition, same style as `list_worker_definitions` (worker group, below): observe,
+    // handle channel, no minRole beyond authentication. Unlike `list_worker_definitions` ("List
+    // published WorkerDefinitions" only), this also returns the caller's own drafts (I16 read-
+    // privacy: a draft is private to its proposer, enforced by `application/worker/skills.ts`'s
+    // `listSkills` query itself, not by this schema) — see this task's PR body for the "propose →
+    // not visible to another principal → publish → visible" acceptance test this backs.
+    name: 'list_skills',
+    group: 'meta',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: noParams,
+    description: 'List published Skills plus the caller’s own draft Skills.',
+  },
+  {
+    name: 'list_procedures',
+    group: 'meta',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: noParams,
+    description: 'List published Procedures plus the caller’s own draft Procedures.',
+  },
+  {
     name: 'assert_fact',
     group: 'meta',
     mode: 'propose',

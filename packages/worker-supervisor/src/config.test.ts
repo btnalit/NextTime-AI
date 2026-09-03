@@ -207,6 +207,79 @@ describe('TaskSpawnRequestSchema', () => {
     expect(withSkill('valid-name_1.2')).toBe(true);
   });
 
+  describe('skillsInline (S2.14)', () => {
+    const withSkillsInline = (skillsInline: unknown) =>
+      TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, skillsInline }).success;
+
+    it('accepts a valid single-file entry', () => {
+      expect(
+        withSkillsInline([
+          { name: 'diagnose-network', files: { 'SKILL.md': '---\nname: x\n---\n\nbody\n' } },
+        ]),
+      ).toBe(true);
+    });
+
+    it('accepts a nested reference file alongside SKILL.md', () => {
+      expect(
+        withSkillsInline([
+          {
+            name: 'diagnose-network',
+            files: {
+              'SKILL.md': '---\nname: x\n---\n\nbody\n',
+              'references/notes.md': 'extra',
+            },
+          },
+        ]),
+      ).toBe(true);
+    });
+
+    it('rejects an entry with no files', () => {
+      expect(withSkillsInline([{ name: 'x', files: {} }])).toBe(false);
+    });
+
+    it('rejects an entry missing SKILL.md', () => {
+      expect(withSkillsInline([{ name: 'x', files: { 'other.md': 'y' } }])).toBe(false);
+    });
+
+    it('rejects an unsafe skill name, same rule as skills[].name', () => {
+      expect(withSkillsInline([{ name: '../../etc', files: { 'SKILL.md': 'y' } }])).toBe(false);
+      expect(withSkillsInline([{ name: '..', files: { 'SKILL.md': 'y' } }])).toBe(false);
+    });
+
+    it('rejects a file name that escapes the skill directory', () => {
+      expect(
+        withSkillsInline([{ name: 'x', files: { 'SKILL.md': 'y', '../../etc/passwd': 'z' } }]),
+      ).toBe(false);
+      expect(
+        withSkillsInline([{ name: 'x', files: { 'SKILL.md': 'y', '/etc/passwd': 'z' } }]),
+      ).toBe(false);
+    });
+
+    it('rejects a file whose content exceeds the per-file byte cap', () => {
+      expect(
+        withSkillsInline([{ name: 'x', files: { 'SKILL.md': 'a'.repeat(512 * 1024 + 1) } }]),
+      ).toBe(false);
+    });
+
+    it('rejects a set of files whose combined size exceeds the total byte cap', () => {
+      const big = 'a'.repeat(500 * 1024);
+      expect(
+        withSkillsInline([
+          {
+            name: 'x',
+            files: {
+              'SKILL.md': big,
+              'references/a.md': big,
+              'references/b.md': big,
+              'references/c.md': big,
+              'references/d.md': big,
+            },
+          },
+        ]),
+      ).toBe(false);
+    });
+  });
+
   it('rejects a taskId that is not a UUID, including a path-traversal shape', () => {
     expect(TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, taskId: 't1' }).success).toBe(
       false,
