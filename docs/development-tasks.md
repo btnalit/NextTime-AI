@@ -434,8 +434,8 @@
     能把 `/var/run/docker.sock`、`/etc` 之类路径只读挂进容器。收紧为：四个 id 字段改
     `z.string().uuid()`（`config.ts` `idClaim`——沿用平台既有的 UUID 约定，`packages/shared/src/
     handle-token.ts` `uuidClaim`、`packages/kernel/src/governance/llm-usage/service.ts` 已经在用；
-    **resident 模式自己的 `SpawnRequestSchema` 目前仍是 `min(1)`，本次未跟着收紧**，是同类缺口，
-    留给另一次改动）；新增 `isSkillHostPathAllowed`（同 `isImageAllowed` 的写法：纯函数 +
+    resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema` 与 `/resident/:principalId` 路径
+    参数当时仍是 `min(1)`，已在紧随其后的改动里收紧为同一条规则——`config.ts` `IdClaimSchema`）；新增 `isSkillHostPathAllowed`（同 `isImageAllowed` 的写法：纯函数 +
     `server.ts` 逐个 skill 校验，不满足 `400`，不落到 docker 客户端）——要求绝对路径且经
     `path.posix.normalize` 后落在 `${config.nextTimeData}/` 之下。详见
     `packages/worker-supervisor/README.md`"POST /task/spawn"一节与本文档同一小节顶部的运行手册

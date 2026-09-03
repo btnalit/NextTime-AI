@@ -90,15 +90,15 @@ describe('SpawnRequestSchema', () => {
   it('accepts the required fields plus optional overrides', () => {
     expect(
       SpawnRequestSchema.safeParse({
-        workspaceId: 'w1',
-        principalId: 'p1',
+        workspaceId: '55555555-5555-4555-8555-555555555555',
+        principalId: '66666666-6666-4666-8666-666666666666',
         handle: 'h1',
       }).success,
     ).toBe(true);
     expect(
       SpawnRequestSchema.safeParse({
-        workspaceId: 'w1',
-        principalId: 'p1',
+        workspaceId: '55555555-5555-4555-8555-555555555555',
+        principalId: '66666666-6666-4666-8666-666666666666',
         handle: 'h1',
         kernelUrl: 'http://k',
         llmUrl: 'http://l',
@@ -107,11 +107,13 @@ describe('SpawnRequestSchema', () => {
   });
 
   it('rejects missing fields and unknown fields', () => {
-    expect(SpawnRequestSchema.safeParse({ workspaceId: 'w1' }).success).toBe(false);
+    expect(
+      SpawnRequestSchema.safeParse({ workspaceId: '55555555-5555-4555-8555-555555555555' }).success,
+    ).toBe(false);
     expect(
       SpawnRequestSchema.safeParse({
-        workspaceId: 'w1',
-        principalId: 'p1',
+        workspaceId: '55555555-5555-4555-8555-555555555555',
+        principalId: '66666666-6666-4666-8666-666666666666',
         handle: 'h1',
         extra: 'nope',
       }).success,
@@ -121,9 +123,23 @@ describe('SpawnRequestSchema', () => {
 
 describe('StopRequestSchema', () => {
   it('requires exactly principalId', () => {
-    expect(StopRequestSchema.safeParse({ principalId: 'p1' }).success).toBe(true);
+    expect(
+      StopRequestSchema.safeParse({ principalId: '66666666-6666-4666-8666-666666666666' }).success,
+    ).toBe(true);
     expect(StopRequestSchema.safeParse({}).success).toBe(false);
-    expect(StopRequestSchema.safeParse({ principalId: 'p1', extra: 1 }).success).toBe(false);
+    // IdClaimSchema: a traversal-shaped id never validates (it would become a host path segment).
+    expect(StopRequestSchema.safeParse({ principalId: '../../pgdata' }).success).toBe(false);
+    expect(
+      SpawnRequestSchema.safeParse({
+        workspaceId: '55555555-5555-4555-8555-555555555555',
+        principalId: '../../pgdata',
+        handle: 'h1',
+      }).success,
+    ).toBe(false);
+    expect(
+      StopRequestSchema.safeParse({ principalId: '66666666-6666-4666-8666-666666666666', extra: 1 })
+        .success,
+    ).toBe(false);
   });
 });
 

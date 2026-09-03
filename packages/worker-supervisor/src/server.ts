@@ -31,7 +31,7 @@ import {
   isImageAllowed,
   isSkillHostPathAllowed,
 } from './config.js';
-import type { SupervisorConfig } from './config.js';
+import { IdClaimSchema, type SupervisorConfig } from './config.js';
 import type { ResidentService } from './resident-service.js';
 import type { TaskService } from './task-service.js';
 
@@ -87,6 +87,10 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
   });
 
   app.get<{ Params: { principalId: string } }>('/resident/:principalId', async (request, reply) => {
+    if (!IdClaimSchema.safeParse(request.params.principalId).success) {
+      reply.code(400);
+      return { error: { code: 'invalid_principal_id', message: 'principalId must be a UUID' } };
+    }
     const status = await residentService.status(request.params.principalId);
     if (!status) {
       reply.code(404);
@@ -99,6 +103,10 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
   app.post<{ Params: { principalId: string } }>(
     '/resident/:principalId/touch',
     async (request, reply) => {
+      if (!IdClaimSchema.safeParse(request.params.principalId).success) {
+        reply.code(400);
+        return { error: { code: 'invalid_principal_id', message: 'principalId must be a UUID' } };
+      }
       const touched = await residentService.touch(request.params.principalId);
       if (!touched) {
         reply.code(404);

@@ -433,9 +433,9 @@ fetch('http://localhost:8081/task/spawn', {
   容器；`skills[].hostPath` 同理完全不受限，能把 `/var/run/docker.sock`、`/etc` 之类路径只读挂进
   容器。修法：四个 id 字段改用 `z.string().uuid()`（`config.ts` `idClaim`——这不是新发明的规则，
   是平台其它地方本来就在用的既有约定，见 `packages/shared/src/handle-token.ts` `uuidClaim`、
-  `packages/kernel/src/governance/llm-usage/service.ts`；**resident 模式自己的
-  `SpawnRequestSchema` 目前仍是 `min(1)`，未跟着收紧**——不在这次改动范围内，是同类缺口，留给另一次
-  改动处理，这里明确点出而不是悄悄留着）；`skills[].hostPath` 新增 `isSkillHostPathAllowed`（同
+  `packages/kernel/src/governance/llm-usage/service.ts`；resident 模式自己的
+  `SpawnRequestSchema`/`StopRequestSchema` 与 `/resident/:principalId` 路径参数当时仍是 `min(1)`，
+  已在紧随其后的改动里收紧为同一条规则——`config.ts` `IdClaimSchema`，非 UUID 一律 `400`）；`skills[].hostPath` 新增 `isSkillHostPathAllowed`（同
   `isImageAllowed` 的写法——纯函数 + `server.ts` 在 `/task/spawn` 里对每个 skill 调用，不满足就
   `400`，不落到 docker 客户端）：要求绝对路径，且经 `path.posix.normalize` 之后落在
   `${config.nextTimeData}/` 之下。本文档 §10 的验证步骤已同步更新为 UUID 形式的示例值，并加了两条
