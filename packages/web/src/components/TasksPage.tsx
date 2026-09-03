@@ -63,7 +63,10 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   );
   const pendingApprovals = useResource(loadPending);
   useEffect(() => {
-    if (pendingApprovals.state.status === 'error' && isForbiddenError(pendingApprovals.state.error)) {
+    if (
+      pendingApprovals.state.status === 'error' &&
+      isForbiddenError(pendingApprovals.state.error)
+    ) {
       permissions.markDenied('list_pending');
     }
   }, [pendingApprovals.state, permissions]);
@@ -211,7 +214,9 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
                     <>
                       {need ? <span className="truncate">{excerpt(need, 90)}</span> : null}
                       {need ? <span className="meta-sep" /> : null}
-                      <time title={formatDateTime(task.createdAt)}>{formatRelative(task.createdAt)}</time>
+                      <time title={formatDateTime(task.createdAt)}>
+                        {formatRelative(task.createdAt)}
+                      </time>
                       <span className="meta-sep" />
                       <span className="tabular">
                         {finished ? 'took ' : 'running '}
@@ -247,8 +252,11 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
         onClose={() => onSelect(null)}
         title={
           selected
-            ? (definitionName(definitionRows, selected.workerDefinitionId, selected.workerDefinitionVersion) ??
-              'Task')
+            ? (definitionName(
+                definitionRows,
+                selected.workerDefinitionId,
+                selected.workerDefinitionVersion,
+              ) ?? 'Task')
             : 'Task'
         }
         subtitle={selectedId ? <span className="mono">{selectedId}</span> : undefined}

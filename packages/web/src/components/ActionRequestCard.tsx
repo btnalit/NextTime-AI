@@ -23,7 +23,10 @@ export function ActionRequestCard(props: ActionRequestCardProps) {
   const { card } = props;
   if (!card.isHolder) {
     return (
-      <div className="action-card action-card-status-only" data-action-request-id={card.actionRequestId}>
+      <div
+        className="action-card action-card-status-only"
+        data-action-request-id={card.actionRequestId}
+      >
         <div className="row-wrap">
           <StatusChip
             machine="actionRequest"

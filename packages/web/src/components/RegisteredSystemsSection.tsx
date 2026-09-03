@@ -1,6 +1,10 @@
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { type GatekeeperView, type OperationView, groupOperationsByStatus } from '../lib/connections.js';
+import {
+  type GatekeeperView,
+  type OperationView,
+  groupOperationsByStatus,
+} from '../lib/connections.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
@@ -58,7 +62,10 @@ export function GatekeeperCard({
       const count = result.publishedOperationNames?.length ?? 0;
       toast.push({
         tone: 'ok',
-        title: count > 0 ? `Published ${count} operation${count === 1 ? '' : 's'}` : 'No drafts to publish',
+        title:
+          count > 0
+            ? `Published ${count} operation${count === 1 ? '' : 's'}`
+            : 'No drafts to publish',
         description: gatekeeper.name,
       });
       onChanged();
@@ -117,7 +124,13 @@ export function GatekeeperCard({
             </Button>
           ) : null}
           {canGrant ? (
-            <Button variant="secondary" size="s" icon="user" onClick={() => setGrantOpen((open) => !open)} aria-expanded={grantOpen}>
+            <Button
+              variant="secondary"
+              size="s"
+              icon="user"
+              onClick={() => setGrantOpen((open) => !open)}
+              aria-expanded={grantOpen}
+            >
               Grant to principal
             </Button>
           ) : null}
@@ -138,7 +151,9 @@ export function GatekeeperCard({
           <dd className="mono">{gatekeeper.endpoint ?? '—'}</dd>
           <dt>Updated</dt>
           <dd>
-            <time title={formatDateTime(gatekeeper.updatedAt)}>{formatRelative(gatekeeper.updatedAt)}</time>
+            <time title={formatDateTime(gatekeeper.updatedAt)}>
+              {formatRelative(gatekeeper.updatedAt)}
+            </time>
           </dd>
         </dl>
 
@@ -157,7 +172,12 @@ export function GatekeeperCard({
                 mono
               />
             </Field>
-            <Button type="submit" variant="primary" loading={granting} disabled={!principalId.trim()}>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={granting}
+              disabled={!principalId.trim()}
+            >
               Grant
             </Button>
           </form>
@@ -180,7 +200,13 @@ export function GatekeeperCard({
                     <span className="op-name">{operation.name}</span>
                     {operation.mode ? <span className="tag">{operation.mode}</span> : null}
                     {operation.blastRadius && operation.blastRadius !== 'low' ? (
-                      <span className={operation.blastRadius === 'high' ? 'text-danger text-small' : 'text-3 text-small'}>
+                      <span
+                        className={
+                          operation.blastRadius === 'high'
+                            ? 'text-danger text-small'
+                            : 'text-3 text-small'
+                        }
+                      >
                         {operation.blastRadius}
                       </span>
                     ) : null}

@@ -1,10 +1,15 @@
-import { Button } from '../ui/Button.js';
-import { Icon, type IconName } from '../ui/Icon.js';
 import type { NavSection } from '../../lib/router.js';
 import { hrefs } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
+import { Button } from '../ui/Button.js';
+import { Icon, type IconName } from '../ui/Icon.js';
 
-const NAV: readonly { readonly section: NavSection; readonly label: string; readonly icon: IconName; readonly href: string }[] = [
+const NAV: readonly {
+  readonly section: NavSection;
+  readonly label: string;
+  readonly icon: IconName;
+  readonly href: string;
+}[] = [
   { section: 'chats', label: 'Chats', icon: 'chat', href: hrefs.chats() },
   { section: 'approvals', label: 'Approvals', icon: 'approvals', href: hrefs.approvals() },
   { section: 'tasks', label: 'Tasks', icon: 'tasks', href: hrefs.tasks() },

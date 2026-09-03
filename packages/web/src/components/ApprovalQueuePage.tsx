@@ -144,7 +144,10 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   const selectedRow = selectedFromList ?? fetchedDetail;
 
   function setBusy(id: string, busy: boolean): void {
-    setDecision((prev) => ({ ...prev, [id]: { busy, error: busy ? null : (prev[id]?.error ?? null) } }));
+    setDecision((prev) => ({
+      ...prev,
+      [id]: { busy, error: busy ? null : (prev[id]?.error ?? null) },
+    }));
   }
 
   function settle(id: string, error: unknown | null): void {
@@ -169,10 +172,16 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       if (options.alwaysAllow) {
         try {
           await http.call('set_auto_approved_action_kind', { actionKind: row.actionKind });
-          toast.push({ tone: 'info', title: `${row.actionKind} will be auto-approved from now on` });
+          toast.push({
+            tone: 'info',
+            title: `${row.actionKind} will be auto-approved from now on`,
+          });
         } catch (err) {
           if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');
-          toast.push({ tone: 'warn', title: 'Approved, but the auto-approval rule was not written' });
+          toast.push({
+            tone: 'warn',
+            title: 'Approved, but the auto-approval rule was not written',
+          });
         }
       }
     } catch (err) {
@@ -260,7 +269,11 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       ) : rows.length === 0 ? (
         <EmptyState
           icon="approvals"
-          title={filter === 'pending' ? 'Nothing pending your approval' : 'No approvals seen this session'}
+          title={
+            filter === 'pending'
+              ? 'Nothing pending your approval'
+              : 'No approvals seen this session'
+          }
           body="Requests appear here the moment a Worker proposes an execute-class action that policy routes to you."
           testId="approvals-empty"
         />
@@ -299,7 +312,9 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
                       </>
                     ) : null}
                     <span className="meta-sep" />
-                    <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
+                    <time title={formatDateTime(row.requestedAt)}>
+                      {formatRelative(row.requestedAt)}
+                    </time>
                     {row.blastRadius !== 'low' ? (
                       <>
                         <span className="meta-sep" />

@@ -15,7 +15,10 @@ export function TurnStatusBadge({ status }: { readonly status: TurnStatus }) {
   if (status === 'idle') return null;
   return (
     <span className={`turn-badge turn-badge-${status}`} data-status={status}>
-      <span className={`conn-dot conn-dot-${status === 'running' ? 'connecting' : 'connected'}`} aria-hidden />
+      <span
+        className={`conn-dot conn-dot-${status === 'running' ? 'connecting' : 'connected'}`}
+        aria-hidden
+      />
       {LABELS[status]}
     </span>
   );

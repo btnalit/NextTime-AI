@@ -1,4 +1,12 @@
-import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { actionCardFromPendingContent, isPendingCardMessage } from '../lib/action-card.js';
 import { insertChatMessage } from '../lib/chat-messages.js';
@@ -52,7 +60,14 @@ const AT_BOTTOM_THRESHOLD_PX = 48;
  * The human channel has no "is a Turn running" read (S1.8 假设与偏离); the composer starts enabled
  * and learns of a foreign Turn from `send_chat_message`'s -32010 (`TurnAlreadyRunningError`).
  */
-export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenTask }: ChatPageProps) {
+export function ChatPage({
+  client,
+  http,
+  chatId,
+  onBack,
+  onOpenApproval,
+  onOpenTask,
+}: ChatPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
@@ -63,7 +78,9 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
   const [sendError, setSendError] = useState<unknown | null>(null);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState<string | null>(null);
-  const [actionStatusOverrides, setActionStatusOverrides] = useState<Readonly<Record<string, string>>>({});
+  const [actionStatusOverrides, setActionStatusOverrides] = useState<
+    Readonly<Record<string, string>>
+  >({});
   const [cardState, setCardState] = useState<Readonly<Record<string, CardCallState>>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -123,7 +140,7 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
         if (cancelled) return;
         setTurn((prev) => streamReducer(prev, { kind: 'metadata', metadata }));
         // Any chat.metadata means the chat's one running Turn ended (one running Turn per chat).
-        setSendError((prev) => (prev instanceof TurnAlreadyRunningError ? null : prev));
+        setSendError((prev: unknown) => (prev instanceof TurnAlreadyRunningError ? null : prev));
       },
       onCaughtUp: () => {
         if (!cancelled) setCaughtUp(true);
@@ -150,6 +167,7 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
   // count what arrived and offer "Jump to latest".
   const contentVersion = `${messages.length}:${turn.streamingText.length}:${turn.toolCalls.length}`;
   const lastCount = useRef(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: contentVersion is the trigger (streamed text/tool rows), not read in the body
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -179,7 +197,10 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
   }
 
   function setCardBusy(id: string, value: boolean): void {
-    setCardState((prev) => ({ ...prev, [id]: { busy: value, error: value ? null : (prev[id]?.error ?? null) } }));
+    setCardState((prev) => ({
+      ...prev,
+      [id]: { busy: value, error: value ? null : (prev[id]?.error ?? null) },
+    }));
   }
 
   async function handleApprove(id: string, options: { alwaysAllow: boolean }): Promise<void> {
@@ -189,13 +210,21 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
       setActionStatusOverrides((prev) => ({ ...prev, [id]: result.status }));
       setCardState((prev) => ({ ...prev, [id]: IDLE_CARD_STATE }));
       if (options.alwaysAllow) {
-        const card = messages.map((m) => (m.content ? actionCardFromPendingContent(m.content) : undefined)).find((c) => c?.actionRequestId === id);
+        const card = messages
+          .map((m) => (m.content ? actionCardFromPendingContent(m.content) : undefined))
+          .find((c) => c?.actionRequestId === id);
         try {
           await http.call('set_auto_approved_action_kind', { actionKind: card?.actionKindTag });
-          toast.push({ tone: 'info', title: `${card?.actionKindTag ?? 'This kind'} will be auto-approved from now on` });
+          toast.push({
+            tone: 'info',
+            title: `${card?.actionKindTag ?? 'This kind'} will be auto-approved from now on`,
+          });
         } catch (err) {
           if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');
-          toast.push({ tone: 'warn', title: 'Approved, but the auto-approval rule was not written' });
+          toast.push({
+            tone: 'warn',
+            title: 'Approved, but the auto-approval rule was not written',
+          });
         }
       }
     } catch (err) {
@@ -266,7 +295,9 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
       const card = actionCardFromPendingContent(message.content);
       if (card) {
         const effectiveStatus =
-          actionStatusOverrides[card.actionRequestId] ?? latestActionStatus.get(card.actionRequestId) ?? card.status;
+          actionStatusOverrides[card.actionRequestId] ??
+          latestActionStatus.get(card.actionRequestId) ??
+          card.status;
         const state = cardState[card.actionRequestId] ?? IDLE_CARD_STATE;
         return (
           <ActionRequestCard
@@ -296,12 +327,19 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
       );
     }
     return (
-      <div key={message.sequence} className={`message message-${message.role}`} data-role={message.role}>
+      <div
+        key={message.sequence}
+        className={`message message-${message.role}`}
+        data-role={message.role}
+      >
         <div className="message-bubble message-text">{message.text}</div>
         <div className="message-meta">
           <span>{message.role}</span>
           <time title={formatDateTime(message.createdAt)}>
-            {new Date(message.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+            {new Date(message.createdAt).toLocaleTimeString(undefined, {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
           </time>
         </div>
       </div>
@@ -311,7 +349,14 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
   return (
     <div className="chat-page" data-testid="chat-page">
       <header className="chat-header">
-        <Button variant="ghost" size="s" icon="arrow-left" iconOnly aria-label="Back to chats" onClick={onBack} />
+        <Button
+          variant="ghost"
+          size="s"
+          icon="arrow-left"
+          iconOnly
+          aria-label="Back to chats"
+          onClick={onBack}
+        />
         <h1 className="chat-header-title">{title ?? ' '}</h1>
         <TurnStatusBadge status={turn.status} />
         <div className="grow" />
@@ -329,10 +374,17 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
 
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-thread" data-testid="chat-thread">
-          {subscribeError !== null ? <ErrorBanner error={subscribeError} title="Could not open this chat" /> : null}
-          {!caughtUp && subscribeError === null ? <p className="chat-empty">Loading history…</p> : null}
+          {subscribeError !== null ? (
+            <ErrorBanner error={subscribeError} title="Could not open this chat" />
+          ) : null}
+          {!caughtUp && subscribeError === null ? (
+            <p className="chat-empty">Loading history…</p>
+          ) : null}
           {caughtUp && messages.length === 0 && turn.status !== 'running' ? (
-            <p className="chat-empty">No messages yet. Ask the entry agent something — it can observe systems, propose actions and delegate to Workers.</p>
+            <p className="chat-empty">
+              No messages yet. Ask the entry agent something — it can observe systems, propose
+              actions and delegate to Workers.
+            </p>
           ) : null}
           {messages.map(renderMessage)}
 
@@ -354,7 +406,13 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
         </div>
         {!atBottom ? (
           <div className="chat-thread" style={{ paddingTop: 0, paddingBottom: 0 }}>
-            <Button variant="secondary" size="s" icon="arrow-down" className="jump-latest" onClick={jumpToLatest}>
+            <Button
+              variant="secondary"
+              size="s"
+              icon="arrow-down"
+              className="jump-latest"
+              onClick={jumpToLatest}
+            >
               Jump to latest{unseen > 0 ? ` (${unseen})` : ''}
             </Button>
           </div>
@@ -370,7 +428,9 @@ export function ChatPage({ client, http, chatId, onBack, onOpenApproval, onOpenT
               value={composerText}
               onChange={(event) => setComposerText(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder={composerDisabled ? 'Waiting for the current turn to finish…' : 'Message…'}
+              placeholder={
+                composerDisabled ? 'Waiting for the current turn to finish…' : 'Message…'
+              }
               disabled={composerDisabled}
               rows={Math.min(6, Math.max(1, composerText.split('\n').length))}
               aria-label="Message"

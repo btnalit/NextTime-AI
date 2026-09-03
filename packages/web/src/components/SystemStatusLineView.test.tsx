@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SystemStatusLineView } from './SystemStatusLineView.js';
 
 afterEach(cleanup);
@@ -18,7 +18,8 @@ describe('SystemStatusLineView', () => {
         }}
       />,
     );
-    expect(screen.getByText('approved')).toBeTruthy();
+    expect(document.querySelector('.chip')?.getAttribute('data-status')).toBe('approved');
+    expect(document.querySelector('.chip')?.textContent).toBe('Approved');
     expect(screen.getByText('ActionRequest approved')).toBeTruthy();
   });
 
@@ -36,5 +37,25 @@ describe('SystemStatusLineView', () => {
       />,
     );
     expect(screen.getByText('(worker_failed)')).toBeTruthy();
+    expect(document.querySelector('.chip')?.getAttribute('data-status')).toBe('failed');
+  });
+
+  it('renders as a button that opens the referenced detail when onOpen is given', () => {
+    const onOpen = vi.fn();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'task_update',
+          text: 'Task completed',
+          taskId: 'task-1',
+          status: 'completed',
+          failureReason: null,
+          summary: null,
+        }}
+        onOpen={onOpen}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Task completed/ }));
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });

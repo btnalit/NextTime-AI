@@ -91,7 +91,11 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
                 className="chat-list-item"
                 leading={<Icon name="chat" className="text-3" />}
                 title={chat.title ?? 'Untitled chat'}
-                meta={<time title={formatDateTime(chat.createdAt)}>{formatRelative(chat.createdAt)}</time>}
+                meta={
+                  <time title={formatDateTime(chat.createdAt)}>
+                    {formatRelative(chat.createdAt)}
+                  </time>
+                }
                 trailing={<Icon name="chevron-right" />}
                 onSelect={() => onSelectChat(chat.id)}
                 testId="chat-row"

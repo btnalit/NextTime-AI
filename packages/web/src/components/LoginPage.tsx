@@ -80,7 +80,9 @@ export function LoginPage({ onLogin, pending, error }: LoginPageProps) {
             </div>
           </Field>
 
-          {described && !unauthorized ? <ErrorBanner error={error} title="Could not sign in" /> : null}
+          {described && !unauthorized ? (
+            <ErrorBanner error={error} title="Could not sign in" />
+          ) : null}
 
           <Button
             type="submit"
@@ -93,8 +95,8 @@ export function LoginPage({ onLogin, pending, error }: LoginPageProps) {
 
           <div className="login-footer">
             <span>
-              Your key is issued by the workspace owner (<code>bootstrap add-principal</code>) and is
-              kept in this tab only until you sign out.
+              Your key is issued by the workspace owner (<code>bootstrap add-principal</code>) and
+              is kept in this tab only until you sign out.
             </span>
             <span>
               <Kbd>Enter</Kbd> to sign in

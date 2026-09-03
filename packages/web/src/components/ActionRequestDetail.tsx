@@ -4,9 +4,9 @@ import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../
 import { Button } from './ui/Button.js';
 import { CopyId } from './ui/CopyId.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
+import { Textarea } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
 import { StatusChip } from './ui/StatusChip.js';
-import { Textarea } from './ui/Field.js';
 
 export interface ActionRequestDetailProps {
   readonly card: ActionCardData;
@@ -54,7 +54,11 @@ export function ActionRequestDetail({
   const reasonId = `reason-${card.actionRequestId}`;
 
   return (
-    <div className="stack" data-testid="action-request-detail" data-action-request-id={card.actionRequestId}>
+    <div
+      className="stack"
+      data-testid="action-request-detail"
+      data-action-request-id={card.actionRequestId}
+    >
       <header className="action-detail-header">
         <div className="stack-s grow">
           <h3 className="action-detail-title">{card.title}</h3>
@@ -68,7 +72,10 @@ export function ActionRequestDetail({
               </span>
             ) : null}
             {blocking ? (
-              <span className="chip chip-s chip-warn" title="The Worker is blocked until you decide">
+              <span
+                className="chip chip-s chip-warn"
+                title="The Worker is blocked until you decide"
+              >
                 blocking
               </span>
             ) : null}
@@ -110,7 +117,9 @@ export function ActionRequestDetail({
           <>
             <dt>Requested</dt>
             <dd>
-              <time title={formatDateTime(card.requestedAt)}>{formatRelative(card.requestedAt)}</time>
+              <time title={formatDateTime(card.requestedAt)}>
+                {formatRelative(card.requestedAt)}
+              </time>
             </dd>
           </>
         ) : null}

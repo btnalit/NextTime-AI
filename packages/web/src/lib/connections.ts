@@ -95,7 +95,9 @@ export function operationFromObject(object: GraphObjectRow): OperationView | und
     status: typeof status === 'string' ? status : 'draft',
     mode: typeof object.properties.mode === 'string' ? object.properties.mode : undefined,
     blastRadius:
-      typeof object.properties.blast_radius === 'string' ? object.properties.blast_radius : undefined,
+      typeof object.properties.blast_radius === 'string'
+        ? object.properties.blast_radius
+        : undefined,
   };
 }
 

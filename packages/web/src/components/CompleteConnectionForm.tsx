@@ -60,7 +60,12 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
  * from this form the moment the call returns; they are never echoed, logged or kept in state after
  * submit. 400 highlights the field it names; 502/504 show the gate's own message verbatim.
  */
-export function CompleteConnectionForm({ http, request, onDone, onCancel }: CompleteConnectionFormProps) {
+export function CompleteConnectionForm({
+  http,
+  request,
+  onDone,
+  onCancel,
+}: CompleteConnectionFormProps) {
   const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? 'http');
   const [target, setTarget] = useState(request?.target ?? '');
   const [endpoint, setEndpoint] = useState('');
@@ -117,7 +122,8 @@ export function CompleteConnectionForm({ http, request, onDone, onCancel }: Comp
     } catch (err) {
       setCredentials('');
       const described = describeError(err);
-      const field = described.code === 'invalid_params' ? fieldForInvalidParams(described.message) : undefined;
+      const field =
+        described.code === 'invalid_params' ? fieldForInvalidParams(described.message) : undefined;
       if (field) {
         setFieldErrors({ [field]: described.message });
       } else {
@@ -131,7 +137,12 @@ export function CompleteConnectionForm({ http, request, onDone, onCancel }: Comp
   const showManifest = supportsManifestSource(kind);
 
   return (
-    <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate data-testid="complete-connection-form">
+    <form
+      className="stack"
+      onSubmit={(event) => void handleSubmit(event)}
+      noValidate
+      data-testid="complete-connection-form"
+    >
       {request ? (
         <Notice>
           Completing request <span className="mono">{request.id.slice(0, 8)}</span> from principal{' '}
@@ -140,7 +151,12 @@ export function CompleteConnectionForm({ http, request, onDone, onCancel }: Comp
       ) : null}
 
       <Field id="cc-kind" label="Kind" required>
-        <Select id="cc-kind" value={kind} onChange={(event) => setKind(event.target.value as ConnectionKind)} disabled={submitting}>
+        <Select
+          id="cc-kind"
+          value={kind}
+          onChange={(event) => setKind(event.target.value as ConnectionKind)}
+          disabled={submitting}
+        >
           {CONNECTION_KIND_VALUES.map((option) => (
             <option key={option} value={option}>
               {option}
@@ -149,7 +165,13 @@ export function CompleteConnectionForm({ http, request, onDone, onCancel }: Comp
         </Select>
       </Field>
 
-      <Field id="cc-target" label="Target system" required error={fieldErrors.target} hint="What the Gatekeeper fronts — a base URL, host, or service name.">
+      <Field
+        id="cc-target"
+        label="Target system"
+        required
+        error={fieldErrors.target}
+        hint="What the Gatekeeper fronts — a base URL, host, or service name."
+      >
         <Input
           id="cc-target"
           value={target}
@@ -161,7 +183,13 @@ export function CompleteConnectionForm({ http, request, onDone, onCancel }: Comp
         />
       </Field>
 
-      <Field id="cc-endpoint" label="Gatekeeper endpoint" required error={fieldErrors.endpoint} hint="The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one).">
+      <Field
+        id="cc-endpoint"
+        label="Gatekeeper endpoint"
+        required
+        error={fieldErrors.endpoint}
+        hint="The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one)."
+      >
         <Input
           id="cc-endpoint"
           value={endpoint}
@@ -204,7 +232,13 @@ export function CompleteConnectionForm({ http, request, onDone, onCancel }: Comp
 
       {credentialKind === 'connected_account' ? (
         <>
-          <Field id="cc-credentials" label="Credentials" required error={fieldErrors.credentials} hint="A token, or a JSON object. Sent to the Gatekeeper's ConnectedAccount store only — the kernel never persists it and this field is cleared on submit.">
+          <Field
+            id="cc-credentials"
+            label="Credentials"
+            required
+            error={fieldErrors.credentials}
+            hint="A token, or a JSON object. Sent to the Gatekeeper's ConnectedAccount store only — the kernel never persists it and this field is cleared on submit."
+          >
             <Textarea
               id="cc-credentials"
               value={credentials}
@@ -218,19 +252,42 @@ export function CompleteConnectionForm({ http, request, onDone, onCancel }: Comp
               mono
             />
           </Field>
-          <Field id="cc-obo" label="On behalf of (principal id)" hint="Whose account this credential belongs to. Defaults to the requester, or to you.">
-            <Input id="cc-obo" value={onBehalfOf} onChange={(event) => setOnBehalfOf(event.target.value)} disabled={submitting} mono />
+          <Field
+            id="cc-obo"
+            label="On behalf of (principal id)"
+            hint="Whose account this credential belongs to. Defaults to the requester, or to you."
+          >
+            <Input
+              id="cc-obo"
+              value={onBehalfOf}
+              onChange={(event) => setOnBehalfOf(event.target.value)}
+              disabled={submitting}
+              mono
+            />
           </Field>
         </>
       ) : null}
 
       {showManifest ? (
-        <Field id="cc-manifest" label="Manifest source" error={fieldErrors.manifestSource} hint={kind === 'http' ? 'OpenAPI document URL to import operations from. Leave empty to use the gate’s own describe_operations.' : 'MCP server endpoint to import tools/list from. Leave empty to use the gate’s own describe_operations.'}>
+        <Field
+          id="cc-manifest"
+          label="Manifest source"
+          error={fieldErrors.manifestSource}
+          hint={
+            kind === 'http'
+              ? 'OpenAPI document URL to import operations from. Leave empty to use the gate’s own describe_operations.'
+              : 'MCP server endpoint to import tools/list from. Leave empty to use the gate’s own describe_operations.'
+          }
+        >
           <Input
             id="cc-manifest"
             value={manifestSource}
             onChange={(event) => setManifestSource(event.target.value)}
-            placeholder={kind === 'http' ? 'https://api.example.internal/openapi.json' : 'http://mcp-host:port/mcp'}
+            placeholder={
+              kind === 'http'
+                ? 'https://api.example.internal/openapi.json'
+                : 'http://mcp-host:port/mcp'
+            }
             invalid={!!fieldErrors.manifestSource}
             aria-describedby={describedBy('cc-manifest', true, !!fieldErrors.manifestSource)}
             disabled={submitting}
@@ -239,7 +296,9 @@ export function CompleteConnectionForm({ http, request, onDone, onCancel }: Comp
         </Field>
       ) : null}
 
-      {submitError !== null ? <ErrorBanner error={submitError} title="The gate did not accept this connection" /> : null}
+      {submitError !== null ? (
+        <ErrorBanner error={submitError} title="The gate did not accept this connection" />
+      ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>

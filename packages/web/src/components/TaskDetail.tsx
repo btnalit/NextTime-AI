@@ -203,7 +203,9 @@ export function TaskDetail({
                   <td className="tabular">{run.depth}</td>
                   <td className="tabular">{run.attempt}</td>
                   <td>
-                    <time title={formatDateTime(run.startedAt)}>{formatDateTime(run.startedAt)}</time>
+                    <time title={formatDateTime(run.startedAt)}>
+                      {formatDateTime(run.startedAt)}
+                    </time>
                   </td>
                   <td className="tabular">{formatDuration(run.startedAt, run.terminatedAt)}</td>
                 </tr>

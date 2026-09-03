@@ -40,7 +40,9 @@ type DrawerMode =
 const REQUEST_FILTERS: readonly RequestFilter[] = [
   'requested',
   'all',
-  ...(statusValues('connectionRequest').filter((status) => status !== 'requested') as RequestFilter[]),
+  ...(statusValues('connectionRequest').filter(
+    (status) => status !== 'requested',
+  ) as RequestFilter[]),
 ];
 
 /**
@@ -59,7 +61,10 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
   const loadRequests = useCallback(
     () =>
       http
-        .call<{ connectionRequests: readonly ConnectionRequestRow[] }>('list_connection_requests', {})
+        .call<{ connectionRequests: readonly ConnectionRequestRow[] }>(
+          'list_connection_requests',
+          {},
+        )
         .then((result) => result.connectionRequests),
     [http],
   );
@@ -91,7 +96,8 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
     const rows = requests.state.status === 'ready' ? requests.state.data : [];
     const filtered = filter === 'all' ? rows : rows.filter((row) => row.status === filter);
     return [...filtered].sort((a, b) => {
-      if (a.status !== b.status) return a.status === 'requested' ? -1 : b.status === 'requested' ? 1 : 0;
+      if (a.status !== b.status)
+        return a.status === 'requested' ? -1 : b.status === 'requested' ? 1 : 0;
       return b.requestedAt.localeCompare(a.requestedAt);
     });
   }, [requests.state, filter]);
@@ -129,7 +135,11 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
               Request connection
             </Button>
             {canCreate ? (
-              <Button variant="primary" icon="connections" onClick={() => setDrawer({ kind: 'complete', request: null })}>
+              <Button
+                variant="primary"
+                icon="connections"
+                onClick={() => setDrawer({ kind: 'complete', request: null })}
+              >
                 Connect a system
               </Button>
             ) : null}
@@ -161,8 +171,8 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
         ) : requests.state.status === 'error' ? (
           requestsForbidden ? (
             <Notice testId="requests-forbidden">
-              Connection requests are owner-only (<code>list_connection_requests</code>). You can still
-              raise a request; the workspace owner completes it.
+              Connection requests are owner-only (<code>list_connection_requests</code>). You can
+              still raise a request; the workspace owner completes it.
             </Notice>
           ) : (
             <ErrorBanner
@@ -175,10 +185,16 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
         ) : requestRows.length === 0 ? (
           <EmptyState
             icon="inbox"
-            title={filter === 'requested' ? 'No open connection requests' : 'No connection requests'}
+            title={
+              filter === 'requested' ? 'No open connection requests' : 'No connection requests'
+            }
             body="An agent (or you) proposes a system with request_connection; completing it here registers the Gatekeeper and imports its operations as drafts."
             action={
-              <Button variant="secondary" icon="plus" onClick={() => setDrawer({ kind: 'request' })}>
+              <Button
+                variant="secondary"
+                icon="plus"
+                onClick={() => setDrawer({ kind: 'request' })}
+              >
                 Request connection
               </Button>
             }
@@ -201,7 +217,9 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
                   <>
                     <span title={row.requestedBy}>by {shortId(row.requestedBy)}</span>
                     <span className="meta-sep" />
-                    <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
+                    <time title={formatDateTime(row.requestedAt)}>
+                      {formatRelative(row.requestedAt)}
+                    </time>
                     {row.gatekeeperId ? (
                       <>
                         <span className="meta-sep" />
@@ -212,7 +230,11 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
                 }
                 trailing={
                   row.status === 'requested' && canCreate ? (
-                    <Button variant="primary" size="s" onClick={() => setDrawer({ kind: 'complete', request: row })}>
+                    <Button
+                      variant="primary"
+                      size="s"
+                      onClick={() => setDrawer({ kind: 'complete', request: row })}
+                    >
                       Complete
                     </Button>
                   ) : undefined
@@ -256,7 +278,11 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
         ) : (
           <div className="stack">
             {operations.state.status === 'error' ? (
-              <ErrorBanner error={operations.state.error} title="Could not load operations" onRetry={() => void operations.reload()} />
+              <ErrorBanner
+                error={operations.state.error}
+                title="Could not load operations"
+                onRetry={() => void operations.reload()}
+              />
             ) : null}
             {gatekeepers.state.data.map((gatekeeper) => (
               <GatekeeperCard
@@ -265,7 +291,9 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
                 gatekeeper={gatekeeper}
                 operations={
                   operations.state.status === 'ready'
-                    ? operations.state.data.filter((operation) => operation.gatekeeperId === gatekeeper.id)
+                    ? operations.state.data.filter(
+                        (operation) => operation.gatekeeperId === gatekeeper.id,
+                      )
                     : []
                 }
                 canPublish={!permissions.isDenied('publish_manifest')}
@@ -304,7 +332,9 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
       <Drawer
         open={drawer.kind === 'complete'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title={drawer.kind === 'complete' && drawer.request ? 'Complete connection' : 'Connect a system'}
+        title={
+          drawer.kind === 'complete' && drawer.request ? 'Complete connection' : 'Connect a system'
+        }
         subtitle="Registers the Gatekeeper, imports its manifest as drafts, and stores the credential in the gate only."
         wide
         testId="complete-connection-drawer"

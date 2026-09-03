@@ -81,7 +81,9 @@ export function App() {
   }, [session]);
 
   if (!session) {
-    return <LoginPage onLogin={(key) => void connect(key)} pending={connecting} error={authError} />;
+    return (
+      <LoginPage onLogin={(key) => void connect(key)} pending={connecting} error={authError} />
+    );
   }
 
   return (
