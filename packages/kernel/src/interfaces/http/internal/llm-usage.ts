@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../../adapters/db/pool.js';
 import { withWorkspace } from '../../../adapters/db/pool.js';
+import { findAttributableTurnForSession } from '../../../application/host-bridge/index.js';
 import {
   LlmUsageBatchSchema,
   type LlmUsageRecord,
@@ -27,6 +28,25 @@ import {
  * migration's header comment), so `principalId` is inert to the policy either way — this route
  * passes each record's own `sessionId`, a real, syntactically-valid uuid already on hand, rather
  * than fabricating one.
+ *
+ * Turn attribution (docs/development-tasks.md S1.7 补注, 2026-09 — `llm_usage.turn_id` was always
+ * NULL: `governance/llm-usage/service.ts`'s `recordUsage` has always taken a `resolveTurnId` hook,
+ * but nothing ever supplied a real one, and the module itself may not import `application` to
+ * build one internally, §7.10 layering — "governance may not depend on application"). This route
+ * *is* the layer-legal place to close that gap: it already sits inside `application`'s upstream
+ * layer (`interfaces`, which may depend on both `application` and `governance`), and it already
+ * opens the same `client`/transaction `recordUsage` runs in. For each workspace group, it builds a
+ * `resolveTurnId` closure over that `client` that calls `application/host-bridge`'s
+ * `findAttributableTurnForSession` (session → principal → the S1.10 egress rule: the principal's
+ * running Turn, else the most recent one within 5 minutes — reused verbatim, not reinvented) and
+ * passes it as `options.resolveTurnId` into `recordUsage`. A session with no attributable Turn
+ * (a Worker session ahead of S2, or a report delayed past the window) resolves to `null` and is
+ * logged at `debug` — `recordUsage`'s own insert already treats a `null` `turn_id` as normal, and
+ * this route's job is only to try to fill it in, never to reject a report over it (usage must
+ * always be recorded, task brief). Idempotency is unaffected: `recordUsage`'s
+ * `on conflict (workspace_id, jti, started_at) do nothing` already means a replayed report that
+ * matches an existing row never touches that row's columns, `turn_id` included — this route does
+ * not need its own replay guard on top of that.
  */
 
 export interface LlmUsageRoutesDeps {
@@ -82,7 +102,27 @@ export async function registerLlmUsageRoutes(
         const result = await withWorkspace(
           deps.pool,
           { workspaceId, principalId: first.sessionId },
-          (client) => record(client, records),
+          (client) => {
+            // See module doc "Turn attribution" — bound to this group's `client`/`workspaceId` so
+            // it can resolve each record's own `sessionId` within the same transaction the insert
+            // below runs in.
+            const resolveTurnId = async (sessionId: string): Promise<string | null> => {
+              const turn = await findAttributableTurnForSession(client, {
+                workspaceId,
+                sessionId,
+                at: new Date(),
+              });
+              if (!turn) {
+                app.log?.debug?.(
+                  { workspaceId, sessionId },
+                  'llm-usage: no attributable turn for session, recording turn_id = null',
+                );
+                return null;
+              }
+              return turn.id;
+            };
+            return record(client, records, { resolveTurnId });
+          },
         );
         inserted += result.inserted;
       }
