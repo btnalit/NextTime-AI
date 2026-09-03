@@ -1,0 +1,155 @@
+[
+  {
+    "name": "containers.list",
+    "binding": { "kind": "cli", "command_template": "docker ps --all --format json" },
+    "params_schema": {
+      "type": "object",
+      "properties": { "all": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": ["Container"],
+    "writes": [],
+    "result_mapping": {
+      "jmes_path": "[*]",
+      "object_type": "Container",
+      "identity_keys": ["id"],
+      "attributes": { "name": "name", "image": "image", "state": "state", "status": "status" }
+    }
+  },
+  {
+    "name": "container.inspect",
+    "binding": { "kind": "cli", "command_template": "docker inspect {id}" },
+    "params_schema": {
+      "type": "object",
+      "properties": { "id": { "type": "string", "minLength": 1 } },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": ["Container"],
+    "writes": [],
+    "result_mapping": {
+      "jmes_path": "@",
+      "object_type": "Container",
+      "identity_keys": ["id"],
+      "attributes": { "name": "name", "image": "image", "state": "state", "status": "status" }
+    }
+  },
+  {
+    "name": "compose.ls",
+    "binding": {
+      "kind": "cli",
+      "command_template": "docker ps --all --filter label=com.docker.compose.project={project} --format json"
+    },
+    "params_schema": {
+      "type": "object",
+      "properties": { "project": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": ["Container"],
+    "writes": []
+  },
+  {
+    "name": "container.logs_tail",
+    "binding": { "kind": "cli", "command_template": "docker logs --tail {tail} {id}" },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "tail": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": ["Container"],
+    "writes": []
+  },
+  {
+    "name": "container.restart",
+    "binding": {
+      "kind": "cli",
+      "command_template": "docker restart --time {timeoutSeconds} {id}"
+    },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 0, "maximum": 120 }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+    "mode": "execute",
+    "blast_radius": "medium",
+    "reversibility": false,
+    "auto_approvable": false,
+    "await_decision": false,
+    "reads": ["Container"],
+    "writes": ["Container"],
+    "result_mapping": {
+      "jmes_path": "@",
+      "object_type": "Container",
+      "identity_keys": ["id"],
+      "attributes": { "name": "name", "image": "image", "state": "state", "status": "status" }
+    }
+  },
+  {
+    "name": "compose.up",
+    "binding": {
+      "kind": "cli",
+      "command_template": "docker compose --project-name {project} start"
+    },
+    "params_schema": {
+      "type": "object",
+      "properties": { "project": { "type": "string", "minLength": 1 } },
+      "required": ["project"],
+      "additionalProperties": false
+    },
+    "mode": "execute",
+    "blast_radius": "high",
+    "reversibility": false,
+    "auto_approvable": false,
+    "await_decision": true,
+    "reads": ["Container"],
+    "writes": ["Container"]
+  },
+  {
+    "name": "compose.down",
+    "binding": {
+      "kind": "cli",
+      "command_template": "docker compose --project-name {project} stop"
+    },
+    "params_schema": {
+      "type": "object",
+      "properties": { "project": { "type": "string", "minLength": 1 } },
+      "required": ["project"],
+      "additionalProperties": false
+    },
+    "mode": "execute",
+    "blast_radius": "high",
+    "reversibility": false,
+    "auto_approvable": false,
+    "await_decision": true,
+    "reads": ["Container"],
+    "writes": ["Container"]
+  }
+]

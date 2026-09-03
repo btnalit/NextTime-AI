@@ -123,15 +123,30 @@ services:
     image: nexttime-ai-worker-runtime
     profiles: ["build-only"]
 
+  # gatekeeper-docker: talks to the host's own Docker Engine API via dockerode (gatekeepers/docker
+  # — no docker CLI in the image). Runs as non-root uid 10001 (gatekeepers/docker/Dockerfile,
+  # same pattern as worker-supervisor/agent-host); group_add gives it the host's docker group gid
+  # as a supplementary group so it can reach /var/run/docker.sock (root:docker, mode 660).
+  # GATE_DATA_DIR only holds the idempotency store (no ConnectedAccount store — this gate uses no
+  # per-user credential, see gatekeepers/docker/README.md).
   gatekeeper-docker:
     build: { context: ., dockerfile: gatekeepers/docker/Dockerfile }
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+    volumes:
+      [
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "${NEXTTIME_DATA}/gatekeepers/docker:/data/gate",
+      ]
+    group_add: ["${DOCKER_GID:-999}"]
     networks: [control]
     restart: unless-stopped
 
+  # gatekeeper-ragflow: http-kind gate for a RAGFlow instance's REST API (gatekeepers/ragflow).
+  # RAGFLOW_BASE_URL / GATE_CREDENTIAL_RAGFLOW_API_KEY come from the env_file below — never
+  # hardcoded here (§11 "凭证不进内核进程", same rule applied to this gate's own compose service).
   gatekeeper-ragflow:
     build: { context: ., dockerfile: gatekeepers/ragflow/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env
+    volumes: ["${NEXTTIME_DATA}/gatekeepers/ragflow:/data/gate"]
     networks: [control]
     restart: unless-stopped
 

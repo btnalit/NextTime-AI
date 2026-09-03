@@ -16,13 +16,13 @@
 #
 # Scope: writes secrets/{kernel,llm-proxy,gatekeeper-ragflow}.env and
 # config/{llm-providers.yaml,models.json,handle.pub,egress-sources.json} as placeholders/
-# templates — no real credentials exist yet at this point in the task list (S1.7/S1.9/S3.4 fill
-# them in later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc
-# §7.9 — an empty object is a valid "no sources registered yet" map, not a stub for a later
-# task to overwrite).
-# Then chowns workspaces/ artifacts/ caddy/ to the non-root uid:gid the platform's
-# containers run as, and makes config/ world-readable (it holds no secrets). Never echoes
-# secret file contents. Touches nothing outside $NEXTTIME_DATA.
+# templates — no real credentials exist yet at this point in the task list (S1.7/S1.9 fill them in
+# later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc §7.9 — an
+# empty object is a valid "no sources registered yet" map, not a stub for a later task to
+# overwrite; gatekeeper-ragflow.env's real shape is S2.5's, see below).
+# Then chowns workspaces/ artifacts/ caddy/ gatekeepers/{docker,ragflow}/ to the non-root uid:gid
+# the platform's containers run as, and makes config/ world-readable (it holds no secrets). Never
+# echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
 
 set -eu
 
@@ -125,17 +125,19 @@ else
 fi
 chmod 600 "$LLM_PROXY_ENV"
 
-# --- secrets/gatekeeper-ragflow.env: commented template, no values (S3.4 defines the shape) ---
+# --- secrets/gatekeeper-ragflow.env: commented template, no values (S2.5 defines the shape:
+# gatekeepers/ragflow/README.md "Env") -----------------------------------------------------------
 RAGFLOW_ENV="$SECRETS_DIR/gatekeeper-ragflow.env"
 if [ ! -f "$RAGFLOW_ENV" ]; then
 	cat >"$RAGFLOW_ENV" <<'EOF'
-# gatekeeper-ragflow secrets template (design doc §7.5; task S3.4). Real RAGFlow URL/API key for
-# this gatekeeper instance go here — never commit. The platform keeps its own copy; it does not
-# share a credentials file with any other RAGFlow client on this host.
+# gatekeeper-ragflow secrets template (design doc §7.5; docs/development-tasks.md S2.5, see
+# gatekeepers/ragflow/README.md "Env"/"Credentials"). Real RAGFlow base URL/API key for this
+# gatekeeper instance go here — never commit. The platform keeps its own copy; it does not share
+# a credentials file with any other RAGFlow client on this host.
 #
 # Example (uncomment and fill in when connecting):
-# RAGFLOW_URL=
-# RAGFLOW_API_KEY=
+# RAGFLOW_BASE_URL=
+# GATE_CREDENTIAL_RAGFLOW_API_KEY=
 EOF
 	CREATED="$CREATED secrets/gatekeeper-ragflow.env"
 else
@@ -206,12 +208,13 @@ else
 	SKIPPED="$SKIPPED config/egress-sources.json"
 fi
 
-# --- ownership: workspaces/ artifacts/ caddy/ must be usable by the platform's ------
-# non-root containers (uid:gid 10001:10001). pgdata/ (the postgres image manages its own
-# ownership), secrets/ (root-owned, 0700 — compose passes its contents via env_file / Docker
-# secrets, not a bind-mounted directory read by a container process) and backups/ are left
-# untouched, per task scope.
-for d in workspaces artifacts caddy; do
+# --- ownership: workspaces/ artifacts/ caddy/ gatekeepers/{docker,ragflow}/ must be usable by ---
+# the platform's non-root containers (uid:gid 10001:10001 — both gatekeepers/*/Dockerfile create
+# the same `nexttime` uid:gid as every other @nexttime/* image, S2.5). pgdata/ (the postgres image
+# manages its own ownership), secrets/ (root-owned, 0700 — compose passes its contents via
+# env_file / Docker secrets, not a bind-mounted directory read by a container process) and
+# backups/ are left untouched, per task scope.
+for d in workspaces artifacts caddy gatekeepers/docker gatekeepers/ragflow; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
 
@@ -236,7 +239,7 @@ echo "host-env-init: config/ (mode, owner:group, path):"
 find "$CONFIG_DIR" -maxdepth 1 -printf '  %M %U:%G %p\n'
 echo ""
 echo "host-env-init: ownership fix-up (uid:gid ${CONTAINER_UID}:${CONTAINER_GID}) applied to:"
-for d in workspaces artifacts caddy; do
+for d in workspaces artifacts caddy gatekeepers/docker gatekeepers/ragflow; do
 	echo "  $NEXTTIME_DATA/$d -> $(stat -c '%U:%G' "$NEXTTIME_DATA/$d")"
 done
 echo ""

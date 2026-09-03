@@ -1,0 +1,140 @@
+[
+  {
+    "name": "kb.list",
+    "binding": { "kind": "http", "method": "GET", "path": "/api/v1/datasets" },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": ["KnowledgeBase"],
+    "writes": [],
+    "result_mapping": {
+      "jmes_path": "data[*]",
+      "object_type": "KnowledgeBase",
+      "identity_keys": ["id"],
+      "attributes": {
+        "name": "name",
+        "chunkCount": "chunk_count",
+        "documentCount": "document_count",
+        "embeddingModel": "embedding_model",
+        "chunkMethod": "chunk_method"
+      }
+    }
+  },
+  {
+    "name": "kb.documents",
+    "binding": {
+      "kind": "http",
+      "method": "GET",
+      "path": "/api/v1/datasets/{dataset_id}/documents"
+    },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "dataset_id": { "type": "string", "minLength": 1 },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" },
+        "keywords": { "type": "string" }
+      },
+      "required": ["dataset_id"],
+      "additionalProperties": false
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": ["Document"],
+    "writes": [],
+    "result_mapping": {
+      "jmes_path": "data.docs[*]",
+      "object_type": "Document",
+      "identity_keys": ["id"],
+      "attributes": { "name": "name", "size": "size", "run": "run", "chunkCount": "chunk_count" }
+    }
+  },
+  {
+    "name": "retrieve",
+    "binding": { "kind": "http", "method": "POST", "path": "/api/v1/retrieval" },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "question": { "type": "string", "minLength": 1 },
+        "dataset_ids": { "type": "array", "items": { "type": "string" } },
+        "document_ids": { "type": "array", "items": { "type": "string" } },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" },
+        "similarity_threshold": { "type": "number" }
+      },
+      "required": ["question"],
+      "additionalProperties": false
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": ["KnowledgeBase", "Document"],
+    "writes": []
+  },
+  {
+    "name": "document.upload",
+    "binding": {
+      "kind": "http",
+      "method": "POST",
+      "path": "/api/v1/datasets/{dataset_id}/documents?type=empty"
+    },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "dataset_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      },
+      "required": ["dataset_id", "name"],
+      "additionalProperties": false
+    },
+    "mode": "execute",
+    "blast_radius": "medium",
+    "reversibility": false,
+    "auto_approvable": false,
+    "await_decision": true,
+    "reads": [],
+    "writes": ["Document"],
+    "result_mapping": {
+      "jmes_path": "data[*]",
+      "object_type": "Document",
+      "identity_keys": ["id"],
+      "attributes": { "name": "name", "size": "size", "run": "run" }
+    }
+  },
+  {
+    "name": "document.parse",
+    "binding": { "kind": "http", "method": "POST", "path": "/api/v1/datasets/{dataset_id}/chunks" },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "dataset_id": { "type": "string", "minLength": 1 },
+        "document_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      },
+      "required": ["dataset_id", "document_ids"],
+      "additionalProperties": false
+    },
+    "mode": "execute",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": false,
+    "await_decision": true,
+    "reads": ["Document"],
+    "writes": ["Document"]
+  }
+]

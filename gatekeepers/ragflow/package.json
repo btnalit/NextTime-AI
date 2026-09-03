@@ -1,0 +1,20 @@
+{
+  "name": "@nexttime/gatekeeper-ragflow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Preset http-kind Gatekeeper 接入包 for a RAGFlow instance's REST API (design doc §7.5, §7.10; docs/development-tasks.md S2.5).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "manifest.json"],
+  "scripts": {
+    "lint": "biome check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nexttime/gatekeeper-base": "workspace:*",
+    "@nexttime/shared": "workspace:*"
+  }
+}

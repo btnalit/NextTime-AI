@@ -1,0 +1,24 @@
+{
+  "name": "@nexttime/gatekeeper-docker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Preset cli-kind Gatekeeper 接入包 for the host's own Docker Engine (design doc §7.5, §7.10; docs/development-tasks.md S2.5). Talks to /var/run/docker.sock via dockerode — no docker CLI in the image.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "manifest.json"],
+  "scripts": {
+    "lint": "biome check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nexttime/gatekeeper-base": "workspace:*",
+    "@nexttime/shared": "workspace:*",
+    "dockerode": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^4.0.1"
+  }
+}

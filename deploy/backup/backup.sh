@@ -21,7 +21,9 @@
 #   DATA_DIR=/data         — bind mount of ${NEXTTIME_DATA} (compose: "${NEXTTIME_DATA}:/data").
 #
 # One backup = one pg_dump custom-format dump of the whole `nexttime` DB, plus one tar.gz of
-# workspaces/ config/ (never secrets/ — it holds credentials, not backup content).
+# workspaces/ config/ gatekeepers/ (never secrets/ — it holds credentials, not backup content;
+# gatekeepers/{docker,ragflow}/ only ever holds each gate's idempotency-store JSON — operational
+# dedup state, config-like rather than secret, S2.5 — neither gate uses a ConnectedAccount store).
 # Both land under $DATA_DIR/backups/{db,files}/, named with a UTC timestamp so lexical sort ==
 # chronological order (used by the retention step below).
 
@@ -111,14 +113,14 @@ run_backup() {
 	dump_size=$(wc -c <"$dump_file" | tr -d ' ')
 	log "ok: $dump_file ($dump_size bytes)"
 
-	# Only workspaces/ config/ — never secrets/ (credentials, not backup content).
-	log "starting: tar workspaces config -> $tar_file"
+	# Only workspaces/ config/ gatekeepers/ — never secrets/ (credentials, not backup content).
+	log "starting: tar workspaces config gatekeepers -> $tar_file"
 	tar_sources=""
-	for d in workspaces config; do
+	for d in workspaces config gatekeepers; do
 		[ -d "$DATA_DIR/$d" ] && tar_sources="$tar_sources $d"
 	done
 	if [ -z "$tar_sources" ]; then
-		log "ERROR: none of workspaces/ config/ exist under $DATA_DIR"
+		log "ERROR: none of workspaces/ config/ gatekeepers/ exist under $DATA_DIR"
 		return 1
 	fi
 	# shellcheck disable=SC2086
