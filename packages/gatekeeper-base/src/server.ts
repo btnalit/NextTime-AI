@@ -1,6 +1,8 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import type { ConnectedAccountStore } from './credentials/index.js';
 import {
   ApplyRequiresIdempotencyKeyError,
+  ConnectedAccountStoreNotConfiguredError,
   CredentialResolutionError,
   OperationModeMismatchError,
   OperationNotFoundError,
@@ -11,10 +13,12 @@ import {
 import type { GatekeeperBase } from './gatekeeper-base.js';
 import {
   ApplyRequestSchema,
+  DeleteConnectedAccountRequestSchema,
   DescribeOperationsResponseSchema,
   ObserveRequestSchema,
   RevertRequestSchema,
   SimulateRequestSchema,
+  StoreConnectedAccountRequestSchema,
 } from './protocol.js';
 
 /**
@@ -26,6 +30,16 @@ import {
  * `{ok:true,result}` / `{ok:false,error:{code,message}}` — the kernel's
  * `adapters/gatekeeper-client` (S2.4 deliverable B) parses this shape, never branching on HTTP
  * status alone.
+ *
+ * S2.13 addition: `POST`/`DELETE /gate/connected-accounts` — the write-only ConnectedAccount
+ * store endpoint the design brief asked this file to grow ("does the gate expose any HTTP
+ * endpoint to *store* a ConnectedAccount? If not, add one"). Deliberately **no `GET`** — a
+ * credential that entered a gate's `ConnectedAccountStore` (`credentials/connected-account.ts`)
+ * must never be readable back out over the wire again (design doc §11 "凭证只在门"; I9). Only
+ * present when `options.connectedAccountStore` is given — a gate started in shared-credential mode
+ * (`credentials/shared-env.ts`) has nowhere to write one, and both routes 501
+ * (`ConnectedAccountStoreNotConfiguredError`) rather than silently accepting and discarding a
+ * credential.
  */
 
 interface ErrorMapping {
@@ -54,6 +68,9 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
   if (err instanceof TransportInvokeError) {
     return { status: 502, code: 'transport_error', message: err.message };
   }
+  if (err instanceof ConnectedAccountStoreNotConfiguredError) {
+    return { status: 501, code: 'connected_account_store_not_configured', message: err.message };
+  }
   // A Zod .safeParse failure on the request envelope itself, before it ever reaches
   // GatekeeperBase — same 400/invalid_params shape as a params_schema failure, since a caller
   // can't distinguish the two usefully from the wire response alone.
@@ -63,6 +80,9 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
 export interface CreateGatekeeperServerOptions {
   readonly gate: GatekeeperBase;
   readonly logger?: boolean;
+  /** S2.13: enables `POST`/`DELETE /gate/connected-accounts` — omit for a gate running in
+   *  shared-credential mode (this module's own doc comment). */
+  readonly connectedAccountStore?: ConnectedAccountStore;
 }
 
 export function createGatekeeperServer(options: CreateGatekeeperServerOptions): FastifyInstance {
@@ -160,6 +180,44 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
         onBehalfOf: parsed.data.onBehalfOf,
       });
       return ok(reply, result);
+    } catch (err) {
+      return fail(reply, err);
+    }
+  });
+
+  const connectedAccountStore = options.connectedAccountStore;
+
+  app.post('/gate/connected-accounts', async (request, reply) => {
+    const parsed = StoreConnectedAccountRequestSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        ok: false,
+        error: { code: 'invalid_params', message: 'invalid connected-account request' },
+      };
+    }
+    try {
+      if (!connectedAccountStore) throw new ConnectedAccountStoreNotConfiguredError();
+      await connectedAccountStore.set(parsed.data.onBehalfOf, parsed.data.credential);
+      return ok(reply, { stored: true });
+    } catch (err) {
+      return fail(reply, err);
+    }
+  });
+
+  app.delete('/gate/connected-accounts', async (request, reply) => {
+    const parsed = DeleteConnectedAccountRequestSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        ok: false,
+        error: { code: 'invalid_params', message: 'invalid connected-account request' },
+      };
+    }
+    try {
+      if (!connectedAccountStore) throw new ConnectedAccountStoreNotConfiguredError();
+      await connectedAccountStore.delete(parsed.data.onBehalfOf);
+      return ok(reply, { deleted: true });
     } catch (err) {
       return fail(reply, err);
     }

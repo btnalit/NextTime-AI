@@ -34,6 +34,10 @@ interface FakeEntryDefinitionRow {
 
 function createFakePool(
   publishedEntryDefinitions: ReadonlyMap<string, FakeEntryDefinitionRow> = new Map(),
+  /** S2.13: `governance/capability/grants.ts`'s `listActiveGrantResourceScopes`, called by
+   *  `ensureEntryHandle` — keyed by `principalId`, the gatekeeperIds an active `connect_gatekeeper`
+   *  Grant would surface. Empty by default (every pre-S2.13 test keeps its exact prior behavior). */
+  grantedGatekeeperIdsByPrincipal: ReadonlyMap<string, readonly string[]> = new Map(),
 ) {
   const sessionsByPrincipal = new Map<string, FakeSessionRow>();
   const handleCount = new Map<string, number>();
@@ -97,6 +101,14 @@ function createFakePool(
         rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
         rowCount: row ? 1 : 0,
       };
+    }
+
+    // S2.13: governance/capability/grants.ts's listActiveGrantResourceScopes, called by
+    // ensureEntryHandle below.
+    if (sql.startsWith("select distinct scope ->> 'resourceScope'")) {
+      const [, principalId] = params as [string, string];
+      const ids = grantedGatekeeperIdsByPrincipal.get(principalId) ?? [];
+      return { rows: ids.map((id) => ({ resource_scope: id })), rowCount: ids.length };
     }
 
     if (sql.startsWith('insert into capability_handles')) {
@@ -230,6 +242,39 @@ describe('AgentHostRuntime — startTurn happy path', () => {
 
     // Accepted, not ended — no turnEnded (or any other) event yet.
     expect(events).toEqual([]);
+  });
+
+  it('S2.13: a connect_gatekeeper Grant populates the freshly issued entry Handle’s resources.gatekeeper', async () => {
+    const principalId = randomUUID();
+    const { pool } = createFakePool(new Map(), new Map([[principalId, ['gk-1', 'gk-2']]]));
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    // Decode the Handle's own JWT payload (no signature verification needed for this assertion —
+    // governance/capability/handles.test.ts already covers signing/verification correctness) to
+    // inspect the CapabilityScope ensureEntryHandle actually issued.
+    const payloadSegment = command.handle.split('.')[1] ?? '';
+    const claims = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8')) as {
+      scope: { resources: Record<string, readonly string[]> };
+    };
+    expect(new Set(claims.scope.resources.gatekeeper)).toEqual(new Set(['gk-1', 'gk-2']));
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
   });
 
   it('reuses a cached entry Handle for a second turn from the same principal', async () => {

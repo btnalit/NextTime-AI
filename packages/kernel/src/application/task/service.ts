@@ -428,18 +428,42 @@ export async function findWorkers(
   return matches;
 }
 
-/** `find_operations` — candidates from `substrate/graph/find-means.ts`; the Grant-intersection
- *  half is a documented no-op until S2.4 projects real `Operation` Objects with a resolvable
- *  `Gatekeeper` relationship to check a Grant against (this function's own signature already
- *  accepts `caller` so wiring that check in later touches only this file). */
+/**
+ * `find_operations` — candidates from `substrate/graph/find-means.ts` (already published-only,
+ * I16/I17), intersected with the caller's Grant (design doc §9.3 "find_* 与调用者 Grant 取交集").
+ * Wired now that S2.4/S2.13 have landed real `Operation` Objects and a real `connect_gatekeeper`
+ * Grant to check against — this function's signature already accepted `caller` in anticipation of
+ * exactly this (S2.7's own note, which this supersedes).
+ *
+ * **The exact rule is per-candidate `mode`, not "every candidate needs `resources.gatekeeper`
+ * coverage"** — matches `findProcedures`'s own `stepUsableByCaller` (S2.14, same file, an
+ * `operation`-kind step) exactly, both being projections of the same design-doc rule (§11
+ * "observation is ungated by design; only execute-class access is credential-gated" —
+ * `application/task/handle-mint.ts`'s `computeChildHandleScope` documents the identical rule for
+ * `invoke_worker`'s own gate narrowing): an `observe`-mode Operation is always included —
+ * `'unconstrained'` or not, granted or not; an `execute`-mode Operation additionally requires
+ * `identityKey.gatekeeperId` to be in `resources.gatekeeper` (`'unconstrained'` — owner, human
+ * channel, no Handle to narrow from — always satisfies this). `connect_gatekeeper`'s observable
+ * effect on `find_operations` is therefore specifically on which *execute*-class Operations a
+ * caller sees as usable, not on observation — the same scope this whole platform's I14/§11 model
+ * ever puts a credential/authorization gate on.
+ */
 export async function findOperations(
   client: PoolClient,
   workspaceId: string,
-  _caller: FindMeansCaller,
+  caller: FindMeansCaller,
   need: string,
   limit?: number,
 ): Promise<readonly GraphObject[]> {
-  return findOperationCandidates(client, workspaceId, { need, limit });
+  const candidates = await findOperationCandidates(client, workspaceId, { need, limit });
+  if (caller.parentAuthority === 'unconstrained') return candidates;
+
+  const allowedGatekeepers = new Set(caller.parentAuthority.resources.gatekeeper ?? []);
+  return candidates.filter((candidate) => {
+    if (candidate.properties.mode !== 'execute') return true;
+    const gatekeeperId = candidate.identityKey?.gatekeeperId;
+    return typeof gatekeeperId === 'string' && allowedGatekeepers.has(gatekeeperId);
+  });
 }
 
 export interface ProcedureMatch {

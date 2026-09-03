@@ -14,6 +14,7 @@ import {
   createAdminWithTransaction,
   createGatekeeperActionExecutor,
   registerActionRequestDrainConsumer,
+  setConnectionHandlerDeps,
   setRequestActionDeps,
 } from './application/gateway/index.js';
 import type { GatekeeperActionExecutorDeps } from './application/gateway/index.js';
@@ -103,6 +104,10 @@ export function createServer(
     actionExecutor,
     awaitDecisionTimeoutMs: options.requestActionAwaitDecisionTimeoutMs,
   });
+  // S2.13: `create_connection`'s handler reuses the *same* `GatekeeperClient` instance
+  // `request_action` uses — one HTTP client construction, same "single shared executor path"
+  // reasoning `buildGatekeeperExecutionDeps`'s own doc comment gives for `ActionExecutor`.
+  setConnectionHandlerDeps({ gatekeeperClient });
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 

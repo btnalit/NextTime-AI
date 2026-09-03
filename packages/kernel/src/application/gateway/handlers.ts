@@ -55,10 +55,17 @@ import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import {
+  connectGatekeeperHandler,
+  createConnectionHandler,
+  listConnectionRequestsHandler,
+  requestConnectionHandler,
+} from './connection-handlers.js';
 import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
 import {
   deprecateOperationHandler,
   proposeOperationHandler,
+  publishManifestHandler,
   publishOperationHandler,
 } from './operation-manifest-handlers.js';
 import { requestActionHandler } from './request-action-handler.js';
@@ -892,4 +899,11 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S2.9 (docs/development-tasks.md S2.9) — worker-result-handler.ts.
   ['list_allowed_operations', listAllowedOperationsHandler],
   ['report_task_result', reportTaskResultHandler],
+  // S2.13 (docs/development-tasks.md S2.13) — connection-handlers.ts / operation-manifest-
+  // handlers.ts's own `publish_manifest`.
+  ['request_connection', requestConnectionHandler],
+  ['create_connection', createConnectionHandler],
+  ['connect_gatekeeper', connectGatekeeperHandler],
+  ['list_connection_requests', listConnectionRequestsHandler],
+  ['publish_manifest', publishManifestHandler],
 ]);

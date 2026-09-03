@@ -191,6 +191,18 @@ export type GrantStatus = (typeof GRANT_STATUS_VALUES)[number];
 export const GrantStatusSchema = asEnum(GRANT_STATUS_VALUES);
 
 // ---------------------------------------------------------------------------------------------
+// §5.1.4 Connection (S2.13): `requested → completed | cancelled`.
+// ---------------------------------------------------------------------------------------------
+
+/** ConnectionRequest status (S2.13, docs/development-tasks.md S2.13; design doc §5.1.4
+ *  Connection "建立"): a human-facing card produced by `request_connection`, resolved by the
+ *  owner's `create_connection` (this repo's implementation of the task brief's
+ *  `complete_connection`, see governance/connections/service.ts's own doc comment). */
+export const CONNECTION_REQUEST_STATUS_VALUES = ['requested', 'completed', 'cancelled'] as const;
+export type ConnectionRequestStatus = (typeof CONNECTION_REQUEST_STATUS_VALUES)[number];
+export const ConnectionRequestStatusSchema = asEnum(CONNECTION_REQUEST_STATUS_VALUES);
+
+// ---------------------------------------------------------------------------------------------
 // §5.1.4 Operation / Capability metadata
 // ---------------------------------------------------------------------------------------------
 

@@ -37,6 +37,8 @@ function fakeGatekeeperClient(operations: readonly Operation[]): GatekeeperClien
     apply: notImplemented('apply'),
     revert: notImplemented('revert'),
     health: notImplemented('health'),
+    storeConnectedAccount: notImplemented('storeConnectedAccount'),
+    deleteConnectedAccount: notImplemented('deleteConnectedAccount'),
   };
 }
 

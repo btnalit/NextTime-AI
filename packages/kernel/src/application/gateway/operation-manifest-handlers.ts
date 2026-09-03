@@ -2,6 +2,7 @@ import { OperationSchema } from '@nexttime/shared';
 import { z } from 'zod';
 import {
   deprecateOperation,
+  listDraftOperationsForGatekeeper,
   proposeOperation,
   publishOperation,
 } from '../../governance/gatekeepers/index.js';
@@ -15,6 +16,12 @@ import type { CapabilityHandler } from './capability-handler.js';
  * addition to `packages/shared/src/capabilities.ts`, in the same style as `publish_skill`/
  * `deprecate_skill`) — design doc §5.1.4 Operation, §5.4 I16/I17; docs/development-tasks.md S2.4
  * "propose_operation 产草稿，owner 发布".
+ *
+ * S2.13 addition: `publish_manifest` — the `connection` group's bulk counterpart to
+ * `publish_operation` above (design doc §7.5 "owner 发布清单"), publishing every currently-draft
+ * Operation of one Gatekeeper instance in one call rather than one `publish_operation` per name.
+ * Lives here, not connection-handlers.ts, because it is a thin loop over this file's own
+ * `publishOperation` and touches no `governance/connections` state at all.
  */
 
 const ProposeOperationParamsSchema = z.object({
@@ -76,5 +83,26 @@ export const deprecateOperationHandler: CapabilityHandler = async (client, works
     result: { gatekeeperId: record.gatekeeperId, name: record.name, status: record.status },
     resourceType: 'operation',
     resourceId: `${record.gatekeeperId}:${record.name}`,
+  };
+};
+
+/** `publish_manifest(gatekeeperId)` — publishes every draft Operation of one Gatekeeper instance.
+ *  Empty `publishedOperationNames` (no drafts to publish) is a successful, not an error, result —
+ *  the same "nothing to do" tolerance `deprecateOperation`'s own transition table would otherwise
+ *  reject one-at-a-time; a bulk call over zero rows is trivially a no-op. */
+export const publishManifestHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { gatekeeperId } = params as { gatekeeperId: string };
+  const drafts = await listDraftOperationsForGatekeeper(client, workspaceId, gatekeeperId);
+
+  const publishedOperationNames: string[] = [];
+  for (const draft of drafts) {
+    await publishOperation(client, workspaceId, { gatekeeperId, name: draft.name });
+    publishedOperationNames.push(draft.name);
+  }
+
+  return {
+    result: { gatekeeperId, publishedOperationNames },
+    resourceType: 'gatekeeper',
+    resourceId: gatekeeperId,
   };
 };

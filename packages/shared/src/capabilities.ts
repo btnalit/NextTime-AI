@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { WorkerDefinitionKindSchema } from './enums.js';
+import { ConnectionRequestStatusSchema, WorkerDefinitionKindSchema } from './enums.js';
 import type { CapabilityChannel, OperationMode, Role } from './enums.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
@@ -48,6 +48,18 @@ export interface Capability {
   readonly minRole?: Role;
   readonly paramsSchema: z.ZodType;
   readonly description: string;
+  /**
+   * S2.13 addition (design doc §11 "凭证不进任何 agent 进程，也不进内核进程"; docs/development-
+   * tasks.md S2.13 "内核数据库任何表中不存在凭证明文"): top-level param field names that
+   * `application/gateway/dispatch.ts` must replace with a fixed placeholder before writing this
+   * capability's call into `audit_records.payload` — the credential passed to `create_connection`
+   * is forwarded straight to the Gatekeeper's own ConnectedAccount store and must never reach any
+   * kernel table, audit included. Data, not a function (this registry is otherwise pure data,
+   * §9.3's own framing, and a plain string list stays trivially serializable for future tooling
+   * like `check-capability-consistency.ts`, S3.7). Absent (the default for every other capability)
+   * means the parsed params are audited verbatim, exactly as before this field existed.
+   */
+  readonly redactedParamKeys?: readonly string[];
 }
 
 const id = z.string().min(1);
@@ -302,6 +314,26 @@ const connectionCapabilities: readonly Capability[] = [
       'Propose connecting a new system; produces a connection-request card for a human to fill in credentials.',
   },
   {
+    // S2.13 extension (task brief: "add the follow-up capability the human uses to complete a
+    // connection ... e.g. complete_connection {connectionRequestId, endpoint, credential?,
+    // credentialKind, manifestSource?}"): this repo already registered `create_connection` for
+    // that step (design doc §9.3's own name) before S2.13 started — extended additively here
+    // rather than adding a second, competing capability name for the same action. Every new field
+    // is optional and `credentials` (existing, was required) is loosened to optional, so no
+    // pre-existing caller of the old shape breaks:
+    //   - `connectionRequestId`: the `request_connection` card being resolved, when there is one
+    //     (owner may also call this directly, S2.4's precedent for owner-channel testing).
+    //   - `endpoint`: the already-running Gatekeeper instance's own HTTP address (every transport
+    //     kind — including cli/ssh — is fronted by one, `@nexttime/gatekeeper-base`'s `server.ts`).
+    //   - `credentialKind`: `'connected_account'` (default when `credentials` is given) posts
+    //     `credentials` to the gate's per-`onBehalfOf` ConnectedAccount store; `'shared'` (default
+    //     when `credentials` is omitted) skips that call — the gate was already configured with a
+    //     shared/env credential out-of-band (§7.5, the docker/ragflow gates' own pattern).
+    //   - `onBehalfOf`: whose ConnectedAccount this credential is filed under; defaults to the
+    //     connection request's own requester, or the calling owner if there was no request.
+    //   - `manifestSource`: an OpenAPI document URL (`http`) or MCP server endpoint (`mcp`) to
+    //     import from; omitted falls back to the gate's own already-configured manifest
+    //     (`describe_operations`).
     name: 'create_connection',
     group: 'connection',
     mode: 'execute',
@@ -309,13 +341,19 @@ const connectionCapabilities: readonly Capability[] = [
     minRole: 'owner',
     paramsSchema: z
       .object({
+        connectionRequestId: id.optional(),
         kind: z.enum(['http', 'mcp', 'cli', 'ssh']),
         target: z.string(),
-        credentials: z.unknown(),
+        endpoint: z.string().min(1),
+        credentials: z.unknown().optional(),
+        credentialKind: z.enum(['shared', 'connected_account']).optional(),
+        onBehalfOf: id.optional(),
+        manifestSource: z.string().optional(),
       })
       .strict(),
     description:
       'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp.',
+    redactedParamKeys: ['credentials'],
   },
   {
     name: 'publish_manifest',
@@ -324,7 +362,7 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ gatekeeperId: id }).strict(),
-    description: 'Publish a Gatekeeper’s draft interface manifest (I16/I17).',
+    description: 'Publish every draft Operation in a Gatekeeper’s interface manifest (I16/I17).',
   },
   {
     name: 'connect_gatekeeper',
@@ -334,6 +372,17 @@ const connectionCapabilities: readonly Capability[] = [
     minRole: 'owner',
     paramsSchema: z.object({ gatekeeperId: id, principalId: id }).strict(),
     description: 'Grant a user’s entry agent use of an existing Gatekeeper (a CapabilityGrant).',
+  },
+  {
+    // S2.13 addition: the owner-facing queue `request_connection` cards land in — same "list a
+    // human queue" shape as `list_pending` (governance group) below.
+    name: 'list_connection_requests',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ status: ConnectionRequestStatusSchema.optional() }).strict(),
+    description: 'List ConnectionRequests, optionally filtered by status.',
   },
 ];
 
@@ -981,6 +1030,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'create_connection',
   'publish_manifest',
   'connect_gatekeeper',
+  'list_connection_requests',
   'publish_skill',
   'publish_procedure',
   'deprecate_skill',

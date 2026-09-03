@@ -48,4 +48,18 @@ describe('ConnectedAccountStore', () => {
     const raw = await readFile(join(dir, 'connected-accounts.json'), 'utf8');
     expect(raw).not.toContain('super-secret-value');
   });
+
+  it('delete removes a stored credential without touching others, and is idempotent', async () => {
+    const store = new ConnectedAccountStore({ dataDir: dir, keyFilePath });
+    await store.set('user-a', { token: 'secret-a' });
+    await store.set('user-b', { token: 'secret-b' });
+
+    await store.delete('user-a');
+    expect(await store.get('user-a')).toBeUndefined();
+    expect(await store.get('user-b')).toEqual({ token: 'secret-b' });
+
+    // Idempotent: deleting again (or a Principal that was never stored) does not throw.
+    await expect(store.delete('user-a')).resolves.toBeUndefined();
+    await expect(store.delete('user-never-stored')).resolves.toBeUndefined();
+  });
 });

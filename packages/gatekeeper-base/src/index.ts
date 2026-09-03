@@ -127,21 +127,29 @@ async function loadManifest(path: string | undefined): Promise<Operation[]> {
   return JSON.parse(raw) as Operation[];
 }
 
+/**
+ * S2.13: also returns the `ConnectedAccountStore` instance itself (`undefined` in shared mode) —
+ * `startGatekeeperServer` below passes it to `createGatekeeperServer` so `POST`/
+ * `DELETE /gate/connected-accounts` can write to the *same* store `observe`/`apply` read
+ * credentials from, rather than constructing (and discarding) a second one.
+ */
 function buildCredentialResolver(
   mode: string,
   dataDir: string,
   env: NodeJS.ProcessEnv,
-): CredentialResolver {
+): { resolver: CredentialResolver; connectedAccountStore: ConnectedAccountStore | undefined } {
   if (mode === 'connected_account') {
     const keyFilePath = env.GATE_STORE_KEY_FILE;
     if (!keyFilePath) {
       throw new Error('GATE_CREDENTIAL_MODE=connected_account requires GATE_STORE_KEY_FILE');
     }
-    return new ConnectedAccountCredentialResolver(
-      new ConnectedAccountStore({ dataDir, keyFilePath }),
-    );
+    const store = new ConnectedAccountStore({ dataDir, keyFilePath });
+    return {
+      resolver: new ConnectedAccountCredentialResolver(store),
+      connectedAccountStore: store,
+    };
   }
-  return new SharedEnvCredentialResolver({ env });
+  return { resolver: new SharedEnvCredentialResolver({ env }), connectedAccountStore: undefined };
 }
 
 function buildTransport(kind: string, env: NodeJS.ProcessEnv): Transport {
@@ -184,7 +192,7 @@ export async function startGatekeeperServer(
   const dataDir = resolveGateDataDir(env);
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
   const transport = buildTransport(env.GATE_TRANSPORT_KIND ?? 'http', env);
-  const credentialResolver = buildCredentialResolver(
+  const { resolver: credentialResolver, connectedAccountStore } = buildCredentialResolver(
     env.GATE_CREDENTIAL_MODE ?? 'shared',
     dataDir,
     env,
@@ -192,7 +200,7 @@ export async function startGatekeeperServer(
   const idempotencyStore = new JsonFileIdempotencyStore(dataDir);
 
   const gate = new GatekeeperBase({ manifest, transport, credentialResolver, idempotencyStore });
-  const app = createGatekeeperServer({ gate, logger: true });
+  const app = createGatekeeperServer({ gate, logger: true, connectedAccountStore });
 
   const port = Number(env.GATE_PORT ?? 8090);
   const host = env.GATE_BIND_ADDR ?? '0.0.0.0';

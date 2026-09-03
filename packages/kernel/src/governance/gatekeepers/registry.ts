@@ -112,3 +112,17 @@ export async function getGatekeeper(
     endpoint: props.endpoint,
   };
 }
+
+/**
+ * Thrown by callers that need a registered Gatekeeper and got `null` from `getGatekeeper`
+ * (`application/gateway/request-action-handler.ts`, `governance/connections/service.ts`). One
+ * class, owned here by the module that owns the Gatekeeper Object, so `interfaces/http` and
+ * `interfaces/ws` map a single `instanceof` to 404 — before S2.13 each consumer declared its own
+ * same-named class and only the request_action one was mapped.
+ */
+export class GatekeeperNotFoundError extends Error {
+  constructor(gatekeeperId: string) {
+    super(`Gatekeeper not found: ${gatekeeperId}`);
+    this.name = 'GatekeeperNotFoundError';
+  }
+}
