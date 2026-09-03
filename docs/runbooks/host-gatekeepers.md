@@ -19,13 +19,14 @@
 ## 1. 目的
 
 验证两件事：① `gatekeeper-docker`/`gatekeeper-ragflow` 两个镜像能构建、起服务、`/gate/health`
-与 `/gate/describe_operations` 可达；② S2.13 落地前的手工注册路径（`bootstrap.js
-register-gatekeeper`）能把一个门实例注册进图、导入并发布它的 Operation 清单，随后从 owner 的
-human 通道 `request_action` 走一遍完整的 observe / execute（含审批）/ 幂等 apply 流程。
+与 `/gate/describe_operations` 可达；② `bootstrap.js register-gatekeeper` 这条主机操作员的手工
+注册路径能把一个门实例注册进图、导入并发布它的 Operation 清单，随后从 owner 的 human 通道
+`request_action` 走一遍完整的 observe / execute（含审批）/ 幂等 apply 流程。S2.13 落地后新增的
+capability 驱动流程（`request_connection` 卡片 → `create_connection` → `connect_gatekeeper`）见
+§10，两条路径并存——§5/§10 的区别、什么时候用哪条，见§10 开头一段。
 
-不含：S2.13 的 `request_connection` 卡片流程本身（未落地）；`gatekeeper-ragflow` 对一个真实
-RAGFlow 实例的端到端验收（本机大概率没有可用的 RAGFlow 部署——§7 只验证服务能起、清单能注册，
-不要求真实调用其 REST API 成功）。
+不含：`gatekeeper-ragflow` 对一个真实 RAGFlow 实例的端到端验收（本机大概率没有可用的 RAGFlow 部署
+——§7 只验证服务能起、清单能注册，不要求真实调用其 REST API 成功）。
 
 ## 2. 构建镜像
 
@@ -256,7 +257,76 @@ docker rm -f nexttime-gate-test
 docker compose stop gatekeeper-docker gatekeeper-ragflow
 ```
 
-## 10. `ragflow` 门——若本机有可用的 RAGFlow 实例
+## 10. S2.13：capability 驱动的连接流程（`request_connection` → `create_connection` → `connect_gatekeeper`）
+
+§5 用的 `bootstrap.js register-gatekeeper` 是主机操作员的命令行路径——直接对着已经跑起来的门容器
+操作，不经过任何用户/权限模型，适合"这台主机上先起服务、验证服务本身没问题"这类场景，本 runbook
+从 §2 到 §9 全程用的就是它。S2.13 落地的是**同一批底层函数**（`governance/gatekeepers` 的
+`registerGatekeeper`/`importManifest`/`publishOperation`）在**capability 层**的封装——`request_
+connection`/`create_connection`/`connect_gatekeeper`/`list_connection_requests`（`governance/
+connections`）——面向的是"某个用户（可能不是主机操作员本人）想通过对话或 web 的连接系统页接入一个
+系统，owner 审核并把它授权给该用户"这个场景，走的是 kernel 的 HTTP/WS capability 接口而不是主机
+上的 shell。两条路径背后是同一个 Gatekeeper 注册与清单导入实现，选哪条只取决于"谁在发起、经哪个
+入口"。
+
+本节复用 §4 建好的 workspace/owner（`WORKSPACE_ID`/`OWNER_ID`/`OWNER_KEY`），并需要一个第二个用户
+（`member` 角色）——没有的话先用 `bootstrap.js add-principal` 建一个：
+
+```bash
+docker compose exec -T kernel node dist/cli/bootstrap.js add-principal \
+  --workspace "${WORKSPACE_ID}" --name "member" --role member
+# 记下 principal id 与 key：
+MEMBER_ID=<member-uuid>
+MEMBER_KEY=<member-api-key>
+```
+
+以下全部经 `POST /api/cap/<name>`（human 通道，`Authorization: Bearer <api-key>`）。`request_
+connection` 与 `create_connection` 都可以用 owner 自己的 key 发起（owner 对 Handle 通道 capability
+同样放行，见 §6 的既有说明）——这里演示更贴近真实场景的两步：owner 用**已经在跑的** `gatekeeper-
+docker` 门容器地址完成连接，而不是像 §5 那样走 CLI：
+
+```bash
+# 1. request_connection —— 产生一张连接请求卡片
+curl -s http://kernel:8080/api/cap/request_connection \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"kind":"cli","target":"docker"}'
+# {"ok":true,"result":{"connectionRequestId":"<cr-uuid>","status":"requested"}}
+CONNECTION_REQUEST_ID=<cr-uuid>
+
+# 2. list_connection_requests —— owner 的连接队列里能看到这张卡片
+curl -s http://kernel:8080/api/cap/list_connection_requests \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"status":"requested"}'
+
+# 3. create_connection（本仓库对派发文字 complete_connection 的实现，见 governance/connections/
+#    service.ts 头注释的命名对照表）—— 用 docker 门容器自己的地址完成这张请求；docker 门只用共享
+#    env 凭证（S2.5 既有配置），credentialKind 传 'shared'，不经过 ConnectedAccount 存储
+curl -s http://kernel:8080/api/cap/create_connection \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d "{\"connectionRequestId\":\"${CONNECTION_REQUEST_ID}\",\"kind\":\"cli\",\"target\":\"docker\",\"endpoint\":\"http://gatekeeper-docker:8083\",\"credentialKind\":\"shared\"}"
+# {"ok":true,"result":{"gatekeeperId":"<gk-uuid>","importedOperationNames":[...7 个...],"connectionRequestId":"<cr-uuid>"}}
+GATEKEEPER_ID_2=<gk-uuid>
+
+# 4. publish_manifest —— 一次性发布这份新导入的整份草稿清单（§5 的 register-gatekeeper --publish
+#    true 等价物；也可以用 meta 分组的 publish_operation 逐条发）
+curl -s http://kernel:8080/api/cap/publish_manifest \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d "{\"gatekeeperId\":\"${GATEKEEPER_ID_2}\"}"
+
+# 5. connect_gatekeeper —— 把这个门授予 member 的入口 agent（写一条 capability_grants）
+curl -s http://kernel:8080/api/cap/connect_gatekeeper \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d "{\"gatekeeperId\":\"${GATEKEEPER_ID_2}\",\"principalId\":\"${MEMBER_ID}\"}"
+```
+
+期望：第 3 步 `importedOperationNames` 与 §5 注册 `docker` 门时看到的 7 个 Operation 名字一致；
+第 5 步之后，`member` 下一次开启对话（其入口容器重新签发入口 Handle 时——已缓存的 Handle 要么等
+自然重签、要么重启该用户的入口容器强制刷新）能对 `find_operations("container")`
+之类的查询看到这个门暴露的已发布 Operation；`docker compose exec -T kernel psql ...` 查
+`capability_grants` 表能看到 `capability='gatekeeper'`、`scope->>'resourceScope'` 等于
+`GATEKEEPER_ID_2` 的一行。
+
+## 11. `ragflow` 门——若本机有可用的 RAGFlow 实例
 
 §5 已注册并发布了 `ragflow` 门的清单（`kb.list kb.documents retrieve document.upload
 document.parse`）。若 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 已填入真实
@@ -269,7 +339,7 @@ document.parse`）。若 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 已�
 上传要求 `multipart/form-data`）。本机没有可用 RAGFlow 部署时，跳过本节，§3/§5 的服务可达性 +
 清单注册/发布已经是 S2.5 对 `ragflow` 门的完整交付范围。
 
-## 11. 已知偏离 / 待确认（PR 中一并说明）
+## 12. 已知偏离 / 待确认（PR 中一并说明）
 
 - **`compose.up`/`compose.down` 是"启动/停止该 compose 项目下已存在的容器"，不是完整的
   `docker compose up/down`**：镜像里只有 `dockerode`（Docker Engine API），没有 `docker
@@ -277,16 +347,18 @@ document.parse`）。若 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 已�
   network/volume。见 `gatekeepers/docker/README.md`"compose.up/compose.down — 已知偏离"。S2.5
   验收原文只要求 `container.restart` 的幂等 apply，没有把 `compose.up`/`compose.down` 的真实语义
   列入验收范围，因此这个简化没有拿掉任何验收覆盖。
-- **`document.upload` 不支持真实文件内容**：见 §10 与 `gatekeepers/ragflow/README.md`。
+- **`document.upload` 不支持真实文件内容**：见 §11 与 `gatekeepers/ragflow/README.md`。
 - **RAGFlow 的 `{code, data}` 错误信封对协议不可见**：一次 `code != 0` 的 RAGFlow 响应会被这个
   门当成`ok:true`（HTTP 200），`observedFacts` 为空——调用方需要自己检查 `data.code`/
   `data.message`。见 `gatekeepers/ragflow/README.md`。
-- **`register-gatekeeper` 是 S2.13 落地前的过渡手工路径**：`governance/gatekeepers`（S2.4）已经
-  提供 `registerGatekeeper`/`importManifest`/`publishOperation` 服务函数；S2.13 的
-  `request_connection` 卡片流程（人填地址凭证 → 门实例注册 → 清单草稿导入 → owner 发布）预期会
-  调用同一批函数，而不是重新实现——见 `governance/gatekeepers/registry.ts`/`manifest.ts` 的模块
-  注释。本 runbook 用的 `bootstrap.js register-gatekeeper` 子命令只是把这几个函数串起来的最小
-  CLI 包装，不是 S2.13 本身。
+- **`register-gatekeeper` 与 S2.13 的 capability 流程并存，不是被取代**：`governance/gatekeepers`
+  （S2.4）提供 `registerGatekeeper`/`importManifest`/`publishOperation` 服务函数；S2.13 的
+  `governance/connections`（`request_connection`/`create_connection`/`connect_gatekeeper`，§10）
+  确实调用的是同一批函数，而不是重新实现——见 `governance/connections/service.ts`/
+  `governance/gatekeepers/registry.ts`/`manifest.ts` 的模块注释。`bootstrap.js
+  register-gatekeeper` 子命令没有被移除：它是主机操作员在 shell 里直接操作、不经过用户/Grant 模型
+  的路径，S2.13 的 capability 流程是面向终端用户、经 owner 审核与 `connect_gatekeeper` 显式授权
+  的路径——两者服务不同的角色，§10 开头一段有更完整的对比。
 - **`compose.up`/`compose.down` 的 `await_decision` 未在 S2.5 派发文字里明确给出**：本次实现
   设为 `true`（与 `container.restart` 的显式 `false` 不同）——高影响半径的操作默认走同步等待
   批准的路径，更保守；`gatekeepers/docker/manifest.json`/`README.md` 已记录这个判断。
