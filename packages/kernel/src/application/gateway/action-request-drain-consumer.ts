@@ -1,6 +1,7 @@
 import { IllegalTransition } from '@nexttime/shared';
 import type { ApprovalDrainer } from '../../governance/approval/index.js';
 import { getActionRequest } from '../../governance/approval/index.js';
+import { SYSTEM_ACTOR_PLACEHOLDER } from '../../governance/gatekeepers/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
 import type { WithTransactionFn } from './action-executor.js';
 
@@ -20,8 +21,8 @@ import type { WithTransactionFn } from './action-executor.js';
  * not a per-request one — the same category as the outbox dispatcher itself and the S2.3 approval-
  * expiry reaper).
  *
- * Harmless races with `request_action`'s own inline execution (`request-action-handler.ts`'s
- * `executeActionRequestInline`) are expected and tolerated: `startActionRequestExecution`'s row
+ * Harmless races with `request_action`'s own phase-2 execution (`request-action-handler.ts`'s
+ * `tryExecuteInline`) are expected and tolerated: `startActionRequestExecution`'s row
  * locking + conditional UPDATE serializes correctly regardless of which caller wins, so a race
  * loss here surfaces as an `IllegalTransition` from deep inside `drainGatekeeper` — swallowed
  * (not passed to `onError`) since it means "already handled", not a real failure. Any *other*
@@ -40,11 +41,6 @@ export interface ActionRequestUpdatedSource {
 }
 
 const DRAINABLE_STATUSES = new Set(['auto_approved', 'approved']);
-
-/** A fixed, non-dereferenced placeholder — `withTransaction`'s admin-mode implementation
- *  (`skipRoleSwitch: true`) bypasses RLS entirely, so this value is never actually checked against
- *  `principals`; it only satisfies `withWorkspace`'s "non-empty principalId" precondition. */
-const SYSTEM_ACTOR_PLACEHOLDER = '00000000-0000-0000-0000-000000000000';
 
 export function registerActionRequestDrainConsumer(
   dispatcher: ActionRequestUpdatedSource,

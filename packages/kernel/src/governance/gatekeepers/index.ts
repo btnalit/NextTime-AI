@@ -37,3 +37,5 @@ export type {
 } from './manifest.js';
 
 export { getOrCreateGatekeeperServicePrincipal } from './service-principal.js';
+
+export { SYSTEM_ACTOR_PLACEHOLDER } from './system-actor.js';

@@ -20,27 +20,38 @@ import {
   approveActionRequest,
   getActionRequest,
 } from '../../governance/approval/index.js';
-import { importManifest, publishOperation } from '../../governance/gatekeepers/index.js';
-import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import {
+  importManifest,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
-import type { WithTransactionFn } from './action-executor.js';
-import { createGatekeeperActionExecutor } from './action-executor.js';
+import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { dispatchCapability } from './dispatch.js';
 import { setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
  * Integration tests (real Postgres + a real fake Gatekeeper HTTP server; auto-skip without
- * DATABASE_URL) for `request_action` end-to-end (design doc §5.1.4/§7.4/§8.1; docs/development-
- * tasks.md S2.4 acceptance): observe path writes an observed Fact; execute path with auto-approve
- * executes once; execute path pending → approve → drainer executes exactly once (idempotent on
- * re-drain); unclassified operation → require_approval; draft operation never executes.
+ * DATABASE_URL) for `request_action` end-to-end, including the S2.4 two-phase fix (coordinator
+ * review, PR #42 — see request-action-handler.ts's own module doc comment for the full
+ * phase-1/phase-2 decision table). Three scenarios specifically exercise what the single-phase
+ * version got wrong:
  *
- * The fake Gatekeeper is a *real* `@nexttime/gatekeeper-base` `GatekeeperBase` + Fastify server,
- * listening on a real local port, with a fake `Transport` recording invocation counts — this
- * exercises the actual HTTP wire (adapters/gatekeeper-client ⇄ gatekeeper-base/server.ts), not
- * just an in-process fake of the client port.
+ *   1. `await_decision:true`, approved from a genuinely separate connection ~150ms after the
+ *      call starts → must actually observe the approval and execute (a single-phase handler
+ *      polling its own still-open transaction could never see it — this would just time out).
+ *   2. `auto_approved` → the gate is only ever called once the ActionRequest row is visible from
+ *      a second pool connection (proven from *inside* the fake gate's own transport, not
+ *      inferred) — the single-phase version called `apply` while the row (and its audit/outbox
+ *      rows) were still uncommitted.
+ *   3. The async drain consumer and phase 2's own execution attempt racing on the same row still
+ *      apply exactly once.
+ *
+ * The fake Gatekeeper is a *real* `@nexttime/gatekeeper-base` `GatekeeperBase` + Fastify server on
+ * a real local port — this exercises the actual HTTP wire (adapters/gatekeeper-client ⇄
+ * gatekeeper-base/server.ts), not an in-process fake of the client port.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -68,12 +79,46 @@ function humanCaller(
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Records every `invoke()` call, and — for `execute`-mode operations — proves the ActionRequest
+ * row is visible (`status = 'executing'`) from a *second*, independently-acquired connection at
+ * the moment the gate is actually invoked. This is exactly the property the pre-fix single-phase
+ * handler violated (it called `apply` while the row was still sitting inside the still-open
+ * phase-1 transaction, invisible to every other connection).
+ */
 class RecordingTransport implements Transport {
   readonly kind = 'http' as const;
   readonly calls: Record<string, number> = {};
+  readonly visibilityChecks: Record<string, boolean> = {};
+  private readonly pool: Pool;
+  private readonly workspaceId: string;
+
+  constructor(pool: Pool, workspaceId: string) {
+    this.pool = pool;
+    this.workspaceId = workspaceId;
+  }
 
   async invoke(operation: Operation, params: unknown): Promise<TransportInvokeResult> {
     this.calls[operation.name] = (this.calls[operation.name] ?? 0) + 1;
+
+    if (operation.mode === 'execute') {
+      const client = await this.pool.connect();
+      try {
+        const result = await client.query<{ n: number }>(
+          `select count(*)::int as n from action_requests
+           where workspace_id = $1 and action_kind = $2 and status = 'executing'`,
+          [this.workspaceId, operation.name],
+        );
+        this.visibilityChecks[operation.name] = (result.rows[0]?.n ?? 0) >= 1;
+      } finally {
+        client.release();
+      }
+    }
+
     if (operation.name === 'observe.stock') {
       return { data: { items: [{ sku: 'X1', qty: 7 }] } };
     }
@@ -139,6 +184,41 @@ const DRAFT_OP: Operation = {
   writes: [],
 };
 
+/** `awaitDecisionTimeoutMs` for this whole suite — short enough that the two "let it time out"
+ *  tests stay fast, long enough that the ~150ms-delayed external-approve tests comfortably land
+ *  within budget (phase 2 polls every 200ms — see request-action-handler.ts's
+ *  `PHASE2_POLL_INTERVAL_MS`). */
+const AWAIT_DECISION_TIMEOUT_MS = 800;
+const APPROVE_DELAY_MS = 150;
+
+async function waitForActionRequestByStatus(
+  pool: Pool,
+  workspaceId: string,
+  actionKind: string,
+  status: string,
+): Promise<string> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const client = await pool.connect();
+    let id: string | undefined;
+    try {
+      const result = await client.query<{ id: string }>(
+        `select id from action_requests
+         where workspace_id = $1 and action_kind = $2 and status = $3
+         order by requested_at desc limit 1`,
+        [workspaceId, actionKind, status],
+      );
+      id = result.rows[0]?.id;
+    } finally {
+      client.release();
+    }
+    if (id) return id;
+    await sleep(20);
+  }
+  throw new Error(
+    `timed out waiting for an action_requests row: action_kind=${actionKind} status=${status}`,
+  );
+}
+
 describe.runIf(DATABASE_URL !== undefined)(
   'request_action (integration, real Postgres + fake gate)',
   () => {
@@ -149,7 +229,6 @@ describe.runIf(DATABASE_URL !== undefined)(
     let fakeGateApp: FastifyInstance;
     let transport: RecordingTransport;
     let drainer: ApprovalDrainer;
-    let adminWithTransaction: WithTransactionFn;
 
     async function adminInsertWorkspace(name: string): Promise<string> {
       const id = randomUUID();
@@ -186,7 +265,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       workspaceId = await adminInsertWorkspace('request-action-test-workspace');
       ownerId = await adminInsertPrincipal('owner');
 
-      transport = new RecordingTransport();
+      transport = new RecordingTransport(pool, workspaceId);
       const gate = new GatekeeperBase({
         manifest: [OBSERVE_OP, AUTO_OP, PENDING_OP, DRAFT_OP],
         transport,
@@ -225,13 +304,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         // DRAFT_OP is deliberately never published.
       });
 
+      const gatekeeperClient = new HttpGatekeeperClient();
+      const adminWithTransaction = createAdminWithTransaction(pool);
       setRequestActionDeps({
-        gatekeeperClient: new HttpGatekeeperClient(),
-        awaitDecisionTimeoutMs: 300,
+        gatekeeperClient,
+        actionExecutor: createGatekeeperActionExecutor({
+          gatekeeperClient,
+          withTransaction: adminWithTransaction,
+        }),
+        awaitDecisionTimeoutMs: AWAIT_DECISION_TIMEOUT_MS,
       });
 
-      adminWithTransaction = (ws, principalId, fn) =>
-        withWorkspace(pool, { workspaceId: ws, principalId }, fn, { skipRoleSwitch: true });
       drainer = new ApprovalDrainer({
         executor: createGatekeeperActionExecutor({
           gatekeeperClient: new HttpGatekeeperClient(),
@@ -269,7 +352,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(facts[0]?.epistemicStatus).toBe('observed');
     });
 
-    it('execute path with auto-approve executes once', async () => {
+    it('auto-approve executes exactly once, and the gate is only called once the row is visible from another connection', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const before = transport.calls[AUTO_OP.name] ?? 0;
 
@@ -281,27 +364,28 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(result.status).toBe('executed');
       expect(transport.calls[AUTO_OP.name]).toBe(before + 1);
+      expect(transport.visibilityChecks[AUTO_OP.name]).toBe(true);
     });
 
-    // Ordering note: this test must run before the "unclassified"/"draft" tests below, which each
-    // leave a permanently-`pending_approval` row on this same gatekeeper's queue. `drainGatekeeper`
-    // processes `listExecutableQueue`'s rows in `requested_at` order and stops at the first
-    // `pending_approval` row it reaches (§8.1 "遇 pending 停") — an earlier-requested stray pending
-    // row would make the drain below stop before ever reaching this test's own (now `approved`)
-    // row. Vitest runs `it()` blocks within one file in declaration order by default (no
-    // `.concurrent`/shuffle configured, packages/kernel/vitest.config.ts), so this is deterministic.
-    it('execute path pending → approve → drainer executes exactly once (idempotent on re-drain)', async () => {
+    it('await_decision:true resolves once a *different connection* approves it mid-wait, and executes exactly once', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const before = transport.calls[PENDING_OP.name] ?? 0;
 
-      const pendingResult = (await dispatchCapability({ pool }, caller, 'request_action', {
+      const resultPromise = dispatchCapability({ pool }, caller, 'request_action', {
         gatekeeperId,
         operation: PENDING_OP.name,
         params: { qty: 2 },
-      })) as { status: string; actionRequestId: string };
-      expect(pendingResult.status).toBe('pending_approval');
+      }) as Promise<{ status: string; actionRequestId: string; data?: unknown }>;
 
-      const actionRequestId = pendingResult.actionRequestId;
+      // Deliberately a separate connection/transaction, not the one phase 1 used — this is exactly
+      // what a human's `approve()` call looks like in production.
+      await sleep(APPROVE_DELAY_MS);
+      const actionRequestId = await waitForActionRequestByStatus(
+        pool,
+        workspaceId,
+        PENDING_OP.name,
+        'pending_approval',
+      );
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         approveActionRequest(client, workspaceId, {
           actionRequestId,
@@ -310,9 +394,51 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
 
-      await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
-      await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId); // re-drain — must not double-execute
+      const result = await resultPromise;
+      expect(result.status).toBe('executed');
+      expect(result.data).toBeDefined();
+      expect(transport.calls[PENDING_OP.name]).toBe(before + 1);
+      expect(transport.visibilityChecks[PENDING_OP.name]).toBe(true);
 
+      const finalRow = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      expect(finalRow?.status).toBe('executed');
+    });
+
+    it('the async drain consumer racing phase 2 on the same approved row still executes exactly once', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const before = transport.calls[PENDING_OP.name] ?? 0;
+
+      const resultPromise = dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params: { qty: 3 },
+      }) as Promise<{ status: string; actionRequestId: string; data?: unknown }>;
+
+      const actionRequestId = await waitForActionRequestByStatus(
+        pool,
+        workspaceId,
+        PENDING_OP.name,
+        'pending_approval',
+      );
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        approveActionRequest(client, workspaceId, {
+          actionRequestId,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+
+      // Race the drainer (what the outbox consumer / periodic tick would trigger) directly against
+      // phase 2's own poll-and-execute — both may attempt `startActionRequestExecution` on the same
+      // row; the row lock + conditional UPDATE must let only one of them actually call `apply`.
+      const [result] = await Promise.all([
+        resultPromise,
+        drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId),
+      ]);
+
+      expect(result.status).toBe('executed');
       expect(transport.calls[PENDING_OP.name]).toBe(before + 1);
 
       const finalRow = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>

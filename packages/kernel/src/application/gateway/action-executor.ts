@@ -1,4 +1,6 @@
 import type { PoolClient } from 'pg';
+import type { PoolLike } from '../../adapters/db/pool.js';
+import { withWorkspace } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import type { ActionExecutor, ActionExecutorResult } from '../../governance/approval/index.js';
 import type { ActionRequestRow } from '../../governance/approval/index.js';
@@ -28,6 +30,21 @@ export type WithTransactionFn = <T>(
   principalId: string,
   fn: (client: PoolClient) => Promise<T>,
 ) => Promise<T>;
+
+/**
+ * Builds the admin-mode (`skipRoleSwitch: true`) `WithTransactionFn` every background/system
+ * consumer of the Gatekeeper execution path shares: the periodic drain tick, the
+ * `ActionRequestUpdated` outbox consumer, and `request_action`'s own `afterCommit` phase-2
+ * continuation (S2.4 two-phase fix, request-action-handler.ts) — none of these run inside a
+ * per-request RLS context (there is no single request driving them), the same category as the
+ * outbox dispatcher and the approval-expiry reaper. One factory, not one inline arrow function per
+ * call site, so "how the Gatekeeper execution path opens a background transaction" has exactly one
+ * definition.
+ */
+export function createAdminWithTransaction(pool: PoolLike): WithTransactionFn {
+  return (workspaceId, principalId, fn) =>
+    withWorkspace(pool, { workspaceId, principalId }, fn, { skipRoleSwitch: true });
+}
 
 export interface GatekeeperActionExecutorDeps {
   readonly gatekeeperClient: GatekeeperClient;

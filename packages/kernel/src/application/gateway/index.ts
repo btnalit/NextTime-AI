@@ -44,7 +44,7 @@ export {
 } from './request-action-handler.js';
 export type { RequestActionHandlerDeps } from './request-action-handler.js';
 
-export { createGatekeeperActionExecutor } from './action-executor.js';
+export { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 export type {
   GatekeeperActionExecutorDeps,
   WithTransactionFn,

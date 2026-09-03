@@ -21,6 +21,25 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * capability here) never persist either. A capability with no wired handler
  * (`CapabilityNotImplementedError`, HTTP 501) never opens a transaction at all — nothing was
  * "executed", so there is nothing to audit.
+ *
+ * **Two-phase handlers** (S2.4, `CapabilityHandlerResult.afterCommit` — capability-handler.ts):
+ * a handler may return `afterCommit(pool)` alongside its phase-1 `result`. Phase 1 (this
+ * function's existing behavior, unchanged) runs the handler inside the one transaction, writes
+ * the audit row for the *phase-1* result, and commits — this is deliberately correct as-is: the
+ * phase-1 result (e.g. `request_action`'s `{actionRequestId, status}`) is what actually happened
+ * inside this transaction, and any phase-2 state transitions (approve-triggered execution, etc.)
+ * write their own audit rows through the governed service functions that perform them, same as
+ * every other multi-step governed flow in this codebase. Only once the transaction has committed
+ * (so the row a phase-2 continuation needs to see — e.g. a human approving it from a different
+ * connection — is actually visible outside this call) does `dispatchCapability` invoke
+ * `afterCommit(deps.pool)` and use *its* resolved value as the capability's real `result`. A
+ * handler with no `afterCommit` behaves exactly as before. `afterCommit` is intentionally generic
+ * and tiny (one function, `pool` in, `unknown` out) — `request_action` (this task) is the first
+ * user; S2.7's `invoke_worker` (a long, possibly-async wait with the same "must not hold the
+ * request's own transaction open" constraint) is expected to need the identical shape. An error
+ * thrown by `afterCommit` propagates and is mapped exactly like any other handler error — the
+ * phase-1 work has already committed by then regardless (it is not, and cannot be, rolled back by
+ * a phase-2 failure).
  */
 
 export class CapabilityNotFoundError extends Error {
@@ -89,20 +108,29 @@ export async function dispatchCapability(
   const { workspaceId, principalId } = callerContext(caller);
   const onBehalfOf = principalId;
 
-  return withWorkspace(deps.pool, { workspaceId, principalId }, async (client) => {
-    const handlerResult = await handler(client, workspaceId, parsed.data, {
-      channel: caller.channel,
-      principalId,
-      scope: caller.channel === 'handle' ? caller.claims.scope : undefined,
-    });
-    await writeAudit(client, {
-      workspaceId,
-      actorPrincipalId: principalId,
-      action: name,
-      resourceType: handlerResult.resourceType,
-      resourceId: handlerResult.resourceId,
-      payload: { channel: caller.channel, onBehalfOf, params: parsed.data },
-    });
-    return handlerResult.result;
-  });
+  const handlerResult = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId },
+    async (client) => {
+      const result = await handler(client, workspaceId, parsed.data, {
+        channel: caller.channel,
+        principalId,
+        scope: caller.channel === 'handle' ? caller.claims.scope : undefined,
+      });
+      await writeAudit(client, {
+        workspaceId,
+        actorPrincipalId: principalId,
+        action: name,
+        resourceType: result.resourceType,
+        resourceId: result.resourceId,
+        payload: { channel: caller.channel, onBehalfOf, params: parsed.data },
+      });
+      return result;
+    },
+  );
+
+  if (handlerResult.afterCommit) {
+    return handlerResult.afterCommit(deps.pool);
+  }
+  return handlerResult.result;
 }

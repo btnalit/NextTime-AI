@@ -1,5 +1,6 @@
 import type { CapabilityChannel, CapabilityScope } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import type { PoolLike } from '../../adapters/db/pool.js';
 
 /**
  * application/gateway/capability-handler: the `CapabilityHandler` shape every capability handler
@@ -14,6 +15,17 @@ export interface CapabilityHandlerResult {
   readonly result: unknown;
   readonly resourceType?: string;
   readonly resourceId?: string;
+  /**
+   * Optional post-commit continuation (S2.4 two-phase handler — see dispatch.ts's own doc
+   * comment for the full contract). When present, `dispatchCapability` runs it *after* the
+   * phase-1 transaction (this handler's own `client`) has committed, passing the same `pool` the
+   * capability route was given, and uses its resolved value as the capability's real result
+   * instead of `result` above. Exists so a handler whose real outcome depends on state becoming
+   * visible to *other* connections (e.g. a human approving an ActionRequest from a different
+   * request) never has to hold the phase-1 transaction open across that wait — `request_action`
+   * (request-action-handler.ts) is the first user.
+   */
+  readonly afterCommit?: (pool: PoolLike) => Promise<unknown>;
 }
 
 /**

@@ -2,16 +2,18 @@ import { fileURLToPath } from 'node:url';
 import { IllegalTransition } from '@nexttime/shared';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
-import { createPool, withWorkspace } from './adapters/db/pool.js';
+import { createPool } from './adapters/db/pool.js';
+import type { PoolLike } from './adapters/db/pool.js';
 import { HttpGatekeeperClient } from './adapters/gatekeeper-client/index.js';
 import { createChatEventSink, interruptStaleRunningTurns } from './application/chat/index.js';
 import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
 import {
+  createAdminWithTransaction,
   createGatekeeperActionExecutor,
   registerActionRequestDrainConsumer,
   setRequestActionDeps,
 } from './application/gateway/index.js';
-import type { WithTransactionFn } from './application/gateway/index.js';
+import type { GatekeeperActionExecutorDeps } from './application/gateway/index.js';
 import type { AgentRuntime } from './application/host-bridge/index.js';
 import {
   AgentHostRuntime,
@@ -26,6 +28,7 @@ import {
 } from './governance/approval/index.js';
 import type { HandleKeyPair } from './governance/capability/index.js';
 import { loadHandleKeyPair } from './governance/capability/index.js';
+import { SYSTEM_ACTOR_PLACEHOLDER } from './governance/gatekeepers/index.js';
 import type { CapabilityRouteDeps } from './interfaces/http/index.js';
 import { registerCapabilityRoutes } from './interfaces/http/index.js';
 import type { InternalRoutesDeps } from './interfaces/http/internal/index.js';
@@ -35,6 +38,28 @@ import {
   registerWsRoute,
   setAgentHostRuntimeForWsRoute,
 } from './interfaces/ws/index.js';
+
+/**
+ * The one canonical construction of "a `GatekeeperClient` + the admin-mode `ActionExecutor` over
+ * it" (S2.4 coordinator review — "the single shared executor path"): `createServer()` uses it to
+ * wire `request_action`'s phase-2 continuation (`setRequestActionDeps`), `createBackgroundServices`
+ * uses it to wire `ApprovalDrainer`. Two separate `ActionExecutor` instances (one per caller) are
+ * behaviorally identical — the type has no internal state, it is purely a function of
+ * `gatekeeperClient`/`withTransaction` — so this is about having exactly one definition of *how*
+ * to build one, not about sharing a single JS object across the sync/async construction split
+ * below (`createServer` has no async dependency and can build its own before the port opens;
+ * `createBackgroundServices` is built later, once `AgentRuntime`'s own async bootstrap finishes).
+ */
+interface GatekeeperExecutionDeps extends GatekeeperActionExecutorDeps {
+  readonly actionExecutor: ReturnType<typeof createGatekeeperActionExecutor>;
+}
+
+function buildGatekeeperExecutionDeps(pool: PoolLike): GatekeeperExecutionDeps {
+  const gatekeeperClient = new HttpGatekeeperClient();
+  const withTransaction = createAdminWithTransaction(pool);
+  const actionExecutor = createGatekeeperActionExecutor({ gatekeeperClient, withTransaction });
+  return { gatekeeperClient, withTransaction, actionExecutor };
+}
 
 /**
  * Builds the kernel's Fastify instance. This is the composition root (design doc §7.1, §7.10):
@@ -57,13 +82,16 @@ export function createServer(
   const app = Fastify({ logger: options.logger ?? false });
 
   // S2.4: wired here (not createBackgroundServices) so `request_action` is servable as soon as
-  // the port opens, not only once the async AgentRuntime bootstrap below finishes — it needs
-  // nothing that bootstrap produces (see request-action-handler.ts's own doc comment: every
-  // execution path runs on the capability call's own already-open `client`, never a pool it would
-  // have to wait for). `ApprovalDrainer`'s async trigger paths (outbox consumer + periodic tick)
-  // do need the OutboxDispatcher, so those remain in createBackgroundServices below.
+  // the port opens, not only once the async AgentRuntime bootstrap below finishes — building a
+  // `GatekeeperClient` + admin-mode `ActionExecutor` needs nothing async, only `deps.pool`
+  // (already in hand here). `ApprovalDrainer`'s other two trigger paths (outbox consumer +
+  // periodic tick) do need the OutboxDispatcher, so those remain in createBackgroundServices
+  // below — but phase 2 of `request_action` itself (request-action-handler.ts's `afterCommit`)
+  // never waits on them.
+  const { gatekeeperClient, actionExecutor } = buildGatekeeperExecutionDeps(deps.pool);
   setRequestActionDeps({
-    gatekeeperClient: new HttpGatekeeperClient(),
+    gatekeeperClient,
+    actionExecutor,
     awaitDecisionTimeoutMs: options.requestActionAwaitDecisionTimeoutMs,
   });
 
@@ -251,12 +279,6 @@ export const DEFAULT_APPROVAL_REAPER_INTERVAL_MS = 5 * 60 * 1000;
 /** Default S2.4 Gatekeeper-queue periodic drain tick interval — 1 minute. */
 export const DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS = 60 * 1000;
 
-/** A fixed, non-dereferenced placeholder for the admin-mode (`skipRoleSwitch: true`) transactions
- *  the drainer/executor/periodic-drain-scan below run under — see
- *  `application/gateway/action-request-drain-consumer.ts`'s own doc comment for why an
- *  RLS-bypassing background actor never needs a real Principal id here. */
-const SYSTEM_ACTOR_PLACEHOLDER = '00000000-0000-0000-0000-000000000000';
-
 export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
 ): BackgroundServices {
@@ -271,17 +293,12 @@ export function createBackgroundServices(
   // ActionRequestUpdated{approved|auto_approved}, and a periodic tick as the crash-resilient
   // fallback (design doc §13 "outbox 派发器崩溃 ... 消费者幂等"). Both run admin-mode
   // (skipRoleSwitch): this is background, cross-workspace machinery in the same category as the
-  // outbox dispatcher itself and the approval-expiry reaper above, not a per-request path — see
-  // `governance/gatekeepers/registry.ts`'s own doc comment for why a Gatekeeper's endpoint is
-  // itself only ever read (never RLS-sensitive) and `action-request-drain-consumer.ts`'s doc
-  // comment for the full rationale.
-  const adminWithTransaction: WithTransactionFn = (workspaceId, principalId, fn) =>
-    withWorkspace(options.pool, { workspaceId, principalId }, fn, { skipRoleSwitch: true });
-  const gatekeeperClient = new HttpGatekeeperClient();
-  const actionExecutor = createGatekeeperActionExecutor({
-    gatekeeperClient,
-    withTransaction: adminWithTransaction,
-  });
+  // outbox dispatcher itself and the approval-expiry reaper above, not a per-request path.
+  // `buildGatekeeperExecutionDeps` is the same construction `createServer()` uses for
+  // `request_action`'s own phase-2 continuation — see that function's own doc comment.
+  const { actionExecutor, withTransaction: adminWithTransaction } = buildGatekeeperExecutionDeps(
+    options.pool,
+  );
   const drainer = new ApprovalDrainer({
     executor: actionExecutor,
     withTransaction: adminWithTransaction,
