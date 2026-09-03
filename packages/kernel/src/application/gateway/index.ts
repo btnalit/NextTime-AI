@@ -35,3 +35,23 @@ export {
   MetaOntologyWriteForbiddenError,
   assertMetaOntologyHandleWriteAllowed,
 } from './meta-ontology-guard.js';
+
+export {
+  ActionRequestDeniedError,
+  GatekeeperNotFoundError,
+  requestActionHandler,
+  setRequestActionDeps,
+} from './request-action-handler.js';
+export type { RequestActionHandlerDeps } from './request-action-handler.js';
+
+export { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
+export type {
+  GatekeeperActionExecutorDeps,
+  WithTransactionFn,
+} from './action-executor.js';
+
+export { writeObservedFacts } from './observed-facts.js';
+export type { ObservedFactCandidateInput, WrittenObservedFact } from './observed-facts.js';
+
+export { registerActionRequestDrainConsumer } from './action-request-drain-consumer.js';
+export type { ActionRequestUpdatedSource } from './action-request-drain-consumer.js';

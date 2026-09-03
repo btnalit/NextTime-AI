@@ -30,9 +30,17 @@ export type {
   PublishOntologyVersionInput,
 } from './loader.js';
 
-export { projectWorkerDefinitionObject, registerGatekeeperObject } from './meta-objects.js';
+export {
+  projectWorkerDefinitionObject,
+  registerGatekeeperObject,
+  registerOperationDraftObject,
+  setOperationStatusObject,
+} from './meta-objects.js';
 export type {
+  OperationIdentity,
+  OperationObjectResult,
   RegisterGatekeeperObjectInput,
   RegisterGatekeeperObjectResult,
+  RegisterOperationDraftInput,
   WorkerDefinitionObjectInput,
 } from './meta-objects.js';

@@ -26,6 +26,11 @@ export interface ActionRequestRow {
   readonly requestedAt: Date;
   readonly executedAt: Date | null;
   readonly failedAt: Date | null;
+  /** The Operation call's own arguments (migrations/governance/0004_action_request_params.sql,
+   *  S2.4) — `ActionExecutor.execute()` (`application/gateway/action-executor.ts`) needs these
+   *  again at `apply` time, which may run in a different transaction than `request_action` (auto-
+   *  approval executes inline; a `pending_approval` row is applied later by the drainer). */
+  readonly params: Record<string, unknown>;
 }
 
 export interface ActionRequestDbRow {
@@ -46,6 +51,7 @@ export interface ActionRequestDbRow {
   requested_at: Date;
   executed_at: Date | null;
   failed_at: Date | null;
+  params: Record<string, unknown>;
 }
 
 export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
@@ -67,13 +73,14 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
     requestedAt: row.requested_at,
     executedAt: row.executed_at,
     failedAt: row.failed_at,
+    params: row.params,
   };
 }
 
 export const ACTION_REQUEST_ROW_COLUMNS =
   'workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius, ' +
   'policy_decision, approval_decision_id, await_decision, on_behalf_of, parent_worker_run_id, ' +
-  'actor_runtime, idempotency_key, requested_at, executed_at, failed_at';
+  'actor_runtime, idempotency_key, requested_at, executed_at, failed_at, params';
 
 export class ActionRequestNotFoundError extends Error {
   constructor(workspaceId: string, actionRequestId: string) {

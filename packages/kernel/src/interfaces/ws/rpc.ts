@@ -6,11 +6,13 @@ import {
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
   ForbiddenError,
+  GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
   UnauthorizedError,
 } from '../../application/gateway/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
+import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
 import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
@@ -134,7 +136,12 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof ApprovalScopeError) {
     return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
   }
-  if (err instanceof ActionRequestNotFoundError || err instanceof GrantNotFoundError) {
+  if (
+    err instanceof ActionRequestNotFoundError ||
+    err instanceof GrantNotFoundError ||
+    err instanceof GatekeeperNotFoundError ||
+    err instanceof OperationNotFoundError
+  ) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   if (err instanceof IllegalTransition) {

@@ -37,7 +37,14 @@ import { queryAudit, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import type { CapabilityHandler } from './capability-handler.js';
 import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
+import {
+  deprecateOperationHandler,
+  proposeOperationHandler,
+  publishOperationHandler,
+} from './operation-manifest-handlers.js';
+import { requestActionHandler } from './request-action-handler.js';
 
 /**
  * application/gateway/handlers: the real handlers wired for the S1.3 capability set (`get_object`
@@ -71,36 +78,11 @@ import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
  * nothing to stop from that test's point of view anyway.
  */
 
-export interface CapabilityHandlerResult {
-  readonly result: unknown;
-  readonly resourceType?: string;
-  readonly resourceId?: string;
-}
-
-/**
- * The caller-identity facts a handler needs beyond `(client, workspaceId, params)` — S2.6
- * addition, purely additive (see `CapabilityHandler`'s own doc comment below): `channel` is what
- * `application/gateway/meta-ontology-guard.ts`'s I16 check on the graph write path needs
- * (`assertFactHandler`), which `callerContext()` in dispatch.ts already computes for every call
- * but had no way to hand to a handler before this.
- */
-export interface CapabilityHandlerContext {
-  readonly channel: CapabilityChannel;
-  readonly principalId: string;
-}
-
-/**
- * `ctx` is optional so every handler written before S2.6 — none of which declare a 4th parameter
- * — continues to satisfy this type unchanged (a function of fewer parameters is assignable to a
- * type expecting more, TypeScript's own function-parameter-count contravariance); only
- * `dispatch.ts`'s one call site needs to actually pass it.
- */
-export type CapabilityHandler = (
-  client: PoolClient,
-  workspaceId: string,
-  params: unknown,
-  ctx?: CapabilityHandlerContext,
-) => Promise<CapabilityHandlerResult>;
+export type {
+  CapabilityHandler,
+  CapabilityHandlerContext,
+  CapabilityHandlerResult,
+} from './capability-handler.js';
 
 const graphStore = new SqlGraphStore();
 
@@ -442,12 +424,9 @@ const assertFactHandler: CapabilityHandler = async (client, workspaceId, params,
 // way `currentPrincipalId` does (reading back the RLS session variable dispatch.ts already set),
 // plus one lookup into `principals` for the `role` column.
 //
-// `request_action` is deliberately **not** wired here: its wire-level paramsSchema
-// (`{gatekeeperId, operation, params}`) carries no `blast_radius`/`auto_approvable` — resolving
-// those requires a Gatekeeper's published interface manifest, which is S2.4 scope ("Must NOT:
-// do not implement Gatekeeper transports"). `governance/approval/request-action.ts`'s
-// `requestAction(client, workspaceId, input)` is ready to be called directly once S2.4's
-// Gatekeeper client can supply that input — see this task's PR body "已知偏离"/final report.
+// `request_action` (S2.4): wired via `requestActionHandler` (request-action-handler.ts) — its own
+// module doc comment carries the full decision table; it is registered in `CAPABILITY_HANDLERS`
+// below, alongside `propose_operation`/`publish_operation`/`deprecate_operation`.
 // -------------------------------------------------------------------------------------------
 
 async function currentPrincipalRole(
@@ -583,4 +562,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['set_policy', setPolicyHandler],
   ['grant_capability', grantCapabilityHandler],
   ['revoke_capability', revokeCapabilityHandler],
+  ['request_action', requestActionHandler],
+  ['propose_operation', proposeOperationHandler],
+  ['publish_operation', publishOperationHandler],
+  ['deprecate_operation', deprecateOperationHandler],
 ]);

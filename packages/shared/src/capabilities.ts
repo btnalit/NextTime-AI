@@ -351,6 +351,31 @@ const metaCapabilities: readonly Capability[] = [
     description: 'Propose a private draft Operation after exploring a Gatekeeper (I16).',
   },
   {
+    // S2.4 addition (see task brief: "add publish_operation/deprecate_operation in the existing
+    // style only if absent"). Params identify one Operation by its `{gatekeeperId, name}` identity
+    // (governance/gatekeepers/manifest.ts — an Operation has no dedicated id column, unlike
+    // WorkerDefinition/Skill/Procedure, design doc §9.2 "operations 作为平台元本体存于 objects /
+    // links"). No `minRole` — same as `publish_skill`/`publish_procedure`/
+    // `publish_worker_definition` below, human-channel-only is the actual gate (I16). Distinct
+    // from the *connection flow*'s (S2.13) owner-scoped `publish_manifest`, which publishes a
+    // whole newly-imported manifest at once (design doc §7.5 "owner 发布清单") — this capability
+    // publishes one already-drafted Operation, the same granularity `publish_skill` operates at.
+    name: 'publish_operation',
+    group: 'meta',
+    mode: 'execute',
+    channel: 'human',
+    paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
+    description: 'Publish a draft Operation (I16).',
+  },
+  {
+    name: 'deprecate_operation',
+    group: 'meta',
+    mode: 'execute',
+    channel: 'human',
+    paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
+    description: 'Deprecate a published Operation.',
+  },
+  {
     name: 'propose_skill',
     group: 'meta',
     mode: 'propose',
@@ -875,6 +900,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'publish_procedure',
   'deprecate_skill',
   'deprecate_procedure',
+  'publish_operation',
+  'deprecate_operation',
   'approve',
   'reject',
   'list_pending',

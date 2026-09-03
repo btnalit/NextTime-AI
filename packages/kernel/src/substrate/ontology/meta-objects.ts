@@ -1,4 +1,4 @@
-import type { PrincipalKind } from '@nexttime/shared';
+import type { Operation, PrincipalKind, PublishableStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { GraphObject } from '../graph/index.js';
 import { SqlGraphStore } from '../graph/index.js';
@@ -66,6 +66,15 @@ export interface RegisterGatekeeperObjectInput {
   /** Human-readable connection target (design doc `ConnectionCreatedEvent.target`,
    *  packages/shared/src/events.ts) — never a credential. */
   readonly target: string;
+  /** A short, stable name for this Gatekeeper instance (e.g. the接入包's own name) — used to build
+   *  `request_action`'s `action_kind` (`<name>.<operation>`, governance/gatekeepers) and shown in
+   *  approval cards. Not part of the identity key (a Gatekeeper may be renamed without changing
+   *  which instance it is); defaults to the gatekeeper object id string when omitted. */
+  readonly name?: string;
+  /** The gatekeeper server's own base URL (S2.4: "Config for the endpoint may live on the
+   *  object's properties for now (S2.13 will store connection details)"). Never a credential —
+   *  those stay inside the gate process (I9). */
+  readonly endpoint?: string;
   /** The Object id of the connected system (§5.1.4 Connection "产生 Gatekeeper 实例对象、系统对象与
    *  connects_to 边") — already created by the caller before this call. */
   readonly systemObjectId: string;
@@ -92,7 +101,12 @@ export async function registerGatekeeperObject(
   const gatekeeperObject = await graphStore.upsertObject(client, workspaceId, {
     objectType: 'Gatekeeper',
     identity: input.gatekeeperId ? { gatekeeperId: input.gatekeeperId } : undefined,
-    properties: { transportKind: input.transportKind, target: input.target },
+    properties: {
+      transportKind: input.transportKind,
+      target: input.target,
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.endpoint !== undefined ? { endpoint: input.endpoint } : {}),
+    },
   });
 
   const connectsToFact = await graphStore.assertFact(
@@ -108,4 +122,89 @@ export async function registerGatekeeperObject(
   );
 
   return { gatekeeperObjectId: gatekeeperObject.id, connectsToFactId: connectsToFact.id };
+}
+
+// -------------------------------------------------------------------------------------------
+// Operation (for governance/gatekeepers to call — S2.4 deliverable, the接入包-agnostic manifest
+// registry). Design doc §9.2 "operations 作为平台元本体存于 objects / links，状态与版本在
+// properties" — unlike WorkerDefinition, an Operation has no dedicated relational table; its
+// `draft -> published -> deprecated` status (I16/I17) lives entirely in the Object's `properties`.
+// These are, like the two helpers above, dumb projections with no policy/transition logic of
+// their own — `governance/gatekeepers/manifest.ts` is what checks PUBLISHABLE_TRANSITIONS before
+// calling `setOperationStatusObject`, and what enforces I16 (draft-only on the Handle channel).
+// -------------------------------------------------------------------------------------------
+
+/** The Operation Object's identity key — `(gatekeeperId, name)`, scoped to one Gatekeeper
+ *  instance's own manifest. `gatekeeperId` here is the Gatekeeper *Object*'s id (not its
+ *  human-readable `name` property, which may change). */
+export interface OperationIdentity {
+  readonly gatekeeperId: string;
+  readonly name: string;
+}
+
+export interface RegisterOperationDraftInput extends OperationIdentity {
+  readonly operation: Operation;
+  /** `propose_operation`/manifest import is Handle-channel-legal (I16: drafts only) — the
+   *  proposer becomes the `exposes` Fact's `asserted_by`. */
+  readonly proposedBy: { readonly id: string; readonly kind: PrincipalKind };
+  readonly activityId: string;
+}
+
+export interface OperationObjectResult {
+  readonly operationObjectId: string;
+  readonly exposesFactId: string;
+  readonly status: PublishableStatus;
+}
+
+/** Upserts (by `{gatekeeperId, name}` identity) a draft `Operation` Object holding the full
+ *  manifest entry, and asserts the `Gatekeeper --exposes--> Operation` Fact (design doc §5.1.2).
+ *  Re-registering the same identity (e.g. re-importing an unchanged manifest) upserts the same
+ *  Object (properties merge, `status` reset to `'draft'`) but does assert a fresh `exposes` Fact
+ *  each call — Facts are append-only observations, not deduplicated relationships, so a repeat
+ *  registration leaving an extra `exposes` edge is consistent with the rest of this Domain Model,
+ *  not a bug to work around here. */
+export async function registerOperationDraftObject(
+  client: PoolClient,
+  workspaceId: string,
+  input: RegisterOperationDraftInput,
+): Promise<OperationObjectResult> {
+  const operationObject = await graphStore.upsertObject(client, workspaceId, {
+    objectType: 'Operation',
+    identity: { gatekeeperId: input.gatekeeperId, name: input.name },
+    properties: { ...input.operation, status: 'draft' },
+  });
+
+  const exposesFact = await graphStore.assertFact(
+    client,
+    workspaceId,
+    { id: input.proposedBy.id, kind: input.proposedBy.kind },
+    {
+      linkType: 'exposes',
+      sourceObjectId: input.gatekeeperId,
+      targetObjectId: operationObject.id,
+      activityId: input.activityId,
+    },
+  );
+
+  return { operationObjectId: operationObject.id, exposesFactId: exposesFact.id, status: 'draft' };
+}
+
+/** Merges `{status}` into an existing Operation Object's properties (publish/deprecate). Callers
+ *  must have already confirmed the Object exists and the transition is legal
+ *  (`governance/gatekeepers/manifest.ts` reads it first via `GraphStore.getObjectByIdentity` and
+ *  runs it through `PUBLISHABLE_TRANSITIONS`) — this function does not check either, matching
+ *  `upsertObject`'s own "no identity → always insert" behavior: calling this for an identity that
+ *  does not yet exist would silently create an incomplete Object rather than erroring, which is
+ *  exactly the mistake callers are expected to avoid by reading first. */
+export async function setOperationStatusObject(
+  client: PoolClient,
+  workspaceId: string,
+  identity: OperationIdentity,
+  status: PublishableStatus,
+): Promise<GraphObject> {
+  return graphStore.upsertObject(client, workspaceId, {
+    objectType: 'Operation',
+    identity: { gatekeeperId: identity.gatekeeperId, name: identity.name },
+    properties: { status },
+  });
 }

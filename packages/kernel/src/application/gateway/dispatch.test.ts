@@ -111,20 +111,21 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
   });
 
   it('a registry capability with no wired handler → CapabilityNotImplementedError (501)', async () => {
-    // `request_action` (governance group, handle channel) has no wired handler yet — S2.3
-    // deliberately leaves it unimplemented: its wire paramsSchema carries no blast_radius/
-    // auto_approvable, which only a Gatekeeper's published interface manifest (S2.4) can resolve.
-    // `governance/approval/request-action.ts`'s `requestAction()` is ready to be called directly
-    // once S2.4 exists; only the capability-dispatch wiring is pending on it.
+    // `cancel_task` (task group, handle channel) has no wired handler yet — Task/`invoke_worker`
+    // (S2.7) owns it, not this task. `request_action` (governance group, handle channel) *was*
+    // this test's example through S2.3 — it deliberately left it unimplemented, since its wire
+    // paramsSchema carries no blast_radius/auto_approvable, only resolvable via a Gatekeeper's
+    // published interface manifest (S2.4). S2.4 wires `request_action` (`request-action-
+    // handler.ts`, `governance/gatekeepers`'s manifest registry) — see
+    // dispatch.integration.test.ts for its own now-real behavior — so this test moved to a
+    // capability still genuinely unimplemented at this point in the codebase.
     await expect(
       dispatchCapability(
         { pool: neverConnectPool },
         humanCaller({ role: 'operator' }),
-        'request_action',
+        'cancel_task',
         {
-          gatekeeperId: randomUUID(),
-          operation: 'test.op',
-          params: {},
+          taskId: randomUUID(),
         },
       ),
     ).rejects.toThrow(CapabilityNotImplementedError);

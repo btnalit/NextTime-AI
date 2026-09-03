@@ -82,6 +82,24 @@ export function buildGetObjectQuery(workspaceId: string, objectId: string): SqlQ
     values: [workspaceId, objectId],
   };
 }
+/** `getObjectByIdentity` (store.ts): looks up an Object by its `(object_type, identity_key)`
+ *  upsert key — the same partial unique index `buildUpsertObjectQuery` conflicts against
+ *  (migrations/core/0006_object_identity.sql). jsonb equality (`=`), not containment (`@>`): an
+ *  identity key is an exact key/value set, matching the upsert's own conflict semantics. */
+export function buildGetObjectByIdentityQuery(
+  workspaceId: string,
+  objectType: string,
+  identity: Record<string, unknown>,
+): SqlQuery {
+  return {
+    text: `
+      select ${OBJECT_COLUMNS}
+      from objects
+      where workspace_id = $1 and object_type = $2 and identity_key = $3::jsonb
+    `,
+    values: [workspaceId, objectType, JSON.stringify(identity)],
+  };
+}
 
 /** S1 minimal search (docs/development-tasks.md S1.2): ILIKE over properties and identity_key. */
 export function buildSearchQuery(workspaceId: string, input: SearchInput): SqlQuery {

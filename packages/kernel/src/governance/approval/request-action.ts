@@ -61,6 +61,10 @@ export interface RequestActionInput {
   readonly actorRuntime: string;
   readonly idempotencyKey?: string;
   readonly parentWorkerRunId?: string;
+  /** The Operation call's own arguments — persisted so `ActionExecutor.execute()` can `apply` them
+   *  later, possibly in a different transaction/process (S2.4, migrations/governance/
+   *  0004_action_request_params.sql). Defaults to `{}`. */
+  readonly params?: Record<string, unknown>;
   /** The requesting Handle's scope — `policy/engine.ts`'s coverage/`deny` check reads
    *  `resources['gatekeeper']` from this (see that module's `GATEKEEPER_RESOURCE_SCOPE_KEY` doc
    *  comment for the exact convention). */
@@ -95,8 +99,8 @@ async function insertActionRequestRow(
     `insert into action_requests (
        workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
        policy_decision, await_decision, on_behalf_of, parent_worker_run_id, actor_runtime,
-       idempotency_key
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       idempotency_key, params
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
     [
       workspaceId,
@@ -111,6 +115,7 @@ async function insertActionRequestRow(
       input.parentWorkerRunId ?? null,
       input.actorRuntime,
       input.idempotencyKey ?? null,
+      JSON.stringify(input.params ?? {}),
     ],
   );
   const row = result.rows[0];

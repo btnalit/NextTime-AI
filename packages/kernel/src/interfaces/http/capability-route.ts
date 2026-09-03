@@ -7,6 +7,7 @@ import {
   CapabilityNotImplementedError,
   type DispatchDeps,
   ForbiddenError,
+  GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
   MetaOntologyWriteForbiddenError,
   type ResolveCallerDeps,
@@ -16,6 +17,7 @@ import {
 } from '../../application/gateway/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
+import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
 import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
@@ -98,7 +100,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof ApprovalScopeError) {
     return { status: 403, code: 'forbidden', message: err.message };
   }
-  if (err instanceof ActionRequestNotFoundError || err instanceof GrantNotFoundError) {
+  if (
+    err instanceof ActionRequestNotFoundError ||
+    err instanceof GrantNotFoundError ||
+    err instanceof GatekeeperNotFoundError ||
+    err instanceof OperationNotFoundError
+  ) {
     return { status: 404, code: 'not_found', message: err.message };
   }
   if (err instanceof IllegalTransition) {

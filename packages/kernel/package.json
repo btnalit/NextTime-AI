@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.0",
+    "@nexttime/gatekeeper-base": "workspace:*",
     "@nexttime/shared": "workspace:*",
     "fastify": "^5.2.1",
     "jose": "^6.2.10",
