@@ -35,7 +35,14 @@
 -- §5.5 names exactly one further transition for a published WorkerDefinition and packages/shared/
 -- src/transitions.ts's shared `PUBLISHABLE_TRANSITIONS` table (reused by WorkerDefinition,
 -- OntologyVersion, Skill, Procedure alike) agrees: `{from: 'published', event: 'deprecate',
--- to: 'deprecated'}` is the only edge out of `published`.
+-- to: 'deprecated'}` is the only edge out of `published`. A `deprecated` row is that table's
+-- terminal state (no outgoing edge at all) and is exactly as content-immutable as `published` —
+-- `tasks` permanently pins a `(worker_definition_id, version)` pair regardless of which of the
+-- two post-draft statuses that version currently sits in, so both must stay resolvable to the
+-- content a Task actually ran. The trigger below therefore: (1) blocks `definition`/`kind`
+-- changes whenever `old.status` is `published` *or* `deprecated`; (2) allows `published`'s single
+-- `→ deprecated` move and blocks every other status change from `published`; (3) blocks every
+-- status change at all once `old.status = 'deprecated'` (including back to `draft`/`published`).
 --
 -- Runner ordering (docs/development-tasks.md S2.1 note, mirroring governance/0001's and
 -- llm-usage/0001's own notes): packages/kernel/src/adapters/db/migrate.ts's `discoverMigrations`
@@ -89,18 +96,36 @@ create policy worker_definitions_workspace_isolation on worker_definitions
 -- resolvable for as long as the Task's own audit trail does.
 grant select, insert, update on worker_definitions to nexttime_app;
 
+-- Coordinator review amendment (PR #33, 2026-09): a `deprecated` row must be exactly as
+-- immutable as a `published` one, not fully editable again — `tasks.worker_definition_id` /
+-- `.worker_definition_version` (migrations/task/0001_tasks.sql) permanently pin a
+-- `(id, version)` pair for as long as that Task's own audit trail must remain resolvable (§5.5
+-- "Task 固定引用启动时版本"), regardless of whether the pinned version is currently `published`
+-- or has since been `deprecated`. The content check below therefore covers both statuses; the
+-- status-transition check is split per starting status because the two allowed shapes differ:
+-- `published` has exactly one legal exit (→ `deprecated`, `PUBLISHABLE_TRANSITIONS`'s only edge
+-- out of `published`); `deprecated` has none (it is the terminal state of that same table — no
+-- edge exists out of `deprecated` at all).
 create or replace function worker_definitions_block_published_mutation() returns trigger
 language plpgsql as $$
 begin
+  if old.status in ('published', 'deprecated') then
+    if new.definition is distinct from old.definition or new.kind is distinct from old.kind then
+      raise exception 'worker_definitions: content is immutable once published (I12)';
+    end if;
+  end if;
+
   if old.status = 'published' then
     if new.status is distinct from old.status and new.status <> 'deprecated' then
       raise exception
         'worker_definitions: a published row may only transition to deprecated (I12)';
     end if;
-    if new.definition is distinct from old.definition or new.kind is distinct from old.kind then
-      raise exception 'worker_definitions: content is immutable once published (I12)';
+  elsif old.status = 'deprecated' then
+    if new.status is distinct from old.status then
+      raise exception 'worker_definitions: a deprecated row is terminal (I12)';
     end if;
   end if;
+
   return new;
 end;
 $$;

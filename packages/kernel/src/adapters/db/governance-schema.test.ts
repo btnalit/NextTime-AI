@@ -395,6 +395,69 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('action_requests — I7/I11: a human decision state (approved/rejected) must carry its Decision', () => {
+      it('rejects an approved row with no approval_decision_id', async () => {
+        const fixture = await makeActionRequestFixture();
+        await expect(
+          insertActionRequest(fixture, {
+            status: 'approved',
+            policyDecision: 'require_approval',
+            approvalDecisionId: null,
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('accepts an approved row with a real approval_decision_id', async () => {
+        const fixture = await makeActionRequestFixture();
+        const activityId = await insertActivity(workspaceId, ownerId);
+        const decisionId = await insertDecision(workspaceId, ownerId, activityId);
+        await expect(
+          insertActionRequest(fixture, {
+            status: 'approved',
+            policyDecision: 'require_approval',
+            approvalDecisionId: decisionId,
+          }),
+        ).resolves.toBeDefined();
+      });
+
+      it('rejects a rejected row with no approval_decision_id', async () => {
+        const fixture = await makeActionRequestFixture();
+        await expect(
+          insertActionRequest(fixture, {
+            status: 'rejected',
+            policyDecision: 'require_approval',
+            approvalDecisionId: null,
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('accepts a rejected row with a real approval_decision_id', async () => {
+        const fixture = await makeActionRequestFixture();
+        const activityId = await insertActivity(workspaceId, ownerId);
+        const decisionId = await insertDecision(workspaceId, ownerId, activityId);
+        await expect(
+          insertActionRequest(fixture, {
+            status: 'rejected',
+            policyDecision: 'require_approval',
+            approvalDecisionId: decisionId,
+          }),
+        ).resolves.toBeDefined();
+      });
+
+      it('leaves expired/denied/auto_approved unconstrained — no human decision involved, so no approval_decision_id required', async () => {
+        for (const status of ['expired', 'denied', 'auto_approved']) {
+          const fixture = await makeActionRequestFixture();
+          await expect(
+            insertActionRequest(fixture, {
+              status,
+              policyDecision: status === 'denied' ? 'deny' : 'allow',
+              approvalDecisionId: null,
+            }),
+          ).resolves.toBeDefined();
+        }
+      });
+    });
+
     describe('action_requests — idempotency_key uniqueness per workspace', () => {
       it('rejects a second row in the same workspace with the same idempotency_key', async () => {
         const fixture = await makeActionRequestFixture();
@@ -633,6 +696,45 @@ describe.runIf(DATABASE_URL !== undefined)(
             );
           }),
         ).resolves.toBeUndefined();
+      });
+
+      it('rejects updating a deprecated row’s definition (I12: deprecated is exactly as content-immutable as published)', async () => {
+        const id = await insertWorkerDefinition('deprecated');
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+            await client.query(
+              `update worker_definitions set definition = $1
+               where workspace_id = $2 and id = $3 and version = 1`,
+              [JSON.stringify({ modelAllowlist: ['tampered'] }), workspaceId, id],
+            );
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('rejects moving a deprecated row back to published (I12: deprecated is terminal)', async () => {
+        const id = await insertWorkerDefinition('deprecated');
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+            await client.query(
+              `update worker_definitions set status = 'published'
+               where workspace_id = $1 and id = $2 and version = 1`,
+              [workspaceId, id],
+            );
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('rejects moving a deprecated row back to draft (I12: deprecated is terminal)', async () => {
+        const id = await insertWorkerDefinition('deprecated');
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+            await client.query(
+              `update worker_definitions set status = 'draft'
+               where workspace_id = $1 and id = $2 and version = 1`,
+              [workspaceId, id],
+            );
+          }),
+        ).rejects.toThrow();
       });
     });
 

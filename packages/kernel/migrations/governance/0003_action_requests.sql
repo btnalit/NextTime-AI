@@ -46,9 +46,19 @@
 -- be in an executed/executing state when policy_decision is not deny...") is a *conditional* rule
 -- keyed off `status`, which only makes sense if `policy_decision` can be null for some
 -- (pre-evaluation) status — that reading is what's implemented below. I7 is instead enforced by
--- the two CHECK constraints at the bottom of this table: every non-`proposed` row must carry a
--- decision, and no row may reach an executing-or-later status without an `allow` (or an
--- `approved` `require_approval`) decision on file.
+-- the three CHECK constraints at the bottom of this table: every non-`proposed` row must carry a
+-- decision; no row may reach an executing-or-later status without an `allow` (or an `approved`
+-- `require_approval`) decision on file; and (coordinator review amendment, PR #33, 2026-09) a row
+-- that has reached a human decision state (`approved`/`rejected`) must itself carry the Approval
+-- Decision that produced it — S2.3's `approve`/`reject` both write that Decision row in the same
+-- transaction as the status transition (docs/development-tasks.md S2.3: "同事务写 Approval
+-- Decision 并推进关联 agent Decision"), so an `approved`/`rejected` row with no
+-- `approval_decision_id` is an invalid state the instant it is written, not only once execution
+-- is attempted — I11 ("所有受治理转移写 AuditRecord") and I7 both apply from the moment of
+-- decision, not just at the executing-or-later boundary the second CHECK alone would catch.
+-- `expired` (timed out with no human decision at all), `denied` (policy-level, no human
+-- involved), and `auto_approved` (no human decision either) are deliberately left out of this
+-- third CHECK's status list — none of them ever have an Approval Decision to require.
 --
 -- Runner ordering (docs/development-tasks.md S2.1: "decide based on the actual migration ORDER
 -- migrate.ts uses"): packages/kernel/src/adapters/db/migrate.ts's `discoverMigrations` sorts
@@ -106,7 +116,14 @@ create table if not exists action_requests (
       and policy_decision <> 'deny'
       and (policy_decision <> 'require_approval' or approval_decision_id is not null)
     )
-  )
+  ),
+  -- I7 / I11 (coordinator review amendment, PR #33, 2026-09): a human decision state carries the
+  -- Decision that produced it. `approve`/`reject` (S2.3) both write the Approval Decision in the
+  -- same transaction as this status transition, so `approved`/`rejected` with no
+  -- `approval_decision_id` is invalid the moment it is written — not deferred to the
+  -- executing-or-later check above. `expired` / `denied` / `auto_approved` are intentionally
+  -- excluded: none of them involves a human decision.
+  check (status not in ('approved', 'rejected') or approval_decision_id is not null)
 );
 
 -- Partial unique index (not a plain `unique` column constraint): idempotency_key is optional —
