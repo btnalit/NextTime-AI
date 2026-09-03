@@ -190,6 +190,46 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(response.json().error.code).toBe('not_implemented');
     });
 
+    it('set_quota (owner) → 200, persisted, audited with a null resource_id (quota keys are not uuids)', async () => {
+      // Regression: the handler used to return the quota key as `resourceId`; audit_records.
+      // resource_id is a uuid column, so the audit INSERT failed and every set_quota was a 500.
+      const app = createServer({ pool });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/cap/set_quota',
+        headers: { authorization: `Bearer ${ownerApiKey}` },
+        payload: { key: 'task.max_depth', value: 2 },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().ok).toBe(true);
+
+      const quota = await withWorkspace(
+        pool,
+        { workspaceId, principalId: randomUUID() },
+        (client) =>
+          client.query<{ value: unknown }>(
+            'select value from quotas where workspace_id = $1 and key = $2',
+            [workspaceId, 'task.max_depth'],
+          ),
+        { skipRoleSwitch: true },
+      );
+      expect(quota.rows[0]?.value).toBe(2);
+
+      const audit = await withWorkspace(
+        pool,
+        { workspaceId, principalId: randomUUID() },
+        (client) =>
+          client.query<{ resource_type: string | null; resource_id: string | null }>(
+            `select resource_type, resource_id from audit_records
+             where workspace_id = $1 and action = 'set_quota' order by created_at desc limit 1`,
+            [workspaceId],
+          ),
+        { skipRoleSwitch: true },
+      );
+      expect(audit.rows[0]).toMatchObject({ resource_type: 'quota', resource_id: null });
+    });
+
     it('assert_fact (handler present, write unimplemented) → 501 not_implemented, not 500', async () => {
       // S2.6 gave assert_fact a handler (the I16 meta-ontology guard); its write half still throws
       // AssertFactWriteNotImplementedError, which must map to the same stable 501 code as a

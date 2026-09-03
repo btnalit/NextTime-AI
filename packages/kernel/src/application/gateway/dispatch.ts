@@ -65,6 +65,26 @@ export class CapabilityNotImplementedError extends Error {
   }
 }
 
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `audit_records.resource_id` is a uuid column (migrations/core/0004_audit.sql). A handler that
+ * returns a non-uuid `resourceId` (a quota key, an operation name, …) must not turn the whole
+ * capability call into a 500 at the audit INSERT — the row is written with `resource_id = null`
+ * and the raw reference preserved in the payload instead, so the call still succeeds and the
+ * audit trail still says what was touched. Handlers should still return uuids where they have
+ * them; this is the safety net, not the convention.
+ */
+export function auditResourceRef(resourceId: string | undefined): {
+  readonly resourceId: string | undefined;
+  readonly resourceRef: string | undefined;
+} {
+  if (resourceId === undefined || UUID_SHAPE.test(resourceId)) {
+    return { resourceId, resourceRef: undefined };
+  }
+  return { resourceId: undefined, resourceRef: resourceId };
+}
+
 export interface DispatchDeps {
   readonly pool: PoolLike;
 }
@@ -122,13 +142,21 @@ export async function dispatchCapability(
         // verified claims in hand.
         ...(caller.channel === 'handle' ? { claims: caller.claims } : {}),
       });
+      const resourceRef = auditResourceRef(result.resourceId);
       await writeAudit(client, {
         workspaceId,
         actorPrincipalId: principalId,
         action: name,
         resourceType: result.resourceType,
-        resourceId: result.resourceId,
-        payload: { channel: caller.channel, onBehalfOf, params: parsed.data },
+        resourceId: resourceRef.resourceId,
+        payload: {
+          channel: caller.channel,
+          onBehalfOf,
+          params: parsed.data,
+          ...(resourceRef.resourceRef !== undefined
+            ? { resourceRef: resourceRef.resourceRef }
+            : {}),
+        },
       });
       return result;
     },
