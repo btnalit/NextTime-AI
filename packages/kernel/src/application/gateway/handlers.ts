@@ -629,7 +629,11 @@ const setQuotaHandler: CapabilityHandler = async (client, workspaceId, params) =
   const { key, value } = params as { key: string; value: unknown };
   const updatedBy = await currentPrincipalId(client);
   const result = await setQuotaValue(client, workspaceId, { key, value, updatedBy });
-  return { result, resourceType: 'quota', resourceId: result.key };
+  // No resourceId: `audit_records.resource_id` is a uuid column (migrations/core/0004_audit.sql)
+  // and a quota key (`task.max_depth`) is not one — returning it here made every `set_quota` call
+  // fail its audit INSERT with a 500 (found on the host, S2.7 apply). The key is already in the
+  // audit payload's `params`.
+  return { result, resourceType: 'quota' };
 };
 
 const findWorkersHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
