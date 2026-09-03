@@ -9,6 +9,13 @@ import { createServer } from './server.js';
 import { createTaskService } from './task-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
 
+// Resident ids must be UUIDs (config.ts IdClaimSchema): principalId becomes the per-user
+// workspace bind-mount source segment and the container name. Fixed, readable stand-ins.
+const WS_R = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ALICE = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const NOBODY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+// Resident ids must be UUIDs (config.ts IdClaimSchema): principalId becomes the per-user// workspace bind-mount source segment and the container name. Fixed, readable stand-ins.const WS_R = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';const ALICE = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';const NOBODY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
 let dir: string;
 
 beforeEach(() => {
@@ -49,7 +56,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      payload: { workspaceId: 'ws-1', principalId: 'alice', handle: 'h' },
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -63,7 +70,7 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      payload: { workspaceId: 'ws-1' },
+      payload: { workspaceId: WS_R },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -73,9 +80,23 @@ describe('POST /resident/spawn', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      payload: { workspaceId: 'ws-1', principalId: 'alice', handle: 'h', extra: 'x' },
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h', extra: 'x' },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('400s a traversal-shaped principalId before touching docker (IdClaimSchema)', async () => {
+    // principalId becomes the per-user workspace bind-mount source segment and the container
+    // name — a non-UUID value must never reach the docker client.
+    const { app, docker } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      payload: { workspaceId: WS_R, principalId: '../../pgdata', handle: 'h' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('invalid_body');
+    expect(docker.createCalls).toHaveLength(0);
   });
 
   it('spawning twice for the same principal is idempotent (created=false the second time)', async () => {
@@ -83,12 +104,12 @@ describe('POST /resident/spawn', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      payload: { workspaceId: 'ws-1', principalId: 'alice', handle: 'h' },
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     const res = await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      payload: { workspaceId: 'ws-1', principalId: 'alice', handle: 'h' },
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     expect(res.json()).toMatchObject({ created: false });
   });
@@ -100,12 +121,12 @@ describe('POST /resident/stop', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      payload: { workspaceId: 'ws-1', principalId: 'alice', handle: 'h' },
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
     const res = await app.inject({
       method: 'POST',
       url: '/resident/stop',
-      payload: { principalId: 'alice' },
+      payload: { principalId: ALICE },
     });
     expect(res.statusCode).toBe(204);
   });
@@ -120,8 +141,18 @@ describe('POST /resident/stop', () => {
 describe('GET /resident/:principalId', () => {
   it('404s when nothing has been spawned', async () => {
     const { app } = setup();
-    const res = await app.inject({ method: 'GET', url: '/resident/nobody' });
+    const res = await app.inject({ method: 'GET', url: `/resident/${NOBODY}` });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('400s a non-UUID principalId route param (IdClaimSchema), for GET and touch alike', async () => {
+    const { app } = setup();
+    const get = await app.inject({ method: 'GET', url: '/resident/not-a-uuid' });
+    expect(get.statusCode).toBe(400);
+    expect(get.json().error.code).toBe('invalid_principal_id');
+    const touch = await app.inject({ method: 'POST', url: '/resident/not-a-uuid/touch' });
+    expect(touch.statusCode).toBe(400);
+    expect(touch.json().error.code).toBe('invalid_principal_id');
   });
 
   it('200s with status after spawn', async () => {
@@ -129,18 +160,18 @@ describe('GET /resident/:principalId', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      payload: { workspaceId: 'ws-1', principalId: 'alice', handle: 'h' },
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
-    const res = await app.inject({ method: 'GET', url: '/resident/alice' });
+    const res = await app.inject({ method: 'GET', url: `/resident/${ALICE}` });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ principalId: 'alice', running: true, restarts: 0 });
+    expect(res.json()).toMatchObject({ principalId: ALICE, running: true, restarts: 0 });
   });
 });
 
 describe('POST /resident/:principalId/touch', () => {
   it('404s when nothing has been spawned', async () => {
     const { app } = setup();
-    const res = await app.inject({ method: 'POST', url: '/resident/nobody/touch' });
+    const res = await app.inject({ method: 'POST', url: `/resident/${NOBODY}/touch` });
     expect(res.statusCode).toBe(404);
   });
 
@@ -149,9 +180,9 @@ describe('POST /resident/:principalId/touch', () => {
     await app.inject({
       method: 'POST',
       url: '/resident/spawn',
-      payload: { workspaceId: 'ws-1', principalId: 'alice', handle: 'h' },
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
     });
-    const res = await app.inject({ method: 'POST', url: '/resident/alice/touch' });
+    const res = await app.inject({ method: 'POST', url: `/resident/${ALICE}/touch` });
     expect(res.statusCode).toBe(204);
   });
 });

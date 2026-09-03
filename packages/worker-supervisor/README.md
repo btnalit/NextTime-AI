@@ -47,8 +47,11 @@ tmpfs `/tmp`、非 root uid 10001、只挂 `workers` 网络）与同一个出网
 的话 `taskId` 传 `../../pgdata` 这类值就能把宿主机上另一个数据目录挂进 Worker 容器。`workspaceId`/
 `onBehalfOf` 按同一规则一起收紧，与平台其它地方（`packages/shared/src/handle-token.ts`
 `uuidClaim`、`packages/kernel/src/governance/llm-usage/service.ts`）对同类 id 的校验方式一致——
-resident 模式自己的 `SpawnRequestSchema`（`workspaceId`/`principalId`）目前仍是 `min(1)`，未跟着
-收紧（不在本包这次改动范围内，是同类缺口，留待另一次改动处理）。
+resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId`/`principalId`）以及
+`GET /resident/:principalId`、`POST /resident/:principalId/touch` 的路径参数已在后续改动里收紧为同一
+条 UUID 规则（`config.ts` `IdClaimSchema`）：`principalId` 是每用户工作目录 bind-mount 的 host 路径
+片段与容器名，同样不能接受 `../` 形状的值；非 UUID → `400`（body：`invalid_body`；路径参数：
+`invalid_principal_id`），不落到 docker 客户端。
 
 返回 `200 {containerId, ip}`；镜像不在 allowlist（默认只有 `WORKER_IMAGE`，可用
 `WORKER_IMAGE_ALLOWLIST` 逗号列表追加，不会替换默认值）返回 `403`；`skills[].hostPath` 逃出

@@ -129,14 +129,29 @@ export function isImageAllowed(config: SupervisorConfig, image: string): boolean
   return config.taskImageAllowlist.includes(image);
 }
 
+/** Every identifier in this codebase (`workspaceId`/`principalId`/`taskId`/`workerRunId`/...) is a
+ *  Postgres `gen_random_uuid()` / Node `randomUUID()` value — see
+ *  `packages/shared/src/handle-token.ts` `uuidClaim`, `packages/kernel/src/governance/llm-usage/
+ *  service.ts`'s own `z.string().uuid()` fields, and `application/host-bridge/
+ *  egress-observations.ts`'s `ENTRY_SOURCE_ID_PATTERN` doc comment ("both halves are UUIDs...a
+ *  plain UUID-shaped check is enough to reject garbage"). Reused here, not invented for this
+ *  package. Applied to both request families below because several of these ids become host
+ *  path segments or container names (resident: `workspaces/<principalId>` bind-mount source and
+ *  `nexttime-entry-<principalId>`; task: `workspaces/tasks/<taskId>` and
+ *  `nexttime-task-<workerRunId>`) — an unvalidated `../../pgdata` would mount an arbitrary host
+ *  directory into an agent container. Exported so `server.ts` can apply the same rule to
+ *  `:principalId` route params. */
+export const IdClaimSchema = z.string().uuid();
+
 /** `POST /resident/spawn` request body. `systemPrompt`/`model` are S2.6 additions (the workspace's
  *  published entry WorkerDefinition, resolved by the kernel and forwarded by agent-host verbatim —
  *  see `spawn-spec.ts`'s own doc comment and `resident-service.ts`'s `spawn()` for how each is
- *  used). */
+ *  used). `workspaceId`/`principalId` are UUID-validated (`IdClaimSchema`, same rule as
+ *  `TaskSpawnRequestSchema` — S2.8 flagged this as the same class of path-segment gap). */
 export const SpawnRequestSchema = z
   .object({
-    workspaceId: z.string().min(1),
-    principalId: z.string().min(1),
+    workspaceId: IdClaimSchema,
+    principalId: IdClaimSchema,
     handle: z.string().min(1),
     kernelUrl: z.string().min(1).optional(),
     llmUrl: z.string().min(1).optional(),
@@ -149,7 +164,7 @@ export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
 /** `POST /resident/stop` request body. */
 export const StopRequestSchema = z
   .object({
-    principalId: z.string().min(1),
+    principalId: IdClaimSchema,
   })
   .strict();
 export type StopRequest = z.infer<typeof StopRequestSchema>;
@@ -167,14 +182,8 @@ const TaskSkillSchema = z.object({
   hostPath: z.string().min(1),
 });
 
-/** Every identifier in this codebase (`workspaceId`/`principalId`/`sessionId`/`jti`/...) is a
- *  Postgres `gen_random_uuid()` / Node `randomUUID()` value — see
- *  `packages/shared/src/handle-token.ts` `uuidClaim`, `packages/kernel/src/governance/llm-usage/
- *  service.ts`'s own `z.string().uuid()` fields, and `application/host-bridge/
- *  egress-observations.ts`'s `ENTRY_SOURCE_ID_PATTERN` doc comment ("both halves are UUIDs...a
- *  plain UUID-shaped check is enough to reject garbage"). Reused here, not invented for this
- *  schema. */
-const idClaim = z.string().uuid();
+/** Same UUID rule as the resident schemas above (see `IdClaimSchema`'s doc comment). */
+const idClaim = IdClaimSchema;
 
 /** `POST /task/spawn` request body (S2.8 task brief). `onBehalfOf` carries the `principalId` the
  *  child Handle's `on_behalf_of` is scoped to (I13) — named per the task brief, not `principalId`,
@@ -190,11 +199,9 @@ const idClaim = z.string().uuid();
  * an agent container. `workspaceId`/`onBehalfOf` are tightened to the same rule for consistency
  * with how every id of this kind is generated and validated elsewhere in the platform (see
  * `idClaim`'s doc comment) — not because either is currently used to build a path in this package.
- * **Deviation, stated explicitly**: resident mode's own `SpawnRequestSchema` above still validates
- * `workspaceId`/`principalId` as plain `z.string().min(1)` — there is no existing stricter id rule
- * in *this* package to match; `idClaim` is the platform-wide convention (kernel), applied here for
- * the first time in this package. Tightening resident mode's own schema to match is out of scope
- * for this change (S2.8 does not touch resident-mode behavior) but is the same class of gap. */
+ * Resident mode's own `SpawnRequestSchema`/`StopRequestSchema` above apply the same rule (S2.8
+ * had left them at `z.string().min(1)` and flagged it as the same class of gap; closed in the
+ * follow-up that introduced `IdClaimSchema`). */
 export const TaskSpawnRequestSchema = z
   .object({
     taskId: idClaim,
