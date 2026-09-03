@@ -37,11 +37,18 @@ export {
   findOperations,
   findProcedures,
   findWorkers,
+  findWorkerRunBySessionId,
   getTaskWithWorkerRuns,
   recordWorkerRunUsage,
   taskForWorkerRun,
   terminateTask,
 } from './service.js';
+
+export {
+  type PostWorkerResultInput,
+  type PostWorkerResultOutcome,
+  postWorkerResult,
+} from './result.js';
 
 export {
   type ComputeChildHandleScopeInput,

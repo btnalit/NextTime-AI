@@ -81,6 +81,27 @@ export async function taskForWorkerRun(
   return readTaskRow(client, workspaceId, workerRun.taskId);
 }
 
+/** S2.9: resolves the WorkerRun a `sessionId` belongs to — the identity mechanism `report_task_
+ *  result`'s handler uses to find "which Task is this Worker allowed to report a result for"
+ *  (`application/gateway/worker-result-handler.ts`), matching the calling Handle's own
+ *  `claims.sid` rather than trusting a caller-supplied `taskId`/`workerRunId` (I13-style). `null`
+ *  for a `sessionId` with no matching WorkerRun (an entry session, or any other stray Handle) —
+ *  the handler maps that to a 403, never a distinguishable 404 (mirrors `application/task/
+ *  invoke.ts`'s file-local `resolveCallerWorkerRun`, which this intentionally does not replace —
+ *  see this function's own PR body note). */
+export async function findWorkerRunBySessionId(
+  client: PoolClient,
+  workspaceId: string,
+  sessionId: string,
+): Promise<WorkerRunRow | null> {
+  const result = await client.query(
+    `select ${WORKER_RUN_ROW_COLUMNS} from worker_runs where workspace_id = $1 and session_id = $2`,
+    [workspaceId, sessionId],
+  );
+  const row = result.rows[0];
+  return row ? mapWorkerRunRow(row) : null;
+}
+
 // -------------------------------------------------------------------------------------------
 // terminateTask / cancelTask
 // -------------------------------------------------------------------------------------------

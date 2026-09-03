@@ -145,6 +145,45 @@ export async function getPublishedOperation(
   return record && record.status === 'published' ? record : null;
 }
 
+interface OperationObjectRow {
+  identity_key: { gatekeeperId?: string; name?: string } | null;
+  properties: Record<string, unknown>;
+}
+
+/**
+ * `list_allowed_operations` (S2.9, task brief: "the published Operations of the Gatekeepers in
+ * the Handle's resources.gatekeeper scope") — every **published** Operation across a set of
+ * Gatekeeper instance ids, one direct query rather than N `getOperation` round trips. Same direct-
+ * SQL-over-`objects` style `substrate/graph/find-means.ts` already established for meta-ontology
+ * reads (an Operation has no dedicated relational table, §9.2). Returns `[]` for an empty
+ * `gatekeeperIds` (nothing to list, not "list everything").
+ */
+export async function listPublishedOperationsForGatekeepers(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperIds: readonly string[],
+): Promise<readonly OperationRecord[]> {
+  if (gatekeeperIds.length === 0) return [];
+  const result = await client.query<OperationObjectRow>(
+    `select identity_key, properties
+     from objects
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'gatekeeperId' = any($2::text[])
+       and properties ->> 'status' = 'published'
+     order by updated_at asc`,
+    [workspaceId, gatekeeperIds],
+  );
+  const records: OperationRecord[] = [];
+  for (const row of result.rows) {
+    const gatekeeperId = row.identity_key?.gatekeeperId;
+    const name = row.identity_key?.name;
+    if (!gatekeeperId || !name) continue; // defensive — every Operation Object is upserted with both
+    records.push(toOperationRecord(gatekeeperId, name, row.properties));
+  }
+  return records;
+}
+
 // -------------------------------------------------------------------------------------------
 // publish / deprecate — human channel only (enforced at the capability-registry layer, I16).
 // -------------------------------------------------------------------------------------------

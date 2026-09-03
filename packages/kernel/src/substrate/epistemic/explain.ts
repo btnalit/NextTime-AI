@@ -52,6 +52,15 @@ export interface ExplainActivityRef {
   readonly endedAt: string | null;
   readonly startedByPrincipal: ExplainPrincipalRef | null;
   readonly observations: readonly ExplainObservationRef[];
+  /**
+   * S2.9 addition: `activities.metadata` verbatim (docs/development-tasks.md S2.9 "explain 到该
+   * WorkerRun") — `application/task/spawn.ts` already stamps `{taskId, workerRunId}` on every
+   * `kind='worker_run'` Activity, and `application/task/result.ts` stamps the same two fields
+   * (plus `evidence`, §7.3 "把证据挂到 Activity") on its own `kind='worker_result'` Activity;
+   * surfacing the raw object here (rather than inventing typed `taskId`/`workerRunId` fields) lets
+   * `explain` reach either without this module special-casing either Activity `kind`.
+   */
+  readonly metadata: Record<string, unknown>;
 }
 
 export interface ExplainFactRef {
@@ -124,6 +133,7 @@ interface ActivityDbRow {
   created_at: Date;
   ended_at: Date | null;
   started_by: string | null;
+  metadata: Record<string, unknown>;
 }
 
 interface FactDbRow {
@@ -208,7 +218,7 @@ async function fetchActivityRef(
   activityId: string,
 ): Promise<ExplainActivityRef | null> {
   const result = await client.query<ActivityDbRow>(
-    'select id, kind, status, created_at, ended_at, started_by from activities where workspace_id = $1 and id = $2',
+    'select id, kind, status, created_at, ended_at, started_by, metadata from activities where workspace_id = $1 and id = $2',
     [workspaceId, activityId],
   );
   const row = result.rows[0];
@@ -225,6 +235,7 @@ async function fetchActivityRef(
     endedAt: row.ended_at?.toISOString() ?? null,
     startedByPrincipal,
     observations,
+    metadata: row.metadata ?? {},
   };
 }
 

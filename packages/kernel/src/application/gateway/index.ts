@@ -55,3 +55,9 @@ export type { ObservedFactCandidateInput, WrittenObservedFact } from './observed
 
 export { registerActionRequestDrainConsumer } from './action-request-drain-consumer.js';
 export type { ActionRequestUpdatedSource } from './action-request-drain-consumer.js';
+
+export {
+  WorkerResultValidationError,
+  listAllowedOperationsHandler,
+  reportTaskResultHandler,
+} from './worker-result-handler.js';
