@@ -31,7 +31,7 @@ echo "host-bootstrap: target NEXTTIME_DATA=$NEXTTIME_DATA"
 # --- create data root and subdirectories -----------------------------------
 mkdir -p "$NEXTTIME_DATA"
 
-for d in pgdata workspaces workspaces/tasks secrets config artifacts backups caddy; do
+for d in pgdata workspaces workspaces/tasks secrets config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow; do
 	mkdir -p "$NEXTTIME_DATA/$d"
 done
 
@@ -40,7 +40,10 @@ done
 chmod 700 "$NEXTTIME_DATA/secrets"
 
 # Every other subdirectory: 0750 (owner rwx, group rx, no world access).
-for d in pgdata workspaces workspaces/tasks config artifacts backups caddy; do
+# gatekeepers/{docker,ragflow}: each gate's own GATE_DATA_DIR (idempotency store; see
+# docs/development-tasks.md S2.5) — bind-mounted into gatekeeper-docker/gatekeeper-ragflow
+# (docker-compose.yml).
+for d in pgdata workspaces workspaces/tasks config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow; do
 	chmod 750 "$NEXTTIME_DATA/$d"
 done
 
@@ -76,5 +79,5 @@ echo "host-bootstrap: summary"
 echo "  data root:      $NEXTTIME_DATA"
 echo "  secrets mode:   $(stat -c '%a' "$NEXTTIME_DATA/secrets")"
 echo "  pg_password:    $([ -s "$PG_PASSWORD_FILE" ] && echo present || echo MISSING) (mode $(stat -c '%a' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?'))"
-echo "  subdirectories: pgdata workspaces workspaces/tasks secrets config artifacts backups caddy"
+echo "  subdirectories: pgdata workspaces workspaces/tasks secrets config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow"
 echo "host-bootstrap: done (idempotent — safe to re-run)"

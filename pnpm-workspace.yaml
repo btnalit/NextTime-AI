@@ -1,5 +1,9 @@
 packages:
   - "packages/*"
+  # 接入包 (design doc §7.10/§10.1): gatekeepers/<system>/ ships a small runnable TS package
+  # (manifest + binding), not just YAML content — see gatekeepers/docker and gatekeepers/ragflow
+  # (S2.5).
+  - "gatekeepers/*"
 allowBuilds:
   '@biomejs/biome': true
   # Transitive deps of @earendil-works/pi-ai (S1.6, platform-extension devDependency) for

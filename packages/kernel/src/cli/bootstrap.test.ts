@@ -1,11 +1,14 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Operation } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
+import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { hashApiKey } from '../application/gateway/index.js';
-import { addPrincipal, createWorkspace } from './bootstrap.js';
+import { getOperation, getPublishedOperation } from '../governance/gatekeepers/index.js';
+import { addPrincipal, createWorkspace, registerGatekeeperFromCli } from './bootstrap.js';
 
 /**
  * cli/bootstrap.test: integration tests (real Postgres; auto-skip without DATABASE_URL) for
@@ -20,6 +23,49 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+
+/** A `GatekeeperClient` fake for `registerGatekeeperFromCli` tests below — never touches a real
+ *  socket/port; only `describeOperations` is ever called by that function. */
+function fakeGatekeeperClient(operations: readonly Operation[]): GatekeeperClient {
+  const notImplemented = (method: string) => async () => {
+    throw new Error(`fakeGatekeeperClient: ${method} is not implemented`);
+  };
+  return {
+    describeOperations: async () => ({ operations: [...operations] }),
+    observe: notImplemented('observe'),
+    simulate: notImplemented('simulate'),
+    apply: notImplemented('apply'),
+    revert: notImplemented('revert'),
+    health: notImplemented('health'),
+  };
+}
+
+const SAMPLE_MANIFEST: Operation[] = [
+  {
+    name: 'example.observe_thing',
+    binding: { kind: 'http', method: 'GET', path: '/thing' },
+    params_schema: {},
+    mode: 'observe',
+    blast_radius: 'low',
+    reversibility: false,
+    auto_approvable: true,
+    await_decision: false,
+    reads: [],
+    writes: [],
+  },
+  {
+    name: 'example.execute_thing',
+    binding: { kind: 'http', method: 'POST', path: '/thing' },
+    params_schema: {},
+    mode: 'execute',
+    blast_radius: 'medium',
+    reversibility: false,
+    auto_approvable: false,
+    await_decision: true,
+    reads: [],
+    writes: [],
+  },
+];
 
 describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real Postgres)', () => {
   let pool: Pool;
@@ -186,6 +232,79 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
       );
 
       expect(row?.definition.model).toBe('example-provider/example-model');
+    });
+  });
+
+  describe('registerGatekeeperFromCli (S2.5 manual registration path)', () => {
+    it('registers a Gatekeeper and imports its manifest as drafts by default (no publish)', async () => {
+      const owner = await createWorkspace(pool, 'bootstrap-test-workspace-register-gate', 'Alice');
+      const client = fakeGatekeeperClient(SAMPLE_MANIFEST);
+
+      const result = await registerGatekeeperFromCli(
+        pool,
+        {
+          workspaceId: owner.workspaceId,
+          principalId: owner.ownerPrincipalId,
+          name: 'example-system',
+          endpoint: 'https://gate.example.invalid',
+          transportKind: 'http',
+        },
+        { gatekeeperClient: client },
+      );
+
+      expect(result.importedOperationNames.slice().sort()).toEqual([
+        'example.execute_thing',
+        'example.observe_thing',
+      ]);
+      expect(result.publishedOperationNames).toEqual([]);
+
+      const record = await withWorkspace(
+        pool,
+        { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+        (dbClient) =>
+          getOperation(dbClient, owner.workspaceId, result.gatekeeperId, 'example.observe_thing'),
+      );
+      expect(record?.status).toBe('draft');
+    });
+
+    it('--publish true publishes every imported operation', async () => {
+      const owner = await createWorkspace(
+        pool,
+        'bootstrap-test-workspace-register-gate-publish',
+        'Alice',
+      );
+      const client = fakeGatekeeperClient(SAMPLE_MANIFEST);
+
+      const result = await registerGatekeeperFromCli(
+        pool,
+        {
+          workspaceId: owner.workspaceId,
+          principalId: owner.ownerPrincipalId,
+          name: 'example-system-2',
+          endpoint: 'https://gate-2.example.invalid',
+          transportKind: 'http',
+          publish: true,
+        },
+        { gatekeeperClient: client },
+      );
+
+      expect(result.publishedOperationNames.slice().sort()).toEqual([
+        'example.execute_thing',
+        'example.observe_thing',
+      ]);
+
+      const record = await withWorkspace(
+        pool,
+        { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+        (dbClient) =>
+          getPublishedOperation(
+            dbClient,
+            owner.workspaceId,
+            result.gatekeeperId,
+            'example.execute_thing',
+          ),
+      );
+      expect(record?.status).toBe('published');
     });
   });
 });

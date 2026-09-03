@@ -6,8 +6,16 @@ import { type Role, RoleSchema, type WorkerDefinitionKind } from '@nexttime/shar
 import { parse as parseYaml } from 'yaml';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { PoolLike } from '../adapters/db/pool.js';
+import { HttpGatekeeperClient } from '../adapters/gatekeeper-client/index.js';
+import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { hashApiKey } from '../application/gateway/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../application/worker/index.js';
+import {
+  importManifest,
+  publishOperation,
+  registerGatekeeper,
+} from '../governance/gatekeepers/index.js';
+import { endActivity, startActivity } from '../substrate/epistemic/index.js';
 import { resolveOntologyDir, seedPlatformMetaOntology } from '../substrate/ontology/index.js';
 
 /**
@@ -180,6 +188,102 @@ export async function addPrincipal(
 }
 
 // -------------------------------------------------------------------------------------------
+// register-gatekeeper — S2.5's manual registration path for a running Gatekeeper instance (task
+// brief: "if only service functions exist, provide a bootstrap.js register-gatekeeper subcommand
+// ... that calls them and imports the gate's manifest by calling its describe_operations"). Real
+// automated registration is S2.13's `request_connection` card flow (governance/gatekeepers'
+// own doc comment) — this subcommand is the interim host-operator path.
+// -------------------------------------------------------------------------------------------
+
+const GATEKEEPER_TRANSPORT_KINDS = ['http', 'mcp', 'cli', 'ssh'] as const;
+type GatekeeperTransportKind = (typeof GATEKEEPER_TRANSPORT_KINDS)[number];
+
+function isGatekeeperTransportKind(value: string): value is GatekeeperTransportKind {
+  return (GATEKEEPER_TRANSPORT_KINDS as readonly string[]).includes(value);
+}
+
+export interface RegisterGatekeeperCliInput {
+  readonly workspaceId: string;
+  readonly principalId: string;
+  readonly name: string;
+  readonly endpoint: string;
+  readonly transportKind: GatekeeperTransportKind;
+  /** The connected system's own identifying label — defaults to `name` (`registerGatekeeper`'s
+   *  own `target` field, `governance/gatekeepers/registry.ts`). */
+  readonly target?: string;
+  /**
+   * Publishes every imported Operation immediately instead of leaving it as a draft (I17: an
+   * imported Operation always starts as a draft — `importManifest`'s own doc comment — so this is
+   * an explicit second step, not the default, matching the design's owner-review gate).
+   */
+  readonly publish?: boolean;
+}
+
+export interface RegisterGatekeeperCliResult {
+  readonly gatekeeperId: string;
+  readonly importedOperationNames: readonly string[];
+  readonly publishedOperationNames: readonly string[];
+}
+
+/** Fetches the target endpoint's `describe_operations`, registers it as a Gatekeeper instance,
+ *  imports its manifest as drafts, and (only when `input.publish` is set) publishes every
+ *  imported Operation. One Activity spans the whole registration. The HTTP fetch happens before
+ *  any database work starts, so an unreachable endpoint fails fast without opening a transaction.
+ *  `options.gatekeeperClient` defaults to a real `HttpGatekeeperClient` — overridable so tests
+ *  can inject a fake `describeOperations` without a real gate listening on a port. */
+export async function registerGatekeeperFromCli(
+  pool: PoolLike,
+  input: RegisterGatekeeperCliInput,
+  options: { readonly gatekeeperClient?: GatekeeperClient } = {},
+): Promise<RegisterGatekeeperCliResult> {
+  const client = options.gatekeeperClient ?? new HttpGatekeeperClient();
+  const described = await client.describeOperations(input.endpoint);
+
+  return withWorkspace(
+    pool,
+    { workspaceId: input.workspaceId, principalId: input.principalId },
+    async (dbClient) => {
+      const activity = await startActivity(dbClient, input.workspaceId, {
+        kind: 'governance.register_gatekeeper',
+        principalId: input.principalId,
+      });
+
+      const { gatekeeperId } = await registerGatekeeper(dbClient, input.workspaceId, {
+        name: input.name,
+        transportKind: input.transportKind,
+        target: input.target ?? input.name,
+        endpoint: input.endpoint,
+        activityId: activity.id,
+        registeredBy: { id: input.principalId, kind: 'human' },
+      });
+
+      const imported = await importManifest(dbClient, input.workspaceId, {
+        gatekeeperId,
+        operations: described.operations,
+        proposedBy: { id: input.principalId, kind: 'human' },
+        activityId: activity.id,
+      });
+
+      const publishedOperationNames: string[] = [];
+      if (input.publish) {
+        for (const record of imported) {
+          await publishOperation(dbClient, input.workspaceId, { gatekeeperId, name: record.name });
+          publishedOperationNames.push(record.name);
+        }
+      }
+
+      await endActivity(dbClient, input.workspaceId, activity.id, 'completed');
+
+      return {
+        gatekeeperId,
+        importedOperationNames: imported.map((record) => record.name),
+        publishedOperationNames,
+      };
+    },
+  );
+}
+
+// -------------------------------------------------------------------------------------------
 // CLI plumbing
 // -------------------------------------------------------------------------------------------
 
@@ -262,6 +366,52 @@ async function runAddPrincipal(argv: readonly string[]): Promise<void> {
   }
 }
 
+async function runRegisterGatekeeper(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const workspaceId = flags.workspace;
+  const principalId = flags.principal;
+  const name = flags.name;
+  const endpoint = flags.endpoint;
+  const kindFlag = flags.kind;
+  if (
+    !workspaceId ||
+    !principalId ||
+    !name ||
+    !endpoint ||
+    !kindFlag ||
+    !isGatekeeperTransportKind(kindFlag)
+  ) {
+    throw new BootstrapUsageError(
+      'usage: bootstrap register-gatekeeper --workspace <id> --principal <id> --name <name> ' +
+        '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]',
+    );
+  }
+
+  const pool = createPool();
+  try {
+    const result = await registerGatekeeperFromCli(pool, {
+      workspaceId,
+      principalId,
+      name,
+      endpoint,
+      transportKind: kindFlag,
+      target: flags.target,
+      publish: flags.publish === 'true',
+    });
+    console.log(`gatekeeper registered: ${result.gatekeeperId}`);
+    console.log(
+      `imported operations (draft): ${result.importedOperationNames.join(', ') || '(none)'}`,
+    );
+    console.log(
+      result.publishedOperationNames.length > 0
+        ? `published operations: ${result.publishedOperationNames.join(', ')}`
+        : 'published operations: (none — pass --publish true to publish every imported operation)',
+    );
+  } finally {
+    await pool.end();
+  }
+}
+
 async function run(): Promise<void> {
   const [, , command, ...rest] = process.argv;
   if (command === 'create-workspace') {
@@ -272,9 +422,15 @@ async function run(): Promise<void> {
     await runAddPrincipal(rest);
     return;
   }
+  if (command === 'register-gatekeeper') {
+    await runRegisterGatekeeper(rest);
+    return;
+  }
   throw new BootstrapUsageError(
     'usage: bootstrap create-workspace --name <ws> --owner <display-name>\n' +
-      '   or: bootstrap add-principal --workspace <id> --name <display-name> [--role <role>]',
+      '   or: bootstrap add-principal --workspace <id> --name <display-name> [--role <role>]\n' +
+      '   or: bootstrap register-gatekeeper --workspace <id> --principal <id> --name <name> ' +
+      '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]',
   );
 }
 
