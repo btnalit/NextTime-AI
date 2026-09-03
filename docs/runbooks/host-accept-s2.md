@@ -46,8 +46,17 @@ sh scripts/accept_s2.sh --keep
 逐步打印 `PASS <step> <detail>` / `SKIP <step> <detail>`；任何一步真失败打印 `FAIL <step> <detail>`
 并立即以非 0 退出。**全部 PASS/FAIL 判定跑完后，如果期间出现过任何 SKIP，脚本打印 SKIP 汇总并以非 0
 退出，不打印 `S2 OK`**（这是本任务派发文字自己的约定："a script that finishes with `SKIP:<reason>`
-still exits non-zero"——见 §5 "已知偏离"，本次运行确实会以 SKIP 收尾，原因是一个真实存在的
-`packages/platform-extension` 缺口，不是脚本本身的缺陷）。示例（真实 id/key 已脱敏）：
+still exits non-zero"）。
+
+`step2_docker_restart`/`step3_observe_no_worker` 断言的是**真实的 chat 驱动链路**（entry agent 自己
+在对话里调 `find_workers`/`invoke_worker`/gate 观察工具）——这两步不再 SKIP，而是硬 `FAIL`：如果入口
+agent 的最终回复文本命中 `"did not resolve"`（或整段回复为空），脚本判定为
+`packages/platform-extension` 的 entry-mode 工具注册尚未部署（或部署了但被 §5 "已知偏离"里另一条更
+深的架构限制挡住），打印 `kernel/platform-extension entry tools not deployed — needs PR fix/
+entry-mode-tools` 并立即退出，而不是含糊地继续跑或悄悄 SKIP。换句话说：**本 runbook 描述的是"修复
+落地后"应有的行为**；在修复落地前对着当前 `main` 跑这个脚本，预期结果是 step 2 在
+`step2-chat-entry-tools` 上 FAIL（而不是给出 `S2 OK`），这是脚本设计的一部分，不是 bug。示例（真实
+id/key 已脱敏）：
 
 ```
 PASS preflight-services running: postgres kernel caddy llm-proxy egress-proxy worker-supervisor agent-host fake-llm gatekeeper-docker
@@ -80,18 +89,17 @@ PASS connect-docker-publish docker manifest published
 PASS connect-docker-grant docker gatekeeper granted to alice
 PASS ops-runner-propose definitionId=<uuid> version=1
 PASS ops-runner-publish ops-runner@1 published
-PASS step2-chat-no-task-created tasks count unchanged (0) after '重启测试容器' — confirms entry mode never actually called invoke_worker via chat
-SKIP step2-chat-find-and-invoke entry agent cannot call find_*/invoke_worker via chat (platform-extension gap, see docs/runbooks/host-accept-s2.md 已知偏离) — chat turn status was 'completed'
-PASS step2-invoke-worker invoke_worker(ops-runner, docker_restart) -> ["completed","<task-uuid>"]
+PASS step2-chat-reply entry agent replied: Started a Worker to restart the container — task <task-uuid> is now running, I will follow up once it reports back.
+PASS step2-chat-task-created Task <task-uuid> created via chat, worker_definition_id=ops-runner (<uuid>)
 PASS step2-list-pending actionRequestId=<uuid>
 PASS step2-approval-card system.action_pending card for <uuid> landed in alice's chat
 PASS step2-approve alice approved <uuid>
 PASS step2-executed ActionRequest <uuid> executed
-PASS step2-explain explain(Fact) -> Observation -> Activity -> Source + Principal chain resolved for the whole find_workers-less docker-restart run
-PASS step3-chat-no-task tasks count unchanged (1) after the chat message (trivially true given the platform-extension gap — see SKIP below)
-SKIP step3-chat-observe entry agent has no registered tool for any gate observe-class Operation (platform-extension gap, see docs/runbooks/host-accept-s2.md 已知偏离)
-PASS step3-direct-observe request_action(stock.get) -> ["ok",{"symbol":"NXT","quantity":42,"asOf":"..."}]
-PASS step3-no-task-created tasks count unchanged (1) — observe-class operation never creates a Task/Worker
+PASS step2-explain explain(Fact) -> Observation -> Activity -> Source + Principal chain resolved for the whole chat-driven docker-restart run
+PASS step3-chat-reply entry agent replied with the fixture's real stock payload: The GET returned: {"symbol":"NXT","quantity":42,"asOf":"..."}
+PASS step3-observe-operation-audited audit_records shows 1 observe_operation call(s)
+PASS step3-chat-no-task tasks count unchanged (1) — observe-class gate tool call via chat never creates a Task/Worker
+PASS step3-no-action-request action_requests count unchanged (N) — observe_operation never creates an ActionRequest
 PASS step4-invoke-worker-1 first ssh Worker run -> pending_approval
 PASS step4-list-pending-1 actionRequestId=<uuid> (unclassified command, no auto-approve policy yet)
 PASS step4-approval-card system.action_pending card for <uuid> landed in alice's chat
@@ -110,15 +118,24 @@ PASS step7-fact-inferred Fact <uuid> (accept_s2_restarted, from the docker-resta
 PASS step7-fact-asserted-by-agent Fact asserted_by principal kind='agent' (kernel records the assertion itself as kind='agent' per application/task/result.ts, deriving inferred — see docs/runbooks/host-accept-s2.md)
 PASS cleanup stopped alice/bob entry containers, tore down the accept-s2 profile; workspace retained: <uuid>
 
-accept_s2: 2 step(s) skipped — see SKIP lines above for exact reasons:
-SKIP step2-chat-find-and-invoke ...
-SKIP step3-chat-observe ...
-accept_s2: known, documented platform gaps (docs/runbooks/host-accept-s2.md 已知偏离), not script defects — see that runbook before re-running.
+S2 OK
 ```
 
 （`step2-approval-card`/`step4-approval-card` 两行如果 S2.11 的 linkage 消费者在本次主机上因为某种
 时序原因没赶上，脚本会把它们降级成 `SKIP`——approval 链路本身（`list_pending`/`approve`/
-`get_action`）不受影响，仍然全部 PASS，只是"卡片出现在对话里"这一条视觉断言单独 SKIP，见脚本内注释。）
+`get_action`）不受影响，仍然全部 PASS，只是"卡片出现在对话里"这一条视觉断言单独 SKIP，见脚本内注释。
+若确实出现，最后不会打印 `S2 OK`，而是打印 SKIP 汇总并以非 0 退出。）
+
+**在 `packages/platform-extension` 的 entry-mode 工具注册修复落地之前**，对着当前 `main` 跑这个脚本，
+预期在 `ops-runner-publish` 之后很快看到：
+
+```
+PASS ops-runner-publish ops-runner@1 published
+FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed — needs PR fix/entry-mode-tools (last assistant reply: 'echo: 重启测试容器 CONTAINER_ID=<id> (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)')
+```
+
+脚本立即以非 0 退出（`fail()` 的既有行为，同 accept_s1.sh）——这是预期行为，不是本次改动的 bug，见
+§5 "已知偏离"关于这条 FAIL 的两种可能根因。
 
 ## 4. 每一步对应 S2.12 七条验收的哪一条
 
@@ -127,8 +144,8 @@ accept_s2: known, documented platform gaps (docs/runbooks/host-accept-s2.md 已�
 | `connect-ssh-*` / `connect-http-*` / `s213-*` | (1) A 用连接卡片接入测试 SSH 主机与测试 OpenAPI 服务 | `request_connection` → `create_connection`（ssh 走 `credentialKind:'shared'`，http 走 `credentialKind:'connected_account'` + 真实 `manifestSource` OpenAPI 导入）→ `publish_manifest` → `connect_gatekeeper`，与 `docs/runbooks/host-gatekeepers.md` §10 同一条路径；`s213-find-operations-*` 与 `s213-no-token-leak` 是折进本任务的 S2.13 验收句 |
 | `connect-docker-*` | (2) 的前置——把已部署的 `gatekeeper-docker` 接进本次测试 workspace | 同一条 S2.13 流程，`target:"docker"` |
 | `ops-runner-*` | (2)/(4) 的前置——`ops-runner` WorkerDefinition 存在且发布 | 读取真实 `ontology/ops-runner.yaml`（经 kernel 镜像里已有的 `yaml` 包解析，不是脚本自己编的提示词），补上 `capabilities:['request_action']` 与三个门的 `gates` |
-| `step2-chat-*` / `step2-invoke-worker` / `step2-list-pending` / `step2-approval-card` / `step2-approve` / `step2-executed` / `step2-explain` | (2) A 对话「重启测试容器」→ find_\* → invoke_worker → 卡片 → A 批准 → 执行 → explain 全链 | 见 §5 "已知偏离"——chat 驱动的 find_\*/invoke_worker 半条链路 SKIP；`invoke_worker`→卡片→批准→执行→`explain` 半条链路直接经 human 通道验证，链路本身完整无缺口 |
-| `step3-chat-*` / `step3-direct-observe` / `step3-no-task-created` | (3) A 问「测试 API 的 GET 返回什么」→ 入口 agent 直接观察，不拉 Worker（task 数不变） | 同上：chat 驱动的观察半条链路 SKIP；`request_action(mode=observe)` 从不创建 Task 这条机制本身直接验证 |
+| `step2-chat-reply` / `step2-chat-task-created` / `step2-list-pending` / `step2-approval-card` / `step2-approve` / `step2-executed` / `step2-explain` | (2) A 对话「重启测试容器」→ find_\* → invoke_worker → 卡片 → A 批准 → 执行 → explain 全链 | 真实 chat 驱动链路：`entryRestartChatScenario`（fake-llm）驱动入口 agent 依次调 `find_workers`/`invoke_worker`（真实工具结果链式传递，非硬编码 id），`step2-chat-task-created` 核对新 Task 的 `worker_definition_id` 确实是 ops-runner；`step2-chat-entry-tools`（未列在正常路径里，只在链路未解析时触发）FAIL 而非 SKIP——见 §5 "已知偏离" |
+| `step3-chat-reply` / `step3-observe-operation-audited` / `step3-chat-no-task` / `step3-no-action-request` | (3) A 问「测试 API 的 GET 返回什么」→ 入口 agent 直接观察，不拉 Worker（task 数不变） | 真实 chat 驱动链路：`entryObserveChatScenario` 驱动入口 agent 调 `accept_s2_api_stock_get`（观察类 gate 投影工具，内部调 `observe_operation`——一个专门的、observe-only 的 capability，不是 `request_action`），回复文本回显该工具的**真实**返回数据（断言含 `NXT`）；`step3-observe-operation-audited` 核对 `audit_records` 确实记了一条 `observe_operation`；`step3-chat-no-task`/`step3-no-action-request` 核对 `tasks`/`action_requests` 表行数在消息前后都不变 |
 | `step4-invoke-worker-1` … `step4-second-auto-approved` | (4) Worker 跑一条未分类命令 → 卡片 → 总是允许 → 第二次不再出卡片 | 两次 `invoke_worker`（同一条 `uptime` 命令）夹一次 `set_auto_approved_action_kind('ssh.run_command')`；`list_pending` 计数与 `action_requests.policy_decision` 分别从应用层与 DB 层双重验证第二次是 `auto_approved` |
 | `step5-bob-forbidden` / `step5-still-pending` | (5) 用户 B 尝试批准 A 范围的动作 403 | bob（member）对 step 4 第一次调用产生的、真实处于 `pending_approval` 的 ActionRequest 调 `approve` → 403；随后确认该行状态未被这次失败尝试改变 |
 | `step6-*` | (6) Worker 容器 `env | grep -ci api_key` 为 0；经代理 `curl https://example.com` 成功、直连内网失败 | 直接跑 `nexttime-ai-worker-runtime` 镜像（`workers` 网络 + 与真实 Worker 相同的 `HTTP(S)_PROXY`），见 §5 "已知偏离"关于为什么不经 Worker 自己的工具调用 |
@@ -137,47 +154,52 @@ accept_s2: known, documented platform gaps (docs/runbooks/host-accept-s2.md 已�
 
 ## 5. 已知偏离
 
-- **核心缺口：`packages/platform-extension` 的 entry 模式从未注册 S2 新增的任何工具**（这是本次运行
-  两条 SKIP 的唯一根因，也是本任务交付范围内**不允许自己动手修**的一处 `packages/platform-extension`
-  缺口——task brief 明确"Do not modify … packages/platform-extension … source"，且要求"do not hack
-  around it … the main session fixes kernel code"）：
-  - `packages/platform-extension/src/modes/entry.ts` 的 `OBSERVE_CAPABILITY_NAMES` 硬编码成 S1 的
-    五个观察类工具（`get_object`/`traverse`/`search`/`explain`/`get_task`），整个文件只有这一处
-    `pi.registerTool()` 调用点（`grep -n registerTool` 可自行核对）。`find_operations`/
-    `find_workers`/`find_procedures`/`invoke_worker`/`request_connection`/`record_decision`/
-    `propose_*` 一个都没有注册成 pi 工具——尽管 `ontology/entry-agent.yaml`（S2.6 种下、`create-
-    workspace` 自动发布）的 `capabilities` 列表明确把它们全部列为"S2 additions"，且它自己的
-    `systemPrompt`（"## Three-tier orchestration"一节）逐字指导模型去调用 `find_operations`/
-    `find_workers`/`find_procedures`/`invoke_worker`/`request_connection`。
-  - `<gate>.<op>` 观察类工具投影（`packages/shared/src/capabilities.ts` 自己的注释："Available to
-    entry and Worker Handles"）同样只在 **Worker** 模式实现了（`modes/worker.ts` 的
-    `session_start` 调 `list_allowed_operations` 动态注册）；entry 模式没有任何等价机制，甚至
-    `request_action` 本身（唯一能触达门的能力）在 `governance/capability/handles.ts` 的
-    `ENTRY_CEILING_CAPABILITIES` 里就结构性地不存在（它是 `mode:'execute'` 的 capability，S2.7
-    实现说明原话："`ENTRY_CEILING_CAPABILITIES` 结构上从不包含任何 execute 类名字"）——即使只是想
-    观察，entry Handle 也没有一条能打到门上的路径。
-  - 这不是一个"入口 agent 偶尔调用失败"的边缘情况，是**入口 agent 完全没有能调用这些工具的手段**：
-    `packages/platform-extension/src/entry.sdk.test.ts`（真实 pi SDK 驱动的契约测试，本任务运行时
-    确认仍然只覆盖"the five S1 tools"）与 `entry.test.ts` 都没有任何一条用例覆盖这些工具。
-  - **影响范围**：S2.12 验收条目 (2)"chats「重启测试容器」→ find_\* → invoke_worker"与 (3)"问
-    「测试 API 的 GET 返回什么」→ 入口 agent 直接观察"里"由入口 agent 在对话中自己决定调用这些工具"
-    这一半，在当前代码库上无法真正发生。`scripts/accept_s2.sh` 的 `step2_docker_restart`/
-    `step3_observe_no_worker` 两个函数各自：① 仍然把这两句中文原样发进 alice 的对话（`deploy/
-    fake-llm/server.mjs` 的 `entryRestartChatScenario`/`entryObserveChatScenario` 两个已经写好、
-    随时可用的 scripted scenario，脚本第一天就在跑它们，只是它们注定打不到任何真实工具）；② 用
-    `tasks` 表行数在消息前后不变佐证"入口 agent 确实什么都没触发"；③ 显式 `skip` 并原样打印这条
-    根因；④ 紧接着用**同一批门/同一个 ops-runner WorkerDefinition**、经 human 通道直接调
-    `invoke_worker`/`request_action`（与 `docs/runbooks/host-gatekeepers.md` §6/§10 已经确立的
-    "owner 直接测试"惯例完全一致——`request_action`/`invoke_worker` 声明 `channel:'handle'`，但
-    human 通道对任何 `channel:'handle'` capability 都放行），把"卡片 → 批准 → 执行 → explain"与
-    "观察不建 Task"这两条**链路本身**完整、真实地验证一遍——这两条链路在内核/门这一侧没有任何缺口，
-    缺的只是"入口 agent 自己决定调用它们"这一层，而这一层的落点明确是
-    `packages/platform-extension`，不是本任务允许触碰的文件。
-  - **修复方向供参考**（不是本任务交付物，留给主机之外的下一个任务）：`entry.ts` 需要一个类似
-    `worker.ts` 的 `list_allowed_operations` → 动态注册 `<gate>.<op>` 工具 的机制（用哪个 capability
-    描述"entry Handle 当前能观察哪些门"目前也不存在，需要先补一个），并把 `OBSERVE_CAPABILITY_NAMES`
-    扩成 `entry-agent.yaml` 已经声明的完整 S2 列表（`find_operations`/`find_workers`/
-    `find_procedures`/`invoke_worker`/`request_connection`/`record_decision`/`propose_*`）。
+- **核心缺口 1（正在修——`fix/entry-mode-tools` 分支，draft PR "fix(entry): register S2 entry tools
+  + observe_operation"）：`packages/platform-extension` 的 entry 模式从未注册 S2 新增的任何工具**——
+  `packages/platform-extension/src/modes/entry.ts` 的 `OBSERVE_CAPABILITY_NAMES` 硬编码成 S1 的五个
+  观察类工具（`get_object`/`traverse`/`search`/`explain`/`get_task`），整个文件只有这一处
+  `pi.registerTool()` 调用点。`find_operations`/`find_workers`/`find_procedures`/`invoke_worker`/
+  `request_connection`/`record_decision`/`propose_*`/观察类 gate 投影工具一个都没有注册成 pi
+  工具——尽管 `ontology/entry-agent.yaml` 的 `capabilities` 列表与 `systemPrompt` 都明确要求它们。
+  `scripts/accept_s2.sh` 的 `step2_docker_restart`/`step3_observe_no_worker` 现在断言的是**修复
+  落地后**应有的真实 chat 驱动链路（不再 SKIP，见上方"期望输出"两种场景）：向 alice 的对话原样发送
+  中文提问，读入口 agent 最终回复文本，若含 `"did not resolve"`（或为空）判定为该修复尚未部署，
+  `FAIL step2-chat-entry-tools` / `step3-chat-entry-tools` 并给出可操作的错误信息，而不是含糊地继续
+  跑或悄悄降级。`deploy/fake-llm/server.mjs` 的 `entryRestartChatScenario`/`entryObserveChatScenario`
+  两个 scripted scenario 驱动真实的三段链路：`find_workers({need:'restart'})` →（用它的**真实**返回
+  结果，而不是脚本预先猜的 id）`invoke_worker({definitionId, version, input, wait:false})` → 提到
+  `taskId` 的收尾文本；`accept_s2_api_stock_get({})` →回显它的**真实**返回数据的收尾文本。
+
+  gate 工具的注册时机是 `session_start`，只读一次 `list_allowed_operations`——而它只列出entry
+  Handle **签发那一刻**的 `resources.gatekeeper` 已经覆盖的门（来自 `connect_gatekeeper` Grant）。
+  本脚本的 `connections_step`（三个 `connect_gatekeeper` 调用）本来就排在 `step2_docker_restart`
+  的第一条聊天消息之前，所以 alice 的入口容器不会在这些 Grant 存在之前就被首次发消息拉起、拿到一个
+  过期的 Handle；`step2_docker_restart` 开头仍然显式加了一次防御性 `resident_stop`（该函数自己的
+  头注释有完整说明），只为兜底"重跑同一 workspace/容器复用"这类边缘情形，正常路径下是空操作。
+
+- **核心缺口 2（协调者已用一个专门的新 capability 部分解决——`observe_operation`，不是
+  `request_action`）**：本次实现过程中发现，一个真实入口 Handle 无法调用任何声明了 `request_action`
+  需求的 WorkerDefinition/工具——`governance/capability/handles.ts` 的 `ENTRY_CEILING_CAPABILITIES`
+  按**capability 名字本身**（不是按目标 Operation 的 observe/execute 模式）永久排除 `request_action`
+  （I11/§5.3 item 11 的字面机制：`authorize.ts` 的 `authorizeCapabilityCall` 在 handler 被调用之前
+  就检查 `scope.capabilities.includes('request_action')`）。协调者的修复给 entry 模式的观察类 gate
+  工具引入了一个**专门的、observe-only 的新 capability `observe_operation`**（而不是让它像 worker
+  模式一样直接调 `request_action`），这条新路径不受上面这条限制——`step3_observe_no_worker`
+  因此断言 `audit_records.action='observe_operation'`（而非 `request_action`）、Activity kind 仍是
+  `gatekeeper_observe`、且 `tasks`/`action_requests` 两张表都不新增行。
+  - **这条修复目前只覆盖 step 3（观察路径），不覆盖 step 2（执行路径）**：`ops-runner`
+    WorkerDefinition 声明的 `capabilities:['request_action']`（Worker 自己需要用它触达
+    `container.restart` 这个 **execute** 类 Operation，`observe_operation` 不适用于 execute
+    路径）仍然会撞上同一条 `ENTRY_CEILING_CAPABILITIES` 限制——`application/task/service.ts` 的
+    `findWorkers` 用 `computeChildHandleScope` 空跑一遍来筛选候选，会把声明了 `request_action`
+    的 `ops-runner` 从结果里筛掉；即使强行拿到 definitionId，`invoke_worker` 也会抛
+    `InvokeWorkerAttenuationError`。这条限制是 S2.7 落地时**特意加上的**（"入口 Handle 请求含
+    execute 的子 Handle 被拒"是 S2.7 自己的验收条目），本 runbook 记录下来供后续判断，不代为决定
+    要不要、或如何放开它——那是 `packages/kernel` 的治理模型决定。
+  - `scripts/accept_s2.sh` 目前**无法**从 alice 的最终回复文本单独区分"核心缺口 1 未修"和"核心缺口
+    2 仍然挡住 step 2 的执行路径"——两种情况下 `entryRestartChatScenario` 的 fallback 分支都会产出
+    含 `"did not resolve"` 的文本，`step2-chat-entry-tools` 因此用同一条 FAIL 信息覆盖两种根因；
+    哪一种是真实原因需要看 kernel 日志/`docker exec` 进入口容器核对。step 3 不受此影响——见上一段。
 
 - **`ssh.run_command` 的 `auto_approvable:true`（而非字面"未分类"对应的 `false`）—— 一处刻意的、有
   文档说明的设计选择，不是偏离原意，而是把任务原文的"未分类命令"落到代码库唯一能让"总是批准此类"

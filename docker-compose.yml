@@ -223,10 +223,18 @@ services:
   # `create_connection`'s `manifestSource` imports from and the one real `/stock` operation
   # (bearer-token gated, ACCEPT_S2_API_TOKEN generated at accept_s2.sh runtime — never a value
   # baked into this file). See deploy/accept-s2/openapi-fixture/server.mjs's own header comment.
+  # `:-` (not `:?`): compose interpolates every service's `environment:` block for the *whole*
+  # file before profile filtering ever runs, so a `:?` default here would make every ordinary
+  # `docker compose up/ps/build` on the host (for any service, not just this profile) fail with
+  # this message whenever ACCEPT_S2_API_TOKEN happens to be unset in the shell/`.env` — i.e.
+  # always, outside of accept_s2.sh's own run. `deploy/accept-s2/openapi-fixture/server.mjs`
+  # already refuses to start with an empty/missing token (see that file's own header comment), so
+  # an accidental `docker compose --profile accept-s2 up` without the token set fails loudly
+  # inside the container instead, not at compose-parse time for every other command.
   accept-s2-openapi:
     build: { context: ., dockerfile: deploy/accept-s2/openapi-fixture/Dockerfile }
     profiles: ["accept-s2"]
-    environment: { ACCEPT_S2_API_TOKEN: "${ACCEPT_S2_API_TOKEN:?accept_s2.sh sets this at runtime — see docs/runbooks/host-accept-s2.md}" }
+    environment: { ACCEPT_S2_API_TOKEN: "${ACCEPT_S2_API_TOKEN:-}" }
     networks: [control]
     restart: "no"
 

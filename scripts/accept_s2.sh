@@ -690,13 +690,20 @@ connections_step() {
 # worker ceiling *minus* every execute-class capability, packages/shared/src/worker-definition.ts's
 # own doc comment) and the three Gatekeeper ids just connected above. Reads the real checked-in
 # YAML (via the `yaml` package already vendored in the kernel image) rather than reinventing its
-# prompt text.
+# prompt text. `name`/`description` (optional per that same schema) are added here — the literal
+# word "restart" in the description is what makes `find_workers({need:"restart"})` (S2.12 step 2's
+# chat-driven half, deploy/fake-llm/server.mjs's `entryRestartChatScenario`) actually match this
+# definition: `substrate/graph/find-means.ts`'s ILIKE-over-properties search requires the whole
+# `need` string as one contiguous substring somewhere in the WorkerDefinition's graph-projected
+# properties, not a per-word match.
 ops_runner_step() {
   yaml_json=$(docker compose run --rm --no-deps -T -v "$(pwd)/ontology:/tmp/ontology:ro" kernel node -e "
 import('yaml').then(({ parse }) => import('node:fs/promises').then(async ({ readFile }) => {
   const raw = await readFile('/tmp/ontology/ops-runner.yaml', 'utf8');
   const doc = parse(raw);
   delete doc.kind;
+  doc.name = 'ops-runner';
+  doc.description = 'General-purpose Worker for delegated tasks: restart containers, run commands on connected systems, and observe connected APIs.';
   doc.capabilities = ['request_action'];
   doc.gates = ['$GATEKEEPER_ID_SSH', '$GATEKEEPER_ID_HTTP', '$GATEKEEPER_ID_DOCKER'];
   process.stdout.write(JSON.stringify(doc));
@@ -732,47 +739,87 @@ task_count() {
 # S2.12 step 2: "A chats '重启测试容器' -> entry agent find_* -> invoke_worker -> approval card ->
 # A approves -> execution -> explain over the whole chain."
 #
-# The chat-driven half ("A chats X" causing the *entry* agent to itself call find_*/invoke_worker)
-# is attempted first for real evidence, then marked SKIP: packages/platform-extension/src/modes/
-# entry.ts registers only the five S1 observe tools (get_object/traverse/search/explain/get_task)
-# — find_operations/find_workers/find_procedures/invoke_worker (and every gate-projected tool) are
-# not registered as pi tools for entry mode, despite ontology/entry-agent.yaml's own `capabilities`
-# list and systemPrompt describing exactly this behavior. See
-# docs/runbooks/host-accept-s2.md "已知偏离" for the full citation.
+# Asserts the real chat-driven chain: entry mode is expected (as of packages/platform-extension's
+# forthcoming entry-mode-tools fix) to register find_workers/invoke_worker as real tools and call
+# them over the Handle channel — deploy/fake-llm/server.mjs's `entryRestartChatScenario` drives
+# find_workers({need:'restart'}) -> invoke_worker({definitionId, version, input, wait:false})
+# chained off each *real* tool result, then a final text naming the returned taskId.
 #
-# The invoke_worker -> approval card -> approve -> execution -> explain chain itself is real
-# kernel/gate behavior with nothing missing — exercised directly (human channel, same "owner
-# testing" pattern request_action already uses elsewhere in this codebase, e.g.
-# docs/runbooks/host-gatekeepers.md §6/§10) so this step still fully verifies it.
+# `step2-chat-entry-tools` below is a hard FAIL (not a SKIP) when the entry agent's reply shows the
+# chain did not resolve: either packages/platform-extension has not deployed the entry-mode-tools
+# fix yet, OR (a distinct, deeper finding that may still apply to this *execute-class* step even
+# once that fix lands — see docs/runbooks/host-accept-s2.md "已知偏离") a real entry Handle can
+# never satisfy `ops-runner`'s declared `request_action` need at all: `governance/capability/
+# handles.ts`'s `ENTRY_CEILING_CAPABILITIES` structurally excludes `request_action` by capability
+# *name* (I11/§5.3 item 11) regardless of the target Operation's mode. (Step 3's own observe path
+# below is not subject to this — its entry tool calls a *different*, observe-only capability,
+# `observe_operation`, not `request_action`; see that step's own comment.) This script cannot
+# distinguish "tool not registered" from "registered but attenuation-rejected" from the chat reply
+# alone; either way the fix is packages/platform-extension/packages/kernel territory, not this
+# script's.
+#
+# Gate-tool registration ordering: the entry container registers `<gate>.<op>` tools once, at
+# `session_start`, from `list_allowed_operations` — which only lists Gatekeepers already in the
+# entry Handle's `resources.gatekeeper` *at the moment that Handle was issued* (populated from
+# `connect_gatekeeper` Grants — `ensureEntryHandle`). `connections_step` (all three
+# `connect_gatekeeper` calls) already runs before this function's first chat message in this
+# script's own top-level run order, so alice's entry container is never spawned — and never gets a
+# Handle issued — before those Grants exist; `resident_stop` below is a defensive no-op in the
+# normal case, guarding only against a stale/rerun scenario where alice's container might already
+# be running with an older Handle.
 step2_docker_restart() {
   tasks_before=$(task_count)
 
-  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "" "重启测试容器" 60000)
+  # Defensive: force a fresh Handle (and therefore a fresh list_allowed_operations gate-tool
+  # registration) for alice's entry container before her first chat message ever spawns it — see
+  # this function's own header comment on registration ordering. A no-op (404-ish, ignored) when
+  # no container is running yet, which is the expected case here.
+  resident_stop "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
+
+  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "" "重启测试容器 CONTAINER_ID=$RESTART_TARGET_ID" 90000)
   ALICE_CHAT_ID=$(parse_kv "$chat_out" CHAT_ID)
-  chat_status=$(parse_kv "$chat_out" TURN_STATUS)
   [ -n "$ALICE_CHAT_ID" ] || fail "step2-chat-restart" "no CHAT_ID from send-and-wait: $chat_out"
 
+  history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")
+  last_reply=$(parse_kv "$history_out" EXTRACTED)
+  case "$last_reply" in
+    *"did not resolve"*|"")
+      fail "step2-chat-entry-tools" "kernel/platform-extension entry tools not deployed — needs PR fix/entry-mode-tools (last assistant reply: '$last_reply')"
+      ;;
+  esac
+  pass "step2-chat-reply" "entry agent replied: $last_reply"
+
   tasks_after=$(task_count)
-  if [ "$tasks_before" = "$tasks_after" ]; then
-    pass "step2-chat-no-task-created" "tasks count unchanged ($tasks_before) after '重启测试容器' — confirms entry mode never actually called invoke_worker via chat"
-  else
-    fail "step2-chat-no-task-created" "tasks count changed ($tasks_before -> $tasks_after) after a chat message the entry agent should not have been able to act on — investigate before trusting the SKIP below"
-  fi
-  skip "step2-chat-find-and-invoke" "entry agent cannot call find_*/invoke_worker via chat (platform-extension gap, see docs/runbooks/host-accept-s2.md 已知偏离) — chat turn status was '$chat_status'"
+  case "$tasks_before$tasks_after" in
+    *[!0-9]*|'') fail "step2-chat-task-created" "could not read tasks count (before='$tasks_before' after='$tasks_after')" ;;
+  esac
+  [ "$tasks_after" -gt "$tasks_before" ] || fail "step2-chat-task-created" "tasks count did not increase ($tasks_before -> $tasks_after) after '重启测试容器' — expected a chat-driven invoke_worker call to create a Task"
 
-  out=$(cap "$ALICE_KEY" invoke_worker \
-    "{\"definitionId\":\"$OPS_RUNNER_ID\",\"version\":$OPS_RUNNER_VERSION,\"input\":\"ACCEPT_S2_SCENARIO=docker_restart CONTAINER_ID=$RESTART_TARGET_ID\",\"wait\":true,\"timeout\":90,\"gates\":[\"$GATEKEEPER_ID_DOCKER\"]}" \
-    "JSON.stringify([d.result.status, d.result.taskId])")
-  status=$(parse_kv "$out" HTTP_STATUS)
-  [ "$status" = "200" ] || fail "step2-invoke-worker" "invoke_worker HTTP $status: $(parse_kv "$out" BODY)"
-  pass "step2-invoke-worker" "invoke_worker(ops-runner, docker_restart) -> $(parse_kv "$out" EXTRACTED)"
+  task_row=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select id||'|'||worker_definition_id from tasks where workspace_id='$WORKSPACE_ID' order by created_at desc limit 1" \
+    </dev/null 2>/dev/null)
+  new_task_id=$(printf '%s' "$task_row" | cut -d'|' -f1)
+  new_task_def_id=$(printf '%s' "$task_row" | cut -d'|' -f2)
+  [ -n "$new_task_id" ] || fail "step2-chat-task-created" "could not read the newly-created Task row"
+  [ "$new_task_def_id" = "$OPS_RUNNER_ID" ] || fail "step2-chat-task-created" "new Task $new_task_id has worker_definition_id=$new_task_def_id, expected ops-runner ($OPS_RUNNER_ID)"
+  pass "step2-chat-task-created" "Task $new_task_id created via chat, worker_definition_id=ops-runner ($OPS_RUNNER_ID)"
 
-  out=$(cap "$ALICE_KEY" list_pending "{}" "JSON.stringify((d.result||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_DOCKER'))")
-  status=$(parse_kv "$out" HTTP_STATUS)
-  [ "$status" = "200" ] || fail "step2-list-pending" "list_pending HTTP $status: $(parse_kv "$out" BODY)"
-  matches=$(parse_kv "$out" EXTRACTED)
-  AR_ID_DOCKER=$(printf '%s' "$matches" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
-  [ -n "$AR_ID_DOCKER" ] || fail "step2-list-pending" "no pending ActionRequest for gatekeeper $GATEKEEPER_ID_DOCKER found in list_pending: $matches"
+  # invoke_worker was called by the entry agent with wait:false (§8.2's asynchronous model — a
+  # chat turn must not block on the spawned Worker), so the pending ActionRequest may not exist
+  # yet the instant the chat turn settles; poll instead of a single immediate check.
+  AR_ID_DOCKER=""
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    out=$(cap "$ALICE_KEY" list_pending "{}" "JSON.stringify((d.result||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_DOCKER'))")
+    status=$(parse_kv "$out" HTTP_STATUS)
+    [ "$status" = "200" ] || fail "step2-list-pending" "list_pending HTTP $status: $(parse_kv "$out" BODY)"
+    matches=$(parse_kv "$out" EXTRACTED)
+    AR_ID_DOCKER=$(printf '%s' "$matches" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+    [ -n "$AR_ID_DOCKER" ] && break
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  [ -n "$AR_ID_DOCKER" ] || fail "step2-list-pending" "no pending ActionRequest for gatekeeper $GATEKEEPER_ID_DOCKER appeared within 60s of the chat-driven invoke_worker call"
   pass "step2-list-pending" "actionRequestId=$AR_ID_DOCKER"
 
   history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "d.some(m=>m.kind==='system.action_pending'&&m.content&&m.content.actionRequestId==='$AR_ID_DOCKER')")
@@ -820,32 +867,49 @@ step2_docker_restart() {
 # S2.12 step 3: "A asks '测试 API 的 GET 返回什么' -> the entry agent observes directly through the
 # http gate (observe-class operation), no Worker/Task is created (assert task count unchanged)."
 #
-# Same split as step 2: the chat-driven half is attempted, then SKIPped for the same
-# platform-extension reason (entry mode never registers any gate-projected tool either — see
-# docs/runbooks/host-accept-s2.md). The observe-without-a-Worker mechanism itself (mode='observe'
-# short-circuits in application/gateway/request-action-handler.ts's phase 1, never creating a
-# Task) is exercised directly and is what step 3's "assert task count unchanged" really verifies.
+# Asserts the real chat-driven chain: entry mode is expected to register the observe-class
+# gate-projected tool `accept_s2_api_stock_get` (deploy/fake-llm/server.mjs's
+# `entryObserveChatScenario` calls it, then echoes its *real* returned data). Unlike step 2, this
+# tool is expected to call a dedicated observe-only capability, `observe_operation` — *not*
+# `request_action` — so it is not subject to step 2's `ENTRY_CEILING_CAPABILITIES`/`request_action`
+# caveat (see that step's own header comment); `audit_records.action='observe_operation'` and an
+# Activity of kind `gatekeeper_observe` are the confirming evidence this step checks for, alongside
+# "no Task row, no ActionRequest row" — same hard-FAIL-not-SKIP reasoning as step 2 for detecting
+# an undeployed fix.
 step3_observe_no_worker() {
   tasks_before=$(task_count)
+  action_requests_before=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select count(*) from action_requests where workspace_id='$WORKSPACE_ID'" </dev/null 2>/dev/null)
+
   run_driver send-and-wait "$ALICE_KEY" "$ALICE_CHAT_ID" "测试 API 的 GET 返回什么" 60000 >/dev/null
-  tasks_after=$(task_count)
-  [ "$tasks_before" = "$tasks_after" ] || fail "step3-chat-no-task" "tasks count changed ($tasks_before -> $tasks_after) after a chat message the entry agent should not have been able to act on"
-  pass "step3-chat-no-task" "tasks count unchanged ($tasks_before) after the chat message (trivially true given the platform-extension gap — see SKIP below)"
-  skip "step3-chat-observe" "entry agent has no registered tool for any gate observe-class Operation (platform-extension gap, see docs/runbooks/host-accept-s2.md 已知偏离)"
 
-  tasks_before=$(task_count)
-  out=$(cap "$ALICE_KEY" request_action "{\"gatekeeperId\":\"$GATEKEEPER_ID_HTTP\",\"operation\":\"stock.get\",\"params\":{}}" "JSON.stringify([d.result.status, d.result.data])")
-  status=$(parse_kv "$out" HTTP_STATUS)
-  [ "$status" = "200" ] || fail "step3-direct-observe" "request_action(stock.get) HTTP $status: $(parse_kv "$out" BODY)"
-  case "$(parse_kv "$out" EXTRACTED)" in
-    *'"ok"'*|*symbol*) : ;;
-    *) fail "step3-direct-observe" "unexpected observe result: $(parse_kv "$out" EXTRACTED)" ;;
+  history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")
+  last_reply=$(parse_kv "$history_out" EXTRACTED)
+  case "$last_reply" in
+    *"did not resolve"*|"")
+      fail "step3-chat-entry-tools" "kernel/platform-extension entry tools not deployed — needs PR fix/entry-mode-tools (last assistant reply: '$last_reply')"
+      ;;
   esac
-  pass "step3-direct-observe" "request_action(stock.get) -> $(parse_kv "$out" EXTRACTED)"
+  case "$last_reply" in
+    *NXT*) : ;;
+    *) fail "step3-chat-reply" "entry agent's reply did not contain the fixture's stock payload ('NXT'): $last_reply" ;;
+  esac
+  pass "step3-chat-reply" "entry agent replied with the fixture's real stock payload: $last_reply"
+
+  observe_op_count=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='observe_operation'" \
+    </dev/null 2>/dev/null)
+  [ -n "$observe_op_count" ] && [ "$observe_op_count" != "0" ] || fail "step3-observe-operation-audited" "no audit_records row with action='observe_operation' found for this workspace — expected the entry gate tool to call that capability"
+  pass "step3-observe-operation-audited" "audit_records shows $observe_op_count observe_operation call(s)"
 
   tasks_after=$(task_count)
-  [ "$tasks_before" = "$tasks_after" ] || fail "step3-no-task-created" "tasks count changed ($tasks_before -> $tasks_after) from an observe-class request_action call — no Task should ever be created for mode='observe'"
-  pass "step3-no-task-created" "tasks count unchanged ($tasks_before) — observe-class operation never creates a Task/Worker"
+  [ "$tasks_before" = "$tasks_after" ] || fail "step3-chat-no-task" "tasks count changed ($tasks_before -> $tasks_after) after an observe-only chat message — an observe-class gate call must never create a Task"
+  pass "step3-chat-no-task" "tasks count unchanged ($tasks_before) — observe-class gate tool call via chat never creates a Task/Worker"
+
+  action_requests_after=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select count(*) from action_requests where workspace_id='$WORKSPACE_ID'" </dev/null 2>/dev/null)
+  [ "$action_requests_before" = "$action_requests_after" ] || fail "step3-no-action-request" "action_requests count changed ($action_requests_before -> $action_requests_after) after an observe-only chat message"
+  pass "step3-no-action-request" "action_requests count unchanged ($action_requests_before) — observe_operation never creates an ActionRequest"
 }
 
 # S2.12 steps 4 and 5, interleaved (step 5 needs a genuinely pending ActionRequest, which step 4's

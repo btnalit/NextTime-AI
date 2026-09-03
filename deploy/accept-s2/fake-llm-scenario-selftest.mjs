@@ -163,11 +163,17 @@ async function main() {
       );
     }
 
-    // 6. Entry-mode gap scenarios: scripted, first turn attempts the (currently unregistered) tool.
+    // 6. Entry-mode chat scenarios, turn 1: scripted regardless of whether packages/platform-
+    //    extension currently registers the tool being called (see docs/runbooks/
+    //    host-accept-s2.md "已知偏离") — this scenario is ready either way.
     {
-      const { json } = await post([{ role: 'user', content: '重启测试容器' }]);
+      const { json } = await post([{ role: 'user', content: '重启测试容器 CONTAINER_ID=deadbeef' }]);
       const call = toolCallOf(json);
-      check('entry-restart-chat-turn1', call?.name === 'find_workers', JSON.stringify(json.choices[0]));
+      check(
+        'entry-restart-chat-turn1',
+        call?.name === 'find_workers' && call.args.need === 'restart',
+        JSON.stringify(json.choices[0]),
+      );
     }
     {
       const { json } = await post([{ role: 'user', content: '测试 API 的 GET 返回什么' }]);
@@ -175,6 +181,122 @@ async function main() {
       check(
         'entry-observe-chat-turn1',
         call?.name === 'accept_s2_api_stock_get',
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 6a. entryRestartChatScenario turn 2: once find_workers' *real* result is in history, the
+    //     scenario chains invoke_worker off it (definitionId/version from the result, not a
+    //     hardcoded guess), carrying the CONTAINER_ID marker through into `input`.
+    {
+      const messages = [
+        { role: 'user', content: '重启测试容器 CONTAINER_ID=deadbeef' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_fw', type: 'function', function: { name: 'find_workers', arguments: '{"need":"restart"}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_fw',
+          content: JSON.stringify([
+            { definitionId: 'ops-runner-uuid', version: 3, kind: 'worker', name: 'ops-runner' },
+          ]),
+        },
+      ];
+      const { json } = await post(messages);
+      const call = toolCallOf(json);
+      check(
+        'entry-restart-chat-turn2',
+        call?.name === 'invoke_worker' &&
+          call.args.definitionId === 'ops-runner-uuid' &&
+          call.args.version === 3 &&
+          call.args.wait === false &&
+          typeof call.args.input === 'string' &&
+          call.args.input.includes('ACCEPT_S2_SCENARIO=docker_restart') &&
+          call.args.input.includes('CONTAINER_ID=deadbeef'),
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 6b. entryRestartChatScenario turn 2, find_workers came back empty/unresolved (today's
+    //     reality — see the SKIP-replacement fallback text) — never guesses a definitionId.
+    {
+      const messages = [
+        { role: 'user', content: '重启测试容器 CONTAINER_ID=deadbeef' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_fw', type: 'function', function: { name: 'find_workers', arguments: '{"need":"restart"}' } }],
+        },
+        { role: 'tool', tool_call_id: 'call_fw', content: 'Error: unknown tool "find_workers"' },
+      ];
+      const { json } = await post(messages);
+      check(
+        'entry-restart-chat-turn2-unresolved',
+        json.choices[0].finish_reason === 'stop' &&
+          typeof json.choices[0].message.content === 'string' &&
+          json.choices[0].message.content.includes('did not resolve'),
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 6c. entryRestartChatScenario turn 3: once invoke_worker's *real* result is in history, the
+    //     final text names the real taskId.
+    {
+      const messages = [
+        { role: 'user', content: '重启测试容器 CONTAINER_ID=deadbeef' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_fw', type: 'function', function: { name: 'find_workers', arguments: '{"need":"restart"}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_fw',
+          content: JSON.stringify([{ definitionId: 'ops-runner-uuid', version: 3, kind: 'worker' }]),
+        },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_iw', type: 'function', function: { name: 'invoke_worker', arguments: '{}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_iw',
+          content: JSON.stringify({ taskId: 'task-999', workerRunId: 'wr-1', status: 'running' }),
+        },
+      ];
+      const { json } = await post(messages);
+      check(
+        'entry-restart-chat-turn3',
+        json.choices[0].finish_reason === 'stop' &&
+          json.choices[0].message.content.includes('task-999'),
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 6d. entryObserveChatScenario turn 2: echoes accept_s2_api_stock_get's *real* returned data.
+    {
+      const messages = [
+        { role: 'user', content: '测试 API 的 GET 返回什么' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_ob', type: 'function', function: { name: 'accept_s2_api_stock_get', arguments: '{}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_ob',
+          content: JSON.stringify({ status: 'ok', data: { symbol: 'NXT', quantity: 42 } }),
+        },
+      ];
+      const { json } = await post(messages);
+      check(
+        'entry-observe-chat-turn2',
+        json.choices[0].finish_reason === 'stop' &&
+          json.choices[0].message.content.includes('NXT') &&
+          json.choices[0].message.content.includes('42'),
         JSON.stringify(json.choices[0]),
       );
     }
