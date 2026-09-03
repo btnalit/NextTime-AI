@@ -35,6 +35,7 @@ export const PLATFORM_EVENT_NAMES = [
   'WorkerRunUpdated',
   'ActionRequestPending',
   'ActionRequestUpdated',
+  'ConnectionRequested',
   'ConnectionCreated',
   'FactAsserted',
   'EgressObserved',
@@ -111,6 +112,22 @@ const ActionRequestUpdatedEvent = z.object({
   workspaceId: z.string(),
   actionRequestId: z.string(),
   status: ActionRequestStatusSchema,
+});
+
+/** S2.13 addition (docs/development-tasks.md S2.13 deliverable 1: "emit a ConnectionRequested
+ *  outbox event so S2.11's linkage/chat can surface a card later"): the "建立" step's proposal
+ *  half — `request_connection` produces this the moment a connection request card is created,
+ *  before any human has filled in an endpoint or credential. `ConnectionCreated` below remains
+ *  the event for when that request is actually resolved into a registered Gatekeeper. No
+ *  `application/linkage` consumer is added by this task (out of scope — see PR body); this is
+ *  the event shape a future task wires a consumer for. */
+const ConnectionRequestedEvent = z.object({
+  type: z.literal('ConnectionRequested'),
+  workspaceId: z.string(),
+  connectionRequestId: z.string(),
+  kind: z.enum(['http', 'mcp', 'cli', 'ssh']),
+  target: z.string(),
+  requestedBy: z.string(),
 });
 
 const ConnectionCreatedEvent = z.object({
@@ -255,6 +272,7 @@ export const PlatformEventSchema = z.discriminatedUnion('type', [
   WorkerRunUpdatedEvent,
   ActionRequestPendingEvent,
   ActionRequestUpdatedEvent,
+  ConnectionRequestedEvent,
   ConnectionCreatedEvent,
   FactAssertedEvent,
   EgressObservedEvent,

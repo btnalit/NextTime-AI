@@ -1,6 +1,7 @@
 import type {
   ActionRequestStatus,
   ConflictStatus,
+  ConnectionRequestStatus,
   DecisionStatus,
   EntryAgentSessionStatus,
   EpistemicStatus,
@@ -381,6 +382,29 @@ export const GRANT_TRANSITIONS: TransitionTable<GrantStatus, GrantEvent> = {
   edges: GRANT_EDGES,
 };
 
+// ---------------------------------------------------------------------------------------------
+// ConnectionRequest (S2.13, §5.1.4 Connection "建立"): `requested → completed | cancelled`.
+// ---------------------------------------------------------------------------------------------
+
+export const CONNECTION_REQUEST_EVENT_VALUES = ['complete', 'cancel'] as const;
+export type ConnectionRequestEvent = (typeof CONNECTION_REQUEST_EVENT_VALUES)[number];
+
+export const CONNECTION_REQUEST_EDGES: readonly StateTransition<
+  ConnectionRequestStatus,
+  ConnectionRequestEvent
+>[] = [
+  { from: 'requested', event: 'complete', to: 'completed' },
+  { from: 'requested', event: 'cancel', to: 'cancelled' },
+];
+
+export const CONNECTION_REQUEST_TRANSITIONS: TransitionTable<
+  ConnectionRequestStatus,
+  ConnectionRequestEvent
+> = {
+  machine: 'ConnectionRequest',
+  edges: CONNECTION_REQUEST_EDGES,
+};
+
 /** Every transition table, for generic iteration (e.g. exhaustive tests, doc generation). */
 export const ALL_TRANSITION_TABLES = [
   FACT_LIFECYCLE_TRANSITIONS,
@@ -393,4 +417,5 @@ export const ALL_TRANSITION_TABLES = [
   ENTRY_AGENT_SESSION_TRANSITIONS,
   PUBLISHABLE_TRANSITIONS,
   GRANT_TRANSITIONS,
+  CONNECTION_REQUEST_TRANSITIONS,
 ] as const;

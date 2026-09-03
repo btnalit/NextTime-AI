@@ -218,6 +218,45 @@ export async function listGrantHolderPrincipalIds(
 }
 
 // -------------------------------------------------------------------------------------------
+// listActiveGrantResourceScopes (S2.13): the mechanism that flows a `connect_gatekeeper` Grant
+// into an entry Handle's own `resources.gatekeeper` scope at issuance time
+// (`application/host-bridge/agent-host-runtime.ts`'s `ensureEntryHandle` — that seam was
+// documented as missing by `governance/capability/handles.ts`'s own "Known seam for S2.4/S2.13"
+// note, which this closes). Distinct from `hasActiveGrant`/`listGrantHolderPrincipalIds` above,
+// which answer I14's "does this principal cover this one resource_scope" question for a *known*
+// resource; this answers the dual question, "every resource_scope this principal is covered for
+// under this capability" — there is no fixed resource in hand yet, a Handle's scope is being
+// built from scratch.
+// -------------------------------------------------------------------------------------------
+
+export interface ActiveGrantResourceScopeQuery {
+  readonly principalId: string;
+  readonly capability: string;
+}
+
+/** Every distinct, non-null `resourceScope` from `match.principalId`'s active, unexpired grants
+ *  for `match.capability` — a grant with no `resourceScope` (the wildcard-coverage convention,
+ *  `CapabilityGrantScope`'s own doc comment) is skipped: it covers every resource for I14
+ *  purposes, but there is no single id to add to a Handle's finite `resources[key]` list. */
+export async function listActiveGrantResourceScopes(
+  client: PoolClient,
+  workspaceId: string,
+  query: ActiveGrantResourceScopeQuery,
+): Promise<readonly string[]> {
+  const result = await client.query<{ resource_scope: string }>(
+    `select distinct scope ->> 'resourceScope' as resource_scope from capability_grants
+     where workspace_id = $1
+       and principal_id = $2
+       and capability = $3
+       and status = 'active'
+       and (expires_at is null or expires_at > now())
+       and scope ->> 'resourceScope' is not null`,
+    [workspaceId, query.principalId, query.capability],
+  );
+  return result.rows.map((row) => row.resource_scope);
+}
+
+// -------------------------------------------------------------------------------------------
 // Workspace owner — "the workspace owner counts as holding every scope" (this task's own I14
 // wording; §5.8 does not otherwise special-case `owner` for approval, but §5.1.1 already frames
 // `owner` as the tenant-root role — see application/gateway/authorize.ts's `roleSatisfiesMinRole`

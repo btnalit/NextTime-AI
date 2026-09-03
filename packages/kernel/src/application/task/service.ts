@@ -428,18 +428,42 @@ export async function findWorkers(
   return matches;
 }
 
-/** `find_operations` — candidates from `substrate/graph/find-means.ts`; the Grant-intersection
- *  half is a documented no-op until S2.4 projects real `Operation` Objects with a resolvable
- *  `Gatekeeper` relationship to check a Grant against (this function's own signature already
- *  accepts `caller` so wiring that check in later touches only this file). */
+/**
+ * `find_operations` — candidates from `substrate/graph/find-means.ts` (already published-only,
+ * I16/I17), intersected with the caller's Grant (design doc §9.3 "find_* 与调用者 Grant 取交集";
+ * docs/development-tasks.md S2.13's own runbook deliverable: "connect_gatekeeper 到一个成员 → 该
+ * 成员的入口 agent 能 find_operations"). Wired now that S2.4/S2.13 have landed real `Operation`
+ * Objects and a real `connect_gatekeeper` Grant to check against — this function's signature
+ * already accepted `caller` in anticipation of exactly this (S2.7's own note, which this
+ * supersedes).
+ *
+ * Mirrors `findWorkers` above: `'unconstrained'` (owner, human channel, no Handle to narrow from)
+ * sees every published-candidate Operation; a real `CapabilityScope` keeps only candidates whose
+ * `identityKey.gatekeeperId` is in `resources.gatekeeper` — exactly the same key
+ * `computeChildHandleScope`/`ensureEntryHandle` already populate from an active
+ * `connect_gatekeeper` Grant (`governance/policy`'s `GATEKEEPER_RESOURCE_SCOPE_KEY`).
+ *
+ * Known, deliberate asymmetry (see PR body "已知偏离"): `request-action-handler.ts`'s `observe`
+ * path (the actual `<gate>.<op>` tool call, once an agent has *found* an Operation) does not
+ * itself check `resources.gatekeeper` — a pre-existing S2.4 gap, not something this task's
+ * ownership extends to fixing. This function narrows only what `find_operations` *surfaces* as a
+ * candidate means; it is not the sole enforcement point.
+ */
 export async function findOperations(
   client: PoolClient,
   workspaceId: string,
-  _caller: FindMeansCaller,
+  caller: FindMeansCaller,
   need: string,
   limit?: number,
 ): Promise<readonly GraphObject[]> {
-  return findOperationCandidates(client, workspaceId, { need, limit });
+  const candidates = await findOperationCandidates(client, workspaceId, { need, limit });
+  if (caller.parentAuthority === 'unconstrained') return candidates;
+
+  const allowedGatekeepers = new Set(caller.parentAuthority.resources.gatekeeper ?? []);
+  return candidates.filter((candidate) => {
+    const gatekeeperId = candidate.identityKey?.gatekeeperId;
+    return typeof gatekeeperId === 'string' && allowedGatekeepers.has(gatekeeperId);
+  });
 }
 
 export interface ProcedureMatch {

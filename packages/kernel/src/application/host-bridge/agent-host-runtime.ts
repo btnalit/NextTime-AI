@@ -6,7 +6,12 @@ import type {
 import type { CryptoKey } from 'jose';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
-import { entryScope, issueHandle } from '../../governance/capability/index.js';
+import {
+  entryScope,
+  issueHandle,
+  listActiveGrantResourceScopes,
+} from '../../governance/capability/index.js';
+import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import { getPublishedEntryDefinition } from '../worker/index.js';
 import type {
   AgentRuntime,
@@ -473,14 +478,28 @@ export class AgentHostRuntime implements AgentRuntime {
     }
 
     const sessionId = await this.ensureEntrySession(workspaceId, principalId);
-    const issued = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
-      issueHandle(client, {
+    const issued = await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
+      // S2.13: flows every `connect_gatekeeper` Grant this principal holds into the freshly
+      // issued entry Handle's own `resources.gatekeeper` scope (governance/capability/handles.ts's
+      // own "Known seam for S2.4/S2.13" note — this is that seam, closed). Re-read on every
+      // (re)issuance rather than cached separately: `handleCache` below already reissues once the
+      // Handle is mostly through its ttl, so a Grant made after this principal's last issuance
+      // becomes visible within one reissue window (`HANDLE_REISSUE_THRESHOLD`), not instantly —
+      // acceptable for a human-driven authorization change, same latency bound `entrypoint.sh`'s
+      // own `systemPrompt`/`model` refresh already accepts elsewhere in this class.
+      const gatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
+        principalId,
+        capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
+      });
+      return issueHandle(client, {
         sessionId,
-        scope: entryScope(),
+        scope: entryScope(
+          gatekeeperIds.length > 0 ? { resources: { gatekeeper: gatekeeperIds } } : {},
+        ),
         ttlSeconds: this.entryHandleTtlSeconds,
         privateKey: this.privateKey,
-      }),
-    );
+      });
+    });
     this.handleCache.set(principalId, {
       token: issued.token,
       issuedAtMs: issued.issuedAt.getTime(),

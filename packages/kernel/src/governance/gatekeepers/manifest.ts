@@ -184,6 +184,36 @@ export async function listPublishedOperationsForGatekeepers(
   return records;
 }
 
+/**
+ * `publish_manifest` (S2.13, `governance/connections` group's own bulk-publish capability, §7.5
+ * "owner 发布清单" — distinct granularity from `publish_operation` above, which publishes one
+ * already-named Operation): every currently-`draft` Operation of one Gatekeeper instance, single
+ * query, same direct-SQL-over-`objects` style as `listPublishedOperationsForGatekeepers` above.
+ */
+export async function listDraftOperationsForGatekeeper(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+): Promise<readonly OperationRecord[]> {
+  const result = await client.query<OperationObjectRow>(
+    `select identity_key, properties
+     from objects
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'gatekeeperId' = $2
+       and properties ->> 'status' = 'draft'
+     order by updated_at asc`,
+    [workspaceId, gatekeeperId],
+  );
+  const records: OperationRecord[] = [];
+  for (const row of result.rows) {
+    const name = row.identity_key?.name;
+    if (!name) continue; // defensive — every Operation Object is upserted with both identity fields
+    records.push(toOperationRecord(gatekeeperId, name, row.properties));
+  }
+  return records;
+}
+
 // -------------------------------------------------------------------------------------------
 // publish / deprecate — human channel only (enforced at the capability-registry layer, I16).
 // -------------------------------------------------------------------------------------------

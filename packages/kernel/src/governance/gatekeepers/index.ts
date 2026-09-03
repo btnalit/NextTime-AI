@@ -24,6 +24,7 @@ export {
   getOperation,
   getPublishedOperation,
   listPublishedOperationsForGatekeepers,
+  listDraftOperationsForGatekeeper,
   publishOperation,
   deprecateOperation,
   OperationNotFoundError,

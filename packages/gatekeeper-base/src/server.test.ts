@@ -1,5 +1,9 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Operation } from '@nexttime/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ConnectedAccountStore } from './credentials/index.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
@@ -31,14 +35,14 @@ const executeOp: Operation = {
   writes: [],
 };
 
-function buildApp(transport: Transport) {
+function buildApp(transport: Transport, connectedAccountStore?: ConnectedAccountStore) {
   const gate = new GatekeeperBase({
     manifest: [observeOp, executeOp],
     transport,
     credentialResolver: { resolve: async () => ({}) },
     idempotencyStore: new InMemoryIdempotencyStore(),
   });
-  return createGatekeeperServer({ gate });
+  return createGatekeeperServer({ gate, connectedAccountStore });
 }
 
 const fakeTransport: Transport = {
@@ -136,5 +140,73 @@ describe('gatekeeper protocol server', () => {
     });
     expect(response.statusCode).toBe(200);
     expect(typeof response.json().result.description).toBe('string');
+  });
+
+  it('POST/DELETE /gate/connected-accounts 501 when no store is configured (shared-credential mode)', async () => {
+    app = buildApp(fakeTransport);
+    const post = await app.inject({
+      method: 'POST',
+      url: '/gate/connected-accounts',
+      payload: { onBehalfOf: 'user-a', credential: { token: 'x' } },
+    });
+    expect(post.statusCode).toBe(501);
+    expect(post.json().error.code).toBe('connected_account_store_not_configured');
+
+    const del = await app.inject({
+      method: 'DELETE',
+      url: '/gate/connected-accounts',
+      payload: { onBehalfOf: 'user-a' },
+    });
+    expect(del.statusCode).toBe(501);
+  });
+
+  describe('with a ConnectedAccountStore configured', () => {
+    let dir: string;
+    let store: ConnectedAccountStore;
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'gatekeeper-server-connected-account-'));
+      const keyFilePath = join(dir, 'store.key');
+      await writeFile(keyFilePath, 'a-passphrase-not-32-bytes-long');
+      store = new ConnectedAccountStore({ dataDir: dir, keyFilePath });
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('POST stores a credential the store can later resolve, and never echoes it back', async () => {
+      app = buildApp(fakeTransport, store);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/gate/connected-accounts',
+        payload: { onBehalfOf: 'user-a', credential: { token: 'super-secret-value' } },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result).toEqual({ stored: true });
+      expect(JSON.stringify(response.json())).not.toContain('super-secret-value');
+
+      expect(await store.get('user-a')).toEqual({ token: 'super-secret-value' });
+    });
+
+    it('has no GET route — a stored credential can never be read back over the wire', async () => {
+      app = buildApp(fakeTransport, store);
+      await store.set('user-a', { token: 'secret' });
+      const response = await app.inject({ method: 'GET', url: '/gate/connected-accounts' });
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('DELETE removes a stored credential', async () => {
+      app = buildApp(fakeTransport, store);
+      await store.set('user-a', { token: 'secret' });
+      const response = await app.inject({
+        method: 'DELETE',
+        url: '/gate/connected-accounts',
+        payload: { onBehalfOf: 'user-a' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result).toEqual({ deleted: true });
+      expect(await store.get('user-a')).toBeUndefined();
+    });
   });
 });

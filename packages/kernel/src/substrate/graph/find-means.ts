@@ -18,14 +18,25 @@ import type { GraphObject } from './store.js';
  * for why no extra "published" filter is needed here), and the handler narrows that list to what
  * the caller may actually use.
  *
- * **"published only" is free, not filtered here:** every meta-ontology Object this file can find
- * was written by a *publish*-time projection (`substrate/ontology/meta-objects.ts`'s
+ * **"published only" is free for `WorkerDefinition`, not for `Operation`/`Procedure` (S2.13
+ * correction of this file's own earlier claim):** every `WorkerDefinition` Object this file can
+ * find was written by a *publish*-time projection (`substrate/ontology/meta-objects.ts`'s
  * `projectWorkerDefinitionObject`, called only from `application/worker/definitions.ts`'s
  * `publishWorkerDefinition` — never from `propose`), so a `WorkerDefinition` row in `objects` is
  * non-draft by construction (the same invariant `application/gateway/meta-ontology-guard.ts`'s own
- * doc comment relies on for I16). The same will hold for `Gatekeeper`-exposed `Operation` objects
- * (S2.4) and `Procedure` objects (S2.14) once those land — this module does not need to special-
- * case any of them.
+ * doc comment relies on for I16) — no extra filter needed for that one type. `Operation` turned
+ * out *not* to follow the same shape once S2.4 actually landed it: `registerOperationDraftObject`
+ * upserts the Object at **import/propose** time, `status: 'draft'` in `properties`, and
+ * `setOperationStatusObject` only flips that same row's `properties.status` in place — so a draft
+ * Operation is already sitting in `objects` the moment it is imported, long before anyone
+ * publishes it. Returning it here would violate I16/I17 ("未发布的清单对 agent 不可见" —
+ * docs/development-tasks.md S2.13 acceptance) the first time a manifest is imported. This function
+ * therefore adds an explicit `properties ->> 'status' = 'published'` filter for `Operation`/
+ * `Procedure` only (the latter is expected to share the same draft/published/deprecated-in-
+ * properties shape once S2.14 lands it — same idiom `governance/gatekeepers/manifest.ts`'s
+ * `listPublishedOperationsForGatekeepers` already uses) — never for `WorkerDefinition`, whose
+ * Objects carry no `status` property at all (adding the filter there would silently return zero
+ * rows for every published WorkerDefinition, not narrow correctly).
  *
  * **"one traversal" is a text search, not a graph walk, and that is deliberate for S2.7's actual
  * data shape:** a real `traverse` (`substrate/graph/store.ts`) walks Links outward from one
@@ -88,6 +99,10 @@ async function findMetaOntologyObjects(
 ): Promise<readonly GraphObject[]> {
   const pattern = `%${input.need}%`;
   const limit = input.limit ?? DEFAULT_FIND_MEANS_LIMIT;
+  // S2.13: see this file's own module doc comment ("published only is free for WorkerDefinition,
+  // not for Operation/Procedure") for why this filter exists at all and why it must never apply
+  // to WorkerDefinition.
+  const publishedOnly = objectType === 'Operation' || objectType === 'Procedure';
   const result = await client.query<ObjectRow>(
     `select ${OBJECT_COLUMNS}
      from objects
@@ -97,6 +112,7 @@ async function findMetaOntologyObjects(
          properties::text ilike $3
          or coalesce(identity_key::text, '') ilike $3
        )
+       and (not $5::boolean or properties ->> 'status' = 'published')
      order by
        case
          when properties ->> 'name' ilike $3 then 0
@@ -105,14 +121,13 @@ async function findMetaOntologyObjects(
        end,
        updated_at desc
      limit $4`,
-    [workspaceId, objectType, pattern, limit],
+    [workspaceId, objectType, pattern, limit, publishedOnly],
   );
   return result.rows.map(mapObjectRow);
 }
 
-/** Candidates for `find_operations` — `Gatekeeper --exposes--> Operation` (design doc §5.1.2).
- *  Returns no rows until S2.4 projects `Operation` Objects into the graph; the query itself needs
- *  no change when that lands. */
+/** Candidates for `find_operations` — `Gatekeeper --exposes--> Operation` (design doc §5.1.2),
+ *  published only (I16/I17 — see `findMetaOntologyObjects`'s own doc comment above). */
 export function findOperationCandidates(
   client: PoolClient,
   workspaceId: string,

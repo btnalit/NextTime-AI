@@ -3,7 +3,7 @@ import { PLATFORM_EVENT_NAMES, PlatformEventNameSchema, PlatformEventSchema } fr
 import type { PlatformEvent } from './events.js';
 
 describe('PLATFORM_EVENT_NAMES', () => {
-  it('lists the ten canonical domain events from design doc §7.10 (S2.7 adds WorkerRunUpdated)', () => {
+  it('lists the eleven canonical domain events from design doc §7.10 (S2.7 adds WorkerRunUpdated, S2.13 adds ConnectionRequested)', () => {
     expect(PLATFORM_EVENT_NAMES).toEqual([
       'TurnStarted',
       'TurnCompleted',
@@ -11,6 +11,7 @@ describe('PLATFORM_EVENT_NAMES', () => {
       'WorkerRunUpdated',
       'ActionRequestPending',
       'ActionRequestUpdated',
+      'ConnectionRequested',
       'ConnectionCreated',
       'FactAsserted',
       'EgressObserved',
@@ -62,6 +63,14 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
     holderPrincipalIds: ['owner1', 'operator1'],
   },
   { type: 'ActionRequestUpdated', workspaceId: 'ws1', actionRequestId: 'ar1', status: 'executed' },
+  {
+    type: 'ConnectionRequested',
+    workspaceId: 'ws1',
+    connectionRequestId: 'cr1',
+    kind: 'ssh',
+    target: 'example-host',
+    requestedBy: 'p1',
+  },
   {
     type: 'ConnectionCreated',
     workspaceId: 'ws1',
@@ -162,9 +171,9 @@ describe('PlatformEventSchema', () => {
     }
   });
 
-  it('covers all sixteen variants (10 domain + 6 chat/ws)', () => {
+  it('covers all seventeen variants (11 domain + 6 chat/ws)', () => {
     const seenTypes = new Set(SAMPLE_EVENTS.map((e) => e.type));
-    expect(seenTypes.size).toBe(16);
+    expect(seenTypes.size).toBe(17);
   });
 
   it('rejects an event with an unknown discriminant', () => {

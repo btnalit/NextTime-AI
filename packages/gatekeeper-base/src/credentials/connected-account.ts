@@ -114,6 +114,20 @@ export class ConnectedAccountStore {
     await writeFile(tmpPath, JSON.stringify({ records: nextRecords }, null, 2), 'utf8');
     await rename(tmpPath, this.filePath);
   }
+
+  /** Removes the stored credential for `onBehalfOf`, if any (S2.13: `DELETE /gate/connected-
+   *  accounts`). Idempotent — deleting a Principal with no stored credential is a no-op, not an
+   *  error, matching `set`'s own "overwriting any existing" tolerance for either starting state. */
+  async delete(onBehalfOf: string): Promise<void> {
+    const file = await this.loadFile();
+    if (!(onBehalfOf in file.records)) return;
+    const nextRecords = { ...file.records };
+    delete nextRecords[onBehalfOf];
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const tmpPath = `${this.filePath}.${randomUUID()}.tmp`;
+    await writeFile(tmpPath, JSON.stringify({ records: nextRecords }, null, 2), 'utf8');
+    await rename(tmpPath, this.filePath);
+  }
 }
 
 export class ConnectedAccountCredentialResolver implements CredentialResolver {

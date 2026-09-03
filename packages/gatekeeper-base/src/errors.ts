@@ -64,3 +64,17 @@ export class ApplyRequiresIdempotencyKeyError extends Error {
     this.name = 'ApplyRequiresIdempotencyKeyError';
   }
 }
+
+/** S2.13: `POST`/`DELETE /gate/connected-accounts` on a gate started in shared-credential mode
+ *  (no `ConnectedAccountStore` configured — `credentials/shared-env.ts`'s `SharedEnvCredentialResolver`).
+ *  There is nowhere to write the credential; the caller (`create_connection`'s handler) should
+ *  have used `credentialKind: 'shared'` for this Gatekeeper instead. */
+export class ConnectedAccountStoreNotConfiguredError extends Error {
+  constructor() {
+    super(
+      'this gate has no ConnectedAccountStore configured (GATE_CREDENTIAL_MODE is not ' +
+        'connected_account) — there is nowhere to store or delete a per-principal credential',
+    );
+    this.name = 'ConnectedAccountStoreNotConfiguredError';
+  }
+}

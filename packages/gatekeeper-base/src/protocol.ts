@@ -120,3 +120,27 @@ export const HealthResponseSchema = z.object({
   detail: z.string().optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
+
+// -------------------------------------------------------------------------------------------
+// connected-accounts (S2.13, design doc §5.1.4 ConnectedAccount, §11 "凭证只在门"): a write-only
+// store keyed by `onBehalfOf` — no `GET`/read endpoint exists or ever should (server.ts's own doc
+// comment). The kernel's `create_connection`/`connect_gatekeeper` capability handlers
+// (application/gateway/connection-handlers.ts) are the only intended caller.
+// -------------------------------------------------------------------------------------------
+
+export const StoreConnectedAccountRequestSchema = z.object({
+  onBehalfOf: z.string().min(1),
+  credential: z.record(z.string(), z.unknown()),
+});
+export type StoreConnectedAccountRequest = z.infer<typeof StoreConnectedAccountRequestSchema>;
+
+export const StoreConnectedAccountResponseSchema = z.object({ stored: z.literal(true) });
+export type StoreConnectedAccountResponse = z.infer<typeof StoreConnectedAccountResponseSchema>;
+
+export const DeleteConnectedAccountRequestSchema = z.object({
+  onBehalfOf: z.string().min(1),
+});
+export type DeleteConnectedAccountRequest = z.infer<typeof DeleteConnectedAccountRequestSchema>;
+
+export const DeleteConnectedAccountResponseSchema = z.object({ deleted: z.literal(true) });
+export type DeleteConnectedAccountResponse = z.infer<typeof DeleteConnectedAccountResponseSchema>;

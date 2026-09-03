@@ -51,6 +51,14 @@ export interface GatekeeperRevertInput extends GatekeeperCallInput {
   readonly idempotencyKey?: string;
 }
 
+/** S2.13: `create_connection`'s "send the credential straight to the gate" step
+ *  (`application/gateway/connection-handlers.ts`) — `@nexttime/gatekeeper-base`'s
+ *  `POST /gate/connected-accounts`. */
+export interface GatekeeperStoreConnectedAccountInput {
+  readonly onBehalfOf: string;
+  readonly credential: Record<string, unknown>;
+}
+
 /** The port `application/gateway`'s `request_action` handler and `action-executor.ts` depend on
  *  — declared so tests can supply a fake without any HTTP involved. */
 export interface GatekeeperClient {
@@ -60,6 +68,14 @@ export interface GatekeeperClient {
   apply(endpoint: string, input: GatekeeperApplyInput): Promise<ApplyResponse>;
   revert(endpoint: string, input: GatekeeperRevertInput): Promise<RevertResponse>;
   health(endpoint: string): Promise<HealthResponse>;
+  /** S2.13: stores a ConnectedAccount credential on the gate instance, keyed by `onBehalfOf` —
+   *  the kernel never persists the credential itself (design doc §11 "凭证只在门"). */
+  storeConnectedAccount(
+    endpoint: string,
+    input: GatekeeperStoreConnectedAccountInput,
+  ): Promise<void>;
+  /** S2.13: removes a ConnectedAccount credential from the gate instance. */
+  deleteConnectedAccount(endpoint: string, onBehalfOf: string): Promise<void>;
 }
 
 export interface HttpGatekeeperClientOptions {
@@ -91,7 +107,7 @@ export class HttpGatekeeperClient implements GatekeeperClient {
   private async request(
     endpoint: string,
     path: string,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     body?: unknown,
   ): Promise<unknown> {
     const url = new URL(path, endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
@@ -155,5 +171,16 @@ export class HttpGatekeeperClient implements GatekeeperClient {
 
   async health(endpoint: string): Promise<HealthResponse> {
     return (await this.request(endpoint, 'gate/health', 'GET')) as HealthResponse;
+  }
+
+  async storeConnectedAccount(
+    endpoint: string,
+    input: GatekeeperStoreConnectedAccountInput,
+  ): Promise<void> {
+    await this.request(endpoint, 'gate/connected-accounts', 'POST', input);
+  }
+
+  async deleteConnectedAccount(endpoint: string, onBehalfOf: string): Promise<void> {
+    await this.request(endpoint, 'gate/connected-accounts', 'DELETE', { onBehalfOf });
   }
 }

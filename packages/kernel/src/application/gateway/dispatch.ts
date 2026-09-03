@@ -105,6 +105,26 @@ function lookupCapabilityOrThrow(name: string): Capability {
 }
 
 /**
+ * S2.13 addition (design doc §11 "凭证不进内核进程"; `Capability.redactedParamKeys`'s own doc
+ * comment, packages/shared/src/capabilities.ts): replaces every field named in
+ * `capability.redactedParamKeys` with a fixed placeholder before the params are written into
+ * `audit_records.payload` below — `create_connection`'s `credentials` field is the first (and, as
+ * of this task, only) user. Every other capability has no `redactedParamKeys` and is unaffected —
+ * `params` is audited verbatim, exactly as before this function existed.
+ */
+function redactAuditParams(
+  capability: Capability,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!capability.redactedParamKeys || capability.redactedParamKeys.length === 0) return params;
+  const redacted = { ...params };
+  for (const key of capability.redactedParamKeys) {
+    if (key in redacted) redacted[key] = '[redacted]';
+  }
+  return redacted;
+}
+
+/**
  * Dispatches one capability call. Throws `CapabilityNotFoundError` (404), `ForbiddenError` (403,
  * authorize.ts), `InvalidCapabilityParamsError` (400), or `CapabilityNotImplementedError` (501);
  * resolves with the handler's `result` on success.
@@ -152,7 +172,7 @@ export async function dispatchCapability(
         payload: {
           channel: caller.channel,
           onBehalfOf,
-          params: parsed.data,
+          params: redactAuditParams(capability, parsed.data as Record<string, unknown>),
           ...(resourceRef.resourceRef !== undefined
             ? { resourceRef: resourceRef.resourceRef }
             : {}),

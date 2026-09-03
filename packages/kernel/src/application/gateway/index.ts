@@ -61,3 +61,16 @@ export {
   listAllowedOperationsHandler,
   reportTaskResultHandler,
 } from './worker-result-handler.js';
+
+export {
+  ConnectionCredentialRequiredError,
+  ConnectionManifestFetchError,
+  connectGatekeeperHandler,
+  createConnectionHandler,
+  listConnectionRequestsHandler,
+  requestConnectionHandler,
+  setConnectionHandlerDeps,
+} from './connection-handlers.js';
+export type { ConnectionHandlerDeps } from './connection-handlers.js';
+
+export { publishManifestHandler } from './operation-manifest-handlers.js';
