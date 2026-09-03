@@ -5,7 +5,10 @@ import {
   HttpTransport,
   JsonFileIdempotencyStore,
   SharedEnvCredentialResolver,
+  buildTlsFetch,
   createGatekeeperServer,
+  gateTlsOptionsFromEnv,
+  insecureTlsEnvWarning,
   resolveGateDataDir,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
@@ -58,7 +61,16 @@ export async function buildRagflowGate(
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
   const dataDir = resolveGateDataDir(env);
 
-  const transport = new HttpTransport({ baseUrl });
+  // A RAGFlow edge usually terminates TLS with a self-signed certificate issued to a DNS name —
+  // GATE_TLS_CA_FILE (its PEM) + GATE_TLS_SERVERNAME (that name) trust exactly that target; see
+  // @nexttime/gatekeeper-base's tls.ts and README "TLS to the target".
+  const insecure = insecureTlsEnvWarning(env);
+  if (insecure) console.warn(JSON.stringify({ level: 'warn', msg: insecure }));
+  const tls = gateTlsOptionsFromEnv(env);
+  const transport = new HttpTransport({
+    baseUrl,
+    ...(tls ? { fetchImpl: buildTlsFetch(tls) } : {}),
+  });
   const credentialResolver = new SharedEnvCredentialResolver({ name: 'RAGFLOW_API_KEY', env });
   const idempotencyStore = new JsonFileIdempotencyStore(dataDir);
 

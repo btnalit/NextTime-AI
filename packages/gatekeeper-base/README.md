@@ -86,3 +86,19 @@ and manifest from env vars (`GATE_TRANSPORT_KIND`, `GATE_TARGET_BASE_URL` / `GAT
 more specific (a non-file manifest source, multiple transports, custom credential logic)
 constructs `GatekeeperBase` / `createGatekeeperServer` directly instead — see
 `src/gatekeeper-base.ts` and any of the `kinds/*.test.ts` files for the shape.
+
+## TLS to the target (`http`/`mcp`)
+
+A target behind a private or self-signed certificate is trusted explicitly, never by disabling
+verification (`src/tls.ts`):
+
+| Var | Effect |
+|---|---|
+| `GATE_TLS_CA_FILE` | PEM file whose certificates become the trust anchors for this gate's target connections (for a self-signed target: that certificate itself). Unreadable file → the gate refuses to start. |
+| `GATE_TLS_SERVERNAME` | Name the certificate is verified against (and sent as SNI) when the target is reached by an address that is not in its SAN list — e.g. a LAN IP for a certificate issued to a DNS name. |
+
+Either may be set alone; neither set → the plain global `fetch` with the system trust store. A
+gate started with `NODE_TLS_REJECT_UNAUTHORIZED=0` logs a startup warning pointing at these two
+vars — that switch disables verification for every outbound TLS connection of the process and is
+not a supported configuration. `buildTlsFetch`/`gateTlsOptionsFromEnv` are exported for gates
+that compose `HttpTransport` themselves (e.g. `gatekeepers/ragflow`).
