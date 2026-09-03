@@ -22,11 +22,15 @@ services:
     # AgentHostRuntime 塞进每个 startTurn 命令里的 llmUrl（packages/kernel/src/index.ts
     # createBackgroundServices 的默认值与此一致，这里显式写出以便一眼看到）。
     # ENTRY_HANDLE_TTL_SECONDS / AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS 留空用代码内默认值
-    # （分别是 86400 与 30000）。
+    # （分别是 86400 与 30000）。SUPERVISOR_URL（S2.7）：internal task/invoke_worker 通过
+    # adapters/supervisor-client 调用 worker-supervisor 的 Task 模式 API（POST /task/spawn 等）；
+    # 与 agent-host 使用同一个值——kernel 已在 [control, workers] 网络上，能直接到达
+    # worker-supervisor:8081。TASK_REAPER_INTERVAL_MS 留空用代码内默认值（30s）。
     environment:
       {
         AGENT_RUNTIME: "${AGENT_RUNTIME:-agent-host}",
         KERNEL_LLM_URL: http://llm-proxy:8082,
+        SUPERVISOR_URL: http://worker-supervisor:8081,
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；

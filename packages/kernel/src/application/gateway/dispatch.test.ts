@@ -86,10 +86,12 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
   });
 
   it('member calling set_quota → ForbiddenError (403)', async () => {
-    // set_quota (governance group, human channel, minRole:'owner') has no wired handler yet
-    // (I18 quotas are S2.7 scope) — used here (rather than grant_capability/approve, both wired by
-    // S2.3) purely as a still-unimplemented, owner-only capability to prove role-gating still 403s
-    // a `member` before ever reaching dispatch's handler lookup.
+    // set_quota (governance group, human channel, minRole:'owner') is wired (S2.7) — this test
+    // still proves role-gating alone 403s a `member` *before* dispatch ever reaches the handler
+    // (authorizeCapabilityCall runs first, independent of whether a handler exists) — `1` is a
+    // structurally valid `value` (set_quota's own paramsSchema is `{key: string, value:
+    // unknown}`), so a 403 here can only come from the role check, not from later per-key
+    // validation the handler itself would perform.
     await expect(
       dispatchCapability({ pool: neverConnectPool }, humanCaller({ role: 'member' }), 'set_quota', {
         key: 'x',
@@ -98,15 +100,22 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
     ).rejects.toThrow(ForbiddenError);
   });
 
-  it('owner calling set_quota passes authorization (the 403 above is role-specific)', async () => {
-    // set_quota has no handler (S2.7 scope), so this still ends in 501 — but
-    // CapabilityNotImplementedError (not ForbiddenError) proves authorization itself passed for
-    // `owner`, unlike for `member` above.
+  it('owner calling issue_handle passes authorization (the 403 above is role-specific)', async () => {
+    // issue_handle (governance group, human channel, minRole:'owner') has no wired handler yet
+    // (S1.9 registered it; no task has implemented it) — CapabilityNotImplementedError (not
+    // ForbiddenError) proves authorization itself passed for `owner`, unlike `set_quota` for
+    // `member` above. (Prior to S2.7, this test used `set_quota` for the same purpose — it now has
+    // a real handler, so a still-unimplemented owner-only capability is needed here instead.)
     await expect(
-      dispatchCapability({ pool: neverConnectPool }, humanCaller({ role: 'owner' }), 'set_quota', {
-        key: 'x',
-        value: 1,
-      }),
+      dispatchCapability(
+        { pool: neverConnectPool },
+        humanCaller({ role: 'owner' }),
+        'issue_handle',
+        {
+          sessionId: randomUUID(),
+          scope: {},
+        },
+      ),
     ).rejects.toThrow(CapabilityNotImplementedError);
   });
 

@@ -1,4 +1,4 @@
-import type { CapabilityChannel, CapabilityScope } from '@nexttime/shared';
+import type { CapabilityChannel, CapabilityScope, HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 
@@ -47,6 +47,14 @@ export interface CapabilityHandlerContext {
   readonly channel: CapabilityChannel;
   readonly principalId: string;
   readonly scope?: CapabilityScope;
+  /**
+   * S2.7 addition, purely additive alongside `scope` above: the calling Handle's full verified
+   * claims (`jti`/`sid`/`exp`/`obo`/`scope`), `undefined` on the human channel.
+   * `application/task/invoke.ts`'s child-Handle minting needs more than the bare `scope` —
+   * `jti` for `par` lineage, `sid` to look up the caller's own WorkerRun (I18 depth), `exp` for
+   * the child Handle's ttl cap.
+   */
+  readonly claims?: HandleClaims;
 }
 
 /**

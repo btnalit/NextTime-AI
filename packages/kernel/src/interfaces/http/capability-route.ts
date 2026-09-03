@@ -15,6 +15,14 @@ import {
   dispatchCapability,
   resolveCaller,
 } from '../../application/gateway/index.js';
+import {
+  InvalidQuotaValueError,
+  InvokeWorkerAttenuationError,
+  InvokeWorkerValidationError,
+  QuotaExceededError,
+  TaskNotFoundError,
+  UnknownQuotaKeyError,
+} from '../../application/task/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
 import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
@@ -113,6 +121,25 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // S2.7 (docs/development-tasks.md S2.7 "a violated quota returns an error the entry agent can
+  // relay verbatim (stable code + readable message)") — `QuotaExceededError.code` (e.g.
+  // `depth_exceeded`) *is* the wire `code`, not a generic one, so the entry agent's tool-call
+  // result carries the specific, stable identifier this task's acceptance criteria call for.
+  if (err instanceof QuotaExceededError) {
+    return { status: 429, code: err.code, message: err.message };
+  }
+  if (err instanceof InvokeWorkerAttenuationError) {
+    return { status: 403, code: 'attenuation_denied', message: err.message };
+  }
+  if (err instanceof InvokeWorkerValidationError || err instanceof InvalidQuotaValueError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  if (err instanceof UnknownQuotaKeyError) {
+    return { status: 400, code: 'unknown_quota_key', message: err.message };
+  }
+  if (err instanceof TaskNotFoundError) {
+    return { status: 404, code: 'not_found', message: err.message };
   }
   return { status: 500, code: 'internal_error', message: 'internal error' };
 }

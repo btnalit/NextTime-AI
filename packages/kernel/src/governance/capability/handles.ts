@@ -154,6 +154,81 @@ function buildEntryCeilingCapabilityNames(): readonly string[] {
 /** The entry-agent capability ceiling (design doc §5.1.4), computed once at module load. */
 export const ENTRY_CEILING_CAPABILITIES: readonly string[] = buildEntryCeilingCapabilityNames();
 
+// -------------------------------------------------------------------------------------------
+// WORKER_CEILING_CAPABILITIES — the fixed platform ceiling for a WorkerRun's Handle (design doc
+// §7.4 mode table, `worker` row: "Handle 内各门的 Operation（observe 直接调，execute 经
+// request_action）、图的 observe 与 assert_fact、propose_*"; docs/development-tasks.md S2.7).
+// Distinct from `ENTRY_CEILING_CAPABILITIES`: a Worker may hold `assert_fact`/`supersede_fact`/
+// `invalidate_fact` (entry may not — see `ENTRY_CEILING_EXTRA_CAPABILITY_NAMES`'s doc comment,
+// those three never start with `propose_`) and both gate-projection patterns, including the
+// execute one (`<gate>.<op>:execute`) — entry's ceiling never includes it at all.
+//
+// This is the *maximum* any WorkerRun Handle could ever carry, not what a specific WorkerRun
+// actually gets: `application/task/invoke.ts`'s `computeChildHandleScope` further narrows this
+// ceiling by (a) the invoked WorkerDefinition's own declared `capabilities` (defaults to this
+// ceiling minus every execute-class name when the definition does not declare one — least
+// privilege) and (b) a hard requirement that any execute-class capability the definition declares
+// must already be present in the *calling* Handle's own scope, or the whole `invoke_worker` call
+// is rejected (never silently dropped) — see that function's own doc comment for the full rule,
+// including why this is the literal mechanism behind "入口 Handle 请求含 execute 的子 Handle 被拒"
+// (docs/development-tasks.md S2.7 acceptance).
+//
+// Known seam for S2.4/S2.13: today this ceiling is the *only* source of what a WorkerRun Handle
+// may ever hold — there is no path yet for a Gatekeeper connection/grant (S2.13's
+// `connect_gatekeeper`, not yet implemented) to widen what an entry Handle can pass down. Once
+// S2.4/S2.13 land a real Gatekeeper and a real CapabilityGrant for it, extending *this* file's
+// `entryScope()` to also populate `resources` from the on_behalf_of principal's active Grants (or
+// extending `computeChildHandleScope` to consult `governance/capability/grants.ts`'s
+// `hasActiveGrant` directly) is the natural next step — deliberately not done here, since no real
+// Gatekeeper exists yet to grant access to and inventing the convention without that concrete
+// shape in hand would be speculative (B2 "write only what was asked for").
+// -------------------------------------------------------------------------------------------
+
+const WORKER_CEILING_EXTRA_CAPABILITY_NAMES = [
+  'assert_fact',
+  'supersede_fact',
+  'invalidate_fact',
+  'get_task',
+  'invoke_worker',
+  'create_task',
+  'request_action',
+] as const;
+
+const WORKER_CEILING_GATE_EXECUTE_CAPABILITY_NAME = '<gate>.<op>:execute';
+
+function buildWorkerCeilingCapabilityNames(): readonly string[] {
+  const names = new Set<string>();
+  for (const capability of CAPABILITY_REGISTRY) {
+    if (capability.group === 'graph' || capability.name.startsWith('propose_')) {
+      names.add(capability.name);
+    }
+  }
+  names.add(ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME);
+  names.add(WORKER_CEILING_GATE_EXECUTE_CAPABILITY_NAME);
+  for (const name of WORKER_CEILING_EXTRA_CAPABILITY_NAMES) {
+    names.add(name);
+  }
+  return Object.freeze([...names]);
+}
+
+/** The WorkerRun capability ceiling (design doc §7.4 `worker` mode row), computed once at module
+ *  load. See this section's own doc comment above for how it differs from
+ *  `ENTRY_CEILING_CAPABILITIES` and how it is actually narrowed per-invocation. */
+export const WORKER_CEILING_CAPABILITIES: readonly string[] = buildWorkerCeilingCapabilityNames();
+
+/** Names in `WORKER_CEILING_CAPABILITIES` that are execute-class (design doc §5.3 item 11 "入口
+ *  agent 的 Handle 含 execute 能力" is one of the relationships that must never exist — this is the
+ *  fixed, exact list of what "execute-class" means for that check, not a heuristic over the
+ *  string shape). */
+export const EXECUTE_CLASS_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
+  WORKER_CEILING_GATE_EXECUTE_CAPABILITY_NAME,
+  'request_action',
+]);
+
+export function isExecuteClassCapability(name: string): boolean {
+  return EXECUTE_CLASS_CAPABILITY_NAMES.has(name);
+}
+
 /**
  * A WorkerDefinition's resource scoping, as far as this module needs it. No `WorkerDefinition`
  * type exists yet (design doc §9.2's `worker_definitions` table and its TS projection land in
@@ -431,11 +506,47 @@ export interface AttenuateOptions {
 }
 
 /**
+ * The subset-check core of attenuation (design doc §5.3 item 8 "Handle 范围大于其来源"): every
+ * axis of `childScope` must already be present in `parentScope`. Extracted out of `attenuate`
+ * (S2.7) so `application/task/invoke.ts`'s child-Handle minting — which mints a Handle bound to a
+ * *new* `worker_run` session rather than reusing the parent's own session, so it cannot call
+ * `attenuate` itself (see that function's own doc comment: "does not start a new session") — can
+ * reuse the exact same security-critical narrowing check rather than re-implementing it. Throws
+ * `AttenuationError` on the first violation found (capabilities checked before resources); never
+ * returns a partial result.
+ */
+export function assertScopeIsSubset(
+  parentScope: CapabilityScope,
+  childScope: CapabilityScope,
+): void {
+  const parentCapabilities = new Set(parentScope.capabilities);
+  for (const name of childScope.capabilities) {
+    if (!parentCapabilities.has(name)) {
+      throw new AttenuationError(
+        `capability "${name}" is not in the parent handle's scope — attenuation can only narrow`,
+      );
+    }
+  }
+
+  for (const [resourceKey, ids] of Object.entries(childScope.resources)) {
+    const parentIds = new Set(parentScope.resources[resourceKey] ?? []);
+    for (const id of ids) {
+      if (!parentIds.has(id)) {
+        throw new AttenuationError(
+          `resource "${resourceKey}:${id}" is not in the parent handle's scope — attenuation can only narrow`,
+        );
+      }
+    }
+  }
+}
+
+/**
  * Verifies `parentToken` (signature, expiry, revocation — the same checks `verifyHandle` makes,
  * since an already-invalid parent can never legitimately produce a child) and issues a child
  * Handle bound to the *same session* as the parent (design doc §5.1.4 "子 Handle 是自身 Handle 的
  * 衰减" — attenuation narrows scope, it does not start a new session), recording `parentJti` as
- * lineage. The child scope must be a subset of the parent's on every axis:
+ * lineage. The child scope must be a subset of the parent's on every axis (`assertScopeIsSubset`
+ * above):
  *
  *   - `capabilities`: every name in `subsetScope.capabilities` must be in the parent's.
  *   - `resources`: for every resource key in `subsetScope.resources`, every id must be in the
@@ -454,25 +565,7 @@ export async function attenuate(
 
   const parentClaims = await verifyHandle(parentToken, options);
 
-  const parentCapabilities = new Set(parentClaims.scope.capabilities);
-  for (const name of subsetScope.capabilities) {
-    if (!parentCapabilities.has(name)) {
-      throw new AttenuationError(
-        `capability "${name}" is not in the parent handle's scope — attenuation can only narrow`,
-      );
-    }
-  }
-
-  for (const [resourceKey, ids] of Object.entries(subsetScope.resources)) {
-    const parentIds = new Set(parentClaims.scope.resources[resourceKey] ?? []);
-    for (const id of ids) {
-      if (!parentIds.has(id)) {
-        throw new AttenuationError(
-          `resource "${resourceKey}:${id}" is not in the parent handle's scope — attenuation can only narrow`,
-        );
-      }
-    }
-  }
+  assertScopeIsSubset(parentClaims.scope, subsetScope);
 
   const parentRemainingSeconds = parentClaims.exp - Math.floor(Date.now() / 1000);
   const ttlSeconds = options.ttlSeconds ?? parentRemainingSeconds;

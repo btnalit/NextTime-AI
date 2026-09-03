@@ -116,6 +116,11 @@ export async function dispatchCapability(
         channel: caller.channel,
         principalId,
         scope: caller.channel === 'handle' ? caller.claims.scope : undefined,
+        // S2.7 addition (purely additive, alongside `scope` above): `invoke_worker`'s child-Handle
+        // minting needs the caller's full Handle claims (jti/sid/exp, not just scope) to attenuate
+        // from and to look up its own WorkerRun (I18 depth) — this is the only place that has
+        // verified claims in hand.
+        ...(caller.channel === 'handle' ? { claims: caller.claims } : {}),
       });
       await writeAudit(client, {
         workspaceId,

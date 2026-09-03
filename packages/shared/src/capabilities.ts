@@ -729,11 +729,18 @@ const taskCapabilities: readonly Capability[] = [
         version: z.number().int().positive(),
         input: z.unknown(),
         wait: z.boolean().optional(),
+        // Seconds, not ms — matches the design doc's own prose ("默认 90 秒", §8.2).
         timeout: z.number().int().positive().optional(),
+        // S2.7 addition: narrows which of the WorkerDefinition's own declared `gates` this
+        // particular invocation actually needs (§8.5 "衰减出只含所需门的 Handle"); omitted defaults
+        // to every gate the definition declares. Never lets a caller ask for a gate the
+        // definition itself does not declare — see application/task/invoke.ts's
+        // `computeChildHandleScope`.
+        gates: z.array(id).optional(),
       })
       .strict(),
     description:
-      'invoke_worker(definition@version, input, wait, timeout) — §8.2; a decayed child Handle inherits on_behalf_of.',
+      'invoke_worker(definition@version, input, wait, timeout, gates?) — §8.2; a decayed child Handle inherits on_behalf_of.',
   },
   {
     name: 'get_task',

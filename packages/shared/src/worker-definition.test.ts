@@ -70,10 +70,31 @@ describe('worker-definition content schemas', () => {
       expect(result.success).toBe(true);
     });
 
-    it('rejects an entry-only field (capabilities) on a worker definition', () => {
+    // S2.7: `capabilities`/`gates` are now valid (worker-scoped) fields — see this module's own
+    // doc comment on WorkerWorkerDefinitionContentSchema ("the WorkerDefinition's own declared
+    // needs").
+    it('accepts capabilities and gates when present', () => {
+      const result = WorkerWorkerDefinitionContentSchema.safeParse({
+        systemPrompt: 'You are the ops-runner.',
+        capabilities: ['get_object', 'assert_fact'],
+        gates: ['gk-1'],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts name and description when present', () => {
+      const result = WorkerWorkerDefinitionContentSchema.safeParse({
+        systemPrompt: 'You are the ops-runner.',
+        name: 'ops-runner',
+        description: 'General-purpose ops worker.',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an entry-only field (egressDeny) on a worker definition', () => {
       const result = WorkerWorkerDefinitionContentSchema.safeParse({
         systemPrompt: 'hi',
-        capabilities: ['get_object'],
+        egressDeny: ['blocked.example.com'],
       });
       expect(result.success).toBe(false);
     });

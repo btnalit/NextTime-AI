@@ -10,6 +10,14 @@ import {
   InvalidCapabilityParamsError,
   UnauthorizedError,
 } from '../../application/gateway/index.js';
+import {
+  InvalidQuotaValueError,
+  InvokeWorkerAttenuationError,
+  InvokeWorkerValidationError,
+  QuotaExceededError,
+  TaskNotFoundError,
+  UnknownQuotaKeyError,
+} from '../../application/task/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
 import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
@@ -94,6 +102,15 @@ export const WS_ERROR_CODES = {
   /** governance/approval I6 ("ActionRequest 只沿转移表走") — a status the row is not currently in
    *  (e.g. approving an already-approved ActionRequest); mirrors HTTP 409 (S2.3). */
   ILLEGAL_TRANSITION: -32011,
+  /** S2.7 I18 (docs/development-tasks.md S2.7) — mirrors HTTP 429. The WS wire shape has no room
+   *  for a separate stable string code the way HTTP's `error.code` does (interfaces/http/
+   *  capability-route.ts's `mapCapabilityError` carries `QuotaExceededError.code` — `depth_exceeded`
+   *  / `concurrency_exceeded` / `daily_cost_exceeded` — verbatim there); over WS every quota
+   *  violation shares this one numeric code, and the readable `message` (still `err.message`
+   *  verbatim) is what an entry agent relays. */
+  QUOTA_EXCEEDED: -32012,
+  /** S2.7 — mirrors HTTP 403 `attenuation_denied` ("入口 Handle 请求含 execute 的子 Handle 被拒"). */
+  ATTENUATION_DENIED: -32013,
 } as const;
 
 /** Maps an error thrown by `resolveCaller`/`dispatchCapability` (application/gateway) or by
@@ -149,6 +166,23 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // S2.7 (docs/development-tasks.md S2.7) — same set of application/task errors interfaces/http/
+  // capability-route.ts's mapCapabilityError maps.
+  if (err instanceof QuotaExceededError) {
+    return { code: WS_ERROR_CODES.QUOTA_EXCEEDED, message: err.message };
+  }
+  if (err instanceof InvokeWorkerAttenuationError) {
+    return { code: WS_ERROR_CODES.ATTENUATION_DENIED, message: err.message };
+  }
+  if (err instanceof InvokeWorkerValidationError || err instanceof InvalidQuotaValueError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof UnknownQuotaKeyError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof TaskNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   return { code: WS_ERROR_CODES.INTERNAL_ERROR, message: 'internal error' };
 }

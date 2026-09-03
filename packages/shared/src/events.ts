@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { ActionRequestStatusSchema, EpistemicStatusSchema, TaskStatusSchema } from './enums.js';
+import {
+  ActionRequestStatusSchema,
+  EpistemicStatusSchema,
+  TaskStatusSchema,
+  WorkerRunStatusSchema,
+} from './enums.js';
 
 /**
  * Platform event vocabulary (design doc §7.10 domain/outbox events; §9.4 chat WebSocket push
@@ -27,6 +32,7 @@ export const PLATFORM_EVENT_NAMES = [
   'TurnStarted',
   'TurnCompleted',
   'TaskUpdated',
+  'WorkerRunUpdated',
   'ActionRequestPending',
   'ActionRequestUpdated',
   'ConnectionCreated',
@@ -68,6 +74,19 @@ const TaskUpdatedEvent = z.object({
   workspaceId: z.string(),
   taskId: z.string(),
   status: TaskStatusSchema,
+});
+
+/** S2.7 addition (docs/development-tasks.md S2.7 "add TaskUpdated/WorkerRunUpdated events in the
+ *  existing style if absent" — TaskUpdated already existed, this is the sibling that did not).
+ *  Emitted by `application/task` on every WorkerRun transition (provisioning/running/suspended/
+ *  terminated), same "domain bus event, not a wire notification" role `TaskUpdated` already
+ *  plays. */
+const WorkerRunUpdatedEvent = z.object({
+  type: z.literal('WorkerRunUpdated'),
+  workspaceId: z.string(),
+  workerRunId: z.string(),
+  taskId: z.string(),
+  status: WorkerRunStatusSchema,
 });
 
 const ActionRequestPendingEvent = z.object({
@@ -223,6 +242,7 @@ export const PlatformEventSchema = z.discriminatedUnion('type', [
   TurnStartedEvent,
   TurnCompletedEvent,
   TaskUpdatedEvent,
+  WorkerRunUpdatedEvent,
   ActionRequestPendingEvent,
   ActionRequestUpdatedEvent,
   ConnectionCreatedEvent,
