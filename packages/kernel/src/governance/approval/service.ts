@@ -5,9 +5,18 @@
  * guidance, "单文件 ≤ 600 行...超过即拆，不等重构") — every actual implementation lives in:
  *
  *   - `types.ts`      — `ActionRequestRow`, the DB-row mapper, `ActionRequestNotFoundError`/
- *                        `ApprovalScopeError`.
- *   - `reads.ts`       — `getActionRequest`, `listPendingForApprover` (I14), `listExecutableQueue`
- *                        (drainer.ts's queue), `approverHasScope` (I14 precheck).
+ *                        `ApprovalScopeError`/`ActionRequestConcurrentTransitionError` (I6/I11
+ *                        concurrency hardening — a subclass of `@nexttime/shared`'s
+ *                        `IllegalTransition`).
+ *   - `reads.ts`       — `getActionRequest`/`getActionRequestOrThrow` (lock-free),
+ *                        `getActionRequestForUpdate`/`getActionRequestForUpdateOrThrow`
+ *                        (`SELECT ... FOR UPDATE` — every governed mutator uses these, never the
+ *                        lock-free pair), `listPendingForApprover` (I14), `listExecutableQueue`
+ *                        (drainer.ts's lock-free queue read), `approverHasScope` (I14 precheck).
+ *   - `status-transition.ts` — `updateActionRequestStatusConditional`: the one conditional
+ *                        `UPDATE ... WHERE status = $expected` every governed mutator uses to
+ *                        actually change `status` — the correctness guarantee behind the locking
+ *                        above (see that file's own doc comment).
  *   - `transition-log.ts` — `recordTransition`: the shared "write AuditRecord + outbox event for
  *                        one transition" helper (I11) every mutator below calls.
  *   - `request-action.ts` — `requestAction`: create + immediately resolve through the Policy
@@ -30,6 +39,7 @@
  */
 
 export {
+  ActionRequestConcurrentTransitionError,
   ActionRequestNotFoundError,
   ApprovalScopeError,
   type ActionRequestRow,
@@ -38,10 +48,17 @@ export {
 export {
   approverHasScope,
   getActionRequest,
+  getActionRequestForUpdate,
+  getActionRequestForUpdateOrThrow,
   getActionRequestOrThrow,
   listExecutableQueue,
   listPendingForApprover,
 } from './reads.js';
+
+export {
+  type UpdateActionRequestStatusInput,
+  updateActionRequestStatusConditional,
+} from './status-transition.js';
 
 export { type RecordTransitionParams, recordTransition } from './transition-log.js';
 

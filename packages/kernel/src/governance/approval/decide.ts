@@ -1,29 +1,37 @@
 import {
   ACTION_REQUEST_TRANSITIONS,
-  type ActionRequestStatus,
   DECISION_TRANSITIONS,
   type Role,
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
-import { approverHasScope, getActionRequestOrThrow } from './reads.js';
+import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
+import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
-import {
-  ACTION_REQUEST_ROW_COLUMNS,
-  type ActionRequestDbRow,
-  ActionRequestNotFoundError,
-  type ActionRequestRow,
-  ApprovalScopeError,
-  mapActionRequestRow,
-} from './types.js';
+import { type ActionRequestRow, ApprovalScopeError } from './types.js';
 
 /**
- * governance/approval/decide: `approve` / `reject` (design doc §5.4 I14, §5.5, §8.5; docs/
- * development-tasks.md S2.3). Both are an I14 precheck, then a governed transition on the shared
- * table (I6), writing the Approval Decision (`decisions`) in the same transaction as the status
- * change (I7 amendment, PR #33 — `action_requests`' own CHECK requires `approval_decision_id` the
- * instant a row reaches `approved`/`rejected`, not only once execution is attempted).
+ * governance/approval/decide: `approve` / `reject` (design doc §5.4 I6/I11/I14, §5.5, §8.5; docs/
+ * development-tasks.md S2.3). Both are: lock the row -> I14 precheck -> governed transition on the
+ * shared table (I6) -> write the Approval Decision -> conditional UPDATE (I6/I11 concurrency
+ * hardening) -> `recordTransition` (I11 audit + outbox). That exact order matters:
+ *
+ *   1. `getActionRequestForUpdateOrThrow` (`SELECT ... FOR UPDATE`) — locks the row for the rest
+ *      of this transaction. A second concurrent `approve`/`reject` on the same row blocks here
+ *      until this transaction commits or rolls back, then re-reads the *already-updated* status.
+ *   2. I14 precheck (`assertApproverScope`) and the `transition()` table lookup — the common case
+ *      where a second concurrent caller loses the race fails *here*, with a plain
+ *      `IllegalTransition` (its locked read already saw the new status), before ever writing a
+ *      Decision row.
+ *   3. `writeApprovalDecision` — only after both of the above have passed, so a request that was
+ *      always going to fail (wrong scope, wrong starting status) never produces an orphaned
+ *      Decision row.
+ *   4. `updateActionRequestStatusConditional` (`status-transition.ts`) — the actual UPDATE, gated
+ *      on `status = <the status this call's lock read saw>`. This is the correctness guarantee
+ *      even if step 1's lock were somehow skipped by a future refactor (defense in depth, not the
+ *      primary mechanism — see that module's own doc comment).
+ *   5. `recordTransition` — I11 audit + outbox, only once the row has actually moved.
  */
 
 export interface DecideActionRequestInput {
@@ -85,23 +93,6 @@ async function writeApprovalDecision(
   return row.id;
 }
 
-async function updateStatusAndApprovalDecision(
-  client: PoolClient,
-  workspaceId: string,
-  actionRequestId: string,
-  next: { readonly status: ActionRequestStatus; readonly approvalDecisionId: string },
-): Promise<ActionRequestRow> {
-  const result = await client.query<ActionRequestDbRow>(
-    `update action_requests set status = $3, approval_decision_id = $4
-     where workspace_id = $1 and id = $2
-     returning ${ACTION_REQUEST_ROW_COLUMNS}`,
-    [workspaceId, actionRequestId, next.status, next.approvalDecisionId],
-  );
-  const row = result.rows[0];
-  if (!row) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
-  return mapActionRequestRow(row);
-}
-
 async function assertApproverScope(
   client: PoolClient,
   workspaceId: string,
@@ -123,14 +114,19 @@ async function assertApproverScope(
 }
 
 /** Throws `ApprovalScopeError` (403) if the approver does not hold the required scope,
- *  `ActionRequestNotFoundError` (404) if the id does not resolve, or `IllegalTransition` (409) if
- *  the row is not currently `pending_approval`. */
+ *  `ActionRequestNotFoundError` (404) if the id does not resolve, or `IllegalTransition` (409,
+ *  including its `ActionRequestConcurrentTransitionError` subclass) if the row is not currently
+ *  `pending_approval`. */
 export async function approveActionRequest(
   client: PoolClient,
   workspaceId: string,
   input: DecideActionRequestInput,
 ): Promise<ActionRequestRow> {
-  const existing = await getActionRequestOrThrow(client, workspaceId, input.actionRequestId);
+  const existing = await getActionRequestForUpdateOrThrow(
+    client,
+    workspaceId,
+    input.actionRequestId,
+  );
   await assertApproverScope(
     client,
     workspaceId,
@@ -144,8 +140,9 @@ export async function approveActionRequest(
     decidedBy: input.approverPrincipalId,
     event: 'approve',
   });
-  const updated = await updateStatusAndApprovalDecision(client, workspaceId, existing.id, {
+  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
     status: nextStatus,
+    expectedStatus: existing.status,
     approvalDecisionId,
   });
 
@@ -165,7 +162,11 @@ export async function rejectActionRequest(
   workspaceId: string,
   input: DecideActionRequestInput,
 ): Promise<ActionRequestRow> {
-  const existing = await getActionRequestOrThrow(client, workspaceId, input.actionRequestId);
+  const existing = await getActionRequestForUpdateOrThrow(
+    client,
+    workspaceId,
+    input.actionRequestId,
+  );
   await assertApproverScope(
     client,
     workspaceId,
@@ -180,8 +181,9 @@ export async function rejectActionRequest(
     event: 'reject',
     reason: input.reason,
   });
-  const updated = await updateStatusAndApprovalDecision(client, workspaceId, existing.id, {
+  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
     status: nextStatus,
+    expectedStatus: existing.status,
     approvalDecisionId,
   });
 

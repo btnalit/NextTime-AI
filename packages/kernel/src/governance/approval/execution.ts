@@ -1,47 +1,24 @@
-import { ACTION_REQUEST_TRANSITIONS, type ActionRequestStatus, transition } from '@nexttime/shared';
+import { ACTION_REQUEST_TRANSITIONS, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { getActionRequest, getActionRequestOrThrow } from './reads.js';
+import { getActionRequestForUpdate, getActionRequestForUpdateOrThrow } from './reads.js';
+import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
-import {
-  ACTION_REQUEST_ROW_COLUMNS,
-  type ActionRequestDbRow,
-  ActionRequestNotFoundError,
-  type ActionRequestRow,
-  mapActionRequestRow,
-} from './types.js';
+import type { ActionRequestRow } from './types.js';
 
 /**
- * governance/approval/execution: the execution-lifecycle transitions (design doc §5.5 ActionRequest
- * state graph; docs/development-tasks.md S2.3 "`expire`（reaper）；`mark_executed` / `mark_failed` /
- * `compensate`（called by the gate execution path — S2.4 — expose them as service methods now）").
- * `startActionRequestExecution` is called by `drainer.ts`; `markActionRequestExecuted`/
- * `markActionRequestFailed`/`compensateActionRequest` are called by both the drainer and,
- * eventually, S2.4's real Gatekeeper execution path directly.
+ * governance/approval/execution: the execution-lifecycle transitions (design doc §5.4 I6/I11,
+ * §5.5 ActionRequest state graph; docs/development-tasks.md S2.3 "`expire`（reaper）；
+ * `mark_executed` / `mark_failed` / `compensate`（called by the gate execution path — S2.4 —
+ * expose them as service methods now）"). `startActionRequestExecution` is called by `drainer.ts`;
+ * `markActionRequestExecuted`/`markActionRequestFailed`/`compensateActionRequest` are called by
+ * both the drainer and, eventually, S2.4's real Gatekeeper execution path directly.
+ *
+ * Every transition here follows the same lock -> transition-check -> conditional-UPDATE ->
+ * `recordTransition` order `decide.ts` uses (see that file's own doc comment for the full
+ * rationale) — minus the Approval Decision step, since none of these write one. `expire` is the
+ * one exception: it locks the row too, but treats "not found" or "no longer pending_approval" as
+ * a benign no-op (`null`, no throw) rather than an error — see its own doc comment.
  */
-
-async function updateStatus(
-  client: PoolClient,
-  workspaceId: string,
-  actionRequestId: string,
-  next: {
-    readonly status: ActionRequestStatus;
-    readonly executedAt?: Date;
-    readonly failedAt?: Date;
-  },
-): Promise<ActionRequestRow> {
-  const result = await client.query<ActionRequestDbRow>(
-    `update action_requests
-     set status = $3,
-         executed_at = coalesce($4::timestamptz, executed_at),
-         failed_at = coalesce($5::timestamptz, failed_at)
-     where workspace_id = $1 and id = $2
-     returning ${ACTION_REQUEST_ROW_COLUMNS}`,
-    [workspaceId, actionRequestId, next.status, next.executedAt ?? null, next.failedAt ?? null],
-  );
-  const row = result.rows[0];
-  if (!row) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
-  return mapActionRequestRow(row);
-}
 
 // -------------------------------------------------------------------------------------------
 // expire — reaper
@@ -49,21 +26,26 @@ async function updateStatus(
 
 /**
  * Reaper transition (`pending_approval -> expired`). Idempotent-by-precondition: returns `null`
- * (no-op, no audit/outbox write) if the row does not exist or is no longer `pending_approval` —
- * e.g. a human approved/rejected it in the window between the reaper's scan query and this call —
- * rather than throwing `IllegalTransition`, since "already resolved by someone else" is an
- * expected race, not an error.
+ * (no-op, no audit/outbox write) if the row does not exist or is no longer `pending_approval` at
+ * lock time — e.g. a human approved/rejected it in the window between the reaper's scan query and
+ * this call — rather than throwing `IllegalTransition`, since "already resolved by someone else"
+ * is an expected, routine race for a background reaper, not an error. Still takes the row lock
+ * (`getActionRequestForUpdate`) before deciding that, so a concurrent `approve`/`reject`/`expire`
+ * on the same row serializes against this one rather than racing it.
  */
 export async function expireActionRequest(
   client: PoolClient,
   workspaceId: string,
   actionRequestId: string,
 ): Promise<ActionRequestRow | null> {
-  const existing = await getActionRequest(client, workspaceId, actionRequestId);
+  const existing = await getActionRequestForUpdate(client, workspaceId, actionRequestId);
   if (!existing || existing.status !== 'pending_approval') return null;
 
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'expire');
-  const updated = await updateStatus(client, workspaceId, existing.id, { status: nextStatus });
+  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
+    status: nextStatus,
+    expectedStatus: existing.status,
+  });
 
   await recordTransition(client, workspaceId, {
     actorPrincipalId: existing.onBehalfOf,
@@ -151,9 +133,12 @@ export async function startActionRequestExecution(
   workspaceId: string,
   actionRequestId: string,
 ): Promise<ActionRequestRow> {
-  const existing = await getActionRequestOrThrow(client, workspaceId, actionRequestId);
+  const existing = await getActionRequestForUpdateOrThrow(client, workspaceId, actionRequestId);
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'start_execution');
-  const updated = await updateStatus(client, workspaceId, existing.id, { status: nextStatus });
+  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
+    status: nextStatus,
+    expectedStatus: existing.status,
+  });
 
   await recordTransition(client, workspaceId, {
     actorPrincipalId: existing.onBehalfOf,
@@ -183,10 +168,11 @@ export async function markActionRequestExecuted(
   actionRequestId: string,
   options: MarkExecutedOptions = {},
 ): Promise<ActionRequestRow> {
-  const existing = await getActionRequestOrThrow(client, workspaceId, actionRequestId);
+  const existing = await getActionRequestForUpdateOrThrow(client, workspaceId, actionRequestId);
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'complete');
-  const updated = await updateStatus(client, workspaceId, existing.id, {
+  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
     status: nextStatus,
+    expectedStatus: existing.status,
     executedAt: new Date(),
   });
 
@@ -214,10 +200,11 @@ export async function markActionRequestFailed(
   actionRequestId: string,
   options: MarkFailedOptions = {},
 ): Promise<ActionRequestRow> {
-  const existing = await getActionRequestOrThrow(client, workspaceId, actionRequestId);
+  const existing = await getActionRequestForUpdateOrThrow(client, workspaceId, actionRequestId);
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'fail');
-  const updated = await updateStatus(client, workspaceId, existing.id, {
+  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
     status: nextStatus,
+    expectedStatus: existing.status,
     failedAt: new Date(),
   });
 
@@ -239,9 +226,12 @@ export async function compensateActionRequest(
   actionRequestId: string,
   options: ActionRequestActorOptions = {},
 ): Promise<ActionRequestRow> {
-  const existing = await getActionRequestOrThrow(client, workspaceId, actionRequestId);
+  const existing = await getActionRequestForUpdateOrThrow(client, workspaceId, actionRequestId);
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'compensate');
-  const updated = await updateStatus(client, workspaceId, existing.id, { status: nextStatus });
+  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
+    status: nextStatus,
+    expectedStatus: existing.status,
+  });
 
   await recordTransition(client, workspaceId, {
     actorPrincipalId: options.actorPrincipalId ?? existing.onBehalfOf,

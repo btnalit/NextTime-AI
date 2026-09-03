@@ -1,3 +1,4 @@
+import { IllegalTransition } from '@nexttime/shared';
 import type { ActionRequestStatus, BlastRadius, PolicyDecision } from '@nexttime/shared';
 
 /**
@@ -90,5 +91,34 @@ export class ApprovalScopeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ApprovalScopeError';
+  }
+}
+
+/**
+ * I6/I11 concurrency hardening: thrown by `status-transition.ts`'s
+ * `updateActionRequestStatusConditional` when its conditional `UPDATE ... WHERE status =
+ * $expectedStatus` affects 0 rows — i.e. the row's status was no longer what the caller last read
+ * it as, because another transaction transitioned it first. Extends `IllegalTransition` (same
+ * `@nexttime/shared` class every other illegal-transition path already throws) so every existing
+ * `instanceof IllegalTransition` check (409 mapping in `interfaces/http/capability-route.ts` /
+ * `interfaces/ws/rpc.ts`, this task's own DB-integration tests) keeps working without a new
+ * mapping branch — this is a *more specific* instance of "no legal edge from where the row
+ * actually is", not a different failure class.
+ *
+ * In practice this fires only when a caller skipped `reads.ts`'s `getActionRequestForUpdate`
+ * (`SELECT ... FOR UPDATE`) before transitioning: with that lock held, a second concurrent caller
+ * blocks until the first commits, then re-reads the *already-updated* status and fails earlier —
+ * at the ordinary `transition()` table-lookup step, with a plain `IllegalTransition` — before ever
+ * reaching this conditional UPDATE. This class exists so that even a future code path that forgets
+ * the lock still cannot double-write a row (defense in depth, not the primary mechanism).
+ */
+export class ActionRequestConcurrentTransitionError extends IllegalTransition {
+  readonly actionRequestId: string;
+
+  constructor(actionRequestId: string, expectedStatus: string, attemptedStatus: string) {
+    super('ActionRequest', expectedStatus, `transition_to_${attemptedStatus}`);
+    this.name = 'ActionRequestConcurrentTransitionError';
+    this.actionRequestId = actionRequestId;
+    this.message = `ActionRequest ${actionRequestId}: concurrent transition — expected status "${expectedStatus}" but the conditional UPDATE to "${attemptedStatus}" affected 0 rows (another transaction changed it first)`;
   }
 }

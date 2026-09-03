@@ -1,6 +1,7 @@
 import {
   ACTION_REQUEST_TRANSITIONS,
   type ActionRequestEvent,
+  type ActionRequestStatus,
   type BlastRadius,
   type CapabilityScope,
   type PolicyDecision,
@@ -30,6 +31,20 @@ import {
  * own header comment) but are never externally observable mid-resolution within one atomic
  * `request_action` call (no other transaction can see the row before this one commits), so
  * persisting them as separate durable rows would add write volume without adding information.
+ *
+ * Idempotency race (I6/I11 concurrency hardening): the check-first read above is not itself the
+ * enforcement mechanism — two concurrent `requestAction` calls sharing one `idempotencyKey` can
+ * both see "no existing row" and both attempt to INSERT. The partial unique index
+ * `action_requests_idempotency_key_uidx` (migrations/governance/0003_action_requests.sql) is what
+ * actually prevents two rows: Postgres detects the conflict at INSERT time — the second inserter
+ * blocks until the first commits or rolls back, then either proceeds (rollback) or raises
+ * SQLSTATE 23505 (commit) — and 23505 aborts the rest of the *whole* transaction unless the failed
+ * statement was wrapped in its own `SAVEPOINT`. So the INSERT below always runs inside one: on a
+ * unique-violation on that specific index, roll back to the savepoint (restoring the caller's
+ * transaction to a usable state — this function never opens its own `withWorkspace`, so leaving
+ * the transaction poisoned would break every write the *caller* still has queued after this call)
+ * and return the winner's row, honoring the same "a repeat call returns the existing row, no new
+ * audit/outbox writes" contract as the fast-path check above.
  */
 
 export interface RequestActionInput {
@@ -58,10 +73,57 @@ const RESOLUTION_EVENT_BY_DECISION: Record<PolicyDecision, ActionRequestEvent> =
   deny: 'deny',
 };
 
+const IDEMPOTENCY_KEY_CONSTRAINT = 'action_requests_idempotency_key_uidx';
+
+/** Same detection pattern `application/chat/service.ts` already uses for its own partial-unique-
+ *  index race (`activities_one_running_turn_per_chat_uidx`) — matches on both SQLSTATE 23505 and
+ *  the specific constraint name, so an unrelated unique violation is never misread as this race. */
+function isIdempotencyKeyConflict(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const candidate = err as { code?: unknown; constraint?: unknown };
+  return candidate.code === '23505' && candidate.constraint === IDEMPOTENCY_KEY_CONSTRAINT;
+}
+
+async function insertActionRequestRow(
+  client: PoolClient,
+  workspaceId: string,
+  input: RequestActionInput,
+  finalStatus: ActionRequestStatus,
+  policyDecision: PolicyDecision,
+): Promise<ActionRequestRow> {
+  const result = await client.query<ActionRequestDbRow>(
+    `insert into action_requests (
+       workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
+       policy_decision, await_decision, on_behalf_of, parent_worker_run_id, actor_runtime,
+       idempotency_key
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     returning ${ACTION_REQUEST_ROW_COLUMNS}`,
+    [
+      workspaceId,
+      finalStatus,
+      input.gatekeeperId,
+      input.actionKind,
+      input.resourceScope ?? null,
+      input.blastRadius,
+      policyDecision,
+      input.awaitDecision,
+      input.onBehalfOf,
+      input.parentWorkerRunId ?? null,
+      input.actorRuntime,
+      input.idempotencyKey ?? null,
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('requestAction: INSERT ... RETURNING produced no row');
+  return mapActionRequestRow(row);
+}
+
 /**
  * Idempotent: a repeat call with the same `idempotencyKey` returns the existing row unchanged — no
  * new insert, no new audit/outbox writes (a true no-op replay, not merely "the same resulting
- * state"). I18 quota checks (§8.1 "policy + 配额(I18)") are S2.7 scope, not performed here.
+ * state"), whether the duplicate is detected by the fast-path read or by the INSERT's own unique
+ * violation (concurrent callers — see this module's own doc comment). I18 quota checks (§8.1
+ * "policy + 配额(I18)") are S2.7 scope, not performed here.
  */
 export async function requestAction(
   client: PoolClient,
@@ -102,31 +164,42 @@ export async function requestAction(
     RESOLUTION_EVENT_BY_DECISION[evaluation.decision],
   );
 
-  const result = await client.query<ActionRequestDbRow>(
-    `insert into action_requests (
-       workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
-       policy_decision, await_decision, on_behalf_of, parent_worker_run_id, actor_runtime,
-       idempotency_key
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     returning ${ACTION_REQUEST_ROW_COLUMNS}`,
-    [
+  let mapped: ActionRequestRow;
+  if (input.idempotencyKey) {
+    await client.query('SAVEPOINT request_action_insert');
+    try {
+      mapped = await insertActionRequestRow(
+        client,
+        workspaceId,
+        input,
+        finalStatus,
+        evaluation.decision,
+      );
+      await client.query('RELEASE SAVEPOINT request_action_insert');
+    } catch (err) {
+      if (!isIdempotencyKeyConflict(err)) throw err;
+      await client.query('ROLLBACK TO SAVEPOINT request_action_insert');
+      const existing = await findActionRequestByIdempotencyKey(
+        client,
+        workspaceId,
+        input.idempotencyKey,
+      );
+      // The unique violation means a row with this key exists (or existed a moment ago, within
+      // the same still-committed transaction) — not finding it now would mean the winner rolled
+      // back after all, which contradicts a *committed* conflicting row ever having existed. Fail
+      // loudly rather than silently swallowing that impossible case.
+      if (!existing) throw err;
+      return existing;
+    }
+  } else {
+    mapped = await insertActionRequestRow(
+      client,
       workspaceId,
+      input,
       finalStatus,
-      input.gatekeeperId,
-      input.actionKind,
-      input.resourceScope ?? null,
-      input.blastRadius,
       evaluation.decision,
-      input.awaitDecision,
-      input.onBehalfOf,
-      input.parentWorkerRunId ?? null,
-      input.actorRuntime,
-      input.idempotencyKey ?? null,
-    ],
-  );
-  const row = result.rows[0];
-  if (!row) throw new Error('requestAction: INSERT ... RETURNING produced no row');
-  const mapped = mapActionRequestRow(row);
+    );
+  }
 
   await recordTransition(client, workspaceId, {
     actorPrincipalId: input.onBehalfOf,

@@ -130,3 +130,40 @@ export async function getActionRequestOrThrow(
   if (!row) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
   return row;
 }
+
+/**
+ * I6/I11 concurrency hardening: same read as `getActionRequest`, but takes `SELECT ... FOR UPDATE`
+ * — a row-level lock held for the rest of the caller's transaction. Every governed transition that
+ * mutates an *existing* row (`decide.ts`'s `approve`/`reject`, `execution.ts`'s `start_execution`/
+ * `mark_executed`/`mark_failed`/`compensate`/`expire`) must read through this (or the null-tolerant
+ * `expire` case, which locks first and then decides "not found" is a benign no-op rather than an
+ * error) before computing its next status — never the lock-free `getActionRequest`/
+ * `getActionRequestOrThrow` above. Locking here makes a second concurrent caller on the same row
+ * block until the first commits, then see the *already-updated* status and fail at the ordinary
+ * `transition()` table-lookup step (a plain `IllegalTransition`) instead of wastefully writing an
+ * Approval Decision that the conditional UPDATE (`status-transition.ts`) would then discard.
+ * `drainer.ts`'s per-Gatekeeper queue read (`listExecutableQueue` above) is deliberately excluded
+ * — it only decides *what to process next*, never mutates a row itself.
+ */
+export async function getActionRequestForUpdate(
+  client: PoolClient,
+  workspaceId: string,
+  actionRequestId: string,
+): Promise<ActionRequestRow | null> {
+  const result = await client.query<ActionRequestDbRow>(
+    `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests where workspace_id = $1 and id = $2 for update`,
+    [workspaceId, actionRequestId],
+  );
+  const row = result.rows[0];
+  return row ? mapActionRequestRow(row) : null;
+}
+
+export async function getActionRequestForUpdateOrThrow(
+  client: PoolClient,
+  workspaceId: string,
+  actionRequestId: string,
+): Promise<ActionRequestRow> {
+  const row = await getActionRequestForUpdate(client, workspaceId, actionRequestId);
+  if (!row) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
+  return row;
+}
