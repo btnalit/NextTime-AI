@@ -1,7 +1,8 @@
 # @nexttime/web
 
-React + Vite SPA served statically by caddy (design doc §7.6): login, chat list, chat page. S1.8
-scope; approvals/tasks/connections/audit views land with their respective S2/S3 tasks.
+React + Vite SPA served statically by caddy (design doc §7.6): login, chat list, chat page,
+approval cards + approval queue, Tasks & Workers, and a Connections page shell (S2.10). Audit/
+explain views land with S3.
 
 ## Develop
 
@@ -66,16 +67,104 @@ the same key and, if a chat was subscribed, re-subscribes with `startAfter` set 
 `sequence` it already delivered — never redelivering a message, never losing one committed while
 the socket was down.
 
-**S2.10 will consume `action.pending` / `action.updated` / `task.updated`** (design doc §9.4's
-S2.11 addition — `handleNotification`'s `default` branch in this file currently just ignores them).
+**S2.10 addition — `action.pending` / `action.updated` / `task.updated`** (design doc §9.4).
 Unlike `chat.message`/`chat.stream`/`chat.metadata`, these three are not scoped to one Chat — the
 kernel (`interfaces/ws/server.ts`) auto-subscribes every authenticated connection to its own
 principal's copy of these three events the moment `authenticate` succeeds, no separate subscribe
-call needed. `action.pending`/`action.updated` carry an `actionRequestId` (not a `chatId`); the same
-ActionRequest's card also lands as a persisted `chat_messages` row (`kind: 'system.action_pending'`/
-`'system.action_update'`, `packages/shared/src/chat-message-content.ts`) in each holder's and the
-requester's own Chat — the `isHolder` field on that content is what should decide whether to render
-approve/reject buttons.
+call needed, and they carry no `chatId` at all. `WsClient` therefore exposes three independent
+registration methods, dispatched by `method` name *before* the chatId-scoped switch every
+`chat.*` push goes through — folding them into that switch would silently drop every one of them:
+
+```ts
+const unsubscribe = client.onActionPending((event) => {
+  /* ActionPendingPush: {actionRequestId, gatekeeperId, title, description, actionKind:{tag,label},
+     awaitDecision, simulated?} — the *only* source that carries title/description/simulated */
+});
+client.onActionUpdated((event) => {
+  /* ActionUpdatedPush: {actionRequestId, status} */
+});
+client.onTaskUpdated((event) => {
+  /* TaskUpdatedPush: {taskId, status} */
+});
+```
+
+Each returns an `Unsubscribe`; multiple registrations are all delivered independently, and they
+survive a reconnect with no extra bookkeeping (the *server* re-subscribes this principal on every
+fresh `authenticate`). `ChatPage` uses `onActionUpdated` to update an already-rendered pending
+card's status in place; `ApprovalQueuePage`/`TasksPage` use all three/`onTaskUpdated` respectively
+to refresh their lists.
+
+The same ActionRequest also lands as a persisted `chat_messages` row (`kind:
+'system.action_pending'` / `'system.action_update'`, `packages/shared/src/chat-message-content.ts`)
+in each holder's and the requester's own Chat — `ChatMessage.kind`/`.content` (added this task)
+carry that shape verbatim. The `isHolder` field on that content is what decides whether
+`ActionRequestCard` renders approve/reject buttons or a status-only line.
+
+## `lib/http-client.ts`
+
+`POST /api/cap/<name>` client (design doc §9.3) for every capability the chat WS socket cannot
+reach — `interfaces/ws/server.ts` only forwards methods in the `chat` capability group
+(`packages/shared/src/capabilities.ts`), so `approve`/`reject`/`list_pending`/`get_action`/
+`set_auto_approved_action_kind`/`get_task`/`list_tasks`/the `connection` group all go over HTTP
+instead, `Authorization: Bearer <api key>` (the same key `WsClient.authenticate` used), envelope
+`{ok:true,result}` / `{ok:false,error:{code,message}}`. Mirrors
+`packages/platform-extension/src/kernel-client.ts`'s shape without importing it (that package is
+Node-only tooling, not published for browser import) — `HttpClient.call<T>(name, params)` resolves
+with `result` or throws `HttpError` (`kind`: `'network' | 'invalid_response' | 'capability_error'`,
+`code` = the wire error code on the latter).
+
+## `lib/action-card.ts` / `lib/system-status.ts`
+
+Three different shapes an ActionRequest can arrive in — a live `action.pending` push, a persisted
+`system.action_pending` chat message, or a `list_pending`/`get_action` HTTP row — normalize into
+one `ActionCardData` (`actionCardFromPush` / `actionCardFromPendingContent` / `actionCardFromRow`)
+that `components/ActionRequestCard.tsx` renders. Only the push carries a real `title`/Markdown-ish
+`description`/`simulated`; the other two synthesize a title from `actionKind`
+(`humanizeActionKind`, mirroring the kernel's own `application/linkage` title-builder convention —
+see that file's module doc comment for the full reasoning). `system.action_update`/
+`system.task_update` are never cards — always a compact status line
+(`lib/system-status.ts`'s `systemStatusLineFromMessage`, rendered by `SystemStatusLineView`).
+
+## Views
+
+- **Chat page** (`components/ChatPage.tsx`): `system.action_pending` messages render as
+  `ActionRequestCard`s inline in the message list — full card with Approve/Reject(+reason)/"Always
+  approve this kind" buttons when `isHolder`, status-only otherwise; `await_decision: true` and
+  still pending gets the blocking (`.action-card-blocking`) style. A card's status updates in
+  place from two sources that agree once both have arrived: a live `action.updated` push
+  (`actionStatusOverrides` state) and a later `system.action_update` message already in this
+  chat's own history (`latestActionStatus`, derived from `messages`). `system.action_update`/
+  `system.task_update` render as compact `SystemStatusLineView` lines.
+- **Approval queue** (`#/approvals`, `components/ApprovalQueuePage.tsx`): `list_pending` — the
+  caller's own I14-scoped queue, every row `isHolder: true` by construction. Refreshes on
+  `action.pending`/`action.updated`; a decided row simply leaves the list on the next refresh
+  (`list_pending` only ever returns `pending_approval` rows) — the durable "this card, now
+  decided" record lives in the chat instead.
+- **Tasks & Workers** (`#/tasks`, `components/TasksPage.tsx`): the caller's own Tasks (newest
+  first) with status/failure reason/a truncated result summary, and each Task's WorkerRuns in a
+  small table. Uses the S2.10-added `list_tasks` capability (see "Kernel addition" below) and
+  refreshes on `task.updated`.
+- **Connections** (`#/connections`, `components/ConnectionsPage.tsx` + `ConnectionCard.tsx`): page
+  shell + a connection card (kind/address/credentials) wired to `create_connection`
+  (`packages/shared/src/capabilities.ts`, `group: 'connection'`). That capability's *shape* landed
+  on `main` from S2.1 scaffolding, but S2.13 (`governance/connections`, the module that actually
+  implements it) has not — every submission today gets the kernel's stable `501 not_implemented`
+  envelope, shown as a distinct "not implemented yet" note rather than a generic error. See "已知偏离"
+  below.
+
+## Kernel addition — `list_tasks`
+
+§9.3 never defined a list capability for Task (only `get_task`, one at a time by id) — the Tasks &
+Workers view needs one, so this task adds `list_tasks` (`packages/shared/src/capabilities.ts`,
+`channel: 'human'`, `minRole: 'member'`, no params): the caller's own Tasks, newest first, each
+with its WorkerRuns. `application/task/service.ts`'s `listTasksForPrincipal` (one query for the
+Task rows scoped to `on_behalf_of`, one batched query for every WorkerRun across them) plus a
+`gateway/handlers.ts` handler reusing `get_task`'s own wire-shape mapper (`toWireTask`, extracted
+from `getTaskHandler` so both share it) are the only kernel-side changes — `channel: 'human'` (not
+`'handle'` like `get_task`) since this is a web-only "browse my own Tasks" facility a Worker/entry
+Handle has no use for. Neither `ENTRY_CEILING_CAPABILITIES` nor `WORKER_CEILING_CAPABILITIES`
+(`governance/capability/handles.ts`) derive from `group === 'task'` — both are explicit allowlists
+— so this addition cannot leak into either Handle ceiling.
 
 ## Tests
 
@@ -83,14 +172,23 @@ approve/reject buttons.
 corepack pnpm --filter @nexttime/web test
 ```
 
-Vitest, unit-only: `lib/ws-client.test.ts` (a fake `WebSocketLike`, no real socket or kernel) and
-`lib/streaming-reducer.test.ts`. Runs in CI.
+Vitest, unit-only. `lib/*.test.ts` (`ws-client`, `http-client`, `action-card`, `system-status`,
+`streaming-reducer`) run in Vitest's default `node` environment — fakes for `WebSocketLike`/
+`fetch`, no real socket, HTTP call, or kernel. `components/*.test.tsx` (`ActionRequestCard`,
+`SystemStatusLineView`) render into `jsdom` via `@testing-library/react` — each such file opts in
+with a `// @vitest-environment jsdom` pragma comment (`vitest.base.ts`'s shared default stays
+`node`) and registers `afterEach(cleanup)` itself (`globals: false` means the library's automatic
+cleanup hook never fires without an explicit registration). All run in CI (`corepack pnpm -r test`).
 
 ## End-to-end (Playwright)
 
-Opt-in — **not** part of `pnpm test`/CI (no browser, no kernel there). Exercises the full S1.8
-acceptance flow (docs/development-tasks.md S1.8: 登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整)
-against a real, running kernel.
+Opt-in — **not** part of `pnpm test`/CI (no browser, no kernel there). Two suites:
+
+- `e2e/chat.spec.ts` — the S1.8 flow (登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整).
+- `e2e/approvals.spec.ts` — the S2.10 flow (docs/development-tasks.md S2.10: 卡片出现 → 批准 →
+  状态更新 → 对话里出现更新；用户 B 看不到 A 的卡片；授予 B 该动作范围后卡片出现在 B 自己的队列并可批准，
+  A 的对话里只显示状态). **Needs a pending ActionRequest already in the database** before it runs —
+  see "Seeding a pending ActionRequest" below.
 
 ```bash
 # once per machine
@@ -106,19 +204,94 @@ AGENT_RUNTIME=fake DATABASE_URL=<postgres-url> node packages/kernel/dist/index.j
 # 2. start the web app pointed at it (see "Develop" above), or serve a production build
 corepack pnpm --filter @nexttime/web dev
 
-# 3. run the suite against that origin, with a valid API key for the kernel's workspace
+# 3. bootstrap a second principal (role operator — approve/list_pending/grant_capability's target
+#    need it) for the isolation suite, if one does not already exist
+node packages/kernel/dist/cli/bootstrap.js add-principal \
+  --workspace <workspace-id> --name bob --role operator
+# prints: principal created: <principal-id>   (this is WEB_E2E_PRINCIPAL_ID_B below)
+# API key (shown once — store it securely, only its hash is kept):
+# <api-key>                                    (this is WEB_E2E_API_KEY_B below)
+
+# 4. seed the two pending ActionRequests this suite needs (see next section), then run it
 WEB_E2E_BASE_URL=http://127.0.0.1:5173 \
-WEB_E2E_API_KEY=<api-key> \
+WEB_E2E_API_KEY=<owner-api-key> \
+WEB_E2E_API_KEY_B=<bob-api-key> \
+WEB_E2E_PRINCIPAL_ID_B=<bob-principal-id> \
 corepack pnpm --filter @nexttime/web e2e
 ```
 
-**S1.10 hookup**: `scripts/accept_s1.sh` (docs/development-tasks.md S1.10) is expected to run this
-suite as one of its checks once it exists — start the stack with `AGENT_RUNTIME=fake`, bootstrap a
-workspace/principal and mint an API key the way the rest of that script already does for its own
-assertions, then invoke `WEB_E2E_BASE_URL=<web origin> WEB_E2E_API_KEY=<key> corepack pnpm
---filter @nexttime/web e2e` and fail the script on a non-zero exit. Against the full deployment
-(caddy fronting both kernel and web on one origin, deploy/caddy/Caddyfile), `WEB_E2E_BASE_URL` is
-that origin directly — no dev proxy involved.
+### Seeding a pending ActionRequest
+
+`packages/web` owns no capability that can create a *pending, awaiting-a-human-decision*
+ActionRequest from a bare API key — a real one requires `request_action` (handle-channel only) plus
+a real, reachable Gatekeeper to evaluate policy against (S2.4/S2.13 scope, not this task's). Per
+this task's dispatch brief ("a pending row inserted via psql then approved through the UI is
+acceptable for this spec"), `e2e/approvals.spec.ts` instead expects the *database* to already have
+one seeded — run the block below **twice**, once per `resource_scope` marker (`e2e-approve-flow`
+for the first suite, `e2e-isolation-flow` for the second — the spec file hardcodes both literals,
+so they must match exactly), against the same Postgres the kernel under test is using:
+
+```bash
+psql "$DATABASE_URL" -v workspace_id=<workspace-id> -v on_behalf_of=<owner-principal-id> \
+  -v resource_scope=e2e-approve-flow <<'SQL'
+insert into objects (workspace_id, object_type, properties)
+values (:'workspace_id'::uuid, 'Gatekeeper', '{"name":"e2e-test-gate"}'::jsonb)
+returning id as gatekeeper_id \gset
+
+insert into action_requests
+  (workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
+   policy_decision, await_decision, on_behalf_of, actor_runtime, params)
+values
+  (:'workspace_id'::uuid, 'pending_approval', :'gatekeeper_id'::uuid, 'e2e.approval_card_test',
+   :'resource_scope', 'medium', 'require_approval', true, :'on_behalf_of'::uuid, 'worker',
+   '{}'::jsonb)
+returning id as action_request_id \gset
+
+insert into outbox (workspace_id, event_type, payload)
+values (
+  :'workspace_id'::uuid,
+  'ActionRequestPending',
+  jsonb_build_object(
+    'type', 'ActionRequestPending',
+    'workspaceId', :'workspace_id',
+    'actionRequestId', :'action_request_id',
+    'gatekeeperId', :'gatekeeper_id',
+    'actionKind', 'e2e.approval_card_test',
+    'resourceScope', :'resource_scope',
+    'holderPrincipalIds', jsonb_build_array(:'on_behalf_of')
+  )
+);
+
+\echo seeded action_request_id: :action_request_id
+SQL
+```
+
+Run it again with `-v resource_scope=e2e-isolation-flow` for the second suite. `on_behalf_of` is
+the **owner**'s principal id both times (the `WEB_E2E_API_KEY` principal) — the second row's sole
+initial holder is deliberately only the owner too (`holderPrincipalIds` = just `on_behalf_of`), so
+`bob` (B) starts out with no visibility into it, matching the isolation test's first assertion.
+
+Why a raw `action_requests` insert alone is not enough: nothing dispatches a domain event for it,
+so no `chat.message`/`action.pending` push ever fires and no card appears anywhere — the *outbox*
+row above is what `application/linkage`'s `registerActionRequestConsumers`
+(packages/kernel/src/application/linkage/action-request-consumer.ts) picks up on its next poll
+tick against the *already-running* kernel from step 1, writing the `system.action_pending` chat
+message and publishing the `action.pending` push exactly as a real `request_action` call would.
+The `objects` row satisfies `action_requests.gatekeeper_id`'s foreign key with something real
+enough to read back (`object_type: 'Gatekeeper'`) without needing a live Gatekeeper endpoint —
+nothing in this flow ever calls it.
+
+**Not verified against a live Postgres from this sandbox** (no Docker/DB available here) — sanity-
+check the column list against `migrations/governance/000{3,4}_action_requests*.sql` on first run
+and adjust if the schema has drifted since this was written.
+
+**S1.10/S2.12 hookup**: `scripts/accept_s1.sh`/`scripts/accept_s2.sh` are expected to run these
+suites as part of their own checks — start the stack with `AGENT_RUNTIME=fake`, bootstrap
+workspace/principals and mint API keys the way those scripts already do for their own assertions,
+seed as above, then invoke `corepack pnpm --filter @nexttime/web e2e` with the env vars set and
+fail the script on a non-zero exit. Against the full deployment (caddy fronting both kernel and web
+on one origin, deploy/caddy/Caddyfile), `WEB_E2E_BASE_URL` is that origin directly — no dev proxy
+involved.
 
 ## 假设与偏离 (S1.8)
 

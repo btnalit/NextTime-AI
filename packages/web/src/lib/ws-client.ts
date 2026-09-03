@@ -1,4 +1,4 @@
-import type { ChatStreamPayload } from '@nexttime/shared';
+import type { ActionRequestStatus, ChatStreamPayload, TaskStatus } from '@nexttime/shared';
 
 /**
  * lib/ws-client: typed JSON-RPC 2.0 client for the kernel's `/ws` chat socket (design doc §9.4;
@@ -33,13 +33,60 @@ import type { ChatStreamPayload } from '@nexttime/shared';
 
 /** The shape of one `chat_messages` row as every WS response/push carries it (`toWireChatMessage`,
  *  packages/kernel/src/application/gateway/handlers.ts; `ChatMessageEvent`, packages/shared/src/
- *  events.ts). */
+ *  events.ts). `kind`/`content` (S2.11 addition) are present only on the three `role==='system'`
+ *  message kinds `application/linkage` writes (`system.task_update` / `system.action_pending` /
+ *  `system.action_update`, packages/shared/src/chat-message-content.ts) — `undefined` for every
+ *  ordinary user/assistant/tool message. `content` is loosened to a bare record here (not the
+ *  stricter `SystemMessageContent` union) for the same reason `events.ts` loosens it on the wire:
+ *  this module does not import `@nexttime/shared`'s Zod schemas at runtime (S1.8's "type-only
+ *  import, erased at compile time" bundle-size convention) — `lib/action-card.ts` (S2.10) narrows
+ *  it by `kind` at the point it actually needs the fields. */
 export interface ChatMessage {
   readonly id: string;
   readonly role: 'user' | 'assistant' | 'tool' | 'system';
   readonly text: string;
   readonly createdAt: string;
   readonly sequence: number;
+  readonly kind?: string;
+  readonly content?: Readonly<Record<string, unknown>>;
+}
+
+// -------------------------------------------------------------------------------------------
+// S2.10 principal-scoped pushes (design doc §9.4; docs/development-tasks.md S2.10 deliverable 1).
+// Unlike `chat.message`/`chat.stream`/`chat.metadata` above, these three carry no `chatId` — the
+// kernel subscribes every authenticated connection to its own principal's `action.pending`/
+// `action.updated`/`task.updated` push events once, right after `authenticate` succeeds
+// (packages/kernel/src/interfaces/ws/server.ts `subscribeCallerToPrincipalPush`), independent of
+// whatever Chat (if any) is currently `subscribeChat`-ed on this same socket. `handleNotification`
+// below dispatches these three by `method` *before* the chatId-scoped switch for exactly that
+// reason — filtering them by `activeSubscription.chatId` (as every `chat.*` push is) would silently
+// drop every one of them, since they have no `chatId` field to match against.
+// -------------------------------------------------------------------------------------------
+
+/** `action.pending` (packages/shared/src/events.ts `ActionPendingEvent`) — the only source that
+ *  carries `title`/a human-readable `description`/`simulated`; none of these three fields exist on
+ *  a persisted `system.action_pending` chat message or on a `list_pending`/`get_action` row (see
+ *  `lib/action-card.ts`'s own module doc comment for why). */
+export interface ActionPendingPush {
+  readonly actionRequestId: string;
+  readonly gatekeeperId: string;
+  readonly title: string;
+  readonly description: string;
+  readonly actionKind: { readonly tag: string; readonly label: string };
+  readonly awaitDecision: boolean;
+  readonly simulated?: unknown;
+}
+
+/** `action.updated` (packages/shared/src/events.ts `ActionUpdatedEvent`). */
+export interface ActionUpdatedPush {
+  readonly actionRequestId: string;
+  readonly status: ActionRequestStatus;
+}
+
+/** `task.updated` (packages/shared/src/events.ts `TaskUpdatedPushEvent`). */
+export interface TaskUpdatedPush {
+  readonly taskId: string;
+  readonly status: TaskStatus;
 }
 
 interface ChatHistoryResult {
@@ -194,6 +241,14 @@ export class WsClient {
   private activeSubscription: ActiveSubscription | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // S2.10 principal-scoped push listeners — connection-lifetime, not tied to `activeSubscription`
+  // or to any particular socket instance, so they survive a reconnect with no extra bookkeeping
+  // (the *server* re-subscribes this principal on every fresh `authenticate`, per this file's own
+  // module doc comment above `ActionPendingPush`).
+  private readonly actionPendingListeners = new Set<(event: ActionPendingPush) => void>();
+  private readonly actionUpdatedListeners = new Set<(event: ActionUpdatedPush) => void>();
+  private readonly taskUpdatedListeners = new Set<(event: TaskUpdatedPush) => void>();
+
   constructor(options: WsClientOptions) {
     this.url = options.url;
     this.createSocket = options.createSocket ?? defaultWebSocketFactory;
@@ -330,6 +385,28 @@ export class WsClient {
     return this.call('stop_agent', { chatId });
   }
 
+  /** Registers a listener for this connection's own `action.pending` pushes (§9.4, S2.10
+   *  deliverable 1) — every ActionRequest this principal holds approval scope for, regardless of
+   *  which Chat (if any) it is currently subscribed to. Call at most once per authenticated
+   *  session's lifetime per caller (e.g. once from `ApprovalQueuePage`'s mount effect); multiple
+   *  registrations are all delivered independently. Returns an `Unsubscribe`. */
+  onActionPending(handler: (event: ActionPendingPush) => void): Unsubscribe {
+    this.actionPendingListeners.add(handler);
+    return () => this.actionPendingListeners.delete(handler);
+  }
+
+  /** Registers a listener for this connection's own `action.updated` pushes (§9.4). */
+  onActionUpdated(handler: (event: ActionUpdatedPush) => void): Unsubscribe {
+    this.actionUpdatedListeners.add(handler);
+    return () => this.actionUpdatedListeners.delete(handler);
+  }
+
+  /** Registers a listener for this connection's own `task.updated` pushes (§9.4). */
+  onTaskUpdated(handler: (event: TaskUpdatedPush) => void): Unsubscribe {
+    this.taskUpdatedListeners.add(handler);
+    return () => this.taskUpdatedListeners.delete(handler);
+  }
+
   private handleFrame(raw: string): void {
     let parsed: JsonRpcResponseFrame | JsonRpcNotificationFrame;
     try {
@@ -356,6 +433,23 @@ export class WsClient {
   }
 
   private handleNotification(frame: JsonRpcNotificationFrame): void {
+    // Principal-scoped pushes (S2.10) — dispatched by `method` alone, *before* any chatId check:
+    // these frames carry no `chatId` at all (see the module doc comment above `ActionPendingPush`),
+    // so folding them into the chatId-scoped switch below would silently drop every one of them.
+    switch (frame.method) {
+      case 'action.pending':
+        for (const fn of this.actionPendingListeners) fn(frame.params as ActionPendingPush);
+        return;
+      case 'action.updated':
+        for (const fn of this.actionUpdatedListeners) fn(frame.params as ActionUpdatedPush);
+        return;
+      case 'task.updated':
+        for (const fn of this.taskUpdatedListeners) fn(frame.params as TaskUpdatedPush);
+        return;
+      default:
+        break;
+    }
+
     const subscription = this.activeSubscription;
     if (!subscription) return;
 
@@ -382,7 +476,6 @@ export class WsClient {
         return;
       }
       default:
-        // action.pending / action.updated / task.updated (§9.4) — S2 scope, not consumed here.
         return;
     }
   }

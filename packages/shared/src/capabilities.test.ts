@@ -7,11 +7,13 @@ import {
 } from './capabilities.js';
 
 /**
- * Every capability name listed in design doc §9.3, hardcoded (no snapshot). `deprecate_*` in the
- * meta row is expanded to its two concrete siblings of publish_skill/publish_procedure in that
- * same row: deprecate_skill, deprecate_procedure (see capabilities.ts header comment). The two
- * `<gate>.<op>` rows (observe-class, execute-class-via-request_action) are represented as the
- * pattern names `<gate>.<op>` and `<gate>.<op>:execute`.
+ * Every capability name listed in design doc §9.3, hardcoded (no snapshot), plus `list_tasks`
+ * (S2.10 addition — §9.3 has no list capability for Task, only `get_task`; the web Tasks & Workers
+ * view needs one, docs/development-tasks.md S2.10 deliverable 4). `deprecate_*` in the meta row is
+ * expanded to its two concrete siblings of publish_skill/publish_procedure in that same row:
+ * deprecate_skill, deprecate_procedure (see capabilities.ts header comment). The two `<gate>.<op>`
+ * rows (observe-class, execute-class-via-request_action) are represented as the pattern names
+ * `<gate>.<op>` and `<gate>.<op>:execute`.
  */
 const EXPECTED_CAPABILITY_NAMES = [
   // chat
@@ -80,6 +82,7 @@ const EXPECTED_CAPABILITY_NAMES = [
   'create_task',
   'invoke_worker',
   'get_task',
+  'list_tasks',
   'cancel_task',
   // worker
   'propose_worker_definition',

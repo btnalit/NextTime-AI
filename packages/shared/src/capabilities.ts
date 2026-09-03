@@ -791,6 +791,21 @@ const taskCapabilities: readonly Capability[] = [
       '(§7.3 结果契约).',
   },
   {
+    // S2.10 addition (docs/development-tasks.md S2.10 deliverable 4): §9.3 never defined a list
+    // capability for Task (only `get_task`, one at a time) — the web Tasks & Workers view needs
+    // one, so this task adds it, mirroring `get_task`'s shape exactly except for the missing
+    // `taskId` param and the return being an array. `channel: 'human'` (not `'handle'`, unlike
+    // `get_task`): this is a web-only "browse my own Tasks" facility, not something a Worker/entry
+    // Handle has a use for (an entry Handle already gets its own summary via `get_entry_context`).
+    name: 'list_tasks',
+    group: 'task',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: noParams,
+    description: "List the caller's own Tasks (newest first), each with its WorkerRuns.",
+  },
+  {
     name: 'cancel_task',
     group: 'task',
     mode: 'propose',
