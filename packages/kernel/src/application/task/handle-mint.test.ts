@@ -16,7 +16,14 @@ describe('computeChildHandleScope', () => {
       declaredCapabilities: ['get_object', 'not_a_real_capability'],
       declaredGates: [],
     });
-    expect(scope.capabilities).toEqual(['get_object']);
+    // S2.9: list_allowed_operations/report_task_result are force-unioned in unconditionally (see
+    // handle-mint.ts's own doc comment) — with `unconstrained` authority every non-execute-class
+    // name passes through, so both appear here alongside the explicitly declared `get_object`.
+    expect(scope.capabilities).toEqual([
+      'get_object',
+      'list_allowed_operations',
+      'report_task_result',
+    ]);
   });
 
   it('entry Handle (no execute-class capability in scope) requesting an execute-class capability is rejected — S2.7 acceptance', () => {

@@ -580,3 +580,84 @@ fetch('http://localhost:8080/api/cap/invoke_worker', {
   没有在本节重复写成主机 curl 步骤——它们不涉及容器/主机专属行为，跑一次 CI 的 Postgres service
   即可验证，重复在主机上手工验证价值有限。
 - 一次真正端到端"Worker 干活并写回结果"的主机验收留给 S2.9 落地后补充到本文件。
+
+## 13. S2.9 之后：Task 完成并写回结果
+
+前置：§12 已验证 `invoke_worker` 能落一行 `tasks`/`worker_runs`；本节验证的是 S2.9 补上的那一段——
+Worker 容器里的 `platform-extension` `worker` 模式真的跑起来、报了结果、Task 从 `running` 变成
+`completed`、`tasks.result.summary` 非空。
+
+### 13.1 发一个会调用 `report_result` 的 worker 定义
+
+```bash
+OWNER_KEY=<owner-api-key>   # §12.1 已经有
+
+REPORT_DEFINITION_ID=$(docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/propose_worker_definition', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({
+    kind: 'worker',
+    definition: {
+      systemPrompt: 'You are ops-runner. Immediately call report_result with summary \"pong\" and stop.',
+      name: 'ops-runner-report-smoke',
+    },
+  }),
+}).then(r => r.json()).then(b => console.log(b.result.id))
+")
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/publish_worker_definition', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ definitionId: '${REPORT_DEFINITION_ID}', version: 1 }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b)))
+"
+```
+
+### 13.2 `invoke_worker(wait: true)`
+
+```bash
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/invoke_worker', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ definitionId: '${REPORT_DEFINITION_ID}', version: 1, input: {}, wait: true, timeout: 60 }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b, null, 2)))
+"
+```
+
+期望：`{"ok":true,"result":{"taskId":"...","workerRunId":"...","status":"completed","result":
+{"summary":"...", "factIds":[...], ...}}}`。核对：
+
+```bash
+psql "$DATABASE_URL" -c "select status, result from tasks where id = '<taskId>';"
+```
+
+`status` 为 `completed`，`result->>'summary'` 非空。
+
+**已知限制（如实记录，不是"应该修但没修"）**：`deploy/fake-llm`（S1.5b 交付，本任务未改动）的
+`TOOL_TRIGGER_WORD` 硬编码只认 `search` 这一个词，不理解系统提示里的"call report_result"这句话
+——用 fake-llm 时，Worker 的第一轮回复只是把提示文本原样 echo 回来，模型从未真正调用
+`report_result` 工具；`worker.ts` 的 `agent_settled` 兜底路径（没有显式 `report_result` 调用时，
+用最后一句 assistant 文本合成一个空列表契约）接手，`result.summary` 因此会是 fake-llm 的 echo 文本
+（形如 `"echo: ..."`），不会字面等于 `"pong"`。这条兜底路径与模型真的调用 `report_result` 走的是
+内核侧完全相同的写入逻辑（同一个 `report_task_result` capability），所以本节的验收终点——Task
+完成、`tasks.result` 非空——同样成立；如果需要验证模型**主动**调用 `report_result`（而非兜底），
+接一个真实 provider（经 `llm-proxy`，`config/llm-providers.yaml`）比给 `fake-llm` 加第二个触发词
+更贴近真实使用路径，留给需要这一步验证的人自行决定。
+
+### 13.3 `explain` 到该 WorkerRun
+
+```bash
+FACT_ID=<上一步 result.factIds 里任意一个，若 factsToAssert 为空则跳过本步>
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/explain', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ nodeId: '${FACT_ID}' }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b, null, 2)))
+"
+```
+
+期望：`result.fact.epistemicStatus` 为 `"inferred"`，`result.activity.kind` 为 `"worker_result"`，
+`result.activity.metadata.workerRunId` 等于上面拿到的 `workerRunId`。

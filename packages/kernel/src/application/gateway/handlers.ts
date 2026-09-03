@@ -59,6 +59,7 @@ import {
   publishOperationHandler,
 } from './operation-manifest-handlers.js';
 import { requestActionHandler } from './request-action-handler.js';
+import { listAllowedOperationsHandler, reportTaskResultHandler } from './worker-result-handler.js';
 
 /**
  * application/gateway/handlers: the real handlers wired for the S1.3 capability set (`get_object`
@@ -849,4 +850,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['find_workers', findWorkersHandler],
   ['find_operations', findOperationsHandler],
   ['find_procedures', findProceduresHandler],
+  // S2.9 (docs/development-tasks.md S2.9) — worker-result-handler.ts.
+  ['list_allowed_operations', listAllowedOperationsHandler],
+  ['report_task_result', reportTaskResultHandler],
 ]);

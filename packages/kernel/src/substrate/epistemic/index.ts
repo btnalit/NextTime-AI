@@ -27,3 +27,9 @@ export type {
   ExplainResult,
   ExplainSourceRef,
 } from './explain.js';
+
+export { attachEvidence } from './evidence.js';
+export type { AttachEvidenceInput, EvidenceRow } from './evidence.js';
+
+export { registerPrivateSource, recordSourceObservation } from './sources.js';
+export type { RegisterPrivateSourceInput, SourceRow } from './sources.js';
