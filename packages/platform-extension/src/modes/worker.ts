@@ -269,9 +269,10 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
         });
         let facts: readonly unknown[] = [];
         try {
-          const searchResult = await options.kernelClient.call<
-            { objects?: unknown[] } | unknown[]
-          >('search', { query: toSearchQuery(task.input) });
+          const searchResult = await options.kernelClient.call<{ objects?: unknown[] } | unknown[]>(
+            'search',
+            { query: toSearchQuery(task.input) },
+          );
           facts = Array.isArray(searchResult) ? searchResult : (searchResult.objects ?? []);
         } catch (error) {
           logKernelError(error, 'search');
@@ -306,7 +307,9 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
     resultAlreadyPosted = true;
 
     const contract: WorkerResultContract = pendingResultContract ?? {
-      summary: latestTurnSummary || '(the Worker finished with no report_result call and no final message)',
+      summary:
+        latestTurnSummary ||
+        '(the Worker finished with no report_result call and no final message)',
       findings: [],
       factsToAssert: [],
       evidence: [],

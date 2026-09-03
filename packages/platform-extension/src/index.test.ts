@@ -26,7 +26,11 @@ const REQUIRED_WORKER_ENV = {
 } as const;
 
 const ENV_KEYS = [
-  ...new Set([...Object.keys(REQUIRED_ENTRY_ENV), ...Object.keys(REQUIRED_WORKER_ENV), 'NEXTTIME_TURN_ID']),
+  ...new Set([
+    ...Object.keys(REQUIRED_ENTRY_ENV),
+    ...Object.keys(REQUIRED_WORKER_ENV),
+    'NEXTTIME_TURN_ID',
+  ]),
 ] as const;
 
 let savedEnv: Record<string, string | undefined>;
