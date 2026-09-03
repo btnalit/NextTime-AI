@@ -18,6 +18,16 @@ import {
   TaskNotFoundError,
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
+import {
+  ProcedureNotFoundError,
+  ProcedureStepReferenceError,
+  SkillNotFoundError,
+  SkillValidationError,
+  WorkerDefinitionKindMismatchError,
+  WorkerDefinitionNotFoundError,
+  WorkerDefinitionNotPublishedError,
+  WorkerDefinitionValidationError,
+} from '../../application/worker/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
 import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
@@ -183,6 +193,27 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof TaskNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // application/worker registry errors (S2.6 / S2.14) — same mapping as interfaces/http/
+  // capability-route.ts: not-found → NOT_FOUND, not-published → the transition-conflict code,
+  // validation / bad step reference → INVALID_PARAMS.
+  if (
+    err instanceof WorkerDefinitionNotFoundError ||
+    err instanceof SkillNotFoundError ||
+    err instanceof ProcedureNotFoundError
+  ) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof WorkerDefinitionNotPublishedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  if (
+    err instanceof ProcedureStepReferenceError ||
+    err instanceof WorkerDefinitionValidationError ||
+    err instanceof WorkerDefinitionKindMismatchError ||
+    err instanceof SkillValidationError
+  ) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   return { code: WS_ERROR_CODES.INTERNAL_ERROR, message: 'internal error' };
 }

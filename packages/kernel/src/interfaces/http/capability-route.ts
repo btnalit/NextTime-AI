@@ -24,6 +24,16 @@ import {
   TaskNotFoundError,
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
+import {
+  ProcedureNotFoundError,
+  ProcedureStepReferenceError,
+  SkillNotFoundError,
+  SkillValidationError,
+  WorkerDefinitionKindMismatchError,
+  WorkerDefinitionNotFoundError,
+  WorkerDefinitionNotPublishedError,
+  WorkerDefinitionValidationError,
+} from '../../application/worker/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
 import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
@@ -141,6 +151,30 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof TaskNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // application/worker registry errors (S2.6 WorkerDefinitions, S2.14 Skills/Procedures) — found
+  // on the host as 500s: a Procedure step referencing a nonexistent Operation must be a 400 with a
+  // stable code, not an internal error. NotPublished is a 409: the row exists, its *state* forbids
+  // the reference (same reasoning as IllegalTransition above).
+  if (
+    err instanceof WorkerDefinitionNotFoundError ||
+    err instanceof SkillNotFoundError ||
+    err instanceof ProcedureNotFoundError
+  ) {
+    return { status: 404, code: 'not_found', message: err.message };
+  }
+  if (err instanceof WorkerDefinitionNotPublishedError) {
+    return { status: 409, code: 'not_published', message: err.message };
+  }
+  if (err instanceof ProcedureStepReferenceError) {
+    return { status: 400, code: 'invalid_step_reference', message: err.message };
+  }
+  if (
+    err instanceof WorkerDefinitionValidationError ||
+    err instanceof WorkerDefinitionKindMismatchError ||
+    err instanceof SkillValidationError
+  ) {
+    return { status: 400, code: 'invalid_params', message: err.message };
   }
   // S2.9 (docs/development-tasks.md S2.9 "malformed contract → 400"): a `report_task_result`
   // contract that is schema-valid (InvalidCapabilityParamsError already covers a syntax-level
