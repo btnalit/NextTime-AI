@@ -397,7 +397,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           ws: workspaceId,
           sid: randomUUID(),
           obo: ownerId,
-          scope: { capabilities: ['record_decision'], resources: {} },
+          // `report_turn` is also in scope, purely so this test's own cleanup call below (ending
+          // the Turn, so it cannot be mistaken for a still-running Turn by a later test) is
+          // authorized — record_decision itself never touches report_turn's scope requirement.
+          scope: { capabilities: ['record_decision', 'report_turn'], resources: {} },
           jti: randomUUID(),
           iat: Math.floor(Date.now() / 1000),
           exp: Math.floor(Date.now() / 1000) + 3600,

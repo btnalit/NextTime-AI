@@ -442,6 +442,13 @@ describe.runIf(DATABASE_URL !== undefined)(
     // `subscribe_principal` call — actually delivers over the wire.
     it('every authenticated connection receives its own principal’s action.pending/task.updated pushes with no subscribe_principal call', async () => {
       const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
+      // Header-based auth's own subscribeCallerToPrincipalPush call happens inside initAuth(),
+      // asynchronously, *before* the connection starts accepting/replaying frames
+      // (state.authReady) — the client-side 'open' event above only means the WS handshake itself
+      // finished, not that the server has gotten that far yet. A real RPC round-trip is only ever
+      // answered *after* authReady flips true, so awaiting one here is what actually guarantees
+      // the push subscription is already registered before this test publishes anything.
+      await client.call('list_chats', {});
 
       publishPrincipalPushEvent(ownerId, {
         type: 'task.updated',
@@ -474,6 +481,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       const otherApiKey = `other-key-${randomUUID()}`;
       const otherId = await adminInsertPrincipalWithKey(otherApiKey);
       const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
+      // Same reason as the previous test: wait for a real round-trip so the push subscription is
+      // guaranteed registered before either publish below.
+      await client.call('list_chats', {});
 
       publishPrincipalPushEvent(otherId, {
         type: 'task.updated',
