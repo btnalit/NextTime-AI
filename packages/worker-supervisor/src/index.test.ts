@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   VERSION,
+  buildTaskSpawnSpec,
   createDockerClient,
   createEgressMapStore,
   createResidentService,
   createServer,
+  createTaskService,
+  isImageAllowed,
   loadConfig,
   main,
+  taskContainerName,
+  taskSourceId,
 } from './index.js';
 
 describe('@nexttime/worker-supervisor', () => {
@@ -23,5 +28,13 @@ describe('@nexttime/worker-supervisor', () => {
     expect(typeof createEgressMapStore).toBe('function');
     expect(typeof createResidentService).toBe('function');
     expect(typeof createServer).toBe('function');
+  });
+
+  it('exposes the one-shot Task mode (S2.8) wiring functions alongside resident mode', () => {
+    expect(typeof createTaskService).toBe('function');
+    expect(typeof buildTaskSpawnSpec).toBe('function');
+    expect(typeof taskContainerName).toBe('function');
+    expect(typeof taskSourceId).toBe('function');
+    expect(typeof isImageAllowed).toBe('function');
   });
 });

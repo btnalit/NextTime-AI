@@ -25,6 +25,14 @@ function parseIntEnv(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function buildTaskImageAllowlist(raw: string | undefined, defaultImage: string): string[] {
+  const extra = (raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return [...new Set([defaultImage, ...extra])];
+}
+
 export interface SupervisorConfig {
   /** `control`-network-only — never published to the host (design doc §11). */
   readonly port: number;
@@ -64,6 +72,17 @@ export interface SupervisorConfig {
    *  doesn't expose (verified: `packages/egress-proxy/src/admin.ts` only serves `GET /healthz`). */
   readonly egressSourceMapFile: string;
   readonly dockerSocketPath: string;
+  /** One-shot Task mode (S2.8; design doc §7.3, docs/development-tasks.md S2.8). Default runtime
+   *  cap for a Worker container before the reaper kills it (`TASK_MAX_RUNTIME_SEC`) — a per-spawn
+   *  `timeoutSec` in the request body overrides this. */
+  readonly taskMaxRuntimeSec: number;
+  /** How long a finished Task's workspace directory is kept as an artifact before the retention
+   *  sweep deletes it (`TASK_WORKDIR_RETENTION_HOURS`). */
+  readonly taskWorkdirRetentionHours: number;
+  /** Images `POST /task/spawn` may spawn: always includes `workerImage`, plus any comma-separated
+   *  extras from `WORKER_IMAGE_ALLOWLIST`. Additive (not a replacement) so setting the override
+   *  can never accidentally lock out the default image resident mode already trusts. */
+  readonly taskImageAllowlist: readonly string[];
 }
 
 export const SUPERVISOR_ENV_PREFIX = 'nexttime';
@@ -78,10 +97,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
   }
 
   const localDataDir = env.LOCAL_DATA_DIR ?? '/data';
+  const workerImage = env.WORKER_IMAGE ?? 'nexttime-ai-worker-runtime';
 
   return {
     port: parseIntEnv(env.SUPERVISOR_PORT, DEFAULT_SUPERVISOR_PORT),
-    workerImage: env.WORKER_IMAGE ?? 'nexttime-ai-worker-runtime',
+    workerImage,
     workerRuntime: env.WORKER_RUNTIME ?? 'runc',
     nextTimeData,
     localDataDir,
@@ -96,7 +116,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     entryIdleTimeoutMs: parseIntEnv(env.ENTRY_IDLE_TIMEOUT_MS, 30 * 60 * 1000),
     egressSourceMapFile: env.EGRESS_SOURCE_MAP_FILE ?? `${localDataDir}/config/egress-sources.json`,
     dockerSocketPath: env.DOCKER_SOCKET_PATH ?? '/var/run/docker.sock',
+    taskMaxRuntimeSec: parseIntEnv(env.TASK_MAX_RUNTIME_SEC, 3600),
+    taskWorkdirRetentionHours: parseIntEnv(env.TASK_WORKDIR_RETENTION_HOURS, 72),
+    taskImageAllowlist: buildTaskImageAllowlist(env.WORKER_IMAGE_ALLOWLIST, workerImage),
   };
+}
+
+/** `POST /task/spawn` 403s an `image` outside this list (docs/development-tasks.md S2.8
+ *  acceptance: "非允许镜像 403"). */
+export function isImageAllowed(config: SupervisorConfig, image: string): boolean {
+  return config.taskImageAllowlist.includes(image);
 }
 
 /** `POST /resident/spawn` request body. */
@@ -118,3 +147,36 @@ export const StopRequestSchema = z
   })
   .strict();
 export type StopRequest = z.infer<typeof StopRequestSchema>;
+
+/** A single skill mounted read-only into a Worker container (docs/development-tasks.md S2.8:
+ *  "只读挂载 ... 该定义 `uses` 的 Skill"). `name` becomes a path segment
+ *  (`task-spawn-spec.ts`/`host-paths.ts` `taskSkillTargetInContainer`) — restricted to a safe
+ *  single segment so it can never escape the skills directory it's mounted under. */
+const TaskSkillSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/, 'must be a single safe path segment')
+    .refine((name) => name !== '.' && name !== '..', 'must not be "." or ".."'),
+  hostPath: z.string().min(1),
+});
+
+/** `POST /task/spawn` request body (S2.8 task brief). `onBehalfOf` carries the `principalId` the
+ *  child Handle's `on_behalf_of` is scoped to (I13) — named per the task brief, not `principalId`,
+ *  to keep the wire shape distinct from resident mode's own field of that name (this is a
+ *  different Handle: a Task's, decayed and derived from the entry Handle that requested it, per
+ *  S2.7 `invoke_worker` — see that task's own dispatch, not built by this package). */
+export const TaskSpawnRequestSchema = z
+  .object({
+    taskId: z.string().min(1),
+    workerRunId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    onBehalfOf: z.string().min(1),
+    capabilityHandle: z.string().min(1),
+    image: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    skills: z.array(TaskSkillSchema).optional(),
+    timeoutSec: z.number().int().positive().optional(),
+  })
+  .strict();
+export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;

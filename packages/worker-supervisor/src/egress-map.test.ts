@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createEgressMapStore, entrySourceId } from './egress-map.js';
+import { createEgressMapStore, entrySourceId, taskSourceId } from './egress-map.js';
 
 let dir: string;
 let file: string;
@@ -19,6 +19,12 @@ afterEach(() => {
 describe('entrySourceId', () => {
   it('packs workspaceId/principalId into an entry: prefixed opaque sourceId', () => {
     expect(entrySourceId('ws-1', 'alice')).toBe('entry:ws-1:alice');
+  });
+});
+
+describe('taskSourceId', () => {
+  it('packs workspaceId/workerRunId into a worker: prefixed opaque sourceId', () => {
+    expect(taskSourceId('ws-1', 'run-1')).toBe('worker:ws-1:run-1');
   });
 });
 
@@ -59,6 +65,16 @@ describe('createEgressMapStore', () => {
     store.unregister('198.51.100.10');
     expect(store.read()).toEqual({
       '198.51.100.11': { sourceId: 'entry:ws-1:bob' },
+    });
+  });
+
+  it('registers a worker: sourceId alongside entry: ones (opaque string, either format)', () => {
+    const store = createEgressMapStore(file);
+    store.register('198.51.100.10', { sourceId: entrySourceId('ws-1', 'alice') });
+    store.register('198.51.100.11', { sourceId: taskSourceId('ws-1', 'run-1') });
+    expect(store.read()).toEqual({
+      '198.51.100.10': { sourceId: 'entry:ws-1:alice' },
+      '198.51.100.11': { sourceId: 'worker:ws-1:run-1' },
     });
   });
 
