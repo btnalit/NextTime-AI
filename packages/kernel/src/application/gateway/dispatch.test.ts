@@ -120,21 +120,24 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
   });
 
   it('a registry capability with no wired handler → CapabilityNotImplementedError (501)', async () => {
-    // `cancel_task` (task group, handle channel) has no wired handler yet — Task/`invoke_worker`
-    // (S2.7) owns it, not this task. `request_action` (governance group, handle channel) *was*
-    // this test's example through S2.3 — it deliberately left it unimplemented, since its wire
-    // paramsSchema carries no blast_radius/auto_approvable, only resolvable via a Gatekeeper's
-    // published interface manifest (S2.4). S2.4 wires `request_action` (`request-action-
-    // handler.ts`, `governance/gatekeepers`'s manifest registry) — see
-    // dispatch.integration.test.ts for its own now-real behavior — so this test moved to a
-    // capability still genuinely unimplemented at this point in the codebase.
+    // `create_task` (task group, handle channel) has no wired handler — S2.7's own deliberate
+    // decision (see application/gateway/handlers.ts's neighboring doc comment on
+    // `setQuotaHandler`: create_task's paramsSchema carries no definitionId/version, and
+    // tasks.worker_definition_id/.worker_definition_version are NOT NULL, so there is no way to
+    // build a well-formed Task from this capability's own params alone).
+    //
+    // History of this test's example capability (kept for context, since this is now the third
+    // swap): `request_action` was the example through S2.3 (unresolvable without a Gatekeeper
+    // manifest, S2.4); S2.4 itself pre-emptively swapped to `cancel_task` in anticipation of S2.7
+    // owning it — but S2.7 (this PR) wired `cancel_task` too (a thin, low-cost wrapper over the
+    // `terminateTask` service function it already needed elsewhere), so a third swap was needed.
     await expect(
       dispatchCapability(
         { pool: neverConnectPool },
-        humanCaller({ role: 'operator' }),
-        'cancel_task',
+        humanCaller({ role: 'member' }),
+        'create_task',
         {
-          taskId: randomUUID(),
+          input: {},
         },
       ),
     ).rejects.toThrow(CapabilityNotImplementedError);
