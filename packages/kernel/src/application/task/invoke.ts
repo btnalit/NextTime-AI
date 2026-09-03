@@ -4,7 +4,11 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { sumTodayCostUsd } from '../../governance/llm-usage/index.js';
 import { requirePublishedWorkerDefinition } from '../worker/index.js';
-import { computeChildHandleScope, resolveParentAuthority } from './handle-mint.js';
+import {
+  computeChildHandleScope,
+  defaultWorkerCapabilities,
+  resolveParentAuthority,
+} from './handle-mint.js';
 import type { MintWorkerRunHandleInput } from './handle-mint.js';
 import { reactToSupervisorStatus } from './lifecycle.js';
 import { HARD_MAX_DEPTH, resolveQuotas } from './quotas.js';
@@ -121,21 +125,6 @@ function readDefinitionContent(definition: unknown): WorkerDefinitionContentShap
       : undefined,
     model: typeof record.model === 'string' ? record.model : undefined,
   };
-}
-
-/** Default declared capabilities for a WorkerDefinition that does not declare its own (least
- *  privilege — see `packages/shared/src/worker-definition.ts`'s own doc comment): the full worker
- *  ceiling minus every execute-class name, computed lazily so `handle-mint.ts`'s
- *  `WORKER_CEILING_CAPABILITIES`/`isExecuteClassCapability` stay the single source of truth for
- *  what "execute-class" means. */
-function defaultWorkerCapabilities(ceiling: readonly string[]): readonly string[] {
-  return ceiling; // computeChildHandleScope itself rejects execute-class names lacking parent
-  // coverage — see that function's own doc comment. Passing the *full* ceiling here (rather than
-  // pre-filtering out execute-class names) is deliberately safe either way: an entry-Handle-
-  // initiated call still gets rejected for any execute-class name the parent lacks, exactly as if
-  // the definition had declared it explicitly; a Worker-Handle-initiated call that *does* already
-  // hold execute-class capabilities of its own is not artificially prevented from passing them to
-  // a grandchild just because the intermediate WorkerDefinition left `capabilities` unset.
 }
 
 /**

@@ -174,15 +174,16 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('a registered but unimplemented capability → 501', async () => {
-      // `set_quota` (governance group, human channel, minRole:'owner') has no wired handler yet
-      // (I18 quotas are S2.7 scope) — used here rather than `approve` (S2.3 gave it a handler,
-      // same reasoning as application/gateway/dispatch.test.ts's own swap for this exact reason).
+      // `issue_handle` (governance group, human channel, minRole:'owner') has no wired handler
+      // yet — used here rather than `set_quota` (S2.7 gave it a handler; same reasoning as
+      // application/gateway/dispatch.test.ts's own swap for this exact reason, which `set_quota`
+      // itself replaced there for the identical cause: S2.3 having wired `approve`/`reject`).
       const app = createServer({ pool });
       const response = await app.inject({
         method: 'POST',
-        url: '/api/cap/set_quota',
+        url: '/api/cap/issue_handle',
         headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: { key: 'x', value: 1 },
+        payload: { sessionId: '00000000-0000-0000-0000-000000000000', scope: {} },
       });
 
       expect(response.statusCode).toBe(501);

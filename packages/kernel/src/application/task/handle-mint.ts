@@ -245,3 +245,26 @@ export async function mintWorkerRunHandle(
     privateKey: input.privateKey,
   });
 }
+
+/**
+ * Default declared capabilities for a WorkerDefinition that does not declare its own
+ * `capabilities` (least privilege — `packages/shared/src/worker-definition.ts`'s own doc comment
+ * on this exact default): the full worker ceiling **minus every execute-class name**. This is
+ * load-bearing, not cosmetic — `computeChildHandleScope` *rejects the whole call* (never a silent
+ * per-capability drop) whenever a declared execute-class capability is missing from the caller's
+ * scope, and an entry Handle never holds one; defaulting to the *full* ceiling would make every
+ * plain WorkerDefinition (the common case — one that declares no `capabilities` at all)
+ * uninvocable by the entry agent, the one caller S2's own acceptance flow depends on most. A
+ * definition that genuinely needs execute-class access must say so explicitly.
+ *
+ * Shared by `invoke.ts` (the real minting path) and `service.ts`'s `findWorkers` (the "would this
+ * caller actually be able to invoke it" dry-run pre-check) so the two can never quietly disagree
+ * on what an undeclared WorkerDefinition defaults to — an earlier version of this codebase had
+ * `invoke.ts` return the *full*, unfiltered ceiling here (a real bug an integration test caught:
+ * every plain, capability-less WorkerDefinition became uninvocable by an entry Handle) while
+ * `service.ts` independently defaulted to *no* capabilities at all — two different, both-wrong
+ * answers to the same question, in two different files.
+ */
+export function defaultWorkerCapabilities(ceiling: readonly string[]): readonly string[] {
+  return ceiling.filter((capability) => !isExecuteClassCapability(capability));
+}

@@ -198,9 +198,15 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
           expect(waitingTask?.status).toBe('waiting_approval');
 
+          // `denied` rather than `approved`: this test seeds the ActionRequest with a raw SQL
+          // INSERT/UPDATE (not through governance/approval's own service functions), and
+          // `action_requests`' own I11 CHECK constraint (migrations/governance/0003) requires
+          // `approved`/`rejected` to carry a real `approval_decision_id` (a `decisions` row this
+          // test has no reason to fabricate) — `denied` carries no such requirement and is just as
+          // valid a "left pending_approval" resolution for exercising the router itself.
           await inTx(ownerId, (client) =>
             client.query(
-              "update action_requests set status = 'approved' where workspace_id = $1 and id = $2",
+              "update action_requests set status = 'denied' where workspace_id = $1 and id = $2",
               [workspaceId, actionRequestId],
             ),
           );
@@ -208,7 +214,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             type: 'ActionRequestUpdated',
             workspaceId,
             actionRequestId,
-            status: 'approved',
+            status: 'denied',
           });
 
           const resumedTask = await inTx(ownerId, (client) =>

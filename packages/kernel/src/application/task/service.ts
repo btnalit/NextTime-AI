@@ -1,6 +1,7 @@
 import { TASK_TRANSITIONS, type TaskEvent, type TaskStatus, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import {
   findOperationCandidates,
   findProcedureCandidates,
@@ -9,7 +10,11 @@ import {
 import type { GraphObject } from '../../substrate/graph/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import { getWorkerDefinition } from '../worker/index.js';
-import { type ParentAuthority, computeChildHandleScope } from './handle-mint.js';
+import {
+  type ParentAuthority,
+  computeChildHandleScope,
+  defaultWorkerCapabilities,
+} from './handle-mint.js';
 import { failTaskRow, readTaskRow, readWorkerRunRow, terminateWorkerRunRow } from './lifecycle.js';
 import { getConfiguredTaskRuntime } from './runtime.js';
 import { recordTaskTransition } from './transition-log.js';
@@ -336,9 +341,13 @@ export async function findWorkers(
 
     const content = definition.definition as { capabilities?: string[]; gates?: string[] };
     try {
+      // Same default as invoke.ts's own minting path (handle-mint.ts's `defaultWorkerCapabilities`
+      // — see its own doc comment for why the two must never independently guess at this) — a
+      // definition declaring no `capabilities` needs the full observe/propose ceiling, not none.
       computeChildHandleScope({
         parentAuthority: caller.parentAuthority,
-        declaredCapabilities: content.capabilities ?? [],
+        declaredCapabilities:
+          content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
         declaredGates: content.gates ?? [],
       });
     } catch (err) {
