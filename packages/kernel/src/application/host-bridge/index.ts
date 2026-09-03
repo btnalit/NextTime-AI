@@ -45,3 +45,14 @@ export type {
   RecordEgressObservationsDeps,
   RecordEgressObservationsResult,
 } from './egress-observations.js';
+
+export {
+  DEFAULT_RECENT_TURN_WINDOW_MINUTES,
+  findAttributableTurn,
+  findAttributableTurnForSession,
+} from './turn-attribution.js';
+export type {
+  AttributableTurn,
+  FindAttributableTurnForSessionInput,
+  FindAttributableTurnInput,
+} from './turn-attribution.js';

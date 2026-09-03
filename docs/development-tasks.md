@@ -221,6 +221,22 @@
 - 目标：按 provider 透传；provider key 只在这里；内核进程零外部凭证（I9）。
 - 交付物：`packages/llm-proxy`（读 `${NEXTTIME_DATA}/config/llm-providers.yaml`；入站 Handle 从该 provider `auth` 指定的头读取，用内核公钥 EdDSA **本地**验签与过期检查，撤销表按 `jti` 周期同步不逐请求回调；换真实 key；模型白名单；SSE 原样；OpenAI 兼容与 Anthropic 两种 `usage` 解析；用量与 80% 预算警告经 `POST /internal/llm-usage` 上报内核，失败本地队列重放）；内核 `llm-usage` 模块与 `migrations/llm-usage/0001.sql`；`scripts/gen-models-json.ts`。
 - 验收：无 Handle 401；过期 / 撤销 Handle 401；白名单外 403；流式逐块转发且与直连 fake upstream 逐字节一致；`llm_usage` 记 provider / model / tokens / turn_id；内核容器 env 与文件系统中不存在任何 provider key；杀掉内核后代理仍能转发并在内核恢复后补报用量。依赖：S1.3、S1.9。
+- 补注（S1.7 `turn_id` 归因 PR，2026-09）：`llm_usage.turn_id` 此前恒为 NULL——`governance/llm-usage/service.ts` 的
+  `recordUsage` 一直留有 `resolveTurnId` 钩子（默认恒返回 `null`），但从未有调用方注入过真实实现，且该模块本身不能
+  import `application`（§7.10 分层：governance 不依赖 application）。本补丁把 S1.10 egress 已有的归因规则——
+  principal 当前 `running` 的 `agent_turn`，否则取 5 分钟内最近一次（任意状态）——从
+  `application/host-bridge/egress-observations.ts` 抽成同目录 `turn-attribution.ts` 的 `findAttributableTurn`
+  （已解析 principalId 版，egress 复用，行为不变）与 `findAttributableTurnForSession`（先按 `sessionId` 查
+  `sessions.principal_id` 再归因，`llm-usage` 专用，因为上报只带 `sessionId`）；`interfaces/http/internal/
+  llm-usage.ts`——已经依赖 application 与 governance 的合法分层位置——在 `recordUsage` 所在的同一事务 `client`
+  上构造 `resolveTurnId` 闭包传入，governance 侧代码不改一行，只是终于有人喂了真实实现。局限：①落在归因窗口外
+  （既无 running 也无 5 分钟内的 Turn——例如 S2 前还不存在的 Worker session，或代理重放上报延迟超窗）时
+  `turn_id` 记为 NULL 并 debug 级日志，从不因此拒绝上报；②`llm_usage` 的
+  `on conflict (workspace_id, jti, started_at) do nothing` 保证重放不会覆盖已写入行的 `turn_id`；③一次批量上报可
+  跨多个 session/principal，外层 `withWorkspace` 只用首条记录的 `sessionId` 当占位符，而 `activities_visibility`
+  这条 RLS 按 `app.principal_id` 收窄可见的 Chat/Activity——`findAttributableTurnForSession` 因此在查
+  `activities` 前用 `set_config('app.principal_id', ..., true)`（事务级，同 `withWorkspace` 自身机制）把它重新
+  指向刚解析出的 principal，否则归因查询会因看不到该 principal 的 Turn 而总是落到"无归因"分支。
 
 ### S1.8 web：登录与对话
 - 交付物：`packages/web`：登录（API key）、对话页（流式文本、工具调用行、Turn 状态）、WS 客户端（先订阅再翻页规则封装进 client）。

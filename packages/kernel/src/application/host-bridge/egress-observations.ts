@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { enqueue } from '../../substrate/outbox/index.js';
+import { DEFAULT_RECENT_TURN_WINDOW_MINUTES, findAttributableTurn } from './turn-attribution.js';
 
 /**
  * application/host-bridge/egress-observations: turns `packages/egress-proxy`'s batched egress
@@ -32,7 +33,11 @@ import { enqueue } from '../../substrate/outbox/index.js';
  * Attribution when no Turn is currently running (task brief: "record it under the principal's
  * most recent agent_turn within the last N minutes, or drop with a log line — state the choice"):
  * this module attributes to the most recent `agent_turn` (any status) started within
- * `recentTurnWindowMinutes` (default 5) rather than dropping. Rationale: `egress-proxy`'s
+ * `recentTurnWindowMinutes` (default 5) rather than dropping — see `turn-attribution.ts`'s
+ * `findAttributableTurn` for the rule itself (extracted out to a sibling module, 2026-09,
+ * docs/development-tasks.md S1.7 补注, so `governance/llm-usage` can reuse the identical rule for
+ * `llm_usage.turn_id` rather than inventing a second one; purely a lift-and-shift, this module's
+ * own behavior is unchanged). Rationale: `egress-proxy`'s
  * `EgressReporter` batches and backs off (report.ts: 2s base, up to 60s) before a decision ever
  * reaches this route, so a fast Turn (the fake-LLM path completes in well under a second) will
  * routinely have already ended by the time its own egress traffic is reported — dropping would
@@ -98,7 +103,6 @@ export interface RecordEgressObservationsResult {
   readonly skippedNoTurn: number;
 }
 
-const DEFAULT_RECENT_TURN_WINDOW_MINUTES = 5;
 /** Task brief: "keep the array bounded, e.g. last 200 entries". */
 const MAX_EGRESS_ENTRIES = 200;
 
@@ -119,48 +123,6 @@ function parseEntrySourceId(sourceId: string): EntrySource | undefined {
   const principalId = match?.[2];
   if (!workspaceId || !principalId) return undefined;
   return { workspaceId, principalId };
-}
-
-interface AttributionTurn {
-  readonly id: string;
-  readonly wasRunning: boolean;
-}
-
-/**
- * Finds the Turn to attribute an observation to: the principal's currently `running` `agent_turn`
- * first, else the most recent `agent_turn` (any status) started within `recentTurnWindowMinutes`.
- * `started_by` is bound explicitly in addition to the RLS scope this query already runs under
- * (`withWorkspace(workspaceId, principalId)` — `activities_visibility`, migrations/core/
- * 0003_chat.sql, already restricts visible rows to Chats owned by this principal) — the same
- * "RLS already enforces, but still bind explicitly" convention `substrate/epistemic/activities.ts`
- * and `substrate/graph/sql-store.ts` already document for this table.
- */
-async function findAttributionTurn(
-  client: PoolClient,
-  workspaceId: string,
-  principalId: string,
-  recentTurnWindowMinutes: number,
-): Promise<AttributionTurn | undefined> {
-  const running = await client.query<{ id: string }>(
-    `select id from activities
-     where workspace_id = $1 and started_by = $2 and kind = 'agent_turn' and status = 'running'
-     order by created_at desc
-     limit 1`,
-    [workspaceId, principalId],
-  );
-  const runningId = running.rows[0]?.id;
-  if (runningId) return { id: runningId, wasRunning: true };
-
-  const recent = await client.query<{ id: string }>(
-    `select id from activities
-     where workspace_id = $1 and started_by = $2 and kind = 'agent_turn'
-       and created_at > now() - ($3 || ' minutes')::interval
-     order by created_at desc
-     limit 1`,
-    [workspaceId, principalId, recentTurnWindowMinutes],
-  );
-  const recentId = recent.rows[0]?.id;
-  return recentId ? { id: recentId, wasRunning: false } : undefined;
 }
 
 /** Appends one entry to `activities.metadata.egress`, trimming to the last `MAX_EGRESS_ENTRIES`
@@ -236,12 +198,12 @@ export async function recordEgressObservations(
     const { workspaceId, principalId } = source;
 
     const turn = await withWorkspace(deps.pool, { workspaceId, principalId }, async (client) => {
-      const attribution = await findAttributionTurn(
-        client,
+      const attribution = await findAttributableTurn(client, {
         workspaceId,
         principalId,
+        at: new Date(),
         recentTurnWindowMinutes,
-      );
+      });
       if (!attribution) return undefined;
 
       const entry: Record<string, unknown> = {

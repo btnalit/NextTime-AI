@@ -75,10 +75,15 @@ export class LlmUsageValidationError extends Error {
 export interface RecordUsageOptions {
   /**
    * Turn resolution hook (S1.7 task brief: "resolveTurnId hook (default null; S1.4 will map
-   * session → running Turn)"). Defaults to a function that always returns `null` — S1.4 is
-   * expected to pass a real implementation once it exists; this module does not import
-   * `application/task` or `application/chat` itself (§7.10 layering: governance may not depend on
-   * application).
+   * session → running Turn)"). Defaults to a function that always returns `null` — this module
+   * itself does not import `application/host-bridge` or `application/chat` (§7.10 layering:
+   * governance may not depend on application), so it cannot resolve a Turn on its own. The real
+   * implementation (docs/development-tasks.md S1.7 补注, 2026-09) is supplied by
+   * `interfaces/http/internal/llm-usage.ts`, the layer-legal place that already depends on both
+   * `application/host-bridge` (`findAttributableTurnForSession`) and this module — see that
+   * route's own doc comment "Turn attribution" for the full rule. A caller that supplies no hook
+   * at all (e.g. a test, or a future caller with no Turn concept) still gets `turn_id = null`,
+   * never an error.
    */
   readonly resolveTurnId?: (sessionId: string) => Promise<string | null> | string | null;
   /** Overrides `LLM_DAILY_TOKEN_BUDGET` for tests. `undefined` (the default, when the env var is
