@@ -377,6 +377,91 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       ).rejects.toThrow();
     });
+
+    // S2.11 deliverable 4: `Turn --generated--> Decision`.
+    it('record_decision (Handle channel) records a Decision whose activity_id is the running Turn', async () => {
+      const humanCallerForSend = humanCaller(workspaceId, ownerId);
+      const chat = (await dispatchCapability({ pool }, humanCallerForSend, 'new_chat', {})) as {
+        id: string;
+      };
+      const { turnId } = (await dispatchCapability(
+        { pool },
+        humanCallerForSend,
+        'send_chat_message',
+        { chatId: chat.id, text: 'hi' },
+      )) as { turnId: string };
+
+      const handleCaller: ResolvedCaller = {
+        channel: 'handle',
+        claims: {
+          ws: workspaceId,
+          sid: randomUUID(),
+          obo: ownerId,
+          // `report_turn` is also in scope, purely so this test's own cleanup call below (ending
+          // the Turn, so it cannot be mistaken for a still-running Turn by a later test) is
+          // authorized — record_decision itself never touches report_turn's scope requirement.
+          scope: { capabilities: ['record_decision', 'report_turn'], resources: {} },
+          jti: randomUUID(),
+          iat: Math.floor(Date.now() / 1000),
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        },
+      };
+
+      const result = (await dispatchCapability({ pool }, handleCaller, 'record_decision', {
+        summary: 'chose option A',
+        relatedFactIds: [],
+      })) as { id: string; status: string; turnId: string };
+      expect(result.status).toBe('proposed');
+      expect(result.turnId).toBe(turnId);
+
+      const row = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const r = await client.query<{
+            activity_id: string;
+            summary: string;
+            status: string;
+            decided_by: string | null;
+          }>(
+            'select activity_id, summary, status, decided_by from decisions where workspace_id = $1 and id = $2',
+            [workspaceId, result.id],
+          );
+          return r.rows[0];
+        },
+      );
+      expect(row?.activity_id).toBe(turnId);
+      expect(row?.summary).toBe('chose option A');
+      expect(row?.status).toBe('proposed');
+      expect(row?.decided_by).toBeNull();
+
+      // Leave the Turn ended, so it cannot be mistaken for a still-running Turn by a later test.
+      await dispatchCapability({ pool }, handleCaller, 'report_turn', {
+        turnId,
+        summary: 'done',
+      });
+    });
+
+    it('record_decision with no running Turn is rejected (NoActiveTurnError)', async () => {
+      // `otherId` never has a chat/Turn created for it anywhere in this file — used here
+      // specifically so this test's outcome cannot depend on execution order against the Turn the
+      // previous test created (and ended) for `ownerId`.
+      const handleCaller: ResolvedCaller = {
+        channel: 'handle',
+        claims: {
+          ws: workspaceId,
+          sid: randomUUID(),
+          obo: otherId,
+          scope: { capabilities: ['record_decision'], resources: {} },
+          jti: randomUUID(),
+          iat: Math.floor(Date.now() / 1000),
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        },
+      };
+      await expect(
+        dispatchCapability({ pool }, handleCaller, 'record_decision', { summary: 'no turn' }),
+      ).rejects.toThrow();
+    });
   },
 );
 

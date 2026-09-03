@@ -66,6 +66,17 @@ the same key and, if a chat was subscribed, re-subscribes with `startAfter` set 
 `sequence` it already delivered — never redelivering a message, never losing one committed while
 the socket was down.
 
+**S2.10 will consume `action.pending` / `action.updated` / `task.updated`** (design doc §9.4's
+S2.11 addition — `handleNotification`'s `default` branch in this file currently just ignores them).
+Unlike `chat.message`/`chat.stream`/`chat.metadata`, these three are not scoped to one Chat — the
+kernel (`interfaces/ws/server.ts`) auto-subscribes every authenticated connection to its own
+principal's copy of these three events the moment `authenticate` succeeds, no separate subscribe
+call needed. `action.pending`/`action.updated` carry an `actionRequestId` (not a `chatId`); the same
+ActionRequest's card also lands as a persisted `chat_messages` row (`kind: 'system.action_pending'`/
+`'system.action_update'`, `packages/shared/src/chat-message-content.ts`) in each holder's and the
+requester's own Chat — the `isHolder` field on that content is what should decide whether to render
+approve/reject buttons.
+
 ## Tests
 
 ```bash

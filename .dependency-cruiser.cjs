@@ -78,9 +78,14 @@ module.exports = {
       name: 'chat-and-host-bridge-must-not-import-approval-or-task',
       severity: 'error',
       comment:
-        'chat and web only consume events and read-only views, never governance/approval or application/task directly (§7.10 rule paragraph).',
+        'chat and web only consume events and read-only views, never governance/approval or application/task directly (§7.10 rule paragraph). ' +
+        'application/linkage (S2.11) is the one place allowed to read both — it exists precisely ' +
+        'so chat/host-bridge never have to — so it is included here too: chat/host-bridge must ' +
+        'not reach approval/task transitively through it either.',
       from: { path: '^packages/kernel/src/application/(chat|host-bridge)/' },
-      to: { path: '^packages/kernel/src/(governance/approval|application/task)/' },
+      to: {
+        path: '^packages/kernel/src/(governance/approval|application/task|application/linkage)/',
+      },
     },
     {
       name: 'no-cross-package-internal-import',
