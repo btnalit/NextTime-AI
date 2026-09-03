@@ -4,6 +4,7 @@ import {
   StopRequestSchema,
   TaskSpawnRequestSchema,
   isImageAllowed,
+  isSkillHostPathAllowed,
   loadConfig,
 } from './config.js';
 
@@ -126,11 +127,18 @@ describe('StopRequestSchema', () => {
   });
 });
 
+// taskId/workerRunId/workspaceId/onBehalfOf must be UUIDs (TaskSpawnRequestSchema's `idClaim`) —
+// see the dedicated describe block below for the negative (non-UUID) cases.
+const TASK_ID = '11111111-1111-1111-1111-111111111111';
+const WORKER_RUN_ID = '22222222-2222-2222-2222-222222222222';
+const WORKSPACE_ID = '33333333-3333-3333-3333-333333333333';
+const ON_BEHALF_OF = '44444444-4444-4444-4444-444444444444';
+
 const validTaskSpawnBody = {
-  taskId: 't1',
-  workerRunId: 'r1',
-  workspaceId: 'w1',
-  onBehalfOf: 'alice',
+  taskId: TASK_ID,
+  workerRunId: WORKER_RUN_ID,
+  workspaceId: WORKSPACE_ID,
+  onBehalfOf: ON_BEHALF_OF,
   capabilityHandle: 'h1',
 };
 
@@ -152,7 +160,7 @@ describe('TaskSpawnRequestSchema', () => {
   });
 
   it('rejects missing required fields and unknown fields (strict)', () => {
-    expect(TaskSpawnRequestSchema.safeParse({ taskId: 't1' }).success).toBe(false);
+    expect(TaskSpawnRequestSchema.safeParse({ taskId: TASK_ID }).success).toBe(false);
     expect(TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, extra: 'x' }).success).toBe(
       false,
     );
@@ -182,6 +190,36 @@ describe('TaskSpawnRequestSchema', () => {
     expect(withSkill('../../etc')).toBe(false);
     expect(withSkill('valid-name_1.2')).toBe(true);
   });
+
+  it('rejects a taskId that is not a UUID, including a path-traversal shape', () => {
+    expect(TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, taskId: 't1' }).success).toBe(
+      false,
+    );
+    expect(
+      TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, taskId: '../../pgdata' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a workerRunId/workspaceId/onBehalfOf that is not a UUID', () => {
+    expect(
+      TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, workerRunId: 'r1' }).success,
+    ).toBe(false);
+    expect(
+      TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, workspaceId: 'w1' }).success,
+    ).toBe(false);
+    expect(
+      TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, onBehalfOf: 'alice' }).success,
+    ).toBe(false);
+  });
+
+  it('does not restrict capabilityHandle to a UUID shape (it is a JWT, not an id)', () => {
+    expect(
+      TaskSpawnRequestSchema.safeParse({
+        ...validTaskSpawnBody,
+        capabilityHandle: 'not-a-uuid-and-thats-fine.header.payload.sig',
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe('isImageAllowed', () => {
@@ -200,5 +238,37 @@ describe('isImageAllowed', () => {
     expect(isImageAllowed(config, 'nexttime-ai-worker-runtime')).toBe(true);
     expect(isImageAllowed(config, 'extra-image')).toBe(true);
     expect(isImageAllowed(config, 'still-not-allowed')).toBe(false);
+  });
+});
+
+describe('isSkillHostPathAllowed', () => {
+  const config = loadConfig({ NEXTTIME_DATA: '/host/data' });
+
+  it('accepts a path under the host data root', () => {
+    expect(isSkillHostPathAllowed(config, '/host/data/ontology/ops-assets/skills/inventory')).toBe(
+      true,
+    );
+  });
+
+  it('accepts the root itself', () => {
+    expect(isSkillHostPathAllowed(config, '/host/data')).toBe(true);
+  });
+
+  it('rejects a path outside the host data root', () => {
+    expect(isSkillHostPathAllowed(config, '/var/run/docker.sock')).toBe(false);
+    expect(isSkillHostPathAllowed(config, '/etc/passwd')).toBe(false);
+    // A sibling directory that merely shares the root as a string prefix must still be rejected
+    // (naive startsWith("/host/data") without the trailing slash would wrongly accept this).
+    expect(isSkillHostPathAllowed(config, '/host/data-other/secret')).toBe(false);
+  });
+
+  it('rejects a path that escapes the root via .. even though it starts inside it', () => {
+    expect(isSkillHostPathAllowed(config, '/host/data/../../etc')).toBe(false);
+    expect(isSkillHostPathAllowed(config, '/host/data/skills/../../../etc/passwd')).toBe(false);
+  });
+
+  it('rejects a non-absolute path', () => {
+    expect(isSkillHostPathAllowed(config, 'relative/path')).toBe(false);
+    expect(isSkillHostPathAllowed(config, '')).toBe(false);
   });
 });

@@ -8,6 +8,7 @@ import {
   createServer,
   createTaskService,
   isImageAllowed,
+  isSkillHostPathAllowed,
   loadConfig,
   main,
   taskContainerName,
@@ -36,5 +37,6 @@ describe('@nexttime/worker-supervisor', () => {
     expect(typeof taskContainerName).toBe('function');
     expect(typeof taskSourceId).toBe('function');
     expect(typeof isImageAllowed).toBe('function');
+    expect(typeof isSkillHostPathAllowed).toBe('function');
   });
 });

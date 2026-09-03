@@ -27,21 +27,32 @@ tmpfs `/tmp`、非 root uid 10001、只挂 `workers` 网络）与同一个出网
 
 ```jsonc
 {
-  "taskId": "...",           // Task 的工作目录键——workspaces/tasks/<taskId>
-  "workerRunId": "...",      // 这次执行的容器身份键——nexttime-task-<workerRunId>
-  "workspaceId": "...",
-  "onBehalfOf": "...",       // principalId；I13 的 on_behalf_of 已经编码进 capabilityHandle 本身，
-                              // 这里只做协议校验，不再单独使用（见 task-service.ts 模块注释）
+  "taskId": "...",           // UUID；Task 的工作目录键——workspaces/tasks/<taskId>
+  "workerRunId": "...",      // UUID；这次执行的容器身份键——nexttime-task-<workerRunId>
+  "workspaceId": "...",      // UUID
+  "onBehalfOf": "...",       // UUID；principalId；I13 的 on_behalf_of 已经编码进 capabilityHandle
+                              // 本身，这里只做协议校验，不再单独使用（见 task-service.ts 模块注释）
   "capabilityHandle": "...",
   "image": "...",            // 可选，默认 WORKER_IMAGE；不在 allowlist 里 -> 403
   "model": "...",            // 可选，容器 CMD 变成 ["--model", model]
-  "skills": [{ "name": "...", "hostPath": "..." }], // 可选，只读挂载到 <agentDir>/skills/<name>
+  "skills": [{ "name": "...", "hostPath": "..." }], // 可选，只读挂载到 <agentDir>/skills/<name>；
+                              // hostPath 必须是绝对路径，经 path.posix.normalize 后落在
+                              // ${NEXTTIME_DATA}/ 之下——否则 400（见下方"挂载"一条）
   "timeoutSec": 90,          // 可选，默认 TASK_MAX_RUNTIME_SEC
 }
 ```
 
+`taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 校验为 UUID（`z.string().uuid()`）而非任意
+`min(1)` 字符串：`taskId` 会成为 bind-mount 的 host 路径片段，`workerRunId` 会成为容器名——不校验
+的话 `taskId` 传 `../../pgdata` 这类值就能把宿主机上另一个数据目录挂进 Worker 容器。`workspaceId`/
+`onBehalfOf` 按同一规则一起收紧，与平台其它地方（`packages/shared/src/handle-token.ts`
+`uuidClaim`、`packages/kernel/src/governance/llm-usage/service.ts`）对同类 id 的校验方式一致——
+resident 模式自己的 `SpawnRequestSchema`（`workspaceId`/`principalId`）目前仍是 `min(1)`，未跟着
+收紧（不在本包这次改动范围内，是同类缺口，留待另一次改动处理）。
+
 返回 `200 {containerId, ip}`；镜像不在 allowlist（默认只有 `WORKER_IMAGE`，可用
-`WORKER_IMAGE_ALLOWLIST` 逗号列表追加，不会替换默认值）返回 `403`；请求体不合法 `400`。
+`WORKER_IMAGE_ALLOWLIST` 逗号列表追加，不会替换默认值）返回 `403`；`skills[].hostPath` 逃出
+`${NEXTTIME_DATA}/` 之外返回 `400`；请求体（含上述两类校验）不合法 `400`。
 
 ### Spawn spec 关键决策（`src/task-spawn-spec.ts`）
 
@@ -58,6 +69,12 @@ tmpfs `/tmp`、非 root uid 10001、只挂 `workers` 网络）与同一个出网
   `skills[]` 只读挂到 `/workspace/.pi/agent/skills/<name>`——该路径是 pi 0.84.4 的默认全局 skills
   目录（`packages/coding-agent/src/core/skills.ts` `loadSkills`: `join(resolvedAgentDir,
   'skills')`），对照参考项目验证过，不是猜测。**从不**挂载任何用户的入口工作区（I15）。
+  **`skills[].hostPath` 本身也受限**（`config.ts` `isSkillHostPathAllowed`，`server.ts` 在
+  `/task/spawn` 里对每个 skill 调用，任何一个不满足就整体 `400`，不落到 docker 客户端）：必须是
+  绝对路径，且经 `path.posix.normalize` 之后落在这个 supervisor 自己已知的
+  `${config.nextTimeData}/` 之下——否则一个调用方可以把 `/var/run/docker.sock`、`/etc` 之类任意
+  宿主机路径只读挂进 Worker 容器。`name` 字段本身另有校验（安全单段路径，见上一条），两者合起来
+  才能保证最终的挂载目标既不会逃出 skills 目录，来源也不会逃出这台主机的数据根。
 - **CMD**：给了 `model` 就是 `['--model', model]`；`entrypoint.sh` 把容器 CMD 接在它自己固定的 pi
   flags 之后，不需要改那个脚本。
 - **镜像 allowlist** 校验在 `server.ts`（不在这个纯函数里）——`buildTaskSpawnSpec` 只管把已校验过的

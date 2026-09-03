@@ -28,6 +28,7 @@ import {
   StopRequestSchema,
   TaskSpawnRequestSchema,
   isImageAllowed,
+  isSkillHostPathAllowed,
 } from './config.js';
 import type { SupervisorConfig } from './config.js';
 import type { ResidentService } from './resident-service.js';
@@ -123,6 +124,21 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     if (!isImageAllowed(config, image)) {
       reply.code(403);
       return { error: { code: 'image_not_allowed', message: `image not allowlisted: ${image}` } };
+    }
+    // Structural validation (TaskSpawnRequestSchema) can't check this — it has no access to
+    // `config.nextTimeData` — so it's a second pass here, same reasoning as the image allowlist
+    // check above: reject before ever reaching the docker client (config.ts `isSkillHostPathAllowed`
+    // doc comment has the full rationale — arbitrary host paths must never become skill mounts).
+    for (const skill of parsed.data.skills ?? []) {
+      if (!isSkillHostPathAllowed(config, skill.hostPath)) {
+        reply.code(400);
+        return {
+          error: {
+            code: 'invalid_skill_host_path',
+            message: `skill hostPath must resolve under NEXTTIME_DATA: ${skill.hostPath}`,
+          },
+        };
+      }
     }
     try {
       const outcome = await taskService.spawn({ ...parsed.data, image });

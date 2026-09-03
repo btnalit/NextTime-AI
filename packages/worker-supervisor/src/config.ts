@@ -15,6 +15,7 @@
  * actually needs.
  */
 
+import { posix as posixPath } from 'node:path';
 import { z } from 'zod';
 
 export const DEFAULT_SUPERVISOR_PORT = 8081;
@@ -161,17 +162,40 @@ const TaskSkillSchema = z.object({
   hostPath: z.string().min(1),
 });
 
+/** Every identifier in this codebase (`workspaceId`/`principalId`/`sessionId`/`jti`/...) is a
+ *  Postgres `gen_random_uuid()` / Node `randomUUID()` value — see
+ *  `packages/shared/src/handle-token.ts` `uuidClaim`, `packages/kernel/src/governance/llm-usage/
+ *  service.ts`'s own `z.string().uuid()` fields, and `application/host-bridge/
+ *  egress-observations.ts`'s `ENTRY_SOURCE_ID_PATTERN` doc comment ("both halves are UUIDs...a
+ *  plain UUID-shaped check is enough to reject garbage"). Reused here, not invented for this
+ *  schema. */
+const idClaim = z.string().uuid();
+
 /** `POST /task/spawn` request body (S2.8 task brief). `onBehalfOf` carries the `principalId` the
  *  child Handle's `on_behalf_of` is scoped to (I13) — named per the task brief, not `principalId`,
  *  to keep the wire shape distinct from resident mode's own field of that name (this is a
  *  different Handle: a Task's, decayed and derived from the entry Handle that requested it, per
- *  S2.7 `invoke_worker` — see that task's own dispatch, not built by this package). */
+ *  S2.7 `invoke_worker` — see that task's own dispatch, not built by this package).
+ *
+ * `taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` are validated as UUIDs (`idClaim`), not just
+ * `z.string().min(1)`: `taskId` becomes a bind-mount source path segment
+ * (`host-paths.ts` `taskWorkspacePaths`: `${nextTimeData}/workspaces/tasks/<taskId>`) and
+ * `workerRunId` becomes the container name (`task-spawn-spec.ts` `taskContainerName`) — an
+ * unvalidated value like `../../pgdata` would let a caller mount an arbitrary host directory into
+ * an agent container. `workspaceId`/`onBehalfOf` are tightened to the same rule for consistency
+ * with how every id of this kind is generated and validated elsewhere in the platform (see
+ * `idClaim`'s doc comment) — not because either is currently used to build a path in this package.
+ * **Deviation, stated explicitly**: resident mode's own `SpawnRequestSchema` above still validates
+ * `workspaceId`/`principalId` as plain `z.string().min(1)` — there is no existing stricter id rule
+ * in *this* package to match; `idClaim` is the platform-wide convention (kernel), applied here for
+ * the first time in this package. Tightening resident mode's own schema to match is out of scope
+ * for this change (S2.8 does not touch resident-mode behavior) but is the same class of gap. */
 export const TaskSpawnRequestSchema = z
   .object({
-    taskId: z.string().min(1),
-    workerRunId: z.string().min(1),
-    workspaceId: z.string().min(1),
-    onBehalfOf: z.string().min(1),
+    taskId: idClaim,
+    workerRunId: idClaim,
+    workspaceId: idClaim,
+    onBehalfOf: idClaim,
     capabilityHandle: z.string().min(1),
     image: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
@@ -180,3 +204,25 @@ export const TaskSpawnRequestSchema = z
   })
   .strict();
 export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;
+
+/** `skills[].hostPath` must resolve under this supervisor's own host data root
+ *  (`${config.nextTimeData}/`) — otherwise a caller could mount an arbitrary host path (e.g.
+ *  `/var/run/docker.sock`, `/etc`) read-only into a Worker container. `TaskSkillSchema` cannot
+ *  enforce this itself (it has no access to `config`, and this package's Zod schemas are static,
+ *  built once at module scope, matching every other schema in this file) — same pattern as
+ *  `isImageAllowed` below: a small pure function, called by `server.ts` after the structural Zod
+ *  parse succeeds, 400s the request if any skill fails it.
+ *
+ * `hostPath` must be absolute, and — after `path.posix.normalize` — contain no residual `..`
+ * segment and lie at or under the normalized root. Both checks are applied even though, for an
+ * absolute path, `posix.normalize` already resolves every resolvable `..` (an absolute path has no
+ * parent above `/`, so `posix.normalize('/a/../../etc')` is `/etc`, never a string containing
+ * `..`) — the explicit `..`-segment check is cheap, explicit defense-in-depth, not load-bearing on
+ * its own; the root-prefix check is what actually rejects an escaped path like that example. */
+export function isSkillHostPathAllowed(config: SupervisorConfig, hostPath: string): boolean {
+  if (!hostPath.startsWith('/')) return false;
+  const normalized = posixPath.normalize(hostPath);
+  if (normalized.split('/').includes('..')) return false;
+  const root = posixPath.normalize(`${config.nextTimeData}/`);
+  return normalized === root.slice(0, -1) || normalized.startsWith(root);
+}

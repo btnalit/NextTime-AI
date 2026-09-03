@@ -8,6 +8,7 @@ import { createTaskService } from './task-service.js';
 
 export {
   isImageAllowed,
+  isSkillHostPathAllowed,
   loadConfig,
   SpawnRequestSchema,
   StopRequestSchema,

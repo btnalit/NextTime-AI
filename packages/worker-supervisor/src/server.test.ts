@@ -31,7 +31,7 @@ function setup(overrides: Record<string, string> = {}) {
   const residentService = createResidentService({ config, docker, egressMap });
   const taskService = createTaskService({ config, docker, egressMap });
   const app = createServer({ residentService, taskService, config });
-  return { app, residentService, taskService, config };
+  return { app, residentService, taskService, config, docker };
 }
 
 describe('GET /healthz', () => {
@@ -156,11 +156,18 @@ describe('POST /resident/:principalId/touch', () => {
   });
 });
 
+// taskId/workerRunId/workspaceId/onBehalfOf must be UUIDs (TaskSpawnRequestSchema `idClaim`) —
+// see config.test.ts for the schema-level coverage; these are just fixed, readable stand-ins.
+const TASK_ID = '11111111-1111-1111-1111-111111111111';
+const WORKER_RUN_ID = '22222222-2222-2222-2222-222222222222';
+const WORKSPACE_ID = '33333333-3333-3333-3333-333333333333';
+const ON_BEHALF_OF = '44444444-4444-4444-4444-444444444444';
+
 const validTaskSpawnBody = {
-  taskId: 't1',
-  workerRunId: 'r1',
-  workspaceId: 'w1',
-  onBehalfOf: 'alice',
+  taskId: TASK_ID,
+  workerRunId: WORKER_RUN_ID,
+  workspaceId: WORKSPACE_ID,
+  onBehalfOf: ON_BEHALF_OF,
   capabilityHandle: 'h1',
 };
 
@@ -181,7 +188,11 @@ describe('POST /task/spawn', () => {
 
   it('400s on an invalid body', async () => {
     const { app } = setup();
-    const res = await app.inject({ method: 'POST', url: '/task/spawn', payload: { taskId: 't1' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      payload: { taskId: TASK_ID },
+    });
     expect(res.statusCode).toBe(400);
   });
 
@@ -193,6 +204,29 @@ describe('POST /task/spawn', () => {
       payload: { ...validTaskSpawnBody, extra: 'x' },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('400s a traversal-shaped taskId, and it never reaches the docker client', async () => {
+    const { app, docker } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      payload: { ...validTaskSpawnBody, taskId: '../../pgdata' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(docker.createCalls).toHaveLength(0);
+  });
+
+  it('400s a non-UUID workerRunId/workspaceId/onBehalfOf too', async () => {
+    const { app } = setup();
+    for (const field of ['workerRunId', 'workspaceId', 'onBehalfOf'] as const) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/task/spawn',
+        payload: { ...validTaskSpawnBody, [field]: 'not-a-uuid' },
+      });
+      expect(res.statusCode).toBe(400);
+    }
   });
 
   it('403s a non-allowlisted image', async () => {
@@ -211,6 +245,46 @@ describe('POST /task/spawn', () => {
       method: 'POST',
       url: '/task/spawn',
       payload: { ...validTaskSpawnBody, image: 'some-approved-image' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('400s a skill hostPath outside NEXTTIME_DATA, and it never reaches the docker client', async () => {
+    const { app, docker } = setup(); // NEXTTIME_DATA=/host/data (see setup())
+    const res = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      payload: {
+        ...validTaskSpawnBody,
+        skills: [{ name: 'evil', hostPath: '/var/run/docker.sock' }],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(docker.createCalls).toHaveLength(0);
+  });
+
+  it('400s a skill hostPath that escapes NEXTTIME_DATA via ..', async () => {
+    const { app } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      payload: {
+        ...validTaskSpawnBody,
+        skills: [{ name: 'evil', hostPath: '/host/data/../../etc' }],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('200s a skill hostPath that resolves under NEXTTIME_DATA', async () => {
+    const { app } = setup(); // NEXTTIME_DATA=/host/data
+    const res = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      payload: {
+        ...validTaskSpawnBody,
+        skills: [{ name: 'ok-skill', hostPath: '/host/data/ontology/ops-assets/skills/inventory' }],
+      },
     });
     expect(res.statusCode).toBe(200);
   });
@@ -240,7 +314,7 @@ describe('POST /task/:workerRunId/terminate', () => {
   it('204s after spawn', async () => {
     const { app } = setup();
     await app.inject({ method: 'POST', url: '/task/spawn', payload: validTaskSpawnBody });
-    const res = await app.inject({ method: 'POST', url: '/task/r1/terminate' });
+    const res = await app.inject({ method: 'POST', url: `/task/${WORKER_RUN_ID}/terminate` });
     expect(res.statusCode).toBe(204);
   });
 });
@@ -255,16 +329,16 @@ describe('GET /task/:workerRunId', () => {
   it('200s with status after spawn', async () => {
     const { app } = setup();
     await app.inject({ method: 'POST', url: '/task/spawn', payload: validTaskSpawnBody });
-    const res = await app.inject({ method: 'GET', url: '/task/r1' });
+    const res = await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}` });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ workerRunId: 'r1', status: 'running' });
+    expect(res.json()).toMatchObject({ workerRunId: WORKER_RUN_ID, status: 'running' });
   });
 
   it('200s with status terminated after terminate', async () => {
     const { app } = setup();
     await app.inject({ method: 'POST', url: '/task/spawn', payload: validTaskSpawnBody });
-    await app.inject({ method: 'POST', url: '/task/r1/terminate' });
-    const res = await app.inject({ method: 'GET', url: '/task/r1' });
+    await app.inject({ method: 'POST', url: `/task/${WORKER_RUN_ID}/terminate` });
+    const res = await app.inject({ method: 'GET', url: `/task/${WORKER_RUN_ID}` });
     expect(res.json()).toMatchObject({ status: 'terminated', reason: 'requested' });
   });
 });

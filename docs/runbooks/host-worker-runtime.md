@@ -206,17 +206,25 @@ S2.9 之前的正常现象，不是本任务的 bug。因为这个原因，"dock
 **立刻**做（容器一退出，`GET /task/:workerRunId` 或下一次周期性 `reap()`——至多 30 秒——就会把它
 `docker rm` 掉）。
 
+`taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 必须是 UUID（`TaskSpawnRequestSchema`，见 README
+"POST /task/spawn"一节）——下面固定几个便于辨认的示例值：
+
 ```bash
 cd <CODE_DIR>
+TASK_ID=11111111-1111-1111-1111-111111111111
+WORKER_RUN_ID=22222222-2222-2222-2222-222222222222
+WORKSPACE_ID=33333333-3333-3333-3333-333333333333
+ON_BEHALF_OF=44444444-4444-4444-4444-444444444444
+
 docker compose exec -T worker-supervisor node -e "
 fetch('http://localhost:8081/task/spawn', {
   method: 'POST',
   headers: {'content-type': 'application/json'},
   body: JSON.stringify({
-    taskId: 'demo-task-1',
-    workerRunId: 'demo-run-1',
-    workspaceId: 'ws-demo',
-    onBehalfOf: 'demo-alice',
+    taskId: '${TASK_ID}',
+    workerRunId: '${WORKER_RUN_ID}',
+    workspaceId: '${WORKSPACE_ID}',
+    onBehalfOf: '${ON_BEHALF_OF}',
     capabilityHandle: 'dummy-worker-handle',
   }),
 }).then(r => r.text()).then(t => console.log(t))
@@ -226,34 +234,64 @@ fetch('http://localhost:8081/task/spawn', {
 期望：`200 {containerId, ip}`。**立刻**（不要先查 status）检查容器 spec：
 
 ```bash
-docker inspect nexttime-task-demo-run-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | sort
-docker inspect nexttime-task-demo-run-1 --format '{{json .HostConfig.Binds}}'
-docker inspect nexttime-task-demo-run-1 --format '{{json .Config.Labels}}'
-docker inspect nexttime-task-demo-run-1 --format '{{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}} {{json .HostConfig.SecurityOpt}}'
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{range .Config.Env}}{{println .}}{{end}}' | sort
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{json .HostConfig.Binds}}'
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{json .Config.Labels}}'
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}} {{json .HostConfig.SecurityOpt}}'
 ```
 
 期望：env 恰好是 `KERNEL_URL KERNEL_LLM_URL CAPABILITY_HANDLE TASK_ID WORKSPACE_ID WORKER_RUN_ID
 NEXTTIME_MODE HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy` 加镜像自带的
 `PIP_USER PYTHONUSERBASE PATH NODE_ENV HOME` 等——**没有任何 `*_API_KEY`**，也没有
 `PI_CODING_AGENT_DIR`（见 README"Spawn spec 关键决策"，默认值已经落在同一路径，不需要这个变量）；
-`Binds` 含 `.../workspaces/tasks/demo-task-1:/workspace` 与只读的 `models.json`；`Labels` 含
-`nexttime.role=worker`、`nexttime.task-id=demo-task-1`、`nexttime.worker-run-id=demo-run-1`、
-`nexttime.workspace-id=ws-demo`；`ReadonlyRootfs=true`、`CapDrop=["ALL"]`、
+`Binds` 含 `.../workspaces/tasks/${TASK_ID}:/workspace` 与只读的 `models.json`；`Labels` 含
+`nexttime.role=worker`、`nexttime.task-id=${TASK_ID}`、`nexttime.worker-run-id=${WORKER_RUN_ID}`、
+`nexttime.workspace-id=${WORKSPACE_ID}`；`ReadonlyRootfs=true`、`CapDrop=["ALL"]`、
 `SecurityOpt=["no-new-privileges"]`。
+
+**输入校验（server.ts 在 docker 客户端之前就拒绝，不会创建任何容器）**：
+
+```bash
+# 非 UUID / 路径穿越形状的 taskId -> 400，且从不到达 docker（对照上一步：容器数不变）
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/task/spawn', {
+  method: 'POST', headers: {'content-type': 'application/json'},
+  body: JSON.stringify({
+    taskId: '../../pgdata', workerRunId: '${WORKER_RUN_ID}', workspaceId: '${WORKSPACE_ID}',
+    onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h',
+  }),
+}).then(r => console.log(r.status))
+"
+
+# skills[].hostPath 逃出 NEXTTIME_DATA -> 400（这里故意指向 docker.sock 本身来验证）
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/task/spawn', {
+  method: 'POST', headers: {'content-type': 'application/json'},
+  body: JSON.stringify({
+    taskId: '${TASK_ID}', workerRunId: '${WORKER_RUN_ID}', workspaceId: '${WORKSPACE_ID}',
+    onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h',
+    skills: [{name: 'evil', hostPath: '/var/run/docker.sock'}],
+  }),
+}).then(r => console.log(r.status))
+"
+docker ps -a --filter "name=nexttime-task-${WORKER_RUN_ID}" --format '{{.Names}}'   # 只有上面第一次成功 spawn 的那一个
+```
+
+期望：两次都 `400`；`docker ps -a` 里以 `nexttime-task-` 开头的容器数量没有因为这两次请求而增加。
 
 ```bash
 docker compose exec -T worker-supervisor node -e "
-fetch('http://localhost:8081/task/demo-run-1')
+fetch('http://localhost:8081/task/${WORKER_RUN_ID}')
   .then(r => r.text()).then(t => console.log(t))
 "
 ```
 
 期望：`200`，`status` 是 `running`（若查询够快）或 `exited`/`failed`（S2.9 前的预期现象，见上）；
-无论哪种，这次查询之后容器都已被 `docker rm`（`docker ps -a --filter name=nexttime-task-demo-run-1`
+无论哪种，这次查询之后容器都已被 `docker rm`（`docker ps -a --filter name=nexttime-task-${WORKER_RUN_ID}`
 应为空）——`/workspace` 本身没有被删，仍是 Task 的 artifact：
 
 ```bash
-ls "${NEXTTIME_DATA}/workspaces/tasks/demo-task-1"   # 目录还在（entrypoint.sh 写入的 .pi/ 等）
+ls "${NEXTTIME_DATA}/workspaces/tasks/${TASK_ID}"   # 目录还在（entrypoint.sh 写入的 .pi/ 等）
 ```
 
 `terminate`（无论容器此时是否还在跑，都应 `204`——已结束的 Task 上调用是幂等成功，不是错误；用一个
@@ -262,7 +300,7 @@ ls "${NEXTTIME_DATA}/workspaces/tasks/demo-task-1"   # 目录还在（entrypoint
 
 ```bash
 docker compose exec -T worker-supervisor node -e "
-fetch('http://localhost:8081/task/demo-run-1/terminate', {method: 'POST'})
+fetch('http://localhost:8081/task/${WORKER_RUN_ID}/terminate', {method: 'POST'})
   .then(r => console.log(r.status))
 "
 ```
@@ -270,20 +308,22 @@ fetch('http://localhost:8081/task/demo-run-1/terminate', {method: 'POST'})
 期望：`204`。非允许镜像应 `403`：
 
 ```bash
+TASK_ID_2=55555555-5555-5555-5555-555555555555
+WORKER_RUN_ID_2=66666666-6666-6666-6666-666666666666
 docker compose exec -T worker-supervisor node -e "
 fetch('http://localhost:8081/task/spawn', {
   method: 'POST',
   headers: {'content-type': 'application/json'},
   body: JSON.stringify({
-    taskId: 'demo-task-2', workerRunId: 'demo-run-2', workspaceId: 'ws-demo',
-    onBehalfOf: 'demo-alice', capabilityHandle: 'h', image: 'some-unapproved-image',
+    taskId: '${TASK_ID_2}', workerRunId: '${WORKER_RUN_ID_2}', workspaceId: '${WORKSPACE_ID}',
+    onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h', image: 'some-unapproved-image',
   }),
 }).then(r => console.log(r.status))
 "
 ```
 
 期望：`403`。收尾同 §8——`docker compose stop worker-supervisor egress-proxy`、
-`rm -rf "${NEXTTIME_DATA}/workspaces/tasks/demo-task-1" "${NEXTTIME_DATA}/workspaces/tasks/demo-task-2"`
+`rm -rf "${NEXTTIME_DATA}/workspaces/tasks/${TASK_ID}" "${NEXTTIME_DATA}/workspaces/tasks/${TASK_ID_2}"`
 （验收产物，不需要保留）。
 
 ## 11. 已知偏离 / 待确认（PR 中一并说明）
@@ -386,3 +426,17 @@ fetch('http://localhost:8081/task/spawn', {
   另开一个按 `containerId` 或 `ip` 反查的端点，因为派发文字与 S2.7/S2.9 都没有提出这个查询方向的
   具体需求；如果 S2.7 的 gateway 侧确实需要按来源 IP 反查 `workerRunId`（例如做门的来源校验），
   留给那个任务评估是否需要在这里加一个索引，而不是这里预先猜测接口形状。
+- **S2.8 PR review 追加：`taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 收紧为 UUID，
+  `skills[].hostPath` 限定在 `${NEXTTIME_DATA}/` 之下**（PR #35 首版遗漏，review 后补上）：首版
+  `TaskSpawnRequestSchema` 这四个字段只做了 `min(1)`——`taskId` 是 bind-mount 的 host 路径片段，
+  `workerRunId` 是容器名，一个 `../../pgdata` 形状的 `taskId` 就能把宿主机上任意目录挂进 Worker
+  容器；`skills[].hostPath` 同理完全不受限，能把 `/var/run/docker.sock`、`/etc` 之类路径只读挂进
+  容器。修法：四个 id 字段改用 `z.string().uuid()`（`config.ts` `idClaim`——这不是新发明的规则，
+  是平台其它地方本来就在用的既有约定，见 `packages/shared/src/handle-token.ts` `uuidClaim`、
+  `packages/kernel/src/governance/llm-usage/service.ts`；**resident 模式自己的
+  `SpawnRequestSchema` 目前仍是 `min(1)`，未跟着收紧**——不在这次改动范围内，是同类缺口，留给另一次
+  改动处理，这里明确点出而不是悄悄留着）；`skills[].hostPath` 新增 `isSkillHostPathAllowed`（同
+  `isImageAllowed` 的写法——纯函数 + `server.ts` 在 `/task/spawn` 里对每个 skill 调用，不满足就
+  `400`，不落到 docker 客户端）：要求绝对路径，且经 `path.posix.normalize` 之后落在
+  `${config.nextTimeData}/` 之下。本文档 §10 的验证步骤已同步更新为 UUID 形式的示例值，并加了两条
+  新的"入参校验"步骤。
