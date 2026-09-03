@@ -440,3 +440,143 @@ fetch('http://localhost:8081/task/spawn', {
   `400`，不落到 docker 客户端）：要求绝对路径，且经 `path.posix.normalize` 之后落在
   `${config.nextTimeData}/` 之下。本文档 §10 的验证步骤已同步更新为 UUID 形式的示例值，并加了两条
   新的"入参校验"步骤。
+
+## 12. `invoke_worker` 经 `/api/cap`（S2.7 host 验收）
+
+前置：§10 已验证的 `worker-supervisor` Task 模式在跑；`kernel` 容器已起（`docker compose up -d
+kernel`），`SUPERVISOR_URL` 已在其 environment 里指向 `worker-supervisor:8081`（docker-compose.yml
+kernel 服务块，S2.7 新增）。本节验证的是 `invoke_worker` 自己那一半——I18 配额检查、子 Handle 铸造、
+调用 `worker-supervisor` 的 `/task/spawn`、Task/WorkerRun 落库——**不是**端到端"Worker 真的能干活并
+写回结果"：从一轮对话真正拉起 Task 是 S2.9 的交付物（`platform-extension` 的 `worker` 模式扩展、
+`task/result.ts` 的结果契约都还没实现），所以下面 spawn 出来的容器大概率会像 §10 一样很快非零退出或
+清净退出但从不上报结果——kernel 侧的 reaper（默认 30 秒一次，`TASK_REAPER_INTERVAL_MS`）会据此把
+Task 标为 `failed: no_result`。**这是 S2.9 落地前的预期现象，不是本任务的 bug**——验证到这一步（Task
+行、WorkerRun 行、`worker-supervisor` 确实起了一个容器）就是本节的验收终点。
+
+### 12.1 准备一个 workspace、owner、已发布的 worker 定义
+
+```bash
+cd <CODE_DIR>
+docker compose exec -T kernel node dist/cli/bootstrap.js create-workspace \
+  --name "s2-7-host-check" --owner "owner"
+# 输出一次性打印 owner 的 API key（仅这一次可见，只存 hash）——记下来：
+#   PASS create-workspace workspace=<uuid> owner=<uuid> key=<owner-api-key>
+```
+
+用打印出的 `workspace`/`key` 发布一个最小的 `kind='worker'` 定义（human 通道，owner 的 API key；
+`propose_worker_definition`/`publish_worker_definition` 都是 S2.6 已交付的 human-only capability）：
+
+```bash
+OWNER_KEY=<owner-api-key>
+
+DEFINITION_ID=$(docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/propose_worker_definition', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({
+    kind: 'worker',
+    definition: { systemPrompt: 'You are ops-runner.', name: 'ops-runner' },
+  }),
+}).then(r => r.json()).then(b => console.log(b.result.id))
+")
+
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/publish_worker_definition', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ definitionId: '${DEFINITION_ID}', version: 1 }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b)))
+"
+```
+
+期望：`{"ok":true,"result":{"id":"...","version":1,"status":"published",...}}`。
+
+### 12.2 `invoke_worker` — human/owner 通道（无 Handle 可衰减，"unconstrained" 路径）
+
+```bash
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/invoke_worker', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ definitionId: '${DEFINITION_ID}', version: 1, input: {}, wait: false }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b, null, 2)))
+"
+```
+
+期望：`{"ok":true,"result":{"taskId":"...","workerRunId":"...","status":"running"}}`。立刻核对：
+
+```bash
+# tasks / worker_runs 落库（数据库连接见 §0 或 docs/private/ 的 DATABASE_URL）
+psql "$DATABASE_URL" -c "select id, status, worker_definition_id, duration_limit_sec, token_budget from tasks order by created_at desc limit 1;"
+psql "$DATABASE_URL" -c "select id, status, depth, attempt, container_id, session_id from worker_runs order by started_at desc limit 1;"
+
+# worker-supervisor 确实起了一个容器（同 §10 的核对方式）
+WORKER_RUN_ID=<上面 worker_runs.id>
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{.State.Status}}'
+```
+
+期望：`tasks.status` 为 `running`（若已经过了 reaper 一轮，可能已变成 `failed`，`failure_reason` 为
+`no_result`——见本节开头说明，这是预期的）；`worker_runs.status` 为 `running`（或
+`terminated`，同理）；`worker_runs.container_id` 非空且对应一个真实存在过的容器。数分钟后（视
+`TASK_WORKDIR_RETENTION_HOURS`/`reap()` 节奏）重新查询，应能看到 `tasks.status = 'failed'`、
+`tasks.failure_reason = 'no_result'`。
+
+### 12.3 入口 Handle 请求 execute 被拒（S2.7 acceptance，无需真实 Gatekeeper）
+
+发布第二个 worker 定义，声明它需要 execute 类能力（此时还没有真实 Gatekeeper——S2.4/S2.5 未落地——但
+这条校验发生在铸造子 Handle 阶段，不需要真的门存在）：
+
+```bash
+EXECUTE_DEFINITION_ID=$(docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/propose_worker_definition', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({
+    kind: 'worker',
+    definition: {
+      systemPrompt: 'You need real gate access.',
+      capabilities: ['<gate>.<op>:execute'],
+      gates: ['gk-not-connected-yet'],
+    },
+  }),
+}).then(r => r.json()).then(b => console.log(b.result.id))
+")
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/publish_worker_definition', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ definitionId: '${EXECUTE_DEFINITION_ID}', version: 1 }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b)))
+"
+```
+
+用一个**非 owner**的 human principal（`add-principal --role member`）调用 `invoke_worker`
+对这个定义——human 非 owner 通道解析为空 scope（`EMPTY_CAPABILITY_SCOPE`），对 execute 类需求同样
+拒绝：
+
+```bash
+docker compose exec -T kernel node dist/cli/bootstrap.js add-principal \
+  --workspace <workspace-uuid> --name "member" --role member
+# 记下打印的 key=<member-api-key>
+
+MEMBER_KEY=<member-api-key>
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/invoke_worker', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${MEMBER_KEY}'},
+  body: JSON.stringify({ definitionId: '${EXECUTE_DEFINITION_ID}', version: 1, input: {}, wait: false }),
+}).then(r => r.text()).then(t => console.log(t))
+"
+```
+
+期望：HTTP `403`，`{"ok":false,"error":{"code":"attenuation_denied","message":"...execute-class capability \"<gate>.<op>:execute\"..."}}`——`interfaces/http/capability-route.ts` 的
+`InvokeWorkerAttenuationError` 映射（`application/task/handle-mint.ts`）。`tasks` 表不应新增一行
+针对这次调用（S2.7 把这项检查挪到了 Task 创建之前——见 `invoke.ts` 模块注释）。
+
+### 12.4 已知偏离
+
+- `find_workers`/`find_operations`/`find_procedures`、`waiting_approval` 路由、budget 80%/100%
+  这几条验收在 §S2.7 的 kernel 单元/集成测试（`application/task/*.test.ts`，DB-gated）里覆盖，
+  没有在本节重复写成主机 curl 步骤——它们不涉及容器/主机专属行为，跑一次 CI 的 Postgres service
+  即可验证，重复在主机上手工验证价值有限。
+- 一次真正端到端"Worker 干活并写回结果"的主机验收留给 S2.9 落地后补充到本文件。

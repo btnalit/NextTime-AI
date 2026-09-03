@@ -281,6 +281,14 @@ export const TASK_TRANSITIONS: TransitionTable<TaskStatus, TaskEvent> = {
 // suspends while its ActionRequest awaits approval, then resumes), so it round-trips with
 // `running`, and `terminated` is reachable directly from `running` (the normal completion path)
 // as well as from `suspended` (terminated while awaiting approval).
+//
+// S2.7 addition: `{from: 'provisioning', event: 'terminate', to: 'terminated'}` — a WorkerRun row
+// is created (`provisioning`) *before* `invoke_worker` calls the supervisor's `/task/spawn` (the
+// row needs an id to hand the supervisor); if that call fails (network error, image not
+// allowlisted, quota race) the row must still reach a terminal state without ever having been
+// `running` — the pre-existing table had no edge out of `provisioning` other than `start`, which
+// would make a failed spawn an illegal transition. See governance/capability/handles.ts's own
+// worker-ceiling doc comment for the invoke_worker flow this closes a gap for.
 // ---------------------------------------------------------------------------------------------
 
 export const WORKER_RUN_EVENT_VALUES = ['start', 'suspend', 'resume', 'terminate'] as const;
@@ -288,6 +296,7 @@ export type WorkerRunEvent = (typeof WORKER_RUN_EVENT_VALUES)[number];
 
 export const WORKER_RUN_EDGES: readonly StateTransition<WorkerRunStatus, WorkerRunEvent>[] = [
   { from: 'provisioning', event: 'start', to: 'running' },
+  { from: 'provisioning', event: 'terminate', to: 'terminated' },
   { from: 'running', event: 'suspend', to: 'suspended' },
   { from: 'suspended', event: 'resume', to: 'running' },
   { from: 'running', event: 'terminate', to: 'terminated' },

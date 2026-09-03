@@ -3,11 +3,12 @@ import { PLATFORM_EVENT_NAMES, PlatformEventNameSchema, PlatformEventSchema } fr
 import type { PlatformEvent } from './events.js';
 
 describe('PLATFORM_EVENT_NAMES', () => {
-  it('lists the nine canonical domain events from design doc §7.10', () => {
+  it('lists the ten canonical domain events from design doc §7.10 (S2.7 adds WorkerRunUpdated)', () => {
     expect(PLATFORM_EVENT_NAMES).toEqual([
       'TurnStarted',
       'TurnCompleted',
       'TaskUpdated',
+      'WorkerRunUpdated',
       'ActionRequestPending',
       'ActionRequestUpdated',
       'ConnectionCreated',
@@ -45,6 +46,13 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
     status: 'completed',
   },
   { type: 'TaskUpdated', workspaceId: 'ws1', taskId: 'task1', status: 'running' },
+  {
+    type: 'WorkerRunUpdated',
+    workspaceId: 'ws1',
+    workerRunId: 'wr1',
+    taskId: 'task1',
+    status: 'running',
+  },
   {
     type: 'ActionRequestPending',
     workspaceId: 'ws1',
@@ -132,9 +140,9 @@ describe('PlatformEventSchema', () => {
     }
   });
 
-  it('covers all fifteen variants (9 domain + 6 chat/ws)', () => {
+  it('covers all sixteen variants (10 domain + 6 chat/ws)', () => {
     const seenTypes = new Set(SAMPLE_EVENTS.map((e) => e.type));
-    expect(seenTypes.size).toBe(15);
+    expect(seenTypes.size).toBe(16);
   });
 
   it('rejects an event with an unknown discriminant', () => {

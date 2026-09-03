@@ -159,7 +159,12 @@ export function validateWorkerDefinitionContent(
     );
   }
   if (kind === 'entry' && 'capabilities' in result.data) {
-    assertEntryCapabilitiesWithinCeiling(result.data.capabilities);
+    // `result.data`'s static type is the union of both kind-specific schemas (S2.7 added an
+    // *optional* `capabilities` to the worker-kind schema too, packages/shared/src/worker-
+    // definition.ts) — `?? []` is defensive typing only; at runtime, `kind === 'entry'` already
+    // guarantees `EntryWorkerDefinitionContentSchema` parsed this, whose own `capabilities` is
+    // required, never `undefined`.
+    assertEntryCapabilitiesWithinCeiling(result.data.capabilities ?? []);
   }
 }
 
@@ -289,10 +294,17 @@ export async function publishWorkerDefinition(
   const updated = result.rows[0];
   if (!updated) throw new Error('publishWorkerDefinition: UPDATE ... RETURNING produced no row');
 
+  // S2.7: thread the definition's own `name`/`description` (packages/shared/src/worker-
+  // definition.ts), when present, into the graph projection — see meta-objects.ts's
+  // `WorkerDefinitionObjectInput` doc comment for why (find_workers ranking only).
+  const contentName = row.definition.name;
+  const contentDescription = row.definition.description;
   await projectWorkerDefinitionObject(client, workspaceId, {
     definitionId: ref.definitionId,
     version: ref.version,
     kind: row.kind,
+    ...(typeof contentName === 'string' ? { name: contentName } : {}),
+    ...(typeof contentDescription === 'string' ? { description: contentDescription } : {}),
   });
 
   return mapRow(updated);

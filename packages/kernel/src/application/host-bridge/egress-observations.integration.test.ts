@@ -145,6 +145,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         attributedToRecentTurn: 0,
         skippedUnknownSource: 0,
         skippedNoTurn: 0,
+        attributedToWorkerRun: 0,
+        skippedNoWorkerRun: 0,
       });
 
       const activity = await readActivity(turnId);
@@ -213,6 +215,76 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.skippedNoTurn).toBe(1);
       expect(result.attributedToRunningTurn).toBe(0);
       expect(result.attributedToRecentTurn).toBe(0);
+    });
+
+    // S2.7: worker: sourceId path (docs/development-tasks.md S2.7 "Egress attribution for
+    // workers"). No `application/task` service call here — this test seeds the `worker_runs` row
+    // and its Activity directly (the same "insert the minimal row this function needs" style the
+    // rest of this file already uses for `chats`/`activities`), since wiring a full
+    // `invoke_worker` spawn is `application/task`'s own integration test's job, not this file's.
+    it('appends a worker: observation to its WorkerRun Activity and enqueues one EgressObserved event', async () => {
+      const { workerRunId, activityId } = await withWorkspace(
+        pool,
+        { workspaceId, principalId },
+        async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'worker_run',
+            principalId,
+          });
+          const taskResult = await client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+             values ($1, 'running', $2, $3, 1)
+             returning id`,
+            [workspaceId, principalId, randomUUID()],
+          );
+          const taskId = taskResult.rows[0]?.id;
+          if (!taskId) throw new Error('failed to seed task');
+          const workerRunResult = await client.query<{ id: string }>(
+            `insert into worker_runs (workspace_id, status, task_id, depth, attempt, activity_id)
+             values ($1, 'running', $2, 0, 1, $3)
+             returning id`,
+            [workspaceId, taskId, activity.id],
+          );
+          const insertedWorkerRunId = workerRunResult.rows[0]?.id;
+          if (!insertedWorkerRunId) throw new Error('failed to seed worker_run');
+          return { workerRunId: insertedWorkerRunId, activityId: activity.id };
+        },
+      );
+
+      const result = await recordEgressObservations({ pool }, [
+        observation({
+          sourceId: `worker:${workspaceId}:${workerRunId}`,
+          hostname: 'worker.example.com',
+        }),
+      ]);
+
+      expect(result).toEqual({
+        attributedToRunningTurn: 0,
+        attributedToRecentTurn: 0,
+        skippedUnknownSource: 0,
+        skippedNoTurn: 0,
+        attributedToWorkerRun: 1,
+        skippedNoWorkerRun: 0,
+      });
+
+      const activity = await readActivity(activityId);
+      const egress = activity.metadata.egress as readonly Record<string, unknown>[];
+      expect(egress).toHaveLength(1);
+      expect(egress[0]).toMatchObject({ hostname: 'worker.example.com' });
+
+      const events = await readOutboxEvents();
+      expect(events.some((e) => e.payload.activityId === activityId)).toBe(true);
+    });
+
+    it('reports skippedNoWorkerRun for an unknown workerRunId', async () => {
+      const result = await recordEgressObservations({ pool }, [
+        observation({
+          sourceId: `worker:${workspaceId}:${randomUUID()}`,
+          hostname: 'ghost.example.com',
+        }),
+      ]);
+      expect(result.skippedNoWorkerRun).toBe(1);
+      expect(result.attributedToWorkerRun).toBe(0);
     });
 
     it('keeps metadata.egress bounded to the last 200 entries', async () => {

@@ -68,12 +68,26 @@ describe('validateWorkerDefinitionContent (pure)', () => {
   });
 
   it('rejects a worker definition carrying an entry-only field', () => {
+    // S2.7: `capabilities` is now a valid (worker-scoped, not entry's own) field on the worker
+    // schema too (packages/shared/src/worker-definition.ts's own doc comment) — `egressDeny`
+    // remains entry-only, so it is what this test now uses to prove the worker schema still
+    // rejects fields that are not its own.
     expect(() =>
       validateWorkerDefinitionContent('worker', {
         systemPrompt: 'hi',
-        capabilities: ['get_object'],
+        egressDeny: ['blocked.example.com'],
       }),
     ).toThrow(WorkerDefinitionValidationError);
+  });
+
+  it('accepts a worker definition declaring its own capabilities/gates (S2.7)', () => {
+    expect(() =>
+      validateWorkerDefinitionContent('worker', {
+        systemPrompt: 'hi',
+        capabilities: ['get_object', 'assert_fact'],
+        gates: ['gk-1'],
+      }),
+    ).not.toThrow();
   });
 
   it('every capability the entry ceiling actually contains still validates (sanity)', () => {

@@ -36,6 +36,12 @@ export interface WorkerDefinitionObjectInput {
   readonly definitionId: string;
   readonly version: number;
   readonly kind: 'entry' | 'worker';
+  /** S2.7: the definition content's own `name`/`description` (`packages/shared/src/worker-
+   *  definition.ts`), when present — carried into `properties` purely so `find_workers`
+   *  (`substrate/graph/find-means.ts`) has text to rank a `need` query against; never interpreted
+   *  by the kernel otherwise. */
+  readonly name?: string;
+  readonly description?: string;
 }
 
 /** Upserts (by `{definitionId, version}` identity — idempotent, matching this module's doc
@@ -46,10 +52,13 @@ export async function projectWorkerDefinitionObject(
   workspaceId: string,
   input: WorkerDefinitionObjectInput,
 ): Promise<GraphObject> {
+  const properties: Record<string, unknown> = { kind: input.kind };
+  if (input.name !== undefined) properties.name = input.name;
+  if (input.description !== undefined) properties.description = input.description;
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'WorkerDefinition',
     identity: { definitionId: input.definitionId, version: input.version },
-    properties: { kind: input.kind },
+    properties,
   });
 }
 

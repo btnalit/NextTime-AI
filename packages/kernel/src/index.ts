@@ -1,10 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import { IllegalTransition } from '@nexttime/shared';
 import Fastify, { type FastifyInstance } from 'fastify';
+import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
 import { createPool } from './adapters/db/pool.js';
 import type { PoolLike } from './adapters/db/pool.js';
 import { HttpGatekeeperClient } from './adapters/gatekeeper-client/index.js';
+import { TaskSupervisorClient } from './adapters/supervisor-client/index.js';
+import type { TaskSupervisorClientPort } from './adapters/supervisor-client/index.js';
 import { createChatEventSink, interruptStaleRunningTurns } from './application/chat/index.js';
 import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
 import {
@@ -21,6 +24,11 @@ import {
   registerTurnStartedConsumer,
 } from './application/host-bridge/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
+import {
+  configureTaskRuntime,
+  registerActionRequestRoutingConsumer,
+  runTaskReaper,
+} from './application/task/index.js';
 import {
   ApprovalDrainer,
   expireOverduePendingApprovals,
@@ -228,7 +236,43 @@ export interface CreateBackgroundServicesOptions {
    *  swallowed inside `registerActionRequestDrainConsumer`/here, never reaches this hook). Defaults
    *  to a no-op; `main()` passes `app.log.error`. */
   readonly onGatekeeperDrainError?: (error: unknown) => void;
+  /**
+   * S2.7: `worker-supervisor`'s Task-mode base URL (`adapters/supervisor-client`'s
+   * `TaskSupervisorClient`, e.g. `http://worker-supervisor:8081`) — `main()` reads this from
+   * `SUPERVISOR_URL` (the same env var `packages/agent-host` already uses for the resident-mode
+   * client, the deployment compose file). Ignored when `taskSupervisorClient` is given directly
+   * (tests).
+   */
+  readonly supervisorUrl?: string;
+  /** Overrides the constructed `TaskSupervisorClientPort` — for tests (a fake, no network). */
+  readonly taskSupervisorClient?: TaskSupervisorClientPort;
+  /** How often the S2.7 task reaper polls (duration-limit enforcement + supervisor-status
+   *  reconciliation). Default `DEFAULT_TASK_REAPER_INTERVAL_MS` (30s — much tighter than the
+   *  approval reaper's 5 minutes, matching `worker-supervisor`'s own 30s `reap()` cadence). */
+  readonly taskReaperIntervalMs?: number;
+  /** Called whenever a reaper tick's `runTaskReaper` call throws — same shape as
+   *  `onApprovalReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
+  readonly onTaskReaperError?: (error: unknown) => void;
 }
+
+/**
+ * `application/task`'s `TaskRuntimeDeps` (Handle-signing private key + a `TaskSupervisorClientPort`)
+ * is configured **only when a Handle-signing keypair is actually available**
+ * (`options.handleKeyPair`) — regardless of `kind`/`AGENT_RUNTIME`, since `invoke_worker` needs to
+ * mint Handles independent of which `AgentRuntime` is wired (design doc §5.1.4; docs/development-
+ * tasks.md S2.7). When no keypair is supplied (e.g. a test that only exercises chat/WS and never
+ * sets one — `interfaces/ws/server.test.ts`'s existing `createBackgroundServices({pool})` call,
+ * unchanged by this addition), the task runtime is simply never configured: an `invoke_worker` call
+ * in that configuration throws `TaskRuntimeNotConfiguredError` (application/task/runtime.ts) only
+ * if and when someone actually calls it — never an eager startup failure. This mirrors
+ * `buildDefaultRuntime`'s own "only load what `kind` needs" discipline one level further: nothing
+ * here *requires* `main()` to always supply a keypair, but `main()` does so unconditionally in
+ * practice (see its own updated doc comment) because the target deployment's `handle_key` secret
+ * is mounted into the kernel container regardless of `AGENT_RUNTIME` (the deployment compose
+ * file).
+ */
+const DEFAULT_TASK_SUPERVISOR_URL = 'http://worker-supervisor:8081';
+const DEFAULT_TASK_REAPER_INTERVAL_MS = 30 * 1000;
 
 const DEFAULT_AGENT_HOST_KERNEL_LLM_URL = 'http://llm-proxy:8082';
 
@@ -315,6 +359,36 @@ export function createBackgroundServices(
   const onGatekeeperDrainError = options.onGatekeeperDrainError ?? (() => {});
   let gatekeeperDrainTimer: NodeJS.Timeout | undefined;
 
+  // S2.7: configure application/task's runtime deps (Handle-signing key + supervisor client) only
+  // when a keypair is actually available — see this file's own doc comment above
+  // `DEFAULT_TASK_SUPERVISOR_URL` for why this is unconditional on `kind`/`AGENT_RUNTIME` but
+  // conditional on `options.handleKeyPair`.
+  const onTaskReaperError = options.onTaskReaperError ?? (() => {});
+  let taskReaperTimer: NodeJS.Timeout | undefined;
+  let unsubscribeActionRequestRouting: (() => void) | undefined;
+  let taskDeps:
+    | {
+        pool: typeof options.pool;
+        privateKey: CryptoKey;
+        supervisorClient: TaskSupervisorClientPort;
+      }
+    | undefined;
+
+  if (options.handleKeyPair) {
+    const taskSupervisorClient: TaskSupervisorClientPort =
+      options.taskSupervisorClient ??
+      new TaskSupervisorClient({
+        supervisorUrl: options.supervisorUrl ?? DEFAULT_TASK_SUPERVISOR_URL,
+      });
+    taskDeps = {
+      pool: options.pool,
+      privateKey: options.handleKeyPair.privateKey,
+      supervisorClient: taskSupervisorClient,
+    };
+    configureTaskRuntime(taskDeps);
+    unsubscribeActionRequestRouting = registerActionRequestRoutingConsumer(dispatcher, taskDeps);
+  }
+
   return {
     dispatcher,
     runtime,
@@ -354,11 +428,23 @@ export function createBackgroundServices(
         drainTick().catch(onGatekeeperDrainError);
       }, options.gatekeeperDrainIntervalMs ?? DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS);
       gatekeeperDrainTimer.unref?.();
+
+      if (taskDeps) {
+        const taskTick = (): void => {
+          runTaskReaper(taskDeps as NonNullable<typeof taskDeps>).catch(onTaskReaperError);
+        };
+        taskReaperTimer = setInterval(
+          taskTick,
+          options.taskReaperIntervalMs ?? DEFAULT_TASK_REAPER_INTERVAL_MS,
+        );
+        taskReaperTimer.unref?.();
+      }
     },
     stop() {
       dispatcher.stop();
       unsubscribeTurnStarted();
       unsubscribeActionRequestDrain();
+      unsubscribeActionRequestRouting?.();
       if (approvalReaperTimer) {
         clearInterval(approvalReaperTimer);
         approvalReaperTimer = undefined;
@@ -366,6 +452,10 @@ export function createBackgroundServices(
       if (gatekeeperDrainTimer) {
         clearInterval(gatekeeperDrainTimer);
         gatekeeperDrainTimer = undefined;
+      }
+      if (taskReaperTimer) {
+        clearInterval(taskReaperTimer);
+        taskReaperTimer = undefined;
       }
     },
   };
@@ -412,7 +502,26 @@ export function main(): void {
   process.once('SIGINT', shutdown);
 
   void (async (): Promise<void> => {
-    const handleKeyPair = kind === 'agent-host' ? await loadHandleKeyPair() : undefined;
+    // S2.7: `invoke_worker` needs a Handle-signing keypair regardless of `AGENT_RUNTIME` (unlike
+    // `AgentHostRuntime`'s own need for one, which is `kind === 'agent-host'`-only) — the target
+    // deployment mounts the `handle_key` secret into the kernel container unconditionally (the
+    // deployment compose file), so this always attempts the load now rather than only for
+    // `kind === 'agent-host'`. Failure is tolerated, not fatal: a local/dev/test kernel process
+    // with no Handle keys configured still starts and serves chat/WS normally — only `invoke_worker`
+    // (and, if `kind === 'agent-host'`, entry-Handle issuance) would be unavailable, and
+    // `application/task/runtime.ts`'s `TaskRuntimeNotConfiguredError` reports that clearly, lazily,
+    // the moment (if ever) someone actually calls it — see createBackgroundServices's own doc
+    // comment on `DEFAULT_TASK_SUPERVISOR_URL` for the full reasoning.
+    let handleKeyPair: HandleKeyPair | undefined;
+    try {
+      handleKeyPair = await loadHandleKeyPair();
+    } catch (err) {
+      if (kind === 'agent-host') throw err; // AgentHostRuntime cannot function without one.
+      app.log.warn(
+        { err },
+        'no Handle-signing keypair configured — invoke_worker will be unavailable until one is',
+      );
+    }
 
     const rawTurnInterruptTimeoutMs = process.env.TURN_INTERRUPT_TIMEOUT_MS;
     const rawEntryHandleTtlSeconds = process.env.ENTRY_HANDLE_TTL_SECONDS;
@@ -420,9 +529,13 @@ export function main(): void {
     const rawApprovalTimeoutMs = process.env.APPROVAL_TIMEOUT_MS;
     const rawApprovalReaperIntervalMs = process.env.APPROVAL_REAPER_INTERVAL_MS;
     const rawGatekeeperDrainIntervalMs = process.env.GATEKEEPER_DRAIN_INTERVAL_MS;
+    const rawTaskReaperIntervalMs = process.env.TASK_REAPER_INTERVAL_MS;
 
     background = createBackgroundServices({
       pool,
+      supervisorUrl: process.env.SUPERVISOR_URL,
+      taskReaperIntervalMs: rawTaskReaperIntervalMs ? Number(rawTaskReaperIntervalMs) : undefined,
+      onTaskReaperError: (err: unknown) => app.log.error(err),
       kind,
       handleKeyPair,
       kernelLlmUrl: process.env.KERNEL_LLM_URL,

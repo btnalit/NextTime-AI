@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../../adapters/db/pool.js';
 import { withWorkspace } from '../../../adapters/db/pool.js';
 import { findAttributableTurnForSession } from '../../../application/host-bridge/index.js';
+import { recordWorkerRunUsage } from '../../../application/task/index.js';
 import {
   LlmUsageBatchSchema,
   type LlmUsageRecord,
@@ -47,6 +48,16 @@ import {
  * `on conflict (workspace_id, jti, started_at) do nothing` already means a replayed report that
  * matches an existing row never touches that row's columns, `turn_id` included — this route does
  * not need its own replay guard on top of that.
+ *
+ * Per-Task budget accounting (docs/development-tasks.md S2.7 "usage reports carry sessionId; a
+ * Worker session's usage must count against its Task's budget ... same layer-legal shape as the
+ * turn attribution added in PR #37"): same pattern as `resolveTurnId` above — this route builds an
+ * `onRecordInserted` closure over the same per-group `client`/transaction and passes it as
+ * `options.onRecordInserted`, so `application/task`'s `recordWorkerRunUsage` runs in the *same*
+ * transaction as the `llm_usage` insert it is reacting to (I18: a 100%-budget Task failure and the
+ * usage row that pushed it there commit or roll back together). `recordWorkerRunUsage` itself is a
+ * no-op for any session that is not a `worker_run` (an entry/other session's usage has no Task to
+ * accumulate onto) — this route does not need to know which sessions those are.
  */
 
 export interface LlmUsageRoutesDeps {
@@ -121,7 +132,17 @@ export async function registerLlmUsageRoutes(
               }
               return turn.id;
             };
-            return record(client, records, { resolveTurnId });
+            // See module doc "Per-Task budget accounting" — same client/transaction as the
+            // insert(s) it is reacting to; only ever called for a record `recordUsage` actually
+            // inserted (not a replayed duplicate — see that function's own doc comment).
+            const onRecordInserted = (usageRecord: LlmUsageRecord): Promise<void> =>
+              recordWorkerRunUsage(client, workspaceId, usageRecord.sessionId, {
+                inputTokens: usageRecord.inputTokens,
+                outputTokens: usageRecord.outputTokens,
+                cacheReadTokens: usageRecord.cacheReadTokens,
+                cacheWriteTokens: usageRecord.cacheWriteTokens,
+              });
+            return record(client, records, { resolveTurnId, onRecordInserted });
           },
         );
         inserted += result.inserted;

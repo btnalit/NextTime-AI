@@ -1,4 +1,4 @@
-import type { CapabilityChannel, Role, WorkerDefinitionKind } from '@nexttime/shared';
+import type { CapabilityChannel, HandleClaims, Role, WorkerDefinitionKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ChatMessageRow,
@@ -12,6 +12,18 @@ import {
   sendChatMessage,
 } from '../../application/chat/index.js';
 import type { AgentRuntime } from '../../application/host-bridge/index.js';
+import {
+  type InvokeWorkerInput,
+  findOperations,
+  findProcedures,
+  findWorkers,
+  getConfiguredTaskRuntime,
+  getTaskWithWorkerRuns,
+  invokeWorker,
+  resolveParentAuthority,
+  setQuotaValue,
+  terminateTask,
+} from '../../application/task/index.js';
 import {
   type WorkerDefinitionRow,
   deprecateWorkerDefinition,
@@ -532,6 +544,143 @@ const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, p
   return { result, resourceType: 'capability_grant', resourceId: result.id };
 };
 
+// -------------------------------------------------------------------------------------------
+// S2.7 task/find_* handlers (docs/development-tasks.md S2.7). `invoke_worker` deliberately never
+// touches the `client` dispatch.ts hands it — see `application/task/invoke.ts`'s own module doc
+// comment for why (it manages its own independently-committed transactions via the configured
+// `TaskRuntimeDeps.pool`, so a freshly-minted WorkerRun Handle is usable the moment the Worker
+// container can reach the kernel, not only after this whole capability call returns).
+// `create_task` is deliberately **not** wired (see this section's own note below).
+// -------------------------------------------------------------------------------------------
+
+const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, params, ctx) => {
+  const result = await invokeWorker(
+    workspaceId,
+    { principalId: ctx?.principalId ?? '', channel: ctx?.channel ?? 'handle', claims: ctx?.claims },
+    params as InvokeWorkerInput,
+    getConfiguredTaskRuntime(),
+  );
+  return { result, resourceType: 'task', resourceId: result.taskId };
+};
+
+function toWireWorkerRun(row: {
+  readonly id: string;
+  readonly status: string;
+  readonly containerId: string | null;
+  readonly depth: number;
+  readonly attempt: number;
+  readonly startedAt: Date;
+  readonly terminatedAt: Date | null;
+}) {
+  return {
+    id: row.id,
+    status: row.status,
+    containerId: row.containerId,
+    depth: row.depth,
+    attempt: row.attempt,
+    startedAt: row.startedAt.toISOString(),
+    terminatedAt: row.terminatedAt ? row.terminatedAt.toISOString() : null,
+  };
+}
+
+const getTaskHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { taskId } = params as { taskId: string };
+  const { task, workerRuns } = await getTaskWithWorkerRuns(client, workspaceId, taskId);
+  return {
+    result: {
+      id: task.id,
+      status: task.status,
+      onBehalfOf: task.onBehalfOf,
+      workerDefinitionId: task.workerDefinitionId,
+      workerDefinitionVersion: task.workerDefinitionVersion,
+      input: task.input,
+      result: task.result,
+      tokenBudget: task.tokenBudget,
+      tokensUsed: task.tokensUsed,
+      durationLimitSec: task.durationLimitSec,
+      failureReason: task.failureReason,
+      createdAt: task.createdAt.toISOString(),
+      completedAt: task.completedAt ? task.completedAt.toISOString() : null,
+      failedAt: task.failedAt ? task.failedAt.toISOString() : null,
+      cancelledAt: task.cancelledAt ? task.cancelledAt.toISOString() : null,
+      workerRuns: workerRuns.map(toWireWorkerRun),
+    },
+    resourceType: 'task',
+    resourceId: task.id,
+  };
+};
+
+/** `create_task`: **not wired** (docs/development-tasks.md S2.7 "if the registry has it,
+ *  implement as 'invoke without spawn'? — read its paramsSchema and decide; document"). Decision:
+ *  `create_task`'s registered `paramsSchema` (`packages/shared/src/capabilities.ts`) is `{input:
+ *  z.unknown()}` — it carries no `definitionId`/`version`, but `tasks.worker_definition_id`/
+ *  `.worker_definition_version` are `not null` (migrations/task/0001_tasks.sql) and every other
+ *  Task-creating path in this codebase (`invoke_worker`) always pins one at creation time (§5.5
+ *  "Task 固定引用启动时版本"). There is no well-formed Task this handler could create from its own
+ *  params alone without either fabricating a WorkerDefinition reference or loosening a column
+ *  constraint that every other part of the system relies on staying `not null` — both are outside
+ *  this task's ownership to decide unilaterally for a capability whose shape predates it. Left
+ *  unwired (falls through to `CapabilityNotImplementedError`, HTTP 501) rather than guessed at;
+ *  `invoke_worker(..., wait: false)` already covers "create a Task and don't wait for it" for
+ *  every real caller today.
+ */
+
+const setQuotaHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { key, value } = params as { key: string; value: unknown };
+  const updatedBy = await currentPrincipalId(client);
+  const result = await setQuotaValue(client, workspaceId, { key, value, updatedBy });
+  return { result, resourceType: 'quota', resourceId: result.key };
+};
+
+const findWorkersHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { need } = params as { need: string };
+  const parentAuthority = await resolveParentAuthority(client, workspaceId, {
+    principalId: ctx?.principalId ?? '',
+    channel: ctx?.channel ?? 'handle',
+    claims: ctx?.claims,
+  });
+  const result = await findWorkers(client, workspaceId, { parentAuthority }, need);
+  return { result };
+};
+
+const findOperationsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { need } = params as { need: string };
+  const parentAuthority = await resolveParentAuthority(client, workspaceId, {
+    principalId: ctx?.principalId ?? '',
+    channel: ctx?.channel ?? 'handle',
+    claims: ctx?.claims,
+  });
+  const result = await findOperations(client, workspaceId, { parentAuthority }, need);
+  return { result };
+};
+
+const findProceduresHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { need } = params as { need: string };
+  const parentAuthority = await resolveParentAuthority(client, workspaceId, {
+    principalId: ctx?.principalId ?? '',
+    channel: ctx?.channel ?? 'handle',
+    claims: ctx?.claims,
+  });
+  const result = await findProcedures(client, workspaceId, { parentAuthority }, need);
+  return { result };
+};
+
+/** `cancel_task` — not in S2.7's own explicit "handlers wired" list, but wired anyway: it is a
+ *  thin, self-contained pass-through to `terminateTask` (already required internally, e.g. by the
+ *  budget-exhaustion path), the capability's `paramsSchema` (`{taskId}`) needs nothing this
+ *  handler cannot already provide, and leaving a registered-but-unwired capability whose service
+ *  function already exists would be a stranger inconsistency than wiring it. */
+const cancelTaskHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { taskId } = params as { taskId: string };
+  const actorPrincipalId = await currentPrincipalId(client);
+  const result = await terminateTask(workspaceId, actorPrincipalId, taskId);
+  return {
+    result: { id: result.id, status: result.status },
+    resourceType: 'task',
+    resourceId: result.id,
+  };
+};
+
 /** capability name → handler, for every wired capability. */
 export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new Map([
   ['get_object', getObjectHandler],
@@ -566,4 +715,13 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['propose_operation', proposeOperationHandler],
   ['publish_operation', publishOperationHandler],
   ['deprecate_operation', deprecateOperationHandler],
+  // S2.7 (docs/development-tasks.md S2.7) — `create_task` deliberately absent, see
+  // `setQuotaHandler`'s neighboring doc comment above ("create_task: not wired").
+  ['invoke_worker', invokeWorkerHandler],
+  ['get_task', getTaskHandler],
+  ['cancel_task', cancelTaskHandler],
+  ['set_quota', setQuotaHandler],
+  ['find_workers', findWorkersHandler],
+  ['find_operations', findOperationsHandler],
+  ['find_procedures', findProceduresHandler],
 ]);

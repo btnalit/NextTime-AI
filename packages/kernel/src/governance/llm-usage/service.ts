@@ -89,6 +89,18 @@ export interface RecordUsageOptions {
   /** Overrides `LLM_DAILY_TOKEN_BUDGET` for tests. `undefined` (the default, when the env var is
    *  also unset) means unlimited — no budget check runs at all. */
   readonly dailyTokenBudgetTokens?: number;
+  /**
+   * S2.7 addition (docs/development-tasks.md S2.7 "usage reports carry sessionId; a Worker
+   * session's usage must count against its Task's budget" — "same layer-legal shape as the turn
+   * attribution added in PR #37"): called once per record *actually inserted* this call (never
+   * for a replayed record `on conflict do nothing` skips — see the call site below), after that
+   * record's own INSERT, in the same transaction. Same reasoning as `resolveTurnId`: this module
+   * may not import `application/task` (governance may not depend on application, §7.10), so the
+   * per-Task token-budget accounting itself lives there; `interfaces/http/internal/llm-usage.ts`
+   * supplies the real hook, bound to the same `client`/transaction this call runs in. Defaults to
+   * a no-op.
+   */
+  readonly onRecordInserted?: (record: LlmUsageRecord) => Promise<void> | void;
 }
 
 export interface RecordUsageResult {
@@ -133,6 +145,27 @@ async function sumTodayTokens(client: PoolClient, workspaceId: string): Promise<
 }
 
 /**
+ * Sums today's (UTC calendar day) total `cost_usd` for one workspace — the I18 "每工作区日成本"
+ * quota's own data source (design doc §5.4 I18; docs/development-tasks.md S2.7), a distinct axis
+ * from `sumTodayTokens`'s token-count budget above (S1.7's `LLM_DAILY_TOKEN_BUDGET`). Rows with a
+ * `null` `cost_usd` (a model with no configured `ModelCost` rate, this table's own header comment)
+ * contribute `0`, never `null`-poisoning the sum. Exported for `application/task`'s quota checks
+ * — `governance/llm-usage` owns `llm_usage`, so this is the layer-legal read `application/task`
+ * (which may depend on governance's service interface, §7.10) calls rather than querying the
+ * table directly.
+ */
+export async function sumTodayCostUsd(client: PoolClient, workspaceId: string): Promise<number> {
+  const result = await client.query<{ total: string }>(
+    `select coalesce(sum(coalesce(cost_usd, 0)), 0) as total
+     from llm_usage
+     where workspace_id = $1
+       and started_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')`,
+    [workspaceId],
+  );
+  return Number(result.rows[0]?.total ?? 0);
+}
+
+/**
  * Idempotently inserts `records` into `llm_usage` (idempotency key: `(workspace_id, jti,
  * started_at)` — see the migration's header comment for why this option was picked over a
  * client-generated id) and, when `LLM_DAILY_TOKEN_BUDGET` (or `options.dailyTokenBudgetTokens`)
@@ -162,6 +195,7 @@ export async function recordUsage(
   if (workspaceId === undefined) return { inserted: 0 };
 
   const resolveTurnId = options.resolveTurnId ?? defaultResolveTurnId;
+  const onRecordInserted = options.onRecordInserted ?? (() => {});
   const budget = options.dailyTokenBudgetTokens ?? readDailyTokenBudgetFromEnv();
 
   const before = budget !== undefined ? await sumTodayTokens(client, workspaceId) : 0;
@@ -193,7 +227,13 @@ export async function recordUsage(
         record.status,
       ],
     );
-    inserted += result.rowCount ?? 0;
+    const recordInserted = (result.rowCount ?? 0) > 0;
+    if (recordInserted) {
+      inserted += 1;
+      // Only for a genuinely new row — a replayed record the `on conflict` skips must never be
+      // double-counted against a Task's token budget (see this option's own doc comment).
+      await onRecordInserted(record);
+    }
   }
 
   if (budget === undefined) return { inserted };

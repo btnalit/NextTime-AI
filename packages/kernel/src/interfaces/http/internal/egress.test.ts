@@ -79,6 +79,8 @@ describe('POST /internal/egress', () => {
       attributedToRecentTurn: 0,
       skippedUnknownSource: 0,
       skippedNoTurn: 0,
+      attributedToWorkerRun: 0,
+      skippedNoWorkerRun: 0,
     }));
     await registerEgressRoutes(app, { pool: fakePool(), recordEgressObservations });
 
@@ -97,6 +99,8 @@ describe('POST /internal/egress', () => {
         attributedToRecentTurn: 0,
         skippedUnknownSource: 0,
         skippedNoTurn: 0,
+        attributedToWorkerRun: 0,
+        skippedNoWorkerRun: 0,
       },
     });
     expect(recordEgressObservations).toHaveBeenCalledTimes(1);
@@ -123,6 +127,8 @@ describe('POST /internal/egress', () => {
       attributedToRecentTurn: 0,
       skippedUnknownSource: 0,
       skippedNoTurn: 0,
+      attributedToWorkerRun: 0,
+      skippedNoWorkerRun: 0,
     }));
     await registerEgressRoutes(app, { pool: fakePool(), recordEgressObservations });
 
@@ -137,6 +143,8 @@ describe('POST /internal/egress', () => {
       attributedToRecentTurn: 0,
       skippedUnknownSource: 0,
       skippedNoTurn: 0,
+      attributedToWorkerRun: 0,
+      skippedNoWorkerRun: 0,
     });
     expect(recordEgressObservations).toHaveBeenCalledWith(expect.anything(), []);
   });

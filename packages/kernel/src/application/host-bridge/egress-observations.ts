@@ -17,9 +17,15 @@ import { DEFAULT_RECENT_TURN_WINDOW_MINUTES, findAttributableTurn } from './turn
  * `egress-proxy`'s `SOURCE_MAP_FILE` for every entry container it spawns. `egress-proxy` itself
  * treats the whole string as opaque (`report.ts`'s own doc comment: "turning a sourceId into a
  * WorkerRun/entry-session Activity is the kernel host-bridge's job") — this file is that job.
- * `worker`-run sourceIds (a distinct, not-yet-defined format — S2.8) are out of scope; the only
- * format recognized here is the `entry:` one, matching every sourceId `egress-proxy` can produce
- * in S1 (resident/entry spawns are the only kind `worker-supervisor` registers before S2).
+ *
+ * S2.7 addition: `worker:<workspaceId>:<workerRunId>` (`packages/worker-supervisor/src/
+ * egress-map.ts`'s `taskSourceId()`, S2.8) — a Task-mode container's egress. Unlike the `entry:`
+ * path (which attributes to a Turn Activity it does not own — see "Cross-module table access"
+ * below), this one attributes directly to the `kind='worker_run'` Activity `application/task/
+ * invoke.ts`'s `spawnWorkerRun` already created at spawn time and recorded on
+ * `worker_runs.activity_id` (migrations/task/0003_task_worker_run_lineage.sql) — no "which Turn is
+ * currently running" ambiguity to resolve (a WorkerRun has exactly one Activity, for its entire
+ * life), so there is no fallback-window logic on this path the way there is for `entry:`.
  *
  * Cross-module table access (assumption — see PR body "假设与偏离", same deviation `application/
  * gateway/handlers.ts`'s `reportTurnHandler` and `substrate/epistemic/explain.ts` already make and
@@ -101,6 +107,13 @@ export interface RecordEgressObservationsResult {
   readonly skippedUnknownSource: number;
   /** No running or recent-enough `agent_turn` Activity existed to attribute the observation to. */
   readonly skippedNoTurn: number;
+  /** S2.7: `worker:<workspaceId>:<workerRunId>` observations appended to that WorkerRun's own
+   *  `kind='worker_run'` Activity. */
+  readonly attributedToWorkerRun: number;
+  /** S2.7: a `worker:` sourceId named a `workerRunId` this workspace has no `worker_runs` row for
+   *  (never spawned, or already reaped/cleaned up) — dropped with a `warn` log line, same
+   *  "best-effort telemetry" contract `skippedNoTurn` already establishes for the `entry:` path. */
+  readonly skippedNoWorkerRun: number;
 }
 
 /** Task brief: "keep the array bounded, e.g. last 200 entries". */
@@ -123,6 +136,25 @@ function parseEntrySourceId(sourceId: string): EntrySource | undefined {
   const principalId = match?.[2];
   if (!workspaceId || !principalId) return undefined;
   return { workspaceId, principalId };
+}
+
+/** S2.7: `worker:<workspaceId>:<workerRunId>` — fixed by `packages/worker-supervisor/src/
+ *  egress-map.ts`'s `taskSourceId()` (S2.8). Same UUID-shaped pre-check as `ENTRY_SOURCE_ID_
+ *  PATTERN` above. */
+const WORKER_SOURCE_ID_PATTERN =
+  /^worker:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+interface WorkerSource {
+  readonly workspaceId: string;
+  readonly workerRunId: string;
+}
+
+function parseWorkerSourceId(sourceId: string): WorkerSource | undefined {
+  const match = WORKER_SOURCE_ID_PATTERN.exec(sourceId);
+  const workspaceId = match?.[1];
+  const workerRunId = match?.[2];
+  if (!workspaceId || !workerRunId) return undefined;
+  return { workspaceId, workerRunId };
 }
 
 /** Appends one entry to `activities.metadata.egress`, trimming to the last `MAX_EGRESS_ENTRIES`
@@ -184,8 +216,63 @@ export async function recordEgressObservations(
   let attributedToRecentTurn = 0;
   let skippedUnknownSource = 0;
   let skippedNoTurn = 0;
+  let attributedToWorkerRun = 0;
+  let skippedNoWorkerRun = 0;
 
   for (const observation of observations) {
+    const workerSource = parseWorkerSourceId(observation.sourceId);
+    if (workerSource) {
+      const { workspaceId, workerRunId } = workerSource;
+      // `worker_runs` RLS is workspace-only (migrations/task/0001_tasks.sql) — `principalId` is
+      // inert here, same "pass a real, syntactically-valid uuid already on hand" convention this
+      // file's own `entry:` path (via `withWorkspace`) and `interfaces/http/internal/
+      // llm-usage.ts` both already establish.
+      const activityId = await withWorkspace(
+        deps.pool,
+        { workspaceId, principalId: workerRunId },
+        async (client) => {
+          const result = await client.query<{ activity_id: string | null }>(
+            'select activity_id from worker_runs where workspace_id = $1 and id = $2',
+            [workspaceId, workerRunId],
+          );
+          const found = result.rows[0]?.activity_id;
+          if (!found) return undefined;
+
+          const entry: Record<string, unknown> = {
+            hostname: observation.hostname,
+            port: observation.port,
+            bytesIn: observation.bytesIn,
+            bytesOut: observation.bytesOut,
+            allowed: observation.allowed,
+            reason: observation.reason,
+            at: observation.at,
+          };
+          await appendEgressEntry(client, workspaceId, found, entry);
+          await enqueue(client, {
+            type: 'EgressObserved',
+            workspaceId,
+            activityId: found,
+            domain: observation.hostname,
+            bytes: observation.bytesIn + observation.bytesOut,
+          });
+          return found;
+        },
+      );
+
+      if (!activityId) {
+        skippedNoWorkerRun++;
+        log('warn', {
+          msg: 'no worker_runs row (or no activity_id yet) for worker egress sourceId, dropping',
+          workspaceId,
+          workerRunId,
+          hostname: observation.hostname,
+        });
+        continue;
+      }
+      attributedToWorkerRun++;
+      continue;
+    }
+
     const source = parseEntrySourceId(observation.sourceId);
     if (!source) {
       skippedUnknownSource++;
@@ -242,5 +329,12 @@ export async function recordEgressObservations(
     else attributedToRecentTurn++;
   }
 
-  return { attributedToRunningTurn, attributedToRecentTurn, skippedUnknownSource, skippedNoTurn };
+  return {
+    attributedToRunningTurn,
+    attributedToRecentTurn,
+    skippedUnknownSource,
+    skippedNoTurn,
+    attributedToWorkerRun,
+    skippedNoWorkerRun,
+  };
 }

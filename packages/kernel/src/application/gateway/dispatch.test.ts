@@ -86,10 +86,12 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
   });
 
   it('member calling set_quota → ForbiddenError (403)', async () => {
-    // set_quota (governance group, human channel, minRole:'owner') has no wired handler yet
-    // (I18 quotas are S2.7 scope) — used here (rather than grant_capability/approve, both wired by
-    // S2.3) purely as a still-unimplemented, owner-only capability to prove role-gating still 403s
-    // a `member` before ever reaching dispatch's handler lookup.
+    // set_quota (governance group, human channel, minRole:'owner') is wired (S2.7) — this test
+    // still proves role-gating alone 403s a `member` *before* dispatch ever reaches the handler
+    // (authorizeCapabilityCall runs first, independent of whether a handler exists) — `1` is a
+    // structurally valid `value` (set_quota's own paramsSchema is `{key: string, value:
+    // unknown}`), so a 403 here can only come from the role check, not from later per-key
+    // validation the handler itself would perform.
     await expect(
       dispatchCapability({ pool: neverConnectPool }, humanCaller({ role: 'member' }), 'set_quota', {
         key: 'x',
@@ -98,34 +100,44 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
     ).rejects.toThrow(ForbiddenError);
   });
 
-  it('owner calling set_quota passes authorization (the 403 above is role-specific)', async () => {
-    // set_quota has no handler (S2.7 scope), so this still ends in 501 — but
-    // CapabilityNotImplementedError (not ForbiddenError) proves authorization itself passed for
-    // `owner`, unlike for `member` above.
+  it('owner calling issue_handle passes authorization (the 403 above is role-specific)', async () => {
+    // issue_handle (governance group, human channel, minRole:'owner') has no wired handler yet
+    // (S1.9 registered it; no task has implemented it) — CapabilityNotImplementedError (not
+    // ForbiddenError) proves authorization itself passed for `owner`, unlike `set_quota` for
+    // `member` above. (Prior to S2.7, this test used `set_quota` for the same purpose — it now has
+    // a real handler, so a still-unimplemented owner-only capability is needed here instead.)
     await expect(
-      dispatchCapability({ pool: neverConnectPool }, humanCaller({ role: 'owner' }), 'set_quota', {
-        key: 'x',
-        value: 1,
-      }),
+      dispatchCapability(
+        { pool: neverConnectPool },
+        humanCaller({ role: 'owner' }),
+        'issue_handle',
+        {
+          sessionId: randomUUID(),
+          scope: {},
+        },
+      ),
     ).rejects.toThrow(CapabilityNotImplementedError);
   });
 
   it('a registry capability with no wired handler → CapabilityNotImplementedError (501)', async () => {
-    // `cancel_task` (task group, handle channel) has no wired handler yet — Task/`invoke_worker`
-    // (S2.7) owns it, not this task. `request_action` (governance group, handle channel) *was*
-    // this test's example through S2.3 — it deliberately left it unimplemented, since its wire
-    // paramsSchema carries no blast_radius/auto_approvable, only resolvable via a Gatekeeper's
-    // published interface manifest (S2.4). S2.4 wires `request_action` (`request-action-
-    // handler.ts`, `governance/gatekeepers`'s manifest registry) — see
-    // dispatch.integration.test.ts for its own now-real behavior — so this test moved to a
-    // capability still genuinely unimplemented at this point in the codebase.
+    // `create_task` (task group, handle channel) has no wired handler — S2.7's own deliberate
+    // decision (see application/gateway/handlers.ts's neighboring doc comment on
+    // `setQuotaHandler`: create_task's paramsSchema carries no definitionId/version, and
+    // tasks.worker_definition_id/.worker_definition_version are NOT NULL, so there is no way to
+    // build a well-formed Task from this capability's own params alone).
+    //
+    // History of this test's example capability (kept for context, since this is now the third
+    // swap): `request_action` was the example through S2.3 (unresolvable without a Gatekeeper
+    // manifest, S2.4); S2.4 itself pre-emptively swapped to `cancel_task` in anticipation of S2.7
+    // owning it — but S2.7 (this PR) wired `cancel_task` too (a thin, low-cost wrapper over the
+    // `terminateTask` service function it already needed elsewhere), so a third swap was needed.
     await expect(
       dispatchCapability(
         { pool: neverConnectPool },
-        humanCaller({ role: 'operator' }),
-        'cancel_task',
+        humanCaller({ role: 'member' }),
+        'create_task',
         {
-          taskId: randomUUID(),
+          input: {},
         },
       ),
     ).rejects.toThrow(CapabilityNotImplementedError);

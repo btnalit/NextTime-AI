@@ -48,3 +48,11 @@ export type {
 export { SqlGraphStore } from './sql-store.js';
 
 export type { SqlQuery } from './queries.js';
+
+export {
+  DEFAULT_FIND_MEANS_LIMIT,
+  findOperationCandidates,
+  findProcedureCandidates,
+  findWorkerDefinitionCandidates,
+} from './find-means.js';
+export type { FindMeansInput } from './find-means.js';
