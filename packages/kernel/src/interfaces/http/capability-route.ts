@@ -143,9 +143,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     return { status: 404, code: 'not_found', message: err.message };
   }
   // S2.9 (docs/development-tasks.md S2.9 "malformed contract → 400"): a `report_task_result`
-  // contract that is schema-valid (InvalidCapabilityParamsError already covers a syntactically
-  // malformed one) but semantically invalid — a `factsToAssert[].objectId` that does not exist, an
-  // `evidence[].factIndex` out of range, a `proposedOperations[].gatekeeperId` that does not exist.
+  // contract that is schema-valid (InvalidCapabilityParamsError already covers a syntax-level
+  // malformed one) but invalid at the meaning level — a `factsToAssert[].objectId` that does not
+  // exist, an `evidence[].factIndex` out of range, a `proposedOperations[].gatekeeperId` that does
+  // not exist.
   if (err instanceof WorkerResultValidationError) {
     return { status: 400, code: 'invalid_params', message: err.message };
   }
