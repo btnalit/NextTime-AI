@@ -95,5 +95,12 @@ WORKDIR /workspace
 USER nexttime
 ENV NODE_ENV=production
 ENV HOME=/workspace
+# pi 0.84.4 checks for a newer release at startup (dist/utils/version-check.js →
+# https://pi.dev/api/latest-version) unless this env var is set; observed on the host as an
+# unexplained `pi.dev` entry in a Turn's activities.metadata.egress. The image is pinned and
+# updated only by rebuilding it, so the check is pure noise here — and every agent container's
+# outbound traffic should be the agent's own, not the runtime's. Image-level ENV: it does not
+# depend on worker-supervisor's env allowlist, which deliberately passes nothing else through.
+ENV PI_SKIP_VERSION_CHECK=1
 
 ENTRYPOINT ["/opt/nexttime/entrypoint.sh"]
