@@ -8,7 +8,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
-import { hashApiKey } from '../../application/gateway/index.js';
+import { WorkerResultValidationError, hashApiKey } from '../../application/gateway/index.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
 import { mapCapabilityError } from './capability-route.js';
@@ -48,6 +48,13 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new Error('secret detail'));
     expect(mapped.status).toBe(500);
     expect(mapped.message).toBe('internal error');
+  });
+
+  // S2.9 (docs/development-tasks.md S2.9 "malformed contract → 400").
+  it('WorkerResultValidationError → 400 invalid_params', () => {
+    const mapped = mapCapabilityError(new WorkerResultValidationError('bad ref'));
+    expect(mapped.status).toBe(400);
+    expect(mapped.code).toBe('invalid_params');
   });
 });
 
