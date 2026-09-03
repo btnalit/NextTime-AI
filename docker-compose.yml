@@ -156,7 +156,7 @@ services:
   egress-proxy:
     build: { context: ., dockerfile: packages/egress-proxy/Dockerfile }
     volumes: ["${NEXTTIME_DATA}/config/egress-sources.json:/data/config/egress-sources.json:ro"]
-    environment: { KERNEL_URL: http://kernel:8080, NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL}", NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS}", SOURCE_MAP_FILE: /data/config/egress-sources.json, EGRESS_TRUSTED_RESOLVED_CIDRS: "${EGRESS_TRUSTED_RESOLVED_CIDRS:-}" }
+    environment: { KERNEL_URL: http://kernel:8080, NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL}", NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS}", SOURCE_MAP_FILE: /data/config/egress-sources.json, EGRESS_TRUSTED_RESOLVED_CIDRS: "${EGRESS_TRUSTED_RESOLVED_CIDRS:-}", EGRESS_DENY_HOST_SUFFIXES: "${EGRESS_DENY_HOST_SUFFIXES:-}" }
     networks: [control, workers]
     restart: unless-stopped
 

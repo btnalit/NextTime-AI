@@ -394,7 +394,7 @@ flowchart TB
 
 ### 7.9 出网代理
 
-一个小的转发代理容器（几百行 Node，或 tinyproxy 加策略脚本），挂在 `control` 与 `workers` 两个网络上。规则：放行公网；拒绝 RFC1918、链路本地与平台内部服务名；按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 / 拒绝清单；记录每个目标域名与字节数到该次 Activity 的 `metadata`。不解密 TLS。这是 I10 的实现，也是「agent 能抓公网、装包、clone 公开仓库」的前提。宿主网络若是 fake-IP 式透明代理（解析器把所有公网域名答成某个私有段，由本地代理映射回真实目标），用 `EGRESS_TRUSTED_RESOLVED_CIDRS` 声明该段：**域名**解析进该段视为公网，字面 IP 与平台子网仍拒绝；正常网络留空。
+一个小的转发代理容器（几百行 Node，或 tinyproxy 加策略脚本），挂在 `control` 与 `workers` 两个网络上。规则：放行公网；拒绝 RFC1918、链路本地与平台内部服务名；按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 / 拒绝清单；记录每个目标域名与字节数到该次 Activity 的 `metadata`。不解密 TLS。这是 I10 的实现，也是「agent 能抓公网、装包、clone 公开仓库」的前提。宿主网络若是 fake-IP 式透明代理（解析器把所有公网域名答成某个私有段，由本地代理映射回真实目标），用 `EGRESS_TRUSTED_RESOLVED_CIDRS` 声明该段：**域名**解析进该段视为公网，字面 IP 与平台子网仍拒绝；正常网络留空。这种解析器对内网主机名也答同一段，名字成了唯一信号，所以代理内置按名字拒绝的私网后缀（`localhost` / `local` / `lan` / `home.arpa` / `internal`），站点自己的内网域用 `EGRESS_DENY_HOST_SUFFIXES` 追加。
 
 ### 7.10 内核内部分层、模块契约、领域事件
 

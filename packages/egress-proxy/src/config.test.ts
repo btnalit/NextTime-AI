@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_DENY_HOSTS, loadConfig } from './config.js';
+import { DEFAULT_DENY_HOSTS, DEFAULT_DENY_SUFFIXES, loadConfig } from './config.js';
 
 describe('loadConfig', () => {
   it('applies every documented default with an empty env', () => {
@@ -8,7 +8,7 @@ describe('loadConfig', () => {
       proxyPort: 3128,
       adminPort: 3129,
       kernelUrl: undefined,
-      denyHosts: [...DEFAULT_DENY_HOSTS],
+      denyHosts: [...DEFAULT_DENY_HOSTS, ...DEFAULT_DENY_SUFFIXES],
       platformSubnets: [],
       sourceMapFile: undefined,
       maxTunnelsPerSource: 32,
@@ -34,13 +34,25 @@ describe('loadConfig', () => {
       proxyPort: 4000,
       adminPort: 4001,
       kernelUrl: 'http://kernel.internal:8080',
-      denyHosts: ['kernel', 'postgres', 'custom-service'],
+      denyHosts: ['kernel', 'postgres', 'custom-service', ...DEFAULT_DENY_SUFFIXES],
       sourceMapFile: '/data/config/egress-sources.json',
       maxTunnelsPerSource: 8,
       idleTimeoutMs: 5000,
       connectTimeoutMs: 2000,
       allowLoopbackForTests: true,
     });
+  });
+
+  it('appends EGRESS_DENY_HOST_SUFFIXES after the private-suffix defaults (DENY_HOSTS override or not)', () => {
+    expect(loadConfig({ EGRESS_DENY_HOST_SUFFIXES: ' corp.example ,intra, ' }).denyHosts).toEqual([
+      ...DEFAULT_DENY_HOSTS,
+      ...DEFAULT_DENY_SUFFIXES,
+      'corp.example',
+      'intra',
+    ]);
+    expect(
+      loadConfig({ DENY_HOSTS: 'kernel', EGRESS_DENY_HOST_SUFFIXES: 'corp.example' }).denyHosts,
+    ).toEqual(['kernel', ...DEFAULT_DENY_SUFFIXES, 'corp.example']);
   });
 
   it('parses platform subnets from CIDR env vars', () => {
