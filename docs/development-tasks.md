@@ -339,6 +339,76 @@
 ### S2.8 worker-supervisor
 - 交付物：`packages/worker-supervisor` 的一次性模式（常驻模式已在 S1.5）：`spawnTask / terminate / status`；`--runtime ${WORKER_RUNTIME}` 回退 runc；`--network workers --read-only --cap-drop ALL`；挂载 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>` 到 `/workspace`；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE=worker / HTTP(S)_PROXY`、**不继承宿主 env**；只读挂载 `models.json` 与该定义 `uses` 的 Skill；注册 `(worker_run_id, container_id, ip)` 供 gateway 来源绑定与出网代理解析；Task 结束保留工作目录为 artifact，按保留策略清理。
 - 验收：非允许镜像 403；源 ip 与注册不一致的 Handle 请求被拒并撤销；容器内 env 无 `*_API_KEY`。依赖：E1。
+- 实现说明（S2.8 PR，2026-09；与常驻模式共用同一进程、同一 Fastify server、同一
+  `DockerClient`——`packages/worker-supervisor/README.md`"Task 模式"一节是这里的详细版）：
+  - 落地为 HTTP API（与常驻模式同一信任边界：`control` 网络内部、不发布端口、不做独立鉴权），不是
+    派发文字字面的 `spawnTask/terminate/status` 函数名：`POST /task/spawn`
+    `{taskId, workerRunId, workspaceId, onBehalfOf, capabilityHandle, image?, model?, skills?,
+    timeoutSec?}` → `200 {containerId, ip}` / `403`（镜像不在 allowlist）/ `400`；
+    `POST /task/:workerRunId/terminate` → `204`/`404`；`GET /task/:workerRunId` →
+    `200 {workerRunId, status, exitCode?, containerId, ip, startedAt, finishedAt?, reason?}` /
+    `404`。容器身份键是 `workerRunId`（`nexttime-task-<workerRunId>`），工作目录键是 `taskId`
+    （`workspaces/tasks/<taskId>`）——一个 Task 若未来允许多次 WorkerRun 重试，工作目录按设计延续，
+    容器各自独立。
+  - env 恰好是本条文字列出的清单加大小写代理三件套镜像（`http_proxy`/`https_proxy`/`no_proxy`，
+    理由同 S1.5a 已经记录的 "httpoxy" 规避）——**没有** `PI_CODING_AGENT_DIR`/`HOME`：对照 pi
+    0.84.4 参考项目验证，`HOME=/workspace` 已烘焙在镜像层，pi 未设
+    `PI_CODING_AGENT_DIR` 时的默认值 `join(homedir(), '.pi', 'agent')` 因此恰好落在 resident
+    模式显式设置的同一路径，不需要重复设置。
+  - `models.json` 只读挂到 `/workspace/.pi/agent/models.json`（与 resident 模式同一目标路径）；
+    每个 `skills[]` 只读挂到 `/workspace/.pi/agent/skills/<name>`——对照同一参考项目
+    `core/skills.ts` `loadSkills` 验证过是 pi 的默认全局 skills 目录，不是派发文字"验证不了就用
+    兜底路径"那句话所预期的猜测值。`skills[].name` 限定为安全的单段路径（拒绝 `.`/`..`/含 `/`），
+    防止挂载目标逃逸出 skills 目录。
+  - Task 状态 `running -> exited | terminated | failed` 的四态划分是本次实现的显式假设（派发文字
+    只写了"kill after timeoutSec ... status terminated with reason"，未逐字定义 exited 与
+    failed 的边界）：`terminated` 是本服务主动结束的（不看退出码），其余按 Docker 退出码分类
+    （`0` → `exited`，非 0 → `failed`），借鉴 Kubernetes Job 的 Complete/Failed 划分。
+  - `no-new-privileges` 加在 `docker-client.ts` 共享的 `createAndStart` 里（与
+    `--read-only`/`--cap-drop ALL`/tmpfs `/tmp` 这几项已有的做法一致——它们本来就是这个函数
+    无条件加给所有容器的，不是每个 spec 各自的字段），因此 resident 模式的入口容器现在也带这个
+    flag——纯加固，不改变任何已测行为（两种模式都已经以非 root 运行，`no-new-privileges` 只挡
+    setuid/setgid 提权）。
+  - 镜像 allowlist（`WORKER_IMAGE_ALLOWLIST`）是**追加式**：默认 `WORKER_IMAGE` 始终在 allowlist
+    里，设置这个变量不会意外把默认镜像挡在外面——派发文字未明确这一点，是本次实现偏保守的判断。
+  - `reconcile()`（supervisor 重启后按 `nexttime.role=worker` label 重新登记仍在跑的容器，参照
+    resident 模式已有的同名机制）、周期性 `reap()`（超时踢除 + 发现自然退出，30s 一次）、工作目录
+    退休 sweep（`TASK_WORKDIR_RETENTION_HOURS`，默认 72，1 小时一次）都是"Lifecycle"那段描述落地
+    成的具体机制，各自的轮询周期与失败处理（`docker.remove` 失败 best-effort、egress 登记失败
+    best-effort，都与 resident 模式已有的容错风格一致）是本次实现的选择。
+  - 已知缺口——"源 ip 与注册不一致的 Handle 请求被拒并撤销"这条验收标准跨到了 Gatekeeper/kernel
+    的门禁范围：本包只提供注册本身（egress 来源映射 `worker:<workspaceId>:<workerRunId>` 写入
+    `SOURCE_MAP_FILE`；`GET /task/:workerRunId` 按 `workerRunId` 正查 `containerId`/`ip`），没有
+    按来源 IP 反查 `workerRunId` 的端点，也没有撤销 Handle 的机制（Handle 生命周期不在本包所有权
+    范围）——如果 S2.7 的 gateway 侧确实需要这个反查方向，留给那个任务评估要不要在这里加索引，
+    详见 `docs/runbooks/host-worker-runtime.md` §11。
+  - 内核 host-bridge（`egress-observations.ts`）目前只解析 `entry:` 前缀的 sourceId；教它解析
+    `worker:` 前缀、把 Task 的出网流量记到对应 Activity 上是 S2.7/S2.11 的工作，未改动内核代码。
+  - `platform-extension` 的 `worker` 模式扩展是 S2.9 交付物，还没实现——本任务 spawn 出的容器里
+    pi 大概率因为扩展不认识 `NEXTTIME_MODE=worker` 而很快非零退出；本任务只交付
+    `worker-supervisor` 这一半（容器 spec、生命周期、状态机、注册表），端到端"Worker 真的能干活"
+    的验证要等 S2.9 落地。
+  - `docker-compose.yml`/`.env.example` 只加了 `TASK_MAX_RUNTIME_SEC`/`TASK_WORKDIR_RETENTION_HOURS`
+    的可选 passthrough（都已有内置默认值）；`WORKER_IMAGE_ALLOWLIST` 未加进 compose/.env.example
+    ——默认空（只允许 `WORKER_IMAGE`）已经安全，是更少用到的旗舰级 override，按"minimal"原则
+    留给需要时再加。
+  - 本机（Windows，无 Docker）只验证了 `typecheck`/`lint`/`test`（74 条新增用例覆盖 spawn
+    spec、状态机、终止、egress 登记增删、退休 sweep、`GET/POST /task/*` 路由、入参校验）与
+    `depcruise`/`ci:guards`/`validate-compose.mjs`；容器级行为（真实 `dockerode`、镜像构建、
+    `docker inspect` 核对 env/labels/挂载/安全选项）留给目标主机验收，步骤见
+    `docs/runbooks/host-worker-runtime.md` §10。
+  - PR review 追加（PR #35）：`taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 首版只做了
+    `min(1)`——`taskId` 是 bind-mount 的 host 路径片段、`workerRunId` 是容器名，未校验时一个
+    `../../pgdata` 形状的值就能把宿主机任意目录挂进 Worker 容器；`skills[].hostPath` 同样未校验，
+    能把 `/var/run/docker.sock`、`/etc` 之类路径只读挂进容器。收紧为：四个 id 字段改
+    `z.string().uuid()`（`config.ts` `idClaim`——沿用平台既有的 UUID 约定，`packages/shared/src/
+    handle-token.ts` `uuidClaim`、`packages/kernel/src/governance/llm-usage/service.ts` 已经在用；
+    **resident 模式自己的 `SpawnRequestSchema` 目前仍是 `min(1)`，本次未跟着收紧**，是同类缺口，
+    留给另一次改动）；新增 `isSkillHostPathAllowed`（同 `isImageAllowed` 的写法：纯函数 +
+    `server.ts` 逐个 skill 校验，不满足 `400`，不落到 docker 客户端）——要求绝对路径且经
+    `path.posix.normalize` 后落在 `${config.nextTimeData}/` 之下。详见
+    `packages/worker-supervisor/README.md`"POST /task/spawn"一节与本文档同一小节顶部的运行手册
+    引用。
 
 ### S2.9 `worker` 模式扩展与结果契约
 - 交付物：`entrypoint.sh` 增加 `worker` 模式自检（env 无 `*_API_KEY`；出网必经代理：直连内网失败、经代理公网通）；扩展 `modes/worker.ts`（向内核取 Handle 内允许的 Operation 列表并注册为 `<gate>.<op>` 工具，observe 直接经内核转门，execute 经 `tool_call` 拦截转 `request_action`；`context` 注入 Task 输入、相关 Fact、装载的 Skill；结束时按结果契约返回 `{summary, findings, facts_to_assert, evidence, artifacts, proposed_skill?, proposed_operations?}`；全量 JSONL 回传为私有 Source）；内核侧 `task/result.ts` 把 `facts_to_assert` 以 `inferred` 写入、证据挂 Activity、提议存草稿。镜像本身已在 S1.5 交付。

@@ -30,6 +30,10 @@ export interface ContainerSpec {
   readonly memoryMb: number;
   readonly pidsLimit: number;
   readonly tmpfsMb: number;
+  /** Container CMD, appended by `deploy/worker-runtime/entrypoint.sh`'s own `"$@"` after its
+   *  fixed pi flags (e.g. `['--model', modelId]` — task-spawn-spec.ts). `undefined` runs the
+   *  image's default CMD unmodified — resident mode's entry spec never sets this. */
+  readonly cmd?: readonly string[];
 }
 
 export interface ContainerState {
@@ -43,6 +47,9 @@ export interface ContainerState {
    *  running container's network endpoint). */
   readonly ip: string | undefined;
   readonly labels: Readonly<Record<string, string>>;
+  /** Docker's `State.ExitCode` — only meaningful (and only surfaced) once the container is no
+   *  longer running; `undefined` while `running` is true (task-service.ts's status/reap logic). */
+  readonly exitCode: number | undefined;
 }
 
 export interface DockerClient {
@@ -84,6 +91,7 @@ function toContainerState(inspect: Docker.ContainerInspectInfo): ContainerState 
         : undefined,
     ip: firstNetwork?.IPAddress || undefined,
     labels: inspect.Config?.Labels ?? {},
+    exitCode: inspect.State?.Running ? undefined : inspect.State?.ExitCode,
   };
 }
 
@@ -99,6 +107,7 @@ export function createDockerClient(options: CreateDockerClientOptions): DockerCl
       const container = await docker.createContainer({
         name: spec.name,
         Image: spec.image,
+        Cmd: spec.cmd ? [...spec.cmd] : undefined,
         Env: [...spec.env],
         Labels: { ...spec.labels },
         OpenStdin: true,
@@ -107,6 +116,11 @@ export function createDockerClient(options: CreateDockerClientOptions): DockerCl
         HostConfig: {
           Binds: [...spec.binds],
           CapDrop: ['ALL'],
+          // `no-new-privileges` (S2.8 task brief) applies to every spawned container, entry and
+          // Worker alike — it only blocks setuid/setgid privilege escalation, which neither mode
+          // relies on (both already run as non-root `nexttime`, uid 10001), so this is a no-op
+          // hardening addition for resident mode, not a behavior change.
+          SecurityOpt: ['no-new-privileges'],
           ReadonlyRootfs: true,
           Tmpfs: { '/tmp': `size=${spec.tmpfsMb}m` },
           Memory: spec.memoryMb * 1024 * 1024,

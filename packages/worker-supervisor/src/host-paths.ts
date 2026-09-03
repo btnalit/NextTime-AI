@@ -53,3 +53,61 @@ export function hostModelsJsonPath(config: SupervisorConfig): string {
 export function localModelsJsonPath(config: SupervisorConfig): string {
   return `${config.localDataDir}/config/models.json`;
 }
+
+/**
+ * Task-mode analogue of `workspacePaths` (S2.8; design doc §7.3, docs/development-tasks.md S2.8
+ * task brief): one directory per Task (not per user) — `workspaces/tasks/<taskId>` instead of
+ * `workspaces/<principalId>` — mounted to the same `/workspace` target. Never overlaps a user's
+ * entry workspace (I15: "其他用户的容器与任何 Worker 容器都不挂载" — a Worker's `hostWorkspaceDir`
+ * always lives under the `tasks/` subtree, an entry container's never does).
+ *
+ * `piAgentDirInContainer`/`modelsJsonTargetInContainer` intentionally reuse the exact same
+ * in-container path resident mode uses (`/workspace/.pi/agent[/models.json]`) even though the
+ * task-mode env allowlist (spawn-spec's task builder) does not set `PI_CODING_AGENT_DIR`: pi
+ * 0.84.4's own default (`packages/coding-agent/src/config.ts` `getAgentDir()`, verified against
+ * the pinned reference checkout) is `join(homedir(), '.pi', 'agent')`, and `homedir()` resolves
+ * from `HOME` — which the runtime image's own Dockerfile bakes in as `HOME=/workspace` at the
+ * image level (`deploy/worker-runtime/Dockerfile`), present regardless of what this package's
+ * `Env` array sets. So the default already lands exactly here without needing the env var.
+ */
+export interface TaskPaths {
+  readonly hostWorkspaceDir: string;
+  readonly localWorkspaceDir: string;
+  readonly piAgentDirInContainer: string;
+  readonly modelsJsonTargetInContainer: string;
+  readonly skillsDirInContainer: string;
+  /** This container's own view of `piAgentDirInContainer` — pre-created for the same reason
+   *  `workspacePaths`' `localPiAgentDir` is (see that doc comment): Docker would otherwise create
+   *  `.pi/` as root while preparing the `models.json` bind-mount, blocking the non-root Worker
+   *  container from creating sibling directories under it. */
+  readonly localPiAgentDir: string;
+}
+
+export function taskWorkspacePaths(config: SupervisorConfig, taskId: string): TaskPaths {
+  const hostWorkspaceDir = `${config.nextTimeData}/workspaces/tasks/${taskId}`;
+  const localWorkspaceDir = `${config.localDataDir}/workspaces/tasks/${taskId}`;
+  const piAgentDirInContainer = `${WORKSPACE_MOUNT_TARGET}/.pi/agent`;
+  return {
+    hostWorkspaceDir,
+    localWorkspaceDir,
+    piAgentDirInContainer,
+    modelsJsonTargetInContainer: `${piAgentDirInContainer}/models.json`,
+    skillsDirInContainer: `${piAgentDirInContainer}/skills`,
+    localPiAgentDir: `${localWorkspaceDir}/.pi/agent`,
+  };
+}
+
+/** This container's own view of the `workspaces/tasks/` root — used by the retention sweep
+ *  (`task-service.ts`) to enumerate finished Task directories. */
+export function localTaskWorkspacesRootDir(config: SupervisorConfig): string {
+  return `${config.localDataDir}/workspaces/tasks`;
+}
+
+/** Bind-mount target for one `skills[]` entry inside the container (`task-spawn-spec.ts`):
+ *  `<agentDir>/skills/<name>` — pi 0.84.4's own default global-skills directory
+ *  (`packages/coding-agent/src/core/skills.ts` `loadSkills`: `join(resolvedAgentDir, 'skills')`),
+ *  verified against the pinned reference checkout, not a guess — see `TaskPaths`'s doc comment for
+ *  why `resolvedAgentDir` lands at `piAgentDirInContainer` without `PI_CODING_AGENT_DIR` being set. */
+export function taskSkillTargetInContainer(paths: TaskPaths, skillName: string): string {
+  return `${paths.skillsDirInContainer}/${skillName}`;
+}

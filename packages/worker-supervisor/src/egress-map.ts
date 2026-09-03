@@ -37,6 +37,23 @@ export function entrySourceId(workspaceId: string, principalId: string): string 
   return `entry:${workspaceId}:${principalId}`;
 }
 
+/**
+ * Task/Worker-mode analogue of `entrySourceId` (S2.8; docs/development-tasks.md S2.8 task brief:
+ * "注册 `(worker_run_id, container_id, ip)` 供 gateway 来源绑定与出网代理解析"). Same opaque-string
+ * contract as `entry:` (egress-proxy never parses either), same `<kind>:<workspaceId>:<id>` shape
+ * — `worker:` is the `sessionKind` prefix for a one-shot Task's WorkerRun, `entry:`'s counterpart
+ * for the always-resident entry session.
+ *
+ * `packages/kernel/src/application/host-bridge/egress-observations.ts` (read, not modified, per
+ * this task's ownership) already documents that it only recognizes `entry:` today and calls
+ * `worker:` sourceIds "a distinct, not-yet-defined format — S2.8" — this is that format, now
+ * defined; teaching the kernel host-bridge to parse it back apart into `{workspaceId,
+ * workerRunId}` is S2.7/S2.11 work (egress attribution for Task-mode traffic), not this package's.
+ */
+export function taskSourceId(workspaceId: string, workerRunId: string): string {
+  return `worker:${workspaceId}:${workerRunId}`;
+}
+
 export interface EgressMapStore {
   register(ip: string, entry: SourceMapEntry): void;
   unregister(ip: string): void;

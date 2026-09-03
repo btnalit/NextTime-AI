@@ -92,6 +92,10 @@ services:
     # label Compose stamps on the `workers` network (docker-client.ts
     # `resolveNetworkByComposeLabel`); set it explicitly only if that resolution ever needs a
     # manual override.
+    # TASK_MAX_RUNTIME_SEC/TASK_WORKDIR_RETENTION_HOURS (S2.8, one-shot Task mode): both already
+    # have safe built-in defaults (packages/worker-supervisor/src/config.ts) — passed through here,
+    # like WORKER_RUNTIME above, only so an operator can override them via `.env` without editing
+    # this file.
     environment:
       {
         WORKER_IMAGE: nexttime-ai-worker-runtime,
@@ -100,6 +104,8 @@ services:
         KERNEL_URL: http://kernel:8080,
         KERNEL_LLM_URL: http://llm-proxy:8082,
         HTTP_PROXY_FOR_WORKERS: http://egress-proxy:3128,
+        TASK_MAX_RUNTIME_SEC: "${TASK_MAX_RUNTIME_SEC:-3600}",
+        TASK_WORKDIR_RETENTION_HOURS: "${TASK_WORKDIR_RETENTION_HOURS:-72}",
       }
     networks: [control]
     restart: unless-stopped

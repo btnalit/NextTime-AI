@@ -16,6 +16,10 @@ export interface FakeDockerClient extends DockerClient {
    *  by the code under test, only by a test setting up a "found existing but not running"
    *  scenario for the next `spawn()`. */
   simulateExternalKill(name: string): void;
+  /** Simulates a container that exited **on its own** with a specific code — task-service.test.ts
+   *  uses this to distinguish "the process finished" (`exited`/`failed`, depending on the code)
+   *  from an out-of-band kill or this service's own `stop()`/`remove()` calls. */
+  simulateExit(name: string, exitCode: number): void;
 }
 
 let ipCounter = 10;
@@ -48,6 +52,7 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
         startedAt: new Date().toISOString(),
         ip: nextIp(),
         labels: { ...spec.labels },
+        exitCode: undefined,
       };
       containers.set(spec.name, state);
       return state;
@@ -61,7 +66,13 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
       stopCalls.push({ name, timeoutSeconds });
       const existing = containers.get(name);
       if (existing) {
-        containers.set(name, { ...existing, running: false, status: 'exited', ip: undefined });
+        containers.set(name, {
+          ...existing,
+          running: false,
+          status: 'exited',
+          ip: undefined,
+          exitCode: 137,
+        });
       }
     },
 
@@ -84,7 +95,26 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
     simulateExternalKill(name: string): void {
       const existing = containers.get(name);
       if (existing) {
-        containers.set(name, { ...existing, running: false, status: 'exited', ip: undefined });
+        containers.set(name, {
+          ...existing,
+          running: false,
+          status: 'exited',
+          ip: undefined,
+          exitCode: 137,
+        });
+      }
+    },
+
+    simulateExit(name: string, exitCode: number): void {
+      const existing = containers.get(name);
+      if (existing) {
+        containers.set(name, {
+          ...existing,
+          running: false,
+          status: 'exited',
+          ip: undefined,
+          exitCode,
+        });
       }
     },
   };

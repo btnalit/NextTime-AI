@@ -195,7 +195,138 @@ git checkout main
   `container.attach({stream:true, stdin:true, stdout:true, stderr:true})`），`{id}` 取自
   `spawn`/`GET /resident/:principalId` 返回的 `containerId`。
 
-## 10. 已知偏离 / 待确认（PR 中一并说明）
+## 10. 一次性 Task 模式（S2.8）
+
+前置：§2 已构建 `nexttime-ai-worker-runtime` 镜像，`worker-supervisor` 已在跑（§4）。这里验证的是
+`worker-supervisor` 自己那一半——容器 spec（挂载、env、labels、镜像 allowlist）、生命周期（spawn /
+status / terminate / 超时 / 退休清理）——**不是**端到端"Worker 真的能干活"：`platform-extension` 的
+`worker` 模式扩展是 S2.9 的交付物，还没实现，所以下面 spawn 出来的容器里 pi 大概率会因为扩展不认识
+`NEXTTIME_MODE=worker` 而很快非零退出（`status` 从 `running` 很快变成 `failed`）——这是预期中的、
+S2.9 之前的正常现象，不是本任务的 bug。因为这个原因，"docker inspect 看 env" 这一步要在 spawn 后
+**立刻**做（容器一退出，`GET /task/:workerRunId` 或下一次周期性 `reap()`——至多 30 秒——就会把它
+`docker rm` 掉）。
+
+`taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 必须是 UUID（`TaskSpawnRequestSchema`，见 README
+"POST /task/spawn"一节）——下面固定几个便于辨认的示例值：
+
+```bash
+cd <CODE_DIR>
+TASK_ID=11111111-1111-1111-1111-111111111111
+WORKER_RUN_ID=22222222-2222-2222-2222-222222222222
+WORKSPACE_ID=33333333-3333-3333-3333-333333333333
+ON_BEHALF_OF=44444444-4444-4444-4444-444444444444
+
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/task/spawn', {
+  method: 'POST',
+  headers: {'content-type': 'application/json'},
+  body: JSON.stringify({
+    taskId: '${TASK_ID}',
+    workerRunId: '${WORKER_RUN_ID}',
+    workspaceId: '${WORKSPACE_ID}',
+    onBehalfOf: '${ON_BEHALF_OF}',
+    capabilityHandle: 'dummy-worker-handle',
+  }),
+}).then(r => r.text()).then(t => console.log(t))
+"
+```
+
+期望：`200 {containerId, ip}`。**立刻**（不要先查 status）检查容器 spec：
+
+```bash
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{range .Config.Env}}{{println .}}{{end}}' | sort
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{json .HostConfig.Binds}}'
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{json .Config.Labels}}'
+docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}} {{json .HostConfig.SecurityOpt}}'
+```
+
+期望：env 恰好是 `KERNEL_URL KERNEL_LLM_URL CAPABILITY_HANDLE TASK_ID WORKSPACE_ID WORKER_RUN_ID
+NEXTTIME_MODE HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy` 加镜像自带的
+`PIP_USER PYTHONUSERBASE PATH NODE_ENV HOME` 等——**没有任何 `*_API_KEY`**，也没有
+`PI_CODING_AGENT_DIR`（见 README"Spawn spec 关键决策"，默认值已经落在同一路径，不需要这个变量）；
+`Binds` 含 `.../workspaces/tasks/${TASK_ID}:/workspace` 与只读的 `models.json`；`Labels` 含
+`nexttime.role=worker`、`nexttime.task-id=${TASK_ID}`、`nexttime.worker-run-id=${WORKER_RUN_ID}`、
+`nexttime.workspace-id=${WORKSPACE_ID}`；`ReadonlyRootfs=true`、`CapDrop=["ALL"]`、
+`SecurityOpt=["no-new-privileges"]`。
+
+**输入校验（server.ts 在 docker 客户端之前就拒绝，不会创建任何容器）**：
+
+```bash
+# 非 UUID / 路径穿越形状的 taskId -> 400，且从不到达 docker（对照上一步：容器数不变）
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/task/spawn', {
+  method: 'POST', headers: {'content-type': 'application/json'},
+  body: JSON.stringify({
+    taskId: '../../pgdata', workerRunId: '${WORKER_RUN_ID}', workspaceId: '${WORKSPACE_ID}',
+    onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h',
+  }),
+}).then(r => console.log(r.status))
+"
+
+# skills[].hostPath 逃出 NEXTTIME_DATA -> 400（这里故意指向 docker.sock 本身来验证）
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/task/spawn', {
+  method: 'POST', headers: {'content-type': 'application/json'},
+  body: JSON.stringify({
+    taskId: '${TASK_ID}', workerRunId: '${WORKER_RUN_ID}', workspaceId: '${WORKSPACE_ID}',
+    onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h',
+    skills: [{name: 'evil', hostPath: '/var/run/docker.sock'}],
+  }),
+}).then(r => console.log(r.status))
+"
+docker ps -a --filter "name=nexttime-task-${WORKER_RUN_ID}" --format '{{.Names}}'   # 只有上面第一次成功 spawn 的那一个
+```
+
+期望：两次都 `400`；`docker ps -a` 里以 `nexttime-task-` 开头的容器数量没有因为这两次请求而增加。
+
+```bash
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/task/${WORKER_RUN_ID}')
+  .then(r => r.text()).then(t => console.log(t))
+"
+```
+
+期望：`200`，`status` 是 `running`（若查询够快）或 `exited`/`failed`（S2.9 前的预期现象，见上）；
+无论哪种，这次查询之后容器都已被 `docker rm`（`docker ps -a --filter name=nexttime-task-${WORKER_RUN_ID}`
+应为空）——`/workspace` 本身没有被删，仍是 Task 的 artifact：
+
+```bash
+ls "${NEXTTIME_DATA}/workspaces/tasks/${TASK_ID}"   # 目录还在（entrypoint.sh 写入的 .pi/ 等）
+```
+
+`terminate`（无论容器此时是否还在跑，都应 `204`——已结束的 Task 上调用是幂等成功，不是错误；用一个
+更长的 `timeoutSec` 重新 spawn 一次能提高"容器仍在跑时调用"的命中概率，但完整验证"杀掉一个真正还在
+跑的 Worker"要等 S2.9 落地、pi 真的能在 `worker` 模式下跑起来之后）：
+
+```bash
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/task/${WORKER_RUN_ID}/terminate', {method: 'POST'})
+  .then(r => console.log(r.status))
+"
+```
+
+期望：`204`。非允许镜像应 `403`：
+
+```bash
+TASK_ID_2=55555555-5555-5555-5555-555555555555
+WORKER_RUN_ID_2=66666666-6666-6666-6666-666666666666
+docker compose exec -T worker-supervisor node -e "
+fetch('http://localhost:8081/task/spawn', {
+  method: 'POST',
+  headers: {'content-type': 'application/json'},
+  body: JSON.stringify({
+    taskId: '${TASK_ID_2}', workerRunId: '${WORKER_RUN_ID_2}', workspaceId: '${WORKSPACE_ID}',
+    onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h', image: 'some-unapproved-image',
+  }),
+}).then(r => console.log(r.status))
+"
+```
+
+期望：`403`。收尾同 §8——`docker compose stop worker-supervisor egress-proxy`、
+`rm -rf "${NEXTTIME_DATA}/workspaces/tasks/${TASK_ID}" "${NEXTTIME_DATA}/workspaces/tasks/${TASK_ID_2}"`
+（验收产物，不需要保留）。
+
+## 11. 已知偏离 / 待确认（PR 中一并说明）
 
 - **纯 `HTTP_PROXY`（大写）对 plain `http://` 请求不可靠（主机验收才发现）**：`curl`（以及很多
   遵循同一惯例的 HTTP 客户端）出于历史上的 "httpoxy" CGI 环境变量注入漏洞规避考虑，plain
@@ -256,3 +387,56 @@ git checkout main
   Dockerfile 放在仓库根 `worker-runtime/`；本任务派发文字明确给的路径是
   `deploy/worker-runtime/Dockerfile`，按派发文字执行，§10.1 未同步（只同步了 §10.2 的 compose
   片段，按任务所有权范围）。
+- **S2.8：Task 状态四态划分是本次实现的显式假设，非任务原文逐字给出**：`running -> exited |
+  terminated | failed`——`terminated` 是本服务主动结束的（显式 `terminate` 或超时 reaper），不看
+  退出码；其余按 Docker 退出码分类（`0` → `exited`，非 0 → `failed`）。理由与借鉴对象见
+  `packages/worker-supervisor/src/task-service.ts` 模块注释与该包 README。
+- **S2.8：Task 模式 env 清单没有 `PI_CODING_AGENT_DIR`/`HOME`，且这是刻意的，不是遗漏**：对照
+  `D:\NextTime AI\pi-0.84.4`（参考项目，未拷入本仓库）的 `packages/coding-agent/src/config.ts`
+  验证，pi 未设 `PI_CODING_AGENT_DIR` 时的默认值是 `join(homedir(), '.pi', 'agent')`；
+  `homedir()` 读 `HOME`，而 `HOME=/workspace` 已经烘焙在 `deploy/worker-runtime/Dockerfile`
+  镜像层（`ENV HOME=/workspace`），不受本包 `Env` 数组影响——默认值因此恰好落在
+  `host-paths.ts` `taskWorkspacePaths` 挂载 `models.json`/skills 的同一路径，不需要重复设置。
+- **S2.8：skills 挂载目标目录已对照 pi 源码验证，不是派发文字给的兜底猜测**：对照同一参考项目的
+  `packages/coding-agent/src/core/skills.ts` `loadSkills`（`join(resolvedAgentDir, 'skills')`），
+  `/workspace/.pi/agent/skills/<name>` 就是 pi 0.84.4 的默认全局 skills 目录，非猜测的兜底路径。
+- **S2.8：`no-new-privileges` 加在 `docker-client.ts` 共享的 `createAndStart` 里，同时影响 resident
+  模式**：派发文字把它列为 Task 模式的容器 flag，但 `--read-only`/`--cap-drop ALL`/tmpfs `/tmp`
+  这几项本来就是这个共享函数无条件加给所有容器的（不是每个 spec 各自的字段）——按同一模式加
+  `SecurityOpt:['no-new-privileges']`，比在 `ContainerSpec` 上加一个只有 Task 用的布尔字段更一致，
+  代价是 resident 模式的入口容器现在也会带这个 flag。这是纯粹的加固（两种模式都已经以非 root 运行，
+  `no-new-privileges` 只挡 setuid/setgid 提权，两者都不依赖），不改变任何已测行为，本 PR 未把它做成
+  可关闭的选项。
+- **S2.8：`WORKER_IMAGE_ALLOWLIST` 是追加式，不是替换式**：设默认值以外的允许镜像列表时，默认
+  `WORKER_IMAGE` 始终保留在 allowlist 里——不会因为设置了这个变量就意外把默认镜像也挡在外面。
+  派发文字本身没有明确这一点，属于本次实现做出的、偏保守的工程判断。
+- **S2.8：`reconcile()`、周期性 `reap()`、工作目录退休 sweep 是任务原文未逐字要求、本次主动补上的
+  健壮性机制**：`reconcile()`（supervisor 重启后按 label 重新登记仍在跑的 Worker 容器）参照
+  resident 模式已有的同名机制；`reap()`（超时踢除 + 发现自然退出）与 sweep（清理过期工作目录）是
+  "Lifecycle" 那段落描述的行为落地成的具体机制，细节（各自的轮询周期、`docker.remove` 失败时的
+  best-effort 处理）都是本次实现的选择，不是照抄任务原文的字面步骤。
+- **S2.8：Task 模式容器目前大概率很快非零退出**：`platform-extension` 的 `worker` 模式扩展是 S2.9
+  的交付物，还没实现——`NEXTTIME_MODE=worker` 启动的容器里 pi 大概率因为扩展不认识这个模式而很快
+  退出。本任务只交付 `worker-supervisor` 这一半（容器 spec、生命周期、状态机、注册表），不含端到端
+  "Worker 真的能干活"的验证，见本文档 §10 开头的说明。
+- **S2.8：`(worker_run_id, container_id, ip)` 的"注册"就是登记表 + egress 来源映射，没有单独的查询
+  端点**：派发文字"注册 (worker_run_id, container_id, ip) 供 gateway 来源绑定与出网代理解析"里的
+  "出网代理解析"就是 `worker:<workspaceId>:<workerRunId>` 写入 `SOURCE_MAP_FILE`（egress-proxy 直接
+  用得上）；"gateway 来源绑定"目前只能通过 `GET /task/:workerRunId` 拿到 `containerId`/`ip`——没有
+  另开一个按 `containerId` 或 `ip` 反查的端点，因为派发文字与 S2.7/S2.9 都没有提出这个查询方向的
+  具体需求；如果 S2.7 的 gateway 侧确实需要按来源 IP 反查 `workerRunId`（例如做门的来源校验），
+  留给那个任务评估是否需要在这里加一个索引，而不是这里预先猜测接口形状。
+- **S2.8 PR review 追加：`taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 收紧为 UUID，
+  `skills[].hostPath` 限定在 `${NEXTTIME_DATA}/` 之下**（PR #35 首版遗漏，review 后补上）：首版
+  `TaskSpawnRequestSchema` 这四个字段只做了 `min(1)`——`taskId` 是 bind-mount 的 host 路径片段，
+  `workerRunId` 是容器名，一个 `../../pgdata` 形状的 `taskId` 就能把宿主机上任意目录挂进 Worker
+  容器；`skills[].hostPath` 同理完全不受限，能把 `/var/run/docker.sock`、`/etc` 之类路径只读挂进
+  容器。修法：四个 id 字段改用 `z.string().uuid()`（`config.ts` `idClaim`——这不是新发明的规则，
+  是平台其它地方本来就在用的既有约定，见 `packages/shared/src/handle-token.ts` `uuidClaim`、
+  `packages/kernel/src/governance/llm-usage/service.ts`；**resident 模式自己的
+  `SpawnRequestSchema` 目前仍是 `min(1)`，未跟着收紧**——不在这次改动范围内，是同类缺口，留给另一次
+  改动处理，这里明确点出而不是悄悄留着）；`skills[].hostPath` 新增 `isSkillHostPathAllowed`（同
+  `isImageAllowed` 的写法——纯函数 + `server.ts` 在 `/task/spawn` 里对每个 skill 调用，不满足就
+  `400`，不落到 docker 客户端）：要求绝对路径，且经 `path.posix.normalize` 之后落在
+  `${config.nextTimeData}/` 之下。本文档 §10 的验证步骤已同步更新为 UUID 形式的示例值，并加了两条
+  新的"入参校验"步骤。
