@@ -117,6 +117,16 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   'request_connection',
   'record_decision',
   'explain',
+  // S2.9: `list_allowed_operations`/`report_task_result` are WorkerRun-only in practice (a Worker
+  // never has a Task/WorkerRun of its own to report on — see WORKER_INFRASTRUCTURE_CAPABILITY_NAMES's
+  // own doc comment below), but must appear in the entry ceiling too, or `computeChildHandleScope`'s
+  // parent-intersection (application/task/handle-mint.ts) would silently drop them from every
+  // WorkerRun a (structurally always non-`unconstrained`) entry Handle invokes — the one real path
+  // `invoke_worker` is reached through today. Harmless if an entry Handle ever called either: the
+  // former only ever describes the caller's own (empty, for entry) gate resource scope, and the
+  // latter's handler 403s on any `claims.sid` with no matching WorkerRun row.
+  'list_allowed_operations',
+  'report_task_result',
 ] as const;
 
 /**
@@ -192,6 +202,9 @@ const WORKER_CEILING_EXTRA_CAPABILITY_NAMES = [
   'invoke_worker',
   'create_task',
   'request_action',
+  // S2.9 — see WORKER_INFRASTRUCTURE_CAPABILITY_NAMES's own doc comment below.
+  'list_allowed_operations',
+  'report_task_result',
 ] as const;
 
 const WORKER_CEILING_GATE_EXECUTE_CAPABILITY_NAME = '<gate>.<op>:execute';
@@ -215,6 +228,29 @@ function buildWorkerCeilingCapabilityNames(): readonly string[] {
  *  load. See this section's own doc comment above for how it differs from
  *  `ENTRY_CEILING_CAPABILITIES` and how it is actually narrowed per-invocation. */
 export const WORKER_CEILING_CAPABILITIES: readonly string[] = buildWorkerCeilingCapabilityNames();
+
+/**
+ * S2.9 protocol plumbing every WorkerRun's Handle must always carry, regardless of what its
+ * WorkerDefinition declares (or omits) and regardless of the invoking Handle's own scope beyond
+ * simply being an entry Handle (§5.3 item 8 "Handle 范围大于其来源" is still honored — both names
+ * are also in `ENTRY_CEILING_EXTRA_CAPABILITY_NAMES` above, so the ordinary parent-intersection in
+ * `application/task/handle-mint.ts`'s `computeChildHandleScope` legitimately grants them, never a
+ * bypass of the subset check). `computeChildHandleScope` force-unions these into
+ * `declaredCapabilities` before narrowing, so no WorkerDefinition author can omit them by
+ * declaring an explicit `capabilities` list that leaves them out.
+ *
+ * Neither name is execute-class and neither is a privilege escalation on its own:
+ * `list_allowed_operations` only ever echoes Operations already inside the same Handle's own
+ * `resources.gatekeeper` scope (§9.3 "结果带 epistemic_status" — a description, not a grant); and
+ * `report_task_result`'s handler independently authenticates by checking the calling Handle's own
+ * `claims.sid` against the addressed Task's own WorkerRun `session_id` (never trusts a
+ * caller-supplied `taskId`/`workerRunId`), so holding the capability name alone lets a Worker
+ * report only *its own* Task's result, never another WorkerRun's.
+ */
+export const WORKER_INFRASTRUCTURE_CAPABILITY_NAMES: readonly string[] = Object.freeze([
+  'list_allowed_operations',
+  'report_task_result',
+]);
 
 /** Names in `WORKER_CEILING_CAPABILITIES` that are execute-class (design doc §5.3 item 11 "入口
  *  agent 的 Handle 含 execute 能力" is one of the relationships that must never exist — this is the

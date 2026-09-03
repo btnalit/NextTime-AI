@@ -5,6 +5,7 @@ import {
   type CapabilityScope,
   type IssuedHandle,
   WORKER_CEILING_CAPABILITIES,
+  WORKER_INFRASTRUCTURE_CAPABILITY_NAMES,
   assertScopeIsSubset,
   assertValidScope,
   isExecuteClassCapability,
@@ -108,8 +109,19 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
   const unconstrained = input.parentAuthority === 'unconstrained';
   const parentCapabilitySet = new Set(parentScope.capabilities);
 
+  // S2.9: force-union the fixed worker-infrastructure capabilities (list_allowed_operations,
+  // report_task_result — governance/capability/handles.ts's own doc comment on
+  // WORKER_INFRASTRUCTURE_CAPABILITY_NAMES has the full rationale) into the declared set *before*
+  // narrowing, so no WorkerDefinition's own explicit `capabilities` list can omit them. They still
+  // go through the exact same parent-intersection every other non-execute-class name does below
+  // (never a bypass of I13/§5.3-item-8) — granted whenever the parent Handle is an entry Handle
+  // (both names are also in ENTRY_CEILING_EXTRA_CAPABILITY_NAMES) or the call is `unconstrained`.
+  const effectiveDeclaredCapabilities = [
+    ...new Set([...input.declaredCapabilities, ...WORKER_INFRASTRUCTURE_CAPABILITY_NAMES]),
+  ];
+
   const childCapabilities: string[] = [];
-  for (const capability of input.declaredCapabilities) {
+  for (const capability of effectiveDeclaredCapabilities) {
     if (!ceiling.has(capability)) continue;
     const parentHasIt = unconstrained || parentCapabilitySet.has(capability);
     if (isExecuteClassCapability(capability)) {

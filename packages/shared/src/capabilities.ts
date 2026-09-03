@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { WorkerDefinitionKindSchema } from './enums.js';
 import type { CapabilityChannel, OperationMode, Role } from './enums.js';
+import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
 /**
  * Capability registry (design doc §9.3, "Capability 契约 — HTTP 与 MCP 两个投影"). Pure data: one
@@ -750,6 +751,44 @@ const taskCapabilities: readonly Capability[] = [
     minRole: 'member',
     paramsSchema: z.object({ taskId: id }).strict(),
     description: 'Read one Task and its WorkerRun.',
+  },
+  {
+    // S2.9 addition (task brief: "add a small kernel capability/endpoint if none exists — e.g.
+    // list_allowed_operations returning the published Operations of the Gatekeepers in the
+    // Handle's resources.gatekeeper scope"). Deliberately not gated by anything beyond the calling
+    // Handle's own scope — the returned list is already exactly what `resources.gatekeeper` (plus
+    // `<gate>.<op>`/`<gate>.<op>:execute` presence) permits the caller to act on via
+    // `request_action`; this capability only ever *describes* that existing grant, never widens it.
+    // Worker-mode "infrastructure" capability (governance/capability/handles.ts
+    // `WORKER_INFRASTRUCTURE_CAPABILITY_NAMES`) — see that file's own doc comment for why it is
+    // unconditionally reachable by any WorkerRun Handle regardless of what its WorkerDefinition
+    // declares.
+    name: 'list_allowed_operations',
+    group: 'task',
+    mode: 'observe',
+    channel: 'handle',
+    paramsSchema: noParams,
+    description:
+      'List the published Operations of every Gatekeeper in the calling Handle’s own ' +
+      'resources.gatekeeper scope (§7.4 worker-mode tool registration) — one entry per ' +
+      '`<gate>.<op>`, with `mode`/`params_schema`/`blast_radius`.',
+  },
+  {
+    // S2.9 addition (task brief: "report_task_result (Handle channel)"). Handler-side identity
+    // check (application/gateway/worker-result-handler.ts): the calling Handle's `claims.sid` must
+    // match the Task's own WorkerRun `session_id`, or 403 — never the request body's own
+    // `taskId`/`workerRunId` fields (I13-style: identity from the Handle, not the caller-supplied
+    // body). See worker-result.ts for the full contract shape. Same "infrastructure capability"
+    // note as `list_allowed_operations` above.
+    name: 'report_task_result',
+    group: 'task',
+    mode: 'propose',
+    channel: 'handle',
+    paramsSchema: WorkerResultCapabilityParamsSchema,
+    description:
+      'Post a Worker’s result contract ({summary, findings?, factsToAssert?, evidence?, ' +
+      'artifacts?, proposedSkill?, proposedOperations?}) back to the kernel; completes the Task ' +
+      '(§7.3 结果契约).',
   },
   {
     name: 'cancel_task',
