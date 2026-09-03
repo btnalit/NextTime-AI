@@ -73,6 +73,7 @@ export {
 export {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   type ActionRequestActorOptions,
+  type DrainableGatekeeper,
   type ExpireOverdueOptions,
   type MarkExecutedOptions,
   type MarkFailedOptions,
@@ -80,6 +81,7 @@ export {
   compensateActionRequest,
   expireActionRequest,
   expireOverduePendingApprovals,
+  listDistinctExecutableGatekeepers,
   markActionRequestExecuted,
   markActionRequestFailed,
   startActionRequestExecution,

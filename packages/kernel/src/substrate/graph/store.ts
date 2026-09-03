@@ -288,6 +288,20 @@ export interface GraphStore {
 
   getObject(client: PoolClient, workspaceId: string, objectId: string): Promise<GraphObject | null>;
 
+  /** Reads one Object by its `(object_type, identity)` upsert key (§16 identity keys) — the
+   *  lookup `upsertObject`'s own partial unique index (migrations/core/0006_object_identity.sql)
+   *  is built on. `null` when no Object has that identity, or when `identity` is empty (there is
+   *  nothing to look up — an identity-less Object is never addressable this way, only by id).
+   *  Added for governance/gatekeepers' Operation manifest registry (S2.4): resolving a Gatekeeper's
+   *  published Operation by `{gatekeeperId, name}` without a dedicated relational table (design
+   *  doc §9.2 "operations 作为平台元本体存于 objects / links"). */
+  getObjectByIdentity(
+    client: PoolClient,
+    workspaceId: string,
+    objectType: string,
+    identity: Record<string, unknown>,
+  ): Promise<GraphObject | null>;
+
   assertFact(
     client: PoolClient,
     workspaceId: string,

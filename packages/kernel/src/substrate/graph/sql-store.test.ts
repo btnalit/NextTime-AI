@@ -155,6 +155,40 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
     });
   });
 
+  describe('getObjectByIdentity', () => {
+    it('finds an Object by its (object_type, identity) upsert key', async () => {
+      const identity = { gatekeeperId: randomUUID(), name: 'op.example' };
+      const created = await inTx((client) =>
+        store.upsertObject(client, workspaceId, {
+          objectType: 'test.byIdentity',
+          identity,
+          properties: { status: 'draft' },
+        }),
+      );
+
+      const found = await inTx((client) =>
+        store.getObjectByIdentity(client, workspaceId, 'test.byIdentity', identity),
+      );
+      expect(found?.id).toBe(created.id);
+      expect(found?.properties).toMatchObject({ status: 'draft' });
+    });
+
+    it('returns null for an unknown identity or an empty identity', async () => {
+      const missing = await inTx((client) =>
+        store.getObjectByIdentity(client, workspaceId, 'test.byIdentity', {
+          gatekeeperId: randomUUID(),
+          name: 'nope',
+        }),
+      );
+      expect(missing).toBeNull();
+
+      const empty = await inTx((client) =>
+        store.getObjectByIdentity(client, workspaceId, 'test.byIdentity', {}),
+      );
+      expect(empty).toBeNull();
+    });
+  });
+
   describe('assertFact — epistemic_status by caller kind, I3, outbox', () => {
     it('human caller → asserted; agent caller → inferred', async () => {
       const { humanFact, agentFact } = await inTx(async (client) => {

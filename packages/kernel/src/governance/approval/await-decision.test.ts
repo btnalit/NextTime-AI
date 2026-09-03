@@ -28,6 +28,7 @@ function actionRequest(overrides: Partial<ActionRequestRow> = {}): ActionRequest
     requestedAt: new Date('2026-01-01T00:00:00Z'),
     executedAt: null,
     failedAt: null,
+    params: {},
     ...overrides,
   };
 }

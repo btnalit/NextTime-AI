@@ -93,6 +93,7 @@ export async function dispatchCapability(
     const handlerResult = await handler(client, workspaceId, parsed.data, {
       channel: caller.channel,
       principalId,
+      scope: caller.channel === 'handle' ? caller.claims.scope : undefined,
     });
     await writeAudit(client, {
       workspaceId,

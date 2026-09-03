@@ -123,6 +123,39 @@ export async function expireOverduePendingApprovals(
   return expiredCount;
 }
 
+export interface DrainableGatekeeper {
+  readonly workspaceId: string;
+  readonly gatekeeperId: string;
+}
+
+/**
+ * The periodic-tick half of S2.4's drainer wiring ("... and on a periodic tick", docs/development-
+ * tasks.md): every distinct `(workspace_id, gatekeeper_id)` pair currently carrying an executable
+ * (`auto_approved`/`approved`) row, across every workspace — the same cross-workspace admin-mode
+ * scan shape as `expireOverduePendingApprovals` above (one `MinimalPool` connection, no
+ * `withWorkspace`/RLS). `packages/kernel/src/index.ts`'s periodic drain tick calls this, then
+ * `ApprovalDrainer.drainGatekeeper` for each pair returned — kept as a separate, single-purpose
+ * query here (governance/approval owns `action_requests`) rather than a raw `SELECT` in
+ * `application/gateway` (§7.10 module contract: other modules must not query this table directly).
+ */
+export async function listDistinctExecutableGatekeepers(
+  pool: MinimalPool,
+): Promise<readonly DrainableGatekeeper[]> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query<{ workspace_id: string; gatekeeper_id: string }>(
+      `select distinct workspace_id, gatekeeper_id from action_requests
+       where status in ('auto_approved', 'approved')`,
+    );
+    return result.rows.map((row) => ({
+      workspaceId: row.workspace_id,
+      gatekeeperId: row.gatekeeper_id,
+    }));
+  } finally {
+    client.release();
+  }
+}
+
 // -------------------------------------------------------------------------------------------
 // start_execution / mark_executed / mark_failed / compensate
 // -------------------------------------------------------------------------------------------

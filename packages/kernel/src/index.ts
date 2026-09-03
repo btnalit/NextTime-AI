@@ -1,9 +1,17 @@
 import { fileURLToPath } from 'node:url';
+import { IllegalTransition } from '@nexttime/shared';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
-import { createPool } from './adapters/db/pool.js';
+import { createPool, withWorkspace } from './adapters/db/pool.js';
+import { HttpGatekeeperClient } from './adapters/gatekeeper-client/index.js';
 import { createChatEventSink, interruptStaleRunningTurns } from './application/chat/index.js';
 import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
+import {
+  createGatekeeperActionExecutor,
+  registerActionRequestDrainConsumer,
+  setRequestActionDeps,
+} from './application/gateway/index.js';
+import type { WithTransactionFn } from './application/gateway/index.js';
 import type { AgentRuntime } from './application/host-bridge/index.js';
 import {
   AgentHostRuntime,
@@ -11,7 +19,11 @@ import {
   registerTurnStartedConsumer,
 } from './application/host-bridge/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
-import { expireOverduePendingApprovals } from './governance/approval/index.js';
+import {
+  ApprovalDrainer,
+  expireOverduePendingApprovals,
+  listDistinctExecutableGatekeepers,
+} from './governance/approval/index.js';
 import type { HandleKeyPair } from './governance/capability/index.js';
 import { loadHandleKeyPair } from './governance/capability/index.js';
 import type { CapabilityRouteDeps } from './interfaces/http/index.js';
@@ -44,6 +56,17 @@ export function createServer(
 ): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false });
 
+  // S2.4: wired here (not createBackgroundServices) so `request_action` is servable as soon as
+  // the port opens, not only once the async AgentRuntime bootstrap below finishes — it needs
+  // nothing that bootstrap produces (see request-action-handler.ts's own doc comment: every
+  // execution path runs on the capability call's own already-open `client`, never a pool it would
+  // have to wait for). `ApprovalDrainer`'s async trigger paths (outbox consumer + periodic tick)
+  // do need the OutboxDispatcher, so those remain in createBackgroundServices below.
+  setRequestActionDeps({
+    gatekeeperClient: new HttpGatekeeperClient(),
+    awaitDecisionTimeoutMs: options.requestActionAwaitDecisionTimeoutMs,
+  });
+
   app.get('/api/health', async () => ({ status: 'ok' }));
 
   registerCapabilityRoutes(app, deps);
@@ -70,6 +93,10 @@ export interface CreateServerOptions {
    *  this setting (interfaces/http/capability-route.ts uses `request.log`, a no-op sink when
    *  `logger` is `false`); this only controls Fastify's own request/response access log. */
   logger?: boolean;
+  /** `request_action`'s `await_decision:true` poll timeout (default 90s,
+   *  request-action-handler.ts's own `DEFAULT_AWAIT_DECISION_TIMEOUT_MS`) — `main()` reads this
+   *  from `REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS`. */
+  requestActionAwaitDecisionTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -163,6 +190,16 @@ export interface CreateBackgroundServicesOptions {
    *  becomes an unhandled promise rejection — same shape as `OutboxDispatcher`'s own `onError`.
    *  Defaults to a no-op; `main()` passes `app.log.error`. */
   readonly onApprovalReaperError?: (error: unknown) => void;
+  /** How often the S2.4 Gatekeeper-queue periodic drain tick runs. Default
+   *  `DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS` (1 minute — much tighter than the approval reaper's 5,
+   *  since a stuck executable queue directly blocks a Worker's already-approved action, not merely
+   *  an unattended timeout). `main()` reads this from `GATEKEEPER_DRAIN_INTERVAL_MS`. */
+  readonly gatekeeperDrainIntervalMs?: number;
+  /** Called whenever the periodic drain tick's scan or any `drainGatekeeper` call throws
+   *  unexpectedly (an `IllegalTransition` — a benign race with another drain trigger — is already
+   *  swallowed inside `registerActionRequestDrainConsumer`/here, never reaches this hook). Defaults
+   *  to a no-op; `main()` passes `app.log.error`. */
+  readonly onGatekeeperDrainError?: (error: unknown) => void;
 }
 
 const DEFAULT_AGENT_HOST_KERNEL_LLM_URL = 'http://llm-proxy:8082';
@@ -211,6 +248,15 @@ function buildDefaultRuntime(options: CreateBackgroundServicesOptions): AgentRun
  *  need sub-second expiry latency. */
 export const DEFAULT_APPROVAL_REAPER_INTERVAL_MS = 5 * 60 * 1000;
 
+/** Default S2.4 Gatekeeper-queue periodic drain tick interval — 1 minute. */
+export const DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS = 60 * 1000;
+
+/** A fixed, non-dereferenced placeholder for the admin-mode (`skipRoleSwitch: true`) transactions
+ *  the drainer/executor/periodic-drain-scan below run under — see
+ *  `application/gateway/action-request-drain-consumer.ts`'s own doc comment for why an
+ *  RLS-bypassing background actor never needs a real Principal id here. */
+const SYSTEM_ACTOR_PLACEHOLDER = '00000000-0000-0000-0000-000000000000';
+
 export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
 ): BackgroundServices {
@@ -221,8 +267,36 @@ export function createBackgroundServices(
   if (runtime instanceof AgentHostRuntime) setAgentHostRuntimeForWsRoute(runtime);
   const unsubscribeTurnStarted = registerTurnStartedConsumer(dispatcher, runtime);
 
+  // S2.4: the ApprovalDrainer's async trigger paths — an outbox consumer on
+  // ActionRequestUpdated{approved|auto_approved}, and a periodic tick as the crash-resilient
+  // fallback (design doc §13 "outbox 派发器崩溃 ... 消费者幂等"). Both run admin-mode
+  // (skipRoleSwitch): this is background, cross-workspace machinery in the same category as the
+  // outbox dispatcher itself and the approval-expiry reaper above, not a per-request path — see
+  // `governance/gatekeepers/registry.ts`'s own doc comment for why a Gatekeeper's endpoint is
+  // itself only ever read (never RLS-sensitive) and `action-request-drain-consumer.ts`'s doc
+  // comment for the full rationale.
+  const adminWithTransaction: WithTransactionFn = (workspaceId, principalId, fn) =>
+    withWorkspace(options.pool, { workspaceId, principalId }, fn, { skipRoleSwitch: true });
+  const gatekeeperClient = new HttpGatekeeperClient();
+  const actionExecutor = createGatekeeperActionExecutor({
+    gatekeeperClient,
+    withTransaction: adminWithTransaction,
+  });
+  const drainer = new ApprovalDrainer({
+    executor: actionExecutor,
+    withTransaction: adminWithTransaction,
+  });
+  const unsubscribeActionRequestDrain = registerActionRequestDrainConsumer(
+    dispatcher,
+    drainer,
+    adminWithTransaction,
+    options.onGatekeeperDrainError ?? (() => {}),
+  );
+
   const onApprovalReaperError = options.onApprovalReaperError ?? (() => {});
   let approvalReaperTimer: NodeJS.Timeout | undefined;
+  const onGatekeeperDrainError = options.onGatekeeperDrainError ?? (() => {});
+  let gatekeeperDrainTimer: NodeJS.Timeout | undefined;
 
   return {
     dispatcher,
@@ -234,23 +308,47 @@ export function createBackgroundServices(
       });
       dispatcher.start();
 
-      const tick = (): void => {
+      const approvalTick = (): void => {
         expireOverduePendingApprovals(options.pool, {
           timeoutMs: options.approvalTimeoutMs,
         }).catch(onApprovalReaperError);
       };
       approvalReaperTimer = setInterval(
-        tick,
+        approvalTick,
         options.approvalReaperIntervalMs ?? DEFAULT_APPROVAL_REAPER_INTERVAL_MS,
       );
       approvalReaperTimer.unref?.();
+
+      const drainTick = async (): Promise<void> => {
+        const drainable = await listDistinctExecutableGatekeepers(options.pool);
+        for (const { workspaceId, gatekeeperId } of drainable) {
+          try {
+            await drainer.drainGatekeeper(workspaceId, SYSTEM_ACTOR_PLACEHOLDER, gatekeeperId);
+          } catch (err) {
+            // A benign race with another drain trigger (the outbox consumer, or an inline
+            // execution from request-action-handler.ts) — see action-request-drain-consumer.ts's
+            // own doc comment. One pair's race must not stop the rest of this tick's batch.
+            if (err instanceof IllegalTransition) continue;
+            onGatekeeperDrainError(err);
+          }
+        }
+      };
+      gatekeeperDrainTimer = setInterval(() => {
+        drainTick().catch(onGatekeeperDrainError);
+      }, options.gatekeeperDrainIntervalMs ?? DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS);
+      gatekeeperDrainTimer.unref?.();
     },
     stop() {
       dispatcher.stop();
       unsubscribeTurnStarted();
+      unsubscribeActionRequestDrain();
       if (approvalReaperTimer) {
         clearInterval(approvalReaperTimer);
         approvalReaperTimer = undefined;
+      }
+      if (gatekeeperDrainTimer) {
+        clearInterval(gatekeeperDrainTimer);
+        gatekeeperDrainTimer = undefined;
       }
     },
   };
@@ -262,7 +360,17 @@ export function main(): void {
   const kind = resolveAgentRuntimeKind();
 
   const pool = createPool();
-  const app = createServer({ pool }, { logger: true });
+  const rawRequestActionAwaitDecisionTimeoutMs =
+    process.env.REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS;
+  const app = createServer(
+    { pool },
+    {
+      logger: true,
+      requestActionAwaitDecisionTimeoutMs: rawRequestActionAwaitDecisionTimeoutMs
+        ? Number(rawRequestActionAwaitDecisionTimeoutMs)
+        : undefined,
+    },
+  );
 
   const port = Number(process.env.KERNEL_PORT ?? 8080);
   const host = process.env.KERNEL_BIND_ADDR ?? '0.0.0.0';
@@ -294,6 +402,7 @@ export function main(): void {
     const rawTurnAcceptedTimeoutMs = process.env.AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS;
     const rawApprovalTimeoutMs = process.env.APPROVAL_TIMEOUT_MS;
     const rawApprovalReaperIntervalMs = process.env.APPROVAL_REAPER_INTERVAL_MS;
+    const rawGatekeeperDrainIntervalMs = process.env.GATEKEEPER_DRAIN_INTERVAL_MS;
 
     background = createBackgroundServices({
       pool,
@@ -314,6 +423,10 @@ export function main(): void {
         ? Number(rawApprovalReaperIntervalMs)
         : undefined,
       onApprovalReaperError: (err: unknown) => app.log.error(err),
+      gatekeeperDrainIntervalMs: rawGatekeeperDrainIntervalMs
+        ? Number(rawGatekeeperDrainIntervalMs)
+        : undefined,
+      onGatekeeperDrainError: (err: unknown) => app.log.error(err),
     });
 
     // A request that races the still-in-flight recovery scan is not unsafe — the partial unique

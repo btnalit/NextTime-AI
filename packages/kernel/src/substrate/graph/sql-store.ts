@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg';
 import { enqueue } from '../outbox/index.js';
 import {
   buildGetFactForUpdateQuery,
+  buildGetObjectByIdentityQuery,
   buildGetObjectQuery,
   buildInsertFactQuery,
   buildMarkFactInvalidatedQuery,
@@ -172,6 +173,19 @@ export class SqlGraphStore implements GraphStore {
     objectId: string,
   ): Promise<GraphObject | null> {
     const query = buildGetObjectQuery(workspaceId, objectId);
+    const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
+    const row = result.rows[0];
+    return row === undefined ? null : mapObjectRow(row);
+  }
+
+  async getObjectByIdentity(
+    client: PoolClient,
+    workspaceId: string,
+    objectType: string,
+    identity: Record<string, unknown>,
+  ): Promise<GraphObject | null> {
+    if (Object.keys(identity).length === 0) return null;
+    const query = buildGetObjectByIdentityQuery(workspaceId, objectType, identity);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     const row = result.rows[0];
     return row === undefined ? null : mapObjectRow(row);

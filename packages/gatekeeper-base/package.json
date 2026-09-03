@@ -20,5 +20,15 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nexttime/shared": "workspace:*",
+    "ajv": "^8.17.1",
+    "fastify": "^5.2.1",
+    "jmespath": "^0.16.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/jmespath": "^0.15.2"
   }
 }
