@@ -22,7 +22,7 @@
 - `operator`：以上加审批队列与"Always allow this kind"。
 - `owner`：以上加 Connections 全部（完成连接、发布清单、授予门）。
 
-控制台没有角色读取能力，一切按 **首次 403** 推断：某个 capability 一旦返回 `forbidden`，本会话内相关按钮隐藏或替换为说明；"Forget key" 重新登录后重置。
+控制台没有角色读取能力，一切按 **首次 403** 推断：某个 capability 一旦返回 `forbidden`，本会话内它以及注册表里同一 `minRole`（及更高）的 capability 一并视为不可用（`hooks/usePermissions.tsx` 的 `deniedClosure`，按 `@nexttime/shared` 的 `CAPABILITY_REGISTRY` 派生），相关按钮隐藏或替换为说明；"Forget key" 重新登录后重置。
 
 ## 状态词表
 

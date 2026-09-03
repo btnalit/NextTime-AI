@@ -219,7 +219,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
                       </time>
                       <span className="meta-sep" />
                       <span className="tabular">
-                        {finished ? 'took ' : 'running '}
+                        {finished ? 'took ' : task.status === 'running' ? 'running ' : 'waiting '}
                         {formatDuration(task.createdAt, finished)}
                       </span>
                       {task.tokenBudget ? (
