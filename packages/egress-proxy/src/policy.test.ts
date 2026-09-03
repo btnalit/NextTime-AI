@@ -290,6 +290,24 @@ describe('decideEgress', () => {
       expect(decision).toEqual({ allowed: true, address: quad(10, 199, 12, 34) });
     });
 
+    it('denies a private-suffix name by name, before DNS, even though the resolver would answer from the trusted range', async () => {
+      // config.ts appends DEFAULT_DENY_SUFFIXES (localhost/local/lan/home.arpa/internal) to
+      // denyHosts: on a fake-IP host the resolver answers *every* name — LAN hosts included — from
+      // the trusted range, so the name is the only signal left that `nas.internal` is not public.
+      const resolve = vi.fn(resolverReturning(quad(10, 199, 12, 35)));
+      const decision = await decideEgress({
+        hostname: 'nas.internal',
+        source: undefined,
+        config: baseConfig({
+          denyHosts: [...DEFAULT_DENY_HOSTS, 'internal'],
+          trustedResolvedCidrs: [fakeRange],
+        }),
+        resolve,
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'deny-host' });
+      expect(resolve).not.toHaveBeenCalled();
+    });
+
     it('still denies a hostname that resolves into a private range outside the trusted one', async () => {
       const decision = await decideEgress({
         hostname: 'rebound.example.com',

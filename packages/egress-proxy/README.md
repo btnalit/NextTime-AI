@@ -10,7 +10,9 @@ request forwarding and `CONNECT` tunnelling for HTTPS, no TLS interception, no c
 | `PROXY_PORT` | `3128` | Proxy listener, all interfaces. |
 | `ADMIN_PORT` | `3129` | `GET /healthz`, loopback (`127.0.0.1`) only. |
 | `KERNEL_URL` | — | Base URL for `POST ${KERNEL_URL}/internal/egress`; unset disables reporting. |
-| `DENY_HOSTS` | `kernel,postgres,llm-proxy,egress-proxy,worker-supervisor,agent-host,caddy` | Comma-separated internal service names, always denied. |
+| `DENY_HOSTS` | `kernel,postgres,llm-proxy,egress-proxy,worker-supervisor,agent-host,caddy` | Comma-separated internal service names, always denied. Overriding it replaces only this list. |
+| (built-in) | `localhost,local,lan,home.arpa,internal` | Private-network name suffixes (RFC 6761/6762/8375, ICANN `.internal`, de-facto `.lan`), always denied by name — needed because on a fake-IP host (below) a LAN name resolves into the trusted range too. |
+| `EGRESS_DENY_HOST_SUFFIXES` | — | Comma-separated extra suffixes appended to the deny list (your site's own LAN domain, e.g. `corp.example`). |
 | `NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS` | — | Platform subnets (CIDR), always denied. |
 | `EGRESS_TRUSTED_RESOLVED_CIDRS` | — | Comma-separated CIDRs owned by a transparent ("fake-IP") proxy on the host network: a **hostname** resolving into one of them is treated as public (the range is the transparent proxy, not a real internal host). Literal-IP targets in the range and the platform subnets are still denied. Unset on a normal network. |
 | `SOURCE_MAP_FILE` | — | Path to `{"<clientIp>": {"sourceId","allow"?,"deny"?}}`, hot-reloaded. |
@@ -21,7 +23,8 @@ request forwarding and `CONNECT` tunnelling for HTTPS, no TLS interception, no c
 ## Policy (`src/policy.ts`)
 
 Deny, in order (deny always beats allow): a source's own `deny` list (suffix match) → global
-`DENY_HOSTS` (suffix match) → a bare hostname (no dot) unless explicitly on the source's `allow`
+`DENY_HOSTS` + the built-in private suffixes + `EGRESS_DENY_HOST_SUFFIXES` (suffix match, before
+any DNS lookup) → a bare hostname (no dot) unless explicitly on the source's `allow`
 list → a source's `allow` list, when present, restricts to it. Otherwise: DNS is resolved *inside
 the proxy*, every resolved address is classified, and only a public address (not RFC1918, loopback,
 link-local, CGNAT, IPv6 unique-local, or a platform subnet) is connected to — always the address

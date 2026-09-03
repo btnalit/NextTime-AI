@@ -12,6 +12,26 @@ export const DEFAULT_DENY_HOSTS = [
   'caddy',
 ] as const;
 
+/**
+ * Name suffixes that can never be a legitimate public target, denied unconditionally on top of
+ * `DENY_HOSTS` (suffix match, policy.ts `matchesSuffix`): the special-use private-network
+ * domains `localhost` (RFC 6761), `local` (RFC 6762 mDNS), `home.arpa` (RFC 8375), `internal`
+ * (ICANN's 2024 reservation for private use), plus the de-facto `lan`.
+ *
+ * Why a name-based rule when policy.ts already denies names that *resolve* to a private address:
+ * on a host whose resolver is a transparent fake-IP proxy (`EGRESS_TRUSTED_RESOLVED_CIDRS`), every
+ * name — a LAN host's too — is answered from the trusted range, so for such names the name itself
+ * is the only remaining signal that the target is not public. Operators add their own site
+ * suffixes with `EGRESS_DENY_HOST_SUFFIXES`.
+ */
+export const DEFAULT_DENY_SUFFIXES = [
+  'localhost',
+  'local',
+  'lan',
+  'home.arpa',
+  'internal',
+] as const;
+
 export interface EgressProxyConfig {
   proxyPort: number;
   adminPort: number;
@@ -25,6 +45,13 @@ export interface EgressProxyConfig {
   idleTimeoutMs: number;
   connectTimeoutMs: number;
   allowLoopbackForTests: boolean;
+}
+
+function splitList(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 function parseIntEnv(value: string | undefined, fallback: number): number {
@@ -52,11 +79,13 @@ function parseSubnetEnv(value: string | undefined, name: string): CidrRange | un
 
 /** Loads config from `process.env`, applying every default from the task spec (design doc §7.9). */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): EgressProxyConfig {
-  const denyHosts = env.DENY_HOSTS
-    ? env.DENY_HOSTS.split(',')
-        .map((h) => h.trim())
-        .filter((h) => h.length > 0)
-    : [...DEFAULT_DENY_HOSTS];
+  // `DENY_HOSTS` replaces only the platform service-name list; the private-suffix list and the
+  // operator's own `EGRESS_DENY_HOST_SUFFIXES` are always appended (see DEFAULT_DENY_SUFFIXES).
+  const denyHosts = [
+    ...(env.DENY_HOSTS ? splitList(env.DENY_HOSTS) : DEFAULT_DENY_HOSTS),
+    ...DEFAULT_DENY_SUFFIXES,
+    ...splitList(env.EGRESS_DENY_HOST_SUFFIXES),
+  ];
 
   const platformSubnets: CidrRange[] = [];
   const control = parseSubnetEnv(env.NEXTTIME_SUBNET_CONTROL, 'NEXTTIME_SUBNET_CONTROL');
