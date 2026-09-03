@@ -1,0 +1,14 @@
+[
+  {
+    "name": "stock.get",
+    "binding": { "kind": "http", "method": "GET", "path": "/stock" },
+    "params_schema": {},
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": [],
+    "writes": []
+  }
+]

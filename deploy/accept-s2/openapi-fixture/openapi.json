@@ -1,0 +1,18 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "accept-s2 test OpenAPI service", "version": "1.0.0" },
+  "paths": {
+    "/stock": {
+      "get": {
+        "operationId": "stock.get",
+        "summary": "Current test stock reading (accept_s2.sh fixture — no real inventory system).",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  }
+}

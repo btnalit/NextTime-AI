@@ -38,6 +38,12 @@
 // verifies the caller's Handle and substitutes the real upstream key before ever reaching here —
 // this double intentionally does not re-implement that boundary, matching its own scope (an
 // upstream stand-in, not a proxy replacement).
+//
+// S2.12 scripted scenarios (scripts/accept_s2.sh; see SCENARIOS below): additive to every one of
+// the behaviors described above, which remain byte-for-byte unchanged for any request that does
+// not match a scenario — `handleChatCompletions` tries `matchScenario()` first and only falls
+// through to the original search/echo logic when nothing matches, so accept_s1.sh (and every
+// existing test) keeps working against this same file untouched.
 
 import { createServer } from 'node:http';
 
@@ -104,12 +110,371 @@ function writeSse(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+// -------------------------------------------------------------------------------------------
+// S2.12 scripted scenarios (docs/development-tasks.md S2.12; scripts/accept_s2.sh).
+//
+// Deterministic acceptance runs need the model to call specific tools in a specific order for
+// specific Worker/entry invocations — accept_s2.sh cannot rely on the `search`-trigger's single
+// fixed tool call for that. A scenario is selected by a marker substring found *anywhere* in the
+// full JSON-serialized `messages` array (not only the last `user`/`system` message, unlike
+// `lastUserMessageText` above): a Worker's actual task text reaches the model through a
+// `context`-injected message (packages/platform-extension/src/modes/worker.ts's
+// `renderWorkerContext`, role `'custom'`) rather than as the literal last user message, and
+// whether/how pi's OpenAI-completions adapter maps a `role:'custom'` message onto a wire role is
+// not something this test double should have to assume — searching the whole serialized body is
+// robust to that either way. accept_s2.sh embeds one `ACCEPT_S2_SCENARIO=<id> KEY=value ...`
+// marker line (no embedded spaces in any value, so a plain `\S+` regex extracts each one) into
+// the Task `input` string it passes to `invoke_worker`, or sends the literal Chinese chat text a
+// scenario matches on directly as the user's chat message.
+//
+// A scenario is a function `(messages) => step[]`, where `step` is one scripted model turn:
+// `{tool: {name, args}}` (a single tool call, `finish_reason: 'tool_calls'`) or `{text}` (final
+// assistant text, `finish_reason: 'stop'`). Which step fires is `assistantMessageCount(messages)`
+// — the number of `role:'assistant'` messages already in the conversation, i.e. how many of this
+// scenario's own prior turns have already round-tripped through pi and back — clamped to the last
+// step once the scripted sequence is exhausted, so a scenario never needs to guess a session id or
+// keep any state of its own across requests (every fake-llm request already carries the entire
+// conversation so far, OpenAI-style). A later step's tool-call arguments may depend on an earlier
+// step's *real* tool result (`findToolResult`, below) rather than a value guessed ahead of time —
+// `entryRestartChatScenario`'s `invoke_worker` call is the concrete example, chaining off whatever
+// `find_workers` actually returned.
+// -------------------------------------------------------------------------------------------
+
+function assistantMessageCount(messages) {
+  if (!Array.isArray(messages)) return 0;
+  return messages.filter((m) => m && m.role === 'assistant').length;
+}
+
+/** Extracts a `KEY=value` marker's value from the JSON-serialized messages blob. Restricted to
+ *  `[A-Za-z0-9_.:-]+` (every value accept_s2.sh ever embeds is a container id, a hostname-safe
+ *  gate/tool name fragment, or a spaceless shell command like `uptime`) rather than `\S+` — the
+ *  blob is JSON text, so the marker's value is immediately followed by a `"` (the closing quote
+ *  of the JSON string it lives in) with no intervening whitespace; a `\S+` class would keep
+ *  matching straight through that quote and the JSON structure after it, up to the next
+ *  incidental whitespace anywhere later in the blob. */
+function extractMarker(blob, key) {
+  const match = new RegExp(`${key}=([A-Za-z0-9_.:-]+)`).exec(blob);
+  return match ? match[1] : undefined;
+}
+
+/** A tool-result (`role:'tool'`) message's own text — `content` is a bare string for a plain-text
+ *  tool result (the common OpenAI shape) or an array of `{type:'text', text}` parts (some
+ *  adapters keep the pi-native content-parts shape even on the outbound wire request); either way
+ *  this returns the plain text so it can be `JSON.parse`d. Same content-parts handling as
+ *  `lastUserMessageText` above, applied to a different message role. */
+function toolMessageText(message) {
+  const { content } = message;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text)
+      .join('\n');
+  }
+  return '';
+}
+
+/** Finds the most recent `assistant` `tool_calls` entry named `toolName` and the JSON-parsed
+ *  content of its matching `role:'tool'` result message — used by the entry-mode chat scenarios
+ *  below to chain a later tool call's arguments off an earlier tool's *real* result (e.g.
+ *  `invoke_worker`'s `definitionId`/`version` off whatever `find_workers` actually returned),
+ *  rather than a value accept_s2.sh guessed ahead of time. Returns `undefined` when that tool
+ *  hasn't been called yet, or when its result isn't valid JSON — the latter is exactly what
+ *  happens today, before packages/platform-extension registers these tools for entry mode: pi
+ *  turns a call to an unregistered tool name into a plain-text tool-error result, not JSON (see
+ *  entryRestartChatScenario/entryObserveChatScenario's own doc comments and
+ *  docs/runbooks/host-accept-s2.md "已知偏离"). */
+function findToolResult(messages, toolName) {
+  if (!Array.isArray(messages)) return undefined;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || message.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue;
+    const call = message.tool_calls.find((c) => c?.function?.name === toolName);
+    if (!call) continue;
+    const resultMessage = messages.find((r) => r?.role === 'tool' && r.tool_call_id === call.id);
+    if (!resultMessage) return undefined;
+    try {
+      return JSON.parse(toolMessageText(resultMessage));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** S2.12 step 2 ("重启测试容器" → find_* → invoke_worker → 卡片 → 批准 → 执行 → explain): the
+ *  *Worker* half — the container-restart Worker `entryRestartChatScenario` below invokes (or
+ *  accept_s2.sh's own direct fallback call — see docs/runbooks/host-accept-s2.md "已知偏离"). The
+ *  Worker calls the docker gate's `container.restart` tool (registered by
+ *  packages/platform-extension/src/modes/worker.ts from `list_allowed_operations`; tool name
+ *  sanitized from `docker.container_restart`, see that file's `sanitizeToolName`), then reports a
+ *  result contract with one `factsToAssert` entry — S2.12 step 7 asserts this Fact lands
+ *  `epistemic_status='inferred'`.
+ */
+function dockerRestartScenario(messages) {
+  const blob = JSON.stringify(messages);
+  const containerId = extractMarker(blob, 'CONTAINER_ID') ?? 'unknown';
+  return [
+    { tool: { name: 'docker_container_restart', args: { id: containerId } } },
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: requested restart of container ${containerId} via the docker gatekeeper.`,
+          findings: [`container ${containerId} restart requested`],
+          factsToAssert: [
+            {
+              linkType: 'accept_s2_restarted',
+              source: { objectType: 'AcceptS2Container', identity: { containerId } },
+              target: {
+                objectType: 'AcceptS2Observation',
+                identity: { containerId, kind: 'restart' },
+                properties: { containerId },
+              },
+              confidence: 0.9,
+            },
+          ],
+          evidence: [{ kind: 'accept_s2_worker_note', content: { containerId } }],
+          artifacts: [],
+        },
+      },
+    },
+  ];
+}
+
+/** S2.12 step 4 (Worker runs one *unclassified* command on the SSH host → card → "always allow" →
+ *  second identical run auto-approved, no card): the ssh gate's `ssh.run_command` tool, sanitized
+ *  from `accept_s2_ssh.ssh.run_command` (accept_s2.sh registers the ssh connection with
+ *  `target: "accept_s2_ssh"`). Reused verbatim for both the first (pending_approval) and second
+ *  (auto_approved) invocation — the Worker's own turn looks the same either way, it just calls
+ *  the tool once and reports; the difference in governance outcome is entirely server-side
+ *  (governance/policy/engine.ts, driven by the workspace's `set_auto_approved_action_kind` policy
+ *  between the two invocations).
+ */
+function sshRunScenario(messages) {
+  const blob = JSON.stringify(messages);
+  const command = extractMarker(blob, 'COMMAND') ?? 'true';
+  return [
+    { tool: { name: 'accept_s2_ssh_ssh_run_command', args: { command } } },
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: ran "${command}" on the test SSH host via the ssh gatekeeper.`,
+          findings: [`command "${command}" submitted`],
+          factsToAssert: [],
+          evidence: [{ kind: 'accept_s2_worker_note', content: { command } }],
+          artifacts: [],
+        },
+      },
+    },
+  ];
+}
+
+/** S2.12 step 2's *chat-driven* half: a real three-turn chain once
+ *  packages/platform-extension/src/modes/entry.ts registers `find_workers`/`invoke_worker` as
+ *  entry tools (see docs/runbooks/host-accept-s2.md "已知偏离" — as of this file's own last
+ *  update, entry.ts's registered tool set is still only the five S1 observe tools, so this
+ *  scenario's first tool call comes back as a pi tool-error result rather than a real kernel
+ *  call; the fallback branches below keep the turn settling instead of looping either way).
+ *
+ *  Turn 1: `find_workers({need: 'restart'})` — accept_s2.sh's `ops_runner_step` gives the
+ *  proposed `ops-runner` WorkerDefinition a `description` containing the literal word "restart"
+ *  precisely so this need string matches it (`substrate/graph/find-means.ts`'s ILIKE-over-
+ *  properties search requires the *whole* `need` string as a contiguous substring, not a
+ *  per-word match).
+ *
+ *  Turn 2: `invoke_worker({definitionId, version, input, wait:false})` — `definitionId`/`version`
+ *  come from turn 1's *real* result (`findToolResult`, above), not a value accept_s2.sh guessed
+ *  ahead of time; `input` carries the same `ACCEPT_S2_SCENARIO=docker_restart CONTAINER_ID=...`
+ *  marker `dockerRestartScenario` (above) expects, extracted from the chat message text
+ *  accept_s2.sh sends ("重启测试容器 CONTAINER_ID=<id>" — the marker below still matches on the
+ *  substring "重启测试容器" alone). `wait:false`: this is a chat turn, not a synchronous script
+ *  call — the entry agent's own turn must end quickly and report back later (§8.2's asynchronous
+ *  model), not block for up to 90s waiting for the spawned Worker.
+ *
+ *  Turn 3: a final text naming the taskId turn 2's *real* result returned.
+ */
+function entryRestartChatScenario(messages) {
+  const blob = JSON.stringify(messages);
+  const containerId = extractMarker(blob, 'CONTAINER_ID') ?? 'unknown';
+  const foundWorkers = findToolResult(messages, 'find_workers');
+  const workerMatch = Array.isArray(foundWorkers)
+    ? foundWorkers.find((w) => w && w.kind === 'worker')
+    : undefined;
+  const invokeResult = findToolResult(messages, 'invoke_worker');
+
+  return [
+    { tool: { name: 'find_workers', args: { need: 'restart' } } },
+    workerMatch
+      ? {
+          tool: {
+            name: 'invoke_worker',
+            args: {
+              definitionId: workerMatch.definitionId,
+              version: workerMatch.version,
+              input: `ACCEPT_S2_SCENARIO=docker_restart CONTAINER_ID=${containerId}`,
+              wait: false,
+            },
+          },
+        }
+      : { text: 'echo: 重启测试容器 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)' },
+    invokeResult && typeof invokeResult.taskId === 'string'
+      ? {
+          text: `Started a Worker to restart the container — task ${invokeResult.taskId} is now running, I will follow up once it reports back.`,
+        }
+      : { text: 'echo: 重启测试容器 (invoke_worker did not resolve — see docs/runbooks/host-accept-s2.md)' },
+  ];
+}
+
+/** S2.12 step 3's *chat-driven* half — same "real once entry.ts registers the tool" status as
+ *  `entryRestartChatScenario` above. `accept_s2_api_stock_get` is the observe-class gate-projected
+ *  tool name entry mode is expected to register from `list_allowed_operations` (worker mode's own
+ *  `sanitizeToolName` convention — packages/platform-extension/src/modes/worker.ts — applied to
+ *  `<gateName>.<opName>`; accept_s2.sh's http connection uses `target: "accept_s2_api"` and the
+ *  fixture's one Operation is named `stock.get`, so `accept_s2_api.stock.get` sanitizes to
+ *  `accept_s2_api_stock_get`). Turn 2 echoes turn 1's *real* returned data (not a canned string),
+ *  so accept_s2.sh's own "reply contains the fixture's stock payload" assertion is a genuine
+ *  round trip, not a hardcoded echo.
+ */
+function entryObserveChatScenario(messages) {
+  const observed = findToolResult(messages, 'accept_s2_api_stock_get');
+  const data = observed && typeof observed === 'object' ? (observed.data ?? observed) : observed;
+  return [
+    { tool: { name: 'accept_s2_api_stock_get', args: {} } },
+    data !== undefined
+      ? { text: `The GET returned: ${JSON.stringify(data)}` }
+      : {
+          text: 'echo: 测试 API 的 GET 返回什么 (accept_s2_api_stock_get did not resolve — see docs/runbooks/host-accept-s2.md)',
+        },
+  ];
+}
+
+const SCENARIOS = [
+  { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario },
+  { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario },
+  { marker: '重启测试容器', build: entryRestartChatScenario },
+  { marker: '测试 API 的 GET 返回什么', build: entryObserveChatScenario },
+];
+
+/** Returns the scripted step for this request, or `undefined` if no scenario marker matched
+ *  (the caller falls through to the original search/echo logic unchanged). */
+function matchScenarioStep(messages) {
+  const list = messages ?? [];
+  const blob = JSON.stringify(list);
+  const scenario = SCENARIOS.find((s) => blob.includes(s.marker));
+  if (!scenario) return undefined;
+  const steps = scenario.build(list);
+  const index = Math.min(assistantMessageCount(messages), steps.length - 1);
+  return steps[index];
+}
+
+function sendScenarioStep(res, step, stream) {
+  const id = `fake-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const created = Math.floor(Date.now() / 1000);
+  const toolCallId = `call_${Math.random().toString(36).slice(2, 10)}`;
+  const isTool = step.tool !== undefined;
+  const argsJson = isTool ? JSON.stringify(step.tool.args ?? {}) : '';
+  const text = isTool ? '' : step.text;
+  const usage = {
+    prompt_tokens: 1,
+    completion_tokens: estimateTokens(isTool ? argsJson : text),
+    total_tokens: 1 + estimateTokens(isTool ? argsJson : text),
+  };
+
+  if (!stream) {
+    const message = isTool
+      ? {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            { id: toolCallId, type: 'function', function: { name: step.tool.name, arguments: argsJson } },
+          ],
+        }
+      : { role: 'assistant', content: text };
+    sendJson(res, 200, {
+      id,
+      object: 'chat.completion',
+      created,
+      model: MODEL_ID,
+      choices: [{ index: 0, message, finish_reason: isTool ? 'tool_calls' : 'stop' }],
+      usage,
+    });
+    return;
+  }
+
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+
+  writeSse(res, {
+    ...baseChunk(id, created),
+    choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+  });
+
+  if (isTool) {
+    writeSse(res, {
+      ...baseChunk(id, created),
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              { index: 0, id: toolCallId, type: 'function', function: { name: step.tool.name, arguments: '' } },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    });
+    writeSse(res, {
+      ...baseChunk(id, created),
+      choices: [
+        {
+          index: 0,
+          delta: { tool_calls: [{ index: 0, function: { arguments: argsJson } }] },
+          finish_reason: null,
+        },
+      ],
+    });
+    writeSse(res, {
+      ...baseChunk(id, created),
+      choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+    });
+  } else {
+    for (const piece of chunkText(text, 12)) {
+      writeSse(res, {
+        ...baseChunk(id, created),
+        choices: [{ index: 0, delta: { content: piece }, finish_reason: null }],
+      });
+    }
+    writeSse(res, {
+      ...baseChunk(id, created),
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    });
+  }
+
+  writeSse(res, { ...baseChunk(id, created), choices: [], usage });
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
+
 async function handleChatCompletions(req, res) {
   let parsed;
   try {
     parsed = JSON.parse(await readBody(req));
   } catch (err) {
     sendJson(res, 400, { error: { message: `invalid JSON body: ${String(err)}` } });
+    return;
+  }
+
+  // S2.12: a scripted scenario, if one matches, fully owns this response — everything below is
+  // the original, untouched search/echo behavior for every other request.
+  const scenarioStep = matchScenarioStep(parsed.messages);
+  if (scenarioStep) {
+    sendScenarioStep(res, scenarioStep, parsed.stream === true);
     return;
   }
 

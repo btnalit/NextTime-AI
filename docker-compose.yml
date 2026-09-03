@@ -195,6 +195,125 @@ services:
     networks: [control]
     restart: unless-stopped
 
+  # accept-s2 (S2.12 acceptance-only fixtures; profiles: ["accept-s2"] — never started by plain
+  # `docker compose up`). scripts/accept_s2.sh drives all of these; see
+  # docs/runbooks/host-accept-s2.md for the full flow and docs/development-tasks.md S2.12 for the
+  # seven acceptance steps these back. All five reuse the existing `control` network rather than a
+  # new dedicated one: `application/gateway/connection-handlers.ts`'s `create_connection` fetches
+  # `manifestSource` (the OpenAPI document) directly from the *kernel* process, so the openapi
+  # fixture must be reachable from `control` regardless; putting the sshd fixture on a separate
+  # network while `kernel` (which cannot gain a third network without editing its own already-
+  # existing service block, outside this file's additive-only scope) stays off it would not add any
+  # real isolation — a spawned Worker container only ever gets the isolated `workers` network
+  # (S2.8's spawn spec), so it is exactly as unreachable to every one of these five services as it
+  # already is to postgres/kernel/gatekeeper-docker on `control` today. See
+  # docs/runbooks/host-accept-s2.md "已知偏离" for the full reasoning.
+
+  # A container-simulated "test SSH host" (S2.12 deliverable 1a). Pubkey-only auth — the private
+  # half of the keypair is generated at accept_s2.sh runtime into ${NEXTTIME_DATA}/accept-s2/ssh/
+  # and never committed to the repo; see deploy/accept-s2/sshd/Dockerfile's own header comment.
+  accept-s2-sshd:
+    build: { context: ., dockerfile: deploy/accept-s2/sshd/Dockerfile }
+    profiles: ["accept-s2"]
+    volumes: ["${NEXTTIME_DATA}/accept-s2/ssh/id_ed25519.pub:/etc/accept-s2/authorized_keys:ro"]
+    networks: [control]
+    restart: "no"
+
+  # A test OpenAPI service (S2.12 deliverable 1b) — serves both the OpenAPI document
+  # `create_connection`'s `manifestSource` imports from and the one real `/stock` operation
+  # (bearer-token gated, ACCEPT_S2_API_TOKEN generated at accept_s2.sh runtime — never a value
+  # baked into this file). See deploy/accept-s2/openapi-fixture/server.mjs's own header comment.
+  # `:-` (not `:?`): compose interpolates every service's `environment:` block for the *whole*
+  # file before profile filtering ever runs, so a `:?` default here would make every ordinary
+  # `docker compose up/ps/build` on the host (for any service, not just this profile) fail with
+  # this message whenever ACCEPT_S2_API_TOKEN happens to be unset in the shell/`.env` — i.e.
+  # always, outside of accept_s2.sh's own run. `deploy/accept-s2/openapi-fixture/server.mjs`
+  # already refuses to start with an empty/missing token (see that file's own header comment), so
+  # an accidental `docker compose --profile accept-s2 up` without the token set fails loudly
+  # inside the container instead, not at compose-parse time for every other command.
+  accept-s2-openapi:
+    build: { context: ., dockerfile: deploy/accept-s2/openapi-fixture/Dockerfile }
+    profiles: ["accept-s2"]
+    environment: { ACCEPT_S2_API_TOKEN: "${ACCEPT_S2_API_TOKEN:-}" }
+    networks: [control]
+    restart: "no"
+
+  # Generic ssh-kind Gatekeeper instance — packages/gatekeeper-base's own env-driven main()
+  # (docs/runbooks/host-gatekeepers.md's §2/§3 pattern for docker/ragflow, applied directly to the
+  # base image here since this connection has no dedicated `gatekeepers/<system>` package; see
+  # packages/gatekeeper-base/src/index.ts's own "the common http/cli/ssh single-transport case"
+  # main() doc comment). GATE_SSH_POLICY_FILE is deliberately `[]` — every command this gate's own
+  # SshTransport runs is therefore "unclassified" by its internal classifyCommand (informational
+  # only, packages/gatekeeper-base/src/kinds/ssh.ts — never consulted by kernel governance). S2.12
+  # step 4's approval-card / "always allow" behavior is instead driven by this gate's *published*
+  # Operation (deploy/accept-s2/ssh-gate-manifest.json's `ssh.run_command`: auto_approvable=true,
+  # blast_radius=medium) — an Operation published with auto_approvable=false can never be flipped to
+  # auto-approved by any workspace policy (governance/policy/engine.ts's
+  # `operation_not_auto_approvable` branch runs unconditionally, before any workspace-policy check);
+  # see docs/runbooks/host-accept-s2.md "已知偏离" for the full reasoning.
+  accept-s2-ssh-gate:
+    build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
+    profiles: ["accept-s2"]
+    environment:
+      {
+        GATE_TRANSPORT_KIND: ssh,
+        GATE_SSH_HOST: accept-s2-sshd,
+        GATE_SSH_USER: testuser,
+        GATE_SSH_PORT: "22",
+        GATE_SSH_IDENTITY_FILE: /data/ssh-identity/id_ed25519,
+        GATE_SSH_POLICY_FILE: "[]",
+        GATE_MANIFEST_FILE: /data/gate-manifest.json,
+        GATE_PORT: "8090",
+      }
+    volumes:
+      [
+        "${NEXTTIME_DATA}/accept-s2/ssh-gate:/data/gate",
+        "${NEXTTIME_DATA}/accept-s2/ssh:/data/ssh-identity:ro",
+        "./deploy/accept-s2/ssh-gate-manifest.json:/data/gate-manifest.json:ro",
+      ]
+    networks: [control]
+    restart: "no"
+
+  # Generic http-kind Gatekeeper instance fronting accept-s2-openapi. GATE_CREDENTIAL_MODE=
+  # connected_account (S2.13's own credentialKind:'connected_account' path — accept_s2.sh's
+  # generated bearer token goes straight into this gate's local encrypted ConnectedAccount store,
+  # never through the kernel — S2.13's own acceptance sentence "凭证明文不出现在任何内核 DB 表").
+  # GATE_STORE_KEY_FILE is generated at accept_s2.sh runtime, same directory convention as the ssh
+  # keypair above. deploy/accept-s2/http-gate-manifest.json's one Operation (`stock.get`) is the
+  # same shape `@nexttime/gatekeeper-base`'s `importOpenApi` deterministically derives from
+  # accept-s2-openapi's own openapi.json — see that manifest file's own header comment for why both
+  # copies must agree.
+  accept-s2-http-gate:
+    build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
+    profiles: ["accept-s2"]
+    environment:
+      {
+        GATE_TRANSPORT_KIND: http,
+        GATE_TARGET_BASE_URL: http://accept-s2-openapi:8080,
+        GATE_CREDENTIAL_MODE: connected_account,
+        GATE_STORE_KEY_FILE: /data/gate/store.key,
+        GATE_MANIFEST_FILE: /data/gate-manifest.json,
+        GATE_PORT: "8090",
+      }
+    volumes:
+      [
+        "${NEXTTIME_DATA}/accept-s2/http-gate:/data/gate",
+        "./deploy/accept-s2/http-gate-manifest.json:/data/gate-manifest.json:ro",
+      ]
+    networks: [control]
+    restart: "no"
+
+  # The deterministic restart target for S2.12 step 2 ("重启测试容器") — the already-deployed
+  # `gatekeeper-docker` service (not part of this profile; see docs/runbooks/host-gatekeepers.md)
+  # restarts this container via `container.restart`, never a real business container (host-
+  # gatekeepers.md's own "不做": "不对现有业务容器 execute").
+  accept-s2-restart-target:
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+    profiles: ["accept-s2"]
+    networks: [control]
+    restart: "no"
+
   backup:
     image: postgres:17-alpine # 与 postgres 同大版本
     entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config tar.gz，保留 N 份（S1.12）
