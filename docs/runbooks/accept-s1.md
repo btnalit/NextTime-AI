@@ -48,7 +48,10 @@ PASS preflight-fake-provider fake provider configured in .../config/llm-provider
 PASS preflight-migrations up to date
 PASS bootstrap-workspace workspace=<uuid> alice=<uuid> key=abc123...(redacted)
 PASS bootstrap-bob bob=<uuid> (member) key=def456...(redacted)
-SKIP entry-worker-definition (S2.6)
+PASS entry-worker-definition-seeded workspace <uuid> has a published entry WorkerDefinition (<uuid>@1)
+PASS entry-worker-definition-propose-v2 proposed <uuid>@2 (draft)
+PASS entry-worker-definition-publish-v2 published <uuid>@2
+SKIP entry-worker-definition-handle-403 (asserted by a kernel unit test — see docs/runbooks/accept-s1.md)
 PASS chat-alice chat=<uuid> turn=<uuid> status=completed history=2
 PASS chat-bob chat=<uuid> status=completed history=2
 PASS isolation-history bob get_chat_history(alice's chat) -> JSON-RPC error -32004
@@ -72,7 +75,9 @@ S1 OK
 |---|---|---|
 | `preflight-*` | — | 环境就绪：所需服务在跑、fake provider 已配置、迁移无待执行项 |
 | `bootstrap-*` | — | 一个 workspace、两个用户（owner alice、member bob），走 `bootstrap.js`（S1.3）与新增的 `add-principal` 子命令 |
-| `entry-worker-definition` | — | 如实标注 S2.6 缺口，不伪造 |
+| `entry-worker-definition-seeded` | — | `create-workspace`（S2.6）在同一事务内种下并发布了 v1 entry WorkerDefinition |
+| `entry-worker-definition-propose-v2` / `-publish-v2` | — | 经 caddy、owner 的 human 通道 `propose_worker_definition`/`publish_worker_definition`（同 `explain` 的传输方式），验证注册表的 propose→publish 流程真的可用 |
+| `entry-worker-definition-handle-403` | I16：Handle 通道不能发布 | 如实标注"由内核单测断言"，不在本脚本里伪造一个 Handle |
 | `chat-alice` / `chat-bob` | 功能：一轮对话端到端 | 登录 → 对话 → 自己的入口容器回答（`echo:` 来自 fake-llm，链路含真实 pi + agent-host） |
 | `isolation-*` | 隔离：B 看不到 A 的 Chat | -32004、`list_chats` 不含对方会话 |
 | `kill-alice-entry` / `continue-alice` | 失效：杀入口容器后对话可续 | `docker kill` 该用户入口容器，历史不丢，第二轮仍完整（S1.5 验收原文） |
@@ -85,9 +90,19 @@ S1 OK
 
 ## 5. 已知缺口
 
-- **`entry-worker-definition` SKIP**：WorkerDefinition 注册表是 S2.6 的交付物；S1 阶段入口定义
-  是烧进 `worker-runtime` 镜像的静态 system prompt（`docs/development-tasks.md` S1.5a 实现说明）。
-  脚本按设计如实跳过，不伪造"已发布"。
+- **`entry-worker-definition-handle-403` SKIP**：I16 要求"Handle 通道调用 `publish_worker_definition`
+  必须 403"，但从这个 POSIX shell 脚本铸造一个真正签名的 Capability Handle 并不便宜——主机上没有
+  `node`/`corepack`（`docs/runbooks/host-worker-runtime.md` §10），也没有任何面向任意 shell 调用
+  的"签发 Handle"capability（Handle 签发是 `agent-host` 向内核内部链路要来的，不是一个公开
+  capability）。这条规则改由内核单测在真实 gateway 管线上断言：
+  `packages/kernel/src/application/gateway/handlers.test.ts` 的
+  `"gateway/handlers — S2.6 worker-definition registry + I16"` 套件，具体是
+  `"publish_worker_definition is rejected on the handle channel (I16, human-only)"`（以及
+  `deprecate_worker_definition`、`assert_fact(WorkerDefinition …)` 的同类断言），CI 跑
+  `DATABASE_URL` 打开时的完整套件。脚本本身如实 SKIP 并指回这份 runbook，不伪造一次 Handle 调用。
+  （S2.6 之前：WorkerDefinition 注册表本身都还没交付，`entry-worker-definition` 整步都是 SKIP —
+  见本文件的历史版本；S2.6 落地后，seed/propose/publish 三步已经是真实断言，只有 I16 的 403 这一
+  半留在内核单测里。）
 - **`packages/web` 的 Playwright e2e 是独立的 opt-in**（`pnpm --filter @nexttime/web e2e`，需要
   `WEB_E2E_BASE_URL`/`WEB_E2E_API_KEY`，且要求内核以 `AGENT_RUNTIME=fake` 启动——见
   `packages/web/README.md`"已知偏离"一节）：本脚本验收的是 `AGENT_RUNTIME=agent-host` 的真实链路

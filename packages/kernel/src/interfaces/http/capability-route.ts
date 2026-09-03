@@ -6,6 +6,7 @@ import {
   type DispatchDeps,
   ForbiddenError,
   InvalidCapabilityParamsError,
+  MetaOntologyWriteForbiddenError,
   type ResolveCallerDeps,
   UnauthorizedError,
   dispatchCapability,
@@ -56,6 +57,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof CapabilityNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S2.6: checked *before* the generic ForbiddenError branch below — MetaOntologyWriteForbiddenError
+  // extends ForbiddenError (application/gateway/meta-ontology-guard.ts), so an `instanceof
+  // ForbiddenError` check alone would always match first and this more specific, stable code
+  // (docs/development-tasks.md S2.6: "403 with a stable error code") would never be reached.
+  if (err instanceof MetaOntologyWriteForbiddenError) {
+    return { status: 403, code: 'meta_ontology_write_forbidden', message: err.message };
   }
   if (err instanceof ForbiddenError) {
     return { status: 403, code: 'forbidden', message: err.message };

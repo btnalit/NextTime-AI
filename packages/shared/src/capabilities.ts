@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WorkerDefinitionKindSchema } from './enums.js';
 import type { CapabilityChannel, OperationMode, Role } from './enums.js';
 
 /**
@@ -740,8 +741,23 @@ const workerCapabilities: readonly Capability[] = [
     mode: 'propose',
     channel: 'handle',
     minRole: 'builder',
-    paramsSchema: z.object({ definition: jsonRecord }).strict(),
-    description: 'Propose a private draft WorkerDefinition.',
+    // S2.6 extension (see PR body "改动"): the original shape (`{definition: jsonRecord}` alone)
+    // had no way to address which WorkerDefinition family a proposal belongs to, or to declare
+    // `kind` — both required by `worker_definitions`' own schema (migrations/worker/
+    // 0001_worker_definitions.sql: `kind`/`id` are columns, never derived from inside the opaque
+    // `definition` jsonb). `definitionId` omitted starts a new family (a fresh `id`, version 1);
+    // given, proposes the next version under that existing `id`. `kind` is immutable per `id`
+    // across versions (enforced by application/worker/definitions.ts, not by this schema alone —
+    // a Zod shape has no way to see prior versions).
+    paramsSchema: z
+      .object({
+        definitionId: id.optional(),
+        kind: WorkerDefinitionKindSchema,
+        definition: jsonRecord,
+      })
+      .strict(),
+    description:
+      'Propose a private draft WorkerDefinition version (definitionId omitted starts a new family).',
   },
   {
     name: 'publish_worker_definition',

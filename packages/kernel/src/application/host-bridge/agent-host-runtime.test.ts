@@ -24,7 +24,17 @@ interface FakeSessionRow {
   onBehalfOf: string;
 }
 
-function createFakePool() {
+/** S2.6: an entry definition row `resolveEntryDefinition`'s `getPublishedEntryDefinition` query
+ *  should find for a given `workspaceId`, keyed by `createFakePool`'s optional
+ *  `publishedEntryDefinitions` seed map. */
+interface FakeEntryDefinitionRow {
+  readonly systemPrompt?: string;
+  readonly model?: string;
+}
+
+function createFakePool(
+  publishedEntryDefinitions: ReadonlyMap<string, FakeEntryDefinitionRow> = new Map(),
+) {
   const sessionsByPrincipal = new Map<string, FakeSessionRow>();
   const handleCount = new Map<string, number>();
 
@@ -36,6 +46,30 @@ function createFakePool() {
     }
     if (sql.startsWith('select set_config') || sql.startsWith('set local role')) {
       return { rows: [], rowCount: 0 };
+    }
+
+    // application/worker/definitions.ts's getPublishedEntryDefinition.
+    if (sql.startsWith('select workspace_id, id, version, kind, status, definition')) {
+      const [workspaceId] = params as [string];
+      const seed = publishedEntryDefinitions.get(workspaceId);
+      if (!seed) return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            workspace_id: workspaceId,
+            id: randomUUID(),
+            version: 1,
+            kind: 'entry',
+            status: 'published',
+            definition: { systemPrompt: seed.systemPrompt, model: seed.model },
+            proposed_by: randomUUID(),
+            published_by: randomUUID(),
+            created_at: new Date(),
+            published_at: new Date(),
+          },
+        ],
+        rowCount: 1,
+      };
     }
 
     if (sql.startsWith('select id from sessions')) {
@@ -268,6 +302,93 @@ describe('AgentHostRuntime — startTurn happy path', () => {
     await secondPromise;
 
     expect(handleCount.get(principalId)).toBe(2);
+  });
+});
+
+describe('AgentHostRuntime — startTurn resolves the published entry WorkerDefinition (S2.6)', () => {
+  it('includes systemPrompt/model on the startTurn frame when the workspace has a published entry definition', async () => {
+    const input = startTurnInput();
+    const { pool } = createFakePool(
+      new Map([
+        [
+          input.workspaceId,
+          { systemPrompt: 'you are the entry agent', model: 'example-provider/example-model' },
+        ],
+      ]),
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.systemPrompt).toBe('you are the entry agent');
+    expect(command.model).toBe('example-provider/example-model');
+  });
+
+  it('omits systemPrompt/model (never fails the turn) when no entry definition has been published', async () => {
+    const { pool } = createFakePool(); // no seeded definitions
+    const { sink, events } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput();
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.systemPrompt).toBeUndefined();
+    expect(command.model).toBeUndefined();
+    expect(events).toEqual([]); // never a turnEnded — the lookup gap is not fatal
+  });
+
+  it('omits systemPrompt/model when the published definition has no model set', async () => {
+    const input = startTurnInput();
+    const { pool } = createFakePool(
+      new Map([[input.workspaceId, { systemPrompt: 'you are the entry agent' }]]),
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.systemPrompt).toBe('you are the entry agent');
+    expect(command.model).toBeUndefined();
   });
 });
 

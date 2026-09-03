@@ -21,8 +21,16 @@ RUN groupadd --system --gid 10001 nexttime \
 
 WORKDIR /app
 COPY --from=build --chown=nexttime:nexttime /out/kernel .
+# S2.6: repo-root ontology/ (platform-meta.yaml, entry-agent.yaml, ops-runner.yaml — design doc
+# §7.10 "内容以两种包交付...ontology/<domain>/") is *not* part of the @nexttime/kernel package
+# itself (`pnpm deploy` above only carries that package's own files), so it needs its own COPY
+# here. ONTOLOGY_DIR tells `substrate/ontology/loader.ts`'s `resolveOntologyDir` exactly where to
+# find it — see that file's own doc comment for why its relative-path fallback (correct in local
+# dev) cannot resolve inside this flattened image.
+COPY --from=build --chown=nexttime:nexttime /workspace/ontology ./ontology
 
 USER nexttime
 ENV NODE_ENV=production
+ENV ONTOLOGY_DIR=/app/ontology
 EXPOSE 8080
 CMD ["node", "dist/index.js"]

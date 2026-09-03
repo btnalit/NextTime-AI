@@ -19,12 +19,13 @@
  * design that satisfies it, not an oversight; see the PR body "假设与偏离".
  */
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { SpawnRequest, SupervisorConfig } from './config.js';
 import type { DockerClient } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
-import { workspacePaths } from './host-paths.js';
+import { localSystemPromptPath, workspacePaths } from './host-paths.js';
 import {
   ENTRY_ROLE_LABEL,
   ENTRY_ROLE_VALUE,
@@ -145,9 +146,46 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     }
   }
 
+  // S2.6: writes/overwrites `/workspace/.nexttime/system-prompt.md` (host-paths.ts
+  // `localSystemPromptPath`) before every spawn — both the create and the reuse-a-running-
+  // container paths, so a workspace's *next* restart always picks up the current published entry
+  // WorkerDefinition's prompt even when this particular call only reuses an already-running
+  // container (writing to the file has no effect on a container pi already started). Best-effort,
+  // same convention as `registerEgress`/`unregisterEgress` above and this package's own S1.5a
+  // precedent (egress registration must never fail a spawn): a broken/unwritable workspace
+  // directory must not block the entry container from coming up — `entrypoint.sh`'s own
+  // write-if-missing static fallback still applies if this never succeeds. Only writes when
+  // `systemPrompt` is given and differs from what's already on disk, so a spawn call carrying no
+  // `systemPrompt` (or with the caller's own file byte-for-byte in place) is a cheap read + no-op,
+  // not a needless write.
+  function writeSystemPromptIfChanged(principalId: string, systemPrompt: string | undefined): void {
+    if (systemPrompt === undefined) return;
+    const filePath = localSystemPromptPath(config, principalId);
+    try {
+      let existing: string | undefined;
+      try {
+        existing = readFileSync(filePath, 'utf8');
+      } catch {
+        existing = undefined;
+      }
+      if (existing === systemPrompt) return;
+      mkdirSync(path.dirname(filePath), { recursive: true });
+      writeFileSync(filePath, systemPrompt, 'utf8');
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'system-prompt.md write failed (spawn still succeeds; entrypoint.sh’s static fallback applies)',
+          principalId,
+          error: String(err),
+        }),
+      );
+    }
+  }
+
   return {
     async spawn(input): Promise<SpawnOutcome> {
-      const { workspaceId, principalId, handle, kernelUrl, llmUrl } = input;
+      const { workspaceId, principalId, handle, kernelUrl, llmUrl, systemPrompt, model } = input;
       const name = entryContainerName(principalId);
       const paths = workspacePaths(config, principalId);
 
@@ -160,6 +198,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // entry container from creating its sibling `.pi/sessions`.
       mkdirSync(paths.localWorkspaceDir, { recursive: true });
       mkdirSync(paths.localPiAgentDir, { recursive: true });
+
+      // S2.6: before deciding reuse-vs-(re)create, so the file is current for whichever the
+      // container actually loads at its *next* start (see this function's own doc comment above).
+      writeSystemPromptIfChanged(principalId, systemPrompt);
 
       const existing = await docker.inspectByName(name);
 
@@ -195,6 +237,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         llmUrl,
         networkName,
         restarts,
+        model,
       });
       const created = await docker.createAndStart(spec);
 

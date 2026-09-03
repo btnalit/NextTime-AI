@@ -1,0 +1,128 @@
+# Platform meta-ontology (design doc §5.1.2 "平台元本体（对象化的平台自身）", §5.2 关键关系;
+# docs/development-tasks.md S2.6). The six ObjectTypes below "对象化平台自身" — a WorkerDefinition,
+# Gatekeeper, Operation, Capability, Skill, or Procedure is itself an Object in the graph, findable
+# by `find_operations` / `find_workers` / `find_procedures` (§8.4 "在平台元本体上 traverse").
+#
+# Loaded and published as an `ontology_versions` row by `packages/kernel/src/substrate/ontology/
+# loader.ts`'s `seedPlatformMetaOntology`, called once per workspace from the bootstrap CLI's
+# `create-workspace` (packages/kernel/src/cli/bootstrap.ts) — see that loader's own doc comment for
+# why this happens at bootstrap time rather than inside a SQL migration (`ontology_versions` rows
+# are workspace-scoped; migrations run once per database, before any workspace exists).
+#
+# Schema (packages/kernel/src/substrate/ontology/loader.ts `OntologyDefinitionSchema` is
+# authoritative): `objectTypes: [{name, description}]`, `linkTypes: [{name, domain, range,
+# description}]`. I2 ("Link 符合 LinkType 的 domain/range") requires both `domain` and `range` on
+# every LinkType, explicit — `domain`/`range` name an ObjectType from `objectTypes` below, or the
+# sentinel `"*"` for a Link whose other end is not confined to one of these six types (e.g. an
+# Operation may `reads`/`writes` *any* domain ObjectType, not only these six; a Gatekeeper
+# `connects_to` an arbitrary connected-system object).
+#
+# Naming note (design doc §7.10 "design doc only where names deviate"): the design doc's own
+# repo-layout sketch (§10.1) shows this content as a directory, `ontology/platform-meta/` — this
+# task's dispatch specifies the flat file `ontology/platform-meta.yaml` instead (matching
+# `ontology/entry-agent.yaml` / `ontology/ops-runner.yaml` alongside it); the flat-file layout is
+# what is implemented.
+
+objectTypes:
+  - name: WorkerDefinition
+    description: >-
+      A published, versioned "executable" for an entry agent or a Worker: model whitelist,
+      system prompt, Skills it uses, required Capabilities, and — for kind=entry — a fixed
+      capability ceiling. draft -> published -> deprecated (I12); a Task permanently pins the
+      (id, version) it was launched with. Relational identity/lifecycle lives in
+      `worker_definitions` (packages/kernel/src/application/worker); this ObjectType is that
+      table's graph projection, written once a version is published.
+
+  - name: Gatekeeper
+    description: >-
+      One instance of a connected system's governed access point: a transport kind (http / mcp
+      / cli / ssh), an interface manifest (Operations), and a credential the Gatekeeper itself
+      holds (never the kernel or any agent process, I9). Created by `request_connection` /
+      `create_connection` (design doc §7.5, §5.1.4 Connection).
+
+  - name: Operation
+    description: >-
+      One action a Gatekeeper exposes: name, binding, params schema, mode (observe/execute),
+      blast_radius, reversibility, auto_approvable, await_decision, reads/writes ObjectTypes,
+      and an optional result mapping. Imported from an OpenAPI document or an MCP `tools/list`,
+      or proposed by an agent after exploring a Gatekeeper (`propose_operation`).
+
+  - name: Capability
+    description: >-
+      A named, governed action the platform itself exposes (packages/shared's capability
+      registry) — the graph projection lets a WorkerDefinition's `requires` edges name exactly
+      which platform capabilities it needs, findable the same way an external system's
+      Operations are.
+
+  - name: Skill
+    description: >-
+      A written procedure (pi skill-format markdown) naming which Operations/ObjectTypes it
+      applies to, what to watch for, and what "done" looks like. draft -> published ->
+      deprecated; a WorkerDefinition's `uses` edges name the Skills its container loads at
+      startup (S2.14).
+
+  - name: Procedure
+    description: >-
+      A distilled, reusable multi-step business process: an ordered sequence of steps, each
+      referencing an Operation or a WorkerDefinition, including approval and verification steps.
+      Proposed from a successful Task (`propose_procedure`), published by a human (S2.14).
+
+linkTypes:
+  - name: exposes
+    domain: Gatekeeper
+    range: Operation
+    description: >-
+      A Gatekeeper's interface manifest — every Operation it currently offers.
+
+  - name: reads
+    domain: Operation
+    range: "*"
+    description: >-
+      The ObjectType(s) an observe-class Operation's result maps onto (its JMESPath result
+      mapping, when one is declared). Range is "*": any ObjectType in the active domain
+      ontology, not confined to this platform meta-ontology's own six types.
+
+  - name: writes
+    domain: Operation
+    range: "*"
+    description: >-
+      The ObjectType(s) an execute-class Operation's effect is expected to change. Same "*"
+      range rationale as `reads`.
+
+  - name: can_act_on
+    domain: WorkerDefinition
+    range: "*"
+    description: >-
+      What a WorkerDefinition may act on once invoked: a Gatekeeper, an Operation, or an
+      arbitrary domain ObjectType (design doc §5.1.2 "WorkerDefinition --can_act_on--> Gatekeeper
+      | Operation | ObjectType") — the union is why range is "*" rather than one fixed type.
+
+  - name: requires
+    domain: WorkerDefinition
+    range: Capability
+    description: >-
+      The platform Capabilities a WorkerDefinition needs granted before it can run.
+
+  - name: connects_to
+    domain: Gatekeeper
+    range: "*"
+    description: >-
+      A Gatekeeper's connection to the system object it was registered against (design doc
+      §5.1.4 Connection "产生 ... 系统对象与 connects_to 边") — the connected system's own
+      ObjectType belongs to whatever domain ontology models that system, not this one, hence
+      "*". Written by `substrate/ontology/meta-objects.ts`'s `registerGatekeeperObject`.
+
+  - name: uses
+    domain: WorkerDefinition
+    range: Skill
+    description: >-
+      The published Skills a WorkerDefinition's container loads into its pi skills directory at
+      startup (S2.14).
+
+  - name: steps
+    domain: Procedure
+    range: "*"
+    description: >-
+      A Procedure's ordered steps, each referencing an Operation or a WorkerDefinition (design
+      doc §5.1.4 Procedure "有序步骤引用 Operation / WorkerDefinition") — the union is why range
+      is "*".

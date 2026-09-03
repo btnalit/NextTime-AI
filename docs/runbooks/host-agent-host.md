@@ -38,9 +38,17 @@ agent-host → kernel：
   （`textDelta`/`toolCallStarted`/`toolCallEnded`/`message`/`turnEnded`）。
 
 kernel → agent-host：
-- `{"type":"startTurn","workspaceId","chatId","turnId","principalId","prompt","handle","kernelLlmUrl"}`
+- `{"type":"startTurn","workspaceId","chatId","turnId","principalId","prompt","handle","kernelLlmUrl","systemPrompt"?,"model"?}`
   ——`handle` 是刚签发/复用的入口 Capability Handle，两端都绝不记日志；只经这一条命令从 kernel 流向
-  agent-host 再流向 `worker-supervisor` 的 `/resident/spawn` 请求体，再到容器 env。
+  agent-host 再流向 `worker-supervisor` 的 `/resident/spawn` 请求体，再到容器 env。`systemPrompt`/
+  `model`（S2.6）是 `AgentHostRuntime.startTurn` 每次都新查一次该工作区当前已发布的 `kind=entry`
+  WorkerDefinition 解出来的——**工作区怎么设置自己的入口模型**：`create-workspace --entry-model
+  <provider/id>` 在种子 v1 时设置；之后任何时候，owner 经 `propose_worker_definition`（`kind:
+  'entry'`，`definition.model` 字段）+ `publish_worker_definition` 发布一个新版本即可切换（`docs/
+  development-tasks.md` S2.6 `accept_s1.sh` 的 `entry-worker-definition-propose-v2`/`-publish-v2`
+  两步就是在做同一件事，只是那两步没有传 `model`）。没有发布过、或这次查询失败，这两个字段就都不
+  出现在帧里——agent-host 原样透传给 `worker-supervisor`，后者落到 `entrypoint.sh` 的静态兜底
+  prompt 与 pi 自己的默认模型选择，从不因为这次解析失败而拒绝这个 Turn。
 - `{"type":"stopTurn","turnId","principalId"}`
 
 ### 2.2 pi 事件 → 平台事件映射表（唯一翻译点：`packages/agent-host/src/bridge.ts`）

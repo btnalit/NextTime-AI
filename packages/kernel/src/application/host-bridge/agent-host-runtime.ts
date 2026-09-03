@@ -7,6 +7,7 @@ import type { CryptoKey } from 'jose';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { entryScope, issueHandle } from '../../governance/capability/index.js';
+import { getPublishedEntryDefinition } from '../worker/index.js';
 import type {
   AgentRuntime,
   AgentRuntimeEvent,
@@ -99,6 +100,15 @@ interface CachedHandle {
   readonly token: string;
   readonly issuedAtMs: number;
   readonly expiresAtMs: number;
+}
+
+/** S2.6: what `resolveEntryDefinition` extracts from the published entry WorkerDefinition's
+ *  `definition` jsonb — either field may be `undefined` (no entry definition published yet, or
+ *  the published one has no `model` set — `packages/shared/src/worker-definition.ts`'s `model` is
+ *  optional). */
+interface ResolvedEntryDefinition {
+  readonly systemPrompt: string | undefined;
+  readonly model: string | undefined;
 }
 
 type AcceptOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
@@ -203,13 +213,30 @@ export class AgentHostRuntime implements AgentRuntime {
       return;
     }
 
+    // S2.6: the entry container's system prompt/model, from the workspace's currently published
+    // `kind='entry'` WorkerDefinition — resolved fresh on every startTurn (publish is rare; the
+    // extra read is cheap and avoids a stale-cache class of bug entirely) and never fatal: a
+    // lookup failure, or no entry definition ever having been published, falls back to `undefined`
+    // fields on the outbound frame, which `entrypoint.sh`'s own write-if-missing static prompt
+    // (and pi's default model selection) already cover — see this class's own doc comment.
+    const entryDefinition = await this.resolveEntryDefinition(
+      input.workspaceId,
+      input.principalId,
+      input.turnId,
+    );
+
     this.activeTurns.set(input.turnId, {
       workspaceId: input.workspaceId,
       chatId: input.chatId,
       principalId: input.principalId,
     });
 
-    const outcome = await this.sendStartTurnAndAwaitAccept(link, input, handleToken);
+    const outcome = await this.sendStartTurnAndAwaitAccept(
+      link,
+      input,
+      handleToken,
+      entryDefinition,
+    );
 
     if (!outcome.ok) {
       this.activeTurns.delete(input.turnId);
@@ -252,6 +279,7 @@ export class AgentHostRuntime implements AgentRuntime {
     link: AgentHostLink,
     input: StartTurnInput,
     handleToken: string,
+    entryDefinition: ResolvedEntryDefinition | undefined,
   ): Promise<AcceptOutcome> {
     return new Promise<AcceptOutcome>((resolve) => {
       const timeoutHandle = setTimeout(() => {
@@ -277,6 +305,10 @@ export class AgentHostRuntime implements AgentRuntime {
           prompt: input.prompt,
           handle: handleToken,
           kernelLlmUrl: this.kernelLlmUrl,
+          ...(entryDefinition?.systemPrompt !== undefined
+            ? { systemPrompt: entryDefinition.systemPrompt }
+            : {}),
+          ...(entryDefinition?.model !== undefined ? { model: entryDefinition.model } : {}),
         });
       } catch (err) {
         this.pendingAccepts.delete(input.turnId);
@@ -383,6 +415,50 @@ export class AgentHostRuntime implements AgentRuntime {
           error: String(err),
         }),
       );
+    }
+  }
+
+  /**
+   * S2.6: resolves `{systemPrompt, model}` from the workspace's currently published `kind='entry'`
+   * WorkerDefinition (`application/worker`'s `getPublishedEntryDefinition`) — a read-only
+   * `withWorkspace` query, principled the same way `ensureEntrySession`'s own lookup is (RLS-scoped
+   * to `workspaceId`), scoped to `principalId` itself only for the RLS session variable (I1) —
+   * `worker_definitions` carries no `principal_id` column (see `application/worker/definitions.ts`'s
+   * own doc comment: the entry WorkerDefinition is workspace-wide, not per-user). Never throws:
+   * any failure (no DB reachable, no entry definition ever published, a malformed `definition`
+   * missing `systemPrompt`) is logged and treated as "nothing to add to this frame" — see this
+   * class's own doc comment on why a lookup here must never fail a Turn.
+   */
+  private async resolveEntryDefinition(
+    workspaceId: string,
+    principalId: string,
+    turnId: string,
+  ): Promise<ResolvedEntryDefinition | undefined> {
+    try {
+      const definition = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+        getPublishedEntryDefinition(client, workspaceId),
+      );
+      if (!definition) return undefined;
+
+      const content = definition.definition as { systemPrompt?: unknown; model?: unknown };
+      const systemPrompt =
+        typeof content.systemPrompt === 'string' && content.systemPrompt.length > 0
+          ? content.systemPrompt
+          : undefined;
+      const model =
+        typeof content.model === 'string' && content.model.length > 0 ? content.model : undefined;
+      return { systemPrompt, model };
+    } catch (err) {
+      this.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'agent-host-runtime: failed to resolve the published entry WorkerDefinition (falling back to entrypoint.sh’s static prompt/default model)',
+          turnId,
+          workspaceId,
+          error: String(err),
+        }),
+      );
+      return undefined;
     }
   }
 

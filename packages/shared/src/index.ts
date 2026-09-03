@@ -14,5 +14,6 @@ export * from './action-description.js';
 export * from './http.js';
 export * from './handle-token.js';
 export * from './agent-host-protocol.js';
+export * from './worker-definition.js';
 
 export const VERSION = '0.1.0';

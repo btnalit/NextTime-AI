@@ -20,6 +20,8 @@ import {
   ExtensionModeSchema,
   GRANT_STATUS_VALUES,
   GrantStatusSchema,
+  META_ONTOLOGY_OBJECT_TYPE_VALUES,
+  MetaOntologyObjectTypeSchema,
   OPERATION_MODE_VALUES,
   OperationModeSchema,
   PRINCIPAL_KIND_VALUES,
@@ -36,6 +38,7 @@ import {
   WORKER_RUN_STATUS_VALUES,
   WorkerDefinitionKindSchema,
   WorkerRunStatusSchema,
+  isMetaOntologyObjectType,
 } from './enums.js';
 
 const enumsUnderTest = [
@@ -135,11 +138,17 @@ const enumsUnderTest = [
     ['entry', 'worker'],
   ],
   ['ExtensionMode', EXTENSION_MODE_VALUES, ExtensionModeSchema, ['entry', 'worker', 'interactive']],
+  [
+    'MetaOntologyObjectType',
+    META_ONTOLOGY_OBJECT_TYPE_VALUES,
+    MetaOntologyObjectTypeSchema,
+    ['WorkerDefinition', 'Gatekeeper', 'Operation', 'Capability', 'Skill', 'Procedure'],
+  ],
 ] as const;
 
 describe('enums', () => {
-  it('covers all 18 domain enums required by R4', () => {
-    expect(enumsUnderTest).toHaveLength(18);
+  it('covers all 19 domain enums required by R4/S2.6', () => {
+    expect(enumsUnderTest).toHaveLength(19);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {
@@ -163,4 +172,16 @@ describe('enums', () => {
       });
     });
   }
+});
+
+describe('isMetaOntologyObjectType', () => {
+  it('accepts every meta-ontology ObjectType', () => {
+    for (const value of META_ONTOLOGY_OBJECT_TYPE_VALUES) {
+      expect(isMetaOntologyObjectType(value)).toBe(true);
+    }
+  });
+
+  it('rejects a non-meta-ontology ObjectType', () => {
+    expect(isMetaOntologyObjectType('SomeOtherObjectType')).toBe(false);
+  });
 });

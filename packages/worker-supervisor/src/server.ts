@@ -9,7 +9,8 @@
  * as resident endpoints").
  *
  * Routes:
- *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?}
+ *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
+ *                                   systemPrompt?, model?}
  *                                  -> 200 {containerId, ip, status, created, restarts}
  *   POST /resident/stop           {principalId} -> 204
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404

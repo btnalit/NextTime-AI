@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Role } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -30,7 +31,7 @@ const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 function humanCaller(
   workspaceId: string,
   principalId: string,
-  role: 'owner' | 'member' = 'member',
+  role: Role = 'member',
 ): ResolvedCaller {
   return {
     channel: 'human',
@@ -375,6 +376,271 @@ describe.runIf(DATABASE_URL !== undefined)(
           summary: 'not mine to report',
         }),
       ).rejects.toThrow();
+    });
+  },
+);
+
+// -------------------------------------------------------------------------------------------
+// S2.6 worker-definition-registry handlers + I16 graph-write-path guard (docs/development-
+// tasks.md S2.6 deliverables 3-4: "Handle 通道 assert_fact(WorkerDefinition …) 403").
+// -------------------------------------------------------------------------------------------
+
+function handleCallerWithScope(
+  workspaceId: string,
+  onBehalfOf: string,
+  capabilities: readonly string[],
+): ResolvedCaller {
+  return {
+    channel: 'handle',
+    claims: {
+      ws: workspaceId,
+      sid: randomUUID(),
+      obo: onBehalfOf,
+      scope: { capabilities: [...capabilities], resources: {} },
+      jti: randomUUID(),
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+  };
+}
+
+describe.runIf(DATABASE_URL !== undefined)(
+  'gateway/handlers — S2.6 worker-definition registry + I16 (integration, real Postgres)',
+  () => {
+    let pool: Pool;
+    const graphStore = new SqlGraphStore();
+    let workspaceId: string;
+    let ownerId: string;
+    let builderId: string;
+
+    async function adminInsertWorkspace(name: string): Promise<string> {
+      const id = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: id, principalId: randomUUID() },
+        async (client) => {
+          await client.query('insert into workspaces (id, name) values ($1, $2)', [id, name]);
+        },
+        { skipRoleSwitch: true },
+      );
+      return id;
+    }
+
+    async function adminInsertPrincipal(role: Role, displayName: string): Promise<string> {
+      const id = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: id },
+        async (client) => {
+          await client.query(
+            "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', $3, $4)",
+            [workspaceId, id, role, displayName],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      return id;
+    }
+
+    beforeAll(async () => {
+      pool = createPool();
+      await runMigrations(pool, MIGRATIONS_DIR);
+      workspaceId = await adminInsertWorkspace('gateway-handlers-s2-6-test');
+      ownerId = await adminInsertPrincipal('owner', 'owner');
+      builderId = await adminInsertPrincipal('builder', 'builder');
+    });
+
+    afterAll(async () => {
+      await pool.end();
+    });
+
+    it('propose_worker_definition (handle channel) creates an owned draft', async () => {
+      const caller = handleCallerWithScope(workspaceId, builderId, ['propose_worker_definition']);
+
+      const result = (await dispatchCapability({ pool }, caller, 'propose_worker_definition', {
+        kind: 'worker',
+        definition: { systemPrompt: 'you are a worker' },
+      })) as { id: string; version: number; status: string; proposedBy: string };
+
+      expect(result.version).toBe(1);
+      expect(result.status).toBe('draft');
+      expect(result.proposedBy).toBe(builderId);
+    });
+
+    it('publish_worker_definition is rejected on the handle channel (I16, human-only)', async () => {
+      const proposeCaller = handleCallerWithScope(workspaceId, builderId, [
+        'propose_worker_definition',
+      ]);
+      const draft = (await dispatchCapability(
+        { pool },
+        proposeCaller,
+        'propose_worker_definition',
+        {
+          kind: 'worker',
+          definition: { systemPrompt: 'x' },
+        },
+      )) as { id: string; version: number };
+
+      // No handle scope grants publish_worker_definition at all (it is channel:'human'-only and
+      // therefore excluded from every valid Handle scope, governance/capability/handles.ts
+      // assertValidScope) — a handle-channel caller is rejected regardless of claimed scope.
+      const publishAttemptCaller = handleCallerWithScope(workspaceId, ownerId, [
+        'publish_worker_definition',
+      ]);
+      await expect(
+        dispatchCapability({ pool }, publishAttemptCaller, 'publish_worker_definition', {
+          definitionId: draft.id,
+          version: draft.version,
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('publish_worker_definition (human channel, owner) publishes and projects a WorkerDefinition graph Object', async () => {
+      const proposeCaller = handleCallerWithScope(workspaceId, builderId, [
+        'propose_worker_definition',
+      ]);
+      const draft = (await dispatchCapability(
+        { pool },
+        proposeCaller,
+        'propose_worker_definition',
+        {
+          kind: 'entry',
+          definition: { systemPrompt: 'you are the entry agent', capabilities: ['get_object'] },
+        },
+      )) as { id: string; version: number };
+
+      const published = (await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, ownerId, 'owner'),
+        'publish_worker_definition',
+        { definitionId: draft.id, version: draft.version },
+      )) as { status: string; publishedBy: string };
+      expect(published.status).toBe('published');
+      expect(published.publishedBy).toBe(ownerId);
+
+      const listed = (await dispatchCapability(
+        { pool },
+        handleCallerWithScope(workspaceId, ownerId, ['list_worker_definitions']),
+        'list_worker_definitions',
+        { kind: 'entry' },
+      )) as { id: string }[];
+      expect(listed.some((d) => d.id === draft.id)).toBe(true);
+
+      return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const objects = await graphStore.search(client, workspaceId, {
+          query: '',
+          objectType: 'WorkerDefinition',
+        });
+        expect(
+          objects.some(
+            (o) =>
+              o.identityKey?.definitionId === draft.id && o.identityKey?.version === draft.version,
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it('deprecate_worker_definition is rejected on the handle channel (I16, human-only)', async () => {
+      const proposeCaller = handleCallerWithScope(workspaceId, builderId, [
+        'propose_worker_definition',
+      ]);
+      const draft = (await dispatchCapability(
+        { pool },
+        proposeCaller,
+        'propose_worker_definition',
+        {
+          kind: 'worker',
+          definition: { systemPrompt: 'x' },
+        },
+      )) as { id: string; version: number };
+      await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, ownerId, 'owner'),
+        'publish_worker_definition',
+        {
+          definitionId: draft.id,
+          version: draft.version,
+        },
+      );
+
+      await expect(
+        dispatchCapability(
+          { pool },
+          handleCallerWithScope(workspaceId, ownerId, ['deprecate_worker_definition']),
+          'deprecate_worker_definition',
+          { definitionId: draft.id, version: draft.version },
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('assert_fact(WorkerDefinition …) from the Handle channel is rejected 403 (I16 graph write path)', async () => {
+      const proposeCaller = handleCallerWithScope(workspaceId, builderId, [
+        'propose_worker_definition',
+      ]);
+      const draft = (await dispatchCapability(
+        { pool },
+        proposeCaller,
+        'propose_worker_definition',
+        {
+          kind: 'worker',
+          definition: { systemPrompt: 'x' },
+        },
+      )) as { id: string; version: number };
+      await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, ownerId, 'owner'),
+        'publish_worker_definition',
+        { definitionId: draft.id, version: draft.version },
+      );
+
+      const workerDefinitionObjectId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const objects = await graphStore.search(client, workspaceId, {
+            query: '',
+            objectType: 'WorkerDefinition',
+          });
+          const match = objects.find(
+            (o) =>
+              o.identityKey?.definitionId === draft.id && o.identityKey?.version === draft.version,
+          );
+          if (!match) throw new Error('expected a projected WorkerDefinition Object');
+          return match.id;
+        },
+      );
+
+      const assertFactCaller = handleCallerWithScope(workspaceId, builderId, ['assert_fact']);
+      await expect(
+        dispatchCapability({ pool }, assertFactCaller, 'assert_fact', {
+          objectId: workerDefinitionObjectId,
+          linkType: 'test_link',
+          value: 'anything',
+        }),
+      ).rejects.toMatchObject({ name: 'MetaOntologyWriteForbiddenError' });
+    });
+
+    it('assert_fact on a non-meta-ontology Object from the Handle channel is not blocked by I16 (falls through to the pre-existing not-implemented gap)', async () => {
+      const plainObjectId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const object = await graphStore.upsertObject(client, workspaceId, {
+            objectType: 'test.plain',
+            properties: {},
+          });
+          return object.id;
+        },
+      );
+
+      const assertFactCaller = handleCallerWithScope(workspaceId, builderId, ['assert_fact']);
+      await expect(
+        dispatchCapability({ pool }, assertFactCaller, 'assert_fact', {
+          objectId: plainObjectId,
+          linkType: 'test_link',
+          value: 'anything',
+        }),
+      ).rejects.toMatchObject({ name: 'AssertFactWriteNotImplementedError' });
     });
   },
 );

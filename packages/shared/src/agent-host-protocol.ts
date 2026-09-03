@@ -173,6 +173,19 @@ export const KernelStartTurnCommandSchema = z
     prompt: z.string(),
     handle: z.string(),
     kernelLlmUrl: z.string(),
+    /** S2.6: the workspace's published `kind='entry'` WorkerDefinition's `systemPrompt`, resolved
+     *  by `AgentHostRuntime.startTurn` right before sending this frame — replaces
+     *  `deploy/worker-runtime/entrypoint.sh`'s S1 stopgap default (that script now only writes its
+     *  static text when this is never provided, e.g. no published entry definition yet). Optional
+     *  so a workspace with nothing published still starts a Turn — the entrypoint's write-if-
+     *  missing fallback covers that case; this frame never fails a Turn on a missing definition. */
+    systemPrompt: z.string().optional(),
+    /** S2.6: `<provider>/<id>` from that same definition, when the workspace has set one
+     *  (`create-workspace --entry-model`, or a later published version) — becomes the entry
+     *  container's CMD (`worker-supervisor`'s `spawn-spec.ts`: `['--model', model]`,
+     *  `entrypoint.sh`'s own `"$@"` passthrough). Omitted leaves pi's own default model
+     *  selection in place. */
+    model: z.string().optional(),
   })
   .strict();
 

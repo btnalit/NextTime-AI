@@ -124,4 +124,21 @@ describe('buildSpawnSpec', () => {
     });
     expect(recreated.labels['nexttime.restarts']).toBe('3');
   });
+
+  it('sets no CMD when model is omitted (S2.6)', () => {
+    expect(spec.cmd).toBeUndefined();
+  });
+
+  it('sets CMD to ["--model", model] when model is given (S2.6)', () => {
+    const withModel = buildSpawnSpec({
+      config,
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'the-handle-jwt',
+      networkName: 'nexttime-ai_workers',
+      restarts: 0,
+      model: 'example-provider/example-model',
+    });
+    expect(withModel.cmd).toEqual(['--model', 'example-provider/example-model']);
+  });
 });

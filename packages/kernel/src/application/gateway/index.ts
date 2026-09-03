@@ -24,4 +24,14 @@ export {
 } from './dispatch.js';
 export type { DispatchDeps } from './dispatch.js';
 
-export type { CapabilityHandler, CapabilityHandlerResult } from './handlers.js';
+export { AssertFactWriteNotImplementedError } from './handlers.js';
+export type {
+  CapabilityHandler,
+  CapabilityHandlerContext,
+  CapabilityHandlerResult,
+} from './handlers.js';
+
+export {
+  MetaOntologyWriteForbiddenError,
+  assertMetaOntologyHandleWriteAllowed,
+} from './meta-ontology-guard.js';

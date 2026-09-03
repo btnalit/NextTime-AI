@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -60,6 +60,61 @@ describe('resident-service spawn', () => {
     await expect(
       service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' }),
     ).resolves.toBeDefined();
+  });
+
+  it('writes systemPrompt to /workspace/.nexttime/system-prompt.md before spawning (S2.6)', async () => {
+    const { service } = setup();
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      systemPrompt: 'you are the entry agent',
+    });
+
+    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+    expect(existsSync(filePath)).toBe(true);
+    expect(readFileSync(filePath, 'utf8')).toBe('you are the entry agent');
+  });
+
+  it('overwrites system-prompt.md when the content differs, leaves it alone when unchanged', async () => {
+    const { service } = setup();
+    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      systemPrompt: 'v1 prompt',
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe('v1 prompt');
+
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      systemPrompt: 'v2 prompt',
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe('v2 prompt');
+  });
+
+  it('never writes system-prompt.md when systemPrompt is omitted — entrypoint.sh’s fallback applies', async () => {
+    const { service } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+
+    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  it('passes model through to the container spec as CMD (S2.6)', async () => {
+    const { service, docker } = setup();
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      model: 'example-provider/example-model',
+    });
+
+    expect(docker.createCalls[0]?.cmd).toEqual(['--model', 'example-provider/example-model']);
   });
 
   it('reuses a running container on the next spawn (idempotent, created=false)', async () => {

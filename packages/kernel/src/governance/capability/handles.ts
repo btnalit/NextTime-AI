@@ -93,6 +93,21 @@ export function assertValidScope(scope: CapabilityScope): void {
  * S1.6 per-Turn bootstrap/write-back capabilities, packages/shared/src/capabilities.ts `task`
  * group doc comment). `find_operations`/`find_workers`/`find_procedures` ("find_*") are already
  * covered by the `graph` group below and are not repeated here.
+ *
+ * `explain` (bug fix, found and fixed during S2.6): S1.6's entry mode
+ * (`packages/platform-extension/src/modes/entry.ts`) already registers `explain` as one of its
+ * five hardcoded S1 observe-group tools (design doc §7.4/§9.3, §5.1.2 explicitly lists it: "S1 只
+ * 注册 observe 组工具（get_object / traverse / search / explain / get_task）") and calls it through
+ * the entry Handle — but `explain`'s registry `group` is `'epistemic'`
+ * (packages/shared/src/capabilities.ts), not `'graph'`, so it was never included by the `group ===
+ * 'graph'` rule above and had no entry here either. Every actual `explain` call from an entry
+ * agent would therefore be rejected by `authorizeCapabilityCall`'s Handle-scope check (403) — not
+ * caught by any existing test (`handles.test.ts` only asserts the ceiling equals itself, and
+ * `platform-extension`'s own tests run against a fake kernel that does not enforce Handle scope).
+ * Listed explicitly here rather than widening the `group === 'graph'` rule to include `'epistemic'`
+ * wholesale, since that group also contains `record_decision`/`verify_fact`/`resolve_conflict`/
+ * etc. that are not all meant to be in the fixed ceiling (`record_decision` already has its own
+ * explicit entry below; the others are deliberately excluded).
  */
 const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   'get_task',
@@ -101,6 +116,7 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   'invoke_worker',
   'request_connection',
   'record_decision',
+  'explain',
 ] as const;
 
 /**

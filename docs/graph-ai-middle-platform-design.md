@@ -616,7 +616,9 @@ NextTime-AI/
 ├── worker-runtime/           # Dockerfile：pi 0.84.4 + platform-extension + 工具链（入口与 Worker 共用）
 ├── collectors/host-inventory # TS
 ├── explorer/                 # Semantica Explorer 静态构建的挂载说明与构建脚本（S3）
-├── ontology/                 # 领域包：platform-meta/、ops-assets/{types.yaml, skills/, procedures/, workers/}
+├── ontology/                 # platform-meta.yaml、entry-agent.yaml、ops-runner.yaml（S2.6，平面文件——
+│                              # 不是本节原草图的 platform-meta/ 目录，见 development-tasks.md S2.6
+│                              # 实现说明）；领域包 ops-assets/{types.yaml, skills/, procedures/, workers/}（S3）
 ├── deploy/caddy/Caddyfile  deploy/backup/
 ├── scripts/                  # accept_s1.sh accept_s2.sh accept_s3.sh check-capability-consistency.ts gen-models-json.ts check-kernel-purity.sh
 ├── .dependency-cruiser.cjs   # §7.10 的六层依赖规则
