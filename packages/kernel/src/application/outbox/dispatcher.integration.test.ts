@@ -95,7 +95,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         if (event.factId === factId) deliveries.push(meta.outboxId);
       });
 
-      const delivered = await freshDispatcher.pollOnce();
+      // `outbox.id` is one global `bigserial` column shared by every workspace
+      // (migrations/core/0005_outbox.sql), and `pollOnce()` drains at most `batchSize` (20) rows
+      // per call, oldest-`id`-first. Under Vitest's default cross-file parallelism, other
+      // concurrently-running integration test files can enqueue enough of their own rows to push
+      // this test's single row past that first 20-row window — a single `pollOnce()` call is not
+      // guaranteed to reach it. Loop until this row is delivered or the queue is genuinely empty
+      // (capped, so a real regression still fails instead of hanging).
+      let delivered = 0;
+      for (let i = 0; i < 200 && deliveries.length === 0; i += 1) {
+        const n = await freshDispatcher.pollOnce();
+        delivered += n;
+        if (n === 0) break;
+      }
 
       expect(delivered).toBeGreaterThanOrEqual(1);
       expect(deliveries).toHaveLength(1);
