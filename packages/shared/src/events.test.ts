@@ -51,6 +51,7 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
     actionRequestId: 'ar1',
     gatekeeperId: 'gk1',
     actionKind: 'docker.container_restart',
+    holderPrincipalIds: ['owner1', 'operator1'],
   },
   { type: 'ActionRequestUpdated', workspaceId: 'ws1', actionRequestId: 'ar1', status: 'executed' },
   {

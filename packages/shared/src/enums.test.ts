@@ -24,8 +24,10 @@ import {
   MetaOntologyObjectTypeSchema,
   OPERATION_MODE_VALUES,
   OperationModeSchema,
+  POLICY_DECISION_VALUES,
   PRINCIPAL_KIND_VALUES,
   PUBLISHABLE_STATUS_VALUES,
+  PolicyDecisionSchema,
   PrincipalKindSchema,
   PublishableStatusSchema,
   ROLE_VALUES,
@@ -144,11 +146,17 @@ const enumsUnderTest = [
     MetaOntologyObjectTypeSchema,
     ['WorkerDefinition', 'Gatekeeper', 'Operation', 'Capability', 'Skill', 'Procedure'],
   ],
+  [
+    'PolicyDecision',
+    POLICY_DECISION_VALUES,
+    PolicyDecisionSchema,
+    ['allow', 'require_approval', 'deny'],
+  ],
 ] as const;
 
 describe('enums', () => {
-  it('covers all 19 domain enums required by R4/S2.6', () => {
-    expect(enumsUnderTest).toHaveLength(19);
+  it('covers all 20 domain enums required by R4 + S2.2 + S2.6', () => {
+    expect(enumsUnderTest).toHaveLength(20);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {

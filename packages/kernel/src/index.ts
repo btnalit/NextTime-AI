@@ -11,6 +11,7 @@ import {
   registerTurnStartedConsumer,
 } from './application/host-bridge/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
+import { expireOverduePendingApprovals } from './governance/approval/index.js';
 import type { HandleKeyPair } from './governance/capability/index.js';
 import { loadHandleKeyPair } from './governance/capability/index.js';
 import type { CapabilityRouteDeps } from './interfaces/http/index.js';
@@ -108,10 +109,14 @@ export interface BackgroundServices {
    * later poll — there is no separate "replay" step). Recovery runs first so a client cannot
    * observe a Turn this process considers freshly `running` when it is actually a leftover from a
    * previous one — see recovery.ts's own doc comment for what `interrupted` means going forward.
+   * Also starts the S2.3 approval-expiry reaper's interval loop (`governance/approval`'s
+   * `expireOverduePendingApprovals` — same "poll on an interval, never one txn per workspace"
+   * shape as the outbox dispatcher).
    */
   start(): Promise<void>;
-  /** Stops the poll loop and unregisters the `TurnStarted` consumer. Does not wait for an
-   *  in-flight poll — see OutboxDispatcher.stop()'s own doc comment for why that is safe. */
+  /** Stops the poll loop, the approval-expiry reaper's interval, and unregisters the `TurnStarted`
+   *  consumer. Does not wait for an in-flight poll/reaper tick — see OutboxDispatcher.stop()'s own
+   *  doc comment for why that is safe. */
   stop(): void;
 }
 
@@ -147,6 +152,17 @@ export interface CreateBackgroundServicesOptions {
    *  TIMEOUT_MS`, 15 minutes) — `main()` reads this from `TURN_INTERRUPT_TIMEOUT_MS` (docs/
    *  development-tasks.md S1.4 deliverable 7: "configurable timeout"). */
   readonly turnInterruptTimeoutMs?: number;
+  /** `expireOverduePendingApprovals`'s cutoff (default `DEFAULT_APPROVAL_TIMEOUT_MS`, 24h) —
+   *  `main()` reads this from `APPROVAL_TIMEOUT_MS` (docs/development-tasks.md S2.3 "expire（reaper，
+   *  可配置超时）"). */
+  readonly approvalTimeoutMs?: number;
+  /** How often the S2.3 approval-expiry reaper polls. Default `DEFAULT_APPROVAL_REAPER_INTERVAL_MS`
+   *  (5 minutes) — `main()` reads this from `APPROVAL_REAPER_INTERVAL_MS`. */
+  readonly approvalReaperIntervalMs?: number;
+  /** Called whenever a reaper tick's `expireOverduePendingApprovals` call throws, so it never
+   *  becomes an unhandled promise rejection — same shape as `OutboxDispatcher`'s own `onError`.
+   *  Defaults to a no-op; `main()` passes `app.log.error`. */
+  readonly onApprovalReaperError?: (error: unknown) => void;
 }
 
 const DEFAULT_AGENT_HOST_KERNEL_LLM_URL = 'http://llm-proxy:8082';
@@ -190,6 +206,11 @@ function buildDefaultRuntime(options: CreateBackgroundServicesOptions): AgentRun
  * directly anywhere in this wiring; this function is the one place they meet (see host-bridge/
  * index.ts's doc comment).
  */
+/** Default reaper poll interval — 5 minutes. Deliberately much coarser than the outbox
+ *  dispatcher's 200ms: an ActionRequest overdue by `approvalTimeoutMs` (default 24h) does not
+ *  need sub-second expiry latency. */
+export const DEFAULT_APPROVAL_REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
 export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
 ): BackgroundServices {
@@ -200,6 +221,9 @@ export function createBackgroundServices(
   if (runtime instanceof AgentHostRuntime) setAgentHostRuntimeForWsRoute(runtime);
   const unsubscribeTurnStarted = registerTurnStartedConsumer(dispatcher, runtime);
 
+  const onApprovalReaperError = options.onApprovalReaperError ?? (() => {});
+  let approvalReaperTimer: NodeJS.Timeout | undefined;
+
   return {
     dispatcher,
     runtime,
@@ -209,10 +233,25 @@ export function createBackgroundServices(
         timeoutMs: options.turnInterruptTimeoutMs,
       });
       dispatcher.start();
+
+      const tick = (): void => {
+        expireOverduePendingApprovals(options.pool, {
+          timeoutMs: options.approvalTimeoutMs,
+        }).catch(onApprovalReaperError);
+      };
+      approvalReaperTimer = setInterval(
+        tick,
+        options.approvalReaperIntervalMs ?? DEFAULT_APPROVAL_REAPER_INTERVAL_MS,
+      );
+      approvalReaperTimer.unref?.();
     },
     stop() {
       dispatcher.stop();
       unsubscribeTurnStarted();
+      if (approvalReaperTimer) {
+        clearInterval(approvalReaperTimer);
+        approvalReaperTimer = undefined;
+      }
     },
   };
 }
@@ -253,6 +292,8 @@ export function main(): void {
     const rawTurnInterruptTimeoutMs = process.env.TURN_INTERRUPT_TIMEOUT_MS;
     const rawEntryHandleTtlSeconds = process.env.ENTRY_HANDLE_TTL_SECONDS;
     const rawTurnAcceptedTimeoutMs = process.env.AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS;
+    const rawApprovalTimeoutMs = process.env.APPROVAL_TIMEOUT_MS;
+    const rawApprovalReaperIntervalMs = process.env.APPROVAL_REAPER_INTERVAL_MS;
 
     background = createBackgroundServices({
       pool,
@@ -268,6 +309,11 @@ export function main(): void {
       turnInterruptTimeoutMs: rawTurnInterruptTimeoutMs
         ? Number(rawTurnInterruptTimeoutMs)
         : undefined,
+      approvalTimeoutMs: rawApprovalTimeoutMs ? Number(rawApprovalTimeoutMs) : undefined,
+      approvalReaperIntervalMs: rawApprovalReaperIntervalMs
+        ? Number(rawApprovalReaperIntervalMs)
+        : undefined,
+      onApprovalReaperError: (err: unknown) => app.log.error(err),
     });
 
     // A request that races the still-in-flight recovery scan is not unsafe — the partial unique

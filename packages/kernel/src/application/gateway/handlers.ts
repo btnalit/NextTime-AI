@@ -1,4 +1,4 @@
-import type { CapabilityChannel, WorkerDefinitionKind } from '@nexttime/shared';
+import type { CapabilityChannel, Role, WorkerDefinitionKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ChatMessageRow,
@@ -19,6 +19,19 @@ import {
   proposeWorkerDefinition,
   publishWorkerDefinition,
 } from '../../application/worker/index.js';
+import {
+  ActionRequestNotFoundError,
+  approveActionRequest,
+  getActionRequest,
+  listPendingForApprover,
+  rejectActionRequest,
+} from '../../governance/approval/index.js';
+import { grantCapability, revokeCapabilityGrant } from '../../governance/capability/index.js';
+import {
+  parseSetPolicyPayload,
+  setAutoApprovedActionKind,
+  setPolicy,
+} from '../../governance/policy/index.js';
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { queryAudit, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
@@ -420,6 +433,126 @@ const assertFactHandler: CapabilityHandler = async (client, workspaceId, params,
   throw new AssertFactWriteNotImplementedError();
 };
 
+// -------------------------------------------------------------------------------------------
+// S2.2/S2.3 governance handlers (docs/development-tasks.md S2.2/S2.3). Every one of these is
+// human-channel-only (packages/shared/src/capabilities.ts `channel: 'human'`) — `authorizeCapabilityCall`
+// has already checked the caller's `role` against the capability's `minRole` before any of these
+// run; `approve`/`reject`/`list_pending` additionally need the caller's *role value itself* (not
+// just "does it satisfy minRole") for I14, which `currentPrincipalRole` below resolves the same
+// way `currentPrincipalId` does (reading back the RLS session variable dispatch.ts already set),
+// plus one lookup into `principals` for the `role` column.
+//
+// `request_action` is deliberately **not** wired here: its wire-level paramsSchema
+// (`{gatekeeperId, operation, params}`) carries no `blast_radius`/`auto_approvable` — resolving
+// those requires a Gatekeeper's published interface manifest, which is S2.4 scope ("Must NOT:
+// do not implement Gatekeeper transports"). `governance/approval/request-action.ts`'s
+// `requestAction(client, workspaceId, input)` is ready to be called directly once S2.4's
+// Gatekeeper client can supply that input — see this task's PR body "已知偏离"/final report.
+// -------------------------------------------------------------------------------------------
+
+async function currentPrincipalRole(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<{ id: string; role: Role }> {
+  const principalId = await currentPrincipalId(client);
+  const result = await client.query<{ role: Role }>(
+    'select role from principals where workspace_id = $1 and id = $2',
+    [workspaceId, principalId],
+  );
+  const role = result.rows[0]?.role;
+  if (!role) {
+    throw new Error(
+      `currentPrincipalRole: principal ${principalId} not found in workspace ${workspaceId}`,
+    );
+  }
+  return { id: principalId, role };
+}
+
+const approveHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { actionRequestId } = params as { actionRequestId: string };
+  const caller = await currentPrincipalRole(client, workspaceId);
+  const result = await approveActionRequest(client, workspaceId, {
+    actionRequestId,
+    approverPrincipalId: caller.id,
+    approverRole: caller.role,
+  });
+  return { result, resourceType: 'action_request', resourceId: result.id };
+};
+
+const rejectHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { actionRequestId, reason } = params as { actionRequestId: string; reason?: string };
+  const caller = await currentPrincipalRole(client, workspaceId);
+  const result = await rejectActionRequest(client, workspaceId, {
+    actionRequestId,
+    approverPrincipalId: caller.id,
+    approverRole: caller.role,
+    reason,
+  });
+  return { result, resourceType: 'action_request', resourceId: result.id };
+};
+
+/** `list_pending`: the caller's own I14-scoped queue (`governance/approval/reads.ts`'s
+ *  `listPendingForApprover`). */
+const listPendingHandler: CapabilityHandler = async (client, workspaceId) => {
+  const caller = await currentPrincipalRole(client, workspaceId);
+  const result = await listPendingForApprover(client, workspaceId, {
+    principalId: caller.id,
+    role: caller.role,
+  });
+  return { result };
+};
+
+/** `get_action`: workspace-scoped read, not I14-narrowed (§9.3 "get_action returns one
+ *  (workspace-scoped)") — any `operator`+ role may read any single ActionRequest by id. */
+const getActionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { actionRequestId } = params as { actionRequestId: string };
+  const result = await getActionRequest(client, workspaceId, actionRequestId);
+  if (!result) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
+  return { result, resourceType: 'action_request', resourceId: actionRequestId };
+};
+
+/** "总是批准此类" — writes/upserts a workspace auto-approval rule for one action_kind (§9.3,
+ *  design doc S2.10 card action). See `governance/policy/policies.ts`'s own doc comment for why
+ *  the I8 high-blast-radius guard can only fire here when a prior `set_policy` call already
+ *  recorded this action_kind's `blast_radius` (S2.6's graph-stored Operation metadata, the only
+ *  other source of truth, does not exist yet). */
+const setAutoApprovedActionKindHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { actionKind } = params as { actionKind: string };
+  const setBy = await currentPrincipalId(client);
+  const result = await setAutoApprovedActionKind(client, workspaceId, { actionKind, setBy });
+  return { result, resourceType: 'policy', resourceId: result.id };
+};
+
+const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { policy } = params as { policy: unknown };
+  const payload = parseSetPolicyPayload(policy);
+  const setBy = await currentPrincipalId(client);
+  const result = await setPolicy(client, workspaceId, { ...payload, setBy });
+  return { result, resourceType: 'policy', resourceId: result.id };
+};
+
+const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { principalId, capability, scope } = params as {
+    principalId: string;
+    capability: string;
+    scope: Record<string, unknown>;
+  };
+  const grantedBy = await currentPrincipalId(client);
+  const result = await grantCapability(client, workspaceId, {
+    principalId,
+    capability,
+    scope,
+    grantedBy,
+  });
+  return { result, resourceType: 'capability_grant', resourceId: result.id };
+};
+
+const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { grantId } = params as { grantId: string };
+  const result = await revokeCapabilityGrant(client, workspaceId, grantId);
+  return { result, resourceType: 'capability_grant', resourceId: result.id };
+};
+
 /** capability name → handler, for every wired capability. */
 export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new Map([
   ['get_object', getObjectHandler],
@@ -442,4 +575,12 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],
   ['list_worker_definitions', listWorkerDefinitionsHandler],
   ['assert_fact', assertFactHandler],
+  ['approve', approveHandler],
+  ['reject', rejectHandler],
+  ['list_pending', listPendingHandler],
+  ['get_action', getActionHandler],
+  ['set_auto_approved_action_kind', setAutoApprovedActionKindHandler],
+  ['set_policy', setPolicyHandler],
+  ['grant_capability', grantCapabilityHandler],
+  ['revoke_capability', revokeCapabilityHandler],
 ]);

@@ -204,6 +204,17 @@ export const BLAST_RADIUS_VALUES = ['low', 'medium', 'high'] as const;
 export type BlastRadius = (typeof BLAST_RADIUS_VALUES)[number];
 export const BlastRadiusSchema = asEnum(BLAST_RADIUS_VALUES);
 
+/**
+ * Policy decision (§5.1.4 Policy "allow / require_approval / deny", §5.4 I7/I8; §9.2
+ * `action_requests.policy_decision` CHECK, migrations/governance/0003_action_requests.sql). Gap
+ * flagged by S2.1 (see that migration's own header comment and
+ * packages/kernel/src/adapters/db/governance-schema.test.ts's `KNOWN_UNMAPPED_CHECKS`): this is
+ * the `packages/shared` counterpart the policy engine (S2.2) owns.
+ */
+export const POLICY_DECISION_VALUES = ['allow', 'require_approval', 'deny'] as const;
+export type PolicyDecision = (typeof POLICY_DECISION_VALUES)[number];
+export const PolicyDecisionSchema = asEnum(POLICY_DECISION_VALUES);
+
 /** Capability channel (§5.3, §9.3): human (web/API-key) vs handle (agent Handle, MCP/tool calls). */
 export const CAPABILITY_CHANNEL_VALUES = ['human', 'handle'] as const;
 export type CapabilityChannel = (typeof CAPABILITY_CHANNEL_VALUES)[number];

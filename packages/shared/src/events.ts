@@ -77,6 +77,14 @@ const ActionRequestPendingEvent = z.object({
   gatekeeperId: z.string(),
   actionKind: z.string(),
   resourceScope: z.string().optional(),
+  // S2.3 addition (design doc §7.10 "审批路由是 approval 发事件、chat 订阅后写各持有者的系统消息",
+  // §8.5 "卡片出现的位置：进入每个持有范围者自己的对话...与审批队列"): the principal ids I14's routing
+  // resolved as holders of this ActionRequest's `action_kind × resource_scope` (every active
+  // capability_grants match plus the workspace owner(s), governance/approval/routing.ts) — not
+  // necessarily including the requester. `chat`/`web` (S2.11/S2.10, out of this task's scope) read
+  // this list to know whose Chat/queue gets a system message; `approval` itself never imports
+  // `chat` (.dependency-cruiser.cjs), so this event is the only channel carrying that fan-out list.
+  holderPrincipalIds: z.array(z.string()),
 });
 
 const ActionRequestUpdatedEvent = z.object({
