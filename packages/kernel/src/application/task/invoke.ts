@@ -68,6 +68,19 @@ export interface InvokeWorkerCallerCtx {
   readonly principalId: string;
   readonly channel: CapabilityChannel;
   readonly claims?: HandleClaims;
+  /**
+   * The Turn (`activities.id`, `kind='agent_turn'`) that generated this `invoke_worker` call, if
+   * any — design doc §5.2 `Turn --generated--> Task`; docs/development-tasks.md S2.11 deliverable
+   * 4. Resolved by the caller (`application/gateway/handlers.ts`'s `invokeWorkerHandler`, via
+   * `application/host-bridge`'s `findAttributableTurn`) *before* calling `invokeWorker` — this
+   * module never resolves it itself, matching `invoke_worker`'s existing rule that everything
+   * needed to create the Task is passed in, not re-derived (`caller`'s other fields are handled
+   * the same way). `undefined` when the call had no attributable running Turn (e.g. the human
+   * channel, or a Handle call outside any Turn) — `tasks.created_by_activity_id` stays `null` in
+   * that case, exactly as it always has (S2.7's own doc comment on that column: "写这条边是 S2.11
+   * 自己的职责范围").
+   */
+  readonly turnId?: string;
 }
 
 export interface InvokeWorkerInput {
@@ -238,13 +251,14 @@ export async function invokeWorker(
     async (client) => {
       const taskResult = await client.query(
         `insert into tasks (
-           workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version,
-           input, token_budget, duration_limit_sec
-         ) values ($1, 'queued', $2, $3, $4, $5::jsonb, $6, $7)
+           workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
+           worker_definition_version, input, token_budget, duration_limit_sec
+         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8)
          returning ${TASK_ROW_COLUMNS}`,
         [
           workspaceId,
           caller.principalId,
+          caller.turnId ?? null,
           input.definitionId,
           input.version,
           JSON.stringify(input.input ?? null),

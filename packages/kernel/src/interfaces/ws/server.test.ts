@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { publishPrincipalPushEvent } from '../../application/chat/index.js';
 import { hashApiKey } from '../../application/gateway/index.js';
 import { createBackgroundServices, createServer } from '../../index.js';
 import type { BackgroundServices } from '../../index.js';
@@ -143,6 +144,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     let wsUrl: string;
     let workspaceId: string;
     let ownerApiKey: string;
+    let ownerId: string;
 
     async function adminInsertWorkspace(name: string): Promise<string> {
       const id = randomUUID();
@@ -184,7 +186,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await runMigrations(pool, MIGRATIONS_DIR);
       workspaceId = await adminInsertWorkspace('ws-server-test-workspace');
       ownerApiKey = `owner-key-${randomUUID()}`;
-      await adminInsertPrincipalWithKey(ownerApiKey);
+      ownerId = await adminInsertPrincipalWithKey(ownerApiKey);
 
       app = createServer({ pool });
       // Small but nonzero delay: exercises real asynchronous streaming without slowing the suite.
@@ -426,6 +428,81 @@ describe.runIf(DATABASE_URL !== undefined)(
       // union) so a regression here fails this assertion specifically, rather than being masked
       // by paging's coverage.
       expect([...seenViaPush].sort((a, b) => a - b)).toEqual(expectedSequences);
+
+      client.close();
+    });
+
+    // S2.11 deliverable 2 (docs/development-tasks.md S2.11 "WS push test through the existing
+    // server test harness for action.pending/task.updated"; §9.4). Pushes are exercised directly
+    // via `publishPrincipalPushEvent` — the outbox→push plumbing itself (application/linkage's
+    // consumers reading a real ActionRequest/Task row and calling this same function) is covered
+    // end-to-end by application/linkage/{task-consumer,action-request-consumer}.integration.test.ts;
+    // this file's job is only to prove interfaces/ws/server.ts's own wiring — every authenticated
+    // connection auto-subscribes to its own principal's push events with no separate
+    // `subscribe_principal` call — actually delivers over the wire.
+    it('every authenticated connection receives its own principal’s action.pending/task.updated pushes with no subscribe_principal call', async () => {
+      const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
+
+      publishPrincipalPushEvent(ownerId, {
+        type: 'task.updated',
+        taskId: 'task-1',
+        status: 'completed',
+      });
+      publishPrincipalPushEvent(ownerId, {
+        type: 'action.pending',
+        actionRequestId: 'ar-1',
+        gatekeeperId: 'gk-1',
+        title: 'Approval needed: test action',
+        description: 'test.action (via gk-1)',
+        actionKind: { tag: 'test.action', label: 'test action' },
+        awaitDecision: false,
+      });
+
+      await waitUntil(() => client.notifications.some((n) => n.method === 'task.updated'));
+      await waitUntil(() => client.notifications.some((n) => n.method === 'action.pending'));
+
+      const taskPush = client.notifications.find((n) => n.method === 'task.updated');
+      expect(taskPush?.params).toMatchObject({ taskId: 'task-1', status: 'completed' });
+
+      const actionPush = client.notifications.find((n) => n.method === 'action.pending');
+      expect(actionPush?.params).toMatchObject({ actionRequestId: 'ar-1', gatekeeperId: 'gk-1' });
+
+      client.close();
+    });
+
+    it('a push for a different principal never reaches this connection', async () => {
+      const otherApiKey = `other-key-${randomUUID()}`;
+      const otherId = await adminInsertPrincipalWithKey(otherApiKey);
+      const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
+
+      publishPrincipalPushEvent(otherId, {
+        type: 'task.updated',
+        taskId: 'task-not-mine',
+        status: 'failed',
+      });
+      // No positive event to wait on for "never arrives" — publish one more, to *this* connection's
+      // own principal, and rely on push delivery being in-order per listener (application/chat/
+      // push.ts's `publishPrincipalPushEvent` calls listeners synchronously) to know the first
+      // publish, if it had been (mis)delivered here, would already be in `notifications` by now.
+      publishPrincipalPushEvent(ownerId, {
+        type: 'task.updated',
+        taskId: 'task-mine',
+        status: 'completed',
+      });
+      await waitUntil(() =>
+        client.notifications.some(
+          (n) =>
+            n.method === 'task.updated' && (n.params as { taskId?: string }).taskId === 'task-mine',
+        ),
+      );
+
+      expect(
+        client.notifications.some(
+          (n) =>
+            n.method === 'task.updated' &&
+            (n.params as { taskId?: string }).taskId === 'task-not-mine',
+        ),
+      ).toBe(false);
 
       client.close();
     });

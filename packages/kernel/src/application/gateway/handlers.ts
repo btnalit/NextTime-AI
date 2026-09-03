@@ -12,6 +12,8 @@ import {
   sendChatMessage,
 } from '../../application/chat/index.js';
 import type { AgentRuntime } from '../../application/host-bridge/index.js';
+import { findAttributableTurn } from '../../application/host-bridge/index.js';
+import { drainPendingContextItems } from '../../application/linkage/index.js';
 import {
   type InvokeWorkerInput,
   findOperations,
@@ -255,14 +257,36 @@ const subscribeChatHandler: CapabilityHandler = async (client, workspaceId, para
 // already narrowed by the Handle's own scope by the time either handler runs.
 // -------------------------------------------------------------------------------------------
 
-/** S1 scope (design doc §7.4 `context` injection row): pending approvals and running tasks are
- *  always empty — governance/approval and application/task do not exist yet (S2). `facts` is the
- *  one real piece of context S1 can offer: `GraphStore.listRecentFacts` (an S1.4 additive method,
- *  see substrate/graph/store.ts's own doc comment on it), capped at its default limit. */
+/**
+ * S1 scope was: pending approvals and running tasks always empty, `facts` the one real piece of
+ * context (`GraphStore.listRecentFacts`). S2.11 addition (design doc §7.4 `context` injection row,
+ * §8.2 "用户下一次发言时，context 事件把 Task 结果注入"; docs/development-tasks.md S2.11 deliverable 3):
+ * `tasks`/`pendingApprovals` are now populated from `application/linkage`'s
+ * `drainPendingContextItems` — every undelivered Task outcome, budget warning (≥80%), or
+ * `waiting_approval` notice for this principal (`tasks` bucket), and every undelivered ActionRequest
+ * status change this principal is the requester of (`pendingApprovals` bucket) — marked delivered
+ * in the same call so nothing repeats on the next Turn (`application/linkage/store.ts`'s own doc
+ * comment has the full "why a table, not a column" rationale). `precedents` remains S3 scope (no
+ * Procedure/Skill graph content exists yet to precedent-match against).
+ *
+ * Field names deliberately unchanged from the S1 stub (`tasks`/`pendingApprovals`, not new keys) —
+ * `packages/platform-extension/src/modes/entry.ts`'s `EntryContextResult`/`renderSection` already
+ * render any JSON-shaped array under these two keys generically; inventing new top-level keys would
+ * need a platform-extension change, which is out of this task's ownership (S2.9's area).
+ */
 const getEntryContextHandler: CapabilityHandler = async (client, workspaceId) => {
-  const facts = await graphStore.listRecentFacts(client, workspaceId);
+  const principalId = await currentPrincipalId(client);
+  const [facts, drained] = await Promise.all([
+    graphStore.listRecentFacts(client, workspaceId),
+    drainPendingContextItems(client, workspaceId, principalId),
+  ]);
   return {
-    result: { pendingApprovals: [], tasks: [], facts, precedents: [] },
+    result: {
+      pendingApprovals: drained.pendingApprovals,
+      tasks: drained.tasks,
+      facts,
+      precedents: [],
+    },
   };
 };
 
@@ -311,6 +335,83 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
     result: { turnId: row.id, status: row.status },
     resourceType: 'activity',
     resourceId: turnId,
+  };
+};
+
+/** Thrown by `record_decision` when the caller has no currently-`running` Turn to attribute the
+ *  Decision to (`findAttributableTurn`'s recency-window fallback is deliberately *not* accepted
+ *  here — see `recordDecisionHandler`'s own doc comment for why). Not mapped in interfaces/ws/
+ *  rpc.ts or interfaces/http/capability-route.ts (falls through to a generic 500/INTERNAL_ERROR),
+ *  matching this same handler group's existing `TurnNotFoundError` above, which has never had a
+ *  dedicated mapping either. */
+export class NoActiveTurnError extends Error {
+  constructor() {
+    super('record_decision: no currently-running Turn to attribute this Decision to');
+    this.name = 'NoActiveTurnError';
+  }
+}
+
+/**
+ * `record_decision` (design doc §5.2 `Turn --generated--> Decision`; docs/development-tasks.md
+ * S2.11 deliverable 4). `decisions.activity_id` *is* the edge — the same relational-FK-as-edge
+ * convention `tasks.created_by_activity_id` already uses for `Turn --generated--> Task`
+ * (`invokeWorkerHandler`'s own doc comment has the parallel reasoning), not a `links` row: neither
+ * a Turn nor a Decision is a graph Object (`objects`/`links`' `source_object_id`/`target_object_id`
+ * are `objects` FKs — migrations/core/0002_substrate.sql — and no ontology YAML in this repo
+ * projects either one as one), so there is no `generated` LinkType to add anywhere today; if a
+ * future task ever projects Turn/Decision as graph Objects, that YAML addition belongs with that
+ * projection work, not here.
+ *
+ * Only `wasRunning === true` is accepted (mirrors `invokeWorkerHandler`'s identical choice, same
+ * reasoning: "generated" means *during*, not *shortly after*) — safe to require unconditionally
+ * because `record_decision` is entry-only (`governance/capability/handles.ts`'s
+ * `ENTRY_CEILING_EXTRA_CAPABILITY_NAMES`, not in `WORKER_CEILING_EXTRA_CAPABILITY_NAMES`), so every
+ * legitimate caller already has a Turn in progress by construction.
+ *
+ * Starts `proposed` (`packages/shared`'s `DECISION_TRANSITIONS`) — `decided_by`/`decided_at` stay
+ * null; nothing in this codebase transitions an entry-agent-recorded Decision onward yet (S2.3's
+ * own Approval Decisions, `governance/approval/decide.ts`, are a separate, already-resolved write
+ * path). `relatedFactIds`/`relatedTaskId` (the capability's own `paramsSchema`, `packages/shared/
+ * src/capabilities.ts`) have no dedicated `decisions` columns — S2.3's own implementation notes
+ * flag this exact gap ("关联语义...本任务不代为决定") without resolving it; stashed in the existing
+ * free-form `rationale` jsonb here rather than a new migration column speculatively adding a query
+ * shape nothing yet needs.
+ */
+const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { summary, relatedFactIds, relatedTaskId } = params as {
+    summary: string;
+    relatedFactIds?: string[];
+    relatedTaskId?: string;
+  };
+  const principalId = await currentPrincipalId(client);
+  const attributedTurn = await findAttributableTurn(client, {
+    workspaceId,
+    principalId,
+    at: new Date(),
+  });
+  if (!attributedTurn?.wasRunning) throw new NoActiveTurnError();
+
+  const result = await client.query<{ id: string; status: string }>(
+    `insert into decisions (workspace_id, status, activity_id, summary, rationale)
+     values ($1, 'proposed', $2, $3, $4::jsonb)
+     returning id, status`,
+    [
+      workspaceId,
+      attributedTurn.id,
+      summary,
+      JSON.stringify({
+        relatedFactIds: relatedFactIds ?? [],
+        relatedTaskId: relatedTaskId ?? null,
+      }),
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('record_decision: INSERT ... RETURNING produced no row');
+
+  return {
+    result: { id: row.id, status: row.status, turnId: attributedTurn.id },
+    resourceType: 'decision',
+    resourceId: row.id,
   };
 };
 
@@ -553,10 +654,29 @@ const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, p
 // `create_task` is deliberately **not** wired (see this section's own note below).
 // -------------------------------------------------------------------------------------------
 
+/**
+ * §5.2 `Turn --generated--> Task` (docs/development-tasks.md S2.11 deliverable 4): resolves the
+ * caller's currently-*running* Turn, if any, using `_client` — the one transaction
+ * `dispatchCapability` (dispatch.ts) already has open for this whole handler call, so this read
+ * costs nothing extra to hold open (that transaction stays open for the full `invoke_worker` call
+ * regardless — including any `wait=true` polling below — since `invokeWorker` itself never uses
+ * `_client`; see `application/task/invoke.ts`'s own module doc comment for why *it* manages
+ * separate, independently-committed transactions instead). Only `wasRunning === true` counts —
+ * `findAttributableTurn`'s 5-minute recency fallback exists for egress/llm-usage attribution
+ * (where "which Turn was this probably part of" is the right question), but "generated" here means
+ * *during*, not *shortly after*: a Task invoked well after its nearest Turn ended did not come from
+ * that Turn.
+ */
 const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, params, ctx) => {
+  const principalId = ctx?.principalId ?? '';
+  const attributedTurn = principalId
+    ? await findAttributableTurn(_client, { workspaceId, principalId, at: new Date() })
+    : undefined;
+  const turnId = attributedTurn?.wasRunning ? attributedTurn.id : undefined;
+
   const result = await invokeWorker(
     workspaceId,
-    { principalId: ctx?.principalId ?? '', channel: ctx?.channel ?? 'handle', claims: ctx?.claims },
+    { principalId, channel: ctx?.channel ?? 'handle', claims: ctx?.claims, turnId },
     params as InvokeWorkerInput,
     getConfiguredTaskRuntime(),
   );
@@ -702,6 +822,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['subscribe_chat', subscribeChatHandler],
   ['get_entry_context', getEntryContextHandler],
   ['report_turn', reportTurnHandler],
+  ['record_decision', recordDecisionHandler],
   ['propose_worker_definition', proposeWorkerDefinitionHandler],
   ['publish_worker_definition', publishWorkerDefinitionHandler],
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],

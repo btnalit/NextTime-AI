@@ -166,6 +166,16 @@ const ChatMessageEvent = z.object({
     // this on every pushed `chat.message` to replay-then-dedupe against live delivery without
     // gaps or duplicates (docs/development-tasks.md S1.4 acceptance criterion).
     sequence: z.number(),
+    // S2.11 addition (docs/development-tasks.md S2.11 deliverable 1): present only on the three
+    // `role='system'` message kinds `application/linkage` writes (`chat-message-content.ts`'s
+    // `SystemMessageKind`) — `undefined` for ordinary user/assistant/tool messages, which carry no
+    // `kind`. `content` is that same `SystemMessageContent` object verbatim (loosened to a bare
+    // record here so this file need not import chat-message-content.ts's stricter union — a
+    // consumer that cares can re-validate with `SystemMessageContentSchema` itself), letting a
+    // live-connected web client render a card the moment the push arrives instead of waiting for a
+    // separate `get_chat_history`/`get_action` round-trip.
+    kind: z.string().optional(),
+    content: z.record(z.string(), z.unknown()).optional(),
   }),
 });
 

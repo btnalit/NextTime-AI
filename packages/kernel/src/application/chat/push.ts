@@ -58,3 +58,70 @@ export function publishChatPushEvent(event: ChatPushEvent): void {
 export function _resetChatPushEventsForTests(): void {
   listenersByChatId.clear();
 }
+
+// -------------------------------------------------------------------------------------------
+// Per-principal push bus (docs/development-tasks.md S2.11 deliverable 2: `action.pending` /
+// `action.updated` / `task.updated`, §9.4). A second, independent registry alongside the
+// per-chat one above — these three events are not scoped to one Chat (an ActionRequest's holders
+// span however many Chats they each own; a Task's owner may be viewing any Chat, or none) but to
+// a *principal*: "pushed to the connected sessions of the principals concerned" (S2.11 deliverable
+// 2). `interfaces/ws/server.ts` subscribes every authenticated connection to its own resolved
+// principal automatically (no separate `subscribe_principal` request — the task brief's own
+// "(or reuse authenticate's session)" option), the same way `subscribeToChatPushEvents` above is
+// driven by an explicit `subscribe_chat`.
+//
+// Lives here, not in `application/linkage` (the module that actually publishes into this bus for
+// S2.11's three event kinds): the same reason the per-chat registry above lives in
+// `application/chat` and not e.g. `application/host-bridge` — `interfaces/ws` needs one shared
+// place to subscribe from regardless of which application module ends up publishing, and
+// `application/chat` is already `interfaces/ws`'s existing push-bus dependency (kept a single
+// import, not two near-identical ones).
+// -------------------------------------------------------------------------------------------
+
+export type PrincipalPushEvent = Extract<
+  PlatformEvent,
+  { type: 'action.pending' | 'action.updated' | 'task.updated' }
+>;
+
+export type PrincipalPushListener = (event: PrincipalPushEvent) => void;
+
+const listenersByPrincipalId = new Map<string, Set<PrincipalPushListener>>();
+
+/** Registers `listener` for every push event published for `principalId`. Returns an
+ *  unsubscribe function — same shape as `subscribeToChatPushEvents` above. */
+export function subscribeToPrincipalPushEvents(
+  principalId: string,
+  listener: PrincipalPushListener,
+): () => void {
+  let listeners = listenersByPrincipalId.get(principalId);
+  if (!listeners) {
+    listeners = new Set();
+    listenersByPrincipalId.set(principalId, listeners);
+  }
+  listeners.add(listener);
+
+  return () => {
+    const current = listenersByPrincipalId.get(principalId);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) listenersByPrincipalId.delete(principalId);
+  };
+}
+
+/** Publishes `event` to every listener currently subscribed to `principalId`. A no-op if that
+ *  principal has no connected socket right now — the persisted `pending_context_items` row
+ *  (`application/linkage`) is what makes the same information available on their next
+ *  `get_entry_context`/reconnect regardless. `principalId` is a separate parameter (not read off
+ *  `event`) because none of the three S2.11 wire events carry a principal id of their own — the
+ *  same event object is typically published once per concerned principal (e.g. once per
+ *  ActionRequest holder). */
+export function publishPrincipalPushEvent(principalId: string, event: PrincipalPushEvent): void {
+  const listeners = listenersByPrincipalId.get(principalId);
+  if (!listeners) return;
+  for (const listener of listeners) listener(event);
+}
+
+/** Test-only escape hatch: clears every registered listener. Not exported from index.ts. */
+export function _resetPrincipalPushEventsForTests(): void {
+  listenersByPrincipalId.clear();
+}

@@ -83,6 +83,28 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
       sequence: 2,
     },
   },
+  // S2.11 addition: a role='system' message carrying the optional kind/content pair
+  // (application/linkage writes these; chat-message-content.ts's SystemMessageContent is the
+  // richer, kind-discriminated shape `content` holds — loosened to a bare record here, see this
+  // field's own doc comment).
+  {
+    type: 'chat.message',
+    chatId: 'chat1',
+    message: {
+      id: 'm2',
+      role: 'system',
+      text: 'Task task1 completed',
+      createdAt: '2026-09-01T00:01:00Z',
+      sequence: 3,
+      kind: 'system.task_update',
+      content: {
+        kind: 'system.task_update',
+        text: 'Task task1 completed',
+        taskId: 'task1',
+        status: 'completed',
+      },
+    },
+  },
   {
     type: 'chat.stream',
     chatId: 'chat1',

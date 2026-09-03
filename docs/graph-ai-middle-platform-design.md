@@ -588,6 +588,16 @@ MCP 工具 = Handle 通道可用行的投影。Semantica 的 17 个工具名与�
 - **客户端规则：先 `subscribe_chat(chatId, startAfter)` 再 `get_chat_history` 翻页**，否则会丢事件。
 - 一个 Chat 同时只允许一个进行中的 Turn；进行中时 `send_chat_message` 被拒，只能 `stop_agent`。
 
+**`action.pending` / `action.updated` / `task.updated`（S2.11）**：这三个不属于任何一个 Chat——一个 ActionRequest 的持有者可能横跨多个 Chat，Task 的所有者也可能当前没有打开任何 Chat——而是按**principal**推送：每个通过 `authenticate`（首帧或 Authorization 头）完成鉴权的连接，自动订阅该 principal 自己的这三类事件，不需要单独的 `subscribe_principal` 请求（复用 `authenticate` 已建立的会话）。字段形状（`packages/shared/src/events.ts`）：
+
+| 事件 | 字段 | 说明 |
+|------|------|------|
+| `action.pending` | `actionRequestId, gatekeeperId, title, description, actionKind: {tag, label}, awaitDecision, simulated?` | 推给该 ActionRequest 的每个持有者（I14 范围内）与发起者本人（§8.5：发起者只看状态，不看批准按钮——这条区分体现在**持久化的系统消息**里，WS 推送帧本身对持有者与发起者一致，是否显示批准按钮由 web 客户端按自己的 `list_pending`/授权范围决定）。`title`/`description` 由 `application/linkage` 从 `actionKind`/`gatekeeperId`/`resourceScope` 生成（`action_requests` 本身未存这两个字段——来自门的接口清单的更精确标题留给 S2.4/S2.13 落地后接入）。 |
+| `action.updated` | `actionRequestId, status` | 推给同一组人（持有者 + 发起者），ActionRequest 每次进入 §5.5 状态图中一个"值得播报"的终态/中间态时（`auto_approved / approved / rejected / expired / denied / executed / failed / compensated`——`proposed`/`policy_evaluated`/`pending_approval`/`executing`/`verified` 不单独推送，前三个在 `request_action` 的实现里从不可单独观测到，后两个是内部过渡态）。 |
+| `task.updated` | `taskId, status` | 推给该 Task 的 `on_behalf_of` 用户，Task 每次状态转移（含 `queued`/`running` 这类中间态）都推送——web 端按需过滤；对话里的**持久化**系统消息（`chat_messages`）只在 `waiting_approval / completed / failed / cancelled` 时才写。 |
+
+推送与"下一轮 `context` 注入"（S2.11，见 §8.2）是同一份底层事件的两条独立投递路径：WS 推送是"当前在线才收到"的即时通知，`pending_context_items`（`application/linkage` 自己的表）是"离线也不丢、且只投递一次"的补充路径——两者互不依赖，一个连接掉线不影响下一轮 `context` 补上同样的信息。
+
 ### 9.5 Explorer 契约（S3，只做这些）
 
 内核实现 Semantica Explorer 需要的：`GET /api/graph/nodes?limit&cursor`、`GET /api/graph/edges`、`POST /api/graph/search`、`GET /api/temporal/bounds`、`GET /api/temporal/snapshot?at=`、`GET /api/decisions`、`GET /api/decisions/{id}/chain`、`GET /api/provenance?node_id=`、`GET /api/provenance/report?node_id=&format=`，响应形状按其 `explorer/schemas.py`（`NodeResponse` / `EdgeResponse` / `DecisionResponse` / `ProvenanceNode` / `ProvenanceEdge`），含 `207` 部分成功约定与 `X-API-Key`。Ontology、Vocabulary、Reasoning、Enrich、SPARQL、Manage 工作区隐藏。

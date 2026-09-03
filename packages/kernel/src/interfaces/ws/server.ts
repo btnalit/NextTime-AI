@@ -2,8 +2,12 @@ import fastifyWebsocket from '@fastify/websocket';
 import { CAPABILITY_REGISTRY } from '@nexttime/shared';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { RawData, WebSocket } from 'ws';
-import type { ChatPushEvent } from '../../application/chat/index.js';
-import { publishChatPushEvent, subscribeToChatPushEvents } from '../../application/chat/index.js';
+import type { ChatPushEvent, PrincipalPushEvent } from '../../application/chat/index.js';
+import {
+  publishChatPushEvent,
+  subscribeToChatPushEvents,
+  subscribeToPrincipalPushEvents,
+} from '../../application/chat/index.js';
 import type {
   DispatchDeps,
   ResolveCallerDeps,
@@ -84,6 +88,13 @@ interface ConnectionState {
   authReady: boolean;
   readonly pendingFrames: RawData[];
   subscription: { chatId: string; unsubscribe: () => void } | undefined;
+  /** S2.11 (docs/development-tasks.md S2.11 deliverable 2, §9.4): every authenticated connection's
+   *  own `action.pending`/`action.updated`/`task.updated` push subscription — set once, right after
+   *  `state.caller` itself, never re-subscribed or torn down until the socket closes (unlike
+   *  `subscription` above, which is per-Chat and changes on every `subscribe_chat`). "reuse
+   *  authenticate's session" (the task brief's own words) rather than a separate
+   *  `subscribe_principal` request. */
+  principalUnsubscribe: (() => void) | undefined;
 }
 
 type WsOutgoingMessage = JsonRpcSuccessResponse | JsonRpcErrorResponse | JsonRpcNotification;
@@ -251,6 +262,35 @@ async function handleSubscribeChat(
   }
 }
 
+/** I13: the acting principal for a `ResolvedCaller` — always the Handle's `on_behalf_of` for a
+ *  handle caller, never a session/agent id of its own. Mirrors `application/gateway/dispatch.ts`'s
+ *  own (unexported) `callerContext` exactly; duplicated rather than imported since dispatch.ts's
+ *  version also resolves `workspaceId`, which this call site does not need (the socket's push
+ *  events are already implicitly workspace-scoped — a principal id is unique per workspace). */
+function callerPrincipalId(caller: ResolvedCaller): string {
+  return caller.channel === 'human' ? caller.principal.id : caller.claims.obo;
+}
+
+/** S2.11 deliverable 2: subscribes `socket` to `caller`'s own `action.pending`/`action.updated`/
+ *  `task.updated` push events (§9.4's "no `id`" notification shape, same as `subscribe_chat`'s live
+ *  path) and records the unsubscribe function on `state`. Called once, immediately after
+ *  `state.caller` is set, from both places that happens below (an `Authorization` header present
+ *  at upgrade, or the first-frame `authenticate` RPC) — "reuse authenticate's session" per the
+ *  task brief, rather than a separate `subscribe_principal` request the web client would have to
+ *  remember to send. */
+function subscribeCallerToPrincipalPush(
+  socket: WebSocket,
+  caller: ResolvedCaller,
+  state: ConnectionState,
+): void {
+  state.principalUnsubscribe = subscribeToPrincipalPushEvents(
+    callerPrincipalId(caller),
+    (event: PrincipalPushEvent) => {
+      send(socket, notification(event.type, event));
+    },
+  );
+}
+
 function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRouteDeps): void {
   const state: ConnectionState = {
     caller: undefined,
@@ -258,11 +298,14 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
     authReady: false,
     pendingFrames: [],
     subscription: undefined,
+    principalUnsubscribe: undefined,
   };
 
   socket.once('close', () => {
     state.subscription?.unsubscribe();
     state.subscription = undefined;
+    state.principalUnsubscribe?.();
+    state.principalUnsubscribe = undefined;
   });
 
   socket.on('message', (raw: RawData) => {
@@ -312,6 +355,7 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
         return;
       }
       state.caller = caller;
+      subscribeCallerToPrincipalPush(socket, caller, state);
       send(socket, successResponse(req.id, { authenticated: true }));
       return;
     }
@@ -352,6 +396,7 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
           pool: deps.pool,
           loadHandlePublicKey: deps.loadHandlePublicKey,
         });
+        subscribeCallerToPrincipalPush(socket, state.caller, state);
       } catch {
         send(socket, errorResponse(null, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));
         socket.close();

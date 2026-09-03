@@ -23,6 +23,7 @@ import {
   FakeAgentRuntime,
   registerTurnStartedConsumer,
 } from './application/host-bridge/index.js';
+import { registerLinkageConsumers } from './application/linkage/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
 import {
   configureTaskRuntime,
@@ -333,6 +334,14 @@ export function createBackgroundServices(
   if (runtime instanceof AgentHostRuntime) setAgentHostRuntimeForWsRoute(runtime);
   const unsubscribeTurnStarted = registerTurnStartedConsumer(dispatcher, runtime);
 
+  // S2.11: application/linkage's TaskUpdated/ActionRequestPending/ActionRequestUpdated/
+  // BudgetWarning consumers — chat system messages + the action.pending/action.updated/
+  // task.updated WS push frames + pending_context_items. Unconditional on `options.pool` alone
+  // (unlike the task-reaper wiring below, which needs `options.handleKeyPair`) — this module never
+  // touches Handle signing or the supervisor, only reads governance/approval's and
+  // application/task's public surfaces.
+  const unsubscribeLinkage = registerLinkageConsumers(dispatcher, { pool: options.pool });
+
   // S2.4: the ApprovalDrainer's async trigger paths — an outbox consumer on
   // ActionRequestUpdated{approved|auto_approved}, and a periodic tick as the crash-resilient
   // fallback (design doc §13 "outbox 派发器崩溃 ... 消费者幂等"). Both run admin-mode
@@ -443,6 +452,7 @@ export function createBackgroundServices(
     stop() {
       dispatcher.stop();
       unsubscribeTurnStarted();
+      unsubscribeLinkage();
       unsubscribeActionRequestDrain();
       unsubscribeActionRequestRouting?.();
       if (approvalReaperTimer) {
