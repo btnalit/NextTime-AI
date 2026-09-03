@@ -661,3 +661,117 @@ fetch('http://localhost:8080/api/cap/explain', {
 
 期望：`result.fact.epistemicStatus` 为 `"inferred"`，`result.activity.kind` 为 `"worker_result"`，
 `result.activity.metadata.workerRunId` 等于上面拿到的 `workerRunId`。
+
+## 14. S2.14 之后：发布一个 Skill，挂进 Worker 容器
+
+前置：§13 已验证 `invoke_worker(wait: true)` 能跑完一个 Worker 并写回结果。本节验证的是 S2.14 补上
+的那一段——发布一个 Skill、在 WorkerDefinition 的 `skills` 里引用它、`invoke_worker` 之后容器内确实
+能读到 `/workspace/.pi/agent/skills/<name>/SKILL.md`（不是一次内核内部的单元测试，是真的进容器里看）。
+
+### 14.1 提议并发布一个 Skill
+
+```bash
+OWNER_KEY=<owner-api-key>   # §12.1 已经有
+
+SKILL_ID=$(docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/propose_skill', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({
+    skill: {
+      name: 'host-smoke-skill',
+      description: 'A minimal Skill used only to verify S2.14 container mounting on this host.',
+      markdown: 'When asked, say hello.',
+    },
+  }),
+}).then(r => r.json()).then(b => console.log(b.result.id))
+")
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/publish_skill', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ skillId: '${SKILL_ID}' }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b)))
+"
+```
+
+期望：第二条调用返回 `{"ok":true, "result":{"status":"published", ...}}`。
+
+### 14.2 发布一个引用该 Skill 的 WorkerDefinition
+
+```bash
+SKILL_WORKER_DEFINITION_ID=$(docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/propose_worker_definition', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({
+    kind: 'worker',
+    definition: {
+      systemPrompt: 'You are ops-runner. Immediately call report_result with summary \"pong\" and stop.',
+      name: 'ops-runner-skill-mount-smoke',
+      skills: ['host-smoke-skill'],
+    },
+  }),
+}).then(r => r.json()).then(b => console.log(b.result.id))
+")
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/publish_worker_definition', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ definitionId: '${SKILL_WORKER_DEFINITION_ID}', version: 1 }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b)))
+"
+```
+
+`skills: ['host-smoke-skill']` 引用的是 §14.1 那个 Skill 的**名字**（`resolvePublishedSkills`，
+`application/worker/skills.ts`，按 id 或 name 解析，两者都行——这里用 name 是因为它比 UUID 好读）。
+
+### 14.3 `invoke_worker`，容器还在跑的窗口内核对挂载
+
+`skillsInline` 是 spawn 时一次性写进 Task 工作目录的（不是持续存在的 bind mount），容器退出后
+`worker-supervisor` 仍会保留该工作目录一段时间（`TASK_WORKDIR_RETENTION_HOURS`，默认 72 小时）—— 核
+对可以在 spawn 之后随时做，不必卡着容器还在跑的那几秒：
+
+```bash
+docker compose exec -T kernel node -e "
+fetch('http://localhost:8080/api/cap/invoke_worker', {
+  method: 'POST',
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
+  body: JSON.stringify({ definitionId: '${SKILL_WORKER_DEFINITION_ID}', version: 1, input: {}, wait: true, timeout: 60 }),
+}).then(r => r.json()).then(b => console.log(JSON.stringify(b, null, 2)))
+"
+```
+
+记下返回里的 `taskId`，然后在宿主机上直接看 supervisor 写下的文件（走 `${NEXTTIME_DATA}`，不是
+`docker exec` 进容器——容器这时可能已经退出了）：
+
+```bash
+cat "${NEXTTIME_DATA}/workspaces/tasks/<taskId>/.pi/agent/skills/host-smoke-skill/SKILL.md"
+```
+
+期望：文件存在，内容形如：
+
+```markdown
+---
+name: host-smoke-skill
+description: A minimal Skill used only to verify S2.14 container mounting on this host.
+---
+
+When asked, say hello.
+```
+
+（`name`/`description` 由 `renderSkillMarkdownFile` 用 `yaml` 库序列化生成，不是字面拼接字符串
+——如果 §14.1 填的 description 里有冒号或引号，输出会带 YAML 引号，属于正常。）
+
+若容器仍在跑（spawn 到 timeout 之间的窗口内），也可以直接进容器核对同一个文件（容器内路径）：
+
+```bash
+CONTAINER=nexttime-task-<workerRunId>   # workerRunId 来自上一步返回的 JSON
+docker exec "$CONTAINER" cat /workspace/.pi/agent/skills/host-smoke-skill/SKILL.md
+```
+
+### 14.4 已知限制
+
+同 §13 的 `TOOL_TRIGGER_WORD` 限制——`fake-llm` 不理解系统提示里的指令，Worker 大概率走
+`agent_settled` 的兜底路径而不是模型真的读了这个 Skill 并照做；本节验证的是**挂载机制本身**（文件
+确实出现在容器能看到的路径上），不是"模型用上了这个 Skill"，后者需要接一个真实 provider。

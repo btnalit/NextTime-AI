@@ -10,6 +10,7 @@ import {
 } from '../../substrate/epistemic/index.js';
 import type { Fact } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { proposeSkill } from '../worker/index.js';
 import { completeTaskWithResult } from './lifecycle.js';
 import type { TaskRow } from './types.js';
 
@@ -36,12 +37,18 @@ import type { TaskRow } from './types.js';
  * names one `facts_to_assert[]` entry by position; omitted attaches to every Fact this same
  * contract wrote (never an N×M cross product beyond that).
  *
- * **`proposedSkill` is deliberately never projected into the graph**: there is no Skill draft
- * service yet (S2.14, downstream of S2.9) — inventing one now would define S2.14's own ontology
- * decisions (identity key, `draft` object shape) out from under it. The raw payload is retained
- * verbatim in `tasks.result` (via `completeTaskWithResult` below), which is enough for a human to
- * read it back; S2.14 is expected to add its own real `propose_skill` capability/service and, if it
- * chooses to, backfill from `tasks.result` — not something this task decides for it.
+ * **`proposedSkill` (S2.14) becomes a real draft Skill**: `postWorkerResult` forwards it verbatim
+ * to `application/worker/skills.ts`'s `proposeSkill`, owned by `actorPrincipalId` (the Task's
+ * `on_behalf_of` principal — resolved by the gateway handler from the calling Handle's `claims.obo`,
+ * same as every other Fact this function writes, see `PostWorkerResultInput.actorPrincipalId`'s own
+ * doc comment). This is *in addition to*, not instead of, the verbatim copy already retained on
+ * `tasks.result` (via `completeTaskWithResult` below) — a human reading the Task's raw result and
+ * `list_skills` finding the new draft are two independent, both-true outcomes of the same field.
+ * `proposedSkill` failing to propose (a defensive-only path — its shape is already Zod-validated at
+ * the capability boundary, `packages/shared/src/worker-result.ts`'s `WorkerResultContractSchema`)
+ * is treated the same as every other write this function performs: it is not caught here, so it
+ * propagates and rolls back the whole contract — a Worker's result is either written completely or
+ * not at all, never partially.
  */
 
 const graphStore = new SqlGraphStore();
@@ -181,6 +188,14 @@ export async function postWorkerResult(
       await endActivity(client, workspaceId, proposalActivity.id, 'completed');
     }
 
+    // proposed_skill -> a real draft Skill (S2.14), owned by the Task's on_behalf_of principal —
+    // see this module's doc comment. Drafts are private to their proposer by construction
+    // (`skills.ts`'s own I16 read-privacy note), so nothing further is needed here to keep it
+    // private to `actorPrincipalId` alone.
+    const proposedSkillRecord = contract.proposedSkill
+      ? await proposeSkill(client, workspaceId, actorPrincipalId, contract.proposedSkill)
+      : undefined;
+
     await endActivity(client, workspaceId, activity.id, 'completed');
 
     const storedResult = {
@@ -189,6 +204,7 @@ export async function postWorkerResult(
       factIds: writtenFacts.map((fact) => fact.id),
       artifacts: contract.artifacts ?? [],
       proposedSkill: contract.proposedSkill,
+      proposedSkillId: proposedSkillRecord?.id,
       proposedOperations: contract.proposedOperations ?? [],
       activityId: activity.id,
     };

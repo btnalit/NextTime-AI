@@ -31,6 +31,8 @@ export type {
 } from './loader.js';
 
 export {
+  projectProcedureObject,
+  projectSkillObject,
   projectWorkerDefinitionObject,
   registerGatekeeperObject,
   registerOperationDraftObject,
@@ -39,8 +41,10 @@ export {
 export type {
   OperationIdentity,
   OperationObjectResult,
+  ProcedureObjectInput,
   RegisterGatekeeperObjectInput,
   RegisterGatekeeperObjectResult,
   RegisterOperationDraftInput,
+  SkillObjectInput,
   WorkerDefinitionObjectInput,
 } from './meta-objects.js';

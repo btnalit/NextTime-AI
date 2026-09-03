@@ -38,9 +38,31 @@ tmpfs `/tmp`、非 root uid 10001、只挂 `workers` 网络）与同一个出网
   "skills": [{ "name": "...", "hostPath": "..." }], // 可选，只读挂载到 <agentDir>/skills/<name>；
                               // hostPath 必须是绝对路径，经 path.posix.normalize 后落在
                               // ${NEXTTIME_DATA}/ 之下——否则 400（见下方"挂载"一条）
+  "skillsInline": [           // 可选（S2.14）；见下方"skillsInline"一条
+    { "name": "...", "files": { "SKILL.md": "..." } }
+  ],
   "timeoutSec": 90,          // 可选，默认 TASK_MAX_RUNTIME_SEC
 }
 ```
+
+#### `skillsInline`（S2.14）
+
+`skills[]`（上面）挂载的是**已经在宿主机上的文件**——内核没有可写的数据挂载（`config:ro` 是它唯一的
+数据挂载，I9 相邻），没法先把一个已发布 Skill 的内容写成宿主机文件再传 `hostPath` 进来。
+`skillsInline[]` 因此换一种方式：内核（`application/worker/skills.ts` `renderSkillMarkdownFile`）
+把已发布 Skill 渲染成 pi 的 `SKILL.md` 格式文本，随 spawn 请求体本身传过来；这个服务在
+`docker.createAndStart` **之前**把每个条目的 `files` 写进这个 Task 自己已经会挂载的
+`<agentDir>/skills/<name>/` 目录（`task-service.ts` `spawn()`）——不需要新增挂载，整个 Task 工作目录
+本来就整体挂在 `/workspace`。
+
+- `name`：与 `skills[].name` 同一条"安全单段路径"规则（`config.ts`，未合并成共享 schema——两者故意
+  独立校验，其中一条以后改动不会悄悄影响另一条）。
+- `files`：文件名 → 内容的映射；文件名必须是安全的相对路径（无前导 `/`、无 `.`/`..` 段，
+  `isSafeSkillInlineFileName`），必须包含一个 `"SKILL.md"` 键（pi 的必需入口文件，`docs/skills.md`
+  "Skill Structure"）；单文件 ≤ 512 KiB（`MAX_SKILL_INLINE_FILE_BYTES`），一个条目全部文件合计
+  ≤ 2 MiB（`MAX_SKILL_INLINE_TOTAL_BYTES`）——都在 `config.ts` `TaskSkillInlineSchema` 里用
+  `superRefine` 校验，不合规直接 `400`，不落到文件系统。
+- 两种挂载方式（`skills[]`/`skillsInline[]`）互不冲突，可以在同一次 spawn 里都出现。
 
 `taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 校验为 UUID（`z.string().uuid()`）而非任意
 `min(1)` 字符串：`taskId` 会成为 bind-mount 的 host 路径片段，`workerRunId` 会成为容器名——不校验

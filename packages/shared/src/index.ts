@@ -16,6 +16,8 @@ export * from './handle-token.js';
 export * from './agent-host-protocol.js';
 export * from './worker-definition.js';
 export * from './chat-message-content.js';
+export * from './skill.js';
+export * from './procedure.js';
 export * from './worker-result.js';
 
 export const VERSION = '0.1.0';

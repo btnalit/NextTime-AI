@@ -1,7 +1,14 @@
-import { TASK_TRANSITIONS, type TaskEvent, type TaskStatus, transition } from '@nexttime/shared';
+import {
+  type ProcedureStep,
+  TASK_TRANSITIONS,
+  type TaskEvent,
+  type TaskStatus,
+  transition,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
+import { getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import {
   findOperationCandidates,
   findProcedureCandidates,
@@ -9,7 +16,7 @@ import {
 } from '../../substrate/graph/index.js';
 import type { GraphObject } from '../../substrate/graph/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
-import { getWorkerDefinition } from '../worker/index.js';
+import { getProcedure, getWorkerDefinition } from '../worker/index.js';
 import {
   type ParentAuthority,
   computeChildHandleScope,
@@ -435,13 +442,132 @@ export async function findOperations(
   return findOperationCandidates(client, workspaceId, { need, limit });
 }
 
-/** `find_procedures` — same no-op-until-S2.14 note as `findOperations` above. */
+export interface ProcedureMatch {
+  readonly procedureId: string;
+  readonly version: number;
+  readonly name?: string;
+  readonly description?: string;
+}
+
+function toProcedureMatch(object: GraphObject): ProcedureMatch | undefined {
+  const identity = object.identityKey;
+  const procedureId =
+    identity && typeof identity.procedureId === 'string' ? identity.procedureId : undefined;
+  const version = identity && typeof identity.version === 'number' ? identity.version : undefined;
+  if (!procedureId || version === undefined) return undefined;
+  const properties = object.properties;
+  return {
+    procedureId,
+    version,
+    name: typeof properties.name === 'string' ? properties.name : undefined,
+    description: typeof properties.description === 'string' ? properties.description : undefined,
+  };
+}
+
+/** One step's own Grant-intersection check (S2.14) — `false` means "this candidate is not usable
+ *  by `caller` right now", never thrown; the caller (`findProcedures`) drops the whole Procedure
+ *  candidate rather than surfacing a partially-usable one. */
+async function stepUsableByCaller(
+  client: PoolClient,
+  workspaceId: string,
+  caller: FindMeansCaller,
+  step: ProcedureStep,
+): Promise<boolean> {
+  if (step.kind === 'worker') {
+    const definition = await getWorkerDefinition(client, workspaceId, {
+      definitionId: step.definitionId,
+      version: step.version,
+    });
+    if (!definition || definition.status !== 'published') return false;
+    const content = definition.definition as { capabilities?: string[]; gates?: string[] };
+    try {
+      // Same dry-run `findWorkers` already performs against a WorkerDefinition candidate's own
+      // declared needs — see that function's own doc comment for the default-capabilities
+      // rationale.
+      computeChildHandleScope({
+        parentAuthority: caller.parentAuthority,
+        declaredCapabilities:
+          content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
+        declaredGates: content.gates ?? [],
+      });
+    } catch (err) {
+      if (err instanceof InvokeWorkerAttenuationError) return false;
+      throw err;
+    }
+    return true;
+  }
+
+  if (step.kind === 'operation') {
+    const operation = await getPublishedOperation(
+      client,
+      workspaceId,
+      step.gatekeeperId,
+      step.operationName,
+    );
+    if (!operation) return false; // I17: draft/deprecated/unknown is never usable.
+    if (operation.operation.mode !== 'execute') return true; // §11: observe is ungated by design.
+    try {
+      // A synthetic single-gate "WorkerDefinition" dry run — `request_action` is the fixed
+      // execute-class capability name every gate-execute call goes through
+      // (`governance/capability/handles.ts`'s `EXECUTE_CLASS_CAPABILITY_NAMES`), so requiring it
+      // here forces the same "does the caller's scope already cover this Gatekeeper" check
+      // `computeChildHandleScope` performs for a real `invoke_worker` call.
+      computeChildHandleScope({
+        parentAuthority: caller.parentAuthority,
+        declaredCapabilities: ['request_action'],
+        declaredGates: [step.gatekeeperId],
+      });
+    } catch (err) {
+      if (err instanceof InvokeWorkerAttenuationError) return false;
+      throw err;
+    }
+    return true;
+  }
+
+  // 'approval' | 'verify' — no external reference to check (design doc §5.1.4 "含审批步与验证步" —
+  // procedural markers, not something a Grant covers).
+  return true;
+}
+
+/**
+ * `find_procedures`: every published Procedure matching `need` (`substrate/graph/find-means.ts`),
+ * filtered to only those every step of which `caller` could actually carry out right now — the
+ * same "intersected with the caller's Grant/Handle scope" shape `findWorkers` established (design
+ * doc §9.3), applied per-step (S2.14, `stepUsableByCaller` above). A step whose reference no
+ * longer resolves to something *currently published* (e.g. the Operation/WorkerDefinition it named
+ * at Procedure-publish-time has since been deprecated) excludes the whole candidate — soft
+ * degradation, not an error; a Procedure is re-validated against the graph's current state on
+ * every `find_procedures` call, not only once at its own publish time.
+ */
 export async function findProcedures(
   client: PoolClient,
   workspaceId: string,
-  _caller: FindMeansCaller,
+  caller: FindMeansCaller,
   need: string,
   limit?: number,
-): Promise<readonly GraphObject[]> {
-  return findProcedureCandidates(client, workspaceId, { need, limit });
+): Promise<readonly ProcedureMatch[]> {
+  const candidates = await findProcedureCandidates(client, workspaceId, { need, limit });
+  const matches: ProcedureMatch[] = [];
+
+  for (const candidate of candidates) {
+    const match = toProcedureMatch(candidate);
+    if (!match) continue;
+
+    const procedure = await getProcedure(client, workspaceId, {
+      procedureId: match.procedureId,
+      version: match.version,
+    });
+    if (!procedure || procedure.status !== 'published') continue;
+
+    let usable = true;
+    for (const step of procedure.steps) {
+      if (!(await stepUsableByCaller(client, workspaceId, caller, step))) {
+        usable = false;
+        break;
+      }
+    }
+    if (usable) matches.push(match);
+  }
+
+  return matches;
 }

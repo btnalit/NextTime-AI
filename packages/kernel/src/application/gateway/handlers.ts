@@ -62,6 +62,16 @@ import {
   publishOperationHandler,
 } from './operation-manifest-handlers.js';
 import { requestActionHandler } from './request-action-handler.js';
+import {
+  deprecateProcedureHandler,
+  deprecateSkillHandler,
+  listProceduresHandler,
+  listSkillsHandler,
+  proposeProcedureHandler,
+  proposeSkillHandler,
+  publishProcedureHandler,
+  publishSkillHandler,
+} from './skill-procedure-handlers.js';
 import { listAllowedOperationsHandler, reportTaskResultHandler } from './worker-result-handler.js';
 
 /**
@@ -860,6 +870,15 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['propose_operation', proposeOperationHandler],
   ['publish_operation', publishOperationHandler],
   ['deprecate_operation', deprecateOperationHandler],
+  // S2.14 (docs/development-tasks.md S2.14) — skill-procedure-handlers.ts.
+  ['propose_skill', proposeSkillHandler],
+  ['publish_skill', publishSkillHandler],
+  ['deprecate_skill', deprecateSkillHandler],
+  ['list_skills', listSkillsHandler],
+  ['propose_procedure', proposeProcedureHandler],
+  ['publish_procedure', publishProcedureHandler],
+  ['deprecate_procedure', deprecateProcedureHandler],
+  ['list_procedures', listProceduresHandler],
   // S2.7 (docs/development-tasks.md S2.7) — `create_task` deliberately absent, see
   // `setQuotaHandler`'s neighboring doc comment above ("create_task: not wired").
   ['invoke_worker', invokeWorkerHandler],
