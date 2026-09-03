@@ -9,6 +9,12 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { WorkerResultValidationError, hashApiKey } from '../../application/gateway/index.js';
+import {
+  ProcedureStepReferenceError,
+  SkillValidationError,
+  WorkerDefinitionNotFoundError,
+  WorkerDefinitionNotPublishedError,
+} from '../../application/worker/index.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
 import { mapCapabilityError } from './capability-route.js';
@@ -42,6 +48,25 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new ChatNotFoundError('ws-1', 'chat-1'));
     expect(mapped.status).toBe(404);
     expect(mapped.code).toBe('chat_not_found');
+  });
+
+  it('application/worker registry errors map to 400/404/409, never 500 (S2.6/S2.14 gap found on the host)', () => {
+    expect(
+      mapCapabilityError(new ProcedureStepReferenceError(0, 'no such operation')),
+    ).toMatchObject({ status: 400, code: 'invalid_step_reference' });
+    expect(mapCapabilityError(new SkillValidationError('bad frontmatter'))).toMatchObject({
+      status: 400,
+      code: 'invalid_params',
+    });
+    expect(mapCapabilityError(new WorkerDefinitionNotFoundError('ws-1', 'def-1', 1))).toMatchObject(
+      {
+        status: 404,
+        code: 'not_found',
+      },
+    );
+    expect(
+      mapCapabilityError(new WorkerDefinitionNotPublishedError('ws-1', 'def-1', 1, 'draft')),
+    ).toMatchObject({ status: 409, code: 'not_published' });
   });
 
   it('an unknown error still maps to a generic 500 that never echoes its message', () => {
@@ -235,6 +260,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         { skipRoleSwitch: true },
       );
       expect(audit.rows[0]).toMatchObject({ resource_type: 'quota', resource_id: null });
+    });
+
+    it('publish_procedure with a step referencing a nonexistent Operation → 400 invalid_step_reference (S2.14 acceptance)', async () => {
+      const app = createServer({ pool });
+      const proposed = await app.inject({
+        method: 'POST',
+        url: '/api/cap/propose_procedure',
+        headers: { authorization: `Bearer ${ownerApiKey}` },
+        payload: {
+          procedure: {
+            name: 'bad-procedure',
+            description: 'references a missing operation',
+            steps: [{ kind: 'operation', gatekeeperId: randomUUID(), operationName: 'nope' }],
+          },
+        },
+      });
+      expect(proposed.statusCode).toBe(200);
+      const procedureId = proposed.json().result.id as string;
+
+      const published = await app.inject({
+        method: 'POST',
+        url: '/api/cap/publish_procedure',
+        headers: { authorization: `Bearer ${ownerApiKey}` },
+        payload: { procedureId },
+      });
+      expect(published.statusCode).toBe(400);
+      expect(published.json().error.code).toBe('invalid_step_reference');
     });
 
     it('assert_fact (handler present, write unimplemented) → 501 not_implemented, not 500', async () => {
