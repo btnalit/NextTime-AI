@@ -16,12 +16,15 @@ import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import { drainPendingContextItems } from '../../application/linkage/index.js';
 import {
   type InvokeWorkerInput,
+  type TaskRow,
+  type WorkerRunRow,
   findOperations,
   findProcedures,
   findWorkers,
   getConfiguredTaskRuntime,
   getTaskWithWorkerRuns,
   invokeWorker,
+  listTasksForPrincipal,
   resolveParentAuthority,
   setQuotaValue,
   terminateTask,
@@ -704,31 +707,47 @@ function toWireWorkerRun(row: {
   };
 }
 
+/** The wire shape one Task + its WorkerRuns projects to, shared by `get_task` and the S2.10
+ *  addition `list_tasks` (one Task per array entry there, same per-Task shape). */
+function toWireTask(task: TaskRow, workerRuns: readonly WorkerRunRow[]) {
+  return {
+    id: task.id,
+    status: task.status,
+    onBehalfOf: task.onBehalfOf,
+    workerDefinitionId: task.workerDefinitionId,
+    workerDefinitionVersion: task.workerDefinitionVersion,
+    input: task.input,
+    result: task.result,
+    tokenBudget: task.tokenBudget,
+    tokensUsed: task.tokensUsed,
+    durationLimitSec: task.durationLimitSec,
+    failureReason: task.failureReason,
+    createdAt: task.createdAt.toISOString(),
+    completedAt: task.completedAt ? task.completedAt.toISOString() : null,
+    failedAt: task.failedAt ? task.failedAt.toISOString() : null,
+    cancelledAt: task.cancelledAt ? task.cancelledAt.toISOString() : null,
+    workerRuns: workerRuns.map(toWireWorkerRun),
+  };
+}
+
 const getTaskHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { taskId } = params as { taskId: string };
   const { task, workerRuns } = await getTaskWithWorkerRuns(client, workspaceId, taskId);
   return {
-    result: {
-      id: task.id,
-      status: task.status,
-      onBehalfOf: task.onBehalfOf,
-      workerDefinitionId: task.workerDefinitionId,
-      workerDefinitionVersion: task.workerDefinitionVersion,
-      input: task.input,
-      result: task.result,
-      tokenBudget: task.tokenBudget,
-      tokensUsed: task.tokensUsed,
-      durationLimitSec: task.durationLimitSec,
-      failureReason: task.failureReason,
-      createdAt: task.createdAt.toISOString(),
-      completedAt: task.completedAt ? task.completedAt.toISOString() : null,
-      failedAt: task.failedAt ? task.failedAt.toISOString() : null,
-      cancelledAt: task.cancelledAt ? task.cancelledAt.toISOString() : null,
-      workerRuns: workerRuns.map(toWireWorkerRun),
-    },
+    result: toWireTask(task, workerRuns),
     resourceType: 'task',
     resourceId: task.id,
   };
+};
+
+/** `list_tasks` (S2.10 addition — see `packages/shared/src/capabilities.ts`'s registry entry and
+ *  `application/task/service.ts`'s `listTasksForPrincipal` for why one had to be added and how it
+ *  is scoped). Human-channel-only, so `currentPrincipalId` (same RLS-session-variable read every
+ *  other human-channel handler in this file already uses) is the caller. */
+const listTasksHandler: CapabilityHandler = async (client, workspaceId) => {
+  const principalId = await currentPrincipalId(client);
+  const rows = await listTasksForPrincipal(client, workspaceId, principalId);
+  return { result: rows.map(({ task, workerRuns }) => toWireTask(task, workerRuns)) };
 };
 
 /** `create_task`: **not wired** (docs/development-tasks.md S2.7 "if the registry has it,
@@ -845,6 +864,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // `setQuotaHandler`'s neighboring doc comment above ("create_task: not wired").
   ['invoke_worker', invokeWorkerHandler],
   ['get_task', getTaskHandler],
+  ['list_tasks', listTasksHandler],
   ['cancel_task', cancelTaskHandler],
   ['set_quota', setQuotaHandler],
   ['find_workers', findWorkersHandler],

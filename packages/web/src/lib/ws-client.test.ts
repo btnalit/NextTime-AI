@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatMessage, ChatSubscriptionHandlers, WebSocketLike } from './ws-client.js';
+import type {
+  ActionPendingPush,
+  ChatMessage,
+  ChatSubscriptionHandlers,
+  TaskUpdatedPush,
+  WebSocketLike,
+} from './ws-client.js';
 import { RpcError, TurnAlreadyRunningError, WsClient } from './ws-client.js';
 
 /**
@@ -409,6 +415,86 @@ describe('WsClient', () => {
       await flush();
 
       expect(sockets).toHaveLength(2);
+    });
+  });
+
+  describe('S2.10 principal-scoped pushes', () => {
+    it('delivers action.pending with no active chat subscription', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+      const onActionPending = vi.fn();
+      client.onActionPending(onActionPending);
+
+      const push: ActionPendingPush = {
+        actionRequestId: 'ar-1',
+        gatekeeperId: 'gk-1',
+        title: 'docker container restart',
+        description: 'restart container web-1',
+        actionKind: { tag: 'docker.container_restart', label: 'docker container restart' },
+        awaitDecision: true,
+      };
+      socket.receive({ jsonrpc: '2.0', method: 'action.pending', params: push });
+
+      expect(onActionPending).toHaveBeenCalledTimes(1);
+      expect(onActionPending).toHaveBeenCalledWith(push);
+    });
+
+    it('delivers action.updated/task.updated while a different chat is subscribed', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+      const onTaskUpdated = vi.fn();
+      client.onTaskUpdated(onTaskUpdated);
+
+      const subscribePromise = client.subscribeChat('chat-1', 0, noopHandlers());
+      respond(socket, sentFrame(socket, socket.sent.length - 1), { subscribed: true });
+      await flush();
+      respond(socket, sentFrame(socket, socket.sent.length - 1), { messages: [] });
+      await subscribePromise;
+
+      const push: TaskUpdatedPush = { taskId: 'task-1', status: 'completed' };
+      socket.receive({ jsonrpc: '2.0', method: 'task.updated', params: push });
+
+      expect(onTaskUpdated).toHaveBeenCalledTimes(1);
+      expect(onTaskUpdated).toHaveBeenCalledWith(push);
+    });
+
+    it('stops delivering to a listener after it unsubscribes', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+      const onActionUpdated = vi.fn();
+      const unsubscribe = client.onActionUpdated(onActionUpdated);
+      unsubscribe();
+
+      socket.receive({
+        jsonrpc: '2.0',
+        method: 'action.updated',
+        params: { actionRequestId: 'ar-1', status: 'approved' },
+      });
+
+      expect(onActionUpdated).not.toHaveBeenCalled();
+    });
+
+    it('survives a reconnect (listener stays registered across a new socket)', async () => {
+      const { client, sockets } = harness;
+      const socket1 = await connectAndAuth(client, sockets);
+      const onTaskUpdated = vi.fn();
+      client.onTaskUpdated(onTaskUpdated);
+
+      socket1.remoteClose();
+      await wait(0);
+      await flush();
+      const socket2 = sockets[1];
+      if (!socket2) throw new Error('expected a reconnect socket');
+      socket2.open();
+      await flush();
+      respond(socket2, sentFrame(socket2, 0), { authenticated: true });
+      await flush();
+
+      const push: TaskUpdatedPush = { taskId: 'task-2', status: 'failed' };
+      socket2.receive({ jsonrpc: '2.0', method: 'task.updated', params: push });
+
+      expect(onTaskUpdated).toHaveBeenCalledTimes(1);
+      expect(onTaskUpdated).toHaveBeenCalledWith(push);
     });
   });
 

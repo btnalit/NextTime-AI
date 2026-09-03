@@ -39,6 +39,7 @@ export {
   findWorkers,
   findWorkerRunBySessionId,
   getTaskWithWorkerRuns,
+  listTasksForPrincipal,
   recordWorkerRunUsage,
   taskForWorkerRun,
   terminateTask,

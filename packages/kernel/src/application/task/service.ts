@@ -68,6 +68,46 @@ export async function getTaskWithWorkerRuns(
   return { task, workerRuns: workerRunsResult.rows.map(mapWorkerRunRow) };
 }
 
+/**
+ * `list_tasks` (S2.10 addition — see packages/shared/src/capabilities.ts's own doc comment on
+ * that registry entry for why one had to be added; §9.3 never defined a list capability for Task).
+ * Unlike `getTaskWithWorkerRuns` above (workspace-scoped, any Task by id), this is narrowed to
+ * `on_behalf_of = principalId` — "the caller's own Tasks" (the task brief's own words) — newest
+ * first, each with its WorkerRuns. One query for the Task rows, one batched query for every
+ * WorkerRun across all of them (`task_id = any($2)`), grouped back together in application code —
+ * avoids an N+1 query per Task while staying a single, easily-read function (mirrors
+ * `getTaskWithWorkerRuns`'s own per-Task WorkerRun query, just batched across the whole list).
+ */
+export async function listTasksForPrincipal(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<readonly TaskWithWorkerRuns[]> {
+  const tasksResult = await client.query(
+    `select ${TASK_ROW_COLUMNS} from tasks
+     where workspace_id = $1 and on_behalf_of = $2
+     order by created_at desc`,
+    [workspaceId, principalId],
+  );
+  const tasks = tasksResult.rows.map(mapTaskRow);
+  if (tasks.length === 0) return [];
+
+  const workerRunsResult = await client.query(
+    `select ${WORKER_RUN_ROW_COLUMNS} from worker_runs
+     where workspace_id = $1 and task_id = any($2::uuid[])
+     order by started_at asc`,
+    [workspaceId, tasks.map((task) => task.id)],
+  );
+  const workerRunsByTaskId = new Map<string, WorkerRunRow[]>();
+  for (const row of workerRunsResult.rows.map(mapWorkerRunRow)) {
+    const bucket = workerRunsByTaskId.get(row.taskId);
+    if (bucket) bucket.push(row);
+    else workerRunsByTaskId.set(row.taskId, [row]);
+  }
+
+  return tasks.map((task) => ({ task, workerRuns: workerRunsByTaskId.get(task.id) ?? [] }));
+}
+
 /** `taskForWorkerRun` (docs/development-tasks.md S2.7 deliverable: "expose taskForWorkerRun
  *  (workerRunId)" — the seam `reaper.ts`'s ActionRequest-routing consumer uses to find which Task
  *  to move to `waiting_approval`). */

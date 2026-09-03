@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { errorMessage } from '../lib/errors.js';
 import type { WsClient } from '../lib/ws-client.js';
+import { NavBar } from './NavBar.js';
 
 /** The subset of `ChatRow` (packages/kernel/src/application/chat/service.ts) this page renders —
  *  extra wire fields (workspaceId, ownerPrincipalId, visibility) are simply ignored. */
@@ -53,6 +54,7 @@ export function ChatListPage({ client, onSelectChat, onForgetKey }: ChatListPage
 
   return (
     <div className="page">
+      <NavBar active="chats" />
       <header className="page-header">
         <h1>Chats</h1>
         <div className="header-actions">

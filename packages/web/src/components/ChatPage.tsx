@@ -1,18 +1,31 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { actionCardFromPendingContent, isPendingCardMessage } from '../lib/action-card.js';
 import { insertChatMessage } from '../lib/chat-messages.js';
 import { errorMessage } from '../lib/errors.js';
+import type { HttpClient } from '../lib/http-client.js';
 import { initialTurnState, streamReducer } from '../lib/streaming-reducer.js';
+import { systemStatusLineFromMessage } from '../lib/system-status.js';
 import type { ChatMessage, ChatSubscriptionHandlers, WsClient } from '../lib/ws-client.js';
 import { TurnAlreadyRunningError } from '../lib/ws-client.js';
+import { ActionRequestCard } from './ActionRequestCard.js';
+import { SystemStatusLineView } from './SystemStatusLineView.js';
 import { ToolCallRowView } from './ToolCallRowView.js';
 import { TurnStatusBadge } from './TurnStatusBadge.js';
 
 export interface ChatPageProps {
   readonly client: WsClient;
+  readonly httpClient: HttpClient;
   readonly chatId: string;
   readonly onBack: () => void;
   readonly onForgetKey: () => void;
 }
+
+interface CardCallState {
+  readonly busy: boolean;
+  readonly error: string | null;
+}
+
+const IDLE_CARD_STATE: CardCallState = { busy: false, error: null };
 
 /**
  * components/ChatPage: the conversation view (design doc §7.6; docs/development-tasks.md S1.8
@@ -40,7 +53,7 @@ export interface ChatPageProps {
  * Turn's id (the handler resolves the chat's own running Turn server-side), so the Stop button is
  * always available regardless of whether this page itself started the Turn.
  */
-export function ChatPage({ client, chatId, onBack, onForgetKey }: ChatPageProps) {
+export function ChatPage({ client, httpClient, chatId, onBack, onForgetKey }: ChatPageProps) {
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
   const [turn, setTurn] = useState(initialTurnState);
   const [caughtUp, setCaughtUp] = useState(false);
@@ -48,6 +61,82 @@ export function ChatPage({ client, chatId, onBack, onForgetKey }: ChatPageProps)
   const [sendError, setSendError] = useState<string | TurnAlreadyRunningError | null>(null);
   const [busy, setBusy] = useState(false);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
+
+  // S2.10: live `action.updated` overrides for a pending card's status, keyed by actionRequestId —
+  // see lib/action-card.ts's module doc comment for why `system.action_pending` alone never carries
+  // an up-to-date status. Complements (does not replace) deriving the latest status from a later
+  // `system.action_update` message already in `messages` (the `latestActionStatus` memo below) —
+  // the two agree once that message has arrived; this map is what makes a card react *before* it
+  // does (or when the update landed in a different chat than this one — `action.updated` is
+  // principal-scoped, not chat-scoped, so it still reaches this page either way).
+  const [actionStatusOverrides, setActionStatusOverrides] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const [cardState, setCardState] = useState<Readonly<Record<string, CardCallState>>>({});
+
+  useEffect(() => {
+    return client.onActionUpdated((event) => {
+      setActionStatusOverrides((prev) => ({ ...prev, [event.actionRequestId]: event.status }));
+    });
+  }, [client]);
+
+  // Latest `system.action_update` status per actionRequestId already visible in this chat's
+  // history (`messages` is kept ascending by `sequence`, lib/chat-messages.ts, so a later entry
+  // always overwrites an earlier one here).
+  const latestActionStatus = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const message of messages) {
+      const line = systemStatusLineFromMessage(message);
+      if (line?.variant === 'action_update') map.set(line.actionRequestId, line.status);
+    }
+    return map;
+  }, [messages]);
+
+  function setCardBusy(actionRequestId: string, busyValue: boolean): void {
+    setCardState((prev) => ({
+      ...prev,
+      [actionRequestId]: { busy: busyValue, error: prev[actionRequestId]?.error ?? null },
+    }));
+  }
+
+  function setCardError(actionRequestId: string, error: string | null): void {
+    setCardState((prev) => ({ ...prev, [actionRequestId]: { busy: false, error } }));
+  }
+
+  async function handleApprove(actionRequestId: string): Promise<void> {
+    setCardBusy(actionRequestId, true);
+    try {
+      const result = await httpClient.call<{ status: string }>('approve', { actionRequestId });
+      setActionStatusOverrides((prev) => ({ ...prev, [actionRequestId]: result.status }));
+      setCardState((prev) => ({ ...prev, [actionRequestId]: IDLE_CARD_STATE }));
+    } catch (err) {
+      setCardError(actionRequestId, errorMessage(err));
+    }
+  }
+
+  async function handleReject(actionRequestId: string, reason: string | undefined): Promise<void> {
+    setCardBusy(actionRequestId, true);
+    try {
+      const result = await httpClient.call<{ status: string }>('reject', {
+        actionRequestId,
+        ...(reason !== undefined ? { reason } : {}),
+      });
+      setActionStatusOverrides((prev) => ({ ...prev, [actionRequestId]: result.status }));
+      setCardState((prev) => ({ ...prev, [actionRequestId]: IDLE_CARD_STATE }));
+    } catch (err) {
+      setCardError(actionRequestId, errorMessage(err));
+    }
+  }
+
+  async function handleAlwaysApprove(actionRequestId: string, actionKind: string): Promise<void> {
+    setCardBusy(actionRequestId, true);
+    try {
+      await httpClient.call('set_auto_approved_action_kind', { actionKind });
+      setCardState((prev) => ({ ...prev, [actionRequestId]: IDLE_CARD_STATE }));
+    } catch (err) {
+      setCardError(actionRequestId, errorMessage(err));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +227,44 @@ export function ChatPage({ client, chatId, onBack, onForgetKey }: ChatPageProps)
 
   const composerDisabled = turn.status === 'running' || busy;
 
+  function renderMessage(message: ChatMessage) {
+    if (isPendingCardMessage(message) && message.content) {
+      const card = actionCardFromPendingContent(message.content);
+      if (card) {
+        const effectiveStatus =
+          actionStatusOverrides[card.actionRequestId] ??
+          latestActionStatus.get(card.actionRequestId) ??
+          card.status;
+        const state = cardState[card.actionRequestId] ?? IDLE_CARD_STATE;
+        return (
+          <ActionRequestCard
+            key={message.sequence}
+            card={{ ...card, status: effectiveStatus }}
+            busy={state.busy}
+            error={state.error}
+            onApprove={(id) => void handleApprove(id)}
+            onReject={(id, reason) => void handleReject(id, reason)}
+            onAlwaysApprove={(actionKind) =>
+              void handleAlwaysApprove(card.actionRequestId, actionKind)
+            }
+          />
+        );
+      }
+    }
+
+    const statusLine = systemStatusLineFromMessage(message);
+    if (statusLine) {
+      return <SystemStatusLineView key={message.sequence} line={statusLine} />;
+    }
+
+    return (
+      <div key={message.sequence} className={`message message-${message.role}`}>
+        <span className="message-role">{message.role}</span>
+        <p className="message-text">{message.text}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="page chat-page">
       <header className="page-header">
@@ -162,12 +289,7 @@ export function ChatPage({ client, chatId, onBack, onForgetKey }: ChatPageProps)
 
       <div className="message-list">
         {!caughtUp && <p className="hint">Loading history…</p>}
-        {messages.map((message) => (
-          <div key={message.sequence} className={`message message-${message.role}`}>
-            <span className="message-role">{message.role}</span>
-            <p className="message-text">{message.text}</p>
-          </div>
-        ))}
+        {messages.map(renderMessage)}
 
         {turn.status === 'running' && (
           <div className="message message-assistant message-streaming">
