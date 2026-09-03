@@ -346,6 +346,33 @@ document.parse`）。若 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 已�
 上传要求 `multipart/form-data`）。本机没有可用 RAGFlow 部署时，跳过本节，§3/§5 的服务可达性 +
 清单注册/发布已经是 S2.5 对 `ragflow` 门的完整交付范围。
 
+### 11.1 RAGFlow 走 https 且证书自签时：用 `GATE_TLS_CA_FILE`，不要关校验
+
+RAGFlow 的 edge（nginx）通常用一张自签证书终止 TLS，且签给某个 DNS 名（CN/SAN 里没有主机 IP）。
+`gatekeeper-ragflow.env` 里**不要**写 `NODE_TLS_REJECT_UNAUTHORIZED=0`（它关掉门进程全部出向 TLS
+校验，门启动时会打一条 warn）。正确做法是把那张证书交给门、并告诉门按哪个名字校验：
+
+```bash
+set -a; . ./.env; set +a
+# 1. 从 edge 抓下证书（本机 443；改成你的 edge 地址），落到门已挂载的数据目录下
+mkdir -p "${NEXTTIME_DATA}/gatekeepers/ragflow/tls"
+echo | openssl s_client -connect 127.0.0.1:443 2>/dev/null \
+  | openssl x509 -out "${NEXTTIME_DATA}/gatekeepers/ragflow/tls/edge.pem"
+chown -R 10001:10001 "${NEXTTIME_DATA}/gatekeepers/ragflow/tls"
+# 看一眼证书签给了哪个名字（SAN 里的 DNS 名）
+openssl x509 -in "${NEXTTIME_DATA}/gatekeepers/ragflow/tls/edge.pem" -noout -subject -ext subjectAltName
+
+# 2. secrets/gatekeeper-ragflow.env 里：去掉 NODE_TLS_REJECT_UNAUTHORIZED，加上
+#    GATE_TLS_CA_FILE=/data/gate/tls/edge.pem        （容器内路径：数据目录挂在 /data/gate）
+#    GATE_TLS_SERVERNAME=<证书 SAN 里的 DNS 名>       （RAGFLOW_BASE_URL 用 IP 时必需）
+
+# 3. 重启门并验证：health 200；随后 §11 的 kb.list observe 应正常返回，且门日志里无 tls warn
+docker compose up -d --force-recreate gatekeeper-ragflow
+docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UNAUTHORIZED'   # 期望 0
+```
+
+证书轮换后重做第 1 步并 `--force-recreate` 即可；CA 文件读不到时门拒绝启动（不会静默退回系统信任库）。
+
 ## 12. 已知偏离 / 待确认（PR 中一并说明）
 
 - **`compose.up`/`compose.down` 是"启动/停止该 compose 项目下已存在的容器"，不是完整的

@@ -13,6 +13,7 @@ import { JsonFileIdempotencyStore } from './idempotency-store.js';
 import { CliTransport, HttpTransport, McpTransport, SshTransport } from './kinds/index.js';
 import type { SshPolicyRule, SshTarget, Transport } from './kinds/index.js';
 import { createGatekeeperServer } from './server.js';
+import { buildTlsFetch, gateTlsOptionsFromEnv, insecureTlsEnvWarning } from './tls.js';
 
 /**
  * @nexttime/gatekeeper-base — protocol, four transport kinds (http/mcp/cli/ssh), manifest model,
@@ -26,6 +27,8 @@ import { createGatekeeperServer } from './server.js';
 export const VERSION = '0.1.0';
 
 export { GatekeeperBase } from './gatekeeper-base.js';
+export { buildTlsFetch, gateTlsOptionsFromEnv, insecureTlsEnvWarning } from './tls.js';
+export type { GateTlsOptions } from './tls.js';
 export type {
   ApplyResult,
   GatekeeperBaseCallContext,
@@ -153,15 +156,19 @@ function buildCredentialResolver(
 }
 
 function buildTransport(kind: string, env: NodeJS.ProcessEnv): Transport {
+  // GATE_TLS_CA_FILE / GATE_TLS_SERVERNAME (tls.ts): only the two fetch-based transports have a
+  // TLS client to configure; `undefined` keeps the plain global fetch.
+  const tls = gateTlsOptionsFromEnv(env);
+  const fetchImpl = tls ? buildTlsFetch(tls) : undefined;
   if (kind === 'http') {
     const baseUrl = env.GATE_TARGET_BASE_URL;
     if (!baseUrl) throw new Error('GATE_TRANSPORT_KIND=http requires GATE_TARGET_BASE_URL');
-    return new HttpTransport({ baseUrl });
+    return new HttpTransport({ baseUrl, ...(fetchImpl ? { fetchImpl } : {}) });
   }
   if (kind === 'mcp') {
     const endpoint = env.GATE_TARGET_ENDPOINT;
     if (!endpoint) throw new Error('GATE_TRANSPORT_KIND=mcp requires GATE_TARGET_ENDPOINT');
-    return new McpTransport({ endpoint });
+    return new McpTransport({ endpoint, ...(fetchImpl ? { fetchImpl } : {}) });
   }
   if (kind === 'cli') {
     return new CliTransport();
@@ -191,6 +198,8 @@ export async function startGatekeeperServer(
 ): Promise<{ app: ReturnType<typeof createGatekeeperServer>; close(): Promise<void> }> {
   const dataDir = resolveGateDataDir(env);
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
+  const insecure = insecureTlsEnvWarning(env);
+  if (insecure) console.warn(JSON.stringify({ level: 'warn', msg: insecure }));
   const transport = buildTransport(env.GATE_TRANSPORT_KIND ?? 'http', env);
   const { resolver: credentialResolver, connectedAccountStore } = buildCredentialResolver(
     env.GATE_CREDENTIAL_MODE ?? 'shared',
