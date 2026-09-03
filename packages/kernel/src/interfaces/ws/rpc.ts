@@ -1,3 +1,4 @@
+import { IllegalTransition } from '@nexttime/shared';
 import { z } from 'zod';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import {
@@ -8,6 +9,12 @@ import {
   InvalidCapabilityParamsError,
   UnauthorizedError,
 } from '../../application/gateway/index.js';
+import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
+import { GrantNotFoundError } from '../../governance/capability/index.js';
+import {
+  HighBlastRadiusAutoApproveError,
+  SetPolicyValidationError,
+} from '../../governance/policy/index.js';
 
 /**
  * interfaces/ws/rpc: JSON-RPC 2.0 message shapes and error-code mapping for `/ws` (design doc
@@ -82,6 +89,9 @@ export const WS_ERROR_CODES = {
    *  409" (interfaces/http/capability-route.ts is out of this task's ownership, so only this
    *  transport gets a distinct code — see the PR body "假设与偏离" for the HTTP-side deviation). */
   TURN_ALREADY_RUNNING: -32010,
+  /** governance/approval I6 ("ActionRequest 只沿转移表走") — a status the row is not currently in
+   *  (e.g. approving an already-approved ActionRequest); mirrors HTTP 409 (S2.3). */
+  ILLEGAL_TRANSITION: -32011,
 } as const;
 
 /** Maps an error thrown by `resolveCaller`/`dispatchCapability` (application/gateway) or by
@@ -117,6 +127,21 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof ChatNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // governance/approval + governance/policy domain errors (S2.2/S2.3) — same additions as
+  // interfaces/http/capability-route.ts's mapCapabilityError, reusing FORBIDDEN/NOT_FOUND/
+  // INVALID_PARAMS where an existing code already fits and only ILLEGAL_TRANSITION is new.
+  if (err instanceof ApprovalScopeError) {
+    return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
+  }
+  if (err instanceof ActionRequestNotFoundError || err instanceof GrantNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof IllegalTransition) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   return { code: WS_ERROR_CODES.INTERNAL_ERROR, message: 'internal error' };
 }

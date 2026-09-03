@@ -85,25 +85,48 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
     ).rejects.toThrow(ForbiddenError);
   });
 
-  it('owner calling grant_capability passes authorization (the 403 above is role-specific)', async () => {
-    // grant_capability has no S1.3 handler, so this still ends in 501 — but CapabilityNotImplementedError
-    // (not ForbiddenError) proves authorization itself passed for `owner`, unlike for `member` above.
+  it('member calling set_quota → ForbiddenError (403)', async () => {
+    // set_quota (governance group, human channel, minRole:'owner') has no wired handler yet
+    // (I18 quotas are S2.7 scope) — used here (rather than grant_capability/approve, both wired by
+    // S2.3) purely as a still-unimplemented, owner-only capability to prove role-gating still 403s
+    // a `member` before ever reaching dispatch's handler lookup.
     await expect(
-      dispatchCapability(
-        { pool: neverConnectPool },
-        humanCaller({ role: 'owner' }),
-        'grant_capability',
-        { principalId: randomUUID(), capability: 'x', scope: {} },
-      ),
+      dispatchCapability({ pool: neverConnectPool }, humanCaller({ role: 'member' }), 'set_quota', {
+        key: 'x',
+        value: 1,
+      }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it('owner calling set_quota passes authorization (the 403 above is role-specific)', async () => {
+    // set_quota has no handler (S2.7 scope), so this still ends in 501 — but
+    // CapabilityNotImplementedError (not ForbiddenError) proves authorization itself passed for
+    // `owner`, unlike for `member` above.
+    await expect(
+      dispatchCapability({ pool: neverConnectPool }, humanCaller({ role: 'owner' }), 'set_quota', {
+        key: 'x',
+        value: 1,
+      }),
     ).rejects.toThrow(CapabilityNotImplementedError);
   });
 
   it('a registry capability with no wired handler → CapabilityNotImplementedError (501)', async () => {
-    // `approve` (governance group, human channel, minRole:'operator') has no S1.3 handler.
+    // `request_action` (governance group, handle channel) has no wired handler yet — S2.3
+    // deliberately leaves it unimplemented: its wire paramsSchema carries no blast_radius/
+    // auto_approvable, which only a Gatekeeper's published interface manifest (S2.4) can resolve.
+    // `governance/approval/request-action.ts`'s `requestAction()` is ready to be called directly
+    // once S2.4 exists; only the capability-dispatch wiring is pending on it.
     await expect(
-      dispatchCapability({ pool: neverConnectPool }, humanCaller({ role: 'operator' }), 'approve', {
-        actionRequestId: randomUUID(),
-      }),
+      dispatchCapability(
+        { pool: neverConnectPool },
+        humanCaller({ role: 'operator' }),
+        'request_action',
+        {
+          gatekeeperId: randomUUID(),
+          operation: 'test.op',
+          params: {},
+        },
+      ),
     ).rejects.toThrow(CapabilityNotImplementedError);
   });
 });

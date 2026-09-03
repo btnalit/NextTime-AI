@@ -1,3 +1,4 @@
+import { IllegalTransition } from '@nexttime/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import {
@@ -13,6 +14,12 @@ import {
   dispatchCapability,
   resolveCaller,
 } from '../../application/gateway/index.js';
+import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
+import { GrantNotFoundError } from '../../governance/capability/index.js';
+import {
+  HighBlastRadiusAutoApproveError,
+  SetPolicyValidationError,
+} from '../../governance/policy/index.js';
 
 /**
  * interfaces/http/capability-route: `POST /api/cap/<name>` (design doc §9.3; docs/development-
@@ -81,6 +88,24 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // that class lives in dispatch.ts, which imports handlers.ts (an import cycle).
   if (err instanceof AssertFactWriteNotImplementedError) {
     return { status: 501, code: 'not_implemented', message: err.message };
+  }
+  // governance/approval + governance/policy domain errors (S2.2/S2.3). ApprovalScopeError is I14
+  // ("does the approver hold this action_kind × resource_scope") — a *narrower* forbidden than
+  // ForbiddenError's role-gate, but the same HTTP shape. IllegalTransition (packages/shared,
+  // ACTION_REQUEST_TRANSITIONS/DECISION_TRANSITIONS) is I6's own error for a status the row is not
+  // currently in (e.g. approving an already-approved ActionRequest) — a conflict, not a 400 (the
+  // request itself is well-formed, the row's *state* just does not allow it right now).
+  if (err instanceof ApprovalScopeError) {
+    return { status: 403, code: 'forbidden', message: err.message };
+  }
+  if (err instanceof ActionRequestNotFoundError || err instanceof GrantNotFoundError) {
+    return { status: 404, code: 'not_found', message: err.message };
+  }
+  if (err instanceof IllegalTransition) {
+    return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
   }
   return { status: 500, code: 'internal_error', message: 'internal error' };
 }

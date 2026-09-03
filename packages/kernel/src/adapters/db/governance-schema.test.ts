@@ -106,6 +106,7 @@ const EXPECTED_ENUM_CHECKS: ReadonlyArray<{ table: string; column: string; enumE
   { table: 'capability_grants', column: 'status', enumExport: 'GRANT_STATUS_VALUES' },
   { table: 'action_requests', column: 'status', enumExport: 'ACTION_REQUEST_STATUS_VALUES' },
   { table: 'action_requests', column: 'blast_radius', enumExport: 'BLAST_RADIUS_VALUES' },
+  { table: 'action_requests', column: 'policy_decision', enumExport: 'POLICY_DECISION_VALUES' },
   { table: 'tasks', column: 'status', enumExport: 'TASK_STATUS_VALUES' },
   { table: 'worker_runs', column: 'status', enumExport: 'WORKER_RUN_STATUS_VALUES' },
   { table: 'worker_definitions', column: 'kind', enumExport: 'WORKER_DEFINITION_KIND_VALUES' },
@@ -114,13 +115,12 @@ const EXPECTED_ENUM_CHECKS: ReadonlyArray<{ table: string; column: string; enumE
 
 /**
  * `table.column` pairs with a CHECK but no packages/shared counterpart — documented, not missed.
- * `action_requests.policy_decision` (`'allow' | 'require_approval' | 'deny'`) has no
- * packages/shared enum export yet (docs/development-tasks.md S2.1 "Read first" §6: "if none
- * exist, define the SQL CHECK lists ... and list them in your report so later tasks can mirror
- * them" — reported in the PR body; S2.2's policy engine is the natural owner of a future
- * `POLICY_DECISION_VALUES` export).
+ * Empty as of S2.2: `action_requests.policy_decision` (`'allow' | 'require_approval' | 'deny'`)
+ * used to be the one gap here (docs/development-tasks.md S2.1 "Read first" §6) but S2.2's policy
+ * engine now owns `POLICY_DECISION_VALUES` (packages/shared/src/enums.ts) and it is mapped in
+ * `EXPECTED_ENUM_CHECKS` above instead.
  */
-const KNOWN_UNMAPPED_CHECKS = new Set(['action_requests.policy_decision']);
+const KNOWN_UNMAPPED_CHECKS = new Set<string>([]);
 
 describe('S2.1 governance/task/worker migrations — CHECK enum lists match packages/shared (static, no DB)', () => {
   it('every enum-shaped CHECK constraint matches its packages/shared *_VALUES array exactly', async () => {
