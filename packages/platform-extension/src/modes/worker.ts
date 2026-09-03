@@ -7,6 +7,7 @@ import { WorkerResultContractSchema } from '@nexttime/shared';
 import type { WorkerResultCapabilityParams, WorkerResultContract } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { toToolParameters } from '../tool-schema.js';
+import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
 
 /**
  * `worker` mode (design doc §7.3, §7.4, S2.9 scope): the pi extension registered inside a
@@ -25,50 +26,20 @@ import { toToolParameters } from '../tool-schema.js';
 // Gate tool registration (`list_allowed_operations` → one pi tool per Operation, `<gate>.<op>`).
 // -------------------------------------------------------------------------------------------
 
-interface AllowedOperationWire {
-  readonly gatekeeperId: string;
-  readonly gateName: string;
-  readonly name: string;
-  readonly operation: {
-    readonly params_schema?: Record<string, unknown>;
-    readonly [key: string]: unknown;
-  };
-}
-
-/** provider tool-name charset every major LLM API restricts function/tool names to
- *  (`^[a-zA-Z0-9_-]{1,64}$` — no dots) — verified against the vendored provider adapters in
- *  `@earendil-works/pi-coding-agent`'s own bundle (anthropic-messages/openai-completions/bedrock-
- *  converse all sanitize against this exact character class). §7.4's own `<gate>.<op>` naming is
- *  therefore a *display* convention, not a literal wire tool name — `<gate>.<op>` (unsanitized) is
- *  kept as each tool's `label`; the registered `name` below is the sanitized form, with a
- *  gatekeeperId-based fallback on collision (two Gatekeepers sharing a `gateName`). Documented
- *  deviation — see docs/development-tasks.md S2.9 "实现说明".
- */
-function sanitizeToolName(raw: string): string {
-  return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-}
-
+// Naming/sanitization lives in gate-tools.ts (shared with entry mode since the S2.12 fix).
 function buildGateTool(
   op: AllowedOperationWire,
   kernelClient: KernelClient,
   usedNames: Set<string>,
 ): ToolDefinition {
-  const label = `${op.gateName}.${op.name}`;
-  let name = sanitizeToolName(label);
-  if (usedNames.has(name)) {
-    name = sanitizeToolName(`${op.gatekeeperId}.${op.name}`);
-  }
-  usedNames.add(name);
+  const { name, label } = gateToolName(op, usedNames);
 
   const paramsSchema = op.operation.params_schema ?? {};
 
   return {
     name,
     label,
-    description:
-      typeof op.operation.description === 'string'
-        ? op.operation.description
-        : `Gatekeeper Operation "${label}" (§7.4/§9.3 gate projection).`,
+    description: gateToolDescription(op, label),
     // An Operation's params_schema is already a JSON Schema object (imported from OpenAPI/MCP/
     // hand-written YAML, `@nexttime/shared`'s OperationSchema) — passed straight through, no
     // zod-to-json-schema conversion (see tool-schema.ts's own doc comment for why that helper is

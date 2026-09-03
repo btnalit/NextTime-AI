@@ -93,15 +93,24 @@ describe('platformExtension() activation', () => {
     });
   }
 
-  it('registers the five observe tools and four event handlers for entry mode with all env vars set', () => {
+  it('registers the entry capability tools (five S1 observe + S2) and the event handlers for entry mode with all env vars set', () => {
     for (const [key, value] of Object.entries(REQUIRED_ENTRY_ENV)) process.env[key] = value;
     const pi = fakePi();
 
     expect(() => platformExtension(pi)).not.toThrow();
 
-    expect(pi.registerTool).toHaveBeenCalledTimes(5);
+    expect(pi.registerTool).toHaveBeenCalledTimes(17);
     const registeredNames = vi.mocked(pi.registerTool).mock.calls.map(([tool]) => tool.name);
-    expect(registeredNames).toEqual(['get_object', 'traverse', 'search', 'explain', 'get_task']);
+    expect(registeredNames.slice(0, 5)).toEqual([
+      'get_object',
+      'traverse',
+      'search',
+      'explain',
+      'get_task',
+    ]);
+    expect(registeredNames).toEqual(
+      expect.arrayContaining(['find_workers', 'invoke_worker', 'request_connection']),
+    );
 
     const subscribedEvents = vi.mocked(pi.on).mock.calls.map(([event]) => event);
     expect(subscribedEvents).toEqual(

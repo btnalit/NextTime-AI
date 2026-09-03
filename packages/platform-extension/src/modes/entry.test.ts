@@ -68,17 +68,93 @@ describe('registerEntryMode', () => {
     await kernel.close();
   });
 
-  it('registers exactly the five S1 observe tools, derived from the shared registry', () => {
+  it('registers the five S1 observe tools first, then the S2 entry capabilities, all from the shared registry', () => {
     expect([...fake.tools.keys()]).toEqual([
       'get_object',
       'traverse',
       'search',
       'explain',
       'get_task',
+      'state_at',
+      'find_operations',
+      'find_workers',
+      'find_procedures',
+      'invoke_worker',
+      'request_connection',
+      'record_decision',
+      'propose_worker_definition',
+      'propose_operation',
+      'propose_skill',
+      'propose_procedure',
+      'propose_ontology_change',
     ]);
     const getObject = fake.tools.get('get_object');
     expect(getObject?.description).toContain('Object');
     expect(getObject?.parameters).toMatchObject({ type: 'object' });
+    // Never exposed raw: the extension calls these itself, and observe_operation is reached only
+    // through the projected <gate>.<op> tools (session_start test below).
+    expect(fake.tools.has('get_entry_context')).toBe(false);
+    expect(fake.tools.has('report_turn')).toBe(false);
+    expect(fake.tools.has('observe_operation')).toBe(false);
+    expect(fake.tools.has('request_action')).toBe(false);
+  });
+
+  it('session_start projects only observe-class allowed Operations as <gate>.<op> tools that call observe_operation', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        operations: [
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'accept_s2_api',
+            name: 'stock.get',
+            operation: { mode: 'observe', params_schema: { type: 'object', properties: {} } },
+          },
+          {
+            gatekeeperId: 'gk-2',
+            gateName: 'docker',
+            name: 'container.restart',
+            operation: { mode: 'execute', params_schema: { type: 'object' } },
+          },
+        ],
+      },
+    }));
+    kernel.setHandler('observe_operation', (request) => ({
+      ok: true,
+      result: { status: 'ok', data: { echo: request.params }, observedFactCount: 0 },
+    }));
+    const sessionStart = fake.handlers.get('session_start');
+    if (!sessionStart) throw new Error('session_start handler not registered');
+
+    await sessionStart({ type: 'session_start', reason: 'startup' }, fakeCtx());
+
+    expect(fake.tools.has('accept_s2_api_stock_get')).toBe(true);
+    expect(fake.tools.has('docker_container_restart')).toBe(false);
+    const tool = fake.tools.get('accept_s2_api_stock_get');
+    if (!tool) throw new Error('projected observe tool missing');
+    expect(tool.label).toBe('accept_s2_api.stock.get');
+
+    const result = await tool.execute('call-1', { symbol: 'X' }, undefined, undefined, fakeCtx());
+    const observeCall = kernel.requests.find((r) => r.capability === 'observe_operation');
+    expect(observeCall?.params).toEqual({
+      gatekeeperId: 'gk-1',
+      operation: 'stock.get',
+      params: { symbol: 'X' },
+    });
+    expect(kernel.requests.some((r) => r.capability === 'request_action')).toBe(false);
+    expect(result.details).toMatchObject({ status: 'ok' });
+  });
+
+  it('session_start degrades to zero gate tools when list_allowed_operations fails', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: false,
+      error: { code: 'forbidden', message: 'nope' },
+    }));
+    const before = fake.tools.size;
+    const sessionStart = fake.handlers.get('session_start');
+    if (!sessionStart) throw new Error('session_start handler not registered');
+    await sessionStart({ type: 'session_start', reason: 'startup' }, fakeCtx());
+    expect(fake.tools.size).toBe(before);
   });
 
   it('a tool execute() calls the kernel and returns the result as content/details on success', async () => {

@@ -6,6 +6,35 @@ import type {
 import { getCapability } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { toToolParameters } from '../tool-schema.js';
+import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
+
+/** An entry agent's projected observe tool — calls `observe_operation` (never `request_action`,
+ *  which an entry Handle does not hold) and returns the observed data verbatim. */
+function buildGateObserveTool(
+  op: AllowedOperationWire,
+  kernelClient: KernelClient,
+  usedNames: Set<string>,
+): ToolDefinition {
+  const { name, label } = gateToolName(op, usedNames);
+  const paramsSchema = op.operation.params_schema ?? {};
+  return {
+    name,
+    label,
+    description: gateToolDescription(op, label),
+    parameters: paramsSchema as ToolDefinition['parameters'],
+    async execute(_toolCallId, params) {
+      const result = await kernelClient.call<Record<string, unknown>>('observe_operation', {
+        gatekeeperId: op.gatekeeperId,
+        operation: op.name,
+        params,
+      });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
+    },
+  };
+}
 
 /**
  * `entry` mode (design doc §7.4, §7.2, S1 scope): the pi extension registered inside a user's
@@ -17,12 +46,31 @@ import { toToolParameters } from '../tool-schema.js';
  */
 
 /** The S1 graph observe group (design doc §9.3 "graph"), registered verbatim as pi tools. */
-const OBSERVE_CAPABILITY_NAMES = [
+const ENTRY_TOOL_CAPABILITY_NAMES = [
+  // S1 observe group (unchanged order — entry.test.ts pins it).
   'get_object',
   'traverse',
   'search',
   'explain',
   'get_task',
+  // S2 (S2.12 fix): the rest of ontology/entry-agent.yaml's `capabilities`, minus the two the
+  // extension calls itself (`get_entry_context` on `context`, `report_turn` on `agent_settled`)
+  // and `observe_operation`, which is reached through the projected `<gate>.<op>` tools registered
+  // on `session_start` below rather than exposed raw. Every name must be on
+  // governance/capability/handles.ts's entry ceiling — a Handle-scope 403 on a registered tool
+  // is a bug on that side, not something to hide here.
+  'state_at',
+  'find_operations',
+  'find_workers',
+  'find_procedures',
+  'invoke_worker',
+  'request_connection',
+  'record_decision',
+  'propose_worker_definition',
+  'propose_operation',
+  'propose_skill',
+  'propose_procedure',
+  'propose_ontology_change',
 ] as const;
 
 export interface EntryModeOptions {
@@ -42,14 +90,14 @@ export interface EntryModeOptions {
  */
 const TURN_ID_MARKER = /^<!--nexttime:turn_id=([A-Za-z0-9_-]+)-->\n?/;
 
-function buildObserveTool(
-  name: (typeof OBSERVE_CAPABILITY_NAMES)[number],
+function buildCapabilityTool(
+  name: (typeof ENTRY_TOOL_CAPABILITY_NAMES)[number],
   kernelClient: KernelClient,
 ): ToolDefinition {
   const capability = getCapability(name);
   if (!capability) {
     throw new Error(
-      `@nexttime/platform-extension: capability "${name}" is missing from the shared registry (entry mode requires get_object/traverse/search/explain/get_task)`,
+      `@nexttime/platform-extension: capability "${name}" is missing from the shared registry (entry mode registers ENTRY_TOOL_CAPABILITY_NAMES verbatim)`,
     );
   }
   return {
@@ -131,9 +179,36 @@ function extractAssistantText(content: unknown): string {
 export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): void {
   let currentTurnId = options.initialTurnId;
 
-  for (const name of OBSERVE_CAPABILITY_NAMES) {
-    pi.registerTool(buildObserveTool(name, options.kernelClient));
+  for (const name of ENTRY_TOOL_CAPABILITY_NAMES) {
+    pi.registerTool(buildCapabilityTool(name, options.kernelClient));
   }
+
+  // Gate observe tools (S2.12 fix; design doc §7.4 "<gate>.<op>"): one pi tool per *published,
+  // observe-class* Operation of every Gatekeeper this user's entry Handle carries in
+  // `resources.gatekeeper` (`connect_gatekeeper` Grants, flowed in at Handle issuance). Same
+  // naming as worker mode (gate-tools.ts) so tool names are predictable from `<gateName>.<op>`;
+  // execute-class Operations are never projected here — an entry agent delegates those through
+  // `invoke_worker`. Registered on `session_start`, so a Grant made after this container started
+  // becomes a tool only after the resident container is restarted (same latency bound as the
+  // Handle reissue itself).
+  pi.on('session_start', async () => {
+    const usedNames = new Set<string>();
+    let operations: AllowedOperationWire[];
+    try {
+      const response = await options.kernelClient.call<{ operations?: AllowedOperationWire[] }>(
+        'list_allowed_operations',
+        {},
+      );
+      operations = response.operations ?? [];
+    } catch (error) {
+      logKernelError(error, 'list_allowed_operations');
+      return;
+    }
+    for (const op of operations) {
+      if (op.operation.mode !== 'observe') continue;
+      pi.registerTool(buildGateObserveTool(op, options.kernelClient, usedNames));
+    }
+  });
 
   pi.on('input', (event) => {
     const match = TURN_ID_MARKER.exec(event.text);

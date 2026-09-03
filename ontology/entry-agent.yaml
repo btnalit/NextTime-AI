@@ -41,6 +41,10 @@ capabilities:
   - find_operations
   - find_workers
   - find_procedures
+  # The capability behind every projected `<gate>.<op>` observe tool (packages/shared
+  # capabilities.ts `observe_operation`; entry.ts registers one tool per observe-class Operation of
+  # each Gatekeeper this user has been granted via `connect_gatekeeper`).
+  - observe_operation
   - get_task
   - get_entry_context
   - report_turn

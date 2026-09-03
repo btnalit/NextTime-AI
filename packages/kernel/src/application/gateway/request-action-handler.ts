@@ -14,6 +14,7 @@ import {
 } from '../../governance/approval/index.js';
 import {
   GatekeeperNotFoundError,
+  OperationNotFoundError,
   SYSTEM_ACTOR_PLACEHOLDER,
   getGatekeeper,
   getOrCreateGatekeeperServicePrincipal,
@@ -507,6 +508,61 @@ function resolveRequesterScope(
   if (channel === 'handle' && scope) return scope;
   return { capabilities: [], resources: { gatekeeper: [gatekeeperId] } };
 }
+
+/**
+ * `observe_operation` (S2.12 fix) — the dispatchable capability behind the `<gate>.<op>` observe
+ * projection (packages/shared/src/capabilities.ts `gate` group; design doc §5.1.4 "门上的 observe
+ * 类 Operation" is in the entry ceiling, §11 "观察免审"). Same observe path as `request_action`
+ * (`runObserve`: gate `observe` + observed Facts + `gatekeeper_observe` Activity), but:
+ *
+ *   - an unpublished Operation is `OperationNotFoundError` (404) — I17 "未发布的清单对 agent 不可见",
+ *     never the governed "unclassified → require approval" branch `request_action` takes;
+ *   - an execute-class Operation is refused (`ForbiddenError`, 403) — this capability's mode is
+ *     `observe`, which is exactly why an entry Handle may hold it while it holds no execute-mode
+ *     capability at all (governance/capability/handles.ts `entryScope()`). An entry agent that
+ *     needs an execute-class effect delegates through `invoke_worker`; a Worker uses
+ *     `request_action`.
+ *
+ * Like `request_action`'s own observe path, this does not check `resources.gatekeeper` (S2.4
+ * known gap — projected tools only exist for granted gates, but a direct call is not narrowed).
+ */
+export const observeOperationHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const {
+    gatekeeperId,
+    operation: operationName,
+    params: operationParams,
+  } = params as { gatekeeperId: string; operation: string; params?: Record<string, unknown> };
+  const onBehalfOf = ctx?.principalId;
+  if (!onBehalfOf) {
+    throw new Error('observe_operation: caller context is required (dispatch.ts must supply it)');
+  }
+
+  const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
+  if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
+
+  const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
+  if (!published) throw new OperationNotFoundError(gatekeeperId, operationName);
+  if (published.operation.mode !== 'observe') {
+    const mode = published.operation.mode;
+    throw new ForbiddenError(
+      `observe_operation: "${operationName}" on gatekeeper ${gatekeeperId} is ${mode}-class — delegate it through invoke_worker (a Worker requests it via request_action)`,
+    );
+  }
+
+  return runObserve(
+    client,
+    workspaceId,
+    gatekeeper,
+    operationName,
+    operationParams ?? {},
+    onBehalfOf,
+  );
+};
 
 export const requestActionHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const {

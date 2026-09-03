@@ -20,6 +20,7 @@ import {
   approveActionRequest,
   getActionRequest,
 } from '../../governance/approval/index.js';
+import { entryScope } from '../../governance/capability/index.js';
 import {
   importManifest,
   publishOperation,
@@ -350,6 +351,73 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(facts.length).toBeGreaterThanOrEqual(1);
       expect(facts[0]?.epistemicStatus).toBe('observed');
+    });
+
+    // S2.12 fix: `observe_operation` — the capability an entry agent's projected `<gate>.<op>`
+    // tools call. Exercised through dispatchCapability with a *Handle* caller carrying exactly
+    // `entryScope(...)`, so authorize.ts's Handle-scope check runs for real (the class of gap that
+    // let `explain` 403 unnoticed in S2.6: extension tests never enforce Handle scope).
+    describe('observe_operation via an entry-scoped Handle caller', () => {
+      function entryHandleCaller(): ResolvedCaller {
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: ownerId,
+            scope: entryScope({ resources: { gatekeeper: [gatekeeperId] } }),
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+      }
+
+      it('runs a published observe-class Operation and returns its data', async () => {
+        const result = (await dispatchCapability(
+          { pool },
+          entryHandleCaller(),
+          'observe_operation',
+          {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: {},
+          },
+        )) as { status: string; data: unknown; observedFactCount: number };
+        expect(result.status).toBe('ok');
+        expect(result.observedFactCount).toBe(1);
+      });
+
+      it('refuses an execute-class Operation (403-shaped ForbiddenError), never creating an ActionRequest', async () => {
+        await expect(
+          dispatchCapability({ pool }, entryHandleCaller(), 'observe_operation', {
+            gatekeeperId,
+            operation: 'auto.op',
+            params: {},
+          }),
+        ).rejects.toThrow(/execute-class/);
+      });
+
+      it('treats an unpublished Operation as not found (I17), not as a governed request', async () => {
+        await expect(
+          dispatchCapability({ pool }, entryHandleCaller(), 'observe_operation', {
+            gatekeeperId,
+            operation: 'draft.op',
+            params: {},
+          }),
+        ).rejects.toThrow(/not found|Operation/);
+      });
+
+      it('an entry Handle still cannot call request_action at all (ceiling invariant)', async () => {
+        await expect(
+          dispatchCapability({ pool }, entryHandleCaller(), 'request_action', {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: {},
+          }),
+        ).rejects.toThrow(/not in|scope|forbidden/i);
+      });
     });
 
     it('auto-approve executes exactly once, and the gate is only called once the row is visible from another connection', async () => {

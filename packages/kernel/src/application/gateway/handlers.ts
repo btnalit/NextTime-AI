@@ -68,7 +68,7 @@ import {
   publishManifestHandler,
   publishOperationHandler,
 } from './operation-manifest-handlers.js';
-import { requestActionHandler } from './request-action-handler.js';
+import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
 import {
   deprecateProcedureHandler,
   deprecateSkillHandler,
@@ -902,6 +902,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S2.13 (docs/development-tasks.md S2.13) — connection-handlers.ts / operation-manifest-
   // handlers.ts's own `publish_manifest`.
   ['request_connection', requestConnectionHandler],
+  // S2.12 fix — the dispatchable capability behind the `<gate>.<op>` observe projection.
+  ['observe_operation', observeOperationHandler],
   ['create_connection', createConnectionHandler],
   ['connect_gatekeeper', connectGatekeeperHandler],
   ['list_connection_requests', listConnectionRequestsHandler],
