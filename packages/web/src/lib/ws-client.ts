@@ -115,6 +115,11 @@ export interface ChatSubscriptionHandlers {
 
 export type Unsubscribe = () => void;
 
+/** Connection lifecycle as the shell's status indicator sees it: `connecting` (first `connect()`
+ *  in flight), `connected` (socket open — authenticated or about to be), `reconnecting` (an
+ *  unexpected drop; `WsClient` is retrying on its own), `closed` (never opened, or `close()`). */
+export type WsConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'closed';
+
 // -------------------------------------------------------------------------------------------
 // Errors
 // -------------------------------------------------------------------------------------------
@@ -249,6 +254,9 @@ export class WsClient {
   private readonly actionUpdatedListeners = new Set<(event: ActionUpdatedPush) => void>();
   private readonly taskUpdatedListeners = new Set<(event: TaskUpdatedPush) => void>();
 
+  private status: WsConnectionStatus = 'closed';
+  private readonly statusListeners = new Set<(status: WsConnectionStatus) => void>();
+
   constructor(options: WsClientOptions) {
     this.url = options.url;
     this.createSocket = options.createSocket ?? defaultWebSocketFactory;
@@ -259,12 +267,16 @@ export class WsClient {
    *  authenticate — call `authenticate()` next, as the first frame the server will accept. */
   connect(): Promise<void> {
     this.manuallyClosed = false;
+    // A reconnect attempt (`reconnect()` below) keeps reporting `reconnecting` until the socket is
+    // actually open again; only a first-time connect reports `connecting`.
+    if (this.status !== 'reconnecting') this.setStatus('connecting');
     return new Promise((resolve, reject) => {
       const socket = this.createSocket(this.url);
       this.socket = socket;
       let settled = false;
       socket.onopen = () => {
         settled = true;
+        this.setStatus('connected');
         resolve();
       };
       socket.onerror = () => {
@@ -407,6 +419,24 @@ export class WsClient {
     return () => this.taskUpdatedListeners.delete(handler);
   }
 
+  /** The current connection status (see `WsConnectionStatus`). */
+  getStatus(): WsConnectionStatus {
+    return this.status;
+  }
+
+  /** Registers a listener for connection status changes — fires only on an actual change, never
+   *  for the current value (read `getStatus()` for that). Returns an `Unsubscribe`. */
+  onStatusChange(handler: (status: WsConnectionStatus) => void): Unsubscribe {
+    this.statusListeners.add(handler);
+    return () => this.statusListeners.delete(handler);
+  }
+
+  private setStatus(next: WsConnectionStatus): void {
+    if (this.status === next) return;
+    this.status = next;
+    for (const fn of this.statusListeners) fn(next);
+  }
+
   private handleFrame(raw: string): void {
     let parsed: JsonRpcResponseFrame | JsonRpcNotificationFrame;
     try {
@@ -494,7 +524,10 @@ export class WsClient {
     // down) is the caller's own retry decision, not this client's — auto-reconnecting behind a
     // still-pending or already-rejected initial authenticate() would race a second socket against
     // whatever the caller does next (e.g. the login screen letting the user retry).
-    if (this.manuallyClosed || this.token === undefined) return;
+    if (this.manuallyClosed || this.token === undefined) {
+      this.setStatus('closed');
+      return;
+    }
     this.scheduleReconnect();
   }
 
@@ -503,6 +536,7 @@ export class WsClient {
     // attempt — `reconnect()`'s own catch block below also calls this — can never schedule
     // another one: `close()` sets `manuallyClosed` synchronously before anything async happens.
     if (this.manuallyClosed || this.reconnectTimer) return;
+    this.setStatus('reconnecting');
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       void this.reconnect();
@@ -545,5 +579,6 @@ export class WsClient {
     }
     this.socket?.close();
     this.socket = undefined;
+    this.setStatus('closed');
   }
 }

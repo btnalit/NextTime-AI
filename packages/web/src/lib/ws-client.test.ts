@@ -498,6 +498,53 @@ describe('WsClient', () => {
     });
   });
 
+  describe('connection status', () => {
+    it('reports connecting -> connected -> reconnecting -> connected across an unexpected drop', async () => {
+      const { client, sockets } = harness;
+      const seen: string[] = [];
+      client.onStatusChange((status) => seen.push(status));
+      expect(client.getStatus()).toBe('closed');
+
+      const socket1 = await connectAndAuth(client, sockets);
+      expect(seen).toEqual(['connecting', 'connected']);
+
+      socket1.remoteClose();
+      expect(client.getStatus()).toBe('reconnecting');
+      await wait(0);
+      await flush();
+      const socket2 = sockets[1];
+      if (!socket2) throw new Error('expected a reconnect socket');
+      // Still reconnecting while the new socket is not open yet — never a spurious `connecting`.
+      expect(client.getStatus()).toBe('reconnecting');
+      socket2.open();
+      await flush();
+
+      expect(seen).toEqual(['connecting', 'connected', 'reconnecting', 'connected']);
+    });
+
+    it('reports closed after close() and does not fire for unchanged status', async () => {
+      const { client, sockets } = harness;
+      const seen: string[] = [];
+      client.onStatusChange((status) => seen.push(status));
+      await connectAndAuth(client, sockets);
+      client.close();
+      client.close();
+      expect(client.getStatus()).toBe('closed');
+      expect(seen).toEqual(['connecting', 'connected', 'closed']);
+    });
+
+    it('reports closed (not reconnecting) when the socket drops before any successful authenticate', async () => {
+      const { client, sockets } = harness;
+      const connectPromise = client.connect();
+      const socket = sockets[0];
+      if (!socket) throw new Error('expected a socket');
+      socket.open();
+      await connectPromise;
+      socket.remoteClose();
+      expect(client.getStatus()).toBe('closed');
+    });
+  });
+
   describe('typed errors', () => {
     it('surfaces a -32010 error response as TurnAlreadyRunningError', async () => {
       const { client, sockets } = harness;
