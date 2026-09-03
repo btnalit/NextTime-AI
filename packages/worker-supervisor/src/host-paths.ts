@@ -54,6 +54,15 @@ export function localModelsJsonPath(config: SupervisorConfig): string {
   return `${config.localDataDir}/config/models.json`;
 }
 
+/** `deploy/worker-runtime/entrypoint.sh`'s `SYSTEM_PROMPT_FILE` path, workspace-relative
+ *  (`/workspace/.nexttime/system-prompt.md`) — this container's own view (`resident-service.ts`
+ *  `spawn()` writes here, S2.6, before deciding whether to reuse or (re)create the entry
+ *  container, so a workspace's next restart always picks up the current published prompt even
+ *  when this particular `spawn()` call only reuses an already-running container). */
+export function localSystemPromptPath(config: SupervisorConfig, principalId: string): string {
+  return `${workspacePaths(config, principalId).localWorkspaceDir}/.nexttime/system-prompt.md`;
+}
+
 /**
  * Task-mode analogue of `workspacePaths` (S2.8; design doc §7.3, docs/development-tasks.md S2.8
  * task brief): one directory per Task (not per user) — `workspaces/tasks/<taskId>` instead of

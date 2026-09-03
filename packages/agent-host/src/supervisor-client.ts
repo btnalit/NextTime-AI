@@ -6,7 +6,8 @@
  * client's own secret is the Capability Handle it forwards in every `spawn` call's body, which it
  * never logs either.
  *
- *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?}
+ *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
+ *                                   systemPrompt?, model?}
  *                                   -> 200 {containerId, ip, status, created, restarts}
  *   POST /resident/stop           {principalId} -> 204
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404
@@ -49,6 +50,15 @@ export interface SpawnInput {
   readonly handle: string;
   readonly kernelUrl?: string;
   readonly llmUrl?: string;
+  /** S2.6: the published entry WorkerDefinition's `systemPrompt` (from the `startTurn` command's
+   *  own field of the same name, `@nexttime/shared`'s `agent-host-protocol.ts`) — worker-supervisor
+   *  writes this to `/workspace/.nexttime/system-prompt.md` before spawn, overwriting only when
+   *  the content differs; `undefined` leaves the existing file (or `entrypoint.sh`'s own write-if-
+   *  missing static fallback) untouched. */
+  readonly systemPrompt?: string;
+  /** S2.6: `<provider>/<id>`, forwarded as the entry container's CMD (`['--model', model]`) —
+   *  `undefined` sets no CMD (pi's own default model selection). */
+  readonly model?: string;
 }
 
 export interface SpawnResult {

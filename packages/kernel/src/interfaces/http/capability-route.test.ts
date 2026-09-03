@@ -186,6 +186,22 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(response.json().error.code).toBe('not_implemented');
     });
 
+    it('assert_fact (handler present, write unimplemented) → 501 not_implemented, not 500', async () => {
+      // S2.6 gave assert_fact a handler (the I16 meta-ontology guard); its write half still throws
+      // AssertFactWriteNotImplementedError, which must map to the same stable 501 code as a
+      // capability with no handler at all — not fall through to a generic 500.
+      const app = createServer({ pool });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/cap/assert_fact',
+        headers: { authorization: `Bearer ${ownerApiKey}` },
+        payload: { objectId: randomUUID(), linkType: 'has_note', value: 'x' },
+      });
+
+      expect(response.statusCode).toBe(501);
+      expect(response.json().error.code).toBe('not_implemented');
+    });
+
     it('get_object round-trips a real Object end-to-end', async () => {
       const objectId = await withWorkspace(
         pool,

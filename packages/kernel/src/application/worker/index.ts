@@ -1,9 +1,30 @@
 /**
  * application/worker: WorkerDefinition lifecycle and find_* worker discovery.
  *
- * Placeholder for the R1 repo skeleton (design doc §7.1, §7.10). This module owns its own
- * tables/migrations and exposes only a service interface here — it must not be reached into
- * from another module's internal files, and other modules must not query its tables directly;
- * cross-module coordination happens through domain events (see packages/shared).
+ * S2.6 ships the WorkerDefinition registry (`definitions.ts`: propose/publish/deprecate,
+ * `getPublishedEntryDefinition`, `requirePublishedWorkerDefinition`). `find_operations` /
+ * `find_workers` / `find_procedures` land with S2.7. This module owns its own table
+ * (`worker_definitions`, migrations/worker/0001_worker_definitions.sql) and exposes only this
+ * service interface here — it must not be reached into from another module's internal files, and
+ * other modules must not query its table directly; cross-module coordination happens through
+ * domain events (see packages/shared).
  */
-export {};
+export {
+  deprecateWorkerDefinition,
+  getPublishedEntryDefinition,
+  getWorkerDefinition,
+  listWorkerDefinitions,
+  proposeWorkerDefinition,
+  publishWorkerDefinition,
+  requirePublishedWorkerDefinition,
+  validateWorkerDefinitionContent,
+  WorkerDefinitionKindMismatchError,
+  WorkerDefinitionNotFoundError,
+  WorkerDefinitionNotPublishedError,
+  WorkerDefinitionValidationError,
+} from './definitions.js';
+export type {
+  ProposeWorkerDefinitionInput,
+  WorkerDefinitionRow,
+  WorkerDefinitionVersionRef,
+} from './definitions.js';

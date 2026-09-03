@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import {
+  AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
   ForbiddenError,
@@ -103,6 +104,12 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof CapabilityNotImplementedError) {
+    return { code: WS_ERROR_CODES.NOT_IMPLEMENTED, message: err.message };
+  }
+  // S2.6: `assert_fact`'s handler runs the I16 guard, then throws this because the write half is
+  // still unimplemented — same code as the registry-level "no handler" case (see
+  // interfaces/http/capability-route.ts for why it is not a subclass).
+  if (err instanceof AssertFactWriteNotImplementedError) {
     return { code: WS_ERROR_CODES.NOT_IMPLEMENTED, message: err.message };
   }
   if (err instanceof TurnAlreadyRunningError) {

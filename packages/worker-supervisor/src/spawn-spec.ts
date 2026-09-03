@@ -25,6 +25,13 @@
  *
  * Nothing from this process's own env is ever forwarded (`docker-client.ts` passes exactly the
  * array built here, never inherits `process.env`).
+ *
+ * S2.6 addition: `input.model`, when set, becomes container CMD (`['--model', model]`) — same
+ * `ContainerSpec.cmd` field and the same `entrypoint.sh` "appends CMD after its fixed pi flags"
+ * mechanism `task-spawn-spec.ts`'s one-shot Task mode already uses (S2.8). The entry container's
+ * `systemPrompt` is **not** part of this spec — `resident-service.ts` writes it straight to
+ * `/workspace/.nexttime/system-prompt.md` (a file, not an env var or CMD arg) before calling
+ * `buildSpawnSpec`, since `entrypoint.sh` already reads that exact path.
  */
 
 import type { SupervisorConfig } from './config.js';
@@ -52,6 +59,11 @@ export interface BuildSpawnSpecInput {
   /** Carried forward from the previous container's `nexttime.restarts` label (0 for a first-ever
    *  spawn) — see `resident-service.ts`. */
   readonly restarts: number;
+  /** S2.6: `<provider>/<id>` from the workspace's published entry WorkerDefinition, when set —
+   *  becomes container CMD `['--model', model]`; `entrypoint.sh` appends any CMD after its own
+   *  fixed pi flags (same mechanism `task-spawn-spec.ts`'s one-shot Task mode already uses).
+   *  `undefined` sets no CMD (pi's own default model selection). */
+  readonly model?: string;
 }
 
 export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
@@ -86,6 +98,7 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
   return {
     name: entryContainerName(input.principalId),
     image: config.workerImage,
+    cmd: input.model ? ['--model', input.model] : undefined,
     env,
     binds,
     labels: {

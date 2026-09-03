@@ -120,4 +120,72 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
       addPrincipal(pool, owner.workspaceId, 'Eve', 'not-a-role' as never),
     ).rejects.toThrow();
   });
+
+  describe('S2.6: platform meta-ontology + entry WorkerDefinition seeding', () => {
+    it('publishes the platform meta-ontology and a published v1 entry WorkerDefinition', async () => {
+      const owner = await createWorkspace(pool, 'bootstrap-test-workspace-s2-6', 'Alice');
+
+      const rows = await withWorkspace(
+        pool,
+        { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+        async (client) => {
+          const ontologyResult = await client.query<{ status: string; definition: unknown }>(
+            'select status, definition from ontology_versions where workspace_id = $1',
+            [owner.workspaceId],
+          );
+          const workerDefResult = await client.query<{
+            kind: string;
+            status: string;
+            version: number;
+            proposed_by: string;
+            published_by: string;
+            definition: { systemPrompt?: string; capabilities?: string[]; model?: string };
+          }>(
+            'select kind, status, version, proposed_by, published_by, definition from worker_definitions where workspace_id = $1',
+            [owner.workspaceId],
+          );
+          return { ontologyRows: ontologyResult.rows, workerDefRows: workerDefResult.rows };
+        },
+      );
+
+      expect(rows.ontologyRows).toHaveLength(1);
+      expect(rows.ontologyRows[0]?.status).toBe('published');
+      expect(
+        (rows.ontologyRows[0]?.definition as { objectTypes: { name: string }[] }).objectTypes.map(
+          (t) => t.name,
+        ),
+      ).toContain('WorkerDefinition');
+
+      expect(rows.workerDefRows).toHaveLength(1);
+      const entryRow = rows.workerDefRows[0];
+      expect(entryRow?.kind).toBe('entry');
+      expect(entryRow?.status).toBe('published');
+      expect(entryRow?.version).toBe(1);
+      expect(entryRow?.proposed_by).toBe(owner.ownerPrincipalId);
+      expect(entryRow?.published_by).toBe(owner.ownerPrincipalId);
+      expect(entryRow?.definition.systemPrompt?.length).toBeGreaterThan(0);
+      expect(entryRow?.definition.capabilities?.length).toBeGreaterThan(0);
+      expect(entryRow?.definition.model).toBeUndefined();
+    });
+
+    it('--entry-model sets the seeded entry WorkerDefinition’s model field', async () => {
+      const owner = await createWorkspace(pool, 'bootstrap-test-workspace-s2-6-model', 'Alice', {
+        entryModel: 'example-provider/example-model',
+      });
+
+      const row = await withWorkspace(
+        pool,
+        { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+        async (client) => {
+          const result = await client.query<{ definition: { model?: string } }>(
+            "select definition from worker_definitions where workspace_id = $1 and kind = 'entry'",
+            [owner.workspaceId],
+          );
+          return result.rows[0];
+        },
+      );
+
+      expect(row?.definition.model).toBe('example-provider/example-model');
+    });
+  });
 });

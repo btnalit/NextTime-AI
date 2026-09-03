@@ -179,6 +179,8 @@ export function createHost(options: HostOptions): Host {
     workspaceId: string,
     handle: string,
     llmUrl: string,
+    systemPrompt: string | undefined,
+    model: string | undefined,
   ): Promise<AttachmentRecord> {
     const spawnResult = await supervisorClient.spawn({
       workspaceId,
@@ -186,6 +188,8 @@ export function createHost(options: HostOptions): Host {
       handle,
       kernelUrl,
       llmUrl,
+      systemPrompt,
+      model,
     });
 
     // Best-effort — spawn() itself already refreshed worker-supervisor's idle clock for this
@@ -234,6 +238,8 @@ export function createHost(options: HostOptions): Host {
           cmd.workspaceId,
           cmd.handle,
           cmd.kernelLlmUrl || defaultKernelLlmUrl,
+          cmd.systemPrompt,
+          cmd.model,
         );
       } catch (err) {
         log(

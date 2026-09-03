@@ -90,7 +90,10 @@ export async function dispatchCapability(
   const onBehalfOf = principalId;
 
   return withWorkspace(deps.pool, { workspaceId, principalId }, async (client) => {
-    const handlerResult = await handler(client, workspaceId, parsed.data);
+    const handlerResult = await handler(client, workspaceId, parsed.data, {
+      channel: caller.channel,
+      principalId,
+    });
     await writeAudit(client, {
       workspaceId,
       actorPrincipalId: principalId,

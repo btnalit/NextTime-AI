@@ -1,11 +1,13 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import {
+  AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
   type DispatchDeps,
   ForbiddenError,
   InvalidCapabilityParamsError,
+  MetaOntologyWriteForbiddenError,
   type ResolveCallerDeps,
   UnauthorizedError,
   dispatchCapability,
@@ -57,6 +59,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof CapabilityNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
   }
+  // S2.6: checked *before* the generic ForbiddenError branch below — MetaOntologyWriteForbiddenError
+  // extends ForbiddenError (application/gateway/meta-ontology-guard.ts), so an `instanceof
+  // ForbiddenError` check alone would always match first and this more specific, stable code
+  // (docs/development-tasks.md S2.6: "403 with a stable error code") would never be reached.
+  if (err instanceof MetaOntologyWriteForbiddenError) {
+    return { status: 403, code: 'meta_ontology_write_forbidden', message: err.message };
+  }
   if (err instanceof ForbiddenError) {
     return { status: 403, code: 'forbidden', message: err.message };
   }
@@ -64,6 +73,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     return { status: 400, code: 'invalid_params', message: err.message };
   }
   if (err instanceof CapabilityNotImplementedError) {
+    return { status: 501, code: 'not_implemented', message: err.message };
+  }
+  // S2.6: `assert_fact` now has a handler (the I16 meta-ontology guard runs first) whose write half
+  // is still unimplemented — same 501 the registry-level "no handler" case gets, so a client sees
+  // one stable `not_implemented` code either way. Not a subclass of CapabilityNotImplementedError:
+  // that class lives in dispatch.ts, which imports handlers.ts (an import cycle).
+  if (err instanceof AssertFactWriteNotImplementedError) {
     return { status: 501, code: 'not_implemented', message: err.message };
   }
   return { status: 500, code: 'internal_error', message: 'internal error' };

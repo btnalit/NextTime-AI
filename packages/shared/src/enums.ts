@@ -218,3 +218,28 @@ export const WorkerDefinitionKindSchema = asEnum(WORKER_DEFINITION_KIND_VALUES);
 export const EXTENSION_MODE_VALUES = ['entry', 'worker', 'interactive'] as const;
 export type ExtensionMode = (typeof EXTENSION_MODE_VALUES)[number];
 export const ExtensionModeSchema = asEnum(EXTENSION_MODE_VALUES);
+
+// ---------------------------------------------------------------------------------------------
+// §5.1.2 Platform meta-ontology (S2.6): the ObjectTypes that "对象化平台自身" — WorkerDefinition,
+// Gatekeeper, Operation, Capability, Skill, Procedure are all `objects` rows, and I16 ("平台元本体
+// 对象只能经 human 通道发布；Handle 通道只能写对提议者私有的草稿") applies uniformly to all six. Kept
+// here (domain layer) rather than kernel-local so both `application/gateway` (the I16 guard on the
+// graph write path) and `substrate/ontology` (the object-projection helpers, e.g.
+// `registerGatekeeperObject`) can import the same list without either depending on the other.
+// ---------------------------------------------------------------------------------------------
+
+export const META_ONTOLOGY_OBJECT_TYPE_VALUES = [
+  'WorkerDefinition',
+  'Gatekeeper',
+  'Operation',
+  'Capability',
+  'Skill',
+  'Procedure',
+] as const;
+export type MetaOntologyObjectType = (typeof META_ONTOLOGY_OBJECT_TYPE_VALUES)[number];
+export const MetaOntologyObjectTypeSchema = asEnum(META_ONTOLOGY_OBJECT_TYPE_VALUES);
+
+/** Whether `objectType` names one of the six platform meta-ontology ObjectTypes (I16 scope). */
+export function isMetaOntologyObjectType(objectType: string): objectType is MetaOntologyObjectType {
+  return (META_ONTOLOGY_OBJECT_TYPE_VALUES as readonly string[]).includes(objectType);
+}

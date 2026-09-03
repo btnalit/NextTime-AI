@@ -433,10 +433,67 @@ bootstrap_step() {
 }
 
 entry_worker_definition_step() {
-  # WorkerDefinitions land in S2.6; in S1 the entry definition is the static system prompt baked
-  # into the worker-runtime image (docs/development-tasks.md S1.5a implementation note,
-  # entrypoint.sh's stopgap system-prompt.md). Nothing to publish yet — do not fake it.
-  skip "entry-worker-definition (S2.6)"
+  # S2.6 landed the WorkerDefinition registry — create-workspace now seeds and publishes v1 of
+  # the entry WorkerDefinition (ontology/entry-agent.yaml) in the same transaction as the
+  # workspace/owner rows (packages/kernel/src/cli/bootstrap.ts). Read directly with psql, same
+  # convention egress_step already uses for a row no capability projects verbatim.
+  entry_count=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select count(*) from worker_definitions where workspace_id='$WORKSPACE_ID' and kind='entry' and status='published'" \
+    </dev/null 2>/dev/null)
+  if [ "$entry_count" != "1" ]; then
+    fail "entry-worker-definition-seeded" "expected exactly 1 published entry WorkerDefinition for workspace $WORKSPACE_ID, got '$entry_count'"
+  fi
+  entry_def_id=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select id from worker_definitions where workspace_id='$WORKSPACE_ID' and kind='entry' and status='published' limit 1" \
+    </dev/null 2>/dev/null)
+  if [ -z "$entry_def_id" ]; then
+    fail "entry-worker-definition-seeded" "could not read the seeded entry WorkerDefinition's id"
+  fi
+  pass "entry-worker-definition-seeded" "workspace $WORKSPACE_ID has a published entry WorkerDefinition ($entry_def_id@1)"
+
+  # Propose v2 via the human channel, through caddy — same transport explain_step already uses
+  # (task brief: "POST /api/cap/propose_worker_definition through caddy with the owner's key").
+  propose_resp=$(curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/propose_worker_definition" \
+    -H "Authorization: Bearer $ALICE_KEY" \
+    -H 'content-type: application/json' \
+    -d "{\"definitionId\":\"$entry_def_id\",\"kind\":\"entry\",\"definition\":{\"systemPrompt\":\"accept_s1 v2 entry prompt\",\"capabilities\":[\"get_object\"]}}")
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "entry-worker-definition-propose-v2" "curl to caddy failed (rc=$rc)"
+  fi
+  case "$propose_resp" in
+    *'"ok":true'*) : ;;
+    *) fail "entry-worker-definition-propose-v2" "propose_worker_definition failed: $propose_resp" ;;
+  esac
+  v2_version=$(printf '%s' "$propose_resp" | sed -n 's/.*"version":\([0-9]*\).*/\1/p')
+  if [ -z "$v2_version" ]; then
+    fail "entry-worker-definition-propose-v2" "could not parse version from response: $propose_resp"
+  fi
+  pass "entry-worker-definition-propose-v2" "proposed $entry_def_id@$v2_version (draft)"
+
+  # Publish v2, same transport.
+  publish_resp=$(curl -sk -X POST "https://${KERNEL_BIND_ADDR}:8443/api/cap/publish_worker_definition" \
+    -H "Authorization: Bearer $ALICE_KEY" \
+    -H 'content-type: application/json' \
+    -d "{\"definitionId\":\"$entry_def_id\",\"version\":$v2_version}")
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "entry-worker-definition-publish-v2" "curl to caddy failed (rc=$rc)"
+  fi
+  case "$publish_resp" in
+    *'"ok":true'*) pass "entry-worker-definition-publish-v2" "published $entry_def_id@$v2_version" ;;
+    *) fail "entry-worker-definition-publish-v2" "publish_worker_definition failed: $publish_resp" ;;
+  esac
+
+  # I16: a Handle-channel publish attempt must be rejected 403. Minting a real Capability Handle
+  # from this POSIX shell script is not cheap (no node/corepack on the host —
+  # docs/runbooks/host-worker-runtime.md §10 — and no capability mints one for arbitrary shell
+  # use; issuance is internal to agent-host's own kernel link) — asserted instead by a kernel unit
+  # test that exercises the real gateway pipeline end to end
+  # (packages/kernel/src/application/gateway/handlers.test.ts, "gateway/handlers — S2.6
+  # worker-definition registry + I16": "publish_worker_definition is rejected on the handle
+  # channel (I16, human-only)", run in CI). See docs/runbooks/accept-s1.md "已知缺口".
+  skip "entry-worker-definition-handle-403 (asserted by a kernel unit test — see docs/runbooks/accept-s1.md)"
 }
 
 chat_step() {

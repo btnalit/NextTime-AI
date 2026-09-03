@@ -209,6 +209,28 @@ describe('createHost — handleStartTurn happy path', () => {
     expect(kernelLink.accepted).toEqual([cmd.turnId]);
   });
 
+  it('forwards systemPrompt/model from the startTurn command to supervisorClient.spawn (S2.6)', async () => {
+    const { host, supervisor } = setUp();
+    const cmd = startTurnCommand({
+      systemPrompt: 'you are the entry agent',
+      model: 'example-provider/example-model',
+    });
+
+    await host.handleStartTurn(cmd);
+
+    expect(supervisor.spawnCalls).toEqual([
+      {
+        workspaceId: cmd.workspaceId,
+        principalId: cmd.principalId,
+        handle: cmd.handle,
+        kernelUrl: 'http://kernel:8080',
+        llmUrl: cmd.kernelLlmUrl,
+        systemPrompt: 'you are the entry agent',
+        model: 'example-provider/example-model',
+      },
+    ]);
+  });
+
   it('rejects a second concurrent turn for the same principal without spawning again', async () => {
     const { host, supervisor, kernelLink } = setUp();
     const first = startTurnCommand();

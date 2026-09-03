@@ -1,3 +1,4 @@
+import type { CapabilityChannel, WorkerDefinitionKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ChatMessageRow,
@@ -11,11 +12,19 @@ import {
   sendChatMessage,
 } from '../../application/chat/index.js';
 import type { AgentRuntime } from '../../application/host-bridge/index.js';
+import {
+  type WorkerDefinitionRow,
+  deprecateWorkerDefinition,
+  listWorkerDefinitions,
+  proposeWorkerDefinition,
+  publishWorkerDefinition,
+} from '../../application/worker/index.js';
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { queryAudit, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
 
 /**
  * application/gateway/handlers: the real handlers wired for the S1.3 capability set (`get_object`
@@ -55,10 +64,29 @@ export interface CapabilityHandlerResult {
   readonly resourceId?: string;
 }
 
+/**
+ * The caller-identity facts a handler needs beyond `(client, workspaceId, params)` — S2.6
+ * addition, purely additive (see `CapabilityHandler`'s own doc comment below): `channel` is what
+ * `application/gateway/meta-ontology-guard.ts`'s I16 check on the graph write path needs
+ * (`assertFactHandler`), which `callerContext()` in dispatch.ts already computes for every call
+ * but had no way to hand to a handler before this.
+ */
+export interface CapabilityHandlerContext {
+  readonly channel: CapabilityChannel;
+  readonly principalId: string;
+}
+
+/**
+ * `ctx` is optional so every handler written before S2.6 — none of which declare a 4th parameter
+ * — continues to satisfy this type unchanged (a function of fewer parameters is assignable to a
+ * type expecting more, TypeScript's own function-parameter-count contravariance); only
+ * `dispatch.ts`'s one call site needs to actually pass it.
+ */
 export type CapabilityHandler = (
   client: PoolClient,
   workspaceId: string,
   params: unknown,
+  ctx?: CapabilityHandlerContext,
 ) => Promise<CapabilityHandlerResult>;
 
 const graphStore = new SqlGraphStore();
@@ -279,7 +307,120 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
   };
 };
 
-/** capability name → handler, for every S1.3-wired capability. */
+// -------------------------------------------------------------------------------------------
+// S2.6 worker-definition-registry handlers (docs/development-tasks.md S2.6 deliverable 3). Date
+// fields are projected to ISO strings for the wire, same convention as `toWireChatMessage` above.
+// -------------------------------------------------------------------------------------------
+
+function toWireWorkerDefinition(row: WorkerDefinitionRow) {
+  return {
+    id: row.id,
+    version: row.version,
+    kind: row.kind,
+    status: row.status,
+    definition: row.definition,
+    proposedBy: row.proposedBy,
+    publishedBy: row.publishedBy,
+    createdAt: row.createdAt.toISOString(),
+    publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+  };
+}
+
+const proposeWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { definitionId, kind, definition } = params as {
+    definitionId?: string;
+    kind: WorkerDefinitionKind;
+    definition: Record<string, unknown>;
+  };
+  const principalId = await currentPrincipalId(client);
+  const row = await proposeWorkerDefinition(client, workspaceId, principalId, {
+    definitionId,
+    kind,
+    definition,
+  });
+  return {
+    result: toWireWorkerDefinition(row),
+    resourceType: 'worker_definition',
+    resourceId: row.id,
+  };
+};
+
+const publishWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { definitionId, version } = params as { definitionId: string; version: number };
+  const principalId = await currentPrincipalId(client);
+  const row = await publishWorkerDefinition(client, workspaceId, principalId, {
+    definitionId,
+    version,
+  });
+  return {
+    result: toWireWorkerDefinition(row),
+    resourceType: 'worker_definition',
+    resourceId: row.id,
+  };
+};
+
+const deprecateWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { definitionId, version } = params as { definitionId: string; version: number };
+  const row = await deprecateWorkerDefinition(client, workspaceId, { definitionId, version });
+  return {
+    result: toWireWorkerDefinition(row),
+    resourceType: 'worker_definition',
+    resourceId: row.id,
+  };
+};
+
+const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { kind } = params as { kind?: WorkerDefinitionKind };
+  const rows = await listWorkerDefinitions(client, workspaceId, kind);
+  return { result: rows.map(toWireWorkerDefinition) };
+};
+
+// -------------------------------------------------------------------------------------------
+// S2.6 I16 graph-write-path guard (docs/development-tasks.md S2.6 deliverable 4: "Handle 通道
+// assert_fact(WorkerDefinition …) 403"). See application/gateway/meta-ontology-guard.ts's own
+// doc comment for why this handler stops at the guard rather than performing a real write: the
+// registered `assert_fact` capability's paramsSchema (`{objectId, linkType, value, sourceId?}`,
+// packages/shared/src/capabilities.ts) predates S2.6, is not owned by it, and does not carry the
+// `sourceObjectId`/`targetObjectId`/`activityId` `substrate/graph/store.ts`'s `AssertFactInput`
+// requires (I3) — wiring the write itself is a separate, pre-existing gap this task does not
+// silently paper over. `ctx?.channel` defaults to `'handle'` (fail-closed) for the theoretical
+// case of a caller with no context attached (e.g. a handler invoked directly in a unit test).
+// -------------------------------------------------------------------------------------------
+
+export class AssertFactWriteNotImplementedError extends Error {
+  constructor() {
+    super(
+      'assert_fact: the graph write is not implemented (pre-existing gap, not S2.6 scope — see ' +
+        'application/gateway/handlers.ts module doc); only the I16 meta-ontology guard on the ' +
+        'referenced object(s) runs here',
+    );
+    this.name = 'AssertFactWriteNotImplementedError';
+  }
+}
+
+const assertFactHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { objectId, sourceId } = params as {
+    objectId: string;
+    linkType: string;
+    value: unknown;
+    sourceId?: string;
+  };
+  const channel: CapabilityChannel = ctx?.channel ?? 'handle';
+
+  const referencedIds = [objectId, sourceId].filter(
+    (candidate): candidate is string => typeof candidate === 'string',
+  );
+  for (const id of referencedIds) {
+    const object = await graphStore.getObject(client, workspaceId, id);
+    if (object) {
+      assertMetaOntologyHandleWriteAllowed(channel, object.objectType);
+    }
+  }
+
+  throw new AssertFactWriteNotImplementedError();
+};
+
+/** capability name → handler, for every wired capability. */
 export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new Map([
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
@@ -296,4 +437,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['subscribe_chat', subscribeChatHandler],
   ['get_entry_context', getEntryContextHandler],
   ['report_turn', reportTurnHandler],
+  ['propose_worker_definition', proposeWorkerDefinitionHandler],
+  ['publish_worker_definition', publishWorkerDefinitionHandler],
+  ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],
+  ['list_worker_definitions', listWorkerDefinitionsHandler],
+  ['assert_fact', assertFactHandler],
 ]);

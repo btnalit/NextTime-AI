@@ -129,7 +129,10 @@ export function isImageAllowed(config: SupervisorConfig, image: string): boolean
   return config.taskImageAllowlist.includes(image);
 }
 
-/** `POST /resident/spawn` request body. */
+/** `POST /resident/spawn` request body. `systemPrompt`/`model` are S2.6 additions (the workspace's
+ *  published entry WorkerDefinition, resolved by the kernel and forwarded by agent-host verbatim —
+ *  see `spawn-spec.ts`'s own doc comment and `resident-service.ts`'s `spawn()` for how each is
+ *  used). */
 export const SpawnRequestSchema = z
   .object({
     workspaceId: z.string().min(1),
@@ -137,6 +140,8 @@ export const SpawnRequestSchema = z
     handle: z.string().min(1),
     kernelUrl: z.string().min(1).optional(),
     llmUrl: z.string().min(1).optional(),
+    systemPrompt: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
   })
   .strict();
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
