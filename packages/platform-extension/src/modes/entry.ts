@@ -4,10 +4,8 @@ import type {
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { getCapability } from '@nexttime/shared';
-import type { TSchema } from 'typebox';
-import type { ZodTypeAny } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import { type KernelClient, KernelError } from '../kernel-client.js';
+import { toToolParameters } from '../tool-schema.js';
 
 /**
  * `entry` mode (design doc §7.4, §7.2, S1 scope): the pi extension registered inside a user's
@@ -43,21 +41,6 @@ export interface EntryModeOptions {
  * the only per-prompt channel available without changing pi.
  */
 const TURN_ID_MARKER = /^<!--nexttime:turn_id=([A-Za-z0-9_-]+)-->\n?/;
-
-/** Converts a shared-registry capability's Zod paramsSchema into a pi tool parameter schema. pi's
- * `ToolDefinition.parameters` type (`TSchema`, from typebox) is used purely as a JSON-Schema-shaped
- * object at runtime (see PR body "假设" — pi never re-validates against typebox's `Kind` symbols;
- * it structurally clones/reads `.type`/`.properties`/`.required` when building the provider's tool
- * payload), so a plain `zod-to-json-schema` object cast to `TSchema` is sufficient and avoids
- * hand-duplicating the registry's Zod schemas as typebox schemas. */
-function toToolParameters(paramsSchema: ZodTypeAny): TSchema {
-  const jsonSchema = zodToJsonSchema(paramsSchema, { $refStrategy: 'none' }) as Record<
-    string,
-    unknown
-  >;
-  jsonSchema.$schema = undefined;
-  return jsonSchema as unknown as TSchema;
-}
 
 function buildObserveTool(
   name: (typeof OBSERVE_CAPABILITY_NAMES)[number],
