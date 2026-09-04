@@ -717,7 +717,7 @@ import('yaml').then(({ parse }) => import('node:fs/promises').then(async ({ read
     *) fail "ops-runner-yaml" "could not parse ontology/ops-runner.yaml: $yaml_json" ;;
   esac
 
-  out=$(cap "$ALICE_KEY" propose_worker_definition "{\"kind\":\"worker\",\"definition\":$yaml_json}" "JSON.stringify([d.result.definitionId, d.result.version])")
+  out=$(cap "$ALICE_KEY" propose_worker_definition "{\"kind\":\"worker\",\"definition\":$yaml_json}" "JSON.stringify([d.result.id, d.result.version])")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "ops-runner-propose" "propose_worker_definition HTTP $status: $(parse_kv "$out" BODY)"
   pair=$(parse_kv "$out" EXTRACTED)
