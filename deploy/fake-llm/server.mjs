@@ -350,11 +350,16 @@ function entryObserveChatScenario(messages) {
   ];
 }
 
+// Order matters: the entry-chat scenarios must be tested first. Once the entry agent has called
+// `invoke_worker`, its own message history contains the Worker marker (inside the tool-call
+// arguments' `input`), so a Worker-marker-first table would hand the *entry* agent the Worker's
+// `report_result` step (observed on the host: "Tool report_result not found"). A Worker's history
+// never contains the Chinese chat text, so the chat markers cannot misfire the other way.
 const SCENARIOS = [
-  { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario },
-  { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario },
   { marker: '重启测试容器', build: entryRestartChatScenario },
   { marker: '测试 API 的 GET 返回什么', build: entryObserveChatScenario },
+  { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario },
+  { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario },
 ];
 
 /** Returns the scripted step for this request, or `undefined` if no scenario marker matched

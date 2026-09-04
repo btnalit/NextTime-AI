@@ -255,6 +255,11 @@ export const WORKER_CEILING_CAPABILITIES: readonly string[] = buildWorkerCeiling
 export const WORKER_INFRASTRUCTURE_CAPABILITY_NAMES: readonly string[] = Object.freeze([
   'list_allowed_operations',
   'report_task_result',
+  // S2.12 host run: worker mode reads its own Task on `context` (platform-extension modes/worker.ts
+  // `get_task {taskId}`) before it can do anything — a WorkerDefinition that declares an explicit
+  // `capabilities` list without it produced a Worker that 403'd on its very first kernel call and
+  // ran with no task input. Reading your own Task is infrastructure, not a declared need.
+  'get_task',
 ]);
 
 /** Names in `WORKER_CEILING_CAPABILITIES` that are execute-class (design doc §5.3 item 11 "入口
