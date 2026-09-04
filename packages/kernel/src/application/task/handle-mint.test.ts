@@ -40,13 +40,60 @@ describe('computeChildHandleScope', () => {
     ).toThrow(InvokeWorkerAttenuationError);
   });
 
-  it('request_action is also treated as execute-class and rejected the same way', () => {
+  it('request_action is also treated as execute-class and rejected the same way when the parent holds no gate resources', () => {
     const entryLikeScope = { capabilities: ['get_object'], resources: {} };
     expect(() =>
       computeChildHandleScope({
         parentAuthority: entryLikeScope,
         declaredCapabilities: ['request_action'],
         declaredGates: [],
+      }),
+    ).toThrow(InvokeWorkerAttenuationError);
+  });
+
+  // Spec correction (S2.12 / G1): the right to *propose* on a gate is delegated with the gate
+  // resource. An entry Handle never holds `request_action` by name, but it carries the gates its
+  // user was granted via connect_gatekeeper — a Worker it invokes may request actions on exactly
+  // those gates (execution still goes through policy/approval), and on nothing else.
+  it('an entry Handle granted gate X can mint a Worker that holds request_action scoped to X', () => {
+    const entryScopeWithGate = {
+      capabilities: ['get_object', 'invoke_worker'],
+      resources: { gatekeeper: ['gk-x'] },
+    };
+    const child = computeChildHandleScope({
+      parentAuthority: entryScopeWithGate,
+      declaredCapabilities: ['get_object', 'request_action'],
+      declaredGates: ['gk-x'],
+    });
+    expect(child.capabilities).toContain('request_action');
+    expect(child.capabilities).not.toContain('<gate>.<op>:execute');
+    expect(child.resources.gatekeeper).toEqual(['gk-x']);
+  });
+
+  it('an entry Handle granted gate X is still rejected for a Worker that needs request_action on gate Y', () => {
+    const entryScopeWithGate = {
+      capabilities: ['get_object', 'invoke_worker'],
+      resources: { gatekeeper: ['gk-x'] },
+    };
+    expect(() =>
+      computeChildHandleScope({
+        parentAuthority: entryScopeWithGate,
+        declaredCapabilities: ['request_action'],
+        declaredGates: ['gk-y'],
+      }),
+    ).toThrow(InvokeWorkerAttenuationError);
+  });
+
+  it('gate resources never delegate the direct <gate>.<op>:execute projection by name', () => {
+    const entryScopeWithGate = {
+      capabilities: ['get_object', 'invoke_worker'],
+      resources: { gatekeeper: ['gk-x'] },
+    };
+    expect(() =>
+      computeChildHandleScope({
+        parentAuthority: entryScopeWithGate,
+        declaredCapabilities: ['<gate>.<op>:execute'],
+        declaredGates: ['gk-x'],
       }),
     ).toThrow(InvokeWorkerAttenuationError);
   });
