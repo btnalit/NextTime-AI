@@ -120,10 +120,26 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
     ...new Set([...input.declaredCapabilities, ...WORKER_INFRASTRUCTURE_CAPABILITY_NAMES]),
   ];
 
+  // Spec correction (S2.12, G1 "对话 → 派 Worker → 卡片 → 批准 → 执行"): the right to *propose* an
+  // action on a Gatekeeper (`request_action` only creates an ActionRequest; execution is decided
+  // by policy — I8 — or by a human approver — I14) is delegated together with the gate
+  // *resource*, not with the capability name. An entry Handle structurally never holds
+  // `request_action` (governance/capability/handles.ts entry ceiling), but it does carry
+  // `resources.gatekeeper` — the `connect_gatekeeper` Grants a human made for this user — and the
+  // `missingExecuteGates` check below narrows the child to exactly those gates. S2.7's literal
+  // reading ("entry-initiated invoke_worker with execute-class needs is always rejected") made the
+  // platform's core loop impossible; it now reads "rejected for gates the parent was not granted".
+  // `<gate>.<op>:execute` (direct, auto-approvable execution projection) stays name-attenuated.
+  const parentGateSet = new Set(parentScope.resources.gatekeeper ?? []);
+  const delegatedRequestAction = !unconstrained && parentGateSet.size > 0;
+
   const childCapabilities: string[] = [];
   for (const capability of effectiveDeclaredCapabilities) {
     if (!ceiling.has(capability)) continue;
-    const parentHasIt = unconstrained || parentCapabilitySet.has(capability);
+    const parentHasIt =
+      unconstrained ||
+      parentCapabilitySet.has(capability) ||
+      (capability === 'request_action' && delegatedRequestAction);
     if (isExecuteClassCapability(capability)) {
       if (!parentHasIt) {
         throw new InvokeWorkerAttenuationError(
@@ -147,7 +163,6 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
   }
 
   const wantsExecute = childCapabilities.some((capability) => isExecuteClassCapability(capability));
-  const parentGateSet = new Set(parentScope.resources.gatekeeper ?? []);
   const grantedGates: string[] = [];
   const missingExecuteGates: string[] = [];
   for (const gate of requestedGates) {
@@ -170,7 +185,15 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
 
   const childScope: CapabilityScope = { capabilities: childCapabilities, resources };
   if (!unconstrained) {
-    assertScopeIsSubset(parentScope, childScope);
+    // The subset check is against the parent scope *plus* the resource-delegated
+    // `request_action` (see above) — every other name and every gate must still be narrower.
+    const comparisonScope: CapabilityScope = delegatedRequestAction
+      ? {
+          capabilities: [...new Set([...parentScope.capabilities, 'request_action'])],
+          resources: parentScope.resources,
+        }
+      : parentScope;
+    assertScopeIsSubset(comparisonScope, childScope);
   }
   return childScope;
 }
