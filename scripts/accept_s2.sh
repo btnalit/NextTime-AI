@@ -1039,9 +1039,13 @@ step4_step5_ssh_always_allow() {
 # (worker-supervisor's own HTTP_PROXY_FOR_WORKERS), for a literal, direct `env | grep -ci api_key`
 # check plus the two curl probes.
 step6_env_and_egress() {
-  out=$(docker compose --profile build-only run --rm --no-deps -T --network workers --entrypoint sh \
+  # Plain `docker run` on the compose project's `workers` network: `docker compose run --network`
+  # is not accepted by the compose version on the host (fourteenth run: "unknown flag: --network"),
+  # and the build-only worker-runtime service declares no networks of its own. Same image, same
+  # non-root user, same proxy env a real Worker receives (worker-supervisor spawn-spec).
+  out=$(docker run --rm --network "${COMPOSE_PROJECT_NAME:-nexttime-ai}_workers" --entrypoint sh \
     -e HTTP_PROXY=http://egress-proxy:3128 -e HTTPS_PROXY=http://egress-proxy:3128 \
-    worker-runtime -c '
+    nexttime-ai-worker-runtime -c '
 api_key_count=$(env | grep -ci api_key)
 echo "API_KEY_COUNT=$api_key_count"
 direct_code=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" --noproxy "*" http://postgres:5432 2>/dev/null)

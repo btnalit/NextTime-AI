@@ -102,7 +102,10 @@ export function sshConnectionArgs(target: SshTarget): string[] {
 }
 
 const defaultSshExec: SshExecFn = async (target, command) => {
-  const args = [...sshConnectionArgs(target), command];
+  // `--` ends option parsing: OpenSSH keeps parsing options after the destination, so a command
+  // beginning with `-o` (e.g. `-oProxyCommand=…`) would otherwise be consumed as a *client* option
+  // and run locally inside the gate with its identity file (review lane 5, P0-1).
+  const args = [...sshConnectionArgs(target), '--', command];
   const { stdout, stderr } = await execFileAsync('ssh', args, { maxBuffer: 10 * 1024 * 1024 });
   return { stdout, stderr };
 };
@@ -130,6 +133,66 @@ export interface SshTransportOptions {
  *  takes the literal command from `params.command`, and requires it to actually match that
  *  Operation's own declared pattern (defense in depth: a caller cannot invoke a loosely-classified
  *  Operation with an unrelated command string). */
+const SHELL_SAFE_WORD = /^[A-Za-z0-9_./:@%+=,-]+$/;
+
+/** One shell word: a value made only of shell-inert characters is passed through unchanged (so
+ *  `command_pattern`s written for plain values keep matching); anything else is POSIX
+ *  single-quoted (`'` → `'\''`), which is inert under sh/bash/dash/busybox. */
+export function shellQuote(value: string): string {
+  if (SHELL_SAFE_WORD.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export class SshCommandRejectedError extends Error {
+  constructor(reason: string) {
+    super(`ssh transport: command rejected — ${reason}`);
+    this.name = 'SshCommandRejectedError';
+  }
+}
+
+/** A command line is refused when it starts with `-` (would be read as an ssh option — belt to
+ *  the `--` braces in defaultSshExec) or spans lines (a second command the policy regex never
+ *  saw). Everything else is the operator's declared contract: the Operation's `command_pattern`
+ *  and the gate's policy table classify the line as a whole. */
+export function assertCommandShape(command: string): void {
+  if (/^\s*-/.test(command)) {
+    throw new SshCommandRejectedError('command must not start with "-"');
+  }
+  if (/[\r\n]/.test(command)) {
+    throw new SshCommandRejectedError('command must be a single line');
+  }
+}
+
+const BLAST_RADIUS_RANK: Record<BlastRadius, number> = { low: 0, medium: 1, high: 2 };
+
+/**
+ * Live policy enforcement (review lane 5, P0-3): the classification used to be computed and then
+ * dropped, so an Operation published as `observe` with a loose `command_pattern` let
+ * `/gate/observe` — no ActionRequest, no approval — run anything. An observe-class Operation may
+ * only run a command the policy table classifies as observe, and no Operation may run a command
+ * whose classified blast radius exceeds what the Operation declared (the kernel's policy decision
+ * was made on the declared value).
+ */
+export function assertClassificationAllowed(
+  operation: Operation,
+  classification: SshClassification,
+): void {
+  if (
+    operation.mode === 'observe' &&
+    (classification.unclassified || classification.mode !== 'observe')
+  ) {
+    const actual = classification.unclassified ? 'unclassified' : classification.mode;
+    throw new SshCommandRejectedError(
+      `operation "${operation.name}" is observe-class but the command classifies as ${actual}`,
+    );
+  }
+  if (BLAST_RADIUS_RANK[classification.blastRadius] > BLAST_RADIUS_RANK[operation.blast_radius]) {
+    throw new SshCommandRejectedError(
+      `command classifies as blast radius "${classification.blastRadius}", above the operation's declared "${operation.blast_radius}"`,
+    );
+  }
+}
+
 function resolveCommand(operation: Operation, params: unknown): string {
   if (operation.binding.kind !== 'ssh') {
     throw new BindingKindMismatchError(operation.name, 'ssh', operation.binding.kind);
@@ -141,7 +204,10 @@ function resolveCommand(operation: Operation, params: unknown): string {
       if (value === undefined) {
         throw new Error(`ssh transport: missing param "${name}" for operation "${operation.name}"`);
       }
-      return String(value);
+      // One shell *word* per param: the template is a remote shell line, so a raw value like
+      // `eth0; reload` would run two commands. POSIX single-quoting makes the value inert
+      // (review lane 5, P0-2). Templates must not quote placeholders themselves.
+      return shellQuote(String(value));
     });
   }
   const command = bag.command;
@@ -176,7 +242,9 @@ export class SshTransport implements Transport {
   ): Promise<TransportInvokeResult> {
     void ctx;
     const command = resolveCommand(operation, params);
+    assertCommandShape(command);
     const classification = classifyCommand(command, this.options.policyTable);
+    assertClassificationAllowed(operation, classification);
     try {
       const run = this.options.execImpl ?? defaultSshExec;
       const { stdout, stderr } = await run(this.options.target, command);
