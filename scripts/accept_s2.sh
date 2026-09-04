@@ -454,7 +454,11 @@ bootstrap_step() {
   ts=$(date +%s)
   ws_name="accept-s2-$ts"
 
-  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name "$ws_name" --owner alice </dev/null 2>&1)
+  # --entry-model pins alice's entry agent to the fake provider (config/llm-providers.fake.example.yaml
+  # `fake/fake-echo`): without it the seeded entry WorkerDefinition has no `model` and the runtime
+  # falls back to the host's default provider — on the first host run that was the real DeepSeek,
+  # fake-llm never saw a request and every chat reply came back empty.
+  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name "$ws_name" --owner alice --entry-model "${ACCEPT_S2_MODEL:-fake/fake-echo}" </dev/null 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     fail "bootstrap-workspace" "create-workspace exited $rc: $(printf '%s' "$out" | tail -5)"
@@ -709,6 +713,9 @@ import('yaml').then(({ parse }) => import('node:fs/promises').then(async ({ read
   doc.description = 'General-purpose Worker for delegated tasks: restart containers, run commands on connected systems, and observe connected APIs.';
   doc.capabilities = ['request_action'];
   doc.gates = ['$GATEKEEPER_ID_SSH', '$GATEKEEPER_ID_HTTP', '$GATEKEEPER_ID_DOCKER'];
+  // Same fake model as alice's entry agent — a Worker without \`model\` falls back to the host's
+  // default provider, which is the real one outside this script.
+  doc.model = '${ACCEPT_S2_MODEL:-fake/fake-echo}';
   process.stdout.write(JSON.stringify(doc));
 }));
 " </dev/null 2>&1)
