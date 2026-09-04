@@ -42,6 +42,7 @@ import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
 } from '../../governance/policy/index.js';
+import { isPgInvalidTextRepresentation } from '../http/capability-route.js';
 
 /**
  * interfaces/ws/rpc: JSON-RPC 2.0 message shapes and error-code mapping for `/ws` (design doc
@@ -185,6 +186,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof IllegalTransition) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.
+  if (isPgInvalidTextRepresentation(err)) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: 'malformed identifier or value' };
   }
   // S2.13 `create_connection` — same additions as capability-route.ts's mapCapabilityError.
   if (err instanceof ConnectionCredentialRequiredError) {

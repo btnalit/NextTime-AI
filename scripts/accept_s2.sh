@@ -820,11 +820,13 @@ step2_docker_restart() {
   AR_ID_DOCKER=""
   attempt=0
   while [ "$attempt" -lt 30 ]; do
-    out=$(cap "$ALICE_KEY" list_pending "{}" "JSON.stringify((d.result||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_DOCKER'))")
+    # Select the row's own `id` on the JS side: a greedy sed over the JSON picked the *last*
+    # `"id":"…"` — which is the container id inside `params` (container.restart {id}) — and the
+    # seventh host run then approved a container id (500) and looked for a card under it (miss).
+    out=$(cap "$ALICE_KEY" list_pending "{}" "String((((d.result||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_DOCKER'))[0]||{}).id||'')")
     status=$(parse_kv "$out" HTTP_STATUS)
     [ "$status" = "200" ] || fail "step2-list-pending" "list_pending HTTP $status: $(parse_kv "$out" BODY)"
-    matches=$(parse_kv "$out" EXTRACTED)
-    AR_ID_DOCKER=$(printf '%s' "$matches" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+    AR_ID_DOCKER=$(parse_kv "$out" EXTRACTED)
     [ -n "$AR_ID_DOCKER" ] && break
     attempt=$((attempt + 1))
     sleep 2
