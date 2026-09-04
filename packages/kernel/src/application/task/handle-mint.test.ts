@@ -23,6 +23,8 @@ describe('computeChildHandleScope', () => {
       'get_object',
       'list_allowed_operations',
       'report_task_result',
+      // S2.12 host run: a Worker reads its own Task on `context` — infrastructure, not a need.
+      'get_task',
     ]);
   });
 
