@@ -68,6 +68,8 @@ interface ChatHistoryResult {
     readonly id: string;
     readonly role: string;
     readonly text: string;
+    /** Structured message content (S2.12) — `system.*` cards carry `kind`/`actionRequestId`/… */
+    readonly content?: Record<string, unknown>;
     readonly createdAt: string;
     readonly sequence: number;
   }[];

@@ -356,18 +356,42 @@ function entryObserveChatScenario(messages) {
 // `report_result` step (observed on the host: "Tool report_result not found"). A Worker's history
 // never contains the Chinese chat text, so the chat markers cannot misfire the other way.
 const SCENARIOS = [
-  { marker: '重启测试容器', build: entryRestartChatScenario },
-  { marker: '测试 API 的 GET 返回什么', build: entryObserveChatScenario },
-  { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario },
-  { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario },
+  { marker: '重启测试容器', build: entryRestartChatScenario, chat: true },
+  { marker: '测试 API 的 GET 返回什么', build: entryObserveChatScenario, chat: true },
+  { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
+  { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
 ];
+
+/**
+ * Picks the scenario for this request. An entry agent's pi session is resident — its history keeps
+ * every earlier chat turn (ninth host run: a fresh kernel chat still replayed the restart scenario
+ * because "重启测试容器" was still in the session) — so among the chat scenarios the one whose marker
+ * occurs *latest* in the serialized history wins (the newest question). Worker scenarios are only
+ * consulted when no chat marker is present at all: a Worker's history never contains the chat
+ * text, while an entry agent's history contains the Worker marker as soon as it has called
+ * invoke_worker (inside the tool-call arguments), which must not flip it onto the Worker script.
+ */
+function pickScenario(blob) {
+  let best;
+  let bestAt = -1;
+  for (const s of SCENARIOS) {
+    if (!s.chat) continue;
+    const at = blob.lastIndexOf(s.marker);
+    if (at > bestAt) {
+      best = s;
+      bestAt = at;
+    }
+  }
+  if (best) return best;
+  return SCENARIOS.find((s) => !s.chat && blob.includes(s.marker));
+}
 
 /** Returns the scripted step for this request, or `undefined` if no scenario marker matched
  *  (the caller falls through to the original search/echo logic unchanged). */
 function matchScenarioStep(messages) {
   const list = messages ?? [];
   const blob = JSON.stringify(list);
-  const scenario = SCENARIOS.find((s) => blob.includes(s.marker));
+  const scenario = pickScenario(blob);
   if (!scenario) return undefined;
   const steps = scenario.build(list);
   const index = Math.min(assistantMessageCount(messages), steps.length - 1);
