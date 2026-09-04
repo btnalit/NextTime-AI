@@ -654,7 +654,10 @@ connections_step() {
     sql="$sql select 1 from \"$t\" x where x::text ilike '%' || :'token' || '%'"
   done
   sql="$sql) accept_s2_leak_check"
-  leak_count=$(docker compose exec -T postgres psql -U nexttime -d nexttime -v token="$ACCEPT_S2_API_TOKEN" -tAc "$sql" </dev/null 2>/dev/null)
+  # SQL goes in on stdin, not via -c: psql performs :'var' interpolation only on input it parses
+  # itself (stdin/-f), never on a -c string (verified on the host — -c fails with a syntax error at
+  # the colon, and the discarded stderr made this look like a real leak).
+  leak_count=$(printf '%s\n' "$sql" | docker compose exec -T postgres psql -U nexttime -d nexttime -v token="$ACCEPT_S2_API_TOKEN" -tA 2>/dev/null | tail -1)
   [ "$leak_count" = "0" ] || fail "s213-no-token-leak" "bearer token string found in $leak_count row(s) across kernel DB tables"
   pass "s213-no-token-leak" "bearer token appears in 0 rows across all $(printf '%s\n' "$tables" | wc -l | tr -d ' ') public tables"
 
