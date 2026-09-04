@@ -834,7 +834,9 @@ step2_docker_restart() {
   [ -n "$AR_ID_DOCKER" ] || fail "step2-list-pending" "no pending ActionRequest for gatekeeper $GATEKEEPER_ID_DOCKER appeared within 60s of the chat-driven invoke_worker call"
   pass "step2-list-pending" "actionRequestId=$AR_ID_DOCKER"
 
-  history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "d.some(m=>m.kind==='system.action_pending'&&m.content&&m.content.actionRequestId==='$AR_ID_DOCKER')")
+  # A system card is a chat message whose `content` carries `kind`/`actionRequestId`
+  # (application/linkage/content.ts); the driver may also expose them flattened — accept both.
+  history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "d.some(m=>{const c=(m&&m.content&&typeof m.content==='object')?m.content:m;return c&&c.kind==='system.action_pending'&&c.actionRequestId==='$AR_ID_DOCKER';})")
   card_found=$(parse_kv "$history_out" EXTRACTED)
   if [ "$card_found" = "true" ]; then
     pass "step2-approval-card" "system.action_pending card for $AR_ID_DOCKER landed in alice's chat"
@@ -893,7 +895,13 @@ step3_observe_no_worker() {
   action_requests_before=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
     "select count(*) from action_requests where workspace_id='$WORKSPACE_ID'" </dev/null 2>/dev/null)
 
-  run_driver send-and-wait "$ALICE_KEY" "$ALICE_CHAT_ID" "测试 API 的 GET 返回什么" 60000 >/dev/null
+  # New chat, not the step-2 one: fake-llm matches scenarios against the whole message history, so
+  # asking in the restart chat replays the restart scenario (eighth host run). The linkage routes
+  # system cards to alice's *most recent* chat (application/linkage/chat-targets.ts), so later card
+  # checks must follow this new chat id too — hence ALICE_CHAT_ID is reassigned, not a second var.
+  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "" "测试 API 的 GET 返回什么" 60000)
+  ALICE_CHAT_ID=$(parse_kv "$chat_out" CHAT_ID)
+  [ -n "$ALICE_CHAT_ID" ] || fail "step3-chat-observe" "no CHAT_ID from send-and-wait: $chat_out"
 
   history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")
   last_reply=$(parse_kv "$history_out" EXTRACTED)
@@ -947,7 +955,7 @@ step4_step5_ssh_always_allow() {
   [ -n "$AR_ID_SSH1" ] || fail "step4-list-pending-1" "no pending ActionRequest for gatekeeper $GATEKEEPER_ID_SSH: $matches"
   pass "step4-list-pending-1" "actionRequestId=$AR_ID_SSH1 (unclassified command, no auto-approve policy yet)"
 
-  history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "d.some(m=>m.kind==='system.action_pending'&&m.content&&m.content.actionRequestId==='$AR_ID_SSH1')")
+  history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "d.some(m=>{const c=(m&&m.content&&typeof m.content==='object')?m.content:m;return c&&c.kind==='system.action_pending'&&c.actionRequestId==='$AR_ID_SSH1';})")
   card_found=$(parse_kv "$history_out" EXTRACTED)
   if [ "$card_found" = "true" ]; then
     pass "step4-approval-card" "system.action_pending card for $AR_ID_SSH1 landed in alice's chat"
