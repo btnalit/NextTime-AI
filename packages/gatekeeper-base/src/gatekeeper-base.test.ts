@@ -157,6 +157,27 @@ describe('GatekeeperBase', () => {
     await expect(gate.observe('stock.get', {})).rejects.toBeInstanceOf(CredentialResolutionError);
   });
 
+  it('skips credential resolution entirely when the transport declares credentialRequired: false (ssh/cli)', async () => {
+    const resolve = vi.fn(async () => {
+      throw new CredentialResolutionError('no credential configured');
+    });
+    const invoke = vi.fn(async (_op: Operation, _params: unknown, _ctx: unknown) => ({
+      data: { stdout: 'up' },
+    }));
+    const transport: Transport = { kind: 'ssh', credentialRequired: false, invoke };
+    const gate = new GatekeeperBase({
+      manifest: [observeOp(), executeOp()],
+      transport,
+      credentialResolver: { resolve },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+    await expect(gate.observe('stock.get', {})).resolves.toMatchObject({ data: { stdout: 'up' } });
+    await expect(gate.simulate('stock.adjust', {})).resolves.toHaveProperty('description');
+    await expect(gate.apply('stock.adjust', {}, 'k1')).resolves.toBeDefined();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(invoke.mock.calls[0]?.[2]).toMatchObject({ credential: undefined });
+  });
+
   it('simulate falls back to a generic description when the transport has none', async () => {
     const gate = new GatekeeperBase({
       manifest: [executeOp()],

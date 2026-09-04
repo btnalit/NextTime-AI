@@ -26,6 +26,12 @@ export interface TransportInvokeResult {
 export interface Transport {
   readonly kind: TransportKind;
 
+  /** Whether `GatekeeperBase` must resolve a credential before every call (default `true`). `ssh`
+   *  (identity file) and `cli` (local socket/binary) authenticate out of band and set this `false`
+   *  — otherwise a gate started in shared mode with no `GATE_CREDENTIAL_*` var fails every
+   *  observe/simulate/apply with CredentialResolutionError (S2.12 host run: the ssh fixture gate). */
+  readonly credentialRequired?: boolean;
+
   /** Executes one Operation call (used for both `observe` and `apply` — GatekeeperBase is what
    *  restricts which Operations may reach either protocol method). */
   invoke(

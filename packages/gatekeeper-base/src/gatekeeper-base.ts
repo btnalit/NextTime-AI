@@ -79,6 +79,10 @@ export class GatekeeperBase {
   }
 
   private async resolveCredential(onBehalfOf: string | undefined): Promise<unknown> {
+    // A transport that authenticates out of band (ssh identity file, local cli) declares
+    // `credentialRequired: false` — resolving would only ever fail for a gate that has no
+    // credential to configure (kinds/types.ts).
+    if (this.options.transport.credentialRequired === false) return undefined;
     return this.options.credentialResolver.resolve(onBehalfOf);
   }
 

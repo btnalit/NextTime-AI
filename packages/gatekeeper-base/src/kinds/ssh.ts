@@ -138,6 +138,8 @@ function resolveCommand(operation: Operation, params: unknown): string {
 
 export class SshTransport implements Transport {
   readonly kind = 'ssh' as const;
+  /** Authenticates with the identity file in `target`, never with a resolved credential. */
+  readonly credentialRequired = false as const;
   private readonly options: SshTransportOptions;
 
   constructor(options: SshTransportOptions) {
