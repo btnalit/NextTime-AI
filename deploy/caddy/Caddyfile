@@ -29,7 +29,16 @@
 # internal-only tool) and KERNEL_BIND_ADDR is not meant to be internet-reachable. Revisit if
 # this deployment is ever exposed beyond a trusted network.
 https://:8443 {
-	tls internal {
+	# Internal CA, on-demand leaf per requested host. `lifetime` raises the leaf certificate
+	# validity from Caddy's 12h default: a browser's per-fingerprint "proceed anyway" exception
+	# dies with every leaf rotation, so at 12h the LAN operator saw the interstitial twice a day
+	# (S2.12 host run). The proper fix is still importing the internal root
+	# (`${NEXTTIME_DATA}/caddy/caddy/pki/authorities/local/root.crt`) into the client's trust store —
+	# see docs/runbooks/web-console.md 排障; this only makes the untrusted path tolerable.
+	tls {
+		issuer internal {
+			lifetime 2160h
+		}
 		on_demand
 	}
 
