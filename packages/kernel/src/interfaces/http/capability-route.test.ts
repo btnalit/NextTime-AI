@@ -85,6 +85,16 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     expect(mapped).toMatchObject({ status: 502, code: 'gatekeeper_error' });
     expect(mapped.message).toContain('connected_account_store_not_configured');
   });
+
+  it('maps a Postgres 22P02 (malformed uuid from the caller) to 400 invalid_params, not 500', () => {
+    const pgError = Object.assign(new Error('invalid input syntax for type uuid: "d54af0"'), {
+      code: '22P02',
+    });
+    expect(mapCapabilityError(pgError)).toMatchObject({ status: 400, code: 'invalid_params' });
+    // Other SQLSTATEs stay internal errors — never leak a DB message.
+    const other = Object.assign(new Error('deadlock detected'), { code: '40P01' });
+    expect(mapCapabilityError(other)).toMatchObject({ status: 500 });
+  });
 });
 
 describe('mapCapabilityError — application/chat domain errors (unit)', () => {

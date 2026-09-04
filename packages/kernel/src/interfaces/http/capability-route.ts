@@ -65,6 +65,12 @@ import {
 
 export interface CapabilityRouteDeps extends ResolveCallerDeps, DispatchDeps {}
 
+/** `pg` surfaces server errors as `Error & { code: string }` (SQLSTATE). 22P02 is
+ *  invalid_text_representation — the one class a caller can cause with a malformed id. */
+export function isPgInvalidTextRepresentation(err: unknown): boolean {
+  return err instanceof Error && (err as Error & { code?: unknown }).code === '22P02';
+}
+
 interface ErrorMapping {
   readonly status: number;
   readonly code: string;
@@ -137,6 +143,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof IllegalTransition) {
     return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  // Postgres 22P02 invalid_text_representation — a well-typed but malformed value reached a typed
+  // column (e.g. a non-uuid `actionRequestId` on `approve`: the registry's `id` params are
+  // `z.string().min(1)`, not uuid). The caller sent the bad value; 400, not 500 (seen on the host
+  // during the S2.12 run).
+  if (isPgInvalidTextRepresentation(err)) {
+    return { status: 400, code: 'invalid_params', message: 'malformed identifier or value' };
   }
   // S2.13 `create_connection` (application/gateway/connection-handlers.ts): the two network legs
   // that run inline in the handler surface as upstream failures, not internal errors — the gate
