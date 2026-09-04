@@ -1,6 +1,6 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { type SshPolicyRule, SshTransport, classifyCommand } from './ssh.js';
+import { type SshPolicyRule, SshTransport, classifyCommand, sshConnectionArgs } from './ssh.js';
 
 const POLICY_TABLE: SshPolicyRule[] = [
   { pattern: '^show\\b', mode: 'observe', blastRadius: 'low', autoApprovable: true },
@@ -56,6 +56,49 @@ describe('SshTransport', () => {
     reads: [],
     writes: [],
   };
+
+  it('builds ssh argv with BatchMode always and host-key options only when configured', () => {
+    expect(sshConnectionArgs({ host: 'h', user: 'u' })).toEqual(['-o', 'BatchMode=yes', 'u@h']);
+    expect(
+      sshConnectionArgs({
+        host: 'h',
+        user: 'u',
+        port: 2222,
+        identityFile: '/k/id',
+        strictHostKeyChecking: 'no',
+        knownHostsFile: '/dev/null',
+      }),
+    ).toEqual([
+      '-i',
+      '/k/id',
+      '-p',
+      '2222',
+      '-o',
+      'StrictHostKeyChecking=no',
+      '-o',
+      'UserKnownHostsFile=/dev/null',
+      '-o',
+      'BatchMode=yes',
+      'u@h',
+    ]);
+  });
+
+  it('surfaces ssh stderr and exit code in the transport error (diagnosable failure reason)', async () => {
+    const execImpl = vi.fn(async () => {
+      throw Object.assign(new Error('Command failed: ssh'), {
+        stderr: 'Host key verification failed.\n',
+        code: 255,
+      });
+    });
+    const transport = new SshTransport({
+      target: { host: '198.51.100.10', user: 'admin' },
+      policyTable: POLICY_TABLE,
+      execImpl,
+    });
+    await expect(
+      transport.invoke(patternOperation, { command: 'show interfaces' }, {}),
+    ).rejects.toThrow(/Host key verification failed\. \(exit 255\)/);
+  });
 
   it('execFiles ssh with connection args and the literal command as the last argument (no local shell)', async () => {
     const execImpl = vi.fn(async () => ({ stdout: 'ok', stderr: '' }));

@@ -261,6 +261,10 @@ services:
         GATE_SSH_USER: testuser,
         GATE_SSH_PORT: "22",
         GATE_SSH_IDENTITY_FILE: /data/ssh-identity/id_ed25519,
+        # Test fixture only: the sshd container regenerates its host key on every run, so pinning
+        # is meaningless here. A real ssh gate pins the target key (`yes` + a known_hosts file).
+        GATE_SSH_STRICT_HOST_KEY_CHECKING: "no",
+        GATE_SSH_KNOWN_HOSTS_FILE: /dev/null,
         GATE_SSH_POLICY_FILE: "[]",
         GATE_MANIFEST_FILE: /data/gate-manifest.json,
         GATE_PORT: "8090",

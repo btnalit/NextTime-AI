@@ -30,6 +30,13 @@ export interface SshTarget {
   /** Path to a private key file, passed as `-i`. Omit to use the ssh client's own default
    *  identity/agent resolution. */
   readonly identityFile?: string;
+  /** `-o StrictHostKeyChecking=…`: `yes` (pinned key required), `accept-new` (pin on first
+   *  contact), `no` (test fixtures only). Omit → OpenSSH default, which under BatchMode refuses an
+   *  unknown host (S2.12 host run: every fixture command failed with "Host key verification
+   *  failed" until this existed). */
+  readonly strictHostKeyChecking?: 'yes' | 'accept-new' | 'no';
+  /** `-o UserKnownHostsFile=…` — where the pinned key(s) live (under the gate's data dir). */
+  readonly knownHostsFile?: string;
 }
 
 export interface SshPolicyRule {
@@ -81,19 +88,35 @@ export type SshExecFn = (
 
 const execFileAsync = promisify(execFile);
 
-function connectionArgs(target: SshTarget): string[] {
+/** Exported for tests — the exact argv handed to `ssh` (never a shell). */
+export function sshConnectionArgs(target: SshTarget): string[] {
   const args: string[] = [];
   if (target.identityFile) args.push('-i', target.identityFile);
   if (target.port) args.push('-p', String(target.port));
+  if (target.strictHostKeyChecking) {
+    args.push('-o', `StrictHostKeyChecking=${target.strictHostKeyChecking}`);
+  }
+  if (target.knownHostsFile) args.push('-o', `UserKnownHostsFile=${target.knownHostsFile}`);
   args.push('-o', 'BatchMode=yes', `${target.user}@${target.host}`);
   return args;
 }
 
 const defaultSshExec: SshExecFn = async (target, command) => {
-  const args = [...connectionArgs(target), command];
+  const args = [...sshConnectionArgs(target), command];
   const { stdout, stderr } = await execFileAsync('ssh', args, { maxBuffer: 10 * 1024 * 1024 });
   return { stdout, stderr };
 };
+
+/** `execFile` rejections carry the child's stderr and exit code — the only place ssh explains
+ *  itself ("Host key verification failed.", "Permission denied (publickey)", "UNPROTECTED PRIVATE
+ *  KEY FILE"). Folded into the error message so an ActionRequest's failure reason is diagnosable. */
+function describeExecFailure(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const withIo = err as Error & { stderr?: unknown; code?: unknown };
+  const stderr = typeof withIo.stderr === 'string' ? withIo.stderr.trim() : '';
+  const code = withIo.code !== undefined ? ` (exit ${String(withIo.code)})` : '';
+  return `${stderr || err.message}${code}`;
+}
 
 export interface SshTransportOptions {
   readonly target: SshTarget;
@@ -159,9 +182,10 @@ export class SshTransport implements Transport {
       const { stdout, stderr } = await run(this.options.target, command);
       return { data: { stdout, stderr }, detail: { command, classification } };
     } catch (err) {
-      throw new TransportInvokeError(`ssh transport: command failed for "${operation.name}"`, {
-        cause: err,
-      });
+      throw new TransportInvokeError(
+        `ssh transport: command failed for "${operation.name}": ${describeExecFailure(err)}`,
+        { cause: err },
+      );
     }
   }
 

@@ -179,11 +179,22 @@ function buildTransport(kind: string, env: NodeJS.ProcessEnv): Transport {
     if (!host || !user) {
       throw new Error('GATE_TRANSPORT_KIND=ssh requires GATE_SSH_HOST and GATE_SSH_USER');
     }
+    const strict = env.GATE_SSH_STRICT_HOST_KEY_CHECKING;
+    if (strict !== undefined && strict !== 'yes' && strict !== 'accept-new' && strict !== 'no') {
+      throw new Error(
+        `GATE_SSH_STRICT_HOST_KEY_CHECKING must be yes | accept-new | no (got "${strict}")`,
+      );
+    }
     const target: SshTarget = {
       host,
       user,
       port: env.GATE_SSH_PORT ? Number(env.GATE_SSH_PORT) : undefined,
       identityFile: env.GATE_SSH_IDENTITY_FILE,
+      // Host-key policy (kinds/ssh.ts): production gates pin the target's key in a known_hosts
+      // file (`yes` + GATE_SSH_KNOWN_HOSTS_FILE); test fixtures may use `no`. Unset → OpenSSH's
+      // own default, which under BatchMode fails closed on an unknown host.
+      strictHostKeyChecking: strict,
+      knownHostsFile: env.GATE_SSH_KNOWN_HOSTS_FILE,
     };
     const policyTable: SshPolicyRule[] = env.GATE_SSH_POLICY_FILE
       ? (JSON.parse(env.GATE_SSH_POLICY_FILE) as SshPolicyRule[])
