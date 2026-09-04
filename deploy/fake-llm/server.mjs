@@ -394,7 +394,22 @@ function matchScenarioStep(messages) {
   const scenario = pickScenario(blob);
   if (!scenario) return undefined;
   const steps = scenario.build(list);
-  const index = Math.min(assistantMessageCount(messages), steps.length - 1);
+  // Which step: for a chat scenario, count assistant messages *since the newest message carrying
+  // its marker* (the user's question) — the entry agent's pi session is resident, so the history
+  // already holds every earlier turn's assistant messages (tenth host run: the observe scenario
+  // jumped straight to its final text). A Worker session is one-shot, so its count stays global —
+  // its own marker also rides in the re-injected task context, which would otherwise reset the
+  // count on every request.
+  let counted = list;
+  if (scenario.chat) {
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (JSON.stringify(list[i]).includes(scenario.marker)) {
+        counted = list.slice(i + 1);
+        break;
+      }
+    }
+  }
+  const index = Math.min(assistantMessageCount(counted), steps.length - 1);
   return steps[index];
 }
 
