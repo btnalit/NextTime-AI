@@ -10,7 +10,8 @@
 - `docker compose --profile test up -d` 已起（`postgres kernel caddy llm-proxy egress-proxy
   worker-supervisor agent-host fake-llm`），且 `docker compose up -d gatekeeper-docker` 已起（这个
   服务不在任何 profile 下，`docker compose up -d` 默认就会拉起，只是显式点名确保）。
-- `${NEXTTIME_DATA}/config/llm-providers.yaml` 已指向 `fake` provider（同 accept-s1.md §1）。
+- `${NEXTTIME_DATA}/config/llm-providers.yaml` 已指向 `fake` provider（同 accept-s1.md §1），**并且切换之后重新跑过 `make gen-models`**——容器里的模型目录 `models.json` 是从 providers 文件生成后挂进去的，不重生成时入口容器会报 `Model "fake/fake-echo" not found`（主机首轮验收踩过）。验收结束换回真实 provider 后同样要再跑一次。
+- `fake-llm` 镜像是用当前代码构建的：`deploy/fake-llm/server.mjs` 的脚本化场景烤在镜像里，拉新代码后要 `docker compose --profile test build fake-llm && docker compose --profile test up -d --force-recreate fake-llm`，否则场景不匹配、入口 agent 只会回 echo。
 - 迁移已跑到最新。
 - `docker compose --profile build-only build worker-runtime` 已跑过一次，产出
   `nexttime-ai-worker-runtime` 镜像（step 6 直接跑这个镜像做 env/egress 探测，见 §5 "已知偏离"）。
