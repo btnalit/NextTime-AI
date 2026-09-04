@@ -18,6 +18,10 @@ FROM alpine:3.20
 RUN apk add --no-cache openssh-server \
  && ssh-keygen -A \
  && adduser -D -s /bin/sh testuser \
+ # `adduser -D` leaves the shadow password field as `!` = locked, and OpenSSH refuses a locked
+ # account even for publickey auth ("User testuser not allowed because account is locked" —
+ # thirteenth host run). `*` = no password, not locked; pubkey-only login still holds.
+ && sed -i 's/^testuser:!:/testuser:*:/' /etc/shadow \
  && mkdir -p /home/testuser/.ssh \
  && chown -R testuser:testuser /home/testuser/.ssh \
  && chmod 700 /home/testuser/.ssh
