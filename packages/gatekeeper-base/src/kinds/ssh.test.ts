@@ -1,6 +1,58 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { type SshPolicyRule, SshTransport, classifyCommand, sshConnectionArgs } from './ssh.js';
+import {
+  type SshPolicyRule,
+  SshTransport,
+  assertClassificationAllowed,
+  assertCommandShape,
+  classifyCommand,
+  shellQuote,
+  sshConnectionArgs,
+} from './ssh.js';
+
+describe('ssh hardening (review lane 5 P0-1/2/3)', () => {
+  it('shellQuote passes inert words through and single-quotes everything else', () => {
+    expect(shellQuote('eth0')).toBe('eth0');
+    expect(shellQuote('/var/log/app.log')).toBe('/var/log/app.log');
+    expect(shellQuote('eth0; reload')).toBe("'eth0; reload'");
+    expect(shellQuote("it's")).toBe("'it'\\''s'");
+    expect(shellQuote('$(id)')).toBe("'$(id)'");
+  });
+
+  it('assertCommandShape refuses option-looking and multi-line commands', () => {
+    expect(() => assertCommandShape('-oProxyCommand=id')).toThrow(/must not start with "-"/);
+    expect(() => assertCommandShape('  --version')).toThrow(/must not start with "-"/);
+    expect(() => assertCommandShape('uptime\nrm -rf /')).toThrow(/single line/);
+    expect(() => assertCommandShape('uptime')).not.toThrow();
+  });
+
+  it('assertClassificationAllowed refuses execute/unclassified commands on an observe Operation and blast-radius escalation', () => {
+    const observeOp = { name: 'host.show', mode: 'observe', blast_radius: 'low' } as never;
+    const executeOp = { name: 'host.run', mode: 'execute', blast_radius: 'medium' } as never;
+    const unclassified = {
+      mode: 'execute',
+      blastRadius: 'medium',
+      autoApprovable: false,
+      unclassified: true,
+    } as const;
+    const observeLow = {
+      mode: 'observe',
+      blastRadius: 'low',
+      autoApprovable: true,
+      unclassified: false,
+    } as const;
+    const executeHigh = {
+      mode: 'execute',
+      blastRadius: 'high',
+      autoApprovable: false,
+      unclassified: false,
+    } as const;
+    expect(() => assertClassificationAllowed(observeOp, unclassified)).toThrow(/observe-class/);
+    expect(() => assertClassificationAllowed(observeOp, observeLow)).not.toThrow();
+    expect(() => assertClassificationAllowed(executeOp, unclassified)).not.toThrow();
+    expect(() => assertClassificationAllowed(executeOp, executeHigh)).toThrow(/blast radius/);
+  });
+});
 
 const POLICY_TABLE: SshPolicyRule[] = [
   { pattern: '^show\\b', mode: 'observe', blastRadius: 'low', autoApprovable: true },
