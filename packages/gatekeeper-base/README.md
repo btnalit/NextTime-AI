@@ -87,6 +87,19 @@ more specific (a non-file manifest source, multiple transports, custom credentia
 constructs `GatekeeperBase` / `createGatekeeperServer` directly instead — see
 `src/gatekeeper-base.ts` and any of the `kinds/*.test.ts` files for the shape.
 
+## SSH host keys (`ssh`)
+
+The `ssh` transport shells out to the system `ssh` client with `BatchMode=yes`, so an unknown or
+changed host key fails closed instead of prompting. Two env vars control the policy:
+
+| Var | Effect |
+|---|---|
+| `GATE_SSH_KNOWN_HOSTS_FILE` | `-o UserKnownHostsFile=<path>` — the pinned host key(s) for the target. Put it under the gate's data dir. |
+| `GATE_SSH_STRICT_HOST_KEY_CHECKING` | `yes` (pinned key required — production), `accept-new` (pin on first contact, refuse changes), or `no` (test fixtures only, e.g. `deploy/accept-s2`). Unset → OpenSSH default, which under BatchMode refuses unknown hosts. |
+
+A failed command surfaces `ssh`'s own stderr in the error message (host-key refusal, permission
+denied, unprotected private key file) so the ActionRequest's failure reason is diagnosable.
+
 ## TLS to the target (`http`/`mcp`)
 
 A target behind a private or self-signed certificate is trusted explicitly, never by disabling
