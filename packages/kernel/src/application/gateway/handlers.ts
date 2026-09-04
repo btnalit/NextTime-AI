@@ -242,6 +242,11 @@ function toWireChatMessage(message: ChatMessageRow) {
     id: message.id,
     role: message.role,
     text: chatMessageText(message.content),
+    // S2.12 host run: a `system.*` card (application/linkage/content.ts — `kind`, `actionRequestId`,
+    // `taskId`, …) collapsed to its `text` here, so nothing reading history could tell a card from
+    // prose or re-render it after a reload; the live `chat.message` push already carries the full
+    // content (application/chat/event-sink.ts). Additive — `text` stays as-is for every client.
+    content: message.content,
     createdAt: message.createdAt.toISOString(),
     sequence: message.sequence,
   };
