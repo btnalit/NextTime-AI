@@ -56,6 +56,8 @@ export interface CliTransportOptions {
 
 export class CliTransport implements Transport {
   readonly kind = 'cli' as const;
+  /** Local binary/socket — no per-call credential to resolve. */
+  readonly credentialRequired = false as const;
   private readonly options: CliTransportOptions;
 
   constructor(options: CliTransportOptions = {}) {

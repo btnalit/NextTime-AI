@@ -458,11 +458,23 @@ async function runGovernedRequest(
 
   // pending_approval
   if (!args.awaitDecision) {
-    const simulate = await requireDeps().gatekeeperClient.simulate(args.gatekeeper.endpoint, {
-      operation: args.operationName,
-      params: args.operationParams,
-      onBehalfOf: args.onBehalfOf,
-    });
+    // The simulation is decoration on the approval card, not a precondition of the request: a gate
+    // that cannot simulate (S2.12 host run — the ssh gate's simulate call failed and the whole
+    // request rolled back, so the Worker's action never reached a human) must still produce a
+    // pending ActionRequest. The failure is reported on the card instead.
+    let simulate: unknown;
+    try {
+      simulate = await requireDeps().gatekeeperClient.simulate(args.gatekeeper.endpoint, {
+        operation: args.operationName,
+        params: args.operationParams,
+        onBehalfOf: args.onBehalfOf,
+      });
+    } catch (err) {
+      simulate = {
+        unavailable: true,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
     return {
       result: { status: 'pending_approval', actionRequestId: actionRequest.id, simulate },
       resourceType: 'action_request',
