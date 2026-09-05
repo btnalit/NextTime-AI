@@ -40,7 +40,7 @@
 | Connections 提交后 `manifest_fetch_failed` / `gatekeeper_timeout` / `gatekeeper_error` | 横幅里门的原文 | 502/504：门或 manifest URL 未响应；修 endpoint/manifestSource 后重试 |
 | Connections 提交后字段变红（400） | 字段下的说明 | `invalid_params`：例如选了 connected_account 却没填凭证 |
 | "Registered systems" 只显示 50 个 | 无解，内核 `search` 无分页 | 见"已知缺口" |
-| 浏览器反复弹证书警告（点过"继续访问"之后又出现） | 一次性把 Caddy 内部根证书导入客户端信任库：主机 `${NEXTTIME_DATA}/caddy/caddy/pki/authorities/local/root.crt` → Windows「受信任的根证书颁发机构」/ macOS 钥匙串 / Linux `update-ca-certificates` | Caddy 内部 CA 签的叶子证书会轮换（`deploy/caddy/Caddyfile` 已把默认 12h 调到 90 天），Chrome 的例外只绑定单张证书指纹，轮换即失效；导入根证书后不再出现 |
+| 浏览器反复弹证书警告（点过"继续访问"之后又出现） | 一次性把 Caddy 内部根证书导入客户端信任库：主机 `${NEXTTIME_DATA}/caddy/caddy/pki/authorities/local/root.crt` → Windows「受信任的根证书颁发机构」/ macOS 钥匙串 / Linux `update-ca-certificates` | Caddy 内部 CA 签的叶子证书会轮换（`deploy/caddy/Caddyfile` 已把默认 12h 调到 90 天，并把中间证书寿命从 7 天调到 100 天——不调中间证书时叶子寿命会被钳到 7 天；改 Caddyfile 后要 `docker compose restart caddy`），Chrome 的例外只绑定单张证书指纹，轮换即失效；导入根证书后不再出现 |
 
 ## 已知缺口（内核侧，控制台已就地绕过）
 

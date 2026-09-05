@@ -10,6 +10,14 @@
 # helper" behavior that otherwise applies to any TLS-enabled site, hostname or not.
 {
 	auto_https disable_redirects
+	# The internal issuer clamps a leaf's lifetime to its intermediate's NotAfter, and the
+	# intermediate defaults to 7 days — so the site block's `lifetime 2160h` below would silently
+	# become ≤7d (review lane 7). Stretch the intermediate to 100 days so a leaf really lasts ~90.
+	pki {
+		ca local {
+			intermediate_lifetime 2400h
+		}
+	}
 }
 
 # The scheme prefix is required, not decorative: a bare ":8443" (no scheme, no hostname, non-
