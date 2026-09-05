@@ -24,10 +24,10 @@ import {
  * No package exports this shape for the kernel to import, so it is duplicated here as a zod
  * schema — keep the two in sync by hand if either changes.
  *
- * Trust boundary (design doc §11: "内核不发布端口" — only `control`-network compose services can
- * reach the kernel at all): same as `llm-usage.ts` and `handle-revocations.ts` — this route
- * performs no additional authentication of its own. Deliberate S1 assumption, not an oversight
- * (see those two files' own doc comments, and PR body "假设与偏离").
+ * Trust boundary: same as `llm-usage.ts` and `handle-revocations.ts` — behind
+ * `interfaces/internal-auth`'s shared-secret guard (installed once at the composition root, keyed
+ * on the `/internal/` route prefix); this file performs no authentication of its own. See
+ * llm-usage.ts's doc comment for why the earlier "control-network-only" assumption was retired.
  */
 
 const EgressObservationWireSchema = z

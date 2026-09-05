@@ -43,6 +43,8 @@ import type { CapabilityRouteDeps } from './interfaces/http/index.js';
 import { registerCapabilityRoutes } from './interfaces/http/index.js';
 import type { InternalRoutesDeps } from './interfaces/http/internal/index.js';
 import { registerInternalRoutes } from './interfaces/http/internal/index.js';
+import type { InternalPlaneAuthConfig } from './interfaces/internal-auth/index.js';
+import { loadInternalToken, registerInternalPlaneGuard } from './interfaces/internal-auth/index.js';
 import {
   registerAgentHostWsRoute,
   registerWsRoute,
@@ -111,18 +113,30 @@ export function createServer(
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
+  // Internal-plane shared-secret guard (interfaces/internal-auth): one root-level `onRequest`
+  // hook that 401s every route whose pattern starts with `/internal/` — the HTTP routes below
+  // *and* the `/internal/agent-host` WebSocket upgrade — unless `Authorization: Bearer <token>`
+  // matches `options.internalAuth.token` (constant-time) and the TCP peer is outside
+  // `options.internalAuth.workersSubnet`. Installed before the routes purely for readability;
+  // Fastify resolves hook chains at `preReady`. With no `internalAuth` (tests that never touch
+  // the internal plane) the guard is fail-closed, never open — `main()` always supplies one and
+  // refuses to start without the token file (`loadInternalToken`).
+  registerInternalPlaneGuard(app, options.internalAuth);
+
   registerCapabilityRoutes(app, deps);
   registerWsRoute(app, deps);
   // `/internal/*` (S1.7): service-to-service routes for `llm-proxy` (usage reports, revocation
-  // sync). Reachable only on the `control` compose network — the kernel publishes no host port
-  // (design doc §11) — so they carry no additional auth of their own.
+  // sync) and `egress-proxy` (egress observations). The kernel is dual-homed on `control` and
+  // `workers` and binds every interface, so these are reachable from every agent container — the
+  // guard above is what actually closes them (see interfaces/internal-auth's doc comment).
   app.register(async (instance) => {
     await registerInternalRoutes(instance, deps);
   });
-  // `/internal/agent-host` (S1.5, second half): agent-host's event-bridge WebSocket — same
-  // `control`-network-only trust boundary as the `/internal/*` HTTP routes above. Registered
-  // unconditionally (independent of AGENT_RUNTIME) — see interfaces/ws/agent-host.ts's own doc
-  // comment for why a connection is simply closed when no AgentHostRuntime has been registered.
+  // `/internal/agent-host` (S1.5, second half): agent-host's event-bridge WebSocket — behind the
+  // same guard as the `/internal/*` HTTP routes above (the upgrade is rejected before `hello`).
+  // Registered unconditionally (independent of AGENT_RUNTIME) — see interfaces/ws/agent-host.ts's
+  // own doc comment for why a connection is simply closed when no AgentHostRuntime has been
+  // registered.
   registerAgentHostWsRoute(app);
 
   return app;
@@ -139,6 +153,12 @@ export interface CreateServerOptions {
    *  request-action-handler.ts's own `DEFAULT_AWAIT_DECISION_TIMEOUT_MS`) — `main()` reads this
    *  from `REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS`. */
   requestActionAwaitDecisionTimeoutMs?: number;
+  /** Shared-secret authentication for the internal plane (`/internal/*` + the agent-host
+   *  WebSocket) — interfaces/internal-auth. `main()` builds it from `NEXTTIME_INTERNAL_TOKEN_FILE`
+   *  (`loadInternalToken`, default `/run/secrets/internal_token`) and `NEXTTIME_SUBNET_WORKERS`.
+   *  Omitted → the internal plane is fail-closed (every request 401), never unauthenticated; a
+   *  test that exercises an internal route must pass one. */
+  internalAuth?: InternalPlaneAuthConfig;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -481,6 +501,18 @@ export function main(): void {
   // binding a port).
   const kind = resolveAgentRuntimeKind();
 
+  // Same fail-fast slot for the internal plane's shared secret: a missing / empty / too-short
+  // `NEXTTIME_INTERNAL_TOKEN_FILE` (default `/run/secrets/internal_token`, the compose secret
+  // `internal_token`) throws `InternalTokenError` here with the path in the message — the kernel
+  // never starts with the internal plane either open or unusable. `NEXTTIME_SUBNET_WORKERS`
+  // (the same value the compose file gives `egress-proxy`) enables the peer rule: a request from
+  // inside the Worker subnet is rejected even with the right token (a Worker must never hold it).
+  const workersSubnet = process.env.NEXTTIME_SUBNET_WORKERS?.trim();
+  const internalAuth: InternalPlaneAuthConfig = {
+    token: loadInternalToken(),
+    workersSubnet: workersSubnet ? workersSubnet : undefined,
+  };
+
   const pool = createPool();
   const rawRequestActionAwaitDecisionTimeoutMs =
     process.env.REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS;
@@ -491,6 +523,7 @@ export function main(): void {
       requestActionAwaitDecisionTimeoutMs: rawRequestActionAwaitDecisionTimeoutMs
         ? Number(rawRequestActionAwaitDecisionTimeoutMs)
         : undefined,
+      internalAuth,
     },
   );
 

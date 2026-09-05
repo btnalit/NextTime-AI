@@ -8,6 +8,10 @@ import type { PoolLike } from '../../../adapters/db/pool.js';
  * polls this every `REVOCATION_SYNC_INTERVAL_MS` and keeps an in-memory revoked-`jti` set, instead
  * of a per-request callback to the kernel.
  *
+ * Trust boundary: behind `interfaces/internal-auth`'s shared-secret guard like every `/internal/*`
+ * route (`llm-proxy` sends `Authorization: Bearer <internal token>` on each poll); this file
+ * performs no authentication of its own — see llm-usage.ts's doc comment.
+ *
  * Cross-workspace query (task brief: "reads capability_handles across workspaces — a kernel-
  * internal, superuser-pool query, so use skipRoleSwitch/no RLS as pool.ts allows"): this is a
  * deliberate, narrow exception to the §7.10 module contract ("不查询其他模块的表") — the task brief
