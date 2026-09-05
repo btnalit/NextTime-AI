@@ -1,11 +1,15 @@
+import { randomBytes } from 'node:crypto';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { registerInternalPlaneGuard } from '../../internal-auth/index.js';
 import { registerHandleRevocationRoutes } from './handle-revocations.js';
 
 /**
  * interfaces/http/internal/handle-revocations.test: route-shape tests only —
- * `deps.listRevokedSince` is faked, so this file never touches Postgres.
+ * `deps.listRevokedSince` is faked, so this file never touches Postgres. The last `describe`
+ * composes the route with `interfaces/internal-auth`'s guard the way the composition root does, to
+ * pin the 401/401/200 contract `llm-proxy`'s revocation poller relies on.
  */
 
 let app: FastifyInstance | undefined;
@@ -81,5 +85,59 @@ describe('GET /internal/handle-revocations', () => {
     const body = res.json();
     expect(body.ok).toBe(false);
     expect(JSON.stringify(body)).not.toContain('db exploded');
+  });
+});
+
+describe('GET /internal/handle-revocations behind the internal-plane guard', () => {
+  const token = randomBytes(32).toString('hex');
+  const unauthorized = { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } };
+
+  async function guardedApp(): Promise<{
+    app: FastifyInstance;
+    listRevokedSince: ReturnType<typeof vi.fn>;
+  }> {
+    const instance = Fastify();
+    registerInternalPlaneGuard(instance, { token });
+    const listRevokedSince = vi.fn(async () => ({
+      revoked: [],
+      now: '2026-01-01T00:00:00.000Z',
+    }));
+    await registerHandleRevocationRoutes(instance, { pool: {} as never, listRevokedSince });
+    return { app: instance, listRevokedSince };
+  }
+
+  it('401s without an Authorization header and never calls the lister', async () => {
+    const built = await guardedApp();
+    app = built.app;
+    const res = await app.inject({ method: 'GET', url: '/internal/handle-revocations' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual(unauthorized);
+    expect(built.listRevokedSince).not.toHaveBeenCalled();
+  });
+
+  it('401s with a wrong token', async () => {
+    const built = await guardedApp();
+    app = built.app;
+    const res = await app.inject({
+      method: 'GET',
+      url: '/internal/handle-revocations',
+      headers: { authorization: `Bearer ${randomBytes(32).toString('hex')}` },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual(unauthorized);
+    expect(built.listRevokedSince).not.toHaveBeenCalled();
+  });
+
+  it('200s with the right token and serves the route normally', async () => {
+    const built = await guardedApp();
+    app = built.app;
+    const res = await app.inject({
+      method: 'GET',
+      url: '/internal/handle-revocations',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ revoked: [], now: '2026-01-01T00:00:00.000Z' });
+    expect(built.listRevokedSince).toHaveBeenCalledTimes(1);
   });
 });
