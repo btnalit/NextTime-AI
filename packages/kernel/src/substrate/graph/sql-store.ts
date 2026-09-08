@@ -35,7 +35,7 @@ import {
   type TraverseResult,
   type UpsertObjectInput,
   assertNoCallerSuppliedEpistemicStatus,
-  deriveEpistemicStatus,
+  epistemicStatusForCaller,
   factLifecycleState,
 } from './store.js';
 
@@ -225,7 +225,7 @@ export class SqlGraphStore implements GraphStore {
   ): Promise<Fact> {
     assertNoCallerSuppliedEpistemicStatus(input);
     const callerKind = await resolveCallerKind(client, workspaceId, caller.id);
-    const epistemicStatus = deriveEpistemicStatus(callerKind);
+    const epistemicStatus = epistemicStatusForCaller(callerKind, caller.viaAgent);
 
     const query = buildInsertFactQuery(workspaceId, {
       linkType: input.linkType,
@@ -291,7 +291,7 @@ export class SqlGraphStore implements GraphStore {
     transition(FACT_LIFECYCLE_TRANSITIONS, currentState, 'supersede');
 
     const callerKind = await resolveCallerKind(client, workspaceId, caller.id);
-    const epistemicStatus = deriveEpistemicStatus(callerKind);
+    const epistemicStatus = epistemicStatusForCaller(callerKind, caller.viaAgent);
     const insertQuery = buildInsertFactQuery(workspaceId, {
       linkType: input.linkType,
       sourceObjectId: input.sourceObjectId,

@@ -88,6 +88,18 @@ export interface CallerPrincipal {
    * omits it entirely is exactly as correct as one that supplies it.
    */
   readonly kind?: PrincipalKind;
+  /**
+   * The write is being made *through an agent* (a Worker run's result contract, §5.6 / S2.9) on
+   * behalf of principal `id`, which is the human the agent acts for — this codebase has no
+   * separate agent-kind principal for a WorkerRun to be `asserted_by`. Unlike `kind`, this flag
+   * *is* honoured, because it can only ever weaken the recorded status: `epistemicStatusForCaller`
+   * yields `inferred` whenever it is set, regardless of what `principals.kind` says. A caller can
+   * therefore never use it to upgrade an agent's output into a human `asserted` Fact — the
+   * failure mode the lane-1 P2 fix closed — while the Worker result path keeps writing
+   * `inferred`, which is what the acceptance contract (`accept_s2.sh` step 7) and the design
+   * require. Omit for a write made directly by the principal itself.
+   */
+  readonly viaAgent?: boolean;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -266,6 +278,19 @@ const EPISTEMIC_STATUS_BY_PRINCIPAL_KIND: Readonly<Record<PrincipalKind, Epistem
 /** Derives the `epistemic_status` a new Fact gets from who is asserting it. Pure, no IO. */
 export function deriveEpistemicStatus(principalKind: PrincipalKind): EpistemicStatus {
   return EPISTEMIC_STATUS_BY_PRINCIPAL_KIND[principalKind];
+}
+
+/**
+ * The status a Fact gets for a concrete caller: `deriveEpistemicStatus` of the caller's *real*
+ * `principals.kind`, weakened to `inferred` when the write comes through an agent on that
+ * principal's behalf (`CallerPrincipal.viaAgent`). Downgrade-only by construction — `viaAgent`
+ * can never produce `asserted`/`observed`/`verified`. Pure, no IO.
+ */
+export function epistemicStatusForCaller(
+  principalKind: PrincipalKind,
+  viaAgent: boolean | undefined,
+): EpistemicStatus {
+  return viaAgent ? 'inferred' : deriveEpistemicStatus(principalKind);
 }
 
 /**
