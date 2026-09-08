@@ -390,6 +390,21 @@ export async function listSkills(
   return result.rows.map(mapRow);
 }
 
+/** Every currently-published Skill's own `id` (workspace-wide, no caller-draft mixing — unlike
+ *  `listSkills` above, which also surfaces the caller's own drafts for I16 read-privacy). S3.13's
+ *  `governance/agent-profile` uses this as the "every published Skill" ceiling
+ *  `AgentProfile.enabledSkills === null` (inherit) resolves to. */
+export async function listPublishedSkillIds(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<readonly string[]> {
+  const result = await client.query<{ id: string }>(
+    `select id from skills where workspace_id = $1 and status = 'published'`,
+    [workspaceId],
+  );
+  return result.rows.map((row) => row.id);
+}
+
 /** Resolves each of `refs` (a WorkerDefinition's declared `skills[]` — id or name, S2.14
  *  deliverable 4) against **published** Skills only, by `id` first, then by `name` — returns only
  *  the ones that actually resolve (silently skipping the rest, same "best effort, never blocks

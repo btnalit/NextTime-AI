@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
-import { resolveEffectiveAgentProfile } from './resolve.js';
-import type { EffectiveAgentProfile } from './resolve.js';
+import { NO_AVAILABLE_AGENT_RESOURCES, resolveEffectiveAgentProfile } from './resolve.js';
+import type { AvailableAgentResources, EffectiveAgentProfile } from './resolve.js';
 import type { AgentPolicyRow, AgentProfileRow } from './types.js';
 
 /**
@@ -297,19 +297,24 @@ export async function setAgentPolicy(
 // -------------------------------------------------------------------------------------------
 // readEffectiveAgentProfile — the one convenience read every non-registry consumer uses
 // (`application/host-bridge/agent-host-runtime.ts`, `application/task/invoke.ts`/`lifecycle.ts`,
-// `application/gateway/request-action-handler.ts`): reads both rows and resolves them through
-// `resolve.ts`'s pure `resolveEffectiveAgentProfile` in one call, so no consumer duplicates the
-// "read profile, read policy, resolve" sequence.
+// `application/gateway/request-action-handler.ts`, `application/gateway/
+// agent-profile-handlers.ts`): reads both rows and resolves them through `resolve.ts`'s pure
+// `resolveEffectiveAgentProfile` in one call, so no consumer duplicates the "read profile, read
+// policy, resolve" sequence. `available` is the caller's own job to assemble (this module — and
+// its owning `governance` layer — may not depend on `application/worker`, the six-layer rule) —
+// pass `NO_AVAILABLE_AGENT_RESOURCES` (`resolve.ts`) when the caller only reads
+// `.model`/`.promptAddendum`/`.autoApproveLow`.
 // -------------------------------------------------------------------------------------------
 
 export async function readEffectiveAgentProfile(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
+  available: AvailableAgentResources = NO_AVAILABLE_AGENT_RESOURCES,
 ): Promise<EffectiveAgentProfile> {
   const [profile, policy] = await Promise.all([
     readAgentProfile(client, workspaceId, principalId),
     readAgentPolicy(client, workspaceId),
   ]);
-  return resolveEffectiveAgentProfile(profile, policy);
+  return resolveEffectiveAgentProfile(profile, policy, available);
 }

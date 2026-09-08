@@ -65,12 +65,17 @@ interface WireAgentProfile {
   readonly autoApproveLow: boolean | null;
   readonly updatedAt: string | null;
   readonly updatedBy: string | null;
+  /** Always concrete (never `null`) — `null` (inherit) on any raw list field above resolves to
+   *  "every currently available resource" here, not to nothing (`governance/agent-profile/
+   *  resolve.ts`'s own doc comment) — the already-shipped web console's `EffectivePanel` renders
+   *  every one of these fields, including a `.length` call on each list, so a `null` here would
+   *  break it. */
   readonly effective: {
-    readonly model: string | null;
-    readonly enabledSkills: readonly string[] | null;
-    readonly enabledGatekeepers: readonly string[] | null;
-    readonly enabledWorkerDefinitions: readonly string[] | null;
-    readonly promptAddendum: string | null;
+    readonly model: string;
+    readonly enabledSkills: readonly string[];
+    readonly enabledGatekeepers: readonly string[];
+    readonly enabledWorkerDefinitions: readonly string[];
+    readonly promptAddendum: string;
     readonly autoApproveLow: boolean;
   };
 }
@@ -270,9 +275,13 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('get_agent_profile', () => {
-      it('defaults: no row for a fresh principal — every field null, effective resolves to the compiled-in AgentPolicy defaults', async () => {
-        const memberId = await adminInsertPrincipal(workspaceId, 'member', 'Alice');
-        const member = humanCaller(workspaceId, memberId, 'member');
+      it('defaults: no row for a fresh principal in a fresh workspace — every raw field null, effective resolves to concrete "nothing configured" values', async () => {
+        // Isolated workspace (not the shared top-level one) so "nothing currently available" is
+        // actually true — the shared workspace accumulates published Skills/Gatekeepers from
+        // other tests in this file.
+        const freshWs = await adminInsertWorkspace('agent-profile-flow-defaults-workspace');
+        const memberId = await adminInsertPrincipal(freshWs, 'member', 'Alice');
+        const member = humanCaller(freshWs, memberId, 'member');
 
         const profile = (await dispatchCapability(
           { pool },
@@ -290,14 +299,47 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(profile.autoApproveLow).toBeNull();
         expect(profile.updatedAt).toBeNull();
         expect(profile.updatedBy).toBeNull();
+        // Always concrete — never null — see WireAgentProfile's own doc comment.
         expect(profile.effective).toEqual({
-          model: null,
-          enabledSkills: null,
-          enabledGatekeepers: null,
-          enabledWorkerDefinitions: null,
-          promptAddendum: null,
+          model: '',
+          enabledSkills: [],
+          enabledGatekeepers: [],
+          enabledWorkerDefinitions: [],
+          promptAddendum: '',
           autoApproveLow: false,
         });
+      });
+
+      it('effective.enabledSkills/enabledGatekeepers resolve to "everything currently available" when the profile sets none — not to an empty list', async () => {
+        const availWs = await adminInsertWorkspace('agent-profile-flow-available-workspace');
+        const availOwnerId = await adminInsertPrincipal(availWs, 'owner', 'AvailOwner');
+        const memberId = await adminInsertPrincipal(availWs, 'member', 'AvailMember');
+        const member = humanCaller(availWs, memberId, 'member');
+
+        const skillId = await publishTestSkill(
+          availWs,
+          availOwnerId,
+          `avail-skill-${randomUUID()}`,
+        );
+        const gatekeeperId = await registerTestGatekeeper(
+          availWs,
+          availOwnerId,
+          `avail-gate-${randomUUID()}`,
+        );
+        await grantGatekeeper(availWs, availOwnerId, memberId, gatekeeperId);
+
+        const profile = (await dispatchCapability(
+          { pool },
+          member,
+          'get_agent_profile',
+          {},
+        )) as WireAgentProfile;
+
+        // The raw fields are still null (never touched) — only `effective` resolves the ceiling.
+        expect(profile.enabledSkills).toBeNull();
+        expect(profile.enabledGatekeepers).toBeNull();
+        expect(profile.effective.enabledSkills).toEqual([skillId]);
+        expect(profile.effective.enabledGatekeepers).toEqual([gatekeeperId]);
       });
 
       it('a member may read their own profile with no principalId given', async () => {

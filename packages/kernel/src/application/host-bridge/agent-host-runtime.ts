@@ -20,6 +20,7 @@ import {
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import {
   getPublishedEntryDefinition,
+  listPublishedSkillIds,
   renderSkillMarkdownFile,
   resolvePublishedSkills,
 } from '../worker/index.js';
@@ -443,9 +444,11 @@ export class AgentHostRuntime implements AgentRuntime {
    * S3.13: `agentProfile` (the caller's own `effective` AgentProfile, resolved once in `startTurn`
    * — `undefined` only when resolution itself failed) is merged in here — never re-derived —
    * against the published entry WorkerDefinition's own `entryDefinition`:
-   *   - `model`: `agentProfile.model` wins when set (not `null`/`undefined`); otherwise the
-   *     WorkerDefinition's own `model` applies, exactly as before this task.
-   *   - `systemPrompt`: `agentProfile.promptAddendum`, when present, is appended as a clearly
+   *   - `model`: `agentProfile.model` wins when non-empty (`EffectiveAgentProfile.model` is always
+   *     a concrete `string`, `''` meaning "nothing configured anywhere" —
+   *     `governance/agent-profile/resolve.ts`'s own doc comment); otherwise the WorkerDefinition's
+   *     own `model` applies, exactly as before this task.
+   *   - `systemPrompt`: `agentProfile.promptAddendum`, when non-empty, is appended as a clearly
    *     delimited final section (`appendPromptAddendum` below) — strictly *after* the platform's
    *     own `entryDefinition.systemPrompt`, so it can never precede or otherwise override it.
    */
@@ -475,7 +478,7 @@ export class AgentHostRuntime implements AgentRuntime {
       },
     });
 
-    const model = agentProfile?.model ?? entryDefinition?.model;
+    const model = agentProfile?.model ? agentProfile.model : entryDefinition?.model;
     const systemPrompt = appendPromptAddendum(
       entryDefinition?.systemPrompt,
       agentProfile?.promptAddendum,
@@ -749,6 +752,16 @@ export class AgentHostRuntime implements AgentRuntime {
    * above already established (a lookup failure degrades to `undefined`, meaning "no override on
    * top of whatever the platform WorkerDefinition/entrypoint default already provides", never a
    * failed Turn).
+   *
+   * `available.publishedSkillIds`/`grantedGatekeeperIds` are resolved here too — `governance/
+   * agent-profile/resolve.ts`'s own doc comment has the full rationale: a `null` (inherit)
+   * `enabledSkills`/`enabledGatekeepers` resolves to "every currently available resource", not
+   * "nothing" — matching the already-shipped web console's own reading of the same contract (its
+   * `EffectivePanel` renders `effective.enabledSkills`/`enabledGatekeepers` as always-concrete
+   * lists). `grantedGatekeeperIds` here is a second `listActiveGrantResourceScopes` call,
+   * independent of `ensureEntryHandle`'s own — this method runs *before* that one (its result
+   * feeds `ensureEntryHandle`'s own gate-narrowing), so there is no already-computed value to
+   * reuse yet; the extra read is cheap and keeps the two methods independently callable/testable.
    */
   private async resolveAgentProfile(
     workspaceId: string,
@@ -756,12 +769,25 @@ export class AgentHostRuntime implements AgentRuntime {
   ): Promise<ResolvedAgentProfile | undefined> {
     try {
       return await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
-        const [profile, policy] = await Promise.all([
+        const [profile, policy, publishedSkillIds, grantedGatekeeperIds] = await Promise.all([
           readAgentProfile(client, workspaceId, principalId),
           readAgentPolicy(client, workspaceId),
+          listPublishedSkillIds(client, workspaceId),
+          listActiveGrantResourceScopes(client, workspaceId, {
+            principalId,
+            resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
+          }),
         ]);
         return {
-          effective: resolveEffectiveAgentProfile(profile, policy),
+          effective: resolveEffectiveAgentProfile(profile, policy, {
+            publishedSkillIds,
+            grantedGatekeeperIds,
+            // No consumer in this class reads `enabledWorkerDefinitions` — entry Turns never
+            // mount/select a WorkerDefinition of their own — so the ceiling is left empty rather
+            // than paying for a third query (`listWorkerDefinitions`) purely to fill a field
+            // nothing here inspects.
+            publishedWorkerDefinitionIds: [],
+          }),
           versionKey: `${profile?.updatedAt?.getTime() ?? 0}:${policy.updatedAt?.getTime() ?? 0}`,
         };
       });
@@ -783,12 +809,12 @@ export class AgentHostRuntime implements AgentRuntime {
    * S3.13: renders the caller's own `effective.enabledSkills` into mountable content — same
    * `resolvePublishedSkills` + `renderSkillMarkdownFile` pair `application/task/
    * definition-content.ts`'s `resolveSkillsInline` already uses for the Task path, applied here to
-   * the entry container instead. Deliberately treats a `null` `enabledSkills` (the "no explicit
-   * restriction" sentinel `governance/agent-profile/resolve.ts`'s own doc comment describes) as
-   * "mount nothing", **not** "every published Skill" — see that same doc comment's own rationale
-   * for why an entry-agent's Skill set only ever grows by the principal's own explicit choice.
-   * Never fatal: a lookup failure degrades to no Skills mounted, same convention as
-   * `resolveEntryDefinition`/`resolveAgentProfile` above.
+   * the entry container instead. `effective.enabledSkills` is already fully resolved by
+   * `resolveAgentProfile` above (never `null` — "every published Skill" when the principal's own
+   * AgentProfile sets no explicit selection, `governance/agent-profile/resolve.ts`'s own doc
+   * comment), so this method only ever renders whatever concrete list it is given; an empty list
+   * mounts nothing. Never fatal: a lookup failure degrades to no Skills mounted, same convention
+   * as `resolveEntryDefinition`/`resolveAgentProfile` above.
    */
   private async resolveSkillsInline(
     workspaceId: string,

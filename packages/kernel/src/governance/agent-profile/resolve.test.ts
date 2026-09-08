@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolveEffectiveAgentProfile } from './resolve.js';
+import { NO_AVAILABLE_AGENT_RESOURCES, resolveEffectiveAgentProfile } from './resolve.js';
+import type { AvailableAgentResources } from './resolve.js';
 import { defaultAgentPolicy } from './store.js';
 import type { AgentPolicyRow, AgentProfileRow } from './types.js';
 
@@ -26,15 +27,19 @@ function policy(overrides: Partial<AgentPolicyRow> = {}): AgentPolicyRow {
   return { ...defaultAgentPolicy(WORKSPACE_ID), ...overrides };
 }
 
+function available(overrides: Partial<AvailableAgentResources> = {}): AvailableAgentResources {
+  return { ...NO_AVAILABLE_AGENT_RESOURCES, ...overrides };
+}
+
 describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () => {
-  it('resolves every field to the compiled-in defaults when there is no profile row and no policy row', () => {
-    const effective = resolveEffectiveAgentProfile(undefined, policy());
+  it('resolves every field to a concrete "nothing configured" value when there is no profile row, no policy row, and nothing available', () => {
+    const effective = resolveEffectiveAgentProfile(undefined, policy(), available());
     expect(effective).toEqual({
-      model: null,
-      enabledSkills: null,
-      enabledGatekeepers: null,
-      enabledWorkerDefinitions: null,
-      promptAddendum: null,
+      model: '',
+      enabledSkills: [],
+      enabledGatekeepers: [],
+      enabledWorkerDefinitions: [],
+      promptAddendum: '',
       autoApproveLow: false,
     });
   });
@@ -43,6 +48,7 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
     const effective = resolveEffectiveAgentProfile(
       profile({ model: 'anthropic/claude-sonnet' }),
       policy({ defaultModel: 'anthropic/claude-haiku' }),
+      available(),
     );
     expect(effective.model).toBe('anthropic/claude-sonnet');
   });
@@ -51,43 +57,57 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
     const effective = resolveEffectiveAgentProfile(
       profile({ model: null }),
       policy({ defaultModel: 'anthropic/claude-haiku' }),
+      available(),
     );
     expect(effective.model).toBe('anthropic/claude-haiku');
   });
 
-  it('model: null when neither the profile nor the policy sets one', () => {
-    const effective = resolveEffectiveAgentProfile(profile({ model: null }), policy());
-    expect(effective.model).toBeNull();
+  it('model: empty string when neither the profile nor the policy sets one', () => {
+    const effective = resolveEffectiveAgentProfile(profile({ model: null }), policy(), available());
+    expect(effective.model).toBe('');
   });
 
-  it('enabledGatekeepers: null (no restriction) when the profile is null and the policy has no cap', () => {
+  it('enabledGatekeepers: null (inherit) resolves to every currently-available (granted) id, not an empty list', () => {
     const effective = resolveEffectiveAgentProfile(
       profile({ enabledGatekeepers: null }),
       policy({ allowedGatekeepers: [] }),
+      available({ grantedGatekeeperIds: ['gk-1', 'gk-2'] }),
     );
-    expect(effective.enabledGatekeepers).toBeNull();
+    expect(effective.enabledGatekeepers).toEqual(['gk-1', 'gk-2']);
+  });
+
+  it('enabledGatekeepers: an explicit empty list means "nothing" — genuinely different from null', () => {
+    const effective = resolveEffectiveAgentProfile(
+      profile({ enabledGatekeepers: [] }),
+      policy({ allowedGatekeepers: [] }),
+      available({ grantedGatekeeperIds: ['gk-1', 'gk-2'] }),
+    );
+    expect(effective.enabledGatekeepers).toEqual([]);
   });
 
   it('enabledGatekeepers: an explicit profile list passes through unchanged when the policy has no cap', () => {
     const effective = resolveEffectiveAgentProfile(
       profile({ enabledGatekeepers: ['gk-1', 'gk-2'] }),
       policy({ allowedGatekeepers: [] }),
+      available({ grantedGatekeeperIds: ['gk-1', 'gk-2', 'gk-3'] }),
     );
     expect(effective.enabledGatekeepers).toEqual(['gk-1', 'gk-2']);
   });
 
-  it('enabledGatekeepers: a policy cap becomes the effective list when the profile is null', () => {
+  it('enabledGatekeepers: a policy cap narrows the "everything available" inherited set', () => {
     const effective = resolveEffectiveAgentProfile(
       profile({ enabledGatekeepers: null }),
-      policy({ allowedGatekeepers: ['gk-1', 'gk-2'] }),
+      policy({ allowedGatekeepers: ['gk-1'] }),
+      available({ grantedGatekeeperIds: ['gk-1', 'gk-2'] }),
     );
-    expect(effective.enabledGatekeepers).toEqual(['gk-1', 'gk-2']);
+    expect(effective.enabledGatekeepers).toEqual(['gk-1']);
   });
 
   it('enabledGatekeepers: a policy cap narrows an explicit profile list to the intersection — never widens', () => {
     const effective = resolveEffectiveAgentProfile(
       profile({ enabledGatekeepers: ['gk-1', 'gk-2', 'gk-3'] }),
       policy({ allowedGatekeepers: ['gk-2', 'gk-3', 'gk-4'] }),
+      available(),
     );
     expect(effective.enabledGatekeepers).toEqual(['gk-2', 'gk-3']);
   });
@@ -96,47 +116,64 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
     const effective = resolveEffectiveAgentProfile(
       profile({ enabledGatekeepers: ['gk-1'] }),
       policy({ allowedGatekeepers: ['gk-2'] }),
+      available(),
     );
     expect(effective.enabledGatekeepers).toEqual([]);
   });
 
-  it('enabledSkills: follows the identical cap/inherit rule as enabledGatekeepers', () => {
-    const effective = resolveEffectiveAgentProfile(
+  it('enabledSkills: follows the identical inherit/cap rule as enabledGatekeepers, against published Skills', () => {
+    const inherited = resolveEffectiveAgentProfile(
+      profile({ enabledSkills: null }),
+      policy(),
+      available({ publishedSkillIds: ['skill-a', 'skill-b'] }),
+    );
+    expect(inherited.enabledSkills).toEqual(['skill-a', 'skill-b']);
+
+    const capped = resolveEffectiveAgentProfile(
       profile({ enabledSkills: ['skill-a', 'skill-b'] }),
       policy({ allowedSkills: ['skill-b'] }),
+      available(),
     );
-    expect(effective.enabledSkills).toEqual(['skill-b']);
+    expect(capped.enabledSkills).toEqual(['skill-b']);
   });
 
-  it('enabledWorkerDefinitions: passes through the raw profile value — no policy cap exists for it', () => {
-    const withValue = resolveEffectiveAgentProfile(
-      profile({ enabledWorkerDefinitions: ['def-1'] }),
-      policy(),
-    );
-    expect(withValue.enabledWorkerDefinitions).toEqual(['def-1']);
-
-    const withNull = resolveEffectiveAgentProfile(
+  it('enabledWorkerDefinitions: null (inherit) resolves to every currently-published WorkerDefinition id — no policy cap exists for it', () => {
+    const inherited = resolveEffectiveAgentProfile(
       profile({ enabledWorkerDefinitions: null }),
       policy(),
+      available({ publishedWorkerDefinitionIds: ['def-1', 'def-2'] }),
     );
-    expect(withNull.enabledWorkerDefinitions).toBeNull();
+    expect(inherited.enabledWorkerDefinitions).toEqual(['def-1', 'def-2']);
+
+    const explicit = resolveEffectiveAgentProfile(
+      profile({ enabledWorkerDefinitions: ['def-1'] }),
+      policy(),
+      available({ publishedWorkerDefinitionIds: ['def-1', 'def-2'] }),
+    );
+    expect(explicit.enabledWorkerDefinitions).toEqual(['def-1']);
   });
 
-  it('promptAddendum: profile value passes through; null when the profile has none', () => {
+  it('promptAddendum: profile value passes through; empty string when the profile has none', () => {
     const withValue = resolveEffectiveAgentProfile(
       profile({ promptAddendum: 'Prefer concise answers.' }),
       policy(),
+      available(),
     );
     expect(withValue.promptAddendum).toBe('Prefer concise answers.');
 
-    const withNull = resolveEffectiveAgentProfile(profile({ promptAddendum: null }), policy());
-    expect(withNull.promptAddendum).toBeNull();
+    const withNull = resolveEffectiveAgentProfile(
+      profile({ promptAddendum: null }),
+      policy(),
+      available(),
+    );
+    expect(withNull.promptAddendum).toBe('');
   });
 
   it('autoApproveLow: profile true overrides a workspace default of false', () => {
     const effective = resolveEffectiveAgentProfile(
       profile({ autoApproveLow: true }),
       policy({ allowMemberAutoApproveLow: false }),
+      available(),
     );
     expect(effective.autoApproveLow).toBe(true);
   });
@@ -145,6 +182,7 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
     const effective = resolveEffectiveAgentProfile(
       profile({ autoApproveLow: false }),
       policy({ allowMemberAutoApproveLow: true }),
+      available(),
     );
     expect(effective.autoApproveLow).toBe(false);
   });
@@ -153,13 +191,26 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
     const inheritsTrue = resolveEffectiveAgentProfile(
       profile({ autoApproveLow: null }),
       policy({ allowMemberAutoApproveLow: true }),
+      available(),
     );
     expect(inheritsTrue.autoApproveLow).toBe(true);
 
     const inheritsFalse = resolveEffectiveAgentProfile(
       profile({ autoApproveLow: null }),
       policy({ allowMemberAutoApproveLow: false }),
+      available(),
     );
     expect(inheritsFalse.autoApproveLow).toBe(false);
+  });
+
+  it('NO_AVAILABLE_AGENT_RESOURCES is a safe placeholder for a caller that never reads the list fields', () => {
+    const effective = resolveEffectiveAgentProfile(
+      profile({ model: 'anthropic/claude-sonnet', autoApproveLow: true }),
+      policy(),
+      NO_AVAILABLE_AGENT_RESOURCES,
+    );
+    // The fields this kind of caller actually reads are unaffected by the empty placeholder.
+    expect(effective.model).toBe('anthropic/claude-sonnet');
+    expect(effective.autoApproveLow).toBe(true);
   });
 });

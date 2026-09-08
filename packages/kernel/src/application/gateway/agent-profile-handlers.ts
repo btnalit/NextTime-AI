@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import type {
   AgentPolicyRow,
   AgentProfileRow,
+  AvailableAgentResources,
   EffectiveAgentProfile,
   SetAgentPolicyFields,
   SetAgentProfileFields,
@@ -20,7 +21,11 @@ import {
   revokeEntrySessionHandles,
 } from '../../governance/capability/index.js';
 import { listGatekeepers } from '../../governance/gatekeepers/index.js';
-import { resolvePublishedSkills } from '../worker/index.js';
+import {
+  listPublishedSkillIds,
+  listWorkerDefinitions,
+  resolvePublishedSkills,
+} from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { PrincipalNotFoundError } from './members-handlers.js';
@@ -81,6 +86,37 @@ async function assertPrincipalExists(
     [workspaceId, principalId],
   );
   if ((result.rowCount ?? 0) === 0) throw new PrincipalNotFoundError(workspaceId, principalId);
+}
+
+/**
+ * The "inherit" ceiling `resolveEffectiveAgentProfile` resolves a `null` list field against —
+ * every currently-published Skill (workspace-wide), every Gatekeeper `targetPrincipalId`
+ * currently holds an active `'gatekeeper'`-resource-type Grant for (the same query
+ * `agent-host-runtime.ts`'s `ensureEntryHandle` uses for the entry Handle's own gate scope, so
+ * `effective.enabledGatekeepers` always matches what that principal's entry agent can actually
+ * reach — including for an owner, who gets no automatic full-Grant-list here: I14's owner
+ * override is a *validation-time* allowance to explicitly select any registered Gatekeeper, not a
+ * standing grant, so it plays no role in this "what's available to inherit" ceiling), and every
+ * currently-published WorkerDefinition.
+ */
+async function resolveAvailableResources(
+  client: PoolClient,
+  workspaceId: string,
+  targetPrincipalId: string,
+): Promise<AvailableAgentResources> {
+  const [publishedSkillIds, grantedGatekeeperIds, publishedWorkerDefinitions] = await Promise.all([
+    listPublishedSkillIds(client, workspaceId),
+    listActiveGrantResourceScopes(client, workspaceId, {
+      principalId: targetPrincipalId,
+      resourceType: GATEKEEPER_GRANT_CAPABILITY,
+    }),
+    listWorkerDefinitions(client, workspaceId),
+  ]);
+  return {
+    publishedSkillIds,
+    grantedGatekeeperIds,
+    publishedWorkerDefinitionIds: publishedWorkerDefinitions.map((definition) => definition.id),
+  };
 }
 
 // -------------------------------------------------------------------------------------------
@@ -232,11 +268,12 @@ export const getAgentProfileHandler: CapabilityHandler = async (
   }
   await assertPrincipalExists(client, workspaceId, target);
 
-  const [profile, policy] = await Promise.all([
+  const [profile, policy, available] = await Promise.all([
     readAgentProfile(client, workspaceId, target),
     readAgentPolicy(client, workspaceId),
+    resolveAvailableResources(client, workspaceId, target),
   ]);
-  const effective = resolveEffectiveAgentProfile(profile, policy);
+  const effective = resolveEffectiveAgentProfile(profile, policy, available);
 
   return {
     result: toWireAgentProfile(target, profile, effective),
@@ -321,7 +358,8 @@ export const setAgentProfileHandler: CapabilityHandler = async (
   // S3.13 change propagation — see this file's own module doc comment.
   await revokeEntrySessionHandles(client, workspaceId, target);
 
-  const effective = resolveEffectiveAgentProfile(updated, policy);
+  const available = await resolveAvailableResources(client, workspaceId, target);
+  const effective = resolveEffectiveAgentProfile(updated, policy, available);
   return {
     result: toWireAgentProfile(target, updated, effective),
     resourceType: 'agent_profile',

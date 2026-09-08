@@ -400,9 +400,12 @@ async function spawnWorkerRunForRetry(
       const content = readDefinitionContent(definition.definition);
       // S3.13: same fallback `invoke.ts`'s initial spawn applies — only consulted when the
       // WorkerDefinition itself declares no model, never a widening of what it pinned.
+      // `EffectiveAgentProfile.model` is always a concrete `string` (`''` = "nothing configured
+      // anywhere", `governance/agent-profile/resolve.ts`'s own doc comment) — normalized to
+      // `undefined` here, same as `invoke.ts`'s own identical fallback.
       const effectiveModel =
         content.model === undefined
-          ? (await readEffectiveAgentProfile(client, workspaceId, onBehalfOf)).model
+          ? (await readEffectiveAgentProfile(client, workspaceId, onBehalfOf)).model || undefined
           : undefined;
       return {
         model: content.model ?? effectiveModel ?? undefined,

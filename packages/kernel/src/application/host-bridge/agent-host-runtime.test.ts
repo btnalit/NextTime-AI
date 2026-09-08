@@ -238,6 +238,15 @@ function createFakePool(
       };
     }
 
+    // S3.13: application/worker/skills.ts's listPublishedSkillIds, called by resolveAgentProfile
+    // below (the "everything available" ceiling `enabledSkills === null` resolves to).
+    if (sql.startsWith('select id from skills')) {
+      return {
+        rows: publishedSkills.map((skill) => ({ id: skill.id })),
+        rowCount: publishedSkills.length,
+      };
+    }
+
     if (sql.startsWith('insert into capability_handles')) {
       // (workspace_id, jti, session_id, on_behalf_of, parent_jti, scope, expires_at) —
       // governance/capability/handles.ts's issueHandle; on_behalf_of is index 3, not jti (index 1).
@@ -1271,10 +1280,11 @@ describe('AgentHostRuntime — S3.13 AgentProfile runtime projection', () => {
     await startPromise;
   });
 
-  it('mounts no Skills when the profile’s enabledSkills is null (inherit) — never widens to "every published Skill"', async () => {
+  it('mounts every currently-published Skill when the profile’s enabledSkills is null (inherit) — matches the already-shipped web console’s "everything available" reading', async () => {
     const principalId = randomUUID();
     const { pool } = createFakePool(new Map(), new Map(), new Map(), undefined, [
       { id: 'skill-1', name: 'writing-tips' },
+      { id: 'skill-2', name: 'code-review' },
     ]);
     const { sink } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -1292,7 +1302,10 @@ describe('AgentHostRuntime — S3.13 AgentProfile runtime projection', () => {
     const startPromise = runtime.startTurn(input);
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
-    expect(command.skillsInline).toBeUndefined();
+    expect(command.skillsInline?.map((s) => s.name).sort()).toEqual([
+      'code-review',
+      'writing-tips',
+    ]);
 
     runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
     await startPromise;

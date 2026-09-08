@@ -209,10 +209,14 @@ export async function invokeWorkerCreate(
       skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
       // S3.13: only read when the WorkerDefinition itself declares no model — the requesting
       // principal's own effective.model is the fallback, never a widening of what the
-      // WorkerDefinition author already pinned.
+      // WorkerDefinition author already pinned. `EffectiveAgentProfile.model` is always a
+      // concrete `string` (`''` = "nothing configured anywhere",
+      // `governance/agent-profile/resolve.ts`'s own doc comment) — normalized to `undefined`
+      // here so an unconfigured model never becomes a literal empty-string CMD arg.
       effectiveModel:
         content.model === undefined
-          ? (await readEffectiveAgentProfile(client, workspaceId, caller.principalId)).model
+          ? (await readEffectiveAgentProfile(client, workspaceId, caller.principalId)).model ||
+            undefined
           : undefined,
     }),
   );
