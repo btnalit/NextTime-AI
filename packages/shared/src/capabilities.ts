@@ -444,7 +444,8 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
-    description: 'List every registered Gatekeeper instance (health/manifest not included — see get_gatekeeper).',
+    description:
+      'List every registered Gatekeeper instance (health/manifest not included — see get_gatekeeper).',
   },
   {
     name: 'get_gatekeeper',
@@ -462,7 +463,8 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ gatekeeperId: id.optional() }).strict(),
-    description: 'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to one gate.',
+    description:
+      'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to one gate.',
   },
 ];
 
@@ -887,7 +889,8 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: noParams,
-    description: 'List the workspace’s I18 quota values (overrides merged over compiled-in defaults).',
+    description:
+      'List the workspace’s I18 quota values (overrides merged over compiled-in defaults).',
   },
 ];
 
@@ -1203,7 +1206,8 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: noParams,
-    description: 'List every Principal in the workspace (kind/role/hasApiKey/disabledAt — never the key hash).',
+    description:
+      'List every Principal in the workspace (kind/role/hasApiKey/disabledAt — never the key hash).',
   },
   {
     name: 'create_principal',
@@ -1266,7 +1270,8 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
-    description: 'The llm-proxy model whitelist, read from the kernel’s read-only models.json mount (never provider keys).',
+    description:
+      'The llm-proxy model whitelist, read from the kernel’s read-only models.json mount (never provider keys).',
   },
 ];
 
