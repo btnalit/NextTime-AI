@@ -180,6 +180,63 @@ describe('registerEntryMode', () => {
     expect(kernel.requests[0]?.params).toEqual({ objectId: 'obj-1' });
   });
 
+  it('invoke_worker always forces wait:false, overriding whatever the caller asked for (lane-6 review P2-4)', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {}, wait: true, timeout: 90 },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    const invokeCall = kernel.requests.find((r) => r.capability === 'invoke_worker');
+    expect(invokeCall?.params).toEqual({
+      definitionId: 'def-1',
+      version: 1,
+      input: {},
+      wait: false,
+      timeout: 90,
+    });
+  });
+
+  it('invoke_worker forces wait:false even when the caller omits wait entirely', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {} },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    const invokeCall = kernel.requests.find((r) => r.capability === 'invoke_worker');
+    expect(invokeCall?.params).toMatchObject({ wait: false });
+  });
+
+  it('does not force wait:false on any other capability (get_task params pass through unmodified)', async () => {
+    kernel.setHandler('get_task', () => ({ ok: true, result: { taskId: 'task-1' } }));
+    const tool = fake.tools.get('get_task');
+    if (!tool) throw new Error('get_task tool not registered');
+
+    await tool.execute('call-1', { taskId: 'task-1' }, undefined, undefined, fakeCtx());
+
+    const call = kernel.requests.find((r) => r.capability === 'get_task');
+    expect(call?.params).toEqual({ taskId: 'task-1' });
+  });
+
   it('a tool execute() rejects (does not swallow) when the kernel returns {ok:false}', async () => {
     kernel.setHandler('get_object', () => ({
       ok: false,
