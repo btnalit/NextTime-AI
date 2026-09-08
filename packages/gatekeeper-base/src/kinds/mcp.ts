@@ -1,6 +1,7 @@
 import type { Operation } from '@nexttime/shared';
 import { BindingKindMismatchError, TransportInvokeError } from '../errors.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
+import { boundUntrustedText } from './untrusted-text.js';
 
 /**
  * `mcp` transport (design doc §7.5): proxies an external MCP server over HTTP JSON-RPC (streamable
@@ -57,7 +58,9 @@ export class McpTransport implements Transport {
       }
       const body = (await response.json()) as JsonRpcResponse<T>;
       if (body.error) {
-        throw new TransportInvokeError(`mcp transport: ${method} error: ${body.error.message}`);
+        throw new TransportInvokeError(
+          `mcp transport: ${method} error: ${boundUntrustedText(body.error.message)}`,
+        );
       }
       if (body.result === undefined) {
         throw new TransportInvokeError(`mcp transport: ${method} returned no result`);
@@ -84,6 +87,15 @@ export class McpTransport implements Transport {
       { name: operation.binding.tool_name, arguments: params ?? {} },
       ctx.credential,
     );
+    // Review lane 5, P2-3: `tools/call` returning HTTP 200 with `isError:true` is the MCP spec's
+    // own signal that the *tool* failed — that used to be treated as a successful invoke and
+    // persisted as a replayable `apply` result (idempotency store) with no signal anything went
+    // wrong. Surfaced as a transport failure instead, same as a JSON-RPC-level error above.
+    if (isMcpErrorResult(data)) {
+      throw new TransportInvokeError(
+        `mcp transport: tool "${operation.binding.tool_name}" returned isError:true: ${boundUntrustedText(mcpErrorResultText(data))}`,
+      );
+    }
     return { data };
   }
 
@@ -107,6 +119,28 @@ export class McpTransport implements Transport {
   async listTools(credential?: unknown): Promise<McpToolsListResult> {
     return this.call('tools/list', {}, credential);
   }
+}
+
+/** MCP `tools/call` results shape their failure as `{isError: true, content: [...]}` on an
+ *  otherwise-200 JSON-RPC response — see `invoke`'s own doc comment. */
+function isMcpErrorResult(data: unknown): data is { isError: true; content?: unknown } {
+  return (
+    typeof data === 'object' && data !== null && (data as Record<string, unknown>).isError === true
+  );
+}
+
+/** Best-effort human-readable text from an `isError:true` result's `content` array (each item
+ *  typically `{type:'text', text:'...'}` per the MCP content-block spec); falls back to the raw
+ *  JSON when the shape doesn't match. */
+function mcpErrorResultText(data: { content?: unknown }): string {
+  const content = data.content;
+  if (Array.isArray(content)) {
+    const texts = content
+      .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+      .map((item) => (typeof item.text === 'string' ? item.text : JSON.stringify(item)));
+    if (texts.length > 0) return texts.join(' ');
+  }
+  return JSON.stringify(data);
 }
 
 function credentialHeaders(credential: unknown): Record<string, string> {

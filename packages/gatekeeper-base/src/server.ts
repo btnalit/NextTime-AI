@@ -7,6 +7,7 @@ import {
   IdempotencyConflictError,
   OperationModeMismatchError,
   OperationNotFoundError,
+  ParamsSchemaInvalidError,
   ParamsValidationError,
   RevertNotSupportedError,
   TransportInvokeError,
@@ -64,6 +65,9 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
     err instanceof ApplyRequiresIdempotencyKeyError
   ) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  if (err instanceof ParamsSchemaInvalidError) {
+    return { status: 400, code: 'invalid_operation_schema', message: err.message };
   }
   if (err instanceof IdempotencyConflictError) {
     return { status: 409, code: 'idempotency_conflict', message: err.message };
