@@ -143,14 +143,31 @@ export async function registerGatekeeperObject(
 // `setOperationStatusObject`, and what decides *which* existing row a draft write may replace
 // (I16); `registerOperationDraftObject` only provides the atomic conditional write that decision
 // is expressed through (see its own doc comment).
+//
+// **Revision versioning (S3.12, closing the "propose on a published Operation always 409s" gap —
+// docs/runbooks/web-console.md known-gap #11, docs/development-tasks.md S3.12 note)**: the
+// identity key gained a third field, `version`, following the exact convention
+// `projectWorkerDefinitionObject`/`projectSkillObject`/`projectProcedureObject` above already use
+// (`{id, version}`) — multiple `Operation` rows may now coexist for the same `(gatekeeperId, name)`
+// (e.g. a `published` v1 and a `draft` v2 revision proposed against it), instead of one row
+// upserted in place forever. No migration was needed: `identity_key` is a generic `jsonb` column
+// (`objects_identity_key_uidx`, migrations/core/0006_object_identity.sql) — this is purely a
+// change to what JSON shape callers construct. `governance/gatekeepers/manifest.ts` (`getOperation`
+// et al.) is what decides which version is "current" for a given read; this module still only
+// projects whatever identity/version it is handed.
 // -------------------------------------------------------------------------------------------
 
-/** The Operation Object's identity key — `(gatekeeperId, name)`, scoped to one Gatekeeper
+/** The Operation Object's identity key — `(gatekeeperId, name, version)`, scoped to one Gatekeeper
  *  instance's own manifest. `gatekeeperId` here is the Gatekeeper *Object*'s id (not its
- *  human-readable `name` property, which may change). */
+ *  human-readable `name` property, which may change). `version` starts at 1 and increments by one
+ *  per revision (`governance/gatekeepers/manifest.ts`'s `proposeOperation`) — never reused, even
+ *  across a `deprecated` row, so `{gatekeeperId, name, version}` is a stable, permanent reference
+ *  (a draft's own `draftOf` property, and a `publish_operation` Activity's `supersedes` metadata,
+ *  both point at a specific row by its Object id, not by re-deriving this key). */
 export interface OperationIdentity {
   readonly gatekeeperId: string;
   readonly name: string;
+  readonly version: number;
 }
 
 /**
@@ -182,6 +199,15 @@ export interface RegisterOperationDraftInput extends OperationIdentity {
    * replaced (the owner/CLI import path).
    */
   readonly onlyOwnDraftOf?: string;
+  /**
+   * S3.12 revision path only: the Object id of the `published` Operation row this draft was
+   * proposed against (`governance/gatekeepers/manifest.ts`'s `proposeOperation`, when the current
+   * row for the identity is `published` rather than a conflicting draft) — stashed on the draft's
+   * own `properties.draftOf` so `publishOperation` can deprecate that exact row, in the same
+   * transaction it publishes this one, without re-deriving which version it supersedes. Absent for
+   * a fresh v1 draft or an in-place same-version redraft.
+   */
+  readonly draftOf?: string;
 }
 
 export interface OperationObjectResult {
@@ -227,6 +253,8 @@ export async function registerOperationDraftObject(
     origin: input.origin,
     proposedBy: input.proposedBy.id,
     proposedByKind: input.proposedBy.kind,
+    version: input.version,
+    ...(input.draftOf !== undefined ? { draftOf: input.draftOf } : {}),
   };
   const result = await client.query<{ id: string }>(
     `insert into objects (workspace_id, object_type, identity_key, properties)
@@ -244,7 +272,11 @@ export async function registerOperationDraftObject(
      returning id`,
     [
       workspaceId,
-      JSON.stringify({ gatekeeperId: input.gatekeeperId, name: input.name }),
+      JSON.stringify({
+        gatekeeperId: input.gatekeeperId,
+        name: input.name,
+        version: input.version,
+      }),
       JSON.stringify(properties),
       input.onlyOwnDraftOf ?? null,
     ],
@@ -323,13 +355,17 @@ export async function projectProcedureObject(
   });
 }
 
-/** Merges `{status}` into an existing Operation Object's properties (publish/deprecate). Callers
- *  must have already confirmed the Object exists and the transition is legal
- *  (`governance/gatekeepers/manifest.ts` reads it first via `GraphStore.getObjectByIdentity` and
- *  runs it through `PUBLISHABLE_TRANSITIONS`) — this function does not check either, matching
- *  `upsertObject`'s own "no identity → always insert" behavior: calling this for an identity that
- *  does not yet exist would silently create an incomplete Object rather than erroring, which is
- *  exactly the mistake callers are expected to avoid by reading first. */
+/** Merges `{status}` into one specific, already-versioned Operation Object's properties
+ *  (publish/deprecate — targets exactly the `{gatekeeperId, name, version}` row `identity` names,
+ *  never "whichever row currently has this name", which matters once a `published` row and a
+ *  revision `draft` row can coexist for the same identity, S3.12). Callers must have already
+ *  confirmed the Object exists and the transition is legal (`governance/gatekeepers/manifest.ts`
+ *  reads it first and runs it through `PUBLISHABLE_TRANSITIONS`) — this function does not check
+ *  either, matching `upsertObject`'s own "no identity → always insert" behavior: calling this for
+ *  an identity that does not yet exist would silently create an incomplete Object rather than
+ *  erroring, which is exactly the mistake callers are expected to avoid by reading first. Also
+ *  used, unchanged, to deprecate the *superseded* version when `publishOperation` publishes a
+ *  revision draft — same function, just called a second time against the old row's own identity. */
 export async function setOperationStatusObject(
   client: PoolClient,
   workspaceId: string,
@@ -338,7 +374,11 @@ export async function setOperationStatusObject(
 ): Promise<GraphObject> {
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'Operation',
-    identity: { gatekeeperId: identity.gatekeeperId, name: identity.name },
+    identity: {
+      gatekeeperId: identity.gatekeeperId,
+      name: identity.name,
+      version: identity.version,
+    },
     properties: { status },
   });
 }

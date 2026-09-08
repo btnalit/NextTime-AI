@@ -124,11 +124,11 @@ function toWireOperationSummary(record: OperationRecord) {
     mode: record.operation.mode,
     blastRadius: record.operation.blast_radius,
     autoApprovable: record.operation.auto_approvable,
-    // No per-Operation revision counter exists yet — every currently-stored Operation row is
-    // upserted in place (never versioned the way a WorkerDefinition is), so this is always `1`
-    // rather than an omitted/fabricated value; see countOperationsByGatekeeper's own doc comment
-    // for the sibling `manifestVersion?` decision at the Gatekeeper level.
-    version: 1,
+    // S3.12: a real per-identity revision counter now exists (`propose_operation`'s
+    // published→draft revision path, `governance/gatekeepers/manifest.ts`'s own module doc
+    // comment) — no longer hardcoded to `1`. See `countOperationsByGatekeeper`'s own doc comment
+    // for the sibling `manifestVersion?` decision at the Gatekeeper level, which is unaffected.
+    version: record.version,
     status: record.status,
   };
 }

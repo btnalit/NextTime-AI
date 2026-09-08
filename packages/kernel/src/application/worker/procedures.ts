@@ -220,25 +220,11 @@ async function resolveStepTargets(
           `Operation "${step.operationName}" on Gatekeeper ${step.gatekeeperId} is not published (or does not exist)`,
         );
       }
-      const operationObject = await graphStore.getObjectByIdentity(
-        client,
-        workspaceId,
-        'Operation',
-        {
-          gatekeeperId: step.gatekeeperId,
-          name: step.operationName,
-        },
-      );
-      // Defensive — `getPublishedOperation` already confirmed this Object exists (it reads the
-      // same `objects` row); a null here would mean the two queries disagree, which should never
-      // happen, but this function must never silently drop a step it just validated.
-      if (!operationObject) {
-        throw new ProcedureStepReferenceError(
-          stepIndex,
-          `Operation "${step.operationName}" on Gatekeeper ${step.gatekeeperId} has no graph projection`,
-        );
-      }
-      targets.push({ stepIndex, targetObjectId: operationObject.id });
+      // `getPublishedOperation` already resolved this Object and carries its own id (S3.12:
+      // Operation's identity gained a `version` dimension, so a plain `{gatekeeperId, name}`
+      // `getObjectByIdentity` lookup — this used to re-fetch the same row that way — no longer
+      // resolves anything; `operation.id` is that same row, no second query needed).
+      targets.push({ stepIndex, targetObjectId: operation.id });
       continue;
     }
 
