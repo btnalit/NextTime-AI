@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,7 @@ import type {
 import { AgentHostRuntime } from '../../application/host-bridge/index.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
 import { createServer } from '../../index.js';
+import type { InternalPlaneAuthConfig } from '../internal-auth/index.js';
 import {
   _resetAgentHostRuntimeForWsRouteForTests,
   setAgentHostRuntimeForWsRoute,
@@ -22,9 +23,15 @@ import {
  * client, same style as interfaces/ws/server.test.ts — but backed by an in-memory fake `PoolLike`
  * (same technique as application/host-bridge/agent-host-runtime.test.ts) rather than real
  * Postgres, so this file needs no `DATABASE_URL` and always runs: it is testing the WebSocket
- * transport/wiring (frame parsing, `AgentHostLink`, connect/disconnect), not `AgentHostRuntime`'s
- * own protocol logic (already covered by agent-host-runtime.test.ts's unit tests).
+ * transport/wiring (frame parsing, `AgentHostLink`, connect/disconnect) and the internal-plane
+ * guard's effect on the upgrade (fix/internal-plane-auth), not `AgentHostRuntime`'s own protocol
+ * logic (already covered by agent-host-runtime.test.ts's unit tests).
  */
+
+/** The internal-plane shared secret the listener below is built with; every "happy path"
+ *  connection presents it, the rejection tests withhold or alter it. */
+const INTERNAL_TOKEN = randomBytes(32).toString('hex');
+const AUTH_HEADERS = { authorization: `Bearer ${INTERNAL_TOKEN}` };
 
 function createFakePool(): PoolLike {
   const sessionIdByPrincipal = new Map<string, string>();
@@ -105,19 +112,40 @@ interface Listening {
   url: string;
 }
 
-async function listen(): Promise<Listening> {
+async function listen(
+  internalAuth: InternalPlaneAuthConfig = { token: INTERNAL_TOKEN },
+): Promise<Listening> {
   // createServer() already registers GET /internal/agent-host (packages/kernel/src/index.ts) —
-  // no separate registerAgentHostWsRoute() call needed here.
-  const app = createServer({ pool: createFakePool() });
+  // no separate registerAgentHostWsRoute() call needed here — and installs the internal-plane
+  // guard from `internalAuth`.
+  const app = createServer({ pool: createFakePool() }, { internalAuth });
   const address = await app.listen({ port: 0, host: '127.0.0.1' });
   return { app, url: `${address.replace('http://', 'ws://')}/internal/agent-host` };
 }
 
-function connect(url: string): Promise<WebSocket> {
-  const ws = new WebSocket(url);
+function connect(url: string, headers: Record<string, string> = AUTH_HEADERS): Promise<WebSocket> {
+  const ws = new WebSocket(url, { headers });
   return new Promise((resolve, reject) => {
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
+  });
+}
+
+/** Resolves with the HTTP status the server answered the upgrade with (the `ws` client surfaces a
+ *  non-101 response as an `error` "Unexpected server response: <status>"), or rejects if the
+ *  upgrade unexpectedly succeeded. */
+function attemptUpgrade(url: string, headers: Record<string, string>): Promise<number> {
+  const ws = new WebSocket(url, { headers });
+  return new Promise((resolve, reject) => {
+    ws.once('open', () => {
+      ws.close();
+      reject(new Error('upgrade was accepted but should have been rejected'));
+    });
+    ws.once('error', (err) => {
+      const match = /Unexpected server response: (\d+)/.exec(err.message);
+      if (match?.[1]) resolve(Number(match[1]));
+      else reject(err);
+    });
   });
 }
 
@@ -144,6 +172,60 @@ function startTurnInput(): StartTurnInput {
     prompt: 'hello',
   };
 }
+
+describe('GET /internal/agent-host upgrade is behind the internal-plane guard', () => {
+  it('rejects the upgrade with 401 when no Authorization header is sent, before any hello is read', async () => {
+    listening = await listen();
+    const { runtime, events } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    await expect(attemptUpgrade(listening.url, {})).resolves.toBe(401);
+
+    // Nothing registered itself as the link: a startTurn still reports "no agent-host connected".
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+    expect(events.at(-1)).toMatchObject({ turnId: input.turnId, status: 'failed' });
+  });
+
+  it('rejects the upgrade with 401 for a wrong token', async () => {
+    listening = await listen();
+    const { runtime, events } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    const wrong = randomBytes(32).toString('hex');
+    await expect(attemptUpgrade(listening.url, { authorization: `Bearer ${wrong}` })).resolves.toBe(
+      401,
+    );
+
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+    expect(events.at(-1)).toMatchObject({ turnId: input.turnId, status: 'failed' });
+  });
+
+  it('rejects the upgrade with 401 from a peer inside NEXTTIME_SUBNET_WORKERS even with the right token', async () => {
+    // The test client connects from loopback; declaring loopback as the Worker subnet makes this
+    // very connection "a Worker holding a leaked token".
+    listening = await listen({ token: INTERNAL_TOKEN, workersSubnet: '127.0.0.0/8' });
+    const { runtime, events } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    await expect(attemptUpgrade(listening.url, AUTH_HEADERS)).resolves.toBe(401);
+
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+    expect(events.at(-1)).toMatchObject({ turnId: input.turnId, status: 'failed' });
+  });
+
+  it('accepts the upgrade with the right token (the connection tests below all present it)', async () => {
+    listening = await listen();
+    const { runtime } = await buildRuntime();
+    setAgentHostRuntimeForWsRoute(runtime);
+
+    const ws = await connect(listening.url);
+    expect(ws.readyState).toBe(1);
+    ws.close();
+  });
+});
 
 describe('GET /internal/agent-host', () => {
   it('closes the connection immediately when no AgentHostRuntime is registered', async () => {

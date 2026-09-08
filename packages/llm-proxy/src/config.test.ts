@@ -1,11 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { INTERNAL_TOKEN_FILE_ENV, InternalTokenError } from '@nexttime/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_LLM_PROXY_PORT,
   LlmProxyConfigError,
   loadConfig,
+  loadInternalToken,
   loadProvidersFile,
 } from './config.js';
 
@@ -151,5 +153,54 @@ providers:
     models: []
 `);
     await expect(loadProvidersFile(file)).rejects.toThrow(LlmProxyConfigError);
+  });
+});
+
+describe('loadInternalToken', () => {
+  let dir: string | undefined;
+
+  afterEach(() => {
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+      dir = undefined;
+    }
+  });
+
+  function tokenFile(contents: string): string {
+    dir = mkdtempSync(path.join(tmpdir(), 'nexttime-llm-proxy-internal-token-'));
+    const file = path.join(dir, 'internal.token');
+    writeFileSync(file, contents, 'utf8');
+    return file;
+  }
+
+  const TOKEN = 'a'.repeat(64);
+
+  it('reads and trims the token from the file named by the env var', async () => {
+    const file = tokenFile(`${TOKEN}\n`);
+    await expect(loadInternalToken({ [INTERNAL_TOKEN_FILE_ENV]: file })).resolves.toBe(TOKEN);
+  });
+
+  it('fails with InternalTokenError naming the path and env var when the file is missing', async () => {
+    const missing = path.join(
+      tmpdir(),
+      'nexttime-llm-proxy-internal-token-does-not-exist',
+      'internal.token',
+    );
+    await expect(loadInternalToken({ [INTERNAL_TOKEN_FILE_ENV]: missing })).rejects.toThrow(
+      InternalTokenError,
+    );
+    await expect(loadInternalToken({ [INTERNAL_TOKEN_FILE_ENV]: missing })).rejects.toThrow(
+      new RegExp(INTERNAL_TOKEN_FILE_ENV),
+    );
+  });
+
+  it('fails when the file is empty or holds a too-short token', async () => {
+    await expect(loadInternalToken({ [INTERNAL_TOKEN_FILE_ENV]: tokenFile('\n') })).rejects.toThrow(
+      InternalTokenError,
+    );
+    rmSync(dir as string, { recursive: true, force: true });
+    await expect(
+      loadInternalToken({ [INTERNAL_TOKEN_FILE_ENV]: tokenFile('changeme\n') }),
+    ).rejects.toThrow(InternalTokenError);
   });
 });

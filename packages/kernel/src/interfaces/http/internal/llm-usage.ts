@@ -19,9 +19,14 @@ import {
  * array of records, batched") — and forwards each per-workspace group to
  * `governance/llm-usage`'s `recordUsage`.
  *
- * Trust boundary (design doc §11: "内核不发布端口" — only `control`-network compose services can
- * reach the kernel at all): this route performs no additional authentication of its own. That is
- * a deliberate S1 assumption, not an oversight — see PR body "假设与偏离".
+ * Trust boundary: every `/internal/*` route, this one included, sits behind
+ * `interfaces/internal-auth`'s shared-secret guard (a root-level `onRequest` hook installed by
+ * `packages/kernel/src/index.ts`'s `createServer` — `Authorization: Bearer <internal token>`,
+ * constant-time compared, plus the `NEXTTIME_SUBNET_WORKERS` peer rule). This file performs no
+ * authentication of its own by design: the guard is keyed on the `/internal/` route prefix so no
+ * internal route can forget it. The pre-2026-09 assumption that "only `control`-network services
+ * can reach the kernel" was wrong for a kernel dual-homed on `control` and `workers` — see
+ * `@nexttime/shared`'s `internal-token.ts` doc comment.
  *
  * `principalId` for `withWorkspace`: this route has no authenticated human/agent principal (it's
  * a service-to-service call from `llm-proxy`, which only ever holds a Handle's *claims*, not a

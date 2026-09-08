@@ -1,7 +1,8 @@
 import type { Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { internalAuthorizationHeader } from '@nexttime/shared';
 import type { LlmProxyConfig } from './config.js';
-import { loadConfig, loadProvidersFile } from './config.js';
+import { loadConfig, loadInternalToken, loadProvidersFile } from './config.js';
 import { loadHandlePublicKey } from './handle-auth.js';
 import { createProxyServer } from './proxy.js';
 import { LlmUsageReporter } from './report.js';
@@ -17,6 +18,13 @@ import { startRevocationSync } from './revocation.js';
  * restarts (design doc §13): the revocation set and the usage-report queue are both in-memory
  * only — a restart just means "resync from the kernel" and "any not-yet-flushed usage rows are
  * lost", both accepted trade-offs the design already calls out for this proxy.
+ *
+ * fix/internal-plane-auth (2026-09): both `/internal/*` calls above (revocation sync, usage
+ * reporting) now carry `Authorization: Bearer <internal-plane token>` — `config.ts`'s
+ * `loadInternalToken`, called here only when `config.kernelUrl` is configured. An unreadable or
+ * unusable token file fails `startLlmProxy` outright in that case (this proxy cannot function
+ * without reporting/revocation once a kernel is configured); with no `kernelUrl` at all, the token
+ * is never loaded, matching every other kernel-optional behavior in this file.
  */
 export const VERSION = '0.1.0';
 
@@ -54,15 +62,23 @@ async function closeServer(server: Server): Promise<void> {
 export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Promise<LlmProxyApp> {
   const providersFile = await loadProvidersFile(config.providersFile);
   const publicKey = await loadHandlePublicKey(config.handlePublicKeyFile);
+  // fix/internal-plane-auth (2026-09): only loaded when there is a kernel to reach — see
+  // loadInternalToken's own doc comment for why this mirrors kernelUrl's existing "unset disables
+  // the feature" posture rather than always requiring the token file.
+  const authorizationHeader = config.kernelUrl
+    ? internalAuthorizationHeader(await loadInternalToken())
+    : undefined;
 
   const revocationSync = startRevocationSync({
     kernelUrl: config.kernelUrl,
+    authorizationHeader,
     intervalMs: config.revocationSyncIntervalMs,
     overlapMs: config.revocationSyncOverlapMs,
   });
 
   const reporter = new LlmUsageReporter({
     kernelUrl: config.kernelUrl,
+    authorizationHeader,
     flushIntervalMs: config.usageFlushIntervalMs,
     maxFlushIntervalMs: config.usageMaxFlushIntervalMs,
     maxQueueSize: config.usageMaxQueueSize,

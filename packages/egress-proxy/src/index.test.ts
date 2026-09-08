@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { INTERNAL_TOKEN_FILE_ENV, InternalTokenError } from '@nexttime/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EgressProxyConfig } from './config.js';
 import { loadConfig } from './config.js';
@@ -67,6 +68,24 @@ describe('@nexttime/egress-proxy', () => {
 
       const health = await getJson(adminAddress.port, '/healthz');
       expect(health).toEqual({ status: 200, body: { status: 'ok' } });
+    });
+
+    it('fails fast when KERNEL_URL is configured but the internal-plane token file is missing (fix/internal-plane-auth)', async () => {
+      dir = mkdtempSync(join(tmpdir(), 'egress-proxy-index-'));
+      const sourceMapFile = join(dir, 'sources.json');
+      writeFileSync(sourceMapFile, JSON.stringify({}));
+
+      const config: EgressProxyConfig = {
+        ...loadConfig({
+          SOURCE_MAP_FILE: sourceMapFile,
+          KERNEL_URL: 'http://kernel.internal:8080',
+          [INTERNAL_TOKEN_FILE_ENV]: join(dir, 'does-not-exist', 'internal.token'),
+        }),
+        proxyPort: 0,
+        adminPort: 0,
+      };
+
+      await expect(startEgressProxy(config)).rejects.toThrow(InternalTokenError);
     });
   });
 });

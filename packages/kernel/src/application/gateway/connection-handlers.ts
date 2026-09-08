@@ -229,6 +229,7 @@ export const createConnectionHandler: CapabilityHandler = async (
     result: {
       gatekeeperId: completion.gatekeeperId,
       importedOperationNames: completion.importedOperationNames,
+      skippedOperationNames: completion.skippedOperationNames,
       connectionRequestId: completion.connectionRequest?.id ?? null,
     },
     resourceType: 'gatekeeper',

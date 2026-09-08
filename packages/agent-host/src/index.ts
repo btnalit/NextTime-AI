@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
+import {
+  INTERNAL_TOKEN_FILE_ENV,
+  InternalTokenError,
+  internalAuthorizationHeader,
+  normalizeInternalToken,
+  resolveInternalTokenFile,
+} from '@nexttime/shared';
 import { createContainerIoClient } from './container-io.js';
 import { createHost } from './host.js';
 import type { Host } from './host.js';
@@ -27,6 +35,14 @@ import { SupervisorClient } from './supervisor-client.js';
  *   - `DOCKER_SOCKET_PATH`: defaults to `/var/run/docker.sock` (docker-compose.yml mounts it
  *     read-only into this service — see that file's own comment on why this package, not
  *     worker-supervisor, does the attaching).
+ *
+ * The env list above is still exactly these four — the internal-plane token
+ * (fix/internal-plane-auth, 2026-09) is a *file*, not an env var: `loadInternalToken` below reads
+ * it from `NEXTTIME_INTERNAL_TOKEN_FILE` (default `/run/secrets/internal_token`, the compose
+ * secret `internal_token`), the same contract `@nexttime/shared`'s `internal-token.ts` defines for
+ * every internal-plane client. `main()` loads it eagerly, in the same fail-fast slot as the four
+ * `readRequiredEnv` calls below: this process cannot register as agent-host without it, so an
+ * unreadable/unusable token file is a startup failure, not a degraded mode.
  */
 export const VERSION = '0.1.0';
 
@@ -39,6 +55,30 @@ function readRequiredEnv(name: string): string {
     throw new Error(`@nexttime/agent-host: required environment variable ${name} is not set`);
   }
   return value;
+}
+
+/**
+ * Reads the internal-plane token file (`NEXTTIME_INTERNAL_TOKEN_FILE`, default
+ * `/run/secrets/internal_token` — same contract as `packages/kernel/src/interfaces/internal-auth`'s
+ * `loadInternalToken`, deliberately duplicated rather than shared: `@nexttime/shared`'s
+ * `internal-token.ts` is IO-free by design, see that module's own doc comment). Synchronous so
+ * `main()` can fail fast, before opening the kernel WebSocket or starting the healthz server —
+ * this process has nothing useful to do without a working link to the kernel.
+ */
+export function loadInternalToken(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const file = resolveInternalTokenFile(env);
+  let raw: string;
+  try {
+    raw = readFileSync(file, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code ?? 'error';
+    throw new InternalTokenError(
+      `cannot read the internal-plane token file "${file}" (${INTERNAL_TOKEN_FILE_ENV}; ${code}) — agent-host refuses to start without it: generate it with scripts/gen-handle-keys.sh and mount it as the compose secret internal_token`,
+    );
+  }
+  return normalizeInternalToken(raw, file);
 }
 
 /** `http://kernel:8080` -> `ws://kernel:8080/internal/agent-host` (`https://` -> `wss://`). */
@@ -65,6 +105,9 @@ export function main(): void {
   const supervisorUrl = readRequiredEnv('SUPERVISOR_URL');
   const kernelLlmUrl = readRequiredEnv('KERNEL_LLM_URL');
   const dockerSocketPath = process.env.DOCKER_SOCKET_PATH ?? '/var/run/docker.sock';
+  // Same fail-fast slot as the three readRequiredEnv calls above — see loadInternalToken's own
+  // doc comment.
+  const authorizationHeader = internalAuthorizationHeader(loadInternalToken());
 
   const instanceId = randomUUID();
   const log = (line: string): void => console.error(line);
@@ -80,6 +123,7 @@ export function main(): void {
   const hostRef: { current?: Host } = {};
   const kernelLink = createKernelLink({
     kernelWsUrl: kernelWsUrlFrom(kernelUrl),
+    authorizationHeader,
     instanceId,
     onStartTurn: (cmd) => {
       void hostRef.current?.handleStartTurn(cmd);
