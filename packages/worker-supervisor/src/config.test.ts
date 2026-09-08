@@ -4,7 +4,6 @@ import {
   StopRequestSchema,
   TaskSpawnRequestSchema,
   isImageAllowed,
-  isSkillHostPathAllowed,
   loadConfig,
 } from './config.js';
 
@@ -163,16 +162,25 @@ describe('TaskSpawnRequestSchema', () => {
     expect(TaskSpawnRequestSchema.safeParse(validTaskSpawnBody).success).toBe(true);
   });
 
-  it('accepts every optional field, including skills', () => {
+  it('accepts every optional field, including skillsInline', () => {
     expect(
       TaskSpawnRequestSchema.safeParse({
         ...validTaskSpawnBody,
         image: 'custom-image',
         model: 'anthropic/claude-sonnet-5',
         timeoutSec: 120,
-        skills: [{ name: 'inventory', hostPath: '/host/data/ontology/skills/inventory' }],
+        skillsInline: [{ name: 'inventory', files: { 'SKILL.md': '---\nname: x\n---\n\nbody\n' } }],
       }).success,
     ).toBe(true);
+  });
+
+  it('rejects the removed skills[] host-path field (lane-6 review P1-3 — unknown field, strict schema)', () => {
+    expect(
+      TaskSpawnRequestSchema.safeParse({
+        ...validTaskSpawnBody,
+        skills: [{ name: 'inventory', hostPath: '/host/data/ontology/skills/inventory' }],
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects missing required fields and unknown fields (strict)', () => {
@@ -192,19 +200,6 @@ describe('TaskSpawnRequestSchema', () => {
     expect(
       TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, timeoutSec: 1.5 }).success,
     ).toBe(false);
-  });
-
-  it('rejects a skill name that is not a safe single path segment', () => {
-    const withSkill = (name: string) =>
-      TaskSpawnRequestSchema.safeParse({
-        ...validTaskSpawnBody,
-        skills: [{ name, hostPath: '/host/data/skill' }],
-      }).success;
-    expect(withSkill('..')).toBe(false);
-    expect(withSkill('.')).toBe(false);
-    expect(withSkill('a/b')).toBe(false);
-    expect(withSkill('../../etc')).toBe(false);
-    expect(withSkill('valid-name_1.2')).toBe(true);
   });
 
   describe('skillsInline (S2.14)', () => {
@@ -241,7 +236,7 @@ describe('TaskSpawnRequestSchema', () => {
       expect(withSkillsInline([{ name: 'x', files: { 'other.md': 'y' } }])).toBe(false);
     });
 
-    it('rejects an unsafe skill name, same rule as skills[].name', () => {
+    it('rejects an unsafe skill name (same safe-single-path-segment rule as every other name field in this schema)', () => {
       expect(withSkillsInline([{ name: '../../etc', files: { 'SKILL.md': 'y' } }])).toBe(false);
       expect(withSkillsInline([{ name: '..', files: { 'SKILL.md': 'y' } }])).toBe(false);
     });
@@ -327,37 +322,5 @@ describe('isImageAllowed', () => {
     expect(isImageAllowed(config, 'nexttime-ai-worker-runtime')).toBe(true);
     expect(isImageAllowed(config, 'extra-image')).toBe(true);
     expect(isImageAllowed(config, 'still-not-allowed')).toBe(false);
-  });
-});
-
-describe('isSkillHostPathAllowed', () => {
-  const config = loadConfig({ NEXTTIME_DATA: '/host/data' });
-
-  it('accepts a path under the host data root', () => {
-    expect(isSkillHostPathAllowed(config, '/host/data/ontology/ops-assets/skills/inventory')).toBe(
-      true,
-    );
-  });
-
-  it('accepts the root itself', () => {
-    expect(isSkillHostPathAllowed(config, '/host/data')).toBe(true);
-  });
-
-  it('rejects a path outside the host data root', () => {
-    expect(isSkillHostPathAllowed(config, '/var/run/docker.sock')).toBe(false);
-    expect(isSkillHostPathAllowed(config, '/etc/passwd')).toBe(false);
-    // A sibling directory that merely shares the root as a string prefix must still be rejected
-    // (naive startsWith("/host/data") without the trailing slash would wrongly accept this).
-    expect(isSkillHostPathAllowed(config, '/host/data-other/secret')).toBe(false);
-  });
-
-  it('rejects a path that escapes the root via .. even though it starts inside it', () => {
-    expect(isSkillHostPathAllowed(config, '/host/data/../../etc')).toBe(false);
-    expect(isSkillHostPathAllowed(config, '/host/data/skills/../../../etc/passwd')).toBe(false);
-  });
-
-  it('rejects a non-absolute path', () => {
-    expect(isSkillHostPathAllowed(config, 'relative/path')).toBe(false);
-    expect(isSkillHostPathAllowed(config, '')).toBe(false);
   });
 });

@@ -110,31 +110,6 @@ describe('buildTaskSpawnSpec', () => {
     ]);
   });
 
-  it('mounts each skill read-only under the agent skills directory, by name', () => {
-    const withSkills = buildTaskSpawnSpec({
-      config,
-      taskId: 'task-1',
-      workerRunId: 'run-1',
-      workspaceId: 'ws-1',
-      capabilityHandle: 'h',
-      image: 'nexttime-ai-worker-runtime',
-      networkName: 'workers',
-      skills: [
-        {
-          name: 'ops-assets-inventory',
-          hostPath: '/host/data/ontology/ops-assets/skills/inventory',
-        },
-        { name: 'report-writer', hostPath: '/host/data/ontology/ops-assets/skills/report-writer' },
-      ],
-    });
-    expect(withSkills.binds).toEqual([
-      '/host/data/workspaces/tasks/task-1:/workspace',
-      '/host/data/config/models.json:/workspace/.pi/agent/models.json:ro',
-      '/host/data/ontology/ops-assets/skills/inventory:/workspace/.pi/agent/skills/ops-assets-inventory:ro',
-      '/host/data/ontology/ops-assets/skills/report-writer:/workspace/.pi/agent/skills/report-writer:ro',
-    ]);
-  });
-
   it('sets no CMD when model is omitted', () => {
     expect(spec.cmd).toBeUndefined();
   });

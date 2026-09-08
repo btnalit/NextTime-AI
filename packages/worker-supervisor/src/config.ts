@@ -15,7 +15,6 @@
  * actually needs.
  */
 
-import { posix as posixPath } from 'node:path';
 import { z } from 'zod';
 
 export const DEFAULT_SUPERVISOR_PORT = 8081;
@@ -169,19 +168,6 @@ export const StopRequestSchema = z
   .strict();
 export type StopRequest = z.infer<typeof StopRequestSchema>;
 
-/** A single skill mounted read-only into a Worker container (docs/development-tasks.md S2.8:
- *  "只读挂载 ... 该定义 `uses` 的 Skill"). `name` becomes a path segment
- *  (`task-spawn-spec.ts`/`host-paths.ts` `taskSkillTargetInContainer`) — restricted to a safe
- *  single segment so it can never escape the skills directory it's mounted under. */
-const TaskSkillSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/, 'must be a single safe path segment')
-    .refine((name) => name !== '.' && name !== '..', 'must not be "." or ".."'),
-  hostPath: z.string().min(1),
-});
-
 /** A single skill mounted by *content*, not a host path (S2.14; docs/development-tasks.md S2.14
  *  deliverable 4: "extend the supervisor Task spawn API additively with `skillsInline?: [{name,
  *  files: {"SKILL.md": string, ...}}]`"). The kernel has no writable data mount of its own
@@ -191,16 +177,25 @@ const TaskSkillSchema = z.object({
  *  under the Task's own workspace directory before the container starts — no bind mount needed,
  *  the whole Task workspace is already bind-mounted at `/workspace`.
  *
- * `name` reuses the exact same safe-single-path-segment rule as `TaskSkillSchema.name` above (not
- * refactored into a shared schema — the two are validated independently by design, so a future
- * change to one's rule does not silently change the other's). Each entry in `files` becomes
- * `<agentDir>/skills/<name>/<fileName>` (`host-paths.ts` `taskSkillTargetInContainer` — same target
- * directory the host-path variant mounts to, just populated by writing instead of bind-mounting);
- * `fileName` must be a safe relative path (`isSafeSkillInlineFileName` below) — no leading `/`, no
- * `.`/`..` path segments, so it can never escape the skill's own directory. Every entry must
- * include a `"SKILL.md"` file (pi's own required entry point, `docs/skills.md` "Skill Structure")
- * — `application/worker/skills.ts`'s `renderSkillMarkdownFile` (kernel) is the one place that
- * produces this shape today. Per-file and total-payload size caps
+ * This is now the *only* way a spawn request can put a Skill into a Worker container — the
+ * earlier host-path variant (`skills[].hostPath`, a caller-supplied absolute path this process
+ * bind-mounted read-only) was removed (lane-6 review P1-3): it had been dead since this
+ * `skillsInline` variant shipped (the kernel only ever sends `skillsInline`, never `skills`), and
+ * its allowlist — any path under `${NEXTTIME_DATA}/`, not just a `skills/` subtree — let any
+ * caller of this unauthenticated-until-now API mount `secrets/handle.key` (the Handle signing
+ * key, 0640 group-readable by the Worker uid) or any other user's workspace read-only into a
+ * Worker container. Closed by deleting the feature rather than narrowing the allowlist: nothing
+ * in this codebase ever sent `skills[]`, so there was no behavior to preserve. See `server.ts`'s
+ * internal-plane-auth guard (`internal-auth.ts`) for the other half of P1-3 — `POST /task/spawn`
+ * itself is no longer reachable without the shared secret either.
+ *
+ * `name` must be a safe single path segment — `isSafeSkillInlineFileName` below applies the
+ * matching rule to `fileName`. Each entry in `files` becomes `<agentDir>/skills/<name>/<fileName>`
+ * (`host-paths.ts`'s `TaskPaths.skillsDirInContainer`); `fileName` must be a safe relative path —
+ * no leading `/`, no `.`/`..` path segments, so it can never escape the skill's own directory.
+ * Every entry must include a `"SKILL.md"` file (pi's own required entry point, `docs/skills.md`
+ * "Skill Structure") — `application/worker/skills.ts`'s `renderSkillMarkdownFile` (kernel) is the
+ * one place that produces this shape today. Per-file and total-payload size caps
  * (`MAX_SKILL_INLINE_FILE_BYTES`/`MAX_SKILL_INLINE_TOTAL_BYTES`) bound how much a single spawn
  * request can make this process write to disk. */
 export const MAX_SKILL_INLINE_FILE_BYTES = 512 * 1024;
@@ -289,32 +284,9 @@ export const TaskSpawnRequestSchema = z
     capabilityHandle: z.string().min(1),
     image: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
-    skills: z.array(TaskSkillSchema).optional(),
     skillsInline: z.array(TaskSkillInlineSchema).optional(),
     timeoutSec: z.number().int().positive().optional(),
   })
   .strict();
 export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;
 export type TaskSkillInline = z.infer<typeof TaskSkillInlineSchema>;
-
-/** `skills[].hostPath` must resolve under this supervisor's own host data root
- *  (`${config.nextTimeData}/`) — otherwise a caller could mount an arbitrary host path (e.g.
- *  `/var/run/docker.sock`, `/etc`) read-only into a Worker container. `TaskSkillSchema` cannot
- *  enforce this itself (it has no access to `config`, and this package's Zod schemas are static,
- *  built once at module scope, matching every other schema in this file) — same pattern as
- *  `isImageAllowed` below: a small pure function, called by `server.ts` after the structural Zod
- *  parse succeeds, 400s the request if any skill fails it.
- *
- * `hostPath` must be absolute, and — after `path.posix.normalize` — contain no residual `..`
- * segment and lie at or under the normalized root. Both checks are applied even though, for an
- * absolute path, `posix.normalize` already resolves every resolvable `..` (an absolute path has no
- * parent above `/`, so `posix.normalize('/a/../../etc')` is `/etc`, never a string containing
- * `..`) — the explicit `..`-segment check is cheap, explicit defense-in-depth, not load-bearing on
- * its own; the root-prefix check is what actually rejects an escaped path like that example. */
-export function isSkillHostPathAllowed(config: SupervisorConfig, hostPath: string): boolean {
-  if (!hostPath.startsWith('/')) return false;
-  const normalized = posixPath.normalize(hostPath);
-  if (normalized.split('/').includes('..')) return false;
-  const root = posixPath.normalize(`${config.nextTimeData}/`);
-  return normalized === root.slice(0, -1) || normalized.startsWith(root);
-}

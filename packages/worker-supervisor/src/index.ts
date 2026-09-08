@@ -2,13 +2,13 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { createDockerClient } from './docker-client.js';
 import { createEgressMapStore } from './egress-map.js';
+import { loadInternalToken } from './internal-auth.js';
 import { createResidentService } from './resident-service.js';
 import { createServer } from './server.js';
 import { createTaskService } from './task-service.js';
 
 export {
   isImageAllowed,
-  isSkillHostPathAllowed,
   loadConfig,
   SpawnRequestSchema,
   StopRequestSchema,
@@ -24,6 +24,7 @@ export { createDockerClient } from './docker-client.js';
 export type { ContainerSpec, ContainerState, DockerClient } from './docker-client.js';
 export { createEgressMapStore, entrySourceId, taskSourceId } from './egress-map.js';
 export type { EgressMapStore, SourceMapEntry, SourceMapFile } from './egress-map.js';
+export { loadInternalToken, requireInternalToken } from './internal-auth.js';
 export { createResidentService } from './resident-service.js';
 export type { ResidentService, ResidentStatus, SpawnOutcome } from './resident-service.js';
 export { buildSpawnSpec, entryContainerName } from './spawn-spec.js';
@@ -59,6 +60,9 @@ const TASK_RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 export async function main(): Promise<void> {
   const config = loadConfig();
+  // Fail-fast, before opening the Docker socket or binding a port — this process cannot serve
+  // POST /task/spawn or any /resident/* route without it (internal-auth.ts's own doc comment).
+  const internalToken = loadInternalToken();
   const docker = createDockerClient({ socketPath: config.dockerSocketPath });
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
   const residentService = createResidentService({ config, docker, egressMap });
@@ -94,7 +98,7 @@ export async function main(): Promise<void> {
   }, TASK_RETENTION_SWEEP_INTERVAL_MS);
   taskRetentionTimer.unref();
 
-  const app = createServer({ residentService, taskService, config, logger: true });
+  const app = createServer({ residentService, taskService, config, internalToken, logger: true });
   await app.listen({ port: config.port, host: '0.0.0.0' });
 
   const shutdown = async (): Promise<void> => {

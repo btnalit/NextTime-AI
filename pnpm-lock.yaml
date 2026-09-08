@@ -222,6 +222,9 @@ importers:
 
   packages/worker-supervisor:
     dependencies:
+      '@nexttime/shared':
+        specifier: workspace:*
+        version: link:../shared
       dockerode:
         specifier: ^5.0.1
         version: 5.0.1(supports-color@7.2.0)
