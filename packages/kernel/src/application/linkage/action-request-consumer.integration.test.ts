@@ -267,5 +267,78 @@ describe.runIf(DATABASE_URL !== undefined)(
         isHolder: false,
       });
     });
+
+    // Lane-4 P3 fix (docs/development-tasks.md; action-request-consumer.ts's own module doc
+    // comment has the full decision writeup): a single-owner workspace's owner is automatically a
+    // holder (I14) — when that same owner is *also* the requester (they asked their own entry
+    // agent to do the thing), the old `isHolder ? undefined : {...}` condition silently dropped
+    // their pending_context_items row, since `isHolder` was true. The entry agent acting for that
+    // owner would then never learn, via get_entry_context, what happened to an action it had just
+    // asked for — the exact scenario this test covers.
+    it('a requester who is also a holder (single-owner workspace) still gets pending_context_items', async () => {
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        requestAction(client, workspaceId, {
+          gatekeeperId,
+          actionKind: 'linkage.test.action',
+          blastRadius: 'medium',
+          operationAutoApprovable: true,
+          awaitDecision: false,
+          onBehalfOf: ownerId,
+          actorRuntime: 'pi',
+          requesterScope: scopeCovering(gatekeeperId),
+        }),
+      );
+      expect(row.status).toBe('pending_approval');
+
+      const outboxRow = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string; payload: Record<string, unknown> }>(
+            `select id, payload from outbox
+           where workspace_id = $1 and event_type = 'ActionRequestPending'
+             and payload->>'actionRequestId' = $2
+           order by id desc limit 1`,
+            [workspaceId, row.id],
+          );
+          const found = result.rows[0];
+          if (!found) throw new Error('expected an ActionRequestPending outbox row');
+          return found;
+        },
+      );
+      const holderPrincipalIds = (outboxRow.payload as { holderPrincipalIds?: string[] })
+        .holderPrincipalIds;
+      // ownerId is both the requester (onBehalfOf above) and a holder — I14.
+      expect(holderPrincipalIds).toContain(ownerId);
+
+      // ownerId's own Chat already accumulated messages from the earlier test in this same
+      // describe block (ownerId is a holder there too) — this test only asserts on the *new*
+      // message this dispatch adds, not on an absolute count from an assumed-empty Chat.
+      const ownerMessagesBefore = await chatMessagesFor(ownerId);
+
+      const dispatcher = createFakeDispatcher();
+      registerActionRequestConsumers(dispatcher, { pool });
+      await dispatcher.emit('ActionRequestPending', outboxRow.id, outboxRow.payload as never);
+
+      // The card message still shows isHolder:true (unaffected — that field governs the chat
+      // message's own rendering, not the context-injection decision below).
+      const ownerMessages = await chatMessagesFor(ownerId);
+      expect(ownerMessages).toHaveLength(ownerMessagesBefore.length + 1);
+      expect(ownerMessages.at(-1)?.content).toMatchObject({
+        kind: 'system.action_pending',
+        actionRequestId: row.id,
+        isHolder: true,
+      });
+
+      // The fix under test: despite isHolder:true, a pending_context_items row is still written,
+      // because ownerId is also the requester.
+      const ownerDrain = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) => drainPendingContextItems(client, workspaceId, ownerId),
+      );
+      expect(ownerDrain.pendingApprovals).toHaveLength(1);
+      expect(ownerDrain.pendingApprovals[0]).toMatchObject({ actionRequestId: row.id });
+    });
   },
 );

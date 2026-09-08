@@ -2,13 +2,18 @@ import type { PoolClient } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { _resetChatPushEventsForTests, subscribeToChatPushEvents } from './push.js';
 import type { ChatPushEvent } from './push.js';
-import { DEFAULT_STALE_TURN_TIMEOUT_MS, interruptStaleRunningTurns } from './recovery.js';
+import { interruptStaleRunningTurns } from './recovery.js';
 
 /**
  * Unit tests (fake `pg` client, no Postgres) for interruptStaleRunningTurns — mirrors the
  * fake-client pattern already used throughout this package (e.g.
- * application/outbox/dispatcher.test.ts). A DB-gated integration test for the real UPDATE ...
- * WHERE created_at < cutoff behavior lives in recovery.integration.test.ts.
+ * application/outbox/dispatcher.test.ts). A DB-gated integration test for the real UPDATE
+ * behavior lives in recovery.integration.test.ts.
+ *
+ * Lane-4 P1 fix (docs/development-tasks.md): this function no longer takes an age/`timeoutMs`
+ * threshold — it interrupts *every* `running` agent_turn Activity, unconditionally, since its one
+ * call site (packages/kernel/src/index.ts's startup `start()`) runs before this process could
+ * possibly have started one itself. See recovery.ts's own doc comment for the full reasoning.
  */
 
 afterEach(() => {
@@ -38,32 +43,17 @@ function createFakePool(rows: FakeRow[]) {
 }
 
 describe('interruptStaleRunningTurns', () => {
-  it('runs the UPDATE with a cutoff derived from timeoutMs, inside BEGIN/COMMIT', async () => {
+  it('runs the UPDATE with no age filter (no bound parameters), inside BEGIN/COMMIT', async () => {
     const { pool, queries } = createFakePool([]);
 
-    const count = await interruptStaleRunningTurns({ pool, timeoutMs: 1000 });
+    const count = await interruptStaleRunningTurns({ pool });
 
     expect(count).toBe(0);
     const texts = queries.map((q) => q.text.split('\n')[0]);
     expect(texts).toEqual(['BEGIN', 'update activities', 'COMMIT']);
     const updateQuery = queries.find((q) => q.text.startsWith('update activities'));
-    expect(updateQuery?.values).toHaveLength(1);
-  });
-
-  it('defaults to DEFAULT_STALE_TURN_TIMEOUT_MS when timeoutMs is omitted', async () => {
-    const { pool, queries } = createFakePool([]);
-    const before = Date.now();
-
-    await interruptStaleRunningTurns({ pool });
-
-    const cutoffIso = queries.find((q) => q.text.startsWith('update activities'))?.values?.[0] as
-      | string
-      | undefined;
-    expect(cutoffIso).toBeTruthy();
-    const cutoffMs = new Date(cutoffIso as string).getTime();
-    // cutoff should be ~DEFAULT_STALE_TURN_TIMEOUT_MS in the past from "now" at call time.
-    expect(before - cutoffMs).toBeGreaterThanOrEqual(DEFAULT_STALE_TURN_TIMEOUT_MS - 1000);
-    expect(before - cutoffMs).toBeLessThanOrEqual(DEFAULT_STALE_TURN_TIMEOUT_MS + 5000);
+    expect(updateQuery?.values ?? []).toHaveLength(0);
+    expect(updateQuery?.text).not.toMatch(/created_at/);
   });
 
   it('publishes chat.metadata (turnStatus: interrupted) for every returned row that has a chat_id', async () => {

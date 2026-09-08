@@ -99,4 +99,37 @@ describe('registerTurnStartedConsumer', () => {
 
     expect(started).toHaveLength(0);
   });
+
+  it('lane-4 P1 fix: a throw is not deduped — redelivery of the same outbox row id retries it', async () => {
+    const dispatcher = createFakeDispatcher();
+    const started: StartTurnInput[] = [];
+    let failNext = true;
+    const runtime: AgentRuntime = {
+      startTurn: vi.fn(async (input: StartTurnInput) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error('boom');
+        }
+        started.push(input);
+      }),
+      stopTurn: vi.fn(async () => true),
+    };
+    registerTurnStartedConsumer(dispatcher, runtime);
+
+    // First delivery throws — the outboxId must not have been marked "seen" as a result (the
+    // previous shape of this function added it *before* calling startTurn, which would have
+    // silently swallowed every later redelivery of this exact row).
+    await expect(dispatcher.emit('outbox-1', EVENT)).rejects.toThrow('boom');
+    expect(started).toHaveLength(0);
+
+    // Redelivery of the identical outbox row (dispatcher retry after its own transaction rolled
+    // back) must actually retry the call, not be dropped by the dedupe Set.
+    await dispatcher.emit('outbox-1', EVENT);
+    expect(started).toHaveLength(1);
+
+    // A *further* redelivery of the same row, now that it succeeded, is still deduped exactly
+    // once (the Set was correctly populated after the successful attempt).
+    await dispatcher.emit('outbox-1', EVENT);
+    expect(started).toHaveLength(1);
+  });
 });

@@ -49,10 +49,16 @@ import type {
  * structured log line below carries `turnId`/`principalId`/a reason string, never `handle`).
  *
  * Failure contract (matches `AgentRuntime.startTurn`'s own doc comment): `startTurn` never
- * throws. No agent-host connected, a Handle/session bootstrap failure, a `turnAccepted` timeout,
- * or an explicit `turnRejected` are all reported the same way — one `turnEnded {status:'failed'}`
- * event through the sink — so `application/host-bridge/turn-started-consumer.ts`'s caller has
- * exactly one path to observe a Turn's outcome, per the port's own contract.
+ * throws. No agent-host connected or a Handle/session bootstrap failure are resolved synchronously
+ * (before the command frame would even exist to send) and reported via one `turnEnded
+ * {status:'failed'}` event before `startTurn` returns; a `link.send` failure is the same. A
+ * `turnAccepted` timeout or an explicit `turnRejected`, by contrast, are *not* awaited by
+ * `startTurn` itself (lane-4 P2 fix, docs/development-tasks.md — see `sendStartTurnFrame`'s own
+ * doc comment for why) — `startTurn` resolves as soon as the command frame is sent, and the same
+ * `turnEnded {status:'failed'}` event is emitted later, asynchronously, once the accept/reject/
+ * timeout outcome is known. Either way, `application/host-bridge/turn-started-consumer.ts`'s
+ * caller still has exactly one path to observe a Turn's outcome, per the port's own contract —
+ * only the *timing* relative to `startTurn`'s own resolution has changed.
  *
  * agent-host restart vs. a mere reconnect (design doc §13 "agent-host 重启 | 入口容器不受影响；事件桥
  * 重连并从最后确认的事件续读；对话在 Postgres 无损"): agent-host is a single Node process with no
@@ -236,14 +242,30 @@ export class AgentHostRuntime implements AgentRuntime {
       principalId: input.principalId,
     });
 
-    const outcome = await this.sendStartTurnAndAwaitAccept(
-      link,
-      input,
-      handleToken,
-      entryDefinition,
-    );
+    const sent = this.sendStartTurnFrame(link, input, handleToken, entryDefinition);
+    if (!sent.ok) {
+      this.activeTurns.delete(input.turnId);
+      this.log(
+        JSON.stringify({
+          level: 'error',
+          msg: 'agent-host-runtime: failed to send startTurn to agent-host',
+          turnId: input.turnId,
+          reason: sent.reason,
+        }),
+      );
+      await this.emitFailed(input);
+      return;
+    }
 
-    if (!outcome.ok) {
+    // Do not await `sent.wait` — see this class's own doc comment / agent-runtime.ts's
+    // `startTurn` doc comment (lane-4 P2 fix): resolving here, right after the frame is sent,
+    // is the whole point — this call runs inside the outbox dispatcher's single-row transaction
+    // (application/host-bridge/turn-started-consumer.ts), and awaiting up to
+    // `turnAcceptedTimeoutMs` here would stall every other outbox event behind this one Turn.
+    // The accept/reject/timeout outcome is instead handled asynchronously: a negative outcome
+    // still produces exactly one `turnEnded {status:'failed'}` event, just later.
+    void sent.wait.then((outcome) => {
+      if (outcome.ok) return;
       this.activeTurns.delete(input.turnId);
       this.log(
         JSON.stringify({
@@ -253,15 +275,23 @@ export class AgentHostRuntime implements AgentRuntime {
           reason: outcome.reason,
         }),
       );
-      await this.emitFailed(input);
-    }
+      void this.emitFailed(input);
+    });
   }
 
   /** Idempotent (port contract): stopping an unknown, already-ended, or never-accepted `turnId`
-   *  is a no-op — there is nothing running for agent-host to abort. */
-  async stopTurn(turnId: string): Promise<void> {
+   *  is a no-op — there is nothing running for agent-host to abort. Resolves with whether this
+   *  runtime had any record of `turnId` at all (lane-4 P1 fix — see `AgentRuntime.stopTurn`'s own
+   *  doc comment): `false` only when `turnId` is not tracked as active at all (unknown, or
+   *  already ended from this runtime's own point of view) — a caller gets `true` even when
+   *  agent-host is not currently connected (`!this.link`), because the Turn is still tracked and
+   *  will eventually resolve one way or another (a future `runtimeEvent`, or `abandonAllActive
+   *  Turns` on the next `hello` if agent-host restarted) — only a *fully unknown* `turnId` means
+   *  this runtime will never independently report a `turnEnded` for it. */
+  async stopTurn(turnId: string): Promise<boolean> {
     const turn = this.activeTurns.get(turnId);
-    if (!turn || !this.link) return;
+    if (!turn) return false;
+    if (!this.link) return true;
     try {
       this.link.send({ type: 'stopTurn', turnId, principalId: turn.principalId });
     } catch (err) {
@@ -274,53 +304,66 @@ export class AgentHostRuntime implements AgentRuntime {
         }),
       );
     }
+    return true;
   }
 
   // -------------------------------------------------------------------------------------------
   // internals
   // -------------------------------------------------------------------------------------------
 
-  private sendStartTurnAndAwaitAccept(
+  /**
+   * Sends the `startTurn` command frame and returns immediately (`{ok: true, wait}`) — `wait` is
+   * a separate Promise the caller may observe *without* blocking on it (lane-4 P2 fix; see
+   * `startTurn`'s own body for why it is not awaited there). `{ok: false, reason}` is returned
+   * only for a failure known synchronously (the `link.send` call itself throwing, e.g. a closed
+   * socket) — a `turnAccepted` timeout or an explicit `turnRejected` are reported later, through
+   * `wait` resolving with `{ok: false, reason}` on its own schedule.
+   */
+  private sendStartTurnFrame(
     link: AgentHostLink,
     input: StartTurnInput,
     handleToken: string,
     entryDefinition: ResolvedEntryDefinition | undefined,
-  ): Promise<AcceptOutcome> {
-    return new Promise<AcceptOutcome>((resolve) => {
-      const timeoutHandle = setTimeout(() => {
-        this.pendingAccepts.delete(input.turnId);
-        resolve({ ok: false, reason: 'agent-host did not accept the turn in time' });
-      }, this.turnAcceptedTimeoutMs);
-      timeoutHandle.unref?.();
-
-      this.pendingAccepts.set(input.turnId, {
-        resolve: (outcome) => {
-          clearTimeout(timeoutHandle);
-          resolve(outcome);
-        },
-      });
-
-      try {
-        link.send({
-          type: 'startTurn',
-          workspaceId: input.workspaceId,
-          chatId: input.chatId,
-          turnId: input.turnId,
-          principalId: input.principalId,
-          prompt: input.prompt,
-          handle: handleToken,
-          kernelLlmUrl: this.kernelLlmUrl,
-          ...(entryDefinition?.systemPrompt !== undefined
-            ? { systemPrompt: entryDefinition.systemPrompt }
-            : {}),
-          ...(entryDefinition?.model !== undefined ? { model: entryDefinition.model } : {}),
-        });
-      } catch (err) {
-        this.pendingAccepts.delete(input.turnId);
-        clearTimeout(timeoutHandle);
-        resolve({ ok: false, reason: `failed to send startTurn to agent-host: ${String(err)}` });
-      }
+  ): { ok: true; wait: Promise<AcceptOutcome> } | { ok: false; reason: string } {
+    let resolveWait!: (outcome: AcceptOutcome) => void;
+    const wait = new Promise<AcceptOutcome>((resolve) => {
+      resolveWait = resolve;
     });
+
+    const timeoutHandle = setTimeout(() => {
+      this.pendingAccepts.delete(input.turnId);
+      resolveWait({ ok: false, reason: 'agent-host did not accept the turn in time' });
+    }, this.turnAcceptedTimeoutMs);
+    timeoutHandle.unref?.();
+
+    this.pendingAccepts.set(input.turnId, {
+      resolve: (outcome) => {
+        clearTimeout(timeoutHandle);
+        resolveWait(outcome);
+      },
+    });
+
+    try {
+      link.send({
+        type: 'startTurn',
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+        prompt: input.prompt,
+        handle: handleToken,
+        kernelLlmUrl: this.kernelLlmUrl,
+        ...(entryDefinition?.systemPrompt !== undefined
+          ? { systemPrompt: entryDefinition.systemPrompt }
+          : {}),
+        ...(entryDefinition?.model !== undefined ? { model: entryDefinition.model } : {}),
+      });
+    } catch (err) {
+      this.pendingAccepts.delete(input.turnId);
+      clearTimeout(timeoutHandle);
+      return { ok: false, reason: `failed to send startTurn to agent-host: ${String(err)}` };
+    }
+    return { ok: true, wait };
   }
 
   private resolvePendingAccept(turnId: string, outcome: AcceptOutcome): void {

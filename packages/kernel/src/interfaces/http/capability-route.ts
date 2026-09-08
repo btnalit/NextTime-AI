@@ -5,6 +5,13 @@ import {
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+// NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
+// application/gateway/index.ts's curated public surface (adding them there is a one-line change
+// inside application/gateway/**, outside this task's file ownership — see this PR's own report)
+// — imported directly from the file that defines them instead. Layer-wise this is still
+// interfaces -> application, exactly what .dependency-cruiser.cjs already permits; only the
+// "go through index.ts" naming convention is bypassed, not the six-layer rule itself.
+import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
@@ -41,7 +48,7 @@ import {
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
-import { GrantNotFoundError } from '../../governance/capability/index.js';
+import { GrantNotFoundError, ScopeValidationError } from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
 import {
   OperationIdentityConflictError,
@@ -99,6 +106,18 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ChatNotFoundError) {
     return { status: 404, code: 'chat_not_found', message: err.message };
+  }
+  // Lane-4 P2 fix (docs/development-tasks.md "Unmapped error classes → 500"): `report_turn`'s own
+  // `turnId` lookup failure and `record_decision`'s "no currently-running Turn to attribute this
+  // Decision to" both previously fell through to the generic 500/internal_error branch below —
+  // neither is a server fault, both are the caller naming/implying a Turn that either does not
+  // exist (404) or is not currently running (409, a state conflict — same family as
+  // `TurnAlreadyRunningError`/`IllegalTransition` below).
+  if (err instanceof TurnNotFoundError) {
+    return { status: 404, code: 'turn_not_found', message: err.message };
+  }
+  if (err instanceof NoActiveTurnError) {
+    return { status: 409, code: 'no_active_turn', message: err.message };
   }
   if (err instanceof CapabilityNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
@@ -181,6 +200,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof HighBlastRadiusAutoApproveError || err instanceof SetPolicyValidationError) {
     return { status: 400, code: 'invalid_params', message: err.message };
   }
+  // Lane-4 P2 fix (docs/development-tasks.md "Unmapped error classes → 500"): `invoke_worker`'s
+  // Handle-mint path (governance/capability/handles.ts's `assertValidScope`, called from
+  // `issueHandle`) throws this for a scope naming an unknown or human-channel-only capability —
+  // the caller's own malformed request, not a server fault.
+  if (err instanceof ScopeValidationError) {
+    return { status: 400, code: 'invalid_scope', message: err.message };
+  }
   // S2.7 (docs/development-tasks.md S2.7 "a violated quota returns an error the entry agent can
   // relay verbatim (stable code + readable message)") — `QuotaExceededError.code` (e.g.
   // `depth_exceeded`) *is* the wire `code`, not a generic one, so the entry agent's tool-call
@@ -247,6 +273,11 @@ export async function handleCapabilityRoute(
 ): Promise<
   { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } }
 > {
+  // Extracted before the try block — available regardless of how far the request gets (even a
+  // resolveCaller/401 failure knows which capability was named), and needed by the lane-4 P2
+  // error log below.
+  const { name: capability } = request.params as CapabilityRouteParams;
+
   let workspaceId: string | undefined;
   let principalId: string | undefined;
   let onBehalfOf: string | undefined;
@@ -271,8 +302,12 @@ export async function handleCapabilityRoute(
       sessionId = caller.claims.sid;
     }
 
-    const { name } = request.params as CapabilityRouteParams;
-    const result = await dispatchCapability({ pool: deps.pool }, caller, name, request.body ?? {});
+    const result = await dispatchCapability(
+      { pool: deps.pool },
+      caller,
+      capability,
+      request.body ?? {},
+    );
 
     outcome = 'success';
     reply.code(200);
@@ -281,6 +316,18 @@ export async function handleCapabilityRoute(
     outcome = 'error';
     const mapped = mapCapabilityError(err);
     reply.code(mapped.status);
+    // Lane-4 P2 fix (docs/development-tasks.md "errors never logged on either transport (500s
+    // invisible server-side)"): one structured line per failed call, `{capability, errorName,
+    // code, status}` only — deliberately never `message`/request params, even though `message`
+    // is already generic for 401/500 (mapCapabilityError's own doc comment) and could in
+    // principle be logged safely for the other statuses; keeping the field set uniform across
+    // every status is simpler than special-casing which ones are "safe enough" to add message to.
+    request.log.error({
+      capability,
+      errorName: err instanceof Error ? err.name : typeof err,
+      code: mapped.code,
+      status: mapped.status,
+    });
     return { ok: false, error: { code: mapped.code, message: mapped.message } };
   } finally {
     // Structured log fields (design doc §12, S1.3 subset) — never the Authorization header or
