@@ -24,6 +24,9 @@ import {
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
   MetaOntologyWriteForbiddenError,
+  ModelsCatalogUnavailableError,
+  PrincipalNotFoundError,
+  PrincipalOperationRefusedError,
   type ResolveCallerDeps,
   UnauthorizedError,
   WorkerResultValidationError,
@@ -179,6 +182,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof OperationIdentityConflictError) {
     return { status: 409, code: 'conflict', message: err.message };
   }
+  // S3.11 (docs/development-tasks.md "中台控制面"): member-management invariant refusals — same
+  // 409 "well-formed request, the row's current state forbids it" family as
+  // OperationIdentityConflictError/IllegalTransition above (last-owner protection, self-disable,
+  // a non-human target for set_principal_role/rotate_api_key/disable_principal).
+  if (err instanceof PrincipalOperationRefusedError) {
+    return { status: 409, code: 'conflict', message: err.message };
+  }
+  if (err instanceof PrincipalNotFoundError) {
+    return { status: 404, code: 'not_found', message: err.message };
+  }
   // Postgres 22P02 invalid_text_representation — a well-typed but malformed value reached a typed
   // column (e.g. a non-uuid `actionRequestId` on `approve`: the registry's `id` params are
   // `z.string().min(1)`, not uuid). The caller sent the bad value; 400, not 500 (seen on the host
@@ -229,6 +242,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // this file did not yet use for anything — added consistently with WS's new
   // SERVICE_UNAVAILABLE code below (rpc.ts).
   if (err instanceof TaskRuntimeNotConfiguredError) {
+    return { status: 503, code: 'service_unavailable', message: err.message };
+  }
+  // S3.11 `list_models`: models.json missing/unreadable/malformed — same "kernel process itself
+  // is not ready to serve this capability yet" 503 bucket as TaskRuntimeNotConfiguredError above.
+  if (err instanceof ModelsCatalogUnavailableError) {
     return { status: 503, code: 'service_unavailable', message: err.message };
   }
   // S2.7 (docs/development-tasks.md S2.7 "a violated quota returns an error the entry agent can

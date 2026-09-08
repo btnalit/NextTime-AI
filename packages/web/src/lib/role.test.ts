@@ -3,12 +3,11 @@ import { inferRole } from './role.js';
 
 const NONE = { allowed: new Set<string>(), denied: new Set<string>() };
 
-// Fixture capability names, chosen to already exist in `@nexttime/shared`'s `CAPABILITY_REGISTRY`
-// with the `minRole` this test relies on — the S3.11 governance capabilities this PR's pages call
-// (`list_principals`, `list_quotas`, ...) are landing in a parallel kernel PR and are not
-// registered on this branch yet, so `inferRole` would see them as "no minRole" (not evidence of
-// anything) until that PR merges. `grant_capability`/`list_pending` are the same two fixtures
-// `hooks/usePermissions.test.tsx` already uses for "owner-minRole"/"operator-minRole".
+// Fixture capability names, chosen to exist in `@nexttime/shared`'s `CAPABILITY_REGISTRY` with
+// the `minRole` this test relies on. `grant_capability`/`list_pending` are the same two fixtures
+// `hooks/usePermissions.test.tsx` already uses for "owner-minRole"/"operator-minRole"; the S3.11
+// governance capabilities (`list_principals`, …) are registered as of the kernel control-plane PR
+// and are asserted as real evidence below.
 const OWNER_ONLY = 'grant_capability';
 const OPERATOR_ONLY = 'list_pending';
 
@@ -34,8 +33,16 @@ describe('inferRole', () => {
     expect(inferRole({ allowed: new Set([OPERATOR_ONLY]), denied: new Set() })).toBe('operator+');
   });
 
-  it('a capability with no minRole (or not registered at all, e.g. S3.11 ones not merged yet) is not evidence either way', () => {
+  it('a capability with a member minRole is not evidence either way', () => {
     expect(inferRole({ allowed: new Set(['list_chats']), denied: new Set() })).toBe('unknown');
-    expect(inferRole({ allowed: new Set(['list_principals']), denied: new Set() })).toBe('unknown');
+  });
+
+  it('the S3.11 governance capabilities are real evidence now that the kernel half registered them', () => {
+    // `list_principals` is `minRole: 'operator'` in the shared registry (S3.11 kernel PR), so a
+    // successful call proves operator+ and a denial proves member — exactly what the pages rely on.
+    expect(inferRole({ allowed: new Set(['list_principals']), denied: new Set() })).toBe(
+      'operator+',
+    );
+    expect(inferRole({ allowed: new Set(), denied: new Set(['list_principals']) })).toBe('member');
   });
 });

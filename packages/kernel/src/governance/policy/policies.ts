@@ -70,6 +70,21 @@ export async function readWorkspacePolicy(
   return row ? mapPolicyRow(row) : null;
 }
 
+/** `list_policies` (S3.11, docs/development-tasks.md "中台控制面"): every explicit `policies` row
+ *  the workspace has ever `set_policy`'d, most recently updated first — an action_kind with no row
+ *  here is simply absent (it is running on the compiled-in default, `engine.ts`'s own concern, not
+ *  this read's). */
+export async function listPolicies(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<readonly PolicyRow[]> {
+  const result = await client.query<PolicyDbRow>(
+    `select ${POLICY_COLUMNS} from policies where workspace_id = $1 order by updated_at desc`,
+    [workspaceId],
+  );
+  return result.rows.map(mapPolicyRow);
+}
+
 // -------------------------------------------------------------------------------------------
 // set_policy — packages/shared/src/capabilities.ts governance group, `paramsSchema: {policy:
 // jsonRecord}`. The wire payload's shape (validated here, not in the shared registry, since it is

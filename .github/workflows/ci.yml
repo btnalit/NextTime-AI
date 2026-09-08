@@ -85,7 +85,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Test
-        run: pnpm -r test
+        # --no-bail (must precede -r; pnpm forwards flags placed after the script name straight to
+        # the script itself, not to pnpm's own recursive runner): pnpm's default recursive behavior
+        # kills every other still-running package's test process the instant any one package fails
+        # (ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL) — observed hiding packages/kernel's own DB-gated
+        # integration suite mid-run behind an unrelated packages/web failure, so a real kernel
+        # regression could equally go unreported whenever some other package fails first. Every
+        # package's full result is strictly more informative than fewer, unrelated packages
+        # happening to finish first; the job's overall pass/fail (this step's exit code) is
+        # unchanged — it still fails if any package does.
+        run: pnpm --no-bail -r test
 
   guards:
     name: guards
@@ -121,6 +130,9 @@ jobs:
 
       - name: pi version consistency guard (docs/runbooks/pi-upgrade.md)
         run: sh scripts/check-pi-version-consistency.sh
+
+      - name: Membership capabilities must never enter a Handle-scope ceiling (S3.11)
+        run: sh scripts/check-membership-capabilities-not-in-handle-scope.sh
 
       - name: Shell scripts must be LF and executable
         run: |

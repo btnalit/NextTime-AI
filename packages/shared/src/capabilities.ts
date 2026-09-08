@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ConnectionRequestStatusSchema, WorkerDefinitionKindSchema } from './enums.js';
+import { ConnectionRequestStatusSchema, RoleSchema, WorkerDefinitionKindSchema } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
@@ -36,6 +36,15 @@ export const CAPABILITY_GROUP_VALUES = [
   'worker',
   'ingest',
   'audit',
+  // S3.11 (docs/development-tasks.md, 2026-09-08 "中台控制面" decision): member/API-key
+  // management and workspace-summary reads have no existing group they fit — `governance` already
+  // holds Grant/Policy/Quota management (list_grants/list_policies/list_quotas join it directly,
+  // below); `connection` already holds Gatekeeper registration/lifecycle (list_gatekeepers/
+  // get_gatekeeper/list_operations join it). `members` is the catch-all for what is left:
+  // Principal CRUD (`list_principals`/`create_principal`/`set_principal_role`/`rotate_api_key`/
+  // `disable_principal`), plus `get_workspace`/`list_models`, which are workspace-summary/config
+  // reads with no other natural home.
+  'members',
 ] as const;
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
@@ -420,6 +429,42 @@ const connectionCapabilities: readonly Capability[] = [
     minRole: 'owner',
     paramsSchema: z.object({ status: ConnectionRequestStatusSchema.optional() }).strict(),
     description: 'List ConnectionRequests, optionally filtered by status.',
+  },
+  // -----------------------------------------------------------------------------------------
+  // S3.11 read-side additions (docs/development-tasks.md, 2026-09-08 "中台控制面" decision): the
+  // console's "系统接入" (system connections) directory — every Gatekeeper instance and its
+  // Operations, member-visible (unlike `list_connection_requests` above, which is the owner-only
+  // in-flight queue). `find_operations` (task group) stays the agent-side ranked-search
+  // counterpart; these are the flat human directory.
+  // -----------------------------------------------------------------------------------------
+  {
+    name: 'list_gatekeepers',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: noParams,
+    description:
+      'List every registered Gatekeeper instance (health/manifest not included — see get_gatekeeper).',
+  },
+  {
+    name: 'get_gatekeeper',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ gatekeeperId: id }).strict(),
+    description: 'One Gatekeeper instance with its Operations and a live health probe.',
+  },
+  {
+    name: 'list_operations',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ gatekeeperId: id.optional() }).strict(),
+    description:
+      'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to one gate.',
   },
 ];
 
@@ -812,6 +857,41 @@ const governanceCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ sessionId: id, scope: jsonRecord }).strict(),
     description: 'Issue a CapabilityHandle for a Session.',
   },
+  // -----------------------------------------------------------------------------------------
+  // S3.11 read-side additions (docs/development-tasks.md, 2026-09-08 "中台控制面" decision):
+  // list views over the governance state this group already writes (`grant_capability`/
+  // `revoke_capability`/`set_policy`/`set_quota` above) — the console's "系统接入" / "模型与配额"
+  // pages need to *see* what those write capabilities produced. `minRole: 'operator'` per the
+  // task's own role table ("配额查看 = operator").
+  // -----------------------------------------------------------------------------------------
+  {
+    name: 'list_grants',
+    group: 'governance',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'operator',
+    paramsSchema: z.object({ principalId: id.optional() }).strict(),
+    description: 'List CapabilityGrants, optionally filtered to one Principal.',
+  },
+  {
+    name: 'list_policies',
+    group: 'governance',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'operator',
+    paramsSchema: noParams,
+    description: 'List every Policy row in the workspace.',
+  },
+  {
+    name: 'list_quotas',
+    group: 'governance',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'operator',
+    paramsSchema: noParams,
+    description:
+      'List the workspace’s I18 quota values (overrides merged over compiled-in defaults).',
+  },
 ];
 
 // -------------------------------------------------------------------------------------------
@@ -1102,6 +1182,99 @@ const auditCapabilities: readonly Capability[] = [
   },
 ];
 
+// -------------------------------------------------------------------------------------------
+// members (S3.11, docs/development-tasks.md 2026-09-08 "中台控制面" decision): Principal CRUD
+// (who can get in — kind/role/API key) plus the two workspace-summary/config reads with no other
+// natural group (`get_workspace`, `list_models`). All `channel: 'human'` — a Principal's own
+// membership/credentials are never a Handle-scope concern (I13: a Handle only ever narrows what
+// its *own* on_behalf_of principal may already do; it never manages *other* principals).
+//
+// `mode` (docs/wire-contract-conventions.md §1, MANDATORY): every write here is an immediate,
+// in-platform, audited state change with no policy-gated external Gatekeeper call — `write`, not
+// `execute` (`execute` is reserved for "acts through a Gatekeeper on an external system, policy-
+// approved" per that doc's own vocabulary table). This intentionally does not retag the
+// pre-existing `grant_capability`/`revoke_capability`/`set_policy`/`set_quota`/`issue_handle`
+// rows above (still `mode: 'execute'`) — those predate the 2026-09-08 mode decision and are out
+// of this task's scope (S3.7 is where the registry-wide retag lands).
+// -------------------------------------------------------------------------------------------
+
+const membersCapabilities: readonly Capability[] = [
+  {
+    name: 'list_principals',
+    group: 'members',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'operator',
+    paramsSchema: noParams,
+    description:
+      'List every Principal in the workspace (kind/role/hasApiKey/disabledAt — never the key hash).',
+  },
+  {
+    name: 'create_principal',
+    group: 'members',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ role: RoleSchema, displayName: z.string().min(1) }).strict(),
+    description:
+      'Create a kind=human Principal and its API key; the plaintext key is returned once and never stored or readable again.',
+  },
+  {
+    name: 'set_principal_role',
+    group: 'members',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ principalId: id, role: RoleSchema }).strict(),
+    description:
+      'Change a Principal’s role. Refuses to demote the last remaining owner and refuses any non-human (agent/service) Principal.',
+  },
+  {
+    name: 'rotate_api_key',
+    group: 'members',
+    // minRole:'member' is the registry-level floor only (every principal may rotate their own
+    // key); the handler additionally enforces "owner, or the caller’s own principalId" — the same
+    // "minRole gates entry, the handler narrows further" shape `set_auto_approved_action_kind`
+    // already established (packages/shared/src/capabilities.ts governance group, above).
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ principalId: id }).strict(),
+    description:
+      'Rotate a Principal’s API key — the old key stops working immediately; the new plaintext key is returned once.',
+  },
+  {
+    name: 'disable_principal',
+    group: 'members',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ principalId: id }).strict(),
+    description:
+      'Disable a Principal: its API key and entry-session Handles stop working immediately. Refuses the last remaining owner and refuses disabling oneself.',
+  },
+  {
+    name: 'get_workspace',
+    group: 'members',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: noParams,
+    description:
+      'The calling workspace’s identity and summary counts (principals, gatekeepers), plus the resolved calling Principal’s own identity and role (caller).',
+  },
+  {
+    name: 'list_models',
+    group: 'members',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: noParams,
+    description:
+      'The llm-proxy model whitelist, read from the kernel’s read-only models.json mount (never provider keys).',
+  },
+];
+
 /** The complete capability registry (design doc §9.3). */
 export const CAPABILITY_REGISTRY: readonly Capability[] = [
   ...chatCapabilities,
@@ -1116,6 +1289,7 @@ export const CAPABILITY_REGISTRY: readonly Capability[] = [
   ...workerCapabilities,
   ...ingestCapabilities,
   ...auditCapabilities,
+  ...membersCapabilities,
 ];
 
 /** Capability names that must always be on the human channel (I16/I17/§9.3), never handle. */
@@ -1146,6 +1320,23 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'audit_query',
   'reconstruct',
   'export_prov',
+  // S3.11 (docs/development-tasks.md, 2026-09-08 "中台控制面" decision): member/governance
+  // management and its read-side directory — never a legitimate Handle-scope member (see this
+  // task's own CI guard, scripts/check-membership-capabilities-not-in-handle-scope.sh, for the
+  // second, independent enforcement of the same rule against governance/capability/handles.ts).
+  'list_principals',
+  'create_principal',
+  'set_principal_role',
+  'rotate_api_key',
+  'disable_principal',
+  'list_grants',
+  'list_policies',
+  'list_quotas',
+  'list_gatekeepers',
+  'get_gatekeeper',
+  'list_operations',
+  'get_workspace',
+  'list_models',
 ]);
 
 /** Execute-mode capabilities allowed on the handle channel: only request_action and the gate execute pattern (§9.3, §7.4). */

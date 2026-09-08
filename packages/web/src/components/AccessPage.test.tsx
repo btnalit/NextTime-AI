@@ -58,7 +58,9 @@ describe('AccessPage', () => {
 
   it('lists grants with a status chip, and revoking calls revoke_capability then updates the row', async () => {
     const http = scriptedHttp({
-      list_principals: () => Promise.reject(new HttpError('capability_error', 'nope', 'forbidden')),
+      // `list_principals` is a real operator-minRole capability now (S3.11 kernel half); a 403
+      // here would be read by `inferRole` as "member" and hide the governance page under test.
+      list_principals: () => ({ items: [] }),
       list_grants: () => ({ items: [grant()] }),
       revoke_capability: (params) => {
         expect(params).toEqual({ grantId: 'grant-1' });
@@ -78,7 +80,9 @@ describe('AccessPage', () => {
 
   it('granting a capability calls grant_capability with the free-text fallback fields', async () => {
     const http = scriptedHttp({
-      list_principals: () => Promise.reject(new HttpError('capability_error', 'nope', 'forbidden')),
+      // `list_principals` is a real operator-minRole capability now (S3.11 kernel half); a 403
+      // here would be read by `inferRole` as "member" and hide the governance page under test.
+      list_principals: () => ({ items: [] }),
       list_grants: () => ({ items: [] }),
       grant_capability: (params) => {
         expect(params).toEqual({

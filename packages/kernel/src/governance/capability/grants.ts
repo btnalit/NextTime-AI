@@ -199,6 +199,38 @@ export async function getGrant(
   return row ? mapGrantRow(row) : null;
 }
 
+/**
+ * `list_grants` (S3.11, docs/development-tasks.md "中台控制面"): every CapabilityGrant in the
+ * workspace, optionally narrowed to one Principal, newest first. Every status (active/revoked/
+ * expired) is included — the console's "成员与授权" page needs to show what was revoked, not just
+ * what is currently active (unlike `hasActiveGrant`/`listGrantHolderPrincipalIds` above, which are
+ * I14's "does an *active* grant exist" question, not a directory read).
+ */
+export interface ListGrantsFilter {
+  readonly principalId?: string;
+}
+
+export async function listGrants(
+  client: PoolClient,
+  workspaceId: string,
+  filter: ListGrantsFilter = {},
+): Promise<readonly CapabilityGrantRow[]> {
+  const result = filter.principalId
+    ? await client.query<CapabilityGrantDbRow>(
+        `select ${GRANT_COLUMNS} from capability_grants
+         where workspace_id = $1 and principal_id = $2
+         order by created_at desc`,
+        [workspaceId, filter.principalId],
+      )
+    : await client.query<CapabilityGrantDbRow>(
+        `select ${GRANT_COLUMNS} from capability_grants
+         where workspace_id = $1
+         order by created_at desc`,
+        [workspaceId],
+      );
+  return result.rows.map(mapGrantRow);
+}
+
 // -------------------------------------------------------------------------------------------
 // I14 — "the approver must hold an active capability_grants row for the action_kind (as
 // resourceType) × resource_scope (as resourceId)". `capability_grants.resource_id is null` is this

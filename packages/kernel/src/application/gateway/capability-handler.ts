@@ -1,4 +1,10 @@
-import type { CapabilityChannel, CapabilityScope, HandleClaims } from '@nexttime/shared';
+import type {
+  CapabilityChannel,
+  CapabilityScope,
+  HandleClaims,
+  PrincipalKind,
+  Role,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 
@@ -55,6 +61,23 @@ export interface CapabilityHandlerContext {
    * the child Handle's ttl cap.
    */
   readonly claims?: HandleClaims;
+  /**
+   * S3.11 addition, purely additive alongside `scope`/`claims` above: the resolved calling
+   * Principal's own identity (`kind`/`role`/`displayName`), `undefined` on the handle channel (a
+   * Handle has no Principal row of its own to project — `principalId` there is the Handle's
+   * `obo`). `application/gateway/resolve-caller.ts` already resolves this full row for every
+   * human-channel call (I13's own `PrincipalRow`) before authorization even runs; threaded
+   * through here so a handler that needs "who am I, what's my role" (`get_workspace`'s own
+   * `caller` field — the web console has no other way to learn the calling principal's role
+   * without inferring it from which capabilities 403) never has to re-query `principals` by API
+   * key a second time.
+   */
+  readonly principal?: {
+    readonly id: string;
+    readonly kind: PrincipalKind;
+    readonly role: Role;
+    readonly displayName: string | null;
+  };
 }
 
 /**

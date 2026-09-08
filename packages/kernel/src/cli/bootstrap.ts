@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { PoolLike } from '../adapters/db/pool.js';
 import { HttpGatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
-import { hashApiKey } from '../application/gateway/index.js';
+import { generateApiKey, hashApiKey } from '../application/gateway/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../application/worker/index.js';
 import {
   importManifest,
@@ -76,12 +76,6 @@ import { resolveOntologyDir, seedPlatformMetaOntology } from '../substrate/ontol
  * `PRINCIPAL=<id>`/`TASK=<id>` lines so `scripts/delete-workspace.sh` can remove the matching
  * host-side container and data directory (docs/runbooks/host-bootstrap.md "Deleting a workspace").
  */
-
-const API_KEY_BYTES = 32;
-
-function generateApiKey(): string {
-  return randomBytes(API_KEY_BYTES).toString('base64url');
-}
 
 /** `ontology/entry-agent.yaml`'s (and, in principle, any future `kind=worker` template's) shape:
  *  `kind` is a top-level sibling of the WorkerDefinition content, not a field of the content

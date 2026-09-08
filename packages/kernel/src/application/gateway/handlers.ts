@@ -27,6 +27,7 @@ import {
   getConfiguredTaskRuntime,
   getTaskWithWorkerRuns,
   invokeWorkerCreate,
+  listQuotas,
   listTasksForPrincipal,
   resolveParentAuthority,
   resolveWaitTimeoutMs,
@@ -51,9 +52,11 @@ import {
 import {
   grantCapability,
   hasAnyActiveGrant,
+  listGrants,
   revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
 import {
+  listPolicies,
   parseSetPolicyPayload,
   setAutoApprovedActionKind,
   setPolicy,
@@ -72,7 +75,21 @@ import {
   listConnectionRequestsHandler,
   requestConnectionHandler,
 } from './connection-handlers.js';
+import {
+  getGatekeeperHandler,
+  listGatekeepersHandler,
+  listOperationsHandler,
+} from './gatekeeper-read-handlers.js';
+import {
+  createPrincipalHandler,
+  disablePrincipalHandler,
+  getWorkspaceHandler,
+  listPrincipalsHandler,
+  rotateApiKeyHandler,
+  setPrincipalRoleHandler,
+} from './members-handlers.js';
 import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
+import { listModelsHandler } from './models-catalog-handler.js';
 import {
   deprecateOperationHandler,
   proposeOperationHandler,
@@ -736,6 +753,33 @@ const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, p
   return { result, resourceType: 'capability_grant', resourceId: result.id };
 };
 
+/** `list_grants` (S3.11, docs/development-tasks.md "中台控制面"): every CapabilityGrant, optionally
+ *  narrowed to one Principal — `governance/capability/grants.ts`'s own wire shape (resourceType/
+ *  resourceId/scope/status/expiresAt, already camelCase) already matches
+ *  docs/wire-contract-conventions.md, so this is a direct `{items}` projection with no separate
+ *  `toWireGrant` function needed (unlike ActionRequest's `toWireActionRequest`, which drops/renames
+ *  fields — `CapabilityGrantRow` has nothing to drop). */
+const listGrantsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { principalId } = params as { principalId?: string };
+  const rows = await listGrants(client, workspaceId, { principalId });
+  return { result: { items: rows } };
+};
+
+/** `list_policies` (S3.11) — every explicit `policies` row (`governance/policy/policies.ts`'s
+ *  `PolicyRow`, already the wire shape this needs). */
+const listPoliciesHandler: CapabilityHandler = async (client, workspaceId) => {
+  const rows = await listPolicies(client, workspaceId);
+  return { result: { items: rows } };
+};
+
+/** `list_quotas` (S3.11) — every I18 quota key with its resolved value and whether that value is
+ *  an explicit override or the compiled-in default (`application/task/quotas.ts`'s `QuotaListEntry`,
+ *  already the wire shape this needs). */
+const listQuotasHandler: CapabilityHandler = async (client, workspaceId) => {
+  const rows = await listQuotas(client, workspaceId);
+  return { result: { items: rows } };
+};
+
 // -------------------------------------------------------------------------------------------
 // S2.7 task/find_* handlers (docs/development-tasks.md S2.7). `invoke_worker` deliberately never
 // touches the `client` dispatch.ts hands it — see `application/task/invoke.ts`'s own module doc
@@ -1005,6 +1049,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['set_policy', setPolicyHandler],
   ['grant_capability', grantCapabilityHandler],
   ['revoke_capability', revokeCapabilityHandler],
+  // S3.11 (docs/development-tasks.md "中台控制面") — governance read-side additions.
+  ['list_grants', listGrantsHandler],
+  ['list_policies', listPoliciesHandler],
+  ['list_quotas', listQuotasHandler],
   ['request_action', requestActionHandler],
   ['propose_operation', proposeOperationHandler],
   ['publish_operation', publishOperationHandler],
@@ -1040,4 +1088,17 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['connect_gatekeeper', connectGatekeeperHandler],
   ['list_connection_requests', listConnectionRequestsHandler],
   ['publish_manifest', publishManifestHandler],
+  // S3.11 (docs/development-tasks.md "中台控制面") — gatekeeper-read-handlers.ts.
+  ['list_gatekeepers', listGatekeepersHandler],
+  ['get_gatekeeper', getGatekeeperHandler],
+  ['list_operations', listOperationsHandler],
+  // S3.11 — members-handlers.ts.
+  ['list_principals', listPrincipalsHandler],
+  ['create_principal', createPrincipalHandler],
+  ['set_principal_role', setPrincipalRoleHandler],
+  ['rotate_api_key', rotateApiKeyHandler],
+  ['disable_principal', disablePrincipalHandler],
+  ['get_workspace', getWorkspaceHandler],
+  // S3.11 — models-catalog-handler.ts.
+  ['list_models', listModelsHandler],
 ]);

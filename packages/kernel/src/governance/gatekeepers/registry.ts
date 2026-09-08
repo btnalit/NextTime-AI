@@ -86,6 +86,9 @@ export interface GatekeeperRecord {
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
   readonly target: string;
   readonly endpoint: string;
+  /** S3.11 addition (`get_gatekeeper`'s own wire shape needs it) — the underlying Object's own
+   *  `created_at`, purely additive to every pre-existing caller of this function. */
+  readonly createdAt: Date;
 }
 
 /** Reads a registered Gatekeeper's connection config from its Object properties, or `null` if it
@@ -110,6 +113,7 @@ export async function getGatekeeper(
     transportKind: props.transportKind as GatekeeperRecord['transportKind'],
     target: props.target,
     endpoint: props.endpoint,
+    createdAt: object.createdAt,
   };
 }
 
@@ -125,4 +129,69 @@ export class GatekeeperNotFoundError extends Error {
     super(`Gatekeeper not found: ${gatekeeperId}`);
     this.name = 'GatekeeperNotFoundError';
   }
+}
+
+// -------------------------------------------------------------------------------------------
+// listGatekeepers (S3.11, docs/development-tasks.md "中台控制面" — `list_gatekeepers`'s service
+// half): every registered Gatekeeper instance, direct SQL over `objects` — same style
+// `governance/gatekeepers/manifest.ts`'s `listPublishedOperationsForGatekeepers`/
+// `listDraftOperationsForGatekeeper` already established for this table (no dedicated relational
+// table exists for a Gatekeeper, §9.2 — see this file's own module doc comment).
+// -------------------------------------------------------------------------------------------
+
+export interface GatekeeperListEntry {
+  readonly gatekeeperId: string;
+  readonly name: string;
+  readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
+  readonly endpoint: string | null;
+  readonly createdAt: Date;
+}
+
+interface GatekeeperObjectRow {
+  id: string;
+  properties: Record<string, unknown>;
+  created_at: Date;
+}
+
+/** Every `Gatekeeper` Object in the workspace, oldest first — the raw rows `application/gateway`'s
+ *  `list_gatekeepers`/`get_gatekeeper` handlers project to the wire shape (operation counts and
+ *  live health are that layer's concern, not this one's, same "governance owns storage,
+ *  application projects" split `getGatekeeper`/`getOperation` above already follow). */
+export async function listGatekeepers(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<readonly GatekeeperListEntry[]> {
+  const result = await client.query<GatekeeperObjectRow>(
+    `select id, properties, created_at
+     from objects
+     where workspace_id = $1 and object_type = 'Gatekeeper'
+     order by created_at asc`,
+    [workspaceId],
+  );
+  return result.rows.map((row) => {
+    const props = row.properties as {
+      transportKind?: string;
+      name?: string;
+      endpoint?: string;
+    };
+    return {
+      gatekeeperId: row.id,
+      name: props.name ?? row.id,
+      transportKind: (props.transportKind as GatekeeperListEntry['transportKind']) ?? 'http',
+      endpoint: props.endpoint ?? null,
+      createdAt: row.created_at,
+    };
+  });
+}
+
+/** `get_workspace`'s own summary count (S3.11, `application/gateway/members-handlers.ts`) — a
+ *  plain count over the same `objects` slice `listGatekeepers` reads, kept as its own query
+ *  (rather than `(await listGatekeepers(...)).length`) so a workspace with many registered
+ *  Gatekeepers does not pay for every row's `properties` just to report a number. */
+export async function countGatekeepers(client: PoolClient, workspaceId: string): Promise<number> {
+  const result = await client.query<{ count: string }>(
+    `select count(*)::bigint as count from objects where workspace_id = $1 and object_type = 'Gatekeeper'`,
+    [workspaceId],
+  );
+  return Number(result.rows[0]?.count ?? 0);
 }
