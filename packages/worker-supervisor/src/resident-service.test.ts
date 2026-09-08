@@ -8,6 +8,14 @@ import type { EgressMapStore } from './egress-map.js';
 import { createResidentService } from './resident-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
 
+/** A JWT-*shaped* (but unsigned/fake) Handle carrying only the `jti` claim `decodeHandleJtiUnsafe`
+ *  reads — resident-service.ts never verifies the Handle's signature, only decodes `jti` for
+ *  rotation detection (P2-5), so a real signed token isn't needed for these tests. */
+function fakeHandle(jti: string): string {
+  const encode = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  return `${encode({ alg: 'EdDSA' })}.${encode({ jti })}.fake-signature`;
+}
+
 let dir: string;
 
 beforeEach(() => {
@@ -142,6 +150,81 @@ describe('resident-service spawn', () => {
     docker.simulateExternalKill('nexttime-entry-alice');
     const third = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
     expect(third.restarts).toBe(2);
+  });
+
+  it('does not recreate when the same jti-bearing Handle is presented again (P2-5)', async () => {
+    const { service, docker } = setup();
+    const handle = fakeHandle('jti-alpha');
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle });
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle });
+    expect(second.created).toBe(false);
+    expect(second.containerId).toBe(first.containerId);
+    expect(docker.createCalls).toHaveLength(1);
+    expect(docker.stopCalls).toHaveLength(0);
+  });
+
+  it('recreates (does not reuse) a running container when the incoming Handle jti differs from the label (P2-5 rotation)', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: fakeHandle('jti-old'),
+    });
+    expect(first.created).toBe(true);
+    expect(docker.createCalls[0]?.labels['nexttime.handle-jti']).toBe('jti-old');
+
+    const second = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: fakeHandle('jti-new'),
+    });
+    expect(second.created).toBe(true);
+    expect(second.containerId).not.toBe(first.containerId);
+    expect(second.restarts).toBe(1);
+    // Gracefully stopped (not force-killed) before being removed and recreated.
+    expect(docker.stopCalls).toEqual([{ name: 'nexttime-entry-alice', timeoutSeconds: 10 }]);
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    expect(docker.createCalls).toHaveLength(2);
+    expect(docker.createCalls[1]?.labels['nexttime.handle-jti']).toBe('jti-new');
+  });
+
+  it('unregisters the old container’s egress IP when recreating due to rotation', async () => {
+    const { service, egressMap } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: fakeHandle('jti-old'),
+    });
+    expect(first.ip).toBeDefined();
+    expect(egressMap.read()[first.ip as string]).toBeDefined();
+
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: fakeHandle('jti-new'),
+    });
+    // The old IP must no longer be registered — it belonged to the now-removed container.
+    expect(egressMap.read()[first.ip as string]).toBeUndefined();
+  });
+
+  it('does not force a recreation when the Handle is not a decodable JWT (plain string, e.g. "h")', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(second.created).toBe(false);
+    expect(second.containerId).toBe(first.containerId);
+    expect(docker.createCalls).toHaveLength(1);
+  });
+
+  it('does not force a recreation on first spawn (no existing label to compare against)', async () => {
+    const { service, docker } = setup();
+    const outcome = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: fakeHandle('jti-first'),
+    });
+    expect(outcome.created).toBe(true);
+    expect(docker.stopCalls).toHaveLength(0);
   });
 
   it('keeps separate containers and workspaces per principal', async () => {

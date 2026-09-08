@@ -110,7 +110,21 @@ describe('buildSpawnSpec', () => {
       'nexttime.principal': 'alice',
       'nexttime.workspace': 'ws-1',
       'nexttime.restarts': '0',
+      'nexttime.handle-jti': '',
     });
+  });
+
+  it('stamps handleJti onto the label when given (P2-5 rotation detection)', () => {
+    const withJti = buildSpawnSpec({
+      config,
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      networkName: 'workers',
+      restarts: 0,
+      handleJti: 'the-jti-value',
+    });
+    expect(withJti.labels['nexttime.handle-jti']).toBe('the-jti-value');
   });
 
   it('carries forward a non-zero restarts count into the label', () => {
