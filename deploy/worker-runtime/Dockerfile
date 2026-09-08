@@ -68,7 +68,19 @@ RUN apt-get update \
 
 # Pinned exact version (docs/development-tasks.md §0.3 "pi 锁 @earendil-works/pi-coding-
 # agent@0.84.4"). --ignore-scripts matches pi's own containerization.md recipe (header above).
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+#
+# Single source of truth (docs/runbooks/pi-upgrade.md "升级契约"): the root `pi.version` file,
+# read here rather than hardcoded — bumping pi means editing exactly that one file for the image.
+# `pnpm`/`npm` still need a literal version string in packages/platform-extension/package.json's
+# own `dependencies`/`devDependencies` (no file-reference syntax exists for that), so those two
+# pins are kept honest against pi.version by scripts/check-pi-version-consistency.sh
+# (`pnpm ci:guards`) instead of reading the same file directly — see the runbook for why a
+# Dockerfile ARG wired through docker-compose.yml's build args was not used instead (this COPY
+# needs no change to the build invocation `docker compose build worker-runtime` already uses).
+COPY pi.version /tmp/pi.version
+RUN PI_VERSION="$(cat /tmp/pi.version)" \
+ && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+ && rm /tmp/pi.version
 
 # Same non-root uid:gid every other @nexttime/* image uses (kernel/agent-host/worker-supervisor/
 # llm-proxy/egress-proxy Dockerfiles; scripts/host-env-init.sh CONTAINER_UID/CONTAINER_GID) —
