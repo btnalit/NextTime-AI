@@ -46,10 +46,16 @@ type Filter = 'active' | 'all' | 'done';
 export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
-  const load = useCallback(() => http.call<readonly TaskSummary[]>('list_tasks'), [http]);
+  const load = useCallback(
+    () => http.call<{ items: readonly TaskSummary[] }>('list_tasks').then((page) => page.items),
+    [http],
+  );
   const tasks = useResource(load);
   const loadDefinitions = useCallback(
-    () => http.call<readonly WorkerDefinitionSummary[]>('list_worker_definitions', {}),
+    () =>
+      http
+        .call<{ items: readonly WorkerDefinitionSummary[] }>('list_worker_definitions', {})
+        .then((page) => page.items),
     [http],
   );
   const definitions = useResource(loadDefinitions);
@@ -58,7 +64,9 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
     () =>
       pendingDenied
         ? Promise.resolve<readonly ActionRequestRowLike[]>([])
-        : http.call<readonly ActionRequestRowLike[]>('list_pending'),
+        : http
+            .call<{ items: readonly ActionRequestRowLike[] }>('list_pending')
+            .then((page) => page.items),
     [http, pendingDenied],
   );
   const pendingApprovals = useResource(loadPending);
@@ -91,10 +99,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
     [http, tasks.mutate, tasks.reload],
   );
 
-  useEffect(
-    () => pushes.onTaskUpdated((event) => void refreshOne(event.taskId)),
-    [pushes, refreshOne],
-  );
+  useEffect(() => pushes.onTaskUpdated((event) => void refreshOne(event.id)), [pushes, refreshOne]);
   useEffect(() => {
     const unsubPending = pushes.onActionPending(() => void pendingApprovals.reload());
     const unsubUpdated = pushes.onActionUpdated(() => void pendingApprovals.reload());

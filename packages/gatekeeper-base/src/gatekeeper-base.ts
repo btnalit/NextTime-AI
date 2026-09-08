@@ -134,10 +134,10 @@ export class GatekeeperBase {
   async apply(
     name: string,
     params: unknown,
-    idempotencyKey: string,
+    actionRequestId: string,
     ctx: GatekeeperBaseCallContext = {},
   ): Promise<ApplyResult> {
-    if (!idempotencyKey) throw new ApplyRequiresIdempotencyKeyError(name);
+    if (!actionRequestId) throw new ApplyRequiresIdempotencyKeyError(name);
     const operation = this.getOperation(name);
     if (operation.mode !== 'execute') {
       throw new OperationModeMismatchError(name, 'execute', operation.mode);
@@ -145,15 +145,17 @@ export class GatekeeperBase {
     assertParamsValid(name, operation.params_schema, params);
 
     // Reserved *before* the transport is invoked (review lane 5, P2-1) — a concurrent `apply` for
-    // the same key, matching tuple or not, gets 'conflict' rather than a second invocation.
+    // the same key, matching tuple or not, gets 'conflict' rather than a second invocation. The
+    // idempotency store is keyed by `actionRequestId` (docs/wire-contract-conventions.md §1,
+    // 2026-09-08 decision — the ActionRequest's own id, not a caller-supplied dedupe token).
     const descriptor = {
       operation: name,
       paramsHash: hashIdempotencyParams(params),
       onBehalfOf: ctx.onBehalfOf,
     };
-    const reservation = await this.options.idempotencyStore.reserve(idempotencyKey, descriptor);
+    const reservation = await this.options.idempotencyStore.reserve(actionRequestId, descriptor);
     if (reservation.status === 'conflict') {
-      throw new IdempotencyConflictError(idempotencyKey);
+      throw new IdempotencyConflictError(actionRequestId);
     }
     if (reservation.status === 'replay') {
       const entry = reservation.entry;
@@ -170,7 +172,7 @@ export class GatekeeperBase {
       credential,
     });
     const observedFacts = this.toObservedFacts(operation, result.data);
-    await this.options.idempotencyStore.complete(idempotencyKey, {
+    await this.options.idempotencyStore.complete(actionRequestId, {
       data: result.data,
       observedFacts,
     });

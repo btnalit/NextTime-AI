@@ -138,7 +138,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         grantCapability(client, workspaceId, {
           principalId: holderId,
-          capability: 'linkage.test.action',
+          resourceType: 'linkage.test.action',
           grantedBy: ownerId,
         }),
       );

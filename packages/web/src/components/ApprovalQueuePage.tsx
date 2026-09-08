@@ -56,7 +56,10 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   const permissions = usePermissions();
   const toast = useToast();
   const load = useCallback(
-    () => http.call<readonly ActionRequestRowLike[]>('list_pending'),
+    () =>
+      http
+        .call<{ items: readonly ActionRequestRowLike[] }>('list_pending')
+        .then((page) => page.items),
     [http],
   );
   const pending = useResource(load);
@@ -86,19 +89,17 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
     const unsubPending = pushes.onActionPending(() => void pending.reload());
     const unsubUpdated = pushes.onActionUpdated((event) => {
       pending.mutate((rows) => {
-        const row = rows.find((candidate) => candidate.id === event.actionRequestId);
+        const row = rows.find((candidate) => candidate.id === event.id);
         if (row) {
           setDecided((prev) => ({ ...prev, [row.id]: { ...row, status: event.status } }));
         }
-        return rows.filter((candidate) => candidate.id !== event.actionRequestId);
+        return rows.filter((candidate) => candidate.id !== event.id);
       });
       setDecided((prev) => {
-        const existing = prev[event.actionRequestId];
-        return existing
-          ? { ...prev, [event.actionRequestId]: { ...existing, status: event.status } }
-          : prev;
+        const existing = prev[event.id];
+        return existing ? { ...prev, [event.id]: { ...existing, status: event.status } } : prev;
       });
-      void refreshRow(event.actionRequestId).then((row) => {
+      void refreshRow(event.id).then((row) => {
         if (row && row.status !== 'pending_approval') {
           setDecided((prev) => ({ ...prev, [row.id]: row }));
         }
@@ -168,13 +169,13 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       const result = await http.call<{ status: string }>('approve', { actionRequestId: id });
       setDecided((prev) => ({ ...prev, [id]: { ...row, status: result.status } }));
       settle(id, null);
-      toast.push({ tone: 'ok', title: `Approved ${humanizeKind(row.actionKind)}` });
+      toast.push({ tone: 'ok', title: `Approved ${humanizeKind(row.actionKindTag)}` });
       if (options.alwaysAllow) {
         try {
-          await http.call('set_auto_approved_action_kind', { actionKind: row.actionKind });
+          await http.call('set_auto_approved_action_kind', { actionKindTag: row.actionKindTag });
           toast.push({
             tone: 'info',
-            title: `${row.actionKind} will be auto-approved from now on`,
+            title: `${row.actionKindTag} will be auto-approved from now on`,
           });
         } catch (err) {
           if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');
@@ -206,7 +207,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       });
       setDecided((prev) => ({ ...prev, [id]: { ...row, status: result.status } }));
       settle(id, null);
-      toast.push({ tone: 'info', title: `Rejected ${humanizeKind(row.actionKind)}` });
+      toast.push({ tone: 'info', title: `Rejected ${humanizeKind(row.actionKindTag)}` });
     } catch (err) {
       setDecided((prev) => {
         const { [id]: _dropped, ...rest } = prev;
@@ -292,8 +293,8 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
                 leading={<StatusChip machine="actionRequest" status={row.status} size="s" />}
                 title={
                   <>
-                    <span className="truncate">{humanizeKind(row.actionKind)}</span>
-                    <span className="tag">{row.actionKind}</span>
+                    <span className="truncate">{humanizeKind(row.actionKindTag)}</span>
+                    <span className="tag">{row.actionKindTag}</span>
                   </>
                 }
                 meta={
@@ -347,7 +348,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       <Drawer
         open={selectedId !== undefined}
         onClose={() => onSelect(null)}
-        title={selectedRow ? humanizeKind(selectedRow.actionKind) : 'Approval request'}
+        title={selectedRow ? humanizeKind(selectedRow.actionKindTag) : 'Approval request'}
         subtitle={selectedId ? <span className="mono">{selectedId}</span> : undefined}
         testId="approval-drawer"
       >

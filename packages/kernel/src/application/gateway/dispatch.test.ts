@@ -80,7 +80,7 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
         { pool: neverConnectPool },
         humanCaller({ role: 'member' }),
         'grant_capability',
-        { principalId: randomUUID(), capability: 'x', scope: {} },
+        { principalId: randomUUID(), resourceType: 'x', scope: {} },
       ),
     ).rejects.toThrow(ForbiddenError);
   });

@@ -97,7 +97,7 @@ export function registerTaskUpdatedConsumer(
     // "refresh this Task's view" signal) — cheap, no DB write required beyond the read above.
     publishPrincipalPushEvent(task.onBehalfOf, {
       type: 'task.updated',
-      taskId: event.taskId,
+      id: event.taskId,
       status: event.status,
     });
 

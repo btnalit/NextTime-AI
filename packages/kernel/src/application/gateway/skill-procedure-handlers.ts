@@ -72,7 +72,7 @@ const listSkillsHandler: CapabilityHandler = async (client, workspaceId, _params
   const rows = await listSkills(client, workspaceId, principalId);
   return {
     result: {
-      skills: rows.map((row) => ({
+      items: rows.map((row) => ({
         id: row.id,
         version: row.version,
         status: row.status,
@@ -128,7 +128,7 @@ const listProceduresHandler: CapabilityHandler = async (client, workspaceId, _pa
   const rows = await listProcedures(client, workspaceId, principalId);
   return {
     result: {
-      procedures: rows.map((row) => ({
+      items: rows.map((row) => ({
         id: row.id,
         version: row.version,
         status: row.status,

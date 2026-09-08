@@ -110,11 +110,15 @@ function createFakePool(
     }
 
     // S2.13: governance/capability/grants.ts's listActiveGrantResourceScopes, called by
-    // ensureEntryHandle below.
-    if (sql.startsWith("select distinct scope ->> 'resourceScope'")) {
+    // ensureEntryHandle below. docs/wire-contract-conventions.md §1/§2 (2026-09-08 decision):
+    // `capability_grants.capability`/`scope->>'resourceScope'` renamed to the first-class
+    // `resource_type`/`resource_id` columns (migrations/governance/
+    // 0009_capability_grants_resource_type.sql) — this fake's SQL-prefix match and returned column
+    // name follow the rename.
+    if (sql.startsWith('select distinct resource_id')) {
       const [, principalId] = params as [string, string];
       const ids = grantedGatekeeperIdsByPrincipal.get(principalId) ?? [];
-      return { rows: ids.map((id) => ({ resource_scope: id })), rowCount: ids.length };
+      return { rows: ids.map((id) => ({ resource_id: id })), rowCount: ids.length };
     }
 
     if (sql.startsWith('insert into capability_handles')) {
@@ -385,7 +389,7 @@ describe('AgentHostRuntime — startTurn happy path', () => {
     runtime.handleFrame({ type: 'turnAccepted', turnId: first.turnId });
     await firstPromise;
 
-    // A Grant was added (workspace owner ran `grant_capability{capability:'gatekeeper', ...}`) —
+    // A Grant was added (workspace owner ran `grant_capability{resourceType:'gatekeeper', ...}`) —
     // simulated here by mutating the fake pool's own grant map, exactly as a real `capability_
     // grants` row appearing between two `ensureEntryHandle` reads would.
     grantedGatekeeperIdsByPrincipal.set(principalId, ['gk-1', 'gk-2']);

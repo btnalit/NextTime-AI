@@ -48,17 +48,17 @@ describe('HttpGatekeeperClient', () => {
     expect(result).toEqual({ data: { qty: 3 } });
   });
 
-  it('apply carries idempotencyKey through', async () => {
+  it('apply carries actionRequestId through', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(init?.body as string);
-      expect(body.idempotencyKey).toBe('req-1');
+      expect(body.actionRequestId).toBe('req-1');
       return jsonResponse({ ok: true, result: { data: {}, observedFacts: [], replayed: false } });
     });
     const client = new HttpGatekeeperClient({ fetchImpl });
     await client.apply('https://example.test', {
       operation: 'stock.adjust',
       params: {},
-      idempotencyKey: 'req-1',
+      actionRequestId: 'req-1',
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });

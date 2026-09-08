@@ -38,8 +38,8 @@ export async function computeActionRequestHolders(
   const [owners, grantHolders] = await Promise.all([
     listWorkspaceOwnerPrincipalIds(client, workspaceId),
     listGrantHolderPrincipalIds(client, workspaceId, {
-      actionKind: query.actionKind,
-      resourceScope: query.resourceScope,
+      resourceType: query.actionKind,
+      resourceId: query.resourceScope,
     }),
   ]);
   return [...new Set([...owners, ...grantHolders])];

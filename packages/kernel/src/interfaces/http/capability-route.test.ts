@@ -298,7 +298,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         method: 'POST',
         url: '/api/cap/grant_capability',
         headers: { authorization: `Bearer ${memberApiKey}` },
-        payload: { principalId: randomUUID(), capability: 'get_object', scope: {} },
+        payload: { principalId: randomUUID(), resourceType: 'gatekeeper', scope: {} },
       });
 
       expect(response.statusCode).toBe(403);

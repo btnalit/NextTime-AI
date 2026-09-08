@@ -14,7 +14,7 @@ import type { ActionPendingPush, ChatMessage } from './ws-client.js';
  *     on the fly in `application/linkage/action-request-consumer.ts`).
  *   - persisted `system.action_pending` chat message content (`ChatMessage.content`,
  *     packages/shared/src/chat-message-content.ts `SystemActionPendingContent`) — durable, but only
- *     `text`, a bare `actionKind`, `resourceScope`, `blastRadius`, `awaitDecision`, `isHolder`.
+ *     `text`, a bare `actionKindTag`, `resourceScope`, `blastRadius`, `awaitDecision`, `isHolder`.
  *   - a `list_pending`/`get_action` row (`governance/approval/types.ts` `ActionRequestRow` over
  *     HTTP — duplicated locally as `ActionRequestRowLike`, this module never imports kernel code)
  *     — the rawest and richest for governance fields: `status`, `params`, `onBehalfOf`,
@@ -33,7 +33,7 @@ export interface ActionRequestRowLike {
   readonly id: string;
   readonly status: string;
   readonly gatekeeperId: string;
-  readonly actionKind: string;
+  readonly actionKindTag: string;
   readonly resourceScope: string | null;
   readonly blastRadius: BlastRadius;
   readonly awaitDecision: boolean;
@@ -127,7 +127,7 @@ export function actionCardFromPendingContent(
   if (content.kind !== 'system.action_pending') return undefined;
 
   const actionRequestId = content.actionRequestId;
-  const actionKind = content.actionKind;
+  const actionKind = content.actionKindTag;
   const isHolder = content.isHolder;
   if (
     typeof actionRequestId !== 'string' ||
@@ -170,13 +170,13 @@ export function actionCardFromRow(
   row: ActionRequestRowLike,
   extra: { readonly isHolder?: boolean } = {},
 ): ActionCardData {
-  const label = humanizeKind(row.actionKind);
+  const label = humanizeKind(row.actionKindTag);
   return {
     actionRequestId: row.id,
     gatekeeperId: row.gatekeeperId,
     title: label,
     description: `${label}${row.resourceScope ? ` on ${row.resourceScope}` : ''}`,
-    actionKindTag: row.actionKind,
+    actionKindTag: row.actionKindTag,
     actionKindLabel: label,
     resourceScope: row.resourceScope,
     blastRadius: row.blastRadius,

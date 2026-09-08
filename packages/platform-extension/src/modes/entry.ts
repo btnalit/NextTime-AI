@@ -252,11 +252,11 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
     const usedNames = new Set<string>();
     let operations: AllowedOperationWire[];
     try {
-      const response = await options.kernelClient.call<{ operations?: AllowedOperationWire[] }>(
+      const response = await options.kernelClient.call<{ items?: AllowedOperationWire[] }>(
         'list_allowed_operations',
         {},
       );
-      operations = response.operations ?? [];
+      operations = response.items ?? [];
     } catch (error) {
       logKernelError(error, 'list_allowed_operations');
       return;

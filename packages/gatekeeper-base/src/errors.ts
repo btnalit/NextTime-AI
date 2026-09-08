@@ -60,20 +60,22 @@ export class BindingKindMismatchError extends Error {
 
 export class ApplyRequiresIdempotencyKeyError extends Error {
   constructor(name: string) {
-    super(`apply for operation "${name}" requires idempotencyKey`);
+    super(`apply for operation "${name}" requires actionRequestId`);
     this.name = 'ApplyRequiresIdempotencyKeyError';
   }
 }
 
-/** Review lane 5, P2-1: an `idempotencyKey` reused for a different `(operation, paramsHash,
+/** Review lane 5, P2-1: an `actionRequestId` reused for a different `(operation, paramsHash,
  *  onBehalfOf)` tuple than the one it was first reserved for — either a caller bug (key reuse
  *  across unrelated calls) or a genuinely concurrent duplicate `apply` for the same key that is
  *  still in flight (`idempotency-store.ts`'s `reserve` folds both cases into `'conflict'`: neither
- *  may safely invoke the transport a second time). */
+ *  may safely invoke the transport a second time). Class name unchanged
+ *  (docs/wire-contract-conventions.md's rename is the wire field/key value, not this generic
+ *  "idempotent execution" mechanism's own name). */
 export class IdempotencyConflictError extends Error {
   constructor(key: string) {
     super(
-      `idempotencyKey "${key}" is already in use for a different (operation, params, onBehalfOf) or is still being applied — reuse a key only for a retry of the exact same call`,
+      `actionRequestId "${key}" is already in use for a different (operation, params, onBehalfOf) or is still being applied — reuse a key only for a retry of the exact same call`,
     );
     this.name = 'IdempotencyConflictError';
   }

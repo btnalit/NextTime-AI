@@ -241,8 +241,8 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
       }),
     );
     expect(grant.principalId).toBe(memberId);
-    expect(grant.capability).toBe('gatekeeper');
-    expect(grant.scope.resourceScope).toBe(gatekeeperId);
+    expect(grant.resourceType).toBe('gatekeeper');
+    expect(grant.resourceId).toBe(gatekeeperId);
     expect(grant.status).toBe('active');
 
     const reread = await inTx((client) => getGrant(client, workspaceId, grant.id));

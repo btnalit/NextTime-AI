@@ -329,8 +329,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         grantCapability(client, workspaceId, {
           principalId: memberWithGrantId,
-          capability: 'gatekeeper',
-          scope: { resourceScope: gatekeeperId },
+          resourceType: 'gatekeeper',
+          resourceId: gatekeeperId,
           grantedBy: ownerId,
         }),
       );
@@ -460,7 +460,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: PENDING_OP.name,
         params: { qty: 424242 },
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
       expect(result.status).toBe('pending_approval');
 
       const resourceScope = await withWorkspace(
@@ -469,7 +469,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         async (client) => {
           const row = await client.query<{ resource_scope: string | null }>(
             'select resource_scope from action_requests where workspace_id = $1 and id = $2',
-            [workspaceId, result.actionRequestId],
+            [workspaceId, result.id],
           );
           return row.rows[0]?.resource_scope;
         },
@@ -486,7 +486,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // any pending_approval row.
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         rejectActionRequest(client, workspaceId, {
-          actionRequestId: result.actionRequestId,
+          actionRequestId: result.id,
           approverPrincipalId: ownerId,
           approverRole: 'owner',
         }),
@@ -568,7 +568,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: AUTO_OP.name,
         params: { qty: 1 },
-      })) as { status: string; actionRequestId: string; data?: unknown };
+      })) as { status: string; id: string; data?: unknown };
 
       expect(result.status).toBe('executed');
       expect(transport.calls[AUTO_OP.name]).toBe(before + 1);
@@ -586,7 +586,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: PENDING_OP.name,
         params: { qty: 6001 },
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
       expect(pendingResult.status).toBe('pending_approval');
 
       const before = transport.calls[AUTO_OP.name] ?? 0;
@@ -595,13 +595,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: AUTO_OP.name,
         params: { qty: 6002 },
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
 
       expect(autoResult.status).toBe('auto_approved'); // not yet executed — blocked behind pendingResult
       expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was never called for it
 
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        getActionRequest(client, workspaceId, autoResult.actionRequestId),
+        getActionRequest(client, workspaceId, autoResult.id),
       );
       expect(row?.status).toBe('auto_approved');
 
@@ -612,7 +612,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // very drainer ordering this test just proved.
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         rejectActionRequest(client, workspaceId, {
-          actionRequestId: pendingResult.actionRequestId,
+          actionRequestId: pendingResult.id,
           approverPrincipalId: ownerId,
           approverRole: 'owner',
         }),
@@ -683,7 +683,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: AUTO_OP.name,
         params,
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
       expect(first.status).toBe('executed');
 
       const before = transport.calls[AUTO_OP.name] ?? 0;
@@ -692,9 +692,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: AUTO_OP.name,
         params,
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
 
-      expect(second.actionRequestId).toBe(first.actionRequestId);
+      expect(second.id).toBe(first.id);
       expect(second.status).toBe('executed');
       expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
     });
@@ -708,7 +708,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         operation: AUTO_OP.name,
         params: { qty: 4201 },
         idempotencyKey,
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
       expect(first.status).toBe('executed');
 
       const before = transport.calls[AUTO_OP.name] ?? 0;
@@ -718,9 +718,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         operation: AUTO_OP.name,
         params: { qty: 4202 }, // different params — the explicit key still wins
         idempotencyKey,
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
 
-      expect(second.actionRequestId).toBe(first.actionRequestId);
+      expect(second.id).toBe(first.id);
       expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
     });
 
@@ -732,7 +732,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: PENDING_OP.name,
         params: { qty: 2 },
-      }) as Promise<{ status: string; actionRequestId: string; data?: unknown }>;
+      }) as Promise<{ status: string; id: string; data?: unknown }>;
 
       // Deliberately a separate connection/transaction, not the one phase 1 used — this is exactly
       // what a human's `approve()` call looks like in production.
@@ -771,7 +771,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: PENDING_OP.name,
         params: { qty: 3 },
-      }) as Promise<{ status: string; actionRequestId: string; data?: unknown }>;
+      }) as Promise<{ status: string; id: string; data?: unknown }>;
 
       const actionRequestId = await waitForActionRequestByStatus(
         pool,
@@ -866,11 +866,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: PENDING_OP.name,
         params: { qty: 777 },
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
       expect(result.status).toBe('pending_approval');
 
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        getActionRequest(client, workspaceId, result.actionRequestId),
+        getActionRequest(client, workspaceId, result.id),
       );
       expect(row?.parentWorkerRunId).toBe(workerRunId);
     });
@@ -881,11 +881,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: 'totally.unknown.op',
         params: {},
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
       expect(result.status).toBe('pending_approval');
 
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        getActionRequest(client, workspaceId, result.actionRequestId),
+        getActionRequest(client, workspaceId, result.id),
       );
       expect(row?.blastRadius).toBe('medium');
       expect(row?.status).toBe('pending_approval');
@@ -943,7 +943,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
         operation: DRAFT_OP.name,
         params: {},
-      })) as { status: string; actionRequestId: string };
+      })) as { status: string; id: string };
 
       expect(result.status).toBe('pending_approval');
       expect(transport.calls[DRAFT_OP.name] ?? 0).toBe(before); // never invoked

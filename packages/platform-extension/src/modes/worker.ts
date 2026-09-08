@@ -64,8 +64,7 @@ function buildGateTool(
           result.simulate !== undefined
             ? JSON.stringify(result.simulate, null, 2)
             : '(no simulated effect reported)';
-        const actionRequestId =
-          typeof result.actionRequestId === 'string' ? result.actionRequestId : 'unknown';
+        const actionRequestId = typeof result.id === 'string' ? result.id : 'unknown';
         return {
           content: [
             {
@@ -207,11 +206,11 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
   pi.on('session_start', async (_event, ctx: ExtensionContext) => {
     const usedNames = new Set<string>();
     try {
-      const response = await options.kernelClient.call<{ operations: AllowedOperationWire[] }>(
+      const response = await options.kernelClient.call<{ items: AllowedOperationWire[] }>(
         'list_allowed_operations',
         {},
       );
-      for (const op of response.operations ?? []) {
+      for (const op of response.items ?? []) {
         pi.registerTool(buildGateTool(op, options.kernelClient, usedNames));
       }
     } catch (error) {

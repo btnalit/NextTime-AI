@@ -23,7 +23,7 @@ import { writeObservedFacts } from './observed-facts.js';
  * §7.10) because it composes `adapters/gatekeeper-client` with `governance/gatekeepers` and
  * `substrate`.
  *
- * `apply`'s `idempotencyKey` is the ActionRequest's own id — a `drainGatekeeper` retry (e.g. after
+ * `apply`'s `actionRequestId` is the ActionRequest's own id — a `drainGatekeeper` retry (e.g. after
  * a crash between `apply` succeeding and `markActionRequestExecuted` committing) replays the same
  * key, so the gate's own idempotency store (design doc §5.1.4 "apply 幂等") returns the stored
  * result instead of re-running the effect. Observed facts from a successful `apply` are written in
@@ -149,7 +149,7 @@ export function createGatekeeperActionExecutor(deps: GatekeeperActionExecutorDep
           operation: actionRequest.actionKind,
           params: actionRequest.params,
           onBehalfOf: actionRequest.onBehalfOf,
-          idempotencyKey: actionRequest.id,
+          actionRequestId: actionRequest.id,
         });
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
@@ -214,7 +214,7 @@ export interface ReapStaleExecutingActionRequestsResult {
  * Scans every workspace for `executing` ActionRequests stuck past `options.staleAfterMs`
  * (`listStaleExecutingActionRequests`) and, for each, replays `apply` through the *same*
  * `ActionExecutor.execute` every other execution path in this codebase uses — the gate's own
- * idempotency store (keyed by `actionRequestId`, `apply`'s `idempotencyKey`) is what makes this
+ * idempotency store (keyed by `actionRequestId`, `apply`'s own field of that name) is what makes this
  * safe to call again: a genuinely-completed `apply` returns its stored result instead of
  * re-running the effect (same guarantee `action-executor.ts`'s own module doc comment and
  * `request-action-handler.ts`'s `tryExecuteInline` already document and rely on) — this function

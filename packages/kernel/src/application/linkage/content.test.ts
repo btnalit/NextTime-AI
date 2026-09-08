@@ -73,7 +73,7 @@ describe('buildActionPendingContent', () => {
     expect(content).toMatchObject({
       actionRequestId: 'ar-1',
       gatekeeperId: 'gk-1',
-      actionKind: 'docker.container_restart',
+      actionKindTag: 'docker.container_restart',
       resourceScope: 'host-1',
       isHolder: true,
     });
@@ -98,7 +98,7 @@ describe('buildActionPendingContent', () => {
       actionKind: 'docker.container_restart',
       isHolder: true,
     });
-    expect(content.actionKind).toBe('docker.container_restart');
+    expect(content.actionKindTag).toBe('docker.container_restart');
     expect(content.text).toContain('docker container restart');
   });
 });

@@ -179,7 +179,7 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
       const result = await gate.apply(
         parsed.data.operation,
         parsed.data.params,
-        parsed.data.idempotencyKey,
+        parsed.data.actionRequestId,
         { onBehalfOf: parsed.data.onBehalfOf },
       );
       return ok(reply, result);

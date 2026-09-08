@@ -26,7 +26,10 @@ export interface ChatListPageProps {
 
 /** components/ChatListPage: `list_chats` / `new_chat` (design doc §7.6; S1.8 deliverable 1). */
 export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
-  const load = useCallback(() => client.call<readonly ChatSummary[]>('list_chats'), [client]);
+  const load = useCallback(
+    () => client.call<{ items: readonly ChatSummary[] }>('list_chats').then((page) => page.items),
+    [client],
+  );
   const chats = useResource(load);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<unknown | null>(null);

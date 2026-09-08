@@ -14,7 +14,7 @@ function row(overrides: Partial<ActionRequestRowLike> = {}): ActionRequestRowLik
     id: 'ar-1',
     status: 'pending_approval',
     gatekeeperId: 'gk-1',
-    actionKind: 'docker.container_restart',
+    actionKindTag: 'docker.container_restart',
     resourceScope: 'web-1',
     blastRadius: 'medium',
     awaitDecision: true,
@@ -27,7 +27,8 @@ function row(overrides: Partial<ActionRequestRowLike> = {}): ActionRequestRowLik
 }
 
 /** A capability caller whose `list_pending` answers are scripted in order; other capabilities
- *  resolve to whatever `others` says. */
+ *  resolve to whatever `others` says. `list_pending` itself returns `{items}` on the wire (§3
+ *  list envelope) — scripted as a bare array here for brevity and wrapped at the call site. */
 function scriptedHttp(
   listPending: readonly (() => Promise<readonly ActionRequestRowLike[]>)[],
   others: Record<string, (params: unknown) => Promise<unknown>> = {},
@@ -41,7 +42,8 @@ function scriptedHttp(
       if (name === 'list_pending') {
         const next = queue.length > 1 ? queue.shift() : queue[0];
         if (!next) throw new Error('unscripted list_pending');
-        return next();
+        const items = await next();
+        return { items };
       }
       const handler = others[name];
       if (!handler) throw new Error(`unscripted capability ${name}`);
@@ -175,7 +177,7 @@ describe('ApprovalQueuePage state machine', () => {
     render(<ApprovalQueuePage http={http} pushes={pushes} onSelect={vi.fn()} />);
     await screen.findByTestId('approval-row');
 
-    act(() => pushes.emitUpdated({ actionRequestId: 'ar-1', status: 'rejected' }));
+    act(() => pushes.emitUpdated({ id: 'ar-1', status: 'rejected' }));
     await waitFor(() => expect(screen.queryByTestId('approval-row')).toBeNull());
     fireEvent.click(screen.getByRole('tab', { name: /All/ }));
     const decided = await screen.findByTestId('approval-row');

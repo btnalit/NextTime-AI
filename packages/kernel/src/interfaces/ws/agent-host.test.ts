@@ -73,8 +73,11 @@ function createFakePool(): PoolLike {
     }
     // S2.13: governance/capability/grants.ts's listActiveGrantResourceScopes, called by
     // AgentHostRuntime's ensureEntryHandle — no Grant is ever seeded here, matching this test
-    // file's pre-S2.13 behavior (empty resources.gatekeeper).
-    if (sql.startsWith("select distinct scope ->> 'resourceScope'")) {
+    // file's pre-S2.13 behavior (empty resources.gatekeeper). docs/wire-contract-conventions.md
+    // §1/§2 (2026-09-08 decision): `capability`/`scope->>'resourceScope'` renamed to
+    // `resource_type`/`resource_id` (migrations/governance/
+    // 0009_capability_grants_resource_type.sql).
+    if (sql.startsWith('select distinct resource_id')) {
       return { rows: [], rowCount: 0 };
     }
     throw new Error(`fake pool: unhandled query: ${sql}`);

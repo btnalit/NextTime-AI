@@ -115,15 +115,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(sendResult.sequence).toBe(1);
 
       const list = (await dispatchCapability({ pool }, caller, 'list_chats', {})) as {
-        id: string;
-      }[];
-      expect(list.some((c) => c.id === chat.id)).toBe(true);
+        items: { id: string }[];
+      };
+      expect(list.items.some((c) => c.id === chat.id)).toBe(true);
 
       const history = (await dispatchCapability({ pool }, caller, 'get_chat_history', {
         chatId: chat.id,
-      })) as { messages: { text: string; role: string; kind?: string }[] };
-      expect(history.messages).toHaveLength(1);
-      expect(history.messages[0]).toMatchObject({
+      })) as { items: { text: string; role: string; kind?: string }[] };
+      expect(history.items).toHaveLength(1);
+      expect(history.items[0]).toMatchObject({
         role: 'user',
         text: 'hello from a handler test',
       });
@@ -131,7 +131,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // sets `kind` for every row, not just role='system' ones — still undefined here, since a
       // plain user message's content has no `kind` field of its own (see the system-message test
       // below for the case that actually changed behavior).
-      expect(history.messages[0]?.kind).toBeUndefined();
+      expect(history.items[0]?.kind).toBeUndefined();
 
       const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         queryAudit(client, workspaceId, { action: 'send_chat_message', resourceId: chat.id }),
@@ -166,11 +166,11 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const history = (await dispatchCapability({ pool }, caller, 'get_chat_history', {
         chatId: chat.id,
-      })) as { messages: { role: string; kind?: string; content?: Record<string, unknown> }[] };
-      expect(history.messages).toHaveLength(1);
-      expect(history.messages[0]?.role).toBe('system');
-      expect(history.messages[0]?.kind).toBe('system.task_update');
-      expect(history.messages[0]?.content).toMatchObject(systemContent);
+      })) as { items: { role: string; kind?: string; content?: Record<string, unknown> }[] };
+      expect(history.items).toHaveLength(1);
+      expect(history.items[0]?.role).toBe('system');
+      expect(history.items[0]?.kind).toBe('system.task_update');
+      expect(history.items[0]?.content).toMatchObject(systemContent);
     });
 
     it('a second send_chat_message while running throws — dispatchCapability surfaces the error (§9.4)', async () => {
@@ -204,9 +204,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow();
 
       const otherList = (await dispatchCapability({ pool }, otherCaller, 'list_chats', {})) as {
-        id: string;
-      }[];
-      expect(otherList.some((c) => c.id === chat.id)).toBe(false);
+        items: { id: string }[];
+      };
+      expect(otherList.items.some((c) => c.id === chat.id)).toBe(false);
     });
 
     it('subscribe_chat authorizes and audits without mutating anything', async () => {
@@ -694,8 +694,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         handleCallerWithScope(workspaceId, ownerId, ['list_worker_definitions']),
         'list_worker_definitions',
         { kind: 'entry' },
-      )) as { id: string }[];
-      expect(listed.some((d) => d.id === draft.id)).toBe(true);
+      )) as { items: { id: string }[] };
+      expect(listed.items.some((d) => d.id === draft.id)).toBe(true);
 
       return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
         const objects = await graphStore.search(client, workspaceId, {

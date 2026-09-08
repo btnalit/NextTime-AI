@@ -7,7 +7,7 @@ import { Field, Input, Select } from './ui/Field.js';
 
 export interface RequestConnectionFormProps {
   readonly http: CapabilityCaller;
-  readonly onDone: (result: { connectionRequestId: string; status: string }) => void;
+  readonly onDone: (result: { id: string; status: string }) => void;
   readonly onCancel: () => void;
 }
 
@@ -28,10 +28,10 @@ export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnect
     setSubmitting(true);
     setError(null);
     try {
-      const result = await http.call<{ connectionRequestId: string; status: string }>(
-        'request_connection',
-        { kind, target: target.trim() },
-      );
+      const result = await http.call<{ id: string; status: string }>('request_connection', {
+        kind,
+        target: target.trim(),
+      });
       onDone(result);
     } catch (err) {
       setError(err);

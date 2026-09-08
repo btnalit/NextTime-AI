@@ -35,7 +35,7 @@ const SAMPLE_CONTENTS: SystemMessageContent[] = [
     text: 'Approval needed: restart container',
     actionRequestId: 'ar1',
     gatekeeperId: 'gk1',
-    actionKind: 'docker.container_restart',
+    actionKindTag: 'docker.container_restart',
     resourceScope: 'host-1',
     blastRadius: 'medium',
     awaitDecision: false,
@@ -46,7 +46,7 @@ const SAMPLE_CONTENTS: SystemMessageContent[] = [
     text: 'restart container: was approved',
     actionRequestId: 'ar1',
     status: 'approved',
-    actionKind: 'docker.container_restart',
+    actionKindTag: 'docker.container_restart',
     isHolder: false,
   },
 ];
@@ -81,7 +81,7 @@ describe('SystemMessageContentSchema', () => {
         text: 'x',
         actionRequestId: 'ar1',
         gatekeeperId: 'gk1',
-        actionKind: 'test.action',
+        actionKindTag: 'test.action',
         blastRadius: 'not_a_radius',
         isHolder: true,
       }),
@@ -94,7 +94,7 @@ describe('SystemMessageContentSchema', () => {
       text: 'x',
       actionRequestId: 'ar1',
       gatekeeperId: 'gk1',
-      actionKind: 'test.action',
+      actionKindTag: 'test.action',
       isHolder: true,
     };
     expect(SystemMessageContentSchema.parse(minimal)).toEqual(minimal);

@@ -546,7 +546,7 @@ export class AgentHostRuntime implements AgentRuntime {
   }
 
   /**
-   * S2.13: flows every `connect_gatekeeper`/`grant_capability{capability:'gatekeeper'}` Grant this
+   * S2.13: flows every `connect_gatekeeper`/`grant_capability{resourceType:'gatekeeper'}` Grant this
    * principal holds into the entry Handle's own `resources.gatekeeper` scope
    * (governance/capability/handles.ts's own "Known seam for S2.4/S2.13" note — this is that seam,
    * closed). Item 4 fix (authority-tightening, review job 652a4abc: "Grant changes become
@@ -566,7 +566,7 @@ export class AgentHostRuntime implements AgentRuntime {
     const gatekeeperIds = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
       listActiveGrantResourceScopes(client, workspaceId, {
         principalId,
-        capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
+        resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
       }),
     );
 

@@ -95,7 +95,7 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
       kernel.setHandler('list_allowed_operations', () => ({
         ok: true,
         result: {
-          operations: [
+          items: [
             {
               gatekeeperId: 'gk-1',
               gateName: 'inventory',

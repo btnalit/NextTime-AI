@@ -81,20 +81,23 @@ export interface ActionPendingPush {
   readonly simulated?: unknown;
 }
 
-/** `action.updated` (packages/shared/src/events.ts `ActionUpdatedEvent`). */
+/** `action.updated` (packages/shared/src/events.ts `ActionUpdatedEvent`) — docs/wire-contract-
+ *  conventions.md §3 (2026-09-08 decision): an exact `{id, status}` subset of the ActionRequest
+ *  resource, so `id` (not `actionRequestId`). */
 export interface ActionUpdatedPush {
-  readonly actionRequestId: string;
+  readonly id: string;
   readonly status: ActionRequestStatus;
 }
 
-/** `task.updated` (packages/shared/src/events.ts `TaskUpdatedPushEvent`). */
+/** `task.updated` (packages/shared/src/events.ts `TaskUpdatedPushEvent`) — same §3 rename as
+ *  `ActionUpdatedPush` above. */
 export interface TaskUpdatedPush {
-  readonly taskId: string;
+  readonly id: string;
   readonly status: TaskStatus;
 }
 
 interface ChatHistoryResult {
-  readonly messages: readonly ChatMessage[];
+  readonly items: readonly ChatMessage[];
   readonly nextCursor?: string;
 }
 
@@ -376,7 +379,7 @@ export class WsClient {
         cursor,
         limit: HISTORY_PAGE_LIMIT,
       });
-      for (const message of page.messages) this.deliverMessage(subscription, message);
+      for (const message of page.items) this.deliverMessage(subscription, message);
       if (page.nextCursor === undefined) return;
       cursor = page.nextCursor;
     }

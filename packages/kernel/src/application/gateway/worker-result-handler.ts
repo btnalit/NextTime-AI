@@ -151,7 +151,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
 
   return {
     result: {
-      taskId: outcome.task.id,
+      id: outcome.task.id,
       status: outcome.task.status,
       activityId: outcome.activityId,
       factIds: outcome.factIds,
@@ -203,5 +203,5 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
     operations.push(toWireOperation(record, gateName));
   }
 
-  return { result: { operations } };
+  return { result: { items: operations } };
 };

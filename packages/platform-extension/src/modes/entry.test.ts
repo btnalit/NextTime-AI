@@ -103,7 +103,7 @@ describe('registerEntryMode', () => {
     kernel.setHandler('list_allowed_operations', () => ({
       ok: true,
       result: {
-        operations: [
+        items: [
           {
             gatekeeperId: 'gk-1',
             gateName: 'accept_s2_api',

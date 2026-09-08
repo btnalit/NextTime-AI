@@ -67,7 +67,7 @@ export async function recordTransition(
       workspaceId,
       actionRequestId: params.actionRequestId,
       gatekeeperId: params.pendingApprovalFanout.gatekeeperId,
-      actionKind: params.pendingApprovalFanout.actionKind,
+      actionKindTag: params.pendingApprovalFanout.actionKind,
       resourceScope: params.pendingApprovalFanout.resourceScope ?? undefined,
       holderPrincipalIds: [...holderPrincipalIds],
     });

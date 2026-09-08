@@ -293,14 +293,18 @@ function sshRunScenario(messages) {
  *  call — the entry agent's own turn must end quickly and report back later (§8.2's asynchronous
  *  model), not block for up to 90s waiting for the spawned Worker.
  *
- *  Turn 3: a final text naming the taskId turn 2's *real* result returned.
+ *  Turn 3: a final text naming the id (was taskId — docs/wire-contract-conventions.md §2,
+ *  invoke_worker's result is now the created Task resource keyed `id`) turn 2's *real* result
+ *  returned.
  */
 function entryRestartChatScenario(messages) {
   const blob = JSON.stringify(messages);
   const containerId = extractMarker(blob, 'CONTAINER_ID') ?? 'unknown';
   const foundWorkers = findToolResult(messages, 'find_workers');
-  const workerMatch = Array.isArray(foundWorkers)
-    ? foundWorkers.find((w) => w && w.kind === 'worker')
+  // find_workers is a list_*/find_* capability — its result is now {items, nextCursor?}
+  // (docs/wire-contract-conventions.md §3), not a bare array.
+  const workerMatch = Array.isArray(foundWorkers?.items)
+    ? foundWorkers.items.find((w) => w && w.kind === 'worker')
     : undefined;
   const invokeResult = findToolResult(messages, 'invoke_worker');
 
@@ -319,9 +323,9 @@ function entryRestartChatScenario(messages) {
           },
         }
       : { text: 'echo: 重启测试容器 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)' },
-    invokeResult && typeof invokeResult.taskId === 'string'
+    invokeResult && typeof invokeResult.id === 'string'
       ? {
-          text: `Started a Worker to restart the container — task ${invokeResult.taskId} is now running, I will follow up once it reports back.`,
+          text: `Started a Worker to restart the container — task ${invokeResult.id} is now running, I will follow up once it reports back.`,
         }
       : { text: 'echo: 重启测试容器 (invoke_worker did not resolve — see docs/runbooks/host-accept-s2.md)' },
   ];

@@ -4,7 +4,9 @@ import { dirname, join } from 'node:path';
 
 /**
  * `apply`'s idempotency store (design doc §5.1.4 "apply 幂等"): a repeat `apply` call with the
- * same `idempotencyKey` returns the stored result instead of re-executing.
+ * same `actionRequestId` (docs/wire-contract-conventions.md §1, 2026-09-08 decision — renamed
+ * from `idempotencyKey`, same key, different name) returns the stored result instead of
+ * re-executing.
  *
  * Descriptor + reserve/complete (review lane 5, P2-1): entries now carry the `(operation,
  * paramsHash, onBehalfOf)` tuple `apply` first reserved the key for, not just an opaque value.

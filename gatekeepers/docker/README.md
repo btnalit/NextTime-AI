@@ -56,9 +56,10 @@ resolves to `{}`.
 ## Idempotent `apply`
 
 Handled entirely by `@nexttime/gatekeeper-base`'s `GatekeeperBase`/`JsonFileIdempotencyStore` — a
-repeat `apply` for `container.restart` with the same `idempotencyKey` returns the stored result
-without calling `dockerode` again (`src/transport.test.ts` asserts `client.restartCalls` stays at
-length 1 across two `apply` calls with the same key).
+repeat `apply` for `container.restart` with the same `actionRequestId` (the `/gate/apply` request
+field — renamed from `idempotencyKey`, docs/wire-contract-conventions.md §1) returns the stored
+result without calling `dockerode` again (`src/transport.test.ts` asserts `client.restartCalls`
+stays at length 1 across two `apply` calls with the same key).
 
 ## Env
 

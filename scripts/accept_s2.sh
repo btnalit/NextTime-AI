@@ -316,7 +316,7 @@ async function cmdSendAndWait(args) {
     TURN_ID: turnId,
     TURN_STATUS: turnStatus ?? '',
     ECHO_SEEN: echoSeen ? 1 : 0,
-    HISTORY_COUNT: history.messages.length,
+    HISTORY_COUNT: history.items.length,
   });
   ws.close();
 }
@@ -327,8 +327,8 @@ async function cmdGetHistory(args) {
   const nextId = idCounter();
   await call(ws, nextId(), 'authenticate', { token });
   const history = await call(ws, nextId(), 'get_chat_history', { chatId });
-  console.log(`RESULT=${JSON.stringify(history.messages)}`);
-  printExtraction(history.messages, extractExpr);
+  console.log(`RESULT=${JSON.stringify(history.items)}`);
+  printExtraction(history.items, extractExpr);
   ws.close();
 }
 
@@ -580,7 +580,7 @@ fixtures_up_step() {
 # bootstrap.js's operator-only register-gatekeeper subcommand.
 connections_step() {
   # --- ssh ---
-  out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"ssh\",\"target\":\"accept_s2_ssh\"}" "d.result.connectionRequestId")
+  out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"ssh\",\"target\":\"accept_s2_ssh\"}" "d.result.id")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-ssh-request" "request_connection(ssh) HTTP $status: $(parse_kv "$out" BODY)"
   CR_ID_SSH=$(parse_kv "$out" EXTRACTED)
@@ -607,7 +607,7 @@ connections_step() {
   pass "connect-ssh-grant" "ssh gatekeeper granted to alice"
 
   # --- http (test OpenAPI service) ---
-  out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"http\",\"target\":\"accept_s2_api\"}" "d.result.connectionRequestId")
+  out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"http\",\"target\":\"accept_s2_api\"}" "d.result.id")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-http-request" "request_connection(http) HTTP $status: $(parse_kv "$out" BODY)"
   CR_ID_HTTP=$(parse_kv "$out" EXTRACTED)
@@ -625,7 +625,7 @@ connections_step() {
 
   # S2.13 acceptance sentence, pre-publish half: a freshly-imported draft manifest must not be
   # visible to find_operations yet (I16/I17).
-  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"stock\"}" "d.result.length")
+  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"stock\"}" "d.result.items.length")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "s213-find-operations-pre-publish" "find_operations HTTP $status: $(parse_kv "$out" BODY)"
   pre_count=$(parse_kv "$out" EXTRACTED)
@@ -637,7 +637,7 @@ connections_step() {
   [ "$status" = "200" ] || fail "connect-http-publish" "publish_manifest(http) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-http-publish" "http manifest published"
 
-  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"stock\"}" "d.result.length")
+  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"stock\"}" "d.result.items.length")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "s213-find-operations-post-publish" "find_operations HTTP $status: $(parse_kv "$out" BODY)"
   post_count=$(parse_kv "$out" EXTRACTED)
@@ -671,7 +671,7 @@ connections_step() {
   pass "s213-no-token-leak" "bearer token appears in 0 rows across all $(printf '%s\n' "$tables" | wc -l | tr -d ' ') public tables"
 
   # --- docker (already-deployed gatekeeper-docker; docs/runbooks/host-gatekeepers.md §10) ---
-  out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"cli\",\"target\":\"docker\"}" "d.result.connectionRequestId")
+  out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"cli\",\"target\":\"docker\"}" "d.result.id")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-docker-request" "request_connection(docker) HTTP $status: $(parse_kv "$out" BODY)"
   CR_ID_DOCKER=$(parse_kv "$out" EXTRACTED)
@@ -828,7 +828,7 @@ step2_docker_restart() {
     # Select the row's own `id` on the JS side: a greedy sed over the JSON picked the *last*
     # `"id":"…"` — which is the container id inside `params` (container.restart {id}) — and the
     # seventh host run then approved a container id (500) and looked for a card under it (miss).
-    out=$(cap "$ALICE_KEY" list_pending "{}" "String((((d.result||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_DOCKER'))[0]||{}).id||'')")
+    out=$(cap "$ALICE_KEY" list_pending "{}" "String((((d.result.items||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_DOCKER'))[0]||{}).id||'')")
     status=$(parse_kv "$out" HTTP_STATUS)
     [ "$status" = "200" ] || fail "step2-list-pending" "list_pending HTTP $status: $(parse_kv "$out" BODY)"
     AR_ID_DOCKER=$(parse_kv "$out" EXTRACTED)
@@ -952,7 +952,7 @@ step4_step5_ssh_always_allow() {
   [ "$status" = "200" ] || fail "step4-invoke-worker-1" "invoke_worker HTTP $status: $(parse_kv "$out" BODY)"
   pass "step4-invoke-worker-1" "first ssh Worker run -> $(parse_kv "$out" EXTRACTED)"
 
-  out=$(cap "$ALICE_KEY" list_pending "{}" "JSON.stringify((d.result||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_SSH'))")
+  out=$(cap "$ALICE_KEY" list_pending "{}" "JSON.stringify((d.result.items||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_SSH'))")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "step4-list-pending-1" "list_pending HTTP $status: $(parse_kv "$out" BODY)"
   matches=$(parse_kv "$out" EXTRACTED)
@@ -1001,12 +1001,12 @@ step4_step5_ssh_always_allow() {
   pass "step4-executed-1" "first ssh run executed"
 
   # --- "always allow this kind" ---
-  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"actionKind\":\"ssh.run_command\"}" "")
+  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"actionKindTag\":\"ssh.run_command\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "step4-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
   pass "step4-always-allow" "workspace policy: ssh.run_command auto-approved from now on"
 
-  out=$(cap "$ALICE_KEY" list_pending "{}" "(d.result||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_SSH').length")
+  out=$(cap "$ALICE_KEY" list_pending "{}" "(d.result.items||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_SSH').length")
   pending_before_second=$(parse_kv "$out" EXTRACTED)
 
   out=$(cap "$ALICE_KEY" invoke_worker \
@@ -1016,7 +1016,7 @@ step4_step5_ssh_always_allow() {
   [ "$status" = "200" ] || fail "step4-invoke-worker-2" "invoke_worker (second run) HTTP $status: $(parse_kv "$out" BODY)"
   pass "step4-invoke-worker-2" "second ssh Worker run -> $(parse_kv "$out" EXTRACTED)"
 
-  out=$(cap "$ALICE_KEY" list_pending "{}" "(d.result||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_SSH').length")
+  out=$(cap "$ALICE_KEY" list_pending "{}" "(d.result.items||[]).filter(r=>r.gatekeeperId==='$GATEKEEPER_ID_SSH').length")
   pending_after_second=$(parse_kv "$out" EXTRACTED)
   [ "$pending_after_second" = "$pending_before_second" ] || fail "step4-no-second-card" "list_pending for the ssh gatekeeper grew ($pending_before_second -> $pending_after_second) — second identical run produced a card instead of being auto-approved"
   pass "step4-no-second-card" "list_pending unchanged ($pending_before_second) — second identical run produced no approval card"

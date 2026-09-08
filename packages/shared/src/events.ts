@@ -102,7 +102,7 @@ const ActionRequestPendingEvent = z.object({
   workspaceId: z.string(),
   actionRequestId: z.string(),
   gatekeeperId: z.string(),
-  actionKind: z.string(),
+  actionKindTag: z.string(),
   resourceScope: z.string().optional(),
   // S2.3 addition (design doc §7.10 "审批路由是 approval 发事件、chat 订阅后写各持有者的系统消息",
   // §8.5 "卡片出现的位置：进入每个持有范围者自己的对话...与审批队列"): the principal ids I14's routing
@@ -264,15 +264,22 @@ const ActionPendingEvent = z.object({
   simulated: z.unknown().optional(),
 });
 
+// `action.updated`/`task.updated` carry no display data beyond id+status — an exact subset of the
+// corresponding resource object (docs/wire-contract-conventions.md §3, 2026-09-08 decision:
+// "服务端推送事件的 payload 与对应资源对象同形...不另造形状"), so the primary key field is `id`, same as
+// the resource itself, not a bespoke `actionRequestId`/`taskId`. `action.pending` (above) is
+// different — a synthesized notification card with its own display fields (title/description/
+// actionKind) no ActionRequest wire object carries, so `actionRequestId` there is a genuine
+// `<resource>Id` cross-reference, not a same-shape subset; left unchanged.
 const ActionUpdatedEvent = z.object({
   type: z.literal('action.updated'),
-  actionRequestId: z.string(),
+  id: z.string(),
   status: ActionRequestStatusSchema,
 });
 
 const TaskUpdatedPushEvent = z.object({
   type: z.literal('task.updated'),
-  taskId: z.string(),
+  id: z.string(),
   status: TaskStatusSchema,
 });
 

@@ -789,7 +789,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
             await client.query(
-              `insert into capability_grants (workspace_id, id, principal_id, capability, status, granted_by)
+              `insert into capability_grants (workspace_id, id, principal_id, resource_type, status, granted_by)
                values ($1, $2, $3, 'test.capability', 'not_a_real_status', $4)`,
               [workspaceId, randomUUID(), memberId, ownerId],
             );
@@ -804,7 +804,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           async (client) => {
             const id = randomUUID();
             await client.query(
-              `insert into capability_grants (workspace_id, id, principal_id, capability, scope, granted_by)
+              `insert into capability_grants (workspace_id, id, principal_id, resource_type, scope, granted_by)
              values ($1, $2, $3, 'test.capability', $4, $5)`,
               [workspaceId, id, memberId, JSON.stringify({ resourceScope: 'gk-1' }), ownerId],
             );

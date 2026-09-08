@@ -19,8 +19,8 @@ export function usePendingCount(http: CapabilityCaller, pushes: PushSource): num
     if (denied || inFlight.current) return;
     inFlight.current = true;
     try {
-      const rows = await http.call<readonly unknown[]>('list_pending');
-      setCount(rows.length);
+      const page = await http.call<{ items: readonly unknown[] }>('list_pending');
+      setCount(page.items.length);
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('list_pending');
       // Any other failure leaves the last known count in place — the Approvals page itself
