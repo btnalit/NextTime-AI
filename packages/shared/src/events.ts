@@ -264,15 +264,22 @@ const ActionPendingEvent = z.object({
   simulated: z.unknown().optional(),
 });
 
+// `action.updated`/`task.updated` carry no display data beyond id+status — an exact subset of the
+// corresponding resource object (docs/wire-contract-conventions.md §3, 2026-09-08 decision:
+// "服务端推送事件的 payload 与对应资源对象同形...不另造形状"), so the primary key field is `id`, same as
+// the resource itself, not a bespoke `actionRequestId`/`taskId`. `action.pending` (above) is
+// different — a synthesized notification card with its own display fields (title/description/
+// actionKind) no ActionRequest wire object carries, so `actionRequestId` there is a genuine
+// `<resource>Id` cross-reference, not a same-shape subset; left unchanged.
 const ActionUpdatedEvent = z.object({
   type: z.literal('action.updated'),
-  actionRequestId: z.string(),
+  id: z.string(),
   status: ActionRequestStatusSchema,
 });
 
 const TaskUpdatedPushEvent = z.object({
   type: z.literal('task.updated'),
-  taskId: z.string(),
+  id: z.string(),
   status: TaskStatusSchema,
 });
 

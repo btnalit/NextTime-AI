@@ -159,8 +159,8 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
     actionKind: { tag: 'docker.container_restart', label: 'Restart container' },
     awaitDecision: false,
   },
-  { type: 'action.updated', actionRequestId: 'ar1', status: 'approved' },
-  { type: 'task.updated', taskId: 'task1', status: 'completed' },
+  { type: 'action.updated', id: 'ar1', status: 'approved' },
+  { type: 'task.updated', id: 'task1', status: 'completed' },
 ];
 
 describe('PlatformEventSchema', () => {
