@@ -191,10 +191,23 @@ export type PolicyRow = Readonly<Record<string, unknown>>;
 // Workspace (get_workspace)
 // -------------------------------------------------------------------------------------------
 
+/** `get_workspace`'s `caller` (S3.11 coordination addendum, 2026-09-08): the already-resolved
+ *  human Principal (`application/gateway/dispatch.ts`'s `ResolvedCaller.principal`, projected by
+ *  `members-handlers.ts`'s `getWorkspaceHandler`) — the console's first authoritative "who am I"
+ *  read, replacing the 403-probing inference in `lib/role.ts` as the primary source (that module
+ *  is now a fallback only, for a kernel that predates this field or when the call itself fails). */
+export interface WorkspaceCaller {
+  readonly id: string;
+  readonly role: Role;
+  readonly displayName: string;
+  readonly kind: PrincipalKind;
+}
+
 export interface WorkspaceInfo {
   readonly id: string;
   readonly name: string;
   readonly createdAt: string;
   readonly principalCount: number;
   readonly gatekeeperCount: number;
+  readonly caller: WorkspaceCaller;
 }

@@ -1,10 +1,11 @@
-import type { InferredRole } from '../../lib/role.js';
-import { ROLE_BADGE_LABEL } from '../../lib/role.js';
+import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
+import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
 import type { NavSection } from '../../lib/router.js';
 import { hrefs } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
 import { Button } from '../ui/Button.js';
 import { Icon, type IconName } from '../ui/Icon.js';
+import { StatusChip } from '../ui/StatusChip.js';
 
 interface NavItem {
   readonly section: NavSection;
@@ -68,7 +69,7 @@ export interface SidebarProps {
   readonly pendingCount: number | null;
   readonly wsStatus: WsConnectionStatus;
   readonly workspaceName: string;
-  readonly inferredRole: InferredRole;
+  readonly role: WorkspaceRole;
   readonly onForgetKey: () => void;
 }
 
@@ -78,16 +79,23 @@ export interface SidebarProps {
  * bottom the WS connection dot and "Forget key". Collapses to an icon rail ≤1100px and a top bar
  * ≤720px (styles/shell.css) — labels/sub-labels/section headers hide, the `title`/`aria-label`s
  * below keep every control nameable.
+ *
+ * Role badge: a `{kind:'known'}` role (`get_workspace.caller.role`, the authoritative source as of
+ * the S3.11 coordination addendum) renders as the same `StatusChip machine="role"` the Members
+ * page already uses for every principal's own role chip — one color vocabulary, not two. A
+ * `{kind:'inferred'}` role (the pre-existing 403/200 fallback, `lib/role.ts`) keeps its own
+ * bucket-label badge (`Owner`/`Operator+`/`Member`/`—`) — those are honest uncertainty ranges, not
+ * real `Role` enum values, so they never borrow the enum-backed chip's vocabulary.
  */
 export function Sidebar({
   active,
   pendingCount,
   wsStatus,
   workspaceName,
-  inferredRole,
+  role,
   onForgetKey,
 }: SidebarProps) {
-  const showGovern = inferredRole !== 'member';
+  const showGovern = !isProvenMember(role);
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -100,13 +108,19 @@ export function Sidebar({
             <span className="sidebar-workspace" title={workspaceName}>
               {workspaceName}
             </span>
-            <span
-              className={`role-badge ${ROLE_BADGE_CLASS[inferredRole]}`}
-              data-testid="role-badge"
-              title={`Inferred role: ${ROLE_BADGE_LABEL[inferredRole]}`}
-            >
-              {ROLE_BADGE_LABEL[inferredRole]}
-            </span>
+            {role.kind === 'known' ? (
+              <span data-testid="role-badge" title={`Role: ${role.role}`}>
+                <StatusChip machine="role" status={role.role} size="s" />
+              </span>
+            ) : (
+              <span
+                className={`role-badge ${ROLE_BADGE_CLASS[role.role]}`}
+                data-testid="role-badge"
+                title={`Inferred role: ${ROLE_BADGE_LABEL[role.role]}`}
+              >
+                {ROLE_BADGE_LABEL[role.role]}
+              </span>
+            )}
           </span>
         </div>
       </div>
