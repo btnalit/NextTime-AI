@@ -58,6 +58,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
 const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+// review lane 5, P1-1: every /gate/* route now requires Authorization: Bearer <token> — this
+// test's own fake gate server and every HttpGatekeeperClient it talks to share this fixed value.
+const GATE_TEST_TOKEN = 'gate-integration-test-token-0123456789abcdef';
 
 function humanCaller(
   workspaceId: string,
@@ -273,7 +276,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         credentialResolver: { resolve: async () => ({}) },
         idempotencyStore: new InMemoryIdempotencyStore(),
       });
-      fakeGateApp = createGatekeeperServer({ gate });
+      fakeGateApp = createGatekeeperServer({ gate, token: GATE_TEST_TOKEN });
       await fakeGateApp.listen({ port: 0, host: '127.0.0.1' });
       const address = fakeGateApp.server.address() as AddressInfo;
       const endpoint = `http://127.0.0.1:${address.port}`;
@@ -305,7 +308,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // DRAFT_OP is deliberately never published.
       });
 
-      const gatekeeperClient = new HttpGatekeeperClient();
+      const gatekeeperClient = new HttpGatekeeperClient({ token: GATE_TEST_TOKEN });
       const adminWithTransaction = createAdminWithTransaction(pool);
       setRequestActionDeps({
         gatekeeperClient,
@@ -318,7 +321,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       drainer = new ApprovalDrainer({
         executor: createGatekeeperActionExecutor({
-          gatekeeperClient: new HttpGatekeeperClient(),
+          gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
           withTransaction: adminWithTransaction,
         }),
         withTransaction: adminWithTransaction,

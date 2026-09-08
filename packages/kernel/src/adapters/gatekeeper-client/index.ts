@@ -1,10 +1,14 @@
-import type {
-  ApplyResponse,
-  DescribeOperationsResponse,
-  HealthResponse,
-  ObserveResponse,
-  RevertResponse,
-  SimulateResponse,
+import { readFileSync } from 'node:fs';
+import {
+  type ApplyResponse,
+  DEFAULT_GATE_TOKEN_FILE,
+  type DescribeOperationsResponse,
+  type HealthResponse,
+  type ObserveResponse,
+  type RevertResponse,
+  type SimulateResponse,
+  gateAuthorizationHeader,
+  normalizeGateToken,
 } from '@nexttime/gatekeeper-base';
 
 /**
@@ -16,7 +20,37 @@ import type {
  *
  * Adapters may be imported only by application and interfaces (§7.10) — this module implements a
  * port; `application/gateway`'s `request_action` handler and `action-executor.ts` are its callers.
+ *
+ * Auth (review lane 5, P1-1): every `/gate/*` route now requires `Authorization: Bearer <token>`
+ * (`@nexttime/gatekeeper-base`'s `gate-auth.ts`). `HttpGatekeeperClient` reads that token itself,
+ * from `NEXTTIME_GATE_TOKEN_FILE` (default `DEFAULT_GATE_TOKEN_FILE`,
+ * `/run/secrets/gate_token` — the same in-container path the compose secret `gate_token` is
+ * mounted at in the kernel service; a *different* env var name from the gate's own
+ * `GATE_KERNEL_TOKEN_FILE` since each side reads its own copy of the same secret independently,
+ * see `gate-token.ts`'s module doc comment). Deliberately best-effort, unlike the gate's own
+ * `loadGateKernelToken` (which refuses the whole process to start): both call sites that construct
+ * this client (`packages/kernel/src/index.ts`, `cli/bootstrap.ts`) do so with no arguments, so a
+ * missing/invalid token file here must not crash kernel startup over a config problem specific to
+ * gate calls — an omitted header simply means every gate call 401s visibly (`GatekeeperClientError`
+ * with code `unauthorized`), diagnosable from the same place a real credential/network failure
+ * would be.
  */
+
+const GATE_TOKEN_FILE_ENV = 'NEXTTIME_GATE_TOKEN_FILE';
+
+function resolveGateTokenFile(env: NodeJS.ProcessEnv): string {
+  const configured = env[GATE_TOKEN_FILE_ENV];
+  return configured && configured.length > 0 ? configured : DEFAULT_GATE_TOKEN_FILE;
+}
+
+function loadGateToken(env: NodeJS.ProcessEnv): string | undefined {
+  const file = resolveGateTokenFile(env);
+  try {
+    return normalizeGateToken(readFileSync(file, 'utf8'), file);
+  } catch {
+    return undefined;
+  }
+}
 
 export class GatekeeperClientError extends Error {
   readonly code: string;
@@ -81,6 +115,12 @@ export interface GatekeeperClient {
 export interface HttpGatekeeperClientOptions {
   readonly fetchImpl?: typeof fetch;
   readonly timeoutMs?: number;
+  /** Explicit override for the gate auth token (mainly for tests) — takes precedence over
+   *  `NEXTTIME_GATE_TOKEN_FILE` and skips reading a file entirely. Omit to use the env-driven
+   *  loader; pass `env` (below) to test that loader against a real temp file instead. */
+  readonly token?: string;
+  /** Injectable for tests — defaults to `process.env`. Only consulted when `token` is omitted. */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -98,10 +138,12 @@ type Envelope = EnvelopeOk | EnvelopeErr;
 export class HttpGatekeeperClient implements GatekeeperClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly token: string | undefined;
 
   constructor(options: HttpGatekeeperClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.token = options.token ?? loadGateToken(options.env ?? process.env);
   }
 
   private async request(
@@ -113,11 +155,14 @@ export class HttpGatekeeperClient implements GatekeeperClient {
     const url = new URL(path, endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const headers: Record<string, string> = {};
+    if (body !== undefined) headers['content-type'] = 'application/json';
+    if (this.token !== undefined) headers.authorization = gateAuthorizationHeader(this.token);
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
         method,
-        headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });

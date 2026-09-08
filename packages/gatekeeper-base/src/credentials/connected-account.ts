@@ -22,6 +22,27 @@ import type { CredentialResolver, ResolvedCredential } from './types.js';
  * never re-encrypts every other Principal's. Same atomic write-to-temp-then-rename durability
  * profile as `idempotency-store.ts` — see that file's own doc comment for the multi-process
  * caveat, which applies here too.
+ *
+ * In-process write queue (review lane 5, P2-6): `set`/`delete` read-modify-write the whole file —
+ * two concurrent writes (e.g. two `POST /gate/connected-accounts` for different principals racing)
+ * used to both read the same on-disk snapshot and whichever wrote last silently discarded the
+ * other's change. Every `set`/`delete` is now queued onto `writeQueue` below so writes to this
+ * store happen strictly one at a time within this process — orthogonal to, and does not change,
+ * this class's own single-file/no-cross-process-lock durability limits.
+ *
+ * `GATE_STORE_KEY_FILE` belongs in compose `secrets:`, same as `handle_key`/`internal_token`/
+ * `gate_token`: it is the AES key protecting every credential this store holds at rest, so it
+ * deserves the same treatment as those, not a plain bind-mounted data volume — `index.ts`'s own
+ * `buildCredentialResolver` doc comment repeats this at the call site that reads the env var.
+ *
+ * Records via `Map`, not a plain object (review lane 5, P3 batch): `onBehalfOf` is caller-
+ * controlled (it flows straight from `request_action`'s/`create_connection`'s own input), so
+ * `file.records[onBehalfOf]` on a plain object let a value like `"constructor"` read
+ * `Object.prototype.constructor` back instead of `undefined` — not exploitable for prototype
+ * pollution here (every write uses a computed property, which always creates an own property,
+ * never triggers the `__proto__` accessor), but a real `onBehalfOf` colliding with a built-in
+ * object member name would `get`/`set`/`delete` inconsistently. `loadRecordsMap`/`writeRecordsMap`
+ * below convert to/from `Map` at the file boundary — the on-disk JSON shape is unchanged.
  */
 
 interface EncryptedRecord {
@@ -63,10 +84,36 @@ function decrypt(key: Buffer, record: EncryptedRecord): string {
   return plaintext.toString('utf8');
 }
 
+async function loadRecordsMap(filePath: string): Promise<Map<string, EncryptedRecord>> {
+  try {
+    const raw = await readFile(filePath, 'utf8');
+    const parsed = JSON.parse(raw) as StoreFileShape;
+    return new Map(Object.entries(parsed.records ?? {}));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
+    throw err;
+  }
+}
+
+async function writeRecordsMap(
+  filePath: string,
+  records: Map<string, EncryptedRecord>,
+): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${randomUUID()}.tmp`;
+  const shape: StoreFileShape = { records: Object.fromEntries(records) };
+  await writeFile(tmpPath, JSON.stringify(shape, null, 2), 'utf8');
+  await rename(tmpPath, filePath);
+}
+
 export class ConnectedAccountStore {
   private readonly options: { readonly dataDir: string; readonly keyFilePath: string };
   private readonly filePath: string;
   private keyPromise: Promise<Buffer> | undefined;
+  /** Serializes `set`/`delete` (review lane 5, P2-6) — see this class's own doc comment. Every
+   *  write is chained onto this promise so at most one read-modify-write is in flight at a time;
+   *  a failed write does not poison the queue for the next, unrelated write. */
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(
     options: { readonly dataDir: string; readonly keyFilePath: string },
@@ -81,21 +128,20 @@ export class ConnectedAccountStore {
     return this.keyPromise;
   }
 
-  private async loadFile(): Promise<StoreFileShape> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8');
-      return JSON.parse(raw) as StoreFileShape;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { records: {} };
-      throw err;
-    }
+  private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.writeQueue.then(task, task);
+    this.writeQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   /** Returns the decrypted credential for `onBehalfOf`, or `undefined` if none is stored. */
   async get(onBehalfOf: string): Promise<ResolvedCredential | undefined> {
     const key = await this.key();
-    const file = await this.loadFile();
-    const record = file.records[onBehalfOf];
+    const records = await loadRecordsMap(this.filePath);
+    const record = records.get(onBehalfOf);
     if (!record) return undefined;
     const plaintext = decrypt(key, record);
     return JSON.parse(plaintext) as ResolvedCredential;
@@ -103,30 +149,24 @@ export class ConnectedAccountStore {
 
   /** Stores (overwriting any existing) credential for `onBehalfOf`. */
   async set(onBehalfOf: string, credential: ResolvedCredential): Promise<void> {
-    const key = await this.key();
-    const file = await this.loadFile();
-    const nextRecords = {
-      ...file.records,
-      [onBehalfOf]: encrypt(key, JSON.stringify(credential)),
-    };
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const tmpPath = `${this.filePath}.${randomUUID()}.tmp`;
-    await writeFile(tmpPath, JSON.stringify({ records: nextRecords }, null, 2), 'utf8');
-    await rename(tmpPath, this.filePath);
+    return this.enqueueWrite(async () => {
+      const key = await this.key();
+      const records = await loadRecordsMap(this.filePath);
+      records.set(onBehalfOf, encrypt(key, JSON.stringify(credential)));
+      await writeRecordsMap(this.filePath, records);
+    });
   }
 
   /** Removes the stored credential for `onBehalfOf`, if any (S2.13: `DELETE /gate/connected-
    *  accounts`). Idempotent — deleting a Principal with no stored credential is a no-op, not an
    *  error, matching `set`'s own "overwriting any existing" tolerance for either starting state. */
   async delete(onBehalfOf: string): Promise<void> {
-    const file = await this.loadFile();
-    if (!(onBehalfOf in file.records)) return;
-    const nextRecords = { ...file.records };
-    delete nextRecords[onBehalfOf];
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const tmpPath = `${this.filePath}.${randomUUID()}.tmp`;
-    await writeFile(tmpPath, JSON.stringify({ records: nextRecords }, null, 2), 'utf8');
-    await rename(tmpPath, this.filePath);
+    return this.enqueueWrite(async () => {
+      const records = await loadRecordsMap(this.filePath);
+      if (!records.has(onBehalfOf)) return;
+      records.delete(onBehalfOf);
+      await writeRecordsMap(this.filePath, records);
+    });
   }
 }
 

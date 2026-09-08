@@ -37,6 +37,29 @@ function renderPath(
   return { path: rendered, used };
 }
 
+/**
+ * Review lane 5, P2-4: `importOpenApi` used to discard each parameter's own `in` — every non-path
+ * param went to the query string for GET and into the JSON body for everything else, so a POST/
+ * PUT/... param the source OpenAPI document declared `in: 'query'` (a common pattern — filters,
+ * pagination) was silently misrouted into the body. `x-in` is not a real JSON Schema keyword —
+ * `ajv`'s `strict: false` tolerates unknown keywords, and it survives `params_schema`'s own
+ * `z.record` passthrough in `OperationSchema` — so `importOpenApi` (below) stamps it onto each
+ * property it derives from an OpenAPI `parameter.in`, and `HttpTransport.request` reads it back
+ * here to route that one param, independent of everything else about the operation's shape. `path`
+ * params are already handled by `renderPath` above before this is ever consulted; `cookie` has no
+ * dedicated handling (no fixture uses it) and falls through to the pre-existing verb-based
+ * default, same as an undeclared location.
+ */
+function paramLocation(paramsSchema: Operation['params_schema'], name: string): string | undefined {
+  const properties = (paramsSchema as { properties?: Record<string, unknown> }).properties;
+  const prop = properties?.[name];
+  if (prop && typeof prop === 'object') {
+    const loc = (prop as Record<string, unknown>)['x-in'];
+    if (typeof loc === 'string') return loc;
+  }
+  return undefined;
+}
+
 function credentialHeaders(credential: unknown): Record<string, string> {
   if (!credential || typeof credential !== 'object') return {};
   const bag = credential as Record<string, unknown>;
@@ -62,7 +85,12 @@ export class HttpTransport implements Transport {
     operation: Operation,
     params: unknown,
     ctx: TransportInvokeContext,
-  ): Promise<{ url: URL; method: string; body: string | undefined }> {
+  ): Promise<{
+    url: URL;
+    method: string;
+    body: string | undefined;
+    headerParams: Record<string, string>;
+  }> {
     if (operation.binding.kind !== 'http') {
       throw new BindingKindMismatchError(operation.name, this.kind, operation.binding.kind);
     }
@@ -72,8 +100,19 @@ export class HttpTransport implements Transport {
     const method = operation.binding.method.toUpperCase();
 
     const remaining: Record<string, unknown> = {};
+    const headerParams: Record<string, string> = {};
     for (const [key, value] of Object.entries(bag)) {
-      if (!used.has(key)) remaining[key] = value;
+      if (used.has(key)) continue;
+      const location = paramLocation(operation.params_schema, key);
+      if (location === 'header') {
+        headerParams[key] = String(value);
+        continue;
+      }
+      if (location === 'query') {
+        url.searchParams.set(key, String(value));
+        continue;
+      }
+      remaining[key] = value;
     }
 
     let body: string | undefined;
@@ -86,7 +125,7 @@ export class HttpTransport implements Transport {
     }
 
     void ctx;
-    return { url, method, body };
+    return { url, method, body, headerParams };
   }
 
   async invoke(
@@ -94,7 +133,7 @@ export class HttpTransport implements Transport {
     params: unknown,
     ctx: TransportInvokeContext,
   ): Promise<TransportInvokeResult> {
-    const { url, method, body } = await this.request(operation, params, ctx);
+    const { url, method, body, headerParams } = await this.request(operation, params, ctx);
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const controller = new AbortController();
     const timeout = setTimeout(
@@ -106,10 +145,16 @@ export class HttpTransport implements Transport {
         method,
         headers: {
           ...(body ? { 'content-type': 'application/json' } : {}),
+          ...headerParams,
           ...credentialHeaders(ctx.credential),
         },
         body,
         signal: controller.signal,
+        // Review lane 5, P2-2: 'follow' (the fetch default) resends every header — including the
+        // credential header just above — to whatever host a 3xx response names, cross-origin or
+        // not. 'error' makes a redirect response a hard failure instead of silently leaking the
+        // credential to an unintended target.
+        redirect: 'error',
       });
       const text = await response.text();
       const data: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
@@ -132,10 +177,10 @@ export class HttpTransport implements Transport {
     params: unknown,
     ctx: TransportInvokeContext,
   ): Promise<{ description: string; detail?: unknown }> {
-    const { url, method, body } = await this.request(operation, params, ctx);
+    const { url, method, body, headerParams } = await this.request(operation, params, ctx);
     return {
       description: `would call ${method} ${url.toString()}`,
-      detail: { method, url: url.toString(), body },
+      detail: { method, url: url.toString(), body, headerParams },
     };
   }
 }
@@ -192,7 +237,9 @@ function paramsSchemaFor(op: OpenApiOperationObject): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
   for (const param of op.parameters ?? []) {
-    properties[param.name] = param.schema ?? {};
+    // `x-in` (review lane 5, P2-4) — see `paramLocation`'s own doc comment above for why this
+    // survives both ajv (strict:false) and OperationSchema's params_schema passthrough.
+    properties[param.name] = { ...(param.schema ?? {}), 'x-in': param.in };
     if (param.required) required.push(param.name);
   }
   const bodySchema = op.requestBody?.content?.['application/json']?.schema;

@@ -17,6 +17,27 @@ describe('renderCommandTemplate', () => {
   it('throws when a referenced param is missing', () => {
     expect(() => renderCommandTemplate('echo {msg}', {})).toThrow(/missing param "msg"/);
   });
+
+  it('refuses a positional value that starts with "-" (flag injection, review lane 5 P1-2)', () => {
+    expect(() =>
+      renderCommandTemplate('fake-cli restart {container}', { container: '--privileged' }),
+    ).toThrow(/flag injection/);
+    expect(() =>
+      renderCommandTemplate('fake-cli restart {container}', { container: '-f' }),
+    ).toThrow(/flag injection/);
+  });
+
+  it('allows a "-"-prefixed rendered value when the template token itself is a flag', () => {
+    const argv = renderCommandTemplate('fake-cli run --name={container}', {
+      container: '--privileged',
+    });
+    expect(argv).toEqual(['fake-cli', 'run', '--name=--privileged']);
+  });
+
+  it('allows a plain positional value that does not start with "-"', () => {
+    const argv = renderCommandTemplate('fake-cli restart {container}', { container: 'c1' });
+    expect(argv).toEqual(['fake-cli', 'restart', 'c1']);
+  });
 });
 
 describe('CliTransport', () => {

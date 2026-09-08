@@ -1,0 +1,49 @@
+# Every packages/*/Dockerfile and gatekeepers/*/Dockerfile builds from the repo root as its
+# context (`COPY . .` in each Dockerfile's own `build` stage — see e.g.
+# packages/gatekeeper-base/Dockerfile's own header comment). Without this file, that `COPY . .`
+# picks up everything below, including secrets and host-specific state, into the build stage's own
+# image layer — even for files the final `runtime` stage never copies out of it, that layer is
+# still cached locally and inspectable via `docker history`/the build cache (review lane 5, P3
+# batch: "COPY . . without .dockerignore (.env into build cache layers)"). Mirrors .gitignore's own
+# security-sensitive entries; the categories below it (build output, host data, editor/OS noise)
+# are excluded because every image does its own `pnpm install`/`tsc` from a clean context, not
+# because they are sensitive.
+
+# --- secrets / environment (never let a real credential reach a build layer) -------------------
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+docs/private/
+
+# --- version control / editor / OS --------------------------------------------------------------
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Claude Code local state (worktrees, session state — never build input) ---------------------
+.claude/
+.codegraph/
+
+# --- reinstalled/rebuilt inside the image — a host copy would bloat the context and can mismatch
+# the container's platform/arch (native deps) -----------------------------------------------------
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+*.tsbuildinfo
+
+# --- host runtime data, never build input ---------------------------------------------------------
+data/
+sessions/
+*.log
+
+# --- local reference-only third-party source (excluded from the repo entirely, see .gitignore) ---
+semantica-0.6.7/
+cloudflare-os-main/
+pi-0.84.4/

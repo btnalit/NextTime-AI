@@ -35,6 +35,13 @@ describe('importOpenApi', () => {
     expect(del?.mode).toBe('execute');
     expect(del?.blast_radius).toBe('high');
   });
+
+  it('keeps each parameter\'s own "in" on its params_schema property (review lane 5, P2-4)', () => {
+    const operations = importOpenApi(document);
+    const get = operations.find((op) => op.name === 'stock_list');
+    const schema = get?.params_schema as { properties?: Record<string, { 'x-in'?: string }> };
+    expect(schema.properties?.sku?.['x-in']).toBe('query');
+  });
 });
 
 describe('HttpTransport', () => {
@@ -81,5 +88,68 @@ describe('HttpTransport', () => {
     const result = await transport.simulate?.(observeOperation, { id: 'X1' }, {});
     expect(result?.description).toContain('GET');
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('sets redirect:"error" so credential headers never follow a cross-origin redirect (review lane 5, P2-2)', async () => {
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ qty: 1 }), { status: 200 }),
+    );
+    const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+    await transport.invoke(observeOperation, { id: 'X1' }, {});
+    const call = fetchImpl.mock.calls[0];
+    expect(call).toBeDefined();
+    const [, init] = call as NonNullable<typeof call>;
+    expect(init?.redirect).toBe('error');
+  });
+
+  describe('param "in" routing (review lane 5, P2-4)', () => {
+    const postOperation: Operation = {
+      name: 'stock.adjust',
+      binding: { kind: 'http', method: 'POST', path: '/stock' },
+      params_schema: {
+        type: 'object',
+        properties: {
+          qty: { type: 'integer' },
+          filter: { type: 'string', 'x-in': 'query' },
+          'x-trace-id': { type: 'string', 'x-in': 'header' },
+        },
+      },
+      mode: 'execute',
+      blast_radius: 'medium',
+      reversibility: false,
+      auto_approvable: false,
+      await_decision: true,
+      reads: [],
+      writes: [],
+    };
+
+    it('routes an x-in:"query" param to the query string even on a POST', async () => {
+      const fetchImpl = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response('{}', { status: 200 }),
+      );
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      await transport.invoke(postOperation, { qty: 5, filter: 'active', 'x-trace-id': 't1' }, {});
+
+      const call = fetchImpl.mock.calls[0];
+      expect(call).toBeDefined();
+      const [url, init] = call as NonNullable<typeof call>;
+      expect((url as URL).searchParams.get('filter')).toBe('active');
+      expect(JSON.parse((init?.body ?? '{}') as string)).toEqual({ qty: 5 });
+      expect((init?.headers as Record<string, string>)['x-trace-id']).toBe('t1');
+    });
+
+    it('simulate exposes headerParams without executing', async () => {
+      const fetchImpl = vi.fn();
+      const transport = new HttpTransport({ baseUrl: 'https://example.test', fetchImpl });
+      const result = await transport.simulate?.(
+        postOperation,
+        { qty: 5, filter: 'active', 'x-trace-id': 't1' },
+        {},
+      );
+      expect(result?.detail).toMatchObject({ headerParams: { 'x-trace-id': 't1' } });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
   });
 });

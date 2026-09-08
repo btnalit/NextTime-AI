@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import type { BlastRadius, Operation, OperationMode } from '@nexttime/shared';
 import { BindingKindMismatchError, TransportInvokeError } from '../errors.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
+import { boundUntrustedText } from './untrusted-text.js';
 
 /**
  * `ssh` transport (design doc §7.5): a command template or a command-pattern policy-table match,
@@ -112,13 +113,17 @@ const defaultSshExec: SshExecFn = async (target, command) => {
 
 /** `execFile` rejections carry the child's stderr and exit code — the only place ssh explains
  *  itself ("Host key verification failed.", "Permission denied (publickey)", "UNPROTECTED PRIVATE
- *  KEY FILE"). Folded into the error message so an ActionRequest's failure reason is diagnosable. */
+ *  KEY FILE"). Folded into the error message so an ActionRequest's failure reason is diagnosable.
+ *  `stderr` is target-controlled and, per `execFileAsync`'s own `maxBuffer: 10 * 1024 * 1024`, can
+ *  be up to 10MB — `boundUntrustedText` (review lane 5, P3 batch) bounds it to 2KB and marks it
+ *  untrusted before it becomes part of a failure reason / audit trail; `err.message` (this
+ *  package's own, used only when there is no stderr at all) is left as-is. */
 function describeExecFailure(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
   const withIo = err as Error & { stderr?: unknown; code?: unknown };
   const stderr = typeof withIo.stderr === 'string' ? withIo.stderr.trim() : '';
   const code = withIo.code !== undefined ? ` (exit ${String(withIo.code)})` : '';
-  return `${stderr || err.message}${code}`;
+  return `${stderr ? boundUntrustedText(stderr) : err.message}${code}`;
 }
 
 export interface SshTransportOptions {

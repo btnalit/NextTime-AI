@@ -20,8 +20,13 @@ services:
     # （fix/internal-plane-auth）：内核整个 internal plane（/internal/* + /internal/agent-host）的
     # 共享密钥，默认挂载路径 /run/secrets/internal_token 与 @nexttime/shared 的
     # DEFAULT_INTERNAL_TOKEN_FILE 一致，kernel 与其三个 internal 客户端（agent-host/llm-proxy/
-    # egress-proxy，见各自服务块）共享同一份文件；scripts/gen-handle-keys.sh 生成。
-    secrets: [handle_key, internal_token]
+    # egress-proxy，见各自服务块）共享同一份文件；scripts/gen-handle-keys.sh 生成。gate_token
+    # （fix/gate-protocol-hardening）：kernel 的 HttpGatekeeperClient 调任何 /gate/* 端点都要带
+    # 的共享密钥——与 internal_token 是两个不同的 secret（两个不同的信任边界，见
+    # @nexttime/gatekeeper-base 的 gate-token.ts 模块注释），默认挂载路径同样是
+    # /run/secrets/gate_token（DEFAULT_GATE_TOKEN_FILE），kernel 侧读取用的 env 是
+    # NEXTTIME_GATE_TOKEN_FILE；四个门服务各自的服务块见它们自己的注释。
+    secrets: [handle_key, internal_token, gate_token]
     # AGENT_RUNTIME=agent-host 现在是默认值（S1.5 后半：真正的 agent-host 事件桥落地）——仍可在
     # .env 里覆盖回 fake（AGENT_RUNTIME=fake）以跳过整条容器/pi 链路。KERNEL_LLM_URL 是
     # AgentHostRuntime 塞进每个 startTurn 命令里的 llmUrl（packages/kernel/src/index.ts
@@ -140,9 +145,13 @@ services:
   # same pattern as worker-supervisor/agent-host); group_add gives it the host's docker group gid
   # as a supplementary group so it can reach /var/run/docker.sock (root:docker, mode 660).
   # GATE_DATA_DIR only holds the idempotency store (no ConnectedAccount store — this gate uses no
-  # per-user credential, see gatekeepers/docker/README.md).
+  # per-user credential, see gatekeepers/docker/README.md). gate_token（fix/gate-protocol-
+  # hardening）：every /gate/* route now requires it (Authorization: Bearer <token>) — default
+  # mount path /run/secrets/gate_token matches GATE_KERNEL_TOKEN_FILE's own default; this gate
+  # refuses to start without it (gate-auth.ts).
   gatekeeper-docker:
     build: { context: ., dockerfile: gatekeepers/docker/Dockerfile }
+    secrets: [gate_token]
     volumes:
       [
         "/var/run/docker.sock:/var/run/docker.sock",
@@ -155,9 +164,11 @@ services:
   # gatekeeper-ragflow: http-kind gate for a RAGFlow instance's REST API (gatekeepers/ragflow).
   # RAGFLOW_BASE_URL / GATE_CREDENTIAL_RAGFLOW_API_KEY come from the env_file below — never
   # hardcoded here (§11 "凭证不进内核进程", same rule applied to this gate's own compose service).
+  # gate_token：见 gatekeeper-docker 服务块自己的注释。
   gatekeeper-ragflow:
     build: { context: ., dockerfile: gatekeepers/ragflow/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env
+    secrets: [gate_token]
     volumes: ["${NEXTTIME_DATA}/gatekeepers/ragflow:/data/gate"]
     networks: [control]
     restart: unless-stopped
@@ -272,6 +283,10 @@ services:
   accept-s2-ssh-gate:
     build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
     profiles: ["accept-s2"]
+    # gate_token（fix/gate-protocol-hardening）：startGatekeeperServer()'s main() refuses to start
+    # without a readable GATE_KERNEL_TOKEN_FILE — same compose secret as the other three gate
+    # services, default mount path /run/secrets/gate_token.
+    secrets: [gate_token]
     environment:
       {
         GATE_TRANSPORT_KIND: ssh,
@@ -308,6 +323,8 @@ services:
   accept-s2-http-gate:
     build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
     profiles: ["accept-s2"]
+    # gate_token：见 accept-s2-ssh-gate 服务块自己的注释。
+    secrets: [gate_token]
     environment:
       {
         GATE_TRANSPORT_KIND: http,
@@ -353,3 +370,4 @@ secrets:
   pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
   handle_key: { file: "${NEXTTIME_DATA}/secrets/handle.key" } # scripts/gen-handle-keys.sh；0640 组 10001
   internal_token: { file: "${NEXTTIME_DATA}/secrets/internal.token" } # scripts/gen-handle-keys.sh；0640 组 10001
+  gate_token: { file: "${NEXTTIME_DATA}/secrets/gate.token" } # scripts/gen-handle-keys.sh；0640 组 10001；fix/gate-protocol-hardening
