@@ -480,6 +480,100 @@ describe('createProxyServer — streaming byte-for-byte forwarding', () => {
   });
 });
 
+describe('createProxyServer — per-api (method, path) allowlist', () => {
+  async function makeProxy(upstreamPort: number): Promise<{ port: number; privateKey: CryptoKey }> {
+    // No upstream is ever listened on `upstreamPort` in this suite — every case here must be
+    // rejected before the proxy would dial out, so an accidental forward fails loudly (connection
+    // refused) rather than silently succeeding.
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const proxy = createProxyServer({
+      providers: { openai: openAiProvider(upstreamPort) },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 500,
+      upstreamIdleTimeoutMs: 500,
+      resolveApiKey,
+      log: () => {},
+    });
+    const port = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+    return { port, privateKey };
+  }
+
+  it('404s a path outside the provider api kind’s single forwardable action (e.g. /v1/files) without contacting upstream', async () => {
+    // Deliberately no upstream listening on this port — a 404 must be returned without the proxy
+    // ever attempting to dial out.
+    const { port, privateKey } = await makeProxy(1);
+    const token = await signHandle(privateKey);
+
+    const res = await rawRequest({
+      port,
+      method: 'POST',
+      path: '/openai/v1/files',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('405s a non-POST method on the allowed action path (e.g. DELETE) without contacting upstream', async () => {
+    const { port, privateKey } = await makeProxy(1);
+    const token = await signHandle(privateKey);
+
+    const res = await rawRequest({
+      port,
+      method: 'DELETE',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(405);
+  });
+
+  it('400s a non-JSON body on the allowed action path', async () => {
+    const { port, privateKey } = await makeProxy(1);
+    const token = await signHandle(privateKey);
+
+    const res = await rawRequest({
+      port,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'text/plain' },
+      body: 'not json',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('400s a JSON body missing "model" on the allowed action path', async () => {
+    const { port, privateKey } = await makeProxy(1);
+    const token = await signHandle(privateKey);
+
+    const res = await rawRequest({
+      port,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ stream: true }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a multipart-style path (e.g. /v1/audio/transcriptions) with 404 even with a valid Handle', async () => {
+    const { port, privateKey } = await makeProxy(1);
+    const token = await signHandle(privateKey);
+
+    const res = await rawRequest({
+      port,
+      method: 'POST',
+      path: '/openai/v1/audio/transcriptions',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'multipart/form-data' },
+      body: 'irrelevant',
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('createProxyServer — GET /<provider>/v1/models', () => {
   it('synthesizes the model list from the whitelist without calling upstream', async () => {
     const upstream = startFakeUpstream({
