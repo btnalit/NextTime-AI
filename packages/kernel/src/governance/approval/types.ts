@@ -24,6 +24,12 @@ export interface ActionRequestRow {
   readonly actorRuntime: string;
   readonly idempotencyKey: string | null;
   readonly requestedAt: Date;
+  /** Set once, by `execution.ts`'s `startActionRequestExecution` (`auto_approved|approved ->
+   *  executing`) — migrations/governance/0006_action_request_executing_at.sql. The staleness
+   *  anchor `application/gateway/action-executor.ts`'s `reapStaleExecutingActionRequests` (P1-3
+   *  fix) scans on, deliberately distinct from `requestedAt` (see that migration's own doc
+   *  comment for why `requestedAt` cannot serve this purpose). */
+  readonly executingAt: Date | null;
   readonly executedAt: Date | null;
   readonly failedAt: Date | null;
   /** The Operation call's own arguments (migrations/governance/0004_action_request_params.sql,
@@ -49,6 +55,7 @@ export interface ActionRequestDbRow {
   actor_runtime: string;
   idempotency_key: string | null;
   requested_at: Date;
+  executing_at: Date | null;
   executed_at: Date | null;
   failed_at: Date | null;
   params: Record<string, unknown>;
@@ -71,6 +78,7 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
     actorRuntime: row.actor_runtime,
     idempotencyKey: row.idempotency_key,
     requestedAt: row.requested_at,
+    executingAt: row.executing_at,
     executedAt: row.executed_at,
     failedAt: row.failed_at,
     params: row.params,
@@ -80,7 +88,7 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
 export const ACTION_REQUEST_ROW_COLUMNS =
   'workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius, ' +
   'policy_decision, approval_decision_id, await_decision, on_behalf_of, parent_worker_run_id, ' +
-  'actor_runtime, idempotency_key, requested_at, executed_at, failed_at, params';
+  'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, params';
 
 export class ActionRequestNotFoundError extends Error {
   constructor(workspaceId: string, actionRequestId: string) {

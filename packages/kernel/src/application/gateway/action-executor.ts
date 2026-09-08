@@ -1,10 +1,16 @@
 import { createHash } from 'node:crypto';
+import { IllegalTransition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import type { ActionExecutor, ActionExecutorResult } from '../../governance/approval/index.js';
 import type { ActionRequestRow } from '../../governance/approval/index.js';
+import {
+  listStaleExecutingActionRequests,
+  markActionRequestExecuted,
+  markActionRequestFailed,
+} from '../../governance/approval/index.js';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { writeObservedFacts } from './observed-facts.js';
@@ -178,4 +184,79 @@ export function createGatekeeperActionExecutor(deps: GatekeeperActionExecutorDep
       };
     },
   };
+}
+
+// -------------------------------------------------------------------------------------------
+// stale-`executing` reaper (P1-3 fix, review job 652a4abc: "crash/DB failure between apply
+// success and markActionRequestExecuted leaves row `executing` forever; not drainable, no
+// reaper, no event, parent Task never resumes"). Lives here, not in governance/approval
+// (§7.10 layering — governance may not depend on `adapters/gatekeeper-client`), same reasoning
+// `createGatekeeperActionExecutor` above already establishes for this file.
+// -------------------------------------------------------------------------------------------
+
+export interface ReapStaleExecutingActionRequestsOptions {
+  /** Forwarded to `listStaleExecutingActionRequests` — default `DEFAULT_STALE_EXECUTING_
+   *  TIMEOUT_MS`. */
+  readonly staleAfterMs?: number;
+  /** Called for a row whose replay genuinely failed (a real DB/network error, not a benign race
+   *  with the original executor finally finishing) — never for a benign race, which the reaper
+   *  itself resolves by moving on to the next row. Defaults to a no-op; `packages/kernel/src/
+   *  index.ts` passes `app.log.error`. */
+  readonly onRowError?: (actionRequestId: string, error: unknown) => void;
+}
+
+export interface ReapStaleExecutingActionRequestsResult {
+  readonly scanned: number;
+  readonly reaped: number;
+}
+
+/**
+ * Scans every workspace for `executing` ActionRequests stuck past `options.staleAfterMs`
+ * (`listStaleExecutingActionRequests`) and, for each, replays `apply` through the *same*
+ * `ActionExecutor.execute` every other execution path in this codebase uses — the gate's own
+ * idempotency store (keyed by `actionRequestId`, `apply`'s `idempotencyKey`) is what makes this
+ * safe to call again: a genuinely-completed `apply` returns its stored result instead of
+ * re-running the effect (same guarantee `action-executor.ts`'s own module doc comment and
+ * `request-action-handler.ts`'s `tryExecuteInline` already document and rely on) — this function
+ * does not re-implement that guarantee, it only decides *when* to retry.
+ *
+ * Marking the outcome tolerates `IllegalTransition`: the row may have been genuinely still
+ * executing (just slow) and finished — by the original caller's own phase-2, the drainer, or the
+ * outbox consumer — in the window between the scan and this call, in which case
+ * `markActionRequestExecuted`/`markActionRequestFailed` finds the row no longer `executing` and
+ * throws; that is not a failure, it means the row is already resolved (same "benign race" swallow
+ * `action-request-drain-consumer.ts` already applies to the same error class). Any other error is
+ * reported via `onRowError` and the reaper moves on — one poisoned row must not block the rest of
+ * the batch (mirrors `expireOverduePendingApprovals`/`runTaskReaper`'s own per-row isolation).
+ */
+export async function reapStaleExecutingActionRequests(
+  pool: PoolLike,
+  actionExecutor: ActionExecutor,
+  options: ReapStaleExecutingActionRequestsOptions = {},
+): Promise<ReapStaleExecutingActionRequestsResult> {
+  const staleRows = await listStaleExecutingActionRequests(pool, {
+    staleAfterMs: options.staleAfterMs,
+  });
+  const withTransaction = createAdminWithTransaction(pool);
+  const onRowError = options.onRowError ?? (() => {});
+
+  let reaped = 0;
+  for (const row of staleRows) {
+    try {
+      const result = await actionExecutor.execute(row);
+      await withTransaction(row.workspaceId, row.onBehalfOf, (client) =>
+        result.ok
+          ? markActionRequestExecuted(client, row.workspaceId, row.id, {
+              resultMetadata: result.resultMetadata,
+            })
+          : markActionRequestFailed(client, row.workspaceId, row.id, { reason: result.reason }),
+      );
+      reaped += 1;
+    } catch (err) {
+      if (err instanceof IllegalTransition) continue; // benign — already resolved elsewhere.
+      onRowError(row.id, err);
+    }
+  }
+
+  return { scanned: staleRows.length, reaped };
 }

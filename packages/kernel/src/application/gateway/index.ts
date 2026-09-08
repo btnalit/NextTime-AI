@@ -49,10 +49,13 @@ export {
   createGatekeeperActionExecutor,
   deriveDefaultIdempotencyKey,
   hashStableParams,
+  reapStaleExecutingActionRequests,
   scopeExplicitIdempotencyKey,
 } from './action-executor.js';
 export type {
   GatekeeperActionExecutorDeps,
+  ReapStaleExecutingActionRequestsOptions,
+  ReapStaleExecutingActionRequestsResult,
   WithTransactionFn,
 } from './action-executor.js';
 

@@ -13,6 +13,7 @@ import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
 import {
   createAdminWithTransaction,
   createGatekeeperActionExecutor,
+  reapStaleExecutingActionRequests,
   registerActionRequestDrainConsumer,
   setConnectionHandlerDeps,
   setRequestActionDeps,
@@ -242,6 +243,20 @@ export interface CreateBackgroundServicesOptions {
    *  swallowed inside `registerActionRequestDrainConsumer`/here, never reaches this hook). Defaults
    *  to a no-op; `main()` passes `app.log.error`. */
   readonly onGatekeeperDrainError?: (error: unknown) => void;
+  /** How often the P1-3 stale-`executing`-ActionRequest reaper polls. Default
+   *  `DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS` (5 minutes — same cadence as the approval-expiry
+   *  reaper; a stuck `executing` row is a crash-recovery backstop, not a latency-sensitive path).
+   *  `main()` reads this from `ACTION_REQUEST_REAPER_INTERVAL_MS`. */
+  readonly actionRequestReaperIntervalMs?: number;
+  /** `reapStaleExecutingActionRequests`'s staleness threshold (default `DEFAULT_STALE_EXECUTING_
+   *  TIMEOUT_MS`, 10 minutes — comfortably past any real `apply` call's expected latency, so this
+   *  only ever catches a row a crash actually orphaned). `main()` reads this from
+   *  `ACTION_REQUEST_STALE_EXECUTING_TIMEOUT_MS`. */
+  readonly staleExecutingTimeoutMs?: number;
+  /** Called for a stale-`executing` row whose replay genuinely failed (never for the benign "it
+   *  was already resolved" race — see `reapStaleExecutingActionRequests`'s own doc comment).
+   *  Defaults to a no-op; `main()` passes `app.log.error`. */
+  readonly onActionRequestReaperError?: (actionRequestId: string, error: unknown) => void;
   /**
    * S2.7: `worker-supervisor`'s Task-mode base URL (`adapters/supervisor-client`'s
    * `TaskSupervisorClient`, e.g. `http://worker-supervisor:8081`) — `main()` reads this from
@@ -329,6 +344,10 @@ export const DEFAULT_APPROVAL_REAPER_INTERVAL_MS = 5 * 60 * 1000;
 /** Default S2.4 Gatekeeper-queue periodic drain tick interval — 1 minute. */
 export const DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS = 60 * 1000;
 
+/** Default P1-3 stale-`executing`-ActionRequest reaper poll interval — 5 minutes, same cadence as
+ *  the approval-expiry reaper (a crash-recovery backstop, not a latency-sensitive path). */
+export const DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
 export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
 ): BackgroundServices {
@@ -372,6 +391,8 @@ export function createBackgroundServices(
   let approvalReaperTimer: NodeJS.Timeout | undefined;
   const onGatekeeperDrainError = options.onGatekeeperDrainError ?? (() => {});
   let gatekeeperDrainTimer: NodeJS.Timeout | undefined;
+  const onActionRequestReaperError = options.onActionRequestReaperError ?? (() => {});
+  let actionRequestReaperTimer: NodeJS.Timeout | undefined;
 
   // S2.7: configure application/task's runtime deps (Handle-signing key + supervisor client) only
   // when a keypair is actually available — see this file's own doc comment above
@@ -443,6 +464,20 @@ export function createBackgroundServices(
       }, options.gatekeeperDrainIntervalMs ?? DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS);
       gatekeeperDrainTimer.unref?.();
 
+      // P1-3: the stale-`executing` reaper — same admin-mode `actionExecutor` the drainer above
+      // already uses (`buildGatekeeperExecutionDeps`, "the single shared executor path").
+      const actionRequestReaperTick = (): void => {
+        reapStaleExecutingActionRequests(options.pool, actionExecutor, {
+          staleAfterMs: options.staleExecutingTimeoutMs,
+          onRowError: onActionRequestReaperError,
+        }).catch((err: unknown) => onActionRequestReaperError('unknown', err));
+      };
+      actionRequestReaperTimer = setInterval(
+        actionRequestReaperTick,
+        options.actionRequestReaperIntervalMs ?? DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS,
+      );
+      actionRequestReaperTimer.unref?.();
+
       if (taskDeps) {
         const taskTick = (): void => {
           runTaskReaper(taskDeps as NonNullable<typeof taskDeps>).catch(onTaskReaperError);
@@ -467,6 +502,10 @@ export function createBackgroundServices(
       if (gatekeeperDrainTimer) {
         clearInterval(gatekeeperDrainTimer);
         gatekeeperDrainTimer = undefined;
+      }
+      if (actionRequestReaperTimer) {
+        clearInterval(actionRequestReaperTimer);
+        actionRequestReaperTimer = undefined;
       }
       if (taskReaperTimer) {
         clearInterval(taskReaperTimer);
@@ -584,6 +623,14 @@ export function main(): void {
       'GATEKEEPER_DRAIN_INTERVAL_MS',
       process.env.GATEKEEPER_DRAIN_INTERVAL_MS,
     );
+    const actionRequestReaperIntervalMs = parsePositiveIntEnvVar(
+      'ACTION_REQUEST_REAPER_INTERVAL_MS',
+      process.env.ACTION_REQUEST_REAPER_INTERVAL_MS,
+    );
+    const staleExecutingTimeoutMs = parsePositiveIntEnvVar(
+      'ACTION_REQUEST_STALE_EXECUTING_TIMEOUT_MS',
+      process.env.ACTION_REQUEST_STALE_EXECUTING_TIMEOUT_MS,
+    );
     const taskReaperIntervalMs = parsePositiveIntEnvVar(
       'TASK_REAPER_INTERVAL_MS',
       process.env.TASK_REAPER_INTERVAL_MS,
@@ -605,6 +652,10 @@ export function main(): void {
       onApprovalReaperError: (err: unknown) => app.log.error(err),
       gatekeeperDrainIntervalMs,
       onGatekeeperDrainError: (err: unknown) => app.log.error(err),
+      actionRequestReaperIntervalMs,
+      staleExecutingTimeoutMs,
+      onActionRequestReaperError: (actionRequestId: string, err: unknown) =>
+        app.log.error({ actionRequestId, err }),
     });
 
     // A request that races the still-in-flight recovery scan is not unsafe — the partial unique

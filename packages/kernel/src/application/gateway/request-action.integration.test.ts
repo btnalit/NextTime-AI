@@ -28,7 +28,11 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
-import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
+import {
+  createAdminWithTransaction,
+  createGatekeeperActionExecutor,
+  reapStaleExecutingActionRequests,
+} from './action-executor.js';
 import { dispatchCapability } from './dispatch.js';
 import { setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -652,6 +656,50 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(second.actionRequestId).toBe(first.actionRequestId);
       expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
+    });
+
+    // P1-3 fix (review job 652a4abc): "crash/DB failure between apply success and
+    // markActionRequestExecuted leaves row `executing` forever" — a row hand-seeded at `executing`
+    // (simulating exactly that crash) with a stale `executing_at` must be picked up, replayed
+    // (idempotently, via the same ActionExecutor.execute every other execution path uses), and
+    // marked to a terminal status.
+    it('the stale-executing reaper replays apply and marks a crashed-mid-execution row', async () => {
+      const actionRequestId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into action_requests (
+               workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+               await_decision, on_behalf_of, actor_runtime, executing_at, params
+             ) values ($1, 'executing', $2, $3, 'low', 'allow', false, $4, 'pi',
+               now() - interval '1 hour', $5::jsonb)
+             returning id`,
+            [workspaceId, gatekeeperId, AUTO_OP.name, ownerId, JSON.stringify({ qty: 5150 })],
+          );
+          return result.rows[0]?.id as string;
+        },
+      );
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+      const withTransactionAdmin = createAdminWithTransaction(pool);
+      const actionExecutor = createGatekeeperActionExecutor({
+        gatekeeperClient: new HttpGatekeeperClient(),
+        withTransaction: withTransactionAdmin,
+      });
+
+      const reapResult = await reapStaleExecutingActionRequests(pool, actionExecutor, {
+        staleAfterMs: 1000,
+      });
+
+      expect(reapResult.scanned).toBeGreaterThanOrEqual(1);
+      expect(reapResult.reaped).toBeGreaterThanOrEqual(1);
+      expect(transport.calls[AUTO_OP.name]).toBe(before + 1); // the gate was called (the replay)
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      expect(row?.status).toBe('executed');
     });
 
     it('a draft (unpublished) operation never executes, even though its own manifest entry declares auto_approvable', async () => {
