@@ -47,15 +47,18 @@ export { createServer } from './server.js';
  *
  * IDLE_SWEEP_INTERVAL_MS is deliberately not `ENTRY_IDLE_TIMEOUT_MS` itself — the sweep runs far
  * more often than the timeout so an idle container is stopped within roughly a minute of crossing
- * the threshold, not up to a whole timeout period late. TASK_REAP_INTERVAL_MS follows the same
- * reasoning for Task mode's timeout kill + spontaneous-exit reap. TASK_RETENTION_SWEEP_INTERVAL_MS
- * is deliberately much coarser — deleting finished Task workdirs is "small, boring" housekeeping
- * (S2.8 task brief), not latency-sensitive the way noticing a container exited is.
+ * the threshold, not up to a whole timeout period late. `config.taskReapIntervalMs`
+ * (`TASK_REAP_INTERVAL_MS`, config.ts) follows the same reasoning for Task mode's timeout kill +
+ * spontaneous-exit reap — configurable (unlike the two constants below) since lane-6 review P2-7
+ * flags its interval as the bound on how stale an exited Task's egress-map registration can get
+ * before an operator might want to tune it further; see that field's own doc comment.
+ * TASK_RETENTION_SWEEP_INTERVAL_MS is deliberately much coarser — deleting finished Task workdirs
+ * is "small, boring" housekeeping (S2.8 task brief), not latency-sensitive the way noticing a
+ * container exited is.
  */
 export const VERSION = '0.1.0';
 
 const IDLE_SWEEP_INTERVAL_MS = 60_000;
-const TASK_REAP_INTERVAL_MS = 30_000;
 const TASK_RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 export async function main(): Promise<void> {
@@ -86,7 +89,7 @@ export async function main(): Promise<void> {
         JSON.stringify({ level: 'error', msg: 'task reap failed', error: String(err) }),
       );
     });
-  }, TASK_REAP_INTERVAL_MS);
+  }, config.taskReapIntervalMs);
   taskReapTimer.unref();
 
   const taskRetentionTimer = setInterval(() => {

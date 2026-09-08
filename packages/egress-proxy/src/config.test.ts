@@ -24,6 +24,7 @@ describe('loadConfig', () => {
       idleTimeoutMs: 120_000,
       connectTimeoutMs: 10_000,
       allowLoopbackForTests: false,
+      denyUnknownSource: true,
     });
   });
 
@@ -50,6 +51,13 @@ describe('loadConfig', () => {
       connectTimeoutMs: 2000,
       allowLoopbackForTests: true,
     });
+  });
+
+  it('EGRESS_DENY_UNKNOWN_SOURCE (P2-7): defaults to true (fail-closed); only the literal "0" turns it off', () => {
+    expect(loadConfig({}).denyUnknownSource).toBe(true);
+    expect(loadConfig({ EGRESS_DENY_UNKNOWN_SOURCE: '0' }).denyUnknownSource).toBe(false);
+    expect(loadConfig({ EGRESS_DENY_UNKNOWN_SOURCE: '1' }).denyUnknownSource).toBe(true);
+    expect(loadConfig({ EGRESS_DENY_UNKNOWN_SOURCE: 'false' }).denyUnknownSource).toBe(true);
   });
 
   it('appends EGRESS_DENY_HOST_SUFFIXES after the private-suffix defaults (DENY_HOSTS override or not)', () => {

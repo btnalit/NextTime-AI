@@ -152,6 +152,21 @@ describe('resident-service spawn', () => {
     expect(third.restarts).toBe(2);
   });
 
+  it('unregisters the crashed container’s last-known egress IP promptly, from the in-memory registry (P2-7)', async () => {
+    const { service, docker, egressMap } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(first.ip).toBeDefined();
+    expect(egressMap.read()[first.ip as string]).toBeDefined();
+
+    docker.simulateExternalKill('nexttime-entry-alice');
+    // Docker itself has already cleared the crashed container's `ip` (ContainerState's own
+    // contract) — this only works if resident-service.ts falls back to its own in-memory registry
+    // for the last-known ip, not the (now-undefined) inspect result.
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+
+    expect(egressMap.read()[first.ip as string]).toBeUndefined();
+  });
+
   it('does not recreate when the same jti-bearing Handle is presented again (P2-5)', async () => {
     const { service, docker } = setup();
     const handle = fakeHandle('jti-alpha');

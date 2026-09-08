@@ -52,6 +52,13 @@ export interface EgressProxyConfig {
   idleTimeoutMs: number;
   connectTimeoutMs: number;
   allowLoopbackForTests: boolean;
+  /** `EGRESS_DENY_UNKNOWN_SOURCE` (lane-6 review P2-7) — see `policy.ts`'s `PolicyConfig
+   *  .denyUnknownSource` doc comment for the full rationale and the operator escape-hatch caveat.
+   *  Defaults to `true` (fail-closed): any value other than the literal string `'0'` keeps the
+   *  fail-closed default, matching this package's existing `'1'`-means-set convention for
+   *  `allowLoopbackForTests` (opt-in) but inverted here (opt-*out*), since the secure behavior is
+   *  the default an operator should have to deliberately turn off, not turn on. */
+  denyUnknownSource: boolean;
 }
 
 function splitList(value: string | undefined): string[] {
@@ -143,6 +150,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EgressProxyCon
     idleTimeoutMs: parseIntEnv(env.IDLE_TIMEOUT_MS, 120_000),
     connectTimeoutMs: parseIntEnv(env.CONNECT_TIMEOUT_MS, 10_000),
     allowLoopbackForTests: env.ALLOW_LOOPBACK_FOR_TESTS === '1',
+    denyUnknownSource: env.EGRESS_DENY_UNKNOWN_SOURCE !== '0',
   };
 }
 

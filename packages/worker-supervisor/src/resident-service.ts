@@ -258,6 +258,18 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           // /resident/stop uses) rather than force-killing outright.
           await docker.stop(name, STOP_TIMEOUT_SECONDS);
           unregisterEgress(existing.ip);
+        } else {
+          // Crash path (lane-6 review P2-7's IP-reuse-misattribution concern, resident-mode half):
+          // Docker already clears `ip` once a container isn't running (`ContainerState.ip`'s own
+          // doc comment), so `existing.ip` is `undefined` here — the only place that still knows
+          // what this principal's now-dead container was last registered under is this service's
+          // own in-memory `registry`, untouched since the crash (nothing else evicts it before the
+          // next successful spawn or an explicit stop/idle-sweep). Unregistering it *here*, the
+          // moment a crash is actually noticed, closes the window during which a Docker-assigned
+          // IP reuse could otherwise get a different container's egress mis-attributed to this
+          // principal — rather than leaving the stale entry in place for up to a full
+          // `entryIdleTimeoutMs` (idle-sweep is the only other thing that would ever clear it).
+          unregisterEgress(registry.get(principalId)?.ip);
         }
         await docker.remove(name);
       }

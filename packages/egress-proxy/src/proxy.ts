@@ -26,6 +26,11 @@ export interface ProxyServerOptions {
   trustedResolvedCidrs?: readonly CidrRange[];
   /** Test-only: see policy.ts `PolicyConfig.allowLoopbackForTests`. Never set in production. */
   allowLoopbackForTests?: boolean;
+  /** See policy.ts `PolicyConfig.denyUnknownSource` (`EGRESS_DENY_UNKNOWN_SOURCE`, config.ts) —
+   *  `undefined` here defaults to `true` (fail-closed), same as `config.ts`'s own default, so a
+   *  caller constructing this directly (e.g. a test) gets the secure behavior without having to
+   *  know the flag exists. */
+  denyUnknownSource?: boolean;
   resolveSource: (clientIp: string) => SourcePolicy | undefined;
   /** Injectable DNS resolver for tests. Defaults to a literal-IP shortcut + `dns.promises.lookup`. */
   resolveHost?: Resolver;
@@ -66,6 +71,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     platformSubnets: options.platformSubnets,
     trustedResolvedCidrs: options.trustedResolvedCidrs,
     allowLoopbackForTests: options.allowLoopbackForTests,
+    denyUnknownSource: options.denyUnknownSource ?? true,
   };
 
   // Per-source concurrent-tunnel accounting (design doc §7.9 task spec: MAX_TUNNELS_PER_SOURCE).

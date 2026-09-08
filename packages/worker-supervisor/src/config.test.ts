@@ -32,6 +32,7 @@ describe('loadConfig', () => {
     expect(config.dockerSocketPath).toBe('/var/run/docker.sock');
     expect(config.taskMaxRuntimeSec).toBe(3600);
     expect(config.taskWorkdirRetentionHours).toBe(72);
+    expect(config.taskReapIntervalMs).toBe(10_000);
     expect(config.taskImageAllowlist).toEqual(['nexttime-ai-worker-runtime']);
   });
 
@@ -55,6 +56,7 @@ describe('loadConfig', () => {
       DOCKER_SOCKET_PATH: '/tmp/docker.sock',
       TASK_MAX_RUNTIME_SEC: '600',
       TASK_WORKDIR_RETENTION_HOURS: '24',
+      TASK_REAP_INTERVAL_MS: '5000',
       WORKER_IMAGE_ALLOWLIST: 'extra-image-a, extra-image-b',
     });
     expect(config).toMatchObject({
@@ -75,6 +77,7 @@ describe('loadConfig', () => {
       dockerSocketPath: '/tmp/docker.sock',
       taskMaxRuntimeSec: 600,
       taskWorkdirRetentionHours: 24,
+      taskReapIntervalMs: 5000,
     });
     expect(config.taskImageAllowlist).toEqual(['custom-image', 'extra-image-a', 'extra-image-b']);
   });

@@ -66,7 +66,7 @@ describe('isBareHostname', () => {
 });
 
 describe('decideEgress', () => {
-  it('allows a public hostname with no source policy (unknown source -> default public allow)', async () => {
+  it('allows a public hostname with no source policy when denyUnknownSource is unset/false (the flag is opt-in at this layer — config.ts defaults it to true)', async () => {
     const decision = await decideEgress({
       hostname: 'example.com',
       source: undefined,
@@ -373,5 +373,47 @@ describe('decideEgress', () => {
       resolve: resolverReturning(),
     });
     expect(decision).toEqual({ allowed: false, reason: 'dns-error' });
+  });
+
+  describe('denyUnknownSource (lane-6 review P2-7)', () => {
+    it('denies an unregistered source (source undefined) with unknown-source, before any DNS lookup', async () => {
+      const decision = await decideEgress({
+        hostname: 'example.com',
+        source: undefined,
+        config: baseConfig({ denyUnknownSource: true }),
+        resolve: unreachableResolver(),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'unknown-source' });
+    });
+
+    it('does not deny a registered source, even one with no allow/deny restrictions of its own', async () => {
+      const decision = await decideEgress({
+        hostname: 'example.com',
+        source: { sourceId: 'worker-1' },
+        config: baseConfig({ denyUnknownSource: true }),
+        resolve: resolverReturning('192.0.2.10'),
+      });
+      expect(decision).toEqual({ allowed: true, address: '192.0.2.10' });
+    });
+
+    it('still allows an unregistered source when the flag is explicitly false (operator escape hatch)', async () => {
+      const decision = await decideEgress({
+        hostname: 'example.com',
+        source: undefined,
+        config: baseConfig({ denyUnknownSource: false }),
+        resolve: resolverReturning('192.0.2.10'),
+      });
+      expect(decision).toEqual({ allowed: true, address: '192.0.2.10' });
+    });
+
+    it('takes priority over every other check (denied before deny-host/bare-hostname would otherwise apply)', async () => {
+      const decision = await decideEgress({
+        hostname: 'kernel', // would otherwise be denied as deny-host or bare-hostname
+        source: undefined,
+        config: baseConfig({ denyUnknownSource: true }),
+        resolve: unreachableResolver(),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'unknown-source' });
+    });
   });
 });

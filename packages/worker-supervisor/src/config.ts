@@ -79,6 +79,15 @@ export interface SupervisorConfig {
   /** How long a finished Task's workspace directory is kept as an artifact before the retention
    *  sweep deletes it (`TASK_WORKDIR_RETENTION_HOURS`). */
   readonly taskWorkdirRetentionHours: number;
+  /** How often `index.ts`'s reap timer runs (`TASK_REAP_INTERVAL_MS`) — kills timed-out Task
+   *  containers and, via `task-service.ts`'s `reconcileOne`, notices and unregisters egress for
+   *  any Task container that exited on its own since the last tick. Lane-6 review P2-7: a longer
+   *  interval widens the window during which a Docker-assigned IP the reaper hasn't yet noticed
+   *  was released could be reused for an unrelated container, misattributing its egress to the
+   *  just-exited Task's `sourceId` — shortened from a fixed 30s to a configurable default of 10s
+   *  as a bounded mitigation (the review's own "or at reap with a shorter interval" alternative to
+   *  event-driven unregistration via Docker's own event stream, which this fix does not add). */
+  readonly taskReapIntervalMs: number;
   /** Images `POST /task/spawn` may spawn: always includes `workerImage`, plus any comma-separated
    *  extras from `WORKER_IMAGE_ALLOWLIST`. Additive (not a replacement) so setting the override
    *  can never accidentally lock out the default image resident mode already trusts. */
@@ -118,6 +127,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     dockerSocketPath: env.DOCKER_SOCKET_PATH ?? '/var/run/docker.sock',
     taskMaxRuntimeSec: parseIntEnv(env.TASK_MAX_RUNTIME_SEC, 3600),
     taskWorkdirRetentionHours: parseIntEnv(env.TASK_WORKDIR_RETENTION_HOURS, 72),
+    taskReapIntervalMs: parseIntEnv(env.TASK_REAP_INTERVAL_MS, 10_000),
     taskImageAllowlist: buildTaskImageAllowlist(env.WORKER_IMAGE_ALLOWLIST, workerImage),
   };
 }
