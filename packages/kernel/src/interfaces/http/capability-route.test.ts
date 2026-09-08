@@ -12,6 +12,7 @@ import {
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
@@ -24,7 +25,11 @@ import {
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
 } from '../../application/worker/index.js';
-import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
+import {
+  HANDLE_SIGNING_ALG,
+  ScopeValidationError,
+  issueHandle,
+} from '../../governance/capability/index.js';
 import {
   ConnectionRequestNotFoundError,
   GatekeeperNotFoundError,
@@ -120,6 +125,24 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new ChatNotFoundError('ws-1', 'chat-1'));
     expect(mapped.status).toBe(404);
     expect(mapped.code).toBe('chat_not_found');
+  });
+
+  it('lane-4 P2 fix: TurnNotFoundError (report_turn) → 404 turn_not_found, not 500', () => {
+    const mapped = mapCapabilityError(new TurnNotFoundError('ws-1', 'turn-1'));
+    expect(mapped.status).toBe(404);
+    expect(mapped.code).toBe('turn_not_found');
+  });
+
+  it('lane-4 P2 fix: NoActiveTurnError (record_decision) → 409 no_active_turn, not 500', () => {
+    const mapped = mapCapabilityError(new NoActiveTurnError());
+    expect(mapped.status).toBe(409);
+    expect(mapped.code).toBe('no_active_turn');
+  });
+
+  it('lane-4 P2 fix: ScopeValidationError (invoke_worker Handle mint) → 400 invalid_scope, not 500', () => {
+    const mapped = mapCapabilityError(new ScopeValidationError('unknown capability "bogus"'));
+    expect(mapped.status).toBe(400);
+    expect(mapped.code).toBe('invalid_scope');
   });
 
   it('application/worker registry errors map to 400/404/409, never 500 (S2.6/S2.14 gap found on the host)', () => {

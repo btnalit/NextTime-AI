@@ -5,6 +5,10 @@ import {
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+// NoActiveTurnError/TurnNotFoundError: see capability-route.ts's own comment on this same import
+// — exported by handlers.ts but not re-exported by gateway/index.ts's curated surface; that one-
+// line addition is inside application/gateway/**, outside this task's file ownership.
+import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
@@ -35,7 +39,7 @@ import {
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
-import { GrantNotFoundError } from '../../governance/capability/index.js';
+import { GrantNotFoundError, ScopeValidationError } from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
 import {
   OperationIdentityConflictError,
@@ -171,6 +175,19 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof ChatNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // Lane-4 P2 fix (docs/development-tasks.md "Unmapped error classes → 500") — WS equivalents of
+  // capability-route.ts's own new mappings (see that file's comment on the same three classes).
+  if (err instanceof TurnNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof NoActiveTurnError) {
+    // Same state-conflict bucket ILLEGAL_TRANSITION already covers for OperationIdentityConflictError
+    // below (mirrors HTTP 409, no dedicated WS code needed for a second 409-shaped condition).
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  if (err instanceof ScopeValidationError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // governance/approval + governance/policy domain errors (S2.2/S2.3) — same additions as
   // interfaces/http/capability-route.ts's mapCapabilityError, reusing FORBIDDEN/NOT_FOUND/
