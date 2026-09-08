@@ -32,13 +32,24 @@ const defaultExecFile: ExecFileFn = async (file, args) => {
  * — each resulting token is exactly one argv element (no shell involved, so no escaping needed for
  * spaces/metacharacters inside a param value; the whole substituted value is one argv slot even if
  * it contains spaces).
+ *
+ * Flag injection (review lane 5, P1-2): `execFile` prevents shell injection, but not argv-level
+ * flag injection — a *positional* template token (the placeholder with nothing else around it,
+ * e.g. `{container}`) whose substituted value happens to start with `-` is read by the target CLI
+ * as an option, not as the positional value the template author intended (e.g. `container.restart`
+ * with `container: '--force'` could flip an unrelated flag on whatever `docker`/`kubectl`/`gh`
+ * command the template names). A template token that already starts with `-` in the template
+ * itself (e.g. `--name={container}`) is exempt: its leading `-`/`--` bytes are the operator's own
+ * literal text, not attacker-controlled, so a `-`-prefixed value glued onto it cannot rename or
+ * add a flag. Only a token that is *entirely* the substitution (no literal prefix) is refused.
  */
 export function renderCommandTemplate(template: string, params: Record<string, unknown>): string[] {
   return template
     .split(/\s+/)
     .filter((token) => token.length > 0)
-    .map((token) =>
-      token.replace(/\{([^}]+)\}/g, (_match, name: string) => {
+    .map((token) => {
+      const isFlagToken = token.startsWith('-');
+      const rendered = token.replace(/\{([^}]+)\}/g, (_match, name: string) => {
         const value = params[name];
         if (value === undefined) {
           throw new Error(
@@ -46,8 +57,14 @@ export function renderCommandTemplate(template: string, params: Record<string, u
           );
         }
         return String(value);
-      }),
-    );
+      });
+      if (!isFlagToken && rendered.startsWith('-')) {
+        throw new Error(
+          `renderCommandTemplate: positional value "${rendered}" for template "${template}" must not start with "-" (flag injection) — use a --flag={name} template token if a flag-shaped value is actually intended`,
+        );
+      }
+      return rendered;
+    });
 }
 
 export interface CliTransportOptions {
