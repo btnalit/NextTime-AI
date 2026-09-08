@@ -1060,6 +1060,12 @@ step6_env_and_egress() {
   # non-root user, same proxy env a real Worker receives (worker-supervisor spawn-spec) — but no
   # source registration, so the proxied probe uses plain http:// (a denied CONNECT would only show
   # up as curl exit 56 / http_code 000; a denied plain-HTTP request carries the proxy's own 403).
+  # The proxy is named explicitly with `-x`: curl deliberately ignores an *uppercase* `HTTP_PROXY`
+  # (httpoxy mitigation — only lowercase `http_proxy` is read for plain http, while `HTTPS_PROXY`
+  # in either case is honoured), so relying on the env above sent the http:// probe direct, where
+  # the internal `workers` network has no resolver (curl rc 6 / 000, third regression run).
+  # worker-supervisor's spawn-spec sets both cases on real containers for exactly this reason
+  # (its own S1.5a note); this ad-hoc run only mirrors the uppercase pair.
   out=$(docker run --rm --network "${COMPOSE_PROJECT_NAME:-nexttime-ai}_workers" --entrypoint sh \
     -e HTTP_PROXY=http://egress-proxy:3128 -e HTTPS_PROXY=http://egress-proxy:3128 \
     nexttime-ai-worker-runtime -c '
@@ -1069,7 +1075,9 @@ direct_code=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" --noproxy "*" http://
 direct_rc=$?
 echo "DIRECT_RC=$direct_rc"
 echo "DIRECT_CODE=$direct_code"
-unregistered_code=$(curl -m 10 -sS -o /dev/null -w "%{http_code}" http://example.com 2>/dev/null)
+unregistered_code=$(curl -m 10 -sS -o /dev/null -w "%{http_code}" -x http://egress-proxy:3128 http://example.com 2>/dev/null)
+unregistered_rc=$?
+echo "UNREGISTERED_RC=$unregistered_rc"
 echo "UNREGISTERED_CODE=$unregistered_code"
 ' </dev/null 2>&1)
 
