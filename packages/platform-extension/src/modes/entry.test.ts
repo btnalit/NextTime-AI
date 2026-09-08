@@ -180,33 +180,7 @@ describe('registerEntryMode', () => {
     expect(kernel.requests[0]?.params).toEqual({ objectId: 'obj-1' });
   });
 
-  it('invoke_worker always forces wait:false, overriding whatever the caller asked for (lane-6 review P2-4)', async () => {
-    kernel.setHandler('invoke_worker', () => ({
-      ok: true,
-      result: { taskId: 'task-1', workerRunId: 'run-1' },
-    }));
-    const tool = fake.tools.get('invoke_worker');
-    if (!tool) throw new Error('invoke_worker tool not registered');
-
-    await tool.execute(
-      'call-1',
-      { definitionId: 'def-1', version: 1, input: {}, wait: true, timeout: 90 },
-      undefined,
-      undefined,
-      fakeCtx(),
-    );
-
-    const invokeCall = kernel.requests.find((r) => r.capability === 'invoke_worker');
-    expect(invokeCall?.params).toEqual({
-      definitionId: 'def-1',
-      version: 1,
-      input: {},
-      wait: false,
-      timeout: 90,
-    });
-  });
-
-  it('invoke_worker forces wait:false even when the caller omits wait entirely', async () => {
+  it('invoke_worker defaults wait to false when the caller omits it (lane-6 review P2-4, still true after the fix)', async () => {
     kernel.setHandler('invoke_worker', () => ({
       ok: true,
       result: { taskId: 'task-1', workerRunId: 'run-1' },
@@ -224,6 +198,95 @@ describe('registerEntryMode', () => {
 
     const invokeCall = kernel.requests.find((r) => r.capability === 'invoke_worker');
     expect(invokeCall?.params).toMatchObject({ wait: false });
+  });
+
+  it('invoke_worker forces wait:false when the caller explicitly asks for wait:false', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {}, wait: false },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    const invokeCall = kernel.requests.find((r) => r.capability === 'invoke_worker');
+    expect(invokeCall?.params).toMatchObject({ wait: false });
+  });
+
+  it('invoke_worker honours an explicit wait:true, with a per-call timeout computed to outlast the kernel wait', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1', status: 'completed' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+    const callSpy = vi.spyOn(kernelClient, 'call');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {}, wait: true, timeout: 45 },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    const invokeCall = kernel.requests.find((r) => r.capability === 'invoke_worker');
+    expect(invokeCall?.params).toEqual({
+      definitionId: 'def-1',
+      version: 1,
+      input: {},
+      wait: true,
+      timeout: 45,
+    });
+    // 45s (unclamped, below the 90s max) + the 10s headroom.
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 55_000);
+  });
+
+  it('invoke_worker wait:true with no explicit timeout is treated as the max (90s) for the computed client timeout', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1', status: 'running' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+    const callSpy = vi.spyOn(kernelClient, 'call');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {}, wait: true },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 100_000);
+  });
+
+  it('invoke_worker wait:true clamps a caller timeout above the max down to 90s for the computed client timeout', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1', status: 'running' },
+    }));
+    const tool = fake.tools.get('invoke_worker');
+    if (!tool) throw new Error('invoke_worker tool not registered');
+    const callSpy = vi.spyOn(kernelClient, 'call');
+
+    await tool.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {}, wait: true, timeout: 999 },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 100_000);
   });
 
   it('does not force wait:false on any other capability (get_task params pass through unmodified)', async () => {

@@ -215,12 +215,14 @@ export interface BackgroundServices {
    * previous one — see recovery.ts's own doc comment for what `interrupted` means going forward.
    * Also starts the S2.3 approval-expiry reaper's interval loop (`governance/approval`'s
    * `expireOverduePendingApprovals` — same "poll on an interval, never one txn per workspace"
-   * shape as the outbox dispatcher).
+   * shape as the outbox dispatcher), and the outbox-prune loop (`OutboxDispatcher.pruneDispatched`,
+   * fix/invoke-worker-wait-and-outbox-prune — first tick shortly after this call, unlike the other
+   * reapers here; see `OUTBOX_PRUNE_INITIAL_DELAY_MS`'s own doc comment).
    */
   start(): Promise<void>;
-  /** Stops the poll loop, the approval-expiry reaper's interval, and unregisters the `TurnStarted`
-   *  consumer. Does not wait for an in-flight poll/reaper tick — see OutboxDispatcher.stop()'s own
-   *  doc comment for why that is safe. */
+  /** Stops the poll loop, the approval-expiry reaper's interval, the outbox-prune loop, and
+   *  unregisters the `TurnStarted` consumer. Does not wait for an in-flight poll/reaper/prune tick
+   *  — see OutboxDispatcher.stop()'s own doc comment for why that is safe. */
   stop(): void;
 }
 
@@ -313,6 +315,26 @@ export interface CreateBackgroundServicesOptions {
   /** Called whenever a reaper tick's `runTaskReaper` call throws — same shape as
    *  `onApprovalReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
   readonly onTaskReaperError?: (error: unknown) => void;
+  /**
+   * `OutboxDispatcher.pruneDispatched`'s `olderThanDays` — deletes dispatched outbox rows older
+   * than this many days on a periodic tick (fix/invoke-worker-wait-and-outbox-prune: `pruneDispatched`
+   * itself landed in PR #76 with nothing calling it yet). Default `DEFAULT_OUTBOX_PRUNE_DAYS` (7).
+   * `0` disables the prune loop entirely (no timer is ever started) — an explicit opt-out, not a
+   * "prune everything" footgun. `main()` reads this from `OUTBOX_PRUNE_DAYS`.
+   */
+  readonly outboxPruneDays?: number;
+  /** How often the outbox-prune tick runs. Default `DEFAULT_OUTBOX_PRUNE_INTERVAL_MS` (6 hours —
+   *  pruning is cleanup, not a latency-sensitive path; much coarser than every other reaper here).
+   *  `main()` reads this from `OUTBOX_PRUNE_INTERVAL_MS`. Ignored when `outboxPruneDays` is `0`. */
+  readonly outboxPruneIntervalMs?: number;
+  /** Called whenever a prune tick's `pruneDispatched` call throws — same shape as
+   *  `onApprovalReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
+  readonly onOutboxPruneError?: (error: unknown) => void;
+  /** Called after each successful prune tick with the number of rows deleted — the hook `main()`
+   *  uses to log `{ deleted }` at info (task brief: "log `{ deleted }` at info"). Defaults to a
+   *  no-op; a tick that deletes 0 rows still calls this (0 is a normal, expected outcome once the
+   *  backlog is caught up, not worth suppressing). */
+  readonly onOutboxPruneComplete?: (result: { deleted: number }) => void;
 }
 
 /**
@@ -386,6 +408,22 @@ export const DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS = 60 * 1000;
 /** Default P1-3 stale-`executing`-ActionRequest reaper poll interval — 5 minutes, same cadence as
  *  the approval-expiry reaper (a crash-recovery backstop, not a latency-sensitive path). */
 export const DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Default `OutboxDispatcher.pruneDispatched` retention — 7 days. */
+export const DEFAULT_OUTBOX_PRUNE_DAYS = 7;
+
+/** Default outbox-prune tick interval — 6 hours (pruning is cleanup, not latency-sensitive —
+ *  deliberately the coarsest interval of any reaper in this file). */
+export const DEFAULT_OUTBOX_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/** Delay before the *first* outbox-prune tick — short, but deliberately not `0`/immediate, so it
+ *  never competes with `start()`'s own synchronous recovery scan (`interruptStaleRunningTurns`)
+ *  or the other reapers' own startup wiring for the same tick of the event loop. Every other
+ *  reaper in this file instead waits a full interval for its first tick (`setInterval` alone,
+ *  no immediate call) — pruning gets its own short initial delay instead of that same
+ *  wait-a-full-interval treatment because its own interval (6h) would otherwise leave a
+ *  freshly-started kernel's outbox unpruned for up to 6 hours after every restart. */
+export const OUTBOX_PRUNE_INITIAL_DELAY_MS = 10 * 1000;
 
 export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
@@ -461,6 +499,10 @@ export function createBackgroundServices(
   let gatekeeperDrainTimer: NodeJS.Timeout | undefined;
   const onActionRequestReaperError = options.onActionRequestReaperError ?? (() => {});
   let actionRequestReaperTimer: NodeJS.Timeout | undefined;
+  const onOutboxPruneError = options.onOutboxPruneError ?? (() => {});
+  const onOutboxPruneComplete = options.onOutboxPruneComplete ?? (() => {});
+  let outboxPruneInitialTimer: NodeJS.Timeout | undefined;
+  let outboxPruneIntervalTimer: NodeJS.Timeout | undefined;
 
   // S2.7: configure application/task's runtime deps (Handle-signing key + supervisor client) only
   // when a keypair is actually available — see this file's own doc comment above
@@ -554,6 +596,34 @@ export function createBackgroundServices(
         );
         taskReaperTimer.unref?.();
       }
+
+      // fix/invoke-worker-wait-and-outbox-prune: `pruneDispatched` (PR #76) had nothing calling
+      // it — wire it up the same "composition root holds the timer handle, start()/stop() paired"
+      // way every reaper above does. `outboxPruneDays === 0` is a deliberate opt-out (no timer
+      // ever starts, distinct from every other reaper here — see this file's own doc comment on
+      // `outboxPruneDays`); every other value, including the compiled-in default, prunes.
+      const outboxPruneDays = options.outboxPruneDays ?? DEFAULT_OUTBOX_PRUNE_DAYS;
+      if (outboxPruneDays > 0) {
+        const outboxPruneTick = (): void => {
+          dispatcher
+            .pruneDispatched(outboxPruneDays)
+            .then((deleted) => onOutboxPruneComplete({ deleted }))
+            .catch(onOutboxPruneError);
+        };
+        // First tick fires shortly after start (OUTBOX_PRUNE_INITIAL_DELAY_MS), not after a full
+        // OUTBOX_PRUNE_INTERVAL_MS (6h) — see that constant's own doc comment for why pruning
+        // deliberately does not follow the "wait a full interval for the first tick" convention
+        // every other reaper in this file uses.
+        outboxPruneInitialTimer = setTimeout(() => {
+          outboxPruneTick();
+          outboxPruneIntervalTimer = setInterval(
+            outboxPruneTick,
+            options.outboxPruneIntervalMs ?? DEFAULT_OUTBOX_PRUNE_INTERVAL_MS,
+          );
+          outboxPruneIntervalTimer.unref?.();
+        }, OUTBOX_PRUNE_INITIAL_DELAY_MS);
+        outboxPruneInitialTimer.unref?.();
+      }
     },
     stop() {
       dispatcher.stop();
@@ -577,6 +647,14 @@ export function createBackgroundServices(
         clearInterval(taskReaperTimer);
         taskReaperTimer = undefined;
       }
+      if (outboxPruneInitialTimer) {
+        clearTimeout(outboxPruneInitialTimer);
+        outboxPruneInitialTimer = undefined;
+      }
+      if (outboxPruneIntervalTimer) {
+        clearInterval(outboxPruneIntervalTimer);
+        outboxPruneIntervalTimer = undefined;
+      }
     },
   };
 }
@@ -598,6 +676,27 @@ export function parsePositiveIntEnvVar(name: string, raw: string | undefined): n
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(
       `${name}="${raw}" is not a positive, finite number — unset it to use the compiled-in default`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Same fail-fast contract as {@link parsePositiveIntEnvVar} — except `0` is accepted rather than
+ * rejected, since `OUTBOX_PRUNE_DAYS=0` is a deliberate "disable pruning" sentinel
+ * (`CreateBackgroundServicesOptions.outboxPruneDays`'s own doc comment), not a misconfiguration a
+ * caller could not possibly have meant. A negative value is still rejected — `-1` cannot mean
+ * "disable" when `0` already does, so it can only be a mistake.
+ */
+export function parseNonNegativeIntEnvVar(
+  name: string,
+  raw: string | undefined,
+): number | undefined {
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(
+      `${name}="${raw}" is not a non-negative, finite number — unset it to use the compiled-in default`,
     );
   }
   return parsed;
@@ -710,6 +809,14 @@ export function main(): void {
       'TASK_REAPER_INTERVAL_MS',
       process.env.TASK_REAPER_INTERVAL_MS,
     );
+    const outboxPruneDays = parseNonNegativeIntEnvVar(
+      'OUTBOX_PRUNE_DAYS',
+      process.env.OUTBOX_PRUNE_DAYS,
+    );
+    const outboxPruneIntervalMs = parsePositiveIntEnvVar(
+      'OUTBOX_PRUNE_INTERVAL_MS',
+      process.env.OUTBOX_PRUNE_INTERVAL_MS,
+    );
 
     background = createBackgroundServices({
       pool,
@@ -733,6 +840,11 @@ export function main(): void {
       staleExecutingTimeoutMs,
       onActionRequestReaperError: (actionRequestId: string, err: unknown) =>
         app.log.error({ actionRequestId, err }),
+      outboxPruneDays,
+      outboxPruneIntervalMs,
+      onOutboxPruneError: (err: unknown) => app.log.error(err),
+      onOutboxPruneComplete: ({ deleted }: { deleted: number }) =>
+        app.log.info({ deleted }, 'outbox prune complete'),
     });
 
     // A request that races the still-in-flight recovery scan is not unsafe — the partial unique

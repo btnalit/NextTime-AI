@@ -1,3 +1,4 @@
+import { INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS } from '@nexttime/shared';
 import type { CapabilityChannel, HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
@@ -69,7 +70,12 @@ import {
  * `invoke_worker` call never leaves a half-created Task behind.
  */
 
-export const DEFAULT_WAIT_TIMEOUT_SECONDS = 90;
+// fix/invoke-worker-wait-and-outbox-prune: sourced from the shared ceiling (`@nexttime/shared`'s
+// `INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS`) so the kernel's own default and the paramsSchema
+// `.max()` clamp on `timeout` (capabilities.ts) can never drift apart — this re-export is kept
+// (rather than inlining the import at every call site) since every existing caller/test already
+// imports `DEFAULT_WAIT_TIMEOUT_SECONDS` from this module.
+export const DEFAULT_WAIT_TIMEOUT_SECONDS = INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS;
 const DEFAULT_WAIT_POLL_INTERVAL_MS = 500;
 /** A WorkerRun Handle's ttl is the Task's own duration limit plus this grace window, so the
  *  Worker can still finish reporting its result (S2.9) after its own deadline fires without its
@@ -78,6 +84,24 @@ const HANDLE_TTL_GRACE_SECONDS = 300;
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Clamps a caller-provided `timeout` (seconds, `invoke_worker`'s own param) to
+ * `DEFAULT_WAIT_TIMEOUT_SECONDS` and converts to milliseconds for `waitForOutcome`. Defense in
+ * depth alongside the schema-level `.max()` (`@nexttime/shared`'s `capabilities.ts`, enforced by
+ * `dispatchCapability`) for the two callers that reach `waitForOutcome` without going through that
+ * validation: `invokeWorker` below (every existing test/caller) and `application/gateway/
+ * handlers.ts`'s `invokeWorkerHandler` (its `afterCommit` runs after `dispatchCapability`'s own
+ * `safeParse` already succeeded, but re-derives `timeoutMs` from the same raw `input.timeout`
+ * rather than trusting it stayed within bounds across that boundary) — same "schema rejects above
+ * the ceiling, resolve-time code also clamps" two-layer convention `application/task/quotas.ts`'s
+ * `resolveQuotas` already uses for `HARD_MAX_DEPTH`.
+ */
+export function resolveWaitTimeoutMs(timeoutSeconds: number | undefined): number {
+  return (
+    Math.min(timeoutSeconds ?? DEFAULT_WAIT_TIMEOUT_SECONDS, DEFAULT_WAIT_TIMEOUT_SECONDS) * 1000
+  );
 }
 
 export interface InvokeWorkerCallerCtx {
@@ -393,7 +417,7 @@ export async function invokeWorker(
     created.taskId,
     created.workerRunId,
     {
-      timeoutMs: (input.timeout ?? DEFAULT_WAIT_TIMEOUT_SECONDS) * 1000,
+      timeoutMs: resolveWaitTimeoutMs(input.timeout),
     },
   );
 }

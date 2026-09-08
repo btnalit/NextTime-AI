@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CAPABILITY_REGISTRY,
+  INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
   assertRegistryConsistent,
   getCapability,
   listByChannel,
@@ -192,5 +193,35 @@ describe('listByChannel', () => {
     for (const capability of listByChannel('human')) {
       expect(capability.channel).toBe('human');
     }
+  });
+});
+
+// fix/invoke-worker-wait-and-outbox-prune: `timeout` (seconds) is clamped to
+// INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS (90 — matches the kernel's own wait-window default, no
+// larger ceiling is defined anywhere) so a caller can never ask for a wait longer than the kernel
+// will ever actually hold.
+describe('invoke_worker paramsSchema timeout clamp', () => {
+  const baseParams = { definitionId: 'def-1', version: 1, input: {} };
+  const schema = () => getCapability('invoke_worker')?.paramsSchema;
+
+  it('accepts a timeout at the max', () => {
+    const result = schema()?.safeParse({
+      ...baseParams,
+      timeout: INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
+    });
+    expect(result?.success).toBe(true);
+  });
+
+  it('rejects a timeout above the max', () => {
+    const result = schema()?.safeParse({
+      ...baseParams,
+      timeout: INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS + 1,
+    });
+    expect(result?.success).toBe(false);
+  });
+
+  it('accepts an omitted timeout (the kernel applies its own default)', () => {
+    const result = schema()?.safeParse(baseParams);
+    expect(result?.success).toBe(true);
   });
 });

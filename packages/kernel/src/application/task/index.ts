@@ -21,6 +21,7 @@ export {
   invokeWorker,
   invokeWorkerCreate,
   readTask,
+  resolveWaitTimeoutMs,
   waitForOutcome,
 } from './invoke.js';
 
