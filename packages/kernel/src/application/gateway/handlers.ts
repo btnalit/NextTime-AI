@@ -15,6 +15,7 @@ import type { AgentRuntime } from '../../application/host-bridge/index.js';
 import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import { drainPendingContextItems } from '../../application/linkage/index.js';
 import {
+  DEFAULT_WAIT_TIMEOUT_SECONDS,
   type InvokeWorkerInput,
   type TaskRow,
   type WorkerRunRow,
@@ -23,11 +24,12 @@ import {
   findWorkers,
   getConfiguredTaskRuntime,
   getTaskWithWorkerRuns,
-  invokeWorker,
+  invokeWorkerCreate,
   listTasksForPrincipal,
   resolveParentAuthority,
   setQuotaValue,
   terminateTask,
+  waitForOutcome,
 } from '../../application/task/index.js';
 import {
   type WorkerDefinitionRow,
@@ -683,15 +685,20 @@ const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, p
 /**
  * §5.2 `Turn --generated--> Task` (docs/development-tasks.md S2.11 deliverable 4): resolves the
  * caller's currently-*running* Turn, if any, using `_client` — the one transaction
- * `dispatchCapability` (dispatch.ts) already has open for this whole handler call, so this read
- * costs nothing extra to hold open (that transaction stays open for the full `invoke_worker` call
- * regardless — including any `wait=true` polling below — since `invokeWorker` itself never uses
- * `_client`; see `application/task/invoke.ts`'s own module doc comment for why *it* manages
- * separate, independently-committed transactions instead). Only `wasRunning === true` counts —
- * `findAttributableTurn`'s 5-minute recency fallback exists for egress/llm-usage attribution
- * (where "which Turn was this probably part of" is the right question), but "generated" here means
- * *during*, not *shortly after*: a Task invoked well after its nearest Turn ended did not come from
- * that Turn.
+ * `dispatchCapability` (dispatch.ts) already has open for this whole handler call. Only
+ * `wasRunning === true` counts — `findAttributableTurn`'s 5-minute recency fallback exists for
+ * egress/llm-usage attribution (where "which Turn was this probably part of" is the right
+ * question), but "generated" here means *during*, not *shortly after*: a Task invoked well after
+ * its nearest Turn ended did not come from that Turn.
+ *
+ * **Two-phase (P1-4 fix, review job 652a4abc)**: phase 1 (still inside dispatch.ts's transaction)
+ * only runs `invokeWorkerCreate` — the fast, no-network-wait half (resolve/validate the
+ * WorkerDefinition, I18 quota checks, mint the child Handle, spawn the WorkerRun) — and returns
+ * immediately. `input.wait:true`'s poll (`waitForOutcome`, up to `input.timeout ?? 90` seconds) is
+ * deferred to `afterCommit`, run only once phase 1 has committed, holding no transaction of its
+ * own across the wait — see `application/task/invoke.ts`'s own module doc comment for the full
+ * "why holding dispatch.ts's transaction open across this wait was a real pool-exhaustion defect,
+ * not just a missed optimization" rationale.
  */
 const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, params, ctx) => {
   const principalId = ctx?.principalId ?? '';
@@ -699,14 +706,33 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
     ? await findAttributableTurn(_client, { workspaceId, principalId, at: new Date() })
     : undefined;
   const turnId = attributedTurn?.wasRunning ? attributedTurn.id : undefined;
+  const input = params as InvokeWorkerInput;
 
-  const result = await invokeWorker(
+  const created = await invokeWorkerCreate(
     workspaceId,
     { principalId, channel: ctx?.channel ?? 'handle', claims: ctx?.claims, turnId },
-    params as InvokeWorkerInput,
+    input,
     getConfiguredTaskRuntime(),
   );
-  return { result, resourceType: 'task', resourceId: result.taskId };
+
+  if (!input.wait) {
+    return { result: created, resourceType: 'task', resourceId: created.taskId };
+  }
+
+  return {
+    result: created,
+    resourceType: 'task',
+    resourceId: created.taskId,
+    afterCommit: () =>
+      waitForOutcome(
+        getConfiguredTaskRuntime(),
+        workspaceId,
+        principalId,
+        created.taskId,
+        created.workerRunId,
+        { timeoutMs: (input.timeout ?? DEFAULT_WAIT_TIMEOUT_SECONDS) * 1000 },
+      ),
+  };
 };
 
 function toWireWorkerRun(row: {

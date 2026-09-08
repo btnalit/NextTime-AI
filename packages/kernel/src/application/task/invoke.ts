@@ -1,14 +1,10 @@
 import type { CapabilityChannel, HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
-import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { sumTodayCostUsd } from '../../governance/llm-usage/index.js';
-import {
-  renderSkillMarkdownFile,
-  requirePublishedWorkerDefinition,
-  resolvePublishedSkills,
-} from '../worker/index.js';
+import { requirePublishedWorkerDefinition } from '../worker/index.js';
+import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import {
   computeChildHandleScope,
   defaultWorkerCapabilities,
@@ -45,20 +41,35 @@ import {
  * *closed* on an unknown `jti`, so an uncommitted Handle looks exactly like a revoked one). Holding
  * `dispatchCapability`'s single transaction open across a `wait=true` poll (up to 90s by default)
  * would therefore make the very Worker it just spawned unable to authenticate for the entire wait
- * window — a self-inflicted deadlock, not merely a missed optimization. `invokeWorker` below
- * instead manages its own short, independently-committed `withWorkspace(deps.pool, ...)`
+ * window — a self-inflicted deadlock, not merely a missed optimization. `invokeWorkerCreate`
+ * (below) manages its own short, independently-committed `withWorkspace(deps.pool, ...)`
  * transactions (`TaskRuntimeDeps.pool` — see `runtime.ts`'s own doc comment) so the CREATE phase
  * commits and the Handle becomes usable *before* any waiting begins; `application/gateway/
  * handlers.ts`'s `invokeWorkerHandler` therefore ignores the `client` dispatch.ts hands it
  * entirely (dispatch.ts's own generic audit row for "invoke_worker was called" still commits
  * normally in its own transaction — a documented, deliberate exception, see this task's PR body).
  *
+ * **P1-4 fix (review job 652a4abc): the `wait:true` poll itself is two-phase, same shape
+ * `request_action` established.** Handle-usability was never the only problem here — even with
+ * every one of `invokeWorkerCreate`'s own transactions committing independently, the *original*
+ * single-function `invokeWorker` awaited the whole `wait:true` poll (up to 90s) from *inside*
+ * `invokeWorkerHandler`, which itself runs inside `dispatch.ts`'s own `withWorkspace` transaction
+ * — that outer transaction (and the pool connection under it) stayed open, idle, for the entire
+ * wait regardless of what `invokeWorkerCreate` committed underneath it. Under load this can
+ * exhaust the pool and block unrelated callers (e.g. a Worker's own `report_task_result`).
+ * `invokeWorkerHandler` now calls `invokeWorkerCreate` (fast, no network wait) for its phase-1
+ * result and defers any `wait:true` polling (`waitForOutcome`, exported below) to `afterCommit` —
+ * run only *after* the phase-1 transaction has committed, holding no transaction of its own across
+ * the wait. `invokeWorker` (also below) remains a thin single-call convenience wrapper — create,
+ * then optionally wait — used directly by every existing test and any caller that already manages
+ * its own transaction lifetime.
+ *
  * **Quota checks (I18) run before anything is created**, in the same transaction as the
  * Task/WorkerRun/Handle creation itself — a violation rolls the whole thing back, so a rejected
  * `invoke_worker` call never leaves a half-created Task behind.
  */
 
-const DEFAULT_WAIT_TIMEOUT_SECONDS = 90;
+export const DEFAULT_WAIT_TIMEOUT_SECONDS = 90;
 const DEFAULT_WAIT_POLL_INTERVAL_MS = 500;
 /** A WorkerRun Handle's ttl is the Task's own duration limit plus this grace window, so the
  *  Worker can still finish reporting its result (S2.9) after its own deadline fires without its
@@ -120,69 +131,19 @@ async function resolveCallerWorkerRun(
   return row ? mapWorkerRunRow(row) : null;
 }
 
-/** The WorkerDefinition content fields `invoke_worker`/requeue need — a structural subset of
- *  `packages/shared/src/worker-definition.ts`'s `WorkerWorkerDefinitionContent`, read from the
- *  already-parsed `definition` jsonb (this module trusts `publishWorkerDefinition`'s own
- *  `validateWorkerDefinitionContent` call already shaped it correctly at publish time — no
- *  re-validation here). */
-interface WorkerDefinitionContentShape {
-  readonly capabilities?: readonly string[];
-  readonly gates?: readonly string[];
-  readonly model?: string;
-  /** `WorkerDefinition --uses--> Skill` (design doc §5.1.2; `packages/shared/src/worker-
-   *  definition.ts`'s `skills` field, "published Skill names/ids this WorkerDefinition uses") —
-   *  resolved to mountable content by `resolveSkillsInline` below (S2.14 deliverable 4). */
-  readonly skills?: readonly string[];
-}
-
-function readDefinitionContent(definition: unknown): WorkerDefinitionContentShape {
-  if (!definition || typeof definition !== 'object') return {};
-  const record = definition as Record<string, unknown>;
-  return {
-    capabilities: Array.isArray(record.capabilities)
-      ? record.capabilities.filter((c): c is string => typeof c === 'string')
-      : undefined,
-    gates: Array.isArray(record.gates)
-      ? record.gates.filter((g): g is string => typeof g === 'string')
-      : undefined,
-    model: typeof record.model === 'string' ? record.model : undefined,
-    skills: Array.isArray(record.skills)
-      ? record.skills.filter((s): s is string => typeof s === 'string')
-      : undefined,
-  };
-}
-
 /**
- * Resolves a WorkerDefinition's declared `skills[]` (id-or-name refs) to **published** Skill rows
- * and renders each into pi's on-disk `SKILL.md` format (S2.14 deliverable 4) — the payload
- * `worker-supervisor`'s `/task/spawn` writes to the Task's workspace directory before the
- * container starts (`skillsInline`, `adapters/supervisor-client/index.ts`'s own doc comment has
- * the full "why inline content, not a host-path bind mount" rationale). A `skills[]` entry that
- * does not resolve to a published Skill is silently skipped — same "best effort, never blocks the
- * caller" convention this file's own `computeChildHandleScope` gate-narrowing uses for a
- * non-execute-class need the caller doesn't hold: a WorkerDefinition referencing a Skill that was
- * since deprecated (or never published) should not make every future `invoke_worker` call fail.
+ * `invoke_worker`'s create phase: resolves and validates the WorkerDefinition, runs the I18 quota
+ * checks, mints the child Handle, and spawns the WorkerRun — never waits for the Task to reach a
+ * terminal (or `waiting_approval`) status. Split out from `invokeWorker` below (P1-4 fix, review
+ * job 652a4abc: "dispatch keeps the withWorkspace txn/pool connection open through the wait (≤90s)
+ * → pool exhaustion blocks report_task_result") so `application/gateway/handlers.ts`'s
+ * `invokeWorkerHandler` can run *this* inside `dispatch.ts`'s phase-1 transaction (fast — no
+ * network wait) and defer any `wait:true` polling to `afterCommit`, the same two-phase shape
+ * `request_action` already established — never holding the capability call's own transaction open
+ * across the wait. `invokeWorker` below (still the direct entry point every existing caller/test
+ * uses) is now a thin wrapper: create, then optionally wait.
  */
-async function resolveSkillsInline(
-  client: PoolClient,
-  workspaceId: string,
-  skillRefs: readonly string[],
-): Promise<readonly TaskSkillInlineMountInput[]> {
-  if (skillRefs.length === 0) return [];
-  const skills = await resolvePublishedSkills(client, workspaceId, skillRefs);
-  return skills.map((skill) => ({
-    name: skill.name,
-    files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
-  }));
-}
-
-/**
- * `invoke_worker`'s full flow: resolves and validates the WorkerDefinition, runs the I18 quota
- * checks, mints the child Handle, spawns the WorkerRun, and — when `input.wait` — polls for
- * completion up to `input.timeout` seconds (default 90) before returning `{taskId, status:
- * 'running'}` rather than hanging (design doc §8.2).
- */
-export async function invokeWorker(
+export async function invokeWorkerCreate(
   workspaceId: string,
   caller: InvokeWorkerCallerCtx,
   input: InvokeWorkerInput,
@@ -377,21 +338,46 @@ export async function invokeWorker(
     },
   );
 
-  if (!input.wait) {
-    return { taskId: task.id, workerRunId: workerRun.id, status: 'running' };
-  }
+  return { taskId: task.id, workerRunId: workerRun.id, status: 'running' };
+}
 
-  return waitForOutcome(deps, workspaceId, caller.principalId, task.id, workerRun.id, {
-    timeoutMs: (input.timeout ?? DEFAULT_WAIT_TIMEOUT_SECONDS) * 1000,
-  });
+/**
+ * `invoke_worker`'s full flow (the direct entry point every existing test/caller — other than the
+ * two-phase capability handler, see `invokeWorkerCreate`'s own doc comment — uses): create, then,
+ * when `input.wait`, poll for completion up to `input.timeout` seconds (default 90) before
+ * returning `{taskId, status: 'running'}` rather than hanging (design doc §8.2).
+ */
+export async function invokeWorker(
+  workspaceId: string,
+  caller: InvokeWorkerCallerCtx,
+  input: InvokeWorkerInput,
+  deps: TaskRuntimeDeps,
+): Promise<InvokeWorkerResult> {
+  const created = await invokeWorkerCreate(workspaceId, caller, input, deps);
+  if (!input.wait) return created;
+  return waitForOutcome(
+    deps,
+    workspaceId,
+    caller.principalId,
+    created.taskId,
+    created.workerRunId,
+    {
+      timeoutMs: (input.timeout ?? DEFAULT_WAIT_TIMEOUT_SECONDS) * 1000,
+    },
+  );
 }
 
 const TERMINAL_TASK_STATUSES: readonly TaskRow['status'][] = ['completed', 'failed', 'cancelled'];
 
-/** Polls the Task row (and, opportunistically, the supervisor directly — `lifecycle.ts`'s
- *  `reactToSupervisorStatus`) until the Task reaches a terminal status or `options.timeoutMs`
- *  elapses, whichever first — never hangs past the timeout (design doc §8.2). */
-async function waitForOutcome(
+/**
+ * Polls the Task row (and, opportunistically, the supervisor directly — `lifecycle.ts`'s
+ * `reactToSupervisorStatus`) until the Task reaches a terminal status or `options.timeoutMs`
+ * elapses, whichever first — never hangs past the timeout (design doc §8.2). Exported (P1-4 fix)
+ * so `application/gateway/handlers.ts`'s `invokeWorkerHandler` can run it from `afterCommit`,
+ * *after* `dispatch.ts`'s phase-1 transaction has already committed — see `invokeWorkerCreate`'s
+ * own doc comment for why holding that transaction open across this wait was the actual defect.
+ */
+export async function waitForOutcome(
   deps: TaskRuntimeDeps,
   workspaceId: string,
   onBehalfOf: string,

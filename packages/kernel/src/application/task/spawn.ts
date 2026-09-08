@@ -44,12 +44,14 @@ export interface SpawnWorkerRunInput {
   readonly declaredGates: readonly string[];
   readonly requestedGates?: readonly string[];
   readonly model?: string;
-  /** Pre-resolved by the caller (`invoke.ts`'s `resolveSkillsInline`, S2.14 deliverable 4) —
-   *  mirrors `model` above: this function never re-derives it from the WorkerDefinition itself,
-   *  it only ever forwards what it is given. `undefined` on the requeue path
-   *  (`lifecycle.ts`'s `spawnWorkerRunForRetry`, which does not re-resolve `model` either — see
-   *  that function's own doc comment for why a retry re-derives nothing beyond the already-granted
-   *  Handle scope). */
+  /** Pre-resolved by the caller (`definition-content.ts`'s `resolveSkillsInline`, S2.14
+   *  deliverable 4) — mirrors `model` above: this function never re-derives it from the
+   *  WorkerDefinition itself, it only ever forwards what it is given. On the requeue path
+   *  (`lifecycle.ts`'s `spawnWorkerRunForRetry`), both `model` and `skillsInline` are re-resolved
+   *  from the Task's own *pinned* WorkerDefinition (P2-10 fix — see that function's own doc
+   *  comment for why `getWorkerDefinition`, not `requirePublishedWorkerDefinition`); everything
+   *  else about the retry (capabilities/gates/authority) still comes from the failed WorkerRun's
+   *  own already-granted Handle scope, never re-derived. */
   readonly skillsInline?: readonly TaskSkillInlineMountInput[];
 }
 

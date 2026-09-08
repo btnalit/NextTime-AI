@@ -9,6 +9,8 @@ import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { TaskSupervisorStatus } from '../../adapters/supervisor-client/index.js';
 import { revokeSession } from '../../governance/capability/index.js';
+import { getWorkerDefinition } from '../worker/index.js';
+import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { spawnWorkerRun } from './spawn.js';
 import { recordTaskTransition, recordWorkerRunTransition } from './transition-log.js';
@@ -330,10 +332,25 @@ export async function reactToSupervisorStatus(
   }
 }
 
-/** Reads the just-failed WorkerRun's own Handle scope (`capability_handles`, keyed by its
- *  session) and re-spawns under the same Task, attenuating from that already-granted scope — a
- *  requeue asks for nothing new, so there is no caller-side "declared needs" to re-resolve, and no
- *  risk of the retry silently gaining privilege the original invocation did not have. */
+/**
+ * Reads the just-failed WorkerRun's own Handle scope (`capability_handles`, keyed by its session)
+ * and re-spawns under the same Task, attenuating from that already-granted scope — a requeue asks
+ * for nothing new, so there is no caller-side "declared needs" to re-resolve, and no risk of the
+ * retry silently gaining privilege the original invocation did not have.
+ *
+ * **P2-10 fix (review job 652a4abc: "requeue omits skillsInline and model")**: `model`/`skillsInline`
+ * are re-resolved from the Task's own *pinned* WorkerDefinition (`task.workerDefinitionId`/
+ * `.workerDefinitionVersion` — §5.5 "Task 固定引用启动时版本", never re-derived from anything that
+ * could have changed since `invoke_worker` first ran) via `getWorkerDefinition` — deliberately
+ * **not** `requirePublishedWorkerDefinition`: the pinned version may have been deprecated in the
+ * time between the original spawn and this retry, and a since-deprecated definition must not turn
+ * a legitimate crash-retry into an immediate `worker_failed` (the retry is re-running a Task that
+ * was already validly invoked; it is not a fresh `invoke_worker` call subject to that same I17-style
+ * "only published" gate). A missing definition row (should not happen — the Task's own FK-less
+ * reference already resolved once) degrades to no `model`/`skillsInline`, same "best effort, never
+ * blocks the caller" convention `resolveSkillsInline` itself already uses for an individual skill
+ * ref that fails to resolve.
+ */
 async function spawnWorkerRunForRetry(
   deps: TaskRuntimeDeps,
   workspaceId: string,
@@ -357,6 +374,23 @@ async function spawnWorkerRunForRetry(
 
   const scope = handleRow.scope as { capabilities: string[]; resources: Record<string, string[]> };
 
+  const { model, skillsInline } = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: onBehalfOf },
+    async (client) => {
+      const definition = await getWorkerDefinition(client, workspaceId, {
+        definitionId: task.workerDefinitionId,
+        version: task.workerDefinitionVersion,
+      });
+      if (!definition) return { model: undefined, skillsInline: [] };
+      const content = readDefinitionContent(definition.definition);
+      return {
+        model: content.model,
+        skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+      };
+    },
+  );
+
   try {
     await spawnWorkerRun(deps, workspaceId, {
       task,
@@ -371,6 +405,8 @@ async function spawnWorkerRunForRetry(
       },
       declaredCapabilities: scope.capabilities,
       declaredGates: scope.resources.gatekeeper ?? [],
+      model,
+      skillsInline,
     });
   } catch {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, (client) =>

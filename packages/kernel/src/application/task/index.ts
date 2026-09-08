@@ -14,11 +14,14 @@
  */
 
 export {
+  DEFAULT_WAIT_TIMEOUT_SECONDS,
   type InvokeWorkerCallerCtx,
   type InvokeWorkerInput,
   type InvokeWorkerResult,
   invokeWorker,
+  invokeWorkerCreate,
   readTask,
+  waitForOutcome,
 } from './invoke.js';
 
 export {
