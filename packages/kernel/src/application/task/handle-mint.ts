@@ -248,6 +248,24 @@ export interface MintWorkerRunHandleInput {
  * verbatim from `input.onBehalfOf` — I13 inheritance) and issues a Handle under it. `ttlSeconds`
  * is additionally capped to the parent Handle's own remaining ttl when one exists (a child should
  * never outlive the credential that authorized it), mirroring `attenuate()`'s own ttl rule.
+ *
+ * `notAfterSeconds` (lane-1 P2 follow-up fix — same shape as `attenuate()`, governance/
+ * capability/handles.ts): `parentRemainingSeconds` below and `issueHandle`'s own `iatSeconds` are
+ * two separate `Date.now()` reads, the second one after an awaited DB round trip (the session
+ * INSERT above) — tens of ms apart is enough to straddle a whole-second boundary and land the
+ * child's `expires_at` a second past the parent's, which the `capability_handles_inheritance`
+ * trigger (migrations/governance/0008) now rejects. Passing `notAfterSeconds:
+ * input.parentClaims.exp` closes that the same way `attenuate()` does: `issueHandle` clamps
+ * against it directly, using whichever `Date.now()` it actually reads. The previous
+ * `Math.max(parentRemainingSeconds, 1)` floor is deliberately gone: it existed to keep
+ * `ttlSeconds` positive for `issueHandle`'s own `ttlSeconds <= 0` check, but for an
+ * already-(near-)expired parent it manufactured a 1-second-TTL child anyway — silently minting a
+ * Handle under an authority that has (or is about to) run out, previously only ever caught deep
+ * inside a DB trigger exception. Letting a non-positive `parentRemainingSeconds` flow through
+ * unmodified now surfaces that case as `issueHandle`'s own clean `HandleIssuanceError`
+ * (`ttlSeconds must be a positive number`, or the `notAfterSeconds` clamp's own message if the
+ * boundary is crossed between here and there) before any row is ever written, rather than an
+ * over-long child or a confusing constraint violation.
  */
 export async function mintWorkerRunHandle(
   client: PoolClient,
@@ -269,7 +287,7 @@ export async function mintWorkerRunHandle(
   let ttlSeconds = input.ttlSeconds;
   if (input.parentClaims) {
     const parentRemainingSeconds = input.parentClaims.exp - Math.floor(Date.now() / 1000);
-    ttlSeconds = Math.min(ttlSeconds, Math.max(parentRemainingSeconds, 1));
+    ttlSeconds = Math.min(ttlSeconds, parentRemainingSeconds);
   }
 
   return issueHandle(client, {
@@ -277,6 +295,7 @@ export async function mintWorkerRunHandle(
     scope: input.scope,
     ttlSeconds,
     parentJti: input.parentClaims?.jti,
+    notAfterSeconds: input.parentClaims?.exp,
     privateKey: input.privateKey,
   });
 }

@@ -1,6 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
-import { EMPTY_CAPABILITY_SCOPE, computeChildHandleScope } from './handle-mint.js';
+import { randomUUID } from 'node:crypto';
+import type { CapabilityScope } from '@nexttime/shared';
+import type { PoolClient } from 'pg';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  HandleIssuanceError,
+  WORKER_CEILING_CAPABILITIES,
+  generateEphemeralHandleKeyPair,
+  verifyHandle,
+} from '../../governance/capability/index.js';
+import {
+  EMPTY_CAPABILITY_SCOPE,
+  type MintWorkerRunHandleInput,
+  computeChildHandleScope,
+  mintWorkerRunHandle,
+} from './handle-mint.js';
 import { InvokeWorkerAttenuationError, InvokeWorkerValidationError } from './types.js';
 
 /**
@@ -189,5 +202,160 @@ describe('computeChildHandleScope', () => {
     for (const capability of scope.capabilities) {
       expect(WORKER_CEILING_CAPABILITIES).toContain(capability);
     }
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// mintWorkerRunHandle — lane-1 P2 follow-up fix: the same Date.now()-then-await-then-Date.now()
+// rounding race handles.test.ts's `attenuate` test covers, reproduced here against
+// mintWorkerRunHandle's own two reads (parentRemainingSeconds above, issueHandle's own iatSeconds
+// after the session INSERT round trip below).
+// -------------------------------------------------------------------------------------------
+
+interface FakeSessionRow {
+  workspaceId: string;
+  onBehalfOf: string;
+}
+
+interface FakeHandleRow {
+  workspace_id: string;
+  session_id: string;
+  on_behalf_of: string;
+  parent_jti: string | null;
+  scope: CapabilityScope;
+  expires_at: string;
+}
+
+/** A tiny in-memory stand-in for `sessions` + `capability_handles`, matched against the exact
+ *  small set of SQL statements mintWorkerRunHandle (session INSERT) and issueHandle (session
+ *  SELECT, capability_handles INSERT) issue — same pattern as governance/capability/
+ *  handles.test.ts's own `createFakeCapabilityClient`. */
+function createFakeMintClient() {
+  const sessions = new Map<string, FakeSessionRow>();
+  const handles = new Map<string, FakeHandleRow>();
+
+  const query = vi.fn(async (text: string, params: unknown[] = []) => {
+    const sql = text.trim();
+
+    if (sql.startsWith('insert into sessions')) {
+      const [workspaceId, , onBehalfOf] = params as [string, string, string];
+      // A real UUID — HandleClaimsSchema validates `sid` as a uuid string.
+      const id = randomUUID();
+      sessions.set(id, { workspaceId, onBehalfOf });
+      return { rows: [{ id }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+      const [sessionId] = params as [string];
+      const row = sessions.get(sessionId);
+      return {
+        rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    if (sql.startsWith('insert into capability_handles')) {
+      const [workspaceId, jti, sessionId, onBehalfOf, parentJti, scopeJson, expiresAt] = params as [
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string,
+        string,
+      ];
+      handles.set(jti, {
+        workspace_id: workspaceId,
+        session_id: sessionId,
+        on_behalf_of: onBehalfOf,
+        parent_jti: parentJti,
+        scope: JSON.parse(scopeJson) as CapabilityScope,
+        expires_at: expiresAt,
+      });
+      return { rows: [], rowCount: 1 };
+    }
+
+    throw new Error(`fake mint client: unhandled query: ${sql}`);
+  });
+
+  const client = { query } as unknown as PoolClient;
+  return { client, sessions, handles };
+}
+
+describe('mintWorkerRunHandle', () => {
+  it('lane-1 P2 follow-up fix: a Date.now() step between parentRemainingSeconds and issueHandle’s own never lets the child’s expires_at exceed the parent’s (rounding race, governance/0008’s trigger)', async () => {
+    const { client, handles } = createFakeMintClient();
+    const { privateKey, publicKey } = await generateEphemeralHandleKeyPair();
+    const workspaceId = randomUUID();
+    const onBehalfOf = randomUUID();
+
+    const parentExpSeconds = Math.floor(Date.now() / 1000) + 3600;
+    const parentJti = randomUUID();
+
+    const input: MintWorkerRunHandleInput = {
+      onBehalfOf,
+      parentClaims: { jti: parentJti, exp: parentExpSeconds },
+      scope: { capabilities: ['get_object'], resources: {} },
+      ttlSeconds: 3600, // >= the parent's remaining ttl — the worst case for this race
+      privateKey,
+    };
+
+    // Same monotonically-advancing fake clock as handles.test.ts's `attenuate` race test: every
+    // Date.now() call sees strictly more elapsed time than the one before it (1.5s/call, forcing
+    // at least one whole-second Math.floor shift), regardless of how many calls land in between.
+    const realNow = Date.now();
+    let calls = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      calls += 1;
+      return realNow + calls * 1500;
+    });
+
+    let child: Awaited<ReturnType<typeof mintWorkerRunHandle>>;
+    try {
+      child = await mintWorkerRunHandle(client, workspaceId, input);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const parentExpiresAtMs = parentExpSeconds * 1000;
+    expect(child.expiresAt.getTime()).toBeLessThanOrEqual(parentExpiresAtMs);
+
+    const childClaims = await verifyHandle(child.token, {
+      publicKey,
+      isRevoked: async () => false,
+    });
+    expect(childClaims.exp).toBeLessThanOrEqual(parentExpSeconds);
+    expect(childClaims.par).toBe(parentJti);
+
+    const dbRow = handles.get(child.jti);
+    expect(dbRow).toBeDefined();
+    expect(new Date(dbRow?.expires_at ?? 0).getTime()).toBeLessThanOrEqual(parentExpiresAtMs);
+  });
+
+  it('lane-1 P2 follow-up fix: an already-expired parent throws HandleIssuanceError instead of minting an over-long child', async () => {
+    const { client, handles } = createFakeMintClient();
+    const { privateKey } = await generateEphemeralHandleKeyPair();
+    const workspaceId = randomUUID();
+    const onBehalfOf = randomUUID();
+
+    // Expired 10 seconds ago — parentRemainingSeconds is strongly negative, so (with the
+    // Math.max(..., 1) floor removed) ttlSeconds flows through unmodified into issueHandle's own
+    // `ttlSeconds must be a positive number` check. Before this fix, the floor would have
+    // manufactured a 1-second-TTL child anyway — silently minting a Handle under an authority
+    // that had already run out.
+    const parentExpSeconds = Math.floor(Date.now() / 1000) - 10;
+
+    const input: MintWorkerRunHandleInput = {
+      onBehalfOf,
+      parentClaims: { jti: randomUUID(), exp: parentExpSeconds },
+      scope: { capabilities: ['get_object'], resources: {} },
+      ttlSeconds: 300,
+      privateKey,
+    };
+
+    await expect(mintWorkerRunHandle(client, workspaceId, input)).rejects.toThrow(
+      HandleIssuanceError,
+    );
+    expect(handles.size).toBe(0);
   });
 });
