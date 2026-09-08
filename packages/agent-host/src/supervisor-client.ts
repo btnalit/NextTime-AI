@@ -7,7 +7,7 @@
  * never logs either.
  *
  *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
- *                                   systemPrompt?, model?, egressDeny?}
+ *                                   systemPrompt?, model?, egressDeny?, skillsInline?}
  *                                   -> 200 {containerId, ip, status, created, restarts}
  *   POST /resident/stop           {principalId} -> 204
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404
@@ -76,6 +76,21 @@ export interface SpawnInput {
    *  narrows this entry session's egress on top of the platform's fixed deny list.
    *  `undefined`/omitted leaves the existing/no per-source deny list untouched. */
   readonly egressDeny?: readonly string[];
+  /** S3.13: the same published `startTurn` command's own `skillsInline` field
+   *  (`@nexttime/shared`'s `agent-host-protocol.ts`) — the caller's own `effective.enabledSkills`,
+   *  already rendered by the kernel into mountable content, forwarded verbatim.
+   *  worker-supervisor writes each entry to `<agentDir>/skills/<name>/` before (re)creating the
+   *  container. `undefined`/empty mounts no Skill. */
+  readonly skillsInline?: readonly SkillInlineMount[];
+}
+
+/** One Skill mounted by content — mirrors `worker-supervisor`'s own `config.ts`
+ *  `TaskSkillInlineSchema` shape (this package does not depend on that package, so the shape is
+ *  re-declared here, structurally identical — same convention `@nexttime/shared`'s
+ *  `agent-host-protocol.ts` already follows for the same reason). */
+export interface SkillInlineMount {
+  readonly name: string;
+  readonly files: Record<string, string>;
 }
 
 export interface SpawnResult {

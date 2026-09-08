@@ -249,6 +249,25 @@ describe('createHost — handleStartTurn happy path', () => {
     ]);
   });
 
+  it('forwards skillsInline from the startTurn command to supervisorClient.spawn (S3.13)', async () => {
+    const { host, supervisor } = setUp();
+    const skillsInline = [{ name: 'writing-tips', files: { 'SKILL.md': '# writing tips' } }];
+    const cmd = startTurnCommand({ skillsInline });
+
+    await host.handleStartTurn(cmd);
+
+    expect(supervisor.spawnCalls).toEqual([
+      {
+        workspaceId: cmd.workspaceId,
+        principalId: cmd.principalId,
+        handle: cmd.handle,
+        kernelUrl: 'http://kernel:8080',
+        llmUrl: cmd.kernelLlmUrl,
+        skillsInline,
+      },
+    ]);
+  });
+
   it('rejects a second concurrent turn for the same principal without spawning again', async () => {
     const { host, supervisor, kernelLink } = setUp();
     const first = startTurnCommand();
