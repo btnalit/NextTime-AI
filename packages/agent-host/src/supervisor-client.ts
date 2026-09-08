@@ -12,6 +12,14 @@
  *   POST /resident/stop           {principalId} -> 204
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404
  *   POST /resident/:principalId/touch -> 204 | 404
+ *
+ * Every route above now requires the internal-plane shared secret (`packages/worker-supervisor`'s
+ * `internal-auth.ts`, lane-6 review P1-3: worker-supervisor is `control`-network only, but an
+ * unauthenticated `/resident/*` was reachable from any other `control`-network service, not just
+ * this process). `authorizationHeader` — `internalAuthorizationHeader(token)` from
+ * `@nexttime/shared`, the same value `index.ts`'s `main()` already computes for the kernel
+ * WebSocket link — is sent on every request below; never logged, matching this client's existing
+ * rule for the Capability Handle in the body.
  */
 
 export const DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS = 30_000;
@@ -23,6 +31,9 @@ export interface SupervisorClientOptions {
   readonly timeoutMs?: number;
   /** Injectable `fetch` implementation, for tests. Defaults to the global `fetch`. */
   readonly fetchImpl?: typeof fetch;
+  /** The `Authorization: Bearer <token>` value for worker-supervisor's internal-plane guard — see
+   *  this module's own doc comment. Sent on every request; never logged. */
+  readonly authorizationHeader?: string;
 }
 
 export type SupervisorErrorKind = 'network' | 'timeout' | 'invalid_response' | 'http_error';
@@ -138,11 +149,16 @@ export class SupervisorClient implements SupervisorClientPort {
   private readonly supervisorUrl: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly authHeaders: Record<string, string>;
 
   constructor(options: SupervisorClientOptions) {
     this.supervisorUrl = options.supervisorUrl.replace(/\/$/, '');
     this.timeoutMs = options.timeoutMs ?? DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.authHeaders =
+      options.authorizationHeader !== undefined
+        ? { authorization: options.authorizationHeader }
+        : {};
   }
 
   /** Idempotent: worker-supervisor reuses a running container for this principal (`created:
@@ -157,7 +173,7 @@ export class SupervisorClient implements SupervisorClientPort {
       `${this.supervisorUrl}/resident/spawn`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...this.authHeaders },
         body: JSON.stringify(input),
       },
     );
@@ -176,7 +192,7 @@ export class SupervisorClient implements SupervisorClientPort {
       `${this.supervisorUrl}/resident/stop`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...this.authHeaders },
         body: JSON.stringify({ principalId }),
       },
     );
@@ -190,7 +206,7 @@ export class SupervisorClient implements SupervisorClientPort {
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/resident/${encodeURIComponent(principalId)}`,
-      { method: 'GET' },
+      { method: 'GET', headers: { ...this.authHeaders } },
     );
     if (status === 404) return undefined;
     if (status !== 200) {
@@ -209,7 +225,7 @@ export class SupervisorClient implements SupervisorClientPort {
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/resident/${encodeURIComponent(principalId)}/touch`,
-      { method: 'POST' },
+      { method: 'POST', headers: { ...this.authHeaders } },
     );
     if (status === 404) return false;
     if (status !== 204) {

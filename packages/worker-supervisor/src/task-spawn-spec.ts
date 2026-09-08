@@ -20,7 +20,8 @@
  * (`packages/coding-agent/src/config.ts` `getAgentDir()`, pinned reference checkout) is
  * `join(homedir(), '.pi', 'agent')` — `homedir()` reads `HOME`, so the default already resolves to
  * `/workspace/.pi/agent`, exactly where `host-paths.ts` `taskWorkspacePaths` mounts `models.json`
- * and each skill. `on_behalf_of`/`WORKSPACE_ID` needing to reach the extension the way resident
+ * and `task-service.ts`'s `spawn()` writes each `skillsInline[]` entry's files. `on_behalf_of`/
+ * `WORKSPACE_ID` needing to reach the extension the way resident
  * mode's own doc comment describes is unaffected — `WORKSPACE_ID` IS one of this list's env vars.
  *
  * Nothing from this process's own env is ever forwarded (`docker-client.ts` passes exactly the
@@ -30,11 +31,7 @@
 
 import type { SupervisorConfig } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
-import {
-  hostModelsJsonPath,
-  taskSkillTargetInContainer,
-  taskWorkspacePaths,
-} from './host-paths.js';
+import { hostModelsJsonPath, taskWorkspacePaths } from './host-paths.js';
 import { ENTRY_ROLE_LABEL as TASK_ROLE_LABEL } from './spawn-spec.js';
 
 /** Shares the `nexttime.role` label *key* with resident mode's `ENTRY_ROLE_LABEL`
@@ -50,11 +47,6 @@ export function taskContainerName(workerRunId: string): string {
   return `nexttime-task-${workerRunId}`;
 }
 
-export interface TaskSkillMount {
-  readonly name: string;
-  readonly hostPath: string;
-}
-
 export interface BuildTaskSpawnSpecInput {
   readonly config: SupervisorConfig;
   readonly taskId: string;
@@ -67,7 +59,6 @@ export interface BuildTaskSpawnSpecInput {
   /** When given, becomes container CMD `['--model', model]` — `entrypoint.sh` appends any CMD
    *  after its own fixed pi flags. `undefined` sets no CMD (pi's own default model selection). */
   readonly model?: string;
-  readonly skills?: readonly TaskSkillMount[];
   readonly networkName: string;
 }
 
@@ -95,9 +86,6 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
   const binds: string[] = [
     `${paths.hostWorkspaceDir}:/workspace`,
     `${hostModelsJsonPath(config)}:${paths.modelsJsonTargetInContainer}:ro`,
-    ...(input.skills ?? []).map(
-      (skill) => `${skill.hostPath}:${taskSkillTargetInContainer(paths, skill.name)}:ro`,
-    ),
   ];
 
   return {
@@ -117,5 +105,7 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
     memoryMb: config.workerMemoryMb,
     pidsLimit: config.workerPidsLimit,
     tmpfsMb: config.workerTmpfsMb,
+    cpus: config.workerCpus,
+    dns: config.workerDnsSinkhole,
   };
 }

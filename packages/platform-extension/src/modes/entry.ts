@@ -110,13 +110,38 @@ function buildCapabilityTool(
     // as isError" contract this tool needs, with no isError field to set by hand (AgentToolResult
     // has none; see kernel-client.ts and the S1.6 PR body "假设").
     async execute(_toolCallId, params) {
-      const result = await kernelClient.call(capability.name, params);
+      const result = await kernelClient.call(
+        capability.name,
+        forceInvokeWorkerWaitFalse(capability.name, params),
+      );
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         details: result,
       };
     },
   };
+}
+
+/**
+ * Lane-6 review P2-4: `invoke_worker`'s own `wait` param (`@nexttime/shared`'s `capabilities.ts`)
+ * asks the kernel to hold the request open until the invoked Worker settles, with the kernel's
+ * own default wait window at ~90s (design doc §8.2 "默认 90 秒"). This `KernelClient`'s per-call
+ * HTTP timeout is a fixed 30s (`DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`, kernel-client.ts) — shorter
+ * than the kernel's own wait window — so `invoke_worker(wait: true)` called through this entry-
+ * mode projected tool would always abort client-side before the kernel's wait could ever resolve,
+ * and pi's own retry-on-tool-error behavior would then re-issue a *second* `invoke_worker` for a
+ * Task that may already be running (duplicate invokes). The real fix (aligning the client timeout
+ * with the kernel's wait window, or a per-capability timeout) lives on the kernel side, out of
+ * scope for this package — this is the one mitigation available entirely within the projected
+ * tool: force `wait: false` on every outbound `invoke_worker` call, overriding whatever the
+ * caller (the model) asked for, so this entry-mode tool never issues a call this client is
+ * structurally unable to wait out. A caller that wants completion status still has `get_task`.
+ * Every other capability's params pass through unmodified.
+ */
+function forceInvokeWorkerWaitFalse(capabilityName: string, params: unknown): unknown {
+  if (capabilityName !== 'invoke_worker') return params;
+  const base = params && typeof params === 'object' ? (params as Record<string, unknown>) : {};
+  return { ...base, wait: false };
 }
 
 /** Loose shape of a `get_entry_context` result (§7.4 `context` column, S1 scope). The kernel side

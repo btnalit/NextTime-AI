@@ -19,16 +19,20 @@ request forwarding and `CONNECT` tunnelling for HTTPS, no TLS interception, no c
 | `MAX_TUNNELS_PER_SOURCE` | `32` | Concurrent tunnels per source. |
 | `IDLE_TIMEOUT_MS` / `CONNECT_TIMEOUT_MS` | `120000` / `10000` | Per-tunnel idle and connect timeouts. |
 | `ALLOW_LOOPBACK_FOR_TESTS` | unset | `1` treats loopback as allowed. **Test-only — never set in production.** |
+| `EGRESS_DENY_UNKNOWN_SOURCE` | `true` (fail-closed) | A client IP `SOURCE_MAP_FILE` has no entry for gets `403 unknown-source`, before any hostname/DNS check. Set to `0` only as a temporary escape hatch if `SOURCE_MAP_FILE` registration is unreliable on a given host (e.g. the EACCES class of failure `packages/worker-supervisor/src/resident-service.ts` treats as best-effort) — flipping this off restores the pre-fix fail-*open* behavior for every unregistered source, not just the affected one. |
 
 ## Policy (`src/policy.ts`)
 
-Deny, in order (deny always beats allow): a source's own `deny` list (suffix match) → global
-`DENY_HOSTS` + the built-in private suffixes + `EGRESS_DENY_HOST_SUFFIXES` (suffix match, before
-any DNS lookup) → a bare hostname (no dot) unless explicitly on the source's `allow`
-list → a source's `allow` list, when present, restricts to it. Otherwise: DNS is resolved *inside
-the proxy*, every resolved address is classified, and only a public address (not RFC1918, loopback,
-link-local, CGNAT, IPv6 unique-local, or a platform subnet) is connected to — always the address
-just checked, never a re-resolved hostname, which defeats rebinding. Unknown source = public-allow.
+Deny, in order (deny always beats allow): **an unregistered source** (no `SOURCE_MAP_FILE` entry
+for the client IP at all — `EGRESS_DENY_UNKNOWN_SOURCE`, default fail-closed) → a source's own
+`deny` list (suffix match) → global `DENY_HOSTS` + the built-in private suffixes +
+`EGRESS_DENY_HOST_SUFFIXES` (suffix match, before any DNS lookup) → a bare hostname (no dot)
+unless explicitly on the source's `allow` list → a source's `allow` list, when present, restricts
+to it. Otherwise: DNS is resolved *inside the proxy*, every resolved address is classified, and
+only a public address (not RFC1918, loopback, link-local, CGNAT, IPv6 unique-local, or a platform
+subnet) is connected to — always the address just checked, never a re-resolved hostname, which
+defeats rebinding. A *registered* source with no `allow`/`deny` of its own still gets public-allow
+— only a genuinely unregistered client IP is denied by the first check.
 
 ## Agent containers / logging
 

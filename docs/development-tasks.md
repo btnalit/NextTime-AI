@@ -200,7 +200,12 @@
   - `make gen-models` 改成经容器化的 `llm-proxy` 镜像跑（新增
     `packages/llm-proxy/src/cli/gen-models.ts`），不再需要本机 corepack/node——目标主机没有这些
     （`docs/runbooks/host-worker-runtime.md` §10 已经点出这个缺口）；根目录既有的
-    `scripts/gen-models-json.ts` 未删除，仍是本机开发时的一条独立可用路径。
+    `scripts/gen-models-json.ts` 未删除，仍是本机开发时的一条独立可用路径。**后续更新
+    （fix/runtime-hardening，lane-6 review P3，2026-09）**：该 recipe 原来把 `docker compose run` 的
+    stdout 直接 `>` 重定向进 `${NEXTTIME_DATA}/config/models.json`——这个文件被只读挂进每个入口/
+    Worker 容器，重定向一开始就会截断真实文件，`docker compose run` 中途任何失败都会留下一个
+    截断/无效的 `models.json` 挡住后续所有 spawn。改成先写 `.tmp` 兄弟文件，成功才 `mv`（同文件系统，
+    原子）覆盖过去，失败则删掉 `.tmp`。
   - 顺手修的既有 bug（S1.4 遗留，本任务 item 6，`packages/kernel/src/interfaces/ws/server.ts`）：
     `subscribe_chat` 的实时推送去重原来用"目前见过的最大 sequence"做单调水位线，但同一个 Chat 的
     `chat.message` 推送并不保证按 sequence 升序到达——用户自己那条消息由
@@ -218,6 +223,25 @@
     `kind='agent'` Principal 代表"入口 agent 实例"）；`agent-host` 每个用户任一时刻只处理一个
     Turn（pi 一个进程一次只能跑一个 prompt）——同一用户第二个 Chat 并发发消息被直接
     `turnRejected`，多 Chat 共享一个入口容器的并发模型不在本任务范围内解决。
+  - **实现说明补充（fix/runtime-hardening，lane-6 review P1-3/P2-5/P2-6，2026-09）**：
+    ① `worker-supervisor` 的 `POST /task/spawn` 与全部 `/resident/*` 此前完全不鉴权（"trusted
+    caller"只是约定）——新增 `src/internal-auth.ts`（与 kernel/agent-host/llm-proxy 同一份
+    `@nexttime/shared` internal-plane token 契约，`docker-compose.yml` 的 `worker-supervisor` 服务块
+    现在也挂 `internal_token` secret），`agent-host` 的 `supervisor-client.ts` 相应带上
+    `Authorization`。**后续补上**（同一分支，协调者复审发现"kernel 未带这个头会导致主机上每一次
+    Task spawn 都 401"是合并阻塞项，2026-09）：`packages/kernel/src/adapters/supervisor-client`
+    （`TaskSupervisorClient`）现在也在 `spawn`/`terminate`/`status` 三个调用上都带
+    `Authorization`——复用 `index.ts` `main()` 已经为 kernel 自己 `/internal/*` 守卫加载过的同一份
+    token（`internalAuthorizationHeader(internalAuth.token)`），不额外读第二份文件。同一批顺手删掉了 `skills[].hostPath`（S2.8 曾经的只读挂载
+    机制，其允许路径覆盖了整个 `${NEXTTIME_DATA}/` 而不只是 skills 目录，含
+    `secrets/handle.key`；S2.14 的 `skillsInline` 上线后从未被任何调用方发送过，整个删除而非收紧）。
+    ② `resident-service.ts` 的 `spawn()` 现在给入口容器打上 `nexttime.handle-jti` label——一个正在
+    跑的容器收到 jti 不同的新 Handle（Handle 重签/新 Grant）会被优雅停止、重建，不再原样复用一个持有
+    旧 Handle 的容器直到它自己超时。③ `agent-host` 的 `host.ts` `handleStartTurn` 把
+    `activeTurns.set(...)` 挪到 `await ensureAttachment(...)` 之前（同步进行，关闭了两个几乎同时到达
+    的 `startTurn` 都通过"是否已有进行中 Turn"检查、都触发 `ensureAttachment` 的竞态——旧代码下会
+    重复 attach、后完成的 `set()` 悄悄覆盖先完成的 Turn 记录，先到的 Turn 从此再也匹配不上任何
+    `handleLine` 事件）。
 
 ### S1.6 platform-extension `entry` 模式
 - 交付物：`packages/platform-extension/src/{index,kernel-client,modes/entry}.ts`：S1 只注册 observe 组工具（`get_object / traverse / search / explain / get_task`），`find_workers` 与 `invoke_worker` 随 S2.7 加入；`context` 事件注入该用户待审批、进行中 Task、相关 Fact 与先例；`session_*` 事件把 `turn_id` 写入会话条目并回传 Turn 结果；契约测试用 pi 的 faux provider + fake kernel。
@@ -243,6 +267,14 @@
   这条 RLS 按 `app.principal_id` 收窄可见的 Chat/Activity——`findAttributableTurnForSession` 因此在查
   `activities` 前用 `set_config('app.principal_id', ..., true)`（事务级，同 `withWorkspace` 自身机制）把它重新
   指向刚解析出的 principal，否则归因查询会因看不到该 principal 的 Turn 而总是落到"无归因"分支。
+- **实现说明补充（fix/runtime-hardening，lane-6 review P1-2，2026-09）**：`proxy.ts` 此前对任何已通过
+  Handle 校验的 `method`/`path`（`/<provider>/…` 下）都原样透传给上游、带真实 key——多段文件上传、
+  files/fine-tuning/batches 端点、`DELETE` 皆可达，等于拿这份 Handle 换到了 provider 账号的完整权限，
+  而不只是聊天补全。新增 `ACTION_PATH_BY_API`：每个 `api` 种类只保留唯一一条可转发的
+  `(method, path)`（`openai-completions`→`POST /v1/chat/completions`、`openai-responses`→
+  `POST /v1/responses`、`anthropic-messages`→`POST /v1/messages`），`GET /v1/models` 继续走既有的
+  白名单合成路径；其余一律 404/405，请求体连读都不读，更不会转发到上游。同时把"非 JSON 请求体静默
+  透传、不做 model 校验"的口子堵上——请求体现在必须是合法 JSON 对象且带非空字符串 `model`，否则 400。
 
 ### S1.8 web：登录与对话
 - 交付物：`packages/web`：登录（API key）、对话页（流式文本、工具调用行、Turn 状态）、WS 客户端（先订阅再翻页规则封装进 client）。
@@ -296,6 +328,22 @@
   `sourceId=entry:<workspaceId>:<principalId>`——格式定义在 `packages/worker-supervisor/src/
   egress-map.ts`——找该 principal 当前在跑的 Turn 或最近 5 分钟内的 Turn 作回退，追加进
   `activities.metadata.egress`，有界 200 条，发 `EgressObserved` 领域事件）。
+- **实现说明补充（fix/runtime-hardening，lane-6 review P2-7/P3，2026-09）**：`resolveSource(clientIp)`
+  返回 `undefined`（`SOURCE_MAP_FILE` 里完全没有这个来源 IP 的登记）此前和"已登记但无
+  allow/deny 限制"的来源走同一条路径——按公网放行，`sourceId` 记 `'unknown'`，是一个 fail-open
+  的口子。`policy.ts` 新增 `denyUnknownSource`（`EGRESS_DENY_UNKNOWN_SOURCE`，代码默认 `true`，
+  fail-closed），未登记来源现在直接 403，且这一步在任何 DNS 查询之前完成。默认虽然收紧，仍留了
+  `0` 这个逃生舱——`worker-supervisor` 的 `registerEgress`/`unregisterEgress` 是 best-effort
+  （主机验收记录过真实的 EACCES 权限问题），一旦登记本身不可靠，fail-closed 会让整批容器的出网
+  直接断掉，比"少记一条来源归因"严重得多。顺手关掉了这条规则的一个绕过口子：`decideEgress` 判断
+  "目标是不是字面 IP"（决定是否有资格享受 `EGRESS_TRUSTED_RESOLVED_CIDRS` 的豁免）原来只认严格的
+  点分十进制/冒号十六进制，十进制单数（如 `2130706433`）、十六进制（`0x7f000001`）、短点分形式
+  （`a.b.c`）这类合法的 `inet_aton` 记法一概被当成"这是个主机名，得走 DNS"——短点分形式因为带点，
+  绕得过 `bare-hostname` 那道防线，能把一个信任范围内的字面地址伪装成"经解析得到"从而骗过豁免规则
+  自己写的注释（"字面 IP 目标永不豁免"）。`net-utils.ts` 新增 `parseIPv4Literal`/`isIpLiteral`/
+  `canonicalizeIpLiteral`，`policy.ts`/`proxy.ts` 都改用它们。另修了 `classifyAddress` 对 NAT64
+  （`64:ff9b::/96`）地址不解出内嵌 IPv4 就直接判 `public` 的问题，以及顺手发现的一个 `parseIPv6`
+  既有 bug（内嵌 v4 紧跟在 `::` 后时会把压缩记号吃掉一个冒号，变得不可解析）。
 
 ### S1.12 最小备份（compose 内，不改主机）
 - 目标：每日 `pg_dump` + `workspaces/` 与 `config/` 的 tar 到 `${NEXTTIME_DATA}/backups/`，保留 7 份；恢复脚本可演练。之前 E7 被暂缓，这里以 compose 内容器形式回归，理由：设计 §10.4 与 §13 的回滚依赖它，且不触碰主机上任何现有服务。
@@ -536,7 +584,7 @@
   - **缺口**：`packages/platform-extension/src/modes/entry.ts` 一直只注册 S1 的五个观察工具（`get_object/traverse/search/explain/get_task`），`find_*`/`invoke_worker`/`request_connection`/`propose_*` 以及门投影的观察工具从未注册成 pi 工具——`ontology/entry-agent.yaml` 的 `capabilities` 与系统提示描述的行为在容器里并不存在，"对话 → 找手段 → 派 Worker"主链在聊天里走不通（S2.7/S2.9 的主机验收都是从 human 通道直接调 capability，没走入口 agent）。
   - **入口的门观察投影落成真 capability**：`packages/shared/src/capabilities.ts` 新增 `observe_operation {gatekeeperId, operation, params?}`（group gate、mode observe、channel handle），是 `<gate>.<op>` 占位行背后可派发的能力；handler（`application/gateway/request-action-handler.ts` `observeOperationHandler`）复用 `request_action` 的 observe 路径（门 `observe` + observed Facts + `gatekeeper_observe` Activity），但未发布的 Operation → 404（I17），execute 类 → 403（入口 Handle 不持有任何 execute 模式能力，`handles.test.ts` 的不变量原样保留；入口要执行只能 `invoke_worker` 委派）。入口上限 `ENTRY_CEILING_EXTRA_CAPABILITY_NAMES` 加入 `observe_operation`；`request_action` 仍不在入口上限。
   - **extension**：`modes/gate-tools.ts` 抽出两种模式共用的 `<gate>.<op>` 命名/清洗（工具名可由 `<gateName>.<op>` 预测，验收脚本与 fake-llm 依赖这一点）；入口模式注册 yaml 里全部能力（除 extension 自己调用的 `get_entry_context`/`report_turn`），并在 `session_start` 调 `list_allowed_operations`、只投影 observe 类 Operation，工具调用 `observe_operation`；worker 模式行为不变。
-  - **已知**：门工具在 `session_start` 注册，`connect_gatekeeper` 之后已在跑的入口容器要重启才有新工具（与 Handle 重签同一时延边界）；`observe_operation` 与 `request_action` 的 observe 路径一样不核对 `resources.gatekeeper`（S2.4 既有缺口，未在本次扩大或修复）；`invoke_worker(wait:true)` 受 kernel-client 30s 超时约束，系统提示应引导 `wait:false` + `get_task`；Worker 现有两条观察路径（`request_action` observe 与新的 `observe_operation`）是后续要收敛的债务。
+  - **已知**：门工具在 `session_start` 注册，`connect_gatekeeper` 之后已在跑的入口容器要重启才有新工具（与 Handle 重签同一时延边界）；`observe_operation` 与 `request_action` 的 observe 路径一样不核对 `resources.gatekeeper`（S2.4 既有缺口，未在本次扩大或修复）；~~`invoke_worker(wait:true)` 受 kernel-client 30s 超时约束，系统提示应引导 `wait:false` + `get_task`~~——**已修（fix/runtime-hardening，lane-6 review P2-4，2026-09）**：不再只是"系统提示引导"，`packages/platform-extension/src/modes/entry.ts` 的 `buildCapabilityTool`（`invoke_worker` 投影工具）现在无条件把出站 `wait` 覆盖为 `false`，模型传什么都不影响这一点——kernel 侧真正的修复（客户端超时对齐 kernel 等待窗口，或按 capability 单独设超时）仍未做，超出该分支所有权范围（`packages/kernel` 不可改），留给拥有 `packages/kernel/src/adapters/supervisor-client`/`kernel-client.ts` 的 lane。Worker 现有两条观察路径（`request_action` observe 与新的 `observe_operation`）是后续要收敛的债务。
 
 ### S2.8 worker-supervisor
 - 交付物：`packages/worker-supervisor` 的一次性模式（常驻模式已在 S1.5）：`spawnTask / terminate / status`；`--runtime ${WORKER_RUNTIME}` 回退 runc；`--network workers --read-only --cap-drop ALL`；挂载 `${NEXTTIME_DATA}/workspaces/tasks/<task_id>` 到 `/workspace`；env 只注入 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID / WORKER_RUN_ID / NEXTTIME_MODE=worker / HTTP(S)_PROXY`、**不继承宿主 env**；只读挂载 `models.json` 与该定义 `uses` 的 Skill；注册 `(worker_run_id, container_id, ip)` 供 gateway 来源绑定与出网代理解析；Task 结束保留工作目录为 artifact，按保留策略清理。
@@ -611,6 +659,20 @@
     `path.posix.normalize` 后落在 `${config.nextTimeData}/` 之下。详见
     `packages/worker-supervisor/README.md`"POST /task/spawn"一节与本文档同一小节顶部的运行手册
     引用。
+  - **后续更新（fix/runtime-hardening，lane-6 review P1-3，2026-09）**：上一条修的
+    `isSkillHostPathAllowed`（连同 `skills[].hostPath`/`TaskSkillSchema`/`TaskSkillMount`）已**整
+    个删除**，不再是"收紧允许路径"——S2.14 `skillsInline`（按内容写盘）上线后，这条 host-path
+    机制在这个代码库里从未被任何调用方真正发送过（kernel 只发 `skillsInline`），却仍把
+    `${config.nextTimeData}/` 全目录当允许挂载根，包含 `secrets/handle.key`。现在把 Skill 放进
+    Worker 容器只有 `skillsInline` 一条路。同一批还给 `docker-client.ts` 的 `HostConfig` 补了
+    `NanoCpus`（新 `WORKER_CPUS`，默认 2，此前 CPU 完全不限）与 `MemorySwap = Memory`（此前
+    Docker 默认给 2 倍 Memory 的 swap 余量）；新增 `Dns`（`WORKER_DNS_SINKHOLE`，未设时不变——
+    只给运维一个把出网 DNS 指到监控/sinkhole 解析器的机制，不默认开启，隔离清单"LAN: P2-8 DNS"
+    条目的部分回应）；`TASK_REAP_INTERVAL_MS` 从写死的 30s 常量挪进 `config.ts`（可配置，默认收紧到
+    10s），缩短一个已退出 Task 容器的出网登记条目变陈旧、被 Docker 复用给别的容器而张冠李戴的窗口。
+    另外 `config.ts` 的 `workerRuntime` 字段注释此前称 `runsc` 为"default"，但代码本身在
+    `WORKER_RUNTIME` 未设时一直回退 `runc`——真正默认 `runsc` 的只是 `.env.example` 里显式写的那一行
+    （已改注释说明这是本文件刻意覆盖代码回退值的选择，不是代码本身的默认）。
 
 ### S2.9 `worker` 模式扩展与结果契约
 - 交付物：`entrypoint.sh` 增加 `worker` 模式自检（env 无 `*_API_KEY`；出网必经代理：直连内网失败、经代理公网通）；扩展 `modes/worker.ts`（向内核取 Handle 内允许的 Operation 列表并注册为 `<gate>.<op>` 工具，observe 直接经内核转门，execute 经 `tool_call` 拦截转 `request_action`；`context` 注入 Task 输入、相关 Fact、装载的 Skill；结束时按结果契约返回 `{summary, findings, facts_to_assert, evidence, artifacts, proposed_skill?, proposed_operations?}`；全量 JSONL 回传为私有 Source）；内核侧 `task/result.ts` 把 `facts_to_assert` 以 `inferred` 写入、证据挂 Activity、提议存草稿。镜像本身已在 S1.5 交付。
@@ -627,6 +689,11 @@
   - **Worker 自驾这一轮**：worker 容器没有 agent-host 那样的 RPC `prompt` 驱动（S2.8 只 spawn 容器、看退出码），`worker.ts` 在 `session_start` 里自己拉 `list_allowed_operations`、注册门工具，再自己调 `pi.sendUserMessage(...)` 触发第一轮。`report_result` 是一个 `terminate:true` 的工具（同 pi 自带 `structured-output.ts` 例子的手法）；模型没主动调用时，`agent_settled` 用最后一句 assistant 文本兜底合成一个空列表契约，保证 Worker 总能报出点什么而不是卡死。
   - **真实 pi SDK 测试踩到的一个坑，记录下来避免下次重踩**：`createAgentSession()`（`@earendil-works/pi-coding-agent` 的 SDK 入口）本身**不会**触发 `session_start`——那个事件是 `AgentSession.bindExtensions(bindings)` 内部才 `emit` 的（`agent-session.js`），真正的 CLI/RPC 启动流程会调它，裸用 SDK 不会。S1.6 的 `entry.sdk.test.ts` 从来没触发过这个坑，因为 entry 模式完全不订阅 `session_start`；worker 模式的整套自驾机制完全靠它，`worker.sdk.test.ts` 必须显式 `await session.bindExtensions({ mode: 'rpc' })` 才能让自驾流程真的跑起来——这不是给测试打的补丁，是这份 SDK 本身"裸构造的 session 不等于一次真实启动"的真实行为。
   - **已知偏离 / 未覆盖**：①`assert_fact`/`create_task` 等既有 Worker-only 能力在"入口 Handle → invoke_worker → 默认声明"这条唯一现实路径下，同样会被 `computeChildHandleScope` 的父子交集悄悄丢弃（本任务发现但不修——不在 S2.9 范围，详见上文 `list_allowed_operations`/`report_task_result` 那条）；②`docs/runbooks/host-worker-runtime.md` §13 的新增小节里，`deploy/fake-llm` 的 `TOOL_TRIGGER_WORD` 硬编码成 `search`，不理解"调用 report_result"这句系统提示——主机验收因此走的是 `agent_settled` 的兜底合成路径（模型只是把提示原样 echo 回来），不是模型真的听懂了指令去调工具；两条路径在内核这一侧的写入逻辑完全相同，兜底路径已经足以验证"Task 完成并写回 `tasks.result`"这条本任务的验收终点，如果需要验证模型**主动**调用 `report_result` 走的是同一条路径，需要接一个真实 provider（经 `llm-proxy`）或者给 `fake-llm` 加第二个触发词——本任务选择前者留给主机验收自行决定，不修改 `deploy/fake-llm`（不在本任务所有权范围，且是本任务之前就有的通用测试基础设施）。
+  - **实现说明补充（fix/runtime-hardening，lane-6 review P3，2026-09）**：`entrypoint.sh` 的自检
+    （I9 无泄漏 `*_API_KEY`；I10 无直连、必经代理）此前只在 `NEXTTIME_MODE=worker` 时跑——但这两条
+    是这个镜像跑出来的**任何**容器都该满足的不变量，不是 Task 专属：入口容器共享同一套凭证/出网隔离
+    保证，而且比一次性 Worker 活得久得多（常驻，动辄几小时到几天）。条件放宽为 `worker` 或
+    `entry`；`interactive` 模式仍不检查（本地开发/测试路径，不在完整部署拓扑内）。
 
 ### S2.10 审批卡片与任务视图（web）
 - 交付物：`action.pending / action.updated / task.updated` 推送；卡片：标题、Markdown 描述、模拟效果、动作种类、批准 / 拒绝 / 「总是批准此类」（`set_auto_approved_action_kind`）、`await_decision` 时的阻塞样式；任务与 Worker 列表；「连接系统」页与连接卡片（`request_connection` → 填地址、凭证、种类 → 门实例；`http` / `mcp` 自动导入清单草稿并展示给 owner 发布）；审批卡片出现在**持有范围者**的对话与队列（可能不是发起者）。

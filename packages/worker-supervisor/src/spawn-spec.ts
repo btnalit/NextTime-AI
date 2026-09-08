@@ -43,6 +43,13 @@ export const ENTRY_ROLE_VALUE = 'entry';
 export const PRINCIPAL_LABEL = 'nexttime.principal';
 export const WORKSPACE_LABEL = 'nexttime.workspace';
 export const RESTARTS_LABEL = 'nexttime.restarts';
+/** The spawning Handle's `jti` claim (best-effort, unverified — see `handle-jti.ts`), stamped on
+ *  every entry container so a later spawn can tell whether the caller's Handle has been rotated
+ *  since this container was created (lane-6 review P2-5; `resident-service.ts`'s own doc comment
+ *  has the full rationale). Empty string when the incoming Handle couldn't be decoded — Docker
+ *  labels must be strings, and `resident-service.ts` treats an empty label the same as "unknown"
+ *  when deciding whether to recreate. */
+export const HANDLE_JTI_LABEL = 'nexttime.handle-jti';
 
 export function entryContainerName(principalId: string): string {
   return `nexttime-entry-${principalId}`;
@@ -64,6 +71,9 @@ export interface BuildSpawnSpecInput {
    *  fixed pi flags (same mechanism `task-spawn-spec.ts`'s one-shot Task mode already uses).
    *  `undefined` sets no CMD (pi's own default model selection). */
   readonly model?: string;
+  /** The incoming Handle's `jti`, best-effort decoded by the caller (`resident-service.ts` via
+   *  `handle-jti.ts`) — stamped as `HANDLE_JTI_LABEL`. `undefined` when it couldn't be decoded. */
+  readonly handleJti?: string;
 }
 
 export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
@@ -106,11 +116,14 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
       [PRINCIPAL_LABEL]: input.principalId,
       [WORKSPACE_LABEL]: input.workspaceId,
       [RESTARTS_LABEL]: String(input.restarts),
+      [HANDLE_JTI_LABEL]: input.handleJti ?? '',
     },
     networkName: input.networkName,
     runtime: config.workerRuntime,
     memoryMb: config.workerMemoryMb,
     pidsLimit: config.workerPidsLimit,
     tmpfsMb: config.workerTmpfsMb,
+    cpus: config.workerCpus,
+    dns: config.workerDnsSinkhole,
   };
 }

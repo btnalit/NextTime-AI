@@ -2,13 +2,13 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { createDockerClient } from './docker-client.js';
 import { createEgressMapStore } from './egress-map.js';
+import { loadInternalToken } from './internal-auth.js';
 import { createResidentService } from './resident-service.js';
 import { createServer } from './server.js';
 import { createTaskService } from './task-service.js';
 
 export {
   isImageAllowed,
-  isSkillHostPathAllowed,
   loadConfig,
   SpawnRequestSchema,
   StopRequestSchema,
@@ -24,6 +24,7 @@ export { createDockerClient } from './docker-client.js';
 export type { ContainerSpec, ContainerState, DockerClient } from './docker-client.js';
 export { createEgressMapStore, entrySourceId, taskSourceId } from './egress-map.js';
 export type { EgressMapStore, SourceMapEntry, SourceMapFile } from './egress-map.js';
+export { loadInternalToken, requireInternalToken } from './internal-auth.js';
 export { createResidentService } from './resident-service.js';
 export type { ResidentService, ResidentStatus, SpawnOutcome } from './resident-service.js';
 export { buildSpawnSpec, entryContainerName } from './spawn-spec.js';
@@ -46,19 +47,25 @@ export { createServer } from './server.js';
  *
  * IDLE_SWEEP_INTERVAL_MS is deliberately not `ENTRY_IDLE_TIMEOUT_MS` itself — the sweep runs far
  * more often than the timeout so an idle container is stopped within roughly a minute of crossing
- * the threshold, not up to a whole timeout period late. TASK_REAP_INTERVAL_MS follows the same
- * reasoning for Task mode's timeout kill + spontaneous-exit reap. TASK_RETENTION_SWEEP_INTERVAL_MS
- * is deliberately much coarser — deleting finished Task workdirs is "small, boring" housekeeping
- * (S2.8 task brief), not latency-sensitive the way noticing a container exited is.
+ * the threshold, not up to a whole timeout period late. `config.taskReapIntervalMs`
+ * (`TASK_REAP_INTERVAL_MS`, config.ts) follows the same reasoning for Task mode's timeout kill +
+ * spontaneous-exit reap — configurable (unlike the two constants below) since lane-6 review P2-7
+ * flags its interval as the bound on how stale an exited Task's egress-map registration can get
+ * before an operator might want to tune it further; see that field's own doc comment.
+ * TASK_RETENTION_SWEEP_INTERVAL_MS is deliberately much coarser — deleting finished Task workdirs
+ * is "small, boring" housekeeping (S2.8 task brief), not latency-sensitive the way noticing a
+ * container exited is.
  */
 export const VERSION = '0.1.0';
 
 const IDLE_SWEEP_INTERVAL_MS = 60_000;
-const TASK_REAP_INTERVAL_MS = 30_000;
 const TASK_RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 export async function main(): Promise<void> {
   const config = loadConfig();
+  // Fail-fast, before opening the Docker socket or binding a port — this process cannot serve
+  // POST /task/spawn or any /resident/* route without it (internal-auth.ts's own doc comment).
+  const internalToken = loadInternalToken();
   const docker = createDockerClient({ socketPath: config.dockerSocketPath });
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
   const residentService = createResidentService({ config, docker, egressMap });
@@ -82,7 +89,7 @@ export async function main(): Promise<void> {
         JSON.stringify({ level: 'error', msg: 'task reap failed', error: String(err) }),
       );
     });
-  }, TASK_REAP_INTERVAL_MS);
+  }, config.taskReapIntervalMs);
   taskReapTimer.unref();
 
   const taskRetentionTimer = setInterval(() => {
@@ -94,7 +101,7 @@ export async function main(): Promise<void> {
   }, TASK_RETENTION_SWEEP_INTERVAL_MS);
   taskRetentionTimer.unref();
 
-  const app = createServer({ residentService, taskService, config, logger: true });
+  const app = createServer({ residentService, taskService, config, internalToken, logger: true });
   await app.listen({ port: config.port, host: '0.0.0.0' });
 
   const shutdown = async (): Promise<void> => {

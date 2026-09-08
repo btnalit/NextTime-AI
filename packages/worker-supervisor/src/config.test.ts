@@ -4,7 +4,6 @@ import {
   StopRequestSchema,
   TaskSpawnRequestSchema,
   isImageAllowed,
-  isSkillHostPathAllowed,
   loadConfig,
 } from './config.js';
 
@@ -28,11 +27,14 @@ describe('loadConfig', () => {
     expect(config.workerMemoryMb).toBe(2048);
     expect(config.workerPidsLimit).toBe(512);
     expect(config.workerTmpfsMb).toBe(512);
+    expect(config.workerCpus).toBe(2);
+    expect(config.workerDnsSinkhole).toBeUndefined();
     expect(config.entryIdleTimeoutMs).toBe(30 * 60 * 1000);
     expect(config.egressSourceMapFile).toBe('/data/config/egress-sources.json');
     expect(config.dockerSocketPath).toBe('/var/run/docker.sock');
     expect(config.taskMaxRuntimeSec).toBe(3600);
     expect(config.taskWorkdirRetentionHours).toBe(72);
+    expect(config.taskReapIntervalMs).toBe(10_000);
     expect(config.taskImageAllowlist).toEqual(['nexttime-ai-worker-runtime']);
   });
 
@@ -51,11 +53,14 @@ describe('loadConfig', () => {
       WORKER_MEMORY_MB: '4096',
       WORKER_PIDS_LIMIT: '256',
       WORKER_TMPFS_MB: '128',
+      WORKER_CPUS: '1.5',
+      WORKER_DNS_SINKHOLE: '198.51.100.53, 198.51.100.54,',
       ENTRY_IDLE_TIMEOUT_MS: '1000',
       EGRESS_SOURCE_MAP_FILE: '/x/sources.json',
       DOCKER_SOCKET_PATH: '/tmp/docker.sock',
       TASK_MAX_RUNTIME_SEC: '600',
       TASK_WORKDIR_RETENTION_HOURS: '24',
+      TASK_REAP_INTERVAL_MS: '5000',
       WORKER_IMAGE_ALLOWLIST: 'extra-image-a, extra-image-b',
     });
     expect(config).toMatchObject({
@@ -71,11 +76,14 @@ describe('loadConfig', () => {
       workerMemoryMb: 4096,
       workerPidsLimit: 256,
       workerTmpfsMb: 128,
+      workerCpus: 1.5,
+      workerDnsSinkhole: ['198.51.100.53', '198.51.100.54'],
       entryIdleTimeoutMs: 1000,
       egressSourceMapFile: '/x/sources.json',
       dockerSocketPath: '/tmp/docker.sock',
       taskMaxRuntimeSec: 600,
       taskWorkdirRetentionHours: 24,
+      taskReapIntervalMs: 5000,
     });
     expect(config.taskImageAllowlist).toEqual(['custom-image', 'extra-image-a', 'extra-image-b']);
   });
@@ -163,16 +171,25 @@ describe('TaskSpawnRequestSchema', () => {
     expect(TaskSpawnRequestSchema.safeParse(validTaskSpawnBody).success).toBe(true);
   });
 
-  it('accepts every optional field, including skills', () => {
+  it('accepts every optional field, including skillsInline', () => {
     expect(
       TaskSpawnRequestSchema.safeParse({
         ...validTaskSpawnBody,
         image: 'custom-image',
         model: 'anthropic/claude-sonnet-5',
         timeoutSec: 120,
-        skills: [{ name: 'inventory', hostPath: '/host/data/ontology/skills/inventory' }],
+        skillsInline: [{ name: 'inventory', files: { 'SKILL.md': '---\nname: x\n---\n\nbody\n' } }],
       }).success,
     ).toBe(true);
+  });
+
+  it('rejects the removed skills[] host-path field (lane-6 review P1-3 — unknown field, strict schema)', () => {
+    expect(
+      TaskSpawnRequestSchema.safeParse({
+        ...validTaskSpawnBody,
+        skills: [{ name: 'inventory', hostPath: '/host/data/ontology/skills/inventory' }],
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects missing required fields and unknown fields (strict)', () => {
@@ -192,19 +209,6 @@ describe('TaskSpawnRequestSchema', () => {
     expect(
       TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, timeoutSec: 1.5 }).success,
     ).toBe(false);
-  });
-
-  it('rejects a skill name that is not a safe single path segment', () => {
-    const withSkill = (name: string) =>
-      TaskSpawnRequestSchema.safeParse({
-        ...validTaskSpawnBody,
-        skills: [{ name, hostPath: '/host/data/skill' }],
-      }).success;
-    expect(withSkill('..')).toBe(false);
-    expect(withSkill('.')).toBe(false);
-    expect(withSkill('a/b')).toBe(false);
-    expect(withSkill('../../etc')).toBe(false);
-    expect(withSkill('valid-name_1.2')).toBe(true);
   });
 
   describe('skillsInline (S2.14)', () => {
@@ -241,7 +245,7 @@ describe('TaskSpawnRequestSchema', () => {
       expect(withSkillsInline([{ name: 'x', files: { 'other.md': 'y' } }])).toBe(false);
     });
 
-    it('rejects an unsafe skill name, same rule as skills[].name', () => {
+    it('rejects an unsafe skill name (same safe-single-path-segment rule as every other name field in this schema)', () => {
       expect(withSkillsInline([{ name: '../../etc', files: { 'SKILL.md': 'y' } }])).toBe(false);
       expect(withSkillsInline([{ name: '..', files: { 'SKILL.md': 'y' } }])).toBe(false);
     });
@@ -327,37 +331,5 @@ describe('isImageAllowed', () => {
     expect(isImageAllowed(config, 'nexttime-ai-worker-runtime')).toBe(true);
     expect(isImageAllowed(config, 'extra-image')).toBe(true);
     expect(isImageAllowed(config, 'still-not-allowed')).toBe(false);
-  });
-});
-
-describe('isSkillHostPathAllowed', () => {
-  const config = loadConfig({ NEXTTIME_DATA: '/host/data' });
-
-  it('accepts a path under the host data root', () => {
-    expect(isSkillHostPathAllowed(config, '/host/data/ontology/ops-assets/skills/inventory')).toBe(
-      true,
-    );
-  });
-
-  it('accepts the root itself', () => {
-    expect(isSkillHostPathAllowed(config, '/host/data')).toBe(true);
-  });
-
-  it('rejects a path outside the host data root', () => {
-    expect(isSkillHostPathAllowed(config, '/var/run/docker.sock')).toBe(false);
-    expect(isSkillHostPathAllowed(config, '/etc/passwd')).toBe(false);
-    // A sibling directory that merely shares the root as a string prefix must still be rejected
-    // (naive startsWith("/host/data") without the trailing slash would wrongly accept this).
-    expect(isSkillHostPathAllowed(config, '/host/data-other/secret')).toBe(false);
-  });
-
-  it('rejects a path that escapes the root via .. even though it starts inside it', () => {
-    expect(isSkillHostPathAllowed(config, '/host/data/../../etc')).toBe(false);
-    expect(isSkillHostPathAllowed(config, '/host/data/skills/../../../etc/passwd')).toBe(false);
-  });
-
-  it('rejects a non-absolute path', () => {
-    expect(isSkillHostPathAllowed(config, 'relative/path')).toBe(false);
-    expect(isSkillHostPathAllowed(config, '')).toBe(false);
   });
 });

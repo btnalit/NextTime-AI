@@ -29,13 +29,16 @@
  * `capabilityHandle` itself by the time it reaches this API (S2.7's `invoke_worker`, not this
  * package) — there is nothing left for the container spec or registry to do with the raw value.
  *
- * **`skillsInline` (S2.14)**: unlike `skills[]` (a host path this process bind-mounts read-only),
- * `skillsInline[]` carries file *content* — the kernel has no writable data mount of its own to
- * stage a host path from (I9-adjacent). `spawn()` below writes every entry's files directly under
- * this Task's own `<agentDir>/skills/<name>/` before calling `docker.createAndStart` — no new bind
- * mount, the whole Task workspace directory is already mounted at `/workspace`. Validated
- * structurally by `config.ts`'s `TaskSkillInlineSchema` (safe names/paths, per-file and total size
- * caps) before this function ever sees it.
+ * **`skillsInline` (S2.14)**: carries Skill file *content*, not a host path — the kernel has no
+ * writable data mount of its own to stage a host path from (I9-adjacent). `spawn()` below writes
+ * every entry's files directly under this Task's own `<agentDir>/skills/<name>/` before calling
+ * `docker.createAndStart` — no bind mount, the whole Task workspace directory is already mounted
+ * at `/workspace`. Validated structurally by `config.ts`'s `TaskSkillInlineSchema` (safe
+ * names/paths, per-file and total size caps) before this function ever sees it. This is the only
+ * way a spawn request can put a Skill into a Worker container — an earlier `skills[]` host-path
+ * variant (a caller-supplied absolute path bind-mounted read-only) was removed (lane-6 review
+ * P1-3: its allowlist covered all of `${NEXTTIME_DATA}/`, including `secrets/handle.key`, and
+ * nothing in this codebase ever sent it — see `config.ts`'s `TaskSkillInlineSchema` doc comment).
  */
 
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -63,11 +66,6 @@ const TERMINATE_STOP_TIMEOUT_SECONDS = 5;
 
 export type TaskState = 'running' | 'exited' | 'terminated' | 'failed';
 
-export interface TaskSkillMount {
-  readonly name: string;
-  readonly hostPath: string;
-}
-
 export interface TaskSpawnInput {
   readonly taskId: string;
   readonly workerRunId: string;
@@ -79,7 +77,6 @@ export interface TaskSpawnInput {
    *  service does not re-check it. */
   readonly image: string;
   readonly model?: string;
-  readonly skills?: readonly TaskSkillMount[];
   /** Skills mounted by content, not a host path (S2.14) — written to disk by `spawn()` itself
    *  before the container starts, see this module's own doc comment's addition below. */
   readonly skillsInline?: readonly TaskSkillInline[];
@@ -260,7 +257,6 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         capabilityHandle,
         image,
         model,
-        skills,
         skillsInline,
         timeoutSec,
       } = input;
@@ -275,8 +271,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       mkdirSync(paths.localPiAgentDir, { recursive: true });
 
       // S2.14: write every `skillsInline[]` entry's files under this container's own local view
-      // of `<agentDir>/skills/<name>/` (same target directory `taskSkillTargetInContainer` mounts
-      // the host-path variant to) — the whole Task workspace is already bind-mounted at
+      // of `<agentDir>/skills/<name>/` — the whole Task workspace is already bind-mounted at
       // `/workspace`, so no new bind mount is needed, only the write happening *before*
       // `docker.createAndStart` below.
       for (const skill of skillsInline ?? []) {
@@ -297,7 +292,6 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         capabilityHandle,
         image,
         model,
-        skills,
         networkName,
       });
       const created = await docker.createAndStart(spec);

@@ -27,15 +27,21 @@
 # there are none; this only exists so a later one-shot Worker mode (S2.8/S2.9) can extend the
 # invocation via a CMD override without editing this file.
 #
-# S2.9 worker-mode self-check (design doc §5.4 I9/I10; docs/development-tasks.md S2.9): when
-# `NEXTTIME_MODE=worker`, this script exits non-zero *before* exec'ing pi if either invariant does
-# not hold — a misconfigured Worker container must fail loudly, never start with a leaked provider
-# credential or a broken egress boundary. S1.5's entry-mode behavior (directory prep, the stopgap
-# system prompt, the exec itself) is entirely unchanged; the self-check is additive and only runs
-# for `worker` mode. One structured `nexttime-selfcheck check=<name> result=<ok|fail|skip> ...`
-# line per check — never an env var's *value*, only its name, even on failure (I9). The public
-# proxied-reachability probe is skippable (`NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1`, for
-# offline test runs) but defaults on.
+# Self-check (design doc §5.4 I9/I10; docs/development-tasks.md S2.9; lane-6 review P3): when
+# `NEXTTIME_MODE` is `worker` **or `entry`**, this script exits non-zero *before* exec'ing pi if
+# either invariant does not hold — a misconfigured container must fail loudly, never start with a
+# leaked provider credential or a broken egress boundary. I9/I10 are invariants of *every* agent
+# container this image runs as, not just one-shot Workers: an entry container shares the exact
+# same egress/credential isolation guarantees (design doc §7.2/§7.3), runs far longer-lived
+# (resident, hours to days vs. one-shot), and handles a real user's Handle — there was never a
+# reason it should skip a check a Worker container gets. Originally shipped worker-only (S2.9);
+# widened to cover entry mode too once that gap was noticed (this fix does not touch
+# `interactive` mode, which stays unchecked — a local dev/test path outside the full deployment
+# topology this check assumes). S1.5's entry-mode behavior otherwise (directory prep, the stopgap
+# system prompt, the exec itself) is entirely unchanged. One structured `nexttime-selfcheck
+# check=<name> result=<ok|fail|skip> ...` line per check — never an env var's *value*, only its
+# name, even on failure (I9). The public proxied-reachability probe is skippable
+# (`NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1`, for offline test runs) but defaults on.
 
 set -eu
 
@@ -68,7 +74,7 @@ WorkerDefinition-driven prompt replaces it in a later milestone (S2.6).
 EOF
 fi
 
-if [ "${NEXTTIME_MODE:-}" = "worker" ]; then
+if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; then
 	# I9: no agent process (this one included) may ever hold an LLM provider credential — provider
 	# keys live only in llm-proxy. A *_API_KEY-shaped env var here means a misconfigured container;
 	# fail before pi ever starts. Names only, never values.

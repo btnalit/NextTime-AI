@@ -185,6 +185,54 @@ describe('SupervisorClient.status', () => {
   });
 });
 
+describe('SupervisorClient — internal-plane Authorization header', () => {
+  const AUTH_HEADER = 'Bearer the-internal-token';
+
+  it('forwards authorizationHeader as Authorization on spawn, stop, status, and touch', async () => {
+    const seen: Array<string | null> = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers).get('authorization'));
+      return jsonResponse(200, {
+        containerId: 'c1',
+        ip: '100.64.0.2',
+        status: 'running',
+        created: true,
+        restarts: 0,
+      });
+    });
+    const client = new SupervisorClient({
+      supervisorUrl: 'http://worker-supervisor:8081',
+      fetchImpl,
+      authorizationHeader: AUTH_HEADER,
+    });
+
+    await client.spawn({ workspaceId: 'ws-1', principalId: 'p-1', handle: 't' });
+    await client.stop('p-1').catch(() => {}); // 200 body isn't {status:204}-shaped — irrelevant here
+    await client.status('p-1').catch(() => {});
+    await client.touch('p-1').catch(() => {});
+
+    expect(seen).toEqual([AUTH_HEADER, AUTH_HEADER, AUTH_HEADER, AUTH_HEADER]);
+  });
+
+  it('sends no Authorization header when authorizationHeader is not configured', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get('authorization')).toBeNull();
+      return jsonResponse(200, {
+        containerId: 'c1',
+        ip: '100.64.0.2',
+        status: 'running',
+        created: true,
+        restarts: 0,
+      });
+    });
+    const client = new SupervisorClient({
+      supervisorUrl: 'http://worker-supervisor:8081',
+      fetchImpl,
+    });
+    await client.spawn({ workspaceId: 'ws-1', principalId: 'p-1', handle: 't' });
+  });
+});
+
 describe('SupervisorClient.touch', () => {
   it('returns false on 404 (recovery case, not an error)', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {

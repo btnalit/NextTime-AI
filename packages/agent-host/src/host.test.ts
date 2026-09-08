@@ -251,6 +251,45 @@ describe('createHost — handleStartTurn happy path', () => {
     ]);
   });
 
+  it('rejects a second turn for the same principal fired before the first has resolved, without a duplicate spawn/attach (P2-6 race)', async () => {
+    // Unlike the "rejects a second concurrent turn" test above (which awaits the first call fully
+    // before issuing the second), this fires both handleStartTurn calls back to back with neither
+    // awaited — the exact interleaving the pre-fix code got wrong: the pre-fix `activeTurns.set()`
+    // ran only after `await ensureAttachment(...)` resolved, so a second startTurn arriving in that
+    // gap would also pass the `activeTurns.has()` check, also spawn/attach, and whichever
+    // `activeTurns.set()` ran last would silently clobber the other Turn's entry (the earlier
+    // Turn's id then never matches an incoming event again and it never ends). Reserving the slot
+    // synchronously before the first `await` closes the gap entirely.
+    const { host, supervisor, containerIo, kernelLink } = setUp();
+    const first = startTurnCommand();
+    const second = startTurnCommand({
+      principalId: first.principalId,
+      workspaceId: first.workspaceId,
+    });
+
+    const firstPromise = host.handleStartTurn(first);
+    const secondPromise = host.handleStartTurn(second); // fired before firstPromise's first await
+    await Promise.all([firstPromise, secondPromise]);
+
+    expect(supervisor.spawnCalls).toHaveLength(1); // second never reached spawn
+    expect(containerIo.attachCalls).toEqual(['c1']); // exactly one attach, not two
+    expect(kernelLink.rejected).toEqual([
+      {
+        turnId: second.turnId,
+        reason: 'entry container is already processing another turn for this principal',
+      },
+    ]);
+
+    // The first Turn's prompt was written and it can still be correlated with pi's own response —
+    // proof the second call's set() never clobbered the first's activeTurns entry.
+    const attachment = containerIo.attachmentsByContainerId.get('c1');
+    expect(attachment?.written).toEqual([
+      { type: 'prompt', id: first.turnId, message: first.prompt },
+    ]);
+    attachment?.emitLine({ type: 'response', command: 'prompt', id: first.turnId, success: true });
+    expect(kernelLink.accepted).toEqual([first.turnId]);
+  });
+
   it('rejects the turn when spawn fails, without attaching', async () => {
     const { host, supervisor, containerIo, kernelLink } = setUp();
     supervisor.setSpawnError(new Error('worker-supervisor unreachable'));
@@ -262,6 +301,26 @@ describe('createHost — handleStartTurn happy path', () => {
     expect(kernelLink.rejected).toHaveLength(1);
     expect(kernelLink.rejected[0]?.turnId).toBe(cmd.turnId);
     expect(kernelLink.rejected[0]?.reason).toContain('worker-supervisor unreachable');
+  });
+
+  it('releases the reservation on spawn failure — a subsequent turn for the same principal is not permanently blocked', async () => {
+    const { host, supervisor, kernelLink } = setUp();
+    supervisor.setSpawnError(new Error('worker-supervisor unreachable'));
+    const failed = startTurnCommand();
+    await host.handleStartTurn(failed);
+    expect(kernelLink.rejected[0]?.reason).toContain('worker-supervisor unreachable');
+
+    supervisor.setSpawnError(undefined);
+    const retry = startTurnCommand({
+      principalId: failed.principalId,
+      workspaceId: failed.workspaceId,
+    });
+    await host.handleStartTurn(retry);
+
+    // Not rejected as "already processing another turn" — the failed attempt's reservation was
+    // released, not left dangling.
+    expect(kernelLink.rejected).toHaveLength(1); // still just the one, from the failed attempt
+    expect(supervisor.spawnCalls).toHaveLength(2);
   });
 
   it('rejects the turn when attach fails', async () => {

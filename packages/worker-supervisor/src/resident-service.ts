@@ -16,7 +16,23 @@
  * sweep or an explicit `/resident/stop`. Distinguishing "crashed" from "we stopped it on purpose"
  * would need extra state that doesn't survive a supervisor restart either, and the task's own
  * acceptance criterion only exercises the crash path — so this is deliberately the simplest
- * design that satisfies it, not an oversight; see the PR body "假设与偏离".
+ * design that satisfies it, not an oversight; see the PR body "假设与偏离". Also incremented by
+ * the Handle-rotation case below — a healthy, still-running container replaced on purpose is the
+ * same "new container id for this principal" event `restarts` was already tracking.
+ *
+ * **Handle rotation** (lane-6 review P2-5): an entry Handle is never re-issued into an already-
+ * running resident container — the container keeps whatever `CAPABILITY_HANDLE` it was spawned
+ * with in its env for as long as it lives, which combined with the 24h entry-Handle TTL
+ * (`ENTRY_HANDLE_TTL_SECONDS`) and the 30-minute idle-stop meant a resident container that stayed
+ * continuously busy past 24h would start getting 401s from `llm-proxy` on an expired Handle, and a
+ * newly issued Grant (a capability added to the workspace's scope after the container was
+ * spawned) would be invisible to it until the container happened to restart on its own. Every
+ * `spawn` request now best-effort decodes the incoming Handle's `jti` (`handle-jti.ts` — no
+ * verification, this process only cares whether it *changed*, not whether it's valid; validity is
+ * llm-proxy's job per request) and compares it against the running container's own
+ * `HANDLE_JTI_LABEL`: a mismatch means agent-host presented a Handle this container was never
+ * spawned with, so `spawn` stops and recreates it (same shape as the crash-restart path below,
+ * `restarts` incremented) instead of silently reusing a container holding a stale Handle.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -25,10 +41,12 @@ import type { SpawnRequest, SupervisorConfig } from './config.js';
 import type { DockerClient } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
+import { decodeHandleJtiUnsafe } from './handle-jti.js';
 import { localSystemPromptPath, workspacePaths } from './host-paths.js';
 import {
   ENTRY_ROLE_LABEL,
   ENTRY_ROLE_VALUE,
+  HANDLE_JTI_LABEL,
   PRINCIPAL_LABEL,
   RESTARTS_LABEL,
   WORKSPACE_LABEL,
@@ -205,7 +223,18 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
       const existing = await docker.inspectByName(name);
 
-      if (existing?.running) {
+      // Handle rotation (P2-5, see this module's own doc comment): a mismatch between the
+      // incoming Handle's jti and the running container's own label means this container was
+      // spawned with a Handle that is no longer the caller's current one — reuse must not apply.
+      // `existingJti` empty/absent (older container predating this label, or a decode failure at
+      // spawn time) never forces a recreation on its own — only an actual, decodable mismatch does.
+      const incomingJti = decodeHandleJtiUnsafe(handle);
+      const existingJti = existing?.labels[HANDLE_JTI_LABEL];
+      const rotated = Boolean(
+        existing && incomingJti !== undefined && existingJti && existingJti !== incomingJti,
+      );
+
+      if (existing?.running && !rotated) {
         registry.set(principalId, {
           workspaceId,
           containerId: existing.id,
@@ -224,6 +253,24 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
       const restarts = existing ? restartsFromLabels(existing.labels) + 1 : 0;
       if (existing) {
+        if (existing.running) {
+          // Rotation while otherwise healthy — retire it gracefully (same timeout an explicit
+          // /resident/stop uses) rather than force-killing outright.
+          await docker.stop(name, STOP_TIMEOUT_SECONDS);
+          unregisterEgress(existing.ip);
+        } else {
+          // Crash path (lane-6 review P2-7's IP-reuse-misattribution concern, resident-mode half):
+          // Docker already clears `ip` once a container isn't running (`ContainerState.ip`'s own
+          // doc comment), so `existing.ip` is `undefined` here — the only place that still knows
+          // what this principal's now-dead container was last registered under is this service's
+          // own in-memory `registry`, untouched since the crash (nothing else evicts it before the
+          // next successful spawn or an explicit stop/idle-sweep). Unregistering it *here*, the
+          // moment a crash is actually noticed, closes the window during which a Docker-assigned
+          // IP reuse could otherwise get a different container's egress mis-attributed to this
+          // principal — rather than leaving the stale entry in place for up to a full
+          // `entryIdleTimeoutMs` (idle-sweep is the only other thing that would ever clear it).
+          unregisterEgress(registry.get(principalId)?.ip);
+        }
         await docker.remove(name);
       }
 
@@ -238,6 +285,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         networkName,
         restarts,
         model,
+        handleJti: incomingJti,
       });
       const created = await docker.createAndStart(spec);
 

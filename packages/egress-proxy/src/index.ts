@@ -70,6 +70,7 @@ export async function startEgressProxy(
     platformSubnets: config.platformSubnets,
     trustedResolvedCidrs: config.trustedResolvedCidrs,
     allowLoopbackForTests: config.allowLoopbackForTests,
+    denyUnknownSource: config.denyUnknownSource,
     resolveSource: (clientIp) => sourceMap.resolveSource(clientIp),
     reporter,
     maxTunnelsPerSource: config.maxTunnelsPerSource,

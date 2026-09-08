@@ -59,6 +59,7 @@ async function startTestProxy(
     resolveHost?: Resolver;
     allowLoopbackForTests?: boolean;
     maxTunnelsPerSource?: number;
+    denyUnknownSource?: boolean;
   } = {},
 ): Promise<TestProxy> {
   const recordings: EgressObservation[] = [];
@@ -66,10 +67,16 @@ async function startTestProxy(
     denyHosts: DEFAULT_DENY_HOSTS,
     platformSubnets: [],
     allowLoopbackForTests: overrides.allowLoopbackForTests ?? false,
-    resolveSource: overrides.resolveSource ?? (() => undefined),
+    // Default to a known, unrestricted source (P2-7's fail-closed unknown-source gate is default
+    // `true` now — see denyUnknownSource-test.ts-style coverage below) so every *other* test in
+    // this file keeps exercising the hostname/deny-host/tunnel-limit logic it was written for,
+    // not the unknown-source gate. Tests of that gate itself pass `resolveSource: () => undefined`
+    // explicitly.
+    resolveSource: overrides.resolveSource ?? (() => ({ sourceId: 'test-source' })),
     resolveHost: overrides.resolveHost,
     reporter: { record: (o) => recordings.push(o) },
     maxTunnelsPerSource: overrides.maxTunnelsPerSource,
+    denyUnknownSource: overrides.denyUnknownSource,
     connectTimeoutMs: 2000,
     idleTimeoutMs: 2000,
   });
@@ -326,5 +333,53 @@ describe('createProxyServer', () => {
     expect(statusLine).toContain('503');
 
     held.destroy();
+  });
+
+  describe('denyUnknownSource (lane-6 review P2-7)', () => {
+    it('403s a plain http:// request from an unregistered source by default, without ever calling resolveHost', async () => {
+      const resolveHost = vi.fn(async () => ['192.0.2.10']);
+      const proxy = await startTestProxy({
+        resolveSource: () => undefined, // simulates a client IP resolveSource has never heard of
+        resolveHost,
+      });
+      cleanups.push(proxy.close);
+
+      const res = await httpGetThroughProxy(proxy.port, 'http://public.example.test/');
+      expect(res.status).toBe(403);
+      expect(resolveHost).not.toHaveBeenCalled();
+
+      await vi.waitFor(() => expect(proxy.recordings).toHaveLength(1));
+      expect(proxy.recordings[0]).toMatchObject({
+        allowed: false,
+        reason: 'unknown-source',
+        sourceId: 'unknown',
+      });
+    });
+
+    it('403s a CONNECT from an unregistered source by default', async () => {
+      const echo = await startEchoServer();
+      cleanups.push(echo.close);
+      const proxy = await startTestProxy({ resolveSource: () => undefined });
+      cleanups.push(proxy.close);
+
+      const { statusLine } = await rawConnect(proxy.port, `127.0.0.1:${echo.port}`);
+      expect(statusLine).toContain('403');
+    });
+
+    it('allows an unregistered source when denyUnknownSource is explicitly false (operator escape hatch)', async () => {
+      const upstream = await startUpstream('hello-from-unknown-source');
+      cleanups.push(upstream.close);
+      const proxy = await startTestProxy({
+        resolveSource: () => undefined,
+        resolveHost: async () => ['127.0.0.1'],
+        allowLoopbackForTests: true,
+        denyUnknownSource: false,
+      });
+      cleanups.push(proxy.close);
+
+      const res = await httpGetThroughProxy(proxy.port, `http://anything.test:${upstream.port}/`);
+      expect(res.status).toBe(200);
+      expect(res.body).toBe('hello-from-unknown-source');
+    });
   });
 });

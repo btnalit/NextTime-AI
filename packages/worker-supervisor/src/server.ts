@@ -1,22 +1,24 @@
 /**
  * server: the resident-mode AND one-shot Task-mode HTTP API (docs/development-tasks.md S1.5a and
  * S2.8 task briefs) — Fastify, matching `@nexttime/kernel`'s own stack and giving the route tests
- * both briefs explicitly ask for (`Fastify inject`, no bound port). `control`-network only
- * (docker-compose.yml: no published host port) — every route here, resident or Task, is
- * trusted-caller (agent-host / the kernel's `task/service.ts`, later; `curl` from inside the
- * compose network for now), same trust boundary kernel's own internal routes document — Task-mode
- * routes deliberately add no separate auth layer on top of that (S2.8 task brief: "same auth model
- * as resident endpoints").
+ * both briefs explicitly ask for (`Fastify inject`, no bound port). `POST /task/spawn` and every
+ * `/resident/*` route require the internal-plane shared secret (`internal-auth.ts`, lane-6 review
+ * P1-3): this service is `control`-network only (docker-compose.yml — no agent container can
+ * reach it directly), but every other `control`-network service could previously call these
+ * routes unauthenticated too, not just agent-host / the kernel's `task/service.ts` — "trusted
+ * caller, no separate auth" was a convention, not something the listener enforced. `POST
+ * /task/:workerRunId/terminate`, `GET /task/:workerRunId`, and `GET /healthz` stay unguarded, per
+ * the same review's own scoping.
  *
  * Routes:
  *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
- *                                   systemPrompt?, model?}
+ *                                   systemPrompt?, model?}                        [guarded]
  *                                  -> 200 {containerId, ip, status, created, restarts}
- *   POST /resident/stop           {principalId} -> 204
- *   GET  /resident/:principalId   -> 200 ResidentStatus | 404
- *   POST /resident/:principalId/touch -> 204 | 404
+ *   POST /resident/stop           {principalId} -> 204                           [guarded]
+ *   GET  /resident/:principalId   -> 200 ResidentStatus | 404                    [guarded]
+ *   POST /resident/:principalId/touch -> 204 | 404                               [guarded]
  *   POST /task/spawn              {taskId, workerRunId, workspaceId, onBehalfOf, capabilityHandle,
- *                                   image?, model?, skills?, skillsInline?, timeoutSec?}
+ *                                   image?, model?, skillsInline?, timeoutSec?}   [guarded]
  *                                  -> 200 {containerId, ip} | 400 | 403 (image not allowlisted)
  *   POST /task/:workerRunId/terminate -> 204 | 404
  *   GET  /task/:workerRunId       -> 200 TaskStatus | 404
@@ -29,9 +31,9 @@ import {
   StopRequestSchema,
   TaskSpawnRequestSchema,
   isImageAllowed,
-  isSkillHostPathAllowed,
 } from './config.js';
 import { IdClaimSchema, type SupervisorConfig } from './config.js';
+import { requireInternalToken } from './internal-auth.js';
 import type { ResidentService } from './resident-service.js';
 import type { TaskService } from './task-service.js';
 
@@ -43,16 +45,22 @@ export interface CreateServerOptions {
   /** Only needed alongside `taskService`, for `POST /task/spawn`'s image-allowlist check
    *  (`config.taskImageAllowlist` / `isImageAllowed`). */
   readonly config?: SupervisorConfig;
+  /** The internal-plane shared secret (`internal-auth.ts` `loadInternalToken`'s output) —
+   *  required on `POST /task/spawn` and every `/resident/*` route. `undefined` fails closed:
+   *  every guarded request is rejected, matching the kernel's own guard's behavior when it starts
+   *  without a configured token (see `internal-auth.ts`'s own doc comment). */
+  readonly internalToken?: string;
   readonly logger?: boolean;
 }
 
 export function createServer(options: CreateServerOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false });
   const { residentService, taskService, config } = options;
+  const requireInternal = { preHandler: requireInternalToken(options.internalToken) };
 
   app.get('/healthz', async () => ({ status: 'ok' }));
 
-  app.post('/resident/spawn', async (request, reply) => {
+  app.post('/resident/spawn', requireInternal, async (request, reply) => {
     const parsed = SpawnRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400);
@@ -69,7 +77,7 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     }
   });
 
-  app.post('/resident/stop', async (request, reply) => {
+  app.post('/resident/stop', requireInternal, async (request, reply) => {
     const parsed = StopRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400);
@@ -86,22 +94,29 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     }
   });
 
-  app.get<{ Params: { principalId: string } }>('/resident/:principalId', async (request, reply) => {
-    if (!IdClaimSchema.safeParse(request.params.principalId).success) {
-      reply.code(400);
-      return { error: { code: 'invalid_principal_id', message: 'principalId must be a UUID' } };
-    }
-    const status = await residentService.status(request.params.principalId);
-    if (!status) {
-      reply.code(404);
-      return { error: { code: 'not_found', message: 'no resident container for this principal' } };
-    }
-    reply.code(200);
-    return status;
-  });
+  app.get<{ Params: { principalId: string } }>(
+    '/resident/:principalId',
+    requireInternal,
+    async (request, reply) => {
+      if (!IdClaimSchema.safeParse(request.params.principalId).success) {
+        reply.code(400);
+        return { error: { code: 'invalid_principal_id', message: 'principalId must be a UUID' } };
+      }
+      const status = await residentService.status(request.params.principalId);
+      if (!status) {
+        reply.code(404);
+        return {
+          error: { code: 'not_found', message: 'no resident container for this principal' },
+        };
+      }
+      reply.code(200);
+      return status;
+    },
+  );
 
   app.post<{ Params: { principalId: string } }>(
     '/resident/:principalId/touch',
+    requireInternal,
     async (request, reply) => {
       if (!IdClaimSchema.safeParse(request.params.principalId).success) {
         reply.code(400);
@@ -119,7 +134,7 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     },
   );
 
-  app.post('/task/spawn', async (request, reply) => {
+  app.post('/task/spawn', requireInternal, async (request, reply) => {
     if (!taskService || !config) {
       reply.code(501);
       return { error: { code: 'not_implemented', message: 'Task mode is not wired up' } };
@@ -133,21 +148,6 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     if (!isImageAllowed(config, image)) {
       reply.code(403);
       return { error: { code: 'image_not_allowed', message: `image not allowlisted: ${image}` } };
-    }
-    // Structural validation (TaskSpawnRequestSchema) can't check this — it has no access to
-    // `config.nextTimeData` — so it's a second pass here, same reasoning as the image allowlist
-    // check above: reject before ever reaching the docker client (config.ts `isSkillHostPathAllowed`
-    // doc comment has the full rationale — arbitrary host paths must never become skill mounts).
-    for (const skill of parsed.data.skills ?? []) {
-      if (!isSkillHostPathAllowed(config, skill.hostPath)) {
-        reply.code(400);
-        return {
-          error: {
-            code: 'invalid_skill_host_path',
-            message: `skill hostPath must resolve under NEXTTIME_DATA: ${skill.hostPath}`,
-          },
-        };
-      }
     }
     try {
       const outcome = await taskService.spawn({ ...parsed.data, image });
