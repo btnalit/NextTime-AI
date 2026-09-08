@@ -481,7 +481,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(row?.status).toBe('auto_approved');
 
-      // Unblock the queue so this leftover pending row does not affect later tests.
+      // Unblock the queue, then drain it: rejecting the blocking row alone would leave
+      // `autoResult`'s row sitting `auto_approved` (unexecuted) forever — `auto_approved` has no
+      // reject/expire edge of its own (packages/shared/src/transitions.ts) — which would then
+      // block *every later* test's own auto-execution on this same shared Gatekeeper under the
+      // very drainer ordering this test just proved.
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         rejectActionRequest(client, workspaceId, {
           actionRequestId: pendingResult.actionRequestId,
@@ -489,6 +493,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           approverRole: 'owner',
         }),
       );
+      await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
     });
 
     // P2-1 fix (review job 652a4abc): a policy `deny` decision must leave a durable trace — the
@@ -538,6 +543,61 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
       expect(auditRows.some((r) => r.action === 'action_request.request')).toBe(true);
+    });
+
+    // P1-1 fix (review job 652a4abc): request_action now always derives (or accepts) an
+    // idempotency key, so a retry with the same intent returns the existing ActionRequest instead
+    // of creating and executing a second one. Placed here (before "an unclassified operation"
+    // below) deliberately — that test leaves a permanent, never-resolved pending_approval row on
+    // this shared Gatekeeper, and P2-2's drainer-ordering fix means every later auto_approved
+    // request on the same Gatekeeper would otherwise queue forever behind it.
+    it('a repeat call with identical (gatekeeperId, operation, params) and no explicit idempotencyKey collapses onto the same ActionRequest', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const params = { qty: 4200 };
+
+      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params,
+      })) as { status: string; actionRequestId: string };
+      expect(first.status).toBe('executed');
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params,
+      })) as { status: string; actionRequestId: string };
+
+      expect(second.actionRequestId).toBe(first.actionRequestId);
+      expect(second.status).toBe('executed');
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
+    });
+
+    it('an explicit idempotencyKey collapses a repeat call onto the same ActionRequest even with different params', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const idempotencyKey = randomUUID();
+
+      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 4201 },
+        idempotencyKey,
+      })) as { status: string; actionRequestId: string };
+      expect(first.status).toBe('executed');
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 4202 }, // different params — the explicit key still wins
+        idempotencyKey,
+      })) as { status: string; actionRequestId: string };
+
+      expect(second.actionRequestId).toBe(first.actionRequestId);
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
     });
 
     it('await_decision:true resolves once a *different connection* approves it mid-wait, and executes exactly once', async () => {
@@ -705,58 +765,6 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(row?.blastRadius).toBe('medium');
       expect(row?.status).toBe('pending_approval');
-    });
-
-    // P1-1 fix (review job 652a4abc): request_action now always derives (or accepts) an
-    // idempotency key, so a retry with the same intent returns the existing ActionRequest instead
-    // of creating and executing a second one.
-    it('a repeat call with identical (gatekeeperId, operation, params) and no explicit idempotencyKey collapses onto the same ActionRequest', async () => {
-      const caller = humanCaller(workspaceId, ownerId);
-      const params = { qty: 4200 };
-
-      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
-        gatekeeperId,
-        operation: AUTO_OP.name,
-        params,
-      })) as { status: string; actionRequestId: string };
-      expect(first.status).toBe('executed');
-
-      const before = transport.calls[AUTO_OP.name] ?? 0;
-
-      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
-        gatekeeperId,
-        operation: AUTO_OP.name,
-        params,
-      })) as { status: string; actionRequestId: string };
-
-      expect(second.actionRequestId).toBe(first.actionRequestId);
-      expect(second.status).toBe('executed');
-      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
-    });
-
-    it('an explicit idempotencyKey collapses a repeat call onto the same ActionRequest even with different params', async () => {
-      const caller = humanCaller(workspaceId, ownerId);
-      const idempotencyKey = randomUUID();
-
-      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
-        gatekeeperId,
-        operation: AUTO_OP.name,
-        params: { qty: 4201 },
-        idempotencyKey,
-      })) as { status: string; actionRequestId: string };
-      expect(first.status).toBe('executed');
-
-      const before = transport.calls[AUTO_OP.name] ?? 0;
-
-      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
-        gatekeeperId,
-        operation: AUTO_OP.name,
-        params: { qty: 4202 }, // different params — the explicit key still wins
-        idempotencyKey,
-      })) as { status: string; actionRequestId: string };
-
-      expect(second.actionRequestId).toBe(first.actionRequestId);
-      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
     });
 
     // P1-3 fix (review job 652a4abc): "crash/DB failure between apply success and
