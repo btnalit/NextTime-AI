@@ -237,10 +237,6 @@ export interface CreateBackgroundServicesOptions {
   /** `AgentHostRuntime`'s `turnAccepted`/`turnRejected` wait timeout override — `main()` reads
    *  this from `AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS` (architecture point 2: "e.g. 30s"). */
   readonly turnAcceptedTimeoutMs?: number;
-  /** Overrides `interruptStaleRunningTurns`'s staleness threshold (default `DEFAULT_STALE_TURN_
-   *  TIMEOUT_MS`, 15 minutes) — `main()` reads this from `TURN_INTERRUPT_TIMEOUT_MS` (docs/
-   *  development-tasks.md S1.4 deliverable 7: "configurable timeout"). */
-  readonly turnInterruptTimeoutMs?: number;
   /** `expireOverduePendingApprovals`'s cutoff (default `DEFAULT_APPROVAL_TIMEOUT_MS`, 24h) —
    *  `main()` reads this from `APPROVAL_TIMEOUT_MS` (docs/development-tasks.md S2.3 "expire（reaper，
    *  可配置超时）"). */
@@ -427,10 +423,7 @@ export function createBackgroundServices(
     dispatcher,
     runtime,
     async start() {
-      await interruptStaleRunningTurns({
-        pool: options.pool,
-        timeoutMs: options.turnInterruptTimeoutMs,
-      });
+      await interruptStaleRunningTurns({ pool: options.pool });
       dispatcher.start();
 
       const approvalTick = (): void => {
@@ -571,7 +564,6 @@ export function main(): void {
       );
     }
 
-    const rawTurnInterruptTimeoutMs = process.env.TURN_INTERRUPT_TIMEOUT_MS;
     const rawEntryHandleTtlSeconds = process.env.ENTRY_HANDLE_TTL_SECONDS;
     const rawTurnAcceptedTimeoutMs = process.env.AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS;
     const rawApprovalTimeoutMs = process.env.APPROVAL_TIMEOUT_MS;
@@ -592,9 +584,6 @@ export function main(): void {
         : undefined,
       turnAcceptedTimeoutMs: rawTurnAcceptedTimeoutMs
         ? Number(rawTurnAcceptedTimeoutMs)
-        : undefined,
-      turnInterruptTimeoutMs: rawTurnInterruptTimeoutMs
-        ? Number(rawTurnInterruptTimeoutMs)
         : undefined,
       approvalTimeoutMs: rawApprovalTimeoutMs ? Number(rawApprovalTimeoutMs) : undefined,
       approvalReaperIntervalMs: rawApprovalReaperIntervalMs

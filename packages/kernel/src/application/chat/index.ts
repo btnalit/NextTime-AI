@@ -62,5 +62,7 @@ export type { ChatPushEvent, ChatPushListener } from './push.js';
 export { publishPrincipalPushEvent, subscribeToPrincipalPushEvents } from './push.js';
 export type { PrincipalPushEvent, PrincipalPushListener } from './push.js';
 
-export { DEFAULT_STALE_TURN_TIMEOUT_MS, interruptStaleRunningTurns } from './recovery.js';
+export { interruptStaleRunningTurns } from './recovery.js';
 export type { InterruptStaleRunningTurnsOptions } from './recovery.js';
+
+export { endUnknownRuntimeTurn } from './turn-recovery.js';

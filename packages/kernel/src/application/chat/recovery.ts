@@ -4,13 +4,31 @@ import { publishChatPushEvent } from './push.js';
 /**
  * application/chat/recovery: kernel-restart Turn recovery (design doc §13 "内核重启：无内存态；扫描
  * executing 超时项与 running Turn"; docs/development-tasks.md S1.4 deliverable 7). On startup,
- * marks any `agent_turn` Activity still `status = 'running'` from *before* this process started —
- * i.e. left running by a kernel process that died or was killed mid-Turn, since the only writer
- * that ever sets `status = 'running'` (`application/chat`'s `sendChatMessage`) and the only
- * writers that ever move it out of `running` (`application/chat/event-sink.ts`'s `turnEnded`
- * handler; `application/gateway/handlers.ts`'s `report_turn`) are both this same kernel process —
- * as `interrupted`, and pushes `chat.metadata` so a client with that chat open right now finds out
+ * marks *every* `agent_turn` Activity still `status = 'running'` — left running by a kernel
+ * process that died or was killed mid-Turn, since the only writer that ever sets `status =
+ * 'running'` (`application/chat`'s `sendChatMessage`) and the only writers that ever move it out
+ * of `running` (`application/chat/event-sink.ts`'s `turnEnded` handler;
+ * `application/gateway/handlers.ts`'s `report_turn`) are both this same kernel process — as
+ * `interrupted`, and pushes `chat.metadata` so a client with that chat open right now finds out
  * immediately rather than only on its next `get_chat_history` read.
+ *
+ * Lane-4 P1 fix (docs/development-tasks.md): this used to only touch rows older than a configurable
+ * timeout (default 15 minutes), on the theory that a Turn less than 15 minutes old "might still be
+ * legitimately in progress". That reasoning does not hold at *startup* specifically — this function
+ * is called once, from `packages/kernel/src/index.ts`'s `createBackgroundServices().start()`,
+ * strictly *before* the outbox dispatcher starts and before any request traffic is served (see that
+ * module's own doc comment: "Recovery runs first so a client cannot observe a Turn this process
+ * considers freshly `running` when it is actually a leftover from a previous one"). By construction,
+ * *this* process has not started a single Turn by the time this function runs — so every `running`
+ * row it finds, regardless of age, was left behind by a now-dead prior process, and none of them
+ * will ever receive a `turnEnded` from anywhere (the prior process is gone; this one never started
+ * them). Age-gating a subset of them left the Chat wedged behind
+ * `activities_one_running_turn_per_chat_uidx` (`send_chat_message` → `TurnAlreadyRunningError`
+ * forever) for up to the configured timeout after every kernel restart — the exact P1 this fix
+ * closes. There is exactly one call site in this codebase (`index.ts`'s `start()`); a periodic
+ * re-scan mid-lifetime, which *would* need an age threshold to avoid touching a Turn its own,
+ * still-live process is legitimately running, is not implemented (design doc §13's "扫描 executing
+ * 超时项" covers ActionRequest/Gatekeeper `executing` rows via a separate mechanism, not this one).
  *
  * Cross-workspace scan, same reasoning as `application/outbox/dispatcher.ts`: exactly one kernel
  * process, not one per workspace, so this deliberately never calls `withWorkspace()` — see that
@@ -28,15 +46,8 @@ import { publishChatPushEvent } from './push.js';
  * "上轮中断" injection story described in §7.2.
  */
 
-export const DEFAULT_STALE_TURN_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
-
 export interface InterruptStaleRunningTurnsOptions {
   readonly pool: PoolLike;
-  /** A `running` Turn older than this (by `activities.created_at`) is considered abandoned by a
-   *  prior kernel process. Default `DEFAULT_STALE_TURN_TIMEOUT_MS` (15 minutes) — configurable per
-   *  design doc S1.4 deliverable 7 ("configurable timeout"); the composition root reads
-   *  `TURN_INTERRUPT_TIMEOUT_MS` from the environment (packages/kernel/src/index.ts). */
-  readonly timeoutMs?: number;
 }
 
 interface InterruptedTurnRow {
@@ -46,28 +57,25 @@ interface InterruptedTurnRow {
 }
 
 /**
- * Marks every stale `running` `agent_turn` Activity as `interrupted` and pushes `chat.metadata`
- * for each one that has a `chat_id` (every Turn does, in practice — see migrations/core/
- * 0008_chat_messages.sql's own note on why `chat_id` is nonetheless nullable on `activities` in
- * general). Resolves with the number of Turns interrupted. Intended to run once, at kernel
- * startup, before the outbox dispatcher and any request traffic begin — see `packages/kernel/src/
- * index.ts`'s `createBackgroundServices`.
+ * Marks every `running` `agent_turn` Activity as `interrupted` (regardless of age — see this
+ * module's own doc comment for why that is correct specifically for the one call site this
+ * function has) and pushes `chat.metadata` for each one that has a `chat_id` (every Turn does, in
+ * practice — see migrations/core/0008_chat_messages.sql's own note on why `chat_id` is
+ * nonetheless nullable on `activities` in general). Resolves with the number of Turns interrupted.
+ * Intended to run once, at kernel startup, before the outbox dispatcher and any request traffic
+ * begin — see `packages/kernel/src/index.ts`'s `createBackgroundServices`.
  */
 export async function interruptStaleRunningTurns(
   options: InterruptStaleRunningTurnsOptions,
 ): Promise<number> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_STALE_TURN_TIMEOUT_MS;
-  const cutoff = new Date(Date.now() - timeoutMs).toISOString();
-
   const client = await options.pool.connect();
   try {
     await client.query('BEGIN');
     const result = await client.query<InterruptedTurnRow>(
       `update activities
        set status = 'interrupted', ended_at = now()
-       where kind = 'agent_turn' and status = 'running' and created_at < $1::timestamptz
+       where kind = 'agent_turn' and status = 'running'
        returning id, workspace_id, chat_id`,
-      [cutoff],
     );
     await client.query('COMMIT');
 
