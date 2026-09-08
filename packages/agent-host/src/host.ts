@@ -231,6 +231,25 @@ export function createHost(options: HostOptions): Host {
         return;
       }
 
+      // Reserve the slot *synchronously*, before the first `await` below (lane-6 review P2-6).
+      // JS runs everything up to an `await` without interruption, so this check-then-reserve is
+      // atomic: no other `handleStartTurn` call for this principal can observe `activeTurns` in
+      // between. Without this, two `startTurn` frames for the same principal arriving close
+      // together could both pass the `has()` check above and both call `ensureAttachment`
+      // concurrently — each would independently see no cached attachment yet, both would
+      // `containerIoClient.attach()` the same container (duplicate stdio subscriptions, the first
+      // `io` leaked/never closed), and whichever `activeTurns.set()` ran last would silently
+      // overwrite the other's entry — the earlier Turn's `turnId` would then never match an
+      // incoming `handleLine` event again and would simply never end. Reserving here instead of
+      // after `ensureAttachment` closes that window entirely; on failure below the reservation is
+      // released so a legitimate retry isn't blocked by a Turn that never actually started.
+      activeTurns.set(cmd.principalId, {
+        turnId: cmd.turnId,
+        workspaceId: cmd.workspaceId,
+        chatId: cmd.chatId,
+        stopRequested: false,
+      });
+
       let record: AttachmentRecord;
       try {
         record = await ensureAttachment(
@@ -242,6 +261,7 @@ export function createHost(options: HostOptions): Host {
           cmd.model,
         );
       } catch (err) {
+        activeTurns.delete(cmd.principalId); // release the reservation — this turn never started
         log(
           JSON.stringify({
             level: 'error',
@@ -257,13 +277,6 @@ export function createHost(options: HostOptions): Host {
         );
         return;
       }
-
-      activeTurns.set(cmd.principalId, {
-        turnId: cmd.turnId,
-        workspaceId: cmd.workspaceId,
-        chatId: cmd.chatId,
-        stopRequested: false,
-      });
 
       // turnAccepted is sent from handleLine, once pi's own {"type":"response","command":"prompt",
       // "id":cmd.turnId,"success":true} confirms it — not here (see bridge.ts's
