@@ -110,3 +110,6 @@ export type { GatekeeperHealth, GatekeeperReadHandlerDeps } from './gatekeeper-r
 
 export { ModelsCatalogUnavailableError, readModelCatalog } from './models-catalog-handler.js';
 export type { ModelCatalogEntry } from './models-catalog-handler.js';
+
+// S3.13 (docs/development-tasks.md "每用户智能体配置") — agent-profile-handlers.ts.
+export { AgentProfileValidationError } from './agent-profile-handlers.js';
