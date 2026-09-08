@@ -55,6 +55,11 @@ export class FakeAgentRuntime implements AgentRuntime {
   /** turnId -> stop requested. Checked between emitted chunks so a `stopTurn` mid-stream ends the
    *  Turn with `status: 'interrupted'` instead of running to completion. */
   private readonly stopRequested = new Set<string>();
+  /** turnId -> currently running (lane-4 P1/P2 fix: `stopTurn`'s `AgentRuntime` port contract
+   *  needs to report whether *this* runtime has any record of `turnId` — see agent-runtime.ts's
+   *  own doc comment). Populated at the start of `run()`, cleared once `endTurn()` emits the
+   *  terminal `turnEnded`. */
+  private readonly runningTurnIds = new Set<string>();
 
   constructor(options: FakeAgentRuntimeOptions) {
     this.sink = options.sink;
@@ -69,8 +74,10 @@ export class FakeAgentRuntime implements AgentRuntime {
     void this.run(input);
   }
 
-  async stopTurn(turnId: string): Promise<void> {
+  async stopTurn(turnId: string): Promise<boolean> {
+    if (!this.runningTurnIds.has(turnId)) return false;
     this.stopRequested.add(turnId);
+    return true;
   }
 
   /** `fields` is the event-specific part of one `AgentRuntimeEvent` variant; the four correlation
@@ -89,10 +96,12 @@ export class FakeAgentRuntime implements AgentRuntime {
 
   private async endTurn(input: StartTurnInput, status: TurnEndStatus): Promise<void> {
     this.stopRequested.delete(input.turnId);
+    this.runningTurnIds.delete(input.turnId);
     await this.emit(input, { type: 'turnEnded', status });
   }
 
   private async run(input: StartTurnInput): Promise<void> {
+    this.runningTurnIds.add(input.turnId);
     const reply = `echo: ${input.prompt}`;
     const chunks = chunkText(reply, this.chunkSize);
 

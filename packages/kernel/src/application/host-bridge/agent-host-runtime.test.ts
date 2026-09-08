@@ -203,7 +203,7 @@ describe('AgentHostRuntime — startTurn with no agent-host connected', () => {
 });
 
 describe('AgentHostRuntime — startTurn happy path', () => {
-  it('issues an entry Handle, sends startTurn, and resolves once turnAccepted arrives (no turnEnded yet)', async () => {
+  it('issues an entry Handle, sends startTurn, and resolves once the frame is sent (does not wait for turnAccepted)', async () => {
     const { pool, handleCount, sessionCount } = createFakePool();
     const { sink, events } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -220,9 +220,10 @@ describe('AgentHostRuntime — startTurn happy path', () => {
     const input = startTurnInput();
     const startPromise = runtime.startTurn(input);
 
-    // startTurn's returned promise only resolves once accepted/rejected/timed-out — send the
-    // acceptance while it's still pending, matching how interfaces/ws/agent-host.ts calls
-    // handleFrame from a live socket.
+    // lane-4 P2 fix: startTurn's returned promise resolves once the command frame is sent — it
+    // does not wait for turnAccepted/turnRejected/timeout (that outcome is handled
+    // asynchronously; see the dedicated describe block below). Send the acceptance anyway, to
+    // prove it produces no event while still pending.
     await Promise.resolve(); // let the async handle-issuance microtasks run before asserting `sent`
     await vi.waitFor(() => expect(sent).toHaveLength(1));
 
@@ -438,7 +439,7 @@ describe('AgentHostRuntime — startTurn resolves the published entry WorkerDefi
 });
 
 describe('AgentHostRuntime — turnRejected and accept timeout', () => {
-  it('turnRejected produces turnEnded {status: failed}', async () => {
+  it('turnRejected produces turnEnded {status: failed}, asynchronously after startTurn already resolved', async () => {
     const { pool } = createFakePool();
     const { sink, events } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -456,8 +457,12 @@ describe('AgentHostRuntime — turnRejected and accept timeout', () => {
     const startPromise = runtime.startTurn(input);
     await vi.waitFor(() => expect(sent).toHaveLength(1));
 
-    runtime.handleFrame({ type: 'turnRejected', turnId: input.turnId, reason: 'busy' });
+    // lane-4 P2 fix: startTurn already resolved once the frame was sent — no turnEnded yet.
     await startPromise;
+    expect(events).toEqual([]);
+
+    runtime.handleFrame({ type: 'turnRejected', turnId: input.turnId, reason: 'busy' });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
 
     expect(events).toEqual([
       {
@@ -471,7 +476,7 @@ describe('AgentHostRuntime — turnRejected and accept timeout', () => {
     ]);
   });
 
-  it('a turnAccepted timeout produces turnEnded {status: failed}', async () => {
+  it('a turnAccepted timeout produces turnEnded {status: failed}, asynchronously after startTurn already resolved', async () => {
     const { pool } = createFakePool();
     const { sink, events } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -487,8 +492,12 @@ describe('AgentHostRuntime — turnRejected and accept timeout', () => {
     runtime.connect(link);
 
     const input = startTurnInput();
-    await runtime.startTurn(input); // never sends turnAccepted — resolves once the 10ms timeout fires
+    // lane-4 P2 fix: startTurn resolves once the frame is sent — well before the 10ms accept
+    // timeout could possibly fire, proving it is no longer on startTurn's own critical path.
+    await runtime.startTurn(input);
+    expect(events).toEqual([]);
 
+    await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events).toEqual([
       {
         type: 'turnEnded',
@@ -553,7 +562,7 @@ describe('AgentHostRuntime — stopTurn', () => {
     runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
     await startPromise;
 
-    await runtime.stopTurn(input.turnId);
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
 
     expect(sent).toHaveLength(2);
     expect(sent[1]).toEqual({
@@ -563,7 +572,7 @@ describe('AgentHostRuntime — stopTurn', () => {
     });
   });
 
-  it('is a no-op for an unknown turnId (idempotent per the AgentRuntime port contract)', async () => {
+  it('is a no-op for an unknown turnId, and reports (false) that it knew nothing (lane-4 P1 fix)', async () => {
     const { pool } = createFakePool();
     const { sink } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
@@ -577,8 +586,33 @@ describe('AgentHostRuntime — stopTurn', () => {
     const { link, sent } = createFakeLink();
     runtime.connect(link);
 
-    await expect(runtime.stopTurn(randomUUID())).resolves.toBeUndefined();
+    await expect(runtime.stopTurn(randomUUID())).resolves.toBe(false);
     expect(sent).toHaveLength(0);
+  });
+
+  it('reports true (it knew) for an active turn even while agent-host is disconnected', async () => {
+    const { pool } = createFakePool();
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput();
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    runtime.disconnect(link); // agent-host currently unreachable, but the turn is still tracked
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
+    expect(sent).toHaveLength(1); // nothing new sent — there is no link to send it on
   });
 
   it('is a no-op for a turnId already ended (turnEnded clears it from the active set)', async () => {
@@ -615,7 +649,7 @@ describe('AgentHostRuntime — stopTurn', () => {
     runtime.handleFrame(event);
     await Promise.resolve();
 
-    await runtime.stopTurn(input.turnId);
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(false);
     expect(sent).toHaveLength(1); // only the original startTurn — no stopTurn was sent
   });
 });
@@ -724,7 +758,7 @@ describe('AgentHostRuntime — hello / instanceId restart detection', () => {
 
     expect(events).toEqual([]); // turn still active, nothing abandoned
 
-    await runtime.stopTurn(input.turnId);
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(true);
     expect(sent).toHaveLength(2); // stopTurn actually sent — proves the turn is still tracked active
   });
 
@@ -764,8 +798,9 @@ describe('AgentHostRuntime — hello / instanceId restart detection', () => {
       },
     ]);
 
-    // The turn is no longer tracked active — a stopTurn call for it is now a no-op.
-    await runtime.stopTurn(input.turnId);
+    // The turn is no longer tracked active — a stopTurn call for it is now a no-op, and reports
+    // (false) that this runtime knows nothing about it (lane-4 P1 fix).
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(false);
     expect(sent).toHaveLength(1);
   });
 
@@ -790,9 +825,13 @@ describe('AgentHostRuntime — hello / instanceId restart detection', () => {
     const startPromise = runtime.startTurn(input);
     await vi.waitFor(() => expect(sent).toHaveLength(1));
 
+    // lane-4 P2 fix: startTurn already resolved once the frame was sent (see other describe
+    // blocks) — the restart below and its abandon-as-failed side effect happen strictly after.
+    await startPromise;
+
     // Restart arrives before turnAccepted ever does.
     runtime.handleFrame({ type: 'hello', instanceId: randomUUID() });
-    await startPromise;
+    await vi.waitFor(() => expect(events).toHaveLength(1));
 
     expect(events).toEqual([
       {

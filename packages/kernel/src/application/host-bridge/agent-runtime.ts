@@ -89,15 +89,40 @@ export interface AgentRuntimeEventSink {
  * container underneath, that is an implementation detail this port does not need to expose).
  */
 export interface AgentRuntime {
-  /** Begins a Turn. Resolves once the runtime has *accepted* the Turn (e.g. the request reached
-   *  agent-host) — the Turn's actual execution is asynchronous and reported entirely through the
-   *  sink this runtime was constructed with. Never throws for a normal "the agent is thinking"
-   *  delay; a runtime-level failure to even start is reported as a `turnEnded` event with
-   *  `status: 'failed'`, not a rejected promise, so callers have exactly one path to observe a
-   *  Turn's outcome. */
+  /**
+   * Begins a Turn: hands the prompt off to the runtime and resolves as soon as that hand-off
+   * itself is done (e.g. once the `startTurn` command frame has been sent to agent-host) — it
+   * does *not* wait for the runtime to acknowledge acceptance (lane-4 P2 fix,
+   * docs/development-tasks.md: this port is invoked from inside the outbox dispatcher's
+   * single-row transaction — `application/host-bridge/turn-started-consumer.ts` →
+   * `application/outbox/dispatcher.ts`'s `processOneRow` — so blocking this call on a runtime
+   * round trip of up to `turnAcceptedTimeoutMs` would stall delivery of every *other* outbox
+   * event behind this one Turn's accept/reject/timeout). The runtime's actual
+   * acceptance/rejection, like the rest of the Turn's execution, is reported entirely
+   * asynchronously through the sink this runtime was constructed with — a runtime-level failure
+   * to even start, an explicit rejection, or an accept timeout is still exactly one `turnEnded`
+   * event with `status: 'failed'`, just delivered on the runtime's own schedule instead of
+   * before this call resolves. Never throws.
+   */
   startTurn(input: StartTurnInput): Promise<void>;
-  /** Requests that a running Turn stop. Idempotent — stopping an already-ended or unknown
-   *  `turnId` is a no-op. Like `startTurn`, the actual stop is confirmed asynchronously via a
-   *  `turnEnded` event (`status: 'interrupted'`), not this call's resolution. */
-  stopTurn(turnId: string): Promise<void>;
+  /**
+   * Requests that a running Turn stop. Idempotent — stopping an already-ended or unknown
+   * `turnId` is a no-op. Resolves with whether the runtime had any record of `turnId` at all
+   * (lane-4 P1 fix, docs/development-tasks.md: a caller that gets back `false` knows this
+   * runtime will never independently report a `turnEnded` for `turnId` — e.g. a kernel restart
+   * (`application/chat/recovery.ts`) or an agent-host restart abandoned it before this call —
+   * and should treat the Turn as already over itself rather than waiting forever behind
+   * `activities_one_running_turn_per_chat_uidx`). `true` does not guarantee the stop actually
+   * lands (the runtime may still fail to reach the far end) — only that the runtime is tracking
+   * the Turn and will eventually report a `turnEnded` for it, exactly as before this contract
+   * addition. `void` is accepted structurally too, purely so a caller-supplied implementation
+   * that predates this addition (an async function with no return statement — inferred
+   * `Promise<void>`, not assignable to `Promise<boolean | undefined>`, per TypeScript's own
+   * `void`-vs-`undefined` assignability rules) still type-checks against this port; every
+   * implementation in this codebase returns a real boolean. Like `startTurn`, the actual stop is
+   * confirmed asynchronously via a `turnEnded` event (`status: 'interrupted'`), not this call's
+   * resolution.
+   */
+  // biome-ignore lint/suspicious/noConfusingVoidType: intentional — widens the contract to accept a pre-existing Promise<void> test double; see this method's own doc comment.
+  stopTurn(turnId: string): Promise<boolean | void>;
 }
