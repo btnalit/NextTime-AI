@@ -9,6 +9,7 @@ import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { findWorkerRunBySessionId } from '../../application/task/index.js';
+import { readEffectiveAgentProfile } from '../../governance/agent-profile/index.js';
 import type { ActionRequestRow, ApprovalDrainer } from '../../governance/approval/index.js';
 import {
   awaitActionRequestResolution,
@@ -522,6 +523,9 @@ interface RunGovernedRequestArgs {
    *  `application/task/reaper.ts`'s ActionRequestPending/Updated routing can move the right Task
    *  to/from `waiting_approval`. `undefined` for a human caller (no WorkerRun to attribute to). */
   readonly parentWorkerRunId?: string;
+  /** S3.13: `onBehalfOf`'s own resolved `effective.autoApproveLow` — threaded straight through to
+   *  `requestAction`/`evaluate()`'s field of the same name (see that module's own doc comment). */
+  readonly principalAutoApproveLowEnabled: boolean;
 }
 
 /** The phase-1 `{result, resourceType, resourceId}` shape every branch of `runGovernedRequest`'s
@@ -574,6 +578,7 @@ async function runGovernedRequest(
     params: args.operationParams,
     idempotencyKey: args.idempotencyKey,
     parentWorkerRunId: args.parentWorkerRunId,
+    principalAutoApproveLowEnabled: args.principalAutoApproveLowEnabled,
   });
 
   switch (actionRequest.status) {
@@ -969,6 +974,14 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     return runObserve(client, workspaceId, gatekeeper, operationName, resolvedParams, onBehalfOf);
   }
 
+  // S3.13: `onBehalfOf`'s own effective.autoApproveLow — resolved once, here, so both
+  // `runGovernedRequest` call sites below narrow identically (a no-op on the I17 unclassified
+  // path, whose `blastRadius` is always `'medium'`, but threaded through uniformly rather than
+  // special-cased).
+  const principalAutoApproveLowEnabled = (
+    await readEffectiveAgentProfile(client, workspaceId, onBehalfOf)
+  ).autoApproveLow;
+
   if (!published) {
     // I17: draft/unknown Operation → unclassified, always require_approval, never execute.
     return runGovernedRequest(client, workspaceId, {
@@ -983,6 +996,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       awaitDecision: true,
       idempotencyKey,
       parentWorkerRunId,
+      principalAutoApproveLowEnabled,
     });
   }
 
@@ -993,6 +1007,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     operationParams: resolvedParams,
     onBehalfOf,
     actorRuntime,
+    principalAutoApproveLowEnabled,
     requesterScope,
     blastRadius: operation.blast_radius,
     autoApprovable: operation.auto_approvable,
