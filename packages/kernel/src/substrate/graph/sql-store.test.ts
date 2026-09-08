@@ -258,32 +258,7 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
       expect(fact.epistemicStatus).toBe('asserted');
     });
 
-    it('viaAgent weakens a human principal to inferred — the Worker result contract path (§5.6; accept_s2 step 7, 2026-09-08)', async () => {
-      // ownerId is a genuine 'human' principal, but the write comes through an agent acting on its
-      // behalf (postWorkerResult) — the store must record 'inferred', never a human 'asserted'.
-      // viaAgent is downgrade-only, so unlike a caller-supplied kind it is honoured.
-      const fact = await inTx(async (client) => {
-        const a = await makeObject(client, 'A');
-        const b = await makeObject(client, 'B');
-        const activity = await makeActivity(client);
-        return store.assertFact(
-          client,
-          workspaceId,
-          { id: ownerId, viaAgent: true },
-          {
-            linkType: 'test.rel',
-            sourceObjectId: a.id,
-            targetObjectId: b.id,
-            activityId: activity.id,
-          },
-        );
-      });
-
-      expect(fact.epistemicStatus).toBe('inferred');
-      expect(fact.assertedBy).toBe(ownerId);
-    });
-
-    it('omitting kind entirely still derives epistemic_status from the principals row', async () => {
+    it('omitting kind entirely still derives epistemic_status from the principals row — the S2.9 result-contract path (a real kind=agent principal, replacing PR #84’s viaAgent downgrade flag) relies on exactly this', async () => {
       const fact = await inTx(async (client) => {
         const a = await makeObject(client, 'A');
         const b = await makeObject(client, 'B');
@@ -302,6 +277,7 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
       });
 
       expect(fact.epistemicStatus).toBe('inferred');
+      expect(fact.assertedBy).toBe(agentId);
     });
 
     it('rejects a caller-supplied epistemic status', async () => {

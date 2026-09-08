@@ -54,6 +54,8 @@ export {
   postWorkerResult,
 } from './result.js';
 
+export { ensureWorkerAgentPrincipal } from './agent-principal.js';
+
 export {
   type ComputeChildHandleScopeInput,
   type ParentAuthority,

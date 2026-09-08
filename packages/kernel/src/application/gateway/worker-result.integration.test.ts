@@ -33,13 +33,18 @@ import type { ResolvedCaller } from './resolve-caller.js';
  *
  * epistemic_status: `inferred`. `SqlGraphStore.assertFact` derives the status from the caller's
  * real `principals.kind` row (lane-1 P2 fix — a caller-supplied `kind` is ignored, closing the
- * hole where any caller could claim `kind: 'human'` → `asserted`), and `postWorkerResult` writes
- * every contract Fact with `CallerPrincipal.viaAgent`, which weakens whatever that row says to
- * `inferred` (downgrade-only; §5.6 "agent → inferred"). This harness's `ownerId` is a genuine
- * `kind: 'human'` principal (`adminInsertPrincipal` below always inserts `'human'`) — exactly the
- * production shape, since `actorPrincipalId` is the Task's on_behalf_of human — so this test is
- * the regression guard for the 2026-09-08 accept_s2 step-7 failure, where deriving from the
- * principal alone had turned a Worker's inference into a human `asserted` Fact.
+ * hole where any caller could claim `kind: 'human'` → `asserted`), and `postWorkerResult` now
+ * asserts every contract Fact *as* a real `kind='agent'` principal — the (workspace,
+ * WorkerDefinition) agent principal `invoke_worker`'s own `spawnWorkerRun` resolves via
+ * `ensureWorkerAgentPrincipal` (`application/task/agent-principal.ts`) — instead of the interim
+ * `CallerPrincipal.viaAgent` downgrade flag PR #84 introduced. This harness's `ownerId` is a
+ * genuine `kind: 'human'` principal (`adminInsertPrincipal` below always inserts `'human'`) —
+ * exactly the production shape, since it is the Task's `on_behalf_of` human, now recorded as
+ * `activity.metadata.onBehalfOf` provenance rather than `asserted_by`/`started_by` — so this test
+ * is the regression guard for both the original 2026-09-08 accept_s2 step-7 failure (deriving from
+ * the human principal alone turned a Worker's inference into a human `asserted` Fact) and its
+ * follow-up: `asserted_by`/`started_by` must resolve to a real agent principal, not just an
+ * `inferred` status reached by a downgrade flag.
  *
  * Reuses `invoke.integration.test.ts`'s own harness shape (fake, in-memory
  * `TaskSupervisorClientPort` — no real Docker/worker-supervisor) so a real WorkerRun + a real
@@ -284,13 +289,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       const [factId] = result.factIds;
       if (!factId) throw new Error('expected a written fact id');
       const explained = await inTx(ownerId, (client) => explain(client, workspaceId, { factId }));
-      // ownerId is a genuine 'human' principal, yet the Fact came through a Worker's result
-      // contract (`viaAgent`) — see this file's module doc comment: §5.6 agent → inferred, and this
-      // is the regression guard for accept_s2 step 7 (2026-09-08).
+      // ownerId is a genuine 'human' principal, yet the Fact is asserted_by a real kind='agent'
+      // principal — see this file's module doc comment: §5.6 agent → inferred, and this is the
+      // regression guard for accept_s2 step 7 (2026-09-08) and its follow-up (replacing PR #84's
+      // viaAgent downgrade flag with a real agent principal).
       expect(explained.fact?.epistemicStatus).toBe('inferred');
+      expect(explained.fact?.assertedByPrincipal?.kind).toBe('agent');
+      expect(explained.fact?.assertedByPrincipal?.displayName).toMatch(/^worker:/);
+      expect(explained.fact?.assertedByPrincipal?.id).not.toBe(ownerId);
       expect(explained.activity?.kind).toBe('worker_result');
       expect(explained.activity?.metadata.taskId).toBe(taskId);
       expect(explained.activity?.metadata.workerRunId).toBe(workerRunId);
+      // Activity started_by is the same agent principal — never the human — with the human kept
+      // as onBehalfOf provenance, both directly on `metadata` and resolved by `explain` itself.
+      expect(explained.activity?.startedByPrincipal?.kind).toBe('agent');
+      expect(explained.activity?.startedByPrincipal?.id).toBe(
+        explained.fact?.assertedByPrincipal?.id,
+      );
+      expect(explained.activity?.metadata.onBehalfOf).toBe(ownerId);
+      expect(explained.activity?.onBehalfOfPrincipal?.id).toBe(ownerId);
+      expect(explained.activity?.onBehalfOfPrincipal?.kind).toBe('human');
     });
 
     it('proposedSkill (S2.14) creates a draft Skill owned by the Task’s on_behalf_of principal, private until published', async () => {

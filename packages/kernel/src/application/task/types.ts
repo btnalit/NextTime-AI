@@ -94,6 +94,13 @@ export interface WorkerRunRow {
   readonly depth: number;
   readonly activityId: string | null;
   readonly attempt: number;
+  /** The (workspace, WorkerDefinition) agent principal `ensureWorkerAgentPrincipal`
+   *  (`application/task/agent-principal.ts`) resolved when this row was spawned
+   *  (migrations/task/0004_worker_run_agent_principal.sql) — `application/task/result.ts`'s
+   *  `postWorkerResult` reads it straight off this row rather than re-deriving it. Nullable only
+   *  because it is set in the same statement that creates the row; see that migration's own doc
+   *  comment. */
+  readonly agentPrincipalId: string | null;
   readonly startedAt: Date;
   readonly terminatedAt: Date | null;
 }
@@ -109,6 +116,7 @@ interface WorkerRunDbRow {
   depth: number;
   activity_id: string | null;
   attempt: number;
+  agent_principal_id: string | null;
   started_at: Date;
   terminated_at: Date | null;
 }
@@ -125,13 +133,15 @@ export function mapWorkerRunRow(row: WorkerRunDbRow): WorkerRunRow {
     depth: row.depth,
     activityId: row.activity_id,
     attempt: row.attempt,
+    agentPrincipalId: row.agent_principal_id,
     startedAt: row.started_at,
     terminatedAt: row.terminated_at,
   };
 }
 
 export const WORKER_RUN_ROW_COLUMNS = `workspace_id, id, status, task_id, parent_worker_run_id,
-  session_id, container_id, depth, activity_id, attempt, started_at, terminated_at`;
+  session_id, container_id, depth, activity_id, attempt, agent_principal_id, started_at,
+  terminated_at`;
 
 export class TaskNotFoundError extends Error {
   constructor(workspaceId: string, taskId: string) {

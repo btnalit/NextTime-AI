@@ -170,6 +170,11 @@ export async function invokeWorkerCreate(
   const declaredCapabilities =
     content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES);
   const declaredGates = content.gates ?? [];
+  // `ensureWorkerAgentPrincipal`'s `display_name` input (spawn.ts) — the WorkerDefinition's own
+  // declared `name` (packages/shared/src/worker-definition.ts, optional) when present, else the
+  // definition id itself so the agent principal is still identifiable without one.
+  const definitionName =
+    typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
 
   const { parentAuthority, skillsInline } = await withWorkspace(
     deps.pool,
@@ -322,6 +327,7 @@ export async function invokeWorkerCreate(
       declaredGates,
       requestedGates: input.gates,
       model: content.model,
+      definitionName,
       skillsInline,
     });
   } catch (err) {
