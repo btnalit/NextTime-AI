@@ -821,6 +821,7 @@
 - 验收：`tools/list` = 注册表 Handle 通道集合 + 别名；Claude Code 经 MCP `traverse` 到同一图；无 Handle 连接被拒。依赖：S1.9、S3.1。
 
 ### S3.7 语义一致性校验
+- **前置决策（2026-09-08）**：线上契约词表与信封规则已定在 `docs/wire-contract-conventions.md`（`idempotencyKey` 只指调用方去重键、门协议执行键改 `actionRequestId`；`actionKind` 只指 `{tag,label}`、裸标识改 `actionKindTag`；Grant 用 `resourceType`/`resourceId` 不再借用「capability」；capability `mode` 四值 `observe / write / propose / execute`，即时写操作从 `propose` 改 `write`；单资源结果主键一律 `id`、引用用 `<resource>Id`；列表统一 `{ items, nextCursor? }`；时间戳 ISO 8601）。对齐实现是一个跨层 PR（shared → kernel → gatekeeper-base/门实例 → platform-extension/web/fake-llm/验收脚本），主机跑 `accept_s1.sh` + `accept_s2.sh` 通过后合入；本条 S3.7 随后把 `resultSchema`、契约快照与词表守卫做进 CI。
 - 交付物：`scripts/check-capability-consistency.ts`：注册表 = HTTP 路由 = MCP 工具 = WS 方法 = policy 可识别 `action_kind`。
 - 验收：CI 步骤；故意删一个路由被拦。依赖：S3.6。
 
