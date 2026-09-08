@@ -36,25 +36,19 @@ function hasOwnKeys(value: Record<string, unknown> | undefined): value is Record
 
 /**
  * Fact (=`links` row, aliased `l`) visibility predicate — belt-and-suspenders alongside the
- * `links_visibility` RLS policy (migrations/core/0010_link_visibility.sql): every Fact-reading
- * query builder below states the rule explicitly, the same convention this file already follows
- * for `workspace_id` (bound as `$1` even though RLS enforces it too). `app_principal()` is the
- * same session-GUC accessor function `links_visibility` itself calls — see migrations/core/
- * 0001_identity.sql. A Fact is excluded only when at least one Observation feeding its Activity
- * comes from a `private` Source the caller does not own; an Activity with no Observations (the
- * common case) or fed only by workspace-visible/own-private Sources stays included.
+ * `links_visibility` RLS policy (migrations/core/0010_link_visibility.sql, redefined by
+ * migrations/core/0013_link_visibility_security_definer.sql): every Fact-reading query builder
+ * below states the rule explicitly, the same convention this file already follows for
+ * `workspace_id` (bound as `$1` even though RLS enforces it too).
+ *
+ * Calls the `security definer` function `link_visible_to_caller` (0013) rather than joining
+ * `observations`/`sources` inline here — `nexttime_app` (the role every one of these queries runs
+ * under) has no RLS visibility into an `observations`/`sources` row it does not own, so an inline
+ * join here would suffer the exact bug 0013's own comment documents: RLS on those two tables
+ * hiding the very evidence this predicate needs to correctly hide a Fact. The function bypasses
+ * that (see 0013) and returns only a boolean.
  */
-const LINK_VISIBLE_PREDICATE = `
-  not exists (
-    select 1
-    from observations lo
-    join sources ls on ls.workspace_id = lo.workspace_id and ls.id = lo.source_id
-    where lo.workspace_id = l.workspace_id
-      and lo.activity_id = l.activity_id
-      and ls.visibility = 'private'
-      and ls.owner_principal_id <> app_principal()
-  )
-`;
+const LINK_VISIBLE_PREDICATE = 'link_visible_to_caller(l.workspace_id, l.activity_id)';
 
 // -------------------------------------------------------------------------------------------
 // objects
