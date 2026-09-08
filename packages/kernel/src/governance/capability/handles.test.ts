@@ -20,6 +20,7 @@ import {
   createDbRevocationCheck,
   entryScope,
   issueHandle,
+  revokeEntrySessionHandles,
   revokeHandle,
   revokeSession,
   verifyHandle,
@@ -775,6 +776,93 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(verifyHandle(second.token, { publicKey, isRevoked })).rejects.toThrow(
         HandleRevoked,
       );
+    });
+
+    // Authority-tightening fix (review job 652a4abc item 4): "Grant changes become visible" —
+    // grants.ts's grantCapability/revokeCapabilityGrant call this whenever the changed grant's
+    // capability is 'gatekeeper', so a cached entry Handle is forced to reissue on the principal's
+    // next Turn.
+    it('revokeEntrySessionHandles revokes every handle under the principal’s own kind=entry session(s), and leaves other principals/kinds untouched', async () => {
+      const { privateKey, publicKey } = await generateEphemeralHandleKeyPair();
+      const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
+
+      const entryPrincipalId = otherPrincipalId;
+      const entrySessionId = await insertSession(workspaceId, entryPrincipalId, entryPrincipalId);
+      // A second entry session for the same principal (e.g. a crashed-and-restarted entry agent
+      // that never cleaned up its old row) — both must be revoked.
+      const secondEntrySessionId = await insertSession(
+        workspaceId,
+        entryPrincipalId,
+        entryPrincipalId,
+      );
+      // A non-entry (web) session for the same principal, and an entry session for a *different*
+      // principal — neither must be touched.
+      const webSessionId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: entryPrincipalId },
+        async (client) => {
+          const id = randomUUID();
+          await client.query(
+            `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, $3, 'web', $3, 'active')`,
+            [workspaceId, id, entryPrincipalId],
+          );
+          return id;
+        },
+      );
+
+      const [entryIssued, secondEntryIssued, webIssued, otherOwnerIssued] = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const entry = await issueHandle(client, {
+            sessionId: entrySessionId,
+            scope,
+            ttlSeconds: 300,
+            privateKey,
+          });
+          const secondEntry = await issueHandle(client, {
+            sessionId: secondEntrySessionId,
+            scope,
+            ttlSeconds: 300,
+            privateKey,
+          });
+          const web = await issueHandle(client, {
+            sessionId: webSessionId,
+            scope,
+            ttlSeconds: 300,
+            privateKey,
+          });
+          const otherOwner = await issueHandle(client, {
+            sessionId,
+            scope,
+            ttlSeconds: 300,
+            privateKey,
+          });
+          return [entry, secondEntry, web, otherOwner];
+        },
+      );
+
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        revokeEntrySessionHandles(client, workspaceId, entryPrincipalId),
+      );
+
+      const isRevoked = (jti: string): Promise<boolean> =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          createDbRevocationCheck(client)(jti),
+        );
+
+      await expect(verifyHandle(entryIssued.token, { publicKey, isRevoked })).rejects.toThrow(
+        HandleRevoked,
+      );
+      await expect(verifyHandle(secondEntryIssued.token, { publicKey, isRevoked })).rejects.toThrow(
+        HandleRevoked,
+      );
+      // Untouched: not a `kind='entry'` session, or belongs to a different principal.
+      await expect(verifyHandle(webIssued.token, { publicKey, isRevoked })).resolves.toBeTruthy();
+      await expect(
+        verifyHandle(otherOwnerIssued.token, { publicKey, isRevoked }),
+      ).resolves.toBeTruthy();
     });
 
     it('UPDATE of on_behalf_of fails — I13, enforced by the capability_handles trigger', async () => {

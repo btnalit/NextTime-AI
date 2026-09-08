@@ -349,6 +349,55 @@ describe('AgentHostRuntime — startTurn happy path', () => {
 
     expect(handleCount.get(principalId)).toBe(2);
   });
+
+  // Authority-tightening fix (review job 652a4abc item 4): "Grant changes become visible" — a
+  // Grant made or revoked between two Turns must be picked up on the very next `startTurn`, not
+  // only once the cached Handle is close enough to its ttl to reissue anyway.
+  it('reissues the entry Handle early when the principal’s gatekeeper Grant coverage changed since the last issuance, even with a fresh cache', async () => {
+    const principalId = randomUUID();
+    const workspaceId = randomUUID();
+    const grantedGatekeeperIdsByPrincipal = new Map<string, readonly string[]>([
+      [principalId, ['gk-1']],
+    ]);
+    const { pool, handleCount } = createFakePool(new Map(), grantedGatekeeperIdsByPrincipal);
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      entryHandleTtlSeconds: 3600, // deliberately long — ttl-based reissue would not fire here
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const first = startTurnInput({ principalId, workspaceId });
+    const firstPromise = runtime.startTurn(first);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: first.turnId });
+    await firstPromise;
+
+    // A Grant was added (workspace owner ran `grant_capability{capability:'gatekeeper', ...}`) —
+    // simulated here by mutating the fake pool's own grant map, exactly as a real `capability_
+    // grants` row appearing between two `ensureEntryHandle` reads would.
+    grantedGatekeeperIdsByPrincipal.set(principalId, ['gk-1', 'gk-2']);
+
+    const second = startTurnInput({ principalId, workspaceId });
+    const secondPromise = runtime.startTurn(second);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: second.turnId });
+    await secondPromise;
+
+    expect(handleCount.get(principalId)).toBe(2); // reissued despite a still-fresh ttl
+    const secondCommand = sent[1] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    const payloadSegment = secondCommand.handle.split('.')[1] ?? '';
+    const claims = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8')) as {
+      scope: { resources: Record<string, readonly string[]> };
+    };
+    expect(new Set(claims.scope.resources.gatekeeper)).toEqual(new Set(['gk-1', 'gk-2']));
+  });
 });
 
 describe('AgentHostRuntime — startTurn resolves the published entry WorkerDefinition (S2.6)', () => {
