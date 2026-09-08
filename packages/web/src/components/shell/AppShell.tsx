@@ -26,7 +26,7 @@ export function AppShell({ active, http, pushes, onForgetKey, children }: AppShe
         pendingCount={pendingCount}
         wsStatus={wsStatus}
         workspaceName={workspaceName}
-        role={role}
+        inferredRole={role}
         onForgetKey={onForgetKey}
       />
       <main className="main">{children}</main>

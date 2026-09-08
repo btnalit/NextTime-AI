@@ -68,7 +68,7 @@ export interface SidebarProps {
   readonly pendingCount: number | null;
   readonly wsStatus: WsConnectionStatus;
   readonly workspaceName: string;
-  readonly role: InferredRole;
+  readonly inferredRole: InferredRole;
   readonly onForgetKey: () => void;
 }
 
@@ -84,10 +84,10 @@ export function Sidebar({
   pendingCount,
   wsStatus,
   workspaceName,
-  role,
+  inferredRole,
   onForgetKey,
 }: SidebarProps) {
-  const showGovern = role !== 'member';
+  const showGovern = inferredRole !== 'member';
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -101,11 +101,11 @@ export function Sidebar({
               {workspaceName}
             </span>
             <span
-              className={`role-badge ${ROLE_BADGE_CLASS[role]}`}
+              className={`role-badge ${ROLE_BADGE_CLASS[inferredRole]}`}
               data-testid="role-badge"
-              title={`Inferred role: ${ROLE_BADGE_LABEL[role]}`}
+              title={`Inferred role: ${ROLE_BADGE_LABEL[inferredRole]}`}
             >
-              {ROLE_BADGE_LABEL[role]}
+              {ROLE_BADGE_LABEL[inferredRole]}
             </span>
           </span>
         </div>
