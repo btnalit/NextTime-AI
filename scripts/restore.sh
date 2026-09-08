@@ -30,6 +30,16 @@
 # stdin), then runs:
 #   docker compose exec -T postgres pg_restore --clean --if-exists -U nexttime -d <target> <path>
 # and removes the copied file from the container afterward.
+#
+# Live restore (--target-db nexttime --i-know) additionally stops kernel/agent-host/
+# worker-supervisor/backup first (lane-7 P2 fix): all four either hold live connections to
+# `nexttime` (kernel, and transitively agent-host/worker-supervisor's own request paths) or write
+# into the same $NEXTTIME_DATA tree pg_restore --clean is about to tear down and rebuild
+# (backup — running the nightly dump concurrently with a live restore is exactly the kind of race
+# that corrupts both). A throwaway --target-db restore never touches this — nothing else in the
+# stack ever connects to a nexttime_restore_<ts> database, so there is nothing to stop. The stop
+# is undone in a trap (`restart_live_services`, below `set -eu`) so a fatal pg_restore error still
+# leaves the stack running rather than exiting mid-script with core services down.
 
 set -eu
 
@@ -38,6 +48,18 @@ TARGET_DB=""
 FILES_TGZ=""
 DRY_RUN=0
 I_KNOW=0
+LIVE_SERVICES_STOPPED=0
+
+# Restarts kernel/agent-host/worker-supervisor/backup if (and only if) this run stopped them for
+# a live restore — registered as an EXIT trap right after that stop, so it fires whether the
+# script goes on to succeed, hits `exit "$restore_rc"` on a fatal pg_restore error, or dies to an
+# unexpected error under `set -e`. A no-op for a dry-run or a throwaway-target restore.
+restart_live_services() {
+	if [ "$LIVE_SERVICES_STOPPED" -eq 1 ]; then
+		echo "restore: restarting kernel/agent-host/worker-supervisor/backup"
+		docker compose start kernel agent-host worker-supervisor backup
+	fi
+}
 
 usage() {
 	cat >&2 <<'EOF'
@@ -153,6 +175,16 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # --- real restore: DB ----------------------------------------------------------------------
+if [ "$TARGET_DB" = "nexttime" ] && [ "$I_KNOW" -eq 1 ]; then
+	echo "restore: live restore — stopping kernel, agent-host, worker-supervisor, backup first" >&2
+	echo "         (they hold connections to, or write into, the live data this is about to" >&2
+	echo "         --clean and rebuild; restarted automatically when this script exits, success" >&2
+	echo "         or failure)." >&2
+	docker compose stop kernel agent-host worker-supervisor backup
+	LIVE_SERVICES_STOPPED=1
+	trap restart_live_services EXIT
+fi
+
 if [ "$TARGET_DB" != "nexttime" ] || [ "$I_KNOW" -ne 1 ]; then
 	# Fresh throwaway target: create it now. (The nexttime/--i-know case skips this — that
 	# database is assumed to already exist and --clean --if-exists will handle prior objects.)
