@@ -186,6 +186,15 @@ export const KernelStartTurnCommandSchema = z
      *  `entrypoint.sh`'s own `"$@"` passthrough). Omitted leaves pi's own default model
      *  selection in place. */
     model: z.string().optional(),
+    /** feat/egress-definition-lists: the same published `kind='entry'` WorkerDefinition's own
+     *  `egressDeny` (`packages/shared/src/worker-definition.ts`), resolved fresh alongside
+     *  `systemPrompt`/`model` on every `startTurn` — forwarded by agent-host as `/resident/spawn`'s
+     *  own `egressDeny`, which worker-supervisor writes into the spawned/reused container's
+     *  `SOURCE_MAP_FILE` entry (`egress-map.ts`'s `deny`) so `@nexttime/egress-proxy`'s existing
+     *  per-source deny check (`policy.ts`) narrows that entry session's own egress on top of the
+     *  platform's fixed deny list. Omitted (no definition published, or none set) leaves the
+     *  existing/no per-source deny list untouched — never a widening either way. */
+    egressDeny: z.array(z.string()).optional(),
   })
   .strict();
 

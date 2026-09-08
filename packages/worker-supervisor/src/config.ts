@@ -254,6 +254,13 @@ export const SpawnRequestSchema = z
     llmUrl: z.string().min(1).optional(),
     systemPrompt: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    /** feat/egress-definition-lists: the published entry WorkerDefinition's own `egressDeny`
+     *  (`@nexttime/shared`'s `worker-definition.ts`), forwarded by agent-host from the `startTurn`
+     *  command's own field of the same name (`@nexttime/shared`'s `agent-host-protocol.ts`) —
+     *  written into this principal's `SOURCE_MAP_FILE` entry on every spawn (reuse or fresh), same
+     *  "refresh every call" convention as `systemPrompt` above. Omitted leaves the existing/no
+     *  per-source deny list untouched. */
+    egressDeny: z.array(z.string().min(1)).optional(),
   })
   .strict();
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
@@ -384,6 +391,12 @@ export const TaskSpawnRequestSchema = z
     model: z.string().min(1).optional(),
     skillsInline: z.array(TaskSkillInlineSchema).optional(),
     timeoutSec: z.number().int().positive().optional(),
+    /** feat/egress-definition-lists: the invoked WorkerDefinition's own `egressDeny`
+     *  (`@nexttime/shared`'s `worker-definition.ts`, `kind='worker'` content), resolved by the
+     *  kernel (`application/task/spawn.ts`) and forwarded here — written into this WorkerRun's
+     *  `SOURCE_MAP_FILE` entry on spawn. Omitted (no list declared) registers no per-source deny
+     *  list, same as before this field existed. */
+    egressDeny: z.array(z.string().min(1)).optional(),
   })
   .strict();
 export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;

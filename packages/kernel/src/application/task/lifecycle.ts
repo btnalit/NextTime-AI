@@ -339,6 +339,7 @@ export async function reactToSupervisorStatus(
  * retry silently gaining privilege the original invocation did not have.
  *
  * **P2-10 fix (review job 652a4abc: "requeue omits skillsInline and model")**: `model`/`skillsInline`
+ * (and, since feat/egress-definition-lists, `egressDeny` too — same rationale, same treatment)
  * are re-resolved from the Task's own *pinned* WorkerDefinition (`task.workerDefinitionId`/
  * `.workerDefinitionVersion` — §5.5 "Task 固定引用启动时版本", never re-derived from anything that
  * could have changed since `invoke_worker` first ran) via `getWorkerDefinition` — deliberately
@@ -347,8 +348,9 @@ export async function reactToSupervisorStatus(
  * a legitimate crash-retry into an immediate `worker_failed` (the retry is re-running a Task that
  * was already validly invoked; it is not a fresh `invoke_worker` call subject to that same I17-style
  * "only published" gate). A missing definition row (should not happen — the Task's own FK-less
- * reference already resolved once) degrades to no `model`/`skillsInline`, same "best effort, never
- * blocks the caller" convention `resolveSkillsInline` itself already uses for an individual skill
+ * reference already resolved once) degrades to no `model`/`skillsInline`/`egressDeny`, same "best
+ * effort, never blocks the caller" convention `resolveSkillsInline` itself already uses for an
+ * individual skill
  * ref that fails to resolve.
  */
 async function spawnWorkerRunForRetry(
@@ -374,7 +376,7 @@ async function spawnWorkerRunForRetry(
 
   const scope = handleRow.scope as { capabilities: string[]; resources: Record<string, string[]> };
 
-  const { model, skillsInline, definitionName } = await withWorkspace(
+  const { model, skillsInline, definitionName, egressDeny } = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: onBehalfOf },
     async (client) => {
@@ -386,8 +388,13 @@ async function spawnWorkerRunForRetry(
         // No definition row (should not happen — see this function's own doc comment): fall back
         // to the Task's own pinned id so `ensureWorkerAgentPrincipal` still gets a usable
         // `display_name`, same "best effort, never blocks the caller" convention `model`/
-        // `skillsInline` already use one line above.
-        return { model: undefined, skillsInline: [], definitionName: task.workerDefinitionId };
+        // `skillsInline`/`egressDeny` already use one line above.
+        return {
+          model: undefined,
+          skillsInline: [],
+          definitionName: task.workerDefinitionId,
+          egressDeny: undefined,
+        };
       }
       const content = readDefinitionContent(definition.definition);
       return {
@@ -397,6 +404,7 @@ async function spawnWorkerRunForRetry(
           typeof definition.definition.name === 'string'
             ? definition.definition.name
             : definition.id,
+        egressDeny: content.egressDeny,
       };
     },
   );
@@ -418,6 +426,7 @@ async function spawnWorkerRunForRetry(
       model,
       definitionName,
       skillsInline,
+      egressDeny,
     });
   } catch {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, (client) =>

@@ -24,6 +24,13 @@ token。
 `com.docker.compose.network=workers` 标签在启动时解析。细节见 `src/resident-service.ts`、
 `src/spawn-spec.ts` 的模块注释，以及 `docs/runbooks/host-worker-runtime.md` §1–§8（含主机验收记录）。
 
+`POST /resident/spawn` 的请求体（`SpawnRequestSchema`）额外接受 `systemPrompt?`/`model?`
+（S2.6，来自已发布入口 WorkerDefinition，agent-host 在每个 `startTurn` 上重新解析并转发）与
+`egressDeny?`（feat/egress-definition-lists，同一个已发布入口 WorkerDefinition 的
+`egressDeny`）——语义与上面 Task 模式的 `egressDeny` 完全一致：每次 spawn（无论新建还是复用一个仍在
+跑的容器）都会重新写入来源映射，所以一个新发布的 WorkerDefinition 版本的拒绝名单，下一次
+`startTurn` 就生效，不必等容器重启；`reconcile()` 同样从 `nexttime.egress-deny` label 恢复。
+
 ## Task 模式（S2.8）
 
 一次性 Worker 容器：`POST /task/spawn`、`POST /task/:workerRunId/terminate`、
@@ -47,8 +54,18 @@ token。
     { "name": "...", "files": { "SKILL.md": "..." } }
   ],
   "timeoutSec": 90,          // 可选，默认 TASK_MAX_RUNTIME_SEC
+  "egressDeny": ["blocked.example.com"], // 可选（feat/egress-definition-lists），见下方一条
 }
 ```
+
+`egressDeny`（feat/egress-definition-lists）：被调用的 WorkerDefinition 自己的 `egressDeny`
+（`packages/shared/src/worker-definition.ts`，`kind='worker'` 内容现在也可声明这个字段，不再仅限
+entry）——写进这个 WorkerRun 在 `SOURCE_MAP_FILE` 里的条目（`deny`），使
+`@nexttime/egress-proxy` 在平台固定拒绝名单之上再收窄这一个来源的出网；只narrow，从不放宽。同时
+以逗号拼接写进容器的 `nexttime.egress-deny` label，供 supervisor 重启后 `reconcile()` 从容器本身
+恢复这份名单（否则重启会把这个字段静默清空，短暂放宽出网，直到该 Task 结束——见
+`task-spawn-spec.ts`/`task-service.ts` 的模块注释）。省略时不注册任何每来源拒绝名单，行为与该字段
+存在前完全一致。`/resident/spawn`（常驻入口容器）走同一套机制，见下一节。
 
 **已删除**：早前这里还有一个 `skills: [{name, hostPath}]` 字段（只读 bind-mount 一个"已经在宿主机上
 的文件"）。已随 fix/runtime-hardening（lane-6 review P1-3）整个删除，不再是请求体的合法字段——

@@ -78,6 +78,17 @@ describe('createEgressMapStore', () => {
     });
   });
 
+  it('registers an entry carrying a deny list (feat/egress-definition-lists)', () => {
+    const store = createEgressMapStore(file);
+    store.register('198.51.100.10', {
+      sourceId: entrySourceId('ws-1', 'alice'),
+      deny: ['blocked.example.com'],
+    });
+    expect(store.read()).toEqual({
+      '198.51.100.10': { sourceId: 'entry:ws-1:alice', deny: ['blocked.example.com'] },
+    });
+  });
+
   it('unregistering an absent IP is a no-op (does not touch the file)', () => {
     const store = createEgressMapStore(file);
     store.register('198.51.100.10', { sourceId: 'entry:ws-1:alice' });

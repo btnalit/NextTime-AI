@@ -140,6 +140,18 @@ describe('KernelToAgentHostFrameSchema', () => {
     expect(KernelToAgentHostFrameSchema.safeParse(stopTurn).success).toBe(true);
   });
 
+  it('accepts an optional egressDeny on startTurn (feat/egress-definition-lists)', () => {
+    const startTurn = {
+      type: 'startTurn',
+      ...correlation(),
+      prompt: '<!--nexttime:turn_id=abc-->\nhello',
+      handle: 'jwt-token',
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      egressDeny: ['blocked.example.com'],
+    };
+    expect(KernelStartTurnCommandSchema.safeParse(startTurn).success).toBe(true);
+  });
+
   it('rejects an agent-host->kernel frame sent on the wrong channel', () => {
     expect(
       KernelToAgentHostFrameSchema.safeParse({ type: 'hello', instanceId: randomUUID() }).success,

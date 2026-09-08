@@ -60,6 +60,12 @@ export interface SpawnWorkerRunInput {
    *  else about the retry (capabilities/gates/authority) still comes from the failed WorkerRun's
    *  own already-granted Handle scope, never re-derived. */
   readonly skillsInline?: readonly TaskSkillInlineMountInput[];
+  /** feat/egress-definition-lists: the invoked WorkerDefinition's own `egressDeny`
+   *  (`definition-content.ts`'s `WorkerDefinitionContentShape`), resolved by the caller
+   *  (`invoke.ts`'s initial spawn, `lifecycle.ts`'s requeue — same convention `model`/
+   *  `skillsInline` above already follow) and forwarded verbatim to the supervisor's `/task/spawn`
+   *  — never re-derived here. */
+  readonly egressDeny?: readonly string[];
 }
 
 /** Creates one WorkerRun row (`provisioning`), its `kind='worker_run'` Activity (S2.7 egress
@@ -165,6 +171,7 @@ export async function spawnWorkerRun(
       model: input.model,
       skillsInline: input.skillsInline,
       timeoutSec: durationLimitSec,
+      egressDeny: input.egressDeny,
     });
   } catch (err) {
     await withWorkspace(

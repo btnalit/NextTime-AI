@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Role, RoleSchema, type WorkerDefinitionKind } from '@nexttime/shared';
+import type { PoolClient } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { PoolLike } from '../adapters/db/pool.js';
@@ -25,6 +26,8 @@ import { resolveOntologyDir, seedPlatformMetaOntology } from '../substrate/ontol
  * Usage:
  *   node dist/cli/bootstrap.js create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>]
  *   node dist/cli/bootstrap.js add-principal --workspace <id> --name <display-name> [--role <role>]
+ *   node dist/cli/bootstrap.js list-workspaces
+ *   node dist/cli/bootstrap.js delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]
  *
  * `create-workspace` creates the Workspace and its first Principal (`kind='human'`,
  * `role='owner'` — design doc §5.1.1), generates an API key, and prints it exactly once: only its
@@ -57,6 +60,21 @@ import { resolveOntologyDir, seedPlatformMetaOntology } from '../substrate/ontol
  * should surface immediately, not a soft-fail case like this file's own egress-registration
  * precedent elsewhere in the codebase (that precedent is for a *runtime* best-effort integration,
  * not a one-time setup step whose whole point is to leave the workspace correctly seeded).
+ *
+ * `delete-workspace`/`list-workspaces` (operator-only, destructive workspace teardown — see the
+ * doc comment above `discoverWorkspaceScopedSchema` below for the full deletion-order/append-only
+ * -trigger rationale): the host-operator cleanup path for the throwaway workspaces acceptance/
+ * smoke runs accumulate. Deliberately CLI-only — this is never registered as a capability, so no
+ * Handle/agent path can ever reach it, regardless of what it is granted. `list-workspaces` prints
+ * every Workspace (id, name, created_at, principal/task counts) so an operator can pick a target
+ * — or a `--allow-name-pattern` — with real numbers in front of them, not guesswork.
+ * `delete-workspace` refuses without `--yes`, optionally cross-checks `--name` against the
+ * workspace's actual stored name (guards against a pasted-wrong-id mistake) and/or
+ * `--allow-name-pattern` against it (a bulk-run safety net), always prints what it found *before*
+ * checking any of that, and — once every guard passes — deletes the Workspace and every row any
+ * workspace-scoped table holds for it in one transaction, then prints machine-readable
+ * `PRINCIPAL=<id>`/`TASK=<id>` lines so `scripts/delete-workspace.sh` can remove the matching
+ * host-side container and data directory (docs/runbooks/host-bootstrap.md "Deleting a workspace").
  */
 
 const API_KEY_BYTES = 32;
@@ -288,6 +306,382 @@ export async function registerGatekeeperFromCli(
 }
 
 // -------------------------------------------------------------------------------------------
+// delete-workspace / list-workspaces — operator-only, destructive workspace teardown. CLI-only
+// by design (task brief: "CLI only, never a capability an agent can call"): the only entry point
+// is this file's `run()` dispatch table below, driven by a human operator — directly, or via the
+// host wrapper script that runs this file's compiled output inside the compose project's
+// `kernel` service (scripts/delete-workspace.sh) — nothing in the governed Handle/capability
+// system (`packages/shared/src/capabilities.ts`) ever names this operation, so no Worker or
+// entry agent can reach it no matter what it is granted.
+//
+// Host-side cleanup (the workspace's stopped resident entry container,
+// `${NEXTTIME_DATA}/workspaces/<principalId>` and `.../workspaces/tasks/<taskId>` data dirs) is
+// deliberately NOT done here: this file lives under `packages/kernel/src`, which
+// `scripts/check-kernel-purity.sh` scans for concrete system/vendor names — the kernel is
+// mechanism, not content (design doc §7.10). That cleanup is `scripts/delete-workspace.sh`'s job,
+// driven by this subcommand's own `PRINCIPAL=`/`TASK=` output lines (see `runDeleteWorkspace`).
+//
+// Deletion order (task brief): every table that carries a `workspace_id` column has a composite
+// `(workspace_id, id[, version])` primary key and, wherever it references another such table, a
+// matching composite foreign key — always the Postgres default `no action`, never `on delete
+// cascade` (verified against every migrations/**/*.sql file: no `on delete` clause exists
+// anywhere in this schema). So a bare `delete from workspaces where id = $1` fails on the first
+// principal still referencing it, and a bare per-table sweep in the wrong order fails the same
+// way one level down. `discoverWorkspaceScopedSchema` reads the *live* schema (information_schema
+// + pg_constraint) rather than hardcoding a table list, so a future migration that adds a new
+// workspace-scoped table is picked up automatically; `computeWorkspaceTableDeletionOrder`
+// topologically sorts it into a safe order (children — the referencing side — before parents).
+// -------------------------------------------------------------------------------------------
+
+export interface ForeignKeyEdge {
+  readonly childTable: string;
+  readonly parentTable: string;
+}
+
+export interface WorkspaceScopedSchema {
+  readonly tables: readonly string[];
+  readonly foreignKeys: readonly ForeignKeyEdge[];
+}
+
+/**
+ * Reads every `public` table with a `workspace_id` column, and every foreign key constraint
+ * between two such tables, from the live schema — the raw input
+ * `computeWorkspaceTableDeletionOrder` turns into a safe per-table delete order. Runtime
+ * discovery, not a table list maintained by hand in this file, so it never drifts from whatever
+ * `packages/kernel/migrations/**\/*.sql` actually declares.
+ */
+export async function discoverWorkspaceScopedSchema(
+  client: PoolClient,
+): Promise<WorkspaceScopedSchema> {
+  const tablesResult = await client.query<{ table_name: string }>(
+    `select distinct table_name
+     from information_schema.columns
+     where table_schema = 'public' and column_name = 'workspace_id'`,
+  );
+  const tables = tablesResult.rows.map((row) => row.table_name).sort();
+
+  const foreignKeysResult = await client.query<{ child_table: string; parent_table: string }>(
+    `select child.relname as child_table, parent.relname as parent_table
+     from pg_constraint c
+     join pg_class child on child.oid = c.conrelid
+     join pg_class parent on parent.oid = c.confrelid
+     join pg_namespace ns on ns.oid = child.relnamespace
+     where c.contype = 'f' and ns.nspname = 'public'`,
+  );
+  const foreignKeys = foreignKeysResult.rows.map((row) => ({
+    childTable: row.child_table,
+    parentTable: row.parent_table,
+  }));
+
+  return { tables, foreignKeys };
+}
+
+export class WorkspaceDeletionOrderCycleError extends Error {
+  constructor(remainingTables: readonly string[]) {
+    super(
+      `delete-workspace: cannot compute a safe deletion order — cyclic foreign keys among: ${remainingTables.join(', ')}`,
+    );
+    this.name = 'WorkspaceDeletionOrderCycleError';
+  }
+}
+
+/**
+ * Topologically sorts `schema.tables` so that every table is deleted before every other table it
+ * holds a foreign key to (Kahn's algorithm: a table becomes eligible once nothing still in the
+ * graph references it) — exactly the order a bare `delete from <table> where workspace_id = $1`
+ * per table needs to never hit a "no action" FK violation.
+ *
+ * Self-referencing foreign keys (`links.supersedes_id`, `capability_handles.parent_jti`,
+ * `worker_runs.parent_worker_run_id`) need no ordering at all — a single `delete ... where
+ * workspace_id = $1` statement removes every row of that table together, satisfying its own
+ * self-FK regardless of which row the constraint machinery happens to check first — so an edge
+ * from a table to itself is dropped before building the graph, not treated as a 1-node cycle.
+ *
+ * Pure — no DB access — so the topology (including the self-reference and multi-level-chain
+ * cases) is unit-testable against a fabricated `WorkspaceScopedSchema`, independent of the live
+ * schema `discoverWorkspaceScopedSchema` reads. Throws `WorkspaceDeletionOrderCycleError` if a
+ * genuine (non-self) cycle makes no valid order possible — not expected against this codebase's
+ * actual schema, but a real possibility for a fabricated/future one, so left as a hard failure
+ * rather than a silently-wrong partial order.
+ */
+export function computeWorkspaceTableDeletionOrder(schema: WorkspaceScopedSchema): string[] {
+  const tables = new Set(schema.tables);
+  const inDegree = new Map<string, number>();
+  // childTable -> the parentTables it must be deleted before (its own outgoing foreign keys).
+  const mustPrecede = new Map<string, string[]>();
+
+  for (const table of tables) {
+    inDegree.set(table, 0);
+    mustPrecede.set(table, []);
+  }
+
+  for (const edge of schema.foreignKeys) {
+    if (edge.childTable === edge.parentTable) continue;
+    if (!tables.has(edge.childTable) || !tables.has(edge.parentTable)) continue;
+    mustPrecede.get(edge.childTable)?.push(edge.parentTable);
+    inDegree.set(edge.parentTable, (inDegree.get(edge.parentTable) ?? 0) + 1);
+  }
+
+  // Nothing (still in the graph) references a zero-in-degree table — it is safe to delete first.
+  const ready = [...tables].filter((table) => inDegree.get(table) === 0).sort();
+  const order: string[] = [];
+
+  while (ready.length > 0) {
+    ready.sort();
+    const table = ready.shift();
+    if (table === undefined) break;
+    order.push(table);
+    for (const parent of mustPrecede.get(table) ?? []) {
+      const remaining = (inDegree.get(parent) ?? 0) - 1;
+      inDegree.set(parent, remaining);
+      if (remaining === 0) ready.push(parent);
+    }
+  }
+
+  if (order.length !== tables.size) {
+    const remaining = [...tables].filter((table) => !order.includes(table));
+    throw new WorkspaceDeletionOrderCycleError(remaining);
+  }
+
+  return order;
+}
+
+export interface WorkspaceInspection {
+  readonly workspaceId: string;
+  readonly name: string;
+  readonly createdAt: Date;
+  readonly principalCount: number;
+  readonly taskCount: number;
+}
+
+/** Read-only lookup used by `delete-workspace` to print "what is this, and how much does it
+ *  hold" *before* any guard is checked or any row touched (task brief: "before acting") — `null`
+ *  if no such workspace exists. Runs over the same admin/skip-role-switch path every other
+ *  cross-workspace lookup in this file uses; a plain read needs no real workspace/principal GUCs
+ *  (see `withAdminClient`'s doc comment, application/gateway/auth.ts, for why those two values
+ *  are inert once `skipRoleSwitch` is set — not imported here only because this file is not part
+ *  of the six-layer dependency-cruiser rule but still keeps its existing convention of calling
+ *  `withWorkspace(..., { skipRoleSwitch: true })` directly, exactly as `createWorkspace`/
+ *  `addPrincipal` above already do). */
+export async function inspectWorkspace(
+  pool: PoolLike,
+  workspaceId: string,
+): Promise<WorkspaceInspection | null> {
+  return withWorkspace(
+    pool,
+    { workspaceId, principalId: randomUUID() },
+    async (client) => {
+      const workspaceRow = (
+        await client.query<{ name: string; created_at: Date }>(
+          'select name, created_at from workspaces where id = $1',
+          [workspaceId],
+        )
+      ).rows[0];
+      if (!workspaceRow) return null;
+
+      const principalCount = Number(
+        (
+          await client.query<{ count: string }>(
+            'select count(*)::bigint as count from principals where workspace_id = $1',
+            [workspaceId],
+          )
+        ).rows[0]?.count ?? 0,
+      );
+      const taskCount = Number(
+        (
+          await client.query<{ count: string }>(
+            'select count(*)::bigint as count from tasks where workspace_id = $1',
+            [workspaceId],
+          )
+        ).rows[0]?.count ?? 0,
+      );
+
+      return {
+        workspaceId,
+        name: workspaceRow.name,
+        createdAt: workspaceRow.created_at,
+        principalCount,
+        taskCount,
+      };
+    },
+    { skipRoleSwitch: true },
+  );
+}
+
+export interface WorkspaceListEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: Date;
+  readonly principalCount: number;
+  readonly taskCount: number;
+}
+
+/** Every Workspace, oldest first, with its Principal/Task counts — `list-workspaces`' own
+ *  deliverable ("make bulk selection safe"): an operator (or `scripts/delete-workspaces-matching.
+ *  sh`) reviews this before choosing which ids/names to hand to `delete-workspace`. */
+export async function listWorkspaces(pool: PoolLike): Promise<WorkspaceListEntry[]> {
+  return withWorkspace(
+    pool,
+    { workspaceId: randomUUID(), principalId: randomUUID() },
+    async (client) => {
+      const result = await client.query<{
+        id: string;
+        name: string;
+        created_at: Date;
+        principal_count: string;
+        task_count: string;
+      }>(
+        `select
+           w.id,
+           w.name,
+           w.created_at,
+           (select count(*) from principals p where p.workspace_id = w.id)::bigint as principal_count,
+           (select count(*) from tasks t where t.workspace_id = w.id)::bigint as task_count
+         from workspaces w
+         order by w.created_at asc`,
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        createdAt: row.created_at,
+        principalCount: Number(row.principal_count),
+        taskCount: Number(row.task_count),
+      }));
+    },
+    { skipRoleSwitch: true },
+  );
+}
+
+/** Thrown for `delete-workspace` refusals that depend on runtime state (workspace not found, a
+ *  guard in `checkDeleteWorkspaceGuards` failed) — distinct from `BootstrapUsageError`, which
+ *  this file reserves for a malformed invocation (bad flags/missing required args, independent of
+ *  what is actually in the database). */
+export class DeleteWorkspaceRefusedError extends Error {}
+
+const LINKS_DELETE_TRIGGER = 'links_immutable_delete';
+const AUDIT_RECORDS_DELETE_TRIGGER = 'audit_records_no_delete';
+
+/** Matches a bare lowercase Postgres identifier. Every table name `deleteWorkspace` ever builds
+ *  a dynamic `delete from "<table>"` statement for comes from `discoverWorkspaceScopedSchema`
+ *  (information_schema/pg_constraint — real catalog data, never CLI input), so this is cheap
+ *  defense-in-depth against building a malformed statement, not a real injection concern. */
+const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
+
+export interface DeleteWorkspaceResult {
+  readonly workspaceId: string;
+  readonly name: string;
+  /** Every `principals.id` that belonged to this workspace, read back before any row was
+   *  deleted — `runDeleteWorkspace` prints these as `PRINCIPAL=<id>` lines so
+   *  `scripts/delete-workspace.sh` can remove the matching `nexttime-entry-<id>` container and
+   *  `${NEXTTIME_DATA}/workspaces/<id>` data dir (host-side; see this section's own doc comment
+   *  for why that cleanup does not live here). */
+  readonly principalIds: readonly string[];
+  /** Every `tasks.id` that belonged to this workspace, read back the same way — printed as
+   *  `TASK=<id>` lines for the matching `${NEXTTIME_DATA}/workspaces/tasks/<id>` data dir. */
+  readonly taskIds: readonly string[];
+  /** Rows actually deleted from each workspace-scoped table, in the order they were deleted
+   *  (children before parents — see `computeWorkspaceTableDeletionOrder`). */
+  readonly deletedCounts: ReadonlyMap<string, number>;
+}
+
+/**
+ * Deletes a Workspace and every row any workspace-scoped table holds for it, in one transaction,
+ * over the admin/skip-role-switch path `createWorkspace` above already establishes (bypasses RLS
+ * the same way). No guard (`--yes`/`--name`/`--allow-name-pattern`) is checked here — this
+ * function is the mechanism; `checkDeleteWorkspaceGuards` is the policy, already applied by
+ * `runDeleteWorkspace` before this is ever called. Kept separate so an integration test can drive
+ * the mechanism directly, exactly like `createWorkspace`/`addPrincipal` above.
+ *
+ * `links` (I4) and `audit_records` (I11) are append-only — each has a `before delete` trigger
+ * (`links_immutable_delete` / `audit_records_no_delete`, migrations/core/0002_substrate.sql and
+ * 0004_audit.sql) that unconditionally raises, regardless of role, so even this RLS-bypassing
+ * admin connection cannot delete a row in either table without first disabling that trigger. This
+ * is the one deliberate, audited override of those two invariants anywhere in this codebase: full
+ * workspace teardown is an operator-only, machine-logged action (`runDeleteWorkspace`'s stderr
+ * `workspace_deleted` line), never something application code can trigger — nothing else in
+ * `packages/kernel/src` ever runs this statement. Both triggers are re-enabled before COMMIT
+ * (`alter table ... enable trigger` is DDL, so it must happen inside the same transaction that
+ * disabled them — leaving either disabled past COMMIT would silently and permanently remove that
+ * invariant for every future write, not just this one).
+ */
+export async function deleteWorkspace(
+  pool: PoolLike,
+  workspaceId: string,
+): Promise<DeleteWorkspaceResult> {
+  return withWorkspace(
+    pool,
+    { workspaceId, principalId: randomUUID() },
+    async (client) => {
+      const name = (
+        await client.query<{ name: string }>('select name from workspaces where id = $1', [
+          workspaceId,
+        ])
+      ).rows[0]?.name;
+      if (name === undefined) {
+        throw new DeleteWorkspaceRefusedError(`workspace not found: ${workspaceId}`);
+      }
+
+      const principalIds = (
+        await client.query<{ id: string }>('select id from principals where workspace_id = $1', [
+          workspaceId,
+        ])
+      ).rows.map((row) => row.id);
+      const taskIds = (
+        await client.query<{ id: string }>('select id from tasks where workspace_id = $1', [
+          workspaceId,
+        ])
+      ).rows.map((row) => row.id);
+
+      const schema = await discoverWorkspaceScopedSchema(client);
+      const order = computeWorkspaceTableDeletionOrder(schema);
+
+      if (order.includes('links')) {
+        await client.query(`alter table links disable trigger ${LINKS_DELETE_TRIGGER}`);
+      }
+      if (order.includes('audit_records')) {
+        await client.query(
+          `alter table audit_records disable trigger ${AUDIT_RECORDS_DELETE_TRIGGER}`,
+        );
+      }
+
+      const deletedCounts = new Map<string, number>();
+      for (const table of order) {
+        if (!SAFE_IDENTIFIER.test(table)) {
+          throw new Error(
+            `delete-workspace: refusing to delete from unexpected table name "${table}"`,
+          );
+        }
+        const result = await client.query(`delete from "${table}" where workspace_id = $1`, [
+          workspaceId,
+        ]);
+        deletedCounts.set(table, result.rowCount ?? 0);
+      }
+
+      if (order.includes('audit_records')) {
+        await client.query(
+          `alter table audit_records enable trigger ${AUDIT_RECORDS_DELETE_TRIGGER}`,
+        );
+      }
+      if (order.includes('links')) {
+        await client.query(`alter table links enable trigger ${LINKS_DELETE_TRIGGER}`);
+      }
+
+      const deletedWorkspace = await client.query('delete from workspaces where id = $1', [
+        workspaceId,
+      ]);
+      if ((deletedWorkspace.rowCount ?? 0) !== 1) {
+        throw new DeleteWorkspaceRefusedError(
+          `workspace row vanished during its own deletion: ${workspaceId}`,
+        );
+      }
+
+      return { workspaceId, name, principalIds, taskIds, deletedCounts };
+    },
+    { skipRoleSwitch: true },
+  );
+}
+
+// -------------------------------------------------------------------------------------------
 // CLI plumbing
 // -------------------------------------------------------------------------------------------
 
@@ -317,6 +711,88 @@ function parseFlags(argv: readonly string[]): ParsedFlags {
 }
 
 class BootstrapUsageError extends Error {}
+
+export interface DeleteWorkspaceCliArgs {
+  readonly workspaceId: string;
+  readonly yes: boolean;
+  readonly expectedName?: string;
+  readonly allowNamePattern?: RegExp;
+}
+
+/**
+ * Parses `delete-workspace <workspaceId> --yes [--name <expected name>]
+ * [--allow-name-pattern <regex>]`. Throws `BootstrapUsageError` only for what makes the
+ * invocation itself malformed (no positional workspaceId, an `--allow-name-pattern` that is not
+ * a valid regular expression) — never for a guard that depends on the workspace's actual stored
+ * name; that is `checkDeleteWorkspaceGuards`'s job, run only once the name has been read back
+ * from the database. Exported (unlike the other subcommands' inline `parseFlags` calls) so it —
+ * and the guard function below — are unit-testable without a database, matching this
+ * subcommand's own higher bar (destructive, operator-only) for argument-guard test coverage.
+ */
+export function parseDeleteWorkspaceArgs(argv: readonly string[]): DeleteWorkspaceCliArgs {
+  const workspaceId = argv[0];
+  if (workspaceId === undefined || workspaceId.startsWith('--')) {
+    throw new BootstrapUsageError(
+      'usage: bootstrap delete-workspace <workspaceId> --yes [--name <expected name>] ' +
+        '[--allow-name-pattern <regex>]',
+    );
+  }
+
+  const flags = parseFlags(argv.slice(1));
+  const yes = argv.includes('--yes');
+  const expectedName = flags.name;
+  const allowNamePatternSource = flags['allow-name-pattern'];
+
+  let allowNamePattern: RegExp | undefined;
+  if (allowNamePatternSource !== undefined) {
+    try {
+      allowNamePattern = new RegExp(allowNamePatternSource);
+    } catch (err) {
+      throw new BootstrapUsageError(
+        `usage: bootstrap delete-workspace: --allow-name-pattern is not a valid regular expression: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return { workspaceId, yes, expectedName, allowNamePattern };
+}
+
+export type DeleteWorkspaceGuardResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * The three refusal conditions `delete-workspace`'s own contract names, checked against the
+ * workspace's *actual* stored name — never trust `--name` alone; catching a pasted-wrong-id
+ * mistake is the whole point of that flag. Pure — no DB access — so every branch (missing
+ * `--yes`, a `--name` mismatch, an `--allow-name-pattern` mismatch, and the passing case) is
+ * unit-testable directly.
+ */
+export function checkDeleteWorkspaceGuards(
+  args: DeleteWorkspaceCliArgs,
+  actualName: string,
+): DeleteWorkspaceGuardResult {
+  if (!args.yes) {
+    return { ok: false, reason: 'refusing to delete without --yes' };
+  }
+  if (args.expectedName !== undefined && args.expectedName !== actualName) {
+    return {
+      ok: false,
+      reason:
+        `--name "${args.expectedName}" does not match this workspace's stored name ` +
+        `"${actualName}" — refusing in case the wrong id was pasted`,
+    };
+  }
+  if (args.allowNamePattern !== undefined && !args.allowNamePattern.test(actualName)) {
+    return {
+      ok: false,
+      reason:
+        `workspace name "${actualName}" does not match --allow-name-pattern ` +
+        `${args.allowNamePattern.source}`,
+    };
+  }
+  return { ok: true };
+}
 
 async function runCreateWorkspace(argv: readonly string[]): Promise<void> {
   const flags = parseFlags(argv);
@@ -421,6 +897,92 @@ async function runRegisterGatekeeper(argv: readonly string[]): Promise<void> {
   }
 }
 
+/**
+ * `delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]`.
+ * Always reads and prints the workspace's info first (name/created_at/principal count/task
+ * count — task brief: "before acting"), *then* checks every guard, *then* — only if every guard
+ * passes — calls `deleteWorkspace`. A guard failure (including "not found") throws
+ * `DeleteWorkspaceRefusedError` after the info is printed but before anything is deleted.
+ *
+ * Output contract for `scripts/delete-workspace.sh`: the structured `workspace_deleted` audit
+ * line (task brief: "log a structured line to stdout/stderr" in place of an `audit_records` row,
+ * since that table is itself being deleted) goes to **stderr**, and the `PRINCIPAL=<id>` /
+ * `TASK=<id>` lines are the last thing written to **stdout** — so a caller that captures only
+ * stdout gets a clean, trailing, greppable id list with nothing after it.
+ */
+async function runDeleteWorkspace(argv: readonly string[]): Promise<void> {
+  const args = parseDeleteWorkspaceArgs(argv);
+
+  const pool = createPool();
+  try {
+    const info = await inspectWorkspace(pool, args.workspaceId);
+    if (!info) {
+      throw new DeleteWorkspaceRefusedError(`workspace not found: ${args.workspaceId}`);
+    }
+
+    console.log(`workspace:  ${info.workspaceId}`);
+    console.log(`name:       ${info.name}`);
+    console.log(`created_at: ${info.createdAt.toISOString()}`);
+    console.log(`principals: ${info.principalCount}`);
+    console.log(`tasks:      ${info.taskCount}`);
+
+    const guard = checkDeleteWorkspaceGuards(args, info.name);
+    if (!guard.ok) {
+      throw new DeleteWorkspaceRefusedError(`delete-workspace refused: ${guard.reason}`);
+    }
+
+    const result = await deleteWorkspace(pool, args.workspaceId);
+
+    console.log('');
+    console.log('deleted rows per table:');
+    for (const [table, count] of result.deletedCounts) {
+      console.log(`  ${table}: ${count}`);
+    }
+    console.log('');
+    console.log(`workspace deleted: ${result.workspaceId} (${result.name})`);
+
+    // Audit trail replacement for the audit_records row this action cannot itself write (its own
+    // table is one of the ones just deleted) — see this file's delete-workspace section doc
+    // comment. Deliberately stderr, not stdout — see this function's own doc comment above.
+    console.error(
+      JSON.stringify({
+        event: 'workspace_deleted',
+        workspaceId: result.workspaceId,
+        workspaceName: result.name,
+        deletedAt: new Date().toISOString(),
+        principalCount: result.principalIds.length,
+        taskCount: result.taskIds.length,
+        deletedCounts: Object.fromEntries(result.deletedCounts),
+      }),
+    );
+
+    console.log('');
+    for (const principalId of result.principalIds) {
+      console.log(`PRINCIPAL=${principalId}`);
+    }
+    for (const taskId of result.taskIds) {
+      console.log(`TASK=${taskId}`);
+    }
+  } finally {
+    await pool.end();
+  }
+}
+
+async function runListWorkspaces(): Promise<void> {
+  const pool = createPool();
+  try {
+    const workspaces = await listWorkspaces(pool);
+    console.log('id\tname\tcreated_at\tprincipals\ttasks');
+    for (const ws of workspaces) {
+      console.log(
+        `${ws.id}\t${ws.name}\t${ws.createdAt.toISOString()}\t${ws.principalCount}\t${ws.taskCount}`,
+      );
+    }
+  } finally {
+    await pool.end();
+  }
+}
+
 async function run(): Promise<void> {
   const [, , command, ...rest] = process.argv;
   if (command === 'create-workspace') {
@@ -435,11 +997,22 @@ async function run(): Promise<void> {
     await runRegisterGatekeeper(rest);
     return;
   }
+  if (command === 'delete-workspace') {
+    await runDeleteWorkspace(rest);
+    return;
+  }
+  if (command === 'list-workspaces') {
+    await runListWorkspaces();
+    return;
+  }
   throw new BootstrapUsageError(
     'usage: bootstrap create-workspace --name <ws> --owner <display-name>\n' +
       '   or: bootstrap add-principal --workspace <id> --name <display-name> [--role <role>]\n' +
       '   or: bootstrap register-gatekeeper --workspace <id> --principal <id> --name <name> ' +
-      '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]',
+      '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]\n' +
+      '   or: bootstrap delete-workspace <workspaceId> --yes [--name <expected name>] ' +
+      '[--allow-name-pattern <regex>]\n' +
+      '   or: bootstrap list-workspaces',
   );
 }
 

@@ -172,7 +172,22 @@ describe('buildTaskSpawnSpec', () => {
       'nexttime.task-id': 'task-1',
       'nexttime.worker-run-id': 'run-1',
       'nexttime.workspace-id': 'ws-1',
+      'nexttime.egress-deny': '',
     });
+  });
+
+  it('stamps a comma-joined egressDeny onto the label when given (feat/egress-definition-lists)', () => {
+    const withDeny = buildTaskSpawnSpec({
+      config,
+      taskId: 'task-1',
+      workerRunId: 'run-1',
+      workspaceId: 'ws-1',
+      capabilityHandle: 'h',
+      image: 'nexttime-ai-worker-runtime',
+      networkName: 'workers',
+      egressDeny: ['blocked.example.com', '.suffix.example.net'],
+    });
+    expect(withDeny.labels['nexttime.egress-deny']).toBe('blocked.example.com,.suffix.example.net');
   });
 
   it('places the given image (allowlist-checked by the caller, not here) verbatim', () => {

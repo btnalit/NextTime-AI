@@ -15,7 +15,7 @@ request forwarding and `CONNECT` tunnelling for HTTPS, no TLS interception, no c
 | `EGRESS_DENY_HOST_SUFFIXES` | — | Comma-separated extra suffixes appended to the deny list (your site's own LAN domain, e.g. `corp.example`). |
 | `NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS` | — | Platform subnets (CIDR), always denied. |
 | `EGRESS_TRUSTED_RESOLVED_CIDRS` | — | Comma-separated CIDRs owned by a transparent ("fake-IP") proxy on the host network: a **hostname** resolving into one of them is treated as public (the range is the transparent proxy, not a real internal host). Literal-IP targets in the range and the platform subnets are still denied. Unset on a normal network. |
-| `SOURCE_MAP_FILE` | — | Path to `{"<clientIp>": {"sourceId","allow"?,"deny"?}}`, hot-reloaded. |
+| `SOURCE_MAP_FILE` | — | Path to `{"<clientIp>": {"sourceId","allow"?,"deny"?}}`, hot-reloaded. Written by `packages/worker-supervisor` on every container spawn/reuse (`egress-map.ts`'s `EgressMapStore`) — as of feat/egress-definition-lists, a source's own `deny` entry is the spawned/invoked WorkerDefinition's own `egressDeny` (`packages/shared/src/worker-definition.ts`), narrowing that one source's egress on top of this proxy's own fixed `DENY_HOSTS`/private-range denial. An entry with no `deny` (definition declared none, or a container predating this field) behaves exactly as before. |
 | `MAX_TUNNELS_PER_SOURCE` | `32` | Concurrent tunnels per source. |
 | `IDLE_TIMEOUT_MS` / `CONNECT_TIMEOUT_MS` | `120000` / `10000` | Per-tunnel idle and connect timeouts. |
 | `ALLOW_LOOPBACK_FOR_TESTS` | unset | `1` treats loopback as allowed. **Test-only — never set in production.** |

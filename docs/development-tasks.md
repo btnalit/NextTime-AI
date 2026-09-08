@@ -343,6 +343,17 @@
   `sourceId=entry:<workspaceId>:<principalId>`——格式定义在 `packages/worker-supervisor/src/
   egress-map.ts`——找该 principal 当前在跑的 Turn 或最近 5 分钟内的 Turn 作回退，追加进
   `activities.metadata.egress`，有界 200 条，发 `EgressObserved` 领域事件）。
+- 补注（feat/egress-definition-lists，2026-09）：definition-level egress lists now wired
+  end-to-end——本条验收原文"WorkerDefinition 加 `deny: [example.com]` 后被拒"此前一直没有
+  producer：`egress-proxy`（`policy.ts`）的每来源 `allow`/`deny` 判定早已实现且有完整单测（本任务
+  未改动那部分策略逻辑），缺的只是"谁把 WorkerDefinition 的 `egressDeny` 写进
+  `SOURCE_MAP_FILE`"。现在 kernel（entry 会话：`application/host-bridge/agent-host-runtime.ts`
+  每次 `startTurn` 重新解析已发布入口 WorkerDefinition 的 `egressDeny` 并转发；Task/WorkerRun：
+  `application/task/spawn.ts` 转发被调用 WorkerDefinition 自己的 `egressDeny`，`egressDeny` 字段
+  也随之扩到 `kind='worker'` 内容，不再仅限 entry）→ `worker-supervisor`（`resident-service.ts` /
+  `task-service.ts` 在 spawn 时写入 `SOURCE_MAP_FILE` 的 `deny`，并把清单以逗号拼接的
+  `nexttime.egress-deny` label stamp 到容器上，供 supervisor 重启后 `reconcile()` 从容器本身恢复，
+  避免重启期间静默放宽出网）。详见该分支 PR 描述。
 - **实现说明补充（fix/runtime-hardening，lane-6 review P2-7/P3，2026-09）**：`resolveSource(clientIp)`
   返回 `undefined`（`SOURCE_MAP_FILE` 里完全没有这个来源 IP 的登记）此前和"已登记但无
   allow/deny 限制"的来源走同一条路径——按公网放行，`sourceId` 记 `'unknown'`，是一个 fail-open
@@ -565,6 +576,13 @@
   - **容器落地三层透传**：`agent-host`（`host.ts` 的 `ensureAttachment`）把 `cmd.systemPrompt`/`cmd.model` 转发进 `supervisor-client.ts` 的 `SpawnInput`；`worker-supervisor` 的 `SpawnRequestSchema`（`config.ts`）新增同名可选字段，`resident-service.ts` 的 `spawn()` 在决定复用/新建容器**之前**把 `systemPrompt` 写入 `/workspace/.nexttime/system-prompt.md`（内容不变则不覆写；无论是否复用都写，保证下一次真正重启时读到的是最新版——`entrypoint.sh` 本条文字不变，仍然是"文件不存在才写自己的静态兜底"，只是现在多数情况下这个文件已经由 supervisor 提前放好了），`model` 经 `spawn-spec.ts` 的 `buildSpawnSpec` 变成容器 `cmd: ['--model', model]`（`ContainerSpec.cmd` 字段与该机制均已由 S2.8/PR #35 落地，本任务复用，未重新发明）。
   - **`create-workspace` 种子**：`cli/bootstrap.ts` 在与 workspace/owner 同一事务内，先 `seedPlatformMetaOntology` 再 `proposeWorkerDefinition`+`publishWorkerDefinition`（读取 `ontology/entry-agent.yaml`，`kind` 与内容分离——见该文件头注释）发布 entry v1；新增 `--entry-model <provider/id>` 覆盖种子文件里留空的 `model` 字段；两步都不吞异常，加载/校验失败直接中断 `create-workspace`（这是一次性的部署期种子操作，失败应该立刻可见，不套用别处"上报失败不阻塞"的 best-effort 惯例）。
   - **`scripts/accept_s1.sh`**：`entry_worker_definition_step` 不再整体 SKIP——断言新 workspace 已有一条已发布的 entry WorkerDefinition，经 caddy 用 owner 的 human 通道 `propose_worker_definition`/`publish_worker_definition` 发布 v2（与既有 `explain_step` 同样的传输方式）；Handle 通道 403 这一半在主机脚本里铸造一个真 Handle 成本过高（主机无 node/corepack，也没有面向任意 shell 调用的签发 capability），改为指向 `handlers.test.ts` 里跑在真实 gateway 管线上的内核单测，如实 SKIP 并在 `docs/runbooks/accept-s1.md` 里写明——见该 runbook "已知缺口"。
+  - **补注（feat/egress-definition-lists，2026-09）**：definition-level egress lists now wired
+    end-to-end。当时 `EntryWorkerDefinitionContentSchema` 的 `egressDeny` 字段本身已经种下
+    （见本节 578 行前的字段列表），但从没有任何代码把它读出来转发给 `worker-supervisor`/
+    `egress-proxy`——`AgentHostRuntime.startTurn`（576 行提到的同一处 `resolveEntryDefinition`）
+    现在顺带解析 `egressDeny`，与 `systemPrompt`/`model` 同一帧转发到 `/resident/spawn`；同一个
+    字段也扩到 `WorkerWorkerDefinitionContentSchema`（`kind='worker'`），使 `invoke_worker` 派生的
+    Task/WorkerRun 同样能声明自己的出网拒绝清单。详见 S1.11 小节自己的同名补注、该分支 PR 描述。
 
 ### S2.7 `find_workers` 与 `invoke_worker`
 - 交付物：`graph/find-means.ts`（`find_operations / find_workers / find_procedures`：元本体 traverse × 用户 Grant 交集）；`task/{service,invoke,reaper}.ts`（`invoke_worker(def@v, input, wait, timeout=90s)`；子 Handle 衰减且继承 `on_behalf_of`；`parent_worker_run_id`；超时返回 `task_id`；崩溃回队；terminate 撤销 Handle；**配额（I18）**：派生链深度 ≤ 3、每用户并发 WorkerRun、每 Task token 与时长、每工作区日成本，作为工作区策略数据，`migrations/task/0002_quotas.sql`；深度或并发超限时 `invoke_worker` 返回入口 agent 可转述的错误；预算 80% 时经 `context` 注入警告，100% 时 Task `failed: budget_exhausted`）。

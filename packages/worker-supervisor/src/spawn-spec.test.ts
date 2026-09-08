@@ -141,7 +141,21 @@ describe('buildSpawnSpec', () => {
       'nexttime.workspace': 'ws-1',
       'nexttime.restarts': '0',
       'nexttime.handle-jti': '',
+      'nexttime.egress-deny': '',
     });
+  });
+
+  it('stamps a comma-joined egressDeny onto the label when given (feat/egress-definition-lists)', () => {
+    const withDeny = buildSpawnSpec({
+      config,
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      networkName: 'workers',
+      restarts: 0,
+      egressDeny: ['blocked.example.com', '.suffix.example.net'],
+    });
+    expect(withDeny.labels['nexttime.egress-deny']).toBe('blocked.example.com,.suffix.example.net');
   });
 
   it('stamps handleJti onto the label when given (P2-5 rotation detection)', () => {

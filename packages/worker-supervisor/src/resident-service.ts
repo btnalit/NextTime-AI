@@ -44,6 +44,7 @@ import type { EgressMapStore } from './egress-map.js';
 import { decodeHandleJtiUnsafe } from './handle-jti.js';
 import { localSystemPromptPath, workspacePaths } from './host-paths.js';
 import {
+  EGRESS_DENY_LABEL,
   ENTRY_ROLE_LABEL,
   ENTRY_ROLE_VALUE,
   HANDLE_JTI_LABEL,
@@ -53,6 +54,17 @@ import {
   buildSpawnSpec,
   entryContainerName,
 } from './spawn-spec.js';
+
+/** Splits `EGRESS_DENY_LABEL`'s comma-joined value back into a list — the inverse of
+ *  `buildSpawnSpec`'s `(input.egressDeny ?? []).join(',')`. An empty/absent label (a container
+ *  spawned before this field existed, or one whose WorkerDefinition declared no list) yields `[]`,
+ *  which `registerEgress` below treats identically to `undefined` (no per-source deny list). */
+function splitEgressDenyLabel(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
 
 const STOP_TIMEOUT_SECONDS = 10;
 
@@ -131,10 +143,21 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
   // rest of the platform treats egress/usage reporting as best-effort elsewhere (e.g.
   // @nexttime/llm-proxy's usage reporter, @nexttime/egress-proxy's own reporter — both queue and
   // retry rather than block their caller).
-  function registerEgress(workspaceId: string, principalId: string, ip: string | undefined): void {
+  function registerEgress(
+    workspaceId: string,
+    principalId: string,
+    ip: string | undefined,
+    egressDeny?: readonly string[],
+  ): void {
     if (!ip) return;
     try {
-      egressMap.register(ip, { sourceId: entrySourceId(workspaceId, principalId) });
+      egressMap.register(ip, {
+        sourceId: entrySourceId(workspaceId, principalId),
+        // Omit `deny` entirely when there is nothing to narrow — keeps the SOURCE_MAP_FILE entry
+        // byte-for-byte identical to before this field existed for the common "no list" case,
+        // rather than writing a needless `"deny": []`.
+        ...(egressDeny && egressDeny.length > 0 ? { deny: egressDeny } : {}),
+      });
     } catch (err) {
       console.error(
         JSON.stringify({
@@ -203,7 +226,16 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
   return {
     async spawn(input): Promise<SpawnOutcome> {
-      const { workspaceId, principalId, handle, kernelUrl, llmUrl, systemPrompt, model } = input;
+      const {
+        workspaceId,
+        principalId,
+        handle,
+        kernelUrl,
+        llmUrl,
+        systemPrompt,
+        model,
+        egressDeny,
+      } = input;
       const name = entryContainerName(principalId);
       const paths = workspacePaths(config, principalId);
 
@@ -241,7 +273,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           ip: existing.ip,
           lastTouchedAt: now(),
         });
-        registerEgress(workspaceId, principalId, existing.ip);
+        // Refreshed on every reuse (not just a fresh spawn) so a WorkerDefinition's egress list
+        // published *after* this container started still takes effect immediately, without
+        // waiting for the container itself to restart — see registerEgress's own doc comment.
+        registerEgress(workspaceId, principalId, existing.ip, egressDeny);
         return {
           containerId: existing.id,
           ip: existing.ip,
@@ -286,6 +321,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         restarts,
         model,
         handleJti: incomingJti,
+        egressDeny,
       });
       const created = await docker.createAndStart(spec);
 
@@ -295,7 +331,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         ip: created.ip,
         lastTouchedAt: now(),
       });
-      registerEgress(workspaceId, principalId, created.ip);
+      registerEgress(workspaceId, principalId, created.ip, egressDeny);
 
       return {
         containerId: created.id,
@@ -372,7 +408,16 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
             ip: state.ip,
             lastTouchedAt: now(),
           });
-          registerEgress(workspaceId, principalId, state.ip);
+          // Restores the egress deny list this container was (re)created with (EGRESS_DENY_LABEL)
+          // — without this, a supervisor restart would re-register every still-running entry
+          // container's source-map entry with no deny list at all, silently widening its egress
+          // until its next startTurn (see EGRESS_DENY_LABEL's own doc comment).
+          registerEgress(
+            workspaceId,
+            principalId,
+            state.ip,
+            splitEgressDenyLabel(state.labels[EGRESS_DENY_LABEL]),
+          );
         }
       }
     },
