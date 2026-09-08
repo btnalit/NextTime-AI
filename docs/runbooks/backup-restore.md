@@ -28,8 +28,10 @@ Docker socket 或其他服务。
 `chmod -R o+rX` 只是对现有文件的一次性基线，不是正确性的来源；能让 `tar` 在任何时刻可靠遍历
 `caddy/` 的是这个 capability。
 
-**主机前置条件**：没有新增。`sh scripts/host-env-init.sh`（幂等）会创建/整理数据目录；它对
-`backups/` 做的 `chown 10001` 与对 `caddy/` 的 `chmod` 在 root 模型下无害、可保留。
+**主机前置条件**：`${NEXTTIME_DATA}/backups` 必须是 **root 属主（0:0，750）**——没有 `DAC_OVERRIDE`
+的 root 只能写自己拥有的目录；fix/socket-proxy-and-backup-user 那版 `host-env-init.sh` 把它 chown 成了
+10001，导致每次备份以一条空的 `pg_dump failed:` 失败（主机实测），当前版本的 `sh scripts/host-env-init.sh`
+（幂等）会把它强制改回 0:0 并打印确认。它对 `caddy/` 的 `chmod -R o+rX` 是无害基线，可保留。
 
 **上线顺序**：`docker compose up -d docker-socket-proxy`（若同批上线；`backup` 本身不用它）→
 `docker compose up -d backup`（或整批 `docker compose up -d`）。
