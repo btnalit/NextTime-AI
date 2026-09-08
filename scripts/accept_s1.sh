@@ -337,11 +337,16 @@ compose_run_ws() {
 # (control-network-only — no host port; docs/runbooks/host-worker-runtime.md's own established
 # `node -e "fetch(...)..."` pattern, run from the kernel image here rather than exec'ing into the
 # already-running worker-supervisor container, since the task brief specifically calls out node
-# running "inside the kernel image").
+# running "inside the kernel image"). `/resident/*` is gated on the internal-plane token since the
+# runtime hardening (F6 / PR #78) — the kernel container has the same token at
+# /run/secrets/internal_token, so the probe sends it as a Bearer; without it the 401 body used to be
+# misread as "found, but no restarts" (2026-09-08 regression run).
 resident_status() {
   docker compose run --rm --no-deps -T kernel node -e "
-fetch('http://worker-supervisor:8081/resident/$1').then(async (r) => {
+const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
+fetch('http://worker-supervisor:8081/resident/$1', { headers: { authorization: 'Bearer ' + token } }).then(async (r) => {
   if (r.status === 404) { console.log('FOUND=0'); return; }
+  if (!r.ok) { console.log('FOUND=error status=' + r.status); return; }
   const j = await r.json();
   console.log('FOUND=1');
   console.log('RESTARTS=' + j.restarts);
@@ -352,9 +357,10 @@ fetch('http://worker-supervisor:8081/resident/$1').then(async (r) => {
 
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token', 'utf8').trim();
 fetch('http://worker-supervisor:8081/resident/stop', {
   method: 'POST',
-  headers: { 'content-type': 'application/json' },
+  headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
   body: JSON.stringify({ principalId: '$1' }),
 }).then((r) => console.log('STATUS=' + r.status));
 " </dev/null 2>&1
