@@ -56,6 +56,18 @@ export interface DrainedContextItems {
  * `get_entry_context`'s Fact read) rolls this back too and the items remain undelivered for the
  * next call, never silently lost. Called exactly once per `get_entry_context` invocation
  * (`application/gateway/handlers.ts`).
+ *
+ * `for update skip locked` (lane-4 P3 fix, docs/development-tasks.md): without it, two concurrent
+ * `get_entry_context` calls for the same principal (a real possibility — nothing prevents an entry
+ * agent, or a client retry, from issuing two overlapping `get_entry_context` requests) can both
+ * `SELECT` the same undelivered rows before either commits its `delivered_at` UPDATE, and both
+ * then return the same context items — one Task outcome or approval update narrated to the entry
+ * agent twice in the same "round" (not merely across separate Turns, which is a normal and
+ * expected redelivery-safe outcome this table's whole design already tolerates). `SKIP LOCKED`
+ * means the second, concurrent call simply sees none of the rows the first one already has locked
+ * (rather than blocking on them) — it returns fewer or zero items for *this* call rather than
+ * duplicating them; nothing is lost, since an unlocked/skipped row is still `delivered_at IS NULL`
+ * and will be picked up whole by the next call once the first transaction commits.
  */
 export async function drainPendingContextItems(
   client: PoolClient,
@@ -69,7 +81,8 @@ export async function drainPendingContextItems(
   }>(
     `select id, kind, payload from pending_context_items
      where workspace_id = $1 and principal_id = $2 and delivered_at is null
-     order by created_at asc`,
+     order by created_at asc
+     for update skip locked`,
     [workspaceId, principalId],
   );
   if (result.rows.length === 0) return { tasks: [], pendingApprovals: [] };
