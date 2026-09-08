@@ -48,7 +48,7 @@
 # `nexttime-ai-worker-runtime` image @nexttime/worker-supervisor references by name; that
 # service is never itself `up`).
 
-FROM node:24-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 RUN corepack enable
 WORKDIR /workspace
 
@@ -57,7 +57,7 @@ RUN corepack pnpm install --frozen-lockfile
 RUN corepack pnpm --filter @nexttime/platform-extension... build
 RUN corepack pnpm --filter @nexttime/platform-extension deploy --prod --legacy /out/platform-extension
 
-FROM node:24-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 
 # Toolchain the entry/Worker agent's own bash/python tool use needs (docs/development-tasks.md
 # S1.5 task brief) — not a pi runtime requirement (see header). One apt layer, cleaned after.
