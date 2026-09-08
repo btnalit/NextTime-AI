@@ -5,6 +5,7 @@ import {
   TaskSpawnRequestSchema,
   isImageAllowed,
   loadConfig,
+  parseDockerConnection,
 } from './config.js';
 
 describe('loadConfig', () => {
@@ -32,6 +33,10 @@ describe('loadConfig', () => {
     expect(config.entryIdleTimeoutMs).toBe(30 * 60 * 1000);
     expect(config.egressSourceMapFile).toBe('/data/config/egress-sources.json');
     expect(config.dockerSocketPath).toBe('/var/run/docker.sock');
+    expect(config.dockerConnection).toEqual({
+      kind: 'socket',
+      socketPath: '/var/run/docker.sock',
+    });
     expect(config.taskMaxRuntimeSec).toBe(3600);
     expect(config.taskWorkdirRetentionHours).toBe(72);
     expect(config.taskReapIntervalMs).toBe(10_000);
@@ -58,6 +63,7 @@ describe('loadConfig', () => {
       ENTRY_IDLE_TIMEOUT_MS: '1000',
       EGRESS_SOURCE_MAP_FILE: '/x/sources.json',
       DOCKER_SOCKET_PATH: '/tmp/docker.sock',
+      DOCKER_HOST: 'tcp://docker-socket-proxy:2375',
       TASK_MAX_RUNTIME_SEC: '600',
       TASK_WORKDIR_RETENTION_HOURS: '24',
       TASK_REAP_INTERVAL_MS: '5000',
@@ -81,6 +87,7 @@ describe('loadConfig', () => {
       entryIdleTimeoutMs: 1000,
       egressSourceMapFile: '/x/sources.json',
       dockerSocketPath: '/tmp/docker.sock',
+      dockerConnection: { kind: 'tcp', host: 'docker-socket-proxy', port: 2375 },
       taskMaxRuntimeSec: 600,
       taskWorkdirRetentionHours: 24,
       taskReapIntervalMs: 5000,
@@ -91,6 +98,55 @@ describe('loadConfig', () => {
   it('ignores non-numeric overrides and falls back to the default', () => {
     const config = loadConfig({ NEXTTIME_DATA: '/d', SUPERVISOR_PORT: 'not-a-number' });
     expect(config.port).toBe(8081);
+  });
+});
+
+// fix/socket-proxy-and-backup-user: DOCKER_HOST parsing — docker-socket-proxy sits between this
+// service and /var/run/docker.sock (docker-compose.yml's `dockerapi` network); every non-`tcp://`
+// or unparsable value must fall back to the plain socket path instead of being guessed at (see
+// `parseDockerConnection`'s own doc comment in config.ts).
+describe('parseDockerConnection', () => {
+  it('falls back to the socket path when DOCKER_HOST is unset', () => {
+    expect(parseDockerConnection(undefined, '/var/run/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/var/run/docker.sock',
+    });
+  });
+
+  it('parses a tcp:// DOCKER_HOST into host/port', () => {
+    expect(parseDockerConnection('tcp://docker-socket-proxy:2375', '/var/run/docker.sock')).toEqual(
+      {
+        kind: 'tcp',
+        host: 'docker-socket-proxy',
+        port: 2375,
+      },
+    );
+  });
+
+  it('defaults the port to 2375 when DOCKER_HOST omits one', () => {
+    expect(parseDockerConnection('tcp://docker-socket-proxy', '/var/run/docker.sock')).toEqual({
+      kind: 'tcp',
+      host: 'docker-socket-proxy',
+      port: 2375,
+    });
+  });
+
+  it('falls back to the socket path for a unix:// DOCKER_HOST (not produced by this repo)', () => {
+    expect(parseDockerConnection('unix:///var/run/docker.sock', '/tmp/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/tmp/docker.sock',
+    });
+  });
+
+  it('falls back to the socket path for an unparsable DOCKER_HOST', () => {
+    expect(parseDockerConnection('tcp://', '/tmp/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/tmp/docker.sock',
+    });
+    expect(parseDockerConnection('not a url', '/tmp/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/tmp/docker.sock',
+    });
   });
 });
 

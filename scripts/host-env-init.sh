@@ -20,9 +20,10 @@
 # later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc §7.9 — an
 # empty object is a valid "no sources registered yet" map, not a stub for a later task to
 # overwrite; gatekeeper-ragflow.env's real shape is S2.5's, see below).
-# Then chowns workspaces/ artifacts/ caddy/ gatekeepers/{docker,ragflow}/ to the non-root uid:gid
-# the platform's containers run as, and makes config/ world-readable (it holds no secrets). Never
-# echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
+# Then chowns workspaces/ artifacts/ backups/ gatekeepers/{docker,ragflow}/ to the non-root uid:gid
+# the platform's containers run as, makes config/ world-readable (it holds no secrets), and
+# chmod -R o+rX's caddy/ (root-owned — chown doesn't help there, see that step's own comment).
+# Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
 
 set -eu
 
@@ -208,15 +209,40 @@ else
 	SKIPPED="$SKIPPED config/egress-sources.json"
 fi
 
-# --- ownership: workspaces/ artifacts/ caddy/ gatekeepers/{docker,ragflow}/ must be usable by ---
-# the platform's non-root containers (uid:gid 10001:10001 — both gatekeepers/*/Dockerfile create
+# --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ must be usable by the -------
+# platform's non-root containers (uid:gid 10001:10001 — both gatekeepers/*/Dockerfile create
 # the same `nexttime` uid:gid as every other @nexttime/* image, S2.5). pgdata/ (the postgres image
-# manages its own ownership), secrets/ (root-owned, 0700 — compose passes its contents via
-# env_file / Docker secrets, not a bind-mounted directory read by a container process) and
-# backups/ are left untouched, per task scope.
-for d in workspaces artifacts caddy gatekeepers/docker gatekeepers/ragflow; do
+# manages its own ownership) and secrets/ (root-owned, 0700 — compose passes its contents via
+# env_file / Docker secrets, not a bind-mounted directory read by a container process) are left
+# untouched, per task scope. `caddy/` is deliberately NOT in this loop — see its own step below.
+for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
+
+# --- backups/ (fix/socket-proxy-and-backup-user): owned by the platform uid so the `backup` -----
+# service's own non-root `user: "10001:10001"` (docker-compose.yml) can write dumps/tarballs here
+# — previously left untouched because `backup` ran as root and ownership didn't matter; now it
+# does. Safe to chown unconditionally: nothing else writes here, and `backup`'s own PGDATA/
+# workspaces/config/gatekeepers/caddy mounts are all read-only, so this is the one directory it
+# actually needs write access to (see that service's own compose comment).
+chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/backups"
+
+# --- caddy/ (fix/socket-proxy-and-backup-user): chown does NOT work here the way it does for -----
+# the uid-10001-owned directories above — `caddy` (docker-compose.yml) runs as the image's own
+# default ROOT user, and its on-demand TLS cert/key storage (Caddy's internal CA, via
+# caddyserver/certmagic's FileStorage) hardcodes every write to mode 0600 (files) / 0700 (dirs),
+# root-owned, replacing the whole inode via atomic rename — so any chmod/chown applied ahead of
+# time is overwritten back to root-only on caddy's next cert write (which `on_demand` TLS can
+# trigger for any new SNI, not just periodic renewal), REGARDLESS of which of chmod/chown was
+# used. `chmod -R o+rX` (not `chown -R :10001` + setgid) is applied anyway as a one-time baseline
+# for files that exist right now — it's simpler (no setgid-vs.-certmagic's-own-chmod-0600
+# interaction to reason about) and doesn't claim to survive the next cert write either way. The
+# `backup` service's actual, ongoing correctness for caddy/ comes from its own `cap_add:
+# [DAC_READ_SEARCH]` (docker-compose.yml), not from this chmod — see
+# docs/runbooks/backup-restore.md for the full explanation. Re-run this script (idempotent) after
+# any caddy restart if you want this baseline re-applied, but it is not required for backups to
+# keep working.
+chmod -R o+rX "$NEXTTIME_DATA/caddy"
 
 # --- config/: left root-owned but made world-readable (it holds no secrets — provider keys ----
 # live in secrets/*.env instead) so any container uid can read it read-only.
@@ -239,9 +265,11 @@ echo "host-env-init: config/ (mode, owner:group, path):"
 find "$CONFIG_DIR" -maxdepth 1 -printf '  %M %U:%G %p\n'
 echo ""
 echo "host-env-init: ownership fix-up (uid:gid ${CONTAINER_UID}:${CONTAINER_GID}) applied to:"
-for d in workspaces artifacts caddy gatekeepers/docker gatekeepers/ragflow; do
+for d in workspaces artifacts backups gatekeepers/docker gatekeepers/ragflow; do
 	echo "  $NEXTTIME_DATA/$d -> $(stat -c '%U:%G' "$NEXTTIME_DATA/$d")"
 done
 echo ""
-echo "host-env-init: left untouched: pgdata/ secrets/ (dir itself) backups/"
+echo "host-env-init: caddy/ left root-owned; \`chmod -R o+rX\` applied instead (mode now: $(stat -c '%a' "$NEXTTIME_DATA/caddy")) — see docs/runbooks/backup-restore.md for why this is only a baseline, not the real fix"
+echo ""
+echo "host-env-init: left untouched: pgdata/ secrets/ (dir itself)"
 echo "host-env-init: done (idempotent — safe to re-run)"
