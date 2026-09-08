@@ -516,6 +516,64 @@ describe('attenuate', () => {
     expect(child.expiresAt.getTime()).toBeLessThan(parent.expiresAt.getTime());
   });
 
+  it('lane-1 P2 fix: a Date.now() step between attenuate’s ttl computation and issueHandle’s own never lets the child’s expires_at exceed the parent’s (rounding race, governance/0008’s trigger)', async () => {
+    const { client, addSession, handles } = createFakeCapabilityClient();
+    const { privateKey, publicKey } = await generateEphemeralHandleKeyPair();
+    const sessionId = randomUUID();
+    addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID() });
+
+    const parent = await issueHandle(client, {
+      sessionId,
+      scope: { capabilities: ['get_object'], resources: {} },
+      ttlSeconds: 3600,
+      privateKey,
+    });
+
+    // Reproduces the real race IssueHandleParams.notAfterSeconds's own doc comment describes:
+    // attenuate's own `Date.now()` call (computing parentRemainingSeconds) and issueHandle's
+    // later one (after its awaited session lookup) can land on different values — tens of ms
+    // apart in production is enough to cross a whole-second Math.floor boundary. A
+    // monotonically-advancing fake clock reproduces this deterministically regardless of how
+    // many Date.now() calls (if any) happen inside jose's own signature/expiry verification in
+    // between: every call here sees strictly more elapsed time than the one before it, so
+    // issueHandle's own iatSeconds always lands after whatever moment attenuate's ttl computation
+    // used — advancing 1.5s per call guarantees at least one whole-second shift.
+    const realNow = Date.now();
+    let calls = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      calls += 1;
+      return realNow + calls * 1500;
+    });
+
+    let child: Awaited<ReturnType<typeof attenuate>>;
+    try {
+      child = await attenuate(
+        client,
+        parent.token,
+        { capabilities: ['get_object'], resources: {} },
+        // ttlSeconds deliberately omitted — defaults to attenuate's own parentRemainingSeconds,
+        // the worst case for this race (any smaller explicit ttl leaves slack the clamp doesn't
+        // need to close).
+        { privateKey, publicKey, isRevoked: neverRevoked },
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    // The JWT claim never outlives the parent...
+    expect(child.expiresAt.getTime()).toBeLessThanOrEqual(parent.expiresAt.getTime());
+    const childClaims = await verifyHandle(child.token, { publicKey, isRevoked: neverRevoked });
+    expect(childClaims.exp).toBeLessThanOrEqual(Math.floor(parent.expiresAt.getTime() / 1000));
+
+    // ...and neither does the persisted capability_handles row (read from the fake table's own
+    // state, independent of the returned IssuedHandle object).
+    const dbRow = handles.get(child.jti);
+    expect(dbRow).toBeDefined();
+    expect(new Date(dbRow?.expires_at ?? 0).getTime()).toBeLessThanOrEqual(
+      parent.expiresAt.getTime(),
+    );
+  });
+
   it('rejects attenuating an already-revoked parent handle', async () => {
     const { client, privateKey, publicKey, parent } = await issueParentHandle({
       capabilities: ['get_object'],
