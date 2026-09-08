@@ -1,4 +1,4 @@
-import type { EpistemicStatus } from '@nexttime/shared';
+import type { EpistemicStatus, PrincipalKind } from '@nexttime/shared';
 import { FACT_LIFECYCLE_TRANSITIONS, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { enqueue } from '../outbox/index.js';
@@ -152,6 +152,31 @@ function firstRowOrThrow<T>(rows: readonly T[], onMissing: () => Error): T {
   return row;
 }
 
+/**
+ * Resolves `caller.id`'s real `principals.kind` (lane-1 P2 fix — see `CallerPrincipal.kind`'s own
+ * doc comment in store.ts): the sole source of truth `assertFact`/`supersedeFact` use to derive
+ * `epistemic_status`, deliberately ignoring whatever `caller.kind` a call site may still pass.
+ * Throws if `id` has no `principals` row in this workspace — every `asserted_by` FK requires one
+ * to exist anyway, so this should never actually fire outside a caller bug.
+ */
+async function resolveCallerKind(
+  client: PoolClient,
+  workspaceId: string,
+  callerId: string,
+): Promise<PrincipalKind> {
+  const result = await client.query<{ kind: PrincipalKind }>(
+    'select kind from principals where workspace_id = $1 and id = $2',
+    [workspaceId, callerId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new Error(
+      `SqlGraphStore: no principals row for workspace ${workspaceId}, id ${callerId} — cannot derive epistemic_status`,
+    );
+  }
+  return row.kind;
+}
+
 export class SqlGraphStore implements GraphStore {
   async upsertObject(
     client: PoolClient,
@@ -199,7 +224,8 @@ export class SqlGraphStore implements GraphStore {
     input: AssertFactInput,
   ): Promise<Fact> {
     assertNoCallerSuppliedEpistemicStatus(input);
-    const epistemicStatus = deriveEpistemicStatus(caller.kind);
+    const callerKind = await resolveCallerKind(client, workspaceId, caller.id);
+    const epistemicStatus = deriveEpistemicStatus(callerKind);
 
     const query = buildInsertFactQuery(workspaceId, {
       linkType: input.linkType,
@@ -264,7 +290,8 @@ export class SqlGraphStore implements GraphStore {
     });
     transition(FACT_LIFECYCLE_TRANSITIONS, currentState, 'supersede');
 
-    const epistemicStatus = deriveEpistemicStatus(caller.kind);
+    const callerKind = await resolveCallerKind(client, workspaceId, caller.id);
+    const epistemicStatus = deriveEpistemicStatus(callerKind);
     const insertQuery = buildInsertFactQuery(workspaceId, {
       linkType: input.linkType,
       sourceObjectId: input.sourceObjectId,

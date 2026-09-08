@@ -78,7 +78,16 @@ export const DEFAULT_TRAVERSE_DIRECTION: TraverseDirection = 'both';
 
 export interface CallerPrincipal {
   readonly id: string;
-  readonly kind: PrincipalKind;
+  /**
+   * **Not trusted** (lane-1 P2 fix): `SqlGraphStore.assertFact`/`supersedeFact` derive the actual
+   * `epistemic_status`-driving kind from the `principals` row for `id` in the same transaction,
+   * never from this field — a caller could otherwise claim `kind: 'human'` (→ `asserted`) for a
+   * write that was not actually made by a human principal, or vice versa. Kept optional, rather
+   * than removed, purely so existing call sites that still pass it (e.g. a service-principal
+   * caller that wants its intent documented at the call site) do not need to change; a caller that
+   * omits it entirely is exactly as correct as one that supplies it.
+   */
+  readonly kind?: PrincipalKind;
 }
 
 // -------------------------------------------------------------------------------------------

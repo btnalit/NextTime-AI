@@ -234,6 +234,51 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
       expect(agentFact.epistemicStatus).toBe('inferred');
     });
 
+    it('ignores a caller-supplied kind that disagrees with the principals row (lane-1 P2 fix)', async () => {
+      // ownerId is genuinely a 'human' principal (beforeAll) — a caller claiming 'agent' for it
+      // must not get 'inferred'; the store derives 'asserted' from the real principals.kind row
+      // regardless of what CallerPrincipal.kind says.
+      const fact = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const activity = await makeActivity(client);
+        return store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'agent' },
+          {
+            linkType: 'test.rel',
+            sourceObjectId: a.id,
+            targetObjectId: b.id,
+            activityId: activity.id,
+          },
+        );
+      });
+
+      expect(fact.epistemicStatus).toBe('asserted');
+    });
+
+    it('omitting kind entirely still derives epistemic_status from the principals row', async () => {
+      const fact = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const activity = await makeActivity(client);
+        return store.assertFact(
+          client,
+          workspaceId,
+          { id: agentId },
+          {
+            linkType: 'test.rel',
+            sourceObjectId: a.id,
+            targetObjectId: b.id,
+            activityId: activity.id,
+          },
+        );
+      });
+
+      expect(fact.epistemicStatus).toBe('inferred');
+    });
+
     it('rejects a caller-supplied epistemic status', async () => {
       await expect(
         inTx(async (client) => {
