@@ -9,7 +9,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
-import { type ActionRequestRow, ApprovalScopeError } from './types.js';
+import { type ActionRequestRow, ApprovalScopeError, SelfApprovalNotAllowedError } from './types.js';
 
 /**
  * governance/approval/decide: `approve` / `reject` (design doc §5.4 I6/I11/I14, §5.5, §8.5; docs/
@@ -99,6 +99,16 @@ async function assertApproverScope(
   approver: { readonly principalId: string; readonly role: Role },
   existing: ActionRequestRow,
 ): Promise<void> {
+  // Item 3 fix (review job 652a4abc: "self-approval of high-blast allowed"): checked before the
+  // I14 scope lookup below — cheap (no DB round trip) and the more specific rule of the two. Only
+  // fires when `requesterCanApprove` was explicitly persisted `false` (never for a historical row
+  // with no value on file — see `ActionRequestRow.requesterCanApprove`'s own doc comment); the
+  // workspace-owner override I14 grants below does *not* exempt self-approval — I8's
+  // `requester_can_approve` and I14's scope check are independent gates, both must pass.
+  if (existing.requesterCanApprove === false && approver.principalId === existing.onBehalfOf) {
+    throw new SelfApprovalNotAllowedError(existing.id, approver.principalId);
+  }
+
   const allowed = await approverHasScope(client, workspaceId, approver, {
     actionKind: existing.actionKind,
     resourceScope: existing.resourceScope,

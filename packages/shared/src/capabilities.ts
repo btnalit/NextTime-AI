@@ -656,6 +656,18 @@ const governanceCapabilities: readonly Capability[] = [
     group: 'governance',
     mode: 'execute',
     channel: 'handle',
+    // Authority-tightening fix (review job 652a4abc, lane3 P1-5): `minRole` here is only the
+    // ordinary "authenticated principal" floor `roleSatisfiesMinRole` gives every role including
+    // `auditor` — it is deliberately *not* the real gate. A non-owner human caller (this
+    // capability's channel is `handle`, but §9.3 "human 通道调用同样允许" — see authorize.ts's own
+    // module doc comment) must additionally hold an active `capability='gatekeeper'` Grant for
+    // the target Gatekeeper, checked by `request-action-handler.ts`'s
+    // `assertHumanGatekeeperAccess`, which excludes `auditor` outright regardless of any grant —
+    // a role-hierarchy `minRole` cannot express either rule (I14 is resource-scoped, and
+    // `roleSatisfiesMinRole('auditor', 'member')` is `true` by design, see authorize.ts). Added
+    // here mainly so this capability's own declaration is not silently missing one, matching
+    // `observe_operation` right below it.
+    minRole: 'member',
     paramsSchema: z
       .object({
         gatekeeperId: id,

@@ -30,6 +30,7 @@ function actionRequest(overrides: Partial<ActionRequestRow> = {}): ActionRequest
     executedAt: null,
     failedAt: null,
     params: {},
+    requesterCanApprove: true,
     ...overrides,
   };
 }

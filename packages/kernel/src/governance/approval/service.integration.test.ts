@@ -417,6 +417,142 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(otherOperatorView.some((r) => r.id === row.id)).toBe(false);
       });
+
+      // Item 2 decision (review job 652a4abc: "decide and document whether capability='gatekeeper'
+      // grants satisfy I14 for that gate — recommended yes").
+      it('a capability="gatekeeper" grant scoped to the gate also satisfies I14 for any action_kind there', async () => {
+        const gateOperatorId = await adminInsertPrincipal(workspaceId, {
+          role: 'operator',
+          displayName: 'gate-operator',
+        });
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          grantCapability(client, workspaceId, {
+            principalId: gateOperatorId,
+            capability: 'gatekeeper',
+            scope: { resourceScope: gatekeeperId },
+            grantedBy: ownerId,
+          }),
+        );
+
+        const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          requestAction(client, workspaceId, {
+            gatekeeperId,
+            actionKind: 'test.gate_grant_action',
+            resourceScope: gatekeeperId,
+            blastRadius: 'medium',
+            operationAutoApprovable: true,
+            awaitDecision: false,
+            onBehalfOf: ownerId,
+            actorRuntime: 'pi',
+            requesterScope: scopeCovering(gatekeeperId),
+          }),
+        );
+        expect(row.status).toBe('pending_approval');
+
+        const pendingView = await withWorkspace(
+          pool,
+          { workspaceId, principalId: gateOperatorId },
+          (client) =>
+            listPendingForApprover(client, workspaceId, {
+              principalId: gateOperatorId,
+              role: 'operator',
+            }),
+        );
+        expect(pendingView.some((r) => r.id === row.id)).toBe(true);
+
+        const updated = await withWorkspace(
+          pool,
+          { workspaceId, principalId: gateOperatorId },
+          (client) =>
+            approveActionRequest(client, workspaceId, {
+              actionRequestId: row.id,
+              approverPrincipalId: gateOperatorId,
+              approverRole: 'operator',
+            }),
+        );
+        expect(updated.status).toBe('approved');
+      });
+
+      // Item 3 fix (review job 652a4abc: "self-approval of high-blast allowed").
+      describe('self-approval (item 3, I8 requester_can_approve)', () => {
+        async function highBlastPendingActionRequest(onBehalfOf: string) {
+          return withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            requestAction(client, workspaceId, {
+              gatekeeperId,
+              actionKind: 'test.action',
+              blastRadius: 'high',
+              operationAutoApprovable: false,
+              awaitDecision: false,
+              onBehalfOf,
+              actorRuntime: 'pi',
+              requesterScope: scopeCovering(gatekeeperId),
+            }),
+          );
+        }
+
+        it('persists requester_can_approve=false by default for a high-blast request', async () => {
+          const row = await highBlastPendingActionRequest(operatorId);
+          expect(row.status).toBe('pending_approval');
+          expect(row.requesterCanApprove).toBe(false);
+        });
+
+        it('rejects the requester approving their own high-blast request', async () => {
+          const row = await highBlastPendingActionRequest(operatorId);
+          await expect(
+            withWorkspace(pool, { workspaceId, principalId: operatorId }, (client) =>
+              approveActionRequest(client, workspaceId, {
+                actionRequestId: row.id,
+                approverPrincipalId: operatorId,
+                approverRole: 'operator',
+              }),
+            ),
+          ).rejects.toThrow(ApprovalScopeError);
+        });
+
+        it('rejects the requester rejecting their own high-blast request too (same shared gate)', async () => {
+          const row = await highBlastPendingActionRequest(operatorId);
+          await expect(
+            withWorkspace(pool, { workspaceId, principalId: operatorId }, (client) =>
+              rejectActionRequest(client, workspaceId, {
+                actionRequestId: row.id,
+                approverPrincipalId: operatorId,
+                approverRole: 'operator',
+              }),
+            ),
+          ).rejects.toThrow(ApprovalScopeError);
+        });
+
+        it('a different approver (including the owner) may still approve it', async () => {
+          const row = await highBlastPendingActionRequest(operatorId);
+          const updated = await withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              approveActionRequest(client, workspaceId, {
+                actionRequestId: row.id,
+                approverPrincipalId: ownerId,
+                approverRole: 'owner',
+              }),
+          );
+          expect(updated.status).toBe('approved');
+        });
+
+        it('does not block self-approval for a medium-blast request (requester_can_approve defaults true)', async () => {
+          const row = await pendingActionRequest();
+          expect(row.requesterCanApprove).toBe(true);
+          const updated = await withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              approveActionRequest(client, workspaceId, {
+                actionRequestId: row.id,
+                approverPrincipalId: ownerId,
+                approverRole: 'owner',
+              }),
+          );
+          expect(updated.status).toBe('approved');
+        });
+      });
     });
   },
 );

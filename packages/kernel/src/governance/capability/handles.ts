@@ -658,3 +658,38 @@ export async function revokeSession(client: PoolClient, sessionId: string): Prom
     [sessionId],
   );
 }
+
+/**
+ * Revokes every Handle issued under `principalId`'s own `kind='entry'` session(s) (authority-
+ * tightening fix, review job 652a4abc lane2 P1: "revoking a `connect_gatekeeper` Grant leaves the
+ * gate in the entry Handle up to ~21.6h" — item 4, "Grant changes become visible"). Called by
+ * `grants.ts`'s `grantCapability`/`revokeCapabilityGrant` whenever the changed grant's
+ * `capability` is `'gatekeeper'` (the same convention `agent-host-runtime.ts`'s `ensureEntryHandle`
+ * already reads via `listActiveGrantResourceScopes` — S2.13), so a cached entry Handle minted
+ * before the change is forced to reissue on this principal's very next Turn: `ensureEntryHandle`
+ * now also re-reads the principal's current Grant coverage on every `startTurn` and reissues on a
+ * difference (belt), but revoking here closes the window immediately — `verifyHandle`'s revocation
+ * check fails a revoked `jti` the instant agent-host (or any other Handle verifier) next uses it,
+ * rather than waiting for the next Turn to even start (suspenders).
+ *
+ * Queries `sessions` directly, the same established pattern `issueHandle` above already uses for
+ * this table (governance/capability is not `sessions`' owning module, but every Handle-issuance
+ * function here has always needed to read it to resolve `workspace_id`/`on_behalf_of` — see this
+ * module's own doc comment). Idempotent: a principal with no entry session yet (never started a
+ * Turn) or one whose Handles are already revoked is a silent no-op, matching `revokeSession`'s own
+ * contract.
+ */
+export async function revokeEntrySessionHandles(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `select id from sessions
+     where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = 'entry'`,
+    [workspaceId, principalId],
+  );
+  for (const row of result.rows) {
+    await revokeSession(client, row.id);
+  }
+}

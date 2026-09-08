@@ -1,5 +1,6 @@
 import type { GrantStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { revokeEntrySessionHandles } from './handles.js';
 
 /**
  * governance/capability/grants: CapabilityGrant CRUD and the I14 "does this Principal hold this
@@ -76,6 +77,24 @@ function mapGrantRow(row: CapabilityGrantDbRow): CapabilityGrantRow {
 const GRANT_COLUMNS =
   'workspace_id, id, principal_id, capability, scope, status, granted_by, created_at, revoked_at, expires_at';
 
+/** The `capability_grants.capability` value that represents "may act on this Gatekeeper" (S2.13
+ *  `connect_gatekeeper`'s own convention — `agent-host-runtime.ts`'s `ensureEntryHandle` already
+ *  reads it via `listActiveGrantResourceScopes(..., {capability: GATEKEEPER_RESOURCE_SCOPE_KEY})`,
+ *  same literal string as `governance/policy/engine.ts`'s `GATEKEEPER_RESOURCE_SCOPE_KEY` — not
+ *  imported from there to avoid a needless cross-submodule dependency for one string constant;
+ *  both names are documented as the same convention, see lane2's own "semantic drift" note on
+ *  `capability_grants.capability` mixing two vocabularies). Used here for two authority-tightening
+ *  fixes (review job 652a4abc, item 2 and item 4):
+ *   - `MATCHING_GRANT_WHERE`/`listGrantHolderPrincipalIds` also accept a `'gatekeeper'` grant
+ *     scoped to the same `resource_scope` as satisfying I14 for *any* `action_kind` at that gate
+ *     (item 2's "decide and document" — decision: yes, a principal trusted to act on a Gatekeeper
+ *     at all is trusted to approve any of its Operations; §5.8 already frames `operator` role as
+ *     only "进队列", capability scope as what actually decides "能批哪条").
+ *   - `grantCapability`/`revokeCapabilityGrant` revoke the principal's entry-session Handle(s)
+ *     whenever the changed grant's `capability` is this value (item 4).
+ */
+export const GATEKEEPER_GRANT_CAPABILITY = 'gatekeeper';
+
 // -------------------------------------------------------------------------------------------
 // grantCapability / revokeCapabilityGrant — the `grant_capability` / `revoke_capability`
 // capabilities' service half (packages/shared/src/capabilities.ts governance group).
@@ -109,7 +128,16 @@ export async function grantCapability(
   );
   const row = result.rows[0];
   if (!row) throw new Error('grantCapability: INSERT ... RETURNING produced no row');
-  return mapGrantRow(row);
+  const mapped = mapGrantRow(row);
+
+  // Item 4 fix: a new `'gatekeeper'` Grant widens what this principal may reach through their
+  // entry agent — force their cached entry Handle(s) to reissue on the next Turn rather than
+  // waiting for `ensureEntryHandle`'s own ttl-driven reissue window (see
+  // `revokeEntrySessionHandles`'s own doc comment).
+  if (mapped.capability === GATEKEEPER_GRANT_CAPABILITY) {
+    await revokeEntrySessionHandles(client, workspaceId, mapped.principalId);
+  }
+  return mapped;
 }
 
 export class GrantNotFoundError extends Error {
@@ -137,7 +165,15 @@ export async function revokeCapabilityGrant(
   );
   const row = result.rows[0];
   if (!row) throw new GrantNotFoundError(workspaceId, grantId);
-  return mapGrantRow(row);
+  const mapped = mapGrantRow(row);
+
+  // Item 4 fix (review job 652a4abc lane2 P1: "revoking a connect_gatekeeper Grant leaves the
+  // gate in the entry Handle up to ~21.6h") — force the principal's cached entry Handle(s) to
+  // reissue on their next Turn rather than continuing to carry a gate this Grant just revoked.
+  if (mapped.capability === GATEKEEPER_GRANT_CAPABILITY) {
+    await revokeEntrySessionHandles(client, workspaceId, mapped.principalId);
+  }
+  return mapped;
 }
 
 export async function getGrant(
@@ -167,19 +203,44 @@ export interface ScopeMatch {
   readonly resourceScope?: string | null | undefined;
 }
 
+/**
+ * Item 2 decision (review job 652a4abc, "decide and document whether capability='gatekeeper'
+ * grants satisfy I14 for that gate — recommended yes"): **yes** — a `'gatekeeper'` grant scoped to
+ * the same `resource_scope` (the ActionRequest's `gatekeeper_id`, see `GATEKEEPER_GRANT_CAPABILITY`'s
+ * own doc comment) satisfies I14 for *any* `action_kind` at that Gatekeeper, in addition to an
+ * exact `capability = action_kind` grant. Rationale: I14's `action_kind`-exact grant already lets a
+ * workspace scope an approver narrowly ("this operator may only approve `container.restart`"); a
+ * `'gatekeeper'` grant is the *coarser* delegation ("this operator may act on this Gatekeeper at
+ * all", the same grant `connect_gatekeeper`/`grant_capability{capability:'gatekeeper'}` writes for
+ * entry-Handle gate access, S2.13) — a principal already trusted with that broader authority is
+ * necessarily trusted with the narrower "approve one Operation on it" (§5.8 "角色 operator 只是进
+ * 队列；能批哪条由 capability 范围决定" already frames capability scope, not role, as the actual
+ * decision surface; this widens what counts as a matching scope, not who reaches the check).
+ * `$4 is not null` guards the added OR-branch so it never fires for an ActionRequest with no
+ * `resource_scope` on file (pre-item-2 rows, or a future non-Gatekeeper `action_kind`) — an
+ * unscoped `'gatekeeper'` grant has nothing meaningful to match there.
+ */
 const MATCHING_GRANT_WHERE = `
   workspace_id = $1
   and principal_id = $2
-  and capability = $3
   and status = 'active'
   and (expires_at is null or expires_at > now())
-  and (scope ->> 'resourceScope' is null or scope ->> 'resourceScope' = $4)
+  and (
+    (capability = $3 and (scope ->> 'resourceScope' is null or scope ->> 'resourceScope' = $4))
+    or (
+      $4 is not null
+      and capability = '${GATEKEEPER_GRANT_CAPABILITY}'
+      and (scope ->> 'resourceScope' is null or scope ->> 'resourceScope' = $4)
+    )
+  )
 `;
 
 /** Whether `match.principalId` holds an active, unexpired grant covering `actionKind` ×
  *  `resourceScope` — the owner-override half of I14 ("the workspace owner counts as holding every
  *  scope") is layered on separately by callers (e.g. `governance/approval/service.ts`'s I14
- *  precheck), not by this function, so it stays a pure "does a grant row exist" question. */
+ *  precheck), not by this function, so it stays a pure "does a grant row exist" question. See
+ *  `MATCHING_GRANT_WHERE`'s own doc comment for the item-2 "gatekeeper grant satisfies I14"
+ *  widening this also applies. */
 export async function hasActiveGrant(
   client: PoolClient,
   workspaceId: string,
@@ -199,7 +260,11 @@ export interface ScopeQuery {
 
 /** Every principal id with an active, unexpired grant covering `actionKind` × `resourceScope` —
  *  the grant half of `governance/approval/routing.ts`'s I14 holder computation (the workspace
- *  owner(s) are the other half, `listWorkspaceOwnerPrincipalIds` below). */
+ *  owner(s) are the other half, `listWorkspaceOwnerPrincipalIds` below). Same item-2 "gatekeeper
+ *  grant satisfies I14" widening as `hasActiveGrant`/`MATCHING_GRANT_WHERE` above, kept as its own
+ *  literal SQL (a `distinct principal_id` projection, not the `exists`-shaped
+ *  `MATCHING_GRANT_WHERE`) rather than factored into one shared string, since the two queries
+ *  select different columns. */
 export async function listGrantHolderPrincipalIds(
   client: PoolClient,
   workspaceId: string,
@@ -208,13 +273,54 @@ export async function listGrantHolderPrincipalIds(
   const result = await client.query<{ principal_id: string }>(
     `select distinct principal_id from capability_grants
      where workspace_id = $1
-       and capability = $2
        and status = 'active'
        and (expires_at is null or expires_at > now())
-       and (scope ->> 'resourceScope' is null or scope ->> 'resourceScope' = $3)`,
+       and (
+         (capability = $2 and (scope ->> 'resourceScope' is null or scope ->> 'resourceScope' = $3))
+         or (
+           $3 is not null
+           and capability = '${GATEKEEPER_GRANT_CAPABILITY}'
+           and (scope ->> 'resourceScope' is null or scope ->> 'resourceScope' = $3)
+         )
+       )`,
     [workspaceId, query.actionKind, query.resourceScope ?? null],
   );
   return result.rows.map((row) => row.principal_id);
+}
+
+/**
+ * Whether `query.principalId` holds ANY active, unexpired `capability_grants` row for
+ * `query.capability` — regardless of `resourceScope` (wildcard or a specific one alike). Distinct
+ * from `hasActiveGrant`, which matches a *specific* target `resourceScope` (or the wildcard-null
+ * convention for it); this answers "does the principal hold this capability at all, on any
+ * resource" — item 5's `set_auto_approved_action_kind` check needs exactly this shape: the
+ * workspace-wide auto-approval rule it writes is not itself resource-scoped (it is not "for gate
+ * G", it is "for every gate"), so the write-time authorization check cannot narrow to one
+ * `resourceScope` either — any grant naming this `action_kind`, at any gate (or wildcard), is
+ * sufficient (§5.8 "能批哪条由 capability 范围决定" extended to "能设自动批准规则的范围由 capability 范围
+ * 决定").
+ */
+export interface AnyActiveGrantQuery {
+  readonly principalId: string;
+  readonly capability: string;
+}
+
+export async function hasAnyActiveGrant(
+  client: PoolClient,
+  workspaceId: string,
+  query: AnyActiveGrantQuery,
+): Promise<boolean> {
+  const result = await client.query(
+    `select 1 from capability_grants
+     where workspace_id = $1
+       and principal_id = $2
+       and capability = $3
+       and status = 'active'
+       and (expires_at is null or expires_at > now())
+     limit 1`,
+    [workspaceId, query.principalId, query.capability],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // -------------------------------------------------------------------------------------------

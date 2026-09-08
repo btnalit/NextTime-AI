@@ -1,5 +1,10 @@
 import { IllegalTransition } from '@nexttime/shared';
-import type { ActionRequestStatus, CapabilityChannel, CapabilityScope } from '@nexttime/shared';
+import type {
+  ActionRequestStatus,
+  CapabilityChannel,
+  CapabilityScope,
+  Role,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
@@ -11,6 +16,10 @@ import {
   requestAction,
 } from '../../governance/approval/index.js';
 import {
+  hasActiveGrant,
+  listActiveGrantResourceScopes,
+} from '../../governance/capability/index.js';
+import {
   GatekeeperNotFoundError,
   OperationNotFoundError,
   SYSTEM_ACTOR_PLACEHOLDER,
@@ -19,6 +28,7 @@ import {
   getPublishedOperation,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
+import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import type { WithTransactionFn } from './action-executor.js';
@@ -544,6 +554,14 @@ async function runGovernedRequest(
   const actionRequest = await requestAction(client, workspaceId, {
     gatekeeperId: args.gatekeeper.gatekeeperId,
     actionKind: args.operationName,
+    // Item 2 fix (review job 652a4abc: "resource_scope never populated (NULL) → scoped grants
+    // never match"): every governed request now snapshots the Gatekeeper it targets as its own
+    // `resource_scope` at request time — I14's approve-time scope check (`decide.ts`'s
+    // `assertApproverScope`/`reads.ts`'s `approverHasScope`) and the `list_pending`/holder-routing
+    // reads (`reads.ts`/`routing.ts`) can then actually narrow by gate, not just by bare
+    // `action_kind` (which, per `getPublishedOperation`'s own shape, is just the Operation's own
+    // name — the same op name could exist on multiple Gatekeepers).
+    resourceScope: args.gatekeeper.gatekeeperId,
     blastRadius: args.blastRadius,
     operationAutoApprovable: args.autoApprovable,
     awaitDecision: args.awaitDecision,
@@ -699,18 +717,114 @@ async function runGovernedRequest(
 // the capability handler
 // -------------------------------------------------------------------------------------------
 
+/**
+ * Resolves the calling human Principal's `role` (authority-tightening fix, review job 652a4abc
+ * item 1) — a direct `principals` lookup by id, the same query `handlers.ts`'s own local
+ * `currentPrincipalRole` runs, kept as a small local duplicate here rather than importing that
+ * unexported helper (would require either exporting it from `handlers.ts`, which imports *this*
+ * module's `requestActionHandler`/`observeOperationHandler` and would create a circular import, or
+ * moving it to a shared module outside this task's owned files). `ctx.principalId` (the caller's
+ * own id, dispatch.ts's `callerContext()`) is already in hand for a human caller — this only adds
+ * the `role` column dispatch.ts does not thread through `CapabilityHandlerContext` today.
+ */
+async function resolvePrincipalRole(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<Role> {
+  const result = await client.query<{ role: Role }>(
+    'select role from principals where workspace_id = $1 and id = $2',
+    [workspaceId, principalId],
+  );
+  const role = result.rows[0]?.role;
+  if (!role) {
+    throw new Error(
+      `request_action/observe_operation: principal ${principalId} not found in workspace ${workspaceId}`,
+    );
+  }
+  return role;
+}
+
+/**
+ * The real authorization gate for a **human** caller of `request_action`/`observe_operation`
+ * (authority-tightening fix, review job 652a4abc lane3 P1-5 / lane2 P1: "resolveRequesterScope
+ * synthesizes gate coverage for every human caller, so policy's own deny check could never fire" —
+ * `minRole` alone cannot express this, see `request_action`'s own registry doc comment). A
+ * non-owner human must hold an active `capability='gatekeeper'` Grant for `gatekeeperId`
+ * (`hasActiveGrant`, the same convention `agent-host-runtime.ts`'s `ensureEntryHandle` already
+ * flows into an entry Handle's `resources.gatekeeper` scope, S2.13). `auditor` is excluded
+ * outright, before any grant lookup — §5.1.1 frames it as the one role deliberately scoped to
+ * read-only (+secrets) access; a read-only role must never reach a Gatekeeper, granted or not.
+ * `owner` bypasses the grant lookup entirely (§5.8/I14 "workspace owner 视为持有一切范围").
+ *
+ * Never called for a `handle`-channel caller: a Worker/entry Handle's own scope (checked by
+ * `authorize.ts`'s `authorizeCapabilityCall` before this handler ever runs) is the actual gate for
+ * that channel — this function is human-channel-only, matching this task's own scope.
+ */
+async function assertHumanGatekeeperAccess(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  role: Role,
+  gatekeeperId: string,
+): Promise<void> {
+  if (role === 'auditor') {
+    throw new ForbiddenError(
+      'request_action/observe_operation: role "auditor" may never call a Gatekeeper (read-only role)',
+    );
+  }
+  if (role === 'owner') return;
+
+  const allowed = await hasActiveGrant(client, workspaceId, {
+    principalId,
+    actionKind: GATEKEEPER_RESOURCE_SCOPE_KEY,
+    resourceScope: gatekeeperId,
+  });
+  if (!allowed) {
+    throw new ForbiddenError(
+      `request_action/observe_operation: principal ${principalId} holds no active ` +
+        `"${GATEKEEPER_RESOURCE_SCOPE_KEY}" grant for gatekeeper ${gatekeeperId}`,
+    );
+  }
+}
+
 /** The `gatekeeper` resource-scope key `evaluate()` reads (see `governance/policy/engine.ts`'s
- *  own `GATEKEEPER_RESOURCE_SCOPE_KEY` doc comment) — the human channel is at least as trusted as
- *  any Handle (§9.3 "human 通道调用同样允许"), so a human caller's scope is synthesized to cover
- *  whichever Gatekeeper it names, matching this task's own "human-channel calls are allowed the
- *  same way (owner testing)" brief. */
-function resolveRequesterScope(
+ *  own `GATEKEEPER_RESOURCE_SCOPE_KEY` doc comment) — defense-in-depth alongside
+ *  `assertHumanGatekeeperAccess` above (the real gate for a human caller), not a replacement for
+ *  it: a Handle caller's own scope is returned unchanged (its Handle already carries the correct,
+ *  attenuated scope). A human caller's scope is built from their real active `'gatekeeper'` Grants
+ *  (`listActiveGrantResourceScopes`, item 1's own instruction) rather than synthesized to always
+ *  cover whichever Gatekeeper is being asked about (the pre-fix behavior, which made policy's own
+ *  `deny` decision unreachable for any human). `owner` is unconstrained — represented here by
+ *  always including `gatekeeperId` itself (owner already bypassed the real gate above; no grant
+ *  row is expected to exist for an owner testing a gate directly). For a non-owner, `gatekeeperId`
+ *  is still unioned in explicitly: `assertHumanGatekeeperAccess` may have accepted a *wildcard*
+ *  `'gatekeeper'` Grant (`resourceScope` unset) that `listActiveGrantResourceScopes` cannot
+ *  represent as a concrete id (see that function's own doc comment: "skipped ... there is no
+ *  single id to add") — without the union, a wildcard-granted principal would pass the real gate
+ *  above only to have `evaluate()`'s own coverage check deny it a moment later. */
+async function resolveRequesterScope(
+  client: PoolClient,
+  workspaceId: string,
   channel: CapabilityChannel,
   scope: CapabilityScope | undefined,
+  role: Role | undefined,
+  principalId: string,
   gatekeeperId: string,
-): CapabilityScope {
+): Promise<CapabilityScope> {
   if (channel === 'handle' && scope) return scope;
-  return { capabilities: [], resources: { gatekeeper: [gatekeeperId] } };
+
+  if (role === 'owner') {
+    return { capabilities: [], resources: { gatekeeper: [gatekeeperId] } };
+  }
+
+  const granted = await listActiveGrantResourceScopes(client, workspaceId, {
+    principalId,
+    capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
+  });
+  const resourceIds = new Set(granted);
+  resourceIds.add(gatekeeperId);
+  return { capabilities: [], resources: { gatekeeper: [...resourceIds] } };
 }
 
 /**
@@ -727,8 +841,12 @@ function resolveRequesterScope(
  *     needs an execute-class effect delegates through `invoke_worker`; a Worker uses
  *     `request_action`.
  *
- * Like `request_action`'s own observe path, this does not check `resources.gatekeeper` (S2.4
- * known gap — projected tools only exist for granted gates, but a direct call is not narrowed).
+ * On the **handle** channel this still does not check `resources.gatekeeper` (S2.4 known gap —
+ * projected tools only exist for granted gates, but a direct call is not narrowed; a Handle's own
+ * scope is still checked by `authorize.ts` before this handler ever runs, just not narrowed to
+ * *this* Gatekeeper specifically). On the **human** channel (item 1 fix, review job 652a4abc), a
+ * non-owner caller must hold an active `'gatekeeper'` Grant for `gatekeeperId` —
+ * `assertHumanGatekeeperAccess` below, same gate `request_action` now applies.
  */
 export const observeOperationHandler: CapabilityHandler = async (
   client,
@@ -744,6 +862,11 @@ export const observeOperationHandler: CapabilityHandler = async (
   const onBehalfOf = ctx?.principalId;
   if (!onBehalfOf) {
     throw new Error('observe_operation: caller context is required (dispatch.ts must supply it)');
+  }
+
+  if ((ctx?.channel ?? 'handle') === 'human') {
+    const role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
+    await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
   }
 
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
@@ -786,7 +909,25 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     throw new Error('request_action: caller context is required (dispatch.ts must supply it)');
   }
   const actorRuntime = channel === 'human' ? 'human' : 'pi';
-  const requesterScope = resolveRequesterScope(channel, ctx?.scope, gatekeeperId);
+
+  // Item 1 fix (review job 652a4abc lane3 P1-5 / lane2 P1): resolved once, before *any* branch
+  // below (including the observe fallthrough and the I17 unclassified path) — every way this
+  // handler can reach a Gatekeeper on the human channel goes through the same gate.
+  let role: Role | undefined;
+  if (channel === 'human') {
+    role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
+    await assertHumanGatekeeperAccess(client, workspaceId, onBehalfOf, role, gatekeeperId);
+  }
+
+  const requesterScope = await resolveRequesterScope(
+    client,
+    workspaceId,
+    channel,
+    ctx?.scope,
+    role,
+    onBehalfOf,
+    gatekeeperId,
+  );
   const resolvedParams = operationParams ?? {};
   const sid = channel === 'handle' ? ctx?.claims?.sid : undefined;
 
