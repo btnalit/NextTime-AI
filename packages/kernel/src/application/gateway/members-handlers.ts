@@ -334,7 +334,24 @@ export const disablePrincipalHandler: CapabilityHandler = async (
 // get_workspace
 // -------------------------------------------------------------------------------------------
 
-export const getWorkspaceHandler: CapabilityHandler = async (client, workspaceId) => {
+/**
+ * `caller` (coordinator addition, 2026-09-08): the resolved calling Principal's own identity —
+ * the web console has no other capability that answers "who am I / what's my role", and was
+ * inferring it indirectly from which capabilities come back `403 forbidden` (a real usability
+ * gap, not a hypothetical). Projected straight from `ctx.principal`
+ * (`application/gateway/dispatch.ts`'s own `resolve-caller.ts`-resolved `PrincipalRow`, threaded
+ * through purely additively — `capability-handler.ts`'s own doc comment) — never a second query
+ * by API key. Always present in production: `get_workspace` is `channel:'human'`-only
+ * (packages/shared/src/capabilities.ts), and `dispatchCapability` supplies `ctx.principal` for
+ * every human-channel call.
+ */
+export const getWorkspaceHandler: CapabilityHandler = async (client, workspaceId, _params, ctx) => {
+  if (!ctx?.principal) {
+    throw new Error(
+      'get_workspace: no resolved human principal in context (this capability is channel:"human"-only)',
+    );
+  }
+
   const workspaceResult = await client.query<{ id: string; name: string; created_at: Date }>(
     'select id, name, created_at from workspaces where id = $1',
     [workspaceId],
@@ -358,6 +375,12 @@ export const getWorkspaceHandler: CapabilityHandler = async (client, workspaceId
       createdAt: workspaceRow.created_at.toISOString(),
       principalCount,
       gatekeeperCount,
+      caller: {
+        id: ctx.principal.id,
+        role: ctx.principal.role,
+        displayName: ctx.principal.displayName,
+        kind: ctx.principal.kind,
+      },
     },
     resourceType: 'workspace',
     resourceId: workspaceRow.id,

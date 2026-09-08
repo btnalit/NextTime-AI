@@ -431,17 +431,38 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(Array.isArray(ops.items)).toBe(true);
     });
 
-    it('get_workspace: id/name/counts', async () => {
+    it('get_workspace: id/name/counts, plus the resolved caller (no re-query by API key)', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       const ws = (await dispatchCapability({ pool }, owner, 'get_workspace', {})) as {
         id: string;
         name: string;
         principalCount: number;
         gatekeeperCount: number;
+        caller: { id: string; role: string; displayName: string | null; kind: string };
       };
       expect(ws.id).toBe(workspaceId);
       expect(ws.principalCount).toBeGreaterThan(0);
       expect(ws.gatekeeperCount).toBeGreaterThanOrEqual(0);
+      expect(ws.caller).toEqual({
+        id: ownerId,
+        role: 'owner',
+        displayName: null,
+        kind: 'human',
+      });
+
+      // A member caller sees themselves, not the owner — proves this is the resolved caller's
+      // own identity, not a hardcoded/first-principal read.
+      const memberId = await adminInsertPrincipal(workspaceId, 'member', 'Heidi');
+      const memberCaller = humanCaller(workspaceId, memberId, 'member');
+      const wsAsMember = (await dispatchCapability(
+        { pool },
+        memberCaller,
+        'get_workspace',
+        {},
+      )) as {
+        caller: { id: string; role: string };
+      };
+      expect(wsAsMember.caller).toEqual(expect.objectContaining({ id: memberId, role: 'member' }));
     });
 
     describe('list_models', () => {

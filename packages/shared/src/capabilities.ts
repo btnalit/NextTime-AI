@@ -1256,7 +1256,8 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
-    description: 'The calling workspace’s identity and summary counts (principals, gatekeepers).',
+    description:
+      'The calling workspace’s identity and summary counts (principals, gatekeepers), plus the resolved calling Principal’s own identity and role (caller).',
   },
   {
     name: 'list_models',

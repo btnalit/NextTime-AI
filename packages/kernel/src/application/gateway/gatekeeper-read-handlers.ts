@@ -108,8 +108,18 @@ function toWireGatekeeperSummary(entry: GatekeeperListEntry, operationCount: num
   };
 }
 
+/**
+ * Shared by both `get_gatekeeper`'s embedded `operations[]` (task brief's own listed shape:
+ * `{name, mode, blastRadius, autoApprovable, version, status}`) and `list_operations`'s cross-gate
+ * `{items}`. `gatekeeperId` is additive on top of that listed shape — `get_gatekeeper` already
+ * identifies the gate by context (harmless extra field there), but `list_operations` is
+ * explicitly the "按门分组" (grouped by gate) human directory *across* gates (task brief), which is
+ * not actually groupable without knowing which gate each item belongs to; omitting it would make
+ * that directory unusable the moment more than one Gatekeeper is registered.
+ */
 function toWireOperationSummary(record: OperationRecord) {
   return {
+    gatekeeperId: record.gatekeeperId,
     name: record.name,
     mode: record.operation.mode,
     blastRadius: record.operation.blast_radius,

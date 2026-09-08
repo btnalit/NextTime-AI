@@ -161,6 +161,19 @@ export async function dispatchCapability(
         // from and to look up its own WorkerRun (I18 depth) — this is the only place that has
         // verified claims in hand.
         ...(caller.channel === 'handle' ? { claims: caller.claims } : {}),
+        // S3.11 addition (purely additive, alongside `scope`/`claims` above): the already-resolved
+        // human Principal row (resolve-caller.ts), so a handler needing "who am I / what's my
+        // role" (get_workspace's own `caller` field) never re-queries `principals` a second time.
+        ...(caller.channel === 'human'
+          ? {
+              principal: {
+                id: caller.principal.id,
+                kind: caller.principal.kind,
+                role: caller.principal.role,
+                displayName: caller.principal.displayName,
+              },
+            }
+          : {}),
       });
       const resourceRef = auditResourceRef(result.resourceId);
       await writeAudit(client, {
