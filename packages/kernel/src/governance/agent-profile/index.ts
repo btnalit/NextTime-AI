@@ -13,5 +13,6 @@
  * call `readEffectiveAgentProfile` (or the raw row functions) through this published interface,
  * the same way `governance/approval` calls into `governance/policy`/`governance/capability`.
  */
+export * from './types.js';
 export * from './resolve.js';
 export * from './store.js';

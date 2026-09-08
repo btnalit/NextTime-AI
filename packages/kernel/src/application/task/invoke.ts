@@ -2,6 +2,7 @@ import { INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS } from '@nexttime/shared';
 import type { CapabilityChannel, HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import { readEffectiveAgentProfile } from '../../governance/agent-profile/index.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { sumTodayCostUsd } from '../../governance/llm-usage/index.js';
 import { requirePublishedWorkerDefinition } from '../worker/index.js';
@@ -200,12 +201,19 @@ export async function invokeWorkerCreate(
   const definitionName =
     typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
 
-  const { parentAuthority, skillsInline } = await withWorkspace(
+  const { parentAuthority, skillsInline, effectiveModel } = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
     async (client) => ({
       parentAuthority: await resolveParentAuthority(client, workspaceId, caller),
       skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+      // S3.13: only read when the WorkerDefinition itself declares no model — the requesting
+      // principal's own effective.model is the fallback, never a widening of what the
+      // WorkerDefinition author already pinned.
+      effectiveModel:
+        content.model === undefined
+          ? (await readEffectiveAgentProfile(client, workspaceId, caller.principalId)).model
+          : undefined,
     }),
   );
 
@@ -350,7 +358,9 @@ export async function invokeWorkerCreate(
       declaredCapabilities,
       declaredGates,
       requestedGates: input.gates,
-      model: content.model,
+      // S3.13: falls back to the requesting principal's own effective.model only when the
+      // WorkerDefinition declares none — never overrides an explicit WorkerDefinition.model.
+      model: content.model ?? effectiveModel ?? undefined,
       definitionName,
       skillsInline,
       egressDeny: content.egressDeny,

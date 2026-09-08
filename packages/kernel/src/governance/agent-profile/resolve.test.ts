@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { resolveEffectiveAgentProfile } from './resolve.js';
-import type { AgentPolicyRow, AgentProfileRow } from './store.js';
 import { defaultAgentPolicy } from './store.js';
+import type { AgentPolicyRow, AgentProfileRow } from './types.js';
 
 const WORKSPACE_ID = 'ws-1';
 const PRINCIPAL_ID = 'pr-1';

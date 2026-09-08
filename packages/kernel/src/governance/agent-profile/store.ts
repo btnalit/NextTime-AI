@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { resolveEffectiveAgentProfile } from './resolve.js';
 import type { EffectiveAgentProfile } from './resolve.js';
+import type { AgentPolicyRow, AgentProfileRow } from './types.js';
 
 /**
  * governance/agent-profile/store: row read/write for `agent_profiles`/`agent_policies`
@@ -21,19 +22,6 @@ import type { EffectiveAgentProfile } from './resolve.js';
 // -------------------------------------------------------------------------------------------
 // AgentProfile
 // -------------------------------------------------------------------------------------------
-
-export interface AgentProfileRow {
-  readonly workspaceId: string;
-  readonly principalId: string;
-  readonly model: string | null;
-  readonly enabledSkills: readonly string[] | null;
-  readonly enabledGatekeepers: readonly string[] | null;
-  readonly enabledWorkerDefinitions: readonly string[] | null;
-  readonly promptAddendum: string | null;
-  readonly autoApproveLow: boolean | null;
-  readonly updatedBy: string | null;
-  readonly updatedAt: Date | null;
-}
 
 interface AgentProfileDbRow {
   workspace_id: string;
@@ -177,19 +165,6 @@ export async function setAgentProfile(
 // AgentPolicy — at most one row per workspace; absent = the compiled-in defaults below (S3.13's
 // own defaults list: "[]、null、true、2000、[]、[]、false").
 // -------------------------------------------------------------------------------------------
-
-export interface AgentPolicyRow {
-  readonly workspaceId: string;
-  readonly allowedModels: readonly string[];
-  readonly defaultModel: string | null;
-  readonly memberCanEditProfile: boolean;
-  readonly maxPromptAddendumChars: number;
-  readonly allowedSkills: readonly string[];
-  readonly allowedGatekeepers: readonly string[];
-  readonly allowMemberAutoApproveLow: boolean;
-  readonly updatedBy: string | null;
-  readonly updatedAt: Date | null;
-}
 
 interface AgentPolicyDbRow {
   workspace_id: string;

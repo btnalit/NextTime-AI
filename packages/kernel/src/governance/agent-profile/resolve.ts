@@ -1,4 +1,4 @@
-import type { AgentPolicyRow, AgentProfileRow } from './store.js';
+import type { AgentPolicyRow, AgentProfileRow } from './types.js';
 
 /**
  * governance/agent-profile/resolve: the pure "apply AgentPolicy defaults to an AgentProfile" half
