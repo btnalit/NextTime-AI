@@ -1042,12 +1042,24 @@ step4_step5_ssh_always_allow() {
 # shell tool a fake-llm scenario could call — see docs/runbooks/host-accept-s2.md "已知偏离"), on
 # the same isolated `workers` network and with the same HTTP(S)_PROXY a real spawned Worker gets
 # (worker-supervisor's own HTTP_PROXY_FOR_WORKERS), for a literal, direct `env | grep -ci api_key`
-# check plus the two curl probes.
+# check plus the curl probes.
+#
+# Egress is fail-closed per *source* since the runtime hardening (review lane 6 / F6,
+# `EGRESS_DENY_UNKNOWN_SOURCE` default on): the proxy only forwards for a client IP that
+# worker-supervisor registered in its source map when it spawned that container. The ad-hoc
+# `docker run` container below is deliberately NOT such a source, so it must now be *denied*
+# (`unknown-source`, 403 — the 2026-09-08 regression run first surfaced this as a curl `000` on
+# the old "expect 200" assertion, which was asserting the pre-hardening fail-open behaviour). The
+# positive half of the invariant — a registered container does reach the public internet through
+# the proxy — is checked from inside alice's resident entry container, which worker-supervisor
+# spawned for steps 2–3 (registered as `entry:<workspace>:<alice>`; same image, same curl).
 step6_env_and_egress() {
   # Plain `docker run` on the compose project's `workers` network: `docker compose run --network`
   # is not accepted by the compose version on the host (fourteenth run: "unknown flag: --network"),
   # and the build-only worker-runtime service declares no networks of its own. Same image, same
-  # non-root user, same proxy env a real Worker receives (worker-supervisor spawn-spec).
+  # non-root user, same proxy env a real Worker receives (worker-supervisor spawn-spec) — but no
+  # source registration, so the proxied probe uses plain http:// (a denied CONNECT would only show
+  # up as curl exit 56 / http_code 000; a denied plain-HTTP request carries the proxy's own 403).
   out=$(docker run --rm --network "${COMPOSE_PROJECT_NAME:-nexttime-ai}_workers" --entrypoint sh \
     -e HTTP_PROXY=http://egress-proxy:3128 -e HTTPS_PROXY=http://egress-proxy:3128 \
     nexttime-ai-worker-runtime -c '
@@ -1057,8 +1069,8 @@ direct_code=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" --noproxy "*" http://
 direct_rc=$?
 echo "DIRECT_RC=$direct_rc"
 echo "DIRECT_CODE=$direct_code"
-proxied_code=$(curl -m 10 -sS -o /dev/null -w "%{http_code}" https://example.com 2>/dev/null)
-echo "PROXIED_CODE=$proxied_code"
+unregistered_code=$(curl -m 10 -sS -o /dev/null -w "%{http_code}" http://example.com 2>/dev/null)
+echo "UNREGISTERED_CODE=$unregistered_code"
 ' </dev/null 2>&1)
 
   api_key_count=$(parse_kv "$out" API_KEY_COUNT)
@@ -1072,9 +1084,18 @@ echo "PROXIED_CODE=$proxied_code"
   fi
   pass "step6-direct-lan-fails" "direct curl to an internal address failed as expected (curl rc=$direct_rc, http_code='$direct_code')"
 
-  proxied_code=$(parse_kv "$out" PROXIED_CODE)
-  [ "$proxied_code" = "200" ] || fail "step6-proxied-egress-ok" "proxied curl https://example.com -> '$proxied_code' (expected 200): $out"
-  pass "step6-proxied-egress-ok" "https://example.com -> 200 via egress-proxy"
+  unregistered_code=$(parse_kv "$out" UNREGISTERED_CODE)
+  [ "$unregistered_code" = "403" ] || fail "step6-unregistered-source-denied" "proxied curl http://example.com from an unregistered container -> '$unregistered_code' (expected 403 unknown-source): $out"
+  pass "step6-unregistered-source-denied" "unregistered container -> 403 from egress-proxy (fail-closed per source)"
+
+  # Positive half: alice's resident entry container was spawned (and its IP registered as an egress
+  # source) by worker-supervisor for steps 2–3, and is still up (ENTRY_IDLE_TIMEOUT_MS default 30m).
+  entry_container="nexttime-entry-${ALICE_PRINCIPAL_ID}"
+  entry_running=$(docker inspect -f '{{.State.Running}}' "$entry_container" 2>/dev/null)
+  [ "$entry_running" = "true" ] || fail "step6-registered-egress-ok" "alice's entry container $entry_container is not running (State.Running='$entry_running') — steps 2–3 should have left it up"
+  registered_code=$(docker exec "$entry_container" curl -m 10 -sS -o /dev/null -w '%{http_code}' -x http://egress-proxy:3128 https://example.com </dev/null 2>/dev/null)
+  [ "$registered_code" = "200" ] || fail "step6-registered-egress-ok" "proxied curl https://example.com from alice's registered entry container -> '$registered_code' (expected 200)"
+  pass "step6-registered-egress-ok" "registered entry container -> https://example.com 200 via egress-proxy"
 }
 
 # S2.12 step 7: the Facts written from the Worker result contract land in the graph with epistemic
