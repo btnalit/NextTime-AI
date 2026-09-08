@@ -379,14 +379,19 @@ fetch('http://worker-supervisor:8081/resident/stop', {
 
 # Polls one gate's /gate/health (reachable only inside the control network — no host port) from
 # inside the kernel image, same node-fetch pattern docs/runbooks/host-gatekeepers.md's own §3
-# uses. Retries for up to ~30s (gate containers can take a few seconds to bind their port after
-# `docker compose up -d`).
+# uses. Every gate route — health included — requires the shared kernel↔gate token since the
+# gate-protocol hardening (review lane 5 P1-1, `gate_token` compose secret), so the probe reads
+# the kernel container's own copy at /run/secrets/gate_token and sends it as a Bearer; without it
+# the gate answers 401 and this loop would time out against a perfectly healthy gate (2026-09-08
+# regression run). Retries for up to ~30s (gate containers can take a few seconds to bind their
+# port after `docker compose up -d`).
 wait_for_gate_health() {
   gate_url="$1"
   attempt=0
   while [ "$attempt" -lt 15 ]; do
     out=$(docker compose run --rm --no-deps -T kernel node -e "
-fetch('$gate_url/gate/health').then((r) => r.json()).then((b) => console.log('OK=' + (b.ok === true)))
+const token = require('fs').readFileSync('/run/secrets/gate_token', 'utf8').trim();
+fetch('$gate_url/gate/health', { headers: { authorization: 'Bearer ' + token } }).then((r) => r.json()).then((b) => console.log('OK=' + (b.ok === true)))
 " </dev/null 2>&1)
     case "$out" in
       *OK=true*) return 0 ;;
