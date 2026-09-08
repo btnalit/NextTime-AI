@@ -137,13 +137,12 @@ services:
   #   consumer.
   docker-socket-proxy:
     # Exact tag verified via `gh api repos/Tecnativa/docker-socket-proxy/releases` (2026-09-08):
-    # v0.5.0 is the current stable release (published 2026-07-27). Digest NOT pinned — this build
-    # environment has no route to Docker Hub or GHCR to resolve one (auth.docker.io and ghcr.io
-    # both TLS-handshake-fail from here; verified with curl, not assumed — see PR body). TODO
-    # (operator): after `docker compose pull docker-socket-proxy` on the target host, run
-    #   docker inspect --format '{{index .RepoDigests 0}}' tecnativa/docker-socket-proxy:0.5.0
-    # and pin it here as tecnativa/docker-socket-proxy:0.5.0@sha256:<digest>.
-    image: tecnativa/docker-socket-proxy:0.5.0
+    # v0.5.0 is the current stable release (published 2026-07-27). Docker Hub publishes the tag
+    # WITH the `v` prefix (`v0.5.0`; the un-prefixed `0.5.0` does not exist — the first host apply
+    # failed with "manifest unknown"). Digest pinned from the target host after `docker pull`
+    # (`docker inspect --format '{{index .RepoDigests 0}}'`, 2026-09-08); re-pin the same way when
+    # bumping the tag. Image runs haproxy as root by default but needs no capability for :2375.
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     environment:
       {
         CONTAINERS: "1",
@@ -597,29 +596,25 @@ services:
     depends_on: { postgres: { condition: service_healthy } }
     secrets: [pg_password]
     networks: [control]
-    user: "10001:10001"
     restart: unless-stopped
-    # user: "10001:10001" (fix/socket-proxy-and-backup-user) — supersedes the lane-7 P2 fix note
-    # below (kept, struck through in spirit, for history): this image's default ENTRYPOINT is
-    # still overridden (line above) so docker-entrypoint.sh's own privilege-drop (gosu postgres)
-    # never runs, but the container no longer starts as root at all — `user:` puts it straight on
-    # the platform's own non-root uid (packages/*/Dockerfile's `nexttime`, uid:gid 10001:10001;
-    # gatekeepers/{docker,ragflow}/Dockerfile use the same convention — see .env.example's own
-    # `DOCKER_GID` comment). A numeric uid with no /etc/passwd entry is fine here: backup.sh only
-    # runs pg_dump (auth via PGPASSWORD, not a password *file* lookup — no ~/.pgpass involved) /
-    # tar / gzip, none of which need a resolvable username; `HOME=/tmp` above is set purely as a
-    # defensive fallback in case any of those ever probe $HOME (glibc's own getpwuid-miss fallback
-    # for a homeless uid is to skip such lookups, not error, but this costs nothing and removes
-    # the ambiguity). Checked deploy/backup/backup.sh line by line for anything else needing root:
-    # no chown, no writes outside $DATA_DIR/backups (rw mount) and /tmp (this service's own
-    # tmpfs below) — clean.
-    # cap_drop: [ALL] — now applied (lane-7 P2 fix had deliberately deferred this specifically
-    # because the container ran as root and cap-less root's ability to still run pg_dump/tar/gzip
-    # was unverified; running as non-root uid 10001 sidesteps that question entirely — a non-root
-    # process's needed capabilities, if any, are for privileged *operations*, not "am I still
-    # root", and pg_dump (a plain TCP client)/tar/gzip (plain file IO under /tmp and the rw
-    # backups/ mount) need none.
-    # cap_add: [DAC_READ_SEARCH] — added alongside cap_drop, for `caddy/` specifically:
+    # Runs as the image's default ROOT, deliberately, with `cap_drop: [ALL]` + a single
+    # `cap_add: [DAC_READ_SEARCH]` (2026-09-08 host correction of fix/socket-proxy-and-backup-user,
+    # which had set `user: "10001:10001"`): Docker grants `cap_add` capabilities to the container's
+    # *bounding* set only — a non-root `user:` starts with empty permitted/effective sets, so
+    # DAC_READ_SEARCH was never in force. Measured on the target host from inside this service:
+    # as 10001 `CapEff: 0000000000000000` and `/run/secrets/pg_password` (root 0600, as Docker
+    # mounts secrets) unreadable → pg_dump "no password supplied"; as root with only this cap
+    # `CapEff: 0000000000000004`, secret and caddy/'s root-0600 keys both readable. Root here is
+    # bounded by: no capabilities except read/search-bypass (no DAC_OVERRIDE, no CHOWN, no
+    # SETUID…), read-only rootfs, `no-new-privileges`, and mounts limited to the ro backup sources
+    # plus the rw backups/ directory — it cannot write anywhere it could not already, and cannot
+    # touch the Docker socket or other services. The alternative (non-root + world-readable
+    # secret/caddy files) would weaken the host filesystem to make the container look better.
+    # backup.sh itself needs nothing else from root: no chown, writes only under
+    # $DATA_DIR/backups (rw mount) and /tmp (tmpfs below). `HOME=/tmp` stays as a harmless
+    # fallback for any tool probing $HOME.
+    # cap_add: [DAC_READ_SEARCH] — the one capability, needed for `caddy/` specifically (and,
+    # as measured, for the root-0600 pg_password secret):
     # `deploy/caddy/Dockerfile` runs caddy as the image's default ROOT user (that service's own
     # comment), and its cert/key storage (Caddy's internal-CA "on_demand" TLS, `caddyserver/
     # certmagic`'s `FileStorage` — verified by reading certmagic's actual filestorage.go /
