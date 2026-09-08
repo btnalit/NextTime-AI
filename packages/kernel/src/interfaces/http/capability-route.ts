@@ -36,6 +36,7 @@ import {
   InvokeWorkerValidationError,
   QuotaExceededError,
   TaskNotFoundError,
+  TaskRuntimeNotConfiguredError,
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
 import {
@@ -49,7 +50,11 @@ import {
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
-import { GrantNotFoundError, ScopeValidationError } from '../../governance/capability/index.js';
+import {
+  GrantNotFoundError,
+  HandleIssuanceError,
+  ScopeValidationError,
+} from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
 import {
   OperationIdentityConflictError,
@@ -207,6 +212,24 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // the caller's own malformed request, not a server fault.
   if (err instanceof ScopeValidationError) {
     return { status: 400, code: 'invalid_scope', message: err.message };
+  }
+  // Review fix 2026-09 (code-review finding F10 "unmapped kernel error classes drift between
+  // HTTP and WS"): `invoke_worker`'s Handle-mint path (governance/capability/handles.ts's
+  // `issueHandle`, called after the ScopeValidationError check above passes) throws this for an
+  // invalid issuance request (unknown session, non-positive ttl) — the caller's own malformed
+  // request, same 400 bucket every other Handle-mint failure mode above already uses.
+  if (err instanceof HandleIssuanceError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // Review fix 2026-09 (code-review finding F10): `invoke_worker`'s task-runtime precondition
+  // (application/task/runtime.ts's `getConfiguredTaskRuntime`) throws this when the composition
+  // root never called `configureTaskRuntime` — not a caller-input problem (400/404/409 all wrong)
+  // and not silently a caller-invisible internal bug either (a plain 500 undersells it): the
+  // kernel process itself is not ready to serve this capability yet. 503 is the one HTTP status
+  // this file did not yet use for anything — added consistently with WS's new
+  // SERVICE_UNAVAILABLE code below (rpc.ts).
+  if (err instanceof TaskRuntimeNotConfiguredError) {
+    return { status: 503, code: 'service_unavailable', message: err.message };
   }
   // S2.7 (docs/development-tasks.md S2.7 "a violated quota returns an error the entry agent can
   // relay verbatim (stable code + readable message)") — `QuotaExceededError.code` (e.g.

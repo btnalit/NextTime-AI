@@ -8,6 +8,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
   ChatNotFoundError,
   TurnAlreadyRunningError,
+  chatMessageKind,
   currentPrincipalId,
   findRunningTurn,
   getChatHistory,
@@ -26,6 +27,26 @@ import {
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
+
+// Pure-function unit coverage (no DB) — runs regardless of DATABASE_URL, unlike every other
+// describe block below. Review fix (code-review finding "chat.message payload drift"):
+// `chatMessageKind` is the one helper every `chat.message` producer now shares to derive the
+// top-level `kind` field (see this function's own doc comment in service.ts for the full story).
+describe('chatMessageKind (unit, no DB)', () => {
+  it('returns content.kind when it is a string, the same way the system-message producers already do', () => {
+    expect(chatMessageKind({ kind: 'system.task_update', text: 'Task done' })).toBe(
+      'system.task_update',
+    );
+  });
+
+  it('returns undefined for a plain {text} content blob (user/assistant/tool messages today)', () => {
+    expect(chatMessageKind({ text: 'hello' })).toBeUndefined();
+  });
+
+  it('returns undefined when content.kind is present but not a string', () => {
+    expect(chatMessageKind({ kind: 42 })).toBeUndefined();
+  });
+});
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');

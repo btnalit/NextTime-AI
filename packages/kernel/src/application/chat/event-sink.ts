@@ -4,7 +4,7 @@ import { endActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import type { AgentRuntimeEvent, AgentRuntimeEventSink } from '../host-bridge/index.js';
 import { publishChatPushEvent } from './push.js';
-import { chatMessageText, insertChatMessage } from './service.js';
+import { chatMessageKind, chatMessageText, insertChatMessage } from './service.js';
 
 /**
  * application/chat/event-sink: `createChatEventSink` implements `application/host-bridge`'s
@@ -92,6 +92,15 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
               text: chatMessageText(message.content),
               createdAt: message.createdAt.toISOString(),
               sequence: message.sequence,
+              // Review fix (code-review finding "chat.message payload drift"): previously omitted
+              // for this producer — only application/linkage's system-message push call sites set
+              // `kind`/`content`, so a client checking `message.kind` worked for a system card but
+              // not for an assistant/tool message, even though both are the same wire shape
+              // (packages/shared/src/events.ts's `ChatMessageEvent`). `chatMessageKind` derives
+              // `kind` the same way those call sites do — `undefined` here, since an
+              // assistant/tool row's `content` never has its own `kind` field.
+              kind: chatMessageKind(message.content),
+              content: message.content,
             },
           });
           return;

@@ -167,6 +167,26 @@ export function chatMessageText(content: Record<string, unknown>): string {
   return typeof text === 'string' ? text : JSON.stringify(content);
 }
 
+/**
+ * Review fix (code-review finding "`chat.message` payload drift"): the top-level `kind` a
+ * `chat.message` wire message carries (`ChatMessageEvent.message.kind`, packages/shared/src/
+ * events.ts) — `undefined` unless `content` itself has a string `kind` field, which today is true
+ * only for the three `role='system'` shapes `application/linkage` writes
+ * (`packages/shared/src/chat-message-content.ts`'s `SystemMessageContent` union, always
+ * discriminated by its own `kind`). Before this fix, only `application/linkage`'s two system-push
+ * call sites derived this field inline (`kind: content.kind`) when publishing a live push;
+ * `get_chat_history`/`subscribe_chat` replay (`toWireChatMessage`, application/gateway/
+ * handlers.ts) and the user/assistant/tool live-push producers (interfaces/ws/server.ts's
+ * `publishSentMessagePush`, this module's own event-sink.ts) never set it at all — so a client
+ * that renders a system card by checking `message.kind` (packages/web/src/lib/action-card.ts)
+ * worked only for a message that happened to arrive as a live push, not for the same row loaded
+ * from history or replayed after reconnect. One helper, used by every producer, closes the drift.
+ */
+export function chatMessageKind(content: Record<string, unknown>): string | undefined {
+  const kind = content.kind;
+  return typeof kind === 'string' ? kind : undefined;
+}
+
 // -------------------------------------------------------------------------------------------
 // currentPrincipalId
 // -------------------------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { insertChatMessage } from '../chat/index.js';
 import type { AgentRuntime, StartTurnInput } from '../host-bridge/index.js';
 import { hashApiKey } from './auth.js';
 import { dispatchCapability } from './dispatch.js';
@@ -120,17 +121,56 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const history = (await dispatchCapability({ pool }, caller, 'get_chat_history', {
         chatId: chat.id,
-      })) as { messages: { text: string; role: string }[] };
+      })) as { messages: { text: string; role: string; kind?: string }[] };
       expect(history.messages).toHaveLength(1);
       expect(history.messages[0]).toMatchObject({
         role: 'user',
         text: 'hello from a handler test',
       });
+      // Review fix (code-review finding "chat.message payload drift"): `toWireChatMessage` now
+      // sets `kind` for every row, not just role='system' ones — still undefined here, since a
+      // plain user message's content has no `kind` field of its own (see the system-message test
+      // below for the case that actually changed behavior).
+      expect(history.messages[0]?.kind).toBeUndefined();
 
       const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         queryAudit(client, workspaceId, { action: 'send_chat_message', resourceId: chat.id }),
       );
       expect(audit).toHaveLength(1);
+    });
+
+    it('review fix: a persisted system-role message surfaces its kind through get_chat_history, not just on live push', async () => {
+      // Before this fix, only the live `chat.message` push for a system message set a top-level
+      // `kind` (application/linkage's task-consumer.ts / action-request-consumer.ts) —
+      // `toWireChatMessage` (this module) never did, so the exact same row loaded through
+      // `get_chat_history` (or replayed by `subscribe_chat`) came back without it. A client that
+      // renders a card by checking `message.kind` (packages/web/src/lib/action-card.ts) would
+      // therefore render correctly on first (live) arrival but not after a reload.
+      const caller = humanCaller(workspaceId, ownerId);
+      const chat = (await dispatchCapability({ pool }, caller, 'new_chat', {})) as { id: string };
+
+      const systemContent = {
+        kind: 'system.task_update',
+        text: 'Task finished',
+        taskId: randomUUID(),
+        status: 'completed',
+      };
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        insertChatMessage(client, workspaceId, {
+          chatId: chat.id,
+          turnId: null,
+          role: 'system',
+          content: systemContent,
+        }),
+      );
+
+      const history = (await dispatchCapability({ pool }, caller, 'get_chat_history', {
+        chatId: chat.id,
+      })) as { messages: { role: string; kind?: string; content?: Record<string, unknown> }[] };
+      expect(history.messages).toHaveLength(1);
+      expect(history.messages[0]?.role).toBe('system');
+      expect(history.messages[0]?.kind).toBe('system.task_update');
+      expect(history.messages[0]?.content).toMatchObject(systemContent);
     });
 
     it('a second send_chat_message while running throws — dispatchCapability surfaces the error (§9.4)', async () => {

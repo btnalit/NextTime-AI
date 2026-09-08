@@ -30,6 +30,7 @@ export {
   ChatNotFoundError,
   DEFAULT_CHAT_HISTORY_LIMIT,
   TurnAlreadyRunningError,
+  chatMessageKind,
   chatMessageText,
   currentPrincipalId,
   findRunningTurn,

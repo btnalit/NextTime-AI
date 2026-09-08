@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import { ExplainNodeNotFoundError } from '../../application/gateway/index.js';
-import { ScopeValidationError } from '../../governance/capability/index.js';
+import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
+import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
 import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
 import { WS_ERROR_CODES, mapDispatchError } from './rpc.js';
 
@@ -38,6 +39,18 @@ describe('mapDispatchError — lane-4 P2 fix: previously-unmapped error classes 
   it('ScopeValidationError (invoke_worker Handle mint) maps to INVALID_PARAMS (-32602), not INTERNAL_ERROR', () => {
     const mapped = mapDispatchError(new ScopeValidationError('unknown capability "bogus"'));
     expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
+  });
+});
+
+describe('mapDispatchError — review fix F10: previously-unmapped error classes → 500', () => {
+  it('HandleIssuanceError (invoke_worker Handle mint) maps to INVALID_PARAMS (-32602), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new HandleIssuanceError('ttlSeconds must be positive'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
+  });
+
+  it('TaskRuntimeNotConfiguredError (invoke_worker) maps to SERVICE_UNAVAILABLE (-32015), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new TaskRuntimeNotConfiguredError());
+    expect(mapped.code).toBe(WS_ERROR_CODES.SERVICE_UNAVAILABLE);
   });
 });
 

@@ -183,14 +183,19 @@ const ChatMessageEvent = z.object({
     // this on every pushed `chat.message` to replay-then-dedupe against live delivery without
     // gaps or duplicates (docs/development-tasks.md S1.4 acceptance criterion).
     sequence: z.number(),
-    // S2.11 addition (docs/development-tasks.md S2.11 deliverable 1): present only on the three
-    // `role='system'` message kinds `application/linkage` writes (`chat-message-content.ts`'s
-    // `SystemMessageKind`) — `undefined` for ordinary user/assistant/tool messages, which carry no
-    // `kind`. `content` is that same `SystemMessageContent` object verbatim (loosened to a bare
-    // record here so this file need not import chat-message-content.ts's stricter union — a
-    // consumer that cares can re-validate with `SystemMessageContentSchema` itself), letting a
-    // live-connected web client render a card the moment the push arrives instead of waiting for a
-    // separate `get_chat_history`/`get_action` round-trip.
+    // S2.11 addition (docs/development-tasks.md S2.11 deliverable 1), generalized by a review fix
+    // (code-review finding "chat.message payload drift"): `kind` is the stored `chat_messages`
+    // row's own `content.kind` (kernel's `chatMessageKind`, application/chat/service.ts), and
+    // `content` is that row's `content` verbatim — derived the same way, by every producer, for
+    // every role, not only the three `role='system'` shapes `application/linkage` writes
+    // (`chat-message-content.ts`'s `SystemMessageKind`). In practice `kind` is still `undefined`
+    // for an ordinary user/assistant/tool message today (its `content` has no `kind` field of its
+    // own), but a client no longer has to special-case *which producer* a message came from
+    // (live push vs. `get_chat_history`/`subscribe_chat` replay) to decide whether `kind` might be
+    // present — before this fix, only the live system-message push set it; the same row loaded
+    // from history did not. `content` stays a bare record here (not the stricter
+    // `SystemMessageContent` union) so this file need not import chat-message-content.ts's own
+    // type — a consumer that cares can re-validate with `SystemMessageContentSchema` itself.
     kind: z.string().optional(),
     content: z.record(z.string(), z.unknown()).optional(),
   }),

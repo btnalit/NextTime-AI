@@ -27,6 +27,7 @@ import {
   InvokeWorkerValidationError,
   QuotaExceededError,
   TaskNotFoundError,
+  TaskRuntimeNotConfiguredError,
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
 import {
@@ -40,7 +41,11 @@ import {
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
-import { GrantNotFoundError, ScopeValidationError } from '../../governance/capability/index.js';
+import {
+  GrantNotFoundError,
+  HandleIssuanceError,
+  ScopeValidationError,
+} from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
 import {
   OperationIdentityConflictError,
@@ -141,6 +146,12 @@ export const WS_ERROR_CODES = {
    *  `manifest_fetch_failed`): a Gatekeeper instance or manifest URL `create_connection` talked to
    *  inline failed or timed out. Not INTERNAL_ERROR — the kernel is fine, the upstream is not. */
   UPSTREAM_ERROR: -32014,
+  /** Review fix 2026-09 (code-review finding F10 "unmapped kernel error classes drift between
+   *  HTTP and WS") — mirrors HTTP 503 `service_unavailable` (interfaces/http/capability-route.ts):
+   *  `invoke_worker`'s task-runtime precondition (`application/task/runtime.ts`'s
+   *  `getConfiguredTaskRuntime`) throws when the composition root never called
+   *  `configureTaskRuntime` — the kernel process itself, not this request, is not ready yet. */
+  SERVICE_UNAVAILABLE: -32015,
 } as const;
 
 /** Maps an error thrown by `resolveCaller`/`dispatchCapability` (application/gateway) or by
@@ -189,6 +200,14 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof ScopeValidationError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Review fix 2026-09 (code-review finding F10) — WS equivalents of capability-route.ts's own
+  // new mappings (see that file's comment on these same two classes).
+  if (err instanceof HandleIssuanceError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof TaskRuntimeNotConfiguredError) {
+    return { code: WS_ERROR_CODES.SERVICE_UNAVAILABLE, message: err.message };
   }
   // governance/approval + governance/policy domain errors (S2.2/S2.3) — same additions as
   // interfaces/http/capability-route.ts's mapCapabilityError, reusing FORBIDDEN/NOT_FOUND/
