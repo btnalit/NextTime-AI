@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
+import { generateKeyPair } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
@@ -9,6 +10,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishPrincipalPushEvent } from '../../application/chat/index.js';
 import { hashApiKey } from '../../application/gateway/index.js';
+import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createBackgroundServices, createServer } from '../../index.js';
 import type { BackgroundServices } from '../../index.js';
 
@@ -237,6 +239,93 @@ describe.runIf(DATABASE_URL !== undefined)(
         code: -32001,
       });
       await client.waitForClose();
+    });
+
+    // Lane-4 P2 fix (docs/development-tasks.md; design doc §9.4 "human 通道认证后使用"): `/ws` is
+    // human-only — a Handle-channel caller (a Worker's Task Handle) must never be able to
+    // authenticate here and receive the obo human's own chat.*/action.*/task.* pushes. A real,
+    // verifiable Handle token needs its own server instance with an explicit `loadHandlePublicKey`
+    // (the shared `app`/`wsUrl` above uses the default key loader, which fails closed with no
+    // `HANDLE_PRIVATE_KEY_FILE`/`HANDLE_PUBLIC_KEY_FILE` configured in this test environment —
+    // same reasoning interfaces/http/capability-route.test.ts's own Handle-channel test documents).
+    it('a Handle token via the first-frame authenticate RPC → unauthorized (chat is human-only)', async () => {
+      const { publicKey, privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      const token = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const sessionResult = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+           values ($1, $2, 'entry', $2, 'active') returning id`,
+            [workspaceId, ownerId],
+          );
+          const sessionRow = sessionResult.rows[0];
+          if (!sessionRow) throw new Error('fixture: session insert produced no row');
+          const issued = await issueHandle(client, {
+            sessionId: sessionRow.id,
+            scope: { capabilities: ['get_object'], resources: {} },
+            ttlSeconds: 3600,
+            privateKey,
+          });
+          return issued.token;
+        },
+      );
+
+      const handleApp = createServer({ pool, loadHandlePublicKey: async () => publicKey });
+      const address = await handleApp.listen({ port: 0, host: '127.0.0.1' });
+      const handleWsUrl = `${address.replace('http://', 'ws://')}/ws`;
+      try {
+        const client = await WsRpcClient.connect(handleWsUrl);
+        await expect(client.call('authenticate', { token })).rejects.toMatchObject({
+          code: -32001,
+        });
+        await client.waitForClose();
+      } finally {
+        await handleApp.close();
+      }
+    });
+
+    it('a Handle token via the Authorization header → unauthorized and the socket is closed (chat is human-only)', async () => {
+      const { publicKey, privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      const token = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const sessionResult = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+           values ($1, $2, 'entry', $2, 'active') returning id`,
+            [workspaceId, ownerId],
+          );
+          const sessionRow = sessionResult.rows[0];
+          if (!sessionRow) throw new Error('fixture: session insert produced no row');
+          const issued = await issueHandle(client, {
+            sessionId: sessionRow.id,
+            scope: { capabilities: ['get_object'], resources: {} },
+            ttlSeconds: 3600,
+            privateKey,
+          });
+          return issued.token;
+        },
+      );
+
+      const handleApp = createServer({ pool, loadHandlePublicKey: async () => publicKey });
+      const address = await handleApp.listen({ port: 0, host: '127.0.0.1' });
+      const handleWsUrl = `${address.replace('http://', 'ws://')}/ws`;
+      try {
+        const client = await WsRpcClient.connect(handleWsUrl, { authorization: `Bearer ${token}` });
+        // initAuth()'s header-based rejection sends an error notification with id:null (there is
+        // no in-flight request to key it to) and closes the socket — the close itself is the
+        // observable proof of rejection here, not a specific call's rejection.
+        await client.waitForClose();
+      } finally {
+        await handleApp.close();
+      }
     });
 
     it('an unknown method → METHOD_NOT_FOUND', async () => {

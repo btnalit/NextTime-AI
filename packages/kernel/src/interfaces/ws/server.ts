@@ -107,6 +107,31 @@ function send(socket: WebSocket, message: WsOutgoingMessage): void {
   if (socket.readyState === 1) socket.send(JSON.stringify(message));
 }
 
+/**
+ * Lane-4 P2 fix (docs/development-tasks.md "structured per-call line in WS dispatch" — this
+ * transport had no per-call structured log at all, the same "errors invisible server-side" gap
+ * `interfaces/http/capability-route.ts`'s own fix closes for HTTP): one line per WS capability
+ * call — `{capability, outcome: 'success'}`, or on failure `{capability, outcome: 'error',
+ * errorName, code}` — never `message`/`params` (same "generic, no leaked internals" discipline as
+ * the HTTP-side fix). Called once per client-issued call: the generic dispatch branch in
+ * `handleFrame` below, and `subscribe_chat`'s own access-check dispatch in `handleSubscribeChat`
+ * (its internal `get_chat_history` replay call is an implementation detail of that one client
+ * call, not a second one, and is not logged separately).
+ */
+function logWsCall(request: FastifyRequest, capability: string, err?: unknown): void {
+  if (err === undefined) {
+    request.log.info({ capability, outcome: 'success' });
+    return;
+  }
+  const mapped = mapDispatchError(err);
+  request.log.error({
+    capability,
+    outcome: 'error',
+    errorName: err instanceof Error ? err.name : typeof err,
+    code: mapped.code,
+  });
+}
+
 function parseFrame(raw: RawData): unknown {
   try {
     return JSON.parse(raw.toString());
@@ -151,6 +176,7 @@ function publishSentMessagePush(rawParams: unknown, callResult: unknown): void {
 
 async function handleSubscribeChat(
   socket: WebSocket,
+  request: FastifyRequest,
   deps: WsRouteDeps,
   caller: ResolvedCaller,
   id: JsonRpcId,
@@ -179,9 +205,11 @@ async function handleSubscribeChat(
   // written").
   try {
     await dispatchCapability(deps, caller, 'subscribe_chat', { chatId, startAfter });
+    logWsCall(request, 'subscribe_chat');
   } catch (err) {
     const mapped = mapDispatchError(err);
     send(socket, errorResponse(id, mapped.code, mapped.message));
+    logWsCall(request, 'subscribe_chat', err);
     return;
   }
 
@@ -273,6 +301,19 @@ function callerPrincipalId(caller: ResolvedCaller): string {
   return caller.channel === 'human' ? caller.principal.id : caller.claims.obo;
 }
 
+/** Lane-4 P2 fix (docs/development-tasks.md; design doc §9.4 "一个 WS 连接 `/ws`，human 通道认证后
+ *  使用"): `/ws` is the human-only chat channel — a Handle-channel caller (a Worker's Task Handle,
+ *  or any future non-human credential `resolveCaller` accepts) authenticating here would be
+ *  subscribed to the *human* it is `on_behalf_of`'s own `action.pending`/`action.updated`/
+ *  `task.updated` pushes (`subscribeCallerToPrincipalPush` below keys purely off
+ *  `callerPrincipalId`, with no channel check) and could dispatch every `chat` capability a human
+ *  can — the human's own conversation is never meant to reach a Worker. Checked at both places a
+ *  caller is resolved: `initAuth`'s Authorization-header path and `authenticateFromParams`'s
+ *  first-frame `authenticate` RPC path. */
+function isHumanChannel(caller: ResolvedCaller): boolean {
+  return caller.channel === 'human';
+}
+
 /** S2.11 deliverable 2: subscribes `socket` to `caller`'s own `action.pending`/`action.updated`/
  *  `task.updated` push events (§9.4's "no `id`" notification shape, same as `subscribe_chat`'s live
  *  path) and records the unsubscribe function on `state`. Called once, immediately after
@@ -351,7 +392,7 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
         return;
       }
       const caller = await authenticateFromParams(req.params);
-      if (!caller) {
+      if (!caller || !isHumanChannel(caller)) {
         send(socket, errorResponse(req.id, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));
         socket.close();
         return;
@@ -376,7 +417,7 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
     }
 
     if (req.method === 'subscribe_chat') {
-      await handleSubscribeChat(socket, deps, state.caller, req.id, req.params, state);
+      await handleSubscribeChat(socket, request, deps, state.caller, req.id, req.params, state);
       return;
     }
 
@@ -384,9 +425,11 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
       const callResult = await dispatchCapability(deps, state.caller, req.method, req.params ?? {});
       if (req.method === 'send_chat_message') publishSentMessagePush(req.params, callResult);
       send(socket, successResponse(req.id, callResult));
+      logWsCall(request, req.method);
     } catch (err) {
       const mapped = mapDispatchError(err);
       send(socket, errorResponse(req.id, mapped.code, mapped.message));
+      logWsCall(request, req.method, err);
     }
   }
 
@@ -394,11 +437,18 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
     const authHeader = request.headers.authorization;
     if (authHeader) {
       try {
-        state.caller = await resolveCaller(authHeader, {
+        const caller = await resolveCaller(authHeader, {
           pool: deps.pool,
           loadHandlePublicKey: deps.loadHandlePublicKey,
         });
-        subscribeCallerToPrincipalPush(socket, state.caller, state);
+        if (!isHumanChannel(caller)) {
+          send(socket, errorResponse(null, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));
+          socket.close();
+          state.authFailed = true;
+        } else {
+          state.caller = caller;
+          subscribeCallerToPrincipalPush(socket, state.caller, state);
+        }
       } catch {
         send(socket, errorResponse(null, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));
         socket.close();

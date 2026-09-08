@@ -248,10 +248,6 @@ export interface CreateBackgroundServicesOptions {
   /** `AgentHostRuntime`'s `turnAccepted`/`turnRejected` wait timeout override — `main()` reads
    *  this from `AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS` (architecture point 2: "e.g. 30s"). */
   readonly turnAcceptedTimeoutMs?: number;
-  /** Overrides `interruptStaleRunningTurns`'s staleness threshold (default `DEFAULT_STALE_TURN_
-   *  TIMEOUT_MS`, 15 minutes) — `main()` reads this from `TURN_INTERRUPT_TIMEOUT_MS` (docs/
-   *  development-tasks.md S1.4 deliverable 7: "configurable timeout"). */
-  readonly turnInterruptTimeoutMs?: number;
   /** `expireOverduePendingApprovals`'s cutoff (default `DEFAULT_APPROVAL_TIMEOUT_MS`, 24h) —
    *  `main()` reads this from `APPROVAL_TIMEOUT_MS` (docs/development-tasks.md S2.3 "expire（reaper，
    *  可配置超时）"). */
@@ -458,10 +454,7 @@ export function createBackgroundServices(
     dispatcher,
     runtime,
     async start() {
-      await interruptStaleRunningTurns({
-        pool: options.pool,
-        timeoutMs: options.turnInterruptTimeoutMs,
-      });
+      await interruptStaleRunningTurns({ pool: options.pool });
       dispatcher.start();
 
       const approvalTick = (): void => {
@@ -642,10 +635,6 @@ export function main(): void {
       );
     }
 
-    const turnInterruptTimeoutMs = parsePositiveIntEnvVar(
-      'TURN_INTERRUPT_TIMEOUT_MS',
-      process.env.TURN_INTERRUPT_TIMEOUT_MS,
-    );
     const entryHandleTtlSeconds = parsePositiveIntEnvVar(
       'ENTRY_HANDLE_TTL_SECONDS',
       process.env.ENTRY_HANDLE_TTL_SECONDS,
@@ -689,7 +678,6 @@ export function main(): void {
       kernelLlmUrl: process.env.KERNEL_LLM_URL,
       entryHandleTtlSeconds,
       turnAcceptedTimeoutMs,
-      turnInterruptTimeoutMs,
       approvalTimeoutMs,
       approvalReaperIntervalMs,
       onApprovalReaperError: (err: unknown) => app.log.error(err),

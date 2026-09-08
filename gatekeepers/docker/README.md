@@ -65,6 +65,7 @@ length 1 across two `apply` calls with the same key).
 | Var | Default | Notes |
 |---|---|---|
 | `DOCKER_SOCKET_PATH` | `/var/run/docker.sock` | passed to `dockerode`'s `socketPath` |
+| `GATE_KERNEL_TOKEN_FILE` | `/run/secrets/gate_token` | the shared secret every `/gate/*` route requires as `Authorization: Bearer <token>` (review lane 5, P1-1) — this gate refuses to start without a readable, valid file here |
 | `GATE_DATA_DIR` | `./data` | idempotency store JSON file (`@nexttime/gatekeeper-base`'s `resolveGateDataDir`) — mount a persistent volume here in production |
 | `GATE_MANIFEST_FILE` | (bundled `manifest.json`) | override the manifest without rebuilding the image |
 | `GATE_PORT` | `8083` | |

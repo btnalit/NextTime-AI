@@ -28,6 +28,20 @@ import type { ContextItemKind } from './types.js';
  * `withWorkspace` with the Task's own id as a syntactically-valid but otherwise-inert
  * `principalId` placeholder; every subsequent write re-opens `withWorkspace` scoped to the real
  * `onBehalfOf`, which both `chats`/`chat_messages` and `pending_context_items` RLS require.
+ *
+ * At-least-once dedupe (lane-4 P1 fix, docs/development-tasks.md): `seenOutboxIds` is only
+ * populated *after* the write below has actually committed — never before. Marking an outboxId
+ * "seen" before doing the work (the previous shape of this function) meant a mid-write failure
+ * (the dispatcher's own row transaction rolling back and redelivering the event —
+ * `application/outbox/dispatcher.ts`'s own doc comment) would find the id already in the Set on
+ * retry and return immediately, permanently dropping the system message/context item this event
+ * was supposed to produce. Both writes below are also now durably idempotent in their own right
+ * (`insertChatMessage`'s `sourceOutboxId`, migrations/core/
+ * 0009_chat_messages_source_outbox_id.sql; `insertPendingContextItem`'s existing
+ * `pending_context_items_dedupe_uidx`) — the in-memory Set is still worth keeping as a fast path
+ * that avoids a redundant DB round trip for the common case (this same process seeing the same
+ * outboxId twice with nothing in between), but is no longer the only thing standing between a
+ * redelivery and data loss.
  */
 
 type TaskUpdatedEvent = Extract<DomainEvent, { type: 'TaskUpdated' }>;
@@ -64,17 +78,13 @@ export function registerTaskUpdatedConsumer(
   dispatcher: TaskUpdatedSource,
   deps: LinkageDeps,
 ): () => void {
-  // Best-effort, process-lifetime dedupe against a redelivered outbox row — same documented
-  // precedent/limitation as application/host-bridge/turn-started-consumer.ts's own `seenOutboxIds`
-  // (its doc comment has the full rationale: this protects against *this process* seeing the same
-  // outboxId twice, not against a crash between commit and the outbox row's own dispatched_at
-  // update — `pending_context_items`'s unique index below covers that harder case for the context
-  // item; the chat message write has no equivalent durable guard, a documented known gap).
+  // Process-lifetime fast-path dedupe against a redelivered outbox row — see this module's own
+  // doc comment above for why entries are only added *after* a successful write, and why the
+  // durable unique indexes below are what actually prevent data loss/duplication on a crash.
   const seenOutboxIds = new Set<string>();
 
   return dispatcher.subscribe('TaskUpdated', async (event, meta) => {
     if (seenOutboxIds.has(meta.outboxId)) return;
-    seenOutboxIds.add(meta.outboxId);
 
     const task = await withWorkspace(
       deps.pool,
@@ -111,6 +121,7 @@ export function registerTaskUpdatedConsumer(
           turnId: null,
           role: 'system',
           content: content as unknown as Record<string, unknown>,
+          sourceOutboxId: meta.outboxId,
         });
         publishChatPushEvent({
           type: 'chat.message',
@@ -135,5 +146,10 @@ export function registerTaskUpdatedConsumer(
         });
       },
     );
+
+    // Marked seen only once the durable write above has actually committed — see this module's
+    // own doc comment for why (a throw anywhere above this line leaves the id un-added, so a
+    // redelivery retries the write in full rather than silently no-op'ing).
+    seenOutboxIds.add(meta.outboxId);
   });
 }

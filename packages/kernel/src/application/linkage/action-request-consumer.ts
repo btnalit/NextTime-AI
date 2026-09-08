@@ -29,12 +29,31 @@ import { insertPendingContextItem } from './store.js';
  * `principalId` placeholder; every write below re-opens `withWorkspace` scoped to the real target
  * principal, which `chats`/`chat_messages`/`pending_context_items` RLS all require.
  *
- * `pendingApprovals` context injection (`get_entry_context`) is requester-side only — an entry
+ * `pendingApprovals` context injection (`get_entry_context`) targets the *requester*, not "every
+ * non-holder" (lane-4 P3 fix, docs/development-tasks.md — see `NOTABLE_UPDATE_STATUSES` sibling
+ * decision note below for the previous, narrower rule and why it under-delivered): an entry
  * Handle can never call `approve`/`reject` itself (I11: Handle-channel Approval is a "永不允许存在的
  * 关系", §5.3 item 9), so a holder's own next-turn context has nothing useful to say about an
- * ActionRequest they can only act on through the web queue; only the requester (who is "blocked
- * on" someone else's decision) gets a `pending_context_items` row here (assumption — see PR body
- * "假设与偏离").
+ * ActionRequest they can only act on through the web queue — *unless* that same principal is also
+ * the requester (single-owner workspace: the workspace owner is automatically a holder by I14, and
+ * is very often the one who asked the entry agent to do the thing in the first place). The
+ * condition below is therefore `principalId === actionRequest.onBehalfOf` ("are you the one
+ * blocked on this decision"), not `!isHolder` ("are you not a holder") — the latter silently
+ * dropped every context item for exactly the requester-who-is-also-holder case, meaning the entry
+ * agent acting for a solo workspace owner never learned via `get_entry_context` what happened to
+ * an action it had just asked for. `isHolder` is unaffected by this — it still governs the chat
+ * *message* content (`buildActionPendingContent`/`buildActionUpdateContent`'s own card-vs-status
+ * rendering) and the WS push shape, both of which are correctly keyed off "can this principal act
+ * on it", not "is this principal waiting on it".
+ *
+ * At-least-once dedupe (lane-4 P1 fix): `seenPendingOutboxIds`/`seenUpdatedOutboxIds` are only
+ * populated *after* every target principal's write has committed — never before. See
+ * `application/linkage/task-consumer.ts`'s own doc comment for the full rationale (same fix,
+ * same reasoning); `insertChatMessage`'s `sourceOutboxId` (migrations/core/
+ * 0009_chat_messages_source_outbox_id.sql) additionally makes each target's own message write
+ * durably idempotent in its own right, which matters more here than in task-consumer.ts: a
+ * mid-fan-out failure (e.g. the second of three holders) must not turn a retry into a duplicate
+ * message for the holders that already got theirs.
  */
 
 type ActionRequestEventType = 'ActionRequestPending' | 'ActionRequestUpdated';
@@ -79,7 +98,12 @@ async function writeActionMessage(
   workspaceId: string,
   principalId: string,
   content: SystemMessageContent,
-  contextItem: { readonly subjectId: string; readonly sourceOutboxId: string } | undefined,
+  outboxId: string,
+  /** Whether `principalId` should also get a `pending_context_items` row for this event — the
+   *  requester (see this module's own doc comment for why "is the requester", not "is not a
+   *  holder", is the right condition). `subjectId` is always `actionRequestId`. */
+  isRequester: boolean,
+  subjectId: string,
 ): Promise<void> {
   await withWorkspace(deps.pool, { workspaceId, principalId }, async (client) => {
     const chat = await resolveDefaultChat(client, workspaceId, principalId);
@@ -88,6 +112,7 @@ async function writeActionMessage(
       turnId: null,
       role: 'system',
       content: content as unknown as Record<string, unknown>,
+      sourceOutboxId: outboxId,
     });
     publishChatPushEvent({
       type: 'chat.message',
@@ -102,13 +127,13 @@ async function writeActionMessage(
         content: content as unknown as Record<string, unknown>,
       },
     });
-    if (contextItem) {
+    if (isRequester) {
       await insertPendingContextItem(client, workspaceId, {
         principalId,
         kind: 'action_request_update',
-        subjectId: contextItem.subjectId,
+        subjectId,
         payload: content as unknown as Record<string, unknown>,
-        sourceOutboxId: contextItem.sourceOutboxId,
+        sourceOutboxId: outboxId,
       });
     }
   });
@@ -124,7 +149,6 @@ export function registerActionRequestConsumers(
 
   const unsubscribePending = dispatcher.subscribe('ActionRequestPending', async (event, meta) => {
     if (seenPendingOutboxIds.has(meta.outboxId)) return;
-    seenPendingOutboxIds.add(meta.outboxId);
 
     const actionRequest = await withWorkspace(
       deps.pool,
@@ -168,14 +192,17 @@ export function registerActionRequestConsumers(
         event.workspaceId,
         principalId,
         content,
-        isHolder ? undefined : { subjectId: event.actionRequestId, sourceOutboxId: meta.outboxId },
+        meta.outboxId,
+        principalId === actionRequest.onBehalfOf,
+        event.actionRequestId,
       );
     }
+
+    seenPendingOutboxIds.add(meta.outboxId);
   });
 
   const unsubscribeUpdated = dispatcher.subscribe('ActionRequestUpdated', async (event, meta) => {
     if (seenUpdatedOutboxIds.has(meta.outboxId)) return;
-    seenUpdatedOutboxIds.add(meta.outboxId);
     if (!NOTABLE_UPDATE_STATUSES.has(event.status)) return;
 
     const actionRequest = await withWorkspace(
@@ -218,9 +245,13 @@ export function registerActionRequestConsumers(
         event.workspaceId,
         principalId,
         content,
-        isHolder ? undefined : { subjectId: event.actionRequestId, sourceOutboxId: meta.outboxId },
+        meta.outboxId,
+        principalId === actionRequest.onBehalfOf,
+        event.actionRequestId,
       );
     }
+
+    seenUpdatedOutboxIds.add(meta.outboxId);
   });
 
   return () => {

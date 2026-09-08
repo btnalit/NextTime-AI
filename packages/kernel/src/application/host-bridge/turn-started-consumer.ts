@@ -39,6 +39,15 @@ export interface TurnStartedSource {
  * dispatcher instance is not possible here — one dispatcher, one consumer registration — but a
  * caller that calls `registerTurnStartedConsumer` twice against the same dispatcher would
  * otherwise start every Turn twice). A crash-durable dedupe table is out of S1.4 scope.
+ *
+ * At-least-once dedupe (lane-4 P1 fix, docs/development-tasks.md): `seenOutboxIds` is only
+ * populated *after* `runtime.startTurn` has returned — never before. `AgentRuntime.startTurn`'s
+ * own contract (agent-runtime.ts) says it never throws, so this is defense in depth rather than a
+ * fix for an observed failure mode here — but marking an outboxId "seen" before the call, the
+ * previous shape of this function, would have silently swallowed a Turn start forever on the one
+ * kind of failure that *would* make it throw (a bug, or a future runtime implementation that
+ * legitimately can) — see `application/linkage/task-consumer.ts`'s own doc comment for the fuller
+ * version of this same reasoning applied to a consumer that could actually fail mid-write today.
  */
 
 const MARKER_PREFIX = '<!--nexttime:turn_id=';
@@ -58,7 +67,6 @@ export function registerTurnStartedConsumer(
 
   return dispatcher.subscribe('TurnStarted', async (event, meta) => {
     if (seenOutboxIds.has(meta.outboxId)) return;
-    seenOutboxIds.add(meta.outboxId);
 
     await runtime.startTurn({
       workspaceId: event.workspaceId,
@@ -67,5 +75,7 @@ export function registerTurnStartedConsumer(
       principalId: event.principalId,
       prompt: withTurnIdMarker(event.turnId, event.prompt),
     });
+
+    seenOutboxIds.add(meta.outboxId);
   });
 }

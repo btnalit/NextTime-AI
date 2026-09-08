@@ -35,6 +35,9 @@ const executeOp: Operation = {
   writes: [],
 };
 
+const TEST_TOKEN = 'test-gate-token-0123456789abcdef0123456789';
+const AUTH_HEADERS = { authorization: `Bearer ${TEST_TOKEN}` };
+
 function buildApp(transport: Transport, connectedAccountStore?: ConnectedAccountStore) {
   const gate = new GatekeeperBase({
     manifest: [observeOp, executeOp],
@@ -42,7 +45,7 @@ function buildApp(transport: Transport, connectedAccountStore?: ConnectedAccount
     credentialResolver: { resolve: async () => ({}) },
     idempotencyStore: new InMemoryIdempotencyStore(),
   });
-  return createGatekeeperServer({ gate, connectedAccountStore });
+  return createGatekeeperServer({ gate, connectedAccountStore, token: TEST_TOKEN });
 }
 
 const fakeTransport: Transport = {
@@ -59,17 +62,70 @@ afterEach(async () => {
   app = undefined;
 });
 
+describe('gate auth (review lane 5, P1-1)', () => {
+  it('401s every /gate/* route with no Authorization header, never touching the transport', async () => {
+    app = buildApp(fakeTransport);
+    const response = await app.inject({ method: 'GET', url: '/gate/describe_operations' });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: { code: 'unauthorized', message: 'unauthorized' },
+    });
+  });
+
+  it('401s a wrong token without echoing the presented or expected token', async () => {
+    app = buildApp(fakeTransport);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/gate/observe',
+      headers: { authorization: 'Bearer wrong-token-entirely-different-value' },
+      payload: { operation: 'stock.get', params: { sku: 'X1' } },
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.body).not.toContain('wrong-token-entirely-different-value');
+    expect(response.body).not.toContain(TEST_TOKEN);
+  });
+
+  it('401s a malformed Authorization header (not Bearer)', async () => {
+    app = buildApp(fakeTransport);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/gate/health',
+      headers: { authorization: `Basic ${TEST_TOKEN}` },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('200s with the correct token', async () => {
+    app = buildApp(fakeTransport);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/gate/describe_operations',
+      headers: AUTH_HEADERS,
+    });
+    expect(response.statusCode).toBe(200);
+  });
+});
+
 describe('gatekeeper protocol server', () => {
   it('GET /gate/describe_operations returns the manifest', async () => {
     app = buildApp(fakeTransport);
-    const response = await app.inject({ method: 'GET', url: '/gate/describe_operations' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/gate/describe_operations',
+      headers: AUTH_HEADERS,
+    });
     expect(response.statusCode).toBe(200);
     expect(response.json().result.operations).toHaveLength(2);
   });
 
   it('GET /gate/health returns ok', async () => {
     app = buildApp(fakeTransport);
-    const response = await app.inject({ method: 'GET', url: '/gate/health' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/gate/health',
+      headers: AUTH_HEADERS,
+    });
     expect(response.json().result).toEqual({ status: 'ok' });
   });
 
@@ -78,6 +134,7 @@ describe('gatekeeper protocol server', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/gate/observe',
+      headers: AUTH_HEADERS,
       payload: { operation: 'stock.get', params: { sku: 'X1' } },
     });
     expect(response.statusCode).toBe(200);
@@ -89,6 +146,7 @@ describe('gatekeeper protocol server', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/gate/observe',
+      headers: AUTH_HEADERS,
       payload: { operation: 'stock.get', params: {} },
     });
     expect(response.statusCode).toBe(400);
@@ -100,6 +158,7 @@ describe('gatekeeper protocol server', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/gate/observe',
+      headers: AUTH_HEADERS,
       payload: { operation: 'does.not.exist', params: {} },
     });
     expect(response.statusCode).toBe(404);
@@ -111,6 +170,7 @@ describe('gatekeeper protocol server', () => {
     const missingKey = await app.inject({
       method: 'POST',
       url: '/gate/apply',
+      headers: AUTH_HEADERS,
       payload: { operation: 'stock.adjust', params: {} },
     });
     expect(missingKey.statusCode).toBe(400);
@@ -118,6 +178,7 @@ describe('gatekeeper protocol server', () => {
     const first = await app.inject({
       method: 'POST',
       url: '/gate/apply',
+      headers: AUTH_HEADERS,
       payload: { operation: 'stock.adjust', params: { qty: 1 }, idempotencyKey: 'req-1' },
     });
     expect(first.statusCode).toBe(200);
@@ -126,9 +187,30 @@ describe('gatekeeper protocol server', () => {
     const second = await app.inject({
       method: 'POST',
       url: '/gate/apply',
+      headers: AUTH_HEADERS,
       payload: { operation: 'stock.adjust', params: { qty: 1 }, idempotencyKey: 'req-1' },
     });
     expect(second.json().result.replayed).toBe(true);
+  });
+
+  it('POST /gate/apply returns 409 idempotency_conflict for the same key with different params', async () => {
+    app = buildApp(fakeTransport);
+    const first = await app.inject({
+      method: 'POST',
+      url: '/gate/apply',
+      headers: AUTH_HEADERS,
+      payload: { operation: 'stock.adjust', params: { qty: 1 }, idempotencyKey: 'req-conflict' },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/gate/apply',
+      headers: AUTH_HEADERS,
+      payload: { operation: 'stock.adjust', params: { qty: 2 }, idempotencyKey: 'req-conflict' },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error.code).toBe('idempotency_conflict');
   });
 
   it('POST /gate/simulate returns a description without executing', async () => {
@@ -136,6 +218,7 @@ describe('gatekeeper protocol server', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/gate/simulate',
+      headers: AUTH_HEADERS,
       payload: { operation: 'stock.adjust', params: {} },
     });
     expect(response.statusCode).toBe(200);
@@ -147,6 +230,7 @@ describe('gatekeeper protocol server', () => {
     const post = await app.inject({
       method: 'POST',
       url: '/gate/connected-accounts',
+      headers: AUTH_HEADERS,
       payload: { onBehalfOf: 'user-a', credential: { token: 'x' } },
     });
     expect(post.statusCode).toBe(501);
@@ -155,6 +239,7 @@ describe('gatekeeper protocol server', () => {
     const del = await app.inject({
       method: 'DELETE',
       url: '/gate/connected-accounts',
+      headers: AUTH_HEADERS,
       payload: { onBehalfOf: 'user-a' },
     });
     expect(del.statusCode).toBe(501);
@@ -180,6 +265,7 @@ describe('gatekeeper protocol server', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/gate/connected-accounts',
+        headers: AUTH_HEADERS,
         payload: { onBehalfOf: 'user-a', credential: { token: 'super-secret-value' } },
       });
       expect(response.statusCode).toBe(200);
@@ -192,7 +278,11 @@ describe('gatekeeper protocol server', () => {
     it('has no GET route — a stored credential can never be read back over the wire', async () => {
       app = buildApp(fakeTransport, store);
       await store.set('user-a', { token: 'secret' });
-      const response = await app.inject({ method: 'GET', url: '/gate/connected-accounts' });
+      const response = await app.inject({
+        method: 'GET',
+        url: '/gate/connected-accounts',
+        headers: AUTH_HEADERS,
+      });
       expect(response.statusCode).toBe(404);
     });
 
@@ -202,6 +292,7 @@ describe('gatekeeper protocol server', () => {
       const response = await app.inject({
         method: 'DELETE',
         url: '/gate/connected-accounts',
+        headers: AUTH_HEADERS,
         payload: { onBehalfOf: 'user-a' },
       });
       expect(response.statusCode).toBe(200);

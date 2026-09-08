@@ -6,6 +6,8 @@ import {
   JsonFileIdempotencyStore,
   type ResolvedCredential,
   createGatekeeperServer,
+  loadGateKernelToken,
+  parseManifestJson,
   resolveGateDataDir,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
@@ -41,10 +43,9 @@ const DEFAULT_DOCKER_SOCKET_PATH = '/var/run/docker.sock';
 const DEFAULT_PORT = 8083;
 
 async function loadManifest(path: string | undefined): Promise<Operation[]> {
-  const raw = path
-    ? await readFile(path, 'utf8')
-    : await readFile(fileURLToPath(DEFAULT_MANIFEST_URL), 'utf8');
-  return JSON.parse(raw) as Operation[];
+  const source = path ?? fileURLToPath(DEFAULT_MANIFEST_URL);
+  const raw = await readFile(source, 'utf8');
+  return parseManifestJson(raw, source);
 }
 
 export interface BuiltDockerGate {
@@ -55,6 +56,9 @@ export interface BuiltDockerGate {
 export async function buildDockerGate(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<BuiltDockerGate> {
+  // Loaded first — this gate refuses to start without a valid auth token (review lane 5, P1-1;
+  // @nexttime/gatekeeper-base's gate-auth.ts).
+  const token = loadGateKernelToken(env);
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
   const dataDir = resolveGateDataDir(env);
   const socketPath = env.DOCKER_SOCKET_PATH ?? DEFAULT_DOCKER_SOCKET_PATH;
@@ -64,7 +68,7 @@ export async function buildDockerGate(
   const credentialResolver = new NoCredentialResolver();
 
   const gate = new GatekeeperBase({ manifest, transport, credentialResolver, idempotencyStore });
-  const app = createGatekeeperServer({ gate, logger: true });
+  const app = createGatekeeperServer({ gate, logger: true, token });
   return { gate, app };
 }
 

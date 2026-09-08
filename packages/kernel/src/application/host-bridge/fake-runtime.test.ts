@@ -86,18 +86,28 @@ describe('FakeAgentRuntime', () => {
 
     await runtime.startTurn(INPUT);
     await waitFor(events, () => events.some((e) => e.type === 'textDelta'));
-    await runtime.stopTurn(INPUT.turnId);
+    await expect(runtime.stopTurn(INPUT.turnId)).resolves.toBe(true);
     await waitFor(events, () => events.some((e) => e.type === 'turnEnded'));
 
     expect(events.find((e) => e.type === 'turnEnded')).toMatchObject({ status: 'interrupted' });
     expect(events.some((e) => e.type === 'message')).toBe(false);
   });
 
-  it('stopTurn on an unknown/already-ended turnId is a harmless no-op', async () => {
+  it('stopTurn on an unknown/already-ended turnId is a harmless no-op and reports it knew nothing', async () => {
     const { sink } = collectingSink();
     const runtime = new FakeAgentRuntime({ sink });
 
-    await expect(runtime.stopTurn('no-such-turn')).resolves.toBeUndefined();
+    await expect(runtime.stopTurn('no-such-turn')).resolves.toBe(false);
+  });
+
+  it('stopTurn after the turn has already ended reports it knew nothing (lane-4 P1/P2 fix)', async () => {
+    const { sink, events } = collectingSink();
+    const runtime = new FakeAgentRuntime({ sink });
+
+    await runtime.startTurn(INPUT);
+    await waitFor(events, () => events.some((e) => e.type === 'turnEnded'));
+
+    await expect(runtime.stopTurn(INPUT.turnId)).resolves.toBe(false);
   });
 
   it('runs two turns independently — stopping one does not affect the other', async () => {

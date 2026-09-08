@@ -65,6 +65,37 @@ export class ApplyRequiresIdempotencyKeyError extends Error {
   }
 }
 
+/** Review lane 5, P2-1: an `idempotencyKey` reused for a different `(operation, paramsHash,
+ *  onBehalfOf)` tuple than the one it was first reserved for — either a caller bug (key reuse
+ *  across unrelated calls) or a genuinely concurrent duplicate `apply` for the same key that is
+ *  still in flight (`idempotency-store.ts`'s `reserve` folds both cases into `'conflict'`: neither
+ *  may safely invoke the transport a second time). */
+export class IdempotencyConflictError extends Error {
+  constructor(key: string) {
+    super(
+      `idempotencyKey "${key}" is already in use for a different (operation, params, onBehalfOf) or is still being applied — reuse a key only for a retry of the exact same call`,
+    );
+    this.name = 'IdempotencyConflictError';
+  }
+}
+
+/** Review lane 5, P2-5: an Operation's `params_schema` that `ajv.compile()` cannot handle (most
+ *  commonly an unresolved `$ref` — this package does not fetch/inline external JSON Schema
+ *  documents at manifest-import time) previously surfaced as a bare 500 `internal_error`, giving
+ *  no signal that the *manifest*, not the caller's `params`, is broken. Named after the Operation
+ *  so the error is diagnosable from the wire response alone. */
+export class ParamsSchemaInvalidError extends Error {
+  constructor(operationName: string, cause: unknown) {
+    super(
+      `params_schema for operation "${operationName}" could not be compiled: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause },
+    );
+    this.name = 'ParamsSchemaInvalidError';
+  }
+}
+
 /** S2.13: `POST`/`DELETE /gate/connected-accounts` on a gate started in shared-credential mode
  *  (no `ConnectedAccountStore` configured — `credentials/shared-env.ts`'s `SharedEnvCredentialResolver`).
  *  There is nowhere to write the credential; the caller (`create_connection`'s handler) should

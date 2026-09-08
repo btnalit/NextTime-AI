@@ -43,9 +43,23 @@
 #                           already-running client until every one of the four containers restarts
 #                           with the new value; a deliberate rotation should restart all four
 #                           together, not rely on this idempotent script to do it silently).
+#   secrets/gate.token     — 32 random bytes, hex-encoded (64 chars), mode 0640, group 10001 — a
+#                           SEPARATE secret from internal.token (fix/gate-protocol-hardening,
+#                           2026-09; @nexttime/gatekeeper-base's gate-token.ts closes the review
+#                           lane 5 P1-1 gap: every /gate/* route was reachable, unauthenticated, by
+#                           any control-network container). Reaches the kernel and every one of the
+#                           four gate services (gatekeeper-docker, gatekeeper-ragflow,
+#                           accept-s2-ssh-gate, accept-s2-http-gate) as the compose secret
+#                           `gate_token`, mounted at each container's own default path
+#                           (/run/secrets/gate_token — @nexttime/gatekeeper-base's
+#                           DEFAULT_GATE_TOKEN_FILE, read by the kernel via NEXTTIME_GATE_TOKEN_FILE
+#                           and by every gate via GATE_KERNEL_TOKEN_FILE — two env var names, one
+#                           shared secret, see gate-token.ts's own module doc comment for why they
+#                           are not the same var). Generated only if missing, same rotation caveat
+#                           as internal.token above.
 #
-# Never prints private key or token contents. Never touches handle.key or internal.token once
-# either has real content.
+# Never prints private key or token contents. Never touches handle.key, internal.token, or
+# gate.token once any of them has real content.
 
 set -eu
 
@@ -80,6 +94,7 @@ echo "gen-handle-keys: target NEXTTIME_DATA=$NEXTTIME_DATA"
 HANDLE_KEY="$SECRETS_DIR/handle.key"
 HANDLE_PUB="$CONFIG_DIR/handle.pub"
 INTERNAL_TOKEN="$SECRETS_DIR/internal.token"
+GATE_TOKEN="$SECRETS_DIR/gate.token"
 
 # --- container gid the private key is chgrp'd to ---------------------------------------------
 # (mirrors host-env-init.sh's CONTAINER_UID/CONTAINER_GID: every packages/*/Dockerfile creates
@@ -134,9 +149,24 @@ fi
 chmod 640 "$INTERNAL_TOKEN"
 chgrp "$CONTAINER_GID" "$INTERNAL_TOKEN" 2>/dev/null || echo "gen-handle-keys: WARNING: could not chgrp $INTERNAL_TOKEN to gid $CONTAINER_GID — the kernel/agent-host/llm-proxy/egress-proxy containers will not be able to read it" >&2
 
+# --- secrets/gate.token: generate only if missing/empty (fix/gate-protocol-hardening) ----------
+if [ ! -s "$GATE_TOKEN" ]; then
+	echo "gen-handle-keys: generating $GATE_TOKEN (32 random bytes, hex)"
+	umask 077
+	openssl rand -hex 32 > "$GATE_TOKEN"
+	GATE_TOKEN_STATUS="generated"
+else
+	echo "gen-handle-keys: $GATE_TOKEN already exists, leaving it unchanged"
+	GATE_TOKEN_STATUS="already existed"
+fi
+
+chmod 640 "$GATE_TOKEN"
+chgrp "$CONTAINER_GID" "$GATE_TOKEN" 2>/dev/null || echo "gen-handle-keys: WARNING: could not chgrp $GATE_TOKEN to gid $CONTAINER_GID — the kernel and gate containers will not be able to read it" >&2
+
 # --- report -------------------------------------------------------------------------------
 echo ""
 echo "gen-handle-keys: secrets/handle.key:    $KEY_STATUS (mode $(stat -c '%a' "$HANDLE_KEY" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$HANDLE_KEY" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: config/handle.pub:     $PUB_STATUS (mode $(stat -c '%a' "$HANDLE_PUB" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: secrets/internal.token: $TOKEN_STATUS (mode $(stat -c '%a' "$INTERNAL_TOKEN" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$INTERNAL_TOKEN" 2>/dev/null || echo '?'))"
+echo "gen-handle-keys: secrets/gate.token:     $GATE_TOKEN_STATUS (mode $(stat -c '%a' "$GATE_TOKEN" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$GATE_TOKEN" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: done (idempotent — safe to re-run; private key/token contents never printed)"

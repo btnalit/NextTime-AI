@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent } from 'undici';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { buildTlsFetch, gateTlsOptionsFromEnv, insecureTlsEnvWarning } from './tls.js';
+import {
+  assertTlsNotDisabled,
+  buildTlsFetch,
+  gateTlsOptionsFromEnv,
+  insecureTlsEnvWarning,
+} from './tls.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'gate-tls-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -31,6 +36,19 @@ describe('insecureTlsEnvWarning', () => {
     expect(insecureTlsEnvWarning({})).toBeUndefined();
     expect(insecureTlsEnvWarning({ NODE_TLS_REJECT_UNAUTHORIZED: '1' })).toBeUndefined();
     expect(insecureTlsEnvWarning({ NODE_TLS_REJECT_UNAUTHORIZED: '0' })).toMatch(
+      /GATE_TLS_CA_FILE/,
+    );
+  });
+});
+
+describe('assertTlsNotDisabled (review lane 5, P3 batch)', () => {
+  it('does not throw when the kill switch is not set', () => {
+    expect(() => assertTlsNotDisabled({})).not.toThrow();
+    expect(() => assertTlsNotDisabled({ NODE_TLS_REJECT_UNAUTHORIZED: '1' })).not.toThrow();
+  });
+
+  it('throws (refuses to start) when NODE_TLS_REJECT_UNAUTHORIZED=0', () => {
+    expect(() => assertTlsNotDisabled({ NODE_TLS_REJECT_UNAUTHORIZED: '0' })).toThrow(
       /GATE_TLS_CA_FILE/,
     );
   });

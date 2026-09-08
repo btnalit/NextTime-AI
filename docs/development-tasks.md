@@ -126,8 +126,11 @@
 - 实现说明（S1.4 PR，2026-09）：
   - 落地路径与设计文档草案不同：`application/chat/{service,event-sink,push,recovery,index}.ts`（`chat/{service,ws}.ts` 中的 `ws.ts` 部分实际落在 `interfaces/ws/{server,rpc,index}.ts`，遵循 §7.10 的六层分层——`interfaces` 只依赖 `application` 服务接口）；`application/outbox/{dispatcher,index}.ts`；`application/host-bridge/{agent-runtime,fake-runtime,turn-started-consumer,index}.ts`。
   - `chat_messages` 落在新迁移 `migrations/core/0008_chat_messages.sql`（`turn_id` 可空，`sequence bigint` 由 `application/chat` 按 `(workspace_id, chat_id)` 分配，advisory lock 序列化并发写；一 Chat 一进行中 Turn 由该文件新增的 `activities_one_running_turn_per_chat_uidx` 部分唯一索引强制）。
-  - `AGENT_RUNTIME` 环境变量（默认 `fake`，唯一实现是 `FakeAgentRuntime`）与 `TURN_INTERRUPT_TIMEOUT_MS`（S1.4 交付物 7 的可配置超时，默认 15 分钟）由 `packages/kernel/src/index.ts` 的 `main()` 读取。
+  - `AGENT_RUNTIME` 环境变量（默认 `fake`，唯一实现是 `FakeAgentRuntime`）由 `packages/kernel/src/index.ts` 的 `main()` 读取。
   - 已知偏离：`send_chat_message` 在已有进行中 Turn 时抛 `TurnAlreadyRunningError`；`interfaces/http/**` 不在本任务所有权范围内，其固定的错误映射表无法识别这个新错误类，因此经 HTTP 该情形回退为 `500`（非文档设想的 `409`）——WS 传输（本任务所有权范围内）正确映射为独立的 JSON-RPC 错误码 `-32010`。`get_entry_context`/`report_turn` 的 S1 范围只含最近 Fact（`pendingApprovals`/`tasks`/`precedents` 恒为空数组，等 S2 的 approval/task 模块落地后再填充）；"上轮中断" 尚未注入 `get_entry_context`（S1.4 交付物 7 已实现启动时扫描并标记 `interrupted` + 推送 `chat.metadata`，但把这个信号读进下一轮 `context` 留给 S1.5，详见 `application/chat/recovery.ts` 的模块注释）。
+  - **lane-4 P1 修订（2026-09，chat/linkage/WS 可靠性专项）**：`interruptStaleRunningTurns`（S1.4 交付物 7）原来只扫描"运行超过 `TURN_INTERRUPT_TIMEOUT_MS`（默认 15 分钟）"的 `running` Turn——内核重启后一个刚好在 15 分钟内的旧 Turn 会被放过，`send_chat_message` 对它所在的 Chat 持续抛 `TurnAlreadyRunningError`，直到超时窗口过去，Chat 事实上被"焊死"长达 15 分钟。这个年龄阈值本身就是错的：该函数唯一调用点是 `index.ts` 的 `createBackgroundServices().start()`，在 outbox 派发器与任何请求流量之前跑一次（该函数自己的模块注释原话），意味着**这个进程此刻绝不可能已经启动过任何 Turn**——找到的每一条 `running` 行，不论多"新"，都必然是前一个（已死）进程留下的。修复：去掉 `timeoutMs`/`DEFAULT_STALE_TURN_TIMEOUT_MS`，`interruptStaleRunningTurns` 现在无条件标记*每一条* `running` 的 `agent_turn` Activity；`TURN_INTERRUPT_TIMEOUT_MS` 环境变量与 `turnInterruptTimeoutMs` 选项随之从 `index.ts` 移除。
+  - **lane-4 P1 修订（同专项）**：`stop_agent`（`application/gateway/handlers.ts`）对一个 `AgentRuntime` 完全不知道的 Turn（内核/agent-host 重启后遗留、`stopTurn` 无法送达也不会有任何异步 `turnEnded` 回报）过去会返回 `{stopped:true}`，但对应的 Activity 永远停在 `running`，同样把 Chat 焊死。`AgentRuntime.stopTurn`（`application/host-bridge/agent-runtime.ts`）改为返回 `Promise<boolean | void>`——`true`/`false` 表示这个运行时是否知道这个 Turn（每个具体实现都返回真实的 `boolean`；`void` 只是为了结构兼容一个早于这次修改、不关心这个区分的调用方类型标注）。`application/chat` 新增 `endUnknownRuntimeTurn`（`turn-recovery.ts`）——`stopTurn` 返回 `false` 时应调用它，效果等价于 `event-sink.ts` 的 `turnEnded` 处理（`endActivity('interrupted')` + enqueue `TurnCompleted` + 推 `chat.metadata`），条件 UPDATE（`status='running'`）保证幂等。**已知未完成**：`stopAgentHandler`（`application/gateway/handlers.ts`）把 `stopTurn` 的返回值判断为 `false` 时调用 `endUnknownRuntimeTurn` 这一处一行级别的接线，因为 `application/gateway/**` 不在本次修订的文件所有权范围内（并发开发中的另一条 lane 所有）——`endUnknownRuntimeTurn` 已实现并单测覆盖，接线留给该 lane 或后续任务。
+  - **lane-4 P2 修订（同专项）**：`AgentHostRuntime.startTurn`（`application/host-bridge/agent-host-runtime.ts`）原来要等 agent-host 的 `turnAccepted`/`turnRejected`（至多 `turnAcceptedTimeoutMs`，默认 30s）才 resolve；但这个调用发生在 outbox 派发器单行事务内部（`application/host-bridge/turn-started-consumer.ts` → `application/outbox/dispatcher.ts` 的 `processOneRow`），阻塞它就等于阻塞同一批次里排在后面的所有其他 outbox 事件（审批卡片、Task 卡片……）最多 30 秒。修复：`startTurn` 现在只等命令帧真正发出（`sendStartTurnFrame`）就 resolve；accept/reject/超时的结果改为异步处理（`.then()` 链，不阻塞调用方），失败时仍然只产生一次 `turnEnded{status:'failed'}` 事件，只是时机变了。`AgentRuntime.startTurn` 的港口契约注释同步更新。
 
 ### S1.5 每用户一个常驻入口容器：agent 镜像、supervisor 最小实现、agent-host 事件桥
 - 交付物：`worker-runtime/Dockerfile`（node:24-bookworm-slim、pi 0.84.4、平台扩展、工具链 git / curl / python3 / pip / build-essential / ripgrep；非 root；只读根，`/workspace` 与 `/tmp` 可写）；`packages/worker-supervisor` 的常驻模式：`spawnResident(user)` 以 `--runtime ${WORKER_RUNTIME}`、`--cap-drop ALL`、挂载 `${NEXTTIME_DATA}/workspaces/<uid>` 到 `/workspace`（含 `--session-dir` 与 `PI_CODING_AGENT_DIR`）、只读挂载 `models.json`，env 只含 `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / NEXTTIME_MODE=entry / HTTP_PROXY / HTTPS_PROXY / NO_PROXY`，**不继承宿主 env**，容器内 `pi --mode rpc --system-prompt <入口定义> -e platform-extension`，**内置工具全开**；`packages/agent-host/src/{host,bridge}.ts`：向 supervisor 申请 / 停止入口容器、向内核申请入口 Handle、把容器 stdout 的 JSONL 事件桥到内核 `host-bridge`、写回 `prompt / stop`；崩溃自动重拉；空闲超时停容器。
@@ -389,6 +392,73 @@
   - **接口改动**：`ImportManifestResult` 从 `readonly OperationRecord[]` 变成 `{imported, skipped}`（`SkippedOperation = {name, status}`）；调用方 `governance/connections/service.ts`（`completeConnection`）、`cli/bootstrap.ts`（`registerGatekeeperFromCli`）同步改用 `.imported`/`.skipped`，两者的对外结果类型都新增 `skippedOperationNames`；`governance/gatekeepers/index.ts` 导出新增 `publishManifest`/`OperationIdentityConflictError` 与相关类型。`interfaces/http/capability-route.ts`（`mapCapabilityError`）与 `interfaces/ws/rpc.ts`（`mapDispatchError`）各新增一支 `OperationIdentityConflictError` 分支。
   - **测试**：`governance/gatekeepers/manifest.test.ts`（`describe.runIf(DATABASE_URL)`）新增 `draft isolation — propose/import/publish identity conflicts` 一组，覆盖完整攻击序列——import + `publish_manifest` 发布一个 `container.restart` 型 execute Operation；Handle 调用者对已发布身份重新 `propose_operation`（`mode:'observe'`）得到 `OperationIdentityConflictError`、现有行不变；同一提议者重新提议自己的草稿被允许（替换定义）、另一个 Principal 对同一草稿提议被拒；`publish_manifest` 把 agent 来源的草稿留在 `skippedDraftOperationNames` 里，只发布 `origin:'import'` 的草稿；`importManifest` 对已发布的名字返回 `skipped`、不改写现有行。`interfaces/http/capability-route.test.ts`/新增的 `interfaces/ws/rpc.test.ts` 各补一条 `mapCapabilityError`/`mapDispatchError` 单元测试，断言新分支的 409 `conflict` / `ILLEGAL_TRANSITION` 映射。
 
+- 实现说明补充（fix/gate-protocol-hardening，review lane 5 复审 P1/P2/P3，2026-09；三个 ssh P0
+  已在此前单独修过，见 `kinds/ssh.ts` 的 `--`/`shellQuote`/`assertClassificationAllowed`）：
+  - **门认证（P1-1）**：`/gate/*` 每个路由现在都要求 `Authorization: Bearer <token>`（常数时间比较，
+    401 信封从不回显 token）——新增 `gate-auth.ts`（guard，仿 kernel 自己的
+    `interfaces/internal-auth`）+ `gate-token.ts`（纯校验，仿 `@nexttime/shared` 的
+    `internal-token.ts`；`gate_token` 是与 `internal_token` **不同**的独立 secret，两个信任边界不
+    共享一把钥匙）。门侧读 `GATE_KERNEL_TOKEN_FILE`（默认 `/run/secrets/gate_token`），读不到直接
+    拒绝启动；kernel 的 `HttpGatekeeperClient` 读自己的 `NEXTTIME_GATE_TOKEN_FILE`（同默认路径），
+    读不到时不发这个头（可诊断的 401，不是让整个 kernel 进程崩掉）。`docker-compose.yml` 新增顶层
+    secret `gate_token`（`${NEXTTIME_DATA}/secrets/gate.token`，`scripts/gen-handle-keys.sh` 生成）
+    挂进 `kernel` 与四个门服务（`gatekeeper-docker`/`gatekeeper-ragflow`/`accept-s2-ssh-gate`/
+    `accept-s2-http-gate`）；`scripts/validate-compose.mjs` 新增顶层 secrets 名单校验。
+  - **cli 传输参数注入（P1-2）**：`renderCommandTemplate` 现在拒绝一个**纯占位符**模板 token（如
+    `{container}`）替换出以 `-` 开头的值（"flag injection"）——`docker inspect {id}` 这类模板里
+    `id` 若被传成 `--privileged` 之类会被目标 CLI 当成选项而不是位置参数；模板 token 自己就带字面
+    前缀（`--name={container}`）的不受限制，因为前缀不是调用方能控制的。
+  - **idempotency 冲突检测 + 先占位后调用（P2-1）**：`idempotency-store.ts` 的 `IdempotencyStore`
+    接口从 `get/set` 换成 `reserve/complete`——`reserve` 在真正调用 transport **之前**原子地
+    (check-and-insert 之间无 `await`) 占住这个 key，记录 `{operation, paramsHash, onBehalfOf}`；
+    同一个 key 撞见不同 tuple，或撞见一个还在 `pending` 的占位（哪怕 tuple 相同——同一个 key 的
+    真并发重复请求），一律 409 `idempotency_conflict`（`IdempotencyConflictError`），绝不二次调用
+    transport。`GatekeeperBase.apply` 相应改写。
+  - **http/mcp 传输（P2-2/P2-3/P2-4/P2-5）**：`HttpTransport.invoke` 现在传 `redirect:'error'`（
+    `fetch` 默认的 `'follow'` 会把凭证头带去跨域重定向目标）；`importOpenApi` 现在把每个参数自己的
+    `in` 记在 `params_schema` 的 `x-in`（非标准 JSON Schema 关键字，`ajv strict:false` 容忍，且能
+    穿过 `OperationSchema` 的 `params_schema: z.record` 原样透传），`HttpTransport.request` 按
+    `x-in:'query'`/`'header'` 路由——此前非 GET 请求的每个参数无差别塞进 JSON body，`in:'query'`
+    的参数被错误路由；`McpTransport.invoke` 现在检测 `tools/call` 返回的 `isError:true`（MCP 规范
+    自己的"工具失败"信号，此前被当成成功结果持久化进幂等存储）并抛 `TransportInvokeError`；
+    `params-validation.ts` 的 `ajv.compile()` 失败（多数是未解析的 `$ref`）现在包成
+    `ParamsSchemaInvalidError`（400 `invalid_operation_schema`，此前是不透明的 500）,并且
+    `properties` 声明了但没显式给 `additionalProperties` 的 schema 默认补 `false`（此前任意多余
+    key 无 schema 约束直接透传给目标系统）。
+  - **ConnectedAccount 写队列（P2-6）**：`ConnectedAccountStore.set`/`delete` 的读-改-写不再各自
+    独立——`writeQueue`（promise 链）把它们串行化，两个并发写不再互相用后写覆盖前写（
+    Windows 上甚至会因为并发 `rename` 到同一目标路径直接 `EPERM`）。`GATE_STORE_KEY_FILE` 应当像
+    `handle_key`/`internal_token`/`gate_token` 一样进 compose `secrets:`，不是普通 bind-mount 数据
+    卷——本次未在 compose 里新增一个真正跑 `connected_account` 模式的常驻服务（只有 accept-s2 测试
+    夹具用它），因此只在 `connected-account.ts`/`index.ts` 的模块注释里记了这条，没有改 compose。
+  - **P3 一批**（均为收紧/加固，非行为新增）：`NODE_TLS_REJECT_UNAUTHORIZED=0` 从只 `console.warn`
+    改成 `assertTlsNotDisabled` 直接拒绝启动；`GATE_SSH_POLICY_FILE` 现在按**文件路径**读取（此前
+    只会 `JSON.parse` 环境变量自己的值），值以 `[` 开头时仍按内联 JSON 解析以兼容
+    `accept-s2-ssh-gate` 现有的 `GATE_SSH_POLICY_FILE: "[]"`；`GATE_SSH_PORT` 非法值（非数字/超出
+    1–65535）现在启动时报错，不再静默产出 `NaN` 拼进 `-p NaN`；manifest 加载新增
+    `parseManifestJson`（`manifest.ts`，`OperationSchema.safeParse` 逐条校验），`index.ts`/
+    `gatekeepers/docker`/`gatekeepers/ragflow` 三处 `loadManifest` 统一改用它；
+    `ConnectedAccountStore` 内部改用 `Map` 存 records（此前 `onBehalfOf` 为 `"constructor"` 等内建
+    成员名时，`file.records[onBehalfOf]` 读到原型链上的函数而不是 `undefined`）；`ssh.ts` 的
+    `describeExecFailure`/`mcp.ts` 的 `isError`/JSON-RPC 错误文本现在经 `boundUntrustedText`（新增
+    `kinds/untrusted-text.ts`）截到 2KB 并标注 `untrusted:` 前缀，此前目标系统可控的 stderr（最多
+    10MB，`maxBuffer`）/错误文本会原样进入失败原因和审计轨迹；仓库根新增 `.dockerignore`（此前
+    每个 Dockerfile 的 `COPY . .` 会把 `.env`/`secrets/`/`.git` 等一起带进 build stage 自己的镜像
+    层，即使最终 `runtime` stage 没有 `COPY --from=build` 出这些文件，那一层本身仍被本地缓存）。
+  - **测试**：`packages/gatekeeper-base` 新增/改写覆盖每一条上述行为（`gate-auth.test.ts`、
+    `manifest.test.ts`、`idempotency-store.test.ts` 的 reserve/complete + 并发不二次调用、
+    `credentials/connected-account.test.ts` 的并发写与 `constructor` 等内建键名、`kinds/*.test.ts`
+    的 redirect/x-in/isError/flag-injection、`params-validation.test.ts` 的 `$ref`/
+    `additionalProperties`、`tls.test.ts`/`index.test.ts` 的 `assertTlsNotDisabled`/
+    `parseSshPort`/`loadSshPolicyTable`）；kernel 侧 `adapters/gatekeeper-client/index.test.ts` 新
+    增 token 发送/读取覆盖，两个既有 DB-gated 集成测试（`application/gateway/{connection-flow,
+    request-action}.integration.test.ts`）改为对各自起的假门服务器与 `HttpGatekeeperClient` 都传同
+    一个测试 token（协议变化的连带修复，不是新场景）。
+  - **已知偏离 / 未覆盖**：① `document.upload`（ragflow）真实文件上传仍不支持（S2.5 已知限制，本次
+    未动）；② `GATE_STORE_KEY_FILE` 进 compose `secrets:` 只落了文档，没有新增一个真正跑
+    `connected_account` 模式的常驻门服务去验证；③ 四个 Dockerfile 镜像构建本机无 Docker，未验证
+    `.dockerignore` 生效后镜像仍能正常构建（同 S2.4/S2.5 已有的"本机无 Docker"已知限制）。
+
 ### S2.5 `docker` 预置清单与 `ragflow` 门实例
 - 交付物：`gatekeepers/docker`（`cli` 种类的预置清单 + dockerode 绑定；observe：`containers.list / container.inspect / compose.ls / container.logs_tail`；execute：`container.restart`（medium，`await_decision=false`，simulate 返回将影响的容器）、`compose.up / compose.down`（high）；全部 `auto_approvable=false`）；`gatekeepers/ragflow`（`http` 种类的清单：observe `kb.list / kb.documents / retrieve`，execute `document.upload`（medium）、`document.parse`（low））。
 - 验收：对自建测试容器 `apply container.restart` 生效且重复不重启。执行者：Codex 写，Claude Code@host 验收。批准：否。不做：不对现有业务容器 execute。
@@ -403,6 +473,11 @@
   - **compose/主机脚本改动**：`docker-compose.yml` 的 `gatekeeper-docker` 新增 `${NEXTTIME_DATA}/gatekeepers/docker:/data/gate` 挂载与 `group_add: ["${DOCKER_GID:-999}"]`（非 root uid 10001 连 docker.sock 的既有模式，同 `worker-supervisor`/`agent-host`）；`gatekeeper-ragflow` 新增 `${NEXTTIME_DATA}/gatekeepers/ragflow:/data/gate`。`scripts/host-bootstrap.sh`/`scripts/host-env-init.sh` 的目录创建/chown 清单加了这两个子目录（`gatekeeper-ragflow.env` 模板同时把占位变量名从旧的 `RAGFLOW_URL`/`RAGFLOW_API_KEY`（S1.9 时代先占位，本任务给出真正形状）改成 `RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY`）；`deploy/backup/backup.sh` 的文件备份 tar 新增 `gatekeepers/`（两个门都只用 `SharedEnvCredentialResolver`/共享 env 凭证，没有 `ConnectedAccount` 本地加密存储，`GATE_DATA_DIR` 下只有幂等存储这类操作态数据，判定为"config-like"纳入备份，不是 `secrets/`）。
   - **测试策略**：两个门包都是纯单元测试（无网络/无 socket）——`docker` 门：`manifest.test.ts`（清单校验 `OperationSchema` + 任务原文的分类表）、`docker-client.test.ts`（日志帧反多路复用）、`transport.test.ts`（经真实 `GatekeeperBase` + 假 `DockerClient`：`containers.list`/`container.inspect` 的 `observedFacts` 结果映射、`container.restart` 的 `simulate` 与幂等 `apply`——重复同一 `idempotencyKey` 只调一次假 dockerode 的 `restart`、`compose.up`/`compose.down` 只对目标状态不同的容器动作）、`index.test.ts`（`buildDockerGate` 装配）；`ragflow` 门同理，`result-mapping.test.ts` 用从在线文档核对出的样例响应验证映射到 `KnowledgeBase`/`Document`。kernel 侧新增 `cli/bootstrap.test.ts` 的 `registerGatekeeperFromCli` 集成测试（`describe.runIf(DATABASE_URL)`，假 `GatekeeperClient`）：不发布时清单落草稿、`--publish true` 时全部发布。`docs/runbooks/host-gatekeepers.md` 是本任务对"对自建测试容器 apply container.restart 生效且重复不重启"这条验收在真实 Docker 上的复核步骤（本机无 Docker，未在开发机验证）。
   - **已知偏离 / 未覆盖**：① `gatekeepers/ragflow` 未针对任何真实 RAGFlow 部署做端到端验证（本机与本次主机验收都没有可用实例）——runbook §10 把这一步标为"若本机有可用的 RAGFlow 实例"的可选步骤；② `compose.ls` 未声明 `result_mapping`（任务原文只要求 `containers.list`/`container.inspect` 映射到 `Container` Fact，`compose.ls` 的分组视图没有对应的单一 ObjectType，留作纯 Observation）；③ 两个门的 `GATE_PORT` 默认统一为 `8083`（任务原文未指定；两者是不同容器/不同网络命名空间，不冲突，选一个值是为了 runbook/compose/README 三处保持一致，不是设计要求）。
+  - **fix/gate-protocol-hardening 补充（2026-09）**：两个门现在都要求 `GATE_KERNEL_TOKEN_FILE`
+    才能启动、`loadManifest` 都改用 `@nexttime/gatekeeper-base` 新增的 `parseManifestJson`（跑
+    `OperationSchema` 校验，不再是裸 `JSON.parse` 强制类型断言）——两个门自己的行为/清单内容不变，
+    只是启动前多了这两道检查；完整清单见 S2.4 小节自己的同名补充段落（认证/幂等/传输层的修复都在
+    `@nexttime/gatekeeper-base`，两个门包只是消费方）。
 
 ### S2.6 平台元本体与 WorkerDefinition 注册表
 - 交付物：`ontology/platform-meta.yaml`（ObjectType：WorkerDefinition / Gatekeeper / Operation / Capability / Skill / Procedure；LinkType：exposes / reads / writes / can_act_on / requires / connects_to / uses / steps）；`ontology/entry-agent.yaml`（kind=entry，能力上限固定，system prompt 教异步模型）；`ontology/ops-runner.yaml`（kind=worker）；`worker/definitions.ts`（`propose / publish / deprecate`，publish 只 human 通道）；注册 Gatekeeper 时同步写元本体对象；I16：Handle 通道写这些类型被拒。

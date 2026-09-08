@@ -17,6 +17,10 @@ import { insertPendingContextItem } from './store.js';
  * events.ts`'s `BudgetWarningEvent`) — `turn`/`workspace_daily` scope warnings are not emitted by
  * any code path yet (`application/task/invoke.ts`'s S2.7 I18 budget check is `scope: 'task'` only,
  * per that task's own implementation notes) and are silently ignored here rather than guessed at.
+ *
+ * At-least-once dedupe (lane-4 P1 fix, docs/development-tasks.md): `seenOutboxIds` is only
+ * populated *after* the write below has actually committed — see `application/linkage/
+ * task-consumer.ts`'s own doc comment for the full rationale (same fix, same reasoning).
  */
 
 type BudgetWarningEvent = Extract<DomainEvent, { type: 'BudgetWarning' }>;
@@ -37,7 +41,6 @@ export function registerBudgetWarningConsumer(
 
   return dispatcher.subscribe('BudgetWarning', async (event, meta) => {
     if (seenOutboxIds.has(meta.outboxId)) return;
-    seenOutboxIds.add(meta.outboxId);
     if (event.scope !== 'task' || !event.taskId) return;
 
     const taskId = event.taskId;
@@ -64,5 +67,7 @@ export function registerBudgetWarningConsumer(
           sourceOutboxId: meta.outboxId,
         }),
     );
+
+    seenOutboxIds.add(meta.outboxId);
   });
 }

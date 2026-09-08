@@ -1,6 +1,6 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { CredentialResolutionError } from './errors.js';
+import { CredentialResolutionError, IdempotencyConflictError } from './errors.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
@@ -89,6 +89,46 @@ describe('GatekeeperBase', () => {
     expect(second.replayed).toBe(true);
     expect(second.data).toEqual(first.data);
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('a concurrent apply with the same key invokes the transport only once (review lane 5, P2-1)', async () => {
+    let resolveInvoke: ((value: { data: unknown }) => void) | undefined;
+    const invoke = vi.fn(
+      () =>
+        new Promise<{ data: unknown }>((resolve) => {
+          resolveInvoke = resolve;
+        }),
+    );
+    const gate = new GatekeeperBase({
+      manifest: [executeOp()],
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+
+    const first = gate.apply('stock.adjust', { qty: 5 }, 'req-race');
+    // The first call has reserved the key but not yet resolved its transport invoke — a second,
+    // genuinely concurrent apply for the same key must not invoke the transport again.
+    await expect(gate.apply('stock.adjust', { qty: 5 }, 'req-race')).rejects.toBeInstanceOf(
+      IdempotencyConflictError,
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    resolveInvoke?.({ data: { applied: true } });
+    await expect(first).resolves.toMatchObject({ replayed: false, data: { applied: true } });
+  });
+
+  it('apply returns IdempotencyConflictError for the same key with a different params tuple', async () => {
+    const gate = new GatekeeperBase({
+      manifest: [executeOp()],
+      transport: fakeTransport(),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+    await gate.apply('stock.adjust', { qty: 1 }, 'req-2');
+    await expect(gate.apply('stock.adjust', { qty: 2 }, 'req-2')).rejects.toBeInstanceOf(
+      IdempotencyConflictError,
+    );
   });
 
   it('validates params against the operation params_schema and rejects invalid input', async () => {

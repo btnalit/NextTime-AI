@@ -11,8 +11,10 @@ import { newChat } from './service.js';
 
 /**
  * Integration test (real Postgres; auto-skip without DATABASE_URL) for interruptStaleRunningTurns
- * — docs/development-tasks.md S1.4 deliverable 7: a genuinely-old `running` agent_turn is marked
- * `interrupted`; a recent one is left alone (it might still be legitimately in progress).
+ * — docs/development-tasks.md S1.4 deliverable 7, lane-4 P1 fix: every `running` agent_turn is
+ * marked `interrupted`, regardless of age (a *recent* one is no longer left alone — see recovery.ts's
+ * own doc comment for why age-gating this specific, startup-only scan was itself the bug: any
+ * `running` row found here was left behind by a now-dead prior process by construction).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -67,7 +69,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool.end();
     });
 
-    it('marks an old running Turn interrupted, leaves a recent one alone, and skips non-running/non-agent_turn rows', async () => {
+    it('marks both an old and a freshly-started running Turn interrupted, and skips non-running/non-agent_turn rows', async () => {
       const chatId = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         newChat(client, workspaceId, ownerId, {}).then((c) => c.id),
       );
@@ -81,8 +83,8 @@ describe.runIf(DATABASE_URL !== undefined)(
             chatId,
             principalId: ownerId,
           });
-          // Backdate created_at past the timeout this test will use — startActivity itself has no way
-          // to set an arbitrary created_at, so backdate it directly afterward.
+          // Backdate created_at — proves the fix: this used to be exempted by an age threshold;
+          // now age is irrelevant, so this row is interrupted exactly like a fresh one.
           await client.query(
             "update activities set created_at = now() - interval '1 hour' where workspace_id = $1 and id = $2",
             [workspaceId, turn.id],
@@ -109,7 +111,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       );
 
-      // A non-agent_turn running Activity, and a completed agent_turn — neither should be touched.
+      // A non-agent_turn running Activity, and a completed agent_turn — neither should be touched
+      // (the `kind`/`status` filter, not age, is what still scopes this UPDATE).
       const otherKindId = await withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
@@ -126,9 +129,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       );
 
-      const count = await interruptStaleRunningTurns({ pool, timeoutMs: 60 * 1000 }); // 1 minute
+      const count = await interruptStaleRunningTurns({ pool });
 
-      expect(count).toBeGreaterThanOrEqual(1);
+      expect(count).toBeGreaterThanOrEqual(2);
 
       const rows = await withWorkspace(
         pool,
@@ -143,7 +146,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
 
       expect(rows.get(staleTurnId)).toBe('interrupted');
-      expect(rows.get(recentTurnId)).toBe('running'); // too recent — left alone
+      expect(rows.get(recentTurnId)).toBe('interrupted'); // no longer exempted by age
       expect(rows.get(otherKindId)).toBe('running'); // wrong kind — left alone
     });
   },

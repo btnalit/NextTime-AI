@@ -2,10 +2,12 @@ import type { Operation } from '@nexttime/shared';
 import type { CredentialResolver } from './credentials/index.js';
 import {
   ApplyRequiresIdempotencyKeyError,
+  IdempotencyConflictError,
   OperationModeMismatchError,
   OperationNotFoundError,
   RevertNotSupportedError,
 } from './errors.js';
+import { hashIdempotencyParams } from './idempotency-store.js';
 import type { IdempotencyStore } from './idempotency-store.js';
 import type { Transport } from './kinds/types.js';
 import { assertParamsValid } from './params-validation.js';
@@ -142,10 +144,24 @@ export class GatekeeperBase {
     }
     assertParamsValid(name, operation.params_schema, params);
 
-    const existing = await this.options.idempotencyStore.get(idempotencyKey);
-    if (existing !== undefined) {
-      const stored = existing as { data: unknown; observedFacts: ObservedFactCandidate[] };
-      return { data: stored.data, observedFacts: stored.observedFacts, replayed: true };
+    // Reserved *before* the transport is invoked (review lane 5, P2-1) — a concurrent `apply` for
+    // the same key, matching tuple or not, gets 'conflict' rather than a second invocation.
+    const descriptor = {
+      operation: name,
+      paramsHash: hashIdempotencyParams(params),
+      onBehalfOf: ctx.onBehalfOf,
+    };
+    const reservation = await this.options.idempotencyStore.reserve(idempotencyKey, descriptor);
+    if (reservation.status === 'conflict') {
+      throw new IdempotencyConflictError(idempotencyKey);
+    }
+    if (reservation.status === 'replay') {
+      const entry = reservation.entry;
+      return {
+        data: entry.data,
+        observedFacts: entry.observedFacts as ObservedFactCandidate[],
+        replayed: true,
+      };
     }
 
     const credential = await this.resolveCredential(ctx.onBehalfOf);
@@ -154,7 +170,10 @@ export class GatekeeperBase {
       credential,
     });
     const observedFacts = this.toObservedFacts(operation, result.data);
-    await this.options.idempotencyStore.set(idempotencyKey, { data: result.data, observedFacts });
+    await this.options.idempotencyStore.complete(idempotencyKey, {
+      data: result.data,
+      observedFacts,
+    });
     return { data: result.data, observedFacts, replayed: false };
   }
 

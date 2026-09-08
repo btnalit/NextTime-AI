@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
+import { ScopeValidationError } from '../../governance/capability/index.js';
 import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
 import { WS_ERROR_CODES, mapDispatchError } from './rpc.js';
 
@@ -18,5 +20,22 @@ describe('mapDispatchError — OperationIdentityConflictError (review 2026-09, P
     );
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
     expect(mapped.message).toContain('container.restart');
+  });
+});
+
+describe('mapDispatchError — lane-4 P2 fix: previously-unmapped error classes → 500', () => {
+  it('TurnNotFoundError (report_turn) maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new TurnNotFoundError('ws-1', 'turn-1'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.NOT_FOUND);
+  });
+
+  it('NoActiveTurnError (record_decision) maps to ILLEGAL_TRANSITION (-32011), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new NoActiveTurnError());
+    expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('ScopeValidationError (invoke_worker Handle mint) maps to INVALID_PARAMS (-32602), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new ScopeValidationError('unknown capability "bogus"'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
   });
 });
