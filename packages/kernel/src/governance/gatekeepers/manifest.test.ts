@@ -582,6 +582,143 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       expect(activity.rows[0]?.metadata.supersedes).toBe(v1?.id);
     });
 
+    it('S3.12 compat: a legacy Operation row (identity_key without version) is backfilled by the 0016 migration path, then propose_operation opens v2 with draftOf — never a fresh v1 coexisting beside it', async () => {
+      const name = `legacy.op.${randomUUID()}`;
+      const legacyOperation = testOperation({
+        name,
+        mode: 'execute',
+        blast_radius: 'high',
+        auto_approvable: false,
+      });
+
+      // Simulate a pre-S3.12 row exactly as `registerOperationDraftObject` used to write it:
+      // `identity_key` is the old two-field `{gatekeeperId, name}` — no `version` key at all —
+      // and `properties` carries no `version`/`draftOf` either (those fields did not exist yet).
+      const legacyRow = await inTx((client) =>
+        client.query<{ id: string }>(
+          `insert into objects (workspace_id, object_type, identity_key, properties)
+           values ($1, 'Operation', $2::jsonb, $3::jsonb)
+           returning id`,
+          [
+            workspaceId,
+            JSON.stringify({ gatekeeperId, name }),
+            JSON.stringify({
+              ...legacyOperation,
+              status: 'published',
+              origin: 'import',
+              proposedBy: ownerId,
+              proposedByKind: 'human',
+            }),
+          ],
+        ),
+      );
+      const legacyId = legacyRow.rows[0]?.id;
+      expect(legacyId).toBeTruthy();
+
+      // Before the backfill: reads already find it (they extract `gatekeeperId`/`name` via `->>`,
+      // never match `identity_key` exactly) and `OperationRecord.version` reads `1` — but only
+      // because `toOperationRecord` *defaults* an absent `properties.version` to `1`, not because
+      // the stored `identity_key` actually carries that key yet.
+      const beforeBackfill = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, name),
+      );
+      expect(beforeBackfill?.id).toBe(legacyId);
+      expect(beforeBackfill?.version).toBe(1);
+
+      // Run the exact backfill `packages/kernel/migrations/core/
+      // 0016_operation_identity_version_backfill.sql` applies. `runMigrations()` in `beforeAll`
+      // already ran 0016 once, before this row ever existed, so this re-issues the identical
+      // statement standalone — proving the backfill logic itself against a genuinely legacy row.
+      await inTx((client) =>
+        client.query(
+          `update objects
+           set identity_key = identity_key || jsonb_build_object('version', 1)
+           where object_type = 'Operation'
+             and identity_key is not null
+             and not (identity_key ? 'version')`,
+        ),
+      );
+
+      // Same row, same id — now addressable at the identity a write actually targets,
+      // {gatekeeperId, name, version: 1}.
+      const afterBackfill = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, name),
+      );
+      expect(afterBackfill?.id).toBe(legacyId);
+      expect(afterBackfill?.version).toBe(1);
+
+      // The actual regression this backfill closes: propose_operation opens v2 with draftOf
+      // pointing at the legacy row — never a "fresh v1" that would silently coexist beside it
+      // (which is what happened pre-backfill: the write path's exact-identity upsert missed the
+      // legacy row entirely).
+      const reviseAct = await newActivity();
+      const revision = await inTx((client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: testOperation({ name, mode: 'observe' }),
+          proposedBy: { id: ownerId, kind: 'agent' },
+          activityId: reviseAct,
+        }),
+      );
+      expect(revision.version).toBe(2);
+      expect(revision.draftOf).toBe(legacyId);
+
+      // publish_operation on that revision deprecates the *same* legacy row in place (rather than
+      // inserting a phantom incomplete row beside it, which is exactly what the pre-backfill bug
+      // did) — find_operations/list_allowed_operations/gate tool resolution then see exactly one
+      // published row, never two.
+      const published = await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name }),
+      );
+      expect(published.version).toBe(2);
+      expect(published.supersedes).toBe(legacyId);
+
+      const rowCount = await inTx((client) =>
+        client.query<{ count: string }>(
+          `select count(*)::bigint as count from objects
+           where workspace_id = $1 and object_type = 'Operation'
+             and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3`,
+          [workspaceId, gatekeeperId, name],
+        ),
+      );
+      // The legacy row (now deprecated) + v2 (published) — never a third, phantom row.
+      expect(Number(rowCount.rows[0]?.count)).toBe(2);
+
+      const legacyRecord = await inTx((client) =>
+        client.query<{ properties: { status?: string } }>(
+          'select properties from objects where workspace_id = $1 and id = $2',
+          [workspaceId, legacyId],
+        ),
+      );
+      expect(legacyRecord.rows[0]?.properties.status).toBe('deprecated');
+
+      // find_operations / list_allowed_operations / gate tool resolution dedupe by identity:
+      // exactly one candidate, the new published version.
+      const candidates = await inTx((client) =>
+        findOperationCandidates(client, workspaceId, { need: name }),
+      );
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]?.id).toBe(revision.id);
+      const allowed = await inTx((client) =>
+        listPublishedOperationsForGatekeepers(client, workspaceId, [gatekeeperId]),
+      );
+      expect(allowed.filter((r) => r.name === name)).toHaveLength(1);
+      expect(allowed.find((r) => r.name === name)?.id).toBe(revision.id);
+      const currentPublished = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, name),
+      );
+      expect(currentPublished?.id).toBe(revision.id);
+
+      // list_operations (human directory) still shows full, correctly-labeled history — the
+      // legacy row deprecated, the revision published — never a phantom third row.
+      const history = (
+        await inTx((client) => listOperations(client, workspaceId, { gatekeeperId }))
+      ).filter((r) => r.name === name);
+      expect(history).toHaveLength(2);
+      expect(history.find((r) => r.id === legacyId)?.status).toBe('deprecated');
+      expect(history.find((r) => r.id === revision.id)?.status).toBe('published');
+    });
+
     it('a proposer may revise their own draft, but another Principal proposing over it gets OperationIdentityConflictError', async () => {
       const name = `stock.propose.${randomUUID()}`;
       const act1 = await newActivity();

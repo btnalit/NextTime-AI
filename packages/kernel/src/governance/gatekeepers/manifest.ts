@@ -303,6 +303,12 @@ export async function proposeOperation(
     draftOf = existing.id;
   } else if (isOwnProposalDraft(existing, input.proposedBy.id)) {
     version = existing.version;
+    // Carry the existing draft's own `draftOf` forward (bug caught in CI review before merge):
+    // `registerOperationDraftObject`'s conditional write replaces `properties` wholesale, not
+    // merges it, so leaving this `undefined` here would silently drop a pending revision draft's
+    // `draftOf` the moment its own proposer revises it a second time — `undefined` is only ever
+    // correct here for a fresh (non-revision) draft, which never had one to begin with.
+    draftOf = existing.draftOf;
   } else {
     // A conflicting draft, or a fully `deprecated` identity — unchanged pre-S3.12 rule.
     throw new OperationIdentityConflictError(gatekeeperId, name, existing.status);

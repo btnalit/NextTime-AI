@@ -280,9 +280,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           findOperations(client, workspaceId, { parentAuthority: 'unconstrained' }, 'stock'),
       );
       expect(afterPublish).toHaveLength(1);
+      // S3.12: Operation identity gained a `version` field (governance/gatekeepers/manifest.ts's
+      // own module doc comment) — a freshly-imported-and-published Operation is always version 1.
       expect(afterPublish[0]?.identityKey).toEqual({
         gatekeeperId: created.gatekeeperId,
         name: 'get_stocks',
+        version: 1,
       });
 
       // 6. connect_gatekeeper → the exact read `ensureEntryHandle` performs at Handle issuance
