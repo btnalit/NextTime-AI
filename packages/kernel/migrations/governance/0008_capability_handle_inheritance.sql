@@ -1,4 +1,4 @@
--- module: governance, version: 0007
+-- module: governance, version: 0008
 --
 -- capability_handles inheritance lock (I13; lane-1 P2 fix): 0001_capability_handles.sql's own
 -- trigger only ever blocked `on_behalf_of` from being *updated* after insertion — the inheritance

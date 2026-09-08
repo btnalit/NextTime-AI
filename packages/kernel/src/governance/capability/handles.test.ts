@@ -898,7 +898,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(stillOwner).toBe(onBehalfOf);
     });
 
-    describe('capability_handles_inheritance — I13 (governance/0007)', () => {
+    describe('capability_handles_inheritance — I13 (governance/0008)', () => {
       async function insertHandleRow(
         client: PoolClient,
         row: {
