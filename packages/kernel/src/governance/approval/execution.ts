@@ -3,7 +3,12 @@ import type { PoolClient } from 'pg';
 import { getActionRequestForUpdate, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
-import type { ActionRequestRow } from './types.js';
+import {
+  ACTION_REQUEST_ROW_COLUMNS,
+  type ActionRequestDbRow,
+  type ActionRequestRow,
+  mapActionRequestRow,
+} from './types.js';
 
 /**
  * governance/approval/execution: the execution-lifecycle transitions (design doc §5.4 I6/I11,
@@ -156,11 +161,55 @@ export async function listDistinctExecutableGatekeepers(
   }
 }
 
+export const DEFAULT_STALE_EXECUTING_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+export interface StaleExecutingScanOptions {
+  /** An `executing` row older than this (by `executing_at`) is a candidate — default
+   *  `DEFAULT_STALE_EXECUTING_TIMEOUT_MS`. */
+  readonly staleAfterMs?: number;
+}
+
+/**
+ * P1-3 fix (review job 652a4abc: "crash/DB failure between apply success and
+ * markActionRequestExecuted leaves row `executing` forever; not drainable, no reaper, no event,
+ * parent Task never resumes"): every workspace's `executing` ActionRequests older than
+ * `options.staleAfterMs` (by `executing_at` — migrations/governance/
+ * 0006_action_request_executing_at.sql's own doc comment explains why not `requested_at`) — the
+ * same cross-workspace admin-mode scan shape as `expireOverduePendingApprovals`/
+ * `listDistinctExecutableGatekeepers` above. Returns full rows (not just ids) because
+ * `application/gateway/action-executor.ts`'s `reapStaleExecutingActionRequests` needs
+ * `gatekeeperId`/`actionKind`/`params`/`onBehalfOf` to replay `apply` — that function lives in
+ * `application/gateway` (governance may not depend on `adapters/gatekeeper-client`, §7.10), so
+ * this module only ever hands back data, never calls the gate itself.
+ */
+export async function listStaleExecutingActionRequests(
+  pool: MinimalPool,
+  options: StaleExecutingScanOptions = {},
+): Promise<readonly ActionRequestRow[]> {
+  const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_EXECUTING_TIMEOUT_MS;
+  const cutoff = new Date(Date.now() - staleAfterMs).toISOString();
+
+  const client = await pool.connect();
+  try {
+    const result = await client.query<ActionRequestDbRow>(
+      `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests
+       where status = 'executing' and executing_at < $1::timestamptz`,
+      [cutoff],
+    );
+    return result.rows.map(mapActionRequestRow);
+  } finally {
+    client.release();
+  }
+}
+
 // -------------------------------------------------------------------------------------------
 // start_execution / mark_executed / mark_failed / compensate
 // -------------------------------------------------------------------------------------------
 
-/** `auto_approved|approved -> executing`. */
+/** `auto_approved|approved -> executing`. Sets `executing_at` (P1-3 fix) — the staleness anchor
+ *  `reapStaleExecutingActionRequests` scans on, see migrations/governance/
+ *  0006_action_request_executing_at.sql's own doc comment for why this, and not `requested_at`,
+ *  is the correct signal. */
 export async function startActionRequestExecution(
   client: PoolClient,
   workspaceId: string,
@@ -171,6 +220,7 @@ export async function startActionRequestExecution(
   const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
     status: nextStatus,
     expectedStatus: existing.status,
+    executingAt: new Date(),
   });
 
   await recordTransition(client, workspaceId, {

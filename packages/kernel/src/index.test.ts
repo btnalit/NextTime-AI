@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
 import type { PoolLike } from './adapters/db/pool.js';
-import { createServer } from './index.js';
+import { createServer, parsePositiveIntEnvVar } from './index.js';
 
 /** The internal-plane shared secret every `/internal/*` test below presents (or deliberately
  *  withholds). Generated per run — never a literal that could look like a real credential. */
@@ -58,6 +58,38 @@ describe('/internal/* routes are wired into the composition root (S1.7 → main)
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ ok: false, error: { code: 'invalid_body' } });
+  });
+});
+
+// P2-9 fix: `Number(env)` on an unvalidated env var silently becomes `NaN`, which turns a
+// reaper's deadline math / `setInterval` cadence into a tight loop instead of a startup error.
+describe('parsePositiveIntEnvVar', () => {
+  it('returns undefined when the env var is unset', () => {
+    expect(parsePositiveIntEnvVar('X', undefined)).toBeUndefined();
+  });
+
+  it('parses a valid positive integer string', () => {
+    expect(parsePositiveIntEnvVar('X', '5000')).toBe(5000);
+  });
+
+  it('throws on a non-numeric value', () => {
+    expect(() => parsePositiveIntEnvVar('X', 'not-a-number')).toThrow(/X="not-a-number"/);
+  });
+
+  it('throws on an empty string', () => {
+    expect(() => parsePositiveIntEnvVar('X', '')).toThrow();
+  });
+
+  it('throws on zero', () => {
+    expect(() => parsePositiveIntEnvVar('X', '0')).toThrow();
+  });
+
+  it('throws on a negative number', () => {
+    expect(() => parsePositiveIntEnvVar('X', '-100')).toThrow();
+  });
+
+  it('throws on Infinity', () => {
+    expect(() => parsePositiveIntEnvVar('X', 'Infinity')).toThrow();
   });
 });
 

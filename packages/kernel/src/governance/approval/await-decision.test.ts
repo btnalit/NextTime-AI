@@ -26,6 +26,7 @@ function actionRequest(overrides: Partial<ActionRequestRow> = {}): ActionRequest
     actorRuntime: 'pi',
     idempotencyKey: null,
     requestedAt: new Date('2026-01-01T00:00:00Z'),
+    executingAt: null,
     executedAt: null,
     failedAt: null,
     params: {},

@@ -24,9 +24,10 @@
  *   - `decide.ts`      — `approveActionRequest`/`rejectActionRequest`: I14 precheck, the governed
  *                        transition, and the Approval Decision write (I7 amendment, PR #33).
  *   - `execution.ts`   — `expireActionRequest`/`expireOverduePendingApprovals` (reaper),
+ *                        `listStaleExecutingActionRequests` (P1-3 stale-`executing` reaper scan),
  *                        `startActionRequestExecution`/`markActionRequestExecuted`/
  *                        `markActionRequestFailed`/`compensateActionRequest` (called by
- *                        `drainer.ts` and, eventually, S2.4's real Gatekeeper execution path).
+ *                        `drainer.ts` and `application/gateway`'s real Gatekeeper execution path).
  *   - `await-decision.ts` — `awaitActionRequestResolution`: the `await_decision=true`
  *                        wait-until-timeout primitive (§8.2), decoupled from the DB/pool so it is
  *                        unit-testable with no Postgres and no real timers.
@@ -72,16 +73,19 @@ export {
 
 export {
   DEFAULT_APPROVAL_TIMEOUT_MS,
+  DEFAULT_STALE_EXECUTING_TIMEOUT_MS,
   type ActionRequestActorOptions,
   type DrainableGatekeeper,
   type ExpireOverdueOptions,
   type MarkExecutedOptions,
   type MarkFailedOptions,
   type MinimalPool,
+  type StaleExecutingScanOptions,
   compensateActionRequest,
   expireActionRequest,
   expireOverduePendingApprovals,
   listDistinctExecutableGatekeepers,
+  listStaleExecutingActionRequests,
   markActionRequestExecuted,
   markActionRequestFailed,
   startActionRequestExecution,

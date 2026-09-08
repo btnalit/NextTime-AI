@@ -19,6 +19,7 @@ import {
   ApprovalDrainer,
   approveActionRequest,
   getActionRequest,
+  rejectActionRequest,
 } from '../../governance/approval/index.js';
 import { entryScope } from '../../governance/capability/index.js';
 import {
@@ -26,9 +27,14 @@ import {
   publishOperation,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
+import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
-import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
+import {
+  createAdminWithTransaction,
+  createGatekeeperActionExecutor,
+  reapStaleExecutingActionRequests,
+} from './action-executor.js';
 import { dispatchCapability } from './dispatch.js';
 import { setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -312,8 +318,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       const adminWithTransaction = createAdminWithTransaction(pool);
       setRequestActionDeps({
         gatekeeperClient,
-        actionExecutor: createGatekeeperActionExecutor({
-          gatekeeperClient,
+        // P2-2 fix: phase 2 now routes execution through an ApprovalDrainer rather than calling
+        // an ActionExecutor directly — a *separate* instance from `drainer` below (constructed
+        // the same way `createServer()`/`createBackgroundServices()` build two independent
+        // instances in production), deliberately not shared, so this suite's own race test below
+        // (`drainer.drainGatekeeper(...)` racing this handler's own internal drainer) exercises
+        // the real cross-instance race the DB-level row lock — not either drainer's in-memory
+        // single-flight set — is what actually has to make safe.
+        drainer: new ApprovalDrainer({
+          executor: createGatekeeperActionExecutor({
+            gatekeeperClient,
+            withTransaction: adminWithTransaction,
+          }),
           withTransaction: adminWithTransaction,
         }),
         awaitDecisionTimeoutMs: AWAIT_DECISION_TIMEOUT_MS,
@@ -438,6 +454,155 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(transport.visibilityChecks[AUTO_OP.name]).toBe(true);
     });
 
+    // P2-2 fix (review job 652a4abc): phase 2's inline execution now routes through the
+    // ApprovalDrainer's per-Gatekeeper "遇 pending 停" ordering instead of calling the
+    // ActionExecutor directly — a later auto_approved request must not execute ahead of an
+    // earlier still-pending_approval row on the same Gatekeeper.
+    it('an auto_approved request does not jump ahead of an earlier pending_approval row on the same Gatekeeper (drainer ordering)', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+
+      const pendingResult = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params: { qty: 6001 },
+      })) as { status: string; actionRequestId: string };
+      expect(pendingResult.status).toBe('pending_approval');
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const autoResult = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 6002 },
+      })) as { status: string; actionRequestId: string };
+
+      expect(autoResult.status).toBe('auto_approved'); // not yet executed — blocked behind pendingResult
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was never called for it
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, autoResult.actionRequestId),
+      );
+      expect(row?.status).toBe('auto_approved');
+
+      // Unblock the queue, then drain it: rejecting the blocking row alone would leave
+      // `autoResult`'s row sitting `auto_approved` (unexecuted) forever — `auto_approved` has no
+      // reject/expire edge of its own (packages/shared/src/transitions.ts) — which would then
+      // block *every later* test's own auto-execution on this same shared Gatekeeper under the
+      // very drainer ordering this test just proved.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        rejectActionRequest(client, workspaceId, {
+          actionRequestId: pendingResult.actionRequestId,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+      await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+    });
+
+    // P2-1 fix (review job 652a4abc): a policy `deny` decision must leave a durable trace — the
+    // row, its `action_request.request` audit entry, and the outbox event all commit even though
+    // the capability call itself still throws (403-shaped `ActionRequestDeniedError`).
+    it('denied leaves a trace: the row and its audit record commit even though the call still throws', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const uncoveredCaller: ResolvedCaller = {
+        channel: 'handle',
+        claims: {
+          ws: workspaceId,
+          sid: randomUUID(),
+          obo: ownerId,
+          // Holds request_action but not this Gatekeeper's resource scope — governance/policy/
+          // engine.ts's own doc comment: "deny... checked first".
+          scope: { capabilities: ['request_action'], resources: { gatekeeper: [randomUUID()] } },
+          jti: randomUUID(),
+          iat: now,
+          exp: now + 600,
+        },
+      };
+
+      await expect(
+        dispatchCapability({ pool }, uncoveredCaller, 'request_action', {
+          gatekeeperId,
+          operation: AUTO_OP.name,
+          params: { qty: 9001 },
+        }),
+      ).rejects.toThrow(/denied/i);
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ id: string; status: string }>(
+          `select id, status from action_requests
+           where workspace_id = $1 and gatekeeper_id = $2 and action_kind = $3
+           order by requested_at desc limit 1`,
+          [workspaceId, gatekeeperId, AUTO_OP.name],
+        ),
+      );
+      const deniedRow = row.rows[0];
+      expect(deniedRow?.status).toBe('denied');
+
+      const auditRows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAudit(client, workspaceId, {
+          resourceType: 'action_request',
+          resourceId: deniedRow?.id,
+          limit: 5,
+        }),
+      );
+      expect(auditRows.some((r) => r.action === 'action_request.request')).toBe(true);
+    });
+
+    // P1-1 fix (review job 652a4abc): request_action now always derives (or accepts) an
+    // idempotency key, so a retry with the same intent returns the existing ActionRequest instead
+    // of creating and executing a second one. Placed here (before "an unclassified operation"
+    // below) deliberately — that test leaves a permanent, never-resolved pending_approval row on
+    // this shared Gatekeeper, and P2-2's drainer-ordering fix means every later auto_approved
+    // request on the same Gatekeeper would otherwise queue forever behind it.
+    it('a repeat call with identical (gatekeeperId, operation, params) and no explicit idempotencyKey collapses onto the same ActionRequest', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const params = { qty: 4200 };
+
+      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params,
+      })) as { status: string; actionRequestId: string };
+      expect(first.status).toBe('executed');
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params,
+      })) as { status: string; actionRequestId: string };
+
+      expect(second.actionRequestId).toBe(first.actionRequestId);
+      expect(second.status).toBe('executed');
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
+    });
+
+    it('an explicit idempotencyKey collapses a repeat call onto the same ActionRequest even with different params', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const idempotencyKey = randomUUID();
+
+      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 4201 },
+        idempotencyKey,
+      })) as { status: string; actionRequestId: string };
+      expect(first.status).toBe('executed');
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 4202 }, // different params — the explicit key still wins
+        idempotencyKey,
+      })) as { status: string; actionRequestId: string };
+
+      expect(second.actionRequestId).toBe(first.actionRequestId);
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
+    });
+
     it('await_decision:true resolves once a *different connection* approves it mid-wait, and executes exactly once', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const before = transport.calls[PENDING_OP.name] ?? 0;
@@ -518,6 +683,77 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(finalRow?.status).toBe('executed');
     });
 
+    // P1-2 fix (review job 652a4abc): `requestActionHandler` resolves the calling Handle's own
+    // WorkerRun via `claims.sid` and threads it through as `parent_worker_run_id` — previously
+    // never set by any production caller, leaving `application/task/reaper.ts`'s
+    // ActionRequestPending routing consumer (already correctly implemented, see
+    // `reaper.integration.test.ts`) with nothing to route back to.
+    it('a Worker-Handle caller sets parent_worker_run_id on the created ActionRequest', async () => {
+      const taskResult = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+             values ($1, 'running', $2, $3, 1) returning id`,
+            [workspaceId, ownerId, randomUUID()],
+          ),
+      );
+      const taskId = taskResult.rows[0]?.id as string;
+
+      const sessionId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'worker_run', $3, 'active') returning id`,
+            [workspaceId, ownerId, ownerId],
+          );
+          return result.rows[0]?.id as string;
+        },
+      );
+
+      const workerRunId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
+             values ($1, 'running', $2, $3, 0, 1) returning id`,
+            [workspaceId, taskId, sessionId],
+          );
+          return result.rows[0]?.id as string;
+        },
+      );
+
+      const now = Math.floor(Date.now() / 1000);
+      const workerCaller: ResolvedCaller = {
+        channel: 'handle',
+        claims: {
+          ws: workspaceId,
+          sid: sessionId,
+          obo: ownerId,
+          scope: { capabilities: ['request_action'], resources: { gatekeeper: [gatekeeperId] } },
+          jti: randomUUID(),
+          iat: now,
+          exp: now + 600,
+        },
+      };
+
+      const result = (await dispatchCapability({ pool }, workerCaller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params: { qty: 777 },
+      })) as { status: string; actionRequestId: string };
+      expect(result.status).toBe('pending_approval');
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, result.actionRequestId),
+      );
+      expect(row?.parentWorkerRunId).toBe(workerRunId);
+    });
+
     it('an unclassified (unimported) operation → require_approval, never executes', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const result = (await dispatchCapability({ pool }, caller, 'request_action', {
@@ -532,6 +768,50 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(row?.blastRadius).toBe('medium');
       expect(row?.status).toBe('pending_approval');
+    });
+
+    // P1-3 fix (review job 652a4abc): "crash/DB failure between apply success and
+    // markActionRequestExecuted leaves row `executing` forever" — a row hand-seeded at `executing`
+    // (simulating exactly that crash) with a stale `executing_at` must be picked up, replayed
+    // (idempotently, via the same ActionExecutor.execute every other execution path uses), and
+    // marked to a terminal status.
+    it('the stale-executing reaper replays apply and marks a crashed-mid-execution row', async () => {
+      const actionRequestId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into action_requests (
+               workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+               await_decision, on_behalf_of, actor_runtime, executing_at, params
+             ) values ($1, 'executing', $2, $3, 'low', 'allow', false, $4, 'pi',
+               now() - interval '1 hour', $5::jsonb)
+             returning id`,
+            [workspaceId, gatekeeperId, AUTO_OP.name, ownerId, JSON.stringify({ qty: 5150 })],
+          );
+          return result.rows[0]?.id as string;
+        },
+      );
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+      const withTransactionAdmin = createAdminWithTransaction(pool);
+      const actionExecutor = createGatekeeperActionExecutor({
+        gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
+        withTransaction: withTransactionAdmin,
+      });
+
+      const reapResult = await reapStaleExecutingActionRequests(pool, actionExecutor, {
+        staleAfterMs: 1000,
+      });
+
+      expect(reapResult.scanned).toBeGreaterThanOrEqual(1);
+      expect(reapResult.reaped).toBeGreaterThanOrEqual(1);
+      expect(transport.calls[AUTO_OP.name]).toBe(before + 1); // the gate was called (the replay)
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      expect(row?.status).toBe('executed');
     });
 
     it('a draft (unpublished) operation never executes, even though its own manifest entry declares auto_approvable', async () => {

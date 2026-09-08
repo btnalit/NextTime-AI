@@ -35,6 +35,9 @@ export interface UpdateActionRequestStatusInput {
   readonly expectedStatus: ActionRequestStatus;
   /** `decide.ts` only — the Approval Decision written just before this call. */
   readonly approvalDecisionId?: string;
+  /** `execution.ts`'s `startActionRequestExecution` only — P1-3 fix, migrations/governance/
+   *  0006_action_request_executing_at.sql's own doc comment has the full rationale. */
+  readonly executingAt?: Date;
   readonly executedAt?: Date;
   readonly failedAt?: Date;
 }
@@ -51,15 +54,17 @@ export async function updateActionRequestStatusConditional(
     `update action_requests
      set status = $3,
          approval_decision_id = coalesce($4::uuid, approval_decision_id),
-         executed_at = coalesce($5::timestamptz, executed_at),
-         failed_at = coalesce($6::timestamptz, failed_at)
-     where workspace_id = $1 and id = $2 and status = $7
+         executing_at = coalesce($5::timestamptz, executing_at),
+         executed_at = coalesce($6::timestamptz, executed_at),
+         failed_at = coalesce($7::timestamptz, failed_at)
+     where workspace_id = $1 and id = $2 and status = $8
      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
     [
       workspaceId,
       actionRequestId,
       next.status,
       next.approvalDecisionId ?? null,
+      next.executingAt ?? null,
       next.executedAt ?? null,
       next.failedAt ?? null,
       next.expectedStatus,

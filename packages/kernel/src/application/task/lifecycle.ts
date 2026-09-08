@@ -9,6 +9,8 @@ import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { TaskSupervisorStatus } from '../../adapters/supervisor-client/index.js';
 import { revokeSession } from '../../governance/capability/index.js';
+import { getWorkerDefinition } from '../worker/index.js';
+import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { spawnWorkerRun } from './spawn.js';
 import { recordTaskTransition, recordWorkerRunTransition } from './transition-log.js';
@@ -118,22 +120,23 @@ export async function terminateWorkerRunRow(
 }
 
 /** The real, if momentary, hop sequence from `status` to `running` — Task's own transition table
- *  only has a `fail` edge out of `running`, so a Task still `queued` (spawn itself failed) or
- *  `waiting_approval` (the reaper catches a timeout while awaiting approval) must walk through
- *  `running` first for the shared transition table to accept `fail` (I6: "只沿转移表走"), never
- *  externally observable as a separate persisted row state — same reasoning `governance/approval/
- *  request-action.ts`'s own doc comment gives for its own multi-hop resolution. `created` is
- *  unreachable in practice (`invoke_worker` always inserts a Task directly at `queued`, mirroring
- *  that same file's "single INSERT already at its resolved status" choice) but included for
- *  completeness/defense-in-depth. */
+ *  only has a `fail` edge out of `running` and (P1-6 fix) `waiting_approval`, so a Task still
+ *  `queued` (spawn itself failed) must walk through `running` first for the shared transition
+ *  table to accept `fail` (I6: "只沿转移表走"), never externally observable as a separate
+ *  persisted row state — same reasoning `governance/approval/request-action.ts`'s own doc comment
+ *  gives for its own multi-hop resolution. `created` is unreachable in practice (`invoke_worker`
+ *  always inserts a Task directly at `queued`, mirroring that same file's "single INSERT already
+ *  at its resolved status" choice) but included for completeness/defense-in-depth.
+ *  `waiting_approval` needs no hop (`packages/shared/src/transitions.ts`'s `TASK_EDGES` now has a
+ *  direct `waiting_approval -> fail -> failed` edge — see that table's own doc comment on why a
+ *  blocked Task's WorkerRun dying has nothing left to do with the ActionRequest it was waiting
+ *  on), so it falls through to the default `[]`, same as `running` itself. */
 function pathToRunning(status: TaskStatus): readonly TaskEvent[] {
   switch (status) {
     case 'created':
       return ['queue', 'start'];
     case 'queued':
       return ['start'];
-    case 'waiting_approval':
-      return ['resume'];
     default:
       return [];
   }
@@ -226,15 +229,19 @@ export async function completeTaskWithResult(
  *   - `running`   — no-op.
  *   - `exited` (exit code 0, no crash) — if the Task has not already been completed by S2.9's
  *     `completeTaskWithResult` seam, marks it `failed: no_result` (see that seam's own doc
- *     comment); always terminates the WorkerRun.
+ *     comment) — including a Task still `waiting_approval` (P1-6 fix: a WorkerRun that is gone has
+ *     nothing left to resume into, regardless of what its outstanding ActionRequest decides);
+ *     always terminates the WorkerRun.
  *   - `failed` (non-zero exit) — requeues once (`task.retryCount < 1`: spawns a fresh WorkerRun
  *     under the same Task, attenuating from the *failed* WorkerRun's own already-granted scope —
- *     see `spawnWorkerRunForRetry` below) or, on a second failure, marks the Task
- *     `failed: worker_failed`.
+ *     see `spawnWorkerRunForRetry` below), unless the Task is `waiting_approval` (P1-6 fix: a
+ *     fresh WorkerRun is not the one the outstanding ActionRequest's `parent_worker_run_id` points
+ *     back to, so requeuing cannot help it) — either way, a second failure or a blocked Task marks
+ *     it `failed: worker_failed`.
  *   - `terminated` — marks the Task `failed: timeout` when `reason === 'timeout'` (the supervisor's
- *     own duration enforcement); a `reason === 'requested'` termination is assumed already handled
- *     by whoever called `terminateTask` (this function only ensures the Task does not stay stuck
- *     `running` forever if it was not).
+ *     own duration enforcement), for a Task `running` or `waiting_approval`; a `reason ===
+ *     'requested'` termination is assumed already handled by whoever called `terminateTask` (this
+ *     function only ensures the Task does not stay stuck non-terminal forever if it was not).
  *
  * A `workerRunId` unknown to the supervisor (never spawned, or the supervisor itself restarted
  * without reconciling it) or already `terminated` on this side is a no-op — nothing to react to.
@@ -268,7 +275,11 @@ export async function reactToSupervisorStatus(
   if (status.status === 'exited') {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
       await terminateWorkerRunRow(client, workspaceId, onBehalfOf, workerRunId, 'exited');
-      if (task.status === 'running') {
+      // P1-6 fix: `waiting_approval` alongside `running` — a WorkerRun that exits (even code 0,
+      // no crash) while its Task is still blocked on an ActionRequest decision leaves that Task
+      // with no live WorkerRun to ever resume into; without this, `ActionRequestUpdated` would
+      // later try to resume a Task whose WorkerRun no longer exists (P1-2's dead state).
+      if (task.status === 'running' || task.status === 'waiting_approval') {
         await failTaskRow(client, workspaceId, onBehalfOf, task.id, 'no_result');
       }
     });
@@ -276,7 +287,12 @@ export async function reactToSupervisorStatus(
   }
 
   if (status.status === 'failed') {
-    if (task.retryCount < 1) {
+    // P1-6 fix: a Task `waiting_approval` when its WorkerRun crashes is never requeued — a fresh
+    // WorkerRun would not be the one the outstanding ActionRequest's `parent_worker_run_id` points
+    // back to, so a later approval could never resume the *right* run anyway (`reaper.ts`'s
+    // routing consumer resolves the Task via that WorkerRun's id). Fail it directly instead of
+    // spending the one retry on a run that cannot help.
+    if (task.retryCount < 1 && task.status !== 'waiting_approval') {
       await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
         await terminateWorkerRunRow(client, workspaceId, onBehalfOf, workerRunId, 'failed');
         await client.query(
@@ -316,10 +332,25 @@ export async function reactToSupervisorStatus(
   }
 }
 
-/** Reads the just-failed WorkerRun's own Handle scope (`capability_handles`, keyed by its
- *  session) and re-spawns under the same Task, attenuating from that already-granted scope — a
- *  requeue asks for nothing new, so there is no caller-side "declared needs" to re-resolve, and no
- *  risk of the retry silently gaining privilege the original invocation did not have. */
+/**
+ * Reads the just-failed WorkerRun's own Handle scope (`capability_handles`, keyed by its session)
+ * and re-spawns under the same Task, attenuating from that already-granted scope — a requeue asks
+ * for nothing new, so there is no caller-side "declared needs" to re-resolve, and no risk of the
+ * retry silently gaining privilege the original invocation did not have.
+ *
+ * **P2-10 fix (review job 652a4abc: "requeue omits skillsInline and model")**: `model`/`skillsInline`
+ * are re-resolved from the Task's own *pinned* WorkerDefinition (`task.workerDefinitionId`/
+ * `.workerDefinitionVersion` — §5.5 "Task 固定引用启动时版本", never re-derived from anything that
+ * could have changed since `invoke_worker` first ran) via `getWorkerDefinition` — deliberately
+ * **not** `requirePublishedWorkerDefinition`: the pinned version may have been deprecated in the
+ * time between the original spawn and this retry, and a since-deprecated definition must not turn
+ * a legitimate crash-retry into an immediate `worker_failed` (the retry is re-running a Task that
+ * was already validly invoked; it is not a fresh `invoke_worker` call subject to that same I17-style
+ * "only published" gate). A missing definition row (should not happen — the Task's own FK-less
+ * reference already resolved once) degrades to no `model`/`skillsInline`, same "best effort, never
+ * blocks the caller" convention `resolveSkillsInline` itself already uses for an individual skill
+ * ref that fails to resolve.
+ */
 async function spawnWorkerRunForRetry(
   deps: TaskRuntimeDeps,
   workspaceId: string,
@@ -343,6 +374,23 @@ async function spawnWorkerRunForRetry(
 
   const scope = handleRow.scope as { capabilities: string[]; resources: Record<string, string[]> };
 
+  const { model, skillsInline } = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: onBehalfOf },
+    async (client) => {
+      const definition = await getWorkerDefinition(client, workspaceId, {
+        definitionId: task.workerDefinitionId,
+        version: task.workerDefinitionVersion,
+      });
+      if (!definition) return { model: undefined, skillsInline: [] };
+      const content = readDefinitionContent(definition.definition);
+      return {
+        model: content.model,
+        skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+      };
+    },
+  );
+
   try {
     await spawnWorkerRun(deps, workspaceId, {
       task,
@@ -357,6 +405,8 @@ async function spawnWorkerRunForRetry(
       },
       declaredCapabilities: scope.capabilities,
       declaredGates: scope.resources.gatekeeper ?? [],
+      model,
+      skillsInline,
     });
   } catch {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, (client) =>

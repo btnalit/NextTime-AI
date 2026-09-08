@@ -13,6 +13,7 @@ import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
 import {
   createAdminWithTransaction,
   createGatekeeperActionExecutor,
+  reapStaleExecutingActionRequests,
   registerActionRequestDrainConsumer,
   setConnectionHandlerDeps,
   setRequestActionDeps,
@@ -53,13 +54,18 @@ import {
 
 /**
  * The one canonical construction of "a `GatekeeperClient` + the admin-mode `ActionExecutor` over
- * it" (S2.4 coordinator review — "the single shared executor path"): `createServer()` uses it to
- * wire `request_action`'s phase-2 continuation (`setRequestActionDeps`), `createBackgroundServices`
- * uses it to wire `ApprovalDrainer`. Two separate `ActionExecutor` instances (one per caller) are
- * behaviorally identical — the type has no internal state, it is purely a function of
- * `gatekeeperClient`/`withTransaction` — so this is about having exactly one definition of *how*
- * to build one, not about sharing a single JS object across the sync/async construction split
- * below (`createServer` has no async dependency and can build its own before the port opens;
+ * it" (S2.4 coordinator review — "the single shared executor path"): both `createServer()` and
+ * `createBackgroundServices` use it to build their own `ApprovalDrainer` — `createServer()` wires
+ * its instance into `request_action`'s phase-2 continuation (`setRequestActionDeps`, P2-2 fix:
+ * inline execution now routes through the drainer's per-Gatekeeper ordering rather than calling
+ * `ActionExecutor` directly), `createBackgroundServices` wires its own into the outbox
+ * consumer + periodic tick trigger paths. Two separate `ActionExecutor`/`ApprovalDrainer` instances
+ * (one per caller) are behaviorally identical — neither type has meaningful internal state beyond
+ * what `gatekeeperClient`/`withTransaction` already determine, and `ApprovalDrainer`'s own
+ * in-memory single-flight set is an optimization, not a correctness mechanism (the DB row lock +
+ * conditional UPDATE is) — so this is about having exactly one definition of *how* to build the
+ * pieces, not about sharing a single JS object across the sync/async construction split below
+ * (`createServer` has no async dependency and can build its own before the port opens;
  * `createBackgroundServices` is built later, once `AgentRuntime`'s own async bootstrap finishes).
  */
 interface GatekeeperExecutionDeps extends GatekeeperActionExecutorDeps {
@@ -96,14 +102,19 @@ export function createServer(
   // S2.4: wired here (not createBackgroundServices) so `request_action` is servable as soon as
   // the port opens, not only once the async AgentRuntime bootstrap below finishes — building a
   // `GatekeeperClient` + admin-mode `ActionExecutor` needs nothing async, only `deps.pool`
-  // (already in hand here). `ApprovalDrainer`'s other two trigger paths (outbox consumer +
-  // periodic tick) do need the OutboxDispatcher, so those remain in createBackgroundServices
-  // below — but phase 2 of `request_action` itself (request-action-handler.ts's `afterCommit`)
-  // never waits on them.
-  const { gatekeeperClient, actionExecutor } = buildGatekeeperExecutionDeps(deps.pool);
+  // (already in hand here). `createBackgroundServices` builds its own second `ApprovalDrainer`
+  // instance (same construction, needed only once its own async bootstrap finishes) for the
+  // outbox consumer + periodic tick trigger paths — this one is `request_action`'s own phase 2
+  // (P2-2 fix: routing inline execution through the drainer, request-action-handler.ts's own doc
+  // comment on `RequestActionHandlerDeps.drainer` has the full "two behaviorally-identical
+  // instances" reasoning), which never waits on either of those.
+  const { gatekeeperClient, actionExecutor, withTransaction } = buildGatekeeperExecutionDeps(
+    deps.pool,
+  );
+  const requestActionDrainer = new ApprovalDrainer({ executor: actionExecutor, withTransaction });
   setRequestActionDeps({
     gatekeeperClient,
-    actionExecutor,
+    drainer: requestActionDrainer,
     awaitDecisionTimeoutMs: options.requestActionAwaitDecisionTimeoutMs,
   });
   // S2.13: `create_connection`'s handler reuses the *same* `GatekeeperClient` instance
@@ -258,6 +269,20 @@ export interface CreateBackgroundServicesOptions {
    *  swallowed inside `registerActionRequestDrainConsumer`/here, never reaches this hook). Defaults
    *  to a no-op; `main()` passes `app.log.error`. */
   readonly onGatekeeperDrainError?: (error: unknown) => void;
+  /** How often the P1-3 stale-`executing`-ActionRequest reaper polls. Default
+   *  `DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS` (5 minutes — same cadence as the approval-expiry
+   *  reaper; a stuck `executing` row is a crash-recovery backstop, not a latency-sensitive path).
+   *  `main()` reads this from `ACTION_REQUEST_REAPER_INTERVAL_MS`. */
+  readonly actionRequestReaperIntervalMs?: number;
+  /** `reapStaleExecutingActionRequests`'s staleness threshold (default `DEFAULT_STALE_EXECUTING_
+   *  TIMEOUT_MS`, 10 minutes — comfortably past any real `apply` call's expected latency, so this
+   *  only ever catches a row a crash actually orphaned). `main()` reads this from
+   *  `ACTION_REQUEST_STALE_EXECUTING_TIMEOUT_MS`. */
+  readonly staleExecutingTimeoutMs?: number;
+  /** Called for a stale-`executing` row whose replay genuinely failed (never for the benign "it
+   *  was already resolved" race — see `reapStaleExecutingActionRequests`'s own doc comment).
+   *  Defaults to a no-op; `main()` passes `app.log.error`. */
+  readonly onActionRequestReaperError?: (actionRequestId: string, error: unknown) => void;
   /**
    * S2.7: `worker-supervisor`'s Task-mode base URL (`adapters/supervisor-client`'s
    * `TaskSupervisorClient`, e.g. `http://worker-supervisor:8081`) — `main()` reads this from
@@ -345,6 +370,10 @@ export const DEFAULT_APPROVAL_REAPER_INTERVAL_MS = 5 * 60 * 1000;
 /** Default S2.4 Gatekeeper-queue periodic drain tick interval — 1 minute. */
 export const DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS = 60 * 1000;
 
+/** Default P1-3 stale-`executing`-ActionRequest reaper poll interval — 5 minutes, same cadence as
+ *  the approval-expiry reaper (a crash-recovery backstop, not a latency-sensitive path). */
+export const DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
 export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
 ): BackgroundServices {
@@ -388,6 +417,8 @@ export function createBackgroundServices(
   let approvalReaperTimer: NodeJS.Timeout | undefined;
   const onGatekeeperDrainError = options.onGatekeeperDrainError ?? (() => {});
   let gatekeeperDrainTimer: NodeJS.Timeout | undefined;
+  const onActionRequestReaperError = options.onActionRequestReaperError ?? (() => {});
+  let actionRequestReaperTimer: NodeJS.Timeout | undefined;
 
   // S2.7: configure application/task's runtime deps (Handle-signing key + supervisor client) only
   // when a keypair is actually available — see this file's own doc comment above
@@ -456,6 +487,20 @@ export function createBackgroundServices(
       }, options.gatekeeperDrainIntervalMs ?? DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS);
       gatekeeperDrainTimer.unref?.();
 
+      // P1-3: the stale-`executing` reaper — same admin-mode `actionExecutor` the drainer above
+      // already uses (`buildGatekeeperExecutionDeps`, "the single shared executor path").
+      const actionRequestReaperTick = (): void => {
+        reapStaleExecutingActionRequests(options.pool, actionExecutor, {
+          staleAfterMs: options.staleExecutingTimeoutMs,
+          onRowError: onActionRequestReaperError,
+        }).catch((err: unknown) => onActionRequestReaperError('unknown', err));
+      };
+      actionRequestReaperTimer = setInterval(
+        actionRequestReaperTick,
+        options.actionRequestReaperIntervalMs ?? DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS,
+      );
+      actionRequestReaperTimer.unref?.();
+
       if (taskDeps) {
         const taskTick = (): void => {
           runTaskReaper(taskDeps as NonNullable<typeof taskDeps>).catch(onTaskReaperError);
@@ -481,12 +526,38 @@ export function createBackgroundServices(
         clearInterval(gatekeeperDrainTimer);
         gatekeeperDrainTimer = undefined;
       }
+      if (actionRequestReaperTimer) {
+        clearInterval(actionRequestReaperTimer);
+        actionRequestReaperTimer = undefined;
+      }
       if (taskReaperTimer) {
         clearInterval(taskReaperTimer);
         taskReaperTimer = undefined;
       }
     },
   };
+}
+
+/**
+ * Parses an optional numeric env var (every one of them below is a timeout or a poll interval in
+ * ms/s) — throws immediately, before opening the DB pool or binding a port, rather than letting
+ * `Number(raw)` silently become `NaN` (P2-9 fix: an unvalidated `NaN` deadline turns a reaper's
+ * `Date.now() + NaN` comparison and `setInterval(fn, NaN)` into a tight loop instead of a
+ * misconfiguration error) — same fail-fast posture `resolveAgentRuntimeKind` already established
+ * for `AGENT_RUNTIME`. Also rejects `<= 0`: every one of these is a deadline/interval, and a
+ * non-positive one is the same tight-loop failure mode by a different route
+ * (`setInterval(fn, 0)`). `undefined` when `raw` is `undefined` — every caller already has its own
+ * compiled-in default for that case.
+ */
+export function parsePositiveIntEnvVar(name: string, raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `${name}="${raw}" is not a positive, finite number — unset it to use the compiled-in default`,
+    );
+  }
+  return parsed;
 }
 
 export function main(): void {
@@ -507,15 +578,15 @@ export function main(): void {
   };
 
   const pool = createPool();
-  const rawRequestActionAwaitDecisionTimeoutMs =
-    process.env.REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS;
+  const requestActionAwaitDecisionTimeoutMs = parsePositiveIntEnvVar(
+    'REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS',
+    process.env.REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS,
+  );
   const app = createServer(
     { pool },
     {
       logger: true,
-      requestActionAwaitDecisionTimeoutMs: rawRequestActionAwaitDecisionTimeoutMs
-        ? Number(rawRequestActionAwaitDecisionTimeoutMs)
-        : undefined,
+      requestActionAwaitDecisionTimeoutMs,
       internalAuth,
     },
   );
@@ -564,36 +635,58 @@ export function main(): void {
       );
     }
 
-    const rawEntryHandleTtlSeconds = process.env.ENTRY_HANDLE_TTL_SECONDS;
-    const rawTurnAcceptedTimeoutMs = process.env.AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS;
-    const rawApprovalTimeoutMs = process.env.APPROVAL_TIMEOUT_MS;
-    const rawApprovalReaperIntervalMs = process.env.APPROVAL_REAPER_INTERVAL_MS;
-    const rawGatekeeperDrainIntervalMs = process.env.GATEKEEPER_DRAIN_INTERVAL_MS;
-    const rawTaskReaperIntervalMs = process.env.TASK_REAPER_INTERVAL_MS;
+    const entryHandleTtlSeconds = parsePositiveIntEnvVar(
+      'ENTRY_HANDLE_TTL_SECONDS',
+      process.env.ENTRY_HANDLE_TTL_SECONDS,
+    );
+    const turnAcceptedTimeoutMs = parsePositiveIntEnvVar(
+      'AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS',
+      process.env.AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS,
+    );
+    const approvalTimeoutMs = parsePositiveIntEnvVar(
+      'APPROVAL_TIMEOUT_MS',
+      process.env.APPROVAL_TIMEOUT_MS,
+    );
+    const approvalReaperIntervalMs = parsePositiveIntEnvVar(
+      'APPROVAL_REAPER_INTERVAL_MS',
+      process.env.APPROVAL_REAPER_INTERVAL_MS,
+    );
+    const gatekeeperDrainIntervalMs = parsePositiveIntEnvVar(
+      'GATEKEEPER_DRAIN_INTERVAL_MS',
+      process.env.GATEKEEPER_DRAIN_INTERVAL_MS,
+    );
+    const actionRequestReaperIntervalMs = parsePositiveIntEnvVar(
+      'ACTION_REQUEST_REAPER_INTERVAL_MS',
+      process.env.ACTION_REQUEST_REAPER_INTERVAL_MS,
+    );
+    const staleExecutingTimeoutMs = parsePositiveIntEnvVar(
+      'ACTION_REQUEST_STALE_EXECUTING_TIMEOUT_MS',
+      process.env.ACTION_REQUEST_STALE_EXECUTING_TIMEOUT_MS,
+    );
+    const taskReaperIntervalMs = parsePositiveIntEnvVar(
+      'TASK_REAPER_INTERVAL_MS',
+      process.env.TASK_REAPER_INTERVAL_MS,
+    );
 
     background = createBackgroundServices({
       pool,
       supervisorUrl: process.env.SUPERVISOR_URL,
-      taskReaperIntervalMs: rawTaskReaperIntervalMs ? Number(rawTaskReaperIntervalMs) : undefined,
+      taskReaperIntervalMs,
       onTaskReaperError: (err: unknown) => app.log.error(err),
       kind,
       handleKeyPair,
       kernelLlmUrl: process.env.KERNEL_LLM_URL,
-      entryHandleTtlSeconds: rawEntryHandleTtlSeconds
-        ? Number(rawEntryHandleTtlSeconds)
-        : undefined,
-      turnAcceptedTimeoutMs: rawTurnAcceptedTimeoutMs
-        ? Number(rawTurnAcceptedTimeoutMs)
-        : undefined,
-      approvalTimeoutMs: rawApprovalTimeoutMs ? Number(rawApprovalTimeoutMs) : undefined,
-      approvalReaperIntervalMs: rawApprovalReaperIntervalMs
-        ? Number(rawApprovalReaperIntervalMs)
-        : undefined,
+      entryHandleTtlSeconds,
+      turnAcceptedTimeoutMs,
+      approvalTimeoutMs,
+      approvalReaperIntervalMs,
       onApprovalReaperError: (err: unknown) => app.log.error(err),
-      gatekeeperDrainIntervalMs: rawGatekeeperDrainIntervalMs
-        ? Number(rawGatekeeperDrainIntervalMs)
-        : undefined,
+      gatekeeperDrainIntervalMs,
       onGatekeeperDrainError: (err: unknown) => app.log.error(err),
+      actionRequestReaperIntervalMs,
+      staleExecutingTimeoutMs,
+      onActionRequestReaperError: (actionRequestId: string, err: unknown) =>
+        app.log.error({ actionRequestId, err }),
     });
 
     // A request that races the still-in-flight recovery scan is not unsafe — the partial unique

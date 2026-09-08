@@ -267,6 +267,75 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(supervisorClient.spawnCalls).toHaveLength(0);
   });
 
+  // P2-6 fix (review job 652a4abc: "quota checks in separate txns, no lock → concurrent invokes
+  // exceed maxConcurrentWorkerRunsPerUser"). A fresh principal (not ownerId, which accumulates
+  // running Tasks across this whole suite) seeded to exactly one below the default concurrency
+  // limit (5) — two truly concurrent invoke_worker calls (Promise.allSettled, not sequential
+  // awaits, so the lock is actually exercised) must let exactly one through.
+  it('two concurrent invoke_worker calls for the same principal at the concurrency ceiling: exactly one succeeds', async () => {
+    const racerId = await adminInsertPrincipal('member', 'racer');
+
+    await inTx(racerId, async (client) => {
+      for (let i = 0; i < 4; i += 1) {
+        await client.query(
+          `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+           values ($1, 'running', $2, $3, 1)`,
+          [workspaceId, racerId, workerDefinitionId],
+        );
+      }
+    });
+
+    const sessionId = await insertSession('entry', racerId, racerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+    const caller = {
+      principalId: racerId,
+      channel: 'handle' as const,
+      claims: claimsFromIssued(issued),
+    };
+
+    const [first, second] = await Promise.allSettled([
+      invokeWorker(
+        workspaceId,
+        caller,
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        runtimeDeps,
+      ),
+      invokeWorker(
+        workspaceId,
+        caller,
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        runtimeDeps,
+      ),
+    ]);
+
+    const outcomes = [first, second];
+    const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
+    const rejected = outcomes.filter((o) => o.status === 'rejected');
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((fulfilled[0] as PromiseFulfilledResult<unknown>).value).toMatchObject({
+      status: 'running',
+    });
+    const rejectionReason = (rejected[0] as PromiseRejectedResult).reason;
+    expect(rejectionReason).toBeInstanceOf(QuotaExceededError);
+    expect((rejectionReason as InstanceType<typeof QuotaExceededError>).code).toBe(
+      'concurrency_exceeded',
+    );
+    expect(supervisorClient.spawnCalls).toHaveLength(1); // only the winner ever spawned
+
+    const finalCount = await inTx(racerId, (client) =>
+      client.query<{ count: string }>(
+        `select count(*)::int as count from tasks
+         where workspace_id = $1 and on_behalf_of = $2 and status in ('queued', 'running', 'waiting_approval')`,
+        [workspaceId, racerId],
+      ),
+    );
+    expect(Number(finalCount.rows[0]?.count)).toBe(5); // never exceeds the default limit
+  });
+
   it('入口 Handle 请求含 execute 的子 Handle 被拒 — attenuation rejection, no Task row left running', async () => {
     const definition = await publishWorkerDef({
       systemPrompt: 'You are an execute-needing worker.',
@@ -377,6 +446,74 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     );
     expect(task?.status).toBe('failed');
     expect(task?.failureReason).toBe('no_result');
+  });
+
+  // P1-6 fix (review job 652a4abc): a Task `waiting_approval` on an ActionRequest decision whose
+  // WorkerRun then dies previously stayed `waiting_approval` forever on an `exited` status (the
+  // check was `task.status === 'running'` only) — a later `ActionRequestUpdated` would try to
+  // `task.resume` a Task with no live WorkerRun to resume into (the P1-2 dead state).
+  it('an exited (code 0) container while the Task is waiting_approval also marks it failed: no_result', async () => {
+    const sessionId = await insertSession('entry', ownerId, ownerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+
+    const spawnResult = await invokeWorker(
+      workspaceId,
+      { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+
+    await inTx(ownerId, (client) =>
+      client.query(
+        "update tasks set status = 'waiting_approval' where workspace_id = $1 and id = $2",
+        [workspaceId, spawnResult.taskId],
+      ),
+    );
+
+    supervisorClient.setStatus(spawnResult.workerRunId, { status: 'exited', exitCode: 0 });
+    await reactToSupervisorStatus(runtimeDeps, workspaceId, ownerId, spawnResult.workerRunId);
+
+    const task = await inTx(ownerId, (client) =>
+      readTaskRow(client, workspaceId, spawnResult.taskId),
+    );
+    expect(task?.status).toBe('failed');
+    expect(task?.failureReason).toBe('no_result');
+  });
+
+  // P1-6 fix, same root cause as above but the `failed` (non-zero exit) branch: previously this
+  // would spend the Task's one retry on a *fresh* WorkerRun that the outstanding ActionRequest's
+  // `parent_worker_run_id` does not point to — a later approval could never resume the right run.
+  it('a non-zero exit while the Task is waiting_approval fails it directly, without requeuing', async () => {
+    const sessionId = await insertSession('entry', ownerId, ownerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+
+    const spawnResult = await invokeWorker(
+      workspaceId,
+      { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+
+    await inTx(ownerId, (client) =>
+      client.query(
+        "update tasks set status = 'waiting_approval' where workspace_id = $1 and id = $2",
+        [workspaceId, spawnResult.taskId],
+      ),
+    );
+
+    supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+    await reactToSupervisorStatus(runtimeDeps, workspaceId, ownerId, spawnResult.workerRunId);
+
+    const task = await inTx(ownerId, (client) =>
+      readTaskRow(client, workspaceId, spawnResult.taskId),
+    );
+    expect(task?.status).toBe('failed');
+    expect(task?.failureReason).toBe('worker_failed');
+    expect(supervisorClient.spawnCalls).toHaveLength(1); // no requeue attempt
   });
 
   it('terminateTask revokes the WorkerRun Handle (capability_handles.revoked_at set)', async () => {

@@ -16,6 +16,7 @@ import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/
 import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
+  ExplainNodeNotFoundError,
   WorkerResultValidationError,
   hashApiKey,
 } from '../../application/gateway/index.js';
@@ -143,6 +144,12 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new ScopeValidationError('unknown capability "bogus"'));
     expect(mapped.status).toBe(400);
     expect(mapped.code).toBe('invalid_scope');
+  });
+
+  it('lane-4 hookup: ExplainNodeNotFoundError (explain) → 404 not_found, not 500', () => {
+    const mapped = mapCapabilityError(new ExplainNodeNotFoundError('fact', 'ws-1', 'fact-1'));
+    expect(mapped.status).toBe(404);
+    expect(mapped.code).toBe('not_found');
   });
 
   it('application/worker registry errors map to 400/404/409, never 500 (S2.6/S2.14 gap found on the host)', () => {

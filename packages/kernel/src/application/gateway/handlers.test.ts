@@ -216,6 +216,52 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(stopped).toEqual([turnId]);
     });
 
+    // lane-4 hookup (application/chat/turn-recovery.ts's own doc comment): stopTurn() === false
+    // means the runtime has no record of this Turn at all (e.g. a kernel/agent-host restart
+    // abandoned it before this call) — stopAgentHandler must end the Activity itself
+    // (interrupted + TurnCompleted) rather than reporting {stopped: true} while the Turn actually
+    // stays running forever, wedging the Chat behind activities_one_running_turn_per_chat_uidx.
+    it('stop_agent ends the Turn itself when the runtime reports it as unknown (stopTurn() === false)', async () => {
+      const fakeRuntime: AgentRuntime = {
+        startTurn: async (_input: StartTurnInput) => {},
+        stopTurn: async (_turnId: string) => false,
+      };
+      setAgentRuntimeForHandlers(fakeRuntime);
+
+      const caller = humanCaller(workspaceId, ownerId);
+      const chat = (await dispatchCapability({ pool }, caller, 'new_chat', {})) as { id: string };
+      const { turnId } = (await dispatchCapability({ pool }, caller, 'send_chat_message', {
+        chatId: chat.id,
+        text: 'hi',
+      })) as { turnId: string };
+
+      const result = (await dispatchCapability({ pool }, caller, 'stop_agent', {
+        chatId: chat.id,
+      })) as { stopped: boolean };
+      expect(result.stopped).toBe(true);
+
+      const activityRow = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query<{ status: string; ended_at: Date | null }>(
+            'select status, ended_at from activities where workspace_id = $1 and id = $2',
+            [workspaceId, turnId],
+          ),
+      );
+      expect(activityRow.rows[0]?.status).toBe('interrupted');
+      expect(activityRow.rows[0]?.ended_at).not.toBeNull();
+
+      // The Chat must not be wedged: a second Turn starts immediately (activities_one_running_
+      // turn_per_chat_uidx would otherwise reject it while the first stays 'running').
+      await expect(
+        dispatchCapability({ pool }, caller, 'send_chat_message', {
+          chatId: chat.id,
+          text: 'again',
+        }),
+      ).resolves.toBeDefined();
+    });
+
     it('get_entry_context (Handle channel) returns S1 scope: empty approvals/tasks/precedents, recent facts', async () => {
       // dispatchCapability operates on an already-resolved ResolvedCaller (dispatch.test.ts's own
       // `humanCaller()` pattern for the human channel) — resolveCaller/verifyHandle's own signature

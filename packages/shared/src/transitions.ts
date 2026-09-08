@@ -269,6 +269,15 @@ export const TASK_EDGES: readonly StateTransition<TaskStatus, TaskEvent>[] = [
   { from: 'running', event: 'complete', to: 'completed' },
   { from: 'running', event: 'fail', to: 'failed' },
   { from: 'running', event: 'cancel', to: 'cancelled' },
+  // P1-6 fix (review job 652a4abc): a Task's own WorkerRun can die (exit/crash/terminate) while
+  // the Task itself is `waiting_approval` — the ActionRequest it is blocked on has nothing more to
+  // say about whether that WorkerRun is still alive. Before this edge, `application/task/
+  // lifecycle.ts`'s `failTaskRow` had to synthesize a `resume` hop first (never externally
+  // observable — the same "single write already at the resolved state" convention this table's
+  // own `queued`/`waiting_approval` multi-hop callers already use) to reach `running` before
+  // `fail` was legal; a direct edge makes the real, always-legal transition explicit in the table
+  // itself rather than only in a caller-local hop list.
+  { from: 'waiting_approval', event: 'fail', to: 'failed' },
 ];
 
 export const TASK_TRANSITIONS: TransitionTable<TaskStatus, TaskEvent> = {

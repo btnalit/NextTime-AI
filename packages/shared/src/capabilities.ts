@@ -657,7 +657,17 @@ const governanceCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'handle',
     paramsSchema: z
-      .object({ gatekeeperId: id, operation: z.string(), params: jsonRecord })
+      .object({
+        gatekeeperId: id,
+        operation: z.string(),
+        params: jsonRecord,
+        // P1-1 fix (review job 652a4abc): scoped to (workspace, on_behalf_of, sid, key) by the
+        // handler before it reaches the DB's (workspace_id, idempotency_key) unique index — a
+        // repeat call with the same key returns the existing ActionRequest instead of creating a
+        // second one. Omitted, a default is derived from (sid|principal, gatekeeperId, operation,
+        // stable params hash) so an unmarked retry still collapses onto the same row.
+        idempotencyKey: z.string().min(1).optional(),
+      })
       .strict(),
     description:
       'A Worker’s only execute-mode entry point onto a Gatekeeper; creates an ActionRequest.',

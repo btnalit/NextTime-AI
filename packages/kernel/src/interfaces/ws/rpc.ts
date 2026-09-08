@@ -15,6 +15,7 @@ import {
   CapabilityNotImplementedError,
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
+  ExplainNodeNotFoundError,
   ForbiddenError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
@@ -245,6 +246,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof TaskNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // `explain` (substrate/epistemic/explain.ts) on an id that does not resolve to a Fact/Activity/
+  // Decision — same mapping as interfaces/http/capability-route.ts (lane-4 hookup).
+  if (err instanceof ExplainNodeNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   // application/worker registry errors (S2.6 / S2.14) — same mapping as interfaces/http/
