@@ -40,10 +40,13 @@ src/
     clients.ts             CapabilityCaller / PushSource — the narrow interfaces pages depend on
     status-tone.ts        status → tone/label maps typed over @nexttime/shared enums (+ grant, role)
     router.ts             hash routes: /login, /work/*, /me/agent, /govern/* (S3.14) — see its own doc
-    role.ts                best-effort caller-role inference from usePermissions' allow/deny evidence
+    role.ts                best-effort caller-role inference — fallback only as of S3.13; see "Roles"
     governance.ts          wire shapes for the S3.11 governance capabilities (members/grants/...)
+    agent-profile.ts       wire shapes for the S3.13 AgentProfile/AgentPolicy capabilities
     action-card.ts        the three ActionRequest sources normalized to one ActionCardData
-    tasks.ts / connections.ts   wire shapes + pure helpers for those pages
+    tasks.ts / connections.ts   wire shapes + pure helpers for those pages (S3.12: connections.ts
+                           also has operationDetailFromObject/reclassifiedOperationPayload — the
+                           full Operation payload the onboarding wizard's review step reclassifies)
     format.ts              shortId, relative time, duration, redactSensitive
     session.ts             API key in sessionStorage only
   hooks/
@@ -63,7 +66,12 @@ src/
                           TurnStatusBadge SystemStatusLineView
                           — S3.11/S3.14 governance pages: MembersPage (+ CreatePrincipalForm,
                           PrincipalDetail), AccessPage (+ GrantCapabilityForm), CatalogPage,
-                          ModelsPage (+ ModelsTable), AuditPage, AgentProfilePage (S3.13 placeholder)
+                          ModelsPage (+ ModelsTable), AuditPage
+                          — S3.13: AgentProfilePage (+ AgentProfileForm, the 我的智能体 editor),
+                          AgentPolicyForm (owner-only, on ModelsPage)
+                          — S3.12: OnboardingWizard (+ OnboardingWizardReview) — the 接入向导 on
+                          ConnectionsPage, a guided alternative to the existing "Connect a system"
+                          drawer; reuses CompleteConnectionForm for its own step ②
   styles/                 tokens.css base.css shell.css ui.css pages.css (imported by styles.css)
 ```
 
@@ -77,7 +85,7 @@ src/
 | `#/work/chats[/<id>]` | ChatListPage / ChatPage | 工作 chats |
 | `#/work/tasks[/<id>]` | TasksPage | 工作 tasks |
 | `#/work/approvals[/<id>]` | ApprovalQueuePage | 工作 approvals |
-| `#/me/agent` | AgentProfilePage (S3.13 placeholder) | 工作 agent |
+| `#/me/agent` | AgentProfilePage (S3.13) | 工作 agent |
 | `#/govern/members` | MembersPage | 治理 members |
 | `#/govern/access` | AccessPage | 治理 access |
 | `#/govern/systems[/<gatekeeperId>]` | ConnectionsPage + GatekeeperDetailDrawer | 治理 systems |
@@ -92,13 +100,13 @@ src/
 | Chats / Chat | `list_chats` `get_chat_history` `subscribe_chat` (WS) | `new_chat` `send_chat_message` `stop_agent` (WS); inline cards: `approve` `reject` `set_auto_approved_action_kind` (HTTP) | `chat.*`, `action.updated` |
 | Approvals | `list_pending` `get_action` | `approve` `reject` `set_auto_approved_action_kind` | `action.pending` `action.updated` |
 | Tasks | `list_tasks` `get_task` `list_worker_definitions` `list_pending` | `cancel_task` | `task.updated` |
-| Systems (`/govern/systems`) | `list_connection_requests` `search` (Gatekeeper / Operation) `get_gatekeeper` | `request_connection` `create_connection` `publish_manifest` `connect_gatekeeper` | — |
+| Systems (`/govern/systems`) | `list_connection_requests` `search` (Gatekeeper / Operation) `get_gatekeeper` | `request_connection` `create_connection` `publish_manifest` `connect_gatekeeper`; 接入向导 (S3.12, `OnboardingWizard`) additionally: `propose_operation` `publish_operation` (per-row reclassification) | — |
 | Members | `list_principals` | `create_principal` `set_principal_role` `rotate_api_key` `disable_principal` | — |
 | Access | `list_grants` `list_principals` | `grant_capability` `revoke_capability` | — |
 | Catalog | `list_operations` `list_skills` `list_procedures` `list_worker_definitions` | `publish_operation`/`deprecate_operation`, `publish_skill`/`deprecate_skill`, `publish_procedure`/`deprecate_procedure`, `deprecate_worker_definition` | — |
-| Models | `list_models` `list_quotas` `list_policies` | — | — |
+| Models | `list_models` `get_agent_policy` `list_quotas` `list_policies` | `set_agent_policy` (owner; S3.13) | — |
 | Audit | `explain` `reconstruct` `audit_query` | — | — |
-| My Agent (`/me/agent`) | `list_models` | — (S3.13 not built — placeholder) | — |
+| My Agent (`/me/agent`) | `get_agent_profile` `get_agent_policy` `list_models` `list_skills` `list_gatekeepers` `list_worker_definitions` `list_principals` (owner's principal picker) | `set_agent_profile` | — |
 
 Every list page renders one of four states from `useResource`/`useCapability`: skeleton,
 `ErrorBanner` (stable wire code + kernel message + Retry), `EmptyState`, or the list. Status chips
@@ -108,20 +116,33 @@ take their vocabulary from `@nexttime/shared` (`ACTION_REQUEST_STATUS_VALUES`, `
 machine and `StatusChip.test.tsx` walks every value, so a new kernel state cannot render unstyled
 unnoticed.
 
-The six governance pages (Members/Access/Systems/Catalog/Models/Audit) call S3.11 capabilities a
-parallel kernel PR is still landing as of this PR — every one of them treats a `not_found`
-response (`lib/errors.ts` `isNotFoundError`) as "该能力尚未上线" (not live yet), an `EmptyState`,
-never a crash. `audit`'s three capabilities (`explain`/`reconstruct`/`audit_query`) are the
-exception — they already exist and are wired; only the console-side UI for them is new here.
+S3.11's governance capabilities (Members/Access/Systems' `get_gatekeeper`/Catalog's
+`list_operations`/Models' `list_quotas`/`list_policies`) landed on `main` via PR #100 — this
+console's own reads for them are unchanged from when they were coded against the parallel-PR
+contract, but they no longer need to degrade for that reason day-to-day. S3.13's AgentProfile/
+AgentPolicy capabilities (`get_agent_profile`/`set_agent_profile`/`get_agent_policy`/
+`set_agent_policy`) are the current parallel-PR case: every read for them still treats a
+`not_found` response (`lib/errors.ts` `isNotFoundError`) as "该能力尚未上线" (not live yet), an
+`EmptyState`, never a crash — see `AgentProfilePage`/`ModelsPage`'s own doc comments for exactly
+which reads degrade and why. `audit`'s three capabilities (`explain`/`reconstruct`/`audit_query`)
+were never gated this way — they already existed and were wired before S3.11.
 
-Roles: no capability returns the caller's role directly, so the console infers it two ways.
-Per-affordance: the first 403 on a capability (and, by the registry's `minRole` closure, everything
-that needs at least as much role) marks it denied for the session (`hooks/usePermissions.tsx`), and
-owner-/operator-only buttons hide or explain themselves from then on. For the Sidebar's role badge
-and the 治理 Governance nav guard: `lib/role.ts` derives a best-effort label (`owner` / `operator+`
-/ `member` / unknown) from that same allow/deny evidence — 治理 hides only once `member` is
-*proven* (an operator-minRole 403); otherwise it stays visible and the kernel's own 403 renders
-inline on whichever page the caller opens. Kernel gaps the UI works around are listed in
+Roles: `get_workspace` now echoes the resolved caller back (`caller: {id, role, displayName,
+kind}`, an S3.11 coordination addendum on top of PR #100) — `hooks/useWorkspaceIdentity.ts` uses
+that as the **authoritative** role source (`lib/role.ts`'s `WorkspaceRole`, `{kind:'known', role}`)
+the moment it resolves. The pre-S3.11 403/200 inference (`lib/role.ts` `inferRole`, `InferredRole`)
+remains as a **fallback** for the window before that call resolves and for a kernel that predates
+the `caller` field (`get_workspace` 404s `not_found`) — `{kind:'inferred', role}`. Per-affordance
+visibility is unchanged: the first 403 on a capability (and, by the registry's `minRole` closure,
+everything that needs at least as much role) marks it denied for the session
+(`hooks/usePermissions.tsx`), and owner-/operator-only buttons hide or explain themselves from then
+on — this still runs independently of the role badge, since a page's own capability call is always
+more specific evidence than the coarse role label. For the Sidebar's role badge and the 治理
+Governance nav guard: a known role renders via the same `StatusChip machine="role"` the Members
+page uses for every principal's own role chip; an inferred role keeps its own bucket-label badge
+(`owner` / `operator+` / `member` / unknown, `ROLE_BADGE_LABEL`) — 治理 hides only once `member` is
+*proven*, known or inferred (`isProvenMember`); otherwise it stays visible and the kernel's own 403
+renders inline on whichever page the caller opens. Kernel gaps the UI works around are listed in
 docs/runbooks/web-console.md.
 
 ## `lib/ws-client.ts`
@@ -174,6 +195,20 @@ decisions, push reconcile), `StatusChip` (exhaustive over every shared enum valu
 push-triggered reload, pagination), `Sidebar` (nav guard + role badge), `MembersPage` (create → key
 shown once, role change, disable), `AccessPage` (grant/revoke), `CatalogPage` (tab switching,
 publish/deprecate), `GatekeeperDetailDrawer` (health-shape variants), `ModelsPage`.
+
+S3.13 additions: `useWorkspaceIdentity` (known role once `get_workspace` resolves, inferred
+fallback on `not_found`/loading), `AgentProfilePage` (pre-filled form, `not_found` degrade on the
+self view, the six-field save payload with `null` for inherited/empty fields, 400 field errors,
+AgentPolicy narrowing, `memberCanEditProfile` disabling the form, the owner's principal switch),
+`ModelsPage` gains AgentPolicy-section cases (member sees a read-only summary, owner sees the
+editable form and can save it).
+
+S3.12 additions: `OnboardingWizard` (the full 5-step walkthrough; a successful reclassification's
+`propose_operation` → `publish_operation` ordering; the 409 `conflict` a reclassification of an
+`origin:'import'` Operation always gets today, rendered via `ErrorBanner` rather than crashing),
+`ConnectionsPage` (new — the wizard's entry point and its finish → `onSelectGatekeeper` wiring;
+the pre-existing "Connect a system" quick path is unchanged), `CompleteConnectionForm` gains a
+case for the new `initialKind`/`hideKindField` props the wizard's own step ② uses.
 
 ## End-to-end (Playwright)
 

@@ -3,7 +3,12 @@ import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
-import type { OperationCatalogRow, ProcedureRow, SkillRow } from '../lib/governance.js';
+import {
+  type OperationCatalogRow,
+  type ProcedureRow,
+  type SkillRow,
+  operationKey,
+} from '../lib/governance.js';
 import type { CatalogTab } from '../lib/router.js';
 import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
 import { Button } from './ui/Button.js';
@@ -126,7 +131,8 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
     row: OperationCatalogRow,
     action: 'publish_operation' | 'deprecate_operation',
   ) {
-    setBusy(row.id);
+    const key = operationKey(row);
+    setBusy(key);
     try {
       await http.call(action, { gatekeeperId: row.gatekeeperId, name: row.name });
       toast.push({
@@ -158,55 +164,68 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
     return <EmptyState icon="grid" title="No operations imported yet" testId="catalog-empty" />;
   }
   return (
-    <DataList ariaLabel="Operations" testId="catalog-list">
-      {rows.map((row) => (
-        <DataRow
-          key={row.id}
-          testId="catalog-row"
-          leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-          title={
-            <>
-              <span className="mono truncate">{row.name}</span>
-              {row.mode ? <span className="tag">{row.mode}</span> : null}
-            </>
-          }
-          meta={
-            <>
-              <span title={row.gatekeeperId}>{row.gatekeeperName ?? row.gatekeeperId}</span>
-              {row.blastRadius && row.blastRadius !== 'low' ? (
+    <>
+      {/* TODO(S3.12 deliverable 4, "Catalog usage stats"): no `get_operation_stats` capability
+          exists in the registry yet (packages/shared/src/capabilities.ts, checked as of this PR)
+          — the near-30-day call/approval counts the task brief describes have no read side to
+          render. Wire a usage column here once that capability lands; do not fabricate the
+          numbers in the meantime. */}
+      <DataList ariaLabel="Operations" testId="catalog-list">
+        {rows.map((row) => {
+          const key = operationKey(row);
+          return (
+            <DataRow
+              key={key}
+              testId="catalog-row"
+              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
+              title={
                 <>
-                  <span className="meta-sep" />
-                  <span className={row.blastRadius === 'high' ? 'text-danger' : ''}>
-                    {row.blastRadius} blast radius
-                  </span>
+                  <span className="mono truncate">{row.name}</span>
+                  {row.mode ? <span className="tag">{row.mode}</span> : null}
+                  {row.autoApprovable ? <span className="tag">auto-approvable</span> : null}
                 </>
-              ) : null}
-            </>
-          }
-          trailing={
-            !permissions.isDenied('publish_operation') && row.status === 'draft' ? (
-              <Button
-                variant="primary"
-                size="s"
-                loading={busy === row.id}
-                onClick={() => void act(row, 'publish_operation')}
-              >
-                Publish
-              </Button>
-            ) : !permissions.isDenied('deprecate_operation') && row.status === 'published' ? (
-              <Button
-                variant="ghost"
-                size="s"
-                loading={busy === row.id}
-                onClick={() => void act(row, 'deprecate_operation')}
-              >
-                Deprecate
-              </Button>
-            ) : undefined
-          }
-        />
-      ))}
-    </DataList>
+              }
+              meta={
+                <>
+                  <span title={row.gatekeeperId} className="mono">
+                    gate {row.gatekeeperId.slice(0, 8)}
+                  </span>
+                  {row.blastRadius && row.blastRadius !== 'low' ? (
+                    <>
+                      <span className="meta-sep" />
+                      <span className={row.blastRadius === 'high' ? 'text-danger' : ''}>
+                        {row.blastRadius} blast radius
+                      </span>
+                    </>
+                  ) : null}
+                </>
+              }
+              trailing={
+                !permissions.isDenied('publish_operation') && row.status === 'draft' ? (
+                  <Button
+                    variant="primary"
+                    size="s"
+                    loading={busy === key}
+                    onClick={() => void act(row, 'publish_operation')}
+                  >
+                    Publish
+                  </Button>
+                ) : !permissions.isDenied('deprecate_operation') && row.status === 'published' ? (
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    loading={busy === key}
+                    onClick={() => void act(row, 'deprecate_operation')}
+                  >
+                    Deprecate
+                  </Button>
+                ) : undefined
+              }
+            />
+          );
+        })}
+      </DataList>
+    </>
   );
 }
 

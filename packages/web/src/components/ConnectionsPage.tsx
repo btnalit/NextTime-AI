@@ -14,6 +14,7 @@ import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import { statusValues } from '../lib/status-tone.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
 import { GatekeeperDetailDrawer } from './GatekeeperDetailDrawer.js';
+import { OnboardingWizard } from './OnboardingWizard.js';
 import { GatekeeperCard } from './RegisteredSystemsSection.js';
 import { RequestConnectionForm } from './RequestConnectionForm.js';
 import { Button } from './ui/Button.js';
@@ -40,7 +41,8 @@ type RequestFilter = 'requested' | 'all' | 'completed' | 'cancelled';
 type DrawerMode =
   | { readonly kind: 'closed' }
   | { readonly kind: 'request' }
-  | { readonly kind: 'complete'; readonly request: ConnectionRequestRow | null };
+  | { readonly kind: 'complete'; readonly request: ConnectionRequestRow | null }
+  | { readonly kind: 'wizard' };
 
 const REQUEST_FILTERS: readonly RequestFilter[] = [
   'requested',
@@ -145,11 +147,16 @@ export function ConnectionsPage({
             </Button>
             {canCreate ? (
               <Button
-                variant="primary"
+                variant="secondary"
                 icon="connections"
                 onClick={() => setDrawer({ kind: 'complete', request: null })}
               >
                 Connect a system
+              </Button>
+            ) : null}
+            {canCreate ? (
+              <Button variant="primary" icon="grid" onClick={() => setDrawer({ kind: 'wizard' })}>
+                接入向导 Onboarding wizard
               </Button>
             ) : null}
           </>
@@ -356,6 +363,28 @@ export function ConnectionsPage({
             request={drawer.request}
             onDone={handleCompleted}
             onCancel={() => setDrawer({ kind: 'closed' })}
+          />
+        ) : null}
+      </Drawer>
+
+      <Drawer
+        open={drawer.kind === 'wizard'}
+        onClose={() => setDrawer({ kind: 'closed' })}
+        title="接入向导 Onboarding wizard"
+        subtitle="Kind → target/credential → import manifest → review operations → done."
+        wide
+        testId="onboarding-wizard-drawer"
+      >
+        {drawer.kind === 'wizard' ? (
+          <OnboardingWizard
+            http={http}
+            onCancel={() => setDrawer({ kind: 'closed' })}
+            onFinished={(gatekeeperId) => {
+              setDrawer({ kind: 'closed' });
+              reloadRegistry();
+              void requests.reload();
+              onSelectGatekeeper?.(gatekeeperId);
+            }}
           />
         ) : null}
       </Drawer>

@@ -16,8 +16,13 @@
 - `docker compose --profile build-only build worker-runtime` 已跑过一次，产出
   `nexttime-ai-worker-runtime` 镜像（step 6 直接跑这个镜像做 env/egress 探测，见 §5 "已知偏离"）。
 - `docker compose --profile accept-s2 build` 未跑过也没关系——`scripts/accept_s2.sh` 自己的
-  preflight 步骤会构建 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-ssh-gate`/
-  `accept-s2-http-gate` 四个镜像（`accept-s2-restart-target` 直接用官方 `alpine:3.20`，无需构建）。
+  preflight 步骤会构建 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/
+  `accept-s2-http-gate` 五个镜像（`accept-s2-restart-target` 直接用官方 `alpine:3.20`，无需构建）。
+  `accept-s2-mcp`（S3.12 新增）是 `connect-mcp-*` 步骤用的最小 MCP fixture（`initialize`/
+  `tools/list`/`tools/call`，两个工具），没有独立前置门——`create_connection` 对 `kind:'mcp'` 的清单
+  导入直接由内核进程调 `manifestSource`（`McpTransport.listTools`），不经过门；两个工具不需要凭证，
+  这一步用 `credentialKind:'shared'`（也是唯一不触发 `create_connection` 向 `endpoint` POST
+  ConnectedAccount 凭证的取值），因此不需要像 http/ssh 那样另建一个 `gatekeeper-base` 前置门实例。
 - 主机上有 `docker`、`docker compose`、`curl`、`psql`（经 `docker compose exec postgres`）；**没有**
   `node`/`corepack`/`ssh-keygen`——脚本把每一次 JSON-RPC 交互、每一次密钥生成都放进一次性容器里跑
   （见脚本头注释）。
@@ -119,6 +124,12 @@ PASS step6-registered-egress-ok registered entry container -> https://example.co
 PASS step7-fact-inferred Fact <uuid> (accept_s2_restarted, from the docker-restart Worker's report_result) has epistemic_status=inferred
 PASS step7-fact-asserted-by-agent Fact asserted_by principal kind='agent' display_name='worker:<name>' (application/task/agent-principal.ts's ensureWorkerAgentPrincipal, one per (workspace, WorkerDefinition) — see docs/runbooks/host-accept-s2.md)
 PASS step7-fact-on-behalf-of-alice worker_result Activity metadata.onBehalfOf=<alice's principal id> (human kept as provenance alongside the agent asserted_by — application/task/result.ts)
+PASS connect-mcp-fixture-up accept-s2-mcp up
+PASS connect-mcp-request connectionRequestId=<uuid>
+PASS connect-mcp-create gatekeeperId=<uuid> (imported both fixture tools from manifestSource tools/list)
+PASS connect-mcp-find-operations-pre-publish find_operations('accept_s2_mcp') misses before publish_manifest, as required
+PASS connect-mcp-publish mcp manifest published
+PASS connect-mcp-find-operations-post-publish find_operations('accept_s2_mcp') sees both fixture tools after publish_manifest (2 result(s))
 PASS cleanup stopped alice/bob entry containers, tore down the accept-s2 profile; workspace retained: <uuid>
 
 S2 OK
@@ -153,6 +164,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `step5-bob-forbidden` / `step5-still-pending` | (5) 用户 B 尝试批准 A 范围的动作 403 | bob（member）对 step 4 第一次调用产生的、真实处于 `pending_approval` 的 ActionRequest 调 `approve` → 403；随后确认该行状态未被这次失败尝试改变 |
 | `step6-*` | (6) Worker 容器 `env | grep -ci api_key` 为 0；直连内网失败；**未注册来源**经代理访问 `http://example.com` 被拒 403（egress 按来源 fail-closed，`EGRESS_DENY_UNKNOWN_SOURCE` 默认开）；**已注册**的 alice 常驻入口容器经代理 `curl https://example.com` 得 200 | 前三项直接跑 `nexttime-ai-worker-runtime` 镜像（`workers` 网络 + 与真实 Worker 相同的 `HTTP(S)_PROXY`，但无来源注册），见 §5 "已知偏离"关于为什么不经 Worker 自己的工具调用；正向探测 `docker exec` 进 `nexttime-entry-<alice>`（步骤 2–3 由 worker-supervisor 拉起并注册） |
 | `step7-*` | (7) Worker 结果契约里的 Fact 入图为 `inferred`，`asserted_by` 是真实 agent 类 principal（非 `viaAgent` 降级标记），alice 作为 provenance 留在 Activity `metadata.onBehalfOf` 上 | 查 `links` 表 `epistemic_status` 列，`link_type='accept_s2_restarted'`（step 2 的 docker-restart Worker 通过 `report_result` 写入）；再查 `asserted_by` 关联的 `principals.kind='agent'`/`display_name` 以 `worker:` 开头；再查 `activities.metadata->>'onBehalfOf'` 等于 alice 的 principal id |
+| `connect-mcp-*` | S3.12 自己的验收句——"通过 UI 接入一个 fixture MCP server ... publish 后 find_operations 命中其工具"（本脚本覆盖 capability 层这一半，不覆盖对话内 `<gate>.<op>` 工具出现这一半——那是 S3.13 入口 `session_start` 投影的范围，见 `docs/runbooks/web-console.md`） | 同一条 `request_connection → create_connection → publish_manifest` 路径，`kind:'mcp'`；`create_connection` 的 `manifestSource` 指向 `accept-s2-mcp` 自己的 JSON-RPC 端点，导入两个工具（`accept_s2_mcp_echo` 观察类、`accept_s2_mcp_note` 执行类）；`find_operations('accept_s2_mcp')` 发布前 0 命中、发布后 2 命中，与 `s213-find-operations-*` 同一条 I16/I17 不变量 |
 | `cleanup` | — | 停 alice/bob 入口容器、`docker compose --profile accept-s2 down`；workspace 行留作审计留痕 |
 
 ## 5. 已知偏离
@@ -223,15 +235,17 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
   `governance/policy` 读取或影响治理判定——治理判定的唯一输入是已发布 Operation 自己的
   `auto_approvable`/`blast_radius`（`request-action-handler.ts` 的 `getPublishedOperation`）。
 
-- **五个 accept-s2 fixture/gate 服务共用既有的 `control` 网络，未新建专属网络**：
+- **六个 accept-s2 fixture/gate 服务（S3.12 新增 `accept-s2-mcp` 后由五个变六个）共用既有的
+  `control` 网络，未新建专属网络**：
   `application/gateway/connection-handlers.ts` 的 `create_connection` 由**内核进程自己**发起
-  `manifestSource`（OpenAPI 文档）的 HTTP 抓取（`resolveManifestOperations`），因此 openapi
-  fixture 必须能被 `kernel` 直接触达；`kernel` 现有的网络列表（`[control, workers]`）是既有服务的
-  一部分，本任务的 docker-compose.yml 改动被要求"additive only"（只加新服务/网络/卷，不改已有服务
-  字段）——给 `kernel` 追加第三个网络会改写它已有的 `networks:` 字段，超出这条边界。把五个 fixture/
-  gate 放进 `control`（而不是一个只有两个门能进的专属网络）不会削弱"Worker 直连失败"这条验收：
+  `manifestSource`（OpenAPI 文档、或 mcp 的 `tools/list`）的 HTTP 抓取（`resolveManifestOperations`），
+  因此 openapi/mcp 两个 fixture 都必须能被 `kernel` 直接触达；`kernel` 现有的网络列表
+  （`[control, workers]`）是既有服务的一部分，本任务的 docker-compose.yml 改动被要求"additive
+  only"（只加新服务/网络/卷，不改已有服务字段）——给 `kernel` 追加第三个网络会改写它已有的
+  `networks:` 字段，超出这条边界。把六个 fixture/gate 放进 `control`（而不是一个只有两个门能进的
+  专属网络）不会削弱"Worker 直连失败"这条验收：
   `worker-supervisor` 的 spawn spec（S2.8）只给 Worker 容器挂 `internal:true` 的 `workers` 网络，
-  一个 Worker 物理上就没有到 `control` 上任何服务（含 postgres/kernel/两个门/两个 fixture）的路由，
+  一个 Worker 物理上就没有到 `control` 上任何服务（含 postgres/kernel/两个门/三个 fixture）的路由，
   这条隔离边界与 fixture 具体挂在哪个 `control` 子网无关——`scripts/accept_s1.sh` 早就用同一个事实
   验证过一次（`http://postgres:5432` 直连失败）。`step6_env_and_egress` 额外直接对 `http://
   postgres:5432` 做了同款探测（借道 `--noproxy '*'`），佐证这条边界本身与本任务是否新建专属网络
@@ -265,8 +279,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 ## 6. 清理
 
 `--keep` 不传时，`cleanup_step` 会：`docker compose --profile accept-s2 down`（移除
-`accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/
-`accept-s2-restart-target` 五个容器）、经 `worker-supervisor` 的 `/resident/stop` 停 alice/bob 的
+`accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/
+`accept-s2-restart-target` 六个容器）、经 `worker-supervisor` 的 `/resident/stop` 停 alice/bob 的
 入口容器。workspace/principal/chat/activity/graph 行按设计文档 §12 的审计留痕原则保留，不清理。
 
 `${NEXTTIME_DATA}/accept-s2/`（生成的 ssh 密钥对、ConnectedAccount store key）**不会**被这次清理

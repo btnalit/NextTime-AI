@@ -128,19 +128,36 @@ export function healthView(health: GatekeeperHealth): HealthView {
 }
 
 // -------------------------------------------------------------------------------------------
-// Catalog (list_operations — new; list_skills / list_procedures / list_worker_definitions —
-// existing, `lib/tasks.ts` already types `WorkerDefinitionSummary`)
+// Catalog (list_operations / get_gatekeeper's embedded operations[] — both on main as of PR
+// #100, `gatekeeper-read-handlers.ts`'s shared `toWireOperationSummary`; list_skills /
+// list_procedures / list_worker_definitions — existing, `lib/tasks.ts` already types
+// `WorkerDefinitionSummary`)
 // -------------------------------------------------------------------------------------------
 
+/** `toWireOperationSummary` (`gatekeeper-read-handlers.ts`) — verified against the real kernel
+ *  projection, not a guess this PR made ahead of it landing. An Operation has **no dedicated id
+ *  column** (identity is the pair `{gatekeeperId, name}`, `capabilities.ts`'s own comment on
+ *  `propose_operation`/`publish_operation`) and this projection carries no `gatekeeperName` or
+ *  `createdAt` — an earlier draft of this type guessed at both; corrected here rather than kept as
+ *  dead/always-undefined fields. Use `operationKey()` below wherever a stable per-row key is
+ *  needed (React lists, a busy-row lookup, ...). */
 export interface OperationCatalogRow {
-  readonly id: string;
   readonly gatekeeperId: string;
-  readonly gatekeeperName?: string;
   readonly name: string;
   readonly status: string;
   readonly mode?: string;
   readonly blastRadius?: string;
-  readonly createdAt?: string;
+  readonly autoApprovable?: boolean;
+  /** Always `1` today — no per-Operation revision counter exists yet (`toWireOperationSummary`'s
+   *  own doc comment). Kept on the wire type so a future real version renders without a UI change. */
+  readonly version?: number;
+}
+
+/** The stable identity of an Operation row — no dedicated id column exists (see
+ *  `OperationCatalogRow`'s own doc comment), so every list/lookup in the UI keys off this pair
+ *  instead of a fabricated `id`. */
+export function operationKey(row: Pick<OperationCatalogRow, 'gatekeeperId' | 'name'>): string {
+  return `${row.gatekeeperId}::${row.name}`;
 }
 
 /** `list_skills` (`application/gateway/skill-procedure-handlers.ts` `listSkillsHandler`, already
@@ -191,10 +208,23 @@ export type PolicyRow = Readonly<Record<string, unknown>>;
 // Workspace (get_workspace)
 // -------------------------------------------------------------------------------------------
 
+/** `get_workspace`'s `caller` (S3.11 coordination addendum, 2026-09-08): the already-resolved
+ *  human Principal (`application/gateway/dispatch.ts`'s `ResolvedCaller.principal`, projected by
+ *  `members-handlers.ts`'s `getWorkspaceHandler`) — the console's first authoritative "who am I"
+ *  read, replacing the 403-probing inference in `lib/role.ts` as the primary source (that module
+ *  is now a fallback only, for a kernel that predates this field or when the call itself fails). */
+export interface WorkspaceCaller {
+  readonly id: string;
+  readonly role: Role;
+  readonly displayName: string;
+  readonly kind: PrincipalKind;
+}
+
 export interface WorkspaceInfo {
   readonly id: string;
   readonly name: string;
   readonly createdAt: string;
   readonly principalCount: number;
   readonly gatekeeperCount: number;
+  readonly caller: WorkspaceCaller;
 }
