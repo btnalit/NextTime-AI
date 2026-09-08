@@ -122,3 +122,84 @@ export function groupOperationsByStatus(
 export function supportsManifestSource(kind: ConnectionKind): boolean {
   return kind === 'http' || kind === 'mcp';
 }
+
+// -------------------------------------------------------------------------------------------
+// S3.12 onboarding wizard step ④ (review operations + "propose reclassification") — needs the
+// *full* Operation payload (`binding`/`params_schema`/`reversibility`/`await_decision`/`reads`/
+// `writes`), not the narrow `{name, mode, blastRadius}` `OperationView` above. Neither
+// `list_operations` nor `get_gatekeeper` project those fields (`gatekeeper-read-handlers.ts`'s
+// `toWireOperationSummary`, on `main` as of PR #100) — `search{objectType:'Operation'}`'s raw
+// `properties` is the one human-facing read that does, because `registerOperationDraftObject`
+// (`substrate/ontology/meta-objects.ts`) writes the whole `Operation` object into `properties`
+// verbatim, snake_case field names and all, alongside its own bookkeeping (`status`/`origin`/
+// `proposedBy`/`proposedByKind`).
+// -------------------------------------------------------------------------------------------
+
+export interface OperationDetailView {
+  readonly objectId: string;
+  readonly gatekeeperId: string;
+  readonly name: string;
+  readonly status: string;
+  readonly mode: string;
+  readonly blastRadius: string;
+  readonly autoApprovable: boolean;
+  readonly paramsSchema: Readonly<Record<string, unknown>>;
+  /** The raw `properties` bag, verbatim — everything `propose_operation`'s `operation` param
+   *  needs beyond what this view already surfaces (`binding`/`reversibility`/`await_decision`/
+   *  `reads`/`writes`/`result_mapping`), plus the Object's own bookkeeping fields that
+   *  `reclassifiedOperationPayload` strips back out. */
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+export function operationDetailFromObject(object: GraphObjectRow): OperationDetailView | undefined {
+  const identity = object.identityKey ?? {};
+  const gatekeeperId = identity.gatekeeperId;
+  const name = identity.name ?? object.properties.name;
+  if (typeof gatekeeperId !== 'string' || typeof name !== 'string') return undefined;
+  const props = object.properties;
+  const paramsSchema =
+    props.params_schema && typeof props.params_schema === 'object'
+      ? (props.params_schema as Record<string, unknown>)
+      : {};
+  return {
+    objectId: object.id,
+    gatekeeperId,
+    name,
+    status: typeof props.status === 'string' ? props.status : 'draft',
+    mode: typeof props.mode === 'string' ? props.mode : 'observe',
+    blastRadius: typeof props.blast_radius === 'string' ? props.blast_radius : 'low',
+    autoApprovable: props.auto_approvable === true,
+    paramsSchema,
+    raw: props,
+  };
+}
+
+/** Builds `propose_operation`'s `operation` param (`@nexttime/shared`'s `OperationSchema`) from a
+ *  previously-read `OperationDetailView`, applying the reader's mode/blast_radius/auto_approvable
+ *  overrides and stripping the Object's own bookkeeping fields (`status`/`origin`/`proposedBy`/
+ *  `proposedByKind` — not part of `OperationSchema`, `registerOperationDraftObject`'s own doc
+ *  comment) — everything else (`binding`/`params_schema`/`reversibility`/`await_decision`/
+ *  `reads`/`writes`/`result_mapping`) passes through unchanged, since this UI never edits them. */
+export function reclassifiedOperationPayload(
+  detail: OperationDetailView,
+  overrides: {
+    readonly mode: string;
+    readonly blastRadius: string;
+    readonly autoApprovable: boolean;
+  },
+): Record<string, unknown> {
+  const {
+    status: _status,
+    origin: _origin,
+    proposedBy: _proposedBy,
+    proposedByKind: _proposedByKind,
+    ...rest
+  } = detail.raw;
+  return {
+    ...rest,
+    name: detail.name,
+    mode: overrides.mode,
+    blast_radius: overrides.blastRadius,
+    auto_approvable: overrides.autoApprovable,
+  };
+}

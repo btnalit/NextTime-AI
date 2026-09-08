@@ -20,6 +20,13 @@ export interface CompleteConnectionFormProps {
   readonly request?: ConnectionRequestRow | null;
   readonly onDone: (result: CreateConnectionResult) => void;
   readonly onCancel: () => void;
+  /** S3.12's onboarding wizard (`OnboardingWizard.tsx`) already collected the kind in its own
+   *  step ① and passes it here instead of duplicating the Kind field — `request?.kind` still wins
+   *  when both are given (completing a real request always reflects the request's own kind). */
+  readonly initialKind?: ConnectionKind;
+  /** Hides the Kind field entirely (the wizard's step ① already showed it) — `false` for every
+   *  pre-existing caller (`ConnectionsPage`'s own two drawers), so this is purely additive. */
+  readonly hideKindField?: boolean;
 }
 
 type CredentialKind = 'shared' | 'connected_account';
@@ -65,8 +72,10 @@ export function CompleteConnectionForm({
   request,
   onDone,
   onCancel,
+  initialKind,
+  hideKindField = false,
 }: CompleteConnectionFormProps) {
-  const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? 'http');
+  const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? initialKind ?? 'http');
   const [target, setTarget] = useState(request?.target ?? '');
   const [endpoint, setEndpoint] = useState('');
   const [credentialKind, setCredentialKind] = useState<CredentialKind>('shared');
@@ -150,20 +159,22 @@ export function CompleteConnectionForm({
         </Notice>
       ) : null}
 
-      <Field id="cc-kind" label="Kind" required>
-        <Select
-          id="cc-kind"
-          value={kind}
-          onChange={(event) => setKind(event.target.value as ConnectionKind)}
-          disabled={submitting}
-        >
-          {CONNECTION_KIND_VALUES.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </Select>
-      </Field>
+      {hideKindField ? null : (
+        <Field id="cc-kind" label="Kind" required>
+          <Select
+            id="cc-kind"
+            value={kind}
+            onChange={(event) => setKind(event.target.value as ConnectionKind)}
+            disabled={submitting}
+          >
+            {CONNECTION_KIND_VALUES.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
 
       <Field
         id="cc-target"

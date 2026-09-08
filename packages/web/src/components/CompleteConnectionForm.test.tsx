@@ -158,6 +158,34 @@ describe('CompleteConnectionForm', () => {
     expect(fieldError.getAttribute('id')).toBe('cc-credentials-error');
   });
 
+  it('hideKindField hides the Kind select and initialKind still drives the submitted kind', async () => {
+    const http = httpWith(async (name, params) => {
+      expect((params as { kind: string }).kind).toBe('mcp');
+      return { gatekeeperId: 'gk-1', importedOperationNames: [], connectionRequestId: null };
+    });
+    render(
+      <CompleteConnectionForm
+        http={http}
+        initialKind="mcp"
+        hideKindField
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText(/^Kind/)).toBeNull();
+    // mcp supports manifestSource, so that field should still render.
+    expect(screen.getByLabelText(/Manifest source/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/Target system/), {
+      target: { value: 'accept_s2_mcp' },
+    });
+    fireEvent.change(screen.getByLabelText(/Gatekeeper endpoint/), {
+      target: { value: 'http://accept-s2-mcp:8080' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
+    await waitFor(() => expect(http.call).toHaveBeenCalled());
+  });
+
   it('parses credentials as JSON when they are JSON, raw otherwise; maps 400 messages to fields', () => {
     expect(parseCredentials('{"a":1}')).toEqual({ a: 1 });
     expect(parseCredentials('  token  ')).toBe('token');
