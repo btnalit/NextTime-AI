@@ -21,11 +21,20 @@
 #   DATA_DIR=/data         — bind mount of ${NEXTTIME_DATA} (compose: "${NEXTTIME_DATA}:/data").
 #
 # One backup = one pg_dump custom-format dump of the whole `nexttime` DB, plus one tar.gz of
-# workspaces/ config/ gatekeepers/ (never secrets/ — it holds credentials, not backup content;
-# gatekeepers/{docker,ragflow}/ only ever holds each gate's idempotency-store JSON — operational
-# dedup state, config-like rather than secret, S2.5 — neither gate uses a ConnectedAccount store).
-# Both land under $DATA_DIR/backups/{db,files}/, named with a UTC timestamp so lexical sort ==
-# chronological order (used by the retention step below).
+# workspaces/ config/ gatekeepers/ caddy/ (never secrets/ — it holds credentials, not backup
+# content). caddy/ (lane-7 P2 fix) holds the internal CA's private key
+# (deploy/caddy/Dockerfile's persisted /data) — without it, losing the host means every client
+# that trusted the old CA must re-import a freshly-generated one; it is included precisely because
+# it is as security-sensitive as anything else backed up here, not despite that. gatekeepers/ is
+# excluded file-by-file, not directory-by-directory: gatekeepers/{docker,ragflow}/ only ever hold
+# each gate's idempotency-store JSON today (operational dedup state, config-like rather than
+# secret, S2.5 — neither gate uses a ConnectedAccount store), but a `connected_account`-mode gate
+# (S2.13's own credentialKind, see accept-s2-http-gate's GATE_STORE_KEY_FILE) keeps its encrypted
+# credential store's *key* at gatekeepers/<name>/store.key — the ciphertext without that key is
+# safe to archive, but the key itself must never land in an unencrypted backup tarball (lane-7 P2
+# fix), so every `*/store.key` path is excluded from the tar regardless of which directory it is
+# under. Both land under $DATA_DIR/backups/{db,files}/, named with a UTC timestamp so lexical sort
+# == chronological order (used by the retention step below).
 
 set -eu
 
@@ -113,18 +122,21 @@ run_backup() {
 	dump_size=$(wc -c <"$dump_file" | tr -d ' ')
 	log "ok: $dump_file ($dump_size bytes)"
 
-	# Only workspaces/ config/ gatekeepers/ — never secrets/ (credentials, not backup content).
-	log "starting: tar workspaces config gatekeepers -> $tar_file"
+	# workspaces/ config/ gatekeepers/ caddy/ — never secrets/ (credentials, not backup content).
+	# `*/store.key` is excluded regardless of which of these directories it turns up under (see
+	# this file's own header comment) — a connected_account-mode gate's encrypted credential
+	# store's *key* must never land in an unencrypted backup tarball.
+	log "starting: tar workspaces config gatekeepers caddy -> $tar_file"
 	tar_sources=""
-	for d in workspaces config gatekeepers; do
+	for d in workspaces config gatekeepers caddy; do
 		[ -d "$DATA_DIR/$d" ] && tar_sources="$tar_sources $d"
 	done
 	if [ -z "$tar_sources" ]; then
-		log "ERROR: none of workspaces/ config/ gatekeepers/ exist under $DATA_DIR"
+		log "ERROR: none of workspaces/ config/ gatekeepers/ caddy/ exist under $DATA_DIR"
 		return 1
 	fi
 	# shellcheck disable=SC2086
-	if ! tar -czf "$tar_file.tmp" -C "$DATA_DIR" $tar_sources 2>/tmp/tar.err; then
+	if ! tar -czf "$tar_file.tmp" --exclude='*/store.key' -C "$DATA_DIR" $tar_sources 2>/tmp/tar.err; then
 		log "ERROR: tar failed: $(cat /tmp/tar.err 2>/dev/null)"
 		rm -f "$tar_file.tmp"
 		return 1
