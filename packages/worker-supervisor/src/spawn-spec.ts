@@ -34,7 +34,9 @@
  * `buildSpawnSpec`, since `entrypoint.sh` already reads that exact path.
  */
 
+import { createHash } from 'node:crypto';
 import type { SupervisorConfig } from './config.js';
+import type { TaskSkillInline } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
 import { hostModelsJsonPath, workspacePaths } from './host-paths.js';
 
@@ -61,6 +63,35 @@ export const HANDLE_JTI_LABEL = 'nexttime.handle-jti';
  *  ever narrow platform policy, never widen it, even transiently). Empty string when no list was
  *  set (equivalent to omitted — `resident-service.ts`'s reconcile splits and filters blanks). */
 export const EGRESS_DENY_LABEL = 'nexttime.egress-deny';
+/** S3.13: a deterministic digest of the `skillsInline` set this container was (re)created with —
+ *  stamped so `resident-service.ts`'s `spawn()` can fold a Skill-set change into the same
+ *  recreate decision `HANDLE_JTI_LABEL` already drives (see that label's own doc comment: "a
+ *  mismatch means agent-host presented a Handle this container was never spawned with" — a
+ *  Skill-set mismatch is the identical shape of problem: the running container's on-disk
+ *  `skills/` mount no longer matches what the caller's AgentProfile currently selects, and pi
+ *  only loads Skills at container startup, so nothing short of a recreate makes the change take
+ *  effect). Empty string for "no Skills" (`hashSkillsInline([])`, below) — the same value an
+ *  older container predating this label reads back as via `?? ''`, so neither ever forces a
+ *  spurious recreate on its own. */
+export const SKILLS_HASH_LABEL = 'nexttime.skills-hash';
+
+/**
+ * A deterministic digest of `skillsInline`'s content — order-independent across both the skill
+ * list and each skill's own `files` map, so two calls describing the identical Skill set always
+ * hash identically regardless of how the caller happened to order either. Empty input hashes to
+ * `''` (not a hash of `'[]'`), matching `SKILLS_HASH_LABEL`'s own "no Skills" convention and
+ * `HANDLE_JTI_LABEL`'s established "empty string is the label's own default" shape.
+ */
+export function hashSkillsInline(skillsInline: readonly TaskSkillInline[]): string {
+  if (skillsInline.length === 0) return '';
+  const canonical = [...skillsInline]
+    .map((skill) => ({
+      name: skill.name,
+      files: Object.fromEntries(Object.entries(skill.files).sort(([a], [b]) => a.localeCompare(b))),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
 
 export function entryContainerName(principalId: string): string {
   return `nexttime-entry-${principalId}`;
@@ -89,6 +120,10 @@ export interface BuildSpawnSpecInput {
    *  `EGRESS_DENY_LABEL` (comma-joined) — see that label's own doc comment. `undefined`/empty
    *  stamps an empty label. */
   readonly egressDeny?: readonly string[];
+  /** S3.13: `hashSkillsInline(skillsInline)`, computed by the caller (`resident-service.ts`) —
+   *  stamped as `SKILLS_HASH_LABEL`. `undefined`/empty stamps `''`, the same "no Skills" value
+   *  that function itself returns for an empty list. */
+  readonly skillsHash?: string;
 }
 
 export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
@@ -133,6 +168,7 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
       [RESTARTS_LABEL]: String(input.restarts),
       [HANDLE_JTI_LABEL]: input.handleJti ?? '',
       [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
+      [SKILLS_HASH_LABEL]: input.skillsHash ?? '',
     },
     networkName: input.networkName,
     runtime: config.workerRuntime,

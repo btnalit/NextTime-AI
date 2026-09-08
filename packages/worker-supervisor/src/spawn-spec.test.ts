@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
-import { buildSpawnSpec, entryContainerName } from './spawn-spec.js';
+import { buildSpawnSpec, entryContainerName, hashSkillsInline } from './spawn-spec.js';
 
 const configEnv = {
   NEXTTIME_DATA: '/host/data',
@@ -142,6 +142,7 @@ describe('buildSpawnSpec', () => {
       'nexttime.restarts': '0',
       'nexttime.handle-jti': '',
       'nexttime.egress-deny': '',
+      'nexttime.skills-hash': '',
     });
   });
 
@@ -198,5 +199,62 @@ describe('buildSpawnSpec', () => {
       model: 'example-provider/example-model',
     });
     expect(withModel.cmd).toEqual(['--model', 'example-provider/example-model']);
+  });
+
+  it('stamps hashSkillsInline(skillsInline) onto the skills-hash label when given (S3.13)', () => {
+    const withSkills = buildSpawnSpec({
+      config,
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      networkName: 'workers',
+      restarts: 0,
+      skillsHash: 'deadbeef',
+    });
+    expect(withSkills.labels['nexttime.skills-hash']).toBe('deadbeef');
+  });
+});
+
+describe('hashSkillsInline', () => {
+  it('hashes an empty list to the empty string', () => {
+    expect(hashSkillsInline([])).toBe('');
+  });
+
+  it('is deterministic for the same content', () => {
+    const skills = [{ name: 'writing-tips', files: { 'SKILL.md': '# writing tips' } }];
+    expect(hashSkillsInline(skills)).toBe(hashSkillsInline(skills));
+  });
+
+  it('is order-independent across the skill list', () => {
+    const a = { name: 'a-skill', files: { 'SKILL.md': '# a' } };
+    const b = { name: 'b-skill', files: { 'SKILL.md': '# b' } };
+    expect(hashSkillsInline([a, b])).toBe(hashSkillsInline([b, a]));
+  });
+
+  it('is order-independent across one skill’s own files map', () => {
+    const skill = {
+      name: 'a-skill',
+      files: { 'SKILL.md': '# a', 'reference.md': 'more' },
+    };
+    const reordered = {
+      name: 'a-skill',
+      files: { 'reference.md': 'more', 'SKILL.md': '# a' },
+    };
+    expect(hashSkillsInline([skill])).toBe(hashSkillsInline([reordered]));
+  });
+
+  it('differs when a Skill’s content differs', () => {
+    const a = hashSkillsInline([{ name: 'a-skill', files: { 'SKILL.md': '# v1' } }]);
+    const b = hashSkillsInline([{ name: 'a-skill', files: { 'SKILL.md': '# v2' } }]);
+    expect(a).not.toBe(b);
+  });
+
+  it('differs when the skill set differs', () => {
+    const a = hashSkillsInline([{ name: 'a-skill', files: { 'SKILL.md': '# a' } }]);
+    const b = hashSkillsInline([
+      { name: 'a-skill', files: { 'SKILL.md': '# a' } },
+      { name: 'b-skill', files: { 'SKILL.md': '# b' } },
+    ]);
+    expect(a).not.toBe(b);
   });
 });

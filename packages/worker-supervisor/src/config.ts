@@ -240,39 +240,6 @@ export function isImageAllowed(config: SupervisorConfig, image: string): boolean
  *  `:principalId` route params. */
 export const IdClaimSchema = z.string().uuid();
 
-/** `POST /resident/spawn` request body. `systemPrompt`/`model` are S2.6 additions (the workspace's
- *  published entry WorkerDefinition, resolved by the kernel and forwarded by agent-host verbatim —
- *  see `spawn-spec.ts`'s own doc comment and `resident-service.ts`'s `spawn()` for how each is
- *  used). `workspaceId`/`principalId` are UUID-validated (`IdClaimSchema`, same rule as
- *  `TaskSpawnRequestSchema` — S2.8 flagged this as the same class of path-segment gap). */
-export const SpawnRequestSchema = z
-  .object({
-    workspaceId: IdClaimSchema,
-    principalId: IdClaimSchema,
-    handle: z.string().min(1),
-    kernelUrl: z.string().min(1).optional(),
-    llmUrl: z.string().min(1).optional(),
-    systemPrompt: z.string().min(1).optional(),
-    model: z.string().min(1).optional(),
-    /** feat/egress-definition-lists: the published entry WorkerDefinition's own `egressDeny`
-     *  (`@nexttime/shared`'s `worker-definition.ts`), forwarded by agent-host from the `startTurn`
-     *  command's own field of the same name (`@nexttime/shared`'s `agent-host-protocol.ts`) —
-     *  written into this principal's `SOURCE_MAP_FILE` entry on every spawn (reuse or fresh), same
-     *  "refresh every call" convention as `systemPrompt` above. Omitted leaves the existing/no
-     *  per-source deny list untouched. */
-    egressDeny: z.array(z.string().min(1)).optional(),
-  })
-  .strict();
-export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
-
-/** `POST /resident/stop` request body. */
-export const StopRequestSchema = z
-  .object({
-    principalId: IdClaimSchema,
-  })
-  .strict();
-export type StopRequest = z.infer<typeof StopRequestSchema>;
-
 /** A single skill mounted by *content*, not a host path (S2.14; docs/development-tasks.md S2.14
  *  deliverable 4: "extend the supervisor Task spawn API additively with `skillsInline?: [{name,
  *  files: {"SKILL.md": string, ...}}]`"). The kernel has no writable data mount of its own
@@ -302,7 +269,11 @@ export type StopRequest = z.infer<typeof StopRequestSchema>;
  * "Skill Structure") — `application/worker/skills.ts`'s `renderSkillMarkdownFile` (kernel) is the
  * one place that produces this shape today. Per-file and total-payload size caps
  * (`MAX_SKILL_INLINE_FILE_BYTES`/`MAX_SKILL_INLINE_TOTAL_BYTES`) bound how much a single spawn
- * request can make this process write to disk. */
+ * request can make this process write to disk.
+ *
+ * S3.13: this same schema (and shape, `TaskSkillInline`) is reused verbatim by resident mode's own
+ * `SpawnRequestSchema.skillsInline` below — one Skill-mount validation rule for both spawn APIs,
+ * not a second copy. */
 export const MAX_SKILL_INLINE_FILE_BYTES = 512 * 1024;
 export const MAX_SKILL_INLINE_TOTAL_BYTES = 2 * 1024 * 1024;
 
@@ -359,6 +330,45 @@ const TaskSkillInlineSchema = z.object({
     .refine((name) => name !== '.' && name !== '..', 'must not be "." or ".."'),
   files: SkillInlineFilesSchema,
 });
+export type TaskSkillInline = z.infer<typeof TaskSkillInlineSchema>;
+
+/** `POST /resident/spawn` request body. `systemPrompt`/`model` are S2.6 additions (the workspace's
+ *  published entry WorkerDefinition, resolved by the kernel and forwarded by agent-host verbatim —
+ *  see `spawn-spec.ts`'s own doc comment and `resident-service.ts`'s `spawn()` for how each is
+ *  used). `workspaceId`/`principalId` are UUID-validated (`IdClaimSchema`, same rule as
+ *  `TaskSpawnRequestSchema` — S2.8 flagged this as the same class of path-segment gap). */
+export const SpawnRequestSchema = z
+  .object({
+    workspaceId: IdClaimSchema,
+    principalId: IdClaimSchema,
+    handle: z.string().min(1),
+    kernelUrl: z.string().min(1).optional(),
+    llmUrl: z.string().min(1).optional(),
+    systemPrompt: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    /** feat/egress-definition-lists: the published entry WorkerDefinition's own `egressDeny`
+     *  (`@nexttime/shared`'s `worker-definition.ts`), forwarded by agent-host from the `startTurn`
+     *  command's own field of the same name (`@nexttime/shared`'s `agent-host-protocol.ts`) —
+     *  written into this principal's `SOURCE_MAP_FILE` entry on every spawn (reuse or fresh), same
+     *  "refresh every call" convention as `systemPrompt` above. Omitted leaves the existing/no
+     *  per-source deny list untouched. */
+    egressDeny: z.array(z.string().min(1)).optional(),
+    /** S3.13: the caller's own `effective.enabledSkills`, rendered by the kernel and forwarded by
+     *  agent-host from the `startTurn` command's own `skillsInline` field — mirrors Task mode's
+     *  `TaskSpawnRequestSchema.skillsInline` exactly (same schema, same write-to-disk mechanism,
+     *  `resident-service.ts`'s `spawn()`). Omitted/empty means no Skill is mounted. */
+    skillsInline: z.array(TaskSkillInlineSchema).optional(),
+  })
+  .strict();
+export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
+
+/** `POST /resident/stop` request body. */
+export const StopRequestSchema = z
+  .object({
+    principalId: IdClaimSchema,
+  })
+  .strict();
+export type StopRequest = z.infer<typeof StopRequestSchema>;
 
 /** Same UUID rule as the resident schemas above (see `IdClaimSchema`'s doc comment). */
 const idClaim = IdClaimSchema;
@@ -400,4 +410,3 @@ export const TaskSpawnRequestSchema = z
   })
   .strict();
 export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;
-export type TaskSkillInline = z.infer<typeof TaskSkillInlineSchema>;

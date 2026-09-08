@@ -35,9 +35,10 @@
  * `restarts` incremented) instead of silently reusing a container holding a stale Handle.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { SpawnRequest, SupervisorConfig } from './config.js';
+import { posix as posixPath } from 'node:path';
+import type { SpawnRequest, SupervisorConfig, TaskSkillInline } from './config.js';
 import type { DockerClient } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
@@ -50,9 +51,11 @@ import {
   HANDLE_JTI_LABEL,
   PRINCIPAL_LABEL,
   RESTARTS_LABEL,
+  SKILLS_HASH_LABEL,
   WORKSPACE_LABEL,
   buildSpawnSpec,
   entryContainerName,
+  hashSkillsInline,
 } from './spawn-spec.js';
 
 /** Splits `EGRESS_DENY_LABEL`'s comma-joined value back into a list — the inverse of
@@ -224,6 +227,47 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     }
   }
 
+  /**
+   * S3.13: writes every `skillsInline[]` entry's files under `<agentDir>/skills/<name>/` — the
+   * same layout `task-service.ts`'s own `spawn()` already writes for Task mode. Only ever called
+   * from the (re)create branch below, never on a plain reuse: a Skill-set change is exactly what
+   * forces the recreate in the first place (`SKILLS_HASH_LABEL`'s own comparison, see `spawn()`),
+   * so a reused container's already-mounted `skills/` directory is, by construction, still the
+   * correct set — writing again there would be a needless no-op at best.
+   *
+   * Clears the whole `skills/` subdirectory first — unlike Task mode's always-fresh workspace, a
+   * resident entry container's workspace directory persists across recreations, so a Skill
+   * removed from the caller's AgentProfile must not linger on disk merely because its own
+   * directory was never deleted (S3.13's own "never widen" invariant applies here too: a
+   * container must never end up mounting a Skill the caller's current AgentProfile no longer
+   * selects). Best-effort, same convention as `writeSystemPromptIfChanged` above — a broken/
+   * unwritable workspace directory must never block the entry container from coming up.
+   */
+  function writeSkillsInline(principalId: string, skillsInline: readonly TaskSkillInline[]): void {
+    const paths = workspacePaths(config, principalId);
+    const skillsDir = posixPath.join(paths.localPiAgentDir, 'skills');
+    try {
+      rmSync(skillsDir, { recursive: true, force: true });
+      for (const skill of skillsInline) {
+        const skillDir = posixPath.join(skillsDir, skill.name);
+        for (const [fileName, content] of Object.entries(skill.files)) {
+          const filePath = posixPath.join(skillDir, fileName);
+          mkdirSync(path.dirname(filePath), { recursive: true });
+          writeFileSync(filePath, content, 'utf8');
+        }
+      }
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'skills/ write failed (spawn still succeeds; the entry container mounts whatever skills/ already contains)',
+          principalId,
+          error: String(err),
+        }),
+      );
+    }
+  }
+
   return {
     async spawn(input): Promise<SpawnOutcome> {
       const {
@@ -235,6 +279,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         systemPrompt,
         model,
         egressDeny,
+        skillsInline,
       } = input;
       const name = entryContainerName(principalId);
       const paths = workspacePaths(config, principalId);
@@ -262,9 +307,19 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // spawn time) never forces a recreation on its own — only an actual, decodable mismatch does.
       const incomingJti = decodeHandleJtiUnsafe(handle);
       const existingJti = existing?.labels[HANDLE_JTI_LABEL];
-      const rotated = Boolean(
+      const handleRotated = Boolean(
         existing && incomingJti !== undefined && existingJti && existingJti !== incomingJti,
       );
+
+      // S3.13: same shape as the Handle-rotation check above — a mismatch between the incoming
+      // `skillsInline` set's own digest and the running container's `SKILLS_HASH_LABEL` means the
+      // caller's effective.enabledSkills has changed since this container was (re)created, and
+      // pi only loads Skills at startup, so reuse must not apply here either.
+      const incomingSkillsHash = hashSkillsInline(skillsInline ?? []);
+      const existingSkillsHash = existing?.labels[SKILLS_HASH_LABEL] ?? '';
+      const skillsChanged = Boolean(existing && existingSkillsHash !== incomingSkillsHash);
+
+      const rotated = handleRotated || skillsChanged;
 
       if (existing?.running && !rotated) {
         registry.set(principalId, {
@@ -309,6 +364,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         await docker.remove(name);
       }
 
+      // S3.13: written only in this (re)create branch — see writeSkillsInline's own doc comment
+      // for why a plain reuse above never needs it.
+      writeSkillsInline(principalId, skillsInline ?? []);
+
       const networkName = await resolveNetworkName();
       const spec = buildSpawnSpec({
         config,
@@ -322,6 +381,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         model,
         handleJti: incomingJti,
         egressDeny,
+        skillsHash: incomingSkillsHash,
       });
       const created = await docker.createAndStart(spec);
 
