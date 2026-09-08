@@ -76,12 +76,12 @@ export async function listPendingForApprover(
            and cg.status = 'active'
            and (cg.expires_at is null or cg.expires_at > now())
            and (
-             (cg.capability = ar.action_kind
-              and (cg.scope ->> 'resourceScope' is null or cg.scope ->> 'resourceScope' = ar.resource_scope))
+             (cg.resource_type = ar.action_kind
+              and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope))
              or (
                ar.resource_scope is not null
-               and cg.capability = '${GATEKEEPER_GRANT_CAPABILITY}'
-               and (cg.scope ->> 'resourceScope' is null or cg.scope ->> 'resourceScope' = ar.resource_scope)
+               and cg.resource_type = '${GATEKEEPER_GRANT_CAPABILITY}'
+               and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope)
              )
            )
        )
