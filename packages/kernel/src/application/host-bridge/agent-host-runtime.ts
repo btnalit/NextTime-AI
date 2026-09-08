@@ -547,7 +547,7 @@ export class AgentHostRuntime implements AgentRuntime {
     const gatekeeperIds = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
       listActiveGrantResourceScopes(client, workspaceId, {
         principalId,
-        capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
+        resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
       }),
     );
 

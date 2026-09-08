@@ -18,6 +18,7 @@ import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import { drainPendingContextItems } from '../../application/linkage/index.js';
 import {
   type InvokeWorkerInput,
+  type InvokeWorkerResult,
   type TaskRow,
   type WorkerRunRow,
   findOperations,
@@ -62,6 +63,7 @@ import { queryAudit, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { toWireActionRequest } from './action-request-wire.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
@@ -203,8 +205,8 @@ export function setAgentRuntimeForHandlers(runtime: AgentRuntime): void {
 
 const listChatsHandler: CapabilityHandler = async (client, workspaceId) => {
   const principalId = await currentPrincipalId(client);
-  const result = await listChats(client, workspaceId, principalId);
-  return { result };
+  const rows = await listChats(client, workspaceId, principalId);
+  return { result: { items: rows } };
 };
 
 const newChatHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -288,8 +290,8 @@ const getChatHistoryHandler: CapabilityHandler = async (client, workspaceId, par
   const page = await getChatHistory(client, workspaceId, { chatId, cursor, limit });
   const result =
     page.nextCursor === undefined
-      ? { messages: page.messages.map(toWireChatMessage) }
-      : { messages: page.messages.map(toWireChatMessage), nextCursor: page.nextCursor };
+      ? { items: page.messages.map(toWireChatMessage) }
+      : { items: page.messages.map(toWireChatMessage), nextCursor: page.nextCursor };
   return { result, resourceType: 'chat', resourceId: chatId };
 };
 
@@ -533,7 +535,7 @@ const deprecateWorkerDefinitionHandler: CapabilityHandler = async (client, works
 const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { kind } = params as { kind?: WorkerDefinitionKind };
   const rows = await listWorkerDefinitions(client, workspaceId, kind);
-  return { result: rows.map(toWireWorkerDefinition) };
+  return { result: { items: rows.map(toWireWorkerDefinition) } };
 };
 
 // -------------------------------------------------------------------------------------------
@@ -621,7 +623,11 @@ const approveHandler: CapabilityHandler = async (client, workspaceId, params) =>
     approverPrincipalId: caller.id,
     approverRole: caller.role,
   });
-  return { result, resourceType: 'action_request', resourceId: result.id };
+  return {
+    result: toWireActionRequest(result),
+    resourceType: 'action_request',
+    resourceId: result.id,
+  };
 };
 
 const rejectHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -633,18 +639,22 @@ const rejectHandler: CapabilityHandler = async (client, workspaceId, params) => 
     approverRole: caller.role,
     reason,
   });
-  return { result, resourceType: 'action_request', resourceId: result.id };
+  return {
+    result: toWireActionRequest(result),
+    resourceType: 'action_request',
+    resourceId: result.id,
+  };
 };
 
 /** `list_pending`: the caller's own I14-scoped queue (`governance/approval/reads.ts`'s
- *  `listPendingForApprover`). */
+ *  `listPendingForApprover`). §3 envelope — `{items}`, never a bare array. */
 const listPendingHandler: CapabilityHandler = async (client, workspaceId) => {
   const caller = await currentPrincipalRole(client, workspaceId);
-  const result = await listPendingForApprover(client, workspaceId, {
+  const rows = await listPendingForApprover(client, workspaceId, {
     principalId: caller.id,
     role: caller.role,
   });
-  return { result };
+  return { result: { items: rows.map(toWireActionRequest) } };
 };
 
 /** `get_action`: workspace-scoped read, not I14-narrowed (§9.3 "get_action returns one
@@ -653,7 +663,11 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
   const { actionRequestId } = params as { actionRequestId: string };
   const result = await getActionRequest(client, workspaceId, actionRequestId);
   if (!result) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
-  return { result, resourceType: 'action_request', resourceId: actionRequestId };
+  return {
+    result: toWireActionRequest(result),
+    resourceType: 'action_request',
+    resourceId: actionRequestId,
+  };
 };
 
 /** "总是批准此类" — writes/upserts a workspace auto-approval rule for one action_kind (§9.3,
@@ -669,22 +683,22 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
 // function's own doc comment). `owner` bypasses, the same "workspace owner counts as holding
 // every scope" convention I14 already uses elsewhere.
 const setAutoApprovedActionKindHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { actionKind } = params as { actionKind: string };
+  const { actionKindTag } = params as { actionKindTag: string };
   const caller = await currentPrincipalRole(client, workspaceId);
   if (caller.role !== 'owner') {
     const covered = await hasAnyActiveGrant(client, workspaceId, {
       principalId: caller.id,
-      capability: actionKind,
+      resourceType: actionKindTag,
     });
     if (!covered) {
       throw new ForbiddenError(
         `set_auto_approved_action_kind: principal ${caller.id} holds no active grant for ` +
-          `action_kind "${actionKind}" (I14)`,
+          `action_kind "${actionKindTag}" (I14)`,
       );
     }
   }
   const result = await setAutoApprovedActionKind(client, workspaceId, {
-    actionKind,
+    actionKind: actionKindTag,
     setBy: caller.id,
   });
   return { result, resourceType: 'policy', resourceId: result.id };
@@ -699,15 +713,17 @@ const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) 
 };
 
 const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { principalId, capability, scope } = params as {
+  const { principalId, resourceType, resourceId, scope } = params as {
     principalId: string;
-    capability: string;
-    scope: Record<string, unknown>;
+    resourceType: string;
+    resourceId?: string;
+    scope?: Record<string, unknown>;
   };
   const grantedBy = await currentPrincipalId(client);
   const result = await grantCapability(client, workspaceId, {
     principalId,
-    capability,
+    resourceType,
+    resourceId,
     scope,
     grantedBy,
   });
@@ -747,6 +763,23 @@ const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, p
  * "why holding dispatch.ts's transaction open across this wait was a real pool-exhaustion defect,
  * not just a missed optimization" rationale.
  */
+/** `invoke_worker`'s wire shape: docs/wire-contract-conventions.md §2 (2026-09-08 decision) — a
+ *  create-style capability's result is the created resource (the spawned Task) keyed `id`, never a
+ *  top-level `taskId` duplicate; `workerRunId` stays as a `<resource>Id` reference to the sibling
+ *  WorkerRun it also created. `InvokeWorkerResult` (application/task/invoke.ts) itself keeps its
+ *  own `taskId` field name — it is an internal task-subsystem type read by many non-wire callers
+ *  (the reaper, tests, `waitForOutcome`'s own recursion) — this is purely the projection at the
+ *  capability boundary, same pattern as `toWireTask`/`toWireWorkerDefinition` below. */
+function toWireInvokeWorkerResult(created: InvokeWorkerResult) {
+  return {
+    id: created.taskId,
+    workerRunId: created.workerRunId,
+    status: created.status,
+    ...(created.result !== undefined ? { result: created.result } : {}),
+    ...(created.failureReason !== undefined ? { failureReason: created.failureReason } : {}),
+  };
+}
+
 const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, params, ctx) => {
   const principalId = ctx?.principalId ?? '';
   const attributedTurn = principalId
@@ -763,11 +796,15 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
   );
 
   if (!input.wait) {
-    return { result: created, resourceType: 'task', resourceId: created.taskId };
+    return {
+      result: toWireInvokeWorkerResult(created),
+      resourceType: 'task',
+      resourceId: created.taskId,
+    };
   }
 
   return {
-    result: created,
+    result: toWireInvokeWorkerResult(created),
     resourceType: 'task',
     resourceId: created.taskId,
     afterCommit: () =>
@@ -778,7 +815,7 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
         created.taskId,
         created.workerRunId,
         { timeoutMs: resolveWaitTimeoutMs(input.timeout) },
-      ),
+      ).then(toWireInvokeWorkerResult),
   };
 };
 
@@ -842,7 +879,7 @@ const getTaskHandler: CapabilityHandler = async (client, workspaceId, params) =>
 const listTasksHandler: CapabilityHandler = async (client, workspaceId) => {
   const principalId = await currentPrincipalId(client);
   const rows = await listTasksForPrincipal(client, workspaceId, principalId);
-  return { result: rows.map(({ task, workerRuns }) => toWireTask(task, workerRuns)) };
+  return { result: { items: rows.map(({ task, workerRuns }) => toWireTask(task, workerRuns)) } };
 };
 
 /** `create_task`: **not wired** (docs/development-tasks.md S2.7 "if the registry has it,
@@ -879,7 +916,7 @@ const findWorkersHandler: CapabilityHandler = async (client, workspaceId, params
     claims: ctx?.claims,
   });
   const result = await findWorkers(client, workspaceId, { parentAuthority }, need);
-  return { result };
+  return { result: { items: result } };
 };
 
 const findOperationsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
@@ -890,7 +927,7 @@ const findOperationsHandler: CapabilityHandler = async (client, workspaceId, par
     claims: ctx?.claims,
   });
   const result = await findOperations(client, workspaceId, { parentAuthority }, need);
-  return { result };
+  return { result: { items: result } };
 };
 
 const findProceduresHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
@@ -901,7 +938,7 @@ const findProceduresHandler: CapabilityHandler = async (client, workspaceId, par
     claims: ctx?.claims,
   });
   const result = await findProcedures(client, workspaceId, { parentAuthority }, need);
-  return { result };
+  return { result: { items: result } };
 };
 
 /** `cancel_task` — not in S2.7's own explicit "handlers wired" list, but wired anyway: it is a

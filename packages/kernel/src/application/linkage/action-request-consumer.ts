@@ -167,13 +167,13 @@ export function registerActionRequestConsumers(
         type: 'action.pending',
         actionRequestId: event.actionRequestId,
         gatekeeperId: event.gatekeeperId,
-        title: `Approval needed: ${event.actionKind}`,
+        title: `Approval needed: ${event.actionKindTag}`,
         description: event.resourceScope
-          ? `${event.actionKind} on ${event.resourceScope} (via ${event.gatekeeperId})`
-          : `${event.actionKind} (via ${event.gatekeeperId})`,
+          ? `${event.actionKindTag} on ${event.resourceScope} (via ${event.gatekeeperId})`
+          : `${event.actionKindTag} (via ${event.gatekeeperId})`,
         actionKind: {
-          tag: event.actionKind,
-          label: event.actionKind.replace(/[._-]+/g, ' ').trim(),
+          tag: event.actionKindTag,
+          label: event.actionKindTag.replace(/[._-]+/g, ' ').trim(),
         },
         awaitDecision: actionRequest.awaitDecision,
       });
@@ -181,7 +181,7 @@ export function registerActionRequestConsumers(
       const content = buildActionPendingContent({
         actionRequestId: event.actionRequestId,
         gatekeeperId: event.gatekeeperId,
-        actionKind: event.actionKind,
+        actionKind: event.actionKindTag,
         resourceScope: event.resourceScope,
         blastRadius: actionRequest.blastRadius,
         awaitDecision: actionRequest.awaitDecision,
@@ -230,7 +230,7 @@ export function registerActionRequestConsumers(
 
       publishPrincipalPushEvent(principalId, {
         type: 'action.updated',
-        actionRequestId: event.actionRequestId,
+        id: event.actionRequestId,
         status: event.status,
       });
 

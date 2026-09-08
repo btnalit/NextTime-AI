@@ -127,8 +127,8 @@ export async function approverHasScope(
   if (approver.role === 'owner') return true;
   return hasActiveGrant(client, workspaceId, {
     principalId: approver.principalId,
-    actionKind: target.actionKind,
-    resourceScope: target.resourceScope,
+    resourceType: target.actionKind,
+    resourceId: target.resourceScope,
   });
 }
 

@@ -71,7 +71,7 @@ export function buildActionPendingContent(
     text,
     actionRequestId: input.actionRequestId,
     gatekeeperId: input.gatekeeperId,
-    actionKind: input.actionKind,
+    actionKindTag: input.actionKind,
     resourceScope: input.resourceScope ?? null,
     blastRadius: input.blastRadius,
     awaitDecision: input.awaitDecision,
@@ -107,7 +107,7 @@ export function buildActionUpdateContent(
     text: `${label}: ${verb}`,
     actionRequestId: input.actionRequestId,
     status: input.status,
-    actionKind: input.actionKind,
+    actionKindTag: input.actionKind,
     isHolder: input.isHolder,
   };
 }

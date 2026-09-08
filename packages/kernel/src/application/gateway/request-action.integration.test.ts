@@ -329,8 +329,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         grantCapability(client, workspaceId, {
           principalId: memberWithGrantId,
-          capability: 'gatekeeper',
-          scope: { resourceScope: gatekeeperId },
+          resourceType: 'gatekeeper',
+          resourceId: gatekeeperId,
           grantedBy: ownerId,
         }),
       );

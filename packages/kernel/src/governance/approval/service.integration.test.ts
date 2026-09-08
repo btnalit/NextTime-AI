@@ -134,7 +134,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         grantCapability(client, workspaceId, {
           principalId: operatorId,
-          capability: 'test.action',
+          resourceType: 'test.action',
           grantedBy: ownerId,
         }),
       );
@@ -420,7 +420,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // Item 2 decision (review job 652a4abc: "decide and document whether capability='gatekeeper'
       // grants satisfy I14 for that gate — recommended yes").
-      it('a capability="gatekeeper" grant scoped to the gate also satisfies I14 for any action_kind there', async () => {
+      it('a resourceType="gatekeeper" grant scoped to the gate also satisfies I14 for any action_kind there', async () => {
         const gateOperatorId = await adminInsertPrincipal(workspaceId, {
           role: 'operator',
           displayName: 'gate-operator',
@@ -428,8 +428,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
           grantCapability(client, workspaceId, {
             principalId: gateOperatorId,
-            capability: 'gatekeeper',
-            scope: { resourceScope: gatekeeperId },
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
             grantedBy: ownerId,
           }),
         );

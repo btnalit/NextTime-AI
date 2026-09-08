@@ -306,7 +306,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         (client) =>
           listActiveGrantResourceScopes(client, workspaceId, {
             principalId: memberId,
-            capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
+            resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
           }),
       );
       expect(grantedGatekeeperIds).toContain(created.gatekeeperId);

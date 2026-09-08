@@ -78,11 +78,11 @@ export interface GatekeeperCallInput {
 }
 
 export interface GatekeeperApplyInput extends GatekeeperCallInput {
-  readonly idempotencyKey: string;
+  readonly actionRequestId: string;
 }
 
 export interface GatekeeperRevertInput extends GatekeeperCallInput {
-  readonly idempotencyKey?: string;
+  readonly actionRequestId?: string;
 }
 
 /** S2.13: `create_connection`'s "send the credential straight to the gate" step

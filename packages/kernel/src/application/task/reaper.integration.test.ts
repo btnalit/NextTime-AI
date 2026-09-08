@@ -189,7 +189,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             workspaceId,
             actionRequestId,
             gatekeeperId: gatekeeperObjectId,
-            actionKind: 'test.restart',
+            actionKindTag: 'test.restart',
             holderPrincipalIds: [ownerId],
           });
 

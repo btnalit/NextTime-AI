@@ -256,9 +256,9 @@ export async function completeConnection(
 
 // -------------------------------------------------------------------------------------------
 // connectGatekeeper — `connect_gatekeeper(gatekeeperId, principalId)` (design doc §5.1.4
-// Connection "授权"): a CapabilityGrant, `capability = GATEKEEPER_RESOURCE_SCOPE_KEY`
+// Connection "授权"): a CapabilityGrant, `resourceType = GATEKEEPER_RESOURCE_SCOPE_KEY`
 // (`governance/policy`'s existing `'gatekeeper'` resources-scope-key convention, reused rather
-// than inventing a second one — see this function's own doc comment), `scope.resourceScope =
+// than inventing a second one — see this function's own doc comment), `resourceId =
 // gatekeeperId`. This is what `application/host-bridge/agent-host-runtime.ts`'s
 // `ensureEntryHandle` reads (`governance/capability/grants.ts`'s `listActiveGrantResourceScopes`)
 // to populate a freshly issued entry Handle's own `resources.gatekeeper`.
@@ -277,15 +277,15 @@ export interface ConnectGatekeeperInput {
 
 /**
  * Grants `input.principalId`'s entry agent use of an existing Gatekeeper. Reuses
- * `GATEKEEPER_RESOURCE_SCOPE_KEY` (`'gatekeeper'`) as the `capability_grants.capability` value —
+ * `GATEKEEPER_RESOURCE_SCOPE_KEY` (`'gatekeeper'`) as the `capability_grants.resource_type` value —
  * the same string `computeChildHandleScope`/`request-action-handler.ts` already read as the
  * `resources` key on a `CapabilityScope` — so this Grant is directly consumable by the existing
  * `hasActiveGrant`/`listGrantHolderPrincipalIds` SQL (I14) with no new query shape, and by this
  * task's own `listActiveGrantResourceScopes` addition (entry-Handle issuance) with no second
- * capability-name convention to keep in sync. `scope.resourceScope = gatekeeperId` is the one
- * Gatekeeper this Grant covers — a wildcard (`resourceScope` omitted) grant is never created here,
- * since "every Gatekeeper this workspace will ever register" is not what "grant a user this one
- * connection" means.
+ * resource-type convention to keep in sync. `resourceId = gatekeeperId` is the one Gatekeeper this
+ * Grant covers — a wildcard (`resourceId` omitted) grant is never created here, since "every
+ * Gatekeeper this workspace will ever register" is not what "grant a user this one connection"
+ * means.
  *
  * Throws `GatekeeperNotFoundError` if `gatekeeperId` does not name a registered Gatekeeper Object
  * — this Grant would otherwise silently name a resource that can never exist.
@@ -304,8 +304,8 @@ export async function connectGatekeeper(
 
   return grantCapability(client, workspaceId, {
     principalId: input.principalId,
-    capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
-    scope: { resourceScope: input.gatekeeperId },
+    resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
+    resourceId: input.gatekeeperId,
     grantedBy: input.grantedBy,
   });
 }

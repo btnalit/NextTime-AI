@@ -103,7 +103,14 @@ export const requestConnectionHandler: CapabilityHandler = async (
   });
 
   return {
-    result: { connectionRequestId: row.id, status: row.status },
+    result: {
+      id: row.id,
+      status: row.status,
+      kind: row.kind,
+      target: row.target,
+      requestedBy: row.requestedBy,
+      requestedAt: row.requestedAt.toISOString(),
+    },
     resourceType: 'connection_request',
     resourceId: row.id,
   };
@@ -265,5 +272,5 @@ export const listConnectionRequestsHandler: CapabilityHandler = async (
 ) => {
   const { status } = params as { status?: 'requested' | 'completed' | 'cancelled' };
   const rows = await listConnectionRequests(client, workspaceId, { status });
-  return { result: { connectionRequests: rows } };
+  return { result: { items: rows } };
 };

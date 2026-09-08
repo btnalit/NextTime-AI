@@ -560,7 +560,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       publishPrincipalPushEvent(ownerId, {
         type: 'task.updated',
-        taskId: 'task-1',
+        id: 'task-1',
         status: 'completed',
       });
       publishPrincipalPushEvent(ownerId, {
@@ -577,7 +577,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await waitUntil(() => client.notifications.some((n) => n.method === 'action.pending'));
 
       const taskPush = client.notifications.find((n) => n.method === 'task.updated');
-      expect(taskPush?.params).toMatchObject({ taskId: 'task-1', status: 'completed' });
+      expect(taskPush?.params).toMatchObject({ id: 'task-1', status: 'completed' });
 
       const actionPush = client.notifications.find((n) => n.method === 'action.pending');
       expect(actionPush?.params).toMatchObject({ actionRequestId: 'ar-1', gatekeeperId: 'gk-1' });
@@ -595,7 +595,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       publishPrincipalPushEvent(otherId, {
         type: 'task.updated',
-        taskId: 'task-not-mine',
+        id: 'task-not-mine',
         status: 'failed',
       });
       // No positive event to wait on for "never arrives" — publish one more, to *this* connection's
@@ -604,21 +604,19 @@ describe.runIf(DATABASE_URL !== undefined)(
       // publish, if it had been (mis)delivered here, would already be in `notifications` by now.
       publishPrincipalPushEvent(ownerId, {
         type: 'task.updated',
-        taskId: 'task-mine',
+        id: 'task-mine',
         status: 'completed',
       });
       await waitUntil(() =>
         client.notifications.some(
-          (n) =>
-            n.method === 'task.updated' && (n.params as { taskId?: string }).taskId === 'task-mine',
+          (n) => n.method === 'task.updated' && (n.params as { id?: string }).id === 'task-mine',
         ),
       );
 
       expect(
         client.notifications.some(
           (n) =>
-            n.method === 'task.updated' &&
-            (n.params as { taskId?: string }).taskId === 'task-not-mine',
+            n.method === 'task.updated' && (n.params as { id?: string }).id === 'task-not-mine',
         ),
       ).toBe(false);
 

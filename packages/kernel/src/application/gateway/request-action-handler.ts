@@ -777,8 +777,8 @@ async function assertHumanGatekeeperAccess(
 
   const allowed = await hasActiveGrant(client, workspaceId, {
     principalId,
-    actionKind: GATEKEEPER_RESOURCE_SCOPE_KEY,
-    resourceScope: gatekeeperId,
+    resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
+    resourceId: gatekeeperId,
   });
   if (!allowed) {
     throw new ForbiddenError(
@@ -820,7 +820,7 @@ async function resolveRequesterScope(
 
   const granted = await listActiveGrantResourceScopes(client, workspaceId, {
     principalId,
-    capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
+    resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
   });
   const resourceIds = new Set(granted);
   resourceIds.add(gatekeeperId);
