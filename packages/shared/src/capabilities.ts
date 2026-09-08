@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ConnectionRequestStatusSchema, WorkerDefinitionKindSchema } from './enums.js';
-import type { CapabilityChannel, OperationMode, Role } from './enums.js';
+import type { CapabilityChannel, Role } from './enums.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
 /**
@@ -40,10 +40,30 @@ export const CAPABILITY_GROUP_VALUES = [
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
 
+/**
+ * Capability-registry governance category (docs/wire-contract-conventions.md §1 vocabulary table,
+ * 2026-09-08 decision): four values, distinct from the gate-side `OperationMode`
+ * (`observe`/`execute` only, enums.ts) even though the two share two literal tokens —
+ * `CapabilityMode` and `OperationMode` are separate types, never structurally interchanged.
+ *
+ *   - `observe`  — read-only.
+ *   - `write`    — an immediate, in-platform state change: audited, no human approval gate
+ *     (`assert_fact`, `create_task`, `invoke_worker`, `report_task_result`, `cancel_task`,
+ *     `register_source`, `submit_observations`, `record_decision`, `resolve_conflict`,
+ *     `verify_fact`, `report_turn`, `supersede_fact`, `invalidate_fact` — the exact list the
+ *     conventions doc names, previously mistagged `propose`).
+ *   - `propose`  — produces a draft or request awaiting human publish/approval: `propose_*`,
+ *     `request_connection`, `propose_ontology_change` only (never any other name).
+ *   - `execute`  — acts through a Gatekeeper on an external system, policy-approved.
+ */
+export const CAPABILITY_MODE_VALUES = ['observe', 'write', 'propose', 'execute'] as const;
+export type CapabilityMode = (typeof CAPABILITY_MODE_VALUES)[number];
+export const CapabilityModeSchema = z.enum(CAPABILITY_MODE_VALUES);
+
 export interface Capability {
   readonly name: string;
   readonly group: CapabilityGroup;
-  readonly mode: OperationMode | 'propose';
+  readonly mode: CapabilityMode;
   readonly channel: CapabilityChannel;
   readonly minRole?: Role;
   readonly paramsSchema: z.ZodType;
@@ -519,7 +539,7 @@ const metaCapabilities: readonly Capability[] = [
   {
     name: 'assert_fact',
     group: 'meta',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z
@@ -531,7 +551,7 @@ const metaCapabilities: readonly Capability[] = [
   {
     name: 'supersede_fact',
     group: 'meta',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ factId: id, value: z.unknown() }).strict(),
@@ -540,7 +560,7 @@ const metaCapabilities: readonly Capability[] = [
   {
     name: 'invalidate_fact',
     group: 'meta',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ factId: id, reason: z.string().optional() }).strict(),
@@ -568,7 +588,7 @@ const epistemicCapabilities: readonly Capability[] = [
   {
     name: 'record_decision',
     group: 'epistemic',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z
@@ -629,7 +649,7 @@ const epistemicCapabilities: readonly Capability[] = [
   {
     name: 'resolve_conflict',
     group: 'epistemic',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ conflictId: id, resolution: z.string() }).strict(),
@@ -638,7 +658,7 @@ const epistemicCapabilities: readonly Capability[] = [
   {
     name: 'verify_fact',
     group: 'epistemic',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ factId: id, evidenceIds: z.array(id) }).strict(),
@@ -727,17 +747,33 @@ const governanceCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: z.object({ actionKind: z.string() }).strict(),
+    paramsSchema: z.object({ actionKindTag: z.string() }).strict(),
     description:
       '"Always allow this kind" — writes a workspace auto-approval rule for an ActionKind.',
   },
   {
+    // 2026-09-08 wire-contract-conventions §1(c): a Grant points at a resource (`resourceType` +
+    // optional `resourceId`), not a "capability" — that word is reserved for the registry name of
+    // *this* row's own `name` field. Current callers pass `resourceType: 'gatekeeper'` with the
+    // gatekeeper id as `resourceId` (was `capability: 'gatekeeper'` with the id inside `scope`);
+    // future resource types (`worker_definition`, `skill`) follow the same shape. `resourceId` is
+    // optional — a workspace-wide grant (e.g. an approval-queue `action_kind` grant, which has no
+    // single resource instance) omits it, matching the DB's own nullable `resource_id` column
+    // (migrations/governance/00NN_capability_grants_resource_type.sql). `scope` keeps only genuine
+    // additional qualifiers now that the id has its own first-class field.
     name: 'grant_capability',
     group: 'governance',
     mode: 'execute',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ principalId: id, capability: z.string(), scope: jsonRecord }).strict(),
+    paramsSchema: z
+      .object({
+        principalId: id,
+        resourceType: z.string(),
+        resourceId: id.optional(),
+        scope: jsonRecord.optional(),
+      })
+      .strict(),
     description: 'Grant a Capability to a Principal.',
   },
   {
@@ -820,7 +856,7 @@ const taskCapabilities: readonly Capability[] = [
   {
     name: 'report_turn',
     group: 'task',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z
@@ -837,7 +873,7 @@ const taskCapabilities: readonly Capability[] = [
   {
     name: 'create_task',
     group: 'task',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ input: z.unknown() }).strict(),
@@ -846,7 +882,7 @@ const taskCapabilities: readonly Capability[] = [
   {
     name: 'invoke_worker',
     group: 'task',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z
@@ -913,7 +949,7 @@ const taskCapabilities: readonly Capability[] = [
     // note as `list_allowed_operations` above.
     name: 'report_task_result',
     group: 'task',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     paramsSchema: WorkerResultCapabilityParamsSchema,
     description:
@@ -939,7 +975,7 @@ const taskCapabilities: readonly Capability[] = [
   {
     name: 'cancel_task',
     group: 'task',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ taskId: id }).strict(),
@@ -1011,7 +1047,7 @@ const ingestCapabilities: readonly Capability[] = [
   {
     name: 'register_source',
     group: 'ingest',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     paramsSchema: z
       .object({
@@ -1025,7 +1061,7 @@ const ingestCapabilities: readonly Capability[] = [
   {
     name: 'submit_observations',
     group: 'ingest',
-    mode: 'propose',
+    mode: 'write',
     channel: 'handle',
     paramsSchema: z.object({ sourceId: id, observations: z.array(jsonRecord) }).strict(),
     description: 'Submit a batch of Observations from one Activity (collectors, §7.8).',

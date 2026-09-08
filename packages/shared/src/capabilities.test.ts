@@ -160,6 +160,38 @@ describe('CAPABILITY_REGISTRY', () => {
       expect(typeof capability.paramsSchema.safeParse).toBe('function');
     }
   });
+
+  // docs/wire-contract-conventions.md §1 vocabulary table / §5 "词表守卫" (2026-09-08 decision):
+  // `mode: 'propose'` is reserved for a name that starts with `propose_` or `request_` (plus the
+  // one named exception, `propose_ontology_change`, which already matches the `propose_` prefix) —
+  // never an immediate in-platform write. Guards against the exact "propose"→"write" retagging
+  // this task performed ever silently regressing for a future registry addition.
+  it('reserves mode:"propose" for propose_*/request_* names, and never for an immediate write', () => {
+    const proposeModeOffenders = CAPABILITY_REGISTRY.filter(
+      (c) =>
+        c.mode === 'propose' && !(c.name.startsWith('propose_') || c.name.startsWith('request_')),
+    );
+    expect(proposeModeOffenders.map((c) => c.name)).toEqual([]);
+
+    const IMMEDIATE_WRITE_NAMES = [
+      'assert_fact',
+      'supersede_fact',
+      'invalidate_fact',
+      'record_decision',
+      'resolve_conflict',
+      'verify_fact',
+      'report_turn',
+      'create_task',
+      'invoke_worker',
+      'report_task_result',
+      'cancel_task',
+      'register_source',
+      'submit_observations',
+    ];
+    for (const name of IMMEDIATE_WRITE_NAMES) {
+      expect(getCapability(name)?.mode, `expected "${name}" to be mode:"write"`).toBe('write');
+    }
+  });
 });
 
 describe('assertRegistryConsistent', () => {

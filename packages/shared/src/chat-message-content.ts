@@ -47,7 +47,7 @@ const SystemActionPendingContent = z.object({
   text: z.string(),
   actionRequestId: z.string(),
   gatekeeperId: z.string(),
-  actionKind: z.string(),
+  actionKindTag: z.string(),
   resourceScope: z.string().nullable().optional(),
   blastRadius: BlastRadiusSchema.optional(),
   awaitDecision: z.boolean().optional(),
@@ -59,7 +59,7 @@ const SystemActionUpdateContent = z.object({
   text: z.string(),
   actionRequestId: z.string(),
   status: ActionRequestStatusSchema,
-  actionKind: z.string(),
+  actionKindTag: z.string(),
   isHolder: z.boolean(),
 });
 
