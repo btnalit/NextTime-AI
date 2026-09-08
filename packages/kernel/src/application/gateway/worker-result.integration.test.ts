@@ -27,9 +27,18 @@ import type { ResolvedCaller } from './resolve-caller.js';
 /**
  * application/gateway/worker-result.integration.test: DB-gated (real Postgres; auto-skip without
  * DATABASE_URL) end-to-end tests for `report_task_result` (docs/development-tasks.md S2.9
- * deliverable C acceptance): a posted contract creates `inferred` Facts under a `worker_result`
- * Activity, completes the Task with the stored result, and `explain(fact)` reaches the WorkerRun;
- * a contract from a session that is not the Task's own WorkerRun → 403; a malformed contract → 400.
+ * deliverable C acceptance): a posted contract creates Facts under a `worker_result` Activity,
+ * completes the Task with the stored result, and `explain(fact)` reaches the WorkerRun; a contract
+ * from a session that is not the Task's own WorkerRun → 403; a malformed contract → 400.
+ *
+ * epistemic_status (lane-1 P2 fix): `SqlGraphStore.assertFact` now derives it from the real
+ * `principals.kind` row for the caller (`postWorkerResult`'s `actorPrincipalId`, the Task's
+ * on_behalf_of principal), never from a caller-supplied `kind` — closing a hole where the old code
+ * could claim `kind: 'agent'` regardless of who `actorPrincipalId` actually was. This harness's
+ * `ownerId` is a genuine `kind: 'human'` principal (`adminInsertPrincipal` below always inserts
+ * `'human'`), so the Fact this test's `report_task_result` call produces is honestly `asserted`,
+ * not `inferred` — this codebase has no separate agent-kind identity for a WorkerRun to record
+ * `inferred` against (see substrate/graph/sql-store.ts's own doc comment on this tradeoff).
  *
  * Reuses `invoke.integration.test.ts`'s own harness shape (fake, in-memory
  * `TaskSupervisorClientPort` — no real Docker/worker-supervisor) so a real WorkerRun + a real
@@ -237,7 +246,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       return { taskId: invoked.taskId, workerRunId: invoked.workerRunId, claims };
     }
 
-    it('writes facts_to_assert as inferred Facts under a worker_result Activity, completes the Task, and explain reaches the WorkerRun', async () => {
+    it('writes facts_to_assert as Facts under a worker_result Activity, completes the Task, and explain reaches the WorkerRun', async () => {
       const { taskId, workerRunId, claims } = await spawnWorkerRun();
       expect(claims.scope.capabilities).toContain('report_task_result');
 
@@ -274,7 +283,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       const [factId] = result.factIds;
       if (!factId) throw new Error('expected a written fact id');
       const explained = await inTx(ownerId, (client) => explain(client, workspaceId, { factId }));
-      expect(explained.fact?.epistemicStatus).toBe('inferred');
+      // ownerId is a genuine 'human' principal — see this file's own module doc comment on why
+      // this is 'asserted', not 'inferred', since the lane-1 P2 CallerPrincipal.kind fix.
+      expect(explained.fact?.epistemicStatus).toBe('asserted');
       expect(explained.activity?.kind).toBe('worker_result');
       expect(explained.activity?.metadata.taskId).toBe(taskId);
       expect(explained.activity?.metadata.workerRunId).toBe(workerRunId);

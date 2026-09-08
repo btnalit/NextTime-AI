@@ -37,7 +37,7 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
     chatId: 'chat1',
     turnId: 'turn1',
     principalId: 'p1',
-    prompt: 'hello',
+    chatMessageId: 'msg1',
   },
   {
     type: 'TurnCompleted',

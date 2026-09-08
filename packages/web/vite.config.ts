@@ -2,7 +2,8 @@ import { defineConfig } from 'vite';
 
 // Minimal Vite config: no @vitejs/plugin-react dependency, esbuild already strips TS/JSX for
 // .tsx sources (see package.json's minimal-deps note). Output lands in dist/, which
-// docker-compose.yml's caddy service mounts read-only at /srv/web (§10.2).
+// deploy/caddy/Dockerfile builds this package and copies into the caddy image at /srv/web
+// (baked at image-build time, not bind-mounted — rebuild the caddy image to deploy a change).
 //
 // Dev server proxy (S1.8 deliverable 2): in production caddy reverse-proxies `/api` and `/ws` to
 // the kernel on the *same origin* (deploy/caddy/Caddyfile) — the app never hard-codes a kernel

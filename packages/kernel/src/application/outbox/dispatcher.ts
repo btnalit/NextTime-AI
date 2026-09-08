@@ -20,12 +20,28 @@ import type { DomainEvent } from '../../substrate/outbox/index.js';
  *      the other 19 rows already selected in the same transaction (and, transitively, block any
  *      other dispatcher instance's `SKIP LOCKED` poll from reaching rows this one hasn't gotten to
  *      yet). Per-row transactions bound that blast radius to the one row.
- *   2. A consumer that throws must not prevent the *rest* of the outbox from draining (no
- *      dead-letter/retry-limit mechanism exists yet — out of S1.4 scope, design doc §18 risk
- *      register). With a per-row transaction, a consumer error rolls back only that row's
- *      `dispatched_at` update (via the throw propagating out of `processOneRow`, caught by
- *      `pollOnce`'s caller), leaving it `dispatched_at IS NULL` for the next poll to retry
- *      indefinitely — a poison-pill event only ever blocks itself, never its neighbors.
+ *   2. A consumer that throws must not prevent the *rest* of the outbox from draining. With a
+ *      per-row transaction, a consumer error rolls back only that row's `dispatched_at` update
+ *      (via the throw propagating out of `processOneRow`, caught by `pollOnce`'s caller), leaving
+ *      it `dispatched_at IS NULL` for a later poll to retry — a poison-pill event only ever blocks
+ *      itself, never its neighbors.
+ *
+ * Attempts + dead-letter cap (lane-1 P2 fix): `attempts` is durably incremented *before* any
+ * consumer runs, in its own short transaction committed immediately — deliberately separate from
+ * the delivery transaction below, because a consumer throw rolls back everything from that
+ * transaction's own `BEGIN` onward, and the original shape here only ever incremented `attempts`
+ * as part of that same rolled-back transaction. A poison-pill consumer therefore used to be
+ * retried forever at full poll cadence with `attempts` stuck at 0 (no way to ever recognize or cap
+ * it). `SELECT ... WHERE attempts < maxAttempts` on the claiming query now excludes a row once it
+ * has been attempted `maxAttempts` times — it is left `dispatched_at IS NULL` (a durable
+ * dead-letter marker queryable as `dispatched_at IS NULL AND attempts >= <maxAttempts>`) rather
+ * than deleted, so the payload remains available for inspection/manual replay. This does introduce
+ * a narrow window, between the increment's `COMMIT` and the delivery transaction's own `BEGIN …
+ * FOR UPDATE`, where a second dispatcher instance could in principle claim the same row — accepted
+ * here because there is exactly one kernel process today (this file's own "Cross-workspace
+ * polling" note below); Postgres has no autonomous-subtransaction primitive that would let one
+ * UPDATE survive its enclosing transaction's rollback, so a second, short transaction is the only
+ * way to make the increment failure-proof at all.
  *
  * Cross-workspace polling: outbox rows for every workspace must be visible to one dispatcher
  * instance (there is exactly one kernel process, not one per workspace), which RLS's per-request
@@ -70,6 +86,11 @@ export interface OutboxDispatcherOptions {
    *  rejection there never becomes an unhandled promise rejection. Defaults to a no-op; callers
    *  that want visibility (structured logging, design doc §12) should pass one. */
   readonly onError?: (error: unknown) => void;
+  /** Dead-letter cap (lane-1 P2 fix, this file's own module doc comment): a row is no longer
+   *  claimed by `processOneRow` once its `attempts` reaches this value — it stays
+   *  `dispatched_at IS NULL` forever (a durable, queryable dead-letter marker) instead of being
+   *  retried at full poll cadence indefinitely. Default 10. */
+  readonly maxAttempts?: number;
 }
 
 interface OutboxRow {
@@ -81,6 +102,7 @@ interface OutboxRow {
 
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_BATCH_SIZE = 20;
+const DEFAULT_MAX_ATTEMPTS = 10;
 
 /**
  * In-process outbox dispatcher over one `PoolLike` (a real `pg.Pool` in production; a fake with
@@ -96,6 +118,7 @@ export class OutboxDispatcher {
   private readonly pollIntervalMs: number;
   private readonly batchSize: number;
   private readonly onError: (error: unknown) => void;
+  private readonly maxAttempts: number;
   private readonly consumers = new Map<string, Set<OutboxConsumer>>();
   private timer: NodeJS.Timeout | undefined;
   /** Reentrancy guard: a slow poll must not overlap the next interval tick. */
@@ -106,6 +129,7 @@ export class OutboxDispatcher {
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
     this.onError = options.onError ?? (() => {});
+    this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   }
 
   /** Registers `consumer` for every outbox row whose `event_type` is `eventType`. Returns an
@@ -185,30 +209,57 @@ export class OutboxDispatcher {
     }
   }
 
-  /** Delivers exactly one undelivered row not in `excludeIds`, or returns `false` if none remain
-   *  right now. On failure, appends the row's id to `excludeIds` before rethrowing, so the caller's
-   *  next attempt (within the same `pollOnce()` batch) skips it. */
+  /** Delivers exactly one undelivered, under-`maxAttempts` row not in `excludeIds`, or returns
+   *  `false` if none remain right now. On failure, appends the row's id to `excludeIds` before
+   *  rethrowing, so the caller's next attempt (within the same `pollOnce()` batch) skips it. */
   private async processOneRow(excludeIds: string[]): Promise<boolean> {
     const client = await this.pool.connect();
     let selectedId: string | undefined;
     try {
+      // Phase 1: claim a row and durably increment its attempts counter — committed here, on its
+      // own, regardless of what phase 2 below does (see this file's own module doc comment,
+      // "Attempts + dead-letter cap").
       await client.query('BEGIN');
-      const result = await client.query<OutboxRow>(
+      const claimResult = await client.query<OutboxRow>(
         `select id, workspace_id, event_type, payload
          from outbox
          where dispatched_at is null
+           and attempts < $2
            and not (id = any($1::bigint[]))
          order by id
          limit 1
          for update skip locked`,
-        [excludeIds],
+        [excludeIds, this.maxAttempts],
       );
-      const row = result.rows[0];
-      if (!row) {
+      const claimed = claimResult.rows[0];
+      if (!claimed) {
         await client.query('ROLLBACK');
         return false;
       }
-      selectedId = row.id;
+      selectedId = claimed.id;
+      await client.query(
+        'update outbox set attempts = attempts + 1 where workspace_id = $1 and id = $2',
+        [claimed.workspace_id, claimed.id],
+      );
+      await client.query('COMMIT');
+
+      // Phase 2: re-acquire the row and deliver. A missing row here (already dispatched by
+      // another process in the narrow gap between the two transactions — see module doc comment)
+      // is treated as "someone else handled it", not an error.
+      await client.query('BEGIN');
+      const deliverResult = await client.query<OutboxRow>(
+        `select id, workspace_id, event_type, payload
+         from outbox
+         where workspace_id = $1 and id = $2 and dispatched_at is null
+         for update skip locked`,
+        [claimed.workspace_id, claimed.id],
+      );
+      const row = deliverResult.rows[0];
+      if (!row) {
+        await client.query('ROLLBACK');
+        excludeIds.push(selectedId);
+        return true;
+      }
 
       const consumers = this.consumers.get(row.event_type);
       if (consumers && consumers.size > 0) {
@@ -223,7 +274,7 @@ export class OutboxDispatcher {
       }
 
       await client.query(
-        'update outbox set dispatched_at = now(), attempts = attempts + 1 where workspace_id = $1 and id = $2',
+        'update outbox set dispatched_at = now() where workspace_id = $1 and id = $2',
         [row.workspace_id, row.id],
       );
       await client.query('COMMIT');
@@ -234,6 +285,36 @@ export class OutboxDispatcher {
       });
       if (selectedId !== undefined) excludeIds.push(selectedId);
       throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Deletes dispatched outbox rows older than `olderThanDays` (lane-1 P2 fix, this file's own
+   * module doc comment — `TurnStarted`'s `outbox.payload` no longer carries raw prompt text after
+   * the chatMessageId change, but the table itself still grows unboundedly with every domain event
+   * ever enqueued unless something prunes it). Only rows with `dispatched_at` set are eligible —
+   * an undelivered or dead-lettered row (see `maxAttempts`) is never pruned, so its payload stays
+   * available for inspection/manual replay regardless of age. Returns the number of rows deleted.
+   * Cross-workspace by design, same as the rest of this dispatcher — see "Cross-workspace polling"
+   * in the module doc comment for why this never calls `withWorkspace()`.
+   */
+  async pruneDispatched(olderThanDays: number): Promise<number> {
+    if (!Number.isFinite(olderThanDays) || olderThanDays <= 0) {
+      throw new RangeError(
+        `pruneDispatched: olderThanDays must be a positive number, got ${olderThanDays}`,
+      );
+    }
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `delete from outbox
+         where dispatched_at is not null
+           and dispatched_at < now() - make_interval(days => $1::int)`,
+        [olderThanDays],
+      );
+      return result.rowCount ?? 0;
     } finally {
       client.release();
     }

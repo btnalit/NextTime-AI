@@ -17,16 +17,21 @@ interface FakeOutboxRow {
   event_type: string;
   payload: unknown;
   dispatched_at: string | null;
+  /** Defaults to 0 when omitted — most tests don't care about this axis at all. */
+  attempts?: number;
 }
 
 /**
  * A tiny in-memory stand-in for the `outbox` table, shared across every `pool.connect()` call the
  * dispatcher makes (one per row it processes) — faithful enough to dispatcher.ts's own SQL text
- * (matched by prefix) to exercise its BEGIN/SELECT…FOR UPDATE SKIP LOCKED/UPDATE/COMMIT/ROLLBACK
- * sequencing without a real database.
+ * (matched by distinguishing substrings) to exercise its two-phase (claim+increment, then deliver)
+ * BEGIN/SELECT…FOR UPDATE SKIP LOCKED/UPDATE/COMMIT/ROLLBACK sequencing without a real database.
  */
 function createFakeOutboxPool(initialRows: readonly FakeOutboxRow[]) {
-  const rows: FakeOutboxRow[] = initialRows.map((r) => ({ ...r }));
+  const rows: Array<FakeOutboxRow & { attempts: number }> = initialRows.map((r) => ({
+    ...r,
+    attempts: r.attempts ?? 0,
+  }));
   const queryTexts: string[] = [];
 
   function makeClient(): PoolClient {
@@ -38,16 +43,49 @@ function createFakeOutboxPool(initialRows: readonly FakeOutboxRow[]) {
         if (t === 'BEGIN' || t === 'ROLLBACK' || t === 'COMMIT') {
           return { rows: [], rowCount: 0 };
         }
-        if (t.startsWith('select id, workspace_id, event_type, payload')) {
+        // Phase 1: claim query (excludeIds[] + attempts < maxAttempts) — checked before the more
+        // generic phase-2 `startsWith` below, since both queries share the same first line.
+        if (t.includes('not (id = any($1::bigint[]))')) {
           const excludeIds = new Set(((values?.[0] as string[] | undefined) ?? []).map(String));
-          const row = rows.find((r) => r.dispatched_at === null && !excludeIds.has(r.id));
+          const maxAttempts = Number(values?.[1]);
+          const row = rows.find(
+            (r) => r.dispatched_at === null && !excludeIds.has(r.id) && r.attempts < maxAttempts,
+          );
           return row ? { rows: [{ ...row }], rowCount: 1 } : { rows: [], rowCount: 0 };
         }
+        // Phase 1: durable attempts increment.
+        if (t.startsWith('update outbox set attempts = attempts + 1')) {
+          const id = String(values?.[1]);
+          const row = rows.find((r) => r.id === id);
+          if (row) row.attempts += 1;
+          return { rows: [], rowCount: row ? 1 : 0 };
+        }
+        // Phase 2: relock by (workspace_id, id).
+        if (t.startsWith('select id, workspace_id, event_type, payload')) {
+          const id = String(values?.[1]);
+          const row = rows.find((r) => r.id === id && r.dispatched_at === null);
+          return row ? { rows: [{ ...row }], rowCount: 1 } : { rows: [], rowCount: 0 };
+        }
+        // Phase 2: dispatched_at update.
         if (t.startsWith('update outbox set dispatched_at')) {
           const id = String(values?.[1]);
           const row = rows.find((r) => r.id === id);
           if (row) row.dispatched_at = new Date().toISOString();
           return { rows: [], rowCount: row ? 1 : 0 };
+        }
+        // pruneDispatched: `dispatched_at < now() - make_interval(days => $1)`, emulated with real
+        // Date arithmetic against each row's own dispatched_at.
+        if (t.startsWith('delete from outbox')) {
+          const olderThanDays = Number(values?.[0]);
+          const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+          const before = rows.length;
+          const survivors = rows.filter(
+            (r) => !(r.dispatched_at !== null && new Date(r.dispatched_at).getTime() < cutoff),
+          );
+          const deletedCount = before - survivors.length;
+          rows.length = 0;
+          rows.push(...survivors);
+          return { rows: [], rowCount: deletedCount };
         }
         throw new Error(`unexpected query against fake outbox pool: ${t}`);
       }),
@@ -262,6 +300,62 @@ describe('OutboxDispatcher.pollOnce', () => {
     expect(rows[0]?.dispatched_at).not.toBeNull();
   });
 
+  it('lane-1 P2 fix: attempts is durably incremented even when the consumer throws (not rolled back)', async () => {
+    const { pool, rows } = createFakeOutboxPool([
+      {
+        id: '1',
+        workspace_id: 'ws1',
+        event_type: 'FactAsserted',
+        payload: factAssertedEvent(),
+        dispatched_at: null,
+      },
+    ]);
+    const dispatcher = new OutboxDispatcher(pool);
+    dispatcher.subscribe('FactAsserted', () => {
+      throw new Error('boom');
+    });
+
+    await expect(dispatcher.pollOnce()).rejects.toThrow('boom');
+
+    // Before this fix, attempts stayed 0 forever on a consumer throw (it only incremented inside
+    // the same transaction the throw rolled back) — a poison-pill event retried at full poll
+    // cadence with no way to ever recognize or cap it.
+    expect(rows[0]?.attempts).toBe(1);
+    expect(rows[0]?.dispatched_at).toBeNull();
+
+    await expect(dispatcher.pollOnce()).rejects.toThrow('boom');
+    expect(rows[0]?.attempts).toBe(2);
+  });
+
+  it('lane-1 P2 fix: a row is dead-lettered (no longer claimed) once attempts reaches maxAttempts', async () => {
+    const { pool, rows } = createFakeOutboxPool([
+      {
+        id: '1',
+        workspace_id: 'ws1',
+        event_type: 'FactAsserted',
+        payload: factAssertedEvent(),
+        dispatched_at: null,
+      },
+    ]);
+    const dispatcher = new OutboxDispatcher(pool, { maxAttempts: 2 });
+    dispatcher.subscribe('FactAsserted', () => {
+      throw new Error('boom');
+    });
+
+    await expect(dispatcher.pollOnce()).rejects.toThrow('boom');
+    expect(rows[0]?.attempts).toBe(1);
+    await expect(dispatcher.pollOnce()).rejects.toThrow('boom');
+    expect(rows[0]?.attempts).toBe(2);
+
+    // A third poll finds nothing left to claim — the row is dead-lettered (attempts >=
+    // maxAttempts), not retried indefinitely. It stays dispatched_at IS NULL (a durable,
+    // queryable dead-letter marker), never silently deleted.
+    const delivered = await dispatcher.pollOnce();
+    expect(delivered).toBe(0);
+    expect(rows[0]?.attempts).toBe(2);
+    expect(rows[0]?.dispatched_at).toBeNull();
+  });
+
   it('reentrancy guard: a concurrent pollOnce call while one is in flight resolves 0 and touches nothing', async () => {
     const { pool, rows } = createFakeOutboxPool([
       {
@@ -288,6 +382,70 @@ describe('OutboxDispatcher.pollOnce', () => {
     release?.();
     expect(await first).toBe(1);
     expect(rows[0]?.dispatched_at).not.toBeNull();
+  });
+});
+
+describe('OutboxDispatcher.pruneDispatched', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  it('deletes only dispatched rows older than olderThanDays', async () => {
+    const now = Date.now();
+    const { pool, rows } = createFakeOutboxPool([
+      {
+        id: '1',
+        workspace_id: 'ws1',
+        event_type: 'FactAsserted',
+        payload: factAssertedEvent(),
+        dispatched_at: new Date(now - 10 * DAY_MS).toISOString(), // old — pruned
+      },
+      {
+        id: '2',
+        workspace_id: 'ws1',
+        event_type: 'FactAsserted',
+        payload: factAssertedEvent(),
+        dispatched_at: new Date(now - 1 * DAY_MS).toISOString(), // recent — kept
+      },
+      {
+        id: '3',
+        workspace_id: 'ws1',
+        event_type: 'FactAsserted',
+        payload: factAssertedEvent(),
+        dispatched_at: null, // never dispatched — kept regardless of age
+      },
+    ]);
+    const dispatcher = new OutboxDispatcher(pool);
+
+    const deletedCount = await dispatcher.pruneDispatched(7);
+
+    expect(deletedCount).toBe(1);
+    expect(rows.map((r) => r.id)).toEqual(['2', '3']);
+  });
+
+  it('never prunes a dead-lettered row (dispatched_at still null regardless of attempts)', async () => {
+    const { pool, rows } = createFakeOutboxPool([
+      {
+        id: '1',
+        workspace_id: 'ws1',
+        event_type: 'FactAsserted',
+        payload: factAssertedEvent(),
+        dispatched_at: null,
+        attempts: 999,
+      },
+    ]);
+    const dispatcher = new OutboxDispatcher(pool);
+
+    const deletedCount = await dispatcher.pruneDispatched(1);
+
+    expect(deletedCount).toBe(0);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('rejects a non-positive olderThanDays', async () => {
+    const { pool } = createFakeOutboxPool([]);
+    const dispatcher = new OutboxDispatcher(pool);
+
+    await expect(dispatcher.pruneDispatched(0)).rejects.toThrow(RangeError);
+    await expect(dispatcher.pruneDispatched(-1)).rejects.toThrow(RangeError);
   });
 });
 

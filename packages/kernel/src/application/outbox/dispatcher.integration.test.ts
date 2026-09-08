@@ -128,5 +128,107 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(row.rows[0]?.dispatched_at).not.toBeNull();
     });
+
+    it('lane-1 P2 fix: attempts is durably incremented across a real rollback, and a dead-lettered row stops being claimed', async () => {
+      const factId = randomUUID();
+
+      await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+        await enqueue(client, {
+          type: 'FactAsserted',
+          workspaceId,
+          factId,
+          epistemicStatus: 'asserted',
+        });
+      });
+
+      const dispatcher = new OutboxDispatcher(pool, { maxAttempts: 2 });
+      dispatcher.subscribe('FactAsserted', (event) => {
+        if (event.factId === factId) throw new Error('boom');
+      });
+
+      // Drain other workspaces' rows first (same "queue may not be empty" reality the test above
+      // documents) until this row's attempts actually increments — a real consumer throw really
+      // does roll back the delivery transaction, so this only ever proves something if this exact
+      // row was claimed at least once.
+      const findRow = () =>
+        withWorkspace(pool, { workspaceId, principalId }, (client) =>
+          client.query<{ attempts: number; dispatched_at: Date | null }>(
+            "select attempts, dispatched_at from outbox where workspace_id = $1 and event_type = 'FactAsserted' and payload ->> 'factId' = $2",
+            [workspaceId, factId],
+          ),
+        );
+
+      for (let i = 0; i < 200; i += 1) {
+        const before = (await findRow()).rows[0]?.attempts ?? 0;
+        if (before >= 2) break;
+        await dispatcher.pollOnce().catch(() => {
+          // A poison-pill row rejects pollOnce() — expected; keep polling.
+        });
+      }
+
+      const afterTwoAttempts = await findRow();
+      expect(afterTwoAttempts.rows[0]?.attempts).toBe(2);
+      expect(afterTwoAttempts.rows[0]?.dispatched_at).toBeNull();
+
+      // Dead-lettered: further polling never claims it again (attempts stays at 2, never grows).
+      for (let i = 0; i < 5; i += 1) {
+        await dispatcher.pollOnce().catch(() => {});
+      }
+      const stillDeadLettered = await findRow();
+      expect(stillDeadLettered.rows[0]?.attempts).toBe(2);
+      expect(stillDeadLettered.rows[0]?.dispatched_at).toBeNull();
+    });
+
+    it('pruneDispatched deletes only dispatched rows past the cutoff, never an undelivered/dead-lettered one', async () => {
+      const factId = randomUUID();
+
+      await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+        await enqueue(client, {
+          type: 'FactAsserted',
+          workspaceId,
+          factId,
+          epistemicStatus: 'asserted',
+        });
+      });
+
+      // Deliver it, then backdate dispatched_at (admin path — this write path is not exposed to
+      // nexttime_app, and backdating is only ever needed here, to simulate age without waiting).
+      const dispatcher = new OutboxDispatcher(pool);
+      dispatcher.subscribe('FactAsserted', () => {});
+      for (let i = 0; i < 200; i += 1) {
+        const n = await dispatcher.pollOnce();
+        if (n === 0) break;
+        const row = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+          client.query<{ dispatched_at: Date | null }>(
+            "select dispatched_at from outbox where workspace_id = $1 and event_type = 'FactAsserted' and payload ->> 'factId' = $2",
+            [workspaceId, factId],
+          ),
+        );
+        if (row.rows[0]?.dispatched_at !== null) break;
+      }
+
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: randomUUID() },
+        async (client) => {
+          await client.query(
+            "update outbox set dispatched_at = now() - interval '30 days' where workspace_id = $1 and event_type = 'FactAsserted' and payload ->> 'factId' = $2",
+            [workspaceId, factId],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+
+      const deletedCount = await dispatcher.pruneDispatched(7);
+      expect(deletedCount).toBeGreaterThanOrEqual(1);
+
+      const remaining = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+        client.query(
+          "select 1 from outbox where workspace_id = $1 and event_type = 'FactAsserted' and payload ->> 'factId' = $2",
+          [workspaceId, factId],
+        ),
+      );
+      expect(remaining.rowCount).toBe(0);
+    });
   },
 );

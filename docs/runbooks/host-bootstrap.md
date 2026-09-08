@@ -18,11 +18,12 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=/path/to/data sh -s' < scripts/host-bootstrap.s
 | 目录 | 挂载到 |
 |------|--------|
 | `pgdata/` | `postgres`（数据卷） |
-| `workspaces/` | `worker-supervisor`（读写；子目录挂载规则见下） |
-| `secrets/` | `postgres`（Docker secret `pg_password`）、`backup` |
-| `config/` | `kernel`、`worker-supervisor`（均只读）、`llm-proxy`（只读） |
-| `caddy/` | `caddy`（TLS 状态数据） |
-| `backups/` | `backup` 容器（整个 `${NEXTTIME_DATA}` 挂为 `/data`） |
+| `workspaces/` | `worker-supervisor`（读写；子目录挂载规则见下）、`backup`（只读，`workspaces/` 只读子挂载） |
+| `secrets/` | `postgres`（Docker secret `pg_password`） |
+| `config/` | `kernel`、`worker-supervisor`（均只读）、`llm-proxy`（只读）、`egress-proxy`（只读）、`backup`（只读子挂载） |
+| `caddy/` | `caddy`（TLS 状态数据）、`backup`（只读子挂载，CA 私钥备份） |
+| `gatekeepers/`（含 `docker/`、`ragflow/` 两个子目录） | `gatekeeper-docker`、`gatekeeper-ragflow`（各自的幂等存储；只读子挂载给 `backup`） |
+| `backups/` | `backup` 容器（唯一可写挂载——`backup.sh` 的 `pg_dump`/tar.gz 输出落地处） |
 | `artifacts/` | 预留：当前 compose 骨架未显式挂载任何服务 |
 
 ## I15：workspaces 挂载规则
@@ -35,5 +36,7 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=/path/to/data sh -s' < scripts/host-bootstrap.s
 stat -c '%a %n' ${NEXTTIME_DATA}/secrets
 find ${NEXTTIME_DATA} -maxdepth 2 -printf '%M %u %p\n'
 ```
-期望：`secrets` 为 `700`；九个路径（八个一级子目录 + `workspaces/tasks`）齐全；
+期望：`secrets` 为 `700`；十一个目录路径齐全（八个一级子目录 `pgdata workspaces secrets
+config artifacts backups caddy gatekeepers` + 三个二级子目录 `workspaces/tasks
+gatekeepers/docker gatekeepers/ragflow`），另有 `config/.keep`（占位文件，非目录）一并列出；
 `secrets/pg_password` 为 `600` 且非空；其余目录为 `750`。

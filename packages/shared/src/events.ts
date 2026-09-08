@@ -56,10 +56,17 @@ const TurnStartedEvent = z.object({
   // the coupling mechanism"): `application/chat` and `application/host-bridge` never import each
   // other (.dependency-cruiser.cjs forbids chat/host-bridge -> application/task, and by
   // convention neither reaches into the other's module internals either) — this event is the
-  // only channel between them, so it must carry everything host-bridge's TurnStarted consumer
-  // needs to call `AgentRuntime.startTurn` without querying chat's own `chat_messages` table.
-  // `prompt` is the user message text that triggered this Turn.
-  prompt: z.string(),
+  // only channel between them.
+  //
+  // `chatMessageId` (lane-1 P2 fix, replacing the original `prompt: z.string()` field): a
+  // reference into `chat_messages` (RLS-scoped the same as the Chat itself, §5.6), not the
+  // message text inline. The full prompt previously lived in `outbox.payload` under
+  // workspace-only RLS and was never pruned — readable by any workspace member, indefinitely,
+  // regardless of the originating Chat's own visibility. `application/host-bridge`'s TurnStarted
+  // consumer resolves this id back to text (under the originating principal's own RLS context)
+  // immediately before handing it to `AgentRuntime.startTurn` — see
+  // `packages/kernel/src/index.ts`'s `resolveTurnPrompt` wiring.
+  chatMessageId: z.string(),
 });
 
 const TurnCompletedEvent = z.object({

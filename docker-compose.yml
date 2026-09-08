@@ -7,7 +7,11 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     environment: { POSTGRES_DB: nexttime, POSTGRES_USER: nexttime, POSTGRES_PASSWORD_FILE: /run/secrets/pg_password }
-    volumes: ["${NEXTTIME_DATA}/pgdata:/var/lib/postgresql/data"]
+    # ${NEXTTIME_DATA:?}: an unset/empty NEXTTIME_DATA would otherwise interpolate to an empty
+    # string, mounting the host's own filesystem root's /pgdata — fail the whole `docker compose
+    # up` instead (lane-7 P1 fix, this file's own convention below for every other always-on,
+    # non-gate service that references it).
+    volumes: ["${NEXTTIME_DATA:?}/pgdata:/var/lib/postgresql/data"]
     secrets: [pg_password]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U nexttime"], interval: 10s, retries: 5 }
     restart: unless-stopped
@@ -15,7 +19,7 @@ services:
 
   kernel:
     build: { context: ., dockerfile: packages/kernel/Dockerfile }
-    env_file: ${NEXTTIME_DATA}/secrets/kernel.env # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
+    env_file: ${NEXTTIME_DATA:?}/secrets/kernel.env # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
     # handle_key：Handle 签名私钥，只进这一个容器：/run/secrets/handle_key。internal_token
     # （fix/internal-plane-auth）：内核整个 internal plane（/internal/* + /internal/agent-host）的
     # 共享密钥，默认挂载路径 /run/secrets/internal_token 与 @nexttime/shared 的
@@ -44,15 +48,34 @@ services:
         AGENT_RUNTIME: "${AGENT_RUNTIME:-agent-host}",
         KERNEL_LLM_URL: http://llm-proxy:8082,
         SUPERVISOR_URL: http://worker-supervisor:8081,
-        NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS}",
+        NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；
     # 这里跟随同一决定，不再补上。
-    volumes: ["${NEXTTIME_DATA}/config:/data/config:ro"]
+    volumes: ["${NEXTTIME_DATA:?}/config:/data/config:ro"]
+    # healthcheck (lane-7 P2 fix): GET /api/health via node's own http client — no curl/wget in
+    # the node:24-bookworm-slim runtime image (packages/kernel/Dockerfile). Backs caddy's and
+    # agent-host's own `depends_on: kernel: condition: service_healthy` below.
+    healthcheck:
+      {
+        test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"],
+        interval: 10s,
+        timeout: 5s,
+        retries: 5,
+        start_period: 10s,
+      }
     depends_on: { postgres: { condition: service_healthy } }
     networks: [control, workers]
     restart: unless-stopped
+    # Hardening (lane-7 P2 fix): kernel runs as non-root `nexttime` (packages/kernel/Dockerfile,
+    # uid 10001) and writes nothing to its own container filesystem at runtime (config is a ro
+    # bind mount; secrets are their own tmpfs-backed mounts, unaffected by `read_only`) — only
+    # `/tmp` needs to stay writable (Node's own scratch use, e.g. os.tmpdir()).
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   agent-host:
     build: { context: ., dockerfile: packages/agent-host/Dockerfile }
@@ -65,16 +88,30 @@ services:
     # internal_token（fix/internal-plane-auth）：kernel-link.ts 需要它给 /internal/agent-host 的
     # WS 握手带 Authorization: Bearer <token>——见 kernel 服务块自己的注释。
     secrets: [internal_token]
-    # docker.sock 只读挂载：这一半任务把容器 stdio 附着(attach)放在 agent-host 自己（不是扩到
-    # worker-supervisor 的 API），见 packages/agent-host/src/container-io.ts 的模块注释——理由是
-    # worker-supervisor 已在 S1.5a 完成主机验收，保持它不动；agent-host 只做 docker attach，不
-    # create/start/stop 容器，只读挂载已经是这条边界能给的最小权限。group_add 与
-    # worker-supervisor 同理：非 root（uid 10001）需要主机 docker 组 gid 才能连 socket
-    # （即使只读也一样，docker.sock 的可读性同样由属组决定）。
+    # docker.sock 只读挂载 — 修正（lane-7 P2 fix）：`:ro` 只防止这个容器改写/删除 socket 特殊文件
+    # 本身，对经这条连接发出的 Docker Engine API 调用完全没有限制——任何能连上 socket 的进程都能发出
+    # 任意 API 请求（含创建特权容器、挂载宿主机文件系统），`:ro` 不是、也从未是这条边界的权限收窄，
+    # 只是防止这个容器意外/恶意地改写 socket 文件条目本身。这一半任务把容器 stdio
+    # 附着(attach)放在 agent-host 自己（不是扩到 worker-supervisor 的 API），见
+    # packages/agent-host/src/container-io.ts 的模块注释——理由是 worker-supervisor 已在 S1.5a
+    # 完成主机验收，保持它不动；agent-host 只做 docker attach，不 create/start/stop 容器——这是应用层
+    # 自我约束（container-io.ts 只调用 attach 相关 API），不是 socket 本身强制的边界。真正的调用面
+    # 收窄需要 docker-socket-proxy 之类的 allowlist 代理放在这个容器与 socket 之间，尚未实现。
+    # group_add 与 worker-supervisor 同理：非 root（uid 10001）需要主机 docker 组 gid 才能连 socket
+    # （无论挂载是否 :ro，docker.sock 的可读/可写性同样由属组决定）。
     volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
     group_add: ["${DOCKER_GID:-999}"]
     networks: [control] # 只到 kernel 与 supervisor；不挂载任何用户目录
     restart: unless-stopped
+    # depends_on (lane-7 P2 fix): agent-host's kernel-link.ts dials kernel's /internal/agent-host
+    # WS endpoint on startup — wait for kernel's own healthcheck rather than racing it.
+    depends_on: { kernel: { condition: service_healthy } }
+    # Hardening (lane-7 P2 fix): agent-host runs as non-root `nexttime` (packages/agent-host/
+    # Dockerfile, uid 10001); docker.sock is an external device node (unaffected by `read_only`).
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   worker-supervisor:
     build: { context: ., dockerfile: packages/worker-supervisor/Dockerfile }
@@ -107,9 +144,9 @@ services:
     volumes:
       [
         "/var/run/docker.sock:/var/run/docker.sock",
-        "${NEXTTIME_DATA}/workspaces:/data/workspaces",
-        "${NEXTTIME_DATA}/config:/data/config:ro",
-        "${NEXTTIME_DATA}/config/egress-sources.json:/data/config/egress-sources.json",
+        "${NEXTTIME_DATA:?}/workspaces:/data/workspaces",
+        "${NEXTTIME_DATA:?}/config:/data/config:ro",
+        "${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json",
       ]
     # NEXTTIME_DATA here is the HOST path (not this container's own /data/workspaces mount) —
     # required to compute bind-mount *sources* for the containers this service asks the Docker
@@ -133,7 +170,7 @@ services:
       {
         WORKER_IMAGE: nexttime-ai-worker-runtime,
         WORKER_RUNTIME: "${WORKER_RUNTIME:-runc}",
-        NEXTTIME_DATA: "${NEXTTIME_DATA}",
+        NEXTTIME_DATA: "${NEXTTIME_DATA:?}",
         KERNEL_URL: http://kernel:8080,
         KERNEL_LLM_URL: http://llm-proxy:8082,
         HTTP_PROXY_FOR_WORKERS: http://egress-proxy:3128,
@@ -143,6 +180,13 @@ services:
       }
     networks: [control]
     restart: unless-stopped
+    # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/worker-supervisor/
+    # Dockerfile, uid 10001); docker.sock and the two workspaces/config mounts above are external
+    # device/bind mounts (unaffected by `read_only`) — only /tmp needs to stay writable.
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # build-only: exists so `docker compose build worker-runtime` produces the
   # `nexttime-ai-worker-runtime` image worker-supervisor's resident mode spawns by name (its
@@ -189,13 +233,16 @@ services:
   caddy:
     build: { context: ., dockerfile: deploy/caddy/Dockerfile } # caddy:2.10 + 内建 web 静态产物（E8 + S1.8）
     image: nexttime-ai-caddy
-    ports: ["${KERNEL_BIND_ADDR}:8443:8443"]
+    # ${KERNEL_BIND_ADDR:?}: unset/empty would otherwise interpolate to "" and Compose defaults
+    # the missing host part to 0.0.0.0 — exposing the HTTPS entrypoint on every interface instead
+    # of the intended bind address (lane-7 P1 fix).
+    ports: ["${KERNEL_BIND_ADDR:?}:8443:8443"]
     # Static roots ship inside the image: deploy/caddy/Dockerfile builds packages/web and copies
     # dist/ to /srv/web (/srv/explorer stays a placeholder until S3). Rebuild the image to deploy
-    # a web change. ${NEXTTIME_DATA}/caddy:/data persists the internal CA and issued certs
+    # a web change. ${NEXTTIME_DATA:?}/caddy:/data persists the internal CA and issued certs
     # (chowned by scripts/host-env-init.sh).
-    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA}/caddy:/data"]
-    depends_on: [kernel]
+    volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA:?}/caddy:/data"]
+    depends_on: { kernel: { condition: service_healthy } }
     networks: [control]
     restart: unless-stopped
     # Runs as the image's default root user: the official caddy:2.10 image declares /config as
@@ -208,28 +255,40 @@ services:
 
   llm-proxy:
     build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }
-    env_file: ${NEXTTIME_DATA}/secrets/llm-proxy.env # provider keys 只在这里
-    volumes: ["${NEXTTIME_DATA}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro", "${NEXTTIME_DATA}/config/handle.pub:/data/config/handle.pub:ro"]
+    env_file: ${NEXTTIME_DATA:?}/secrets/llm-proxy.env # provider keys 只在这里
+    volumes: ["${NEXTTIME_DATA:?}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro", "${NEXTTIME_DATA:?}/config/handle.pub:/data/config/handle.pub:ro"]
     environment: { KERNEL_URL: http://kernel:8080, HANDLE_PUBLIC_KEY_FILE: /data/config/handle.pub, LLM_PROXY_PORT: 8082 }
     # internal_token（fix/internal-plane-auth）：revocation sync（GET /internal/handle-revocations）
     # 与 usage 上报（POST /internal/llm-usage）都要带它——见 kernel 服务块自己的注释。
     secrets: [internal_token]
     networks: [control, workers]
     restart: unless-stopped
+    # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/llm-proxy/Dockerfile, uid
+    # 10001); config/handle.pub are ro bind mounts — only /tmp needs to stay writable.
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   egress-proxy:
     build: { context: ., dockerfile: packages/egress-proxy/Dockerfile }
-    volumes: ["${NEXTTIME_DATA}/config/egress-sources.json:/data/config/egress-sources.json:ro"]
+    volumes: ["${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json:ro"]
     # EGRESS_DENY_UNKNOWN_SOURCE（fix/runtime-hardening，lane-6 review P2-7）：默认 fail-closed
     # （代码内默认 true）——一个 SOURCE_MAP_FILE 里完全没有登记的来源 IP 直接 403，不再和"已登记但无
     # allow/deny 限制"的来源一样按公网放行处理。只在 SOURCE_MAP_FILE 登记本身不可靠（worker-
     # supervisor 的 resident-service.ts 记录过的 EACCES 一类主机权限问题）时临时设成 0 作为逃生舱。
-    environment: { KERNEL_URL: http://kernel:8080, NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL}", NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS}", SOURCE_MAP_FILE: /data/config/egress-sources.json, EGRESS_TRUSTED_RESOLVED_CIDRS: "${EGRESS_TRUSTED_RESOLVED_CIDRS:-}", EGRESS_DENY_HOST_SUFFIXES: "${EGRESS_DENY_HOST_SUFFIXES:-}", EGRESS_DENY_UNKNOWN_SOURCE: "${EGRESS_DENY_UNKNOWN_SOURCE:-1}" }
+    environment: { KERNEL_URL: http://kernel:8080, NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL:?}", NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}", SOURCE_MAP_FILE: /data/config/egress-sources.json, EGRESS_TRUSTED_RESOLVED_CIDRS: "${EGRESS_TRUSTED_RESOLVED_CIDRS:-}", EGRESS_DENY_HOST_SUFFIXES: "${EGRESS_DENY_HOST_SUFFIXES:-}", EGRESS_DENY_UNKNOWN_SOURCE: "${EGRESS_DENY_UNKNOWN_SOURCE:-1}" }
     # internal_token（fix/internal-plane-auth）：egress 上报（POST /internal/egress）要带它——见
     # kernel 服务块自己的注释。
     secrets: [internal_token]
     networks: [control, workers]
     restart: unless-stopped
+    # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/egress-proxy/Dockerfile,
+    # uid 10001); the config mount above is ro — only /tmp needs to stay writable.
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # 仅测试/验收用（S1.10 accept_s1.sh 与本任务的主机验收）：确定性的 OpenAI 兼容假上游，见
   # deploy/fake-llm/server.mjs 与 config/llm-providers.fake.example.yaml。`profiles: ["test"]`——
@@ -372,17 +431,43 @@ services:
 
   backup:
     image: postgres:17-alpine # 与 postgres 同大版本
-    entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config tar.gz，保留 N 份（S1.12）
-    volumes: ["./deploy/backup/backup.sh:/backup.sh:ro", "${NEXTTIME_DATA}:/data"]
+    entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config/gatekeepers/caddy tar.gz，保留 N 份（S1.12）
+    # Mounts narrowed (lane-7 P2 fix) from one blanket rw `${NEXTTIME_DATA}:/data` (which handed
+    # this container write access to pgdata/, secrets/, and every other host-data subtree it never
+    # touches) to exactly what deploy/backup/backup.sh reads (ro) and writes (rw): workspaces/
+    # config/ gatekeepers/ caddy/ are backup *sources*, never destinations — secrets/ is
+    # deliberately absent (never backed up, see backup.sh's own header comment); backups/ is the
+    # one directory this container actually writes to.
+    volumes:
+      [
+        "./deploy/backup/backup.sh:/backup.sh:ro",
+        "${NEXTTIME_DATA:?}/workspaces:/data/workspaces:ro",
+        "${NEXTTIME_DATA:?}/config:/data/config:ro",
+        "${NEXTTIME_DATA:?}/gatekeepers:/data/gatekeepers:ro",
+        "${NEXTTIME_DATA:?}/caddy:/data/caddy:ro",
+        "${NEXTTIME_DATA:?}/backups:/data/backups",
+      ]
     environment: { TZ: "${TZ:-UTC}", BACKUP_TIME: "${BACKUP_TIME:-03:30}", RETENTION: "${BACKUP_RETENTION:-7}", PGHOST: postgres }
     depends_on: { postgres: { condition: service_healthy } }
     secrets: [pg_password]
     networks: [control]
     restart: unless-stopped
+    # Hardening (lane-7 P2 fix): this image's default ENTRYPOINT is overridden (line above), so
+    # docker-entrypoint.sh's own privilege-drop (gosu postgres) never runs — this container starts
+    # and stays as the image's default root user (lane-7 review's own finding). `read_only` and
+    # `no-new-privileges` are still real, root-independent restrictions (they bound what the
+    # filesystem/process tree can do regardless of uid), so both apply; `cap_drop: [ALL]`
+    # deliberately does not — pg_dump/tar/gzip under alpine's busybox userland have not been
+    # verified to still run cap-less as root (no Docker available in this environment — see the
+    # PR's own "no host access" note), and this is exactly the kind of change that fails silently
+    # (a cron-like background loop, not a request path) if it breaks the nightly backup.
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
 
 networks:
-  control: { ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_CONTROL}" }] } }
-  workers: { internal: true, ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_WORKERS}" }] } }
+  control: { ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_CONTROL:?}" }] } }
+  workers: { internal: true, ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_WORKERS:?}" }] } }
 secrets:
   pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
   handle_key: { file: "${NEXTTIME_DATA}/secrets/handle.key" } # scripts/gen-handle-keys.sh；0640 组 10001

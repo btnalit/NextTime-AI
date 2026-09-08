@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "React + Vite SPA served statically by caddy: chat, approvals, tasks, connections, audit/explain (design doc §7.6). `dist/` is the Vite static build, mounted read-only by the caddy service in docker-compose.yml (§10.2).",
+  "description": "React + Vite SPA served statically by caddy: chat, approvals, tasks, connections, audit/explain (design doc §7.6). `dist/` is the Vite static build, baked into the caddy image at build time (deploy/caddy/Dockerfile builds this package and copies dist/ to /srv/web) — not bind-mounted; rebuild the caddy image to deploy a web change.",
   "scripts": {
     "lint": "biome check .",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -389,7 +389,9 @@ export async function sendChatMessage(
     chatId: input.chatId,
     turnId,
     principalId,
-    prompt: input.text,
+    // lane-1 P2 fix: a reference into chat_messages (RLS-scoped), not the message text inline —
+    // see shared/src/events.ts's TurnStartedEvent doc comment.
+    chatMessageId: message.id,
   });
 
   return { message, turnId };

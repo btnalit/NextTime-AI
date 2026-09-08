@@ -78,7 +78,16 @@ export const DEFAULT_TRAVERSE_DIRECTION: TraverseDirection = 'both';
 
 export interface CallerPrincipal {
   readonly id: string;
-  readonly kind: PrincipalKind;
+  /**
+   * **Not trusted** (lane-1 P2 fix): `SqlGraphStore.assertFact`/`supersedeFact` derive the actual
+   * `epistemic_status`-driving kind from the `principals` row for `id` in the same transaction,
+   * never from this field — a caller could otherwise claim `kind: 'human'` (→ `asserted`) for a
+   * write that was not actually made by a human principal, or vice versa. Kept optional, rather
+   * than removed, purely so existing call sites that still pass it (e.g. a service-principal
+   * caller that wants its intent documented at the call site) do not need to change; a caller that
+   * omits it entirely is exactly as correct as one that supplies it.
+   */
+  readonly kind?: PrincipalKind;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -219,6 +228,24 @@ export class FactNotFoundError extends Error {
   constructor(workspaceId: string, factId: string) {
     super(`Fact not found: workspace ${workspaceId}, id ${factId}`);
     this.name = 'FactNotFoundError';
+  }
+}
+
+/**
+ * Thrown by `supersedeFact` when the replacement's `(linkType, sourceObjectId, targetObjectId)`
+ * does not match the Fact it supersedes (I5 — lane-1 P1 fix): a supersede replaces the *content*
+ * of an existing edge (properties/valid_from/valid_until/confidence/epistemic promotion), never
+ * its identity. Without this check, `state_at()` history for the *original* triple silently stops
+ * updating while a `supersedes_id` chain quietly walks off to a completely different edge — a
+ * caller reading the old triple's history at a later `at` would see stale data with no indication
+ * a "supersede" ever happened to it at all.
+ */
+export class SupersedeIdentityMismatchError extends Error {
+  constructor(workspaceId: string, factId: string) {
+    super(
+      `supersedeFact: workspace ${workspaceId}, fact ${factId} — the replacement's (linkType, sourceObjectId, targetObjectId) must match the Fact it supersedes (I5); to record a genuinely different edge, assertFact a new Fact instead`,
+    );
+    this.name = 'SupersedeIdentityMismatchError';
   }
 }
 

@@ -365,6 +365,20 @@ export interface IssueHandleParams {
   readonly ttlSeconds: number;
   /** Set only when this Handle is the product of `attenuate`. */
   readonly parentJti?: string;
+  /**
+   * Absolute upper bound (epoch seconds) on the issued `exp` — set by `attenuate` to the parent
+   * Handle's own `exp`. `ttlSeconds` alone is relative to *this* call's own `Date.now()`, computed
+   * after an `await` (the session lookup below); a caller that derived `ttlSeconds` from the
+   * parent's remaining time using an earlier `Date.now()` call can therefore end up with
+   * `iatSeconds + ttlSeconds` landing a second (or more) past the parent's actual `exp` if a
+   * whole-second boundary falls between the two calls — tens of milliseconds apart is enough. That
+   * would violate the `capability_handles_inheritance` trigger's `expires_at <= parent's` check
+   * (migrations/governance/0008), turning a benign timing race into an intermittent, hard-to-debug
+   * child-Handle-mint failure. Clamping here, against the caller's own already-known ceiling,
+   * closes it structurally rather than relying on every future `ttlSeconds` computation to get the
+   * timing exactly right.
+   */
+  readonly notAfterSeconds?: number;
   readonly privateKey: CryptoKey;
 }
 
@@ -417,7 +431,16 @@ export async function issueHandle(
 
   const jti = randomUUID();
   const iatSeconds = Math.floor(Date.now() / 1000);
-  const expSeconds = iatSeconds + Math.floor(params.ttlSeconds);
+  const expSeconds = Math.min(
+    iatSeconds + Math.floor(params.ttlSeconds),
+    params.notAfterSeconds ?? Number.POSITIVE_INFINITY,
+  );
+  if (expSeconds <= iatSeconds) {
+    throw new HandleIssuanceError(
+      `notAfterSeconds (${params.notAfterSeconds}) clamps expiry to ${expSeconds}, which is not ` +
+        `after issuance (${iatSeconds}) — the parent handle has (or is about to) expire`,
+    );
+  }
 
   const claims: HandleClaims = {
     ws: sessionRow.workspace_id,
@@ -627,6 +650,9 @@ export async function attenuate(
     scope: subsetScope,
     ttlSeconds,
     parentJti: parentClaims.jti,
+    // See IssueHandleParams.notAfterSeconds's own doc comment: closes the timing race between
+    // this function's ttlSeconds computation (above) and issueHandle's own, later Date.now() call.
+    notAfterSeconds: parentClaims.exp,
     privateKey: options.privateKey,
   });
 }

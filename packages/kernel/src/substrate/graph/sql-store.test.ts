@@ -7,8 +7,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { startActivity } from '../epistemic/activities.js';
+import { recordSourceObservation, registerPrivateSource } from '../epistemic/sources.js';
 import { SqlGraphStore } from './sql-store.js';
-import { EpistemicStatusOverrideError, FactNotFoundError, type GraphObject } from './store.js';
+import {
+  EpistemicStatusOverrideError,
+  FactNotFoundError,
+  type GraphObject,
+  SupersedeIdentityMismatchError,
+} from './store.js';
 
 /**
  * Integration tests (real Postgres; auto-skip without DATABASE_URL — same pattern as
@@ -31,6 +37,7 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
   let workspaceId: string;
   let ownerId: string;
   let agentId: string;
+  let memberId: string;
   const humanCaller = () => ({ id: ownerId, kind: 'human' as const });
 
   async function adminInsertWorkspace(name: string): Promise<string> {
@@ -64,6 +71,13 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
 
   async function inTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
     return withWorkspace(pool, { workspaceId, principalId: ownerId }, fn);
+  }
+
+  async function inTxAs<T>(
+    principalId: string,
+    fn: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    return withWorkspace(pool, { workspaceId, principalId }, fn);
   }
 
   async function makeObject(client: PoolClient, name: string): Promise<GraphObject> {
@@ -104,6 +118,7 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
     workspaceId = await adminInsertWorkspace('graph-store-test-workspace');
     ownerId = await adminInsertPrincipal({ kind: 'human', role: 'owner', displayName: 'owner' });
     agentId = await adminInsertPrincipal({ kind: 'agent', role: 'member', displayName: 'agent' });
+    memberId = await adminInsertPrincipal({ kind: 'human', role: 'member', displayName: 'member' });
   });
 
   afterAll(async () => {
@@ -217,6 +232,51 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
 
       expect(humanFact.epistemicStatus).toBe('asserted');
       expect(agentFact.epistemicStatus).toBe('inferred');
+    });
+
+    it('ignores a caller-supplied kind that disagrees with the principals row (lane-1 P2 fix)', async () => {
+      // ownerId is genuinely a 'human' principal (beforeAll) — a caller claiming 'agent' for it
+      // must not get 'inferred'; the store derives 'asserted' from the real principals.kind row
+      // regardless of what CallerPrincipal.kind says.
+      const fact = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const activity = await makeActivity(client);
+        return store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'agent' },
+          {
+            linkType: 'test.rel',
+            sourceObjectId: a.id,
+            targetObjectId: b.id,
+            activityId: activity.id,
+          },
+        );
+      });
+
+      expect(fact.epistemicStatus).toBe('asserted');
+    });
+
+    it('omitting kind entirely still derives epistemic_status from the principals row', async () => {
+      const fact = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const activity = await makeActivity(client);
+        return store.assertFact(
+          client,
+          workspaceId,
+          { id: agentId },
+          {
+            linkType: 'test.rel',
+            sourceObjectId: a.id,
+            targetObjectId: b.id,
+            activityId: activity.id,
+          },
+        );
+      });
+
+      expect(fact.epistemicStatus).toBe('inferred');
     });
 
     it('rejects a caller-supplied epistemic status', async () => {
@@ -376,6 +436,51 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
           });
         }),
       ).rejects.toThrow(IllegalTransition);
+    });
+
+    it('rejects a supersede whose (linkType, source, target) does not match the Fact it targets (I5)', async () => {
+      const { fact1, c } = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const c = await makeObject(client, 'C');
+        const activity = await makeActivity(client);
+        const fact1 = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity.id,
+        });
+        return { fact1, c };
+      });
+
+      await expect(
+        inTx(async (client) => {
+          const activity = await makeActivity(client);
+          return store.supersedeFact(client, workspaceId, humanCaller(), {
+            factId: fact1.id,
+            linkType: 'test.rel',
+            sourceObjectId: fact1.sourceObjectId,
+            // Different target than fact1 — an attempt to smuggle a different edge through the
+            // same supersede chain.
+            targetObjectId: c.id,
+            activityId: activity.id,
+          });
+        }),
+      ).rejects.toThrow(SupersedeIdentityMismatchError);
+
+      await expect(
+        inTx(async (client) => {
+          const activity = await makeActivity(client);
+          return store.supersedeFact(client, workspaceId, humanCaller(), {
+            factId: fact1.id,
+            // Different linkType, same endpoints — also rejected.
+            linkType: 'test.other_rel',
+            sourceObjectId: fact1.sourceObjectId,
+            targetObjectId: fact1.targetObjectId,
+            activityId: activity.id,
+          });
+        }),
+      ).rejects.toThrow(SupersedeIdentityMismatchError);
     });
   });
 
@@ -592,6 +697,107 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
 
       const limited = await inTx((client) => store.listRecentFacts(client, workspaceId, 1));
       expect(limited).toHaveLength(1);
+    });
+  });
+
+  describe('Fact visibility inherits Source visibility (lane-1 P1, §5.1.3/§5.6)', () => {
+    /** Mirrors `application/task/result.ts`'s `postWorkerResult`: a private Source/Observation
+     *  recorded against the *same* Activity a Fact is asserted under — the shape that actually
+     *  leaked before migrations/core/0010_link_visibility.sql. */
+    async function assertFactBehindPrivateSource(
+      ownerPrincipalId: string,
+      sourceObjectId: string,
+      targetObjectId: string,
+    ): Promise<{ readonly factId: string; readonly activityId: string }> {
+      return inTxAs(ownerPrincipalId, async (client) => {
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.private_run',
+          principalId: ownerPrincipalId,
+        });
+        const source = await registerPrivateSource(client, workspaceId, {
+          kind: 'test.private_source',
+          ownerPrincipalId,
+        });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: source.id,
+          activityId: activity.id,
+        });
+        const fact = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerPrincipalId, kind: 'human' },
+          {
+            linkType: 'test.private_fact',
+            sourceObjectId,
+            targetObjectId,
+            activityId: activity.id,
+          },
+        );
+        return { factId: fact.id, activityId: activity.id };
+      });
+    }
+
+    it('listRecentFacts/traverse/neighbors hide a Fact behind another principal’s private Source', async () => {
+      const [a, b] = await inTx(async (client) => [
+        await makeObject(client, `vis-a-${randomUUID()}`),
+        await makeObject(client, `vis-b-${randomUUID()}`),
+      ]);
+      if (!a || !b) throw new Error('makeObject produced no object');
+
+      const { factId } = await assertFactBehindPrivateSource(ownerId, a.id, b.id);
+
+      // The owner (who owns the private Source) still sees it everywhere.
+      const ownerRecent = await inTx((client) => store.listRecentFacts(client, workspaceId, 500));
+      expect(ownerRecent.map((fact) => fact.id)).toContain(factId);
+      const ownerNeighbors = await inTx((client) =>
+        store.neighbors(client, workspaceId, { objectId: a.id }),
+      );
+      expect(ownerNeighbors.map((fact) => fact.id)).toContain(factId);
+      const ownerTraverse = await inTx((client) =>
+        store.traverse(client, workspaceId, { fromId: a.id, direction: 'out', depth: 1 }),
+      );
+      expect(ownerTraverse.edges.map((edge) => edge.linkId)).toContain(factId);
+
+      // A different member never sees it, in any Fact-reading method.
+      const memberRecent = await inTxAs(memberId, (client) =>
+        store.listRecentFacts(client, workspaceId, 500),
+      );
+      expect(memberRecent.map((fact) => fact.id)).not.toContain(factId);
+
+      const memberNeighbors = await inTxAs(memberId, (client) =>
+        store.neighbors(client, workspaceId, { objectId: a.id }),
+      );
+      expect(memberNeighbors.map((fact) => fact.id)).not.toContain(factId);
+
+      const memberTraverse = await inTxAs(memberId, (client) =>
+        store.traverse(client, workspaceId, { fromId: a.id, direction: 'out', depth: 1 }),
+      );
+      expect(memberTraverse.edges.map((edge) => edge.linkId)).not.toContain(factId);
+      expect(memberTraverse.nodes).not.toContain(b.id);
+    });
+
+    it('stays visible when the Activity has no Observations at all (the common, unscoped case)', async () => {
+      const [a, b] = await inTx(async (client) => [
+        await makeObject(client, `vis-open-a-${randomUUID()}`),
+        await makeObject(client, `vis-open-b-${randomUUID()}`),
+      ]);
+      if (!a || !b) throw new Error('makeObject produced no object');
+
+      const factId = await inTx(async (client) => {
+        const activity = await makeActivity(client);
+        const fact = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.open_fact',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity.id,
+        });
+        return fact.id;
+      });
+
+      const memberRecent = await inTxAs(memberId, (client) =>
+        store.listRecentFacts(client, workspaceId, 500),
+      );
+      expect(memberRecent.map((fact) => fact.id)).toContain(factId);
     });
   });
 });

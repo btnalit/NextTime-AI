@@ -863,14 +863,20 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('parent_jti accepts a real parent — an attenuated child Handle records its lineage', async () => {
         const sessionId = await insertSessionFor(ownerId);
 
-        const parentJti = await withWorkspace(
+        // governance/0008's I13 inheritance trigger (lane-1 P2 fix) now enforces
+        // child.expires_at <= parent.expires_at — read the parent's actual, DB-computed
+        // expires_at back (RETURNING) and reuse that exact value for the child, rather than a
+        // second independent `now() + interval '1 hour'` (which, evaluated a moment later in its
+        // own transaction, would be strictly *greater* than the parent's and rejected).
+        const { parentJti, parentExpiresAt } = await withWorkspace(
           pool,
           { workspaceId, principalId: ownerId },
           async (client) => {
             const jti = randomUUID();
-            await client.query(
+            const inserted = await client.query<{ expires_at: Date }>(
               `insert into capability_handles (workspace_id, jti, session_id, on_behalf_of, scope, expires_at)
-             values ($1, $2, $3, $4, $5, now() + interval '1 hour')`,
+             values ($1, $2, $3, $4, $5, now() + interval '1 hour')
+             returning expires_at`,
               [
                 workspaceId,
                 jti,
@@ -879,7 +885,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 JSON.stringify({ capabilities: [], resources: {} }),
               ],
             );
-            return jti;
+            return { parentJti: jti, parentExpiresAt: inserted.rows[0]?.expires_at };
           },
         );
 
@@ -887,7 +893,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
             await client.query(
               `insert into capability_handles (workspace_id, jti, session_id, on_behalf_of, parent_jti, scope, expires_at)
-               values ($1, $2, $3, $4, $5, $6, now() + interval '1 hour')`,
+               values ($1, $2, $3, $4, $5, $6, $7)`,
               [
                 workspaceId,
                 randomUUID(),
@@ -895,6 +901,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 ownerId,
                 parentJti,
                 JSON.stringify({ capabilities: [], resources: {} }),
+                parentExpiresAt,
               ],
             );
           }),

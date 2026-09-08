@@ -117,7 +117,12 @@ export async function postWorkerResult(
   });
 
   try {
-    // facts_to_assert -> inferred Facts under this Activity (I3, §5.6 agent -> inferred).
+    // facts_to_assert -> Facts under this Activity (I3). epistemic_status is derived by
+    // SqlGraphStore from actorPrincipalId's own `principals.kind` row (lane-1 P2 fix — see
+    // CallerPrincipal.kind's doc comment in substrate/graph/store.ts), never from a caller-supplied
+    // `kind` here: actorPrincipalId is the Task's on_behalf_of principal, which this codebase has
+    // no separate agent-kind identity for (§5.6's "agent -> inferred" would require one), so these
+    // Facts are honestly recorded under whatever kind that principal actually is.
     const writtenFacts: Fact[] = [];
     for (const factInput of contract.factsToAssert ?? []) {
       const sourceObjectId = await resolveObjectRef(client, workspaceId, factInput.source);
@@ -125,7 +130,7 @@ export async function postWorkerResult(
       const fact = await graphStore.assertFact(
         client,
         workspaceId,
-        { id: actorPrincipalId, kind: 'agent' },
+        { id: actorPrincipalId },
         {
           linkType: factInput.linkType,
           sourceObjectId,

@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write # gitleaks-action (guards job) comments on the PR when it finds a leak
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,13 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # pnpm/action-setup does not support pnpm v11+ (root package.json pins
       # packageManager: pnpm@11.25.0) - its own README points to pnpm/setup for v11 and newer,
       # which also installs the Node.js runtime in the same step (replacing actions/setup-node).
       - name: Setup pnpm and Node 22
-        uses: pnpm/setup@v2
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
         with:
           runtime: node@22
           cache: true
@@ -73,10 +72,10 @@ jobs:
       DATABASE_URL: postgres://nexttime:nexttime@localhost:5432/nexttime_test
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pnpm and Node 22
-        uses: pnpm/setup@v2
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
         with:
           runtime: node@22
           cache: true
@@ -91,14 +90,20 @@ jobs:
   guards:
     name: guards
     runs-on: ubuntu-latest
+    # lane-7 P3 fix: pull-requests: write is needed only by gitleaks-action's own PR-comment
+    # step below, not by quality/test — narrowed from the workflow-wide permissions: block
+    # (which handed every job write access to PRs) down to just this one job.
+    permissions:
+      contents: read
+      pull-requests: write # gitleaks-action comments on the PR when it finds a leak
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: gitleaks (secret scanning)
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No GITLEAKS_LICENSE: only required for organization accounts, not personal ones
