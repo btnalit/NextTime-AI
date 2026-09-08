@@ -475,6 +475,22 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       );
       expect(resourceScope).toBe(gatekeeperId);
+
+      // Root-cause fix (CI failure, run 34215183787): every other test in this file shares one
+      // Gatekeeper/drainer queue across the whole describe block ("遇 pending 停" — the drainer
+      // stops at the first still-`pending_approval` row for a Gatekeeper, ascending
+      // `requested_at`) — leaving this row pending forever (nothing else in this test ever
+      // approves/rejects it) permanently blocked every later `auto_approved`/`approved` row on
+      // this same Gatekeeper from ever reaching `executed`. Reject it so the queue is clear for
+      // the tests that run after this one, the same way a real caller would eventually resolve
+      // any pending_approval row.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        rejectActionRequest(client, workspaceId, {
+          actionRequestId: result.actionRequestId,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
     });
 
     // S2.12 fix: `observe_operation` — the capability an entry agent's projected `<gate>.<op>`
