@@ -22,7 +22,7 @@ describe('systemStatusLineFromMessage', () => {
         text: 'ActionRequest approved',
         actionRequestId: 'ar-1',
         status: 'approved',
-        actionKind: 'docker.container_restart',
+        actionKindTag: 'docker.container_restart',
         isHolder: true,
       }),
     );
@@ -72,7 +72,7 @@ describe('systemStatusLineFromMessage', () => {
         chatMessage({
           kind: 'system.action_pending',
           actionRequestId: 'ar-1',
-          actionKind: 'docker.container_restart',
+          actionKindTag: 'docker.container_restart',
           isHolder: true,
         }),
       ),

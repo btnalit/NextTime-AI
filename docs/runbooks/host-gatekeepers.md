@@ -230,21 +230,23 @@ fetch('http://localhost:8080/api/cap/get_action', {
 docker inspect nexttime-gate-test --format '{{.State.StartedAt}}'   # 应已变化（真的重启了一次）
 ```
 
-## 8. 幂等验证——同一 `idempotencyKey` 重复 `apply` 不二次重启
+## 8. 幂等验证——同一 `actionRequestId` 重复 `apply` 不二次重启
 
 第 7 步已经用 kernel 的治理路径重启过一次；这一步直接对门自己的协议端点验证"重复 `apply` 只执行
 一次"（`@nexttime/gatekeeper-base` 的 `GatekeeperBase`/`JsonFileIdempotencyStore` 保证——门本身
 的单元测试 `gatekeepers/docker/src/transport.test.ts` 已经用假 dockerode 覆盖了这一点，这里是
 对真实门服务的端到端复核）。**注意**：再发一次 `request_action` 不是同一件事——那会产生一个
-*新的* `ActionRequestId`（=新的 `idempotencyKey`），会再重启一次，不是幂等测试；幂等测试必须直接
-打门自己的 `/gate/apply`，用同一个 `idempotencyKey`：
+*新的* `ActionRequestId`，会再重启一次，不是幂等测试；幂等测试必须直接打门自己的 `/gate/apply`，
+用同一个 `actionRequestId`（docs/wire-contract-conventions.md §1，2026-09-08 决定：字段名从
+`idempotencyKey` 改为 `actionRequestId`——`idempotencyKey` 现在只留给 `request_action` 自己的
+调用方去重参数）：
 
 ```bash
 docker compose exec -T kernel node -e "
 fetch('http://gatekeeper-docker:8083/gate/apply', {
   method: 'POST',
   headers: {'content-type': 'application/json', authorization: 'Bearer ${GATE_TOKEN}'},
-  body: JSON.stringify({ operation: 'container.restart', params: { id: '${GATE_TEST_CONTAINER_ID}' }, idempotencyKey: 'manual-idempotency-check-1' }),
+  body: JSON.stringify({ operation: 'container.restart', params: { id: '${GATE_TEST_CONTAINER_ID}' }, actionRequestId: 'manual-idempotency-check-1' }),
 }).then(r => r.json()).then(b => console.log(JSON.stringify(b, null, 2)))
 "
 docker inspect nexttime-gate-test --format '{{.State.StartedAt}}'
@@ -253,14 +255,14 @@ docker inspect nexttime-gate-test --format '{{.State.StartedAt}}'
 期望第一次调用：`{"ok":true,"result":{"data":{...},"observedFacts":[...],"replayed":false}}`，
 `StartedAt` 相对第 7 步末尾再次变化（这次是直接打门、绕过了内核审批，允许——门本身对
 `onBehalfOf`/审批状态一无所知，治理只在内核这一侧强制）。再发一次**同样的请求体**（同一
-`idempotencyKey`）：
+`actionRequestId`）：
 
 ```bash
 docker compose exec -T kernel node -e "
 fetch('http://gatekeeper-docker:8083/gate/apply', {
   method: 'POST',
   headers: {'content-type': 'application/json', authorization: 'Bearer ${GATE_TOKEN}'},
-  body: JSON.stringify({ operation: 'container.restart', params: { id: '${GATE_TEST_CONTAINER_ID}' }, idempotencyKey: 'manual-idempotency-check-1' }),
+  body: JSON.stringify({ operation: 'container.restart', params: { id: '${GATE_TEST_CONTAINER_ID}' }, actionRequestId: 'manual-idempotency-check-1' }),
 }).then(r => r.json()).then(b => console.log(JSON.stringify(b, null, 2)))
 "
 docker inspect nexttime-gate-test --format '{{.State.StartedAt}}'

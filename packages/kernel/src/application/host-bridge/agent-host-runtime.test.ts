@@ -383,7 +383,7 @@ describe('AgentHostRuntime — startTurn happy path', () => {
     runtime.handleFrame({ type: 'turnAccepted', turnId: first.turnId });
     await firstPromise;
 
-    // A Grant was added (workspace owner ran `grant_capability{capability:'gatekeeper', ...}`) —
+    // A Grant was added (workspace owner ran `grant_capability{resourceType:'gatekeeper', ...}`) —
     // simulated here by mutating the fake pool's own grant map, exactly as a real `capability_
     // grants` row appearing between two `ensureEntryHandle` reads would.
     grantedGatekeeperIdsByPrincipal.set(principalId, ['gk-1', 'gk-2']);

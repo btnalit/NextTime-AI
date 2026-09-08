@@ -90,10 +90,10 @@ export function ChatPage({
   useEffect(() => {
     let cancelled = false;
     client
-      .call<readonly ChatSummary[]>('list_chats')
-      .then((chats) => {
+      .call<{ items: readonly ChatSummary[] }>('list_chats')
+      .then((page) => {
         if (cancelled) return;
-        const match = chats.find((chat) => chat.id === chatId);
+        const match = page.items.find((chat) => chat.id === chatId);
         setTitle(match?.title ?? 'Untitled chat');
       })
       .catch(() => {
@@ -107,7 +107,7 @@ export function ChatPage({
   useEffect(
     () =>
       client.onActionUpdated((event) => {
-        setActionStatusOverrides((prev) => ({ ...prev, [event.actionRequestId]: event.status }));
+        setActionStatusOverrides((prev) => ({ ...prev, [event.id]: event.status }));
       }),
     [client],
   );
@@ -214,7 +214,7 @@ export function ChatPage({
           .map((m) => (m.content ? actionCardFromPendingContent(m.content) : undefined))
           .find((c) => c?.actionRequestId === id);
         try {
-          await http.call('set_auto_approved_action_kind', { actionKind: card?.actionKindTag });
+          await http.call('set_auto_approved_action_kind', { actionKindTag: card?.actionKindTag });
           toast.push({
             tone: 'info',
             title: `${card?.actionKindTag ?? 'This kind'} will be auto-approved from now on`,

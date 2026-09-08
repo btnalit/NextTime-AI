@@ -90,7 +90,7 @@ describe('registerWorkerMode', () => {
     kernel.setHandler('list_allowed_operations', () => ({
       ok: true,
       result: {
-        operations: [
+        items: [
           {
             gatekeeperId: 'gk-1',
             gateName: 'docker',
@@ -128,7 +128,7 @@ describe('registerWorkerMode', () => {
     kernel.setHandler('list_allowed_operations', () => ({
       ok: true,
       result: {
-        operations: [
+        items: [
           {
             gatekeeperId: 'gk-1',
             gateName: 'inventory',
@@ -163,7 +163,7 @@ describe('registerWorkerMode', () => {
     kernel.setHandler('list_allowed_operations', () => ({
       ok: true,
       result: {
-        operations: [
+        items: [
           {
             gatekeeperId: 'gk-1',
             gateName: 'docker',
@@ -177,7 +177,7 @@ describe('registerWorkerMode', () => {
       ok: true,
       result: {
         status: 'pending_approval',
-        actionRequestId: 'ar-1',
+        id: 'ar-1',
         simulate: { willRestart: ['container-a'] },
       },
     }));

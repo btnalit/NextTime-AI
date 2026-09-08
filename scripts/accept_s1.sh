@@ -260,7 +260,7 @@ async function cmdSendAndWait(args) {
     TURN_ID: turnId,
     TURN_STATUS: turnStatus,
     ECHO_SEEN: echoSeen ? 1 : 0,
-    HISTORY_COUNT: history.messages.length,
+    HISTORY_COUNT: history.items.length,
   });
   ws.close();
 }
@@ -296,7 +296,8 @@ async function cmdIsolationCheck(args) {
   }
 
   const chats = await call(ws, nextId(), 'list_chats', {});
-  const containsOther = Array.isArray(chats) && chats.some((c) => c.id === otherChatId) ? 1 : 0;
+  const containsOther =
+    Array.isArray(chats.items) && chats.items.some((c) => c.id === otherChatId) ? 1 : 0;
 
   print({ HISTORY_ERROR_CODE: historyErrorCode, LIST_CONTAINS_OTHER: containsOther });
   ws.close();

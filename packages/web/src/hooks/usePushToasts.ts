@@ -28,9 +28,9 @@ export function usePushToasts(pushes: PushSource, active: NavSection): void {
       const style = statusChipStyle('actionRequest', event.status);
       toast.push({
         tone: style.tone === 'danger' ? 'danger' : style.tone === 'ok' ? 'ok' : 'info',
-        key: `action:${event.actionRequestId}`,
-        title: `Action ${shortId(event.actionRequestId)}: ${style.label.toLowerCase()}`,
-        action: { label: 'Open', onClick: () => navigate(hrefs.approval(event.actionRequestId)) },
+        key: `action:${event.id}`,
+        title: `Action ${shortId(event.id)}: ${style.label.toLowerCase()}`,
+        action: { label: 'Open', onClick: () => navigate(hrefs.approval(event.id)) },
       });
     });
     const unsubTask = pushes.onTaskUpdated((event) => {
@@ -39,9 +39,9 @@ export function usePushToasts(pushes: PushSource, active: NavSection): void {
       if (style.tone === 'neutral' || style.tone === 'info') return; // queued/running: noise
       toast.push({
         tone: style.tone === 'danger' ? 'danger' : style.tone === 'ok' ? 'ok' : 'warn',
-        key: `task:${event.taskId}`,
-        title: `Task ${shortId(event.taskId)} ${humanizeKind(style.label).toLowerCase()}`,
-        action: { label: 'Open', onClick: () => navigate(hrefs.task(event.taskId)) },
+        key: `task:${event.id}`,
+        title: `Task ${shortId(event.id)} ${humanizeKind(style.label).toLowerCase()}`,
+        action: { label: 'Open', onClick: () => navigate(hrefs.task(event.id)) },
       });
     });
     return () => {

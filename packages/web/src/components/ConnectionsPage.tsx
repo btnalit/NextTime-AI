@@ -61,11 +61,8 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
   const loadRequests = useCallback(
     () =>
       http
-        .call<{ connectionRequests: readonly ConnectionRequestRow[] }>(
-          'list_connection_requests',
-          {},
-        )
-        .then((result) => result.connectionRequests),
+        .call<{ items: readonly ConnectionRequestRow[] }>('list_connection_requests', {})
+        .then((result) => result.items),
     [http],
   );
   const requests = useResource(loadRequests);

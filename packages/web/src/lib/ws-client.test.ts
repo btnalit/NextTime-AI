@@ -225,7 +225,7 @@ describe('WsClient', () => {
         'get_chat_history',
       ]);
 
-      respond(socket, sentFrame(socket, socket.sent.length - 1), { messages: [] });
+      respond(socket, sentFrame(socket, socket.sent.length - 1), { items: [] });
       await subscribePromise;
     });
 
@@ -240,12 +240,12 @@ describe('WsClient', () => {
 
       const page1 = sentFrame(socket, socket.sent.length - 1);
       expect(page1.params).toMatchObject({ chatId: 'chat-1', cursor: '0' });
-      respond(socket, page1, { messages: [msg(1)], nextCursor: '1' });
+      respond(socket, page1, { items: [msg(1)], nextCursor: '1' });
       await flush();
 
       const page2 = sentFrame(socket, socket.sent.length - 1);
       expect(page2.params).toMatchObject({ chatId: 'chat-1', cursor: '1' });
-      respond(socket, page2, { messages: [msg(2)] });
+      respond(socket, page2, { items: [msg(2)] });
 
       await subscribePromise;
       expect(onMessage.mock.calls.map(([m]) => (m as ChatMessage).sequence)).toEqual([1, 2]);
@@ -270,7 +270,7 @@ describe('WsClient', () => {
       });
 
       respond(socket, sentFrame(socket, socket.sent.length - 1), {
-        messages: [msg(1), msg(2), msg(3)],
+        items: [msg(1), msg(2), msg(3)],
       });
 
       await subscribePromise;
@@ -291,7 +291,7 @@ describe('WsClient', () => {
       );
       respond(socket, sentFrame(socket, socket.sent.length - 1), { subscribed: true });
       await flush();
-      respond(socket, sentFrame(socket, socket.sent.length - 1), { messages: [] });
+      respond(socket, sentFrame(socket, socket.sent.length - 1), { items: [] });
       await subscribePromise;
 
       socket.receive({
@@ -323,7 +323,7 @@ describe('WsClient', () => {
       const subscribePromise = client.subscribeChat('chat-1', 0, noopHandlers({ onMessage }));
       respond(socket1, sentFrame(socket1, socket1.sent.length - 1), { subscribed: true });
       await flush();
-      respond(socket1, sentFrame(socket1, socket1.sent.length - 1), { messages: [msg(1), msg(2)] });
+      respond(socket1, sentFrame(socket1, socket1.sent.length - 1), { items: [msg(1), msg(2)] });
       await subscribePromise;
 
       socket1.remoteClose();
@@ -354,7 +354,7 @@ describe('WsClient', () => {
         method: 'get_chat_history',
         params: { chatId: 'chat-1', cursor: '2' },
       });
-      respond(socket2, sentFrame(socket2, 2), { messages: [msg(3)] });
+      respond(socket2, sentFrame(socket2, 2), { items: [msg(3)] });
       await flush();
 
       // sequence 3 is new; 1 and 2 must not be redelivered across the reconnect.
@@ -448,10 +448,10 @@ describe('WsClient', () => {
       const subscribePromise = client.subscribeChat('chat-1', 0, noopHandlers());
       respond(socket, sentFrame(socket, socket.sent.length - 1), { subscribed: true });
       await flush();
-      respond(socket, sentFrame(socket, socket.sent.length - 1), { messages: [] });
+      respond(socket, sentFrame(socket, socket.sent.length - 1), { items: [] });
       await subscribePromise;
 
-      const push: TaskUpdatedPush = { taskId: 'task-1', status: 'completed' };
+      const push: TaskUpdatedPush = { id: 'task-1', status: 'completed' };
       socket.receive({ jsonrpc: '2.0', method: 'task.updated', params: push });
 
       expect(onTaskUpdated).toHaveBeenCalledTimes(1);
@@ -468,7 +468,7 @@ describe('WsClient', () => {
       socket.receive({
         jsonrpc: '2.0',
         method: 'action.updated',
-        params: { actionRequestId: 'ar-1', status: 'approved' },
+        params: { id: 'ar-1', status: 'approved' },
       });
 
       expect(onActionUpdated).not.toHaveBeenCalled();
@@ -490,7 +490,7 @@ describe('WsClient', () => {
       respond(socket2, sentFrame(socket2, 0), { authenticated: true });
       await flush();
 
-      const push: TaskUpdatedPush = { taskId: 'task-2', status: 'failed' };
+      const push: TaskUpdatedPush = { id: 'task-2', status: 'failed' };
       socket2.receive({ jsonrpc: '2.0', method: 'task.updated', params: push });
 
       expect(onTaskUpdated).toHaveBeenCalledTimes(1);

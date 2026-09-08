@@ -232,7 +232,7 @@ export function TaskDetail({
                 onClick={() => onOpenApproval(row.id)}
                 icon="approvals"
               >
-                {humanizeKind(row.actionKind)}
+                {humanizeKind(row.actionKindTag)}
               </Button>
             ))}
           </div>
