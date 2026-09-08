@@ -34,6 +34,28 @@ function hasOwnKeys(value: Record<string, unknown> | undefined): value is Record
   return value !== undefined && Object.keys(value).length > 0;
 }
 
+/**
+ * Fact (=`links` row, aliased `l`) visibility predicate — belt-and-suspenders alongside the
+ * `links_visibility` RLS policy (migrations/core/0010_link_visibility.sql): every Fact-reading
+ * query builder below states the rule explicitly, the same convention this file already follows
+ * for `workspace_id` (bound as `$1` even though RLS enforces it too). `app_principal()` is the
+ * same session-GUC accessor function `links_visibility` itself calls — see migrations/core/
+ * 0001_identity.sql. A Fact is excluded only when at least one Observation feeding its Activity
+ * comes from a `private` Source the caller does not own; an Activity with no Observations (the
+ * common case) or fed only by workspace-visible/own-private Sources stays included.
+ */
+const LINK_VISIBLE_PREDICATE = `
+  not exists (
+    select 1
+    from observations lo
+    join sources ls on ls.workspace_id = lo.workspace_id and ls.id = lo.source_id
+    where lo.workspace_id = l.workspace_id
+      and lo.activity_id = l.activity_id
+      and ls.visibility = 'private'
+      and ls.owner_principal_id <> app_principal()
+  )
+`;
+
 // -------------------------------------------------------------------------------------------
 // objects
 // -------------------------------------------------------------------------------------------
@@ -204,7 +226,7 @@ export function buildNeighborsQuery(workspaceId: string, input: NeighborsInput):
   return {
     text: `
       select ${FACT_COLUMNS}
-      from links
+      from links l
       where workspace_id = $1
         and superseded_at is null
         and invalidated_at is null
@@ -214,6 +236,7 @@ export function buildNeighborsQuery(workspaceId: string, input: NeighborsInput):
           or ($3 = 'both' and (source_object_id = $2 or target_object_id = $2))
         )
         and ($4::text is null or link_type = $4)
+        and ${LINK_VISIBLE_PREDICATE}
       order by recorded_at desc
     `,
     values: [workspaceId, input.objectId, direction, input.linkType ?? null],
@@ -248,6 +271,7 @@ export function buildTraverseQuery(workspaceId: string, input: TraverseInput): S
             or ($3 = 'both' and (l.source_object_id = $2 or l.target_object_id = $2))
           )
           and ($4::text is null or l.link_type = $4)
+          and ${LINK_VISIBLE_PREDICATE}
 
         union all
 
@@ -265,6 +289,7 @@ export function buildTraverseQuery(workspaceId: string, input: TraverseInput): S
           and l.invalidated_at is null
           and ($4::text is null or l.link_type = $4)
           and w.depth < $5
+          and ${LINK_VISIBLE_PREDICATE}
       )
       select link_id, link_type, source_object_id, target_object_id, next_object_id, min(depth) as depth
       from walk
@@ -285,10 +310,11 @@ export function buildRecentFactsQuery(workspaceId: string, limit: number | undef
   return {
     text: `
       select ${FACT_COLUMNS}
-      from links
+      from links l
       where workspace_id = $1
         and superseded_at is null
         and invalidated_at is null
+        and ${LINK_VISIBLE_PREDICATE}
       order by recorded_at desc
       limit $2
     `,
@@ -312,7 +338,7 @@ export function buildStateAtFactsQuery(workspaceId: string, input: StateAtInput)
   return {
     text: `
       select ${FACT_COLUMNS}
-      from links
+      from links l
       where workspace_id = $1
         and (source_object_id = $2 or target_object_id = $2)
         and recorded_at <= $3::timestamptz
@@ -320,6 +346,7 @@ export function buildStateAtFactsQuery(workspaceId: string, input: StateAtInput)
         and (invalidated_at is null or invalidated_at > $3)
         and valid_from <= $3
         and (valid_until is null or valid_until > $3)
+        and ${LINK_VISIBLE_PREDICATE}
       order by recorded_at desc
     `,
     values: [workspaceId, input.objectId, input.at],
