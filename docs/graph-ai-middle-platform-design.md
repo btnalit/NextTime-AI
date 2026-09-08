@@ -384,6 +384,8 @@ flowchart TB
 - 页面：登录；对话（流式文本、工具调用行、Worker 拉起行、审批卡片：标题、Markdown 描述、模拟效果、动作种类、批准 / 拒绝 / 「总是批准此类」）；任务与 Worker 列表；连接系统（两件事：建立新门并填凭证；把已有的门授予某用户的入口 agent，cloudflare-os 的 capsule 语义）；审计与 explain 视图。
 - **Explorer 挂载（S3）**：Semantica Explorer 静态构建挂在 `/explorer`，内核实现其 Graph / Decision / Lineage 契约（§9.5）；Ontology 与其他工作区隐藏，不承诺。Explorer 是 human 通道客户端，用 API key，不用 Handle。
 
+- **控制面（目标架构，S3.11–S3.14；当前实现只有"工作"区）**：web 分「工作」（对话、任务、待我审批）与「治理」（成员与授权、系统接入、能力目录、模型与配额、审计）两区，治理区按 role 可见；每用户一份 **AgentProfile**（模型、启用的 Skill、可见的门、提示词附加）作为其 Grant 的**子集投影**，永不扩权；第三方能力只有 Gatekeeper（含 `kind: mcp`）与 Skill 两种来源，不开放第三方 pi extension。详见 `docs/development-tasks.md` S3.11–S3.14。
+
 ### 7.7 模型策略
 
 不绑定单一厂商。Worker 与入口 agent 侧复用 pi-ai 的 provider 实现；独立的 `llm-proxy` 服务做按 provider 的透传代理：用内核公钥在本地验证 Handle 签名（不逐请求回调内核）、注入真实 key、模型白名单、SSE 原样、用量与 80% 预算警告上报内核；内核进程不持有任何 provider key。内核自用调用（P3 起）用 OpenAI 兼容子集，同样经 `llm-proxy`。厂商与模型是配置 `${NEXTTIME_DATA}/config/llm-providers.yaml`，同一份配置生成内核路由表与 `models.json`。成本元数据复用 pi-ai 的 `ModelCost`。
