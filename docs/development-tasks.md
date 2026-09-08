@@ -821,6 +821,7 @@
 - 验收：`tools/list` = 注册表 Handle 通道集合 + 别名；Claude Code 经 MCP `traverse` 到同一图；无 Handle 连接被拒。依赖：S1.9、S3.1。
 
 ### S3.7 语义一致性校验
+- **前置决策（2026-09-08）**：线上契约词表与信封规则已定在 `docs/wire-contract-conventions.md`（`idempotencyKey` 只指调用方去重键、门协议执行键改 `actionRequestId`；`actionKind` 只指 `{tag,label}`、裸标识改 `actionKindTag`；Grant 用 `resourceType`/`resourceId` 不再借用「capability」；capability `mode` 四值 `observe / write / propose / execute`，即时写操作从 `propose` 改 `write`；单资源结果主键一律 `id`、引用用 `<resource>Id`；列表统一 `{ items, nextCursor? }`；时间戳 ISO 8601）。对齐实现是一个跨层 PR（shared → kernel → gatekeeper-base/门实例 → platform-extension/web/fake-llm/验收脚本），主机跑 `accept_s1.sh` + `accept_s2.sh` 通过后合入；本条 S3.7 随后把 `resultSchema`、契约快照与词表守卫做进 CI。
 - 交付物：`scripts/check-capability-consistency.ts`：注册表 = HTTP 路由 = MCP 工具 = WS 方法 = policy 可识别 `action_kind`。
 - 验收：CI 步骤；故意删一个路由被拦。依赖：S3.6。
 
@@ -836,6 +837,46 @@
 - 目标：换人能维护。
 - 交付物：`docs/runbooks/`：重启各服务与恢复顺序、从备份恢复、轮换 Handle 签名密钥与 provider key、新增一个接入包（含清单导入与发布）、新增一个领域包、升级 pi 版本（契约测试流程）、排查一次失败的 Task（沿 `explain` 与审计）；`docs/testing.md`：设计 §7.10 的测试分层与每层的运行命令。
 - 验收：按「从备份恢复」手册在临时环境走一遍成功；按「新增接入包」手册接入一个 fake 系统成功。依赖：S3.9、S1.12。
+
+---
+
+### S3.11 中台控制面（管理员面）
+
+- 背景与反省（2026-09-08）：S1/S2 的 web 只是验收面——登录、对话、审批卡片、任务、连接页壳。一个"中台"缺的是**控制面**：谁能进（成员、角色、API key）、谁能做什么（Grant / Policy / Quota）、接了什么系统（Gatekeeper 与其 Operation 分类）、发布了什么能力（Skill / Procedure / WorkerDefinition / Operation）、发生过什么（审计）。这些在内核里大多已有 capability，只是没有读侧能力、没有 UI、没有信息架构。
+- 本体（不新增一等概念，补读侧与成员管理）：Principal（kind / role / api_key）、CapabilityGrant、Policy、Quota、Gatekeeper + Operation、ConnectionRequest、Skill、Procedure、WorkerDefinition、AuditRecord 均已存在。缺口 = **成员管理能力** + **列表/详情读能力**：`list_principals`、`create_principal`（owner；API key 只显示一次）、`set_principal_role`（owner；不能把最后一个 owner 降级）、`rotate_api_key`（owner 或本人）、`disable_principal`（owner；撤销其全部 Handle 与入口会话）；`list_grants`、`list_policies`、`list_quotas`、`list_gatekeepers`（含健康、manifest 版本、Operation 数）、`get_gatekeeper`、`list_operations`（human 侧目录，按门分组；agent 侧已有 `find_operations`）、`get_workspace`、`list_models`（llm-proxy 白名单的只读投影——kernel 只读挂载的 `config/models.json`，不接触 provider key）。全部 `channel: 'human'`，minRole 按组：成员/授权/策略 = owner，审批与配额查看 = operator，审计 = auditor，目录 = member。
+- 不变量：管理能力**永不**出现在任何 Handle 的 scope 里（注册表 `channel:'human'` 已强制，加一条 CI 守卫：`governance`/成员管理组不得被 `ENTRY_CEILING`/Worker 基础设施集合引用）；每次管理变更写 audit（`dispatchCapability` 已统一）；`disable_principal`/`set_principal_role`/`revoke_capability` 触发既有"Grant 变更即重签/撤销入口会话"路径。
+- UI 信息架构：左栏两区。**工作**：对话、任务、待我审批。**治理**（owner/operator 可见）：成员与授权（Principal 列表、角色、API key、Grant 矩阵）、系统接入（门列表 + 接入向导 → S3.12）、能力目录（Operations / Skills / Procedures / Workers：草稿 → 发布 → 弃用）、模型与配额（白名单、AgentPolicy → S3.13、Quota）、审计（按 principal / capability / 时间过滤，explain 跳转）。member 只见工作区 + 「我的智能体」（S3.13）。
+- 交付物：内核上述 capability + 测试；web 路由化（当前单 `App.tsx` 组件切换 → 路由 + 按 role 的导航守卫）、治理区五页；`docs/runbooks/web-console.md` 更新。
+- 验收：owner 在 UI 创建 member 并发 key → member 登录只见工作区；owner 授 Grant 后 member 的入口工具列表变化（下一 turn 生效）；`disable_principal` 后该 member 的 WS 与 Handle 全部 401；审计页能按 principal 查到以上每一步。依赖：S2.10、S2.13。
+
+### S3.12 Skills / MCP / 第三方能力的统一接入与治理
+
+- 决策（2026-09-08）：**不引入「插件」为一等概念**。第三方能力只有两种来源：**Gatekeeper**（transport `http / mcp / cli / ssh`——一个 MCP server 就是 `kind: mcp` 的门，`publish_manifest` 从 `tools/list` 导入 Operation，已在 S2.4/S2.13 落地）与 **Skill**（S2.14，pi skill 文件包，内联挂载）。pi 扩展只有平台自己的 `platform-extension`；不开放第三方 pi extension（会绕过 Gate 与审计——违反底线三）。
+- 缺的是**治理面而非机制**：接入向导 UI（选 kind → 地址 / 凭证直达门 → 导入清单 → 逐 Operation 审核分类：mode、blast_radius、auto_approvable、参数 schema 预览 → publish）；门详情页（健康、manifest 版本、ConnectedAccount 数、最近 ActionRequest）；Skill 页（列表 / 草稿预览 / 发布 / 弃用、被哪些 Worker 使用）；Procedure 页；Operation 目录（按门分组、版本、分类、近 30 天调用与审批统计——来自 audit/action_requests 聚合读能力 `get_operation_stats`）。
+- 本体补充：Operation 分类修改是**版本化**的（`propose_operation` → `publish_operation` 已如此）；UI 不得提供"直接改分类"的捷径——保持 propose/publish 两步，因为分类决定审批边界。
+- 交付物：向导与四个页面；`get_operation_stats`、`get_gatekeeper`；accept-s2 的 OpenAPI/ssh 夹具复用为 UI e2e（Playwright，可选）。
+- 验收：通过 UI 接入一个 fixture MCP server（`deploy/accept-s2` 增加一个最小 MCP fixture）并 publish 后，对话中出现 `<gate>.<op>` 工具且 observe 直连、execute 走卡片。依赖：S3.11。
+
+### S3.13 每用户智能体配置：AgentProfile / AgentPolicy
+
+- 背景：现在每个用户的常驻入口 agent 的模型由启动参数决定（`--model` 经 agent-host → worker-supervisor 已可按 spawn 传入），Skill 只挂给 Worker，门工具 = Grant 全集。用户不能选模型、不能挑 Skill、不能收窄可见系统。
+- 本体：
+  - **AgentProfile**（每 (workspace, principal) 至多一个；缺省 = 继承 AgentPolicy 默认）：`model`（`provider/id`，必须 ∈ llm-proxy 白名单 ∩ AgentPolicy.allowedModels）、`enabledSkills[]`（已发布 Skill 子集）、`enabledGatekeepers[]`（门子集）、`enabledWorkerDefinitions[]`（可选）、`promptAddendum`（长度上限，审计可见）、`autoApproveLow`（不得高于 Policy 允许）。
+  - **AgentPolicy**（每工作区一个，owner 设）：`allowedModels[]`、`defaultModel`、`memberCanEditProfile`、`maxPromptAddendumChars`、`allowedSkills[]`/`allowedGatekeepers[]` 上限集合（空 = 不限制）。
+- 不变量（核心）：**Profile 是 Grant 的子集投影，永不扩权**——入口 Handle scope = Grant ∩ Profile；Worker 子 Handle 仍是父的子集（既有 `attenuate` 规则不变）。Profile 只会收窄，所以变更是即时的、不走 propose/approve；但每次变更写 audit，并触发入口会话 Handle 重签 + 常驻容器按 jti 轮换重建（#78 已有机制）。模型不在允许集合 → 400 `invalid_params`；Skill/门不在 Grant 内 → 400。
+- 状态与数据：Profile 无状态机，只有 `updated_at / updated_by`；表 `agent_profiles(workspace_id, principal_id, model, enabled_skills jsonb, enabled_gatekeepers jsonb, enabled_worker_definitions jsonb, prompt_addendum, auto_approve_low, updated_by, updated_at, primary key (workspace_id, principal_id))`、`agent_policies(workspace_id primary key, allowed_models jsonb, default_model, member_can_edit_profile, max_prompt_addendum_chars, allowed_skills jsonb, allowed_gatekeepers jsonb, updated_by, updated_at)`；迁移在 `governance/`（它是授权投影，不是应用状态）。
+- 能力：`get_agent_profile`（member 看自己；owner 看任何人）、`set_agent_profile`（member 改自己且 Policy 允许；owner 改任何人）、`get_agent_policy`（member）、`set_agent_policy`（owner）、`list_models`（member，来自 S3.11）。全部 human 通道。
+- 运行时投影：入口 spawn 时内核解析 Profile → `model` 传 supervisor（既有 `--model` 通道）；Skill 内联挂载扩到入口容器（复用 S2.14 `skillsInline`）；入口 `list_allowed_operations` 与工具注册按 Grant ∩ enabledGatekeepers 过滤；`promptAddendum` 进入口系统提示的独立段（不可覆盖平台段）。Worker 的模型：WorkerDefinition 自带，或继承发起人 Profile 的 model（当定义未指定时）。
+- UI：「我的智能体」页——模型下拉（白名单内）、Skills 勾选、系统接入勾选、提示词附加、当前 Handle 范围只读展示；owner 在「模型与配额」页设 AgentPolicy。
+- 验收：member 改模型 → 下一 turn llm-proxy `llm_usage` 记录新模型；关掉一个门 → `session_start` 注册的工具不再包含该门的 observe 工具；选未允许模型 → 400；Policy 关闭 `memberCanEditProfile` 后 member 的 `set_agent_profile` → 403。依赖：S3.11、S2.14、#78 jti 轮换。
+
+### S3.14 web 重构为控制台
+
+- 目标：把验收面改成产品面。路由化与按 role 的导航守卫；统一数据层（一个 WS，请求缓存与失效；列表分页统一 `{ items, nextCursor }`——与 F10 后续的信封统一同步）；设计规范（信息密度、状态色语义：待审批 / 执行中 / 失败 / 已完成；暗色 + 亮色；中文主标题英文副标题）；空状态与错误态；键盘可达。与 S3.5 Explorer 挂载并列，Explorer 作为治理区的「图」入口。
+- 交付物：`packages/web` 路由化重构、组件库收敛（`components/ui` 为唯一基元）、五个治理页 + 「我的智能体」页、Playwright 覆盖登录 → 审批 → 治理三条主路径。
+- 验收：S3.11–S3.13 的 UI 验收全部通过；`pnpm --filter @nexttime/web e2e` 在主机上跑通。依赖：S3.11–S3.13。
+
+- **实施顺序（2026-09-08 决定）**：S3.11 内核读侧 + 成员管理能力 → web 路由化 + 治理区壳与成员页 → S3.13 迁移 + 能力 + 运行时投影 → 「我的智能体」页 → S3.12 接入向导与目录页。前两步可与 S3.1–S3.4 并行；不等 Explorer。
 
 ---
 
