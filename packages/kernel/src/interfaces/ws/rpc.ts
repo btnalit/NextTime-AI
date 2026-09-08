@@ -37,7 +37,10 @@ import {
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
-import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
+import {
+  OperationIdentityConflictError,
+  OperationNotFoundError,
+} from '../../governance/gatekeepers/index.js';
 import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
@@ -185,6 +188,12 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   if (err instanceof IllegalTransition) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // Review 2026-09: `propose_operation` over an identity that is not the caller's own draft —
+  // mirrors HTTP 409 `conflict` (capability-route.ts), the same state-conflict code as
+  // IllegalTransition / WorkerDefinitionNotPublishedError below.
+  if (err instanceof OperationIdentityConflictError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.

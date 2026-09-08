@@ -26,17 +26,24 @@ export {
   listPublishedOperationsForGatekeepers,
   listDraftOperationsForGatekeeper,
   publishOperation,
+  publishManifest,
   deprecateOperation,
   OperationNotFoundError,
+  OperationIdentityConflictError,
   IllegalTransition,
 } from './manifest.js';
 export type {
   OperationRecord,
   ImportManifestInput,
+  ImportManifestResult,
+  SkippedOperation,
   ProposeOperationInput,
   PublishOperationInput,
+  PublishManifestInput,
+  PublishManifestResult,
   DeprecateOperationInput,
 } from './manifest.js';
+export type { OperationOrigin } from '../../substrate/ontology/index.js';
 
 export { getOrCreateGatekeeperServicePrincipal } from './service-principal.js';
 

@@ -222,6 +222,9 @@ export interface RegisterGatekeeperCliInput {
 export interface RegisterGatekeeperCliResult {
   readonly gatekeeperId: string;
   readonly importedOperationNames: readonly string[];
+  /** Manifest entries `importManifest` refused to write over an already `published`/`deprecated`
+   *  Operation of the same name (always empty for the fresh Gatekeeper this command registers). */
+  readonly skippedOperationNames: readonly string[];
   readonly publishedOperationNames: readonly string[];
 }
 
@@ -266,7 +269,7 @@ export async function registerGatekeeperFromCli(
 
       const publishedOperationNames: string[] = [];
       if (input.publish) {
-        for (const record of imported) {
+        for (const record of imported.imported) {
           await publishOperation(dbClient, input.workspaceId, { gatekeeperId, name: record.name });
           publishedOperationNames.push(record.name);
         }
@@ -276,7 +279,8 @@ export async function registerGatekeeperFromCli(
 
       return {
         gatekeeperId,
-        importedOperationNames: imported.map((record) => record.name),
+        importedOperationNames: imported.imported.map((record) => record.name),
+        skippedOperationNames: imported.skipped.map((entry) => entry.name),
         publishedOperationNames,
       };
     },
@@ -402,6 +406,11 @@ async function runRegisterGatekeeper(argv: readonly string[]): Promise<void> {
     console.log(
       `imported operations (draft): ${result.importedOperationNames.join(', ') || '(none)'}`,
     );
+    if (result.skippedOperationNames.length > 0) {
+      console.log(
+        `skipped operations (already published/deprecated, left unchanged): ${result.skippedOperationNames.join(', ')}`,
+      );
+    }
     console.log(
       result.publishedOperationNames.length > 0
         ? `published operations: ${result.publishedOperationNames.join(', ')}`

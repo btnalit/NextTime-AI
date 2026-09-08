@@ -155,6 +155,10 @@ export interface CompleteConnectionInput {
 export interface CompleteConnectionResult {
   readonly gatekeeperId: string;
   readonly importedOperationNames: readonly string[];
+  /** Manifest entries `importManifest` refused to write because a `published`/`deprecated`
+   *  Operation already holds that name (always empty for the freshly registered Gatekeeper this
+   *  function creates — surfaced so the caller sees it if that ever changes). */
+  readonly skippedOperationNames: readonly string[];
   readonly connectionRequest: ConnectionRequestRow | null;
 }
 
@@ -244,7 +248,8 @@ export async function completeConnection(
 
   return {
     gatekeeperId,
-    importedOperationNames: imported.map((record) => record.name),
+    importedOperationNames: imported.imported.map((record) => record.name),
+    skippedOperationNames: imported.skipped.map((entry) => entry.name),
     connectionRequest,
   };
 }

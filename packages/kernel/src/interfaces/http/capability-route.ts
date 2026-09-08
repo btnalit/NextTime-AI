@@ -43,7 +43,10 @@ import {
 import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
 import { GrantNotFoundError } from '../../governance/capability/index.js';
 import { ConnectionRequestNotFoundError } from '../../governance/connections/index.js';
-import { OperationNotFoundError } from '../../governance/gatekeepers/index.js';
+import {
+  OperationIdentityConflictError,
+  OperationNotFoundError,
+} from '../../governance/gatekeepers/index.js';
 import {
   HighBlastRadiusAutoApproveError,
   SetPolicyValidationError,
@@ -143,6 +146,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof IllegalTransition) {
     return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  // Review 2026-09 (docs/development-tasks.md S2.4 "实现说明补充"): `propose_operation` over an
+  // identity that already exists and is not the caller's own draft — a published/deprecated
+  // Operation, another Principal's draft, an import draft (I16). Same 409 family as
+  // IllegalTransition / not_published: well-formed request, the row's *state* forbids it.
+  if (err instanceof OperationIdentityConflictError) {
+    return { status: 409, code: 'conflict', message: err.message };
   }
   // Postgres 22P02 invalid_text_representation — a well-typed but malformed value reached a typed
   // column (e.g. a non-uuid `actionRequestId` on `approve`: the registry's `id` params are
