@@ -270,9 +270,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         ],
         evidence: [{ kind: 'note', content: { text: 'checked twice' } }],
         artifacts: [{ path: 'artifacts/report.txt' }],
-      })) as { taskId: string; status: string; activityId: string; factIds: string[] };
+      })) as { id: string; status: string; activityId: string; factIds: string[] };
 
-      expect(result.taskId).toBe(taskId);
+      expect(result.id).toBe(taskId);
       expect(result.status).toBe('completed');
       expect(result.factIds).toHaveLength(1);
 

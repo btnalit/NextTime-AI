@@ -216,8 +216,8 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('header-based auth: chat methods work immediately with no authenticate frame', async () => {
       const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
-      const chats = await client.call<unknown[]>('list_chats', {});
-      expect(Array.isArray(chats)).toBe(true);
+      const chats = await client.call<{ items: unknown[] }>('list_chats', {});
+      expect(Array.isArray(chats.items)).toBe(true);
       client.close();
     });
 
@@ -228,8 +228,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(authResult.authenticated).toBe(true);
 
-      const chats = await client.call<unknown[]>('list_chats', {});
-      expect(Array.isArray(chats)).toBe(true);
+      const chats = await client.call<{ items: unknown[] }>('list_chats', {});
+      expect(Array.isArray(chats.items)).toBe(true);
       client.close();
     });
 
@@ -341,8 +341,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       // The malformed frame gets an id:null error response, which this client has no pending call
       // to correlate it to (JSON-RPC ids are only meaningful for well-formed requests) — instead,
       // prove the connection itself survives a malformed frame by making a real call right after.
-      const chats = await client.call<unknown[]>('list_chats', {});
-      expect(Array.isArray(chats)).toBe(true);
+      const chats = await client.call<{ items: unknown[] }>('list_chats', {});
+      expect(Array.isArray(chats.items)).toBe(true);
       client.close();
     });
 
@@ -425,12 +425,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(assistantMessage.content).toEqual({ text: assistantMessage.text });
 
       const history = await client.call<{
-        messages: { role: string; sequence: number; kind?: string; content?: unknown }[];
+        items: { role: string; sequence: number; kind?: string; content?: unknown }[];
       }>('get_chat_history', { chatId });
-      expect(history.messages).toHaveLength(2);
-      expect(history.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
-      expect(history.messages.map((m) => m.sequence)).toEqual([1, 2]);
-      expect(history.messages.map((m) => m.kind)).toEqual([undefined, undefined]);
+      expect(history.items).toHaveLength(2);
+      expect(history.items.map((m) => m.role)).toEqual(['user', 'assistant']);
+      expect(history.items.map((m) => m.sequence)).toEqual([1, 2]);
+      expect(history.items.map((m) => m.kind)).toEqual([undefined, undefined]);
 
       client.close();
     });
@@ -454,10 +454,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         let cursor: string | undefined;
         for (;;) {
           const page = await client.call<{
-            messages: { sequence: number }[];
+            items: { sequence: number }[];
             nextCursor?: string;
           }>('get_chat_history', { chatId, cursor, limit: 2 });
-          for (const m of page.messages) seenViaPaging.add(m.sequence);
+          for (const m of page.items) seenViaPaging.add(m.sequence);
           if (!page.nextCursor) break;
           cursor = page.nextCursor;
         }

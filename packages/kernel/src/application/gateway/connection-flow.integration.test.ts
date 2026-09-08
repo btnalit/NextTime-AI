@@ -214,7 +214,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const requested = (await dispatchCapability({ pool }, owner, 'request_connection', {
         kind: 'http',
         target: 'example-system',
-      })) as { connectionRequestId: string; status: string };
+      })) as { id: string; status: string };
       expect(requested.status).toBe('requested');
 
       const queueBeforeCompletion = (await dispatchCapability(
@@ -222,18 +222,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         owner,
         'list_connection_requests',
         { status: 'requested' },
-      )) as { connectionRequests: readonly { id: string }[] };
-      expect(
-        queueBeforeCompletion.connectionRequests.some(
-          (r) => r.id === requested.connectionRequestId,
-        ),
-      ).toBe(true);
+      )) as { items: readonly { id: string }[] };
+      expect(queueBeforeCompletion.items.some((r) => r.id === requested.id)).toBe(true);
 
       // 2. create_connection ("complete_connection") — manifestSource OpenAPI import + credential
       //    → the gate's ConnectedAccount store, keyed by `onBehalfOf` (memberId, not the owner
       //    completing the connection — design doc §5.1.4 ConnectedAccount "按 on_behalf_of 取用").
       const created = (await dispatchCapability({ pool }, owner, 'create_connection', {
-        connectionRequestId: requested.connectionRequestId,
+        connectionRequestId: requested.id,
         kind: 'http',
         target: 'example-system',
         endpoint: gateEndpoint,
@@ -250,10 +246,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         owner,
         'list_connection_requests',
         { status: 'completed' },
-      )) as { connectionRequests: readonly { id: string; gatekeeperId: string | null }[] };
-      const completedRow = queueAfterCompletion.connectionRequests.find(
-        (r) => r.id === requested.connectionRequestId,
-      );
+      )) as { items: readonly { id: string; gatekeeperId: string | null }[] };
+      const completedRow = queueAfterCompletion.items.find((r) => r.id === requested.id);
       expect(completedRow?.gatekeeperId).toBe(created.gatekeeperId);
 
       // The credential really did reach the gate's own store, decrypted correctly under the

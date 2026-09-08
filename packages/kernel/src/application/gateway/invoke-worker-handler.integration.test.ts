@@ -222,7 +222,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         input: {},
         wait: true,
         timeout: 1,
-      })) as { status: string; taskId: string; workerRunId: string };
+      })) as { status: string; id: string; workerRunId: string };
 
       expect(result.status).toBe('running'); // timed out still-running, never hangs (§8.2)
       expect(supervisorClient.auditVisibleOnFirstPoll).toBe(true);

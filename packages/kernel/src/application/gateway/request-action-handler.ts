@@ -37,6 +37,7 @@ import {
   deriveDefaultIdempotencyKey,
   scopeExplicitIdempotencyKey,
 } from './action-executor.js';
+import { toWireActionRequest } from './action-request-wire.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler, CapabilityHandlerResult } from './capability-handler.js';
 import { writeObservedFacts } from './observed-facts.js';
@@ -64,7 +65,7 @@ import { writeObservedFacts } from './observed-facts.js';
  * *resolves* the ActionRequest — creates it via `requestAction` (I6/I11: this call already writes
  * its own row + audit + outbox atomically), throws for `denied`, calls the gate's cheap read-only
  * `simulate` for the `pending_approval && !awaitDecision` row, and otherwise returns
- * `{actionRequestId, status}` plus an `afterCommit` continuation. Phase 2 (`afterCommit`, run by
+ * `{id, status, ...}` (§2 identity — `toWireActionRequest`) plus an `afterCommit` continuation. Phase 2 (`afterCommit`, run by
  * dispatch.ts only once the phase-1 transaction has committed) does everything that either waits
  * for another connection's write to become visible or performs a real external effect — and it
  * never holds one of *its own* transactions across either a wait or a gate call: every DB write
@@ -85,17 +86,17 @@ import { writeObservedFacts } from './observed-facts.js';
  *     inside an Activity, writes `observedFacts`, returns the final result — no ActionRequest, no
  *     `afterCommit` (a read has no "effect with no record" risk; if the write of the observed
  *     Facts itself fails, the whole phase-1 transaction rolls back cleanly, which is correct).
- *   - `mode: 'execute'`, resolves `denied`          → R returns `{actionRequestId, status:'denied'}`
+ *   - `mode: 'execute'`, resolves `denied`          → R returns `{id, status:'denied', ...}`
  *     + `afterCommit`; A: throws `ActionRequestDeniedError` (403) — deferred past commit (P2-1
  *     fix) so the denied row/audit/outbox survive, rather than a synchronous R-side throw rolling
  *     them back along with dispatch.ts's own transaction.
- *   - `mode: 'execute'`, resolves `auto_approved`   → R returns `{actionRequestId, status}` +
+ *   - `mode: 'execute'`, resolves `auto_approved`   → R returns `{id, status, ...}` +
  *     `afterCommit`; A: `tryExecuteInline` (see below) runs immediately.
  *   - `mode: 'execute'`, resolves `pending_approval`, `awaitDecision: false` → R: calls the gate's
  *     `simulate` (read-only, no `afterCommit` needed) and returns
- *     `{status:'pending_approval', actionRequestId, simulate}`.
+ *     `{...toWireActionRequest(actionRequest), status:'pending_approval', simulate}`.
  *   - `mode: 'execute'`, resolves `pending_approval`, `awaitDecision: true` → R returns
- *     `{actionRequestId, status}` + `afterCommit`; A: `pollAndExecute` polls (short transactions)
+ *     `{id, status, ...}` + `afterCommit`; A: `pollAndExecute` polls (short transactions)
  *     until the row leaves `pending_approval`/`approved` decisively or `awaitDecisionTimeoutMs`
  *     elapses — `approved`/`auto_approved` within budget → executes via `tryExecuteInline`;
  *     `rejected`/`expired` → returned as-is; already `executed`/`failed` (a concurrent drain beat
@@ -524,10 +525,12 @@ interface RunGovernedRequestArgs {
 }
 
 /** The phase-1 `{result, resourceType, resourceId}` shape every branch of `runGovernedRequest`'s
- *  switch below starts from — only the branches that need one add an `afterCommit`. */
+ *  switch below starts from — only the branches that need one add an `afterCommit`. `result` is
+ *  the ActionRequest wire projection (§2 identity — `toWireActionRequest`, keyed `id`, never a
+ *  top-level `actionRequestId` duplicate). */
 function phase1Result(actionRequest: ActionRequestRow): CapabilityHandlerResult {
   return {
-    result: { actionRequestId: actionRequest.id, status: actionRequest.status },
+    result: toWireActionRequest(actionRequest),
     resourceType: 'action_request',
     resourceId: actionRequest.id,
   };
@@ -614,7 +617,7 @@ async function runGovernedRequest(
             args.gatekeeper.gatekeeperId,
             actionRequest.id,
           );
-          return { ...outcome, actionRequestId: actionRequest.id };
+          return { ...outcome, id: actionRequest.id };
         },
       };
 
@@ -632,7 +635,7 @@ async function runGovernedRequest(
             systemActorId,
             actionRequest.id,
           );
-          return { ...outcome, actionRequestId: actionRequest.id };
+          return { ...outcome, id: actionRequest.id };
         },
       };
 
@@ -655,7 +658,7 @@ async function runGovernedRequest(
           return {
             status: actionRequest.status === 'failed' ? 'failed' : 'executed',
             ...outcome,
-            actionRequestId: actionRequest.id,
+            id: actionRequest.id,
           };
         },
       };
@@ -681,7 +684,7 @@ async function runGovernedRequest(
           };
         }
         return {
-          result: { status: 'pending_approval', actionRequestId: actionRequest.id, simulate },
+          result: { ...toWireActionRequest(actionRequest), simulate },
           resourceType: 'action_request',
           resourceId: actionRequest.id,
         };
@@ -702,7 +705,7 @@ async function runGovernedRequest(
             actionRequest.id,
             awaitDecisionTimeoutMs ?? DEFAULT_AWAIT_DECISION_TIMEOUT_MS,
           );
-          return { ...outcome, actionRequestId: actionRequest.id };
+          return { ...outcome, id: actionRequest.id };
         },
       };
 
