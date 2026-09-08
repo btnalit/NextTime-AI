@@ -161,4 +161,67 @@ describe('TaskSupervisorClient', () => {
     const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
     await expect(client.status('wr1')).rejects.toMatchObject({ kind: 'invalid_response' });
   });
+
+  describe('internal-plane Authorization header (worker-supervisor internal-auth.ts requires it on POST /task/spawn)', () => {
+    const AUTH_HEADER = 'Bearer the-internal-token';
+
+    it('sends the configured header on spawn, terminate, and status', async () => {
+      const seen: Array<string | null> = [];
+      const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        seen.push(new Headers(init?.headers).get('authorization'));
+        return jsonResponse(200, { containerId: 'c1', ip: '198.51.100.3' });
+      });
+      const client = new TaskSupervisorClient({
+        supervisorUrl: 'http://worker-supervisor:8081',
+        fetchImpl,
+        authorizationHeader: AUTH_HEADER,
+      });
+
+      await client
+        .spawn({
+          taskId: 't1',
+          workerRunId: 'wr1',
+          workspaceId: 'ws1',
+          onBehalfOf: 'p1',
+          capabilityHandle: 'h',
+        })
+        .catch(() => {});
+      await client.terminate('wr1').catch(() => {});
+      await client.status('wr1').catch(() => {});
+
+      expect(seen).toEqual([AUTH_HEADER, AUTH_HEADER, AUTH_HEADER]);
+    });
+
+    it('sends no Authorization header when authorizationHeader is not configured', async () => {
+      const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get('authorization')).toBeNull();
+        return jsonResponse(200, { containerId: 'c1', ip: '198.51.100.3' });
+      });
+      const client = new TaskSupervisorClient({
+        supervisorUrl: 'http://worker-supervisor:8081',
+        fetchImpl,
+      });
+      await client.spawn({
+        taskId: 't1',
+        workerRunId: 'wr1',
+        workspaceId: 'ws1',
+        onBehalfOf: 'p1',
+        capabilityHandle: 'h',
+      });
+    });
+
+    it('never leaks the header value into a thrown TaskSupervisorError', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(jsonResponse(500, { error: { code: 'boom', message: 'boom' } }));
+      const client = new TaskSupervisorClient({
+        supervisorUrl: 'http://x',
+        fetchImpl,
+        authorizationHeader: AUTH_HEADER,
+      });
+      const err = await client.status('wr1').catch((e: unknown) => e);
+      expect(String(err)).not.toContain(AUTH_HEADER);
+      expect(String(err)).not.toContain('the-internal-token');
+    });
+  });
 });
