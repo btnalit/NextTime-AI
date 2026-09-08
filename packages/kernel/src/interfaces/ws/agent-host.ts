@@ -13,11 +13,15 @@ import type { AgentHostLink, AgentHostRuntime } from '../../application/host-bri
  * protocol state of its own (which turns are active, the entry Handle cache, the accept-timeout
  * clock all live on `AgentHostRuntime`, application/host-bridge/agent-host-runtime.ts).
  *
- * Trust boundary (mirrors `interfaces/http/internal/llm-usage.ts`'s own doc comment): reachable
- * only on the compose `control` network (design doc §11 "内核不发布端口") — the same boundary
- * `/internal/llm-usage` and `/internal/handle-revocations` already document. This route performs
- * no additional authentication of its own; that is a deliberate S1 assumption, not an oversight
- * (see PR body "假设与偏离").
+ * Trust boundary: this route is part of the kernel's internal plane and sits behind
+ * `interfaces/internal-auth`'s shared-secret guard — the upgrade request must carry
+ * `Authorization: Bearer <internal token>` and must not originate from `NEXTTIME_SUBNET_WORKERS`,
+ * or it is answered 401 *before* `handleConnection` below ever runs (so an unauthenticated peer can
+ * never register itself as the link, let alone read a `startTurn` frame's entry Handle). The
+ * earlier "reachable only on `control`, hence no auth" assumption was wrong for a dual-homed
+ * kernel — see `@nexttime/shared`'s `internal-token.ts` doc comment for the full threat model.
+ * This file itself still owns no auth logic: the guard is a root-level hook installed by
+ * `packages/kernel/src/index.ts`'s `createServer`, keyed on the `/internal/` route prefix.
  *
  * Single active connection (S1 scope — one agent-host process per deployment, design doc §7.2 "一
  * 个 Node 服务"): a second connection simply replaces the first as the registered link

@@ -26,6 +26,8 @@ artifacts caddy` 属主改成容器非 root 用户（uid:gid 见脚本注释）�
 
 紧接着跑 `ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/gen-handle-keys.sh` 生成 Handle 签名密钥对（S1.9，幂等）：私钥落在 `secrets/handle.key`（0640，组 10001，只经 compose secret `handle_key` 挂进 kernel），公钥在 `config/handle.pub`。若 `secrets/kernel.env` 是在此之前生成的，用 `sed -i` 把其中 `HANDLE_PRIVATE_KEY_FILE` 改成 `/run/secrets/handle_key` 并补一行 `HANDLE_PUBLIC_KEY_FILE=/data/config/handle.pub`（不要 `cat` 该文件）。
 
+同一次脚本运行也会生成 `secrets/internal.token`（fix/internal-plane-auth，2026-09；幂等，已存在则不动）：32 字节随机数，hex 编码，0640，组 10001——内核整个 internal plane（`/internal/*` HTTP 路由 + `/internal/agent-host` WS）的共享密钥，经 compose secret `internal_token` 挂进四个容器：`kernel`、`agent-host`、`llm-proxy`、`egress-proxy`（默认路径 `/run/secrets/internal_token`，与 `NEXTTIME_INTERNAL_TOKEN_FILE` 的代码内默认值一致，通常不需要在任何 `.env`/`secrets/*.env` 里显式覆盖）。用 `stat` 验证权限，**不要 `cat` 该文件**。
+
 ## E3.4 校验 compose
 `cd <CODE_DIR> && docker compose config >/dev/null && echo ok`；失败则回仓库改脚本或 compose
 期望，推回后重新 E3.1 再重试。

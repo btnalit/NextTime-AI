@@ -16,8 +16,13 @@ import { WebSocket as NodeWebSocket } from 'ws';
  * `@nexttime/shared`'s `agent-host-protocol.ts` doc comment for why the kernel needs to tell a
  * mere reconnect apart from a genuine restart) and resume relaying.
  *
- * No auth of its own — same `control`-network-only trust boundary as every other `/internal/*`
- * kernel route (see `packages/kernel/src/interfaces/ws/agent-host.ts`'s own doc comment).
+ * Auth (fix/internal-plane-auth, 2026-09): every connection attempt (the initial one and every
+ * reconnect) carries `Authorization: Bearer <internal-plane token>` on the WebSocket handshake
+ * request — `@nexttime/shared`'s `internal-token.ts` contract, checked by
+ * `packages/kernel/src/interfaces/internal-auth`'s guard before the upgrade is even accepted (see
+ * that module's own doc comment for the full threat model). `main()` (`index.ts`) loads the token
+ * once at startup and fails fast if it cannot; this module only carries the already-built header
+ * value (`KernelLinkOptions.authorizationHeader`) and never reads the token file itself.
  */
 
 const DEFAULT_RECONNECT_BASE_DELAY_MS = 500;
@@ -26,6 +31,9 @@ const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000;
 export interface KernelLinkOptions {
   /** e.g. `ws://kernel:8080/internal/agent-host`. */
   readonly kernelWsUrl: string;
+  /** `Authorization` header value sent on every handshake (initial connect and every reconnect) —
+   *  `@nexttime/shared`'s `internalAuthorizationHeader(token)`, i.e. `Bearer <token>`. */
+  readonly authorizationHeader: string;
   /** Generated once per agent-host *process* (not per connection) — see this module's own doc
    *  comment. */
   readonly instanceId: string;
@@ -90,7 +98,12 @@ export function createKernelLink(options: KernelLinkOptions): KernelLink {
 
   function connect(): void {
     if (stopped) return;
-    const ws = new WebSocketCtor(options.kernelWsUrl);
+    // The internal-plane guard (packages/kernel/src/interfaces/internal-auth) rejects the upgrade
+    // with 401 before `hello` is ever read unless this header is present and correct — sent on
+    // every attempt, not only the first, since a reconnect is a brand-new HTTP upgrade request.
+    const ws = new WebSocketCtor(options.kernelWsUrl, {
+      headers: { authorization: options.authorizationHeader },
+    });
     socket = ws;
 
     ws.on('open', () => {

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HANDLE_SIGNING_ALG } from '@nexttime/shared';
+import { HANDLE_SIGNING_ALG, INTERNAL_TOKEN_FILE_ENV, InternalTokenError } from '@nexttime/shared';
 import { exportSPKI, generateKeyPair } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LlmProxyConfig } from './config.js';
@@ -91,6 +91,47 @@ describe('@nexttime/llm-proxy', () => {
 
       const health = await getJson(addressPort(app), '/healthz');
       expect(health).toEqual({ status: 200, body: { status: 'ok' } });
+    });
+
+    it('fails fast when KERNEL_URL is configured but the internal-plane token file is missing (fix/internal-plane-auth)', async () => {
+      dir = mkdtempSync(join(tmpdir(), 'nexttime-llm-proxy-index-'));
+
+      const providersFile = join(dir, 'llm-providers.yaml');
+      writeFileSync(
+        providersFile,
+        [
+          'providers:',
+          '  example:',
+          '    api: openai-completions',
+          '    upstream_base_url: https://api.example.invalid',
+          '    api_key_env: EXAMPLE_API_KEY',
+          '    auth:',
+          '      header: authorization',
+          '      scheme: Bearer',
+          '    models:',
+          '      - id: example-model',
+          '',
+        ].join('\n'),
+      );
+
+      const { publicKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      const handlePubFile = join(dir, 'handle.pub');
+      writeFileSync(handlePubFile, await exportSPKI(publicKey));
+
+      const config: LlmProxyConfig = {
+        ...loadConfig({
+          LLM_PROVIDERS_FILE: providersFile,
+          HANDLE_PUBLIC_KEY_FILE: handlePubFile,
+          KERNEL_URL: 'http://kernel.internal:8080',
+          [INTERNAL_TOKEN_FILE_ENV]: join(dir, 'does-not-exist', 'internal.token'),
+        }),
+        port: 0,
+      };
+
+      await expect(startLlmProxy(config)).rejects.toThrow(InternalTokenError);
     });
   });
 });

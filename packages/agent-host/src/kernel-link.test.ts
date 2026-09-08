@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { createKernelLink } from './kernel-link.js';
@@ -10,9 +10,17 @@ import type { KernelLink } from './kernel-link.js';
  * and `agent-host.test.ts` already use, from the other side of the same wire).
  */
 
+/** Stand-in internal-plane token for every test below — the fake server never actually checks it
+ *  (the kernel-side guard is covered by packages/kernel/src/interfaces/ws/agent-host.test.ts); the
+ *  "sends the Authorization header" test asserts the *client* presents it on the handshake. */
+const TOKEN = randomBytes(32).toString('hex');
+
 interface FakeKernelServer {
   readonly url: string;
   readonly connections: WebSocket[];
+  /** The `Authorization` header (if any) each accepted connection's handshake request carried,
+   *  same index as `connections`. */
+  readonly authorizationHeaders: Array<string | undefined>;
   nextConnection(): Promise<WebSocket>;
   close(): Promise<void>;
 }
@@ -21,6 +29,7 @@ function startFakeKernelServer(): Promise<FakeKernelServer> {
   return new Promise((resolve) => {
     const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
     const connections: WebSocket[] = [];
+    const authorizationHeaders: Array<string | undefined> = [];
     // Every accepted connection is queued here as a resolved promise slot — nextConnection()
     // always returns the *next* one it hasn't handed out yet (FIFO), whether it already arrived
     // or is still pending, without needing to track "already consumed" separately.
@@ -29,8 +38,9 @@ function startFakeKernelServer(): Promise<FakeKernelServer> {
     }> = [];
     let delivered = 0;
 
-    wss.on('connection', (ws) => {
+    wss.on('connection', (ws, req) => {
       connections.push(ws);
+      authorizationHeaders.push(req.headers.authorization);
       const waiter = pending[delivered];
       if (waiter) {
         waiter.resolve(ws);
@@ -44,6 +54,7 @@ function startFakeKernelServer(): Promise<FakeKernelServer> {
       resolve({
         url: `ws://127.0.0.1:${port}`,
         connections,
+        authorizationHeaders,
         nextConnection(): Promise<WebSocket> {
           return new Promise((res) => {
             pending.push({ resolve: res });
@@ -87,6 +98,7 @@ describe('createKernelLink', () => {
     const instanceId = randomUUID();
     link = createKernelLink({
       kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
       instanceId,
       onStartTurn: () => {},
       onStopTurn: () => {},
@@ -102,12 +114,41 @@ describe('createKernelLink', () => {
     await vi.waitFor(() => expect(link?.isConnected()).toBe(true));
   });
 
+  it('sends the configured Authorization header on the WS handshake, on every (re)connect', async () => {
+    server = await startFakeKernelServer();
+    link = createKernelLink({
+      kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
+      instanceId: randomUUID(),
+      onStartTurn: () => {},
+      onStopTurn: () => {},
+      reconnectBaseDelayMs: 5,
+      reconnectMaxDelayMs: 20,
+      log: () => {},
+    });
+
+    const firstConnection = server.nextConnection();
+    link.start();
+    const firstServerSocket = await firstConnection;
+    await nextMessage(firstServerSocket); // hello
+    expect(server.authorizationHeaders[0]).toBe(`Bearer ${TOKEN}`);
+
+    // A reconnect is a brand-new HTTP upgrade request — the header must be present again, not
+    // only on the very first attempt.
+    const secondConnectionPromise = server.nextConnection();
+    firstServerSocket.terminate();
+    const secondServerSocket = await secondConnectionPromise;
+    await nextMessage(secondServerSocket); // hello
+    expect(server.authorizationHeaders[1]).toBe(`Bearer ${TOKEN}`);
+  });
+
   it('routes an inbound startTurn to onStartTurn and stopTurn to onStopTurn', async () => {
     server = await startFakeKernelServer();
     const startCalls: unknown[] = [];
     const stopCalls: unknown[] = [];
     link = createKernelLink({
       kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
       instanceId: randomUUID(),
       onStartTurn: (cmd) => startCalls.push(cmd),
       onStopTurn: (cmd) => stopCalls.push(cmd),
@@ -144,6 +185,7 @@ describe('createKernelLink', () => {
     const startCalls: unknown[] = [];
     link = createKernelLink({
       kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
       instanceId: randomUUID(),
       onStartTurn: (cmd) => startCalls.push(cmd),
       onStopTurn: () => {},
@@ -177,6 +219,7 @@ describe('createKernelLink', () => {
     server = await startFakeKernelServer();
     link = createKernelLink({
       kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
       instanceId: randomUUID(),
       onStartTurn: () => {},
       onStopTurn: () => {},
@@ -214,6 +257,7 @@ describe('createKernelLink', () => {
     server = await startFakeKernelServer();
     link = createKernelLink({
       kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
       instanceId: randomUUID(),
       onStartTurn: () => {},
       onStopTurn: () => {},
@@ -228,6 +272,7 @@ describe('createKernelLink', () => {
     server = await startFakeKernelServer();
     link = createKernelLink({
       kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
       instanceId: randomUUID(),
       onStartTurn: () => {},
       onStopTurn: () => {},
@@ -259,6 +304,7 @@ describe('createKernelLink', () => {
     server = await startFakeKernelServer();
     link = createKernelLink({
       kernelWsUrl: server.url,
+      authorizationHeader: `Bearer ${TOKEN}`,
       instanceId: randomUUID(),
       onStartTurn: () => {},
       onStopTurn: () => {},

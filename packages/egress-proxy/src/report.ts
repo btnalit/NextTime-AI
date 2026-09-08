@@ -35,6 +35,11 @@ export interface EgressObservation {
 export interface EgressReporterOptions {
   /** `KERNEL_URL`; when unset the reporter only logs to stdout and never queues/POSTs. */
   kernelUrl?: string;
+  /** `Authorization` header value sent on every flush POST (`@nexttime/shared`'s
+   *  `internalAuthorizationHeader(token)`, i.e. `Bearer <token>`) — `index.ts` supplies this
+   *  whenever `kernelUrl` is set (fix/internal-plane-auth, 2026-09: the kernel's `/internal/*`
+   *  routes 401 without it). Omitted only in tests that talk to an unguarded fake kernel. */
+  authorizationHeader?: string;
   /** Bounded in-memory queue size — oldest entries are dropped once full. Default 1000. */
   maxQueueSize?: number;
   /** Delay before a batch flush attempt. Default 2000ms. */
@@ -55,6 +60,7 @@ export interface EgressReporterOptions {
 export class EgressReporter {
   private queue: EgressObservation[] = [];
   private readonly kernelUrl: string | undefined;
+  private readonly authorizationHeader: string | undefined;
   private readonly maxQueueSize: number;
   private readonly baseFlushIntervalMs: number;
   private readonly maxFlushIntervalMs: number;
@@ -66,6 +72,7 @@ export class EgressReporter {
 
   constructor(options: EgressReporterOptions = {}) {
     this.kernelUrl = options.kernelUrl;
+    this.authorizationHeader = options.authorizationHeader;
     this.maxQueueSize = options.maxQueueSize ?? 1000;
     this.baseFlushIntervalMs = options.flushIntervalMs ?? 2000;
     this.maxFlushIntervalMs = options.maxFlushIntervalMs ?? 60_000;
@@ -100,7 +107,10 @@ export class EgressReporter {
     try {
       const res = await this.fetchImpl(`${this.kernelUrl}/internal/egress`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          ...(this.authorizationHeader ? { authorization: this.authorizationHeader } : {}),
+        },
         body: JSON.stringify({ observations: batch }),
       });
       if (!res.ok) throw new Error(`kernel responded ${res.status}`);

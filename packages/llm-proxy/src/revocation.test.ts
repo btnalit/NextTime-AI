@@ -54,6 +54,45 @@ describe('startRevocationSync', () => {
     expect(sync.isRevoked('jti-2')).toBe(false);
   });
 
+  it('sends the configured Authorization header on the poll (fix/internal-plane-auth)', async () => {
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      jsonResponse({ revoked: [], now: '2026-01-01T00:00:00.000Z' }),
+    );
+    sync = startRevocationSync({
+      kernelUrl: 'http://kernel.internal:8080',
+      authorizationHeader: 'Bearer test-token',
+      intervalMs: 1_000_000,
+      overlapMs: 60_000,
+      fetchImpl,
+      log: () => {},
+    });
+
+    await sync.forceSync();
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit | undefined];
+    expect((init?.headers as Record<string, string> | undefined)?.authorization).toBe(
+      'Bearer test-token',
+    );
+  });
+
+  it('omits the Authorization header when none is configured', async () => {
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      jsonResponse({ revoked: [], now: '2026-01-01T00:00:00.000Z' }),
+    );
+    sync = startRevocationSync({
+      kernelUrl: 'http://kernel.internal:8080',
+      intervalMs: 1_000_000,
+      overlapMs: 60_000,
+      fetchImpl,
+      log: () => {},
+    });
+
+    await sync.forceSync();
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit | undefined];
+    expect((init?.headers as Record<string, string> | undefined)?.authorization).toBeUndefined();
+  });
+
   it('does nothing (no-op, never throws) when kernelUrl is unset', async () => {
     const fetchImpl = vi.fn();
     sync = startRevocationSync({
