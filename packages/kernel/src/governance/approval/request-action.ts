@@ -94,13 +94,14 @@ async function insertActionRequestRow(
   input: RequestActionInput,
   finalStatus: ActionRequestStatus,
   policyDecision: PolicyDecision,
+  requesterCanApprove: boolean,
 ): Promise<ActionRequestRow> {
   const result = await client.query<ActionRequestDbRow>(
     `insert into action_requests (
        workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
        policy_decision, await_decision, on_behalf_of, parent_worker_run_id, actor_runtime,
-       idempotency_key, params
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+       idempotency_key, params, requester_can_approve
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
     [
       workspaceId,
@@ -116,6 +117,7 @@ async function insertActionRequestRow(
       input.actorRuntime,
       input.idempotencyKey ?? null,
       JSON.stringify(input.params ?? {}),
+      requesterCanApprove,
     ],
   );
   const row = result.rows[0];
@@ -179,6 +181,7 @@ export async function requestAction(
         input,
         finalStatus,
         evaluation.decision,
+        evaluation.requesterCanApprove,
       );
       await client.query('RELEASE SAVEPOINT request_action_insert');
     } catch (err) {
@@ -203,6 +206,7 @@ export async function requestAction(
       input,
       finalStatus,
       evaluation.decision,
+      evaluation.requesterCanApprove,
     );
   }
 

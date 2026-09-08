@@ -46,7 +46,11 @@ import {
   listPendingForApprover,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
-import { grantCapability, revokeCapabilityGrant } from '../../governance/capability/index.js';
+import {
+  grantCapability,
+  hasAnyActiveGrant,
+  revokeCapabilityGrant,
+} from '../../governance/capability/index.js';
 import {
   parseSetPolicyPayload,
   setAutoApprovedActionKind,
@@ -57,6 +61,7 @@ import { queryAudit, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
   connectGatekeeperHandler,
@@ -647,10 +652,32 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
  *  the I8 high-blast-radius guard can only fire here when a prior `set_policy` call already
  *  recorded this action_kind's `blast_radius` (S2.6's graph-stored Operation metadata, the only
  *  other source of truth, does not exist yet). */
+// Item 5 fix (review job 652a4abc lane2 P1: "operator flips I8 workspace signal for medium
+// action_kind across all gates, no I14 scope check"): `minRole:'operator'` only gates *entry* to
+// this capability (`authorize.ts`) — a non-owner operator must additionally hold an active grant
+// covering `actionKind` (`hasAnyActiveGrant`, any `resourceScope`: this writes one workspace-wide
+// rule, not a per-gate one, so the check cannot narrow to a single gate either — see that
+// function's own doc comment). `owner` bypasses, the same "workspace owner counts as holding
+// every scope" convention I14 already uses elsewhere.
 const setAutoApprovedActionKindHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { actionKind } = params as { actionKind: string };
-  const setBy = await currentPrincipalId(client);
-  const result = await setAutoApprovedActionKind(client, workspaceId, { actionKind, setBy });
+  const caller = await currentPrincipalRole(client, workspaceId);
+  if (caller.role !== 'owner') {
+    const covered = await hasAnyActiveGrant(client, workspaceId, {
+      principalId: caller.id,
+      capability: actionKind,
+    });
+    if (!covered) {
+      throw new ForbiddenError(
+        `set_auto_approved_action_kind: principal ${caller.id} holds no active grant for ` +
+          `action_kind "${actionKind}" (I14)`,
+      );
+    }
+  }
+  const result = await setAutoApprovedActionKind(client, workspaceId, {
+    actionKind,
+    setBy: caller.id,
+  });
   return { result, resourceType: 'policy', resourceId: result.id };
 };
 
@@ -872,11 +899,28 @@ const findProceduresHandler: CapabilityHandler = async (client, workspaceId, par
  *  thin, self-contained pass-through to `terminateTask` (already required internally, e.g. by the
  *  budget-exhaustion path), the capability's `paramsSchema` (`{taskId}`) needs nothing this
  *  handler cannot already provide, and leaving a registered-but-unwired capability whose service
- *  function already exists would be a stranger inconsistency than wiring it. */
+ *  function already exists would be a stranger inconsistency than wiring it.
+ *
+ *  Item 5 fix (review job 652a4abc lane3 P2-5: "cancel_task (member) has no ownership check"):
+ *  `terminateTask` itself performs no ownership check (it trusts its caller) — `minRole:'member'`
+ *  alone would let any authenticated member cancel any other principal's Task by guessing/reading
+ *  its id. A non-owner caller may only cancel a Task whose `onBehalfOf` is themselves; `owner`
+ *  bypasses (tenant-root, same convention every other owner-override in this module already
+ *  uses). Reads the Task first (`getTaskWithWorkerRuns`, the same read `get_task` already does) —
+ *  a 403 for "not yours" is preferable to `terminateTask`'s own `TaskNotFoundError` (404) leaking
+ *  no information either way, but 403 is the more accurate reason here. */
 const cancelTaskHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { taskId } = params as { taskId: string };
-  const actorPrincipalId = await currentPrincipalId(client);
-  const result = await terminateTask(workspaceId, actorPrincipalId, taskId);
+  const caller = await currentPrincipalRole(client, workspaceId);
+  if (caller.role !== 'owner') {
+    const { task } = await getTaskWithWorkerRuns(client, workspaceId, taskId);
+    if (task.onBehalfOf !== caller.id) {
+      throw new ForbiddenError(
+        `cancel_task: principal ${caller.id} may not cancel Task ${taskId} (owned by another principal)`,
+      );
+    }
+  }
+  const result = await terminateTask(workspaceId, caller.id, taskId);
   return {
     result: { id: result.id, status: result.status },
     resourceType: 'task',

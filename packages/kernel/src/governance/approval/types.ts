@@ -37,6 +37,16 @@ export interface ActionRequestRow {
    *  again at `apply` time, which may run in a different transaction than `request_action` (auto-
    *  approval executes inline; a `pending_approval` row is applied later by the drainer). */
   readonly params: Record<string, unknown>;
+  /** `governance/policy/engine.ts`'s `evaluate()` own `requesterCanApprove` result, persisted at
+   *  request time (authority-tightening fix, review job 652a4abc item 3: "persist
+   *  requester_can_approve on ActionRequests and reject self-approval ... for high-blast
+   *  requests") — migrations/governance/0007_action_request_requester_can_approve.sql.
+   *  `decide.ts`'s `assertApproverScope` reads this back to refuse `approver === on_behalf_of`
+   *  when it is `false` (I8 §5.8 "blast_radius=high 默认 requester_can_approve=false，工作区可覆盖").
+   *  Nullable: rows written before this migration have no value on file — treated as permissive
+   *  (self-approval not blocked) rather than retroactively locking out a historical row this fix
+   *  never evaluated; every row `request-action.ts` writes going forward always sets it. */
+  readonly requesterCanApprove: boolean | null;
 }
 
 export interface ActionRequestDbRow {
@@ -59,6 +69,7 @@ export interface ActionRequestDbRow {
   executed_at: Date | null;
   failed_at: Date | null;
   params: Record<string, unknown>;
+  requester_can_approve: boolean | null;
 }
 
 export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
@@ -82,13 +93,15 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
     executedAt: row.executed_at,
     failedAt: row.failed_at,
     params: row.params,
+    requesterCanApprove: row.requester_can_approve,
   };
 }
 
 export const ACTION_REQUEST_ROW_COLUMNS =
   'workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius, ' +
   'policy_decision, approval_decision_id, await_decision, on_behalf_of, parent_worker_run_id, ' +
-  'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, params';
+  'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, params, ' +
+  'requester_can_approve';
 
 export class ActionRequestNotFoundError extends Error {
   constructor(workspaceId: string, actionRequestId: string) {
@@ -106,6 +119,26 @@ export class ApprovalScopeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ApprovalScopeError';
+  }
+}
+
+/** I8/§5.8 (authority-tightening fix, review job 652a4abc item 3): the approver is the same
+ *  principal the ActionRequest was made `on_behalf_of`, and `requesterCanApprove` is `false` for
+ *  this row (defaults `false` for `blast_radius='high'`, workspace-overridable either way —
+ *  `governance/policy/engine.ts`'s `resolveRequesterCanApprove`). Extends `ApprovalScopeError`
+ *  (not a fresh top-level class) so every existing `instanceof ApprovalScopeError` mapping
+ *  (`interfaces/http/capability-route.ts`, `interfaces/ws/rpc.ts` — both 403) already covers it
+ *  with no new mapping branch, the same pattern `MetaOntologyWriteForbiddenError extends
+ *  ForbiddenError` uses one layer up. */
+export class SelfApprovalNotAllowedError extends ApprovalScopeError {
+  readonly actionRequestId: string;
+  constructor(actionRequestId: string, principalId: string) {
+    super(
+      `principal ${principalId} may not approve/reject its own ActionRequest ${actionRequestId} ` +
+        '(requester_can_approve=false, I8)',
+    );
+    this.name = 'SelfApprovalNotAllowedError';
+    this.actionRequestId = actionRequestId;
   }
 }
 

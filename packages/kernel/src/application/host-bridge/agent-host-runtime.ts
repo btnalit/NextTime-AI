@@ -111,6 +111,22 @@ interface CachedHandle {
   readonly token: string;
   readonly issuedAtMs: number;
   readonly expiresAtMs: number;
+  /** The `resources.gatekeeper` ids baked into this cached Handle at issuance (S2.13) — compared
+   *  against a fresh `listActiveGrantResourceScopes` read on every `ensureEntryHandle` call
+   *  (authority-tightening fix, review job 652a4abc item 4: "Grant changes become visible") so a
+   *  Grant made/revoked since this Handle was minted is picked up on this principal's very next
+   *  Turn, not only once the cached Handle is close enough to its ttl to reissue anyway. Order-
+   *  independent — compared via `sameGatekeeperScope` below, not array equality. */
+  readonly gatekeeperIds: readonly string[];
+}
+
+/** Order-independent set equality for two `resources.gatekeeper` id lists — used by
+ *  `ensureEntryHandle` to decide whether a Grant change since the cached Handle's issuance
+ *  requires reissuing it early (item 4 fix, see `CachedHandle.gatekeeperIds`'s own doc comment). */
+function sameGatekeeperScope(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const setA = new Set(a);
+  return b.every((id) => setA.has(id));
 }
 
 /** S2.6: what `resolveEntryDefinition` extracts from the published entry WorkerDefinition's
@@ -510,9 +526,36 @@ export class AgentHostRuntime implements AgentRuntime {
     }
   }
 
+  /**
+   * S2.13: flows every `connect_gatekeeper`/`grant_capability{capability:'gatekeeper'}` Grant this
+   * principal holds into the entry Handle's own `resources.gatekeeper` scope
+   * (governance/capability/handles.ts's own "Known seam for S2.4/S2.13" note — this is that seam,
+   * closed). Item 4 fix (authority-tightening, review job 652a4abc: "Grant changes become
+   * visible"): the principal's current Grant coverage is now read on **every** call — not only
+   * when the cached Handle is already close enough to its ttl to reissue anyway — and compared
+   * (`sameGatekeeperScope`) against what the cached Handle was actually minted with; a difference
+   * forces an early reissue regardless of remaining ttl. `grants.ts`'s `grantCapability`/
+   * `revokeCapabilityGrant` independently `revokeSession` the principal's entry session on the
+   * same kind of change (belt: closes the window immediately, for any Handle verifier, not only
+   * this cache) — this comparison is the suspenders: even if a `startTurn` races a Grant change
+   * that already revoked the cached token, this method mints a fresh one instead of returning the
+   * (now-revoked) cached one blindly.
+   */
   private async ensureEntryHandle(workspaceId: string, principalId: string): Promise<string> {
+    const sessionId = await this.ensureEntrySession(workspaceId, principalId);
+
+    const gatekeeperIds = await withWorkspace(
+      this.pool,
+      { workspaceId, principalId },
+      (client) =>
+        listActiveGrantResourceScopes(client, workspaceId, {
+          principalId,
+          capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
+        }),
+    );
+
     const cached = this.handleCache.get(principalId);
-    if (cached) {
+    if (cached && sameGatekeeperScope(cached.gatekeeperIds, gatekeeperIds)) {
       const totalTtlMs = cached.expiresAtMs - cached.issuedAtMs;
       const remainingMs = cached.expiresAtMs - this.now();
       if (totalTtlMs <= 0 || remainingMs > totalTtlMs * HANDLE_REISSUE_THRESHOLD) {
@@ -520,33 +563,21 @@ export class AgentHostRuntime implements AgentRuntime {
       }
     }
 
-    const sessionId = await this.ensureEntrySession(workspaceId, principalId);
-    const issued = await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
-      // S2.13: flows every `connect_gatekeeper` Grant this principal holds into the freshly
-      // issued entry Handle's own `resources.gatekeeper` scope (governance/capability/handles.ts's
-      // own "Known seam for S2.4/S2.13" note — this is that seam, closed). Re-read on every
-      // (re)issuance rather than cached separately: `handleCache` below already reissues once the
-      // Handle is mostly through its ttl, so a Grant made after this principal's last issuance
-      // becomes visible within one reissue window (`HANDLE_REISSUE_THRESHOLD`), not instantly —
-      // acceptable for a human-driven authorization change, same latency bound `entrypoint.sh`'s
-      // own `systemPrompt`/`model` refresh already accepts elsewhere in this class.
-      const gatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
-        principalId,
-        capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
-      });
-      return issueHandle(client, {
+    const issued = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+      issueHandle(client, {
         sessionId,
         scope: entryScope(
           gatekeeperIds.length > 0 ? { resources: { gatekeeper: gatekeeperIds } } : {},
         ),
         ttlSeconds: this.entryHandleTtlSeconds,
         privateKey: this.privateKey,
-      });
-    });
+      }),
+    );
     this.handleCache.set(principalId, {
       token: issued.token,
       issuedAtMs: issued.issuedAt.getTime(),
       expiresAtMs: issued.expiresAt.getTime(),
+      gatekeeperIds,
     });
     return issued.token;
   }
