@@ -7,7 +7,7 @@
  * never logs either.
  *
  *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
- *                                   systemPrompt?, model?}
+ *                                   systemPrompt?, model?, egressDeny?}
  *                                   -> 200 {containerId, ip, status, created, restarts}
  *   POST /resident/stop           {principalId} -> 204
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404
@@ -70,6 +70,12 @@ export interface SpawnInput {
   /** S2.6: `<provider>/<id>`, forwarded as the entry container's CMD (`['--model', model]`) —
    *  `undefined` sets no CMD (pi's own default model selection). */
   readonly model?: string;
+  /** feat/egress-definition-lists: the same published entry WorkerDefinition's own `egressDeny`
+   *  (from the `startTurn` command's own field of the same name) — worker-supervisor writes this
+   *  into the spawned/reused container's `SOURCE_MAP_FILE` entry so `@nexttime/egress-proxy`
+   *  narrows this entry session's egress on top of the platform's fixed deny list.
+   *  `undefined`/omitted leaves the existing/no per-source deny list untouched. */
+  readonly egressDeny?: readonly string[];
 }
 
 export interface SpawnResult {

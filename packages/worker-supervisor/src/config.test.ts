@@ -183,6 +183,17 @@ describe('SpawnRequestSchema', () => {
       }).success,
     ).toBe(false);
   });
+
+  it('accepts an optional egressDeny (feat/egress-definition-lists)', () => {
+    expect(
+      SpawnRequestSchema.safeParse({
+        workspaceId: '55555555-5555-4555-8555-555555555555',
+        principalId: '66666666-6666-4666-8666-666666666666',
+        handle: 'h1',
+        egressDeny: ['blocked.example.com'],
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe('StopRequestSchema', () => {
@@ -235,6 +246,7 @@ describe('TaskSpawnRequestSchema', () => {
         model: 'anthropic/claude-sonnet-5',
         timeoutSec: 120,
         skillsInline: [{ name: 'inventory', files: { 'SKILL.md': '---\nname: x\n---\n\nbody\n' } }],
+        egressDeny: ['blocked.example.com'],
       }).success,
     ).toBe(true);
   });

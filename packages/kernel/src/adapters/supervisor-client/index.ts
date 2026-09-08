@@ -13,7 +13,7 @@
  *
  *   POST /task/spawn                {taskId, workerRunId, workspaceId, onBehalfOf,
  *                                     capabilityHandle, image?, model?, skills?, skillsInline?,
- *                                     timeoutSec?}
+ *                                     timeoutSec?, egressDeny?}
  *                                     -> 200 {containerId, ip} / 403 (image not allowlisted) / 400
  *   POST /task/:workerRunId/terminate -> 204 | 404
  *   GET  /task/:workerRunId         -> 200 TaskStatus | 404
@@ -101,6 +101,10 @@ export interface TaskSpawnInput {
   readonly skills?: readonly TaskSkillMountInput[];
   readonly skillsInline?: readonly TaskSkillInlineMountInput[];
   readonly timeoutSec?: number;
+  /** feat/egress-definition-lists: forwarded verbatim into `/task/spawn`'s own `egressDeny`
+   *  (`packages/worker-supervisor`'s `config.ts` `TaskSpawnRequestSchema`) — the invoked
+   *  WorkerDefinition's own egress deny list, never re-derived by this client. */
+  readonly egressDeny?: readonly string[];
 }
 
 export interface TaskSpawnOutcome {

@@ -50,6 +50,7 @@ import { taskSourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import { localTaskWorkspacesRootDir, taskWorkspacePaths } from './host-paths.js';
 import {
+  TASK_EGRESS_DENY_LABEL,
   TASK_ID_LABEL,
   TASK_ROLE_LABEL,
   TASK_ROLE_VALUE,
@@ -58,6 +59,18 @@ import {
   buildTaskSpawnSpec,
   taskContainerName,
 } from './task-spawn-spec.js';
+
+/** Splits `TASK_EGRESS_DENY_LABEL`'s comma-joined value back into a list — the inverse of
+ *  `buildTaskSpawnSpec`'s `(input.egressDeny ?? []).join(',')`. Same convention as
+ *  `resident-service.ts`'s own `splitEgressDenyLabel` (not shared between the two files — same
+ *  reason `spawn-spec.ts`/`task-spawn-spec.ts` keep separate `ContainerSpec` builders: the two
+ *  modes' registries and reconcile paths are otherwise independent). */
+function splitEgressDenyLabel(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
 
 /** Shorter than resident mode's `STOP_TIMEOUT_SECONDS` (10s, `resident-service.ts`) — a one-shot
  *  Worker being terminated (explicit request or timeout) should be reaped promptly; there is no
@@ -81,6 +94,11 @@ export interface TaskSpawnInput {
    *  before the container starts, see this module's own doc comment's addition below. */
   readonly skillsInline?: readonly TaskSkillInline[];
   readonly timeoutSec?: number;
+  /** feat/egress-definition-lists: the invoked WorkerDefinition's own `egressDeny`
+   *  (`@nexttime/shared`'s `worker-definition.ts`, `kind='worker'` content) — written into this
+   *  WorkerRun's `SOURCE_MAP_FILE` entry (`registerEgress` below) and stamped onto the container
+   *  as `TASK_EGRESS_DENY_LABEL` so `reconcile()` can restore it after a supervisor restart. */
+  readonly egressDeny?: readonly string[];
 }
 
 export interface TaskSpawnOutcome {
@@ -158,10 +176,21 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
 
   // Best-effort, matching resident-service.ts's own registerEgress/unregisterEgress — a broken
   // SOURCE_MAP_FILE must never fail a spawn/terminate/reap.
-  function registerEgress(workspaceId: string, workerRunId: string, ip: string | undefined): void {
+  function registerEgress(
+    workspaceId: string,
+    workerRunId: string,
+    ip: string | undefined,
+    egressDeny?: readonly string[],
+  ): void {
     if (!ip) return;
     try {
-      egressMap.register(ip, { sourceId: taskSourceId(workspaceId, workerRunId) });
+      egressMap.register(ip, {
+        sourceId: taskSourceId(workspaceId, workerRunId),
+        // Omit `deny` entirely when there is nothing to narrow — same convention as
+        // resident-service.ts's own registerEgress (keeps the common "no list" case byte-for-byte
+        // identical to before this field existed).
+        ...(egressDeny && egressDeny.length > 0 ? { deny: egressDeny } : {}),
+      });
     } catch (err) {
       console.error(
         JSON.stringify({
@@ -259,6 +288,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         model,
         skillsInline,
         timeoutSec,
+        egressDeny,
       } = input;
       const paths = taskWorkspacePaths(config, taskId);
 
@@ -293,6 +323,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         image,
         model,
         networkName,
+        egressDeny,
       });
       const created = await docker.createAndStart(spec);
 
@@ -309,7 +340,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         reason: undefined,
         terminating: false,
       });
-      registerEgress(workspaceId, workerRunId, created.ip);
+      registerEgress(workspaceId, workerRunId, created.ip, egressDeny);
 
       return { containerId: created.id, ip: created.ip };
     },
@@ -353,7 +384,18 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           reason: undefined,
           terminating: false,
         });
-        if (state.running) registerEgress(workspaceId, workerRunId, state.ip);
+        // Restores the egress deny list this container was spawned with (TASK_EGRESS_DENY_LABEL)
+        // — without this, a supervisor restart would re-register a still-running Task's source-map
+        // entry with no deny list at all, silently widening its egress for the rest of its run
+        // (never re-registered again — reap()/status() only reconcile *exit* state, not egress).
+        if (state.running) {
+          registerEgress(
+            workspaceId,
+            workerRunId,
+            state.ip,
+            splitEgressDenyLabel(state.labels[TASK_EGRESS_DENY_LABEL]),
+          );
+        }
       }
     },
 

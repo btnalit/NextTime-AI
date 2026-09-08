@@ -9,7 +9,12 @@
 # authoritative): `systemPrompt` (required), `model` (optional, left empty — a workspace or a
 # later published version sets it), `skills` (optional — published Skill names/ids this
 # WorkerDefinition `uses`; empty here since no Skill has been published yet at S2.6 — S2.14 is
-# what actually mounts them into the container).
+# what actually mounts them into the container), `egressDeny` (optional, seeded empty here —
+# feat/egress-definition-lists: narrows this WorkerRun's own egress, on top of the platform's
+# fixed deny list, for every Task spawned from this definition; platform-specific, so never
+# pre-populated with real hostnames in this checked-in template — see
+# `ontology/entry-agent.yaml`'s own `egressDeny` comment for the full mechanism, which applies
+# identically here).
 #
 # `kind` is a sibling of `definition`, not a field of the content schema — see
 # `ontology/entry-agent.yaml`'s own comment for why.
@@ -17,6 +22,8 @@
 kind: worker
 
 skills: []
+
+egressDeny: []
 
 systemPrompt: |
   You are `ops-runner`, a general-purpose Worker. You were invoked by an entry agent on behalf of

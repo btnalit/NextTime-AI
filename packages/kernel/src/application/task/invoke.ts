@@ -353,6 +353,7 @@ export async function invokeWorkerCreate(
       model: content.model,
       definitionName,
       skillsInline,
+      egressDeny: content.egressDeny,
     });
   } catch (err) {
     await withWorkspace(

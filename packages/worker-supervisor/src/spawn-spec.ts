@@ -50,6 +50,17 @@ export const RESTARTS_LABEL = 'nexttime.restarts';
  *  labels must be strings, and `resident-service.ts` treats an empty label the same as "unknown"
  *  when deciding whether to recreate. */
 export const HANDLE_JTI_LABEL = 'nexttime.handle-jti';
+/** feat/egress-definition-lists: the entry WorkerDefinition's own `egressDeny` at the moment this
+ *  container was (re)created, comma-joined (a hostname/`.suffix` entry can never itself contain a
+ *  comma) — stamped so `resident-service.ts`'s `reconcile()` (run once, after a supervisor
+ *  restart) can restore the per-source deny list into a fresh `SOURCE_MAP_FILE` entry for a
+ *  container it did not itself just spawn, the same way `RESTARTS_LABEL`/`HANDLE_JTI_LABEL`
+ *  already survive a supervisor restart on the container itself. Without this, a restart would
+ *  silently *widen* egress for every still-running entry container until its next `startTurn`
+ *  re-registers the list — the one persistence gap this field exists to close (this list may only
+ *  ever narrow platform policy, never widen it, even transiently). Empty string when no list was
+ *  set (equivalent to omitted — `resident-service.ts`'s reconcile splits and filters blanks). */
+export const EGRESS_DENY_LABEL = 'nexttime.egress-deny';
 
 export function entryContainerName(principalId: string): string {
   return `nexttime-entry-${principalId}`;
@@ -74,6 +85,10 @@ export interface BuildSpawnSpecInput {
   /** The incoming Handle's `jti`, best-effort decoded by the caller (`resident-service.ts` via
    *  `handle-jti.ts`) — stamped as `HANDLE_JTI_LABEL`. `undefined` when it couldn't be decoded. */
   readonly handleJti?: string;
+  /** feat/egress-definition-lists: the entry WorkerDefinition's own `egressDeny`, stamped as
+   *  `EGRESS_DENY_LABEL` (comma-joined) — see that label's own doc comment. `undefined`/empty
+   *  stamps an empty label. */
+  readonly egressDeny?: readonly string[];
 }
 
 export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
@@ -117,6 +132,7 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
       [WORKSPACE_LABEL]: input.workspaceId,
       [RESTARTS_LABEL]: String(input.restarts),
       [HANDLE_JTI_LABEL]: input.handleJti ?? '',
+      [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
     },
     networkName: input.networkName,
     runtime: config.workerRuntime,

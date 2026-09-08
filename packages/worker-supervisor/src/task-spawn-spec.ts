@@ -32,7 +32,7 @@
 import type { SupervisorConfig } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
 import { hostModelsJsonPath, taskWorkspacePaths } from './host-paths.js';
-import { ENTRY_ROLE_LABEL as TASK_ROLE_LABEL } from './spawn-spec.js';
+import { EGRESS_DENY_LABEL, ENTRY_ROLE_LABEL as TASK_ROLE_LABEL } from './spawn-spec.js';
 
 /** Shares the `nexttime.role` label *key* with resident mode's `ENTRY_ROLE_LABEL`
  *  (`spawn-spec.ts`) — only the value differs (`worker` vs `entry`). Re-exported under this name
@@ -42,6 +42,14 @@ export const TASK_ROLE_VALUE = 'worker';
 export const TASK_ID_LABEL = 'nexttime.task-id';
 export const WORKER_RUN_ID_LABEL = 'nexttime.worker-run-id';
 export const TASK_WORKSPACE_LABEL = 'nexttime.workspace-id';
+/** feat/egress-definition-lists: shares the `nexttime.egress-deny` label *key* with resident
+ *  mode's `EGRESS_DENY_LABEL` (`spawn-spec.ts`) — same purpose, same encoding (comma-joined),
+ *  re-exported under this name for the same reason `TASK_ROLE_LABEL` is above. Stamped so
+ *  `task-service.ts`'s `reconcile()` (post supervisor-restart) can restore the invoked
+ *  WorkerDefinition's own egress deny list for a still-running Task container it did not itself
+ *  just spawn, instead of silently widening its egress until that Task's own natural end (never
+ *  re-registered by `reap()`/`status()` otherwise). */
+export { EGRESS_DENY_LABEL as TASK_EGRESS_DENY_LABEL };
 
 export function taskContainerName(workerRunId: string): string {
   return `nexttime-task-${workerRunId}`;
@@ -60,6 +68,10 @@ export interface BuildTaskSpawnSpecInput {
    *  after its own fixed pi flags. `undefined` sets no CMD (pi's own default model selection). */
   readonly model?: string;
   readonly networkName: string;
+  /** feat/egress-definition-lists: the invoked WorkerDefinition's own `egressDeny`, stamped as
+   *  `TASK_EGRESS_DENY_LABEL` (comma-joined) — see that label's own doc comment. `undefined`/empty
+   *  stamps an empty label. */
+  readonly egressDeny?: readonly string[];
 }
 
 export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpec {
@@ -99,6 +111,7 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
       [TASK_ID_LABEL]: input.taskId,
       [WORKER_RUN_ID_LABEL]: input.workerRunId,
       [TASK_WORKSPACE_LABEL]: input.workspaceId,
+      [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
     },
     networkName: input.networkName,
     runtime: config.workerRuntime,

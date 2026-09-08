@@ -132,10 +132,15 @@ function sameGatekeeperScope(a: readonly string[], b: readonly string[]): boolea
 /** S2.6: what `resolveEntryDefinition` extracts from the published entry WorkerDefinition's
  *  `definition` jsonb — either field may be `undefined` (no entry definition published yet, or
  *  the published one has no `model` set — `packages/shared/src/worker-definition.ts`'s `model` is
- *  optional). */
+ *  optional). `egressDeny` (feat/egress-definition-lists) is `undefined` under the same
+ *  circumstances, or when the published definition declares no list. */
 interface ResolvedEntryDefinition {
   readonly systemPrompt: string | undefined;
   readonly model: string | undefined;
+  /** Not `readonly string[]` — matches `KernelStartTurnCommandSchema`'s zod-inferred `string[]`
+   *  exactly (`agent-host-protocol.ts`), since this is assigned straight into the outbound frame
+   *  below. */
+  readonly egressDeny: string[] | undefined;
 }
 
 type AcceptOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
@@ -373,6 +378,9 @@ export class AgentHostRuntime implements AgentRuntime {
           ? { systemPrompt: entryDefinition.systemPrompt }
           : {}),
         ...(entryDefinition?.model !== undefined ? { model: entryDefinition.model } : {}),
+        ...(entryDefinition?.egressDeny !== undefined
+          ? { egressDeny: entryDefinition.egressDeny }
+          : {}),
       });
     } catch (err) {
       this.pendingAccepts.delete(input.turnId);
@@ -492,6 +500,10 @@ export class AgentHostRuntime implements AgentRuntime {
    * any failure (no DB reachable, no entry definition ever published, a malformed `definition`
    * missing `systemPrompt`) is logged and treated as "nothing to add to this frame" — see this
    * class's own doc comment on why a lookup here must never fail a Turn.
+   *
+   * feat/egress-definition-lists: also resolves `egressDeny` off the same definition read — no
+   * second query, same never-throws contract (a malformed/missing `egressDeny` degrades to
+   * `undefined`, exactly like a missing `model`, never to a Turn failure).
    */
   private async resolveEntryDefinition(
     workspaceId: string,
@@ -504,14 +516,21 @@ export class AgentHostRuntime implements AgentRuntime {
       );
       if (!definition) return undefined;
 
-      const content = definition.definition as { systemPrompt?: unknown; model?: unknown };
+      const content = definition.definition as {
+        systemPrompt?: unknown;
+        model?: unknown;
+        egressDeny?: unknown;
+      };
       const systemPrompt =
         typeof content.systemPrompt === 'string' && content.systemPrompt.length > 0
           ? content.systemPrompt
           : undefined;
       const model =
         typeof content.model === 'string' && content.model.length > 0 ? content.model : undefined;
-      return { systemPrompt, model };
+      const egressDeny = Array.isArray(content.egressDeny)
+        ? content.egressDeny.filter((d): d is string => typeof d === 'string')
+        : undefined;
+      return { systemPrompt, model, egressDeny };
     } catch (err) {
       this.log(
         JSON.stringify({
