@@ -20,7 +20,8 @@
 # later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc §7.9 — an
 # empty object is a valid "no sources registered yet" map, not a stub for a later task to
 # overwrite; gatekeeper-ragflow.env's real shape is S2.5's, see below).
-# Then chowns workspaces/ artifacts/ backups/ gatekeepers/{docker,ragflow}/ to the non-root uid:gid
+# Then chowns workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ to the non-root uid:gid (backups/
+# is forced back to root-owned — see its own step), and
 # the platform's containers run as, makes config/ world-readable (it holds no secrets), and
 # chmod -R o+rX's caddy/ (root-owned — chown doesn't help there, see that step's own comment).
 # Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
@@ -219,13 +220,14 @@ for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
 
-# --- backups/ (fix/socket-proxy-and-backup-user): owned by the platform uid so the `backup` -----
-# service's own non-root `user: "10001:10001"` (docker-compose.yml) can write dumps/tarballs here
-# — previously left untouched because `backup` ran as root and ownership didn't matter; now it
-# does. Safe to chown unconditionally: nothing else writes here, and `backup`'s own PGDATA/
-# workspaces/config/gatekeepers/caddy mounts are all read-only, so this is the one directory it
-# actually needs write access to (see that service's own compose comment).
-chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/backups"
+# --- backups/: must stay ROOT-owned (0:0, mode 750). The `backup` service runs as root with -----
+# `cap_drop: [ALL]` + only `DAC_READ_SEARCH` (docker-compose.yml, 2026-09-08 correction): without
+# CAP_DAC_OVERRIDE, root can only write into directories it owns — a `backups/` chowned to the
+# platform uid (what fix/socket-proxy-and-backup-user did here) made every backup fail with an
+# empty pg_dump error until the directory was chowned back on the host. Enforced idempotently so a
+# stray chown cannot silently break the nightly job again; nothing else writes here.
+chown -R 0:0 "$NEXTTIME_DATA/backups"
+chmod 750 "$NEXTTIME_DATA/backups"
 
 # --- caddy/ (fix/socket-proxy-and-backup-user): chown does NOT work here the way it does for -----
 # the uid-10001-owned directories above — `caddy` (docker-compose.yml) runs as the image's own
@@ -265,9 +267,10 @@ echo "host-env-init: config/ (mode, owner:group, path):"
 find "$CONFIG_DIR" -maxdepth 1 -printf '  %M %U:%G %p\n'
 echo ""
 echo "host-env-init: ownership fix-up (uid:gid ${CONTAINER_UID}:${CONTAINER_GID}) applied to:"
-for d in workspaces artifacts backups gatekeepers/docker gatekeepers/ragflow; do
+for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow; do
 	echo "  $NEXTTIME_DATA/$d -> $(stat -c '%U:%G' "$NEXTTIME_DATA/$d")"
 done
+echo "host-env-init: backups/ kept root-owned (0:0, mode $(stat -c '%a' "$NEXTTIME_DATA/backups")) — the backup service is root with only DAC_READ_SEARCH and cannot write into a directory it does not own"
 echo ""
 echo "host-env-init: caddy/ left root-owned; \`chmod -R o+rX\` applied instead (mode now: $(stat -c '%a' "$NEXTTIME_DATA/caddy")) — see docs/runbooks/backup-restore.md for why this is only a baseline, not the real fix"
 echo ""
