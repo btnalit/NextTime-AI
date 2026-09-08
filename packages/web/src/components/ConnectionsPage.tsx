@@ -13,6 +13,7 @@ import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import { statusValues } from '../lib/status-tone.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
+import { GatekeeperDetailDrawer } from './GatekeeperDetailDrawer.js';
 import { GatekeeperCard } from './RegisteredSystemsSection.js';
 import { RequestConnectionForm } from './RequestConnectionForm.js';
 import { Button } from './ui/Button.js';
@@ -29,6 +30,10 @@ import { useToast } from './ui/Toast.js';
 
 export interface ConnectionsPageProps {
   readonly http: CapabilityCaller;
+  /** The Gatekeeper whose S3.11 health/operations detail drawer is open (`#/govern/systems/<id>`,
+   *  route-addressable so a link can deep-link straight into it). */
+  readonly selectedGatekeeperId?: string;
+  readonly onSelectGatekeeper?: (gatekeeperId: string | null) => void;
 }
 
 type RequestFilter = 'requested' | 'all' | 'completed' | 'cancelled';
@@ -46,13 +51,20 @@ const REQUEST_FILTERS: readonly RequestFilter[] = [
 ];
 
 /**
- * components/ConnectionsPage: the two halves of design doc §7.6 "连接系统" on the live S2.13
- * capabilities. (a) Connection requests — `list_connection_requests` (owner), completed through
- * `create_connection`, or raised here with `request_connection`. (b) Registered systems — the
- * `Gatekeeper`/`Operation` graph Objects via `search`, with `publish_manifest` and
- * `connect_gatekeeper`. `search` is capped at 50 results per object type (kernel gap).
+ * components/ConnectionsPage: rendered at `/govern/systems` (系统接入 Systems) — the two halves of
+ * design doc §7.6 "连接系统" on the live S2.13 capabilities. (a) Connection requests —
+ * `list_connection_requests` (owner), completed through `create_connection`, or raised here with
+ * `request_connection`. (b) Registered systems — the `Gatekeeper`/`Operation` graph Objects via
+ * `search`, with `publish_manifest` and `connect_gatekeeper`. `search` is capped at 50 results per
+ * object type (kernel gap). S3.11/S3.14 addition: each card's "Health & operations" action opens
+ * `GatekeeperDetailDrawer` (`get_gatekeeper`, new) — the rest of this page (including its file
+ * name) is otherwise untouched by that task; see the PR report for why it was not renamed/rewritten.
  */
-export function ConnectionsPage({ http }: ConnectionsPageProps) {
+export function ConnectionsPage({
+  http,
+  selectedGatekeeperId,
+  onSelectGatekeeper,
+}: ConnectionsPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
   const [filter, setFilter] = useState<RequestFilter>('requested');
@@ -124,7 +136,7 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
   return (
     <div className="page">
       <PageHeader
-        title="Connections"
+        title="系统接入 Systems"
         description="Bring systems in behind a Gatekeeper, publish their operations, and grant gates to people's entry agents."
         actions={
           <>
@@ -297,6 +309,7 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
                 canGrant={!permissions.isDenied('connect_gatekeeper')}
                 onChanged={reloadRegistry}
                 onForbidden={permissions.markDenied}
+                onOpenDetail={onSelectGatekeeper}
               />
             ))}
             {gatekeepers.state.data.length >= 50 ? (
@@ -343,6 +356,24 @@ export function ConnectionsPage({ http }: ConnectionsPageProps) {
             request={drawer.request}
             onDone={handleCompleted}
             onCancel={() => setDrawer({ kind: 'closed' })}
+          />
+        ) : null}
+      </Drawer>
+
+      <Drawer
+        open={selectedGatekeeperId !== undefined}
+        onClose={() => onSelectGatekeeper?.(null)}
+        title="Health & operations"
+        subtitle={
+          selectedGatekeeperId ? <span className="mono">{selectedGatekeeperId}</span> : undefined
+        }
+        testId="gatekeeper-detail-drawer"
+      >
+        {selectedGatekeeperId ? (
+          <GatekeeperDetailDrawer
+            key={selectedGatekeeperId}
+            http={http}
+            gatekeeperId={selectedGatekeeperId}
           />
         ) : null}
       </Drawer>

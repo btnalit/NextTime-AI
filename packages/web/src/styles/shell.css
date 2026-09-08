@@ -52,16 +52,85 @@
   font-size: 14px;
 }
 
+.sidebar-workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .sidebar-workspace {
   font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+
+.role-badge-owner {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.role-badge-operator {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.role-badge-member {
+  background: var(--surface-3);
   color: var(--text-3);
 }
 
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3);
   flex: 1;
+  overflow-y: auto;
+}
+
+.nav-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.nav-section-title-sub {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.75;
+}
+
+.nav-label-sub {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
 }
 
 .nav-item {
@@ -274,6 +343,7 @@
 
   .sidebar-brand-text,
   .nav-label,
+  .nav-section-title,
   .conn-status-label,
   .sidebar-footer .btn-label {
     display: none;
@@ -321,8 +391,17 @@
 
   .sidebar-nav {
     flex-direction: row;
+    flex-wrap: wrap;
     justify-content: center;
     gap: var(--space-1);
+    overflow-y: visible;
+  }
+
+  /* Flattens each section's items directly into the row above — two stacked columns (one per
+   * section) would otherwise sit side by side instead of one wrapping strip of icons. The
+   * section title is already hidden at this width (rule above, shared with the 1100px rail). */
+  .nav-section {
+    display: contents;
   }
 
   .nav-item {

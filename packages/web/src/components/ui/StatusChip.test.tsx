@@ -2,7 +2,9 @@
 import {
   ACTION_REQUEST_STATUS_VALUES,
   CONNECTION_REQUEST_STATUS_VALUES,
+  GRANT_STATUS_VALUES,
   PUBLISHABLE_STATUS_VALUES,
+  ROLE_VALUES,
   TASK_STATUS_VALUES,
   WORKER_RUN_STATUS_VALUES,
 } from '@nexttime/shared';
@@ -26,6 +28,8 @@ const MACHINES: readonly { readonly machine: StatusMachine; readonly values: rea
     { machine: 'workerRun', values: WORKER_RUN_STATUS_VALUES },
     { machine: 'connectionRequest', values: CONNECTION_REQUEST_STATUS_VALUES },
     { machine: 'publishable', values: PUBLISHABLE_STATUS_VALUES },
+    { machine: 'grant', values: GRANT_STATUS_VALUES },
+    { machine: 'role', values: ROLE_VALUES },
   ];
 
 describe('StatusChip', () => {

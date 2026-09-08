@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AccessPage } from './components/AccessPage.js';
+import { AgentProfilePage } from './components/AgentProfilePage.js';
 import { ApprovalQueuePage } from './components/ApprovalQueuePage.js';
+import { AuditPage } from './components/AuditPage.js';
+import { CatalogPage } from './components/CatalogPage.js';
 import { ChatListPage } from './components/ChatListPage.js';
 import { ChatPage } from './components/ChatPage.js';
 import { ConnectionsPage } from './components/ConnectionsPage.js';
 import { LoginPage } from './components/LoginPage.js';
+import { MembersPage } from './components/MembersPage.js';
+import { ModelsPage } from './components/ModelsPage.js';
 import { TasksPage } from './components/TasksPage.js';
 import { AppShell } from './components/shell/AppShell.js';
 import { ToastProvider } from './components/ui/Toast.js';
@@ -109,6 +115,14 @@ function Routed({
   const openApproval = (id: string) => navigate(hrefs.approval(id));
   const openTask = (id: string) => navigate(hrefs.task(id));
 
+  // A stray `#/login` while already signed in (a leftover tab, a manually-typed hash) has nowhere
+  // sensible to render — redirect to the default work view, same as an unmatched hash
+  // (`lib/router.ts`'s own fallback).
+  useEffect(() => {
+    if (route.kind === 'login') navigate(hrefs.chats());
+  }, [route.kind]);
+  if (route.kind === 'login') return null;
+
   let page: JSX.Element;
   switch (route.kind) {
     case 'chat':
@@ -145,11 +159,41 @@ function Routed({
         />
       );
       break;
-    case 'connections':
-      page = <ConnectionsPage http={session.http} />;
-      break;
     case 'chats':
       page = <ChatListPage client={session.ws} onSelectChat={(id) => navigate(hrefs.chat(id))} />;
+      break;
+    case 'agent':
+      page = <AgentProfilePage http={session.http} />;
+      break;
+    case 'members':
+      page = <MembersPage http={session.http} />;
+      break;
+    case 'access':
+      page = <AccessPage http={session.http} />;
+      break;
+    case 'systems':
+      page = (
+        <ConnectionsPage
+          http={session.http}
+          selectedGatekeeperId={route.gatekeeperId}
+          onSelectGatekeeper={(id) => navigate(id ? hrefs.gatekeeper(id) : hrefs.systems())}
+        />
+      );
+      break;
+    case 'catalog':
+      page = (
+        <CatalogPage
+          http={session.http}
+          tab={route.tab}
+          onTabChange={(tab) => navigate(hrefs.catalog(tab))}
+        />
+      );
+      break;
+    case 'models':
+      page = <ModelsPage http={session.http} />;
+      break;
+    case 'audit':
+      page = <AuditPage http={session.http} />;
       break;
   }
 

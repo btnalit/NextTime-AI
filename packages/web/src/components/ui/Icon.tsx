@@ -31,8 +31,11 @@ export type IconName =
   | 'link'
   | 'clock'
   | 'user'
+  | 'users'
   | 'shield'
-  | 'logout';
+  | 'logout'
+  | 'grid'
+  | 'search';
 
 const PATHS: Readonly<Record<IconName, string>> = {
   chat: 'M4 5h16v10H9l-5 4V5z',
@@ -60,8 +63,12 @@ const PATHS: Readonly<Record<IconName, string>> = {
   link: 'M10 14 14 10M8 16l-2 2a3.5 3.5 0 0 1-5-5l2-2m11 5 2-2a3.5 3.5 0 0 0-5-5l-2 2',
   clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 4v5l3 2',
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-8 9a8 8 0 0 1 16 0',
+  users:
+    'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1M16 3.2a4 4 0 0 1 0 7.6M21.5 21v-1a5 5 0 0 0-3.5-4.8',
   shield: 'M12 3l8 3v6c0 4.5-3.4 7.7-8 9-4.6-1.3-8-4.5-8-9V6l8-3z',
   logout: 'M10 4H5v16h5M14 8l5 4-5 4m5-4H9',
+  grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+  search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35',
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {

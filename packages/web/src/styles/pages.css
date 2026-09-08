@@ -385,22 +385,27 @@
   color: var(--warn);
 }
 
-/* ---- Tasks --------------------------------------------------------------------------- */
-.worker-run-table {
+/* ---- Tasks / governance tables (S3.14: `.data-table` is the generic name — `.worker-run-table`
+ * is kept as an alias so the pre-existing Tasks markup is untouched) --------------------------- */
+.worker-run-table,
+.data-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12.5px;
 }
 
 .worker-run-table th,
-.worker-run-table td {
+.worker-run-table td,
+.data-table th,
+.data-table td {
   text-align: left;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
 
-.worker-run-table th {
+.worker-run-table th,
+.data-table th {
   color: var(--text-3);
   font-weight: 500;
   font-size: 11.5px;
@@ -408,7 +413,8 @@
   letter-spacing: 0.04em;
 }
 
-.worker-run-table tr:last-child td {
+.worker-run-table tr:last-child td,
+.data-table tr:last-child td {
   border-bottom: 0;
 }
 

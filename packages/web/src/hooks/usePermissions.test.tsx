@@ -65,4 +65,22 @@ describe('usePermissions', () => {
     bare?.markDenied('list_pending');
     expect(bare?.isDenied('list_pending')).toBe(false);
   });
+
+  it('markAllowed records a success with no closure — only that exact capability', () => {
+    let latest: Permissions | undefined;
+    render(
+      <PermissionsProvider>
+        <Probe
+          onReady={(permissions) => {
+            latest = permissions;
+          }}
+        />
+      </PermissionsProvider>,
+    );
+    expect(latest?.allowed.has('list_quotas')).toBe(false);
+    act(() => latest?.markAllowed('list_quotas'));
+    expect(latest?.allowed.has('list_quotas')).toBe(true);
+    // no closure: a sibling operator-minRole capability is not implied allowed too.
+    expect(latest?.allowed.has('list_pending')).toBe(false);
+  });
 });
