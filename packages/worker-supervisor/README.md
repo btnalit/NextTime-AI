@@ -31,6 +31,23 @@ token。
 跑的容器）都会重新写入来源映射，所以一个新发布的 WorkerDefinition 版本的拒绝名单，下一次
 `startTurn` 就生效，不必等容器重启；`reconcile()` 同样从 `nexttime.egress-deny` label 恢复。
 
+**`skillsInline?`（S3.13）**：调用方（AgentProfile 的 `effective.enabledSkills`，内核解析并渲染）
+自己的 Skill 挂载——复用 Task 模式上面那条 `skillsInline` 的**同一个** Zod schema（`config.ts`
+`TaskSkillInlineSchema`）与写盘机制（`<agentDir>/skills/<name>/<fileName>`），但触发方式不同：
+Task 容器每次都是全新工作目录，天然每次都写；常驻入口容器的工作目录跨重建持久化，所以：
+
+- 只在这次 spawn 真的要（重）建容器时才写（`resident-service.ts` `writeSkillsInline`）——单纯复用
+  一个仍在跑的容器不写，因为 Skill 集合有变化本身就是下面这条判定强制重建的原因，"仍在复用"意味着
+  集合本来就没变。
+- 写之前先把整个 `skills/` 子目录删掉再重建——与 Task 模式的"永远全新目录"不同，一个从 AgentProfile
+  移除的 Skill 绝不能因为目录从未被删过而继续留在磁盘上、下次重启又被 pi 重新挂载（S3.13"永不扩权"
+  的同一条不变量，落到这里）。
+- Skill 集合变化会强制重建容器，即使 Handle 的 `jti` 没变：`spawn-spec.ts` 新增
+  `SKILLS_HASH_LABEL`（`nexttime.skills-hash`）与纯函数 `hashSkillsInline`（对 Skill 列表本身、以及
+  每个 Skill 自己的 `files` 映射都做顺序无关的规范化），`resident-service.ts` 的 `spawn()` 把这个
+  哈希的比对结果并入原有的 `rotated`（Handle jti 不匹配）判定——pi 只在容器启动时加载 Skill，所以
+  集合变化和 Handle 轮换需要完全相同的处理：不能靠"仍在跑的容器"继续用旧的挂载内容。
+
 ## Task 模式（S2.8）
 
 一次性 Worker 容器：`POST /task/spawn`、`POST /task/:workerRunId/terminate`、
