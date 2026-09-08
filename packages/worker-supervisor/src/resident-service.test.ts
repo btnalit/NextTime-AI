@@ -259,6 +259,50 @@ describe('resident-service spawn', () => {
     expect(map[outcome.ip as string]).toEqual({ sourceId: 'entry:ws-1:alice' });
   });
 
+  it('registers egressDeny alongside sourceId when the definition declares one (feat/egress-definition-lists)', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      egressDeny: ['blocked.example.com'],
+    });
+    const map = egressMap.read();
+    expect(map[outcome.ip as string]).toEqual({
+      sourceId: 'entry:ws-1:alice',
+      deny: ['blocked.example.com'],
+    });
+    expect(docker.createCalls[0]?.labels['nexttime.egress-deny']).toBe('blocked.example.com');
+  });
+
+  it('refreshes egressDeny on every reuse spawn, not just on (re)create', async () => {
+    const { service, egressMap } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      egressDeny: ['first.example.com'],
+    });
+    expect(egressMap.read()[first.ip as string]).toEqual({
+      sourceId: 'entry:ws-1:alice',
+      deny: ['first.example.com'],
+    });
+
+    // Same still-running container (reuse path) — a newly published definition version's list
+    // must still take effect without a container restart.
+    const second = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      egressDeny: ['second.example.com'],
+    });
+    expect(second.created).toBe(false);
+    expect(egressMap.read()[first.ip as string]).toEqual({
+      sourceId: 'entry:ws-1:alice',
+      deny: ['second.example.com'],
+    });
+  });
+
   it('pre-creates .pi/agent under the local workspace dir before asking Docker to create the container', async () => {
     // Host verification (S1.5a) found Docker auto-creating .pi/agent as root (as the parent of
     // the models.json bind-mount target) blocks the non-root entry container from creating the
@@ -416,5 +460,28 @@ describe('resident-service reconcile', () => {
     const second = createResidentService({ config, docker, egressMap });
     await expect(second.reconcile()).resolves.toBeUndefined();
     expect(await second.touch('alice')).toBe(false);
+  });
+
+  it('restores egressDeny from the container label after a simulated supervisor restart (feat/egress-definition-lists)', async () => {
+    const { config, docker, egressMap } = setup();
+    const first = createResidentService({ config, docker, egressMap });
+    const outcome = await first.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      egressDeny: ['blocked.example.com'],
+    });
+
+    // Simulate a supervisor restart: fresh service instance, and pretend the source-map file
+    // itself was also lost — reconcile() must restore the deny list from the container's own
+    // label, not merely re-register a bare sourceId (which would silently widen egress).
+    egressMap.unregister(outcome.ip as string);
+    const second = createResidentService({ config, docker, egressMap });
+    await second.reconcile();
+
+    expect(egressMap.read()[outcome.ip as string]).toEqual({
+      sourceId: 'entry:ws-1:alice',
+      deny: ['blocked.example.com'],
+    });
   });
 });

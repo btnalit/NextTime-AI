@@ -30,6 +30,8 @@ interface FakeSessionRow {
 interface FakeEntryDefinitionRow {
   readonly systemPrompt?: string;
   readonly model?: string;
+  /** feat/egress-definition-lists */
+  readonly egressDeny?: readonly string[];
 }
 
 function createFakePool(
@@ -65,7 +67,11 @@ function createFakePool(
             version: 1,
             kind: 'entry',
             status: 'published',
-            definition: { systemPrompt: seed.systemPrompt, model: seed.model },
+            definition: {
+              systemPrompt: seed.systemPrompt,
+              model: seed.model,
+              egressDeny: seed.egressDeny,
+            },
             proposed_by: randomUUID(),
             published_by: randomUUID(),
             created_at: new Date(),
@@ -484,6 +490,63 @@ describe('AgentHostRuntime — startTurn resolves the published entry WorkerDefi
     const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
     expect(command.systemPrompt).toBe('you are the entry agent');
     expect(command.model).toBeUndefined();
+  });
+
+  it('includes egressDeny on the startTurn frame when the published entry definition declares one (feat/egress-definition-lists)', async () => {
+    const input = startTurnInput();
+    const { pool } = createFakePool(
+      new Map([
+        [
+          input.workspaceId,
+          { systemPrompt: 'you are the entry agent', egressDeny: ['blocked.example.com'] },
+        ],
+      ]),
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.egressDeny).toEqual(['blocked.example.com']);
+  });
+
+  it('omits egressDeny when the published definition declares none', async () => {
+    const input = startTurnInput();
+    const { pool } = createFakePool(
+      new Map([[input.workspaceId, { systemPrompt: 'you are the entry agent' }]]),
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.egressDeny).toBeUndefined();
   });
 });
 

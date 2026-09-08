@@ -91,12 +91,16 @@ describe('worker-definition content schemas', () => {
       expect(result.success).toBe(true);
     });
 
-    it('rejects an entry-only field (egressDeny) on a worker definition', () => {
+    // feat/egress-definition-lists: egressDeny is no longer entry-only (design doc §7.9 applies a
+    // WorkerDefinition's own allow/deny list to both entry sessions and WorkerRuns) — was
+    // previously rejected here as an "entry-only field"; see worker-definition.ts's own doc
+    // comment for the full rationale.
+    it('accepts egressDeny when present', () => {
       const result = WorkerWorkerDefinitionContentSchema.safeParse({
         systemPrompt: 'hi',
         egressDeny: ['blocked.example.com'],
       });
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
   });
 

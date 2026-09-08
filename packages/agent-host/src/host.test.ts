@@ -231,6 +231,24 @@ describe('createHost — handleStartTurn happy path', () => {
     ]);
   });
 
+  it('forwards egressDeny from the startTurn command to supervisorClient.spawn (feat/egress-definition-lists)', async () => {
+    const { host, supervisor } = setUp();
+    const cmd = startTurnCommand({ egressDeny: ['blocked.example.com'] });
+
+    await host.handleStartTurn(cmd);
+
+    expect(supervisor.spawnCalls).toEqual([
+      {
+        workspaceId: cmd.workspaceId,
+        principalId: cmd.principalId,
+        handle: cmd.handle,
+        kernelUrl: 'http://kernel:8080',
+        llmUrl: cmd.kernelLlmUrl,
+        egressDeny: ['blocked.example.com'],
+      },
+    ]);
+  });
+
   it('rejects a second concurrent turn for the same principal without spawning again', async () => {
     const { host, supervisor, kernelLink } = setUp();
     const first = startTurnCommand();

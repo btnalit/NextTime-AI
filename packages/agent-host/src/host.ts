@@ -181,6 +181,7 @@ export function createHost(options: HostOptions): Host {
     llmUrl: string,
     systemPrompt: string | undefined,
     model: string | undefined,
+    egressDeny: readonly string[] | undefined,
   ): Promise<AttachmentRecord> {
     const spawnResult = await supervisorClient.spawn({
       workspaceId,
@@ -190,6 +191,7 @@ export function createHost(options: HostOptions): Host {
       llmUrl,
       systemPrompt,
       model,
+      egressDeny,
     });
 
     // Best-effort — spawn() itself already refreshed worker-supervisor's idle clock for this
@@ -259,6 +261,7 @@ export function createHost(options: HostOptions): Host {
           cmd.kernelLlmUrl || defaultKernelLlmUrl,
           cmd.systemPrompt,
           cmd.model,
+          cmd.egressDeny,
         );
       } catch (err) {
         activeTurns.delete(cmd.principalId); // release the reservation — this turn never started

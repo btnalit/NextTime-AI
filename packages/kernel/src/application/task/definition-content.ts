@@ -25,6 +25,12 @@ export interface WorkerDefinitionContentShape {
    *  definition.ts`'s `skills` field, "published Skill names/ids this WorkerDefinition uses") —
    *  resolved to mountable content by `resolveSkillsInline` below (S2.14 deliverable 4). */
   readonly skills?: readonly string[];
+  /** feat/egress-definition-lists: `packages/shared/src/worker-definition.ts`'s `egressDeny`
+   *  (now valid on `kind='worker'` content too, not entry-only) — forwarded verbatim by
+   *  `spawn.ts`'s callers (`invoke.ts`, `lifecycle.ts`) into `SpawnWorkerRunInput.egressDeny`,
+   *  which narrows the spawned WorkerRun container's own egress on top of the platform's fixed
+   *  deny list. */
+  readonly egressDeny?: readonly string[];
 }
 
 export function readDefinitionContent(definition: unknown): WorkerDefinitionContentShape {
@@ -40,6 +46,9 @@ export function readDefinitionContent(definition: unknown): WorkerDefinitionCont
     model: typeof record.model === 'string' ? record.model : undefined,
     skills: Array.isArray(record.skills)
       ? record.skills.filter((s): s is string => typeof s === 'string')
+      : undefined,
+    egressDeny: Array.isArray(record.egressDeny)
+      ? record.egressDeny.filter((d): d is string => typeof d === 'string')
       : undefined,
   };
 }

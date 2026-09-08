@@ -129,6 +129,16 @@ describe('task-service spawn', () => {
     expect(egressMap.read()[outcome.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-1' });
   });
 
+  it('registers egressDeny alongside sourceId when the invoked WorkerDefinition declares one (feat/egress-definition-lists)', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({ ...spawnInput, egressDeny: ['blocked.example.com'] });
+    expect(egressMap.read()[outcome.ip as string]).toEqual({
+      sourceId: 'worker:ws-1:run-1',
+      deny: ['blocked.example.com'],
+    });
+    expect(docker.createCalls[0]?.labels['nexttime.egress-deny']).toBe('blocked.example.com');
+  });
+
   it('spawn still succeeds when the egress map store throws (best-effort registration)', async () => {
     const { config, docker } = setup();
     const throwingEgressMap: EgressMapStore = {
@@ -312,6 +322,21 @@ describe('task-service reconcile', () => {
     expect(egressMap.read()[outcome.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-1' });
     const status = await second.status('run-1');
     expect(status).toMatchObject({ status: 'running', containerId: outcome.containerId });
+  });
+
+  it('restores egressDeny from the container label after a simulated supervisor restart (feat/egress-definition-lists)', async () => {
+    const { config, docker, egressMap } = setup();
+    const first = createTaskService({ config, docker, egressMap });
+    const outcome = await first.spawn({ ...spawnInput, egressDeny: ['blocked.example.com'] });
+
+    egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
+    const second = createTaskService({ config, docker, egressMap });
+    await second.reconcile();
+
+    expect(egressMap.read()[outcome.ip as string]).toEqual({
+      sourceId: 'worker:ws-1:run-1',
+      deny: ['blocked.example.com'],
+    });
   });
 
   it('reconciles an already-exited container into exited/failed by its recorded exit code', async () => {

@@ -28,6 +28,12 @@ import type { WorkerDefinitionKind } from './enums.js';
  * default to the platform's fixed worker ceiling / no gates respectively when omitted — see
  * `governance/capability/handles.ts`'s `WORKER_CEILING_CAPABILITIES` and
  * `application/task/invoke.ts`'s `computeChildHandleScope` for exactly how they are consumed.
+ *
+ * feat/egress-definition-lists addition: `egressDeny` is no longer entry-only — both kind-specific
+ * schemas below now carry it (design doc §7.9 names both "WorkerRun" and "入口会话" as targets of a
+ * WorkerDefinition's own allow/deny list). Still deny-list only, both kinds: `egressAllow` is not
+ * part of the domain today — neither schema below defines it, and nothing in this change invents
+ * it.
  */
 
 /** `<provider>/<id>` — never a hard-coded default (this file, like every other, names no real
@@ -58,7 +64,11 @@ const WorkerDefinitionContentBaseSchema = z.object({
 export const EntryWorkerDefinitionContentSchema = WorkerDefinitionContentBaseSchema.extend({
   capabilities: z.array(z.string().min(1)),
   /** Egress deny-list seeded empty in the checked-in template (§7.9 "按 WorkerDefinition 的允许/
-   *  拒绝清单过滤"); platform-specific, so never pre-populated with real hostnames here. */
+   *  拒绝清单过滤"); platform-specific, so never pre-populated with real hostnames here. Semantics:
+   *  a hostname or a `.suffix` entry (matches the host and every subdomain), case-insensitive;
+   *  literal IPs/CIDRs are not part of this list — the egress proxy's own built-in private-range
+   *  denial already covers those (`packages/egress-proxy/src/policy.ts`). Same field, same
+   *  semantics, on `WorkerWorkerDefinitionContentSchema` below (feat/egress-definition-lists). */
   egressDeny: z.array(z.string().min(1)).optional(),
 }).strict();
 export type EntryWorkerDefinitionContent = z.infer<typeof EntryWorkerDefinitionContentSchema>;
@@ -77,11 +87,22 @@ export type EntryWorkerDefinitionContent = z.infer<typeof EntryWorkerDefinitionC
  * execute-class capability (least-privilege: a definition that never says it needs to act on a
  * system gets an observe/propose-only Handle); `gates` (Gatekeeper Object ids this definition
  * `can_act_on`) omitted defaults to no gates at all.
+ *
+ * `egressDeny` (feat/egress-definition-lists): same shape and semantics as the entry schema's own
+ * field below — design doc §7.9 "按来源容器解析到 WorkerRun / 入口会话，套用其 WorkerDefinition 的允许 /
+ * 拒绝清单" names *both* WorkerRun and entry session as targets of a WorkerDefinition's own egress
+ * list, not entry alone. Added here (S2.6 originally scoped this field to `kind='entry'` only —
+ * see this schema's own "rejects an entry-only field" test history) once a real consumer existed:
+ * `application/task/spawn.ts` forwards a `kind='worker'` WorkerDefinition's own `egressDeny` into
+ * the spawned WorkerRun container's source-map registration, narrowing that Task's own egress on
+ * top of (never in place of) the platform's fixed deny list — never a widening. Optional; a
+ * WorkerDefinition with none behaves exactly as before this field existed.
  */
 export const WorkerWorkerDefinitionContentSchema = WorkerDefinitionContentBaseSchema.extend({
   skills: z.array(z.string().min(1)).optional(),
   capabilities: z.array(z.string().min(1)).optional(),
   gates: z.array(z.string().min(1)).optional(),
+  egressDeny: z.array(z.string().min(1)).optional(),
 }).strict();
 export type WorkerWorkerDefinitionContent = z.infer<typeof WorkerWorkerDefinitionContentSchema>;
 
