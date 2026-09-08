@@ -54,13 +54,18 @@ import {
 
 /**
  * The one canonical construction of "a `GatekeeperClient` + the admin-mode `ActionExecutor` over
- * it" (S2.4 coordinator review — "the single shared executor path"): `createServer()` uses it to
- * wire `request_action`'s phase-2 continuation (`setRequestActionDeps`), `createBackgroundServices`
- * uses it to wire `ApprovalDrainer`. Two separate `ActionExecutor` instances (one per caller) are
- * behaviorally identical — the type has no internal state, it is purely a function of
- * `gatekeeperClient`/`withTransaction` — so this is about having exactly one definition of *how*
- * to build one, not about sharing a single JS object across the sync/async construction split
- * below (`createServer` has no async dependency and can build its own before the port opens;
+ * it" (S2.4 coordinator review — "the single shared executor path"): both `createServer()` and
+ * `createBackgroundServices` use it to build their own `ApprovalDrainer` — `createServer()` wires
+ * its instance into `request_action`'s phase-2 continuation (`setRequestActionDeps`, P2-2 fix:
+ * inline execution now routes through the drainer's per-Gatekeeper ordering rather than calling
+ * `ActionExecutor` directly), `createBackgroundServices` wires its own into the outbox
+ * consumer + periodic tick trigger paths. Two separate `ActionExecutor`/`ApprovalDrainer` instances
+ * (one per caller) are behaviorally identical — neither type has meaningful internal state beyond
+ * what `gatekeeperClient`/`withTransaction` already determine, and `ApprovalDrainer`'s own
+ * in-memory single-flight set is an optimization, not a correctness mechanism (the DB row lock +
+ * conditional UPDATE is) — so this is about having exactly one definition of *how* to build the
+ * pieces, not about sharing a single JS object across the sync/async construction split below
+ * (`createServer` has no async dependency and can build its own before the port opens;
  * `createBackgroundServices` is built later, once `AgentRuntime`'s own async bootstrap finishes).
  */
 interface GatekeeperExecutionDeps extends GatekeeperActionExecutorDeps {
@@ -97,14 +102,19 @@ export function createServer(
   // S2.4: wired here (not createBackgroundServices) so `request_action` is servable as soon as
   // the port opens, not only once the async AgentRuntime bootstrap below finishes — building a
   // `GatekeeperClient` + admin-mode `ActionExecutor` needs nothing async, only `deps.pool`
-  // (already in hand here). `ApprovalDrainer`'s other two trigger paths (outbox consumer +
-  // periodic tick) do need the OutboxDispatcher, so those remain in createBackgroundServices
-  // below — but phase 2 of `request_action` itself (request-action-handler.ts's `afterCommit`)
-  // never waits on them.
-  const { gatekeeperClient, actionExecutor } = buildGatekeeperExecutionDeps(deps.pool);
+  // (already in hand here). `createBackgroundServices` builds its own second `ApprovalDrainer`
+  // instance (same construction, needed only once its own async bootstrap finishes) for the
+  // outbox consumer + periodic tick trigger paths — this one is `request_action`'s own phase 2
+  // (P2-2 fix: routing inline execution through the drainer, request-action-handler.ts's own doc
+  // comment on `RequestActionHandlerDeps.drainer` has the full "two behaviorally-identical
+  // instances" reasoning), which never waits on either of those.
+  const { gatekeeperClient, actionExecutor, withTransaction } = buildGatekeeperExecutionDeps(
+    deps.pool,
+  );
+  const requestActionDrainer = new ApprovalDrainer({ executor: actionExecutor, withTransaction });
   setRequestActionDeps({
     gatekeeperClient,
-    actionExecutor,
+    drainer: requestActionDrainer,
     awaitDecisionTimeoutMs: options.requestActionAwaitDecisionTimeoutMs,
   });
   // S2.13: `create_connection`'s handler reuses the *same* `GatekeeperClient` instance

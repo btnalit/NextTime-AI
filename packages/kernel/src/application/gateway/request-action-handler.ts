@@ -4,14 +4,11 @@ import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { findWorkerRunBySessionId } from '../../application/task/index.js';
-import type { ActionExecutor, ActionRequestRow } from '../../governance/approval/index.js';
+import type { ActionRequestRow, ApprovalDrainer } from '../../governance/approval/index.js';
 import {
   awaitActionRequestResolution,
   getActionRequest,
-  markActionRequestExecuted,
-  markActionRequestFailed,
   requestAction,
-  startActionRequestExecution,
 } from '../../governance/approval/index.js';
 import {
   GatekeeperNotFoundError,
@@ -78,7 +75,10 @@ import { writeObservedFacts } from './observed-facts.js';
  *     inside an Activity, writes `observedFacts`, returns the final result — no ActionRequest, no
  *     `afterCommit` (a read has no "effect with no record" risk; if the write of the observed
  *     Facts itself fails, the whole phase-1 transaction rolls back cleanly, which is correct).
- *   - `mode: 'execute'`, resolves `denied`          → R: throws `ActionRequestDeniedError` (403).
+ *   - `mode: 'execute'`, resolves `denied`          → R returns `{actionRequestId, status:'denied'}`
+ *     + `afterCommit`; A: throws `ActionRequestDeniedError` (403) — deferred past commit (P2-1
+ *     fix) so the denied row/audit/outbox survive, rather than a synchronous R-side throw rolling
+ *     them back along with dispatch.ts's own transaction.
  *   - `mode: 'execute'`, resolves `auto_approved`   → R returns `{actionRequestId, status}` +
  *     `afterCommit`; A: `tryExecuteInline` (see below) runs immediately.
  *   - `mode: 'execute'`, resolves `pending_approval`, `awaitDecision: false` → R: calls the gate's
@@ -90,19 +90,30 @@ import { writeObservedFacts } from './observed-facts.js';
  *     elapses — `approved`/`auto_approved` within budget → executes via `tryExecuteInline`;
  *     `rejected`/`expired` → returned as-is; already `executed`/`failed` (a concurrent drain beat
  *     us to it) → reads the stored outcome back; timed out → `{status:'pending_approval'}` if
- *     still undecided, or `{status:'approved'}` (execution left to the already-wired async drain
- *     paths — the outbox consumer / periodic tick, `packages/kernel/src/index.ts`) if a decision
- *     landed but we ran out of budget to also finish executing it.
+ *     still undecided, or `{status:'approved'}`/`{status:'auto_approved'}` (execution left to the
+ *     already-wired async drain paths — the outbox consumer / periodic tick, `packages/kernel/src/
+ *     index.ts`) if a decision landed but we ran out of budget to also finish executing it, or the
+ *     drainer's own "遇 pending 停" ordering left it queued behind an earlier row.
  *
- * **Racing the drain consumer** (`tryExecuteInline`): phase 2 and the async drain paths
- * (`ActionRequestUpdated` outbox consumer, periodic tick) can both try to execute the same
- * `approved`/`auto_approved` row. `startActionRequestExecution`'s row lock + conditional UPDATE
- * (S2.3) makes exactly one of them win; the loser gets `IllegalTransition` and, rather than
- * retrying `apply` itself (a real retry after a genuine failure could double-run a non-idempotent
- * effect — only the gate's own idempotency store, keyed by `actionRequestId`, is trusted to dedupe
- * `apply`), polls for the row to reach a terminal state and reads the winner's stored result back
- * from the audit trail (`markActionRequestExecuted`/`markActionRequestFailed`'s own
- * `resultMetadata`/`reason` payload — `readTerminalOutcome` below) instead.
+ * **Routed through the drainer, not a direct `ActionExecutor` call** (`tryExecuteInline`, P2-2
+ * fix, review job 652a4abc: "inline execution bypasses drainer ordering"): phase 2 calls
+ * `ApprovalDrainer.drainGatekeeper` — the same per-Gatekeeper single-flight, ascending, "遇
+ * pending 停" queue the outbox consumer and the periodic tick already go through — rather than
+ * `startActionRequestExecution` + `ActionExecutor.execute` directly, so a Worker's own inline
+ * `auto_approved`/approved-within-budget request can never jump ahead of an earlier
+ * `pending_approval` row on the same Gatekeeper. `drainGatekeeper`'s own loop has no per-row
+ * `try/catch`, so a benign race with *any* other concurrent drain trigger winning
+ * `startActionRequestExecution` on some row in the queue (not necessarily ours) surfaces as
+ * `IllegalTransition` here — swallowed, since it means "the queue is being worked by someone else
+ * right now". Either way, `tryExecuteInline` always finishes by reading back *this* row's own
+ * actual status: `executed`/`verified`/`failed` reads the stored outcome
+ * (`markActionRequestExecuted`/`markActionRequestFailed`'s own `resultMetadata`/`reason` payload —
+ * `readTerminalOutcome` below); `approved`/`auto_approved` behind an earlier `pending_approval` row
+ * reports that status as-is (nothing is currently executing it); otherwise (a concurrent execution
+ * genuinely in flight, or the drainer's own single-flight lock skipped this call while another
+ * in-flight drain handles it) `awaitConcurrentExecution` waits briefly rather than retrying `apply`
+ * itself (a real retry after a genuine failure could double-run a non-idempotent effect — only the
+ * gate's own idempotency store, keyed by `actionRequestId`, is trusted to dedupe `apply`).
  *
  * **Idempotency** (P1-1 fix, review job 652a4abc lane3/lane2): `requestActionHandler` always
  * derives an idempotency key before calling `requestAction` — an explicit `idempotencyKey` param,
@@ -139,10 +150,20 @@ export class ActionRequestDeniedError extends ForbiddenError {
 
 export interface RequestActionHandlerDeps {
   readonly gatekeeperClient: GatekeeperClient;
-  /** The same `ActionExecutor` instance (or an equivalently-constructed one — it is stateless)
-   *  the composition root wires into `ApprovalDrainer` — "the single shared executor path"
-   *  (coordinator review): phase 2 never re-implements "call apply, then write observed facts". */
-  readonly actionExecutor: ActionExecutor;
+  /** P2-2 fix (review job 652a4abc: "inline execution bypasses drainer ordering"): phase 2 no
+   *  longer calls an `ActionExecutor` directly — it routes every execution attempt through this
+   *  `ApprovalDrainer` (`drainGatekeeper`), the same per-Gatekeeper single-flight, ascending,
+   *  "遇 pending 停" queue every other execution trigger (the outbox consumer, the periodic tick)
+   *  already goes through, so a Worker's own inline `auto_approved`/`await_decision:true` request
+   *  can never jump ahead of an earlier `pending_approval` row on the same Gatekeeper. Built by
+   *  the composition root from the same `buildGatekeeperExecutionDeps` construction
+   *  `createBackgroundServices` uses for its own drainer — "the single shared executor path"
+   *  (coordinator review) now means *one definition of how to build the pieces*, materialized as
+   *  two behaviorally-identical `ApprovalDrainer` instances (this one built synchronously in
+   *  `createServer()`, the other once `createBackgroundServices` finishes its own async bootstrap)
+   *  — the same split `buildGatekeeperExecutionDeps`'s own doc comment already documents for
+   *  `ActionExecutor`. */
+  readonly drainer: ApprovalDrainer;
   /** `await_decision:true`'s poll timeout — default 25s (P1-1 fix, review job 652a4abc: kept
    *  below `packages/platform-extension/src/kernel-client.ts`'s `DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`
    *  (30s) so `request_action` itself always resolves — with `{status:'pending_approval'|
@@ -333,43 +354,74 @@ async function awaitConcurrentExecution(
 }
 
 /**
- * Tries to execute one `auto_approved`/`approved` ActionRequest. Wins the race
- * (`startActionRequestExecution` succeeds) → runs the shared `ActionExecutor.execute` (apply
- * outside any transaction, observed facts inside its own short one — action-executor.ts's own
- * doc comment), then records the outcome in one more short admin transaction. Loses the race
- * (`IllegalTransition` — a concurrent drain trigger already moved the row) →
- * `awaitConcurrentExecution` instead of retrying `apply` itself.
+ * Tries to execute one `auto_approved`/`approved` ActionRequest — routed through the
+ * `ApprovalDrainer`'s per-Gatekeeper `drainGatekeeper` (P2-2 fix, review job 652a4abc: "inline
+ * execution bypasses drainer ordering"), the same single-flight, ascending, "遇 pending 停" queue
+ * every other execution trigger already goes through, rather than calling `startActionRequestExecution`
+ * + `ActionExecutor.execute` directly (which let a Worker's own inline request jump ahead of an
+ * earlier `pending_approval` row on the same Gatekeeper).
+ *
+ * `drainGatekeeper`'s own loop (`drainer.ts`) has no per-row `try/catch` — a benign race with
+ * *any other* concurrent drain trigger winning `startActionRequestExecution` on some row in the
+ * queue (not necessarily this one) surfaces as `IllegalTransition` here; swallowed, since it means
+ * "the queue is being worked by someone else right now", not a real failure. Either way (drain
+ * succeeded, was skipped in-flight, or raced), this function always finishes by reading back
+ * *this* row's own actual status rather than trusting `DrainResult`'s aggregate counts:
+ *
+ *   - `executed`/`verified`/`failed` → the drain (by us or a racer) already finished it; read the
+ *     stored outcome back (`readTerminalOutcome`), never re-`apply`.
+ *   - `approved`/`auto_approved` and the drain stopped at an earlier `pending_approval` row
+ *     (§8.1) → nothing is currently executing this row; report its status as-is rather than
+ *     waiting for something that has not started — the already-wired async drain paths (the
+ *     outbox consumer, the periodic tick) pick it up once the blocking row resolves.
+ *   - otherwise (`executing`, or still `approved`/`auto_approved` with no `stoppedAtPending`
+ *     signal — a concurrent execution is actively in flight, or the drainer's own single-flight
+ *     lock skipped this call while another in-flight drain handles it) → `awaitConcurrentExecution`
+ *     waits briefly for that winner to finish, rather than retrying `apply` itself.
  */
 async function tryExecuteInline(
-  actionExecutor: ActionExecutor,
+  drainer: ApprovalDrainer,
   withTransaction: WithTransactionFn,
   workspaceId: string,
   systemActorId: string,
+  gatekeeperId: string,
   actionRequestId: string,
 ): Promise<ExecutionOutcome> {
-  let executing: ActionRequestRow;
+  let stoppedAtPending = false;
   try {
-    executing = await withTransaction(workspaceId, systemActorId, (client) =>
-      startActionRequestExecution(client, workspaceId, actionRequestId),
-    );
+    const drainResult = await drainer.drainGatekeeper(workspaceId, systemActorId, gatekeeperId);
+    stoppedAtPending = drainResult.stoppedAtPending;
   } catch (err) {
     if (!(err instanceof IllegalTransition)) throw err;
-    return awaitConcurrentExecution(withTransaction, workspaceId, systemActorId, actionRequestId);
+    // benign race — see this function's own doc comment; fall through to reading our own row.
   }
 
-  const result = await actionExecutor.execute(executing);
-  await withTransaction(workspaceId, systemActorId, (client) =>
-    result.ok
-      ? markActionRequestExecuted(client, workspaceId, actionRequestId, {
-          resultMetadata: result.resultMetadata,
-        })
-      : markActionRequestFailed(client, workspaceId, actionRequestId, { reason: result.reason }),
+  const row = await withTransaction(workspaceId, systemActorId, (client) =>
+    getActionRequest(client, workspaceId, actionRequestId),
   );
-  if (result.ok) {
-    const data = (result.resultMetadata as { data?: unknown } | undefined)?.data;
-    return { status: 'executed', data };
+
+  if (row?.status === 'executed' || row?.status === 'verified') {
+    const outcome = await readTerminalOutcome(
+      withTransaction,
+      workspaceId,
+      systemActorId,
+      actionRequestId,
+    );
+    return { status: 'executed', data: outcome.data };
   }
-  return { status: 'failed', reason: result.reason };
+  if (row?.status === 'failed') {
+    const outcome = await readTerminalOutcome(
+      withTransaction,
+      workspaceId,
+      systemActorId,
+      actionRequestId,
+    );
+    return { status: 'failed', reason: outcome.reason };
+  }
+  if ((row?.status === 'approved' || row?.status === 'auto_approved') && stoppedAtPending) {
+    return { status: row.status };
+  }
+  return awaitConcurrentExecution(withTransaction, workspaceId, systemActorId, actionRequestId);
 }
 
 /**
@@ -381,10 +433,11 @@ async function tryExecuteInline(
  * round-trip past the nominal budget).
  */
 async function pollAndExecute(
-  actionExecutor: ActionExecutor,
+  drainer: ApprovalDrainer,
   withTransaction: WithTransactionFn,
   workspaceId: string,
   systemActorId: string,
+  gatekeeperId: string,
   actionRequestId: string,
   timeoutMs: number,
 ): Promise<{ status: string; data?: unknown; reason?: string }> {
@@ -419,10 +472,11 @@ async function pollAndExecute(
     if (row.status === 'approved' || row.status === 'auto_approved') {
       if (Date.now() < deadline) {
         return tryExecuteInline(
-          actionExecutor,
+          drainer,
           withTransaction,
           workspaceId,
           systemActorId,
+          gatekeeperId,
           actionRequestId,
         );
       }
@@ -503,10 +557,19 @@ async function runGovernedRequest(
 
   switch (actionRequest.status) {
     case 'denied':
-      // P2-1 (denials leave zero trace) is addressed by a later commit in this same fix series
-      // (phase 1 will return `{status:'denied'}` and defer this throw to `afterCommit`, so the
-      // row/audit/outbox this `requestAction` call just wrote survive the commit). Unchanged here.
-      throw new ActionRequestDeniedError(actionRequest.id);
+      // P2-1 fix (review job 652a4abc: "denials leave zero trace"): phase 1 returns
+      // `{status:'denied'}` (a normal result, not a throw) so the row/audit/outbox this
+      // `requestAction` call just wrote commit along with the rest of dispatch.ts's phase-1
+      // transaction; the 403-shaped `ActionRequestDeniedError` is deferred to `afterCommit`,
+      // thrown only once that row is durably on record. Previously this threw synchronously here
+      // — inside dispatch.ts's still-open transaction — which rolled the denied row back along
+      // with it, leaving the denial with no trace at all (I7/I11).
+      return {
+        ...phase1Result(actionRequest),
+        afterCommit: async () => {
+          throw new ActionRequestDeniedError(actionRequest.id);
+        },
+      };
 
     case 'rejected':
     case 'expired':
@@ -522,14 +585,15 @@ async function runGovernedRequest(
       return {
         ...phase1Result(actionRequest),
         afterCommit: async (pool: PoolLike) => {
-          const { actionExecutor } = requireDeps();
+          const { drainer } = requireDeps();
           const withTransaction = createAdminWithTransaction(pool);
           const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
           const outcome = await tryExecuteInline(
-            actionExecutor,
+            drainer,
             withTransaction,
             workspaceId,
             systemActorId,
+            args.gatekeeper.gatekeeperId,
             actionRequest.id,
           );
           return { ...outcome, actionRequestId: actionRequest.id };
@@ -608,14 +672,15 @@ async function runGovernedRequest(
       return {
         ...phase1Result(actionRequest),
         afterCommit: async (pool: PoolLike) => {
-          const { actionExecutor, awaitDecisionTimeoutMs } = requireDeps();
+          const { drainer, awaitDecisionTimeoutMs } = requireDeps();
           const withTransaction = createAdminWithTransaction(pool);
           const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
           const outcome = await pollAndExecute(
-            actionExecutor,
+            drainer,
             withTransaction,
             workspaceId,
             systemActorId,
+            args.gatekeeper.gatekeeperId,
             actionRequest.id,
             awaitDecisionTimeoutMs ?? DEFAULT_AWAIT_DECISION_TIMEOUT_MS,
           );

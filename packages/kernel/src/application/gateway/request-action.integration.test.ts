@@ -19,6 +19,7 @@ import {
   ApprovalDrainer,
   approveActionRequest,
   getActionRequest,
+  rejectActionRequest,
 } from '../../governance/approval/index.js';
 import { entryScope } from '../../governance/capability/index.js';
 import {
@@ -26,6 +27,7 @@ import {
   publishOperation,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
+import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import {
@@ -313,8 +315,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       const adminWithTransaction = createAdminWithTransaction(pool);
       setRequestActionDeps({
         gatekeeperClient,
-        actionExecutor: createGatekeeperActionExecutor({
-          gatekeeperClient,
+        // P2-2 fix: phase 2 now routes execution through an ApprovalDrainer rather than calling
+        // an ActionExecutor directly — a *separate* instance from `drainer` below (constructed
+        // the same way `createServer()`/`createBackgroundServices()` build two independent
+        // instances in production), deliberately not shared, so this suite's own race test below
+        // (`drainer.drainGatekeeper(...)` racing this handler's own internal drainer) exercises
+        // the real cross-instance race the DB-level row lock — not either drainer's in-memory
+        // single-flight set — is what actually has to make safe.
+        drainer: new ApprovalDrainer({
+          executor: createGatekeeperActionExecutor({
+            gatekeeperClient,
+            withTransaction: adminWithTransaction,
+          }),
           withTransaction: adminWithTransaction,
         }),
         awaitDecisionTimeoutMs: AWAIT_DECISION_TIMEOUT_MS,
@@ -437,6 +449,95 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.status).toBe('executed');
       expect(transport.calls[AUTO_OP.name]).toBe(before + 1);
       expect(transport.visibilityChecks[AUTO_OP.name]).toBe(true);
+    });
+
+    // P2-2 fix (review job 652a4abc): phase 2's inline execution now routes through the
+    // ApprovalDrainer's per-Gatekeeper "遇 pending 停" ordering instead of calling the
+    // ActionExecutor directly — a later auto_approved request must not execute ahead of an
+    // earlier still-pending_approval row on the same Gatekeeper.
+    it('an auto_approved request does not jump ahead of an earlier pending_approval row on the same Gatekeeper (drainer ordering)', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+
+      const pendingResult = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params: { qty: 6001 },
+      })) as { status: string; actionRequestId: string };
+      expect(pendingResult.status).toBe('pending_approval');
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const autoResult = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 6002 },
+      })) as { status: string; actionRequestId: string };
+
+      expect(autoResult.status).toBe('auto_approved'); // not yet executed — blocked behind pendingResult
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was never called for it
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, autoResult.actionRequestId),
+      );
+      expect(row?.status).toBe('auto_approved');
+
+      // Unblock the queue so this leftover pending row does not affect later tests.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        rejectActionRequest(client, workspaceId, {
+          actionRequestId: pendingResult.actionRequestId,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+    });
+
+    // P2-1 fix (review job 652a4abc): a policy `deny` decision must leave a durable trace — the
+    // row, its `action_request.request` audit entry, and the outbox event all commit even though
+    // the capability call itself still throws (403-shaped `ActionRequestDeniedError`).
+    it('denied leaves a trace: the row and its audit record commit even though the call still throws', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const uncoveredCaller: ResolvedCaller = {
+        channel: 'handle',
+        claims: {
+          ws: workspaceId,
+          sid: randomUUID(),
+          obo: ownerId,
+          // Holds request_action but not this Gatekeeper's resource scope — governance/policy/
+          // engine.ts's own doc comment: "deny... checked first".
+          scope: { capabilities: ['request_action'], resources: { gatekeeper: [randomUUID()] } },
+          jti: randomUUID(),
+          iat: now,
+          exp: now + 600,
+        },
+      };
+
+      await expect(
+        dispatchCapability({ pool }, uncoveredCaller, 'request_action', {
+          gatekeeperId,
+          operation: AUTO_OP.name,
+          params: { qty: 9001 },
+        }),
+      ).rejects.toThrow(/denied/i);
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ id: string; status: string }>(
+          `select id, status from action_requests
+           where workspace_id = $1 and gatekeeper_id = $2 and action_kind = $3
+           order by requested_at desc limit 1`,
+          [workspaceId, gatekeeperId, AUTO_OP.name],
+        ),
+      );
+      const deniedRow = row.rows[0];
+      expect(deniedRow?.status).toBe('denied');
+
+      const auditRows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAudit(client, workspaceId, {
+          resourceType: 'action_request',
+          resourceId: deniedRow?.id,
+          limit: 5,
+        }),
+      );
+      expect(auditRows.some((r) => r.action === 'action_request.request')).toBe(true);
     });
 
     it('await_decision:true resolves once a *different connection* approves it mid-wait, and executes exactly once', async () => {
