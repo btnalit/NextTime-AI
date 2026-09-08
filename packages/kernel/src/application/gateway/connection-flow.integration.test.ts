@@ -53,6 +53,9 @@ const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
 const CREDENTIAL_SECRET = 'super-secret-connection-token-value';
+// review lane 5, P1-1: every /gate/* route now requires Authorization: Bearer <token> — this
+// test's own real gate server and the HttpGatekeeperClient it talks to share this fixed value.
+const GATE_TEST_TOKEN = 'gate-integration-test-token-0123456789abcdef';
 
 function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
   return {
@@ -188,10 +191,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         credentialResolver: new ConnectedAccountCredentialResolver(connectedAccountStore),
         idempotencyStore: new InMemoryIdempotencyStore(),
       });
-      gateApp = createGatekeeperServer({ gate, connectedAccountStore });
+      gateApp = createGatekeeperServer({ gate, connectedAccountStore, token: GATE_TEST_TOKEN });
       gateEndpoint = await listen(gateApp);
 
-      setConnectionHandlerDeps({ gatekeeperClient: new HttpGatekeeperClient() });
+      setConnectionHandlerDeps({
+        gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
+      });
     });
 
     afterAll(async () => {

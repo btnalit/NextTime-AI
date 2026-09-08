@@ -21,6 +21,20 @@ An HTTP server (`createGatekeeperServer`, Fastify) exposes six operations under 
 Every response is `{ok: true, result}` or `{ok: false, error: {code, message}}` — the kernel's
 `adapters/gatekeeper-client` (`packages/kernel/src/adapters/gatekeeper-client`) parses this shape.
 
+## Auth
+
+Every `/gate/*` route requires `Authorization: Bearer <token>`, checked in constant time
+(`gate-auth.ts`). The token is read from `GATE_KERNEL_TOKEN_FILE` (default
+`/run/secrets/gate_token`, `gate-token.ts`'s `DEFAULT_GATE_TOKEN_FILE`) — `createGatekeeperServer`
+and `startGatekeeperServer`/`main()` both refuse to start without a readable, valid one. A missing
+or wrong token gets 401 `{ok:false,error:{code:'unauthorized',message:'unauthorized'}}`, and the
+guard never echoes the presented or expected token anywhere (body or logs). The kernel's
+`HttpGatekeeperClient` reads its own copy of the same secret from `NEXTTIME_GATE_TOKEN_FILE` (same
+default path) and sends the header automatically — a concrete接入包 (`gatekeepers/<system>/`)
+that composes `GatekeeperBase`/`createGatekeeperServer` directly (rather than using this package's
+own `main()`) must load its own token via `loadGateKernelToken` and pass it as
+`createGatekeeperServer`'s `token` option, same as `gatekeepers/docker`/`gatekeepers/ragflow` do.
+
 ## Manifest format
 
 A manifest is an array of `Operation` (`@nexttime/shared`'s `OperationSchema`):

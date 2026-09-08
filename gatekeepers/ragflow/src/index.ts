@@ -9,6 +9,7 @@ import {
   createGatekeeperServer,
   gateTlsOptionsFromEnv,
   insecureTlsEnvWarning,
+  loadGateKernelToken,
   resolveGateDataDir,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
@@ -58,6 +59,9 @@ export async function buildRagflowGate(
   const baseUrl = env.RAGFLOW_BASE_URL;
   if (!baseUrl) throw new Error('gatekeeper-ragflow: RAGFLOW_BASE_URL is not set');
 
+  // Loaded next — this gate refuses to start without a valid auth token (review lane 5, P1-1;
+  // @nexttime/gatekeeper-base's gate-auth.ts).
+  const token = loadGateKernelToken(env);
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
   const dataDir = resolveGateDataDir(env);
 
@@ -75,7 +79,7 @@ export async function buildRagflowGate(
   const idempotencyStore = new JsonFileIdempotencyStore(dataDir);
 
   const gate = new GatekeeperBase({ manifest, transport, credentialResolver, idempotencyStore });
-  const app = createGatekeeperServer({ gate, logger: true });
+  const app = createGatekeeperServer({ gate, logger: true, token });
   return { gate, app };
 }
 

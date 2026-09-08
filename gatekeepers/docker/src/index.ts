@@ -6,6 +6,7 @@ import {
   JsonFileIdempotencyStore,
   type ResolvedCredential,
   createGatekeeperServer,
+  loadGateKernelToken,
   resolveGateDataDir,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
@@ -55,6 +56,9 @@ export interface BuiltDockerGate {
 export async function buildDockerGate(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<BuiltDockerGate> {
+  // Loaded first — this gate refuses to start without a valid auth token (review lane 5, P1-1;
+  // @nexttime/gatekeeper-base's gate-auth.ts).
+  const token = loadGateKernelToken(env);
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
   const dataDir = resolveGateDataDir(env);
   const socketPath = env.DOCKER_SOCKET_PATH ?? DEFAULT_DOCKER_SOCKET_PATH;
@@ -64,7 +68,7 @@ export async function buildDockerGate(
   const credentialResolver = new NoCredentialResolver();
 
   const gate = new GatekeeperBase({ manifest, transport, credentialResolver, idempotencyStore });
-  const app = createGatekeeperServer({ gate, logger: true });
+  const app = createGatekeeperServer({ gate, logger: true, token });
   return { gate, app };
 }
 

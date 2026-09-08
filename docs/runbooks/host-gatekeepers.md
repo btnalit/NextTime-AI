@@ -10,7 +10,26 @@
 变量名 `RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY`——如果这台主机是用旧版本的脚本初始化
 的，重新跑一次这两个脚本，幂等，不会破坏已有数据）；`.env` 里 `DOCKER_GID` 是本机真实的 `docker`
 组 gid（`stat -c '%g' /var/run/docker.sock`）；`kernel` 容器已起且能连 Postgres（S2.4 已合并——
-`packages/gatekeeper-base` 与 kernel 侧 `governance/gatekeepers`/`adapters/gatekeeper-client` 就位）。
+`packages/gatekeeper-base` 与 kernel 侧 `governance/gatekeepers`/`adapters/gatekeeper-client` 就位）；
+`scripts/gen-handle-keys.sh` 跑过且是 **fix/gate-protocol-hardening 之后的版本**（额外生成
+`${NEXTTIME_DATA}/secrets/gate.token`）——如果这台主机在此之前跑过旧版本，重新跑一次同一个脚本
+（幂等，只补 `gate.token`，不动已有的 `handle.key`/`internal.token`）。
+
+**fix/gate-protocol-hardening（P1-1）**：`/gate/*` 的每一个路由现在都要求
+`Authorization: Bearer <token>`（`@nexttime/gatekeeper-base` 的 `gate-auth.ts`；缺失或错误的
+token → 401 `{"ok":false,"error":{"code":"unauthorized","message":"unauthorized"}}`）。四个门服务
+（`gatekeeper-docker`/`gatekeeper-ragflow`/`accept-s2-ssh-gate`/`accept-s2-http-gate`）都从
+compose secret `gate_token`（`${NEXTTIME_DATA}/secrets/gate.token`）读取自己的校验副本，容器内默
+认路径 `/run/secrets/gate_token`；本 runbook 从 §3 起所有直接打 `/gate/*` 的 `fetch()`/`curl` 例子
+都要带这个头——本节起把它取到 shell 变量里：
+
+```bash
+GATE_TOKEN=$(cat "${NEXTTIME_DATA}/secrets/gate.token")
+```
+
+`kernel` 自己的 `HttpGatekeeperClient`（`register-gatekeeper`、`request_action` 等经内核治理路径
+的调用）已经自动带这个头，不需要手动传——只有本 runbook 里**绕过内核、直接打门自己的协议端点**的
+例子（§3 的 health/describe_operations 探活、§8 的幂等复核）需要手动加 `authorization` 头。
 
 **不做**：不对现有业务容器 `execute`（`container.restart`/`compose.up`/`compose.down`）——§4 起、
 §6 全程操作的是本 runbook 自己创建的测试容器 `nexttime-gate-test`，除它之外不要对任何其它容器跑
@@ -55,14 +74,15 @@ operations`/`health` 不需要它们生效。两个服务都只在 `control` 网
 口），从主机 `curl` 不到；用 `kernel` 容器自带的 Node `fetch()`：
 
 ```bash
+# GATE_TOKEN was set at the top of this runbook (§1 前置之后的 fix/gate-protocol-hardening 段落).
 docker compose exec -T kernel node -e "
-fetch('http://gatekeeper-docker:8083/gate/health').then(r=>r.text()).then(t=>console.log('docker:',t))
+fetch('http://gatekeeper-docker:8083/gate/health', {headers:{authorization:'Bearer ${GATE_TOKEN}'}}).then(r=>r.text()).then(t=>console.log('docker:',t))
 "
 docker compose exec -T kernel node -e "
-fetch('http://gatekeeper-docker:8083/gate/describe_operations').then(r=>r.text()).then(t=>console.log(t))
+fetch('http://gatekeeper-docker:8083/gate/describe_operations', {headers:{authorization:'Bearer ${GATE_TOKEN}'}}).then(r=>r.text()).then(t=>console.log(t))
 "
 docker compose exec -T kernel node -e "
-fetch('http://gatekeeper-ragflow:8083/gate/health').then(r=>r.text()).then(t=>console.log('ragflow:',t))
+fetch('http://gatekeeper-ragflow:8083/gate/health', {headers:{authorization:'Bearer ${GATE_TOKEN}'}}).then(r=>r.text()).then(t=>console.log('ragflow:',t))
 "
 ```
 
@@ -223,7 +243,7 @@ docker inspect nexttime-gate-test --format '{{.State.StartedAt}}'   # 应已变�
 docker compose exec -T kernel node -e "
 fetch('http://gatekeeper-docker:8083/gate/apply', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${GATE_TOKEN}'},
   body: JSON.stringify({ operation: 'container.restart', params: { id: '${GATE_TEST_CONTAINER_ID}' }, idempotencyKey: 'manual-idempotency-check-1' }),
 }).then(r => r.json()).then(b => console.log(JSON.stringify(b, null, 2)))
 "
@@ -239,7 +259,7 @@ docker inspect nexttime-gate-test --format '{{.State.StartedAt}}'
 docker compose exec -T kernel node -e "
 fetch('http://gatekeeper-docker:8083/gate/apply', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ${GATE_TOKEN}'},
   body: JSON.stringify({ operation: 'container.restart', params: { id: '${GATE_TEST_CONTAINER_ID}' }, idempotencyKey: 'manual-idempotency-check-1' }),
 }).then(r => r.json()).then(b => console.log(JSON.stringify(b, null, 2)))
 "

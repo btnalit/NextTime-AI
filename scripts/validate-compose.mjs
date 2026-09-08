@@ -34,15 +34,31 @@ const expectedServices = [
   'backup',
 ];
 
+// fix/gate-protocol-hardening: every credential/token file compose hands a container as a secret
+// — pg_password/handle_key/internal_token predate this task; gate_token is this task's own
+// addition (@nexttime/gatekeeper-base's gate-token.ts / scripts/gen-handle-keys.sh). Kept here
+// (not just "services present") because a secret silently dropped from the top-level `secrets:`
+// block, or from a service's own `secrets:` list, fails a container at runtime in a way this
+// static parse is the only pre-host check for (§10.2, docs/runbooks/host-gatekeepers.md).
+const expectedSecrets = ['pg_password', 'handle_key', 'internal_token', 'gate_token'];
+
 console.log(`docker-compose.yml parsed OK: ${composePath}`);
 console.log(`services (${services.length}): ${services.join(', ')}`);
 console.log(`networks (${networks.length}): ${networks.join(', ')}`);
 console.log(`secrets (${secrets.length}): ${secrets.join(', ')}`);
 
-const missing = expectedServices.filter((name) => !services.includes(name));
-if (missing.length > 0) {
-  console.error(`MISSING expected services: ${missing.join(', ')}`);
+const missingServices = expectedServices.filter((name) => !services.includes(name));
+if (missingServices.length > 0) {
+  console.error(`MISSING expected services: ${missingServices.join(', ')}`);
   process.exitCode = 1;
 } else {
   console.log('All expected services from design doc §10.2 are present.');
+}
+
+const missingSecrets = expectedSecrets.filter((name) => !secrets.includes(name));
+if (missingSecrets.length > 0) {
+  console.error(`MISSING expected top-level secrets: ${missingSecrets.join(', ')}`);
+  process.exitCode = 1;
+} else {
+  console.log('All expected top-level secrets are declared.');
 }

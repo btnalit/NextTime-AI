@@ -8,6 +8,7 @@ import {
 } from './credentials/index.js';
 import type { CredentialResolver } from './credentials/index.js';
 import { resolveGateDataDir } from './data-dir.js';
+import { loadGateKernelToken } from './gate-auth.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
 import { JsonFileIdempotencyStore } from './idempotency-store.js';
 import { CliTransport, HttpTransport, McpTransport, SshTransport } from './kinds/index.js';
@@ -41,6 +42,23 @@ export type {
 
 export { createGatekeeperServer, mapGatekeeperError } from './server.js';
 export type { CreateGatekeeperServerOptions } from './server.js';
+
+export {
+  GATE_KERNEL_TOKEN_FILE_ENV,
+  createGateAuthGuard,
+  loadGateKernelToken,
+  registerGateAuthGuard,
+  resolveGateKernelTokenFile,
+} from './gate-auth.js';
+export type { GateAuthGuard } from './gate-auth.js';
+
+export {
+  DEFAULT_GATE_TOKEN_FILE,
+  GATE_TOKEN_MIN_LENGTH,
+  GateTokenError,
+  gateAuthorizationHeader,
+  normalizeGateToken,
+} from './gate-token.js';
 
 export {
   ApplyRequestSchema,
@@ -207,6 +225,9 @@ function buildTransport(kind: string, env: NodeJS.ProcessEnv): Transport {
 export async function startGatekeeperServer(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ app: ReturnType<typeof createGatekeeperServer>; close(): Promise<void> }> {
+  // Loaded first, synchronously, before any other IO (matches `loadGateKernelToken`'s own doc
+  // comment: a gate refuses to start without a readable, valid token file, review lane 5, P1-1).
+  const token = loadGateKernelToken(env);
   const dataDir = resolveGateDataDir(env);
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
   const insecure = insecureTlsEnvWarning(env);
@@ -220,7 +241,7 @@ export async function startGatekeeperServer(
   const idempotencyStore = new JsonFileIdempotencyStore(dataDir);
 
   const gate = new GatekeeperBase({ manifest, transport, credentialResolver, idempotencyStore });
-  const app = createGatekeeperServer({ gate, logger: true, connectedAccountStore });
+  const app = createGatekeeperServer({ gate, logger: true, connectedAccountStore, token });
 
   const port = Number(env.GATE_PORT ?? 8090);
   const host = env.GATE_BIND_ADDR ?? '0.0.0.0';

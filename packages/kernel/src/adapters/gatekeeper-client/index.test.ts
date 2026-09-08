@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { GatekeeperClientError, GatekeeperTimeoutError, HttpGatekeeperClient } from './index.js';
 
 /**
@@ -95,5 +98,61 @@ describe('HttpGatekeeperClient', () => {
     await client.health('https://example.test/');
     await client.health('https://example.test');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends no Authorization header when no token file is readable', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string> | undefined)?.authorization).toBeUndefined();
+      return jsonResponse({ ok: true, result: { status: 'ok' } });
+    });
+    const client = new HttpGatekeeperClient({
+      fetchImpl,
+      env: { NEXTTIME_GATE_TOKEN_FILE: '/definitely/does/not/exist/gate_token' },
+    });
+    await client.health('https://example.test');
+  });
+
+  it('sends Authorization: Bearer <token> when an explicit token is given', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>).authorization).toBe(
+        'Bearer explicit-test-token-0123456789',
+      );
+      return jsonResponse({ ok: true, result: { status: 'ok' } });
+    });
+    const client = new HttpGatekeeperClient({ fetchImpl, token: 'explicit-test-token-0123456789' });
+    await client.health('https://example.test');
+  });
+
+  it('reads the token from NEXTTIME_GATE_TOKEN_FILE when no explicit token is given', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gatekeeper-client-'));
+    try {
+      const tokenFile = join(dir, 'gate.token');
+      writeFileSync(tokenFile, `${'c'.repeat(40)}\n`);
+      const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        expect((init?.headers as Record<string, string>).authorization).toBe(
+          `Bearer ${'c'.repeat(40)}`,
+        );
+        return jsonResponse({ ok: true, result: { status: 'ok' } });
+      });
+      const client = new HttpGatekeeperClient({
+        fetchImpl,
+        env: { NEXTTIME_GATE_TOKEN_FILE: tokenFile },
+      });
+      await client.health('https://example.test');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not throw and sends no header when NEXTTIME_GATE_TOKEN_FILE points nowhere', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string> | undefined)?.authorization).toBeUndefined();
+      return jsonResponse({ ok: true, result: { status: 'ok' } });
+    });
+    const client = new HttpGatekeeperClient({
+      fetchImpl,
+      env: { NEXTTIME_GATE_TOKEN_FILE: '/no/such/file/gate.token' },
+    });
+    await client.health('https://example.test');
   });
 });

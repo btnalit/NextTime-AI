@@ -35,8 +35,12 @@ describe('@nexttime/gatekeeper-base', () => {
       idempotencyStore: new InMemoryIdempotencyStore(),
     });
 
-    const app = createGatekeeperServer({ gate });
-    const response = await app.inject({ method: 'GET', url: '/gate/describe_operations' });
+    const app = createGatekeeperServer({ gate, token: 'test-token-0123456789abcdef0123456789' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/gate/describe_operations',
+      headers: { authorization: 'Bearer test-token-0123456789abcdef0123456789' },
+    });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.ok).toBe(true);

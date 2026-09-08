@@ -10,6 +10,7 @@ import {
   RevertNotSupportedError,
   TransportInvokeError,
 } from './errors.js';
+import { registerGateAuthGuard } from './gate-auth.js';
 import type { GatekeeperBase } from './gatekeeper-base.js';
 import {
   ApplyRequestSchema,
@@ -30,6 +31,10 @@ import {
  * `{ok:true,result}` / `{ok:false,error:{code,message}}` — the kernel's
  * `adapters/gatekeeper-client` (S2.4 deliverable B) parses this shape, never branching on HTTP
  * status alone.
+ *
+ * Every route is guarded by `gate-auth.ts`'s shared-secret check (review lane 5, P1-1) — a request
+ * without a valid `Authorization: Bearer <token>` header gets 401 `{ok:false,error:{code:
+ * 'unauthorized',message:'unauthorized'}}` before it ever reaches `gate`.
  *
  * S2.13 addition: `POST`/`DELETE /gate/connected-accounts` — the write-only ConnectedAccount
  * store endpoint the design brief asked this file to grow ("does the gate expose any HTTP
@@ -83,10 +88,16 @@ export interface CreateGatekeeperServerOptions {
   /** S2.13: enables `POST`/`DELETE /gate/connected-accounts` — omit for a gate running in
    *  shared-credential mode (this module's own doc comment). */
   readonly connectedAccountStore?: ConnectedAccountStore;
+  /** The shared secret every `/gate/*` request must present as `Authorization: Bearer <token>`
+   *  (review lane 5, P1-1; `gate-auth.ts`). Required — every caller of this function loads one via
+   *  `gate-auth.ts`'s `loadGateKernelToken` (or a fixed value in tests) before constructing the
+   *  server, so a gate can never come up without the guard installed. */
+  readonly token: string;
 }
 
 export function createGatekeeperServer(options: CreateGatekeeperServerOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false });
+  registerGateAuthGuard(app, options.token);
   const gate = options.gate;
 
   function ok(
