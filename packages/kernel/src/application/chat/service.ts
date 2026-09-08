@@ -94,6 +94,11 @@ export interface ChatMessageRow {
    *  any real per-chat message count. */
   readonly sequence: number;
   readonly createdAt: Date;
+  /** The outbox row this message was produced from (migrations/core/
+   *  0009_chat_messages_source_outbox_id.sql) — `null` for a human's own message
+   *  (`sendChatMessage`) and for an AgentRuntime-driven assistant/tool message
+   *  (`event-sink.ts`), neither of which is outbox-driven. */
+  readonly sourceOutboxId: string | null;
 }
 
 interface ChatDbRow {
@@ -114,11 +119,12 @@ interface ChatMessageDbRow {
   content: Record<string, unknown>;
   sequence: string; // bigint comes back from `pg` as a string
   created_at: Date;
+  source_outbox_id: string | null; // bigint comes back from `pg` as a string
 }
 
 const CHAT_COLUMNS = 'workspace_id, id, owner_principal_id, title, visibility, created_at';
 const CHAT_MESSAGE_COLUMNS =
-  'workspace_id, id, chat_id, turn_id, role, content, sequence, created_at';
+  'workspace_id, id, chat_id, turn_id, role, content, sequence, created_at, source_outbox_id';
 
 function mapChatRow(row: ChatDbRow): ChatRow {
   return {
@@ -144,6 +150,7 @@ function mapChatMessageRow(row: ChatMessageDbRow): ChatMessageRow {
     content: row.content,
     sequence: Number(row.sequence),
     createdAt: row.created_at,
+    sourceOutboxId: row.source_outbox_id,
   };
 }
 
@@ -251,6 +258,15 @@ export interface InsertChatMessageInput {
   readonly turnId: string | null;
   readonly role: ChatMessageRole;
   readonly content: Record<string, unknown>;
+  /** `OutboxDeliveryMeta.outboxId` (application/outbox/index.ts) when this message is produced by
+   *  an outbox consumer (`application/linkage`'s task-consumer.ts / action-request-consumer.ts) —
+   *  omitted for a human's own message (`sendChatMessage` below) and for an AgentRuntime-driven
+   *  assistant/tool message (`event-sink.ts`), neither of which has an outbox row to key off.
+   *  When present, makes this insert durably idempotent against a redelivered outbox row (lane-4
+   *  P1 fix — see migrations/core/0009_chat_messages_source_outbox_id.sql's own doc comment): a
+   *  second insert attempt for the same `(workspaceId, sourceOutboxId, chatId)` returns the row
+   *  already written instead of creating a duplicate. */
+  readonly sourceOutboxId?: string;
 }
 
 /**
@@ -266,6 +282,13 @@ export interface InsertChatMessageInput {
  * let two concurrent inserts compute and attempt the same `sequence` for the same chat, one of
  * which would then fail outright on the `unique (workspace_id, chat_id, sequence)` constraint
  * instead of retrying).
+ *
+ * `input.sourceOutboxId` set: the INSERT carries an `ON CONFLICT ... DO NOTHING` against
+ * `chat_messages_source_outbox_dedupe_uidx` (migrations/core/
+ * 0009_chat_messages_source_outbox_id.sql), so a redelivered outbox row never produces a second
+ * row — a conflict is detected by `RETURNING` producing no row, and the already-written row is
+ * read back and returned instead (never an error; the caller cannot tell the two cases apart, nor
+ * does it need to — see this function's own idempotency contract above).
  */
 export async function insertChatMessage(
   client: PoolClient,
@@ -275,18 +298,38 @@ export async function insertChatMessage(
   await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [input.chatId]);
 
   const result = await client.query<ChatMessageDbRow>(
-    `insert into chat_messages (workspace_id, chat_id, turn_id, role, content, sequence)
+    `insert into chat_messages (workspace_id, chat_id, turn_id, role, content, sequence, source_outbox_id)
      select $1, $2, $3, $4, $5::jsonb,
        coalesce(
          (select max(sequence) from chat_messages where workspace_id = $1 and chat_id = $2),
          0
-       ) + 1
+       ) + 1,
+       $6
+     on conflict (workspace_id, source_outbox_id, chat_id) where source_outbox_id is not null
+       do nothing
      returning ${CHAT_MESSAGE_COLUMNS}`,
-    [workspaceId, input.chatId, input.turnId, input.role, JSON.stringify(input.content)],
+    [
+      workspaceId,
+      input.chatId,
+      input.turnId,
+      input.role,
+      JSON.stringify(input.content),
+      input.sourceOutboxId ?? null,
+    ],
   );
   const row = result.rows[0];
-  if (row === undefined) throw new Error('insertChatMessage: INSERT ... RETURNING produced no row');
-  return mapChatMessageRow(row);
+  if (row !== undefined) return mapChatMessageRow(row);
+
+  if (input.sourceOutboxId !== undefined) {
+    const existing = await client.query<ChatMessageDbRow>(
+      `select ${CHAT_MESSAGE_COLUMNS} from chat_messages
+       where workspace_id = $1 and chat_id = $2 and source_outbox_id = $3`,
+      [workspaceId, input.chatId, input.sourceOutboxId],
+    );
+    const existingRow = existing.rows[0];
+    if (existingRow !== undefined) return mapChatMessageRow(existingRow);
+  }
+  throw new Error('insertChatMessage: INSERT ... RETURNING produced no row');
 }
 
 // -------------------------------------------------------------------------------------------
