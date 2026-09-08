@@ -63,7 +63,8 @@ src/
                           TurnStatusBadge SystemStatusLineView
                           — S3.11/S3.14 governance pages: MembersPage (+ CreatePrincipalForm,
                           PrincipalDetail), AccessPage (+ GrantCapabilityForm), CatalogPage,
-                          ModelsPage (+ ModelsTable), AuditPage, AgentProfilePage (S3.13 placeholder)
+                          ModelsPage (+ ModelsTable), AuditPage — S3.13: AgentProfilePage
+                          (+ AgentProfileForm, the 我的智能体 editor)
   styles/                 tokens.css base.css shell.css ui.css pages.css (imported by styles.css)
 ```
 
@@ -77,7 +78,7 @@ src/
 | `#/work/chats[/<id>]` | ChatListPage / ChatPage | 工作 chats |
 | `#/work/tasks[/<id>]` | TasksPage | 工作 tasks |
 | `#/work/approvals[/<id>]` | ApprovalQueuePage | 工作 approvals |
-| `#/me/agent` | AgentProfilePage (S3.13 placeholder) | 工作 agent |
+| `#/me/agent` | AgentProfilePage (S3.13) | 工作 agent |
 | `#/govern/members` | MembersPage | 治理 members |
 | `#/govern/access` | AccessPage | 治理 access |
 | `#/govern/systems[/<gatekeeperId>]` | ConnectionsPage + GatekeeperDetailDrawer | 治理 systems |
@@ -98,7 +99,7 @@ src/
 | Catalog | `list_operations` `list_skills` `list_procedures` `list_worker_definitions` | `publish_operation`/`deprecate_operation`, `publish_skill`/`deprecate_skill`, `publish_procedure`/`deprecate_procedure`, `deprecate_worker_definition` | — |
 | Models | `list_models` `list_quotas` `list_policies` | — | — |
 | Audit | `explain` `reconstruct` `audit_query` | — | — |
-| My Agent (`/me/agent`) | `list_models` | — (S3.13 not built — placeholder) | — |
+| My Agent (`/me/agent`) | `get_agent_profile` `get_agent_policy` `list_models` `list_skills` `list_gatekeepers` `list_worker_definitions` `list_principals` (owner's principal picker) | `set_agent_profile` | — |
 
 Every list page renders one of four states from `useResource`/`useCapability`: skeleton,
 `ErrorBanner` (stable wire code + kernel message + Retry), `EmptyState`, or the list. Status chips
