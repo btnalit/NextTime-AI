@@ -423,6 +423,111 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         ).rejects.toThrow();
       });
+
+      it('0012: superseded_at cannot be unset, changed, or followed by invalidated_at', async () => {
+        const { linkId } = await insertLink();
+
+        await withWorkspace(
+          pool,
+          { workspaceId: workspaceA, principalId: ownerA },
+          async (client) => {
+            const result = await client.query(
+              'update links set superseded_at = now() where workspace_id = $1 and id = $2',
+              [workspaceA, linkId],
+            );
+            expect(result.rowCount).toBe(1);
+          },
+        );
+
+        // Unsetting it back to null fails.
+        await expect(
+          withWorkspace(pool, { workspaceId: workspaceA, principalId: ownerA }, async (client) => {
+            await client.query(
+              'update links set superseded_at = null where workspace_id = $1 and id = $2',
+              [workspaceA, linkId],
+            );
+          }),
+        ).rejects.toThrow();
+
+        // Changing it to a different timestamp fails.
+        await expect(
+          withWorkspace(pool, { workspaceId: workspaceA, principalId: ownerA }, async (client) => {
+            await client.query(
+              "update links set superseded_at = now() + interval '1 hour' where workspace_id = $1 and id = $2",
+              [workspaceA, linkId],
+            );
+          }),
+        ).rejects.toThrow();
+
+        // Also setting invalidated_at on an already-superseded row fails (mutually terminal).
+        await expect(
+          withWorkspace(pool, { workspaceId: workspaceA, principalId: ownerA }, async (client) => {
+            await client.query(
+              'update links set invalidated_at = now() where workspace_id = $1 and id = $2',
+              [workspaceA, linkId],
+            );
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('0012: epistemic_status may only be promoted to verified/contradicted, never sideways or backwards', async () => {
+        const { linkId } = await insertLink();
+
+        // observed/extracted/inferred/asserted (sideways) is blocked.
+        await expect(
+          withWorkspace(pool, { workspaceId: workspaceA, principalId: ownerA }, async (client) => {
+            await client.query(
+              "update links set epistemic_status = 'observed' where workspace_id = $1 and id = $2",
+              [workspaceA, linkId],
+            );
+          }),
+        ).rejects.toThrow();
+
+        // asserted -> verified is a legal promotion (requires verified_by per the existing CHECK).
+        await withWorkspace(
+          pool,
+          { workspaceId: workspaceA, principalId: ownerA },
+          async (client) => {
+            const result = await client.query(
+              "update links set epistemic_status = 'verified', verified_by = $3 where workspace_id = $1 and id = $2",
+              [workspaceA, linkId, ownerA],
+            );
+            expect(result.rowCount).toBe(1);
+          },
+        );
+
+        // verified -> asserted (backwards) is blocked; only -> contradicted remains legal.
+        await expect(
+          withWorkspace(pool, { workspaceId: workspaceA, principalId: ownerA }, async (client) => {
+            await client.query(
+              "update links set epistemic_status = 'asserted' where workspace_id = $1 and id = $2",
+              [workspaceA, linkId],
+            );
+          }),
+        ).rejects.toThrow();
+
+        await withWorkspace(
+          pool,
+          { workspaceId: workspaceA, principalId: ownerA },
+          async (client) => {
+            const result = await client.query(
+              "update links set epistemic_status = 'contradicted' where workspace_id = $1 and id = $2",
+              [workspaceA, linkId],
+            );
+            expect(result.rowCount).toBe(1);
+          },
+        );
+
+        // contradicted is terminal.
+        await expect(
+          withWorkspace(pool, { workspaceId: workspaceA, principalId: ownerA }, async (client) => {
+            await client.query(
+              "update links set epistemic_status = 'verified' where workspace_id = $1 and id = $2",
+              [workspaceA, linkId],
+            );
+          }),
+        ).rejects.toThrow();
+      });
     });
 
     describe('§5.3 item 6 — a verified Fact must have verified_by (CHECK)', () => {
@@ -473,6 +578,54 @@ describe.runIf(DATABASE_URL !== undefined)(
             await client.query(
               'update ontology_versions set definition = $1 where workspace_id = $2 and id = $3 and version = 1',
               [JSON.stringify({ objectTypes: ['tampered'] }), workspaceA, versionId],
+            );
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('UPDATE of status from published back to draft fails (0011 status-transition lock)', async () => {
+        const versionId = await withWorkspace(
+          pool,
+          { workspaceId: workspaceA, principalId: ownerA },
+          async (client) => {
+            const id = randomUUID();
+            await client.query(
+              `insert into ontology_versions (workspace_id, id, version, status, definition, proposed_by, published_by)
+             values ($1, $2, 1, 'published', $3, $4, $4)`,
+              [workspaceA, id, JSON.stringify({ objectTypes: [] }), ownerA],
+            );
+            return id;
+          },
+        );
+
+        await expect(
+          withWorkspace(pool, { workspaceId: workspaceA, principalId: ownerA }, async (client) => {
+            await client.query(
+              "update ontology_versions set status = 'draft' where workspace_id = $1 and id = $2 and version = 1",
+              [workspaceA, versionId],
+            );
+          }),
+        ).rejects.toThrow();
+
+        // The one legal published exit (-> deprecated) still succeeds.
+        await withWorkspace(
+          pool,
+          { workspaceId: workspaceA, principalId: ownerA },
+          async (client) => {
+            const result = await client.query(
+              "update ontology_versions set status = 'deprecated' where workspace_id = $1 and id = $2 and version = 1",
+              [workspaceA, versionId],
+            );
+            expect(result.rowCount).toBe(1);
+          },
+        );
+
+        // A deprecated row is terminal — even -> published is blocked.
+        await expect(
+          withWorkspace(pool, { workspaceId: workspaceA, principalId: ownerA }, async (client) => {
+            await client.query(
+              "update ontology_versions set status = 'published' where workspace_id = $1 and id = $2 and version = 1",
+              [workspaceA, versionId],
             );
           }),
         ).rejects.toThrow();

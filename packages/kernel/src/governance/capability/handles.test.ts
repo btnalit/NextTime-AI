@@ -809,5 +809,106 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(stillOwner).toBe(onBehalfOf);
     });
+
+    describe('capability_handles_inheritance — I13 (governance/0007)', () => {
+      async function insertHandleRow(
+        client: PoolClient,
+        row: {
+          jti: string;
+          sessionId: string;
+          onBehalfOf: string;
+          parentJti?: string;
+          expiresAt: Date;
+        },
+      ): Promise<void> {
+        await client.query(
+          `insert into capability_handles
+             (workspace_id, jti, session_id, on_behalf_of, parent_jti, scope, expires_at)
+           values ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+          [
+            workspaceId,
+            row.jti,
+            row.sessionId,
+            row.onBehalfOf,
+            row.parentJti ?? null,
+            JSON.stringify({ capabilities: [], resources: {} }),
+            row.expiresAt.toISOString(),
+          ],
+        );
+      }
+
+      it('rejects on_behalf_of that does not match the row’s own session', async () => {
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            insertHandleRow(client, {
+              jti: randomUUID(),
+              sessionId,
+              onBehalfOf: otherPrincipalId, // sessionId's own on_behalf_of is `onBehalfOf` (owner)
+              expiresAt: new Date(Date.now() + 300_000),
+            }),
+          ),
+        ).rejects.toThrow();
+      });
+
+      it('rejects a child whose on_behalf_of differs from its parent’s, even if it matches its own session', async () => {
+        const { privateKey } = await generateEphemeralHandleKeyPair();
+        const parent = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          issueHandle(client, {
+            sessionId,
+            scope: { capabilities: [], resources: {} },
+            ttlSeconds: 3600,
+            privateKey,
+          }),
+        );
+
+        const otherSessionId = await insertSession(workspaceId, otherPrincipalId, otherPrincipalId);
+
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            insertHandleRow(client, {
+              jti: randomUUID(),
+              sessionId: otherSessionId,
+              onBehalfOf: otherPrincipalId, // matches otherSessionId's own on_behalf_of
+              parentJti: parent.jti, // but parent's on_behalf_of is `onBehalfOf` (owner) — mismatch
+              expiresAt: new Date(Date.now() + 60_000),
+            }),
+          ),
+        ).rejects.toThrow();
+      });
+
+      it('rejects a child whose expires_at exceeds its parent’s, and accepts one that matches it exactly', async () => {
+        const { privateKey } = await generateEphemeralHandleKeyPair();
+        const parent = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          issueHandle(client, {
+            sessionId,
+            scope: { capabilities: [], resources: {} },
+            ttlSeconds: 3600,
+            privateKey,
+          }),
+        );
+
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            insertHandleRow(client, {
+              jti: randomUUID(),
+              sessionId,
+              onBehalfOf,
+              parentJti: parent.jti,
+              expiresAt: new Date(parent.expiresAt.getTime() + 60_000),
+            }),
+          ),
+        ).rejects.toThrow();
+
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          insertHandleRow(client, {
+            jti: randomUUID(),
+            sessionId,
+            onBehalfOf,
+            parentJti: parent.jti,
+            expiresAt: parent.expiresAt,
+          }),
+        );
+      });
+    });
   },
 );

@@ -29,6 +29,7 @@ import {
   type StateAtInput,
   type StateAtResult,
   type SupersedeFactInput,
+  SupersedeIdentityMismatchError,
   type TraverseEdge,
   type TraverseInput,
   type TraverseResult,
@@ -242,6 +243,18 @@ export class SqlGraphStore implements GraphStore {
       currentResult.rows,
       () => new FactNotFoundError(workspaceId, input.factId),
     );
+
+    // I5 (lane-1 P1 fix): a supersede may only replace the *content* of the Fact it targets, never
+    // its identity — the replacement's (linkType, sourceObjectId, targetObjectId) must match the
+    // Fact being superseded, checked before any write (and before the lifecycle-transition check
+    // below, so a caller gets the more specific error).
+    if (
+      input.linkType !== currentRow.link_type ||
+      input.sourceObjectId !== currentRow.source_object_id ||
+      input.targetObjectId !== currentRow.target_object_id
+    ) {
+      throw new SupersedeIdentityMismatchError(workspaceId, input.factId);
+    }
 
     // Illegal transition (e.g. superseding an already-superseded/invalidated Fact) throws
     // IllegalTransition (@nexttime/shared) before any write happens.
