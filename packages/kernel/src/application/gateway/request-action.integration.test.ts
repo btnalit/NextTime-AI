@@ -796,7 +796,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const before = transport.calls[AUTO_OP.name] ?? 0;
       const withTransactionAdmin = createAdminWithTransaction(pool);
       const actionExecutor = createGatekeeperActionExecutor({
-        gatekeeperClient: new HttpGatekeeperClient(),
+        gatekeeperClient: new HttpGatekeeperClient({ token: GATE_TEST_TOKEN }),
         withTransaction: withTransactionAdmin,
       });
 
