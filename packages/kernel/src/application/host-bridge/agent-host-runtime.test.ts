@@ -34,12 +34,56 @@ interface FakeEntryDefinitionRow {
   readonly egressDeny?: readonly string[];
 }
 
+/** S3.13: `governance/agent-profile/store.ts`'s `readAgentProfile` row, keyed by `principalId`
+ *  (tests here only ever use one workspace at a time). `undefined`/absent fields default to the
+ *  "inherit" `null` sentinel, matching a real row with those columns unset. */
+interface FakeAgentProfileRow {
+  readonly model?: string | null;
+  readonly enabledSkills?: readonly string[] | null;
+  readonly enabledGatekeepers?: readonly string[] | null;
+  readonly enabledWorkerDefinitions?: readonly string[] | null;
+  readonly promptAddendum?: string | null;
+  readonly autoApproveLow?: boolean | null;
+  readonly updatedAt?: Date;
+}
+
+/** S3.13: `governance/agent-profile/store.ts`'s `readAgentPolicy` row for the one workspace a
+ *  test uses. `undefined` (the default) means "no row" — `readAgentPolicy`'s own compiled-in
+ *  defaults apply, same as production. */
+interface FakeAgentPolicyRow {
+  readonly allowedModels?: readonly string[];
+  readonly defaultModel?: string | null;
+  readonly memberCanEditProfile?: boolean;
+  readonly maxPromptAddendumChars?: number;
+  readonly allowedSkills?: readonly string[];
+  readonly allowedGatekeepers?: readonly string[];
+  readonly allowMemberAutoApproveLow?: boolean;
+  readonly updatedAt?: Date;
+}
+
+/** S3.13: one published Skill `application/worker/skills.ts`'s `resolvePublishedSkills` should
+ *  resolve — matched by `id` or `name`, mirroring that function's own id-or-name lookup. */
+interface FakePublishedSkill {
+  readonly id: string;
+  readonly name: string;
+}
+
 function createFakePool(
   publishedEntryDefinitions: ReadonlyMap<string, FakeEntryDefinitionRow> = new Map(),
   /** S2.13: `governance/capability/grants.ts`'s `listActiveGrantResourceScopes`, called by
    *  `ensureEntryHandle` — keyed by `principalId`, the gatekeeperIds an active `connect_gatekeeper`
    *  Grant would surface. Empty by default (every pre-S2.13 test keeps its exact prior behavior). */
   grantedGatekeeperIdsByPrincipal: ReadonlyMap<string, readonly string[]> = new Map(),
+  /** S3.13: `agent_profiles` seed, keyed by `principalId`. Empty by default — every pre-S3.13 test
+   *  keeps its exact prior behavior (a missing row resolves through `readAgentProfile` to
+   *  `undefined`, then through `resolveEffectiveAgentProfile` to "no override" on every field). */
+  agentProfilesByPrincipal: ReadonlyMap<string, FakeAgentProfileRow> = new Map(),
+  /** S3.13: the one workspace's `agent_policies` row — `undefined` (default) means "no row",
+   *  `readAgentPolicy`'s own compiled-in defaults apply. */
+  agentPolicy: FakeAgentPolicyRow | undefined = undefined,
+  /** S3.13: published Skills `application/worker/skills.ts`'s `resolvePublishedSkills` should
+   *  resolve — empty by default. */
+  publishedSkills: readonly FakePublishedSkill[] = [],
 ) {
   const sessionsByPrincipal = new Map<string, FakeSessionRow>();
   const handleCount = new Map<string, number>();
@@ -119,6 +163,79 @@ function createFakePool(
       const [, principalId] = params as [string, string];
       const ids = grantedGatekeeperIdsByPrincipal.get(principalId) ?? [];
       return { rows: ids.map((id) => ({ resource_id: id })), rowCount: ids.length };
+    }
+
+    // S3.13: governance/agent-profile/store.ts's readAgentProfile.
+    if (sql.startsWith('select workspace_id, principal_id, model, enabled_skills')) {
+      const [workspaceId, principalId] = params as [string, string];
+      const seed = agentProfilesByPrincipal.get(principalId);
+      if (!seed) return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            workspace_id: workspaceId,
+            principal_id: principalId,
+            model: seed.model ?? null,
+            enabled_skills: seed.enabledSkills ?? null,
+            enabled_gatekeepers: seed.enabledGatekeepers ?? null,
+            enabled_worker_definitions: seed.enabledWorkerDefinitions ?? null,
+            prompt_addendum: seed.promptAddendum ?? null,
+            auto_approve_low: seed.autoApproveLow ?? null,
+            updated_by: null,
+            updated_at: seed.updatedAt ?? new Date('2026-01-01T00:00:00Z'),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+
+    // S3.13: governance/agent-profile/store.ts's readAgentPolicy.
+    if (sql.startsWith('select workspace_id, allowed_models')) {
+      const [workspaceId] = params as [string];
+      if (!agentPolicy) return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            workspace_id: workspaceId,
+            allowed_models: agentPolicy.allowedModels ?? [],
+            default_model: agentPolicy.defaultModel ?? null,
+            member_can_edit_profile: agentPolicy.memberCanEditProfile ?? true,
+            max_prompt_addendum_chars: agentPolicy.maxPromptAddendumChars ?? 2000,
+            allowed_skills: agentPolicy.allowedSkills ?? [],
+            allowed_gatekeepers: agentPolicy.allowedGatekeepers ?? [],
+            allow_member_auto_approve_low: agentPolicy.allowMemberAutoApproveLow ?? false,
+            updated_by: null,
+            updated_at: agentPolicy.updatedAt ?? new Date('2026-01-01T00:00:00Z'),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+
+    // S3.13: application/worker/skills.ts's resolvePublishedSkills, called by
+    // resolveSkillsInline below.
+    if (sql.startsWith('select distinct on (id)')) {
+      const [workspaceId, refs] = params as [string, string[]];
+      const matched = publishedSkills.filter(
+        (skill) => refs.includes(skill.id) || refs.includes(skill.name),
+      );
+      return {
+        rows: matched.map((skill) => ({
+          workspace_id: workspaceId,
+          id: skill.id,
+          version: 1,
+          status: 'published',
+          name: skill.name,
+          description: `${skill.name} description`,
+          markdown: `# ${skill.name}\n\nbody`,
+          applicable: {},
+          proposed_by: randomUUID(),
+          published_by: randomUUID(),
+          created_at: new Date('2026-01-01T00:00:00Z'),
+          published_at: new Date('2026-01-01T00:00:00Z'),
+        })),
+        rowCount: matched.length,
+      };
     }
 
     if (sql.startsWith('insert into capability_handles')) {
@@ -959,5 +1076,312 @@ describe('AgentHostRuntime — hello / instanceId restart detection', () => {
         principalId: input.principalId,
       },
     ]);
+  });
+});
+
+describe('AgentHostRuntime — S3.13 AgentProfile runtime projection', () => {
+  it('effective.model overrides the published entry WorkerDefinition’s own model', async () => {
+    const principalId = randomUUID();
+    const { pool } = createFakePool(
+      new Map([['ws', { model: 'anthropic/claude-haiku' }]]),
+      new Map(),
+      new Map([[principalId, { model: 'anthropic/claude-sonnet' }]]),
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId, workspaceId: 'ws' });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.model).toBe('anthropic/claude-sonnet');
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+  });
+
+  it('falls back to the published entry WorkerDefinition’s model when the profile sets none', async () => {
+    const principalId = randomUUID();
+    const { pool } = createFakePool(
+      new Map([['ws', { model: 'anthropic/claude-haiku' }]]),
+      new Map(),
+      new Map([[principalId, { promptAddendum: 'be terse' }]]), // no model on the profile
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId, workspaceId: 'ws' });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.model).toBe('anthropic/claude-haiku');
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+  });
+
+  it('effective.promptAddendum is appended as a delimited final section, never replacing the platform prompt', async () => {
+    const principalId = randomUUID();
+    const { pool } = createFakePool(
+      new Map([['ws', { systemPrompt: 'You are the NextTime entry agent.' }]]),
+      new Map(),
+      new Map([[principalId, { promptAddendum: 'Prefer concise answers.' }]]),
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId, workspaceId: 'ws' });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.systemPrompt?.startsWith('You are the NextTime entry agent.')).toBe(true);
+    expect(command.systemPrompt).toContain('Prefer concise answers.');
+    // The platform section still comes first — the addendum can only ever follow it.
+    expect(command.systemPrompt?.indexOf('You are the NextTime entry agent.')).toBeLessThan(
+      command.systemPrompt?.indexOf('Prefer concise answers.') ?? -1,
+    );
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+  });
+
+  it('never widens the entry Handle’s gate scope past effective.enabledGatekeepers — only narrows the Grant-derived set', async () => {
+    const principalId = randomUUID();
+    const { pool } = createFakePool(
+      new Map(),
+      new Map([[principalId, ['gk-1', 'gk-2', 'gk-3']]]), // 3 active Grants
+      new Map([[principalId, { enabledGatekeepers: ['gk-2'] }]]), // Profile narrows to just one
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    const payloadSegment = command.handle.split('.')[1] ?? '';
+    const claims = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8')) as {
+      scope: { resources: Record<string, readonly string[]> };
+    };
+    expect(claims.scope.resources.gatekeeper).toEqual(['gk-2']);
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+  });
+
+  it('a null effective.enabledGatekeepers imposes no restriction beyond the Grant-derived ceiling', async () => {
+    const principalId = randomUUID();
+    const { pool } = createFakePool(
+      new Map(),
+      new Map([[principalId, ['gk-1', 'gk-2']]]),
+      new Map([[principalId, { promptAddendum: 'no gate restriction set' }]]), // enabledGatekeepers omitted -> null
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    const payloadSegment = command.handle.split('.')[1] ?? '';
+    const claims = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8')) as {
+      scope: { resources: Record<string, readonly string[]> };
+    };
+    expect(new Set(claims.scope.resources.gatekeeper)).toEqual(new Set(['gk-1', 'gk-2']));
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+  });
+
+  it('mounts effective.enabledSkills as skillsInline content, and mounts nothing when the profile is null', async () => {
+    const principalId = randomUUID();
+    const { pool } = createFakePool(
+      new Map(),
+      new Map(),
+      new Map([[principalId, { enabledSkills: ['writing-tips'] }]]),
+      undefined,
+      [{ id: 'skill-1', name: 'writing-tips' }],
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.skillsInline).toEqual([
+      { name: 'writing-tips', files: { 'SKILL.md': expect.stringContaining('writing-tips') } },
+    ]);
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+  });
+
+  it('mounts no Skills when the profile’s enabledSkills is null (inherit) — never widens to "every published Skill"', async () => {
+    const principalId = randomUUID();
+    const { pool } = createFakePool(new Map(), new Map(), new Map(), undefined, [
+      { id: 'skill-1', name: 'writing-tips' },
+    ]);
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.skillsInline).toBeUndefined();
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+  });
+
+  it('reissues the entry Handle when the AgentProfile changes even though the gate scope stays identical', async () => {
+    const principalId = randomUUID();
+    const workspaceId = randomUUID();
+    const profiles = new Map([
+      [
+        principalId,
+        { model: 'anthropic/claude-haiku', updatedAt: new Date('2026-01-01T00:00:00Z') },
+      ],
+    ]);
+    const { pool, handleCount } = createFakePool(new Map(), new Map(), profiles);
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const first = startTurnInput({ principalId, workspaceId });
+    const firstPromise = runtime.startTurn(first);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: first.turnId });
+    await firstPromise;
+    expect(handleCount.get(principalId)).toBe(1);
+
+    // Simulate set_agent_profile committing a change (a new updated_at) — the cached Handle must
+    // not be reused even though `gatekeeperIds` (empty, unaffected) has not changed.
+    profiles.set(principalId, {
+      model: 'anthropic/claude-sonnet',
+      updatedAt: new Date('2026-01-02T00:00:00Z'),
+    });
+
+    const second = startTurnInput({ principalId, workspaceId });
+    const secondPromise = runtime.startTurn(second);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: second.turnId });
+    await secondPromise;
+
+    expect(handleCount.get(principalId)).toBe(2); // reissued, not reused
+    const firstCommand = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    const secondCommand = sent[1] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(secondCommand.handle).not.toBe(firstCommand.handle);
+    expect(secondCommand.model).toBe('anthropic/claude-sonnet');
+  });
+
+  it('a caller with no AgentProfile row behaves exactly as before S3.13 (no override, cache still works)', async () => {
+    const principalId = randomUUID();
+    const { pool, handleCount } = createFakePool(
+      new Map([['ws', { model: 'anthropic/claude-haiku', systemPrompt: 'platform prompt' }]]),
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const first = startTurnInput({ principalId, workspaceId: 'ws' });
+    const firstPromise = runtime.startTurn(first);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: first.turnId });
+    await firstPromise;
+
+    const second = startTurnInput({ principalId, workspaceId: 'ws' });
+    const secondPromise = runtime.startTurn(second);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: second.turnId });
+    await secondPromise;
+
+    expect(handleCount.get(principalId)).toBe(1); // still reused across turns
+    const commands = sent as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>[];
+    for (const command of commands) {
+      expect(command.model).toBe('anthropic/claude-haiku');
+      expect(command.systemPrompt).toBe('platform prompt');
+      expect(command.skillsInline).toBeUndefined();
+    }
   });
 });
