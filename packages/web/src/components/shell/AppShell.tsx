@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { usePendingCount } from '../../hooks/usePendingCount.js';
+import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { useWsStatus } from '../../hooks/useWsStatus.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import type { NavSection } from '../../lib/router.js';
@@ -17,12 +18,15 @@ export interface AppShellProps {
 export function AppShell({ active, http, pushes, onForgetKey, children }: AppShellProps) {
   const pendingCount = usePendingCount(http, pushes);
   const wsStatus = useWsStatus(pushes);
+  const { workspaceName, role } = useWorkspaceIdentity(http);
   return (
     <div className="shell">
       <Sidebar
         active={active}
         pendingCount={pendingCount}
         wsStatus={wsStatus}
+        workspaceName={workspaceName}
+        inferredRole={role}
         onForgetKey={onForgetKey}
       />
       <main className="main">{children}</main>

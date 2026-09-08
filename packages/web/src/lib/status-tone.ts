@@ -1,14 +1,18 @@
 import type {
   ActionRequestStatus,
   ConnectionRequestStatus,
+  GrantStatus,
   PublishableStatus,
+  Role,
   TaskStatus,
   WorkerRunStatus,
 } from '@nexttime/shared';
 import {
   ACTION_REQUEST_STATUS_VALUES,
   CONNECTION_REQUEST_STATUS_VALUES,
+  GRANT_STATUS_VALUES,
   PUBLISHABLE_STATUS_VALUES,
+  ROLE_VALUES,
   TASK_STATUS_VALUES,
   WORKER_RUN_STATUS_VALUES,
 } from '@nexttime/shared';
@@ -36,7 +40,9 @@ export type StatusMachine =
   | 'task'
   | 'workerRun'
   | 'connectionRequest'
-  | 'publishable';
+  | 'publishable'
+  | 'grant'
+  | 'role';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: 'Proposed' },
@@ -83,6 +89,24 @@ export const PUBLISHABLE_TONES: Readonly<Record<PublishableStatus, ChipStyle>> =
   deprecated: { tone: 'warn', label: 'Deprecated' },
 };
 
+/** S3.11's CapabilityGrant (`enums.ts` `GRANT_STATUS_VALUES`) — the Access page's grant list. */
+export const GRANT_TONES: Readonly<Record<GrantStatus, ChipStyle>> = {
+  active: { tone: 'ok', label: 'Active' },
+  revoked: { tone: 'danger', label: 'Revoked' },
+  expired: { tone: 'neutral', label: 'Expired' },
+};
+
+/** Not a lifecycle machine (a Role never "transitions"), but reusing the tone vocabulary keeps the
+ *  Members page's role chip and the Sidebar's role badge visually consistent with every other
+ *  status in the console rather than inventing a second color system. */
+export const ROLE_TONES: Readonly<Record<Role, ChipStyle>> = {
+  owner: { tone: 'accent', label: 'Owner' },
+  operator: { tone: 'info', label: 'Operator' },
+  builder: { tone: 'info', label: 'Builder' },
+  auditor: { tone: 'neutral', label: 'Auditor' },
+  member: { tone: 'neutral', label: 'Member' },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -91,6 +115,8 @@ const MACHINES: Readonly<
   workerRun: { values: WORKER_RUN_STATUS_VALUES, tones: WORKER_RUN_TONES },
   connectionRequest: { values: CONNECTION_REQUEST_STATUS_VALUES, tones: CONNECTION_REQUEST_TONES },
   publishable: { values: PUBLISHABLE_STATUS_VALUES, tones: PUBLISHABLE_TONES },
+  grant: { values: GRANT_STATUS_VALUES, tones: GRANT_TONES },
+  role: { values: ROLE_VALUES, tones: ROLE_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

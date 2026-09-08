@@ -24,6 +24,10 @@ export interface GatekeeperCardProps {
   readonly canGrant: boolean;
   readonly onChanged: () => void;
   readonly onForbidden: (capabilityName: string) => void;
+  /** Opens the S3.11 health/operations detail drawer (`get_gatekeeper`) for this gate. Optional —
+   *  omitted, the "Health & operations" action does not render (a page rendering the card without
+   *  a drawer to open it into, e.g. a future embedded use). */
+  readonly onOpenDetail?: (gatekeeperId: string) => void;
 }
 
 /**
@@ -41,6 +45,7 @@ export function GatekeeperCard({
   canGrant,
   onChanged,
   onForbidden,
+  onOpenDetail,
 }: GatekeeperCardProps) {
   const toast = useToast();
   const [publishing, setPublishing] = useState(false);
@@ -111,6 +116,16 @@ export function GatekeeperCard({
       }
       actions={
         <>
+          {onOpenDetail ? (
+            <Button
+              variant="ghost"
+              size="s"
+              icon="search"
+              onClick={() => onOpenDetail(gatekeeper.id)}
+            >
+              Health & operations
+            </Button>
+          ) : null}
           {canPublish ? (
             <Button
               variant={draftCount > 0 ? 'primary' : 'secondary'}
