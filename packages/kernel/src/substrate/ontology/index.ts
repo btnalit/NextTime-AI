@@ -41,6 +41,7 @@ export {
 export type {
   OperationIdentity,
   OperationObjectResult,
+  OperationOrigin,
   ProcedureObjectInput,
   RegisterGatekeeperObjectInput,
   RegisterGatekeeperObjectResult,

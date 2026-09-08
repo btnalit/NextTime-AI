@@ -138,9 +138,11 @@ export async function registerGatekeeperObject(
 // registry). Design doc §9.2 "operations 作为平台元本体存于 objects / links，状态与版本在
 // properties" — unlike WorkerDefinition, an Operation has no dedicated relational table; its
 // `draft -> published -> deprecated` status (I16/I17) lives entirely in the Object's `properties`.
-// These are, like the two helpers above, dumb projections with no policy/transition logic of
-// their own — `governance/gatekeepers/manifest.ts` is what checks PUBLISHABLE_TRANSITIONS before
-// calling `setOperationStatusObject`, and what enforces I16 (draft-only on the Handle channel).
+// These are, like the two helpers above, projections with no transition logic of their own —
+// `governance/gatekeepers/manifest.ts` is what checks PUBLISHABLE_TRANSITIONS before calling
+// `setOperationStatusObject`, and what decides *which* existing row a draft write may replace
+// (I16); `registerOperationDraftObject` only provides the atomic conditional write that decision
+// is expressed through (see its own doc comment).
 // -------------------------------------------------------------------------------------------
 
 /** The Operation Object's identity key — `(gatekeeperId, name)`, scoped to one Gatekeeper
@@ -151,12 +153,35 @@ export interface OperationIdentity {
   readonly name: string;
 }
 
+/**
+ * Which channel wrote the current draft (stored as `properties.origin`; review 2026-09 — docs/
+ * development-tasks.md S2.4 "实现说明补充"): `'import'` is the manifest a gate itself declared
+ * (`importManifest` — owner/CLI/`create_connection`); `'agent'`/`'human'` is a `propose_operation`
+ * proposal (Handle channel; a human caller of that same capability produces `'human'`). The
+ * distinction is authority, not provenance flavor: `publish_manifest` bulk-publishes only
+ * `'import'` drafts, and the Handle channel may only ever replace an `'agent'`/`'human'` draft of
+ * its own — never an `'import'` one, which is not any proposer's private draft.
+ */
+export type OperationOrigin = 'import' | 'agent' | 'human';
+
 export interface RegisterOperationDraftInput extends OperationIdentity {
   readonly operation: Operation;
   /** `propose_operation`/manifest import is Handle-channel-legal (I16: drafts only) — the
-   *  proposer becomes the `exposes` Fact's `asserted_by`. */
+   *  proposer becomes the `exposes` Fact's `asserted_by`, and is persisted on the draft itself
+   *  (`properties.proposedBy` / `proposedByKind`) so a later proposal over the same identity can
+   *  be checked against it (I16 "修改他人草稿一律拒绝"). */
   readonly proposedBy: { readonly id: string; readonly kind: PrincipalKind };
   readonly activityId: string;
+  readonly origin: OperationOrigin;
+  /**
+   * Conditional-write guard chosen by the caller (`governance/gatekeepers/manifest.ts`): an
+   * existing row is only ever replaced when it is currently a `draft` — a `published`/`deprecated`
+   * row is never written by this function, whatever the caller passes. When this is set, the
+   * existing draft must additionally carry `proposedBy` equal to it *and* an `origin` of
+   * `'agent'`/`'human'` (the Handle channel's own-draft rule); when omitted, any draft may be
+   * replaced (the owner/CLI import path).
+   */
+  readonly onlyOwnDraftOf?: string;
 }
 
 export interface OperationObjectResult {
@@ -165,23 +190,67 @@ export interface OperationObjectResult {
   readonly status: PublishableStatus;
 }
 
-/** Upserts (by `{gatekeeperId, name}` identity) a draft `Operation` Object holding the full
- *  manifest entry, and asserts the `Gatekeeper --exposes--> Operation` Fact (design doc §5.1.2).
- *  Re-registering the same identity (e.g. re-importing an unchanged manifest) upserts the same
- *  Object (properties merge, `status` reset to `'draft'`) but does assert a fresh `exposes` Fact
- *  each call — Facts are append-only observations, not deduplicated relationships, so a repeat
- *  registration leaving an extra `exposes` edge is consistent with the rest of this Domain Model,
- *  not a bug to work around here. */
+/**
+ * Inserts a draft `Operation` Object holding the full manifest entry (plus `status: 'draft'`,
+ * `origin`, `proposedBy`, `proposedByKind`), and asserts the `Gatekeeper --exposes--> Operation`
+ * Fact (design doc §5.1.2). Returns `null` — and asserts no Fact — when the identity already
+ * exists and the existing row is not one this write is allowed to replace (see
+ * `RegisterOperationDraftInput.onlyOwnDraftOf`).
+ *
+ * Why a hand-written conditional upsert rather than `graphStore.upsertObject` (review 2026-09,
+ * P0): the generic upsert *merges* properties over whatever row holds the identity, and cannot
+ * express "insert only" or "update only if the current row satisfies X". A read in
+ * `manifest.ts` followed by that unconditional write left a window in which a Handle-channel
+ * proposal could demote a `published` Operation to `draft` and rewrite its policy inputs (`mode`,
+ * `blast_radius`, `auto_approvable`) — the owner's next `publish_manifest` then republished the
+ * attacker's values. `ON CONFLICT DO UPDATE ... WHERE` evaluates the guard against the row
+ * version the conflict locked, so two dispatch transactions racing on the same identity cannot
+ * both pass a check one of them performed earlier; the caller's own pre-read (`manifest.ts`) is
+ * kept only to report *why* (the existing row's status) in its error. On replace, `properties`
+ * is set to the new value rather than merged — a re-proposal is the proposer's whole revised
+ * definition, and a stale key left over from the previous draft would otherwise survive.
+ *
+ * Re-registering the same identity legitimately (an owner re-importing an unchanged manifest, a
+ * proposer revising its own draft) asserts a fresh `exposes` Fact each time — Facts are
+ * append-only observations, not deduplicated relationships, so a repeat registration leaving an
+ * extra `exposes` edge is consistent with the rest of this Domain Model, not a bug to work around
+ * here.
+ */
 export async function registerOperationDraftObject(
   client: PoolClient,
   workspaceId: string,
   input: RegisterOperationDraftInput,
-): Promise<OperationObjectResult> {
-  const operationObject = await graphStore.upsertObject(client, workspaceId, {
-    objectType: 'Operation',
-    identity: { gatekeeperId: input.gatekeeperId, name: input.name },
-    properties: { ...input.operation, status: 'draft' },
-  });
+): Promise<OperationObjectResult | null> {
+  const properties: Record<string, unknown> = {
+    ...input.operation,
+    status: 'draft',
+    origin: input.origin,
+    proposedBy: input.proposedBy.id,
+    proposedByKind: input.proposedBy.kind,
+  };
+  const result = await client.query<{ id: string }>(
+    `insert into objects (workspace_id, object_type, identity_key, properties)
+     values ($1, 'Operation', $2::jsonb, $3::jsonb)
+     on conflict (workspace_id, object_type, identity_key) where identity_key is not null
+     do update set properties = excluded.properties, updated_at = now()
+     where objects.properties ->> 'status' = 'draft'
+       and (
+         $4::text is null
+         or (
+           objects.properties ->> 'proposedBy' = $4
+           and objects.properties ->> 'origin' in ('agent', 'human')
+         )
+       )
+     returning id`,
+    [
+      workspaceId,
+      JSON.stringify({ gatekeeperId: input.gatekeeperId, name: input.name }),
+      JSON.stringify(properties),
+      input.onlyOwnDraftOf ?? null,
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
 
   const exposesFact = await graphStore.assertFact(
     client,
@@ -190,12 +259,12 @@ export async function registerOperationDraftObject(
     {
       linkType: 'exposes',
       sourceObjectId: input.gatekeeperId,
-      targetObjectId: operationObject.id,
+      targetObjectId: row.id,
       activityId: input.activityId,
     },
   );
 
-  return { operationObjectId: operationObject.id, exposesFactId: exposesFact.id, status: 'draft' };
+  return { operationObjectId: row.id, exposesFactId: exposesFact.id, status: 'draft' };
 }
 
 // -------------------------------------------------------------------------------------------

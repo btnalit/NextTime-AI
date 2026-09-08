@@ -29,6 +29,7 @@ import {
   ConnectionRequestNotFoundError,
   GatekeeperNotFoundError,
 } from '../../governance/connections/index.js';
+import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
 import { createServer } from '../../index.js';
 import { mapCapabilityError } from './capability-route.js';
 
@@ -84,6 +85,17 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     );
     expect(mapped).toMatchObject({ status: 502, code: 'gatekeeper_error' });
     expect(mapped.message).toContain('connected_account_store_not_configured');
+  });
+
+  // Review 2026-09, P0 (docs/development-tasks.md S2.4 "实现说明补充") — `propose_operation` over an
+  // identity that already exists and is not the caller's own draft (a published/deprecated
+  // Operation, another Principal's draft, or an import draft, I16).
+  it('OperationIdentityConflictError → 409 conflict', () => {
+    const mapped = mapCapabilityError(
+      new OperationIdentityConflictError('gk-1', 'container.restart', 'published'),
+    );
+    expect(mapped).toMatchObject({ status: 409, code: 'conflict' });
+    expect(mapped.message).toContain('container.restart');
   });
 
   it('maps a Postgres 22P02 (malformed uuid from the caller) to 400 invalid_params, not 500', () => {
