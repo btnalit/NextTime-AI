@@ -5,8 +5,16 @@ Fastify server、一个 `/var/run/docker.sock`，同时承载两种模式——�
 S1.5a）与一次性 Task/Worker 容器（`/task/*`，S2.8）。两者共享同一个 `DockerClient`
 （`docker-client.ts`）、同一套安全基线（`--read-only`、`--cap-drop ALL`、`no-new-privileges`、
 tmpfs `/tmp`、非 root uid 10001、只挂 `workers` 网络）与同一个出网代理来源映射文件
-（`egress-map.ts`）。`control` 网络内部服务，不发布主机端口——所有路由信任调用方（agent-host / 内核的
-`task/service.ts`，S2.7），不做独立鉴权（同一信任边界见内核自己的 internal 路由）。
+（`egress-map.ts`）。`control` 网络内部服务，不发布主机端口，也从不挂 `workers` 网络（不像
+kernel/llm-proxy/egress-proxy）——所以没有任何 agent 容器能直接到达它。但 `POST /task/spawn` 与全部
+`/resident/*` 路由现在要求 `Authorization: Bearer <internal_token>`（`src/internal-auth.ts`，
+fix/runtime-hardening，lane-6 review P1-3）：早前这两组路由完全不鉴权，"信任调用方"只是约定，任何
+`control` 网络上的其它服务都能直接调用；token 与 kernel/agent-host 共用同一份
+`${NEXTTIME_DATA}/secrets/internal.token`（`@nexttime/shared` `DEFAULT_INTERNAL_TOKEN_FILE`）。
+kernel 自己的 `packages/kernel/src/adapters/supervisor-client`（`TaskSupervisorClient`）已同步更新
+带上这个头（复用 kernel 自己 `/internal/*` 守卫已经加载的同一份 token，见该文件顶部注释）。
+`GET /healthz`、`POST /task/:workerRunId/terminate`、`GET /task/:workerRunId` 不受影响，仍不需要
+token。
 
 ## 常驻模式（S1.5a）
 
@@ -35,9 +43,6 @@ tmpfs `/tmp`、非 root uid 10001、只挂 `workers` 网络）与同一个出网
   "capabilityHandle": "...",
   "image": "...",            // 可选，默认 WORKER_IMAGE；不在 allowlist 里 -> 403
   "model": "...",            // 可选，容器 CMD 变成 ["--model", model]
-  "skills": [{ "name": "...", "hostPath": "..." }], // 可选，只读挂载到 <agentDir>/skills/<name>；
-                              // hostPath 必须是绝对路径，经 path.posix.normalize 后落在
-                              // ${NEXTTIME_DATA}/ 之下——否则 400（见下方"挂载"一条）
   "skillsInline": [           // 可选（S2.14）；见下方"skillsInline"一条
     { "name": "...", "files": { "SKILL.md": "..." } }
   ],
@@ -45,24 +50,30 @@ tmpfs `/tmp`、非 root uid 10001、只挂 `workers` 网络）与同一个出网
 }
 ```
 
+**已删除**：早前这里还有一个 `skills: [{name, hostPath}]` 字段（只读 bind-mount 一个"已经在宿主机上
+的文件"）。已随 fix/runtime-hardening（lane-6 review P1-3）整个删除，不再是请求体的合法字段——
+S2.14 上线 `skillsInline` 之后，这个代码库里从未有任何调用方真正发送过它（kernel 只发
+`skillsInline`），但它的允许路径校验（`isSkillHostPathAllowed`）覆盖的是**整个** `${NEXTTIME_DATA}/`
+——包括 `secrets/handle.key`（Handle 签名私钥，0640 组 10001，Worker uid 可读）。删掉整个字段
+（`TaskSkillSchema`/`TaskSkillMount`/`isSkillHostPathAllowed`）比只是把允许路径收紧到
+`${NEXTTIME_DATA}/skills/` 更彻底：没有任何行为需要保留。
+
 #### `skillsInline`（S2.14）
 
-`skills[]`（上面）挂载的是**已经在宿主机上的文件**——内核没有可写的数据挂载（`config:ro` 是它唯一的
-数据挂载，I9 相邻），没法先把一个已发布 Skill 的内容写成宿主机文件再传 `hostPath` 进来。
-`skillsInline[]` 因此换一种方式：内核（`application/worker/skills.ts` `renderSkillMarkdownFile`）
-把已发布 Skill 渲染成 pi 的 `SKILL.md` 格式文本，随 spawn 请求体本身传过来；这个服务在
-`docker.createAndStart` **之前**把每个条目的 `files` 写进这个 Task 自己已经会挂载的
-`<agentDir>/skills/<name>/` 目录（`task-service.ts` `spawn()`）——不需要新增挂载，整个 Task 工作目录
-本来就整体挂在 `/workspace`。
+内核没有可写的数据挂载（`config:ro` 是它唯一的数据挂载，I9 相邻），没法先把一个已发布 Skill 的内容
+写成宿主机文件再传路径进来。`skillsInline[]` 因此按内容传：内核
+（`application/worker/skills.ts` `renderSkillMarkdownFile`）把已发布 Skill 渲染成 pi 的
+`SKILL.md` 格式文本，随 spawn 请求体本身传过来；这个服务在 `docker.createAndStart` **之前**把每个
+条目的 `files` 写进这个 Task 自己已经会挂载的 `<agentDir>/skills/<name>/` 目录（`task-service.ts`
+`spawn()`）——不需要新增挂载，整个 Task 工作目录本来就整体挂在 `/workspace`。这是现在**唯一**能把
+Skill 放进 Worker 容器的方式。
 
-- `name`：与 `skills[].name` 同一条"安全单段路径"规则（`config.ts`，未合并成共享 schema——两者故意
-  独立校验，其中一条以后改动不会悄悄影响另一条）。
+- `name`：安全单段路径规则（`config.ts`）。
 - `files`：文件名 → 内容的映射；文件名必须是安全的相对路径（无前导 `/`、无 `.`/`..` 段，
   `isSafeSkillInlineFileName`），必须包含一个 `"SKILL.md"` 键（pi 的必需入口文件，`docs/skills.md`
   "Skill Structure"）；单文件 ≤ 512 KiB（`MAX_SKILL_INLINE_FILE_BYTES`），一个条目全部文件合计
   ≤ 2 MiB（`MAX_SKILL_INLINE_TOTAL_BYTES`）——都在 `config.ts` `TaskSkillInlineSchema` 里用
   `superRefine` 校验，不合规直接 `400`，不落到文件系统。
-- 两种挂载方式（`skills[]`/`skillsInline[]`）互不冲突，可以在同一次 spawn 里都出现。
 
 `taskId`/`workerRunId`/`workspaceId`/`onBehalfOf` 校验为 UUID（`z.string().uuid()`）而非任意
 `min(1)` 字符串：`taskId` 会成为 bind-mount 的 host 路径片段，`workerRunId` 会成为容器名——不校验
@@ -76,8 +87,8 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
 `invalid_principal_id`），不落到 docker 客户端。
 
 返回 `200 {containerId, ip}`；镜像不在 allowlist（默认只有 `WORKER_IMAGE`，可用
-`WORKER_IMAGE_ALLOWLIST` 逗号列表追加，不会替换默认值）返回 `403`；`skills[].hostPath` 逃出
-`${NEXTTIME_DATA}/` 之外返回 `400`；请求体（含上述两类校验）不合法 `400`。
+`WORKER_IMAGE_ALLOWLIST` 逗号列表追加，不会替换默认值）返回 `403`；请求体（含上述校验）不合法
+`400`；`Authorization` 缺失或不对 `401`（见本文件顶部"内部认证"说明）。
 
 ### Spawn spec 关键决策（`src/task-spawn-spec.ts`）
 
@@ -90,16 +101,12 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
   `packages/coding-agent/src/config.ts` 验证）——`homedir()` 读 `HOME`，两者结合后默认值恰好等于
   resident 模式显式设置的那个路径，不需要重复设置。
 - **挂载**：`${NEXTTIME_DATA}/workspaces/tasks/<taskId>` → `/workspace`（读写）；`models.json` 只读
-  挂到 `/workspace/.pi/agent/models.json`（与 resident 模式同一目标路径，理由同上）；每个
-  `skills[]` 只读挂到 `/workspace/.pi/agent/skills/<name>`——该路径是 pi 0.84.4 的默认全局 skills
-  目录（`packages/coding-agent/src/core/skills.ts` `loadSkills`: `join(resolvedAgentDir,
-  'skills')`），对照参考项目验证过，不是猜测。**从不**挂载任何用户的入口工作区（I15）。
-  **`skills[].hostPath` 本身也受限**（`config.ts` `isSkillHostPathAllowed`，`server.ts` 在
-  `/task/spawn` 里对每个 skill 调用，任何一个不满足就整体 `400`，不落到 docker 客户端）：必须是
-  绝对路径，且经 `path.posix.normalize` 之后落在这个 supervisor 自己已知的
-  `${config.nextTimeData}/` 之下——否则一个调用方可以把 `/var/run/docker.sock`、`/etc` 之类任意
-  宿主机路径只读挂进 Worker 容器。`name` 字段本身另有校验（安全单段路径，见上一条），两者合起来
-  才能保证最终的挂载目标既不会逃出 skills 目录，来源也不会逃出这台主机的数据根。
+  挂到 `/workspace/.pi/agent/models.json`（与 resident 模式同一目标路径，理由同上）。`skillsInline[]`
+  条目按内容**写入**（不是 bind mount）到 `/workspace/.pi/agent/skills/<name>`——该路径是 pi 0.84.4
+  的默认全局 skills 目录（`packages/coding-agent/src/core/skills.ts` `loadSkills`:
+  `join(resolvedAgentDir, 'skills')`），对照参考项目验证过，不是猜测。**从不**挂载任何用户的入口
+  工作区（I15）。**没有**任何调用方能再指定一个任意宿主机路径只读挂进 Worker 容器——早前的
+  `skills[].hostPath` 字段本身已随 fix/runtime-hardening 整个删除（见上文"已删除"一条）。
 - **CMD**：给了 `model` 就是 `['--model', model]`；`entrypoint.sh` 把容器 CMD 接在它自己固定的 pi
   flags 之后，不需要改那个脚本。
 - **镜像 allowlist** 校验在 `server.ts`（不在这个纯函数里）——`buildTaskSpawnSpec` 只管把已校验过的

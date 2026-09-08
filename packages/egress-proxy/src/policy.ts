@@ -1,5 +1,5 @@
 import type { CidrRange } from './net-utils.js';
-import { classifyAddress, isInCidr, parseIPv4, parseIPv6 } from './net-utils.js';
+import { classifyAddress, isInCidr, isIpLiteral } from './net-utils.js';
 
 /**
  * Egress decision policy (design doc §7.9, §5.4 I10). Pure aside from the injected `resolve`
@@ -44,9 +44,30 @@ export interface PolicyConfig {
    * production — see README.md.
    */
   allowLoopbackForTests?: boolean;
+  /**
+   * `EGRESS_DENY_UNKNOWN_SOURCE` (lane-6 review P2-7). `resolveSource(clientIp)` returning
+   * `undefined` means no `SourcePolicy` was ever registered for that client IP at all — distinct
+   * from a *registered* source with an empty `allow`/`deny` (which is treated as "no per-source
+   * restriction", per steps 1/4 below). Before this fix the two were indistinguishable to
+   * `decideEgress`: an unregistered source got exactly the same treatment as a known, unrestricted
+   * one — full public egress, attributed to `sourceId: 'unknown'` in every observation
+   * (`proxy.ts`'s `recordObservation`). That is a fail-*open* posture for whatever traffic this
+   * proxy cannot attribute to a specific principal/Task at all (a registration race, a bug in the
+   * caller, or a container that was never registered in the first place).
+   *
+   * Defaults to `true` (fail-closed) in `config.ts`'s `loadConfig` — set `false` only if
+   * `SOURCE_MAP_FILE` registration is unreliable enough on a given host that fail-closed would
+   * cut off legitimate containers' egress outright (see `packages/worker-supervisor/src/
+   * resident-service.ts`'s own doc comment on its best-effort `registerEgress`/`unregisterEgress`
+   * — host verification found a real EACCES class of failure there). Flip this back to `false`
+   * only as a temporary escape hatch while fixing that underlying reliability issue, not as a
+   * permanent posture.
+   */
+  denyUnknownSource?: boolean;
 }
 
 export type PolicyDenyReason =
+  | 'unknown-source'
   | 'source-deny'
   | 'deny-host'
   | 'bare-hostname'
@@ -99,6 +120,10 @@ export interface DecideEgressInput {
 /**
  * The full egress decision pipeline, in the order design doc I10 / §7.9 specify:
  *
+ * 0. Unknown source — no `SourcePolicy` registered for this client IP at all — denied when
+ *    `config.denyUnknownSource` is set (lane-6 review P2-7; not part of the original design doc
+ *    order, checked first since it's a question about the *caller's* identity, prior to anything
+ *    about the requested hostname).
  * 1. Per-source `deny` (beats `allow` — checked first).
  * 2. Global `DENY_HOSTS` (internal service names).
  * 3. Bare hostnames (no dot), unless the source's `allow` list explicitly names them.
@@ -107,13 +132,16 @@ export interface DecideEgressInput {
  *    one that isn't private/platform-internal — this defeats DNS rebinding because the caller
  *    connects to the address this function returns, never re-resolving the hostname itself.
  *
- * Steps 1–3 need no DNS lookup at all, so an obviously-denied hostname (an internal service name,
- * or one on a source's deny list) is rejected before `resolve` is ever called.
+ * Steps 0–3 need no DNS lookup at all, so an obviously-denied hostname (an internal service name,
+ * a source's deny list, or an unregistered source) is rejected before `resolve` is ever called.
  */
 export async function decideEgress(input: DecideEgressInput): Promise<PolicyDecision> {
   const { source, config, resolve } = input;
   const hostname = normalizeHostname(input.hostname);
 
+  if (source === undefined && config.denyUnknownSource) {
+    return { allowed: false, reason: 'unknown-source' };
+  }
   if (matchesSuffix(hostname, source?.deny)) {
     return { allowed: false, reason: 'source-deny' };
   }
@@ -139,8 +167,12 @@ export async function decideEgress(input: DecideEgressInput): Promise<PolicyDeci
 
   // A literal-IP target never qualifies for the trusted-resolved-CIDR exemption (see
   // PolicyConfig.trustedResolvedCidrs): the exemption is about what the network's resolver
-  // answered for a *name*, not about letting callers dial into that range directly.
-  const targetIsLiteral = parseIPv4(hostname) !== null || parseIPv6(hostname) !== null;
+  // answered for a *name*, not about letting callers dial into that range directly. `isIpLiteral`
+  // (not just strict dotted-quad/colon-hex) so an alternate notation (decimal/hex/octal/short
+  // dotted forms — net-utils.ts `parseIPv4Literal`'s own doc comment) can never bypass this rule
+  // by spelling the same target in a form the strict parser alone wouldn't recognize (lane-6
+  // review P3).
+  const targetIsLiteral = isIpLiteral(hostname);
 
   for (const address of addresses) {
     const addressClass = classifyAddress(address, config.platformSubnets);

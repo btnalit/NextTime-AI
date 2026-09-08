@@ -80,21 +80,31 @@ fetch('http://localhost:8081/healthz').then(r=>r.text()).then(t=>console.log(t))
 期望 `{"status":"ok"}`。下面的每个 `/resident/*` 调用都用这个 `node -e fetch(...)` 模式
 （`-T` 关掉伪 TTY，避免 `docker compose exec` 吞掉后续脚本的 stdin）。
 
+**内部认证**（fix/runtime-hardening，lane-6 review P1-3）：`POST /task/spawn` 与全部
+`/resident/*` 路由现在都要求 `Authorization: Bearer <internal_token>`（`GET /healthz`、
+`GET /task/:workerRunId`、`POST /task/:workerRunId/terminate` 不受影响，仍不需要）——`worker-
+supervisor` 自己容器里挂了同一份 `${NEXTTIME_DATA}/secrets/internal.token`
+（`/run/secrets/internal_token`，与 kernel/agent-host 共用），下面每个会命中这两组路由的示例都用
+`require('fs').readFileSync('/run/secrets/internal_token','utf8').trim()` 现读现拼，不需要额外
+一步导出成 shell 变量。缺这个头或 token 不对 → `401 {"error":{"code":"unauthorized",...}}`。
+
 ## 5. 拉起两个用户的入口容器
 
 ```bash
 cd <CODE_DIR>
 docker compose exec -T worker-supervisor node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
 fetch('http://localhost:8081/resident/spawn', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
   body: JSON.stringify({workspaceId: 'ws-demo', principalId: 'demo-alice', handle: 'dummy-handle-alice'}),
 }).then(r => r.text()).then(t => console.log(t))
 "
 docker compose exec -T worker-supervisor node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
 fetch('http://localhost:8081/resident/spawn', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
   body: JSON.stringify({workspaceId: 'ws-demo', principalId: 'demo-bob', handle: 'dummy-handle-bob'}),
 }).then(r => r.text()).then(t => console.log(t))
 "
@@ -147,9 +157,10 @@ docker exec nexttime-entry-demo-alice sh -c 'touch /ok' && echo "UNEXPECTED: roo
 ```bash
 docker kill nexttime-entry-demo-alice
 docker compose exec -T worker-supervisor node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
 fetch('http://localhost:8081/resident/spawn', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
   body: JSON.stringify({workspaceId: 'ws-demo', principalId: 'demo-alice', handle: 'dummy-handle-alice'}),
 }).then(r => r.text()).then(t => console.log(t))
 "
@@ -162,16 +173,18 @@ fetch('http://localhost:8081/resident/spawn', {
 
 ```bash
 docker compose exec -T worker-supervisor node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
 fetch('http://localhost:8081/resident/stop', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
   body: JSON.stringify({principalId: 'demo-alice'}),
 }).then(r => console.log(r.status))
 "
 docker compose exec -T worker-supervisor node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
 fetch('http://localhost:8081/resident/stop', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
   body: JSON.stringify({principalId: 'demo-bob'}),
 }).then(r => console.log(r.status))
 "
@@ -183,12 +196,13 @@ git checkout main
 ## 9. 供下一个任务（agent-host 事件桥）参考的 supervisor API 契约
 
 - `POST /resident/spawn` `{workspaceId, principalId, handle, kernelUrl?, llmUrl?}` →
-  `{containerId, ip, status, created, restarts}`。幂等：已在跑则复用（`created:false`）。
-- `POST /resident/stop` `{principalId}` → `204`。
+  `{containerId, ip, status, created, restarts}`。幂等：已在跑则复用（`created:false`）。**要求**
+  `Authorization: Bearer <internal_token>`（fix/runtime-hardening），下同一组 `/resident/*`。
+- `POST /resident/stop` `{principalId}` → `204`。**要求内部 token**。
 - `GET /resident/:principalId` → `{principalId, containerId, ip, running, status, startedAt,
-  restarts, lastTouchedAt}` 或 `404`。
-- `POST /resident/:principalId/touch` → `204`（刷新空闲计时）或 `404`。
-- `GET /healthz` → `{status:"ok"}`。
+  restarts, lastTouchedAt}` 或 `404`。**要求内部 token**。
+- `POST /resident/:principalId/touch` → `204`（刷新空闲计时）或 `404`。**要求内部 token**。
+- `GET /healthz` → `{status:"ok"}`。不要求 token。
 - **stdio 附着**：容器创建时 `OpenStdin:true, StdinOnce:false, Tty:false`（pi `--mode rpc` 走
   stdio 的 JSON-RPC）；本任务不提供附着端点——下一半用 Docker Engine API 的
   `POST /containers/{id}/attach?stream=1&stdin=1&stdout=1&stderr=1`（或 dockerode
@@ -217,9 +231,10 @@ WORKSPACE_ID=33333333-3333-3333-3333-333333333333
 ON_BEHALF_OF=44444444-4444-4444-4444-444444444444
 
 docker compose exec -T worker-supervisor node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
 fetch('http://localhost:8081/task/spawn', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
   body: JSON.stringify({
     taskId: '${TASK_ID}',
     workerRunId: '${WORKER_RUN_ID}',
@@ -254,8 +269,9 @@ NEXTTIME_MODE HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy` �
 ```bash
 # 非 UUID / 路径穿越形状的 taskId -> 400，且从不到达 docker（对照上一步：容器数不变）
 docker compose exec -T worker-supervisor node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
 fetch('http://localhost:8081/task/spawn', {
-  method: 'POST', headers: {'content-type': 'application/json'},
+  method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
   body: JSON.stringify({
     taskId: '../../pgdata', workerRunId: '${WORKER_RUN_ID}', workspaceId: '${WORKSPACE_ID}',
     onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h',
@@ -263,21 +279,23 @@ fetch('http://localhost:8081/task/spawn', {
 }).then(r => console.log(r.status))
 "
 
-# skills[].hostPath 逃出 NEXTTIME_DATA -> 400（这里故意指向 docker.sock 本身来验证）
+# 缺 Authorization（或 token 不对）-> 401，同样从不到达 docker（fix/runtime-hardening，lane-6
+# review P1-3——历史上这里演示的是 skills[].hostPath 逃出 NEXTTIME_DATA -> 400；该字段本身已随
+# 这次修复整个删除（S2.14 skillsInline 上线后一直是死代码），改成演示新加的内部 token 校验）
 docker compose exec -T worker-supervisor node -e "
 fetch('http://localhost:8081/task/spawn', {
   method: 'POST', headers: {'content-type': 'application/json'},
   body: JSON.stringify({
     taskId: '${TASK_ID}', workerRunId: '${WORKER_RUN_ID}', workspaceId: '${WORKSPACE_ID}',
     onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h',
-    skills: [{name: 'evil', hostPath: '/var/run/docker.sock'}],
   }),
 }).then(r => console.log(r.status))
 "
 docker ps -a --filter "name=nexttime-task-${WORKER_RUN_ID}" --format '{{.Names}}'   # 只有上面第一次成功 spawn 的那一个
 ```
 
-期望：两次都 `400`；`docker ps -a` 里以 `nexttime-task-` 开头的容器数量没有因为这两次请求而增加。
+期望：第一次 `400`，第二次 `401`；`docker ps -a` 里以 `nexttime-task-` 开头的容器数量没有因为这
+两次请求而增加。
 
 ```bash
 docker compose exec -T worker-supervisor node -e "
@@ -311,9 +329,10 @@ fetch('http://localhost:8081/task/${WORKER_RUN_ID}/terminate', {method: 'POST'})
 TASK_ID_2=55555555-5555-5555-5555-555555555555
 WORKER_RUN_ID_2=66666666-6666-6666-6666-666666666666
 docker compose exec -T worker-supervisor node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token','utf8').trim();
 fetch('http://localhost:8081/task/spawn', {
   method: 'POST',
-  headers: {'content-type': 'application/json'},
+  headers: {'content-type': 'application/json', authorization: 'Bearer ' + token},
   body: JSON.stringify({
     taskId: '${TASK_ID_2}', workerRunId: '${WORKER_RUN_ID_2}', workspaceId: '${WORKSPACE_ID}',
     onBehalfOf: '${ON_BEHALF_OF}', capabilityHandle: 'h', image: 'some-unapproved-image',
@@ -440,6 +459,14 @@ fetch('http://localhost:8081/task/spawn', {
   `400`，不落到 docker 客户端）：要求绝对路径，且经 `path.posix.normalize` 之后落在
   `${config.nextTimeData}/` 之下。本文档 §10 的验证步骤已同步更新为 UUID 形式的示例值，并加了两条
   新的"入参校验"步骤。
+  **后续更新（fix/runtime-hardening，lane-6 review P1-3，2026-09）：`skills[].hostPath` 连同
+  `isSkillHostPathAllowed`、`TaskSkillSchema`、`TaskSkillMount` 整个删除，不再是"收紧允许路径"，
+  而是彻底删掉这个 API——S2.14 上线 `skillsInline`（按内容写盘，不是 bind mount）之后，这条
+  host-path 路径在这个代码库里从未被任何调用方真正发送过（kernel 的 `application/task/spawn.ts`
+  只发 `skillsInline`），却仍然把整个 `${NEXTTIME_DATA}/` 当作允许挂载的根——包括
+  `secrets/handle.key`（Handle 签名私钥，0640 组 10001，Worker uid 可读）。同一次修复还给
+  `POST /task/spawn` 与全部 `/resident/*` 加上了内部 token 认证（见本文档 §4"内部认证"、§9），
+  两处合起来才是完整的 P1-3 修复——本文档 §10 的示例已同步移除 `skills[]` 相关内容并加上 token。
 
 ## 12. `invoke_worker` 经 `/api/cap`（S2.7 host 验收）
 

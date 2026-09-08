@@ -115,6 +115,15 @@ services:
 
   worker-supervisor:
     build: { context: ., dockerfile: packages/worker-supervisor/Dockerfile }
+    # internal_token（fix/runtime-hardening, lane-6 review P1-3）：POST /task/spawn 与全部
+    # /resident/* 路由现在都要求这个内部共享密钥（packages/worker-supervisor/src/internal-auth.ts）
+    # ——这个服务只在 control 网络（下面 networks 只有 control，从不在 workers 上），但此前任何其他
+    # control 网络上的服务都能不带凭证直接调用这两组路由；"trusted caller" 只是约定，监听端本身并不
+    # 强制。与 kernel/agent-host 用的是同一份文件（DEFAULT_INTERNAL_TOKEN_FILE，
+    # scripts/gen-handle-keys.sh 生成）。调用方（agent-host 的 supervisor-client.ts；kernel 的
+    # adapters/supervisor-client，同一批修复内已同步更新）必须带上 Authorization: Bearer <token>，
+    # 否则拿到 401。
+    secrets: [internal_token]
     # docker.sock: talks to the Engine API directly (dockerode), no docker CLI needed in the
     # image. workspaces: rw — this is where per-principal directories get created (I15) and
     # bind-mounted (as HOST paths, via NEXTTIME_DATA below) into spawned containers. config: ro
@@ -150,10 +159,13 @@ services:
     # label Compose stamps on the `workers` network (docker-client.ts
     # `resolveNetworkByComposeLabel`); set it explicitly only if that resolution ever needs a
     # manual override.
-    # TASK_MAX_RUNTIME_SEC/TASK_WORKDIR_RETENTION_HOURS (S2.8, one-shot Task mode): both already
-    # have safe built-in defaults (packages/worker-supervisor/src/config.ts) — passed through here,
-    # like WORKER_RUNTIME above, only so an operator can override them via `.env` without editing
-    # this file.
+    # TASK_MAX_RUNTIME_SEC/TASK_WORKDIR_RETENTION_HOURS/TASK_REAP_INTERVAL_MS (S2.8, one-shot Task
+    # mode): all already have safe built-in defaults (packages/worker-supervisor/src/config.ts) —
+    # passed through here, like WORKER_RUNTIME above, only so an operator can override them via
+    # `.env` without editing this file. TASK_REAP_INTERVAL_MS (fix/runtime-hardening, lane-6 review
+    # P2-7): default lowered from a fixed 30s to a configurable 10s — bounds how stale an exited
+    # Task container's egress-map registration can get before a Docker-assigned IP reuse could
+    # misattribute a different container's egress to it; see config.ts's own doc comment.
     environment:
       {
         WORKER_IMAGE: nexttime-ai-worker-runtime,
@@ -164,6 +176,7 @@ services:
         HTTP_PROXY_FOR_WORKERS: http://egress-proxy:3128,
         TASK_MAX_RUNTIME_SEC: "${TASK_MAX_RUNTIME_SEC:-3600}",
         TASK_WORKDIR_RETENTION_HOURS: "${TASK_WORKDIR_RETENTION_HOURS:-72}",
+        TASK_REAP_INTERVAL_MS: "${TASK_REAP_INTERVAL_MS:-10000}",
       }
     networks: [control]
     restart: unless-stopped
@@ -260,7 +273,11 @@ services:
   egress-proxy:
     build: { context: ., dockerfile: packages/egress-proxy/Dockerfile }
     volumes: ["${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json:ro"]
-    environment: { KERNEL_URL: http://kernel:8080, NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL:?}", NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}", SOURCE_MAP_FILE: /data/config/egress-sources.json, EGRESS_TRUSTED_RESOLVED_CIDRS: "${EGRESS_TRUSTED_RESOLVED_CIDRS:-}", EGRESS_DENY_HOST_SUFFIXES: "${EGRESS_DENY_HOST_SUFFIXES:-}" }
+    # EGRESS_DENY_UNKNOWN_SOURCE（fix/runtime-hardening，lane-6 review P2-7）：默认 fail-closed
+    # （代码内默认 true）——一个 SOURCE_MAP_FILE 里完全没有登记的来源 IP 直接 403，不再和"已登记但无
+    # allow/deny 限制"的来源一样按公网放行处理。只在 SOURCE_MAP_FILE 登记本身不可靠（worker-
+    # supervisor 的 resident-service.ts 记录过的 EACCES 一类主机权限问题）时临时设成 0 作为逃生舱。
+    environment: { KERNEL_URL: http://kernel:8080, NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL:?}", NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}", SOURCE_MAP_FILE: /data/config/egress-sources.json, EGRESS_TRUSTED_RESOLVED_CIDRS: "${EGRESS_TRUSTED_RESOLVED_CIDRS:-}", EGRESS_DENY_HOST_SUFFIXES: "${EGRESS_DENY_HOST_SUFFIXES:-}", EGRESS_DENY_UNKNOWN_SOURCE: "${EGRESS_DENY_UNKNOWN_SOURCE:-1}" }
     # internal_token（fix/internal-plane-auth）：egress 上报（POST /internal/egress）要带它——见
     # kernel 服务块自己的注释。
     secrets: [internal_token]

@@ -18,10 +18,16 @@
  *   POST /task/:workerRunId/terminate -> 204 | 404
  *   GET  /task/:workerRunId         -> 200 TaskStatus | 404
  *
- * Trust boundary: same as agent-host's client — `control`-network-only, no auth of its own (see
- * worker-supervisor's own doc comment: "same auth model as agent-host: trusted caller, no separate
- * auth"). This client's own secret is the `capabilityHandle` string it forwards in `spawn`'s body,
- * which — like agent-host's client — it never logs.
+ * Trust boundary (lane-6 review follow-up, 2026-09 — supersedes the "no auth of its own" note this
+ * doc comment used to carry): `worker-supervisor`'s `POST /task/spawn` now requires the
+ * internal-plane shared secret (`packages/worker-supervisor/src/internal-auth.ts`) — this client
+ * sends it as `Authorization: Bearer <authorizationHeader>` (already the full header value, e.g.
+ * `@nexttime/shared`'s `internalAuthorizationHeader(token)`) on every request it makes, not only
+ * the currently-guarded `spawn`, so it never needs revisiting if `terminate`/`status` are ever
+ * guarded too. `index.ts`'s `createBackgroundServices` reuses the exact token `main()` already
+ * loads via `loadInternalToken()` for the kernel's own `/internal/*` guard — no second env var, no
+ * second file read. This client's own other secret is the `capabilityHandle` string it forwards in
+ * `spawn`'s body, which — like the internal-plane token — it never logs.
  */
 
 export const DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS = 30_000;
@@ -33,6 +39,12 @@ export interface SupervisorClientOptions {
   readonly timeoutMs?: number;
   /** Injectable `fetch` implementation, for tests. Defaults to the global `fetch`. */
   readonly fetchImpl?: typeof fetch;
+  /** The full `Authorization` header value for worker-supervisor's internal-plane guard — e.g.
+   *  `internalAuthorizationHeader(token)` from `@nexttime/shared` (`"Bearer <token>"`). Sent on
+   *  every request this client makes; `undefined` sends none (only safe when the guard itself is
+   *  unconfigured, e.g. some unit tests against a fake worker-supervisor — never in production,
+   *  where `POST /task/spawn` would otherwise 401). Never logged. */
+  readonly authorizationHeader?: string;
 }
 
 export type TaskSupervisorErrorKind =
@@ -180,11 +192,16 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
   private readonly supervisorUrl: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly authHeaders: Record<string, string>;
 
   constructor(options: SupervisorClientOptions) {
     this.supervisorUrl = options.supervisorUrl.replace(/\/$/, '');
     this.timeoutMs = options.timeoutMs ?? DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.authHeaders =
+      options.authorizationHeader !== undefined
+        ? { authorization: options.authorizationHeader }
+        : {};
   }
 
   async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
@@ -194,7 +211,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       `${this.supervisorUrl}/task/spawn`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...this.authHeaders },
         body: JSON.stringify(input),
       },
     );
@@ -227,7 +244,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/task/${encodeURIComponent(workerRunId)}/terminate`,
-      { method: 'POST' },
+      { method: 'POST', headers: { ...this.authHeaders } },
     );
     if (status === 404) return false;
     if (status !== 204) {
@@ -245,7 +262,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       this.fetchImpl,
       this.timeoutMs,
       `${this.supervisorUrl}/task/${encodeURIComponent(workerRunId)}`,
-      { method: 'GET' },
+      { method: 'GET', headers: { ...this.authHeaders } },
     );
     if (status === 404) return undefined;
     if (status !== 200) {

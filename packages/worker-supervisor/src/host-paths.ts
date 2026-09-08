@@ -111,12 +111,3 @@ export function taskWorkspacePaths(config: SupervisorConfig, taskId: string): Ta
 export function localTaskWorkspacesRootDir(config: SupervisorConfig): string {
   return `${config.localDataDir}/workspaces/tasks`;
 }
-
-/** Bind-mount target for one `skills[]` entry inside the container (`task-spawn-spec.ts`):
- *  `<agentDir>/skills/<name>` — pi 0.84.4's own default global-skills directory
- *  (`packages/coding-agent/src/core/skills.ts` `loadSkills`: `join(resolvedAgentDir, 'skills')`),
- *  verified against the pinned reference checkout, not a guess — see `TaskPaths`'s doc comment for
- *  why `resolvedAgentDir` lands at `piAgentDirInContainer` without `PI_CODING_AGENT_DIR` being set. */
-export function taskSkillTargetInContainer(paths: TaskPaths, skillName: string): string {
-  return `${paths.skillsDirInContainer}/${skillName}`;
-}

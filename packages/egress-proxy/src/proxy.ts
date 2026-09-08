@@ -3,7 +3,7 @@ import http from 'node:http';
 import net from 'node:net';
 import type { Socket } from 'node:net';
 import type { CidrRange } from './net-utils.js';
-import { normalizeAddress } from './net-utils.js';
+import { canonicalizeIpLiteral, normalizeAddress } from './net-utils.js';
 import type { PolicyConfig, PolicyDecision, Resolver, SourcePolicy } from './policy.js';
 import { decideEgress } from './policy.js';
 import type { EgressObservation } from './report.js';
@@ -26,6 +26,11 @@ export interface ProxyServerOptions {
   trustedResolvedCidrs?: readonly CidrRange[];
   /** Test-only: see policy.ts `PolicyConfig.allowLoopbackForTests`. Never set in production. */
   allowLoopbackForTests?: boolean;
+  /** See policy.ts `PolicyConfig.denyUnknownSource` (`EGRESS_DENY_UNKNOWN_SOURCE`, config.ts) —
+   *  `undefined` here defaults to `true` (fail-closed), same as `config.ts`'s own default, so a
+   *  caller constructing this directly (e.g. a test) gets the secure behavior without having to
+   *  know the flag exists. */
+  denyUnknownSource?: boolean;
   resolveSource: (clientIp: string) => SourcePolicy | undefined;
   /** Injectable DNS resolver for tests. Defaults to a literal-IP shortcut + `dns.promises.lookup`. */
   resolveHost?: Resolver;
@@ -36,7 +41,13 @@ export interface ProxyServerOptions {
 }
 
 async function defaultResolveHost(hostname: string): Promise<string[]> {
-  if (net.isIP(hostname)) return [hostname];
+  // `canonicalizeIpLiteral` (not just `net.isIP`) so an alternate-notation literal (decimal/hex/
+  // octal/short dotted forms — net-utils.ts `parseIPv4Literal`'s own doc comment) is resolved to
+  // its real address deterministically by this proxy's own logic, rather than depending on
+  // whether the OS resolver happens to interpret the same numeric "hostname" the same way
+  // (lane-6 review P3 — a documented SSRF bypass class otherwise).
+  const literal = canonicalizeIpLiteral(hostname);
+  if (literal) return [literal];
   const results = await dns.promises.lookup(hostname, { all: true, verbatim: true });
   return results.map((r) => r.address);
 }
@@ -66,6 +77,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
     platformSubnets: options.platformSubnets,
     trustedResolvedCidrs: options.trustedResolvedCidrs,
     allowLoopbackForTests: options.allowLoopbackForTests,
+    denyUnknownSource: options.denyUnknownSource ?? true,
   };
 
   // Per-source concurrent-tunnel accounting (design doc §7.9 task spec: MAX_TUNNELS_PER_SOURCE).

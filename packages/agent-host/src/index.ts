@@ -112,7 +112,7 @@ export function main(): void {
   const instanceId = randomUUID();
   const log = (line: string): void => console.error(line);
 
-  const supervisorClient = new SupervisorClient({ supervisorUrl });
+  const supervisorClient = new SupervisorClient({ supervisorUrl, authorizationHeader });
   const containerIoClient = createContainerIoClient({ dockerSocketPath });
 
   // Chicken-and-egg: kernelLink needs callbacks that call into `host`, but `host` needs

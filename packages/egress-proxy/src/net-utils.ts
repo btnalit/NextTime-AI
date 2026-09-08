@@ -11,6 +11,15 @@
  * Numeric range checks never spell the literal out, so the guard and the policy coexist cleanly.
  * The platform subnets (`NEXTTIME_SUBNET_CONTROL`/`WORKERS`) are only ever CIDR strings that
  * arrive at runtime via env vars, so `parseCidr`/`isInCidr` below is safe to keep general.
+ *
+ * Two hardening additions (lane-6 review P3), both closing gaps between what this proxy's own
+ * *strict* parsers recognized and what a real resolver/HTTP client stack does: `parseIPv4Literal`/
+ * `isIpLiteral`/`canonicalizeIpLiteral` recognize every legacy `inet_aton`-compatible IPv4
+ * notation (decimal, hex, octal, short dotted forms) as a literal address, not just dotted-quad —
+ * see `parseIPv4Literal`'s own doc comment for the SSRF-bypass class this closes. `classifyAddress`
+ * unwraps a NAT64 `64:ff9b::/96` address (RFC 6052) to its embedded IPv4 address before
+ * classifying, instead of treating every NAT64-synthesized address as `'public'` regardless of
+ * what it actually points at.
  */
 
 export type AddressFamily = 4 | 6;
@@ -46,6 +55,97 @@ export function parseIPv4(input: string): [number, number, number, number] | nul
   return octets as [number, number, number, number];
 }
 
+/** One `inet_aton`-style dotted-part: decimal, `0x`-prefixed hex, or leading-zero octal — the
+ *  same three notations `parseIPv4Literal` below decomposes an address into. `null` for anything
+ *  else (including a leading `+`/`-`, which `Number.parseInt` would otherwise silently accept). */
+function parseAtonPart(part: string): number | null {
+  let value: number;
+  if (/^0[xX][0-9a-fA-F]+$/.test(part)) {
+    value = Number.parseInt(part.slice(2), 16);
+  } else if (/^0[0-7]+$/.test(part)) {
+    value = Number.parseInt(part, 8);
+  } else if (/^(0|[1-9]\d*)$/.test(part)) {
+    value = Number.parseInt(part, 10);
+  } else {
+    return null;
+  }
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Parses every legacy `inet_aton`-compatible IPv4 literal notation `parseIPv4` (strict dotted-
+ * quad only) does not: decimal (`2130706433`), hexadecimal (`0x7f000001`), octal (a part with a
+ * leading `0`, e.g. `0177.0.0.1`), and short dotted forms (`a`, `a.b`, `a.b.c` — the last part
+ * absorbs the octets a full dotted-quad would otherwise need, exactly as BSD `inet_aton` and the
+ * `getaddrinfo`/`inet_pton` family many HTTP clients and resolvers still fall back to for a
+ * "hostname" that looks numeric). Individual parts may mix notations (`0x7f.0.0.1` is valid).
+ *
+ * This exists to close a well-documented SSRF bypass class (see e.g. the PayloadsAllTheThings
+ * SSRF cheat sheet's "IP address" section): a policy that only recognizes strict dotted-quad as
+ * "this is a literal IP address" can be fooled into treating one of these forms as an opaque
+ * hostname needing DNS resolution — `policy.ts`'s `decideEgress` uses this (via `isIpLiteral`
+ * below) so, e.g., a caller can never bypass its "a literal IP into `trustedResolvedCidrs` is
+ * still denied" rule (`PolicyConfig.trustedResolvedCidrs`'s own doc comment) by spelling the
+ * target in a form the strict parser doesn't recognize as literal.
+ */
+export function parseIPv4Literal(input: string): [number, number, number, number] | null {
+  const strict = parseIPv4(input);
+  if (strict) return strict;
+  if (input.length === 0) return null;
+
+  const parts = input.split('.');
+  if (parts.length > 4) return null;
+
+  const values: number[] = [];
+  for (const part of parts) {
+    const value = parseAtonPart(part);
+    if (value === null) return null;
+    values.push(value);
+  }
+
+  const n = values.length;
+  // Every part but the last must fit in one octet; the last absorbs whatever bit width remains
+  // (32 bits total, 8 bits per non-last part).
+  for (let i = 0; i < n - 1; i++) {
+    if ((values[i] as number) > 0xff) return null;
+  }
+  const lastMax = 2 ** (8 * (4 - (n - 1))) - 1; // n=1 -> 2^32-1, n=2 -> 2^24-1, ..., n=4 -> 2^8-1
+  const lastValue = values[n - 1] as number;
+  if (lastValue > lastMax) return null;
+
+  let total = lastValue;
+  for (let i = 0; i < n - 1; i++) {
+    total += (values[i] as number) * 2 ** (8 * (4 - 1 - i));
+  }
+  if (total > 0xffffffff) return null;
+
+  return [
+    Math.floor(total / 16777216) % 256,
+    Math.floor(total / 65536) % 256,
+    Math.floor(total / 256) % 256,
+    total % 256,
+  ];
+}
+
+/** Whether `input` is any IP literal this proxy must treat as "already an address, not a
+ *  hostname to resolve": strict dotted-quad/colon-hex (`parseIPv4`/`parseIPv6`) plus every
+ *  `inet_aton`-compatible alternate IPv4 form `parseIPv4Literal` recognizes. */
+export function isIpLiteral(input: string): boolean {
+  return parseIPv4Literal(input) !== null || parseIPv6(input) !== null;
+}
+
+/**
+ * Canonical form of `input` when it's any recognized IP literal (`isIpLiteral`), else `null`.
+ * `proxy.ts`'s default resolver uses this to short-circuit an alternate-notation literal straight
+ * to its dotted-quad form instead of asking the OS resolver to interpret a numeric "hostname" it
+ * may or may not handle the same way this proxy's own policy does.
+ */
+export function canonicalizeIpLiteral(input: string): string | null {
+  const v4 = parseIPv4Literal(input);
+  if (v4) return v4.join('.');
+  return parseIPv6(input) !== null ? input : null;
+}
+
 /**
  * Parse an IPv6 address (including `::` compression and a trailing embedded IPv4 tail, e.g.
  * `::ffff:127.0.0.1`) into its eight 16-bit groups, or `null` if malformed. Zone IDs (`%eth0`)
@@ -62,7 +162,12 @@ export function parseIPv6(input: string): number[] | null {
     if (!v4) return null;
     v4Tail = [((v4[0] << 8) | v4[1]) >>> 0, ((v4[2] << 8) | v4[3]) >>> 0];
     head = withoutZone.slice(0, withoutZone.length - embedded[1].length);
-    if (head.endsWith(':')) head = head.slice(0, -1);
+    // Strip the single ':' separator between the last hex group and the embedded quad (e.g.
+    // "::ffff:127.0.0.1" -> head "::ffff:" -> "::ffff") — but never when that would eat into the
+    // "::" compression marker itself (lane-6 review P3, found writing a NAT64 test case: "64:
+    // ff9b::127.0.0.1" -> naively stripping one trailing ':' from "64:ff9b::" turns it into
+    // "64:ff9b:", corrupting the "::" into a single colon and making the address unparseable).
+    if (head.endsWith(':') && !head.endsWith('::')) head = head.slice(0, -1);
   }
 
   const sides = head.split('::');
@@ -152,6 +257,26 @@ function isUniqueLocalV6(groups: readonly number[]): boolean {
   return (groups[0] ?? 0) >>> 9 === 0b1111110;
 }
 
+/** RFC 6052's "Well-Known Prefix" `64:ff9b::/96` — NAT64 synthesizes an IPv6 address for an IPv4
+ *  destination by embedding the full 32-bit IPv4 address in the low 32 bits under this fixed
+ *  96-bit prefix. `classifyAddress` below unwraps it and re-classifies using the *embedded* IPv4
+ *  address, instead of falling through to `'public'` for every NAT64-synthesized address
+ *  regardless of what it actually points at (lane-6 review P3: an embedded RFC1918/loopback/CGNAT
+ *  address was previously classified `'public'`, since none of the v6-specific checks above ever
+ *  matched a NAT64 address's actual bit pattern). */
+const NAT64_WELL_KNOWN_PREFIX = [0x0064, 0xff9b, 0, 0, 0, 0] as const;
+
+/** Extracts the embedded IPv4 address from a `64:ff9b::/96` NAT64 address's last two 16-bit
+ *  groups, or `null` when `groups` isn't in that prefix at all. */
+function nat64EmbeddedV4(groups: readonly number[]): [number, number, number, number] | null {
+  for (let i = 0; i < NAT64_WELL_KNOWN_PREFIX.length; i++) {
+    if ((groups[i] ?? -1) !== NAT64_WELL_KNOWN_PREFIX[i]) return null;
+  }
+  const g6 = groups[6] ?? 0;
+  const g7 = groups[7] ?? 0;
+  return [g6 >>> 8, g6 & 0xff, g7 >>> 8, g7 & 0xff];
+}
+
 function ipv4ToBigInt(octets: readonly [number, number, number, number]): bigint {
   return octets.reduce((acc, o) => (acc << 8n) | BigInt(o), 0n);
 }
@@ -227,6 +352,19 @@ export function classifyAddress(
     if (isLoopbackV6(v6)) return 'loopback';
     if (isLinkLocalV6(v6)) return 'link-local';
     if (isUniqueLocalV6(v6)) return 'unique-local-v6';
+
+    const nat64V4 = nat64EmbeddedV4(v6);
+    if (nat64V4) {
+      const embeddedDotted = nat64V4.join('.');
+      for (const subnet of platformSubnets) {
+        if (subnet.family === 4 && isInCidr(embeddedDotted, subnet)) return 'platform-subnet';
+      }
+      if (isLoopbackV4(nat64V4)) return 'loopback';
+      if (isLinkLocalV4(nat64V4)) return 'link-local';
+      if (isRfc1918V4(nat64V4)) return 'rfc1918';
+      if (isCgnatV4(nat64V4)) return 'cgnat';
+      // A NAT64-embedded address that's itself public is legitimately public — fall through.
+    }
     return 'public';
   }
 

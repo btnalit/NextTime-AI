@@ -15,7 +15,6 @@
  * actually needs.
  */
 
-import { posix as posixPath } from 'node:path';
 import { z } from 'zod';
 
 export const DEFAULT_SUPERVISOR_PORT = 8081;
@@ -24,6 +23,25 @@ function parseIntEnv(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Same contract as `parseIntEnv` but for a fractional value (`WORKER_CPUS`, e.g. `1.5`). */
+function parseFloatEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** `WORKER_DNS_SINKHOLE`: comma-separated DNS server IPs, or `undefined` when unset — Docker's
+ *  own embedded DNS applies unchanged in that case (see `SupervisorConfig.workerDnsSinkhole`'s
+ *  own doc comment). Blank/whitespace-only entries are dropped; an all-blank value (`","`, `" "`)
+ *  is treated the same as unset rather than passing an empty `HostConfig.Dns` array through. */
+function parseDnsSinkholeEnv(value: string | undefined): string[] | undefined {
+  const entries = (value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return entries.length > 0 ? entries : undefined;
 }
 
 function buildTaskImageAllowlist(raw: string | undefined, defaultImage: string): string[] {
@@ -40,7 +58,13 @@ export interface SupervisorConfig {
   /** Image name (and optional tag/digest) the resident containers are spawned from — built by
    *  `docker compose build worker-runtime` (deploy/worker-runtime/Dockerfile), never pulled. */
   readonly workerImage: string;
-  /** `--runtime` for spawned containers: `runsc` (gVisor, default) or `runc` (E1 fallback). */
+  /** `--runtime` for spawned containers: `runsc` (gVisor) or `runc`. **This process's own code
+   *  default (`loadConfig` below, when `WORKER_RUNTIME` is unset) is `runc`**, not `runsc` — the
+   *  conservative choice that works on any host, gVisor or not (lane-6 review P3: an earlier
+   *  version of this comment claimed `runsc` was "the default", which was never true of the code,
+   *  only of `.env.example`'s own explicit `WORKER_RUNTIME=runsc` line — see that file's own
+   *  comment for why it deliberately overrides this fallback once gVisor has been verified
+   *  working on the target host, docs/development-tasks.md E1). */
   readonly workerRuntime: string;
   /** Host-side `${NEXTTIME_DATA}` — see this file's own doc comment above. Required; the process
    *  refuses to start without it (a misconfigured value would silently bind-mount the wrong host
@@ -66,6 +90,22 @@ export interface SupervisorConfig {
   readonly workerMemoryMb: number;
   readonly workerPidsLimit: number;
   readonly workerTmpfsMb: number;
+  /** `--cpus` equivalent for every spawned container (`WORKER_CPUS`, fractional — e.g. `1.5`),
+   *  mapped to Docker's `HostConfig.NanoCpus` in `docker-client.ts`. Lane-6 review P3: previously
+   *  unset entirely, meaning a spawned container had no CPU ceiling at all and could monopolize
+   *  every core on the host — `Memory`/`PidsLimit`/`Tmpfs` were already bounded, this was the one
+   *  resource dimension left unbounded. */
+  readonly workerCpus: number;
+  /** `HostConfig.Dns` for every spawned container (`WORKER_DNS_SINKHOLE`, comma-separated IPs) —
+   *  lane-6 review P3 / the isolation checklist's own "LAN: P2-8 DNS" gap: Docker's embedded DNS
+   *  (127.0.0.11) recurses out through the host's own resolver for any name it doesn't own
+   *  itself, which is a potential covert egress channel for a compromised container on the
+   *  otherwise `internal: true` `workers` network — HTTP(S) egress goes through egress-proxy's
+   *  policy, but a DNS query does not. Unset by default (Docker's own embedded DNS, unchanged
+   *  behavior) — this only gives an operator the *mechanism* to point every spawned container at
+   *  a monitoring/sinkhole resolver instead; verifying that in practice (e.g. with `getent`) is
+   *  host-verification work this fix does not do, see the isolation checklist note this addresses. */
+  readonly workerDnsSinkhole: readonly string[] | undefined;
   readonly entryIdleTimeoutMs: number;
   /** Path (in this container's own filesystem — `localDataDir`-relative) to the `SOURCE_MAP_FILE`
    *  `@nexttime/egress-proxy` hot-reloads (its `source-map.ts`) — this is the "documented
@@ -80,6 +120,15 @@ export interface SupervisorConfig {
   /** How long a finished Task's workspace directory is kept as an artifact before the retention
    *  sweep deletes it (`TASK_WORKDIR_RETENTION_HOURS`). */
   readonly taskWorkdirRetentionHours: number;
+  /** How often `index.ts`'s reap timer runs (`TASK_REAP_INTERVAL_MS`) — kills timed-out Task
+   *  containers and, via `task-service.ts`'s `reconcileOne`, notices and unregisters egress for
+   *  any Task container that exited on its own since the last tick. Lane-6 review P2-7: a longer
+   *  interval widens the window during which a Docker-assigned IP the reaper hasn't yet noticed
+   *  was released could be reused for an unrelated container, misattributing its egress to the
+   *  just-exited Task's `sourceId` — shortened from a fixed 30s to a configurable default of 10s
+   *  as a bounded mitigation (the review's own "or at reap with a shorter interval" alternative to
+   *  event-driven unregistration via Docker's own event stream, which this fix does not add). */
+  readonly taskReapIntervalMs: number;
   /** Images `POST /task/spawn` may spawn: always includes `workerImage`, plus any comma-separated
    *  extras from `WORKER_IMAGE_ALLOWLIST`. Additive (not a replacement) so setting the override
    *  can never accidentally lock out the default image resident mode already trusts. */
@@ -114,11 +163,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     workerMemoryMb: parseIntEnv(env.WORKER_MEMORY_MB, 2048),
     workerPidsLimit: parseIntEnv(env.WORKER_PIDS_LIMIT, 512),
     workerTmpfsMb: parseIntEnv(env.WORKER_TMPFS_MB, 512),
+    workerCpus: parseFloatEnv(env.WORKER_CPUS, 2),
+    workerDnsSinkhole: parseDnsSinkholeEnv(env.WORKER_DNS_SINKHOLE),
     entryIdleTimeoutMs: parseIntEnv(env.ENTRY_IDLE_TIMEOUT_MS, 30 * 60 * 1000),
     egressSourceMapFile: env.EGRESS_SOURCE_MAP_FILE ?? `${localDataDir}/config/egress-sources.json`,
     dockerSocketPath: env.DOCKER_SOCKET_PATH ?? '/var/run/docker.sock',
     taskMaxRuntimeSec: parseIntEnv(env.TASK_MAX_RUNTIME_SEC, 3600),
     taskWorkdirRetentionHours: parseIntEnv(env.TASK_WORKDIR_RETENTION_HOURS, 72),
+    taskReapIntervalMs: parseIntEnv(env.TASK_REAP_INTERVAL_MS, 10_000),
     taskImageAllowlist: buildTaskImageAllowlist(env.WORKER_IMAGE_ALLOWLIST, workerImage),
   };
 }
@@ -169,19 +221,6 @@ export const StopRequestSchema = z
   .strict();
 export type StopRequest = z.infer<typeof StopRequestSchema>;
 
-/** A single skill mounted read-only into a Worker container (docs/development-tasks.md S2.8:
- *  "只读挂载 ... 该定义 `uses` 的 Skill"). `name` becomes a path segment
- *  (`task-spawn-spec.ts`/`host-paths.ts` `taskSkillTargetInContainer`) — restricted to a safe
- *  single segment so it can never escape the skills directory it's mounted under. */
-const TaskSkillSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/, 'must be a single safe path segment')
-    .refine((name) => name !== '.' && name !== '..', 'must not be "." or ".."'),
-  hostPath: z.string().min(1),
-});
-
 /** A single skill mounted by *content*, not a host path (S2.14; docs/development-tasks.md S2.14
  *  deliverable 4: "extend the supervisor Task spawn API additively with `skillsInline?: [{name,
  *  files: {"SKILL.md": string, ...}}]`"). The kernel has no writable data mount of its own
@@ -191,16 +230,25 @@ const TaskSkillSchema = z.object({
  *  under the Task's own workspace directory before the container starts — no bind mount needed,
  *  the whole Task workspace is already bind-mounted at `/workspace`.
  *
- * `name` reuses the exact same safe-single-path-segment rule as `TaskSkillSchema.name` above (not
- * refactored into a shared schema — the two are validated independently by design, so a future
- * change to one's rule does not silently change the other's). Each entry in `files` becomes
- * `<agentDir>/skills/<name>/<fileName>` (`host-paths.ts` `taskSkillTargetInContainer` — same target
- * directory the host-path variant mounts to, just populated by writing instead of bind-mounting);
- * `fileName` must be a safe relative path (`isSafeSkillInlineFileName` below) — no leading `/`, no
- * `.`/`..` path segments, so it can never escape the skill's own directory. Every entry must
- * include a `"SKILL.md"` file (pi's own required entry point, `docs/skills.md` "Skill Structure")
- * — `application/worker/skills.ts`'s `renderSkillMarkdownFile` (kernel) is the one place that
- * produces this shape today. Per-file and total-payload size caps
+ * This is now the *only* way a spawn request can put a Skill into a Worker container — the
+ * earlier host-path variant (`skills[].hostPath`, a caller-supplied absolute path this process
+ * bind-mounted read-only) was removed (lane-6 review P1-3): it had been dead since this
+ * `skillsInline` variant shipped (the kernel only ever sends `skillsInline`, never `skills`), and
+ * its allowlist — any path under `${NEXTTIME_DATA}/`, not just a `skills/` subtree — let any
+ * caller of this unauthenticated-until-now API mount `secrets/handle.key` (the Handle signing
+ * key, 0640 group-readable by the Worker uid) or any other user's workspace read-only into a
+ * Worker container. Closed by deleting the feature rather than narrowing the allowlist: nothing
+ * in this codebase ever sent `skills[]`, so there was no behavior to preserve. See `server.ts`'s
+ * internal-plane-auth guard (`internal-auth.ts`) for the other half of P1-3 — `POST /task/spawn`
+ * itself is no longer reachable without the shared secret either.
+ *
+ * `name` must be a safe single path segment — `isSafeSkillInlineFileName` below applies the
+ * matching rule to `fileName`. Each entry in `files` becomes `<agentDir>/skills/<name>/<fileName>`
+ * (`host-paths.ts`'s `TaskPaths.skillsDirInContainer`); `fileName` must be a safe relative path —
+ * no leading `/`, no `.`/`..` path segments, so it can never escape the skill's own directory.
+ * Every entry must include a `"SKILL.md"` file (pi's own required entry point, `docs/skills.md`
+ * "Skill Structure") — `application/worker/skills.ts`'s `renderSkillMarkdownFile` (kernel) is the
+ * one place that produces this shape today. Per-file and total-payload size caps
  * (`MAX_SKILL_INLINE_FILE_BYTES`/`MAX_SKILL_INLINE_TOTAL_BYTES`) bound how much a single spawn
  * request can make this process write to disk. */
 export const MAX_SKILL_INLINE_FILE_BYTES = 512 * 1024;
@@ -289,32 +337,9 @@ export const TaskSpawnRequestSchema = z
     capabilityHandle: z.string().min(1),
     image: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
-    skills: z.array(TaskSkillSchema).optional(),
     skillsInline: z.array(TaskSkillInlineSchema).optional(),
     timeoutSec: z.number().int().positive().optional(),
   })
   .strict();
 export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;
 export type TaskSkillInline = z.infer<typeof TaskSkillInlineSchema>;
-
-/** `skills[].hostPath` must resolve under this supervisor's own host data root
- *  (`${config.nextTimeData}/`) — otherwise a caller could mount an arbitrary host path (e.g.
- *  `/var/run/docker.sock`, `/etc`) read-only into a Worker container. `TaskSkillSchema` cannot
- *  enforce this itself (it has no access to `config`, and this package's Zod schemas are static,
- *  built once at module scope, matching every other schema in this file) — same pattern as
- *  `isImageAllowed` below: a small pure function, called by `server.ts` after the structural Zod
- *  parse succeeds, 400s the request if any skill fails it.
- *
- * `hostPath` must be absolute, and — after `path.posix.normalize` — contain no residual `..`
- * segment and lie at or under the normalized root. Both checks are applied even though, for an
- * absolute path, `posix.normalize` already resolves every resolvable `..` (an absolute path has no
- * parent above `/`, so `posix.normalize('/a/../../etc')` is `/etc`, never a string containing
- * `..`) — the explicit `..`-segment check is cheap, explicit defense-in-depth, not load-bearing on
- * its own; the root-prefix check is what actually rejects an escaped path like that example. */
-export function isSkillHostPathAllowed(config: SupervisorConfig, hostPath: string): boolean {
-  if (!hostPath.startsWith('/')) return false;
-  const normalized = posixPath.normalize(hostPath);
-  if (normalized.split('/').includes('..')) return false;
-  const root = posixPath.normalize(`${config.nextTimeData}/`);
-  return normalized === root.slice(0, -1) || normalized.startsWith(root);
-}

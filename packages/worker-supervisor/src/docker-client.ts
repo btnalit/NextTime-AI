@@ -30,10 +30,20 @@ export interface ContainerSpec {
   readonly memoryMb: number;
   readonly pidsLimit: number;
   readonly tmpfsMb: number;
+  /** `--cpus` equivalent (fractional cores) — mapped to `HostConfig.NanoCpus`. Lane-6 review P3:
+   *  previously unset, so a spawned container had no CPU ceiling at all. */
+  readonly cpus: number;
   /** Container CMD, appended by `deploy/worker-runtime/entrypoint.sh`'s own `"$@"` after its
    *  fixed pi flags (e.g. `['--model', modelId]` — task-spawn-spec.ts). `undefined` runs the
    *  image's default CMD unmodified — resident mode's entry spec never sets this. */
   readonly cmd?: readonly string[];
+  /** `HostConfig.Dns` — DNS server IPs for this container, overriding Docker's own embedded DNS
+   *  (127.0.0.11). `undefined`/empty leaves Docker's default behavior unchanged. Lane-6 review P3
+   *  / isolation checklist "LAN: P2-8 DNS": gives an operator the mechanism to route a spawned
+   *  container's DNS through a monitoring/sinkhole resolver instead of Docker's own recursive
+   *  default — see `config.ts`'s `SupervisorConfig.workerDnsSinkhole` doc comment for why this
+   *  matters (a potential covert egress channel egress-proxy's HTTP(S)-only policy doesn't cover). */
+  readonly dns?: readonly string[];
 }
 
 export interface ContainerState {
@@ -124,10 +134,20 @@ export function createDockerClient(options: CreateDockerClientOptions): DockerCl
           ReadonlyRootfs: true,
           Tmpfs: { '/tmp': `size=${spec.tmpfsMb}m` },
           Memory: spec.memoryMb * 1024 * 1024,
+          // Lane-6 review P3: without an explicit MemorySwap, Docker defaults it to 2x Memory —
+          // a container could use up to twice its stated memory limit via swap. Setting it equal
+          // to Memory caps total memory+swap at exactly the configured limit (no extra swap).
+          MemorySwap: spec.memoryMb * 1024 * 1024,
+          // Lane-6 review P3: previously no CPU ceiling at all — Memory/PidsLimit/Tmpfs were
+          // already bounded, CPU was the one resource dimension left unlimited. NanoCpus (Docker's
+          // simplified CPU-limit field, mutually exclusive with CpuQuota/CpuPeriod) avoids the
+          // period/quota unit arithmetic for the same effect.
+          NanoCpus: Math.round(spec.cpus * 1_000_000_000),
           PidsLimit: spec.pidsLimit,
           NetworkMode: spec.networkName,
           RestartPolicy: { Name: 'no' },
           Runtime: spec.runtime,
+          Dns: spec.dns && spec.dns.length > 0 ? [...spec.dns] : undefined,
         },
       });
       await container.start();

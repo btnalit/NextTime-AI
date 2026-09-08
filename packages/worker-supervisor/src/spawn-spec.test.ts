@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 import { buildSpawnSpec, entryContainerName } from './spawn-spec.js';
 
-const config = loadConfig({
+const configEnv = {
   NEXTTIME_DATA: '/host/data',
   LOCAL_DATA_DIR: '/data',
   WORKER_IMAGE: 'nexttime-ai-worker-runtime',
@@ -12,7 +12,8 @@ const config = loadConfig({
   WORKER_MEMORY_MB: '2048',
   WORKER_PIDS_LIMIT: '512',
   WORKER_TMPFS_MB: '512',
-});
+};
+const config = loadConfig(configEnv);
 
 describe('entryContainerName', () => {
   it('names the container after the principal', () => {
@@ -102,6 +103,35 @@ describe('buildSpawnSpec', () => {
     expect(spec.memoryMb).toBe(2048);
     expect(spec.pidsLimit).toBe(512);
     expect(spec.tmpfsMb).toBe(512);
+    expect(spec.cpus).toBe(2); // WORKER_CPUS default (P3)
+  });
+
+  it('carries WORKER_CPUS through when set', () => {
+    const withCpus = buildSpawnSpec({
+      config: loadConfig({ ...configEnv, WORKER_CPUS: '1.5' }),
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      networkName: 'workers',
+      restarts: 0,
+    });
+    expect(withCpus.cpus).toBe(1.5);
+  });
+
+  it('leaves dns undefined by default (WORKER_DNS_SINKHOLE unset — Docker’s own embedded DNS applies)', () => {
+    expect(spec.dns).toBeUndefined();
+  });
+
+  it('carries WORKER_DNS_SINKHOLE through as dns when set (P3 — documented and tested at spec level)', () => {
+    const withDns = buildSpawnSpec({
+      config: loadConfig({ ...configEnv, WORKER_DNS_SINKHOLE: '198.51.100.53, 198.51.100.54 ' }),
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      networkName: 'workers',
+      restarts: 0,
+    });
+    expect(withDns.dns).toEqual(['198.51.100.53', '198.51.100.54']);
   });
 
   it('labels the container for reconciliation and restart tracking', () => {
@@ -110,7 +140,21 @@ describe('buildSpawnSpec', () => {
       'nexttime.principal': 'alice',
       'nexttime.workspace': 'ws-1',
       'nexttime.restarts': '0',
+      'nexttime.handle-jti': '',
     });
+  });
+
+  it('stamps handleJti onto the label when given (P2-5 rotation detection)', () => {
+    const withJti = buildSpawnSpec({
+      config,
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      networkName: 'workers',
+      restarts: 0,
+      handleJti: 'the-jti-value',
+    });
+    expect(withJti.labels['nexttime.handle-jti']).toBe('the-jti-value');
   });
 
   it('carries forward a non-zero restarts count into the label', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 import { buildTaskSpawnSpec, taskContainerName } from './task-spawn-spec.js';
 
-const config = loadConfig({
+const configEnv = {
   NEXTTIME_DATA: '/host/data',
   LOCAL_DATA_DIR: '/data',
   WORKER_IMAGE: 'nexttime-ai-worker-runtime',
@@ -12,7 +12,8 @@ const config = loadConfig({
   WORKER_MEMORY_MB: '2048',
   WORKER_PIDS_LIMIT: '512',
   WORKER_TMPFS_MB: '512',
-});
+};
+const config = loadConfig(configEnv);
 
 describe('taskContainerName', () => {
   it('names the container after the workerRunId (not the taskId)', () => {
@@ -110,31 +111,6 @@ describe('buildTaskSpawnSpec', () => {
     ]);
   });
 
-  it('mounts each skill read-only under the agent skills directory, by name', () => {
-    const withSkills = buildTaskSpawnSpec({
-      config,
-      taskId: 'task-1',
-      workerRunId: 'run-1',
-      workspaceId: 'ws-1',
-      capabilityHandle: 'h',
-      image: 'nexttime-ai-worker-runtime',
-      networkName: 'workers',
-      skills: [
-        {
-          name: 'ops-assets-inventory',
-          hostPath: '/host/data/ontology/ops-assets/skills/inventory',
-        },
-        { name: 'report-writer', hostPath: '/host/data/ontology/ops-assets/skills/report-writer' },
-      ],
-    });
-    expect(withSkills.binds).toEqual([
-      '/host/data/workspaces/tasks/task-1:/workspace',
-      '/host/data/config/models.json:/workspace/.pi/agent/models.json:ro',
-      '/host/data/ontology/ops-assets/skills/inventory:/workspace/.pi/agent/skills/ops-assets-inventory:ro',
-      '/host/data/ontology/ops-assets/skills/report-writer:/workspace/.pi/agent/skills/report-writer:ro',
-    ]);
-  });
-
   it('sets no CMD when model is omitted', () => {
     expect(spec.cmd).toBeUndefined();
   });
@@ -157,6 +133,37 @@ describe('buildTaskSpawnSpec', () => {
     expect(spec.memoryMb).toBe(2048);
     expect(spec.pidsLimit).toBe(512);
     expect(spec.tmpfsMb).toBe(512);
+    expect(spec.cpus).toBe(2); // WORKER_CPUS default (P3)
+  });
+
+  it('carries WORKER_CPUS through when set', () => {
+    const withCpus = buildTaskSpawnSpec({
+      config: loadConfig({ ...configEnv, WORKER_CPUS: '0.5' }),
+      taskId: 'task-1',
+      workerRunId: 'run-1',
+      workspaceId: 'ws-1',
+      capabilityHandle: 'h',
+      image: 'nexttime-ai-worker-runtime',
+      networkName: 'workers',
+    });
+    expect(withCpus.cpus).toBe(0.5);
+  });
+
+  it('leaves dns undefined by default (WORKER_DNS_SINKHOLE unset)', () => {
+    expect(spec.dns).toBeUndefined();
+  });
+
+  it('carries WORKER_DNS_SINKHOLE through as dns when set (P3 — documented and tested at spec level)', () => {
+    const withDns = buildTaskSpawnSpec({
+      config: loadConfig({ ...configEnv, WORKER_DNS_SINKHOLE: '198.51.100.53,198.51.100.54' }),
+      taskId: 'task-1',
+      workerRunId: 'run-1',
+      workspaceId: 'ws-1',
+      capabilityHandle: 'h',
+      image: 'nexttime-ai-worker-runtime',
+      networkName: 'workers',
+    });
+    expect(withDns.dns).toEqual(['198.51.100.53', '198.51.100.54']);
   });
 
   it('labels the container for reconciliation, role=worker (not entry)', () => {

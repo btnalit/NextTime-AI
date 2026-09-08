@@ -1,7 +1,7 @@
 import http from 'node:http';
 import type { HandleClaims } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
-import type { ProviderConfig } from './config.js';
+import type { ProviderApiKind, ProviderConfig } from './config.js';
 import { HandleAuthError, extractHandleToken, verifyInboundHandle } from './handle-auth.js';
 import type { LlmUsageRecord } from './report.js';
 import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } from './usage.js';
@@ -16,19 +16,41 @@ import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } 
  * Request flow: parse `<provider>` from the path → verify the Handle from the provider's
  * configured header (401 on missing/invalid/expired/revoked) → for `GET .../v1/models`,
  * synthesize the response from the provider's whitelist without ever calling upstream (never
- * leaks a non-whitelisted model id) → otherwise buffer the request body (capped) → parse it for
- * `model`/`stream`, 403 if `model` is set and not whitelisted, and — the one deliberate body
- * mutation (S1.7 task brief) — for an `openai-completions`/`openai-responses` streaming request,
- * force `stream_options.include_usage: true` so the final chunk carries usage → strip both
- * `authorization` and `x-api-key` from the forwarded headers (never let a client sneak a Handle
- * upstream through the header the provider *isn't* configured to use) and set the provider's
- * configured header to the real key from `process.env[api_key_env]` → forward to
- * `upstream_base_url` → stream the response back **byte-for-byte untouched** while a parallel,
- * non-mutating read extracts usage (usage.ts) → report the parsed usage (report.ts).
+ * leaks a non-whitelisted model id) → otherwise check the request against `ACTION_PATH_BY_API`
+ * (design/review lane-6 P1-2): exactly one (method, path) per provider `api` kind is forwardable
+ * — anything else (multipart uploads, files, fine-tuning, batches, DELETE, any other path) is
+ * rejected with 404/405 **without ever contacting upstream** — then buffer the request body
+ * (capped), require it to parse as a JSON object with a non-empty string `model` (400 otherwise —
+ * this proxy is JSON-only, no passthrough for opaque/non-JSON bodies), 403 if `model` is not
+ * whitelisted, and — the one deliberate body mutation (S1.7 task brief) — for an
+ * `openai-completions`/`openai-responses` streaming request, force `stream_options.include_usage:
+ * true` so the final chunk carries usage → strip both `authorization` and `x-api-key` from the
+ * forwarded headers (never let a client sneak a Handle upstream through the header the provider
+ * *isn't* configured to use) and set the provider's configured header to the real key from
+ * `process.env[api_key_env]` → forward to `upstream_base_url` → stream the response back
+ * **byte-for-byte untouched** while a parallel, non-mutating read extracts usage (usage.ts) →
+ * report the parsed usage (report.ts).
  *
  * Response bytes are never altered, streaming or not — only the outbound *request* body is ever
  * mutated, and only in the one case above.
  */
+
+/**
+ * The single forwardable (method, path) pair per provider `api` kind — everything else 404/405s
+ * before the request body is even read, let alone forwarded. `remainderPath` is the inbound path
+ * with the leading `/<provider>` segment already stripped (see `handleRequest` below), so this is
+ * exactly the suffix `gen-models-json.ts`'s `baseUrl` composition implies each `api` kind's SDK
+ * appends: `openai`'s SDK appends `/chat/completions` or `/responses` onto a `baseUrl` already
+ * ending in `/v1`; `@anthropic-ai/sdk` appends `/v1/messages` onto a bare origin. Multipart/file/
+ * batch/fine-tuning endpoints and any HTTP verb other than POST for these paths (e.g. DELETE) are
+ * deliberately absent — this proxy exists to forward one chat-completion shape per provider, not
+ * to be a general passthrough for whatever the provider account can otherwise do.
+ */
+const ACTION_PATH_BY_API: Readonly<Record<ProviderApiKind, string>> = {
+  'openai-completions': '/v1/chat/completions',
+  'openai-responses': '/v1/responses',
+  'anthropic-messages': '/v1/messages',
+};
 
 export class BodyTooLargeError extends Error {
   constructor(message: string) {
@@ -136,28 +158,38 @@ function respondModelsList(
 interface ParsedRequestBody {
   /** The exact bytes to forward upstream — identical to the inbound body unless mutated below. */
   readonly outboundBody: Buffer;
-  readonly modelId: string | undefined;
+  readonly modelId: string;
 }
 
-/** Parses the buffered request body as JSON (a no-op passthrough, `{outboundBody: raw, modelId:
- *  undefined}`, for an empty body or non-JSON content — GET requests carry no body at all).
- *  Applies the one deliberate mutation: for `openai-completions`/`openai-responses` with
- *  `stream: true`, forces `stream_options.include_usage = true`. */
-function parseAndMaybeMutateBody(raw: Buffer, provider: ProviderConfig): ParsedRequestBody {
-  if (raw.length === 0) return { outboundBody: raw, modelId: undefined };
+export class InvalidRequestBodyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidRequestBodyError';
+  }
+}
 
+/** Parses the buffered request body as JSON — this proxy is JSON-only for the one forwardable
+ *  action route per provider (see `ACTION_PATH_BY_API`); an empty body, non-JSON content, a
+ *  non-object body, or a missing/empty `model` field all throw `InvalidRequestBodyError` (400),
+ *  never silently pass through to upstream. Applies the one deliberate mutation once the body is
+ *  known-valid: for `openai-completions`/`openai-responses` with `stream: true`, forces
+ *  `stream_options.include_usage = true`. */
+function parseAndMaybeMutateBody(raw: Buffer, provider: ProviderConfig): ParsedRequestBody {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw.toString('utf8'));
+    parsed = raw.length > 0 ? JSON.parse(raw.toString('utf8')) : undefined;
   } catch {
-    return { outboundBody: raw, modelId: undefined };
+    throw new InvalidRequestBodyError('request body must be valid JSON');
   }
-  if (typeof parsed !== 'object' || parsed === null) {
-    return { outboundBody: raw, modelId: undefined };
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new InvalidRequestBodyError('request body must be a JSON object');
   }
 
   const obj = parsed as Record<string, unknown>;
-  const modelId = typeof obj.model === 'string' ? obj.model : undefined;
+  const modelId = obj.model;
+  if (typeof modelId !== 'string' || modelId.length === 0) {
+    throw new InvalidRequestBodyError('request body must set a non-empty string "model"');
+  }
   const isStreaming = obj.stream === true;
 
   if (provider.api !== 'anthropic-messages' && isStreaming) {
@@ -244,6 +276,21 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       return;
     }
 
+    // Allowlist: exactly one (method, path) is forwardable for this provider's `api` kind.
+    // Everything else — multipart uploads, files, fine-tuning, batches, DELETE, any other path —
+    // 404/405s here, before the body is even read, let alone forwarded upstream (P1-2).
+    const actionPath = ACTION_PATH_BY_API[provider.api];
+    if (remainderPath !== actionPath) {
+      sendJson(res, 404, { error: { code: 'not_found', message: 'not found' } });
+      return;
+    }
+    if (req.method !== 'POST') {
+      sendJson(res, 405, {
+        error: { code: 'method_not_allowed', message: 'method not allowed' },
+      });
+      return;
+    }
+
     let rawBody: Buffer;
     try {
       rawBody = await readBufferedBody(req, options.maxRequestBodyBytes);
@@ -257,9 +304,19 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       throw err;
     }
 
-    const { outboundBody, modelId } = parseAndMaybeMutateBody(rawBody, provider);
+    let outboundBody: Buffer;
+    let modelId: string;
+    try {
+      ({ outboundBody, modelId } = parseAndMaybeMutateBody(rawBody, provider));
+    } catch (err) {
+      if (err instanceof InvalidRequestBodyError) {
+        sendJson(res, 400, { error: { code: 'invalid_request_body', message: err.message } });
+        return;
+      }
+      throw err;
+    }
 
-    if (modelId !== undefined && !provider.models.some((model) => model.id === modelId)) {
+    if (!provider.models.some((model) => model.id === modelId)) {
       sendJson(res, 403, { error: { code: 'model_not_allowed', message: 'model not allowed' } });
       return;
     }

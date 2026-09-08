@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { IllegalTransition } from '@nexttime/shared';
+import { IllegalTransition, internalAuthorizationHeader } from '@nexttime/shared';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
@@ -295,6 +295,15 @@ export interface CreateBackgroundServicesOptions {
    * (tests).
    */
   readonly supervisorUrl?: string;
+  /**
+   * `Authorization` header value the constructed `TaskSupervisorClient` sends on every request to
+   * worker-supervisor (`POST /task/spawn` requires it — `packages/worker-supervisor/src/
+   * internal-auth.ts`; lane-6 review follow-up, 2026-09). `main()` builds this with
+   * `internalAuthorizationHeader(token)` from the *same* token `loadInternalToken()` already loaded
+   * for the kernel's own `/internal/*` guard (`internalAuth.token` above) — no second env var, no
+   * second file read. Ignored when `taskSupervisorClient` is given directly (tests).
+   */
+  readonly supervisorAuthorizationHeader?: string;
   /** Overrides the constructed `TaskSupervisorClientPort` — for tests (a fake, no network). */
   readonly taskSupervisorClient?: TaskSupervisorClientPort;
   /** How often the S2.7 task reaper polls (duration-limit enforcement + supervisor-status
@@ -473,6 +482,7 @@ export function createBackgroundServices(
       options.taskSupervisorClient ??
       new TaskSupervisorClient({
         supervisorUrl: options.supervisorUrl ?? DEFAULT_TASK_SUPERVISOR_URL,
+        authorizationHeader: options.supervisorAuthorizationHeader,
       });
     taskDeps = {
       pool: options.pool,
@@ -704,6 +714,9 @@ export function main(): void {
     background = createBackgroundServices({
       pool,
       supervisorUrl: process.env.SUPERVISOR_URL,
+      // Reuses the exact token already loaded above for the kernel's own /internal/* guard
+      // (`internalAuth.token`) — same file, same loader, no second read (lane-6 review follow-up).
+      supervisorAuthorizationHeader: internalAuthorizationHeader(internalAuth.token),
       taskReaperIntervalMs,
       onTaskReaperError: (err: unknown) => app.log.error(err),
       kind,
