@@ -52,7 +52,7 @@ export async function endUnknownRuntimeTurn(
      where workspace_id = $1 and id = $2 and kind = 'agent_turn' and status = 'running'`,
     [workspaceId, turnId],
   );
-  if (result.rowCount === 0) return false;
+  if ((result.rowCount ?? 0) === 0) return false;
 
   await enqueue(client, {
     type: 'TurnCompleted',
