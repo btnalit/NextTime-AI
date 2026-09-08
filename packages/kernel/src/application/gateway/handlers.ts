@@ -17,7 +17,6 @@ import type { AgentRuntime } from '../../application/host-bridge/index.js';
 import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import { drainPendingContextItems } from '../../application/linkage/index.js';
 import {
-  DEFAULT_WAIT_TIMEOUT_SECONDS,
   type InvokeWorkerInput,
   type TaskRow,
   type WorkerRunRow,
@@ -29,6 +28,7 @@ import {
   invokeWorkerCreate,
   listTasksForPrincipal,
   resolveParentAuthority,
+  resolveWaitTimeoutMs,
   setQuotaValue,
   terminateTask,
   waitForOutcome,
@@ -777,7 +777,7 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
         principalId,
         created.taskId,
         created.workerRunId,
-        { timeoutMs: (input.timeout ?? DEFAULT_WAIT_TIMEOUT_SECONDS) * 1000 },
+        { timeoutMs: resolveWaitTimeoutMs(input.timeout) },
       ),
   };
 };

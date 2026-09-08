@@ -84,6 +84,56 @@ describe('KernelClient', () => {
     expect((error as KernelError).kind).toBe('timeout');
   });
 
+  // fix/invoke-worker-wait-and-outbox-prune: the 4th `call()` arg overrides the constructor's own
+  // `timeoutMs` for one call — needed so `invoke_worker(wait:true)` (whose kernel-side wait can
+  // run longer than this client's flat default) does not abort before the kernel's own wait
+  // resolves.
+  it('a per-call timeoutMsOverride replaces the constructor default for that one call', async () => {
+    kernel.setHandler(
+      'traverse',
+      () =>
+        new Promise<{ ok: true; result: unknown }>((resolve) =>
+          setTimeout(() => resolve({ ok: true, result: { done: true } }), 60),
+        ),
+    );
+    // Constructor default (20ms) is shorter than the handler's own 60ms delay — without an
+    // override this call would time out (exactly the case covered by the test above); a longer
+    // per-call override lets it succeed instead.
+    const client = new KernelClient({
+      kernelUrl: kernel.url,
+      capabilityHandle: 'h',
+      timeoutMs: 20,
+    });
+
+    const result = await client.call('traverse', {}, undefined, 500);
+
+    expect(result).toEqual({ done: true });
+  });
+
+  it('a per-call timeoutMsOverride can also shorten the constructor default, and the timeout error reports it', async () => {
+    kernel.setHandler(
+      'traverse',
+      () =>
+        new Promise<{ ok: true; result: unknown }>((resolve) =>
+          setTimeout(() => resolve({ ok: true, result: {} }), 200),
+        ),
+    );
+    // Constructor default (5000ms) would comfortably outlast the handler's 200ms delay — the
+    // per-call override (20ms) forces a timeout anyway, proving it truly replaces (not merely
+    // extends) the default.
+    const client = new KernelClient({
+      kernelUrl: kernel.url,
+      capabilityHandle: 'h',
+      timeoutMs: 5000,
+    });
+
+    const error = await client.call('traverse', {}, undefined, 20).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(KernelError);
+    expect((error as KernelError).kind).toBe('timeout');
+    expect((error as KernelError).message).toContain('20ms');
+  });
+
   it('throws network on an unroutable kernelUrl', async () => {
     const client = new KernelClient({
       kernelUrl: 'http://127.0.0.1:1',

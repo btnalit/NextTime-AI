@@ -103,14 +103,23 @@ export class KernelClient {
    * Calls one capability. Resolves with `result` on `{ok:true}`; throws {@link KernelError} on any
    * other outcome (network failure, timeout, caller-aborted, malformed response body, or
    * `{ok:false}`).
+   *
+   * `timeoutMsOverride` (fix/invoke-worker-wait-and-outbox-prune) replaces the constructor's own
+   * `timeoutMs` for this one call only — needed by `invoke_worker(wait:true)`, whose kernel-side
+   * wait window (up to `INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS`, `@nexttime/shared`) can exceed
+   * this client's flat default (`DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`, 30s) — see `modes/entry.ts`'s
+   * `resolveInvokeWorkerCallPlan` for how the override is computed. `undefined` (every other call
+   * site, today) keeps the constructor default.
    */
   async call<T = unknown>(
     capabilityName: string,
     params: unknown = {},
     signal?: AbortSignal,
+    timeoutMsOverride?: number,
   ): Promise<T> {
     const url = `${this.kernelUrl}${capabilityRoute(capabilityName)}`;
-    const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
+    const effectiveTimeoutMs = timeoutMsOverride ?? this.timeoutMs;
+    const timeoutSignal = AbortSignal.timeout(effectiveTimeoutMs);
     const requestSignal = signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal;
 
     let response: Response;
@@ -128,7 +137,7 @@ export class KernelClient {
       if (timeoutSignal.aborted) {
         throw new KernelError(
           'timeout',
-          `kernel call "${capabilityName}" timed out after ${this.timeoutMs}ms`,
+          `kernel call "${capabilityName}" timed out after ${effectiveTimeoutMs}ms`,
           {
             cause: error,
           },

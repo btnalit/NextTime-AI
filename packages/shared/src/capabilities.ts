@@ -791,6 +791,19 @@ const governanceCapabilities: readonly Capability[] = [
 // capability here.
 // -------------------------------------------------------------------------------------------
 
+/**
+ * Ceiling (seconds) on `invoke_worker`'s `wait:true` wait window — design doc §8.2 "默认 90 秒".
+ * Neither the design doc nor the kernel's own code defines a larger ceiling anywhere, so this
+ * constant doubles as both the kernel's default wait timeout (`application/task/invoke.ts`'s
+ * `DEFAULT_WAIT_TIMEOUT_SECONDS`, sourced from here) and the hard max a caller's own `timeout`
+ * param may request (enforced below via `.max()`, mirroring `application/task/quotas.ts`'s
+ * `HARD_MAX_DEPTH` "schema rejects above the ceiling, resolve-time code also clamps defensively"
+ * two-layer convention). Exported so `@nexttime/platform-extension`'s `KernelClient` can size its
+ * own per-call HTTP timeout to always outlast the kernel's own wait, rather than duplicating this
+ * number in two packages (fix/invoke-worker-wait-and-outbox-prune).
+ */
+export const INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS = 90;
+
 const taskCapabilities: readonly Capability[] = [
   {
     name: 'get_entry_context',
@@ -842,8 +855,11 @@ const taskCapabilities: readonly Capability[] = [
         version: z.number().int().positive(),
         input: z.unknown(),
         wait: z.boolean().optional(),
-        // Seconds, not ms — matches the design doc's own prose ("默认 90 秒", §8.2).
-        timeout: z.number().int().positive().optional(),
+        // Seconds, not ms — matches the design doc's own prose ("默认 90 秒", §8.2). Clamped to
+        // INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS (fix/invoke-worker-wait-and-outbox-prune) — a
+        // caller asking for more than the kernel will ever wait gets a 400 here rather than a
+        // silently-truncated wait.
+        timeout: z.number().int().positive().max(INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS).optional(),
         // S2.7 addition: narrows which of the WorkerDefinition's own declared `gates` this
         // particular invocation actually needs (§8.5 "衰减出只含所需门的 Handle"); omitted defaults
         // to every gate the definition declares. Never lets a caller ask for a gate the
@@ -853,7 +869,10 @@ const taskCapabilities: readonly Capability[] = [
       })
       .strict(),
     description:
-      'invoke_worker(definition@version, input, wait, timeout, gates?) — §8.2; a decayed child Handle inherits on_behalf_of.',
+      'invoke_worker(definition@version, input, wait, timeout, gates?) — §8.2; wait defaults to ' +
+      'false — returns { taskId, status } immediately and the caller polls get_task for the ' +
+      'result; wait:true blocks (up to timeout seconds, default/max 90) for a terminal result ' +
+      'instead. A decayed child Handle inherits on_behalf_of.',
   },
   {
     name: 'get_task',

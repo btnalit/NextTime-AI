@@ -3,7 +3,7 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
-import { getCapability } from '@nexttime/shared';
+import { INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS, getCapability } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { toToolParameters } from '../tool-schema.js';
 import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
@@ -110,9 +110,12 @@ function buildCapabilityTool(
     // as isError" contract this tool needs, with no isError field to set by hand (AgentToolResult
     // has none; see kernel-client.ts and the S1.6 PR body "假设").
     async execute(_toolCallId, params) {
+      const plan = resolveInvokeWorkerCallPlan(capability.name, params);
       const result = await kernelClient.call(
         capability.name,
-        forceInvokeWorkerWaitFalse(capability.name, params),
+        plan.params,
+        undefined,
+        plan.timeoutMs,
       );
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -122,26 +125,55 @@ function buildCapabilityTool(
   };
 }
 
+/** Extra headroom (ms) layered on top of the kernel's own wait window (see
+ *  `resolveInvokeWorkerCallPlan` below) when this client's per-call HTTP timeout must outlast a
+ *  `wait:true` invoke_worker call — enough slack for response transit/serialization after the
+ *  kernel-side wait itself elapses, without making the client wait meaningfully longer than the
+ *  kernel already promises to. */
+const WAIT_TIMEOUT_HEADROOM_MS = 10_000;
+
+interface InvokeWorkerCallPlan {
+  readonly params: unknown;
+  /** `KernelClient.call`'s per-call timeout override — set only when this call needs one to
+   *  outlast the kernel's own `wait:true` window; `undefined` otherwise (the client's own
+   *  constructor default applies, same as every other capability). */
+  readonly timeoutMs?: number;
+}
+
 /**
- * Lane-6 review P2-4: `invoke_worker`'s own `wait` param (`@nexttime/shared`'s `capabilities.ts`)
- * asks the kernel to hold the request open until the invoked Worker settles, with the kernel's
- * own default wait window at ~90s (design doc §8.2 "默认 90 秒"). This `KernelClient`'s per-call
- * HTTP timeout is a fixed 30s (`DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`, kernel-client.ts) — shorter
- * than the kernel's own wait window — so `invoke_worker(wait: true)` called through this entry-
- * mode projected tool would always abort client-side before the kernel's wait could ever resolve,
- * and pi's own retry-on-tool-error behavior would then re-issue a *second* `invoke_worker` for a
- * Task that may already be running (duplicate invokes). The real fix (aligning the client timeout
- * with the kernel's wait window, or a per-capability timeout) lives on the kernel side, out of
- * scope for this package — this is the one mitigation available entirely within the projected
- * tool: force `wait: false` on every outbound `invoke_worker` call, overriding whatever the
- * caller (the model) asked for, so this entry-mode tool never issues a call this client is
- * structurally unable to wait out. A caller that wants completion status still has `get_task`.
- * Every other capability's params pass through unmodified.
+ * Lane-6 review P2-4 (fixed on both sides now — supersedes this function's own earlier "always
+ * force wait:false" shape, see PR body): `invoke_worker`'s own `wait` param (`@nexttime/shared`'s
+ * `capabilities.ts`) asks the kernel to hold the request open until the invoked Worker settles, up
+ * to `params.timeout ?? 90` seconds (`INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS`, design doc §8.2
+ * "默认 90 秒"). This `KernelClient`'s *default* per-call HTTP timeout is a flat 30s
+ * (`DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`, kernel-client.ts) — shorter than the kernel's own wait
+ * window — so an unmodified `wait:true` call would always abort client-side before the kernel's
+ * wait could ever resolve, and pi's own retry-on-tool-error behavior would then re-issue a
+ * *second* `invoke_worker` for a Task that may already be running (duplicate invokes).
+ *
+ * Entry mode still *defaults* `wait` to `false` (chat is asynchronous — a Task card plus a
+ * follow-up turn is the right UX for a blocking tool call, not blocking the whole turn on it; a
+ * caller that wants completion status polls `get_task`), but an agent that explicitly asks for
+ * `wait:true` now gets it, honoured with a per-call `KernelClient` timeout override
+ * (`min(params.timeout ?? 90, 90) + 10s`, `kernel-client.ts`'s `call()`) computed to always
+ * outlast the kernel's own wait — rather than being silently downgraded to `wait:false`. Every
+ * other capability's params pass through unmodified, no timeout override.
  */
-function forceInvokeWorkerWaitFalse(capabilityName: string, params: unknown): unknown {
-  if (capabilityName !== 'invoke_worker') return params;
+function resolveInvokeWorkerCallPlan(
+  capabilityName: string,
+  params: unknown,
+): InvokeWorkerCallPlan {
+  if (capabilityName !== 'invoke_worker') return { params };
   const base = params && typeof params === 'object' ? (params as Record<string, unknown>) : {};
-  return { ...base, wait: false };
+  if (base.wait !== true) return { params: { ...base, wait: false } };
+
+  const requestedTimeoutSeconds =
+    typeof base.timeout === 'number' ? base.timeout : INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS;
+  const clampedTimeoutSeconds = Math.min(
+    requestedTimeoutSeconds,
+    INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
+  );
+  return { params: base, timeoutMs: clampedTimeoutSeconds * 1000 + WAIT_TIMEOUT_HEADROOM_MS };
 }
 
 /** Loose shape of a `get_entry_context` result (§7.4 `context` column, S1 scope). The kernel side
