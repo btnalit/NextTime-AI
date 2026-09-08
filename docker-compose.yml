@@ -488,6 +488,20 @@ services:
     networks: [control]
     restart: "no"
 
+  # A test MCP server (S3.12's own acceptance deliverable — "接入一个 fixture MCP server"). No
+  # fronting Gatekeeper process, unlike accept-s2-openapi/accept-s2-http-gate: `create_connection`
+  # for `kind:'mcp'` imports directly from `manifestSource` via `McpTransport.listTools`
+  # (connection-handlers.ts `resolveManifestOperations`) — the kernel process itself calls this
+  # container, no gate in between — and the two fixture tools need no credential, so
+  # `scripts/accept_s2.sh`'s connect-mcp-* step uses `credentialKind:'shared'`, which never POSTs
+  # a ConnectedAccount credential anywhere (the only thing a fronting gate would be for). See
+  # deploy/accept-s2/mcp/server.mjs's own header comment.
+  accept-s2-mcp:
+    build: { context: ., dockerfile: deploy/accept-s2/mcp/Dockerfile }
+    profiles: ["accept-s2"]
+    networks: [control]
+    restart: "no"
+
   # Generic ssh-kind Gatekeeper instance — packages/gatekeeper-base's own env-driven main()
   # (docs/runbooks/host-gatekeepers.md's §2/§3 pattern for docker/ragflow, applied directly to the
   # base image here since this connection has no dedicated `gatekeepers/<system>` package; see

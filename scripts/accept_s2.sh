@@ -447,7 +447,7 @@ preflight_step() {
   fi
   pass "preflight-worker-runtime-image" "nexttime-ai-worker-runtime present"
 
-  build_out=$(docker compose --profile accept-s2 build accept-s2-sshd accept-s2-openapi accept-s2-ssh-gate accept-s2-http-gate 2>&1)
+  build_out=$(docker compose --profile accept-s2 build accept-s2-sshd accept-s2-openapi accept-s2-mcp accept-s2-ssh-gate accept-s2-http-gate 2>&1)
   build_rc=$?
   if [ "$build_rc" -ne 0 ]; then
     fail "preflight-accept-s2-build" "docker compose --profile accept-s2 build failed: $(printf '%s' "$build_out" | tail -20)"
@@ -1141,6 +1141,72 @@ step7_facts_inferred() {
   pass "step7-fact-on-behalf-of-alice" "worker_result Activity metadata.onBehalfOf=$ALICE_PRINCIPAL_ID (human kept as provenance alongside the agent asserted_by — application/task/result.ts)"
 }
 
+# S3.12's own acceptance sentence ("接入一个 fixture MCP server ... 并 publish 后，对话中出现
+# <gate>.<op> 工具" — the chat-tool-registration half is out of this script's scope, S3.13's
+# session_start projection; this step covers the connection-flow half: "find_operations 命中").
+# Mirrors connections_step's http-gate flow (request_connection -> create_connection ->
+# publish_manifest -> find_operations) for kind:'mcp': no fronting Gatekeeper process is needed
+# for the import itself (docker-compose.yml's accept-s2-mcp service comment) — `endpoint` and
+# `manifestSource` both point straight at the fixture's own address, `credentialKind:'shared'`
+# (the fixture's two tools need no credential, and 'shared' is also the one value that never
+# makes `create_connection` POST a ConnectedAccount credential anywhere — the only thing that
+# would actually need a live gate listening at `endpoint`). Appended after step 7 — additive only,
+# steps 1-7 above are unchanged.
+step8_mcp_connect() {
+  up_out=$(docker compose --profile accept-s2 up -d accept-s2-mcp 2>&1)
+  up_rc=$?
+  if [ "$up_rc" -ne 0 ]; then
+    fail "connect-mcp-fixture-up" "docker compose up failed: $(printf '%s' "$up_out" | tail -20)"
+  fi
+  pass "connect-mcp-fixture-up" "accept-s2-mcp up"
+
+  out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"mcp\",\"target\":\"accept_s2_mcp\"}" "d.result.id")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "connect-mcp-request" "request_connection(mcp) HTTP $status: $(parse_kv "$out" BODY)"
+  CR_ID_MCP=$(parse_kv "$out" EXTRACTED)
+  [ -n "$CR_ID_MCP" ] || fail "connect-mcp-request" "no connectionRequestId in response: $(parse_kv "$out" BODY)"
+  pass "connect-mcp-request" "connectionRequestId=$CR_ID_MCP"
+
+  out=$(cap "$ALICE_KEY" create_connection \
+    "{\"connectionRequestId\":\"$CR_ID_MCP\",\"kind\":\"mcp\",\"target\":\"accept_s2_mcp\",\"endpoint\":\"http://accept-s2-mcp:8080\",\"credentialKind\":\"shared\",\"manifestSource\":\"http://accept-s2-mcp:8080\"}" \
+    "d.result.gatekeeperId")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "connect-mcp-create" "create_connection(mcp) HTTP $status: $(parse_kv "$out" BODY)"
+  GATEKEEPER_ID_MCP=$(parse_kv "$out" EXTRACTED)
+  [ -n "$GATEKEEPER_ID_MCP" ] || fail "connect-mcp-create" "no gatekeeperId in response: $(parse_kv "$out" BODY)"
+  create_body=$(parse_kv "$out" BODY)
+  case "$create_body" in
+    *accept_s2_mcp_echo*) : ;;
+    *) fail "connect-mcp-create" "importedOperationNames missing accept_s2_mcp_echo: $create_body" ;;
+  esac
+  case "$create_body" in
+    *accept_s2_mcp_note*) : ;;
+    *) fail "connect-mcp-create" "importedOperationNames missing accept_s2_mcp_note: $create_body" ;;
+  esac
+  pass "connect-mcp-create" "gatekeeperId=$GATEKEEPER_ID_MCP (imported both fixture tools from manifestSource tools/list)"
+
+  # Pre-publish half of the same I16/I17 invariant s213-find-operations-pre-publish already checks
+  # for the http gate: a freshly-imported draft manifest must not be visible yet.
+  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"accept_s2_mcp\"}" "d.result.items.length")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "connect-mcp-find-operations-pre-publish" "find_operations HTTP $status: $(parse_kv "$out" BODY)"
+  pre_count=$(parse_kv "$out" EXTRACTED)
+  [ "$pre_count" = "0" ] || fail "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') returned $pre_count results before publish_manifest — draft manifest is visible (I16/I17 violation)"
+  pass "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') misses before publish_manifest, as required"
+
+  out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_MCP\"}" "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "connect-mcp-publish" "publish_manifest(mcp) HTTP $status: $(parse_kv "$out" BODY)"
+  pass "connect-mcp-publish" "mcp manifest published"
+
+  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"accept_s2_mcp\"}" "d.result.items.length")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "connect-mcp-find-operations-post-publish" "find_operations HTTP $status: $(parse_kv "$out" BODY)"
+  post_count=$(parse_kv "$out" EXTRACTED)
+  [ "$post_count" = "2" ] || fail "connect-mcp-find-operations-post-publish" "find_operations('accept_s2_mcp') returned $post_count results after publish_manifest, expected both fixture tools (2)"
+  pass "connect-mcp-find-operations-post-publish" "find_operations('accept_s2_mcp') sees both fixture tools after publish_manifest ($post_count result(s))"
+}
+
 cleanup_step() {
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
@@ -1173,6 +1239,7 @@ step3_observe_no_worker
 step4_step5_ssh_always_allow
 step6_env_and_egress
 step7_facts_inferred
+step8_mcp_connect
 cleanup_step
 
 if [ "$SKIP_COUNT" -gt 0 ]; then
