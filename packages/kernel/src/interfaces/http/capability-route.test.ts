@@ -20,6 +20,7 @@ import {
   WorkerResultValidationError,
   hashApiKey,
 } from '../../application/gateway/index.js';
+import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
   ProcedureStepReferenceError,
   SkillValidationError,
@@ -28,6 +29,7 @@ import {
 } from '../../application/worker/index.js';
 import {
   HANDLE_SIGNING_ALG,
+  HandleIssuanceError,
   ScopeValidationError,
   issueHandle,
 } from '../../governance/capability/index.js';
@@ -144,6 +146,18 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new ScopeValidationError('unknown capability "bogus"'));
     expect(mapped.status).toBe(400);
     expect(mapped.code).toBe('invalid_scope');
+  });
+
+  it('review fix F10: HandleIssuanceError (invoke_worker Handle mint) → 400 invalid_params, not 500', () => {
+    const mapped = mapCapabilityError(new HandleIssuanceError('ttlSeconds must be positive'));
+    expect(mapped.status).toBe(400);
+    expect(mapped.code).toBe('invalid_params');
+  });
+
+  it('review fix F10: TaskRuntimeNotConfiguredError (invoke_worker) → 503 service_unavailable, not 500', () => {
+    const mapped = mapCapabilityError(new TaskRuntimeNotConfiguredError());
+    expect(mapped.status).toBe(503);
+    expect(mapped.code).toBe('service_unavailable');
   });
 
   it('lane-4 hookup: ExplainNodeNotFoundError (explain) → 404 not_found, not 500', () => {

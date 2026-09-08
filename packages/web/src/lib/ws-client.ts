@@ -33,14 +33,18 @@ import type { ActionRequestStatus, ChatStreamPayload, TaskStatus } from '@nextti
 
 /** The shape of one `chat_messages` row as every WS response/push carries it (`toWireChatMessage`,
  *  packages/kernel/src/application/gateway/handlers.ts; `ChatMessageEvent`, packages/shared/src/
- *  events.ts). `kind`/`content` (S2.11 addition) are present only on the three `role==='system'`
- *  message kinds `application/linkage` writes (`system.task_update` / `system.action_pending` /
- *  `system.action_update`, packages/shared/src/chat-message-content.ts) — `undefined` for every
- *  ordinary user/assistant/tool message. `content` is loosened to a bare record here (not the
- *  stricter `SystemMessageContent` union) for the same reason `events.ts` loosens it on the wire:
- *  this module does not import `@nexttime/shared`'s Zod schemas at runtime (S1.8's "type-only
- *  import, erased at compile time" bundle-size convention) — `lib/action-card.ts` (S2.10) narrows
- *  it by `kind` at the point it actually needs the fields. */
+ *  events.ts). `kind`/`content` (S2.11 addition, generalized by a later review fix — see
+ *  events.ts's own doc comment on this field) are that row's stored `content` verbatim and its
+ *  `content.kind`, derived the same way by every producer (live push and `get_chat_history`/
+ *  `subscribe_chat` replay alike) — `undefined` today for every ordinary user/assistant/tool
+ *  message (its `content` has no `kind` field of its own), populated only for the three
+ *  `role==='system'` message kinds `application/linkage` writes (`system.task_update` /
+ *  `system.action_pending` / `system.action_update`, packages/shared/src/chat-message-content.ts).
+ *  `content` is loosened to a bare record here (not the stricter `SystemMessageContent` union) for
+ *  the same reason `events.ts` loosens it on the wire: this module does not import
+ *  `@nexttime/shared`'s Zod schemas at runtime (S1.8's "type-only import, erased at compile time"
+ *  bundle-size convention) — `lib/action-card.ts` (S2.10) narrows it by `kind` at the point it
+ *  actually needs the fields. */
 export interface ChatMessage {
   readonly id: string;
   readonly role: 'user' | 'assistant' | 'tool' | 'system';

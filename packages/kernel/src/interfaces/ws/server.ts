@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { RawData, WebSocket } from 'ws';
 import type { ChatPushEvent, PrincipalPushEvent } from '../../application/chat/index.js';
 import {
+  chatMessageKind,
   publishChatPushEvent,
   subscribeToChatPushEvents,
   subscribeToPrincipalPushEvents,
@@ -70,6 +71,10 @@ interface ChatHistoryResult {
     readonly text: string;
     /** Structured message content (S2.12) — `system.*` cards carry `kind`/`actionRequestId`/… */
     readonly content?: Record<string, unknown>;
+    /** Review fix (code-review finding "chat.message payload drift"): `toWireChatMessage`
+     *  (application/gateway/handlers.ts) now sets this for every row, mirroring the live push —
+     *  `undefined` unless `content` itself carries a `kind` (today: `system.*` rows only). */
+    readonly kind?: string;
     readonly createdAt: string;
     readonly sequence: number;
   }[];
@@ -161,6 +166,13 @@ function publishSentMessagePush(rawParams: unknown, callResult: unknown): void {
   if (typeof params.chatId !== 'string' || typeof params.text !== 'string') return;
   if (typeof result.messageId !== 'string' || typeof result.sequence !== 'number') return;
 
+  // Review fix (code-review finding "chat.message payload drift"): mirrors what
+  // `sendChatMessage` (application/chat/service.ts) actually persisted for this row —
+  // `content: { text: input.text }` — rather than inventing a separate shape for the live push.
+  // `chatMessageKind` derives `kind` from it the same way every other producer now does;
+  // `undefined` here, since a user row's `content` never has its own `kind` field.
+  const content: Record<string, unknown> = { text: params.text };
+
   publishChatPushEvent({
     type: 'chat.message',
     chatId: params.chatId,
@@ -170,6 +182,8 @@ function publishSentMessagePush(rawParams: unknown, callResult: unknown): void {
       text: params.text,
       createdAt: new Date().toISOString(),
       sequence: result.sequence,
+      kind: chatMessageKind(content),
+      content,
     },
   });
 }

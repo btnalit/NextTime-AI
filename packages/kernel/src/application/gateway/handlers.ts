@@ -2,6 +2,7 @@ import type { CapabilityChannel, HandleClaims, Role, WorkerDefinitionKind } from
 import type { PoolClient } from 'pg';
 import {
   type ChatMessageRow,
+  chatMessageKind,
   chatMessageText,
   currentPrincipalId,
   endUnknownRuntimeTurn,
@@ -265,6 +266,14 @@ function toWireChatMessage(message: ChatMessageRow) {
     // prose or re-render it after a reload; the live `chat.message` push already carries the full
     // content (application/chat/event-sink.ts). Additive — `text` stays as-is for every client.
     content: message.content,
+    // Review fix (code-review finding "chat.message payload drift"): previously omitted here —
+    // every live `chat.message` push already carried this for a system message
+    // (application/linkage's two push call sites), but a client loading the same row through
+    // `get_chat_history`/`subscribe_chat` replay (this function) never saw it, so a system card
+    // rendered live would silently stop rendering after a reload. `chatMessageKind` derives it the
+    // same way those push call sites already do — `undefined` for every ordinary user/assistant/
+    // tool message, unchanged.
+    kind: chatMessageKind(message.content),
     createdAt: message.createdAt.toISOString(),
     sequence: message.sequence,
   };

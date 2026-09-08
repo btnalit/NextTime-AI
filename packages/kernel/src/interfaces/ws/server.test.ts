@@ -405,13 +405,32 @@ describe.runIf(DATABASE_URL !== undefined)(
         'hello agent',
       );
 
-      const history = await client.call<{ messages: { role: string; sequence: number }[] }>(
-        'get_chat_history',
-        { chatId },
+      // Review fix (code-review finding "chat.message payload drift"): every live-push producer
+      // (this transport's own publishSentMessagePush for the user's message, application/chat/
+      // event-sink.ts for the assistant's reply) now carries `content`, mirroring what
+      // get_chat_history already returned for both roles — and `kind`, which was previously set
+      // only by the two application/linkage system-message push call sites. Both are `undefined`/
+      // `{text}` here since neither row's content has a `kind` field of its own.
+      type PushedMessage = { role: string; text: string; kind?: string; content?: unknown };
+      const userPush = persistedMessages.find(
+        (n) => (n.params as { message: { role: string } }).message.role === 'user',
       );
+      expect(userPush).toBeTruthy();
+      const userMessage = (userPush?.params as { message: PushedMessage }).message;
+      expect(userMessage.kind).toBeUndefined();
+      expect(userMessage.content).toEqual({ text: 'hello agent' });
+
+      const assistantMessage = (assistantPush?.params as { message: PushedMessage }).message;
+      expect(assistantMessage.kind).toBeUndefined();
+      expect(assistantMessage.content).toEqual({ text: assistantMessage.text });
+
+      const history = await client.call<{
+        messages: { role: string; sequence: number; kind?: string; content?: unknown }[];
+      }>('get_chat_history', { chatId });
       expect(history.messages).toHaveLength(2);
       expect(history.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
       expect(history.messages.map((m) => m.sequence)).toEqual([1, 2]);
+      expect(history.messages.map((m) => m.kind)).toEqual([undefined, undefined]);
 
       client.close();
     });
