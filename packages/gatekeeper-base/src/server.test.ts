@@ -193,6 +193,26 @@ describe('gatekeeper protocol server', () => {
     expect(second.json().result.replayed).toBe(true);
   });
 
+  it('POST /gate/apply returns 409 idempotency_conflict for the same key with different params', async () => {
+    app = buildApp(fakeTransport);
+    const first = await app.inject({
+      method: 'POST',
+      url: '/gate/apply',
+      headers: AUTH_HEADERS,
+      payload: { operation: 'stock.adjust', params: { qty: 1 }, idempotencyKey: 'req-conflict' },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/gate/apply',
+      headers: AUTH_HEADERS,
+      payload: { operation: 'stock.adjust', params: { qty: 2 }, idempotencyKey: 'req-conflict' },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error.code).toBe('idempotency_conflict');
+  });
+
   it('POST /gate/simulate returns a description without executing', async () => {
     app = buildApp(fakeTransport);
     const response = await app.inject({

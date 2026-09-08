@@ -4,6 +4,7 @@ import {
   ApplyRequiresIdempotencyKeyError,
   ConnectedAccountStoreNotConfiguredError,
   CredentialResolutionError,
+  IdempotencyConflictError,
   OperationModeMismatchError,
   OperationNotFoundError,
   ParamsValidationError,
@@ -63,6 +64,9 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
     err instanceof ApplyRequiresIdempotencyKeyError
   ) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  if (err instanceof IdempotencyConflictError) {
+    return { status: 409, code: 'idempotency_conflict', message: err.message };
   }
   if (err instanceof CredentialResolutionError) {
     return { status: 424, code: 'credential_unavailable', message: err.message };
