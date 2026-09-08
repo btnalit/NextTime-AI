@@ -122,6 +122,9 @@ jobs:
       - name: pi version consistency guard (docs/runbooks/pi-upgrade.md)
         run: sh scripts/check-pi-version-consistency.sh
 
+      - name: Membership capabilities must never enter a Handle-scope ceiling (S3.11)
+        run: sh scripts/check-membership-capabilities-not-in-handle-scope.sh
+
       - name: Shell scripts must be LF and executable
         run: |
           bad=$(git ls-files -s 'scripts/*.sh' | grep -v '^100755 ') || true
