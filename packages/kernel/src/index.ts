@@ -476,21 +476,43 @@ export function createBackgroundServices(
   };
 }
 
+/**
+ * Parses an optional numeric env var (every one of them below is a timeout or a poll interval in
+ * ms/s) — throws immediately, before opening the DB pool or binding a port, rather than letting
+ * `Number(raw)` silently become `NaN` (P2-9 fix: an unvalidated `NaN` deadline turns a reaper's
+ * `Date.now() + NaN` comparison and `setInterval(fn, NaN)` into a tight loop instead of a
+ * misconfiguration error) — same fail-fast posture `resolveAgentRuntimeKind` already established
+ * for `AGENT_RUNTIME`. Also rejects `<= 0`: every one of these is a deadline/interval, and a
+ * non-positive one is the same tight-loop failure mode by a different route
+ * (`setInterval(fn, 0)`). `undefined` when `raw` is `undefined` — every caller already has its own
+ * compiled-in default for that case.
+ */
+export function parsePositiveIntEnvVar(name: string, raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `${name}="${raw}" is not a positive, finite number — unset it to use the compiled-in default`,
+    );
+  }
+  return parsed;
+}
+
 export function main(): void {
   // Fail fast on a misconfigured AGENT_RUNTIME before doing anything else (opening the DB pool,
   // binding a port).
   const kind = resolveAgentRuntimeKind();
 
   const pool = createPool();
-  const rawRequestActionAwaitDecisionTimeoutMs =
-    process.env.REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS;
+  const requestActionAwaitDecisionTimeoutMs = parsePositiveIntEnvVar(
+    'REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS',
+    process.env.REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS,
+  );
   const app = createServer(
     { pool },
     {
       logger: true,
-      requestActionAwaitDecisionTimeoutMs: rawRequestActionAwaitDecisionTimeoutMs
-        ? Number(rawRequestActionAwaitDecisionTimeoutMs)
-        : undefined,
+      requestActionAwaitDecisionTimeoutMs,
     },
   );
 
@@ -538,39 +560,50 @@ export function main(): void {
       );
     }
 
-    const rawTurnInterruptTimeoutMs = process.env.TURN_INTERRUPT_TIMEOUT_MS;
-    const rawEntryHandleTtlSeconds = process.env.ENTRY_HANDLE_TTL_SECONDS;
-    const rawTurnAcceptedTimeoutMs = process.env.AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS;
-    const rawApprovalTimeoutMs = process.env.APPROVAL_TIMEOUT_MS;
-    const rawApprovalReaperIntervalMs = process.env.APPROVAL_REAPER_INTERVAL_MS;
-    const rawGatekeeperDrainIntervalMs = process.env.GATEKEEPER_DRAIN_INTERVAL_MS;
-    const rawTaskReaperIntervalMs = process.env.TASK_REAPER_INTERVAL_MS;
+    const turnInterruptTimeoutMs = parsePositiveIntEnvVar(
+      'TURN_INTERRUPT_TIMEOUT_MS',
+      process.env.TURN_INTERRUPT_TIMEOUT_MS,
+    );
+    const entryHandleTtlSeconds = parsePositiveIntEnvVar(
+      'ENTRY_HANDLE_TTL_SECONDS',
+      process.env.ENTRY_HANDLE_TTL_SECONDS,
+    );
+    const turnAcceptedTimeoutMs = parsePositiveIntEnvVar(
+      'AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS',
+      process.env.AGENT_HOST_TURN_ACCEPTED_TIMEOUT_MS,
+    );
+    const approvalTimeoutMs = parsePositiveIntEnvVar(
+      'APPROVAL_TIMEOUT_MS',
+      process.env.APPROVAL_TIMEOUT_MS,
+    );
+    const approvalReaperIntervalMs = parsePositiveIntEnvVar(
+      'APPROVAL_REAPER_INTERVAL_MS',
+      process.env.APPROVAL_REAPER_INTERVAL_MS,
+    );
+    const gatekeeperDrainIntervalMs = parsePositiveIntEnvVar(
+      'GATEKEEPER_DRAIN_INTERVAL_MS',
+      process.env.GATEKEEPER_DRAIN_INTERVAL_MS,
+    );
+    const taskReaperIntervalMs = parsePositiveIntEnvVar(
+      'TASK_REAPER_INTERVAL_MS',
+      process.env.TASK_REAPER_INTERVAL_MS,
+    );
 
     background = createBackgroundServices({
       pool,
       supervisorUrl: process.env.SUPERVISOR_URL,
-      taskReaperIntervalMs: rawTaskReaperIntervalMs ? Number(rawTaskReaperIntervalMs) : undefined,
+      taskReaperIntervalMs,
       onTaskReaperError: (err: unknown) => app.log.error(err),
       kind,
       handleKeyPair,
       kernelLlmUrl: process.env.KERNEL_LLM_URL,
-      entryHandleTtlSeconds: rawEntryHandleTtlSeconds
-        ? Number(rawEntryHandleTtlSeconds)
-        : undefined,
-      turnAcceptedTimeoutMs: rawTurnAcceptedTimeoutMs
-        ? Number(rawTurnAcceptedTimeoutMs)
-        : undefined,
-      turnInterruptTimeoutMs: rawTurnInterruptTimeoutMs
-        ? Number(rawTurnInterruptTimeoutMs)
-        : undefined,
-      approvalTimeoutMs: rawApprovalTimeoutMs ? Number(rawApprovalTimeoutMs) : undefined,
-      approvalReaperIntervalMs: rawApprovalReaperIntervalMs
-        ? Number(rawApprovalReaperIntervalMs)
-        : undefined,
+      entryHandleTtlSeconds,
+      turnAcceptedTimeoutMs,
+      turnInterruptTimeoutMs,
+      approvalTimeoutMs,
+      approvalReaperIntervalMs,
       onApprovalReaperError: (err: unknown) => app.log.error(err),
-      gatekeeperDrainIntervalMs: rawGatekeeperDrainIntervalMs
-        ? Number(rawGatekeeperDrainIntervalMs)
-        : undefined,
+      gatekeeperDrainIntervalMs,
       onGatekeeperDrainError: (err: unknown) => app.log.error(err),
     });
 

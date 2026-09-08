@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
@@ -44,6 +45,76 @@ export type WithTransactionFn = <T>(
 export function createAdminWithTransaction(pool: PoolLike): WithTransactionFn {
   return (workspaceId, principalId, fn) =>
     withWorkspace(pool, { workspaceId, principalId }, fn, { skipRoleSwitch: true });
+}
+
+// -------------------------------------------------------------------------------------------
+// request_action idempotency-key derivation (P1-1 fix, review job 652a4abc lane3/lane2). Kept
+// here rather than in request-action-handler.ts (already near the design doc's §7.10 "单文件 ≤
+// 600 行" guidance) — a small, self-contained, stateless helper set next to the other
+// action-execution primitives this file already owns, not a new module.
+//
+// `request_action`'s own await budget (25s, request-action-handler.ts's
+// `DEFAULT_AWAIT_DECISION_TIMEOUT_MS`) is deliberately kept *below* the platform-extension
+// kernel-client's 30s per-call timeout (`packages/platform-extension/src/kernel-client.ts`,
+// `DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`) — but a caller can still retry after any transport hiccup
+// (a dropped connection, a client-side abort) faster than that. Without a stable idempotency key,
+// a retry with identical intent creates a *second* ActionRequest — a second policy evaluation, a
+// second `apply` once approved. `governance/approval/request-action.ts` already implements the
+// storage half (a partial unique index on `(workspace_id, idempotency_key)`, a SAVEPOINT around
+// the INSERT, `findActionRequestByIdempotencyKey`); this is the derivation half.
+// -------------------------------------------------------------------------------------------
+
+/** Deterministic JSON serialization — sorts object keys recursively so two calls with the same
+ *  params but different key order hash identically. Not a general-purpose canonical-JSON
+ *  implementation (no BigInt/Date/cyclic handling) — `request_action`'s own `params` is always
+ *  the result of `JSON.parse`-shaped input (a capability's `paramsSchema`), which can never
+ *  contain those. */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** sha256 of `params`' stable serialization, hex-encoded — same `createHash('sha256')...digest
+ *  ('hex')` convention `application/gateway/auth.ts`'s `hashApiKey` already uses. */
+export function hashStableParams(params: Record<string, unknown>): string {
+  return createHash('sha256').update(stableStringify(params), 'utf8').digest('hex');
+}
+
+/**
+ * The default `request_action` idempotency key when the caller supplies none: `(sid|principal,
+ * gatekeeperId, operation, stable params hash)` — a retry from the *same session* (a Worker's
+ * `sid`) or the *same human principal* (no Handle, no `sid`) against the *same Operation with the
+ * same arguments* collapses onto the same row. Two calls that legitimately differ in any one of
+ * these (a different session, a different Operation, or even one changed param) get independent
+ * ActionRequests, as they should — this is a narrow, session-scoped default, not a general
+ * "dedupe this action forever" rule.
+ */
+export function deriveDefaultIdempotencyKey(args: {
+  readonly identity: string;
+  readonly gatekeeperId: string;
+  readonly operationName: string;
+  readonly params: Record<string, unknown>;
+}): string {
+  return `auto:${args.identity}:${args.gatekeeperId}:${args.operationName}:${hashStableParams(args.params)}`;
+}
+
+/**
+ * Scopes a caller-supplied idempotency key to `(on_behalf_of, sid)` before it reaches the
+ * `(workspace_id, idempotency_key)` unique index — the index itself is only workspace-scoped, so
+ * two different Workers (or a Worker and a human) that happen to pass the literal same string
+ * would otherwise collide and one would silently receive the other's ActionRequest.
+ */
+export function scopeExplicitIdempotencyKey(args: {
+  readonly onBehalfOf: string;
+  readonly sid: string | undefined;
+  readonly key: string;
+}): string {
+  return `explicit:${args.onBehalfOf}:${args.sid ?? ''}:${args.key}`;
 }
 
 export interface GatekeeperActionExecutorDeps {

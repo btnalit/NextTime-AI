@@ -531,6 +531,58 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(row?.status).toBe('pending_approval');
     });
 
+    // P1-1 fix (review job 652a4abc): request_action now always derives (or accepts) an
+    // idempotency key, so a retry with the same intent returns the existing ActionRequest instead
+    // of creating and executing a second one.
+    it('a repeat call with identical (gatekeeperId, operation, params) and no explicit idempotencyKey collapses onto the same ActionRequest', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const params = { qty: 4200 };
+
+      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params,
+      })) as { status: string; actionRequestId: string };
+      expect(first.status).toBe('executed');
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params,
+      })) as { status: string; actionRequestId: string };
+
+      expect(second.actionRequestId).toBe(first.actionRequestId);
+      expect(second.status).toBe('executed');
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
+    });
+
+    it('an explicit idempotencyKey collapses a repeat call onto the same ActionRequest even with different params', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const idempotencyKey = randomUUID();
+
+      const first = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 4201 },
+        idempotencyKey,
+      })) as { status: string; actionRequestId: string };
+      expect(first.status).toBe('executed');
+
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const second = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 4202 }, // different params — the explicit key still wins
+        idempotencyKey,
+      })) as { status: string; actionRequestId: string };
+
+      expect(second.actionRequestId).toBe(first.actionRequestId);
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was not called again
+    });
+
     it('a draft (unpublished) operation never executes, even though its own manifest entry declares auto_approvable', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const before = transport.calls[DRAFT_OP.name] ?? 0;

@@ -1,5 +1,5 @@
 import { IllegalTransition } from '@nexttime/shared';
-import type { CapabilityChannel, CapabilityScope } from '@nexttime/shared';
+import type { ActionRequestStatus, CapabilityChannel, CapabilityScope } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
@@ -24,7 +24,11 @@ import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import type { WithTransactionFn } from './action-executor.js';
-import { createAdminWithTransaction } from './action-executor.js';
+import {
+  createAdminWithTransaction,
+  deriveDefaultIdempotencyKey,
+  scopeExplicitIdempotencyKey,
+} from './action-executor.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler, CapabilityHandlerResult } from './capability-handler.js';
 import { writeObservedFacts } from './observed-facts.js';
@@ -98,6 +102,19 @@ import { writeObservedFacts } from './observed-facts.js';
  * `apply`), polls for the row to reach a terminal state and reads the winner's stored result back
  * from the audit trail (`markActionRequestExecuted`/`markActionRequestFailed`'s own
  * `resultMetadata`/`reason` payload — `readTerminalOutcome` below) instead.
+ *
+ * **Idempotency** (P1-1 fix, review job 652a4abc lane3/lane2): `requestActionHandler` always
+ * derives an idempotency key before calling `requestAction` — an explicit `idempotencyKey` param,
+ * scoped to `(workspace, on_behalf_of, sid)` (`action-executor.ts`'s `scopeExplicitIdempotencyKey`
+ * — the DB's own unique index is only workspace-scoped); or, when omitted, a default derived from
+ * `(sid|principal, gatekeeperId, operation, stable params hash)`
+ * (`deriveDefaultIdempotencyKey`). A retry — from a caller-side timeout, an aborted connection, or
+ * simple redelivery — that reuses the same key returns the *existing* row instead of creating a
+ * second one (`governance/approval/request-action.ts` owns the storage half: a partial unique
+ * index plus a SAVEPOINT-guarded INSERT for the concurrent-callers case). Because of this, the
+ * decision table above is necessary but not sufficient — `runGovernedRequest`'s switch handles
+ * every `ActionRequestStatus`, not just the three a *fresh* resolution can produce, since a replay
+ * can return a row already carried to any status (including terminal) by an earlier call.
  */
 
 // Re-exported for `application/gateway/index.ts`'s existing consumers; the class itself now lives
@@ -125,12 +142,18 @@ export interface RequestActionHandlerDeps {
    *  the composition root wires into `ApprovalDrainer` — "the single shared executor path"
    *  (coordinator review): phase 2 never re-implements "call apply, then write observed facts". */
   readonly actionExecutor: ActionExecutor;
-  /** `await_decision:true`'s poll timeout — default 90s (design doc §8.2's own `invoke_worker`
-   *  timeout default; this task brief: "configurable, default 90s"). */
+  /** `await_decision:true`'s poll timeout — default 25s (P1-1 fix, review job 652a4abc: kept
+   *  below `packages/platform-extension/src/kernel-client.ts`'s `DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`
+   *  (30s) so `request_action` itself always resolves — with `{status:'pending_approval'|
+   *  'approved', actionRequestId}` if the decision/execution has not landed yet — *before* the
+   *  Worker's own HTTP client would time out and retry; a 90s default let the client's 30s
+   *  timeout fire first, and an unmarked retry used to create a second ActionRequest (now
+   *  prevented independently by the idempotency key below, but the tighter default avoids relying
+   *  on that alone). */
   readonly awaitDecisionTimeoutMs?: number;
 }
 
-const DEFAULT_AWAIT_DECISION_TIMEOUT_MS = 90_000;
+const DEFAULT_AWAIT_DECISION_TIMEOUT_MS = 25_000;
 /** How long `tryExecuteInline` waits for a *concurrent* execution (the race-loss path) to reach a
  *  terminal state before giving up — deliberately short: the winner is actively executing right
  *  now, not waiting on a human, so this should resolve in well under a second in the ordinary
@@ -209,10 +232,20 @@ async function runObserve(
 // -------------------------------------------------------------------------------------------
 
 interface ExecutionOutcome {
-  readonly status: 'executed' | 'failed';
+  readonly status: ActionRequestStatus;
   readonly data?: unknown;
   readonly reason?: string;
 }
+
+/** The two `action` values `readTerminalOutcome` trusts as carrying a real terminal payload
+ *  (`resultMetadata`/`reason`) — `execution.ts`'s `markActionRequestExecuted`/
+ *  `markActionRequestFailed`, which write it in the same transaction as the status transition
+ *  itself (see that module's own doc comment). P2-7 fix: `queryAudit`'s own filter takes a single
+ *  exact `action`, not a set, so this reads a small page of the most recent audit rows for the
+ *  resource and picks the first one whose `action` is one of these two — never the row a *later*,
+ *  unrelated transition (`verify`/`compensate`) happened to also touch this resource with. */
+const TERMINAL_OUTCOME_ACTIONS = new Set(['action_request.complete', 'action_request.fail']);
+const TERMINAL_OUTCOME_SCAN_LIMIT = 10;
 
 /** Resolves the Gatekeeper service Principal via one short admin transaction (bootstrapped with
  *  `SYSTEM_ACTOR_PLACEHOLDER`, then reused for every later admin transaction in this phase-2
@@ -242,10 +275,11 @@ async function readTerminalOutcome(
     queryAudit(client, workspaceId, {
       resourceType: 'action_request',
       resourceId: actionRequestId,
-      limit: 1,
+      limit: TERMINAL_OUTCOME_SCAN_LIMIT,
     }),
   );
-  const payload = rows[0]?.payload as
+  const terminalRow = rows.find((row) => TERMINAL_OUTCOME_ACTIONS.has(row.action));
+  const payload = terminalRow?.payload as
     | { resultMetadata?: { data?: unknown }; reason?: string }
     | undefined;
   return { data: payload?.resultMetadata?.data, reason: payload?.reason };
@@ -285,10 +319,13 @@ async function awaitConcurrentExecution(
       return { status: 'failed', reason: outcome.reason };
     }
     if (Date.now() >= deadline) {
-      return {
-        status: 'failed',
-        reason: `timed out waiting for a concurrent execution to finish (last observed status: "${row?.status ?? 'unknown'}")`,
-      };
+      // P2-8 fix: report the row's *actual* last-observed status, not a fabricated 'failed' — the
+      // winner may simply still be executing (or, once phase-2 inline execution is routed through
+      // the drainer's per-gatekeeper ordering, still sitting `approved`/`auto_approved` behind an
+      // earlier `pending_approval` row — §8.1 "遇 pending 停"). A caller reading `{status:
+      // 'failed'}` here would wrongly conclude the action never happened when it may complete a
+      // moment later; the already-wired async drain paths pick it up regardless.
+      return { status: row?.status ?? 'pending_approval' };
     }
     await sleep(PHASE2_POLL_INTERVAL_MS);
   }
@@ -412,8 +449,38 @@ interface RunGovernedRequestArgs {
   readonly blastRadius: 'low' | 'medium' | 'high';
   readonly autoApprovable: boolean;
   readonly awaitDecision: boolean;
+  /** P1-1 fix — always populated by the caller (`requestActionHandler`, explicit or derived
+   *  default), threaded straight through to `requestAction()`. */
+  readonly idempotencyKey: string;
+  /** P1-2 fix — the Worker's own WorkerRun (resolved from `claims.sid`), so
+   *  `application/task/reaper.ts`'s ActionRequestPending/Updated routing can move the right Task
+   *  to/from `waiting_approval`. `undefined` for a human caller (no WorkerRun to attribute to). */
+  readonly parentWorkerRunId?: string;
 }
 
+/** The phase-1 `{result, resourceType, resourceId}` shape every branch of `runGovernedRequest`'s
+ *  switch below starts from — only the branches that need one add an `afterCommit`. */
+function phase1Result(actionRequest: ActionRequestRow): CapabilityHandlerResult {
+  return {
+    result: { actionRequestId: actionRequest.id, status: actionRequest.status },
+    resourceType: 'action_request',
+    resourceId: actionRequest.id,
+  };
+}
+
+/**
+ * Resolves an ActionRequest through the policy engine (`requestAction`, I6/I11) and then decides
+ * what phase 1 returns and what — if anything — phase 2 (`afterCommit`) does next.
+ *
+ * **Idempotent replay changes what "the resolved status" can be** (P1-1 fix): with an
+ * `idempotencyKey`, `requestAction` may return an *existing* row instead of a freshly-resolved
+ * one — in any status a previous call already carried it to, including a terminal one. The switch
+ * below is therefore exhaustive over every `ActionRequestStatus`, not just the three outcomes a
+ * fresh resolution can produce (`denied`/`auto_approved`/`pending_approval`) — a replayed
+ * `executed`/`failed`/`executing`/`approved`/`rejected`/`expired`/`compensated` row must report
+ * *that* status (and, where relevant, its already-recorded result) rather than being coerced
+ * through logic written only for a brand-new row.
+ */
 async function runGovernedRequest(
   client: PoolClient,
   workspaceId: string,
@@ -429,78 +496,137 @@ async function runGovernedRequest(
     actorRuntime: args.actorRuntime,
     requesterScope: args.requesterScope,
     params: args.operationParams,
+    idempotencyKey: args.idempotencyKey,
+    parentWorkerRunId: args.parentWorkerRunId,
   });
 
-  if (actionRequest.status === 'denied') {
-    throw new ActionRequestDeniedError(actionRequest.id);
-  }
+  switch (actionRequest.status) {
+    case 'denied':
+      // P2-1 (denials leave zero trace) is addressed by a later commit in this same fix series
+      // (phase 1 will return `{status:'denied'}` and defer this throw to `afterCommit`, so the
+      // row/audit/outbox this `requestAction` call just wrote survive the commit). Unchanged here.
+      throw new ActionRequestDeniedError(actionRequest.id);
 
-  if (actionRequest.status === 'auto_approved') {
-    return {
-      result: { actionRequestId: actionRequest.id, status: actionRequest.status },
-      resourceType: 'action_request',
-      resourceId: actionRequest.id,
-      afterCommit: async (pool: PoolLike) => {
-        const { actionExecutor } = requireDeps();
-        const withTransaction = createAdminWithTransaction(pool);
-        const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
-        const outcome = await tryExecuteInline(
-          actionExecutor,
-          withTransaction,
-          workspaceId,
-          systemActorId,
-          actionRequest.id,
-        );
-        return { ...outcome, actionRequestId: actionRequest.id };
-      },
-    };
-  }
+    case 'rejected':
+    case 'expired':
+    case 'compensated':
+    case 'proposed':
+    case 'policy_evaluated':
+      // Terminal (or, for the last two, never actually persisted mid-resolution — request-
+      // action.ts's own doc comment) — nothing left to do; report the status as-is.
+      return phase1Result(actionRequest);
 
-  // pending_approval
-  if (!args.awaitDecision) {
-    // The simulation is decoration on the approval card, not a precondition of the request: a gate
-    // that cannot simulate (S2.12 host run — the ssh gate's simulate call failed and the whole
-    // request rolled back, so the Worker's action never reached a human) must still produce a
-    // pending ActionRequest. The failure is reported on the card instead.
-    let simulate: unknown;
-    try {
-      simulate = await requireDeps().gatekeeperClient.simulate(args.gatekeeper.endpoint, {
-        operation: args.operationName,
-        params: args.operationParams,
-        onBehalfOf: args.onBehalfOf,
-      });
-    } catch (err) {
-      simulate = {
-        unavailable: true,
-        reason: err instanceof Error ? err.message : String(err),
+    case 'auto_approved':
+    case 'approved':
+      return {
+        ...phase1Result(actionRequest),
+        afterCommit: async (pool: PoolLike) => {
+          const { actionExecutor } = requireDeps();
+          const withTransaction = createAdminWithTransaction(pool);
+          const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
+          const outcome = await tryExecuteInline(
+            actionExecutor,
+            withTransaction,
+            workspaceId,
+            systemActorId,
+            actionRequest.id,
+          );
+          return { ...outcome, actionRequestId: actionRequest.id };
+        },
       };
-    }
-    return {
-      result: { status: 'pending_approval', actionRequestId: actionRequest.id, simulate },
-      resourceType: 'action_request',
-      resourceId: actionRequest.id,
-    };
-  }
 
-  return {
-    result: { actionRequestId: actionRequest.id, status: actionRequest.status },
-    resourceType: 'action_request',
-    resourceId: actionRequest.id,
-    afterCommit: async (pool: PoolLike) => {
-      const { actionExecutor, awaitDecisionTimeoutMs } = requireDeps();
-      const withTransaction = createAdminWithTransaction(pool);
-      const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
-      const outcome = await pollAndExecute(
-        actionExecutor,
-        withTransaction,
-        workspaceId,
-        systemActorId,
-        actionRequest.id,
-        awaitDecisionTimeoutMs ?? DEFAULT_AWAIT_DECISION_TIMEOUT_MS,
-      );
-      return { ...outcome, actionRequestId: actionRequest.id };
-    },
-  };
+    case 'executing':
+      // A replay landed on a row a *different* call (or the async drain path) is actively
+      // executing right now — wait for it rather than trying to execute it a second time.
+      return {
+        ...phase1Result(actionRequest),
+        afterCommit: async (pool: PoolLike) => {
+          const withTransaction = createAdminWithTransaction(pool);
+          const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
+          const outcome = await awaitConcurrentExecution(
+            withTransaction,
+            workspaceId,
+            systemActorId,
+            actionRequest.id,
+          );
+          return { ...outcome, actionRequestId: actionRequest.id };
+        },
+      };
+
+    case 'executed':
+    case 'verified':
+    case 'failed':
+      // A replay landed on an already-terminal row — read its stored outcome back rather than
+      // re-deriving anything (never re-`apply`s).
+      return {
+        ...phase1Result(actionRequest),
+        afterCommit: async (pool: PoolLike) => {
+          const withTransaction = createAdminWithTransaction(pool);
+          const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
+          const outcome = await readTerminalOutcome(
+            withTransaction,
+            workspaceId,
+            systemActorId,
+            actionRequest.id,
+          );
+          return {
+            status: actionRequest.status === 'failed' ? 'failed' : 'executed',
+            ...outcome,
+            actionRequestId: actionRequest.id,
+          };
+        },
+      };
+
+    case 'pending_approval':
+      if (!args.awaitDecision) {
+        // The simulation is decoration on the approval card, not a precondition of the request: a
+        // gate that cannot simulate (S2.12 host run — the ssh gate's simulate call failed and the
+        // whole request rolled back, so the Worker's action never reached a human) must still
+        // produce a pending ActionRequest. The failure is reported on the card instead. Re-running
+        // this on a replay is harmless — read-only, and its result is decoration only.
+        let simulate: unknown;
+        try {
+          simulate = await requireDeps().gatekeeperClient.simulate(args.gatekeeper.endpoint, {
+            operation: args.operationName,
+            params: args.operationParams,
+            onBehalfOf: args.onBehalfOf,
+          });
+        } catch (err) {
+          simulate = {
+            unavailable: true,
+            reason: err instanceof Error ? err.message : String(err),
+          };
+        }
+        return {
+          result: { status: 'pending_approval', actionRequestId: actionRequest.id, simulate },
+          resourceType: 'action_request',
+          resourceId: actionRequest.id,
+        };
+      }
+
+      return {
+        ...phase1Result(actionRequest),
+        afterCommit: async (pool: PoolLike) => {
+          const { actionExecutor, awaitDecisionTimeoutMs } = requireDeps();
+          const withTransaction = createAdminWithTransaction(pool);
+          const systemActorId = await resolveSystemActor(withTransaction, workspaceId);
+          const outcome = await pollAndExecute(
+            actionExecutor,
+            withTransaction,
+            workspaceId,
+            systemActorId,
+            actionRequest.id,
+            awaitDecisionTimeoutMs ?? DEFAULT_AWAIT_DECISION_TIMEOUT_MS,
+          );
+          return { ...outcome, actionRequestId: actionRequest.id };
+        },
+      };
+
+    default:
+      // Exhaustiveness net, not a reachable branch (every ActionRequestStatus is a case above) —
+      // report as-is rather than throwing, matching every other terminal branch's shape.
+      return phase1Result(actionRequest);
+  }
 }
 
 // -------------------------------------------------------------------------------------------
@@ -581,10 +707,12 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     gatekeeperId,
     operation: operationName,
     params: operationParams,
+    idempotencyKey: callerIdempotencyKey,
   } = params as {
     gatekeeperId: string;
     operation: string;
     params?: Record<string, unknown>;
+    idempotencyKey?: string;
   };
   const channel: CapabilityChannel = ctx?.channel ?? 'handle';
   const onBehalfOf = ctx?.principalId;
@@ -594,6 +722,22 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   const actorRuntime = channel === 'human' ? 'human' : 'pi';
   const requesterScope = resolveRequesterScope(channel, ctx?.scope, gatekeeperId);
   const resolvedParams = operationParams ?? {};
+  const sid = channel === 'handle' ? ctx?.claims?.sid : undefined;
+
+  // P1-1 fix: an explicit key is scoped to (on_behalf_of, sid) before it reaches the DB's
+  // (workspace_id, idempotency_key) unique index (workspace scoping is the DB's own job — see
+  // `scopeExplicitIdempotencyKey`'s doc comment); omitted, a default is derived from (sid|
+  // principal, gatekeeperId, operation, stable params hash) so an unmarked retry still collapses
+  // onto the same row. Only `mode:'execute'` calls reach `runGovernedRequest` (an ActionRequest is
+  // only ever created there) — the observe path below never needs one.
+  const idempotencyKey = callerIdempotencyKey
+    ? scopeExplicitIdempotencyKey({ onBehalfOf, sid, key: callerIdempotencyKey })
+    : deriveDefaultIdempotencyKey({
+        identity: sid ?? onBehalfOf,
+        gatekeeperId,
+        operationName,
+        params: resolvedParams,
+      });
 
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
@@ -616,6 +760,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       blastRadius: 'medium',
       autoApprovable: false,
       awaitDecision: true,
+      idempotencyKey,
     });
   }
 
@@ -630,5 +775,6 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     blastRadius: operation.blast_radius,
     autoApprovable: operation.auto_approvable,
     awaitDecision: operation.await_decision,
+    idempotencyKey,
   });
 };
