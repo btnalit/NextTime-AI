@@ -38,9 +38,16 @@ interface FakeSession {
 function createFakePool(opts: {
   principals?: FakePrincipal[];
   revokedJtis?: readonly string[];
+  /** S3.11 `disable_principal`: `handle-auth.ts`'s `isPrincipalDisabled` check — ids here make
+   *  that check report disabled; every other `(workspaceId, principalId)` pair (including one
+   *  with no corresponding `FakePrincipal` row at all, the common case in this file's Handle-
+   *  channel tests below) reports not-disabled, matching a real Handle's `obo` always naming a
+   *  real principal. */
+  disabledPrincipalIds?: readonly string[];
 }) {
   const principals = opts.principals ?? [];
   const revokedJtis = new Set(opts.revokedJtis ?? []);
+  const disabledPrincipalIds = new Set(opts.disabledPrincipalIds ?? []);
   const sessions: FakeSession[] = [];
 
   const query = vi.fn(async (text: string, params: unknown[] = []) => {
@@ -86,6 +93,13 @@ function createFakePool(opts: {
     if (sql.startsWith('select revoked_at from capability_handles')) {
       const [jti] = params as [string];
       return { rows: [{ revoked_at: revokedJtis.has(jti) ? new Date() : null }], rowCount: 1 };
+    }
+    if (sql.startsWith('select disabled_at from principals')) {
+      const [, principalId] = params as [string, string];
+      return {
+        rows: [{ disabled_at: disabledPrincipalIds.has(principalId) ? new Date() : null }],
+        rowCount: 1,
+      };
     }
 
     throw new Error(`createFakePool: unexpected query: ${sql}`);
@@ -199,6 +213,31 @@ describe('resolveCaller — handle channel fallthrough', () => {
       obo: randomUUID(),
       scope: { capabilities: [], resources: {} },
       jti,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })
+      .setProtectedHeader({ alg: HANDLE_SIGNING_ALG })
+      .sign(privateKey);
+
+    await expect(
+      resolveCaller(`Bearer ${token}`, { pool, loadHandlePublicKey: async () => publicKey }),
+    ).rejects.toThrow(UnauthorizedError);
+  });
+
+  it('S3.11: a Handle whose on_behalf_of principal is disabled → UnauthorizedError (401)', async () => {
+    const { publicKey, privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+      crv: 'Ed25519',
+      extractable: true,
+    });
+    const onBehalfOf = randomUUID();
+    const { pool } = createFakePool({ principals: [], disabledPrincipalIds: [onBehalfOf] });
+
+    const token = await new SignJWT({
+      ws: randomUUID(),
+      sid: randomUUID(),
+      obo: onBehalfOf,
+      scope: { capabilities: [], resources: {} },
+      jti: randomUUID(),
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 3600,
     })

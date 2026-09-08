@@ -5,7 +5,12 @@
  * doc for why) and exposes only this service interface; `interfaces/http` is the only consumer.
  */
 
-export { hashApiKey, lookupPrincipalByApiKeyHash, authenticateHuman } from './auth.js';
+export {
+  generateApiKey,
+  hashApiKey,
+  lookupPrincipalByApiKeyHash,
+  authenticateHuman,
+} from './auth.js';
 export type { PrincipalRow, SessionRow, AuthenticatedHuman } from './auth.js';
 
 export { authenticateHandle } from './handle-auth.js';
@@ -89,3 +94,19 @@ export {
 export type { ConnectionHandlerDeps } from './connection-handlers.js';
 
 export { publishManifestHandler } from './operation-manifest-handlers.js';
+
+// S3.11 (docs/development-tasks.md "中台控制面") — control-plane read/management capabilities.
+export {
+  PrincipalNotFoundError,
+  PrincipalOperationRefusedError,
+} from './members-handlers.js';
+export type { PrincipalDetailRow } from './members-handlers.js';
+
+// `GatekeeperNotFoundError` itself is already exported above (from request-action-handler.js) —
+// gatekeeper-read-handlers.ts re-exports the exact same class (governance/gatekeepers/index.js's
+// own `GatekeeperNotFoundError`), not a second one, so it is not re-exported a third time here.
+export { setGatekeeperReadHandlerDeps, probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
+export type { GatekeeperHealth, GatekeeperReadHandlerDeps } from './gatekeeper-read-handlers.js';
+
+export { ModelsCatalogUnavailableError, readModelCatalog } from './models-catalog-handler.js';
+export type { ModelCatalogEntry } from './models-catalog-handler.js';

@@ -355,6 +355,69 @@ export async function listDraftOperationsForGatekeeper(
   return records;
 }
 
+/**
+ * `list_operations` (S3.11, docs/development-tasks.md "中台控制面"): the human-facing Operation
+ * directory — every Operation regardless of status (draft/published/deprecated all visible, so a
+ * console can render the draft → published → deprecated lifecycle), optionally narrowed to one
+ * Gatekeeper. Distinct from `listPublishedOperationsForGatekeepers` above (agent-facing, published
+ * only, I17 "draft 对 agent 不可见") and `listDraftOperationsForGatekeeper` (drafts only, one
+ * gate) — this is the human read side, where I17's visibility restriction does not apply (a human
+ * operator reviewing what a Worker proposed is the point of the console's "能力目录" page).
+ */
+export async function listOperations(
+  client: PoolClient,
+  workspaceId: string,
+  filter: { readonly gatekeeperId?: string } = {},
+): Promise<readonly OperationRecord[]> {
+  const result = filter.gatekeeperId
+    ? await client.query<OperationObjectRow>(
+        `select identity_key, properties
+         from objects
+         where workspace_id = $1
+           and object_type = 'Operation'
+           and identity_key ->> 'gatekeeperId' = $2
+         order by updated_at asc`,
+        [workspaceId, filter.gatekeeperId],
+      )
+    : await client.query<OperationObjectRow>(
+        `select identity_key, properties
+         from objects
+         where workspace_id = $1
+           and object_type = 'Operation'
+         order by updated_at asc`,
+        [workspaceId],
+      );
+  const records: OperationRecord[] = [];
+  for (const row of result.rows) {
+    const gatekeeperId = row.identity_key?.gatekeeperId;
+    const name = row.identity_key?.name;
+    if (!gatekeeperId || !name) continue; // defensive — every Operation Object is upserted with both
+    records.push(toOperationRecord(gatekeeperId, name, row.properties));
+  }
+  return records;
+}
+
+/** `list_gatekeepers`'s own per-gate `operationCount` (S3.11) — one grouped query over every
+ *  Gatekeeper's Operations, rather than `listOperations(...).length` once per gate in a loop
+ *  (N+1), and rather than fetching every Operation's full `properties` just to count them. */
+export async function countOperationsByGatekeeper(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReadonlyMap<string, number>> {
+  const result = await client.query<{ gatekeeper_id: string | null; count: string }>(
+    `select identity_key ->> 'gatekeeperId' as gatekeeper_id, count(*)::bigint as count
+     from objects
+     where workspace_id = $1 and object_type = 'Operation'
+     group by identity_key ->> 'gatekeeperId'`,
+    [workspaceId],
+  );
+  const counts = new Map<string, number>();
+  for (const row of result.rows) {
+    if (row.gatekeeper_id) counts.set(row.gatekeeper_id, Number(row.count));
+  }
+  return counts;
+}
+
 // -------------------------------------------------------------------------------------------
 // publish / deprecate — human channel only (enforced at the capability-registry layer, I16).
 // -------------------------------------------------------------------------------------------

@@ -19,6 +19,9 @@ import {
   ForbiddenError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
+  ModelsCatalogUnavailableError,
+  PrincipalNotFoundError,
+  PrincipalOperationRefusedError,
   UnauthorizedError,
 } from '../../application/gateway/index.js';
 import {
@@ -209,6 +212,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof TaskRuntimeNotConfiguredError) {
     return { code: WS_ERROR_CODES.SERVICE_UNAVAILABLE, message: err.message };
   }
+  // S3.11 `list_models` — same bucket as TaskRuntimeNotConfiguredError above.
+  if (err instanceof ModelsCatalogUnavailableError) {
+    return { code: WS_ERROR_CODES.SERVICE_UNAVAILABLE, message: err.message };
+  }
   // governance/approval + governance/policy domain errors (S2.2/S2.3) — same additions as
   // interfaces/http/capability-route.ts's mapCapabilityError, reusing FORBIDDEN/NOT_FOUND/
   // INVALID_PARAMS where an existing code already fits and only ILLEGAL_TRANSITION is new.
@@ -232,6 +239,14 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // IllegalTransition / WorkerDefinitionNotPublishedError below.
   if (err instanceof OperationIdentityConflictError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S3.11 (docs/development-tasks.md "中台控制面") — same additions as capability-route.ts's
+  // mapCapabilityError (member-management invariant refusals / not-found).
+  if (err instanceof PrincipalOperationRefusedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  if (err instanceof PrincipalNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.
   if (isPgInvalidTextRepresentation(err)) {

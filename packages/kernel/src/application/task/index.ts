@@ -72,11 +72,13 @@ export {
   QUOTA_KEY_VALUES,
   type QuotaKey,
   type QuotaRow,
+  type QuotaListEntry,
   type ResolvedQuotas,
   type SetQuotaInput,
   InvalidQuotaValueError,
   UnknownQuotaKeyError,
   isQuotaKey,
+  listQuotas,
   resolveQuotas,
   setQuotaValue,
 } from './quotas.js';

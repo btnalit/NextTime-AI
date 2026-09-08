@@ -98,6 +98,8 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/registry (int
       transportKind: 'http',
       target: 'example-system',
       endpoint: 'https://gate.example.invalid',
+      // S3.11 addition (get_gatekeeper/list_gatekeepers need the Object's own createdAt).
+      createdAt: expect.any(Date),
     });
   });
 

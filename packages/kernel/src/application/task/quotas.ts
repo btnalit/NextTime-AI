@@ -135,6 +135,65 @@ export async function resolveQuotas(
   };
 }
 
+/**
+ * `list_quotas` (S3.11, docs/development-tasks.md "中台控制面"): every I18 quota key, its
+ * effective value (workspace override merged over the compiled-in default, same resolution
+ * `resolveQuotas` above uses — `task.max_depth` gets the same `HARD_MAX_DEPTH` clamp), and
+ * whether that value is an explicit override or still the compiled-in default. Always exactly
+ * `QUOTA_KEY_VALUES.length` rows — every key is reported even when the workspace has never
+ * `set_quota`'d it, so the console's "模型与配额" page always shows the full, current axis set.
+ */
+export interface QuotaListEntry {
+  readonly key: QuotaKey;
+  readonly value: number | null;
+  readonly isDefault: boolean;
+  readonly updatedBy: string | null;
+  readonly updatedAt: string | null;
+}
+
+interface QuotaOverrideRow {
+  key: QuotaKey;
+  value: number | null;
+  updated_by: string;
+  updated_at: Date;
+}
+
+export async function listQuotas(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<readonly QuotaListEntry[]> {
+  const result = await client.query<QuotaOverrideRow>(
+    'select key, value, updated_by, updated_at from quotas where workspace_id = $1 and key = any($2::text[])',
+    [workspaceId, QUOTA_KEY_VALUES],
+  );
+  const overrides = new Map<QuotaKey, QuotaOverrideRow>();
+  for (const row of result.rows) overrides.set(row.key, row);
+
+  return QUOTA_KEY_VALUES.map((key) => {
+    const override = overrides.get(key);
+    if (!override) {
+      return {
+        key,
+        value: DEFAULT_QUOTA_VALUES[key],
+        isDefault: true,
+        updatedBy: null,
+        updatedAt: null,
+      };
+    }
+    const value =
+      key === 'task.max_depth'
+        ? Math.min(override.value ?? HARD_MAX_DEPTH, HARD_MAX_DEPTH)
+        : override.value;
+    return {
+      key,
+      value,
+      isDefault: false,
+      updatedBy: override.updated_by,
+      updatedAt: override.updated_at.toISOString(),
+    };
+  });
+}
+
 export interface SetQuotaInput {
   readonly key: string;
   readonly value: unknown;

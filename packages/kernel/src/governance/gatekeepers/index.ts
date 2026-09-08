@@ -11,11 +11,18 @@
  * must not write these Object types directly (I16, `application/gateway/meta-ontology-guard.ts`).
  */
 
-export { registerGatekeeper, getGatekeeper, GatekeeperNotFoundError } from './registry.js';
+export {
+  registerGatekeeper,
+  getGatekeeper,
+  listGatekeepers,
+  countGatekeepers,
+  GatekeeperNotFoundError,
+} from './registry.js';
 export type {
   RegisterGatekeeperInput,
   RegisterGatekeeperResult,
   GatekeeperRecord,
+  GatekeeperListEntry,
 } from './registry.js';
 
 export {
@@ -25,6 +32,8 @@ export {
   getPublishedOperation,
   listPublishedOperationsForGatekeepers,
   listDraftOperationsForGatekeeper,
+  listOperations,
+  countOperationsByGatekeeper,
   publishOperation,
   publishManifest,
   deprecateOperation,

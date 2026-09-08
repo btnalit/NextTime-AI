@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { PrincipalKind, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
@@ -105,6 +105,19 @@ export function hashApiKey(rawApiKey: string): string {
   return createHash('sha256').update(rawApiKey, 'utf8').digest('hex');
 }
 
+const API_KEY_BYTES = 32;
+
+/**
+ * Generates a fresh raw API key (S3.11 `create_principal`/`rotate_api_key` reuse — moved out of
+ * `cli/bootstrap.ts`'s former private copy, docs/development-tasks.md S3.11 "reuse the bootstrap
+ * CLI's key generation + sha256 hashing path ... factor a shared function if needed, no duplicate
+ * hashing code"). Never logged; the caller is responsible for returning it to its caller exactly
+ * once and storing only `hashApiKey(...)` of it.
+ */
+export function generateApiKey(): string {
+  return randomBytes(API_KEY_BYTES).toString('base64url');
+}
+
 /**
  * Runs `fn` on a connection that stays on the superuser login role (RLS bypassed) with no
  * meaningful workspace/principal GUCs set — for lookups that must run before a workspace is
@@ -119,14 +132,21 @@ export function withAdminClient<T>(
   });
 }
 
-/** Looks up a Principal by the sha256 hash of its API key. `null` if no such key is registered. */
+/**
+ * Looks up a Principal by the sha256 hash of its API key. `null` if no such key is registered —
+ * or (S3.11 `disable_principal`) if it is registered but `disabled_at is not null`: a disabled
+ * Principal's key must stop authenticating immediately, and this is the one place the human
+ * channel resolves a raw key to a Principal, so excluding it here (rather than checking
+ * `disabledAt` after the fact) closes the path with no separate post-hoc check a caller could
+ * forget.
+ */
 export async function lookupPrincipalByApiKeyHash(
   pool: PoolLike,
   apiKeyHash: string,
 ): Promise<PrincipalRow | null> {
   return withAdminClient(pool, async (client) => {
     const result = await client.query<PrincipalDbRow>(
-      'select workspace_id, id, kind, role, display_name from principals where api_key_hash = $1',
+      'select workspace_id, id, kind, role, display_name from principals where api_key_hash = $1 and disabled_at is null',
       [apiKeyHash],
     );
     const row = result.rows[0];
