@@ -105,5 +105,7 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
     memoryMb: config.workerMemoryMb,
     pidsLimit: config.workerPidsLimit,
     tmpfsMb: config.workerTmpfsMb,
+    cpus: config.workerCpus,
+    dns: config.workerDnsSinkhole,
   };
 }

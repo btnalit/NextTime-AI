@@ -27,6 +27,8 @@ describe('loadConfig', () => {
     expect(config.workerMemoryMb).toBe(2048);
     expect(config.workerPidsLimit).toBe(512);
     expect(config.workerTmpfsMb).toBe(512);
+    expect(config.workerCpus).toBe(2);
+    expect(config.workerDnsSinkhole).toBeUndefined();
     expect(config.entryIdleTimeoutMs).toBe(30 * 60 * 1000);
     expect(config.egressSourceMapFile).toBe('/data/config/egress-sources.json');
     expect(config.dockerSocketPath).toBe('/var/run/docker.sock');
@@ -51,6 +53,8 @@ describe('loadConfig', () => {
       WORKER_MEMORY_MB: '4096',
       WORKER_PIDS_LIMIT: '256',
       WORKER_TMPFS_MB: '128',
+      WORKER_CPUS: '1.5',
+      WORKER_DNS_SINKHOLE: '198.51.100.53, 198.51.100.54,',
       ENTRY_IDLE_TIMEOUT_MS: '1000',
       EGRESS_SOURCE_MAP_FILE: '/x/sources.json',
       DOCKER_SOCKET_PATH: '/tmp/docker.sock',
@@ -72,6 +76,8 @@ describe('loadConfig', () => {
       workerMemoryMb: 4096,
       workerPidsLimit: 256,
       workerTmpfsMb: 128,
+      workerCpus: 1.5,
+      workerDnsSinkhole: ['198.51.100.53', '198.51.100.54'],
       entryIdleTimeoutMs: 1000,
       egressSourceMapFile: '/x/sources.json',
       dockerSocketPath: '/tmp/docker.sock',

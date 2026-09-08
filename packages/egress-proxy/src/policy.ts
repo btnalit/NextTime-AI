@@ -1,5 +1,5 @@
 import type { CidrRange } from './net-utils.js';
-import { classifyAddress, isInCidr, parseIPv4, parseIPv6 } from './net-utils.js';
+import { classifyAddress, isInCidr, isIpLiteral } from './net-utils.js';
 
 /**
  * Egress decision policy (design doc §7.9, §5.4 I10). Pure aside from the injected `resolve`
@@ -167,8 +167,12 @@ export async function decideEgress(input: DecideEgressInput): Promise<PolicyDeci
 
   // A literal-IP target never qualifies for the trusted-resolved-CIDR exemption (see
   // PolicyConfig.trustedResolvedCidrs): the exemption is about what the network's resolver
-  // answered for a *name*, not about letting callers dial into that range directly.
-  const targetIsLiteral = parseIPv4(hostname) !== null || parseIPv6(hostname) !== null;
+  // answered for a *name*, not about letting callers dial into that range directly. `isIpLiteral`
+  // (not just strict dotted-quad/colon-hex) so an alternate notation (decimal/hex/octal/short
+  // dotted forms — net-utils.ts `parseIPv4Literal`'s own doc comment) can never bypass this rule
+  // by spelling the same target in a form the strict parser alone wouldn't recognize (lane-6
+  // review P3).
+  const targetIsLiteral = isIpLiteral(hostname);
 
   for (const address of addresses) {
     const addressClass = classifyAddress(address, config.platformSubnets);

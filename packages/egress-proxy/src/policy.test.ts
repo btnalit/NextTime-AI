@@ -329,6 +329,21 @@ describe('decideEgress', () => {
       expect(decision).toEqual({ allowed: false, reason: 'private-address' });
     });
 
+    it('denies the same literal target spelled as an alternate-notation short-dotted form too (lane-6 review P3)', async () => {
+      // Same target as the test above (quad(10,199,12,34)), spelled as "a.b.(c*256+d)" — a form
+      // the old strict-dotted-quad-only literal check did not recognize as "this is a literal IP",
+      // letting it wrongly qualify for the trusted-range exemption above ("only resolved names
+      // qualify" — this hostname has dots, so it isn't caught by the bare-hostname rule either).
+      const shortForm = `10.199.${12 * 256 + 34}`;
+      const decision = await decideEgress({
+        hostname: shortForm,
+        source: undefined,
+        config: baseConfig({ trustedResolvedCidrs: [fakeRange] }),
+        resolve: resolverReturning(quad(10, 199, 12, 34)),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'private-address' });
+    });
+
     it('platform subnets stay denied even when a trusted range covers them', async () => {
       const decision = await decideEgress({
         hostname: 'inside.example.com',
