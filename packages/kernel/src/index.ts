@@ -3,12 +3,16 @@ import { IllegalTransition } from '@nexttime/shared';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
-import { createPool } from './adapters/db/pool.js';
+import { createPool, withWorkspace } from './adapters/db/pool.js';
 import type { PoolLike } from './adapters/db/pool.js';
 import { HttpGatekeeperClient } from './adapters/gatekeeper-client/index.js';
 import { TaskSupervisorClient } from './adapters/supervisor-client/index.js';
 import type { TaskSupervisorClientPort } from './adapters/supervisor-client/index.js';
-import { createChatEventSink, interruptStaleRunningTurns } from './application/chat/index.js';
+import {
+  chatMessageText,
+  createChatEventSink,
+  interruptStaleRunningTurns,
+} from './application/chat/index.js';
 import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
 import {
   createAdminWithTransaction,
@@ -19,7 +23,7 @@ import {
   setRequestActionDeps,
 } from './application/gateway/index.js';
 import type { GatekeeperActionExecutorDeps } from './application/gateway/index.js';
-import type { AgentRuntime } from './application/host-bridge/index.js';
+import type { AgentRuntime, ResolveTurnPrompt } from './application/host-bridge/index.js';
 import {
   AgentHostRuntime,
   FakeAgentRuntime,
@@ -382,7 +386,36 @@ export function createBackgroundServices(
 
   setAgentRuntimeForHandlers(runtime);
   if (runtime instanceof AgentHostRuntime) setAgentHostRuntimeForWsRoute(runtime);
-  const unsubscribeTurnStarted = registerTurnStartedConsumer(dispatcher, runtime);
+
+  // lane-1 P2 fix: TurnStarted now carries a chat_messages reference (chatMessageId), not the
+  // prompt text inline (see shared/src/events.ts's TurnStartedEvent doc comment) — this is the
+  // one place that resolves it back to text, reading the row under the originating principal's
+  // own RLS context (the same visibility the Chat itself has) rather than the outbox's
+  // workspace-wide access.
+  const resolveTurnPrompt: ResolveTurnPrompt = async (event) => {
+    const row = await withWorkspace(
+      options.pool,
+      { workspaceId: event.workspaceId, principalId: event.principalId },
+      async (client) => {
+        const result = await client.query<{ content: Record<string, unknown> }>(
+          'select content from chat_messages where workspace_id = $1 and id = $2',
+          [event.workspaceId, event.chatMessageId],
+        );
+        return result.rows[0];
+      },
+    );
+    if (!row) {
+      throw new Error(
+        `resolveTurnPrompt: no chat_messages row for workspace ${event.workspaceId}, id ${event.chatMessageId}`,
+      );
+    }
+    return chatMessageText(row.content);
+  };
+  const unsubscribeTurnStarted = registerTurnStartedConsumer(
+    dispatcher,
+    runtime,
+    resolveTurnPrompt,
+  );
 
   // S2.11: application/linkage's TaskUpdated/ActionRequestPending/ActionRequestUpdated/
   // BudgetWarning consumers — chat system messages + the action.pending/action.updated/

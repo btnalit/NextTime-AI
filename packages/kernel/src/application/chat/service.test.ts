@@ -138,7 +138,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(running?.id).toBe(turnId);
 
       const outboxRow = await inTxAs(ownerId, async (client) => {
-        const result = await client.query<{ event_type: string; payload: { prompt: string } }>(
+        const result = await client.query<{
+          event_type: string;
+          payload: { chatMessageId: string };
+        }>(
           `select event_type, payload from outbox
          where workspace_id = $1 and event_type = 'TurnStarted'
          order by id desc limit 1`,
@@ -147,7 +150,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         return result.rows[0];
       });
       expect(outboxRow?.event_type).toBe('TurnStarted');
-      expect(outboxRow?.payload.prompt).toBe('hello');
+      expect(outboxRow?.payload.chatMessageId).toBe(message.id);
     });
 
     it('a second send_chat_message while a Turn is running throws TurnAlreadyRunningError and writes nothing (§9.4)', async () => {

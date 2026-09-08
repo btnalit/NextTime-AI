@@ -37,7 +37,7 @@ export { AgentHostRuntime } from './agent-host-runtime.js';
 export type { AgentHostLink, AgentHostRuntimeDeps } from './agent-host-runtime.js';
 
 export { registerTurnStartedConsumer } from './turn-started-consumer.js';
-export type { TurnStartedSource } from './turn-started-consumer.js';
+export type { ResolveTurnPrompt, TurnStartedSource } from './turn-started-consumer.js';
 
 export { recordEgressObservations } from './egress-observations.js';
 export type {

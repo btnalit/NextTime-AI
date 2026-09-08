@@ -18,6 +18,17 @@ export interface TurnStartedSource {
 }
 
 /**
+ * Resolves a `TurnStarted` event's `chatMessageId` reference to the actual prompt text (lane-1 P2
+ * fix — see `TurnStartedEvent`'s own doc comment in packages/shared/src/events.ts: the outbox
+ * payload itself carries only the reference, never the message body). This module deliberately
+ * takes the resolver as a dependency rather than reading `chat_messages` itself — host-bridge and
+ * `application/chat` never import each other directly (this file's own module doc comment) — so
+ * the caller (`packages/kernel/src/index.ts`) is the one that reads the row, under
+ * `withWorkspace`, and projects it with `application/chat`'s own `chatMessageText`.
+ */
+export type ResolveTurnPrompt = (event: TurnStartedEvent) => Promise<string>;
+
+/**
  * application/host-bridge/turn-started-consumer: subscribes an `AgentRuntime` to the outbox's
  * `TurnStarted` events (design doc §7.10 host-bridge row "把 pi 事件翻译为平台事件后发布"; §8.1 data
  * flow; docs/development-tasks.md S1.4 deliverable 5 "host-bridge subscribes to TurnStarted via
@@ -57,23 +68,26 @@ function withTurnIdMarker(turnId: string, prompt: string): string {
   return `${MARKER_PREFIX}${turnId}${MARKER_SUFFIX}${prompt}`;
 }
 
-/** Registers `runtime` to receive every `TurnStarted` domain event from `dispatcher`. Returns an
- *  unsubscribe function (see `OutboxDispatcher.subscribe`). */
+/** Registers `runtime` to receive every `TurnStarted` domain event from `dispatcher`, resolving
+ *  each event's `chatMessageId` to prompt text via `resolvePrompt` before handing it to the
+ *  runtime. Returns an unsubscribe function (see `OutboxDispatcher.subscribe`). */
 export function registerTurnStartedConsumer(
   dispatcher: TurnStartedSource,
   runtime: AgentRuntime,
+  resolvePrompt: ResolveTurnPrompt,
 ): () => void {
   const seenOutboxIds = new Set<string>();
 
   return dispatcher.subscribe('TurnStarted', async (event, meta) => {
     if (seenOutboxIds.has(meta.outboxId)) return;
 
+    const prompt = await resolvePrompt(event);
     await runtime.startTurn({
       workspaceId: event.workspaceId,
       chatId: event.chatId,
       turnId: event.turnId,
       principalId: event.principalId,
-      prompt: withTurnIdMarker(event.turnId, event.prompt),
+      prompt: withTurnIdMarker(event.turnId, prompt),
     });
 
     seenOutboxIds.add(meta.outboxId);
