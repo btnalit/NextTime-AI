@@ -8,16 +8,220 @@ import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { hashApiKey } from '../application/gateway/index.js';
 import { getOperation, getPublishedOperation } from '../governance/gatekeepers/index.js';
-import { addPrincipal, createWorkspace, registerGatekeeperFromCli } from './bootstrap.js';
+import {
+  WorkspaceDeletionOrderCycleError,
+  addPrincipal,
+  checkDeleteWorkspaceGuards,
+  computeWorkspaceTableDeletionOrder,
+  createWorkspace,
+  parseDeleteWorkspaceArgs,
+  registerGatekeeperFromCli,
+} from './bootstrap.js';
+import type { WorkspaceScopedSchema } from './bootstrap.js';
 
 /**
- * cli/bootstrap.test: integration tests (real Postgres; auto-skip without DATABASE_URL) for
- * `create-workspace` (docs/development-tasks.md S1.3, item 6) and `add-principal`
- * (docs/development-tasks.md S1.10) — the workspace/principal rows exist afterward, the printed
- * API key resolves back to that Principal via the human channel's own hashing
- * (`application/gateway/auth.ts`'s `hashApiKey`, which `bootstrap.ts` itself calls — see its
- * module doc), and only the hash, never the raw key, is stored.
+ * cli/bootstrap.test: two kinds of coverage for `bootstrap.ts`.
+ *
+ * `delete-workspace — pure functions (no DB)` below runs unconditionally (no Postgres needed):
+ * `computeWorkspaceTableDeletionOrder`'s topological sort against fabricated `pg_constraint`-
+ * shaped input (task brief: "unit with fakes ... incl. a self-reference and a two-level chain"),
+ * and `parseDeleteWorkspaceArgs`/`checkDeleteWorkspaceGuards`'s argument/guard logic.
+ *
+ * The `describe.runIf(...)` block after it is the original integration coverage (real Postgres;
+ * auto-skip without DATABASE_URL) for `create-workspace` (docs/development-tasks.md S1.3, item
+ * 6) and `add-principal` (docs/development-tasks.md S1.10) — the workspace/principal rows exist
+ * afterward, the printed API key resolves back to that Principal via the human channel's own
+ * hashing (`application/gateway/auth.ts`'s `hashApiKey`, which `bootstrap.ts` itself calls — see
+ * its module doc), and only the hash, never the raw key, is stored. `delete-workspace`'s own
+ * integration coverage lives in the sibling `delete-workspace.integration.test.ts` (this
+ * package's `*.integration.test.ts` convention).
  */
+
+describe('computeWorkspaceTableDeletionOrder (pure, no DB)', () => {
+  it('orders a simple two-level chain: the referencing (child) table before the referenced (parent) table', () => {
+    const schema: WorkspaceScopedSchema = {
+      tables: ['principals', 'sessions'],
+      foreignKeys: [{ childTable: 'sessions', parentTable: 'principals' }],
+    };
+
+    expect(computeWorkspaceTableDeletionOrder(schema)).toEqual(['sessions', 'principals']);
+  });
+
+  it('orders a three-level chain end to end (grandchild, then child, then root)', () => {
+    const schema: WorkspaceScopedSchema = {
+      tables: ['workspaces_scoped_a', 'workspaces_scoped_b', 'workspaces_scoped_c'],
+      foreignKeys: [
+        { childTable: 'workspaces_scoped_b', parentTable: 'workspaces_scoped_a' },
+        { childTable: 'workspaces_scoped_c', parentTable: 'workspaces_scoped_b' },
+      ],
+    };
+
+    expect(computeWorkspaceTableDeletionOrder(schema)).toEqual([
+      'workspaces_scoped_c',
+      'workspaces_scoped_b',
+      'workspaces_scoped_a',
+    ]);
+  });
+
+  it('drops a self-referencing foreign key entirely — no ordering constraint, no cycle error', () => {
+    // Mirrors links.supersedes_id / capability_handles.parent_jti / worker_runs.
+    // parent_worker_run_id: a table whose only foreign key (besides ones to other tables) points
+    // at itself.
+    const schema: WorkspaceScopedSchema = {
+      tables: ['links', 'principals'],
+      foreignKeys: [
+        { childTable: 'links', parentTable: 'links' },
+        { childTable: 'links', parentTable: 'principals' },
+      ],
+    };
+
+    const order = computeWorkspaceTableDeletionOrder(schema);
+    expect(order).toEqual(['links', 'principals']);
+  });
+
+  it('handles a table with multiple foreign keys to the same parent (e.g. proposed_by + published_by)', () => {
+    const schema: WorkspaceScopedSchema = {
+      tables: ['principals', 'worker_definitions'],
+      foreignKeys: [
+        { childTable: 'worker_definitions', parentTable: 'principals' },
+        { childTable: 'worker_definitions', parentTable: 'principals' },
+      ],
+    };
+
+    expect(computeWorkspaceTableDeletionOrder(schema)).toEqual([
+      'worker_definitions',
+      'principals',
+    ]);
+  });
+
+  it('ignores a foreign key to a table outside the workspace-scoped set (e.g. -> workspaces)', () => {
+    const schema: WorkspaceScopedSchema = {
+      tables: ['principals'],
+      foreignKeys: [{ childTable: 'principals', parentTable: 'workspaces' }],
+    };
+
+    expect(computeWorkspaceTableDeletionOrder(schema)).toEqual(['principals']);
+  });
+
+  it('produces a valid order for a diamond (two children of one parent, one grandchild of both)', () => {
+    const schema: WorkspaceScopedSchema = {
+      tables: ['root', 'left', 'right', 'leaf'],
+      foreignKeys: [
+        { childTable: 'left', parentTable: 'root' },
+        { childTable: 'right', parentTable: 'root' },
+        { childTable: 'leaf', parentTable: 'left' },
+        { childTable: 'leaf', parentTable: 'right' },
+      ],
+    };
+
+    const order = computeWorkspaceTableDeletionOrder(schema);
+    expect(order.indexOf('leaf')).toBeLessThan(order.indexOf('left'));
+    expect(order.indexOf('leaf')).toBeLessThan(order.indexOf('right'));
+    expect(order.indexOf('left')).toBeLessThan(order.indexOf('root'));
+    expect(order.indexOf('right')).toBeLessThan(order.indexOf('root'));
+    expect(order).toHaveLength(4);
+  });
+
+  it('throws WorkspaceDeletionOrderCycleError for a genuine (non-self) cycle', () => {
+    const schema: WorkspaceScopedSchema = {
+      tables: ['a', 'b'],
+      foreignKeys: [
+        { childTable: 'a', parentTable: 'b' },
+        { childTable: 'b', parentTable: 'a' },
+      ],
+    };
+
+    expect(() => computeWorkspaceTableDeletionOrder(schema)).toThrow(
+      WorkspaceDeletionOrderCycleError,
+    );
+  });
+});
+
+describe('parseDeleteWorkspaceArgs (pure, no DB)', () => {
+  it('parses a bare workspaceId with --yes', () => {
+    const args = parseDeleteWorkspaceArgs(['ws-1', '--yes']);
+    expect(args).toEqual({
+      workspaceId: 'ws-1',
+      yes: true,
+      expectedName: undefined,
+      allowNamePattern: undefined,
+    });
+  });
+
+  it('defaults yes to false when --yes is not present', () => {
+    const args = parseDeleteWorkspaceArgs(['ws-1']);
+    expect(args.yes).toBe(false);
+  });
+
+  it('parses --name', () => {
+    const args = parseDeleteWorkspaceArgs(['ws-1', '--yes', '--name', 'accept-s2-123']);
+    expect(args.expectedName).toBe('accept-s2-123');
+  });
+
+  it('parses --allow-name-pattern into a RegExp', () => {
+    const args = parseDeleteWorkspaceArgs(['ws-1', '--yes', '--allow-name-pattern', '^accept-']);
+    expect(args.allowNamePattern).toBeInstanceOf(RegExp);
+    expect(args.allowNamePattern?.source).toBe('^accept-');
+  });
+
+  it('throws when no positional workspaceId is given', () => {
+    expect(() => parseDeleteWorkspaceArgs([])).toThrow(/usage: bootstrap delete-workspace/);
+  });
+
+  it('throws when the first token looks like a flag instead of a workspaceId', () => {
+    expect(() => parseDeleteWorkspaceArgs(['--yes'])).toThrow(/usage: bootstrap delete-workspace/);
+  });
+
+  it('throws when --allow-name-pattern is not a valid regular expression', () => {
+    expect(() =>
+      parseDeleteWorkspaceArgs(['ws-1', '--yes', '--allow-name-pattern', '[unterminated']),
+    ).toThrow(/not a valid regular expression/);
+  });
+});
+
+describe('checkDeleteWorkspaceGuards (pure, no DB)', () => {
+  it('refuses without --yes', () => {
+    const result = checkDeleteWorkspaceGuards({ workspaceId: 'ws-1', yes: false }, 'accept-s2-123');
+    expect(result).toEqual({ ok: false, reason: expect.stringMatching(/--yes/) });
+  });
+
+  it('passes when --yes is given and no --name/--allow-name-pattern were supplied', () => {
+    const result = checkDeleteWorkspaceGuards({ workspaceId: 'ws-1', yes: true }, 'anything');
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("refuses when --name does not match the workspace's actual stored name", () => {
+    const result = checkDeleteWorkspaceGuards(
+      { workspaceId: 'ws-1', yes: true, expectedName: 'accept-s2-999' },
+      'accept-s2-123',
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("passes when --name matches the workspace's actual stored name", () => {
+    const result = checkDeleteWorkspaceGuards(
+      { workspaceId: 'ws-1', yes: true, expectedName: 'accept-s2-123' },
+      'accept-s2-123',
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('refuses when the workspace name does not match --allow-name-pattern', () => {
+    const result = checkDeleteWorkspaceGuards(
+      { workspaceId: 'ws-1', yes: true, allowNamePattern: /^accept-/ },
+      'web-smoke-prod',
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('passes when the workspace name matches --allow-name-pattern', () => {
+    const result = checkDeleteWorkspaceGuards(
+      { workspaceId: 'ws-1', yes: true, allowNamePattern: /^accept-/ },
+      'accept-s2-123',
+    );
+    expect(result).toEqual({ ok: true });
+  });
+});
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
