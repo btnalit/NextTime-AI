@@ -189,7 +189,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const event = await latestOutboxEvent(workspaceId, 'ActionRequestPending');
         expect(event?.payload).toMatchObject({
           actionRequestId: row.id,
-          actionKind: 'test.action',
+          actionKindTag: 'test.action',
         });
         const holderIds =
           (event?.payload as { holderPrincipalIds?: string[] } | undefined)?.holderPrincipalIds ??
