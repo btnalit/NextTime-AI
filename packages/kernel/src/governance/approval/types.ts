@@ -134,8 +134,7 @@ export class SelfApprovalNotAllowedError extends ApprovalScopeError {
   readonly actionRequestId: string;
   constructor(actionRequestId: string, principalId: string) {
     super(
-      `principal ${principalId} may not approve/reject its own ActionRequest ${actionRequestId} ` +
-        '(requester_can_approve=false, I8)',
+      `principal ${principalId} may not approve/reject its own ActionRequest ${actionRequestId} (requester_can_approve=false, I8)`,
     );
     this.name = 'SelfApprovalNotAllowedError';
     this.actionRequestId = actionRequestId;

@@ -9,11 +9,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
-import {
-  type ActionRequestRow,
-  ApprovalScopeError,
-  SelfApprovalNotAllowedError,
-} from './types.js';
+import { type ActionRequestRow, ApprovalScopeError, SelfApprovalNotAllowedError } from './types.js';
 
 /**
  * governance/approval/decide: `approve` / `reject` (design doc §5.4 I6/I11/I14, §5.5, §8.5; docs/

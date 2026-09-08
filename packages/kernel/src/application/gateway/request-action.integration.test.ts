@@ -21,7 +21,7 @@ import {
   getActionRequest,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
-import { entryScope } from '../../governance/capability/index.js';
+import { entryScope, grantCapability } from '../../governance/capability/index.js';
 import {
   importManifest,
   publishOperation,
@@ -239,6 +239,12 @@ describe.runIf(DATABASE_URL !== undefined)(
     let fakeGateApp: FastifyInstance;
     let transport: RecordingTransport;
     let drainer: ApprovalDrainer;
+    // Item 1 fix fixtures (review job 652a4abc): a member with no grant at all, a member holding
+    // an active capability='gatekeeper' grant scoped to `gatekeeperId`, and an auditor (excluded
+    // outright regardless of any grant).
+    let memberNoGrantId: string;
+    let memberWithGrantId: string;
+    let auditorId: string;
 
     async function adminInsertWorkspace(name: string): Promise<string> {
       const id = randomUUID();
@@ -253,15 +259,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       return id;
     }
 
-    async function adminInsertPrincipal(displayName: string): Promise<string> {
+    async function adminInsertPrincipal(
+      displayName: string,
+      role: Role = 'owner',
+    ): Promise<string> {
       const id = randomUUID();
       await withWorkspace(
         pool,
         { workspaceId, principalId: id },
         async (client) => {
           await client.query(
-            "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', 'owner', $3)",
-            [workspaceId, id, displayName],
+            'insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, $3, $4, $5)',
+            [workspaceId, id, 'human', role, displayName],
           );
         },
         { skipRoleSwitch: true },
@@ -313,6 +322,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         await publishOperation(client, workspaceId, { gatekeeperId, name: PENDING_OP.name });
         // DRAFT_OP is deliberately never published.
       });
+
+      memberNoGrantId = await adminInsertPrincipal('member-no-grant', 'member');
+      memberWithGrantId = await adminInsertPrincipal('member-with-grant', 'member');
+      auditorId = await adminInsertPrincipal('auditor', 'auditor');
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        grantCapability(client, workspaceId, {
+          principalId: memberWithGrantId,
+          capability: 'gatekeeper',
+          scope: { resourceScope: gatekeeperId },
+          grantedBy: ownerId,
+        }),
+      );
 
       const gatekeeperClient = new HttpGatekeeperClient({ token: GATE_TEST_TOKEN });
       const adminWithTransaction = createAdminWithTransaction(pool);
@@ -370,6 +391,90 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(facts.length).toBeGreaterThanOrEqual(1);
       expect(facts[0]?.epistemicStatus).toBe('observed');
+    });
+
+    // Authority-tightening fix (review job 652a4abc lane3 P1-5 / lane2 P1, item 1): a non-owner
+    // human caller of request_action/observe_operation must hold an active
+    // capability='gatekeeper' Grant for the target gate; auditor is excluded outright.
+    describe('human-channel gate on request_action/observe_operation (item 1)', () => {
+      it('403s a member with no grant at all', async () => {
+        const caller = humanCaller(workspaceId, memberNoGrantId, 'member');
+        await expect(
+          dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: {},
+          }),
+        ).rejects.toThrow(/holds no active|forbidden/i);
+        await expect(
+          dispatchCapability({ pool }, caller, 'observe_operation', {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: {},
+          }),
+        ).rejects.toThrow(/holds no active|forbidden/i);
+      });
+
+      it('403s an auditor even though they hold no grant to begin with', async () => {
+        const caller = humanCaller(workspaceId, auditorId, 'auditor');
+        await expect(
+          dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId,
+            operation: 'observe.stock',
+            params: {},
+          }),
+        ).rejects.toThrow(/auditor/i);
+      });
+
+      it('allows a member holding an active gatekeeper grant for this gate', async () => {
+        const caller = humanCaller(workspaceId, memberWithGrantId, 'member');
+        const result = (await dispatchCapability({ pool }, caller, 'observe_operation', {
+          gatekeeperId,
+          operation: 'observe.stock',
+          params: {},
+        })) as { status: string };
+        expect(result.status).toBe('ok');
+      });
+
+      it('a grant for a different gatekeeper does not authorize this one', async () => {
+        // The human-caller gate (assertHumanGatekeeperAccess) runs before any Gatekeeper lookup,
+        // so an arbitrary id that names no real Gatekeeper is enough to prove the grant is
+        // scoped, without registering a second real gate.
+        const otherGate = randomUUID();
+        const caller = humanCaller(workspaceId, memberWithGrantId, 'member');
+        await expect(
+          dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId: otherGate,
+            operation: 'observe.stock',
+            params: {},
+          }),
+        ).rejects.toThrow(/holds no active|forbidden/i);
+      });
+    });
+
+    // Item 2 fix (review job 652a4abc: "resource_scope never populated (NULL) → scoped grants
+    // never match"): every governed request now snapshots its own Gatekeeper as resource_scope.
+    it('item 2: a governed request persists resource_scope = gatekeeperId', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      const result = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params: { qty: 424242 },
+      })) as { status: string; actionRequestId: string };
+      expect(result.status).toBe('pending_approval');
+
+      const resourceScope = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const row = await client.query<{ resource_scope: string | null }>(
+            'select resource_scope from action_requests where workspace_id = $1 and id = $2',
+            [workspaceId, result.actionRequestId],
+          );
+          return row.rows[0]?.resource_scope;
+        },
+      );
+      expect(resourceScope).toBe(gatekeeperId);
     });
 
     // S2.12 fix: `observe_operation` — the capability an entry agent's projected `<gate>.<op>`

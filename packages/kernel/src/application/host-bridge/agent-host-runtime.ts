@@ -544,14 +544,11 @@ export class AgentHostRuntime implements AgentRuntime {
   private async ensureEntryHandle(workspaceId: string, principalId: string): Promise<string> {
     const sessionId = await this.ensureEntrySession(workspaceId, principalId);
 
-    const gatekeeperIds = await withWorkspace(
-      this.pool,
-      { workspaceId, principalId },
-      (client) =>
-        listActiveGrantResourceScopes(client, workspaceId, {
-          principalId,
-          capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
-        }),
+    const gatekeeperIds = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+      listActiveGrantResourceScopes(client, workspaceId, {
+        principalId,
+        capability: GATEKEEPER_RESOURCE_SCOPE_KEY,
+      }),
     );
 
     const cached = this.handleCache.get(principalId);

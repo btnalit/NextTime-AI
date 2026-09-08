@@ -1,6 +1,6 @@
 import type { Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { hasActiveGrant } from '../capability/index.js';
+import { GATEKEEPER_GRANT_CAPABILITY, hasActiveGrant } from '../capability/index.js';
 import {
   ACTION_REQUEST_ROW_COLUMNS,
   type ActionRequestDbRow,
@@ -44,7 +44,11 @@ export async function findActionRequestByIdempotencyKey(
 /**
  * `list_pending` (§9.3, I14): the caller's own queue — the workspace owner sees every
  * `pending_approval` row; a non-owner sees only rows whose `action_kind`/`resource_scope` matches
- * one of their active `capability_grants` (a correlated `exists`, not an N+1 query per row).
+ * one of their active `capability_grants` (a correlated `exists`, not an N+1 query per row). The
+ * `exists` clause's OR-branch mirrors `governance/capability/grants.ts`'s `MATCHING_GRANT_WHERE`
+ * (item 2's "gatekeeper grant satisfies I14" decision) so this queue and `approve`/`reject`'s own
+ * `approverHasScope` precheck never disagree — a row that shows up here must also be approvable,
+ * and vice versa.
  */
 export async function listPendingForApprover(
   client: PoolClient,
@@ -69,10 +73,17 @@ export async function listPendingForApprover(
          select 1 from capability_grants cg
          where cg.workspace_id = ar.workspace_id
            and cg.principal_id = $2
-           and cg.capability = ar.action_kind
            and cg.status = 'active'
            and (cg.expires_at is null or cg.expires_at > now())
-           and (cg.scope ->> 'resourceScope' is null or cg.scope ->> 'resourceScope' = ar.resource_scope)
+           and (
+             (cg.capability = ar.action_kind
+              and (cg.scope ->> 'resourceScope' is null or cg.scope ->> 'resourceScope' = ar.resource_scope))
+             or (
+               ar.resource_scope is not null
+               and cg.capability = '${GATEKEEPER_GRANT_CAPABILITY}'
+               and (cg.scope ->> 'resourceScope' is null or cg.scope ->> 'resourceScope' = ar.resource_scope)
+             )
+           )
        )
      order by ar.requested_at asc`,
     [workspaceId, approver.principalId],

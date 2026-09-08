@@ -15,7 +15,10 @@ import {
   getActionRequest,
   requestAction,
 } from '../../governance/approval/index.js';
-import { hasActiveGrant, listActiveGrantResourceScopes } from '../../governance/capability/index.js';
+import {
+  hasActiveGrant,
+  listActiveGrantResourceScopes,
+} from '../../governance/capability/index.js';
 import {
   GatekeeperNotFoundError,
   OperationNotFoundError,
