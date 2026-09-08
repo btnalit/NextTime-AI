@@ -3,6 +3,7 @@ import type { ActionRequestStatus, CapabilityChannel, CapabilityScope } from '@n
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import { findWorkerRunBySessionId } from '../../application/task/index.js';
 import type { ActionExecutor, ActionRequestRow } from '../../governance/approval/index.js';
 import {
   awaitActionRequestResolution,
@@ -739,6 +740,17 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
         params: resolvedParams,
       });
 
+  // P1-2 fix: a Handle caller's own WorkerRun (resolved by `sid`, the same identity `report_task_
+  // result` already trusts — `worker-result-handler.ts`'s own doc comment) becomes the
+  // ActionRequest's `parent_worker_run_id`, so `application/task/reaper.ts`'s routing consumer can
+  // move the *right* Task to/from `waiting_approval`. `undefined` for a human caller, or a Handle
+  // whose session is not a WorkerRun (e.g. an entry session) — `request_action` structurally
+  // cannot be called from an entry Handle anyway (governance/capability/handles.ts's
+  // `ENTRY_CEILING_CAPABILITIES` never contains it), so this only ever resolves for a real Worker.
+  const parentWorkerRunId = sid
+    ? (await findWorkerRunBySessionId(client, workspaceId, sid))?.id
+    : undefined;
+
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
 
@@ -761,6 +773,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       autoApprovable: false,
       awaitDecision: true,
       idempotencyKey,
+      parentWorkerRunId,
     });
   }
 
@@ -776,5 +789,6 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     autoApprovable: operation.auto_approvable,
     awaitDecision: operation.await_decision,
     idempotencyKey,
+    parentWorkerRunId,
   });
 };

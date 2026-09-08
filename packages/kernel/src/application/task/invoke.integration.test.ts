@@ -379,6 +379,74 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(task?.failureReason).toBe('no_result');
   });
 
+  // P1-6 fix (review job 652a4abc): a Task `waiting_approval` on an ActionRequest decision whose
+  // WorkerRun then dies previously stayed `waiting_approval` forever on an `exited` status (the
+  // check was `task.status === 'running'` only) — a later `ActionRequestUpdated` would try to
+  // `task.resume` a Task with no live WorkerRun to resume into (the P1-2 dead state).
+  it('an exited (code 0) container while the Task is waiting_approval also marks it failed: no_result', async () => {
+    const sessionId = await insertSession('entry', ownerId, ownerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+
+    const spawnResult = await invokeWorker(
+      workspaceId,
+      { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+
+    await inTx(ownerId, (client) =>
+      client.query(
+        "update tasks set status = 'waiting_approval' where workspace_id = $1 and id = $2",
+        [workspaceId, spawnResult.taskId],
+      ),
+    );
+
+    supervisorClient.setStatus(spawnResult.workerRunId, { status: 'exited', exitCode: 0 });
+    await reactToSupervisorStatus(runtimeDeps, workspaceId, ownerId, spawnResult.workerRunId);
+
+    const task = await inTx(ownerId, (client) =>
+      readTaskRow(client, workspaceId, spawnResult.taskId),
+    );
+    expect(task?.status).toBe('failed');
+    expect(task?.failureReason).toBe('no_result');
+  });
+
+  // P1-6 fix, same root cause as above but the `failed` (non-zero exit) branch: previously this
+  // would spend the Task's one retry on a *fresh* WorkerRun that the outstanding ActionRequest's
+  // `parent_worker_run_id` does not point to — a later approval could never resume the right run.
+  it('a non-zero exit while the Task is waiting_approval fails it directly, without requeuing', async () => {
+    const sessionId = await insertSession('entry', ownerId, ownerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+
+    const spawnResult = await invokeWorker(
+      workspaceId,
+      { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+
+    await inTx(ownerId, (client) =>
+      client.query(
+        "update tasks set status = 'waiting_approval' where workspace_id = $1 and id = $2",
+        [workspaceId, spawnResult.taskId],
+      ),
+    );
+
+    supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+    await reactToSupervisorStatus(runtimeDeps, workspaceId, ownerId, spawnResult.workerRunId);
+
+    const task = await inTx(ownerId, (client) =>
+      readTaskRow(client, workspaceId, spawnResult.taskId),
+    );
+    expect(task?.status).toBe('failed');
+    expect(task?.failureReason).toBe('worker_failed');
+    expect(supervisorClient.spawnCalls).toHaveLength(1); // no requeue attempt
+  });
+
   it('terminateTask revokes the WorkerRun Handle (capability_handles.revoked_at set)', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
     const issued = await issueTestHandle(sessionId, entryScope());

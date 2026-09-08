@@ -515,6 +515,77 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(finalRow?.status).toBe('executed');
     });
 
+    // P1-2 fix (review job 652a4abc): `requestActionHandler` resolves the calling Handle's own
+    // WorkerRun via `claims.sid` and threads it through as `parent_worker_run_id` — previously
+    // never set by any production caller, leaving `application/task/reaper.ts`'s
+    // ActionRequestPending routing consumer (already correctly implemented, see
+    // `reaper.integration.test.ts`) with nothing to route back to.
+    it('a Worker-Handle caller sets parent_worker_run_id on the created ActionRequest', async () => {
+      const taskResult = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+             values ($1, 'running', $2, $3, 1) returning id`,
+            [workspaceId, ownerId, randomUUID()],
+          ),
+      );
+      const taskId = taskResult.rows[0]?.id as string;
+
+      const sessionId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'worker_run', $3, 'active') returning id`,
+            [workspaceId, ownerId, ownerId],
+          );
+          return result.rows[0]?.id as string;
+        },
+      );
+
+      const workerRunId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
+             values ($1, 'running', $2, $3, 0, 1) returning id`,
+            [workspaceId, taskId, sessionId],
+          );
+          return result.rows[0]?.id as string;
+        },
+      );
+
+      const now = Math.floor(Date.now() / 1000);
+      const workerCaller: ResolvedCaller = {
+        channel: 'handle',
+        claims: {
+          ws: workspaceId,
+          sid: sessionId,
+          obo: ownerId,
+          scope: { capabilities: ['request_action'], resources: { gatekeeper: [gatekeeperId] } },
+          jti: randomUUID(),
+          iat: now,
+          exp: now + 600,
+        },
+      };
+
+      const result = (await dispatchCapability({ pool }, workerCaller, 'request_action', {
+        gatekeeperId,
+        operation: PENDING_OP.name,
+        params: { qty: 777 },
+      })) as { status: string; actionRequestId: string };
+      expect(result.status).toBe('pending_approval');
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, result.actionRequestId),
+      );
+      expect(row?.parentWorkerRunId).toBe(workerRunId);
+    });
+
     it('an unclassified (unimported) operation → require_approval, never executes', async () => {
       const caller = humanCaller(workspaceId, ownerId);
       const result = (await dispatchCapability({ pool }, caller, 'request_action', {
