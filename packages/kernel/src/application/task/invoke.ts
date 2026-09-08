@@ -171,10 +171,62 @@ export async function invokeWorkerCreate(
     content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES);
   const declaredGates = content.gates ?? [];
 
-  const { newDepth, parentWorkerRun, quotas } = await withWorkspace(
+  const { parentAuthority, skillsInline } = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: caller.principalId },
+    async (client) => ({
+      parentAuthority: await resolveParentAuthority(client, workspaceId, caller),
+      skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+    }),
+  );
+
+  // Pre-check the child-Handle scope *before* creating anything (docs/development-tasks.md S2.7
+  // "quota checks (I18) before anything is created" — this is the attenuation-equivalent of that
+  // same rule): a rejection here (e.g. "入口 Handle 请求含 execute 的子 Handle 被拒", S2.7
+  // acceptance) never leaves a Task row behind. `spawnWorkerRun` below recomputes the identical,
+  // pure result — cheap, and keeps this function from having to thread a precomputed scope through
+  // the requeue path too (`lifecycle.ts`'s `spawnWorkerRunForRetry` calls `spawnWorkerRun`
+  // directly, with no equivalent pre-check of its own — a requeue attenuates from the failed
+  // WorkerRun's own already-granted scope, which cannot newly fail this check). Pure/synchronous —
+  // deliberately run *before* the locked transaction below, not inside it, so an attenuation
+  // rejection never even attempts to take the advisory lock.
+  computeChildHandleScope({
+    parentAuthority,
+    declaredCapabilities,
+    declaredGates,
+    requestedGates: input.gates,
+  });
+
+  // P2-6 fix (review job 652a4abc: "quota checks in separate txns, no lock → concurrent invokes
+  // exceed maxConcurrentWorkerRunsPerUser"): the I18 quota checks and the Task INSERT that makes
+  // the *next* caller's own concurrency count accurate now share one transaction, serialized per
+  // (workspace, principal) by a session-scoped advisory lock (`pg_advisory_xact_lock`, the same
+  // "auto-released at COMMIT/ROLLBACK" convention `application/chat/service.ts`'s own
+  // `insertChatMessage` already uses for its own sequence-allocation race) — a second concurrent
+  // `invoke_worker` call for the same principal blocks here until the first commits (or rolls
+  // back on a quota violation), then re-reads the *already-committed* count.
+  //
+  // **Deviation from the S2.7 dispatch text's own "每用户并发 WorkerRun" wording**: the concurrency
+  // count below is `tasks.status in ('queued','running','waiting_approval')`, not a `worker_runs`
+  // join (the pre-existing query, still used by `find_workers`'s own unrelated depth math is not
+  // affected). `worker_runs` rows are deliberately created in a *separate*, later-committed
+  // transaction (`spawnWorkerRun`'s own module doc comment: a freshly-minted Handle must be usable
+  // before any Task/WorkerRun creation transaction... commits, so it cannot share this lock without
+  // reopening the exact race this fix closes) — locking around a `tasks` count instead means the
+  // count and the row that makes the *next* caller's own count accurate are atomic with each
+  // other, which no `worker_runs`-based count could achieve without an equally-locked WorkerRun
+  // insert. A `queued`/`running`/`waiting_approval` Task has, in every real case, exactly one
+  // active WorkerRun underneath it (a crash-requeue terminates the old one before spawning a new
+  // one — `lifecycle.ts`'s `spawnWorkerRunForRetry`), so this is a faithful proxy for "concurrent
+  // WorkerRuns per user", not a different quota.
+  const { newDepth, parentWorkerRun, quotas, task } = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
     async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+        `${workspaceId}:${caller.principalId}`,
+      ]);
+
       const callerWorkerRun = caller.claims
         ? await resolveCallerWorkerRun(client, workspaceId, caller.claims.sid)
         : null;
@@ -190,11 +242,10 @@ export async function invokeWorkerCreate(
 
       const concurrentResult = await client.query<{ count: string }>(
         `select count(*)::bigint as count
-         from worker_runs wr
-         join tasks t on t.workspace_id = wr.workspace_id and t.id = wr.task_id
-         where wr.workspace_id = $1
-           and t.on_behalf_of = $2
-           and wr.status in ('provisioning', 'running', 'suspended')`,
+         from tasks
+         where workspace_id = $1
+           and on_behalf_of = $2
+           and status in ('queued', 'running', 'waiting_approval')`,
         [workspaceId, caller.principalId],
       );
       const concurrentCount = Number(concurrentResult.rows[0]?.count ?? 0);
@@ -217,38 +268,6 @@ export async function invokeWorkerCreate(
         }
       }
 
-      return { newDepth: depth, parentWorkerRun: callerWorkerRun, quotas: resolvedQuotas };
-    },
-  );
-
-  const { parentAuthority, skillsInline } = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: caller.principalId },
-    async (client) => ({
-      parentAuthority: await resolveParentAuthority(client, workspaceId, caller),
-      skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
-    }),
-  );
-
-  // Pre-check the child-Handle scope *before* creating anything (docs/development-tasks.md S2.7
-  // "quota checks (I18) before anything is created" — this is the attenuation-equivalent of that
-  // same rule): a rejection here (e.g. "入口 Handle 请求含 execute 的子 Handle 被拒", S2.7
-  // acceptance) never leaves a Task row behind. `spawnWorkerRun` below recomputes the identical,
-  // pure result — cheap, and keeps this function from having to thread a precomputed scope through
-  // the requeue path too (`lifecycle.ts`'s `spawnWorkerRunForRetry` calls `spawnWorkerRun`
-  // directly, with no equivalent pre-check of its own — a requeue attenuates from the failed
-  // WorkerRun's own already-granted scope, which cannot newly fail this check).
-  computeChildHandleScope({
-    parentAuthority,
-    declaredCapabilities,
-    declaredGates,
-    requestedGates: input.gates,
-  });
-
-  const task = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: caller.principalId },
-    async (client) => {
       const taskResult = await client.query(
         `insert into tasks (
            workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
@@ -262,20 +281,26 @@ export async function invokeWorkerCreate(
           input.definitionId,
           input.version,
           JSON.stringify(input.input ?? null),
-          quotas.defaultTokenBudget,
-          quotas.defaultDurationLimitSec,
+          resolvedQuotas.defaultTokenBudget,
+          resolvedQuotas.defaultDurationLimitSec,
         ],
       );
       const row = taskResult.rows[0];
       if (!row) throw new Error('invokeWorker: tasks INSERT ... RETURNING produced no row');
-      const mapped = mapTaskRow(row);
+      const mappedTask = mapTaskRow(row);
       await recordTaskTransition(client, workspaceId, {
         actorPrincipalId: caller.principalId,
         action: 'task.queue',
-        taskId: mapped.id,
+        taskId: mappedTask.id,
         resultingStatus: 'queued',
       });
-      return mapped;
+
+      return {
+        newDepth: depth,
+        parentWorkerRun: callerWorkerRun,
+        quotas: resolvedQuotas,
+        task: mappedTask,
+      };
     },
   );
 

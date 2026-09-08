@@ -267,6 +267,75 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(supervisorClient.spawnCalls).toHaveLength(0);
   });
 
+  // P2-6 fix (review job 652a4abc: "quota checks in separate txns, no lock → concurrent invokes
+  // exceed maxConcurrentWorkerRunsPerUser"). A fresh principal (not ownerId, which accumulates
+  // running Tasks across this whole suite) seeded to exactly one below the default concurrency
+  // limit (5) — two truly concurrent invoke_worker calls (Promise.allSettled, not sequential
+  // awaits, so the lock is actually exercised) must let exactly one through.
+  it('two concurrent invoke_worker calls for the same principal at the concurrency ceiling: exactly one succeeds', async () => {
+    const racerId = await adminInsertPrincipal('member', 'racer');
+
+    await inTx(racerId, async (client) => {
+      for (let i = 0; i < 4; i += 1) {
+        await client.query(
+          `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+           values ($1, 'running', $2, $3, 1)`,
+          [workspaceId, racerId, workerDefinitionId],
+        );
+      }
+    });
+
+    const sessionId = await insertSession('entry', racerId, racerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+    const caller = {
+      principalId: racerId,
+      channel: 'handle' as const,
+      claims: claimsFromIssued(issued),
+    };
+
+    const [first, second] = await Promise.allSettled([
+      invokeWorker(
+        workspaceId,
+        caller,
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        runtimeDeps,
+      ),
+      invokeWorker(
+        workspaceId,
+        caller,
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        runtimeDeps,
+      ),
+    ]);
+
+    const outcomes = [first, second];
+    const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
+    const rejected = outcomes.filter((o) => o.status === 'rejected');
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((fulfilled[0] as PromiseFulfilledResult<unknown>).value).toMatchObject({
+      status: 'running',
+    });
+    const rejectionReason = (rejected[0] as PromiseRejectedResult).reason;
+    expect(rejectionReason).toBeInstanceOf(QuotaExceededError);
+    expect((rejectionReason as InstanceType<typeof QuotaExceededError>).code).toBe(
+      'concurrency_exceeded',
+    );
+    expect(supervisorClient.spawnCalls).toHaveLength(1); // only the winner ever spawned
+
+    const finalCount = await inTx(racerId, (client) =>
+      client.query<{ count: string }>(
+        `select count(*)::int as count from tasks
+         where workspace_id = $1 and on_behalf_of = $2 and status in ('queued', 'running', 'waiting_approval')`,
+        [workspaceId, racerId],
+      ),
+    );
+    expect(Number(finalCount.rows[0]?.count)).toBe(5); // never exceeds the default limit
+  });
+
   it('入口 Handle 请求含 execute 的子 Handle 被拒 — attenuation rejection, no Task row left running', async () => {
     const definition = await publishWorkerDef({
       systemPrompt: 'You are an execute-needing worker.',
