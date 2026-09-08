@@ -311,6 +311,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       // ownerId is both the requester (onBehalfOf above) and a holder — I14.
       expect(holderPrincipalIds).toContain(ownerId);
 
+      // ownerId's own Chat already accumulated messages from the earlier test in this same
+      // describe block (ownerId is a holder there too) — this test only asserts on the *new*
+      // message this dispatch adds, not on an absolute count from an assumed-empty Chat.
+      const ownerMessagesBefore = await chatMessagesFor(ownerId);
+
       const dispatcher = createFakeDispatcher();
       registerActionRequestConsumers(dispatcher, { pool });
       await dispatcher.emit('ActionRequestPending', outboxRow.id, outboxRow.payload as never);
@@ -318,8 +323,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       // The card message still shows isHolder:true (unaffected — that field governs the chat
       // message's own rendering, not the context-injection decision below).
       const ownerMessages = await chatMessagesFor(ownerId);
-      expect(ownerMessages).toHaveLength(1);
-      expect(ownerMessages[0]?.content).toMatchObject({
+      expect(ownerMessages).toHaveLength(ownerMessagesBefore.length + 1);
+      expect(ownerMessages.at(-1)?.content).toMatchObject({
         kind: 'system.action_pending',
         actionRequestId: row.id,
         isHolder: true,
