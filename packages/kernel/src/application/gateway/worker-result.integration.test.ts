@@ -31,14 +31,15 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * completes the Task with the stored result, and `explain(fact)` reaches the WorkerRun; a contract
  * from a session that is not the Task's own WorkerRun → 403; a malformed contract → 400.
  *
- * epistemic_status (lane-1 P2 fix): `SqlGraphStore.assertFact` now derives it from the real
- * `principals.kind` row for the caller (`postWorkerResult`'s `actorPrincipalId`, the Task's
- * on_behalf_of principal), never from a caller-supplied `kind` — closing a hole where the old code
- * could claim `kind: 'agent'` regardless of who `actorPrincipalId` actually was. This harness's
- * `ownerId` is a genuine `kind: 'human'` principal (`adminInsertPrincipal` below always inserts
- * `'human'`), so the Fact this test's `report_task_result` call produces is honestly `asserted`,
- * not `inferred` — this codebase has no separate agent-kind identity for a WorkerRun to record
- * `inferred` against (see substrate/graph/sql-store.ts's own doc comment on this tradeoff).
+ * epistemic_status: `inferred`. `SqlGraphStore.assertFact` derives the status from the caller's
+ * real `principals.kind` row (lane-1 P2 fix — a caller-supplied `kind` is ignored, closing the
+ * hole where any caller could claim `kind: 'human'` → `asserted`), and `postWorkerResult` writes
+ * every contract Fact with `CallerPrincipal.viaAgent`, which weakens whatever that row says to
+ * `inferred` (downgrade-only; §5.6 "agent → inferred"). This harness's `ownerId` is a genuine
+ * `kind: 'human'` principal (`adminInsertPrincipal` below always inserts `'human'`) — exactly the
+ * production shape, since `actorPrincipalId` is the Task's on_behalf_of human — so this test is
+ * the regression guard for the 2026-09-08 accept_s2 step-7 failure, where deriving from the
+ * principal alone had turned a Worker's inference into a human `asserted` Fact.
  *
  * Reuses `invoke.integration.test.ts`'s own harness shape (fake, in-memory
  * `TaskSupervisorClientPort` — no real Docker/worker-supervisor) so a real WorkerRun + a real
@@ -283,9 +284,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       const [factId] = result.factIds;
       if (!factId) throw new Error('expected a written fact id');
       const explained = await inTx(ownerId, (client) => explain(client, workspaceId, { factId }));
-      // ownerId is a genuine 'human' principal — see this file's own module doc comment on why
-      // this is 'asserted', not 'inferred', since the lane-1 P2 CallerPrincipal.kind fix.
-      expect(explained.fact?.epistemicStatus).toBe('asserted');
+      // ownerId is a genuine 'human' principal, yet the Fact came through a Worker's result
+      // contract (`viaAgent`) — see this file's module doc comment: §5.6 agent → inferred, and this
+      // is the regression guard for accept_s2 step 7 (2026-09-08).
+      expect(explained.fact?.epistemicStatus).toBe('inferred');
       expect(explained.activity?.kind).toBe('worker_result');
       expect(explained.activity?.metadata.taskId).toBe(taskId);
       expect(explained.activity?.metadata.workerRunId).toBe(workerRunId);

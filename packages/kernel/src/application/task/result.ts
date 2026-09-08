@@ -55,9 +55,10 @@ const graphStore = new SqlGraphStore();
 
 export interface PostWorkerResultInput {
   /** The `on_behalf_of` principal — becomes the Activity's `started_by`, every written Fact's
-   *  `asserted_by` (as `kind: 'agent'`, deriving `epistemic_status: 'inferred'`, §5.6), and every
-   *  proposed Operation's `proposed_by`. Resolved by the caller (the gateway handler) from the
-   *  calling Handle's own `claims.obo` — never re-derived here. */
+   *  `asserted_by` (written `viaAgent`, so `epistemic_status: 'inferred'`, §5.6 — the principal
+   *  is the human the Worker acts for; there is no agent-kind principal per WorkerRun yet), and
+   *  every proposed Operation's `proposed_by`. Resolved by the caller (the gateway handler) from
+   *  the calling Handle's own `claims.obo` — never re-derived here. */
   readonly actorPrincipalId: string;
   readonly taskId: string;
   readonly workerRunId: string;
@@ -117,12 +118,15 @@ export async function postWorkerResult(
   });
 
   try {
-    // facts_to_assert -> Facts under this Activity (I3). epistemic_status is derived by
-    // SqlGraphStore from actorPrincipalId's own `principals.kind` row (lane-1 P2 fix — see
-    // CallerPrincipal.kind's doc comment in substrate/graph/store.ts), never from a caller-supplied
-    // `kind` here: actorPrincipalId is the Task's on_behalf_of principal, which this codebase has
-    // no separate agent-kind identity for (§5.6's "agent -> inferred" would require one), so these
-    // Facts are honestly recorded under whatever kind that principal actually is.
+    // facts_to_assert -> Facts under this Activity (I3). epistemic_status: `inferred` (§5.6 — a
+    // Worker is an agent). actorPrincipalId is the Task's on_behalf_of principal (a human; this
+    // codebase has no separate agent-kind identity for a WorkerRun to be `asserted_by`), so the
+    // store must not derive the status from that principal's own `principals.kind` — that would
+    // record an agent's inference as a human `asserted` Fact (2026-09-08 regression: accept_s2
+    // step 7). `viaAgent` tells SqlGraphStore the write comes through an agent on the principal's
+    // behalf; it is downgrade-only (see CallerPrincipal.viaAgent in substrate/graph/store.ts), so
+    // this path can never be used to claim a stronger status than `inferred`. The caller-supplied
+    // `kind` the lane-1 P2 fix stopped trusting stays absent here.
     const writtenFacts: Fact[] = [];
     for (const factInput of contract.factsToAssert ?? []) {
       const sourceObjectId = await resolveObjectRef(client, workspaceId, factInput.source);
@@ -130,7 +134,7 @@ export async function postWorkerResult(
       const fact = await graphStore.assertFact(
         client,
         workspaceId,
-        { id: actorPrincipalId },
+        { id: actorPrincipalId, viaAgent: true },
         {
           linkType: factInput.linkType,
           sourceObjectId,
