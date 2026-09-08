@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
+import { ExplainNodeNotFoundError } from '../../application/gateway/index.js';
 import { ScopeValidationError } from '../../governance/capability/index.js';
 import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
 import { WS_ERROR_CODES, mapDispatchError } from './rpc.js';
@@ -37,5 +38,12 @@ describe('mapDispatchError — lane-4 P2 fix: previously-unmapped error classes 
   it('ScopeValidationError (invoke_worker Handle mint) maps to INVALID_PARAMS (-32602), not INTERNAL_ERROR', () => {
     const mapped = mapDispatchError(new ScopeValidationError('unknown capability "bogus"'));
     expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
+  });
+});
+
+describe('mapDispatchError — lane-4 hookup: ExplainNodeNotFoundError (explain)', () => {
+  it('maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new ExplainNodeNotFoundError('fact', 'ws-1', 'fact-1'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.NOT_FOUND);
   });
 });

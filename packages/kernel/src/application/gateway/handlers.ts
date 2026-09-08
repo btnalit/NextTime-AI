@@ -4,6 +4,7 @@ import {
   type ChatMessageRow,
   chatMessageText,
   currentPrincipalId,
+  endUnknownRuntimeTurn,
   findRunningTurn,
   getChatHistory,
   listChats,
@@ -230,7 +231,17 @@ const stopAgentHandler: CapabilityHandler = async (client, workspaceId, params) 
     // asynchronously through the AgentRuntimeEventSink, same as any other turnEnded — see
     // application/chat/event-sink.ts. A handler with no runtime wired (e.g. a unit test) simply
     // has nothing to signal, which is a safe no-op (see this file's module doc comment).
-    await agentRuntime?.stopTurn(running.id);
+    //
+    // lane-4 hookup (`application/chat/turn-recovery.ts`'s own doc comment): `stopTurn` returning
+    // exactly `false` (not `void`/`undefined` — see `AgentRuntime.stopTurn`'s own contract) means
+    // the runtime has no record of this Turn at all (e.g. a kernel/agent-host restart abandoned
+    // it before this call) and will never independently emit the `turnEnded` that would otherwise
+    // end it — end it here instead, so the Chat is not wedged behind
+    // `activities_one_running_turn_per_chat_uidx` forever.
+    const runtimeKnowsTurn = await agentRuntime?.stopTurn(running.id);
+    if (runtimeKnowsTurn === false) {
+      await endUnknownRuntimeTurn(client, workspaceId, chatId, running.id);
+    }
   }
   return { result: { stopped: running !== null }, resourceType: 'chat', resourceId: chatId };
 };

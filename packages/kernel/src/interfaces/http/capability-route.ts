@@ -19,6 +19,7 @@ import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
   type DispatchDeps,
+  ExplainNodeNotFoundError,
   ForbiddenError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
@@ -224,6 +225,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     return { status: 400, code: 'unknown_quota_key', message: err.message };
   }
   if (err instanceof TaskNotFoundError) {
+    return { status: 404, code: 'not_found', message: err.message };
+  }
+  // `explain` (substrate/epistemic/explain.ts) on an id that does not resolve to a Fact/Activity/
+  // Decision — found on the host as a 500 (lane-4 hookup: re-exported through
+  // application/gateway/index.ts's own doc comment on why, since interfaces may not import
+  // substrate directly).
+  if (err instanceof ExplainNodeNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
   }
   // application/worker registry errors (S2.6 WorkerDefinitions, S2.14 Skills/Procedures) — found

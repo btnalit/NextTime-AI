@@ -16,6 +16,12 @@ export type { ResolvedCaller, ResolveCallerDeps } from './resolve-caller.js';
 
 export { authorizeCapabilityCall, roleSatisfiesMinRole, ForbiddenError } from './authorize.js';
 
+// `explainHandler` (handlers.ts) already depends on `substrate/epistemic` directly (the six-layer
+// rule permits application -> substrate); re-exported here so `interfaces/http`/`interfaces/ws`
+// (which may not import substrate directly, .dependency-cruiser.cjs) can map it without their own
+// layering workaround — see this module's own doc comment ("interfaces/http is the only consumer").
+export { ExplainNodeNotFoundError } from '../../substrate/epistemic/index.js';
+
 export {
   dispatchCapability,
   CapabilityNotFoundError,
