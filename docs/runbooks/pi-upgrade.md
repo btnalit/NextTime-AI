@@ -1,8 +1,9 @@
 # Runbook：pi-upgrade（pi 版本升级契约）
 
-对应任务：development-tasks.md § S3.10（"升级 pi 版本（契约测试流程）"）。回答的问题是"pi agent
-解耦，可以跟随主线更新吗"——本手册把答案变成一份可执行流程：耦合面清单、单一版本源、升级步骤、
-兼容性测试清单、漂移检测、回滚。
+对应任务：development-tasks.md § S3.10（"升级 pi 版本（契约测试流程）"，本手册即该条交付物）与
+§ S3.15（"pi 升级契约与漂移检测"，本手册连同 §6/§7 描述的自动化是该条的交付物）。回答的问题是
+"pi agent 解耦，可以跟随主线更新吗"——本手册把答案变成一份可执行流程：耦合面清单、单一版本源、
+升级步骤、兼容性测试清单、漂移检测、回滚。
 
 前置阅读：`README.md`"pi 0.84.4（MIT）"条目；`packages/platform-extension/src/{index,modes/entry,
 modes/worker}.ts`；`deploy/worker-runtime/{Dockerfile,entrypoint.sh}`；

@@ -180,7 +180,7 @@
     透明网关代理），`egress-proxy` 的私网判定（I10 防 DNS rebinding 的既有设计）因此正确地把它
     当私有地址拒绝——这是主机网络本身的特性，不是这几个服务的缺陷，未做任何"放宽私网判定"来
     迁就这一台主机。详见 `docs/runbooks/host-worker-runtime.md` §10。
-  - **实现说明补充（chore/pi-upgrade-contract PR，2026-09；S3.11）**：这个 Dockerfile 里
+  - **实现说明补充（chore/pi-upgrade-contract PR，2026-09；S3.15）**：这个 Dockerfile 里
     `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4` 一行的版本号，
     现在从仓库根目录 `pi.version` 文件读取（`COPY pi.version /tmp/pi.version` +
     `RUN PI_VERSION="$(cat /tmp/pi.version)" && npm install -g ... @earendil-works/pi-coding-
@@ -254,7 +254,7 @@
 ### S1.6 platform-extension `entry` 模式
 - 交付物：`packages/platform-extension/src/{index,kernel-client,modes/entry}.ts`：S1 只注册 observe 组工具（`get_object / traverse / search / explain / get_task`），`find_workers` 与 `invoke_worker` 随 S2.7 加入；`context` 事件注入该用户待审批、进行中 Task、相关 Fact 与先例；`session_*` 事件把 `turn_id` 写入会话条目并回传 Turn 结果；契约测试用 pi 的 faux provider + fake kernel。
 - 验收：`pnpm --filter platform-extension test`；fake kernel 收到带 `turn_id` 的回传。依赖：R4。
-- **实现说明补充（chore/pi-upgrade-contract PR，2026-09；S3.11）**：`package.json` 的
+- **实现说明补充（chore/pi-upgrade-contract PR，2026-09；S3.15）**：`package.json` 的
   `dependencies["@earendil-works/pi-coding-agent"]` 与 `devDependencies["@earendil-works/
   pi-ai"]` 两个版本号字段本身未改（仍是字面量 `0.84.4`，pnpm/npm 没有"从文件读版本号"的语法），
   但现在由 `scripts/check-pi-version-consistency.sh` 校验它们与仓库根目录 `pi.version`
@@ -852,26 +852,6 @@
 - 交付物：`docs/runbooks/`：重启各服务与恢复顺序、从备份恢复、轮换 Handle 签名密钥与 provider key、新增一个接入包（含清单导入与发布）、新增一个领域包、升级 pi 版本（契约测试流程）、排查一次失败的 Task（沿 `explain` 与审计）；`docs/testing.md`：设计 §7.10 的测试分层与每层的运行命令。
 - 验收：按「从备份恢复」手册在临时环境走一遍成功；按「新增接入包」手册接入一个 fake 系统成功。依赖：S3.9、S1.12。
 
-### S3.11 pi 升级契约与漂移检测
-- 目标：回答"pi agent 解耦，可以跟随主线更新吗"——把升级 pi 从"没人敢动的冻结依赖"变成一条有
-  耦合面清单、有自动检测、有回滚方案的可执行流程；本任务本身不升级 pi、不改运行时行为。
-- 交付物：`docs/runbooks/pi-upgrade.md`（耦合面清单——每个依赖 pi 具体行为的文件/flag/schema
-  一行、变更后果、覆盖它的测试；单一版本源 `pi.version`；升级步骤；兼容性测试清单；回滚方案）；
-  `scripts/check-pi-version-consistency.sh`（`pi.version` 与 `packages/platform-extension/
-  package.json` 两个版本号字段、`deploy/worker-runtime/Dockerfile` 是否仍读 `pi.version`，三者
-  一致性校验，接入 `pnpm ci:guards` 与 CI `guards` job）；`.github/workflows/pi-drift.yml`
-  （每晚 + 手动，对 `@earendil-works/pi-coding-agent`/`@earendil-works/pi-ai` 的 `@latest`
-  跑 `@nexttime/platform-extension` 的 pi-SDK 相关测试，只在一次性 checkout 里改版本、从不
-  提交；失败时开/更新单个 `pi-drift` label 的 issue，打印 pinned/latest 版本 diff；无
-  `pull_request`/`push` 触发器，不影响 `ci.yml` 的 required checks）；`.github/dependabot.yml`
-  （`packages/platform-extension` 的 npm 依赖按周检查，`@earendil-works/*` 分组为 `pi`，
-  打 `pi-upgrade` label；`deploy/worker-runtime` 的 Docker 基础镜像按周检查）。
-- 验收：`sh scripts/check-pi-version-consistency.sh` 通过；`pi-drift.yml`/`dependabot.yml`
-  YAML 语法有效；`pnpm ci:guards`、`pnpm -r typecheck`、`pnpm --filter @nexttime/
-  platform-extension test` 全绿。依赖：S1.5、S1.6。
-
----
-
 ### S3.11 中台控制面（管理员面）
 
 - 背景与反省（2026-09-08）：S1/S2 的 web 只是验收面——登录、对话、审批卡片、任务、连接页壳。一个"中台"缺的是**控制面**：谁能进（成员、角色、API key）、谁能做什么（Grant / Policy / Quota）、接了什么系统（Gatekeeper 与其 Operation 分类）、发布了什么能力（Skill / Procedure / WorkerDefinition / Operation）、发生过什么（审计）。这些在内核里大多已有 capability，只是没有读侧能力、没有 UI、没有信息架构。
@@ -909,6 +889,24 @@
 - 验收：S3.11–S3.13 的 UI 验收全部通过；`pnpm --filter @nexttime/web e2e` 在主机上跑通。依赖：S3.11–S3.13。
 
 - **实施顺序（2026-09-08 决定）**：S3.11 内核读侧 + 成员管理能力 → web 路由化 + 治理区壳与成员页 → S3.13 迁移 + 能力 + 运行时投影 → 「我的智能体」页 → S3.12 接入向导与目录页。前两步可与 S3.1–S3.4 并行；不等 Explorer。
+
+### S3.15 pi 升级契约与漂移检测
+- 目标：回答"pi agent 解耦，可以跟随主线更新吗"——把升级 pi 从"没人敢动的冻结依赖"变成一条有
+  耦合面清单、有自动检测、有回滚方案的可执行流程；本任务本身不升级 pi、不改运行时行为。
+- 交付物：`docs/runbooks/pi-upgrade.md`（耦合面清单——每个依赖 pi 具体行为的文件/flag/schema
+  一行、变更后果、覆盖它的测试；单一版本源 `pi.version`；升级步骤；兼容性测试清单；回滚方案）；
+  `scripts/check-pi-version-consistency.sh`（`pi.version` 与 `packages/platform-extension/
+  package.json` 两个版本号字段、`deploy/worker-runtime/Dockerfile` 是否仍读 `pi.version`，三者
+  一致性校验，接入 `pnpm ci:guards` 与 CI `guards` job）；`.github/workflows/pi-drift.yml`
+  （每晚 + 手动，对 `@earendil-works/pi-coding-agent`/`@earendil-works/pi-ai` 的 `@latest`
+  跑 `@nexttime/platform-extension` 的 pi-SDK 相关测试，只在一次性 checkout 里改版本、从不
+  提交；失败时开/更新单个 `pi-drift` label 的 issue，打印 pinned/latest 版本 diff；无
+  `pull_request`/`push` 触发器，不影响 `ci.yml` 的 required checks）；`.github/dependabot.yml`
+  （`packages/platform-extension` 的 npm 依赖按周检查，`@earendil-works/*` 分组为 `pi`，
+  打 `pi-upgrade` label；`deploy/worker-runtime` 的 Docker 基础镜像按周检查）。
+- 验收：`sh scripts/check-pi-version-consistency.sh` 通过；`pi-drift.yml`/`dependabot.yml`
+  YAML 语法有效；`pnpm ci:guards`、`pnpm -r typecheck`、`pnpm --filter @nexttime/
+  platform-extension test` 全绿。依赖：S1.5、S1.6。
 
 ---
 
