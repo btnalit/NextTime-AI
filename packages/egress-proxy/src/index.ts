@@ -1,8 +1,9 @@
 import type { Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { internalAuthorizationHeader } from '@nexttime/shared';
 import { createAdminServer } from './admin.js';
 import type { EgressProxyConfig } from './config.js';
-import { loadConfig } from './config.js';
+import { loadConfig, loadInternalToken } from './config.js';
 import { createProxyServer } from './proxy.js';
 import { EgressReporter } from './report.js';
 import { createSourceMap } from './source-map.js';
@@ -12,6 +13,12 @@ import { createSourceMap } from './source-map.js';
  * egress, denies RFC1918/link-local/CGNAT/unique-local-v6/platform-subnet addresses and internal
  * service names, applies per-source allow/deny lists, and reports every decision (design doc
  * §7.9, §5.4 I10). See README.md for env vars and the policy summary.
+ *
+ * fix/internal-plane-auth (2026-09): `POST ${kernelUrl}/internal/egress` now carries
+ * `Authorization: Bearer <internal-plane token>` — `config.ts`'s `loadInternalToken`, called here
+ * only when `config.kernelUrl` is configured. An unreadable or unusable token file fails
+ * `startEgressProxy` outright in that case; with no `kernelUrl` at all, the token is never loaded,
+ * matching `EgressReporter`'s existing "unset disables reporting" behavior.
  */
 export const VERSION = '0.1.0';
 
@@ -47,8 +54,16 @@ async function closeServer(server: Server): Promise<void> {
 export async function startEgressProxy(
   config: EgressProxyConfig = loadConfig(),
 ): Promise<EgressProxyApp> {
+  // fix/internal-plane-auth (2026-09): loaded first, before any resource (the source map's
+  // fs.watch, either server socket) is opened — only when there is a kernel to reach; see
+  // loadInternalToken's own doc comment for why this mirrors kernelUrl's existing "unset disables
+  // reporting" posture rather than always requiring the token file.
+  const authorizationHeader = config.kernelUrl
+    ? internalAuthorizationHeader(await loadInternalToken())
+    : undefined;
+
   const sourceMap = createSourceMap(config.sourceMapFile);
-  const reporter = new EgressReporter({ kernelUrl: config.kernelUrl });
+  const reporter = new EgressReporter({ kernelUrl: config.kernelUrl, authorizationHeader });
 
   const proxyServer = createProxyServer({
     denyHosts: config.denyHosts,

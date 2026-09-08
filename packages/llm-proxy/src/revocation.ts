@@ -36,6 +36,11 @@ export interface RevocationSyncOptions {
    *  `isRevoked` always reports `false` (the local EdDSA signature/expiry check in handle-auth.ts
    *  is still enforced regardless; this only disables the *revocation* half). */
   readonly kernelUrl: string | undefined;
+  /** `Authorization` header value sent on every poll (`@nexttime/shared`'s
+   *  `internalAuthorizationHeader(token)`) — `index.ts` supplies this whenever `kernelUrl` is set
+   *  (fix/internal-plane-auth, 2026-09). Omitted only in tests that talk to an unguarded fake
+   *  kernel. */
+  readonly authorizationHeader?: string;
   readonly intervalMs: number;
   readonly overlapMs: number;
   readonly fetchImpl?: typeof fetch;
@@ -70,7 +75,11 @@ export function startRevocationSync(options: RevocationSyncOptions): RevocationS
     try {
       const url = new URL('/internal/handle-revocations', options.kernelUrl);
       url.searchParams.set('since', since.toISOString());
-      const res = await fetchImpl(url.toString());
+      const res = await fetchImpl(url.toString(), {
+        headers: options.authorizationHeader
+          ? { authorization: options.authorizationHeader }
+          : undefined,
+      });
       if (!res.ok) throw new Error(`kernel responded ${res.status}`);
       const body = (await res.json()) as HandleRevocationsResponse;
       for (const row of body.revoked) revoked.add(row.jti);

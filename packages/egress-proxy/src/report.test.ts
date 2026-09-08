@@ -81,6 +81,42 @@ describe('EgressReporter', () => {
     reporter.close();
   });
 
+  it('sends the configured Authorization header on the flush POST (fix/internal-plane-auth)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true } as Response);
+    const reporter = new EgressReporter({
+      log: () => {},
+      kernelUrl: 'http://kernel.internal:8080',
+      authorizationHeader: 'Bearer test-token',
+      fetchImpl,
+      flushIntervalMs: 100,
+    });
+    reporter.record(observation());
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).authorization).toBe('Bearer test-token');
+    reporter.close();
+  });
+
+  it('omits the Authorization header when none is configured', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true } as Response);
+    const reporter = new EgressReporter({
+      log: () => {},
+      kernelUrl: 'http://kernel.internal:8080',
+      fetchImpl,
+      flushIntervalMs: 100,
+    });
+    reporter.record(observation());
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+    reporter.close();
+  });
+
   it('never throws or blocks the caller when the POST fails', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('network down'));
     const reporter = new EgressReporter({

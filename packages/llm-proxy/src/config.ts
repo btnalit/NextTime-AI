@@ -1,4 +1,10 @@
 import { readFile } from 'node:fs/promises';
+import {
+  INTERNAL_TOKEN_FILE_ENV,
+  InternalTokenError,
+  normalizeInternalToken,
+  resolveInternalTokenFile,
+} from '@nexttime/shared';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -138,6 +144,34 @@ export async function loadProvidersFile(filePath: string): Promise<LlmProvidersF
     );
   }
   return result.data;
+}
+
+/**
+ * Reads the internal-plane token file (`NEXTTIME_INTERNAL_TOKEN_FILE`, default
+ * `/run/secrets/internal_token` — `@nexttime/shared`'s `internal-token.ts` contract, the same one
+ * `packages/kernel/src/interfaces/internal-auth`'s `loadInternalToken` reads on the other end of
+ * the wire; deliberately duplicated here rather than shared, since that module is IO-free by
+ * design — see its own doc comment). `index.ts`'s `startLlmProxy` calls this only when
+ * `config.kernelUrl` is set (fix/internal-plane-auth, 2026-09): with no kernel to reach, the two
+ * internal-plane clients below (`LlmUsageReporter`, `RevocationSync`) are already no-ops, and this
+ * package must not fail to start over a token it will never present. When `kernelUrl` *is*
+ * configured, an unreadable/unusable token file fails startup — this proxy cannot report usage or
+ * sync revocations without it, so degrading silently would be worse than not starting.
+ */
+export async function loadInternalToken(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<string> {
+  const file = resolveInternalTokenFile(env);
+  let raw: string;
+  try {
+    raw = await readFile(file, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code ?? 'error';
+    throw new InternalTokenError(
+      `cannot read the internal-plane token file "${file}" (${INTERNAL_TOKEN_FILE_ENV}; ${code}) — llm-proxy refuses to start without it while KERNEL_URL is configured: generate it with scripts/gen-handle-keys.sh and mount it as the compose secret internal_token`,
+    );
+  }
+  return normalizeInternalToken(raw, file);
 }
 
 export interface LlmProxyConfig {

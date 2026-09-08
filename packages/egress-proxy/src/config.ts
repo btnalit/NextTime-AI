@@ -1,3 +1,10 @@
+import { readFile } from 'node:fs/promises';
+import {
+  INTERNAL_TOKEN_FILE_ENV,
+  InternalTokenError,
+  normalizeInternalToken,
+  resolveInternalTokenFile,
+} from '@nexttime/shared';
 import type { CidrRange } from './net-utils.js';
 import { parseCidr } from './net-utils.js';
 
@@ -137,4 +144,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EgressProxyCon
     connectTimeoutMs: parseIntEnv(env.CONNECT_TIMEOUT_MS, 10_000),
     allowLoopbackForTests: env.ALLOW_LOOPBACK_FOR_TESTS === '1',
   };
+}
+
+/**
+ * Reads the internal-plane token file (`NEXTTIME_INTERNAL_TOKEN_FILE`, default
+ * `/run/secrets/internal_token` — `@nexttime/shared`'s `internal-token.ts` contract, the same one
+ * `packages/kernel/src/interfaces/internal-auth`'s `loadInternalToken` reads on the other end of
+ * the wire; deliberately duplicated here rather than shared, since that module is IO-free by
+ * design — see its own doc comment). `index.ts`'s `startEgressProxy` calls this only when
+ * `config.kernelUrl` is set (fix/internal-plane-auth, 2026-09): with no kernel to reach,
+ * `EgressReporter` is already a no-op, and this package must not fail to start over a token it
+ * will never present. When `kernelUrl` *is* configured, an unreadable/unusable token file fails
+ * startup — this proxy cannot report egress observations without it.
+ */
+export async function loadInternalToken(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<string> {
+  const file = resolveInternalTokenFile(env);
+  let raw: string;
+  try {
+    raw = await readFile(file, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code ?? 'error';
+    throw new InternalTokenError(
+      `cannot read the internal-plane token file "${file}" (${INTERNAL_TOKEN_FILE_ENV}; ${code}) — egress-proxy refuses to start without it while KERNEL_URL is configured: generate it with scripts/gen-handle-keys.sh and mount it as the compose secret internal_token`,
+    );
+  }
+  return normalizeInternalToken(raw, file);
 }

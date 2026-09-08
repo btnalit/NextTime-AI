@@ -22,8 +22,12 @@ WebSocket（`/internal/agent-host`）转发给内核。内核侧 `AgentHostRunti
 
 ### 2.1 kernel ⇄ agent-host（WebSocket `/internal/agent-host`）
 
-只在 `control` 网络可达，内核不发布任何主机端口（设计文档 §11）——与 `/internal/llm-usage`、
-`/internal/handle-revocations` 同一信任边界，本协议不带额外鉴权。Schema 定义在
+内核不发布任何主机端口（设计文档 §11），但同时在 `control`/`workers` 两个网络上监听——"只在
+`control` 可达"因此并不成立，任何 Worker 容器同样能连到这个升级端点。这个握手现在要求
+`Authorization: Bearer <internal-plane token>`（fix/internal-plane-auth，2026-09；
+`@nexttime/shared` 的 `internal-token.ts`，`packages/kernel/src/interfaces/internal-auth`
+校验），并额外拒绝来自 `NEXTTIME_SUBNET_WORKERS` 的连接（即使 token 正确）——与
+`/internal/llm-usage`、`/internal/handle-revocations` 同一份守卫。Schema 定义在
 `@nexttime/shared` 的 `agent-host-protocol.ts`（kernel 与 agent-host 共享同一份，不会漂移）。
 
 agent-host → kernel：
