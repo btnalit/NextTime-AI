@@ -58,7 +58,7 @@ describe('GatekeeperBase', () => {
     expect(result.data).toEqual({ ok: true });
   });
 
-  it('routes apply only to mode:execute operations and requires an idempotencyKey', async () => {
+  it('routes apply only to mode:execute operations and requires an actionRequestId', async () => {
     const transport = fakeTransport();
     const gate = new GatekeeperBase({
       manifest: [observeOp(), executeOp()],
@@ -70,7 +70,7 @@ describe('GatekeeperBase', () => {
     await expect(gate.apply('stock.get', {}, 'k1')).rejects.toThrow(
       /mode "observe", expected "execute"/,
     );
-    await expect(gate.apply('stock.adjust', {}, '')).rejects.toThrow(/requires idempotencyKey/);
+    await expect(gate.apply('stock.adjust', {}, '')).rejects.toThrow(/requires actionRequestId/);
   });
 
   it('apply is idempotent: a repeat call with the same key returns the stored result without re-invoking', async () => {

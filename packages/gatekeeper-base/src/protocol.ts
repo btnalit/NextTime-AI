@@ -73,14 +73,20 @@ export const SimulateResponseSchema = z.object({
 export type SimulateResponse = z.infer<typeof SimulateResponseSchema>;
 
 // -------------------------------------------------------------------------------------------
-// apply — idempotent by `idempotencyKey` (design doc §5.1.4 Gatekeeper protocol "apply 幂等").
+// apply — idempotent by `actionRequestId` (design doc §5.1.4 Gatekeeper protocol "apply 幂等").
+// docs/wire-contract-conventions.md §1 vocabulary table (2026-09-08 decision): this is the
+// execution-preemption key derived from the ActionRequest's own id, not a caller-supplied
+// dedupe token — `idempotencyKey` is reserved for `request_action`'s own request-dedupe param
+// (packages/shared/src/capabilities.ts), a different key at a different layer. Renamed from
+// `idempotencyKey` (field name unchanged in meaning — still the gate's own idempotency-store
+// key — only the name, to stop the two concepts sharing one word).
 // -------------------------------------------------------------------------------------------
 
 export const ApplyRequestSchema = z.object({
   operation: z.string().min(1),
   params: z.unknown().optional(),
   onBehalfOf: OnBehalfOfSchema,
-  idempotencyKey: z.string().min(1),
+  actionRequestId: z.string().min(1),
 });
 export type ApplyRequest = z.infer<typeof ApplyRequestSchema>;
 
@@ -88,7 +94,7 @@ export const ApplyResponseSchema = z.object({
   data: z.unknown(),
   observedFacts: z.array(ObservedFactCandidateSchema).optional(),
   /** `true` when this response was served from the idempotency store rather than freshly
-   *  executed (a repeat `apply` for the same `idempotencyKey`). */
+   *  executed (a repeat `apply` for the same `actionRequestId`). */
   replayed: z.boolean(),
 });
 export type ApplyResponse = z.infer<typeof ApplyResponseSchema>;
@@ -101,8 +107,9 @@ export const RevertRequestSchema = z.object({
   operation: z.string().min(1),
   params: z.unknown().optional(),
   onBehalfOf: OnBehalfOfSchema,
-  /** The `idempotencyKey` of the `apply` call being reverted, when known. */
-  idempotencyKey: z.string().min(1).optional(),
+  /** The `actionRequestId` of the `apply` call being reverted, when known — same rename as
+   *  `ApplyRequestSchema.actionRequestId` above, for the same reason. */
+  actionRequestId: z.string().min(1).optional(),
 });
 export type RevertRequest = z.infer<typeof RevertRequestSchema>;
 

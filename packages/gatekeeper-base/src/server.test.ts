@@ -165,7 +165,7 @@ describe('gatekeeper protocol server', () => {
     expect(response.json().error.code).toBe('operation_not_found');
   });
 
-  it('POST /gate/apply requires idempotencyKey and is idempotent on repeat', async () => {
+  it('POST /gate/apply requires actionRequestId and is idempotent on repeat', async () => {
     app = buildApp(fakeTransport);
     const missingKey = await app.inject({
       method: 'POST',
@@ -179,7 +179,7 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: { qty: 1 }, idempotencyKey: 'req-1' },
+      payload: { operation: 'stock.adjust', params: { qty: 1 }, actionRequestId: 'req-1' },
     });
     expect(first.statusCode).toBe(200);
     expect(first.json().result.replayed).toBe(false);
@@ -188,7 +188,7 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: { qty: 1 }, idempotencyKey: 'req-1' },
+      payload: { operation: 'stock.adjust', params: { qty: 1 }, actionRequestId: 'req-1' },
     });
     expect(second.json().result.replayed).toBe(true);
   });
@@ -199,7 +199,7 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: { qty: 1 }, idempotencyKey: 'req-conflict' },
+      payload: { operation: 'stock.adjust', params: { qty: 1 }, actionRequestId: 'req-conflict' },
     });
     expect(first.statusCode).toBe(200);
 
@@ -207,7 +207,7 @@ describe('gatekeeper protocol server', () => {
       method: 'POST',
       url: '/gate/apply',
       headers: AUTH_HEADERS,
-      payload: { operation: 'stock.adjust', params: { qty: 2 }, idempotencyKey: 'req-conflict' },
+      payload: { operation: 'stock.adjust', params: { qty: 2 }, actionRequestId: 'req-conflict' },
     });
     expect(second.statusCode).toBe(409);
     expect(second.json().error.code).toBe('idempotency_conflict');
