@@ -4,8 +4,11 @@ import { Agent, fetch as undiciFetch } from 'undici';
 /**
  * tls: how an `http`/`mcp` gate trusts a target that presents a private or self-signed
  * certificate — the alternative to `NODE_TLS_REJECT_UNAUTHORIZED=0`, which disables verification
- * for *every* outbound TLS connection the gate process makes and was the documented stop-gap for
- * the ragflow gate (docs/runbooks/host-gatekeepers.md §11).
+ * for *every* outbound TLS connection the gate process makes and was formerly the documented
+ * stop-gap for the ragflow gate (docs/runbooks/host-gatekeepers.md §11). Review lane 5, P3 batch:
+ * a gate now *refuses to start* with that variable set rather than merely warning — a process-wide
+ * kill switch for certificate verification is exactly the kind of misconfiguration that should be
+ * loud and fatal, not a line in a log an operator can miss.
  *
  *   - `GATE_TLS_CA_FILE`    — PEM file (one or more certificates) added as the *only* trust
  *                             anchors for this gate's target connections. For a self-signed
@@ -39,15 +42,25 @@ export function gateTlsOptionsFromEnv(env: NodeJS.ProcessEnv): GateTlsOptions | 
   return { ...(caFile ? { caFile } : {}), ...(servername ? { servername } : {}) };
 }
 
-/** The line a gate logs at startup when the process-wide kill switch is set — kept as a warning,
- *  not an error, so an operator mid-migration is told what to do instead rather than locked out. */
+/** `undefined` when the process-wide TLS kill switch is not set; otherwise the message a caller
+ *  should refuse to start with (`assertTlsNotDisabled` below is what every gate entry point
+ *  actually calls — this is exported separately so a caller can format/log the reason itself). */
 export function insecureTlsEnvWarning(env: NodeJS.ProcessEnv): string | undefined {
   if (env.NODE_TLS_REJECT_UNAUTHORIZED !== '0') return undefined;
   return (
-    'NODE_TLS_REJECT_UNAUTHORIZED=0 is set: certificate verification is disabled for every ' +
+    'NODE_TLS_REJECT_UNAUTHORIZED=0 is set: certificate verification would be disabled for every ' +
     'outbound TLS connection this gate makes. Trust the target explicitly instead — ' +
     'GATE_TLS_CA_FILE (its PEM) and, if it is reached by an address not in its SAN, GATE_TLS_SERVERNAME.'
   );
+}
+
+/** Throws when the process-wide TLS kill switch is set — called at gate startup, before any
+ *  transport/credential IO, alongside `loadGateKernelToken` (review lane 5, P3 batch: this used to
+ *  only `console.warn`, so a misconfigured gate would come up and run with certificate
+ *  verification silently disabled for every outbound connection it makes). */
+export function assertTlsNotDisabled(env: NodeJS.ProcessEnv): void {
+  const message = insecureTlsEnvWarning(env);
+  if (message) throw new Error(message);
 }
 
 type UndiciFetch = typeof undiciFetch;

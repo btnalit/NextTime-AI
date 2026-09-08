@@ -370,7 +370,10 @@ document.parse`）。若 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 已�
 
 RAGFlow 的 edge（nginx）通常用一张自签证书终止 TLS，且签给某个 DNS 名（CN/SAN 里没有主机 IP）。
 `gatekeeper-ragflow.env` 里**不要**写 `NODE_TLS_REJECT_UNAUTHORIZED=0`（它关掉门进程全部出向 TLS
-校验，门启动时会打一条 warn）。正确做法是把那张证书交给门、并告诉门按哪个名字校验：
+校验）——**fix/gate-protocol-hardening 之后，这不再只是一条 warn**：门在启动阶段（读 manifest/建
+transport 之前）就会检测到这个变量并直接拒绝启动（`assertTlsNotDisabled`，
+`@nexttime/gatekeeper-base` 的 `tls.ts`），容器进入重启循环而不是带着关闭的证书校验静默跑起来。
+正确做法是把那张证书交给门、并告诉门按哪个名字校验：
 
 ```bash
 set -a; . ./.env; set +a

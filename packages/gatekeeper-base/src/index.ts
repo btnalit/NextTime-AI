@@ -13,8 +13,9 @@ import { GatekeeperBase } from './gatekeeper-base.js';
 import { JsonFileIdempotencyStore } from './idempotency-store.js';
 import { CliTransport, HttpTransport, McpTransport, SshTransport } from './kinds/index.js';
 import type { SshPolicyRule, SshTarget, Transport } from './kinds/index.js';
+import { parseManifestJson } from './manifest.js';
 import { createGatekeeperServer } from './server.js';
-import { buildTlsFetch, gateTlsOptionsFromEnv, insecureTlsEnvWarning } from './tls.js';
+import { assertTlsNotDisabled, buildTlsFetch, gateTlsOptionsFromEnv } from './tls.js';
 
 /**
  * @nexttime/gatekeeper-base — protocol, four transport kinds (http/mcp/cli/ssh), manifest model,
@@ -28,7 +29,12 @@ import { buildTlsFetch, gateTlsOptionsFromEnv, insecureTlsEnvWarning } from './t
 export const VERSION = '0.1.0';
 
 export { GatekeeperBase } from './gatekeeper-base.js';
-export { buildTlsFetch, gateTlsOptionsFromEnv, insecureTlsEnvWarning } from './tls.js';
+export {
+  assertTlsNotDisabled,
+  buildTlsFetch,
+  gateTlsOptionsFromEnv,
+  insecureTlsEnvWarning,
+} from './tls.js';
 export type { GateTlsOptions } from './tls.js';
 export type {
   ApplyResult,
@@ -92,6 +98,8 @@ export * from './errors.js';
 
 export { resolveGateDataDir } from './data-dir.js';
 
+export { parseManifestJson } from './manifest.js';
+
 export { assertParamsValid } from './params-validation.js';
 
 export { applyResultMapping } from './result-mapping.js';
@@ -145,7 +153,7 @@ export type {
 async function loadManifest(path: string | undefined): Promise<Operation[]> {
   if (!path) return [];
   const raw = await readFile(path, 'utf8');
-  return JSON.parse(raw) as Operation[];
+  return parseManifestJson(raw, path);
 }
 
 /**
@@ -153,6 +161,14 @@ async function loadManifest(path: string | undefined): Promise<Operation[]> {
  * `startGatekeeperServer` below passes it to `createGatekeeperServer` so `POST`/
  * `DELETE /gate/connected-accounts` can write to the *same* store `observe`/`apply` read
  * credentials from, rather than constructing (and discarding) a second one.
+ *
+ * `GATE_STORE_KEY_FILE` (review lane 5, P2-6) — the AES key protecting every credential
+ * `ConnectedAccountStore` holds at rest — deserves the same provisioning as `handle_key`/
+ * `internal_token`/`gate_token`: a compose `secrets:` entry (0640, group 10001, never a plain
+ * bind-mounted data-volume file an operator might back up or copy alongside less sensitive
+ * config). This function only reads the env var name a deployment points at it; it is the
+ * deploying compose service's own job to mount it as a secret (see `connected-account.ts`'s class
+ * doc comment for the same note at the store itself).
  */
 function buildCredentialResolver(
   mode: string,
@@ -173,7 +189,38 @@ function buildCredentialResolver(
   return { resolver: new SharedEnvCredentialResolver({ env }), connectedAccountStore: undefined };
 }
 
-function buildTransport(kind: string, env: NodeJS.ProcessEnv): Transport {
+/** Validates `GATE_SSH_PORT` (review lane 5, P3 batch — `Number(raw)` on a non-numeric value
+ *  silently produced `NaN`, which `sshConnectionArgs` then stringified into a broken `-p NaN`
+ *  argument instead of failing at startup). `undefined` → ssh's own default port. */
+export function parseSshPort(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`GATE_SSH_PORT must be an integer in 1..65535 (got "${raw}")`);
+  }
+  return port;
+}
+
+/**
+ * `GATE_SSH_POLICY_FILE` (review lane 5, P3 batch): a *file path* to the policy table's JSON, read
+ * from disk — the env var name always implied a path, but the implementation only ever
+ * `JSON.parse`d the env var's own value directly, so it could never actually hold a file path.
+ * Kept backward compatible with every existing deployment that already sets it to inline JSON
+ * (`docker-compose.yml`'s `accept-s2-ssh-gate`: `GATE_SSH_POLICY_FILE: "[]"`): a value whose first
+ * non-whitespace character is `[` is parsed as inline JSON directly; anything else is treated as a
+ * path and read from disk.
+ */
+export async function loadSshPolicyTable(raw: string | undefined): Promise<SshPolicyRule[]> {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('[')) {
+    return JSON.parse(trimmed) as SshPolicyRule[];
+  }
+  const contents = await readFile(raw, 'utf8');
+  return JSON.parse(contents) as SshPolicyRule[];
+}
+
+async function buildTransport(kind: string, env: NodeJS.ProcessEnv): Promise<Transport> {
   // GATE_TLS_CA_FILE / GATE_TLS_SERVERNAME (tls.ts): only the two fetch-based transports have a
   // TLS client to configure; `undefined` keeps the plain global fetch.
   const tls = gateTlsOptionsFromEnv(env);
@@ -206,7 +253,7 @@ function buildTransport(kind: string, env: NodeJS.ProcessEnv): Transport {
     const target: SshTarget = {
       host,
       user,
-      port: env.GATE_SSH_PORT ? Number(env.GATE_SSH_PORT) : undefined,
+      port: parseSshPort(env.GATE_SSH_PORT),
       identityFile: env.GATE_SSH_IDENTITY_FILE,
       // Host-key policy (kinds/ssh.ts): production gates pin the target's key in a known_hosts
       // file (`yes` + GATE_SSH_KNOWN_HOSTS_FILE); test fixtures may use `no`. Unset → OpenSSH's
@@ -214,9 +261,7 @@ function buildTransport(kind: string, env: NodeJS.ProcessEnv): Transport {
       strictHostKeyChecking: strict,
       knownHostsFile: env.GATE_SSH_KNOWN_HOSTS_FILE,
     };
-    const policyTable: SshPolicyRule[] = env.GATE_SSH_POLICY_FILE
-      ? (JSON.parse(env.GATE_SSH_POLICY_FILE) as SshPolicyRule[])
-      : [];
+    const policyTable = await loadSshPolicyTable(env.GATE_SSH_POLICY_FILE);
     return new SshTransport({ target, policyTable });
   }
   throw new Error(`unknown GATE_TRANSPORT_KIND "${kind}" (expected http/mcp/cli/ssh)`);
@@ -228,11 +273,12 @@ export async function startGatekeeperServer(
   // Loaded first, synchronously, before any other IO (matches `loadGateKernelToken`'s own doc
   // comment: a gate refuses to start without a readable, valid token file, review lane 5, P1-1).
   const token = loadGateKernelToken(env);
+  // Also before any other IO — a gate must never come up with certificate verification silently
+  // disabled (review lane 5, P3 batch; tls.ts's own doc comment).
+  assertTlsNotDisabled(env);
   const dataDir = resolveGateDataDir(env);
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
-  const insecure = insecureTlsEnvWarning(env);
-  if (insecure) console.warn(JSON.stringify({ level: 'warn', msg: insecure }));
-  const transport = buildTransport(env.GATE_TRANSPORT_KIND ?? 'http', env);
+  const transport = await buildTransport(env.GATE_TRANSPORT_KIND ?? 'http', env);
   const { resolver: credentialResolver, connectedAccountStore } = buildCredentialResolver(
     env.GATE_CREDENTIAL_MODE ?? 'shared',
     dataDir,

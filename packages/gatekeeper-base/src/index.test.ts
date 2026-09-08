@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
-import { GatekeeperBase, VERSION, createGatekeeperServer } from './index.js';
+import {
+  GatekeeperBase,
+  VERSION,
+  createGatekeeperServer,
+  loadSshPolicyTable,
+  parseSshPort,
+} from './index.js';
 import type { Transport } from './kinds/index.js';
 
 describe('@nexttime/gatekeeper-base', () => {
@@ -46,5 +55,49 @@ describe('@nexttime/gatekeeper-base', () => {
     expect(body.ok).toBe(true);
     expect(body.result.operations).toHaveLength(1);
     await app.close();
+  });
+});
+
+describe('parseSshPort (review lane 5, P3 batch)', () => {
+  it('returns undefined when unset or empty', () => {
+    expect(parseSshPort(undefined)).toBeUndefined();
+    expect(parseSshPort('')).toBeUndefined();
+  });
+
+  it('parses a valid port', () => {
+    expect(parseSshPort('22')).toBe(22);
+    expect(parseSshPort('65535')).toBe(65535);
+  });
+
+  it('throws for a non-numeric value instead of silently producing NaN', () => {
+    expect(() => parseSshPort('not-a-port')).toThrow(/GATE_SSH_PORT/);
+  });
+
+  it('throws for an out-of-range or non-integer value', () => {
+    expect(() => parseSshPort('0')).toThrow(/GATE_SSH_PORT/);
+    expect(() => parseSshPort('70000')).toThrow(/GATE_SSH_PORT/);
+    expect(() => parseSshPort('22.5')).toThrow(/GATE_SSH_PORT/);
+  });
+});
+
+describe('loadSshPolicyTable (review lane 5, P3 batch)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gate-ssh-policy-'));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('returns [] when unset', async () => {
+    expect(await loadSshPolicyTable(undefined)).toEqual([]);
+  });
+
+  it('parses inline JSON when the value starts with "[" (backward compat, e.g. accept-s2-ssh-gate)', async () => {
+    expect(await loadSshPolicyTable('[]')).toEqual([]);
+    const rule = [{ pattern: '^show', mode: 'observe', blastRadius: 'low', autoApprovable: true }];
+    expect(await loadSshPolicyTable(JSON.stringify(rule))).toEqual(rule);
+  });
+
+  it('reads the policy table from a file path when the value is not inline JSON', async () => {
+    const file = join(dir, 'policy.json');
+    const rule = [{ pattern: '^show', mode: 'observe', blastRadius: 'low', autoApprovable: true }];
+    writeFileSync(file, JSON.stringify(rule));
+    expect(await loadSshPolicyTable(file)).toEqual(rule);
   });
 });
