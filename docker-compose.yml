@@ -84,8 +84,8 @@ services:
     # control 网络上的服务都能不带凭证直接调用这两组路由；"trusted caller" 只是约定，监听端本身并不
     # 强制。与 kernel/agent-host 用的是同一份文件（DEFAULT_INTERNAL_TOKEN_FILE，
     # scripts/gen-handle-keys.sh 生成）。调用方（agent-host 的 supervisor-client.ts；kernel 的
-    # adapters/supervisor-client 尚未随此修复更新，是已知的后续工作——见该文件自身注释）必须带上
-    # Authorization: Bearer <token>，否则拿到 401。
+    # adapters/supervisor-client，同一批修复内已同步更新）必须带上 Authorization: Bearer <token>，
+    # 否则拿到 401。
     secrets: [internal_token]
     # docker.sock: talks to the Engine API directly (dockerode), no docker CLI needed in the
     # image. workspaces: rw — this is where per-principal directories get created (I15) and

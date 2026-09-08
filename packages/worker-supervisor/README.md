@@ -11,8 +11,8 @@ kernel/llm-proxy/egress-proxy）——所以没有任何 agent 容器能直接�
 fix/runtime-hardening，lane-6 review P1-3）：早前这两组路由完全不鉴权，"信任调用方"只是约定，任何
 `control` 网络上的其它服务都能直接调用；token 与 kernel/agent-host 共用同一份
 `${NEXTTIME_DATA}/secrets/internal.token`（`@nexttime/shared` `DEFAULT_INTERNAL_TOKEN_FILE`）。
-**已知后续工作**：kernel 自己的 `packages/kernel/src/adapters/supervisor-client` 尚未随这次修复更新
-去发送这个头——见该文件顶部注释；在它更新之前，kernel 发起的 `POST /task/spawn` 会收到 `401`。
+kernel 自己的 `packages/kernel/src/adapters/supervisor-client`（`TaskSupervisorClient`）已同步更新
+带上这个头（复用 kernel 自己 `/internal/*` 守卫已经加载的同一份 token，见该文件顶部注释）。
 `GET /healthz`、`POST /task/:workerRunId/terminate`、`GET /task/:workerRunId` 不受影响，仍不需要
 token。
 

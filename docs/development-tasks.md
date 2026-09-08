@@ -228,9 +228,11 @@
     caller"只是约定）——新增 `src/internal-auth.ts`（与 kernel/agent-host/llm-proxy 同一份
     `@nexttime/shared` internal-plane token 契约，`docker-compose.yml` 的 `worker-supervisor` 服务块
     现在也挂 `internal_token` secret），`agent-host` 的 `supervisor-client.ts` 相应带上
-    `Authorization`。**已知未完成**：`packages/kernel/src/adapters/supervisor-client` 尚未随此更新去
-    发这个头（`packages/kernel` 不在本分支所有权范围）——kernel 发起的 `POST /task/spawn` 在那之前
-    会收到 401，留给拥有该文件的 lane。同一批顺手删掉了 `skills[].hostPath`（S2.8 曾经的只读挂载
+    `Authorization`。**后续补上**（同一分支，协调者复审发现"kernel 未带这个头会导致主机上每一次
+    Task spawn 都 401"是合并阻塞项，2026-09）：`packages/kernel/src/adapters/supervisor-client`
+    （`TaskSupervisorClient`）现在也在 `spawn`/`terminate`/`status` 三个调用上都带
+    `Authorization`——复用 `index.ts` `main()` 已经为 kernel 自己 `/internal/*` 守卫加载过的同一份
+    token（`internalAuthorizationHeader(internalAuth.token)`），不额外读第二份文件。同一批顺手删掉了 `skills[].hostPath`（S2.8 曾经的只读挂载
     机制，其允许路径覆盖了整个 `${NEXTTIME_DATA}/` 而不只是 skills 目录，含
     `secrets/handle.key`；S2.14 的 `skillsInline` 上线后从未被任何调用方发送过，整个删除而非收紧）。
     ② `resident-service.ts` 的 `spawn()` 现在给入口容器打上 `nexttime.handle-jti` label——一个正在
