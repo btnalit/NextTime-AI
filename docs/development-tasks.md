@@ -180,6 +180,14 @@
     透明网关代理），`egress-proxy` 的私网判定（I10 防 DNS rebinding 的既有设计）因此正确地把它
     当私有地址拒绝——这是主机网络本身的特性，不是这几个服务的缺陷，未做任何"放宽私网判定"来
     迁就这一台主机。详见 `docs/runbooks/host-worker-runtime.md` §10。
+  - **实现说明补充（chore/pi-upgrade-contract PR，2026-09；S3.11）**：这个 Dockerfile 里
+    `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4` 一行的版本号，
+    现在从仓库根目录 `pi.version` 文件读取（`COPY pi.version /tmp/pi.version` +
+    `RUN PI_VERSION="$(cat /tmp/pi.version)" && npm install -g ... @earendil-works/pi-coding-
+    agent@${PI_VERSION}`），不再是这里硬编码的字面量——单一版本源，见
+    `docs/runbooks/pi-upgrade.md` §3。`packages/platform-extension/package.json` 的两个版本号
+    字段（S1.6 说明见该节）仍是各自独立的字面量（pnpm/npm 不支持从外部文件读依赖版本号），
+    但三处是否一致由新增的 `scripts/check-pi-version-consistency.sh` 校验（`pnpm ci:guards`）。
 - 实现说明（S1.5b PR，2026-09；本任务的后半——agent-host 事件桥、内核真正的 `AgentRuntime`、假
   LLM 上游、S1.5a 遗留的一处 WS 竞态修复）：
   - 落地路径：`packages/agent-host/src/{host,bridge,supervisor-client,container-io,kernel-link,
@@ -246,6 +254,12 @@
 ### S1.6 platform-extension `entry` 模式
 - 交付物：`packages/platform-extension/src/{index,kernel-client,modes/entry}.ts`：S1 只注册 observe 组工具（`get_object / traverse / search / explain / get_task`），`find_workers` 与 `invoke_worker` 随 S2.7 加入；`context` 事件注入该用户待审批、进行中 Task、相关 Fact 与先例；`session_*` 事件把 `turn_id` 写入会话条目并回传 Turn 结果；契约测试用 pi 的 faux provider + fake kernel。
 - 验收：`pnpm --filter platform-extension test`；fake kernel 收到带 `turn_id` 的回传。依赖：R4。
+- **实现说明补充（chore/pi-upgrade-contract PR，2026-09；S3.11）**：`package.json` 的
+  `dependencies["@earendil-works/pi-coding-agent"]` 与 `devDependencies["@earendil-works/
+  pi-ai"]` 两个版本号字段本身未改（仍是字面量 `0.84.4`，pnpm/npm 没有"从文件读版本号"的语法），
+  但现在由 `scripts/check-pi-version-consistency.sh` 校验它们与仓库根目录 `pi.version`
+  一致——升级 pi 时漏改任一处会在 `pnpm ci:guards`/CI `guards` job 挂红，而不是留到运行时才发现
+  类型定义和容器里装的版本不一致。见 `docs/runbooks/pi-upgrade.md`。
 
 ### S1.7 `llm-proxy` 独立服务
 - 目标：按 provider 透传；provider key 只在这里；内核进程零外部凭证（I9）。
@@ -836,6 +850,24 @@
 - 目标：换人能维护。
 - 交付物：`docs/runbooks/`：重启各服务与恢复顺序、从备份恢复、轮换 Handle 签名密钥与 provider key、新增一个接入包（含清单导入与发布）、新增一个领域包、升级 pi 版本（契约测试流程）、排查一次失败的 Task（沿 `explain` 与审计）；`docs/testing.md`：设计 §7.10 的测试分层与每层的运行命令。
 - 验收：按「从备份恢复」手册在临时环境走一遍成功；按「新增接入包」手册接入一个 fake 系统成功。依赖：S3.9、S1.12。
+
+### S3.11 pi 升级契约与漂移检测
+- 目标：回答"pi agent 解耦，可以跟随主线更新吗"——把升级 pi 从"没人敢动的冻结依赖"变成一条有
+  耦合面清单、有自动检测、有回滚方案的可执行流程；本任务本身不升级 pi、不改运行时行为。
+- 交付物：`docs/runbooks/pi-upgrade.md`（耦合面清单——每个依赖 pi 具体行为的文件/flag/schema
+  一行、变更后果、覆盖它的测试；单一版本源 `pi.version`；升级步骤；兼容性测试清单；回滚方案）；
+  `scripts/check-pi-version-consistency.sh`（`pi.version` 与 `packages/platform-extension/
+  package.json` 两个版本号字段、`deploy/worker-runtime/Dockerfile` 是否仍读 `pi.version`，三者
+  一致性校验，接入 `pnpm ci:guards` 与 CI `guards` job）；`.github/workflows/pi-drift.yml`
+  （每晚 + 手动，对 `@earendil-works/pi-coding-agent`/`@earendil-works/pi-ai` 的 `@latest`
+  跑 `@nexttime/platform-extension` 的 pi-SDK 相关测试，只在一次性 checkout 里改版本、从不
+  提交；失败时开/更新单个 `pi-drift` label 的 issue，打印 pinned/latest 版本 diff；无
+  `pull_request`/`push` 触发器，不影响 `ci.yml` 的 required checks）；`.github/dependabot.yml`
+  （`packages/platform-extension` 的 npm 依赖按周检查，`@earendil-works/*` 分组为 `pi`，
+  打 `pi-upgrade` label；`deploy/worker-runtime` 的 Docker 基础镜像按周检查）。
+- 验收：`sh scripts/check-pi-version-consistency.sh` 通过；`pi-drift.yml`/`dependabot.yml`
+  YAML 语法有效；`pnpm ci:guards`、`pnpm -r typecheck`、`pnpm --filter @nexttime/
+  platform-extension test` 全绿。依赖：S1.5、S1.6。
 
 ---
 

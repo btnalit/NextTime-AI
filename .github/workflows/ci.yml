@@ -119,6 +119,9 @@ jobs:
       - name: Kernel purity guard
         run: sh scripts/check-kernel-purity.sh
 
+      - name: pi version consistency guard (docs/runbooks/pi-upgrade.md)
+        run: sh scripts/check-pi-version-consistency.sh
+
       - name: Shell scripts must be LF and executable
         run: |
           bad=$(git ls-files -s 'scripts/*.sh' | grep -v '^100755 ') || true

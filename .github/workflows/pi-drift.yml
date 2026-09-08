@@ -1,0 +1,164 @@
+name: pi drift
+
+# docs/runbooks/pi-upgrade.md "漂移检测": nightly (+ on-demand) check whether
+# @nexttime/platform-extension still works against pi@latest, without ever bumping the pinned
+# version this repo actually ships (pi.version / packages/platform-extension/package.json /
+# deploy/worker-runtime/Dockerfile — see scripts/check-pi-version-consistency.sh). The `@latest`
+# override happens only inside this ephemeral runner's own checkout and is never committed or
+# pushed.
+#
+# Deliberately has NO `pull_request`/`push` trigger: this workflow must never become, or be
+# mistaken for, a required check on a PR. ci.yml (the workflow that actually gates merges) is
+# completely unaffected by this file's existence.
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # nightly, off the hour to avoid GitHub's documented cron pile-up
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  drift-check:
+    name: drift-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # open/update/close the single `pi-drift`-labeled tracking issue
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm and Node 22
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies (pinned versions)
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve latest pi versions and print the diff
+        id: versions
+        run: |
+          set -eu
+          PINNED=$(tr -d '[:space:]' <pi.version)
+          LATEST_AGENT=$(npm view @earendil-works/pi-coding-agent version)
+          LATEST_AI=$(npm view @earendil-works/pi-ai version)
+          echo "pinned=$PINNED" >>"$GITHUB_OUTPUT"
+          echo "latest_agent=$LATEST_AGENT" >>"$GITHUB_OUTPUT"
+          echo "latest_ai=$LATEST_AI" >>"$GITHUB_OUTPUT"
+
+          echo "pi.version (pinned):            $PINNED"
+          echo "@earendil-works/pi-coding-agent latest: $LATEST_AGENT"
+          echo "@earendil-works/pi-ai latest:           $LATEST_AI"
+
+          {
+            echo "### pi version diff"
+            echo ""
+            echo "| package | pinned (\`pi.version\`) | latest |"
+            echo "|---|---|---|"
+            echo "| @earendil-works/pi-coding-agent | $PINNED | $LATEST_AGENT |"
+            echo "| @earendil-works/pi-ai | $PINNED | $LATEST_AI |"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # Throwaway override: this checkout's own packages/platform-extension/package.json is
+      # rewritten in place by `pnpm add`, but nothing in this job ever runs `git commit`/`git
+      # push` — the change dies with the runner. Both pi packages the extension actually imports
+      # (index.ts's `@earendil-works/pi-coding-agent`, entry.sdk.test.ts's/worker.sdk.test.ts's
+      # `@earendil-works/pi-ai`) are bumped, matching their real dependency sections.
+      - name: Override pi to @latest (throwaway checkout — never committed)
+        run: |
+          set -eu
+          pnpm --filter @nexttime/platform-extension add "@earendil-works/pi-coding-agent@latest"
+          pnpm --filter @nexttime/platform-extension add -D "@earendil-works/pi-ai@latest"
+
+      - name: Run pi-SDK-dependent tests against pi@latest
+        id: test
+        continue-on-error: true
+        run: |
+          pnpm --filter @nexttime/platform-extension exec vitest run \
+            --reporter=default --reporter=json --outputFile=/tmp/pi-drift-vitest.json
+
+      - name: Summarize failures
+        if: steps.test.outcome == 'failure'
+        id: summary
+        run: |
+          set -eu
+          if [ -f /tmp/pi-drift-vitest.json ]; then
+            FAILED=$(node -e "
+              const r = require('/tmp/pi-drift-vitest.json');
+              process.stdout.write(String(r.numFailedTests ?? 'unknown'));
+            " 2>/dev/null || echo "unknown")
+          else
+            # vitest itself crashed before writing the report (e.g. the extension no longer
+            # loads under pi@latest at all) — still real drift, just not test-countable.
+            FAILED="unknown (test process did not produce a report — see workflow logs)"
+          fi
+          echo "failed_count=$FAILED" >>"$GITHUB_OUTPUT"
+          echo "### Result: FAILED ($FAILED test(s) against pi@latest)" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure the pi-drift label exists
+        if: steps.test.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create pi-drift --color B60205 \
+            --description "pi@latest breaks @nexttime/platform-extension's pi-SDK-dependent tests" \
+            2>/dev/null || true
+
+      - name: Open or update the pi-drift tracking issue
+        if: steps.test.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST_AGENT: ${{ steps.versions.outputs.latest_agent }}
+          PINNED: ${{ steps.versions.outputs.pinned }}
+          FAILED_COUNT: ${{ steps.summary.outputs.failed_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          TITLE="pi drift: ${LATEST_AGENT} breaks ${FAILED_COUNT} tests"
+          BODY_FILE=$(mktemp)
+          {
+            echo "pi@latest (\`@earendil-works/pi-coding-agent@${LATEST_AGENT}\`) breaks"
+            echo "${FAILED_COUNT} test(s) in @nexttime/platform-extension's pi-SDK-dependent"
+            echo "suite (\`entry.sdk.test.ts\` / \`worker.sdk.test.ts\` and the rest of"
+            echo "\`packages/platform-extension/src\`)."
+            echo ""
+            echo "- Pinned version (\`pi.version\`): ${PINNED}"
+            echo "- Latest version: ${LATEST_AGENT}"
+            echo "- Failing run: ${RUN_URL}"
+            echo ""
+            echo "See \`docs/runbooks/pi-upgrade.md\` for the coupling-surface inventory,"
+            echo "upgrade procedure and compatibility test list."
+            echo ""
+            echo "This issue is opened/updated in place by the nightly \`pi drift\` workflow —"
+            echo "do not open a second one; it is closed automatically once pi@latest passes."
+          } >"$BODY_FILE"
+
+          EXISTING=$(gh issue list --state open --label pi-drift --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY_FILE"
+            gh issue comment "$EXISTING" --body "Still failing as of ${RUN_URL}."
+          else
+            gh issue create --title "$TITLE" --label pi-drift --body-file "$BODY_FILE"
+          fi
+
+      - name: Close the pi-drift issue if pi@latest now passes
+        if: steps.test.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          echo "### Result: pi@latest passes the pi-SDK-dependent test suite" >>"$GITHUB_STEP_SUMMARY"
+          EXISTING=$(gh issue list --state open --label pi-drift --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "pi@latest now passes the pi-SDK-dependent test suite — closing."
+            gh issue close "$EXISTING"
+          fi
