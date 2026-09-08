@@ -2,6 +2,7 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
 import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
+import { ensureWorkerAgentPrincipal } from './agent-principal.js';
 import {
   type MintWorkerRunHandleInput,
   type ParentAuthority,
@@ -44,6 +45,12 @@ export interface SpawnWorkerRunInput {
   readonly declaredGates: readonly string[];
   readonly requestedGates?: readonly string[];
   readonly model?: string;
+  /** The WorkerDefinition's own human-readable `definition.name` (packages/shared/src/
+   *  worker-definition.ts), or the WorkerDefinition id when it declared none — passed to
+   *  `ensureWorkerAgentPrincipal`'s `display_name` (`worker:<definitionName>`) below. Resolved by
+   *  the caller (`invoke.ts`'s initial spawn, `lifecycle.ts`'s requeue), not re-derived here, same
+   *  convention `model`/`skillsInline` already follow. */
+  readonly definitionName: string;
   /** Pre-resolved by the caller (`definition-content.ts`'s `resolveSkillsInline`, S2.14
    *  deliverable 4) — mirrors `model` above: this function never re-derives it from the
    *  WorkerDefinition itself, it only ever forwards what it is given. On the requeue path
@@ -81,11 +88,31 @@ export async function spawnWorkerRun(
     deps.pool,
     { workspaceId, principalId: input.onBehalfOf },
     async (client) => {
+      // One agent principal per (workspace, WorkerDefinition) — resolved/created idempotently
+      // before the WorkerRun row exists so its id can be stamped on the row in the same INSERT
+      // (agent-principal.ts's own doc comment has the full "why this identity, why not per-run"
+      // rationale). `task.workerDefinitionId` is the stable identity across versions.
+      const agentPrincipalId = await ensureWorkerAgentPrincipal(
+        client,
+        workspaceId,
+        input.task.workerDefinitionId,
+        input.definitionName,
+      );
+
       const workerRunResult = await client.query(
-        `insert into worker_runs (workspace_id, status, task_id, parent_worker_run_id, depth, attempt)
-         values ($1, 'provisioning', $2, $3, $4, $5)
+        `insert into worker_runs (
+           workspace_id, status, task_id, parent_worker_run_id, depth, attempt, agent_principal_id
+         )
+         values ($1, 'provisioning', $2, $3, $4, $5, $6)
          returning ${WORKER_RUN_ROW_COLUMNS}`,
-        [workspaceId, input.task.id, input.parentWorkerRunId, input.depth, input.attempt],
+        [
+          workspaceId,
+          input.task.id,
+          input.parentWorkerRunId,
+          input.depth,
+          input.attempt,
+          agentPrincipalId,
+        ],
       );
       const row = workerRunResult.rows[0];
       if (!row) throw new Error('spawnWorkerRun: worker_runs INSERT ... RETURNING produced no row');

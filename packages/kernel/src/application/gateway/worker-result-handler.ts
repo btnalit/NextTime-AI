@@ -130,8 +130,20 @@ export const reportTaskResultHandler: CapabilityHandler = async (
   if (!onBehalfOf) {
     throw new Error('report_task_result: caller context is required (dispatch.ts must supply it)');
   }
+  // `agentPrincipalId` is resolved once, at spawn time (`spawn.ts`'s `ensureWorkerAgentPrincipal`),
+  // and stamped on the WorkerRun row itself — `findWorkerRunBySessionId` above already read it, so
+  // this handler passes it straight through rather than making `postWorkerResult` re-derive it.
+  // Missing only if a WorkerRun somehow predates migrations/task/0004 (should not happen on a
+  // freshly migrated database) — fail loudly rather than silently falling back to the human, which
+  // is exactly the bug this design replaces (docs/development-tasks.md S2.9 note).
+  if (!workerRun.agentPrincipalId) {
+    throw new Error(
+      `report_task_result: WorkerRun ${workerRun.id} has no agent_principal_id — cannot attribute this result contract`,
+    );
+  }
   const outcome = await postWorkerResult(client, workspaceId, {
     actorPrincipalId: onBehalfOf,
+    agentPrincipalId: workerRun.agentPrincipalId,
     taskId: workerRun.taskId,
     workerRunId: workerRun.id,
     contract,

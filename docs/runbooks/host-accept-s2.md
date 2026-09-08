@@ -117,7 +117,8 @@ PASS step6-direct-lan-fails direct curl to an internal address failed as expecte
 PASS step6-unregistered-source-denied unregistered container -> 403 from egress-proxy (fail-closed per source)
 PASS step6-registered-egress-ok registered entry container -> https://example.com 200 via egress-proxy
 PASS step7-fact-inferred Fact <uuid> (accept_s2_restarted, from the docker-restart Worker's report_result) has epistemic_status=inferred
-PASS step7-fact-asserted-by-agent Fact asserted_by principal kind='agent' (kernel records the assertion itself as kind='agent' per application/task/result.ts, deriving inferred — see docs/runbooks/host-accept-s2.md)
+PASS step7-fact-asserted-by-agent Fact asserted_by principal kind='agent' display_name='worker:<name>' (application/task/agent-principal.ts's ensureWorkerAgentPrincipal, one per (workspace, WorkerDefinition) — see docs/runbooks/host-accept-s2.md)
+PASS step7-fact-on-behalf-of-alice worker_result Activity metadata.onBehalfOf=<alice's principal id> (human kept as provenance alongside the agent asserted_by — application/task/result.ts)
 PASS cleanup stopped alice/bob entry containers, tore down the accept-s2 profile; workspace retained: <uuid>
 
 S2 OK
@@ -151,7 +152,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `step4-invoke-worker-1` … `step4-second-auto-approved` | (4) Worker 跑一条未分类命令 → 卡片 → 总是允许 → 第二次不再出卡片 | 两次 `invoke_worker`（同一条 `uptime` 命令）夹一次 `set_auto_approved_action_kind('ssh.run_command')`；`list_pending` 计数与 `action_requests.policy_decision` 分别从应用层与 DB 层双重验证第二次是 `auto_approved` |
 | `step5-bob-forbidden` / `step5-still-pending` | (5) 用户 B 尝试批准 A 范围的动作 403 | bob（member）对 step 4 第一次调用产生的、真实处于 `pending_approval` 的 ActionRequest 调 `approve` → 403；随后确认该行状态未被这次失败尝试改变 |
 | `step6-*` | (6) Worker 容器 `env | grep -ci api_key` 为 0；直连内网失败；**未注册来源**经代理访问 `http://example.com` 被拒 403（egress 按来源 fail-closed，`EGRESS_DENY_UNKNOWN_SOURCE` 默认开）；**已注册**的 alice 常驻入口容器经代理 `curl https://example.com` 得 200 | 前三项直接跑 `nexttime-ai-worker-runtime` 镜像（`workers` 网络 + 与真实 Worker 相同的 `HTTP(S)_PROXY`，但无来源注册），见 §5 "已知偏离"关于为什么不经 Worker 自己的工具调用；正向探测 `docker exec` 进 `nexttime-entry-<alice>`（步骤 2–3 由 worker-supervisor 拉起并注册） |
-| `step7-*` | (7) Worker 结果契约里的 Fact 入图为 `inferred` | 查 `links` 表 `epistemic_status` 列，`link_type='accept_s2_restarted'`（step 2 的 docker-restart Worker 通过 `report_result` 写入） |
+| `step7-*` | (7) Worker 结果契约里的 Fact 入图为 `inferred`，`asserted_by` 是真实 agent 类 principal（非 `viaAgent` 降级标记），alice 作为 provenance 留在 Activity `metadata.onBehalfOf` 上 | 查 `links` 表 `epistemic_status` 列，`link_type='accept_s2_restarted'`（step 2 的 docker-restart Worker 通过 `report_result` 写入）；再查 `asserted_by` 关联的 `principals.kind='agent'`/`display_name` 以 `worker:` 开头；再查 `activities.metadata->>'onBehalfOf'` 等于 alice 的 principal id |
 | `cleanup` | — | 停 alice/bob 入口容器、`docker compose --profile accept-s2 down`；workspace 行留作审计留痕 |
 
 ## 5. 已知偏离

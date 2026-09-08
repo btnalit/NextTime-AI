@@ -20,10 +20,31 @@ import type { TaskRow } from './types.js';
  * docs/development-tasks.md S2.9 deliverable C). This is the pure write half — authorization
  * (matching the calling Handle's `claims.sid` to the addressed Task's own WorkerRun, I16 on every
  * referenced Object) is `application/gateway/worker-result-handler.ts`'s job, run *before*
- * `postWorkerResult` is ever called; this module trusts its `taskId`/`workerRunId`/`actorPrincipalId`
- * inputs are already correct (same split `application/gateway/request-action-handler.ts` and
- * `governance/approval` already establish: gateway resolves identity and authorizes, the service it
- * calls just writes).
+ * `postWorkerResult` is ever called; this module trusts its `taskId`/`workerRunId`/
+ * `actorPrincipalId`/`agentPrincipalId` inputs are already correct (same split
+ * `application/gateway/request-action-handler.ts` and `governance/approval` already establish:
+ * gateway resolves identity and authorizes, the service it calls just writes).
+ *
+ * **Agent-principal attribution (design decision replacing PR #84's `CallerPrincipal.viaAgent`
+ * downgrade flag)**: every contract Fact is `asserted_by` `agentPrincipalId` — the (workspace,
+ * WorkerDefinition) agent principal `spawn.ts`'s `ensureWorkerAgentPrincipal` resolved when this
+ * WorkerRun was created (migrations/core/0014_worker_agent_principals.sql,
+ * migrations/task/0004_worker_run_agent_principal.sql) — and the `worker_result` Activity's own
+ * `started_by` is that same agent principal, not `actorPrincipalId`. `deriveEpistemicStatus`
+ * (substrate/graph/store.ts) then derives `inferred` from the real `kind='agent'` row, the same way
+ * every other caller kind already works — no downgrade flag needed. `actorPrincipalId` (the Task's
+ * `on_behalf_of` human) is not dropped: it is recorded as **provenance, not assertion** —
+ * `activity.metadata.onBehalfOf` — so `explain()` can show both "which agent wrote this" and "on
+ * behalf of which human" (`substrate/epistemic/explain.ts`'s `ExplainActivityRef`).
+ *
+ * **Asymmetry, deliberate**: proposals (`proposedOperations` → `proposeOperation`, `proposedSkill`
+ * → `proposeSkill`) stay owned by `actorPrincipalId`, the human — *not* re-pointed at the agent
+ * principal like Facts/Activity above. I16 ("平台元本体对象只能经 human 通道发布；Handle 通道只能写对
+ * 提议者私有的草稿") requires a private draft to remain visible/publishable by the human who is
+ * ultimately accountable for it; an agent-owned draft would be invisible to `listSkills`/
+ * `list_pending`-style reads scoped to the calling human (see this file's own
+ * `proposedSkill`-ownership test in worker-result.integration.test.ts). In short: **the agent
+ * asserts Facts; the human owns drafts.**
  *
  * **Why `evidence[]` lands in the Activity's `metadata`, not only the `evidence` table**: the
  * `evidence` table (`substrate/epistemic/evidence.ts`) has `link_id not null` — it is Fact-scoped
@@ -39,9 +60,10 @@ import type { TaskRow } from './types.js';
  *
  * **`proposedSkill` (S2.14) becomes a real draft Skill**: `postWorkerResult` forwards it verbatim
  * to `application/worker/skills.ts`'s `proposeSkill`, owned by `actorPrincipalId` (the Task's
- * `on_behalf_of` principal — resolved by the gateway handler from the calling Handle's `claims.obo`,
- * same as every other Fact this function writes, see `PostWorkerResultInput.actorPrincipalId`'s own
- * doc comment). This is *in addition to*, not instead of, the verbatim copy already retained on
+ * `on_behalf_of` principal — resolved by the gateway handler from the calling Handle's `claims.obo`;
+ * see the "Asymmetry, deliberate" paragraph above and `PostWorkerResultInput.actorPrincipalId`'s own
+ * doc comment for why this stays human-owned unlike the Facts this function writes). This is *in
+ * addition to*, not instead of, the verbatim copy already retained on
  * `tasks.result` (via `completeTaskWithResult` below) — a human reading the Task's raw result and
  * `list_skills` finding the new draft are two independent, both-true outcomes of the same field.
  * `proposedSkill` failing to propose (a defensive-only path — its shape is already Zod-validated at
@@ -54,12 +76,17 @@ import type { TaskRow } from './types.js';
 const graphStore = new SqlGraphStore();
 
 export interface PostWorkerResultInput {
-  /** The `on_behalf_of` principal — becomes the Activity's `started_by`, every written Fact's
-   *  `asserted_by` (written `viaAgent`, so `epistemic_status: 'inferred'`, §5.6 — the principal
-   *  is the human the Worker acts for; there is no agent-kind principal per WorkerRun yet), and
-   *  every proposed Operation's `proposed_by`. Resolved by the caller (the gateway handler) from
-   *  the calling Handle's own `claims.obo` — never re-derived here. */
+  /** The Task's `on_behalf_of` human principal — recorded as **provenance** on the `worker_result`
+   *  Activity (`metadata.onBehalfOf`), and still the owner of every proposed Operation/Skill draft
+   *  (I16 — see this module's own doc comment on the asymmetry). No longer the Fact `asserted_by`
+   *  or the Activity `started_by` — see `agentPrincipalId` below. Resolved by the caller (the
+   *  gateway handler) from the calling Handle's own `claims.obo` — never re-derived here. */
   readonly actorPrincipalId: string;
+  /** The (workspace, WorkerDefinition) agent principal (`spawn.ts`'s `ensureWorkerAgentPrincipal`,
+   *  read off the WorkerRun row by the caller) — becomes the `worker_result` Activity's
+   *  `started_by` and every written Fact's `asserted_by`, deriving `epistemic_status: 'inferred'`
+   *  from its real `kind='agent'` row (§5.6). */
+  readonly agentPrincipalId: string;
   readonly taskId: string;
   readonly workerRunId: string;
   readonly contract: WorkerResultCapabilityParams;
@@ -101,11 +128,13 @@ export async function postWorkerResult(
   workspaceId: string,
   input: PostWorkerResultInput,
 ): Promise<PostWorkerResultOutcome> {
-  const { actorPrincipalId, contract } = input;
+  const { actorPrincipalId, agentPrincipalId, contract } = input;
 
   const activityMetadata: Record<string, unknown> = {
     taskId: input.taskId,
     workerRunId: input.workerRunId,
+    // Provenance, not assertion — see this module's own doc comment on the agent/human split.
+    onBehalfOf: actorPrincipalId,
   };
   if (contract.evidence && contract.evidence.length > 0) {
     activityMetadata.evidence = contract.evidence;
@@ -113,20 +142,17 @@ export async function postWorkerResult(
 
   const activity = await startActivity(client, workspaceId, {
     kind: 'worker_result',
-    principalId: actorPrincipalId,
+    principalId: agentPrincipalId,
     metadata: activityMetadata,
   });
 
   try {
     // facts_to_assert -> Facts under this Activity (I3). epistemic_status: `inferred` (§5.6 — a
-    // Worker is an agent). actorPrincipalId is the Task's on_behalf_of principal (a human; this
-    // codebase has no separate agent-kind identity for a WorkerRun to be `asserted_by`), so the
-    // store must not derive the status from that principal's own `principals.kind` — that would
-    // record an agent's inference as a human `asserted` Fact (2026-09-08 regression: accept_s2
-    // step 7). `viaAgent` tells SqlGraphStore the write comes through an agent on the principal's
-    // behalf; it is downgrade-only (see CallerPrincipal.viaAgent in substrate/graph/store.ts), so
-    // this path can never be used to claim a stronger status than `inferred`. The caller-supplied
-    // `kind` the lane-1 P2 fix stopped trusting stays absent here.
+    // Worker is an agent), derived the ordinary way — `agentPrincipalId` is a real `kind='agent'`
+    // principals row (`spawn.ts`'s `ensureWorkerAgentPrincipal`), so `SqlGraphStore.assertFact`'s
+    // own `resolveCallerKind` finds `kind='agent'` and `deriveEpistemicStatus` does the rest. No
+    // downgrade flag needed (replaces PR #84's `CallerPrincipal.viaAgent`, see this module's own
+    // doc comment).
     const writtenFacts: Fact[] = [];
     for (const factInput of contract.factsToAssert ?? []) {
       const sourceObjectId = await resolveObjectRef(client, workspaceId, factInput.source);
@@ -134,7 +160,7 @@ export async function postWorkerResult(
       const fact = await graphStore.assertFact(
         client,
         workspaceId,
-        { id: actorPrincipalId, viaAgent: true },
+        { id: agentPrincipalId },
         {
           linkType: factInput.linkType,
           sourceObjectId,

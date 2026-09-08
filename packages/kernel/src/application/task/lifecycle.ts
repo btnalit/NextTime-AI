@@ -374,7 +374,7 @@ async function spawnWorkerRunForRetry(
 
   const scope = handleRow.scope as { capabilities: string[]; resources: Record<string, string[]> };
 
-  const { model, skillsInline } = await withWorkspace(
+  const { model, skillsInline, definitionName } = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: onBehalfOf },
     async (client) => {
@@ -382,11 +382,21 @@ async function spawnWorkerRunForRetry(
         definitionId: task.workerDefinitionId,
         version: task.workerDefinitionVersion,
       });
-      if (!definition) return { model: undefined, skillsInline: [] };
+      if (!definition) {
+        // No definition row (should not happen — see this function's own doc comment): fall back
+        // to the Task's own pinned id so `ensureWorkerAgentPrincipal` still gets a usable
+        // `display_name`, same "best effort, never blocks the caller" convention `model`/
+        // `skillsInline` already use one line above.
+        return { model: undefined, skillsInline: [], definitionName: task.workerDefinitionId };
+      }
       const content = readDefinitionContent(definition.definition);
       return {
         model: content.model,
         skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+        definitionName:
+          typeof definition.definition.name === 'string'
+            ? definition.definition.name
+            : definition.id,
       };
     },
   );
@@ -406,6 +416,7 @@ async function spawnWorkerRunForRetry(
       declaredCapabilities: scope.capabilities,
       declaredGates: scope.resources.gatekeeper ?? [],
       model,
+      definitionName,
       skillsInline,
     });
   } catch {

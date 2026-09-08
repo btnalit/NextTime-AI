@@ -61,6 +61,18 @@ export interface ExplainActivityRef {
    * `explain` reach either without this module special-casing either Activity `kind`.
    */
   readonly metadata: Record<string, unknown>;
+  /**
+   * Agent-principal design decision addition (replaces PR #84's `CallerPrincipal.viaAgent`): for a
+   * `kind='worker_result'` Activity, `startedByPrincipal` above is now the (workspace,
+   * WorkerDefinition) agent principal (`application/task/agent-principal.ts`'s
+   * `ensureWorkerAgentPrincipal`), not the human the Worker acted for — that human is recorded
+   * separately, as `metadata.onBehalfOf` (`application/task/result.ts`'s `postWorkerResult`).
+   * Resolved here (rather than leaving a reader to look up the raw `metadata.onBehalfOf` uuid
+   * themselves) so `explain` can show "worker:<definition> on behalf of <human>" directly. `null`
+   * when the Activity carries no `metadata.onBehalfOf` (every Activity `kind` other than
+   * `worker_result`) or that id no longer resolves to a principal row.
+   */
+  readonly onBehalfOfPrincipal: ExplainPrincipalRef | null;
 }
 
 export interface ExplainFactRef {
@@ -223,8 +235,11 @@ async function fetchActivityRef(
   );
   const row = result.rows[0];
   if (!row) return null;
-  const [startedByPrincipal, observations] = await Promise.all([
+  const metadata = row.metadata ?? {};
+  const onBehalfOfId = typeof metadata.onBehalfOf === 'string' ? metadata.onBehalfOf : null;
+  const [startedByPrincipal, onBehalfOfPrincipal, observations] = await Promise.all([
     fetchPrincipalRef(client, workspaceId, row.started_by),
+    fetchPrincipalRef(client, workspaceId, onBehalfOfId),
     fetchObservationRefs(client, workspaceId, row.id),
   ]);
   return {
@@ -235,7 +250,8 @@ async function fetchActivityRef(
     endedAt: row.ended_at?.toISOString() ?? null,
     startedByPrincipal,
     observations,
-    metadata: row.metadata ?? {},
+    metadata,
+    onBehalfOfPrincipal,
   };
 }
 

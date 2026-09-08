@@ -1107,8 +1107,12 @@ echo "UNREGISTERED_CODE=$unregistered_code"
 }
 
 # S2.12 step 7: the Facts written from the Worker result contract land in the graph with epistemic
-# status `inferred` (design doc §5.6: agent -> inferred). Checks the Fact step 2's docker-restart
-# Worker asserted (link_type='accept_s2_restarted').
+# status `inferred` (design doc §5.6: agent -> inferred), asserted_by a real agent principal that
+# identifies the WorkerDefinition (design decision replacing PR #84's interim
+# `CallerPrincipal.viaAgent` downgrade flag — application/task/agent-principal.ts's
+# `ensureWorkerAgentPrincipal`), with alice (the Task's on_behalf_of human) kept as provenance on
+# the Activity, not as the asserter. Checks the Fact step 2's docker-restart Worker asserted
+# (link_type='accept_s2_restarted').
 step7_facts_inferred() {
   epistemic_status=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
     "select epistemic_status from links where workspace_id='$WORKSPACE_ID' and id='$DOCKER_RESTART_FACT_ID'" \
@@ -1119,7 +1123,22 @@ step7_facts_inferred() {
   asserted_by_kind=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
     "select p.kind from links l join principals p on p.workspace_id = l.workspace_id and p.id = l.asserted_by where l.workspace_id='$WORKSPACE_ID' and l.id='$DOCKER_RESTART_FACT_ID'" \
     </dev/null 2>/dev/null)
-  pass "step7-fact-asserted-by-agent" "Fact asserted_by principal kind='$asserted_by_kind' (kernel records the assertion itself as kind='agent' per application/task/result.ts, deriving inferred — see docs/runbooks/host-accept-s2.md)"
+  [ "$asserted_by_kind" = "agent" ] || fail "step7-fact-asserted-by-agent" "Fact $DOCKER_RESTART_FACT_ID asserted_by principal kind='$asserted_by_kind', expected 'agent' (application/task/agent-principal.ts's ensureWorkerAgentPrincipal)"
+
+  asserted_by_display_name=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select p.display_name from links l join principals p on p.workspace_id = l.workspace_id and p.id = l.asserted_by where l.workspace_id='$WORKSPACE_ID' and l.id='$DOCKER_RESTART_FACT_ID'" \
+    </dev/null 2>/dev/null)
+  case "$asserted_by_display_name" in
+    worker:*) ;;
+    *) fail "step7-fact-asserted-by-agent" "Fact $DOCKER_RESTART_FACT_ID asserted_by principal display_name='$asserted_by_display_name', expected to start with 'worker:'" ;;
+  esac
+  pass "step7-fact-asserted-by-agent" "Fact asserted_by principal kind='agent' display_name='$asserted_by_display_name' (application/task/agent-principal.ts's ensureWorkerAgentPrincipal, one per (workspace, WorkerDefinition) — see docs/runbooks/host-accept-s2.md)"
+
+  on_behalf_of=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select a.metadata->>'onBehalfOf' from links l join activities a on a.workspace_id = l.workspace_id and a.id = l.activity_id where l.workspace_id='$WORKSPACE_ID' and l.id='$DOCKER_RESTART_FACT_ID'" \
+    </dev/null 2>/dev/null)
+  [ "$on_behalf_of" = "$ALICE_PRINCIPAL_ID" ] || fail "step7-fact-on-behalf-of-alice" "worker_result Activity metadata.onBehalfOf='$on_behalf_of', expected alice's principal id '$ALICE_PRINCIPAL_ID'"
+  pass "step7-fact-on-behalf-of-alice" "worker_result Activity metadata.onBehalfOf=$ALICE_PRINCIPAL_ID (human kept as provenance alongside the agent asserted_by — application/task/result.ts)"
 }
 
 cleanup_step() {

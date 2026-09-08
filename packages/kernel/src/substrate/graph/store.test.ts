@@ -7,7 +7,6 @@ import {
   TraverseDepthError,
   assertNoCallerSuppliedEpistemicStatus,
   deriveEpistemicStatus,
-  epistemicStatusForCaller,
   factLifecycleState,
   normalizeTraverseDepth,
 } from './store.js';
@@ -28,21 +27,6 @@ describe('deriveEpistemicStatus — epistemic_status by caller PrincipalKind (§
 
   it('service → observed', () => {
     expect(deriveEpistemicStatus('service')).toBe('observed');
-  });
-});
-
-describe('epistemicStatusForCaller — viaAgent is downgrade-only (§5.6 agent → inferred)', () => {
-  it('without viaAgent it is exactly deriveEpistemicStatus of the real principal kind', () => {
-    expect(epistemicStatusForCaller('human', undefined)).toBe('asserted');
-    expect(epistemicStatusForCaller('human', false)).toBe('asserted');
-    expect(epistemicStatusForCaller('agent', undefined)).toBe('inferred');
-    expect(epistemicStatusForCaller('service', undefined)).toBe('observed');
-  });
-
-  it('viaAgent weakens every principal kind to inferred — a Worker result on a human on_behalf_of never becomes asserted (accept_s2 step 7, 2026-09-08)', () => {
-    expect(epistemicStatusForCaller('human', true)).toBe('inferred');
-    expect(epistemicStatusForCaller('service', true)).toBe('inferred');
-    expect(epistemicStatusForCaller('agent', true)).toBe('inferred');
   });
 });
 
