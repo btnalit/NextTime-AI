@@ -49,6 +49,33 @@ describe('ConnectedAccountStore', () => {
     expect(raw).not.toContain('super-secret-value');
   });
 
+  it('concurrent set calls for different principals never lose an update (review lane 5, P2-6)', async () => {
+    const store = new ConnectedAccountStore({ dataDir: dir, keyFilePath });
+    const principals = Array.from({ length: 8 }, (_, i) => `user-${i}`);
+    await Promise.all(principals.map((p) => store.set(p, { token: `secret-${p}` })));
+
+    for (const p of principals) {
+      await expect(store.get(p)).resolves.toEqual({ token: `secret-${p}` });
+    }
+  });
+
+  it('concurrent set and delete for different principals never lose an update', async () => {
+    const store = new ConnectedAccountStore({ dataDir: dir, keyFilePath });
+    await store.set('user-a', { token: 'secret-a' });
+    await store.set('user-b', { token: 'secret-b' });
+
+    await Promise.all([
+      store.set('user-c', { token: 'secret-c' }),
+      store.delete('user-a'),
+      store.set('user-d', { token: 'secret-d' }),
+    ]);
+
+    expect(await store.get('user-a')).toBeUndefined();
+    expect(await store.get('user-b')).toEqual({ token: 'secret-b' });
+    expect(await store.get('user-c')).toEqual({ token: 'secret-c' });
+    expect(await store.get('user-d')).toEqual({ token: 'secret-d' });
+  });
+
   it('delete removes a stored credential without touching others, and is idempotent', async () => {
     const store = new ConnectedAccountStore({ dataDir: dir, keyFilePath });
     await store.set('user-a', { token: 'secret-a' });
