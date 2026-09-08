@@ -78,8 +78,8 @@ describe('CatalogPage', () => {
         return {
           items:
             callCount === 1
-              ? [{ id: 'op-1', gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft' }]
-              : [{ id: 'op-1', gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' }],
+              ? [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft' }]
+              : [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' }],
         };
       },
       publish_operation: (params) => {
