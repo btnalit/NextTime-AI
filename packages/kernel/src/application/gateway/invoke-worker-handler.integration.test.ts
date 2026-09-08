@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { HandleClaims } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type {
@@ -11,7 +12,12 @@ import type {
   TaskSupervisorClientPort,
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
-import { entryScope, generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
+import {
+  type IssuedHandle,
+  entryScope,
+  generateEphemeralHandleKeyPair,
+  issueHandle,
+} from '../../governance/capability/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -32,6 +38,12 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * tick) ran *inside* dispatch.ts's still-open transaction, so that audit row could never be
  * visible to a second connection at this point — the fixed two-phase handler commits phase 1
  * before entering the wait, so it always is.
+ *
+ * The caller must be a *real* issued Handle (`issueHandle`, not a hand-fabricated `claims` object)
+ * — `invoke_worker` mints a child WorkerRun Handle whose `parent_jti` foreign-keys back to the
+ * caller's own `capability_handles` row (`governance/capability/handles.ts`); a fabricated `jti`
+ * with no such row fails that FK at spawn time (`invoke.integration.test.ts`'s own
+ * `issueTestHandle` helper exists for exactly this reason).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -91,6 +103,7 @@ describe.runIf(DATABASE_URL !== undefined)(
   'invoke_worker handler — two-phase wait (integration, real Postgres)',
   () => {
     let pool: Pool;
+    let privateKey: Awaited<ReturnType<typeof generateEphemeralHandleKeyPair>>['privateKey'];
     let workspaceId: string;
     let ownerId: string;
     let workerDefinitionId: string;
@@ -131,25 +144,47 @@ describe.runIf(DATABASE_URL !== undefined)(
       return withWorkspace(pool, { workspaceId, principalId }, fn);
     }
 
-    function workerHandleCaller(): ResolvedCaller {
-      const now = Math.floor(Date.now() / 1000);
+    async function insertSession(
+      kind: string,
+      principalId: string,
+      onBehalfOf: string,
+    ): Promise<string> {
+      return inTx(principalId, async (client) => {
+        const result = await client.query<{ id: string }>(
+          `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+           values ($1, $2, $3, $4, 'active') returning id`,
+          [workspaceId, principalId, kind, onBehalfOf],
+        );
+        const id = result.rows[0]?.id;
+        if (!id) throw new Error('failed to insert session');
+        return id;
+      });
+    }
+
+    async function issueTestHandle(sessionId: string): Promise<IssuedHandle> {
+      return inTx(ownerId, (client) =>
+        issueHandle(client, { sessionId, scope: entryScope(), ttlSeconds: 3600, privateKey }),
+      );
+    }
+
+    function claimsFromIssued(issued: IssuedHandle): HandleClaims {
       return {
-        channel: 'handle',
-        claims: {
-          ws: workspaceId,
-          sid: randomUUID(),
-          obo: ownerId,
-          scope: entryScope(),
-          jti: randomUUID(),
-          iat: now,
-          exp: now + 600,
-        },
+        ws: issued.workspaceId,
+        sid: issued.sessionId,
+        obo: issued.onBehalfOf,
+        scope: issued.scope,
+        jti: issued.jti,
+        iat: Math.floor(issued.issuedAt.getTime() / 1000),
+        exp: Math.floor(issued.expiresAt.getTime() / 1000),
       };
     }
 
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
+      const keyPair = await generateEphemeralHandleKeyPair();
+      privateKey = keyPair.privateKey;
+
       workspaceId = await adminInsertWorkspace('invoke-worker-handler-integration-test');
       ownerId = await adminInsertPrincipal('owner', 'owner');
 
@@ -168,20 +203,20 @@ describe.runIf(DATABASE_URL !== undefined)(
       workerDefinitionId = proposed.id;
     });
 
-    afterEach(() => {
-      resetTaskRuntimeForTests();
-    });
-
     afterAll(async () => {
+      resetTaskRuntimeForTests();
       await pool.end();
     });
 
     it('commits the phase-1 audit row before the wait:true poll ever starts', async () => {
       const supervisorClient = new NeverFinishingSupervisorClient(pool, workspaceId);
-      const { privateKey } = await generateEphemeralHandleKeyPair();
       configureTaskRuntime({ pool, privateKey, supervisorClient });
 
-      const result = (await dispatchCapability({ pool }, workerHandleCaller(), 'invoke_worker', {
+      const sessionId = await insertSession('entry', ownerId, ownerId);
+      const issued = await issueTestHandle(sessionId);
+      const caller: ResolvedCaller = { channel: 'handle', claims: claimsFromIssued(issued) };
+
+      const result = (await dispatchCapability({ pool }, caller, 'invoke_worker', {
         definitionId: workerDefinitionId,
         version: 1,
         input: {},
