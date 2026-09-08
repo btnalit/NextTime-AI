@@ -3,9 +3,12 @@
 对应任务：development-tasks.md § S1.5（本 runbook 覆盖前半：`worker-runtime` 镜像 +
 `worker-supervisor` 常驻模式）。占位符取值见 `docs/private/`（不入库）。前置：E1–E4（gVisor 已
 验证或已在 `.env` 回退 `runc`、数据目录已建、`.env` 已生成、Postgres 已起）；`config/models.json`
-须是有效的 pi `models.json`（见 §3）；`.env` 里 `DOCKER_GID` 须是本机真实的 `docker` 组 gid
-（`stat -c '%g' /var/run/docker.sock`）——`worker-supervisor` 以非 root uid 10001 运行，缺这个
-补充组会导致连接 socket 时 `EACCES` 而 crash loop（S1.5a 主机验收时发现，见 §10）；
+须是有效的 pi `models.json`（见 §3）。**`DOCKER_GID` 更新（fix/socket-proxy-and-backup-user）**：
+`worker-supervisor` 不再直接挂载 `/var/run/docker.sock`——它现在经 `docker-socket-proxy`（新
+`dockerapi` 网络，`DOCKER_HOST=tcp://docker-socket-proxy:2375`）访问 Docker Engine API，`.env` 里
+的 `DOCKER_GID` 因此不再是这个服务的前置条件（下面 §10 那条 EACCES crash-loop 记录已成历史，见该
+条自己的更新说明）——`DOCKER_GID` 本身仍要设置，只是现在只服务于 `gatekeeper-docker`（见
+`docs/runbooks/host-gatekeepers.md`），不在本 runbook 的验收路径上。
 `${NEXTTIME_DATA}/config/egress-sources.json` 建议 `chown 10001:10001`（同一原因——写入会
 `EACCES`，但 S1.5a 已把这个失败改成 best-effort，不会挡住 spawn，只是那次 egress 登记不生效，
 见 §10）。
@@ -368,12 +371,16 @@ fetch('http://localhost:8081/task/spawn', {
   修——放宽 `egress-proxy` 的私网判定会真的削弱 I10 的 DNS-rebinding 防护，不能为了适配这一台
   主机就做。留给主会话与后续任务判断：换一台网络更"标准"的主机验收，或者如果这确实是量产环境
   的常态网络拓扑，需要专门评审 I10 的私网判定策略该怎么和这类透明代理网络共存。
-- **`worker-supervisor` 需要 `DOCKER_GID`（主机验收才发现）**：`packages/worker-supervisor/
-  Dockerfile` 是 R1 就有的、非本任务写的既有文件，以非 root uid 10001 运行；但目标主机
-  `/var/run/docker.sock` 是 `root:docker`（组 gid 因主机而异）660——两者原来对不上，容器一起来
-  就 `EACCES` crash loop。修的位置是 `docker-compose.yml` 的 `worker-supervisor.group_add:
-  ["${DOCKER_GID:-999}"]`（`.env.example` 新增 `DOCKER_GID` 占位符与说明），不是改
-  Dockerfile——本任务 `packages/worker-supervisor/**` 所有权范围内的最小修复。
+- **`worker-supervisor` 需要 `DOCKER_GID`（主机验收才发现；已被 fix/socket-proxy-and-backup-user
+  取代，历史记录保留）**：`packages/worker-supervisor/Dockerfile` 是 R1 就有的、非本任务写的既有
+  文件，以非 root uid 10001 运行；但目标主机 `/var/run/docker.sock` 是 `root:docker`（组 gid 因
+  主机而异）660——两者原来对不上，容器一起来就 `EACCES` crash loop。当时修的位置是
+  `docker-compose.yml` 的 `worker-supervisor.group_add: ["${DOCKER_GID:-999}"]`（`.env.example`
+  新增 `DOCKER_GID` 占位符与说明），不是改 Dockerfile。**更新（fix/socket-proxy-and-backup-
+  user）**：`worker-supervisor` 不再挂载 `/var/run/docker.sock`，`group_add`/`DOCKER_GID` 已从
+  这个服务块整个删除——docker-compose.yml 现在经 `docker-socket-proxy`（`dockerapi` 网络）访问
+  Engine API，这条 EACCES crash-loop 不可能再复现。`DOCKER_GID` 变量本身没有删（`gatekeeper-
+  docker` 还在用），只是不再是这个服务的前置条件。
 - **`.pi/agent` 必须由 supervisor 自己先建好，不能让 Docker 隐式建（主机验收才发现）**：
   bind-mount `models.json` 到 `/workspace/.pi/agent/models.json` 时，若 `.pi/agent` 目录还不
   存在，Docker（准备挂载点这一步本身以 root 跑）会以 root 身份建出 `.pi/`——entrypoint.sh 随后

@@ -10,11 +10,13 @@ import { createTaskService } from './task-service.js';
 export {
   isImageAllowed,
   loadConfig,
+  parseDockerConnection,
   SpawnRequestSchema,
   StopRequestSchema,
   TaskSpawnRequestSchema,
 } from './config.js';
 export type {
+  DockerConnection,
   SpawnRequest,
   StopRequest,
   SupervisorConfig,
@@ -66,7 +68,7 @@ export async function main(): Promise<void> {
   // Fail-fast, before opening the Docker socket or binding a port — this process cannot serve
   // POST /task/spawn or any /resident/* route without it (internal-auth.ts's own doc comment).
   const internalToken = loadInternalToken();
-  const docker = createDockerClient({ socketPath: config.dockerSocketPath });
+  const docker = createDockerClient({ connection: config.dockerConnection });
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
   const residentService = createResidentService({ config, docker, egressMap });
   const taskService = createTaskService({ config, docker, egressMap });

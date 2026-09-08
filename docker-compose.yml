@@ -77,6 +77,144 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
+  # docker-socket-proxy (fix/socket-proxy-and-backup-user): the ONLY container docker.sock itself
+  # is bind-mounted into now — agent-host and worker-supervisor below reach the Engine API through
+  # this HTTP allowlist proxy instead (DOCKER_HOST=tcp://docker-socket-proxy:2375 on the new
+  # `dockerapi` internal network). Previous state (superseded): both consumers bind-mounted
+  # docker.sock directly, and the comment on agent-host's own mount already flagged this ("`:ro`
+  # 不是、也从未是这条边界的权限收窄...真正的调用面收窄需要 docker-socket-proxy 之类的 allowlist
+  # 代理...尚未实现") — this service is that.
+  #
+  # Image: tecnativa/docker-socket-proxy (haproxy.cfg allowlists the Engine API by URL-path
+  # prefix + HTTP method — verified by reading the image's actual haproxy.cfg/Dockerfile at the
+  # v0.5.0 tag via `gh api repos/Tecnativa/docker-socket-proxy/...`, not assumed from its README
+  # alone). `http-request deny unless METH_GET || { env(POST) -m bool }` gates every non-GET
+  # method behind POST=1 FIRST; each `/xxx` path prefix then needs its own env flag — see that
+  # file's "Access granted/revoked by default" sections for the full list.
+  #
+  # Endpoint inventory (only what's actually called — read both consumers' source, not "typical"
+  # docker-socket-proxy defaults):
+  #   worker-supervisor (packages/worker-supervisor/src/docker-client.ts): POST /containers/create
+  #     (createAndStart), POST /containers/{id}/start, POST /containers/{id}/stop,
+  #     DELETE /containers/{id}?force=true (remove), GET /containers/{id}/json (inspectByName),
+  #     GET /containers/json?filters=... (listByLabel), GET /networks?filters=...
+  #     (resolveNetworkByComposeLabel). No image/exec/volume/event/swarm call anywhere in the
+  #     package (grepped for docker.getImage/listImages/pull/getEvents/getNetwork — none found).
+  #   agent-host (packages/agent-host/src/container-io.ts): POST /containers/{id}/attach?
+  #     stream=1&stdin=1&stdout=1&stderr=1&hijack=1 only — never create/start/stop/remove (see
+  #     that file's own module doc comment: "agent-host 只做 docker attach，不 create/start/stop
+  #     容器"). attach is a POST-method endpoint under the /containers prefix, so it needs
+  #     CONTAINERS=1 + POST=1 exactly like worker-supervisor's own calls — there is no narrower
+  #     "attach-only" flag in this proxy, and the proxy is shared (one instance, both consumers,
+  #     per this task's own "a docker-socket-proxy" framing), so agent-host's own effective grant
+  #     is the union below, not a narrower attach-only slice; a second proxy instance would not
+  #     narrow it further for the same reason (haproxy.cfg's CONTAINERS rule is a bare /containers
+  #     prefix match with no method/suffix exclusion once POST=1 is granted).
+  #
+  # Flags (haproxy.cfg verified line-by-line against the v0.5.0 tag):
+  #   CONTAINERS=1, POST=1: covers create/start/stop/remove/inspect/list/attach — every
+  #     /containers/* path matches this proxy's CONTAINERS prefix rule once POST=1 lifts the
+  #     top-level non-GET gate.
+  #   NETWORKS=1: GET /networks (resolveNetworkByComposeLabel — worker-supervisor only).
+  #   ALLOW_START=1 / ALLOW_STOP=1: the two lifecycle verbs docker-client.ts actually calls
+  #     (start/stop) — kept explicit even though CONTAINERS=1 already covers both (haproxy.cfg
+  #     evaluates these narrower rules before the general CONTAINERS rule, but CONTAINERS's own
+  #     regex has no suffix exclusion, so it independently allows start/stop too); left on for
+  #     documentation/intent, not because they add access CONTAINERS doesn't already grant.
+  #   ALLOW_RESTARTS=0 / ALLOW_PAUSE=0 / ALLOW_UNPAUSE=0: docker-client.ts never calls
+  #     restart/kill/pause/unpause (only .stop()) — deliberately NOT granted, unlike a "typical"
+  #     docker-socket-proxy config that turns these on alongside ALLOW_START/ALLOW_STOP.
+  #   IMAGES=0: deliberately NOT granted — no docker.getImage/listImages/pull call in either
+  #     package (the resident/task container image is built by `docker compose build
+  #     worker-runtime`, never pulled or inspected at runtime).
+  #   EVENTS=0: explicit override — this image's own Dockerfile defaults EVENTS=1 ("access granted
+  #     by default"); neither consumer subscribes to the Engine's event stream, so it's turned back
+  #     off instead of left on the image's default.
+  #   PING=1 / VERSION=1: image defaults, left as-is (harmless — no container/image/secret
+  #     information) — this service's own healthcheck below uses PING.
+  #   Everything else (AUTH, BUILD, COMMIT, CONFIGS, DISTRIBUTION, EXEC, GRPC, INFO, NODES,
+  #   PLUGINS, SECRETS, SERVICES, SESSION, SWARM, SYSTEM, TASKS, VOLUMES): 0, unused by either
+  #   consumer.
+  docker-socket-proxy:
+    # Exact tag verified via `gh api repos/Tecnativa/docker-socket-proxy/releases` (2026-09-08):
+    # v0.5.0 is the current stable release (published 2026-07-27). Digest NOT pinned — this build
+    # environment has no route to Docker Hub or GHCR to resolve one (auth.docker.io and ghcr.io
+    # both TLS-handshake-fail from here; verified with curl, not assumed — see PR body). TODO
+    # (operator): after `docker compose pull docker-socket-proxy` on the target host, run
+    #   docker inspect --format '{{index .RepoDigests 0}}' tecnativa/docker-socket-proxy:0.5.0
+    # and pin it here as tecnativa/docker-socket-proxy:0.5.0@sha256:<digest>.
+    image: tecnativa/docker-socket-proxy:0.5.0
+    environment:
+      {
+        CONTAINERS: "1",
+        POST: "1",
+        NETWORKS: "1",
+        ALLOW_START: "1",
+        ALLOW_STOP: "1",
+        ALLOW_RESTARTS: "0",
+        ALLOW_PAUSE: "0",
+        ALLOW_UNPAUSE: "0",
+        IMAGES: "0",
+        EVENTS: "0",
+        PING: "1",
+        VERSION: "1",
+        EXEC: "0",
+        VOLUMES: "0",
+        BUILD: "0",
+        COMMIT: "0",
+        SWARM: "0",
+        SYSTEM: "0",
+        SECRETS: "0",
+        CONFIGS: "0",
+        PLUGINS: "0",
+        TASKS: "0",
+        SERVICES: "0",
+        NODES: "0",
+        AUTH: "0",
+        DISTRIBUTION: "0",
+        GRPC: "0",
+        INFO: "0",
+        SESSION: "0",
+      }
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    # No group_add/DOCKER_GID: this image's own Dockerfile declares `USER root` (verified against
+    # the v0.5.0 tag's source, not assumed) — root's uid (0) already matches docker.sock's own
+    # owning uid (`root:docker` — see worker-supervisor's own comment below), so it reads the
+    # socket via the file's OWNER permission bits and never needs the supplementary-group
+    # membership the non-root (uid 10001) consumers below required.
+    networks: [dockerapi]
+    healthcheck:
+      # PING=1 above keeps /_ping allowlisted for exactly this. UNVERIFIED: whether `wget` exists
+      # in this image's userland was not confirmed on a real host (no Docker locally) — busybox
+      # wget is near-universal on Alpine-based images (haproxy:3.4.2-alpine's own base), but if
+      # this healthcheck shows `unhealthy` on the target host, swap it for whatever's actually
+      # present (`nc -z localhost 2375`, or drop the healthcheck and keep the plain `depends_on`
+      # ordering below) — see this PR's own host verification steps.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:2375/_ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    # read_only + tmpfs: the image's docker-entrypoint.sh templates /tmp/haproxy.cfg from a
+    # bind-in template at every start (needs /tmp writable), and haproxy itself writes its pidfile
+    # to /run/haproxy.pid (needs /run writable) — both verified by reading the image's actual
+    # docker-entrypoint.sh / haproxy.cfg at the v0.5.0 tag, not guessed.
+    read_only: true
+    tmpfs: ["/tmp", "/run"]
+    # cap_drop: [ALL] — tolerated (task's own "if the image tolerates it" question, answered by
+    # reading the image's Dockerfile/entrypoint/haproxy.cfg source at the v0.5.0 tag, not by
+    # running it — no Docker available here): binding :2375 needs no capability (only <1024 needs
+    # CAP_NET_BIND_SERVICE, and only for a non-root process — irrelevant here either way); the
+    # entrypoint's `ulimit -n 10000` is best-effort (`|| true` — needs CAP_SYS_RESOURCE to actually
+    # raise the hard limit, silently skipped otherwise); nothing else in the traced startup path
+    # (templating /tmp/haproxy.cfg, reading the pre-built /var/lib/haproxy/server-state, forking
+    # haproxy's -W master/worker processes) calls for a capability cap_drop:[ALL] would remove.
+    # UNVERIFIED ON A REAL HOST — see this PR's own verification steps for the operator command
+    # that confirms this empirically (a container stuck restart-looping is the failure signal).
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
   agent-host:
     build: { context: ., dockerfile: packages/agent-host/Dockerfile }
     environment:
@@ -84,30 +222,32 @@ services:
         KERNEL_URL: http://kernel:8080,
         SUPERVISOR_URL: http://worker-supervisor:8081,
         KERNEL_LLM_URL: http://llm-proxy:8082,
+        DOCKER_HOST: tcp://docker-socket-proxy:2375,
       }
     # internal_token（fix/internal-plane-auth）：kernel-link.ts 需要它给 /internal/agent-host 的
     # WS 握手带 Authorization: Bearer <token>——见 kernel 服务块自己的注释。
     secrets: [internal_token]
-    # docker.sock 只读挂载 — 修正（lane-7 P2 fix）：`:ro` 只防止这个容器改写/删除 socket 特殊文件
-    # 本身，对经这条连接发出的 Docker Engine API 调用完全没有限制——任何能连上 socket 的进程都能发出
-    # 任意 API 请求（含创建特权容器、挂载宿主机文件系统），`:ro` 不是、也从未是这条边界的权限收窄，
-    # 只是防止这个容器意外/恶意地改写 socket 文件条目本身。这一半任务把容器 stdio
-    # 附着(attach)放在 agent-host 自己（不是扩到 worker-supervisor 的 API），见
-    # packages/agent-host/src/container-io.ts 的模块注释——理由是 worker-supervisor 已在 S1.5a
-    # 完成主机验收，保持它不动；agent-host 只做 docker attach，不 create/start/stop 容器——这是应用层
-    # 自我约束（container-io.ts 只调用 attach 相关 API），不是 socket 本身强制的边界。真正的调用面
-    # 收窄需要 docker-socket-proxy 之类的 allowlist 代理放在这个容器与 socket 之间，尚未实现。
-    # group_add 与 worker-supervisor 同理：非 root（uid 10001）需要主机 docker 组 gid 才能连 socket
-    # （无论挂载是否 :ro，docker.sock 的可读/可写性同样由属组决定）。
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
-    group_add: ["${DOCKER_GID:-999}"]
-    networks: [control] # 只到 kernel 与 supervisor；不挂载任何用户目录
+    # docker.sock (fix/socket-proxy-and-backup-user): this container no longer bind-mounts
+    # /var/run/docker.sock at all — packages/agent-host/src/container-io.ts now attaches over
+    # DOCKER_HOST=tcp://docker-socket-proxy:2375 on the `dockerapi` network instead (see that
+    # service's own comment for the endpoint inventory and env-flag reasoning). Superseded
+    # history: the old `:ro` bind mount's own comment already said "`:ro` 不是、也从未是这条边界的
+    # 权限收窄...真正的调用面收窄需要 docker-socket-proxy 之类的 allowlist 代理...尚未实现" — this
+    # is that fix. No `volumes:`/`group_add` left on this service at all now (docker.sock was its
+    # only mount).
+    networks: [control, dockerapi] # 只到 kernel/supervisor/docker-socket-proxy；不挂载任何用户目录
     restart: unless-stopped
     # depends_on (lane-7 P2 fix): agent-host's kernel-link.ts dials kernel's /internal/agent-host
     # WS endpoint on startup — wait for kernel's own healthcheck rather than racing it.
-    depends_on: { kernel: { condition: service_healthy } }
+    # docker-socket-proxy (fix/socket-proxy-and-backup-user): wait for the proxy to actually be
+    # answering before container-io.ts's first attach() attempt.
+    depends_on:
+      {
+        kernel: { condition: service_healthy },
+        docker-socket-proxy: { condition: service_healthy },
+      }
     # Hardening (lane-7 P2 fix): agent-host runs as non-root `nexttime` (packages/agent-host/
-    # Dockerfile, uid 10001); docker.sock is an external device node (unaffected by `read_only`).
+    # Dockerfile, uid 10001).
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: [ALL]
@@ -124,26 +264,27 @@ services:
     # adapters/supervisor-client，同一批修复内已同步更新）必须带上 Authorization: Bearer <token>，
     # 否则拿到 401。
     secrets: [internal_token]
-    # docker.sock: talks to the Engine API directly (dockerode), no docker CLI needed in the
-    # image. workspaces: rw — this is where per-principal directories get created (I15) and
-    # bind-mounted (as HOST paths, via NEXTTIME_DATA below) into spawned containers. config: ro
-    # for models.json's bind-mount source and general config visibility, EXCEPT
-    # egress-sources.json — that single file is re-mounted read-write on top so this service can
-    # register/unregister spawned containers' IPs with @nexttime/egress-proxy's SOURCE_MAP_FILE
-    # (S1.5a task brief: that package exposes no admin registration endpoint — verified reading
+    # docker.sock (fix/socket-proxy-and-backup-user): this container no longer bind-mounts
+    # /var/run/docker.sock at all — packages/worker-supervisor/src/docker-client.ts now talks to
+    # the Engine API (still via dockerode, no docker CLI needed in the image) over
+    # DOCKER_HOST=tcp://docker-socket-proxy:2375 on the new `dockerapi` network instead (see that
+    # service's own comment above for the endpoint inventory and env-flag reasoning). workspaces:
+    # rw — this is where per-principal directories get created (I15) and bind-mounted (as HOST
+    # paths, via NEXTTIME_DATA below) into spawned containers. config: ro for models.json's
+    # bind-mount source and general config visibility, EXCEPT egress-sources.json — that single
+    # file is re-mounted read-write on top so this service can register/unregister spawned
+    # containers' IPs with @nexttime/egress-proxy's SOURCE_MAP_FILE (S1.5a task brief: that
+    # package exposes no admin registration endpoint — verified reading
     # packages/egress-proxy/src/admin.ts — so the documented file-based contract is the only
     # integration point; see packages/worker-supervisor/src/egress-map.ts).
-    # group_add: the container runs as non-root uid 10001 (packages/worker-supervisor/Dockerfile,
-    # same as every other @nexttime/* image), but /var/run/docker.sock on the host is owned
-    # root:docker mode 660 — verified on the target host (host-worker-runtime.md verification):
-    # without this, connecting to the socket fails EACCES and the process exits immediately
-    # (crash loop). DOCKER_GID must be the *host's* `docker` group gid (`stat -c '%g'
-    # /var/run/docker.sock`), which varies by host — set it in `.env`; 999 is only a common
-    # Debian/Ubuntu default, not guaranteed.
-    group_add: ["${DOCKER_GID:-999}"]
+    # group_add/DOCKER_GID removed (fix/socket-proxy-and-backup-user): this service no longer
+    # touches docker.sock's file permissions at all — the EACCES crash-loop `group_add` used to
+    # guard against (docs/runbooks/host-worker-runtime.md "已知偏离") cannot recur, since the
+    # bind mount is gone. DOCKER_GID itself is NOT removed from .env.example/compose as a whole —
+    # `gatekeeper-docker` (untouched by this task; still bind-mounts docker.sock directly, see
+    # that service's own block below) still needs it.
     volumes:
       [
-        "/var/run/docker.sock:/var/run/docker.sock",
         "${NEXTTIME_DATA:?}/workspaces:/data/workspaces",
         "${NEXTTIME_DATA:?}/config:/data/config:ro",
         "${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json",
@@ -177,12 +318,17 @@ services:
         TASK_MAX_RUNTIME_SEC: "${TASK_MAX_RUNTIME_SEC:-3600}",
         TASK_WORKDIR_RETENTION_HOURS: "${TASK_WORKDIR_RETENTION_HOURS:-72}",
         TASK_REAP_INTERVAL_MS: "${TASK_REAP_INTERVAL_MS:-10000}",
+        DOCKER_HOST: tcp://docker-socket-proxy:2375,
       }
-    networks: [control]
+    networks: [control, dockerapi]
     restart: unless-stopped
+    # docker-socket-proxy (fix/socket-proxy-and-backup-user): resident/task reconcile on startup
+    # (index.ts's `residentService.reconcile()`/`taskService.reconcile()`) both call the Docker
+    # client immediately — wait for the proxy to actually be answering first.
+    depends_on: { docker-socket-proxy: { condition: service_healthy } }
     # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/worker-supervisor/
-    # Dockerfile, uid 10001); docker.sock and the two workspaces/config mounts above are external
-    # device/bind mounts (unaffected by `read_only`) — only /tmp needs to stay writable.
+    # Dockerfile, uid 10001); the two workspaces/config mounts above are external bind mounts
+    # (unaffected by `read_only`) — only /tmp needs to stay writable.
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: [ALL]
@@ -447,27 +593,69 @@ services:
         "${NEXTTIME_DATA:?}/caddy:/data/caddy:ro",
         "${NEXTTIME_DATA:?}/backups:/data/backups",
       ]
-    environment: { TZ: "${TZ:-UTC}", BACKUP_TIME: "${BACKUP_TIME:-03:30}", RETENTION: "${BACKUP_RETENTION:-7}", PGHOST: postgres }
+    environment: { TZ: "${TZ:-UTC}", BACKUP_TIME: "${BACKUP_TIME:-03:30}", RETENTION: "${BACKUP_RETENTION:-7}", PGHOST: postgres, HOME: /tmp }
     depends_on: { postgres: { condition: service_healthy } }
     secrets: [pg_password]
     networks: [control]
+    user: "10001:10001"
     restart: unless-stopped
-    # Hardening (lane-7 P2 fix): this image's default ENTRYPOINT is overridden (line above), so
-    # docker-entrypoint.sh's own privilege-drop (gosu postgres) never runs — this container starts
-    # and stays as the image's default root user (lane-7 review's own finding). `read_only` and
-    # `no-new-privileges` are still real, root-independent restrictions (they bound what the
-    # filesystem/process tree can do regardless of uid), so both apply; `cap_drop: [ALL]`
-    # deliberately does not — pg_dump/tar/gzip under alpine's busybox userland have not been
-    # verified to still run cap-less as root (no Docker available in this environment — see the
-    # PR's own "no host access" note), and this is exactly the kind of change that fails silently
-    # (a cron-like background loop, not a request path) if it breaks the nightly backup.
+    # user: "10001:10001" (fix/socket-proxy-and-backup-user) — supersedes the lane-7 P2 fix note
+    # below (kept, struck through in spirit, for history): this image's default ENTRYPOINT is
+    # still overridden (line above) so docker-entrypoint.sh's own privilege-drop (gosu postgres)
+    # never runs, but the container no longer starts as root at all — `user:` puts it straight on
+    # the platform's own non-root uid (packages/*/Dockerfile's `nexttime`, uid:gid 10001:10001;
+    # gatekeepers/{docker,ragflow}/Dockerfile use the same convention — see .env.example's own
+    # `DOCKER_GID` comment). A numeric uid with no /etc/passwd entry is fine here: backup.sh only
+    # runs pg_dump (auth via PGPASSWORD, not a password *file* lookup — no ~/.pgpass involved) /
+    # tar / gzip, none of which need a resolvable username; `HOME=/tmp` above is set purely as a
+    # defensive fallback in case any of those ever probe $HOME (glibc's own getpwuid-miss fallback
+    # for a homeless uid is to skip such lookups, not error, but this costs nothing and removes
+    # the ambiguity). Checked deploy/backup/backup.sh line by line for anything else needing root:
+    # no chown, no writes outside $DATA_DIR/backups (rw mount) and /tmp (this service's own
+    # tmpfs below) — clean.
+    # cap_drop: [ALL] — now applied (lane-7 P2 fix had deliberately deferred this specifically
+    # because the container ran as root and cap-less root's ability to still run pg_dump/tar/gzip
+    # was unverified; running as non-root uid 10001 sidesteps that question entirely — a non-root
+    # process's needed capabilities, if any, are for privileged *operations*, not "am I still
+    # root", and pg_dump (a plain TCP client)/tar/gzip (plain file IO under /tmp and the rw
+    # backups/ mount) need none.
+    # cap_add: [DAC_READ_SEARCH] — added alongside cap_drop, for `caddy/` specifically:
+    # `deploy/caddy/Dockerfile` runs caddy as the image's default ROOT user (that service's own
+    # comment), and its cert/key storage (Caddy's internal-CA "on_demand" TLS, `caddyserver/
+    # certmagic`'s `FileStorage` — verified by reading certmagic's actual filestorage.go /
+    # internal/atomicfile/file.go source at its current tag, not assumed) hardcodes every write to
+    # mode 0600 (files) / 0700 (dirs), root-owned, via an atomic temp-file-then-rename — a mode
+    # neither a pre-applied `chmod -R o+rX` nor a `chown -R :10001` + setgid on caddy/ survives,
+    # because rename() replaces the whole inode (old permissions/ACLs don't carry over) and
+    # certmagic's own explicit chmod(0600) call would zero the group's permission bits again even
+    # if the new file's group happened to be inherited as 10001 via setgid. A plain non-root uid
+    # 10001 therefore CANNOT read caddy/'s on-demand-issued certs/keys through ordinary DAC
+    # permission bits at all — not "usually", structurally, on every fresh issuance (which
+    # `on_demand` TLS can trigger on any new SNI, not just periodic renewal). DAC_READ_SEARCH
+    # (documented by Docker itself as the capability backup tools use for exactly this) bypasses
+    # read/directory-search permission checks without granting DAC_OVERRIDE's write bypass —
+    # narrower than the root this container used to run as, and it's the only mechanism (short of
+    # running as root again) that makes `tar`'s walk of caddy/ reliable regardless of when it runs
+    # relative to caddy's last cert write. See docs/runbooks/backup-restore.md for the operator-
+    # facing version of this and the one-time `chmod -R o+rX` baseline host-env-init.sh still
+    # applies (belt-and-suspenders for pre-existing files; not load-bearing for correctness — this
+    # capability is). `read_only`/`no-new-privileges` remain real, uid-independent restrictions.
     read_only: true
     tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
     security_opt: ["no-new-privileges:true"]
 
 networks:
   control: { ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_CONTROL:?}" }] } }
   workers: { internal: true, ipam: { config: [{ subnet: "${NEXTTIME_SUBNET_WORKERS:?}" }] } }
+  # dockerapi (fix/socket-proxy-and-backup-user): docker-socket-proxy + its two consumers
+  # (agent-host, worker-supervisor) only — `internal: true` so nothing on it can reach the
+  # public internet even if the proxy itself were compromised. No explicit `ipam.config.subnet`
+  # (unlike `workers` above): nothing outside this file reads this network's subnet the way
+  # NEXTTIME_SUBNET_WORKERS is read by kernel/egress-proxy's own trust-boundary logic, so letting
+  # Docker auto-assign one is fine and avoids adding another required `.env` placeholder.
+  dockerapi: { internal: true }
 secrets:
   pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
   handle_key: { file: "${NEXTTIME_DATA}/secrets/handle.key" } # scripts/gen-handle-keys.sh；0640 组 10001

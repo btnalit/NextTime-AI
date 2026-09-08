@@ -8,7 +8,9 @@
 ## 1. 目的
 
 `packages/agent-host` 是纯事件桥：向 `worker-supervisor` 申请/复用某用户的入口容器、attach 到它
-的 stdio（Docker Engine API，`DOCKER_SOCKET_PATH` 只读挂载）、把 pi 的 RPC stdout 翻译成平台
+的 stdio（Docker Engine API——fix/socket-proxy-and-backup-user 后经 `docker-socket-proxy`
+`DOCKER_HOST=tcp://docker-socket-proxy:2375`；`DOCKER_SOCKET_PATH` 只读挂载仍是测试/无 compose
+场景的兜底，见 `container-io.ts` 自己的模块注释）、把 pi 的 RPC stdout 翻译成平台
 `AgentRuntimeEvent` 词表（唯一的翻译点：`packages/agent-host/src/bridge.ts`）、经一条长连接
 WebSocket（`/internal/agent-host`）转发给内核。内核侧 `AgentHostRuntime`
 （`packages/kernel/src/application/host-bridge/agent-host-runtime.ts`）实现 `AgentRuntime`
@@ -119,11 +121,17 @@ send_chat_message → 观察 chat.stream/chat.message/chat.metadata`），验证
 
 ## 4. 已知偏离 / 假设（详见 PR body "假设与偏离"）
 
-- **worker-supervisor 保持不动**：容器 stdio attach 放在 agent-host 自己（只读挂载
-  `DOCKER_SOCKET_PATH`），没有给 `worker-supervisor` 新增 `/resident/:principalId/attach`
-  端点——理由见 `packages/agent-host/src/container-io.ts` 模块注释：保持已经过 S1.5a 主机验收的
-  `worker-supervisor` 完全不动，代价是两个组件都摸 docker.sock（agent-host 只读挂载、只做
-  attach，不 create/start/stop 容器）。
+- **worker-supervisor 保持不动**：容器 stdio attach 放在 agent-host 自己（当时是只读挂载
+  `DOCKER_SOCKET_PATH`；fix/socket-proxy-and-backup-user 之后是 `DOCKER_HOST=tcp://docker-
+  socket-proxy:2375`，见下一条），没有给 `worker-supervisor` 新增
+  `/resident/:principalId/attach` 端点——理由见 `packages/agent-host/src/container-io.ts` 模块
+  注释：保持已经过 S1.5a 主机验收的 `worker-supervisor` 完全不动，代价（当时）是两个组件都直接摸
+  docker.sock（agent-host 只读挂载、只做 attach，不 create/start/stop 容器）。
+- **更新（fix/socket-proxy-and-backup-user）：两个组件都直接摸 docker.sock 已不再成立**——两者
+  现在都经同一个 `docker-socket-proxy`（新 `dockerapi` 网络）访问 Engine API，都不再直接挂载
+  `/var/run/docker.sock`；上一条"代价是两个组件都摸 docker.sock"这句本身仍保留作为历史记录，但
+  已被这个修复取代——见 `docker-compose.yml` 该服务自己的注释（含端点清单与每个 env flag 的理由）
+  与 `docs/runbooks/backup-restore.md`。
 - **入口 Session 的 Principal**：`AgentHostRuntime.ensureEntrySession` 让 `kind='entry'` 会话的
   `principal_id` 就是那个人类 Principal 自己（照抄 `kind='web'` 会话的既有做法），没有为"这个用户
   的入口 agent 实例"单独铸造一个 `kind='agent'` Principal——`packages/shared/src/enums.ts` 里

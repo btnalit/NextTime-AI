@@ -9,7 +9,7 @@ import {
   normalizeInternalToken,
   resolveInternalTokenFile,
 } from '@nexttime/shared';
-import { createContainerIoClient } from './container-io.js';
+import { createContainerIoClient, parseDockerConnection } from './container-io.js';
 import { createHost } from './host.js';
 import type { Host } from './host.js';
 import { createKernelLink } from './kernel-link.js';
@@ -24,7 +24,9 @@ import { SupervisorClient } from './supervisor-client.js';
  *
  * Env — deliberately exactly these four (docs/development-tasks.md S1.5b dispatch: "No inherited
  * secrets: agent-host env is only KERNEL_URL, SUPERVISOR_URL, KERNEL_LLM_URL, DOCKER_SOCKET_PATH"
- * — `DOCKER_SOCKET_PATH` optional, defaulting to the standard socket path):
+ * — `DOCKER_SOCKET_PATH` optional, defaulting to the standard socket path; `DOCKER_HOST`,
+ * fix/socket-proxy-and-backup-user, is the fifth: also optional, and the one docker-compose.yml
+ * actually sets now — see below):
  *   - `KERNEL_URL`: the kernel's base HTTP(S) URL, e.g. `http://kernel:8080` — this process
  *     derives its own WebSocket URL from it (`/internal/agent-host`) and forwards it verbatim as
  *     every `spawn` call's `kernelUrl`.
@@ -32,9 +34,11 @@ import { SupervisorClient } from './supervisor-client.js';
  *   - `KERNEL_LLM_URL`: read but only used as a defensive fallback — see `host.ts`'s own doc
  *     comment on `HostOptions.defaultKernelLlmUrl` for why the per-Turn value from the kernel is
  *     what actually governs.
- *   - `DOCKER_SOCKET_PATH`: defaults to `/var/run/docker.sock` (docker-compose.yml mounts it
- *     read-only into this service — see that file's own comment on why this package, not
- *     worker-supervisor, does the attaching).
+ *   - `DOCKER_SOCKET_PATH` / `DOCKER_HOST`: container-io.ts's `parseDockerConnection` resolves
+ *     the Docker Engine API target — `DOCKER_HOST=tcp://docker-socket-proxy:2375`
+ *     (docker-compose.yml, fix/socket-proxy-and-backup-user: this container no longer bind-mounts
+ *     `/var/run/docker.sock` at all) when set, else `DOCKER_SOCKET_PATH` (default
+ *     `/var/run/docker.sock`, kept for tests / any non-compose run).
  *
  * The env list above is still exactly these four — the internal-plane token
  * (fix/internal-plane-auth, 2026-09) is a *file*, not an env var: `loadInternalToken` below reads
@@ -105,6 +109,7 @@ export function main(): void {
   const supervisorUrl = readRequiredEnv('SUPERVISOR_URL');
   const kernelLlmUrl = readRequiredEnv('KERNEL_LLM_URL');
   const dockerSocketPath = process.env.DOCKER_SOCKET_PATH ?? '/var/run/docker.sock';
+  const dockerConnection = parseDockerConnection(process.env.DOCKER_HOST, dockerSocketPath);
   // Same fail-fast slot as the three readRequiredEnv calls above — see loadInternalToken's own
   // doc comment.
   const authorizationHeader = internalAuthorizationHeader(loadInternalToken());
@@ -113,7 +118,7 @@ export function main(): void {
   const log = (line: string): void => console.error(line);
 
   const supervisorClient = new SupervisorClient({ supervisorUrl, authorizationHeader });
-  const containerIoClient = createContainerIoClient({ dockerSocketPath });
+  const containerIoClient = createContainerIoClient({ connection: dockerConnection });
 
   // Chicken-and-egg: kernelLink needs callbacks that call into `host`, but `host` needs
   // `kernelLink` to send frames back. Neither callback below runs synchronously during this

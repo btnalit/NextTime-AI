@@ -52,6 +52,43 @@ function buildTaskImageAllowlist(raw: string | undefined, defaultImage: string):
   return [...new Set([defaultImage, ...extra])];
 }
 
+/** How `docker-client.ts` reaches the Docker Engine API — a plain Unix socket (`socketPath`, the
+ *  pre-fix/socket-proxy-and-backup-user default and what tests still use) or `docker-socket-
+ *  proxy`'s HTTP listener over the `dockerapi` network (`tcp`, `DOCKER_HOST=tcp://docker-socket-
+ *  proxy:2375` — docker-compose.yml). `DockerClient`'s callers never see this — it's consumed
+ *  once, in `index.ts`'s `createDockerClient({ connection })` call. */
+export type DockerConnection =
+  | { readonly kind: 'socket'; readonly socketPath: string }
+  | { readonly kind: 'tcp'; readonly host: string; readonly port: number };
+
+/** Parses `DOCKER_HOST` into a `DockerConnection` (fix/socket-proxy-and-backup-user). Only the
+ *  `tcp://host:port` shape this platform's own compose file ever sets is recognized — an unset,
+ *  empty, unparsable, or non-`tcp://` value (e.g. a bare `unix:///var/run/docker.sock`, which
+ *  nothing in this repo produces) falls back to `fallbackSocketPath` (`DOCKER_SOCKET_PATH`,
+ *  default `/var/run/docker.sock`) rather than being guessed at — `dockerode`'s own `socketPath`
+ *  option already covers the plain-Unix-socket case every existing test relies on, so silently
+ *  misparsing an unexpected `DOCKER_HOST` shape into a broken TCP target would be worse than just
+ *  not touching it. A missing port defaults to `2375` (the proxy's own `EXPOSE`, and Docker's own
+ *  conventional plaintext-daemon port) so `DOCKER_HOST=tcp://docker-socket-proxy` alone would
+ *  still resolve, even though the compose file always states the port explicitly. */
+export function parseDockerConnection(
+  dockerHost: string | undefined,
+  fallbackSocketPath: string,
+): DockerConnection {
+  const fallback: DockerConnection = { kind: 'socket', socketPath: fallbackSocketPath };
+  if (!dockerHost || !dockerHost.startsWith('tcp://')) return fallback;
+  let url: URL;
+  try {
+    url = new URL(dockerHost);
+  } catch {
+    return fallback;
+  }
+  if (!url.hostname) return fallback;
+  const port = url.port ? Number.parseInt(url.port, 10) : 2375;
+  if (!Number.isFinite(port) || port <= 0) return fallback;
+  return { kind: 'tcp', host: url.hostname, port };
+}
+
 export interface SupervisorConfig {
   /** `control`-network-only — never published to the host (design doc §11). */
   readonly port: number;
@@ -112,7 +149,13 @@ export interface SupervisorConfig {
    *  mechanism" docs/development-tasks.md points at in lieu of an admin HTTP endpoint egress-proxy
    *  doesn't expose (verified: `packages/egress-proxy/src/admin.ts` only serves `GET /healthz`). */
   readonly egressSourceMapFile: string;
+  /** Kept for backward compatibility / the fallback branch of `dockerConnection` below — no
+   *  longer read directly by `index.ts` (fix/socket-proxy-and-backup-user). */
   readonly dockerSocketPath: string;
+  /** `docker-client.ts`'s actual connection target — `DOCKER_HOST`-derived when set (docker-
+   *  socket-proxy over the `dockerapi` network), else `dockerSocketPath` (see
+   *  `parseDockerConnection`'s own doc comment). */
+  readonly dockerConnection: DockerConnection;
   /** One-shot Task mode (S2.8; design doc §7.3, docs/development-tasks.md S2.8). Default runtime
    *  cap for a Worker container before the reaper kills it (`TASK_MAX_RUNTIME_SEC`) — a per-spawn
    *  `timeoutSec` in the request body overrides this. */
@@ -148,6 +191,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
 
   const localDataDir = env.LOCAL_DATA_DIR ?? '/data';
   const workerImage = env.WORKER_IMAGE ?? 'nexttime-ai-worker-runtime';
+  const dockerSocketPath = env.DOCKER_SOCKET_PATH ?? '/var/run/docker.sock';
 
   return {
     port: parseIntEnv(env.SUPERVISOR_PORT, DEFAULT_SUPERVISOR_PORT),
@@ -167,7 +211,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     workerDnsSinkhole: parseDnsSinkholeEnv(env.WORKER_DNS_SINKHOLE),
     entryIdleTimeoutMs: parseIntEnv(env.ENTRY_IDLE_TIMEOUT_MS, 30 * 60 * 1000),
     egressSourceMapFile: env.EGRESS_SOURCE_MAP_FILE ?? `${localDataDir}/config/egress-sources.json`,
-    dockerSocketPath: env.DOCKER_SOCKET_PATH ?? '/var/run/docker.sock',
+    dockerSocketPath,
+    dockerConnection: parseDockerConnection(env.DOCKER_HOST, dockerSocketPath),
     taskMaxRuntimeSec: parseIntEnv(env.TASK_MAX_RUNTIME_SEC, 3600),
     taskWorkdirRetentionHours: parseIntEnv(env.TASK_WORKDIR_RETENTION_HOURS, 72),
     taskReapIntervalMs: parseIntEnv(env.TASK_REAP_INTERVAL_MS, 10_000),

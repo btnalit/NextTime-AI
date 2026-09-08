@@ -18,6 +18,7 @@
  */
 
 import Docker from 'dockerode';
+import type { DockerConnection } from './config.js';
 
 export interface ContainerSpec {
   readonly name: string;
@@ -105,12 +106,21 @@ function toContainerState(inspect: Docker.ContainerInspectInfo): ContainerState 
   };
 }
 
+/** `connection` (fix/socket-proxy-and-backup-user): `docker-compose.yml` no longer bind-mounts
+ *  `/var/run/docker.sock` into this container — every Docker Engine API call now goes through
+ *  `docker-socket-proxy` over the `dockerapi` network (`DOCKER_HOST=tcp://docker-socket-
+ *  proxy:2375`, parsed by `config.ts`'s `parseDockerConnection`). The `socket` variant survives
+ *  for tests and any non-compose run (e.g. a bare `node dist/index.js` against a local
+ *  `/var/run/docker.sock`) that never sets `DOCKER_HOST`. */
 export interface CreateDockerClientOptions {
-  readonly socketPath: string;
+  readonly connection: DockerConnection;
 }
 
 export function createDockerClient(options: CreateDockerClientOptions): DockerClient {
-  const docker = new Docker({ socketPath: options.socketPath });
+  const docker =
+    options.connection.kind === 'tcp'
+      ? new Docker({ host: options.connection.host, port: options.connection.port })
+      : new Docker({ socketPath: options.connection.socketPath });
 
   return {
     async createAndStart(spec: ContainerSpec): Promise<ContainerState> {
