@@ -74,13 +74,21 @@ export interface PolicyEvaluationInput {
   readonly requesterScope: CapabilityScope;
   /**
    * S3.13 (docs/development-tasks.md "每用户智能体配置" — `AgentProfile.autoApproveLow`): the
-   * requesting principal's own resolved `effective.autoApproveLow`, `true` when omitted (the
-   * caller is expected to have already applied `AgentPolicy.allowMemberAutoApproveLow` as the
-   * default — `governance/agent-profile/resolve.ts`'s `resolveEffectiveAgentProfile` — so a
-   * caller with no AgentProfile mechanism in play at all, e.g. every pre-S3.13 test, passes
-   * nothing and keeps this module's exact prior behavior). `false` narrows: even a `low`-blast-
-   * radius, `auto_approvable` Operation that a workspace policy would otherwise auto-approve must
-   * still `require_approval` for *this* requester — never the other direction (this can only ever
+   * requesting principal's own **raw** `AgentProfile.autoApproveLow` — deliberately *not* the
+   * fully-resolved `effective.autoApproveLow` (`governance/agent-profile/resolve.ts`'s
+   * `resolveEffectiveAgentProfile`, which folds in `AgentPolicy.allowMemberAutoApproveLow`'s own
+   * compiled-in-`false` default). The task's own instruction for this projection is specifically
+   * "per-principal false disables auto-approve ... even when the workspace default allows it" —
+   * the principal's own explicit choice, not the workspace policy's default flowing through on
+   * its own. Feeding the resolved `effective` value here instead would mean every workspace that
+   * has never written an `agent_policies` row (i.e. every workspace that predates S3.13) gets
+   * that compiled-in default narrowing every low-blast-radius auto-approval platform-wide the
+   * moment this feature ships — caught in CI by `request-action.integration.test.ts` regressing.
+   * `true` when omitted/`undefined` (no AgentProfile row, or one that has never set this field) —
+   * every pre-S3.13 caller, and every principal who has not explicitly narrowed themselves, keeps
+   * this module's exact prior behavior. `false` narrows: even a `low`-blast-radius,
+   * `auto_approvable` Operation that a workspace policy would otherwise auto-approve must still
+   * `require_approval` for *this* requester — never the other direction (this can only ever
    * remove an `allow` outcome, never manufacture one an operation/workspace-policy combination
    * would not already produce on its own).
    */

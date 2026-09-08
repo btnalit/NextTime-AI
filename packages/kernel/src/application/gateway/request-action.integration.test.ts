@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import { setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ApprovalDrainer,
   approveActionRequest,
@@ -573,6 +574,68 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.status).toBe('executed');
       expect(transport.calls[AUTO_OP.name]).toBe(before + 1);
       expect(transport.visibilityChecks[AUTO_OP.name]).toBe(true);
+    });
+
+    // S3.13 regression guard (found in CI, not reproducible on a machine with no local
+    // Postgres): an earlier version of this feature fed the *resolved* `effective.autoApproveLow`
+    // into the policy engine's narrowing check — which folds in `AgentPolicy
+    // .allowMemberAutoApproveLow`'s own compiled-in-`false` default — so *every* workspace with no
+    // `agent_policies` row (i.e. every workspace that predates S3.13, including every other test
+    // in this file) got low-blast-radius auto-approval silently disabled platform-wide the moment
+    // that code ran. These two tests pin both halves of the fix: a principal with no AgentProfile
+    // row at all (every test above this one) keeps the pre-S3.13 behavior; only a principal whose
+    // own AgentProfile explicitly narrows `autoApproveLow: false` sees `request_action` require
+    // approval on an otherwise-auto-approved, low-blast-radius Operation.
+    it('S3.13: a principal whose own AgentProfile explicitly sets autoApproveLow:false has an otherwise-auto-approved low-blast-radius request narrowed to require_approval', async () => {
+      const narrowedMemberId = await adminInsertPrincipal('member-narrowed-auto-approve', 'member');
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        grantCapability(client, workspaceId, {
+          principalId: narrowedMemberId,
+          resourceType: 'gatekeeper',
+          resourceId: gatekeeperId,
+          grantedBy: ownerId,
+        }),
+      );
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        setAgentProfile(client, workspaceId, narrowedMemberId, ownerId, { autoApproveLow: false }),
+      );
+
+      const caller = humanCaller(workspaceId, narrowedMemberId, 'member');
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const result = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 2 },
+      })) as { status: string; id: string };
+
+      expect(result.status).toBe('pending_approval'); // narrowed — would otherwise auto-approve
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was never called
+    });
+
+    it('S3.13: a principal with no AgentProfile row at all still auto-approves (the compiled-in AgentPolicy default never narrows on its own)', async () => {
+      const untouchedMemberId = await adminInsertPrincipal('member-no-agent-profile', 'member');
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        grantCapability(client, workspaceId, {
+          principalId: untouchedMemberId,
+          resourceType: 'gatekeeper',
+          resourceId: gatekeeperId,
+          grantedBy: ownerId,
+        }),
+      );
+      // No setAgentProfile call — this principal has never touched S3.13 at all.
+
+      const caller = humanCaller(workspaceId, untouchedMemberId, 'member');
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const result = (await dispatchCapability({ pool }, caller, 'request_action', {
+        gatekeeperId,
+        operation: AUTO_OP.name,
+        params: { qty: 3 },
+      })) as { status: string; id: string };
+
+      expect(result.status).toBe('executed');
+      expect(transport.calls[AUTO_OP.name]).toBe(before + 1);
     });
 
     // P2-2 fix (review job 652a4abc): phase 2's inline execution now routes through the
