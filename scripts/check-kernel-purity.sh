@@ -13,7 +13,15 @@
 # (.github/workflows/ci.yml).
 set -eu
 
-if HITS=$(grep -rniE -f scripts/system-names.txt packages/kernel/src --exclude-dir=__fixtures__ --exclude='*.test.ts'); then
+# S3.6 (docs/development-tasks.md W2-B) exemption: the MCP gateway's `interfaces/mcp/
+# reference-tool-aliases.ts` documents and implements the Semantica MCP tool-name/required-param
+# compatibility table the design doc's own §7.1 `mcp` module row mandates ("Semantica 工具名契约")
+# and §9.3 requires ("Semantica 的 17 个工具名与必填参数作为契约保留") — this is a foreseen,
+# design-mandated exception (a named reference contract this specific interfaces/mcp file exists
+# to implement), not accidental content leakage into the mechanism layer. Every other consumer in
+# packages/kernel/src (tool-projection.ts, server-factory.ts, index.ts, tests) deliberately never
+# spells the name out — only this one file, whose entire purpose is that contract, is exempted.
+if HITS=$(grep -rniE -f scripts/system-names.txt packages/kernel/src --exclude-dir=__fixtures__ --exclude='*.test.ts' --exclude='reference-tool-aliases.ts'); then
   echo "check-kernel-purity: concrete system name(s) found in packages/kernel/src (design doc section 7.10):" >&2
   echo "$HITS" >&2
   exit 1

@@ -50,6 +50,7 @@ import type { InternalRoutesDeps } from './interfaces/http/internal/index.js';
 import { registerInternalRoutes } from './interfaces/http/internal/index.js';
 import type { InternalPlaneAuthConfig } from './interfaces/internal-auth/index.js';
 import { loadInternalToken, registerInternalPlaneGuard } from './interfaces/internal-auth/index.js';
+import { registerMcpRoute } from './interfaces/mcp/index.js';
 import {
   registerAgentHostWsRoute,
   registerWsRoute,
@@ -146,6 +147,11 @@ export function createServer(
   // subset of `CapabilityRouteDeps`).
   registerExplorerHttpRoutes(app, deps);
   registerWsRoute(app, deps);
+  // `/mcp` (S3.6, docs/development-tasks.md W2-B): streamable HTTP MCP gateway, Handle channel
+  // only — see interfaces/mcp/index.ts's own module doc comment for the full auth/tool-projection
+  // contract. `deps` (CapabilityRouteDeps: `{pool, loadHandlePublicKey?}`) is directly assignable
+  // to `McpRouteDeps` with no adaptation, same as the two calls above.
+  registerMcpRoute(app, deps);
   // `/internal/*` (S1.7): service-to-service routes for `llm-proxy` (usage reports, revocation
   // sync) and `egress-proxy` (egress observations), plus `GET /internal/metrics` (S3.8). The
   // kernel is dual-homed on `control` and `workers` and binds every interface, so these are

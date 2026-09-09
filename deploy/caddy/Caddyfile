@@ -98,10 +98,19 @@ https://:8443 {
 	# reaches the kernel here, unchanged and with no X-API-Key injected — this block's callers
 	# (the web console, MCP/agent clients) authenticate themselves.
 	#
+	# S3.6 fix: the E8 matcher below originally had only `/mcp/*` (no bare `/mcp`) — anticipatory,
+	# written before the MCP gateway existed. The real endpoint (interfaces/mcp/index.ts,
+	# `registerMcpRoute`) is a single streamable-HTTP POST at the bare path `/mcp` (no sub-path;
+	# see docs/howto-connect-claude-code.md's `url: https://<host>:8443/mcp`), which Caddy's `path`
+	# matcher only matches literally — `/mcp/*` requires a trailing `/` + more, so a bare `/mcp`
+	# request fell through to the web-SPA catch-all below and 404'd. `/mcp` is added alongside the
+	# pre-existing `/mcp/*` (kept for forward compatibility, e.g. a future sub-resource) — matching
+	# the literal §E8 text ("/mcp", same as the already-bare "/ws").
+	#
 	# NOTE raised in the PR, not decided here: design doc §7.7 / §10.2 describe a separate
 	# `llm-proxy` service for provider traffic. Routing /llm/* to `kernel` instead of
 	# `llm-proxy` may be a documentation gap in §E8 — kept as the task doc states.
-	@backend path /api/* /ws /mcp/* /llm/*
+	@backend path /api/* /ws /mcp /mcp/* /llm/*
 	handle @backend {
 		reverse_proxy kernel:8080
 	}
