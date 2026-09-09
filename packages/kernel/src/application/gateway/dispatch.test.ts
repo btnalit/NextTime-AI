@@ -101,23 +101,21 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
     ).rejects.toThrow(ForbiddenError);
   });
 
-  it('auditor calling export_prov passes authorization (the 403 above is role-specific)', async () => {
-    // export_prov (audit group, human channel, minRole:'auditor') has no wired handler yet —
-    // CapabilityNotImplementedError (not ForbiddenError) proves authorization itself passed for
-    // `auditor`, unlike `set_quota` for `member` above. (Prior to S2.7 this test used `set_quota`
-    // for the same purpose, then `issue_handle` once `set_quota` got a real handler; S3.6
-    // (docs/development-tasks.md W2-B) gave `issue_handle` a real handler too, so a still-
-    // unimplemented, minRole-gated-for-a-role-other-than-`member` capability is needed here again —
-    // `export_prov` is the only remaining `minRole`-gated one that isn't already wired.)
-    await expect(
-      dispatchCapability(
-        { pool: neverConnectPool },
-        humanCaller({ role: 'auditor' }),
-        'export_prov',
-        {},
-      ),
-    ).rejects.toThrow(CapabilityNotImplementedError);
-  });
+  // Removed (docs/development-tasks.md §S3.5, feat/s3-5-explorer): this test's own comment history
+  // was a chain of "swap to a still-unimplemented, human-channel, minRole-gated-for-a-role-other-
+  // than-member capability" (set_quota → issue_handle → export_prov, each retired once that
+  // capability got a real handler). `export_prov` was the last one — grep confirms every remaining
+  // unimplemented capability (`supersede_fact`/`invalidate_fact`/`create_task`/`register_source`/
+  // `submit_observations`) is `channel:'handle'`, so there is no longer a `channel:'human'` example
+  // left to swap to, and none is coming: the registry does not grow new `minRole`-gated-and-
+  // unimplemented human capabilities on its own. Not adapted in place either — export_prov's own
+  // authorization-passes-for-auditor case now reaches a real handler that needs the database
+  // (`explain`/`causal_chain`), which no longer fits this describe block's own "decided before any
+  // transaction (unit, no DB)" contract. The two things this test actually verified are both still
+  // covered elsewhere: the pure role-hierarchy logic (`roleSatisfiesMinRole`, "member does not
+  // satisfy minRole:auditor") in `authorize.test.ts`; export_prov's own real auditor-passes,
+  // member-would-403 path (DB-gated, since the handler genuinely needs it) in
+  // `export-prov-handler.integration.test.ts`.
 
   it('a registry capability with no wired handler → CapabilityNotImplementedError (501)', async () => {
     // `create_task` (task group, handle channel) has no wired handler — S2.7's own deliberate

@@ -635,10 +635,32 @@ services:
     # of the intended bind address (lane-7 P1 fix).
     ports: ["${KERNEL_BIND_ADDR:?}:8443:8443"]
     # Static roots ship inside the image: deploy/caddy/Dockerfile builds packages/web and copies
-    # dist/ to /srv/web (/srv/explorer stays a placeholder until S3). Rebuild the image to deploy
-    # a web change. ${NEXTTIME_DATA:?}/caddy:/data persists the internal CA and issued certs
-    # (chowned by scripts/host-env-init.sh).
+    # dist/ to /srv/web (/srv/explorer holds the S3.5 Explorer bundle once a host operator has
+    # run `sh explorer/build.sh` — a placeholder page until then, see explorer/README.md).
+    # Rebuild the image to deploy a web change. ${NEXTTIME_DATA:?}/caddy:/data persists the
+    # internal CA and issued certs (chowned by scripts/host-env-init.sh).
     volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA:?}/caddy:/data"]
+    # S3.5 (docs/development-tasks.md §S3.5): EXPLORER_API_KEY — the API key of a Principal the
+    # Explorer static bundle's requests are attributed to (Caddyfile's own comment on why: the
+    # unmodified bundle sends no X-API-Key itself). Not `env_file` (llm-proxy's own
+    # `${NEXTTIME_DATA}/secrets/llm-proxy.env` pattern) deliberately — `env_file` requires the
+    # referenced file to already exist at `docker compose up` time, which broke this workflow's own
+    # CI e2e job (it provisions secrets only for the services it actually starts, and does not know
+    # about this one — caught on the first PR push, see that job's run history). `${VAR:-}` compose-
+    # level substitution has no such file dependency: unset defaults to an empty string, which the
+    # Caddyfile's `{$EXPLORER_API_KEY}` placeholder then substitutes into an equally empty
+    # `X-API-Key` header, which the kernel's own auth 401s (fails closed, not silently
+    # unauthenticated) — a real deployment sets `EXPLORER_API_KEY` in `.env` (see
+    # docs/runbooks/host-explorer.md); this file's own credential-handling convention otherwise
+    # keeps *provider*/database/token secrets out of `.env` (`.env.example`'s own comment) — a
+    # platform-issued API key for one dedicated, least-privileged Principal is a smaller-consequence
+    # exception, already visible in the same category `KERNEL_PUBLIC_URL`/`NEXTTIME_SUBNET_*` sit in.
+    # TRUST BOUNDARY: this one key is injected by caddy into EVERY request reaching the Explorer
+    # endpoints — anyone who can reach :8443 reads the graph as that Principal, unauthenticated,
+    # and audit attributes to it, not to the viewer. Leave empty (default → 401) unless :8443 is
+    # LAN/VPN-only, and then use a dedicated `auditor`-role Principal's key, never an owner's.
+    # See docs/runbooks/host-explorer.md "信任边界".
+    environment: { EXPLORER_API_KEY: "${EXPLORER_API_KEY:-}" }
     depends_on: { kernel: { condition: service_healthy } }
     networks: [control]
     restart: unless-stopped
