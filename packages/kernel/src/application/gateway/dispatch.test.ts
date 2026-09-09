@@ -101,21 +101,20 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
     ).rejects.toThrow(ForbiddenError);
   });
 
-  it('owner calling issue_handle passes authorization (the 403 above is role-specific)', async () => {
-    // issue_handle (governance group, human channel, minRole:'owner') has no wired handler yet
-    // (S1.9 registered it; no task has implemented it) — CapabilityNotImplementedError (not
-    // ForbiddenError) proves authorization itself passed for `owner`, unlike `set_quota` for
-    // `member` above. (Prior to S2.7, this test used `set_quota` for the same purpose — it now has
-    // a real handler, so a still-unimplemented owner-only capability is needed here instead.)
+  it('auditor calling export_prov passes authorization (the 403 above is role-specific)', async () => {
+    // export_prov (audit group, human channel, minRole:'auditor') has no wired handler yet —
+    // CapabilityNotImplementedError (not ForbiddenError) proves authorization itself passed for
+    // `auditor`, unlike `set_quota` for `member` above. (Prior to S2.7 this test used `set_quota`
+    // for the same purpose, then `issue_handle` once `set_quota` got a real handler; S3.6
+    // (docs/development-tasks.md W2-B) gave `issue_handle` a real handler too, so a still-
+    // unimplemented, minRole-gated-for-a-role-other-than-`member` capability is needed here again —
+    // `export_prov` is the only remaining `minRole`-gated one that isn't already wired.)
     await expect(
       dispatchCapability(
         { pool: neverConnectPool },
-        humanCaller({ role: 'owner' }),
-        'issue_handle',
-        {
-          sessionId: randomUUID(),
-          scope: {},
-        },
+        humanCaller({ role: 'auditor' }),
+        'export_prov',
+        {},
       ),
     ).rejects.toThrow(CapabilityNotImplementedError);
   });

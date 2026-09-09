@@ -8,6 +8,7 @@ import {
 import { ActionRequestStatusSchema } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
+import { CapabilityScopeSchema } from './handle-token.js';
 import { OntologyDefinitionSchema } from './ontology-definition.js';
 import * as wire from './wire/index.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
@@ -1032,6 +1033,18 @@ const epistemicCapabilities: readonly Capability[] = [
 // governance
 // -------------------------------------------------------------------------------------------
 
+/**
+ * Hard ceiling for `issue_handle`'s requested `ttlSeconds` — an interactive Handle is a
+ * developer-facing external credential (Claude Code, `pi`), not the resident entry agent's own
+ * session (`ENTRY_HANDLE_TTL_SECONDS` is kernel config, never a client-supplied override); a human
+ * explicitly requests this ttl, so a generous but bounded ceiling (30 days) avoids an
+ * unbounded-lifetime credential from a single mistaken parameter while comfortably outliving one
+ * working session. No default is declared here — the handler's own default lives beside its
+ * session-creation logic (`application/gateway/issue-handle-handler.ts`), not duplicated in this
+ * domain-layer schema.
+ */
+const ISSUE_HANDLE_MAX_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 const governanceCapabilities: readonly Capability[] = [
   {
     name: 'request_action',
@@ -1206,17 +1219,55 @@ const governanceCapabilities: readonly Capability[] = [
     description: 'Set an I18 quota (invoke_worker depth, concurrency, token/time, daily cost).',
   },
   {
-    // Unhandled (no CAPABILITY_HANDLERS entry). Best-effort placeholder: whatever issues a
-    // CapabilityHandle must return the signed token itself, or the capability would be useless —
-    // more specific than a bare permissive record, but not derived from any real handler.
+    // S3.6 registry-entry fix (docs/development-tasks.md W2-B): previously `{sessionId,
+    // scope: jsonRecord}` — a best-effort placeholder guessing at a shape no handler had ever
+    // produced (this file's own "resultSchema reuse note" above). The real handler
+    // (packages/kernel/src/application/gateway/issue-handle-handler.ts) issues a Handle for a
+    // *new* `kind='mcp_session'` session (design doc §9.2 "mcp_session（外部运行时）" — the design's
+    // own term for exactly this: an `interactive`-mode client running outside the platform, e.g.
+    // Claude Code or a developer's local `pi`) on behalf of the *calling* human Principal — never
+    // a caller-supplied existing sessionId (I13: identity is never accepted as an input).
+    // `sessionKind` is the domain-facing param name the task brief uses ('interactive', the only
+    // value this handler creates today — a literal union of one, not a free string, so a typo
+    // fails fast at this schema layer rather than deep inside the handler); it names *what kind of
+    // external client* is asking, not `sessions.kind` (`@nexttime/shared`'s `SessionKind`) itself —
+    // the handler maps it onto `mcp_session`.
     name: 'issue_handle',
     group: 'governance',
     mode: 'execute',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ sessionId: id, scope: jsonRecord }).strict(),
-    resultSchema: z.object({ token: z.string() }).strict(),
-    description: 'Issue a CapabilityHandle for a Session.',
+    paramsSchema: z
+      .object({
+        sessionKind: z.literal('interactive'),
+        ttlSeconds: z.number().int().positive().max(ISSUE_HANDLE_MAX_TTL_SECONDS).optional(),
+        // A *requested* scope, intersected against the caller's own entry ceiling ∩ Grants — never
+        // the full CapabilityScopeSchema shape (both fields required there): omitting `scope`
+        // entirely, or either field within it, means "everything the ceiling/Grants already allow
+        // on that axis", not "nothing". See the handler's own `intersectScope` for the exact rule.
+        scope: z
+          .object({
+            capabilities: z.array(z.string().min(1)).optional(),
+            resources: z.record(z.string(), z.array(z.string())).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict(),
+    resultSchema: z
+      .object({
+        handle: z.string(),
+        sessionId: id,
+        onBehalfOf: id,
+        expiresAt: z.string(),
+        scope: CapabilityScopeSchema,
+      })
+      .strict(),
+    description:
+      'Issue a CapabilityHandle for a new interactive-mode session (a pi/Claude-Code-like ' +
+      'client running outside the platform, §7.4 "interactive"), scoped to the intersection of ' +
+      'the request, the entry-agent ceiling, and the caller’s own Grants — never wider than an ' +
+      'entry Handle. The token is returned once and never stored in plaintext.',
   },
   // -----------------------------------------------------------------------------------------
   // S3.11 read-side additions (docs/development-tasks.md, 2026-09-08 "中台控制面" decision):

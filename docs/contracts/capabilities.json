@@ -4383,7 +4383,80 @@
       "additionalProperties": false,
       "properties": {
         "scope": {
-          "additionalProperties": {},
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resources": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "sessionKind": {
+          "const": "interactive",
+          "type": "string"
+        },
+        "ttlSeconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 2592000,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sessionKind"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string"
+        },
+        "onBehalfOf": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resources": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "capabilities",
+            "resources"
+          ],
           "type": "object"
         },
         "sessionId": {
@@ -4392,21 +4465,11 @@
         }
       },
       "required": [
+        "handle",
         "sessionId",
+        "onBehalfOf",
+        "expiresAt",
         "scope"
-      ],
-      "type": "object"
-    },
-    "result": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "token": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "token"
       ],
       "type": "object"
     }
