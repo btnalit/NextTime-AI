@@ -322,22 +322,26 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('a registered but unimplemented capability → 501', async () => {
-      // `export_prov` (audit group, human channel, minRole:'auditor' — `ownerApiKey` satisfies it,
-      // owner is a super-role, authorize.ts's own `roleSatisfiesMinRole`) has no wired handler yet.
-      // Swap chain for this exact cause (a capability this test picks as "still unimplemented"
-      // getting implemented by a later task): `set_quota` → `issue_handle` (S2.7) →
-      // `export_prov`/`invalidate_fact` (S3.2+S3.6) → `invalidate_fact` (S3.3, this task, gave it a
+      // `create_task` (task group, handle channel, minRole:'member') has no wired handler yet —
+      // S2.7's own deliberate decision (application/gateway/handlers.ts's neighboring doc comment:
+      // its paramsSchema carries no definitionId/version, and tasks.worker_definition_id/.version
+      // are NOT NULL, so there is no way to build a well-formed Task from this capability's own
+      // params alone). `channel:'handle'` is still reachable from this HTTP route's human caller
+      // (authorize.ts's own doc comment: "human is a superset" — a human Principal may call
+      // anything a Handle could). Swap chain for this exact cause (a capability this test picks as
+      // "still unimplemented" getting implemented by a later task): `set_quota` → `issue_handle`
+      // (S2.7) → `export_prov`/`invalidate_fact` (S3.2+S3.6) → `invalidate_fact` (S3.3, gave it a
       // real handler alongside assert_fact/supersede_fact/register_source/submit_observations) →
-      // `export_prov` (this file's own next pick — `application/gateway/dispatch.test.ts` already
-      // uses this same name for its own two now-implemented-swap tests; reusing it here is fine,
-      // the two files exercise different layers (HTTP route mapping vs `dispatchCapability`
-      // directly), not the same assertion twice).
+      // `export_prov` (S3.5, this task, gave it a real handler too — application/gateway/dispatch.
+      // test.ts's own "auditor calling export_prov" test was removed for the identical reason, see
+      // that file's own comment) → `create_task`, the one remaining registry capability with no
+      // wired handler as of this task.
       const app = createServer({ pool });
       const response = await app.inject({
         method: 'POST',
-        url: '/api/cap/export_prov',
+        url: '/api/cap/create_task',
         headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: {},
+        payload: { input: {} },
       });
 
       expect(response.statusCode).toBe(501);

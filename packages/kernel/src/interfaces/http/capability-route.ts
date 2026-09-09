@@ -20,6 +20,7 @@ import {
   ConnectionManifestFetchError,
   type DispatchDeps,
   ExplainNodeNotFoundError,
+  ExportProvInputError,
   ForbiddenError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
@@ -294,6 +295,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // substrate directly).
   if (err instanceof ExplainNodeNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S3.5 `export_prov`: caller gave zero or more than one of factId/decisionId/activityId — the
+  // caller's own malformed request, same 400 bucket as every other schema-valid-but-meaning-level-
+  // invalid input above (e.g. AgentProfileValidationError).
+  if (err instanceof ExportProvInputError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
   }
   // application/worker registry errors (S2.6 WorkerDefinitions, S2.14 Skills/Procedures) — found
   // on the host as 500s: a Procedure step referencing a nonexistent Operation must be a 400 with a

@@ -45,7 +45,7 @@ import type { HandleKeyPair } from './governance/capability/index.js';
 import { loadHandleKeyPair } from './governance/capability/index.js';
 import { SYSTEM_ACTOR_PLACEHOLDER } from './governance/gatekeepers/index.js';
 import type { CapabilityRouteDeps } from './interfaces/http/index.js';
-import { registerCapabilityRoutes } from './interfaces/http/index.js';
+import { registerCapabilityRoutes, registerExplorerHttpRoutes } from './interfaces/http/index.js';
 import type { InternalRoutesDeps } from './interfaces/http/internal/index.js';
 import { registerInternalRoutes } from './interfaces/http/internal/index.js';
 import type { InternalPlaneAuthConfig } from './interfaces/internal-auth/index.js';
@@ -142,6 +142,10 @@ export function createServer(
   registerInternalPlaneGuard(app, options.internalAuth);
 
   registerCapabilityRoutes(app, deps);
+  // S3.5 (docs/development-tasks.md §S3.5, design doc §9.5): the nine Explorer endpoints, same
+  // `deps` (only `pool`/`loadHandlePublicKey` are used — `ExplorerRouteDeps` is structurally a
+  // subset of `CapabilityRouteDeps`).
+  registerExplorerHttpRoutes(app, deps);
   registerWsRoute(app, deps);
   // `/mcp` (S3.6, docs/development-tasks.md W2-B): streamable HTTP MCP gateway, Handle channel
   // only — see interfaces/mcp/index.ts's own module doc comment for the full auth/tool-projection
