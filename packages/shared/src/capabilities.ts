@@ -617,26 +617,28 @@ const connectionCapabilities: readonly Capability[] = [
     // `list_operations` joins this by `{gatekeeperId, operationName}`.
     //
     // Source and semantics (`governance/approval/reads.ts`'s `getOperationStats` owns the query):
-    // execute-class Operations only — `calls`/`approved`/`rejected`/`autoApproved`/`failed` are
-    // counts of `action_requests` rows for that `{gatekeeperId, action_kind}` within the trailing
-    // `days` window, grouped by the row's **current** `status` column (governance/approval's own
+    // execute-class Operations — `approved`/`rejected`/`autoApproved`/`failed` are counts of
+    // `action_requests` rows for that `{gatekeeperId, action_kind}` within the trailing `days`
+    // window, grouped by the row's **current** `status` column (governance/approval's own
     // 13-state machine, `@nexttime/shared`'s `transitions.ts` `ACTION_REQUEST_TRANSITIONS`):
     // `approved`/`auto_approved`(→`autoApproved`)/`rejected`/`failed` count rows *currently sitting
     // in* that status — not a cumulative "ever passed through" history, so a request that was
     // `approved` and has since finished executing (`executing`/`executed`/`verified`) is counted
     // under `calls` only, since `executing` does not itself distinguish the `approved` vs.
-    // `auto_approved` path it arrived from. `calls` is every status, unfiltered.
+    // `auto_approved` path it arrived from.
     //
-    // Observe-class Operations (`<gate>.<op>` / `observe_operation`, §11 "观察免审" — never create
-    // an ActionRequest row at all) are **not** included: `substrate/audit`'s own `queryAudit`
-    // service interface (the only sanctioned way to read `audit_records` — that module's boundary
-    // forbids querying its table directly) has no date-range filter and no payload-path grouping,
-    // so an efficient per-operation, `days`-windowed observe count is not achievable through it
-    // without extending that module's query surface — out of this task's bounded scope. Left as a
-    // documented gap rather than an approximate guess; the web catalog degrades to "—" for any
-    // Operation absent from `items` (which, today, is every observe-class one, and any execute-class
-    // one with zero calls in the window — the two are indistinguishable on this wire shape, and
-    // "no calls happened" is the correct real-world reading of "—" either way).
+    // S3.8 (docs/development-tasks.md S3.8, 2026-09-09+) closed the observe-class gap this entry
+    // used to document as out of scope: `substrate/audit`'s `queryAuditActionOperationStats`
+    // (a date-range, payload-grouped read added specifically for this) now supplies `observeCalls`
+    // — a count of `observe_operation` AuditRecords (the capability behind every `<gate>.<op>`
+    // observe tool call, §11 "观察免审" — these never create an `action_requests` row) grouped by
+    // the `gatekeeperId`/`operation` carried in the audit payload's own `params`. `calls` now
+    // includes both sources summed; `observeCalls` is the observe-only subset (always `0` for a
+    // purely execute-class row, and `approved`/`rejected`/`autoApproved`/`failed` stay `0` for a
+    // purely observe-class row — see `governance/approval/reads.ts`'s `OperationStatsRow` doc
+    // comment for the full merge rule and the one remaining, still-documented gap: a Worker's
+    // `request_action` call that happens to resolve to an observe-mode Operation audits under
+    // `action = 'request_action'`, not `'observe_operation'`, and is not attributed here).
     name: 'get_operation_stats',
     group: 'connection',
     mode: 'observe',
@@ -655,12 +657,13 @@ const connectionCapabilities: readonly Capability[] = [
           rejected: z.number().int().nonnegative(),
           autoApproved: z.number().int().nonnegative(),
           failed: z.number().int().nonnegative(),
+          observeCalls: z.number().int().nonnegative(),
           lastCalledAt: z.string(),
         })
         .strict(),
     ),
     description:
-      'Per-Operation call/approve/reject counters over the trailing `days` window (default 30, max 90) — execute-class only, aggregated from action_requests.status (see this entry’s own doc comment for the observe-class gap and the "current status, not decision history" semantics).',
+      'Per-Operation call/approve/reject counters over the trailing `days` window (default 30, max 90) — execute-class counters (approved/rejected/autoApproved/failed) aggregated from action_requests.status ("current status, not decision history"); observe-class calls (<gate>.<op> / observe_operation, never an ActionRequest) counted separately in `observeCalls` and folded into `calls` — see this entry’s own doc comment for the merge rule and remaining known gap.',
   },
 ];
 

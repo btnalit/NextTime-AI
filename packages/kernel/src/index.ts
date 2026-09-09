@@ -55,6 +55,8 @@ import {
   registerWsRoute,
   setAgentHostRuntimeForWsRoute,
 } from './interfaces/ws/index.js';
+import type { InvariantCheckResult } from './substrate/audit/index.js';
+import { renderInvariantMetricsPrometheus, runInvariantChecks } from './substrate/audit/index.js';
 
 /**
  * The one canonical construction of "a `GatekeeperClient` + the admin-mode `ActionExecutor` over
@@ -141,9 +143,14 @@ export function createServer(
   registerCapabilityRoutes(app, deps);
   registerWsRoute(app, deps);
   // `/internal/*` (S1.7): service-to-service routes for `llm-proxy` (usage reports, revocation
-  // sync) and `egress-proxy` (egress observations). The kernel is dual-homed on `control` and
-  // `workers` and binds every interface, so these are reachable from every agent container — the
-  // guard above is what actually closes them (see interfaces/internal-auth's doc comment).
+  // sync) and `egress-proxy` (egress observations), plus `GET /internal/metrics` (S3.8). The
+  // kernel is dual-homed on `control` and `workers` and binds every interface, so these are
+  // reachable from every agent container — the guard above is what actually closes them (see
+  // interfaces/internal-auth's doc comment). `deps.renderMetrics` (optional — `MetricsRoutesDeps`)
+  // is `main()`'s `InvariantMetricsStore.renderMetrics`, so `/internal/metrics` reports whatever
+  // `createBackgroundServices`'s scheduler tick below most recently wrote into that same store;
+  // omitted here (any test building `deps` without it), the route still exists but reports "no
+  // metrics source wired" (metrics.ts's own default).
   app.register(async (instance) => {
     await registerInternalRoutes(instance, deps);
   });
@@ -215,14 +222,17 @@ export interface BackgroundServices {
    * previous one — see recovery.ts's own doc comment for what `interrupted` means going forward.
    * Also starts the S2.3 approval-expiry reaper's interval loop (`governance/approval`'s
    * `expireOverduePendingApprovals` — same "poll on an interval, never one txn per workspace"
-   * shape as the outbox dispatcher), and the outbox-prune loop (`OutboxDispatcher.pruneDispatched`,
+   * shape as the outbox dispatcher), the outbox-prune loop (`OutboxDispatcher.pruneDispatched`,
    * fix/invoke-worker-wait-and-outbox-prune — first tick shortly after this call, unlike the other
-   * reapers here; see `OUTBOX_PRUNE_INITIAL_DELAY_MS`'s own doc comment).
+   * reapers here; see `OUTBOX_PRUNE_INITIAL_DELAY_MS`'s own doc comment), and the S3.8 invariant-
+   * check loop (`substrate/audit`'s `runInvariantChecks` — also a short first-tick delay, same
+   * reasoning as outbox-prune; see `INVARIANT_CHECK_INITIAL_DELAY_MS`'s own doc comment).
    */
   start(): Promise<void>;
-  /** Stops the poll loop, the approval-expiry reaper's interval, the outbox-prune loop, and
-   *  unregisters the `TurnStarted` consumer. Does not wait for an in-flight poll/reaper/prune tick
-   *  — see OutboxDispatcher.stop()'s own doc comment for why that is safe. */
+  /** Stops the poll loop, the approval-expiry reaper's interval, the outbox-prune loop, the
+   *  invariant-check loop, and unregisters the `TurnStarted` consumer. Does not wait for an
+   *  in-flight poll/reaper/prune/check tick — see OutboxDispatcher.stop()'s own doc comment for
+   *  why that is safe. */
   stop(): void;
 }
 
@@ -335,6 +345,28 @@ export interface CreateBackgroundServicesOptions {
    *  no-op; a tick that deletes 0 rows still calls this (0 is a normal, expected outcome once the
    *  backlog is caught up, not worth suppressing). */
   readonly onOutboxPruneComplete?: (result: { deleted: number }) => void;
+  /**
+   * S3.8: how often `substrate/audit`'s `runInvariantChecks` runs. Default
+   * `DEFAULT_INVARIANT_CHECK_INTERVAL_MS` (10 minutes); `0` disables the scheduler entirely (no
+   * timer is ever started — see that constant's own doc comment). `main()` reads this from
+   * `INVARIANT_CHECK_INTERVAL_MS`.
+   */
+  readonly invariantCheckIntervalMs?: number;
+  /** Where the scheduler tick writes its snapshot for `GET /internal/metrics` to read
+   *  (`createServer`'s `deps.renderMetrics` must be built over this same instance — see
+   *  `InvariantMetricsStore`'s own doc comment). Optional so a test exercising other background
+   *  services need not construct one; the tick still runs and still logs via
+   *  `onInvariantCheckComplete` below, it just has nowhere durable to publish its snapshot. */
+  readonly invariantMetrics?: InvariantMetricsStore;
+  /** Called whenever a tick's `runInvariantChecks` call itself throws (a real connectivity/driver
+   *  error, not "found violations") — same shape as `onApprovalReaperError`. Defaults to a no-op;
+   *  `main()` passes `app.log.error`. */
+  readonly onInvariantCheckError?: (error: unknown) => void;
+  /** Called after each successful tick with the full result set (every check, violated or not) —
+   *  the hook `main()` uses to log one structured line per *violated* invariant (task brief: "logs
+   *  a structured line per violated invariant"); this file itself stays logger-agnostic, same
+   *  convention as every other `onXComplete`/`onXError` hook above. Defaults to a no-op. */
+  readonly onInvariantCheckComplete?: (results: readonly InvariantCheckResult[]) => void;
 }
 
 /**
@@ -425,6 +457,54 @@ export const DEFAULT_OUTBOX_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
  *  freshly-started kernel's outbox unpruned for up to 6 hours after every restart. */
 export const OUTBOX_PRUNE_INITIAL_DELAY_MS = 10 * 1000;
 
+/** Default S3.8 invariant-check tick interval — 10 minutes (docs/development-tasks.md S3.8
+ *  deliverable 1: "`INVARIANT_CHECK_INTERVAL_MS`, default 10 min, 0 disables"). `main()` reads
+ *  this from `INVARIANT_CHECK_INTERVAL_MS`; `0` disables the scheduler entirely (no timer is ever
+ *  started) — the same explicit-opt-out convention `outboxPruneDays === 0` already established
+ *  above, not a "check nothing but pretend to" footgun. */
+export const DEFAULT_INVARIANT_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+
+/** Delay before the *first* invariant-check tick — short, not `0`, mirroring
+ *  `OUTBOX_PRUNE_INITIAL_DELAY_MS`'s own reasoning and the task brief's own "first tick shortly
+ *  after start" (unlike the interval-only reapers above, whose first tick waits a full interval —
+ *  a freshly-started kernel would otherwise report zero `/internal/metrics` series, indistinguishable
+ *  from "checked and clean", for up to `DEFAULT_INVARIANT_CHECK_INTERVAL_MS` after every restart). */
+export const INVARIANT_CHECK_INITIAL_DELAY_MS = 10 * 1000;
+
+/**
+ * The live state `GET /internal/metrics` (interfaces/http/internal/metrics.ts) reports: the most
+ * recent `runInvariantChecks` result plus when it ran. A tiny mutable cell, not global module
+ * state — `main()` constructs exactly one per process and threads it into both `createServer()`
+ * (so the route can read it) and `createBackgroundServices()` (so the scheduler tick can write to
+ * it); see `createServer`'s own doc comment on why these two halves of the sync/async startup
+ * split cannot simply share a value some other way. A test that constructs its own `createServer`/
+ * `createBackgroundServices` pair independently gets its own independent store, never leaking
+ * counters across test cases the way a module-level singleton would.
+ */
+export interface InvariantMetricsStore {
+  /** Called by the scheduler tick after each run — replaces the stored snapshot outright (never
+   *  merged), since each run is a fresh, complete pass over every check. */
+  record(results: readonly InvariantCheckResult[]): void;
+  /** `MetricsRoutesDeps.renderMetrics`'s own shape — Prometheus text, always safe to call, even
+   *  before the first tick has completed (renders the "never run yet" `0` timestamp — see
+   *  `renderInvariantMetricsPrometheus`'s own doc comment). */
+  renderMetrics(): string;
+}
+
+export function createInvariantMetricsStore(): InvariantMetricsStore {
+  let lastResults: readonly InvariantCheckResult[] = [];
+  let lastRunAt: Date | undefined;
+  return {
+    record(results) {
+      lastResults = results;
+      lastRunAt = new Date();
+    },
+    renderMetrics() {
+      return renderInvariantMetricsPrometheus(lastResults, lastRunAt);
+    },
+  };
+}
+
 export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
 ): BackgroundServices {
@@ -503,6 +583,14 @@ export function createBackgroundServices(
   const onOutboxPruneComplete = options.onOutboxPruneComplete ?? (() => {});
   let outboxPruneInitialTimer: NodeJS.Timeout | undefined;
   let outboxPruneIntervalTimer: NodeJS.Timeout | undefined;
+
+  // S3.8: same "composition root holds the timer handle, start()/stop() paired" shape as every
+  // reaper above — see this file's own doc comment on `DEFAULT_INVARIANT_CHECK_INTERVAL_MS`/
+  // `INVARIANT_CHECK_INITIAL_DELAY_MS` for the interval/first-tick reasoning.
+  const onInvariantCheckError = options.onInvariantCheckError ?? (() => {});
+  const onInvariantCheckComplete = options.onInvariantCheckComplete ?? (() => {});
+  let invariantCheckInitialTimer: NodeJS.Timeout | undefined;
+  let invariantCheckIntervalTimer: NodeJS.Timeout | undefined;
 
   // S2.7: configure application/task's runtime deps (Handle-signing key + supervisor client) only
   // when a keypair is actually available — see this file's own doc comment above
@@ -624,6 +712,32 @@ export function createBackgroundServices(
         }, OUTBOX_PRUNE_INITIAL_DELAY_MS);
         outboxPruneInitialTimer.unref?.();
       }
+
+      // S3.8: `substrate/audit`'s periodic invariant scan (docs/development-tasks.md S3.8
+      // deliverable 1). `invariantCheckIntervalMs === 0` is a deliberate opt-out (no timer ever
+      // starts), the same convention `outboxPruneDays === 0` established above; every other value,
+      // including the compiled-in default, runs. First tick fires shortly after start
+      // (`INVARIANT_CHECK_INITIAL_DELAY_MS`), matching outbox-prune's own "do not report zero
+      // series for a whole interval after every restart" reasoning, not the wait-a-full-interval
+      // convention the other reapers in this file use.
+      const invariantCheckIntervalMs =
+        options.invariantCheckIntervalMs ?? DEFAULT_INVARIANT_CHECK_INTERVAL_MS;
+      if (invariantCheckIntervalMs > 0) {
+        const invariantCheckTick = (): void => {
+          runInvariantChecks(options.pool)
+            .then((results) => {
+              options.invariantMetrics?.record(results);
+              onInvariantCheckComplete(results);
+            })
+            .catch(onInvariantCheckError);
+        };
+        invariantCheckInitialTimer = setTimeout(() => {
+          invariantCheckTick();
+          invariantCheckIntervalTimer = setInterval(invariantCheckTick, invariantCheckIntervalMs);
+          invariantCheckIntervalTimer.unref?.();
+        }, INVARIANT_CHECK_INITIAL_DELAY_MS);
+        invariantCheckInitialTimer.unref?.();
+      }
     },
     stop() {
       dispatcher.stop();
@@ -654,6 +768,14 @@ export function createBackgroundServices(
       if (outboxPruneIntervalTimer) {
         clearInterval(outboxPruneIntervalTimer);
         outboxPruneIntervalTimer = undefined;
+      }
+      if (invariantCheckInitialTimer) {
+        clearTimeout(invariantCheckInitialTimer);
+        invariantCheckInitialTimer = undefined;
+      }
+      if (invariantCheckIntervalTimer) {
+        clearInterval(invariantCheckIntervalTimer);
+        invariantCheckIntervalTimer = undefined;
       }
     },
   };
@@ -724,8 +846,14 @@ export function main(): void {
     'REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS',
     process.env.REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS,
   );
+  // S3.8: constructed once here, before `createServer` — the same instance is threaded into
+  // `createBackgroundServices` below (async, once its own bootstrap finishes) so the scheduler
+  // tick and the `/internal/metrics` route share one live store, not two independent copies. See
+  // `InvariantMetricsStore`'s own doc comment for why this cannot simply be a module-level
+  // singleton instead.
+  const invariantMetrics = createInvariantMetricsStore();
   const app = createServer(
-    { pool },
+    { pool, renderMetrics: invariantMetrics.renderMetrics },
     {
       logger: true,
       requestActionAwaitDecisionTimeoutMs,
@@ -817,6 +945,12 @@ export function main(): void {
       'OUTBOX_PRUNE_INTERVAL_MS',
       process.env.OUTBOX_PRUNE_INTERVAL_MS,
     );
+    // `0` is a deliberate opt-out (same convention as OUTBOX_PRUNE_DAYS), not a misconfiguration —
+    // parseNonNegativeIntEnvVar, not parsePositiveIntEnvVar.
+    const invariantCheckIntervalMs = parseNonNegativeIntEnvVar(
+      'INVARIANT_CHECK_INTERVAL_MS',
+      process.env.INVARIANT_CHECK_INTERVAL_MS,
+    );
 
     background = createBackgroundServices({
       pool,
@@ -845,6 +979,23 @@ export function main(): void {
       onOutboxPruneError: (err: unknown) => app.log.error(err),
       onOutboxPruneComplete: ({ deleted }: { deleted: number }) =>
         app.log.info({ deleted }, 'outbox prune complete'),
+      invariantCheckIntervalMs,
+      invariantMetrics,
+      onInvariantCheckError: (err: unknown) => app.log.error(err),
+      // Task brief: "logs a structured line per violated invariant" — a clean tick (every check
+      // at violations: 0) logs nothing here; `invariantMetrics.record()` above (called
+      // unconditionally by createBackgroundServices's own tick) is what keeps /internal/metrics
+      // current either way.
+      onInvariantCheckComplete: (results: readonly InvariantCheckResult[]) => {
+        for (const result of results) {
+          if (result.violations > 0) {
+            app.log.warn(
+              { invariant: result.invariant, violations: result.violations, sample: result.sample },
+              'invariant check violated',
+            );
+          }
+        }
+      },
     });
 
     // A request that races the still-in-flight recovery scan is not unsafe — the partial unique
