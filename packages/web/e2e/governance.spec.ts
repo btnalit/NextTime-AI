@@ -23,7 +23,12 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   await page.goto('/');
   await page.getByPlaceholder('sk-...').fill(apiKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/#\/work\/chats$/, { timeout: 15_000 });
+  // Not a URL/hash assertion: a bare `/` load has no `location.hash` at all, and
+  // `lib/router.ts`'s `routeFromHash('')` resolves straight to the default `chats` route without
+  // ever calling `navigate()` (only a stray `#/login` hash triggers App.tsx's own redirect
+  // effect) — so the URL stays hash-less through and after login. The signed-in shell (Sidebar's
+  // connection indicator) is the reliable "we're past the login screen" signal instead.
+  await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
 }
 
 test.describe('CI smoke: governance surface', () => {

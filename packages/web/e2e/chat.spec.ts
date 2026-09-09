@@ -28,7 +28,12 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
 
     // --- chat list: new chat ---
     await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
-    await page.getByRole('button', { name: 'New chat' }).click();
+    // Scoped to the page `<header>` (components/ui/PageHeader.tsx): a fresh workspace with zero
+    // chats also renders a second, identical "New chat" button inside the `chats-empty` state
+    // (ChatListPage.tsx reuses the same button element in both places) — an unscoped
+    // `getByRole('button', { name: 'New chat' })` matches both and Playwright's strict mode
+    // rejects the ambiguity.
+    await page.locator('header').getByRole('button', { name: 'New chat' }).click();
 
     // --- chat page: send a message (the header's back control is an icon button) ---
     await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();

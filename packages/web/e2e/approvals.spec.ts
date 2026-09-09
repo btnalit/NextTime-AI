@@ -41,9 +41,14 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   await page.goto('/');
   await page.getByPlaceholder('sk-...').fill(apiKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  // Post-login redirect target (App.tsx `Routed`, `lib/router.ts` `hrefs.chats()`) moved to
-  // `#/work/chats` under S3.14's route restructure.
-  await expect(page).toHaveURL(/#\/work\/chats$/, { timeout: 15_000 });
+  // Not a URL/hash assertion: a bare `/` load has no `location.hash` at all, and
+  // `lib/router.ts`'s `routeFromHash('')` resolves straight to the default `chats` route without
+  // ever calling `navigate()` (only a stray `#/login` hash triggers App.tsx's own redirect
+  // effect) — so the URL stays hash-less through and after login (verified against a live kernel
+  // via `.github/workflows/e2e.yml`; this suite's own stale `#/chats` assertion here predated
+  // that and was never actually run). The signed-in shell (Sidebar's connection indicator) is the
+  // reliable "we're past the login screen" signal instead.
+  await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
 }
 
 /** Locates the inline chat card (or status-only line) whose scope text contains `marker` —
