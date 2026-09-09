@@ -18,6 +18,7 @@ export {
   type InvokeWorkerCallerCtx,
   type InvokeWorkerInput,
   type InvokeWorkerResult,
+  createTask,
   invokeWorker,
   invokeWorkerCreate,
   readTask,
