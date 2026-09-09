@@ -35,11 +35,12 @@
 - 1.0 之前：破坏性对齐一次到位，同一 PR 内更新全部消费者（web、platform-extension 两种模式、fake-llm 场景、`accept_s1.sh` / `accept_s2.sh`、运行手册），主机验收通过后合入。
 - 1.0 之后：线上契约改动走 `docs/` 下的变更记录 + 兼容期；S3.7 的校验脚本从 `packages/shared` 的 Zod schema 生成"契约快照"，PR 中的快照差异必须在描述里逐条说明。
 
-## 5. 校验（S3.7 落地方式）
+## 5. 校验（S3.7 落地方式）— **已实现（feat/contract-guards，2026-09-08+）**
 
-- `packages/shared`：为每个 capability 增加 `resultSchema`（现在只有 `paramsSchema`），列表结果复用 `listEnvelope(itemSchema)`。
-- 契约快照：`pnpm contract:snapshot` 把所有 params/result schema 序列化到 `docs/contracts/*.json`，CI 比对。
-- 词表守卫：`scripts/guards/vocabulary.mjs` 在 `packages/shared` 与 kernel `interfaces/` 中禁止：裸字符串字段名 `actionKind`、`idempotencyKey` 出现在 gatekeeper 协议、注册表里 `mode: 'propose'` 的能力名不以 `propose_` / `request_` 开头。
+- `packages/shared`：每个 capability 都有 `resultSchema`（`packages/shared/src/capabilities.ts`，96 个全覆盖，此前只有 `get_operation_stats`），列表结果复用 `listEnvelope(itemSchema)`；共享的资源 schema 库在 `packages/shared/src/wire/*.ts`（一处定义，`resultSchema` 与 `events.ts` 的 WS 推送事件共用）。`dispatchCapability`（`packages/kernel/src/application/gateway/dispatch.ts`）在 `KERNEL_VALIDATE_RESULTS=1` 时用它校验每次调用的真实返回值，生产环境不设（零成本、零行为变化）；kernel 测试（`vitest.config.ts`）与 CI `test` job 都设了这个变量。
+- 契约快照：`pnpm contract:snapshot`（`scripts/contract-snapshot.mjs`）把所有 params/result schema 与 `PlatformEventSchema` 序列化到 `docs/contracts/{capabilities,events}.json`（确定性，key 排序）；`pnpm contract:check` 生成到临时目录 diff，CI `quality` job 跑这个，漂移时报错并提示重新生成。
+- 词表守卫：`scripts/guards/vocabulary.mjs`（`pnpm ci:guards` 本地路径 + CI `quality` job 独立步骤）五项检查：裸字符串字段名 `actionKind`（仅限 action-description.ts 外）、`idempotencyKey` 出现在 gatekeeper 协议、注册表里 `mode: 'propose'` 与 `propose_`/`request_` 名字前缀双向对应（例外：`request_action`）、`paramsSchema`/`resultSchema` 键不准 snake_case（例外：内嵌的 Operation 清单字段）、`list_*`/`find_*`/`query_*`/`get_chat_history` 的结果必须是 `listEnvelope`。`scripts/guards/vocabulary.test.mjs` 单测每个探测器。
+- 详细实施记录、推导 `resultSchema` 时顺带修的线上契约违规清单、"已注册未实现" capability 名单：`docs/development-tasks.md` S3.7 自己的"已完成"条目。
 
 ## 6. 实施顺序
 
