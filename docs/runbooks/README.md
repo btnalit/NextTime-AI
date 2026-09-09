@@ -38,6 +38,8 @@
 | [`backup-restore.md`](./backup-restore.md) | 每日备份内容、`backup` 容器的 root+单一 capability 权限模型、`scripts/restore.sh` 恢复演练 |
 | [`pi-upgrade.md`](./pi-upgrade.md) | pi 版本升级契约：耦合面清单、单一版本源、升级步骤、漂移检测（`pi-drift.yml`）、回滚 |
 | [`web-console.md`](./web-console.md) | web 控制台每个页面依赖哪些 capability、角色可见性、排障表 |
+| [`release.md`](./release.md) | release-please 发布契约：单一根版本、release PR 合并前手动踢一次 CI、主机怎么跟随 tag、hotfix 流程 |
+| [`automation.md`](./automation.md) | GitHub 自动化一览：每个 bot/workflow 的用途、触发时机、开出东西之后该做什么 |
 
 ## ③ 扩展平台
 
