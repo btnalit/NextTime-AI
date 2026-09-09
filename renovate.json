@@ -1,0 +1,73 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "schedule:nonOfficeHours"],
+  "timezone": "Asia/Shanghai",
+  "rangeStrategy": "bump",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 5am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "Group every non-major npm update by the workspace directory it lives in (root, packages/*, gatekeepers/*, collectors/*) into one PR, refreshed weekly instead of one PR per bump.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{packageFileDir}}",
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Flag every major bump (any manager) for human review — never auto-merged.",
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["major"]
+    },
+    {
+      "description": "zod 3 -> 4 is a monorepo-wide migration (deferred) — keep taking zod 3.x minor/patch, never propose a major bump.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["zod"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "node:24-bookworm-slim (LTS) stays the pinned major across every Dockerfile — patch/digest updates only.",
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "matchPackageNames": ["node"],
+      "allowedVersions": "<25"
+    },
+    {
+      "description": "Digest-pin every Docker image referenced from a Dockerfile or docker-compose.yml.",
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "pinDigests": true
+    },
+    {
+      "description": "Digest-pin GitHub Actions, keeping this repo's existing `uses: owner/action@<sha> # vX.Y.Z` convention (ci.yml).",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Patch bumps to npm devDependencies auto-merge once required checks (guards/quality/test) pass, via GitHub's native auto-merge.",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Patch bumps to pinned GitHub Actions auto-merge once required checks pass.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "pi (@earendil-works/*) is a separate, never-auto-merged group — it must go through pi.version + the pi-drift contract (docs/runbooks/pi-upgrade.md), not a routine dependency bump. Placed last so it wins over the automerge/grouping rules above for any @earendil-works/* match.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["@earendil-works/*"],
+      "groupName": "pi",
+      "automerge": false,
+      "platformAutomerge": false,
+      "addLabels": ["pi-upgrade"]
+    }
+  ]
+}

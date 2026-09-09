@@ -1,0 +1,28 @@
+name: pr-title
+
+# Lints the PR title against conventional commits (feat/fix/docs/chore/...(scope)!: subject) —
+# this repo already writes its commits that way (see `git log`). This repo merges with regular
+# merge commits, not squash (Settings → General → "Allow squash merging" is off) — GitHub's
+# default merge commit puts the PR title on the merge commit's second line, so an inconsistent
+# title still shows up in `main`'s history even though no tool derives the commit message *from*
+# the title the way squash-merge does. Documentation/hygiene, not required — see
+# docs/runbooks/automation.md.
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-pr-title:
+    name: lint-pr-title
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Validate PR title
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

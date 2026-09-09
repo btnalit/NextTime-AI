@@ -1,0 +1,62 @@
+name: CodeQL
+
+# GitHub code scanning (CodeQL) for the TypeScript/JavaScript sources under packages/*,
+# gatekeepers/*, collectors/*. Runs default queries + the security-and-quality suite (which is
+# cumulative with the default suite, not a replacement for it — see CodeQL's own docs). A
+# separate workflow from ci.yml on purpose: this is a security-scanning concern, not a
+# correctness gate, and it is not (and should not become) one of ci.yml's required checks.
+#
+# `pnpm install` before analysis (not strictly required for interpreted languages, but it lets
+# the JS/TypeScript extractor resolve workspace-internal imports and type information instead of
+# guessing from source alone — same Setup pnpm and Node 22 step as ci.yml's own quality job).
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: '38 4 * * 1' # weekly, Monday, off the hour to avoid GitHub's documented cron pile-up
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same pin as ci.yml's own "Setup pnpm and Node 22" step — pnpm/action-setup does not
+      # support pnpm v11+ (root package.json pins packageManager: pnpm@11.25.0).
+      - name: Setup pnpm and Node 22
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: /language:javascript-typescript
