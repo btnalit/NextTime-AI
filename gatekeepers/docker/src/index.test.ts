@@ -6,8 +6,9 @@ import { buildDockerGate } from './index.js';
 
 /**
  * Smoke test for `buildDockerGate`'s wiring — never listens on a real port or touches
- * `/var/run/docker.sock` (`dockerode`'s `new Docker({socketPath})` does not connect eagerly;
- * nothing here calls a docker-client method).
+ * `/var/run/docker.sock` or a real `docker-socket-proxy-gate` (`dockerode`'s `new
+ * Docker({socketPath})` / `new Docker({host,port})` do not connect eagerly; nothing here calls a
+ * docker-client method).
  */
 
 const dir = mkdtempSync(join(tmpdir(), 'gatekeeper-docker-'));
@@ -43,5 +44,20 @@ describe('buildDockerGate', () => {
     await expect(
       buildDockerGate({ GATE_KERNEL_TOKEN_FILE: join(dir, 'missing.token') } as NodeJS.ProcessEnv),
     ).rejects.toThrow(/gate auth token file/);
+  });
+
+  // fix/gate-docker-socket-proxy: DOCKER_HOST=tcp://docker-socket-proxy-gate:2375 (docker-
+  // compose.yml) must resolve to the `tcp` DockerConnection branch, not silently fall back to the
+  // (now-unmounted) plain socket path. Still no eager connection — `new Docker({host,port})`
+  // doesn't dial anything at construction time either, same as the `socketPath` variant.
+  it('wires DOCKER_HOST into a tcp connection instead of the plain socket fallback', async () => {
+    const { gate, app } = await buildDockerGate(
+      envWithToken({ DOCKER_HOST: 'tcp://docker-socket-proxy-gate:2375' }),
+    );
+    try {
+      expect(gate.describeOperations().length).toBe(7);
+    } finally {
+      await app.close();
+    }
   });
 });

@@ -77,13 +77,15 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
-  # docker-socket-proxy (fix/socket-proxy-and-backup-user): the ONLY container docker.sock itself
-  # is bind-mounted into now — agent-host and worker-supervisor below reach the Engine API through
-  # this HTTP allowlist proxy instead (DOCKER_HOST=tcp://docker-socket-proxy:2375 on the new
-  # `dockerapi` internal network). Previous state (superseded): both consumers bind-mounted
-  # docker.sock directly, and the comment on agent-host's own mount already flagged this ("`:ro`
-  # 不是、也从未是这条边界的权限收窄...真正的调用面收窄需要 docker-socket-proxy 之类的 allowlist
-  # 代理...尚未实现") — this service is that.
+  # docker-socket-proxy (fix/socket-proxy-and-backup-user): docker.sock itself is bind-mounted
+  # only into this service and (fix/gate-docker-socket-proxy, below) `docker-socket-proxy-gate` —
+  # agent-host and worker-supervisor reach the Engine API through this HTTP allowlist proxy
+  # instead (DOCKER_HOST=tcp://docker-socket-proxy:2375 on the new `dockerapi` internal network).
+  # Previous state (superseded): both consumers bind-mounted docker.sock directly, and the comment
+  # on agent-host's own mount already flagged this ("`:ro` 不是、也从未是这条边界的权限收窄...真正
+  # 的调用面收窄需要 docker-socket-proxy 之类的 allowlist 代理...尚未实现") — this service is that.
+  # `gatekeeper-docker` (a third former direct consumer) got its own dedicated second instance
+  # instead of a widened grant here — see `docker-socket-proxy-gate`'s own comment below for why.
   #
   # Image: tecnativa/docker-socket-proxy (haproxy.cfg allowlists the Engine API by URL-path
   # prefix + HTTP method — verified by reading the image's actual haproxy.cfg/Dockerfile at the
@@ -279,9 +281,11 @@ services:
     # group_add/DOCKER_GID removed (fix/socket-proxy-and-backup-user): this service no longer
     # touches docker.sock's file permissions at all — the EACCES crash-loop `group_add` used to
     # guard against (docs/runbooks/host-worker-runtime.md "已知偏离") cannot recur, since the
-    # bind mount is gone. DOCKER_GID itself is NOT removed from .env.example/compose as a whole —
-    # `gatekeeper-docker` (untouched by this task; still bind-mounts docker.sock directly, see
-    # that service's own block below) still needs it.
+    # bind mount is gone. Historical note: at the time this paragraph was written, `DOCKER_GID`
+    # itself was deliberately kept in .env.example/compose because `gatekeeper-docker` (below)
+    # still bind-mounted docker.sock directly and needed it — fix/gate-docker-socket-proxy has
+    # since closed that too (see `gatekeeper-docker`'s own block below), so no compose service
+    # reads `DOCKER_GID` any more; `.env.example`'s own placeholder documents this.
     volumes:
       [
         "${NEXTTIME_DATA:?}/workspaces:/data/workspaces",
@@ -342,25 +346,139 @@ services:
     image: nexttime-ai-worker-runtime
     profiles: ["build-only"]
 
-  # gatekeeper-docker: talks to the host's own Docker Engine API via dockerode (gatekeepers/docker
-  # — no docker CLI in the image). Runs as non-root uid 10001 (gatekeepers/docker/Dockerfile,
-  # same pattern as worker-supervisor/agent-host); group_add gives it the host's docker group gid
-  # as a supplementary group so it can reach /var/run/docker.sock (root:docker, mode 660).
-  # GATE_DATA_DIR only holds the idempotency store (no ConnectedAccount store — this gate uses no
-  # per-user credential, see gatekeepers/docker/README.md). gate_token（fix/gate-protocol-
-  # hardening）：every /gate/* route now requires it (Authorization: Bearer <token>) — default
-  # mount path /run/secrets/gate_token matches GATE_KERNEL_TOKEN_FILE's own default; this gate
-  # refuses to start without it (gate-auth.ts).
+  # docker-socket-proxy-gate (fix/gate-docker-socket-proxy): a SECOND tecnativa/docker-socket-proxy
+  # instance, dedicated to `gatekeeper-docker` alone — closes the last direct docker.sock bind
+  # mount in this file (agent-host/worker-supervisor already went through `docker-socket-proxy`
+  # above). Why a second instance rather than widening the first one's allowlist: the first
+  # proxy's allowlist is the union of what agent-host + worker-supervisor need (create/start/stop/
+  # remove/attach); granting `ALLOW_RESTARTS` there would widen access for those two unrelated
+  # consumers, and granting create/remove to this gate would widen the first proxy the other way —
+  # one instance per trust boundary. `dockerapi-gate` (networks: block below) is a disjoint
+  # `internal: true` network from `dockerapi` — nothing on one can reach the proxy on the other.
+  #
+  # Endpoint inventory (read gatekeepers/docker/src/docker-client.ts + transport.ts — every
+  # Docker API path+method the gate's own dockerode client actually calls, driven by every
+  # Operation manifest.json publishes, not "typical" gate defaults):
+  #   containers.list / compose.ls / compose.up's and compose.down's own pre-listing: GET
+  #     /containers/json (`listContainers`, optionally `?filters=...` for the compose-project
+  #     label).
+  #   container.inspect / container.restart's post-restart re-inspect / its own `simulate`: GET
+  #     /containers/{id}/json (`inspectContainer`).
+  #   container.logs_tail: GET /containers/{id}/logs (`logsTail`).
+  #   container.restart: POST /containers/{id}/restart (`restart`).
+  #   compose.up: POST /containers/{id}/start for each already-stopped container in the named
+  #     project (`start`).
+  #   compose.down: POST /containers/{id}/stop for each running container in the named project
+  #     (`stop`).
+  #   health() (this service's own healthcheck target below, and the gate's own `/gate/health`):
+  #     GET /_ping (`ping`).
+  #   No /images, /networks, /info, /version, /events, or /exec call anywhere in
+  #   gatekeepers/docker/src (grepped for docker.getImage/listImages/pull/getEvents/getNetwork/
+  #   exec — none found; unlike worker-supervisor, this gate never resolves a network).
+  #
+  # Flags (haproxy.cfg semantics as verified on the `docker-socket-proxy` service above — same
+  # v0.5.0 tag/image, same "CONTAINERS's own regex has no suffix exclusion" behavior):
+  #   CONTAINERS=1, POST=1: covers list/inspect/logs/restart/start/stop — every /containers/* path
+  #     this gate calls.
+  #   ALLOW_RESTARTS=1: `container.restart` (POST /containers/{id}/restart) — the one verb the
+  #     other proxy instance above deliberately does NOT grant.
+  #   ALLOW_START=1 / ALLOW_STOP=1: `compose.up`/`compose.down` call dockerode's `start()`/`stop()`
+  #     on already-existing containers (gatekeepers/docker/README.md "compose.up/compose.down —
+  #     reduced semantics") — this gate's own operations do include them, so both are granted
+  #     here (not left at 0).
+  #   ALLOW_PAUSE=0 / ALLOW_UNPAUSE=0: never called.
+  #   NETWORKS=0: never called (unlike worker-supervisor, this gate never resolves a network by
+  #     Compose label).
+  #   IMAGES=0: never called (no image list/pull/inspect anywhere in this gate).
+  #   EVENTS=0: explicit override — same reasoning as the other proxy instance (image default is
+  #     1; nothing here subscribes to the event stream).
+  #   PING=1 / VERSION=1: image defaults, left as-is (harmless) — this service's own healthcheck
+  #     below uses PING.
+  #   Everything else (AUTH, BUILD, COMMIT, CONFIGS, DISTRIBUTION, EXEC, GRPC, INFO, NODES,
+  #   PLUGINS, SECRETS, SERVICES, SESSION, SWARM, SYSTEM, TASKS, VOLUMES): 0, unused.
+  docker-socket-proxy-gate:
+    # Same tag/digest as `docker-socket-proxy` above — see that service's own comment for how it
+    # was verified (`gh api repos/Tecnativa/docker-socket-proxy/releases`; digest pinned from a
+    # `docker pull` on the target host). Re-pin the same way when bumping the tag.
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    environment:
+      {
+        CONTAINERS: "1",
+        POST: "1",
+        ALLOW_RESTARTS: "1",
+        ALLOW_START: "1",
+        ALLOW_STOP: "1",
+        ALLOW_PAUSE: "0",
+        ALLOW_UNPAUSE: "0",
+        NETWORKS: "0",
+        IMAGES: "0",
+        EVENTS: "0",
+        PING: "1",
+        VERSION: "1",
+        EXEC: "0",
+        VOLUMES: "0",
+        BUILD: "0",
+        COMMIT: "0",
+        SWARM: "0",
+        SYSTEM: "0",
+        SECRETS: "0",
+        CONFIGS: "0",
+        PLUGINS: "0",
+        TASKS: "0",
+        SERVICES: "0",
+        NODES: "0",
+        AUTH: "0",
+        DISTRIBUTION: "0",
+        GRPC: "0",
+        INFO: "0",
+        SESSION: "0",
+      }
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    # No group_add/DOCKER_GID: same reasoning as `docker-socket-proxy` above — this image's own
+    # Dockerfile runs the proxy as root, which already owns docker.sock's OWNER permission bits.
+    networks: [dockerapi-gate]
+    healthcheck:
+      # Same UNVERIFIED-on-a-real-host caveat as `docker-socket-proxy` above (no Docker locally to
+      # confirm `wget` exists in this image's userland) — see this PR's own host verification
+      # steps; swap for `nc -z localhost 2375` if this shows `unhealthy` on the target host.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:2375/_ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    # read_only/tmpfs/cap_drop/security_opt: same reasoning as `docker-socket-proxy` above (same
+    # image, same entrypoint/haproxy startup path — UNVERIFIED ON A REAL HOST, same caveat).
+    read_only: true
+    tmpfs: ["/tmp", "/run"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # gatekeeper-docker (fix/gate-docker-socket-proxy): talks to the host's own Docker Engine API via
+  # dockerode (gatekeepers/docker — no docker CLI in the image), now over `docker-socket-proxy-
+  # gate` on the `dockerapi-gate` network instead of a direct `/var/run/docker.sock` bind mount —
+  # this was the last direct docker.sock consumer in this file (agent-host/worker-supervisor
+  # already went through their own `docker-socket-proxy` instance above). No `volumes:`/
+  # `group_add`/`DOCKER_GID` left on this service at all now (docker.sock was its only mount, same
+  # cutover shape as agent-host/worker-supervisor's own fix/socket-proxy-and-backup-user). Runs as
+  # non-root uid 10001 (gatekeepers/docker/Dockerfile, same pattern as worker-supervisor/
+  # agent-host) — no longer needs the host's docker group gid as a supplementary group, since it
+  # never touches the socket's file permissions at all. GATE_DATA_DIR only holds the idempotency
+  # store (no ConnectedAccount store — this gate uses no per-user credential, see
+  # gatekeepers/docker/README.md). gate_token（fix/gate-protocol-hardening）：every /gate/* route
+  # now requires it (Authorization: Bearer <token>) — default mount path /run/secrets/gate_token
+  # matches GATE_KERNEL_TOKEN_FILE's own default; this gate refuses to start without it
+  # (gate-auth.ts).
   gatekeeper-docker:
     build: { context: ., dockerfile: gatekeepers/docker/Dockerfile }
     secrets: [gate_token]
-    volumes:
-      [
-        "/var/run/docker.sock:/var/run/docker.sock",
-        "${NEXTTIME_DATA}/gatekeepers/docker:/data/gate",
-      ]
-    group_add: ["${DOCKER_GID:-999}"]
-    networks: [control]
+    environment: { DOCKER_HOST: tcp://docker-socket-proxy-gate:2375 }
+    volumes: ["${NEXTTIME_DATA}/gatekeepers/docker:/data/gate"]
+    networks: [control, dockerapi-gate]
+    # docker-socket-proxy-gate (fix/gate-docker-socket-proxy): wait for the proxy to actually be
+    # answering before this gate's first Engine API call (same ordering `agent-host`/
+    # `worker-supervisor` already apply against `docker-socket-proxy` above).
+    depends_on: { docker-socket-proxy-gate: { condition: service_healthy } }
     restart: unless-stopped
 
   # gatekeeper-ragflow: http-kind gate for a RAGFlow instance's REST API (gatekeepers/ragflow).
@@ -665,6 +783,12 @@ networks:
   # NEXTTIME_SUBNET_WORKERS is read by kernel/egress-proxy's own trust-boundary logic, so letting
   # Docker auto-assign one is fine and avoids adding another required `.env` placeholder.
   dockerapi: { internal: true }
+  # dockerapi-gate (fix/gate-docker-socket-proxy): docker-socket-proxy-gate + gatekeeper-docker
+  # only — deliberately disjoint from `dockerapi` above (one instance/network per trust boundary,
+  # see `docker-socket-proxy-gate`'s own comment for why gatekeeper-docker doesn't just join
+  # `dockerapi` and share the first proxy). Same `internal: true` / no explicit subnet reasoning
+  # as `dockerapi` above.
+  dockerapi-gate: { internal: true }
 secrets:
   pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
   handle_key: { file: "${NEXTTIME_DATA}/secrets/handle.key" } # scripts/gen-handle-keys.sh；0640 组 10001

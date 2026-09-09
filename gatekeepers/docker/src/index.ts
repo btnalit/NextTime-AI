@@ -11,7 +11,7 @@ import {
   resolveGateDataDir,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
-import { createDockerClient } from './docker-client.js';
+import { createDockerClient, parseDockerConnection } from './docker-client.js';
 import { createDockerTransport } from './transport.js';
 
 /**
@@ -27,9 +27,12 @@ import { createDockerTransport } from './transport.js';
  * is the 接入包 content; `GATE_MANIFEST_FILE` can still override it (e.g. for a host-side manifest
  * edit without rebuilding the image), matching the base package's own env-var name.
  *
- * This gate needs no external credential — the trust boundary is the `/var/run/docker.sock`
- * mount itself (`docker-compose.yml`'s `gatekeeper-docker` service), not a bearer token —
- * `NoCredentialResolver` below always resolves to `{}`.
+ * This gate needs no external credential — the trust boundary is network reachability to the
+ * Docker Engine API itself, not a bearer token: as of fix/gate-docker-socket-proxy that's the
+ * `dockerapi-gate`-network-only, allowlisted `docker-socket-proxy-gate` service (`docker-
+ * compose.yml`'s `gatekeeper-docker` service no longer bind-mounts `/var/run/docker.sock`
+ * directly — see `docker-client.ts`'s own module doc comment) — `NoCredentialResolver` below
+ * always resolves to `{}`.
  */
 
 class NoCredentialResolver implements CredentialResolver {
@@ -62,8 +65,12 @@ export async function buildDockerGate(
   const manifest = await loadManifest(env.GATE_MANIFEST_FILE);
   const dataDir = resolveGateDataDir(env);
   const socketPath = env.DOCKER_SOCKET_PATH ?? DEFAULT_DOCKER_SOCKET_PATH;
+  // fix/gate-docker-socket-proxy: DOCKER_HOST (docker-compose.yml: tcp://docker-socket-proxy-
+  // gate:2375 on the `dockerapi-gate` network) takes priority over the plain socket path — see
+  // docker-client.ts's own module doc comment for the cutover this replaces.
+  const connection = parseDockerConnection(env.DOCKER_HOST, socketPath);
 
-  const transport = createDockerTransport(createDockerClient({ socketPath }));
+  const transport = createDockerTransport(createDockerClient({ connection }));
   const idempotencyStore = new JsonFileIdempotencyStore(dataDir);
   const credentialResolver = new NoCredentialResolver();
 
