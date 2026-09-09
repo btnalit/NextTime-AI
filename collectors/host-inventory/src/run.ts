@@ -13,6 +13,7 @@ import {
 } from './observation-builder.js';
 import { collectProcessTree } from './process-tree.js';
 import type { ProcessTreeResult } from './process-tree.js';
+import { collectRagflowObservations } from './ragflow.js';
 import { SecretRedactionError, sanitizeCommandLines } from './redact.js';
 import { collectRepositories } from './repository.js';
 import { collectSystemdServices } from './systemd.js';
@@ -41,6 +42,14 @@ import { collectSystemdServices } from './systemd.js';
  *      (`observation-builder.ts`'s own module doc comment has the full phase rationale) — Host/
  *      Repository/Image/Process; then ComposeProject/Volume/Network/SystemdService (needs Host's
  *      resolved id); then Container (needs each ComposeProject's resolved id).
+ *   5. S3.4, optional: when `config.ragflowGatekeeperId` is set, a fourth phase —
+ *      `ragflow.ts`'s `collectRagflowObservations` (independent of Host/Container, so it needs no
+ *      previously-resolved id and does not block phases 1-3) — submitted under the same
+ *      `activityId` as every other phase. **Not** subject to this run's own hard-failure contract:
+ *      Docker is this collector's one required source (step 1's own `catch` throws
+ *      `RunFailedError`); RAGFlow is optional infrastructure this collector merely *also* observes
+ *      when configured, so an unreachable/erroring RAGFlow Gatekeeper only logs a warning and skips
+ *      phase 4 for this run — it never fails the run steps 1-4 already completed.
  */
 
 export class RunFailedError extends Error {
@@ -249,14 +258,51 @@ export async function runOnce(options: RunOptions): Promise<RunSummary> {
       ? await kernelClient.submitObservations({ sourceId, activityId, observations: phase3 })
       : { objectsUpserted: 0, factsAsserted: 0, factsSuperseded: 0 };
 
+  // Phase 4 (S3.4, optional, non-fatal): KnowledgeBase/Document, only when a RAGFlow Gatekeeper is
+  // configured — independent of Host/Container, needs no previously-resolved id. Any failure here
+  // (gate unreachable, kb.list erroring, a kernel/network error) is logged and skipped, never
+  // thrown — see this module's own doc comment for why RAGFlow's own optionality does not follow
+  // Docker's hard-required contract.
+  let phase4Result = { objectsUpserted: 0, factsAsserted: 0, factsSuperseded: 0 };
+  if (config.ragflowGatekeeperId) {
+    try {
+      const phase4 = await collectRagflowObservations({
+        kernelClient,
+        gatekeeperId: config.ragflowGatekeeperId,
+        logger,
+      });
+      if (phase4.length > 0) {
+        phase4Result = await kernelClient.submitObservations({
+          sourceId,
+          activityId,
+          observations: phase4,
+        });
+      }
+    } catch (err) {
+      logger.warn('ragflow observation phase failed — skipped, rest of this run still succeeds', {
+        gatekeeperId: config.ragflowGatekeeperId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   const summary: RunSummary = {
     activityId,
     objectsUpserted:
-      phase1Result.objectsUpserted + phase2Result.objectsUpserted + phase3Result.objectsUpserted,
+      phase1Result.objectsUpserted +
+      phase2Result.objectsUpserted +
+      phase3Result.objectsUpserted +
+      phase4Result.objectsUpserted,
     factsAsserted:
-      phase1Result.factsAsserted + phase2Result.factsAsserted + phase3Result.factsAsserted,
+      phase1Result.factsAsserted +
+      phase2Result.factsAsserted +
+      phase3Result.factsAsserted +
+      phase4Result.factsAsserted,
     factsSuperseded:
-      phase1Result.factsSuperseded + phase2Result.factsSuperseded + phase3Result.factsSuperseded,
+      phase1Result.factsSuperseded +
+      phase2Result.factsSuperseded +
+      phase3Result.factsSuperseded +
+      phase4Result.factsSuperseded,
   };
   logger.info('run complete', { ...summary });
   return summary;

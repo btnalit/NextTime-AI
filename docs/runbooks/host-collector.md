@@ -17,7 +17,7 @@ ActionRequest，不经审批）；`docs/runbooks/add-domain-pack.md`（领域包
 - `docker-compose.yml` 已包含本任务新增的 `docker-socket-proxy-collector`/
   `collector-host-inventory` 两个服务块（见该文件自己的注释）。
 
-## 1. 步骤 A：发布 `ops-assets-v1` 领域包（若尚未发布过）
+## 1. 步骤 A：发布 `ops-assets` 领域包（若尚未发布过）
 
 `submit_observations` 的身份键校验（`application/gateway/ingest-handlers.ts`）要求每个
 ObjectType 在这个 workspace 当前可见的本体命名空间里存在——没有发布过 `ops-assets` 域包的
@@ -33,15 +33,37 @@ docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js seed-doma
 幂等：对同一个 `--pack-name` 再跑一次会发布下一个版本（`version=2`），不会报错，也不会影响已发布
 的 Object/LinkType（S3.1 自己的验收："同内容再发布得 v2"）。
 
+**S3.4（RAGFlow KnowledgeBase/Document 观察，可选）**：需要本采集器的 phase 4
+（`collectors/host-inventory/src/ragflow.ts`）时，接着发布 `ontology/ops-assets-v2.yaml`——同一个
+`--pack-name ops-assets`，只换 `--file-name`：
+
+```bash
+docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js seed-domain-pack \
+  --workspace <WORKSPACE_ID> --principal <OWNER_ID> --pack-name ops-assets --file-name ops-assets-v2.yaml
+# domain pack published: ops-assets (id=<uuid>, version=2)
+```
+
+v2 完整携带 v1 的每一个 ObjectType/LinkType（同 identityKey，未改动），只新增 `KnowledgeBase`/
+`Document`/`Dataset` 与 `part_of (Document -> KnowledgeBase)`/`served_by (KnowledgeBase ->
+Gatekeeper)`——见该 YAML 文件自己的头注释。不需要 phase 4 的 workspace 可以只发布到 v1，跳过这一
+步；`RAGFLOW_GATEKEEPER_ID`（§3 下方）留空即可。
+
 ## 2. 步骤 B：铸造采集器自己的 service Handle
 
 ```bash
 docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js issue-service-handle \
   --workspace <WORKSPACE_ID> --name host-inventory \
-  --scope register_source,submit_observations \
+  --scope register_source,submit_observations,observe_operation \
   > /tmp/issue-service-handle.out
 cat /tmp/issue-service-handle.out
 ```
+
+`observe_operation`（S3.4）：本采集器 phase 4 调用 RAGFlow 门的 `kb.list`/`kb.documents` 走这个
+capability，不走 `request_action`——两个 Operation 都是 `mode: observe`，没有 ActionRequest/审批
+流程（`request-action-handler.ts` 的 `observeOperationHandler` 自己的注释）。不需要 phase 4 的
+workspace 也可以把这个 scope 一起铸进去——`observe_operation` 在 handle 通道不按
+`resources.gatekeeper` 收窄（S2.4 已知缺口，见该 handler 自己的注释），持有它但从不调用没有额外
+风险。
 
 输出的最后一行是 Handle token（**只显示这一次**——`cli/bootstrap.ts`'s own doc comment）。取出这
 一行写进采集器的密钥文件：
@@ -57,6 +79,17 @@ rm -f /tmp/issue-service-handle.out
 新的 Session/Handle），旧 Handle 在其 `exp` 之前仍然有效，不会因为铸造新的而失效。
 
 ## 3. 步骤 C：起服务
+
+**S3.4（可选）**：需要 phase 4 时，在起服务之前把 RAGFlow 门自己的 Gatekeeper Object id 写进
+`.env`（`docs/runbooks/host-gatekeepers.md` 有取得这个 id 的步骤——`create_connection`/
+`request_connection` 的返回值，或 `find_operations`/`search` 按 `objectType: "Gatekeeper"` 查）：
+
+```bash
+echo 'RAGFLOW_GATEKEEPER_ID=<ragflow-gatekeeper-object-id>' >> .env
+```
+
+留空（默认）就是不起 phase 4——`docker-compose.yml` 里 `RAGFLOW_GATEKEEPER_ID: "${RAGFLOW_GATEKEEPER_ID:-}"`
+留空会被 `config.ts` 当作未设置。
 
 ```bash
 docker compose up -d docker-socket-proxy-collector collector-host-inventory
@@ -121,6 +154,45 @@ curl -s https://<host>:8443/api/cap/explain \
 `factsAsserted` 应为 0（`SqlGraphStore.assertFact` 对同源边总是走 supersede，不会有 `factsAsserted`
 重新计数第一次已经断言过的边）。
 
+### 4.5（S3.4，仅当配置了 `RAGFLOW_GATEKEEPER_ID`）图里能看到 `Document part_of KnowledgeBase`，`explain` 溯源到 ragflow 门
+
+前提：RAGFlow 门本身已按 `docs/runbooks/host-gatekeepers.md` 接入并至少有一个 KnowledgeBase（否则
+`kb.list` 返回空列表，phase 4 不产生任何 Observation——这不是错误，见 §5 已知限制）。
+
+```bash
+# 1. 找到某个 Document Object 的 id
+curl -s https://<host>:8443/api/cap/search \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"objectType":"Document"}'
+# {"ok":true,"result":{"items":[{"id":"<document-object-id>","objectType":"Document",...}]}}
+
+# 2. traverse 一跳，确认 part_of 边指向一个 KnowledgeBase
+curl -s https://<host>:8443/api/cap/traverse \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"fromId":"<document-object-id>","direction":"out","linkType":"part_of","depth":1}'
+# {"ok":true,"result":{"nodes":["<knowledgebase-object-id>"],"edges":[{"linkType":"part_of",...}]}}
+
+# 3. 再从这个 KnowledgeBase traverse 一跳，确认 served_by 边指向 ragflow 门自己的 Gatekeeper Object
+curl -s https://<host>:8443/api/cap/traverse \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"fromId":"<knowledgebase-object-id>","direction":"out","linkType":"served_by","depth":1}'
+# {"ok":true,"result":{"nodes":["<ragflow-gatekeeper-object-id>"],"edges":[{"linkType":"served_by",...}]}}
+# <ragflow-gatekeeper-object-id> 应等于 RAGFLOW_GATEKEEPER_ID 本身。
+
+# 4. explain 溯源到本采集器的 Source（同 4.3，走 part_of 边而非 runs_on）
+curl -s https://<host>:8443/api/cap/explain \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"nodeId":"<fact-id-from-the-part_of-edge-above>"}'
+# 期望 result.activity.observations[] 里 source.kind 为 host-inventory-collector，
+# 与 4.3 是同一个 Source——phase 4 与 phase 1-3 共用同一个 sourceId/activityId。
+```
+
+**这不是 `kb.list`/`kb.documents` 唯一产生的 KnowledgeBase/Document 写入**——门自己每次
+`observe_operation` 调用也会各自独立写一份低保真的 `{id}`-only KnowledgeBase/Document（经
+`Gatekeeper` service Principal，见 `ontology/ops-assets-v2.yaml` 自己的头注释与
+`gatekeepers/ragflow/README.md`）；上面 §4.5 验证的是本采集器自己那份带 `part_of`/`served_by` 边
+的、身份更完整的一份，两者是预期共存的两个不同 Object，不会互相覆盖或去重。
+
 ## 5. 已知限制 / 已知偏离
 
 - **进程树采集默认返回 `skipped: true`**：`collectors/host-inventory/src/process-tree.ts`'s own
@@ -136,6 +208,14 @@ curl -s https://<host>:8443/api/cap/explain \
   已经写明——`Owner` 身份解析不在本采集器范围内，留给未来任务或人工/CLI 直接断言。
 - **`repository.ts` 只观察 `HOST_INVENTORY_REPOSITORY_PATHS` 里配置的路径**：不会自动发现主机上的
   git 仓库，默认这个环境变量为空（无 Repository 观察）。
+- **S3.4 phase 4 无分页循环**：`ragflow.ts` 对 `kb.list`/`kb.documents` 各只调用一次（一个较大的
+  `page_size`），不会翻页——一个 workspace 的 KnowledgeBase 或某个 KnowledgeBase 的 Document 数量
+  超过一页时，这次运行只观察到部分，不是崩溃。
+- **S3.4 phase 4 非致命**：RAGFlow 门不可达/未接入/`kb.list` 报错只记一条 warning 并跳过这一 phase，
+  不会让整次采集运行失败（Docker 才是本采集器唯一的硬性数据源）；单个 KnowledgeBase 的
+  `kb.documents` 调用失败也只让那一个 KnowledgeBase 的 Document 数为零，不影响其它 KnowledgeBase。
+- **S3.4 phase 4 与门自己的 observe 写入是两条独立路径**：见 §4.5 末尾——本采集器不会、也不需要去
+  重这两份 Object。
 
 ## 6. 回滚 / 停用
 

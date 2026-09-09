@@ -38,7 +38,7 @@ describe('gatekeepers/ragflow manifest.json', () => {
     }
   });
 
-  it('classifies document.upload as medium and document.parse as low, both execute', () => {
+  it('classifies document.upload as medium (not auto-approvable) and document.parse as low, auto-approvable (S3.4)', () => {
     const manifest = loadManifest();
     const upload = manifest.find((op) => op.name === 'document.upload');
     const parse = manifest.find((op) => op.name === 'document.parse');
@@ -47,7 +47,26 @@ describe('gatekeepers/ragflow manifest.json', () => {
       blast_radius: 'medium',
       auto_approvable: false,
     });
-    expect(parse).toMatchObject({ mode: 'execute', blast_radius: 'low', auto_approvable: false });
+    // S3.4: document.parse is a hand-authored, reviewed classification (not an importOpenApi
+    // draft) — auto_approvable:true + blast_radius:'low' resolves to `allow` under the workspace's
+    // compiled-in low-blast-radius default (governance/policy/engine.ts's
+    // `effectiveWorkspaceAutoApprove`), unless a workspace has explicitly opted out.
+    expect(parse).toMatchObject({ mode: 'execute', blast_radius: 'low', auto_approvable: true });
+  });
+
+  it('document.upload accepts real file content (S3.4: kbId/name/content, base64 or utf8)', () => {
+    const manifest = loadManifest();
+    const upload = manifest.find((op) => op.name === 'document.upload') as {
+      params_schema: {
+        required: string[];
+        properties: Record<string, { type: string; enum?: string[] }>;
+      };
+      binding: { path: string };
+    };
+    expect(upload.params_schema.required.sort()).toEqual(['content', 'dataset_id', 'name']);
+    expect(upload.params_schema.properties.content?.type).toBe('string');
+    expect(upload.params_schema.properties.encoding?.enum).toEqual(['utf8', 'base64']);
+    expect(upload.binding.path).toContain('type=local');
   });
 
   it('kb.list and kb.documents map their response to KnowledgeBase/Document facts', () => {

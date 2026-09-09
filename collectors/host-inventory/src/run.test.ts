@@ -6,11 +6,14 @@ import type { CollectorConfig } from './config.js';
 import type { ContainerSummary, DockerClient, HostInfo } from './docker-client.js';
 import type {
   KernelClient,
+  ObserveOperationParams,
+  ObserveOperationResult,
   RegisterSourceParams,
   RegisterSourceResult,
   SubmitObservationsParams,
   SubmitObservationsResult,
 } from './kernel-client.js';
+import { KernelClientError } from './kernel-client.js';
 import type { RunOptions, RunSummary } from './run.js';
 import { RunFailedError, runOnce } from './run.js';
 
@@ -42,6 +45,7 @@ function baseConfig(stateFile: string, overrides: Partial<CollectorConfig> = {})
     sourceStateFile: stateFile,
     sourceName: 'host-inventory',
     sourceKind: 'host-inventory-collector',
+    ragflowGatekeeperId: undefined,
     ...overrides,
   };
 }
@@ -76,12 +80,21 @@ function fakeKernelClient(
   overrides: {
     registerSource?: (params: RegisterSourceParams) => Promise<RegisterSourceResult>;
     submitObservations?: (params: SubmitObservationsParams) => Promise<SubmitObservationsResult>;
+    observeOperation?: (params: ObserveOperationParams) => Promise<ObserveOperationResult>;
   } = {},
 ): {
   client: KernelClient;
-  calls: { registerSource: number; submitObservations: SubmitObservationsParams[] };
+  calls: {
+    registerSource: number;
+    submitObservations: SubmitObservationsParams[];
+    observeOperation: ObserveOperationParams[];
+  };
 } {
-  const calls = { registerSource: 0, submitObservations: [] as SubmitObservationsParams[] };
+  const calls = {
+    registerSource: 0,
+    submitObservations: [] as SubmitObservationsParams[],
+    observeOperation: [] as ObserveOperationParams[],
+  };
 
   const client: KernelClient = {
     registerSource: async (params) => {
@@ -130,7 +143,17 @@ function fakeKernelClient(
           })),
         };
       }
-      // Phase 3: Container.
+      if (objectTypes.has('Container')) {
+        // Phase 3: Container.
+        return {
+          activityId: 'act-1',
+          objectsUpserted: params.observations.length,
+          factsAsserted: params.observations.length,
+          factsSuperseded: 0,
+          objects: [],
+        };
+      }
+      // Phase 4 (S3.4): KnowledgeBase/Document.
       return {
         activityId: 'act-1',
         objectsUpserted: params.observations.length,
@@ -138,6 +161,11 @@ function fakeKernelClient(
         factsSuperseded: 0,
         objects: [],
       };
+    },
+    observeOperation: async (params) => {
+      calls.observeOperation.push(params);
+      if (overrides.observeOperation) return overrides.observeOperation(params);
+      return { status: 'ok', data: { code: 0, data: [] }, observedFactCount: 0 };
     },
   };
 
@@ -297,5 +325,107 @@ describe('runOnce', () => {
 
     await run({ config: baseConfig(stateFile), dockerClient, kernelClient });
     expect(calls.submitObservations).toHaveLength(2); // phase 1 + phase 2 only.
+  });
+
+  describe('phase 4 (S3.4, ragflow — optional, non-fatal)', () => {
+    it('never calls observe_operation when ragflowGatekeeperId is unset (default)', async () => {
+      const stateFile = path.join(dir, 'source.json');
+      const { client: kernelClient, calls } = fakeKernelClient();
+
+      const summary = await run({
+        config: baseConfig(stateFile),
+        dockerClient: fakeDockerClient(),
+        kernelClient,
+      });
+
+      expect(calls.observeOperation).toHaveLength(0);
+      expect(calls.submitObservations).toHaveLength(3); // phases 1-3 only.
+      expect(summary.activityId).toBe('act-1');
+    });
+
+    it('when set, calls kb.list/kb.documents and submits a fourth phase under the same activityId, folded into the summary', async () => {
+      const stateFile = path.join(dir, 'source.json');
+      const { client: kernelClient, calls } = fakeKernelClient({
+        observeOperation: async (params) => {
+          if (params.operation === 'kb.list') {
+            return {
+              status: 'ok',
+              data: { code: 0, data: [{ id: 'ds1', name: 'kb-1' }] },
+              observedFactCount: 1,
+            };
+          }
+          return {
+            status: 'ok',
+            data: { code: 0, data: { docs: [{ id: 'doc1', name: 'a.pdf' }] } },
+            observedFactCount: 1,
+          };
+        },
+      });
+
+      const summary = await run({
+        config: baseConfig(stateFile, { ragflowGatekeeperId: 'gk-1' }),
+        dockerClient: fakeDockerClient(),
+        kernelClient,
+      });
+
+      expect(calls.observeOperation.map((p) => p.operation)).toEqual(['kb.list', 'kb.documents']);
+      expect(calls.submitObservations).toHaveLength(4);
+      const phase4 = calls.submitObservations[3];
+      expect(phase4?.activityId).toBe('act-1');
+      expect(phase4?.observations.map((o) => o.objectType)).toEqual(['KnowledgeBase', 'Document']);
+      // 3 phases * 1 observation (Host) + phase 2/3's own counts + phase 4's own 2 — just confirm
+      // phase 4's own contribution shows up (exact totals for phases 1-3 covered by other tests).
+      expect(summary.factsAsserted).toBeGreaterThanOrEqual(2);
+      expect(summary.activityId).toBe('act-1');
+    });
+
+    it('logs a warning and completes the run normally when kb.list throws (RAGFlow being down is not fatal)', async () => {
+      const stateFile = path.join(dir, 'source.json');
+      const { client: kernelClient, calls } = fakeKernelClient({
+        observeOperation: async () => {
+          throw new KernelClientError(
+            'observe_operation',
+            503,
+            'gate_unreachable',
+            'connect refused',
+          );
+        },
+      });
+      const warn = vi.fn();
+
+      const summary = await run({
+        config: baseConfig(stateFile, { ragflowGatekeeperId: 'gk-1' }),
+        dockerClient: fakeDockerClient(),
+        kernelClient,
+        logger: { info: vi.fn(), warn },
+      });
+
+      expect(calls.submitObservations).toHaveLength(3); // phase 4's own submit never happens.
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('ragflow observation phase failed'),
+        expect.objectContaining({ gatekeeperId: 'gk-1' }),
+      );
+      expect(summary.activityId).toBe('act-1');
+    });
+
+    it('submits no fourth phase when kb.list returns zero KnowledgeBases', async () => {
+      const stateFile = path.join(dir, 'source.json');
+      const { client: kernelClient, calls } = fakeKernelClient({
+        observeOperation: async () => ({
+          status: 'ok',
+          data: { code: 0, data: [] },
+          observedFactCount: 0,
+        }),
+      });
+
+      await run({
+        config: baseConfig(stateFile, { ragflowGatekeeperId: 'gk-1' }),
+        dockerClient: fakeDockerClient(),
+        kernelClient,
+      });
+
+      expect(calls.observeOperation.map((p) => p.operation)).toEqual(['kb.list']);
+      expect(calls.submitObservations).toHaveLength(3); // no phase 4 submit for an empty batch.
+    });
   });
 });

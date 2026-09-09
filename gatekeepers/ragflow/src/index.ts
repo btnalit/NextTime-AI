@@ -2,7 +2,6 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
   GatekeeperBase,
-  HttpTransport,
   JsonFileIdempotencyStore,
   SharedEnvCredentialResolver,
   assertTlsNotDisabled,
@@ -14,10 +13,11 @@ import {
   resolveGateDataDir,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
+import { RagflowTransport } from './transport.js';
 
 /**
  * `gatekeepers/ragflow` — the preset `http`-kind Gatekeeper instance for a RAGFlow deployment's
- * REST API (design doc §7.5, §7.10, §10.2; docs/development-tasks.md S2.5).
+ * REST API (design doc §7.5, §7.10, §10.2; docs/development-tasks.md S2.5, v2 manifest S3.4).
  *
  * Not built on `@nexttime/gatekeeper-base`'s `main()`/`startGatekeeperServer()`: that env-driven
  * bootstrap reads a fixed env var name for each piece (`GATE_TARGET_BASE_URL` for the base URL,
@@ -28,13 +28,16 @@ import type { Operation } from '@nexttime/shared';
  * would collide in meaning with any other gate reusing the same `main()` convention) — `main()`
  * cannot be parameterized to do that without editing `@nexttime/gatekeeper-base` itself (out of
  * this task's scope), so this file composes `GatekeeperBase` + `createGatekeeperServer` +
- * `HttpTransport` + `SharedEnvCredentialResolver({name: 'RAGFLOW_API_KEY'})` directly instead —
- * otherwise the exact same "common http case" `main()` handles. `manifest.json` (this package's
- * own preset) is loaded the same way `main()`'s own `loadManifest` does; `GATE_MANIFEST_FILE`
- * still overrides it.
+ * `RagflowTransport` (`./transport.ts` — S3.4; wraps `@nexttime/gatekeeper-base`'s `HttpTransport`
+ * for every Operation except `document.upload`, which needs a real multipart request that
+ * `HttpTransport` cannot express, see that file's own doc comment) +
+ * `SharedEnvCredentialResolver({name: 'RAGFLOW_API_KEY'})` directly instead — otherwise the exact
+ * same "common http case" `main()` handles. `manifest.json` (this package's own preset) is loaded
+ * the same way `main()`'s own `loadManifest` does; `GATE_MANIFEST_FILE` still overrides it.
  *
  * `SharedEnvCredentialResolver` treats a non-JSON env value as an opaque token
- * (`{token: <value>}`), and `HttpTransport`'s `credentialHeaders` turns `{token}` into
+ * (`{token: <value>}`), and `HttpTransport`'s `credentialHeaders` (`RagflowTransport`'s own
+ * `credentialAuthorizationHeader` for `document.upload`) turns `{token}` into
  * `Authorization: Bearer <token>` — RAGFlow's own auth convention, so no extra glue is needed
  * (`gatekeeper-base/src/credentials/shared-env.ts`, `kinds/http.ts`).
  */
@@ -72,7 +75,7 @@ export async function buildRagflowGate(
   // GATE_TLS_CA_FILE (its PEM) + GATE_TLS_SERVERNAME (that name) trust exactly that target; see
   // @nexttime/gatekeeper-base's tls.ts and README "TLS to the target".
   const tls = gateTlsOptionsFromEnv(env);
-  const transport = new HttpTransport({
+  const transport = new RagflowTransport({
     baseUrl,
     ...(tls ? { fetchImpl: buildTlsFetch(tls) } : {}),
   });

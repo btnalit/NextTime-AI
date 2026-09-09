@@ -159,6 +159,60 @@ describe('createKernelClient', () => {
     });
   });
 
+  it('observeOperation posts to /api/cap/observe_operation and returns the raw data + observedFactCount (S3.4)', async () => {
+    let capturedUrl = '';
+    let capturedBody: unknown;
+    const fetchImpl = fakeFetch((url, init) => {
+      capturedUrl = url;
+      capturedBody = JSON.parse(init.body as string);
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            status: 'ok',
+            data: { code: 0, data: [{ id: 'ds1', name: 'kb-1' }] },
+            observedFactCount: 1,
+          },
+        },
+      };
+    });
+    const client = createKernelClient({
+      kernelUrl: 'http://kernel:8080',
+      handleTokenFile: '/does/not/matter',
+      fetchImpl,
+      readToken: async () => 'tok',
+    });
+
+    const result = await client.observeOperation({
+      gatekeeperId: 'gk-1',
+      operation: 'kb.list',
+      params: {},
+    });
+
+    expect(capturedUrl).toBe('http://kernel:8080/api/cap/observe_operation');
+    expect(capturedBody).toEqual({ gatekeeperId: 'gk-1', operation: 'kb.list', params: {} });
+    expect(result.data).toEqual({ code: 0, data: [{ id: 'ds1', name: 'kb-1' }] });
+    expect(result.observedFactCount).toBe(1);
+  });
+
+  it('observeOperation throws KernelClientError on {ok:false} the same way submitObservations does', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      status: 403,
+      body: { ok: false, error: { code: 'forbidden', message: 'not observe-mode' } },
+    }));
+    const client = createKernelClient({
+      kernelUrl: 'http://kernel:8080',
+      handleTokenFile: '/does/not/matter',
+      fetchImpl,
+      readToken: async () => 'tok',
+    });
+
+    await expect(
+      client.observeOperation({ gatekeeperId: 'gk-1', operation: 'document.upload' }),
+    ).rejects.toMatchObject({ name: 'KernelClientError', code: 'forbidden', status: 403 });
+  });
+
   it('KernelClientError is an instance of Error with a descriptive message', async () => {
     const err = new KernelClientError('register_source', 404, 'not_found', 'no such thing');
     expect(err).toBeInstanceOf(Error);

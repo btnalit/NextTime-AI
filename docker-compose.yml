@@ -600,6 +600,13 @@ services:
   # reasoning (a real, undocumented privilege escalation this task's own compose section never
   # asked for; the "skip if not visible" acceptance path is this collector's expected default
   # behavior without it, not a rare failure mode).
+  #
+  # RAGFLOW_GATEKEEPER_ID (S3.4, optional): the RAGFlow Gatekeeper instance's own graph object id —
+  # only known once a workspace has actually registered one (docs/runbooks/host-gatekeepers.md), so
+  # this cannot have a compiled-in default the way HOST_INVENTORY_INTERVAL_MS does; empty by default
+  # (`collectors/host-inventory/src/config.ts` treats "" the same as unset), which skips this
+  # collector's own KnowledgeBase/Document observation phase entirely — collectors/host-inventory/
+  # src/ragflow.ts's own doc comment.
   collector-host-inventory:
     build: { context: ., dockerfile: collectors/host-inventory/Dockerfile }
     secrets: [collector_host_inventory_token]
@@ -609,6 +616,7 @@ services:
         NEXTTIME_HANDLE_TOKEN_FILE: /run/secrets/collector_host_inventory_token,
         DOCKER_HOST: tcp://docker-socket-proxy-collector:2375,
         HOST_INVENTORY_INTERVAL_MS: "${HOST_INVENTORY_INTERVAL_MS:-900000}",
+        RAGFLOW_GATEKEEPER_ID: "${RAGFLOW_GATEKEEPER_ID:-}",
       }
     volumes:
       [
