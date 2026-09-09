@@ -2892,6 +2892,10 @@
               "lastCalledAt": {
                 "type": "string"
               },
+              "observeCalls": {
+                "minimum": 0,
+                "type": "integer"
+              },
               "operationName": {
                 "minLength": 1,
                 "type": "string"
@@ -2909,6 +2913,7 @@
               "rejected",
               "autoApproved",
               "failed",
+              "observeCalls",
               "lastCalledAt"
             ],
             "type": "object"

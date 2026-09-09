@@ -1,5 +1,6 @@
 import type { Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { queryAuditActionOperationStats } from '../../substrate/audit/index.js';
 import { GATEKEEPER_GRANT_CAPABILITY, hasActiveGrant } from '../capability/index.js';
 import {
   ACTION_REQUEST_ROW_COLUMNS,
@@ -179,12 +180,37 @@ export async function getActionRequestForUpdateOrThrow(
   return row;
 }
 
-/** `get_operation_stats` (S3.12 catalog-usage follow-up) — one row per `{gatekeeperId,
- *  operationName}` (`action_kind`, the Operation's own name, `manifest.ts`'s own doc comment) that
- *  has at least one `action_requests` row in the trailing `days` window. `approved`/`rejected`/
- *  `autoApproved`/`failed` count rows *currently* in that literal `status` — see this module's own
- *  capability-registry entry (`packages/shared/src/capabilities.ts`) for why that is a live
- *  snapshot, not cumulative decision history. */
+/** `get_operation_stats` (S3.12 catalog-usage follow-up; S3.8 closes the observe-class attribution
+ *  gap its own capability-registry doc comment left documented). One row per `{gatekeeperId,
+ *  operationName}` (`action_kind`, the Operation's own name, `manifest.ts`'s own doc comment) with
+ *  at least one call in the trailing `days` window — from either source below:
+ *
+ *   - **execute-class**: at least one `action_requests` row. `approved`/`rejected`/`autoApproved`/
+ *     `failed` count rows *currently* in that literal `status` — see this module's own
+ *     capability-registry entry (`packages/shared/src/capabilities.ts`) for why that is a live
+ *     snapshot, not cumulative decision history. `observeCalls` is always `0` for a row sourced
+ *     this way.
+ *   - **observe-class**: at least one `observe_operation` AuditRecord (the capability behind every
+ *     `<gate>.<op>` observe tool call, `application/gateway/request-action-handler.ts`'s own doc
+ *     comment) — `substrate/audit`'s `queryAuditActionOperationStats` (S3.8). These Operations
+ *     never create an `action_requests` row at all (§11 "观察免审"), so `approved`/`rejected`/
+ *     `autoApproved`/`failed` are always `0` for a row sourced this way; `observeCalls` carries
+ *     the count instead, and `calls` includes it (see the merge note below).
+ *
+ *  A `{gatekeeperId, operationName}` key present in *both* sources (not expected in practice — a
+ *  published Operation has exactly one `mode`, design doc §5.5 — but not something this read
+ *  enforces) merges: `calls` sums both sources, `observeCalls` carries only the observe-side count,
+ *  `approved`/`rejected`/`autoApproved`/`failed` come only from the execute side, and
+ *  `lastCalledAt` is the later of the two.
+ *
+ *  **Known, documented scope boundary**: a Worker's `request_action` call that resolves to an
+ *  observe-mode Operation (the rare fallthrough path in `request-action-handler.ts` — a Worker
+ *  normally only calls `request_action` for execute-class needs) writes its AuditRecord under
+ *  `action = 'request_action'`, not `'observe_operation'` — indistinguishable, from this table
+ *  alone, from every other `request_action` call without cross-referencing the invoked Operation's
+ *  current `mode` (a `governance/gatekeepers` concern this read does not reach into). Left
+ *  uncounted rather than approximated — the primary `<gate>.<op>` observe path (this read's actual
+ *  target) always audits under `observe_operation` regardless. */
 export interface OperationStatsRow {
   readonly gatekeeperId: string;
   readonly operationName: string;
@@ -193,6 +219,9 @@ export interface OperationStatsRow {
   readonly rejected: number;
   readonly autoApproved: number;
   readonly failed: number;
+  /** Observe-class calls within the window (a subset of `calls` — see this interface's own doc
+   *  comment for the merge rule). `0` for a purely execute-class row. */
+  readonly observeCalls: number;
   readonly lastCalledAt: Date;
 }
 
@@ -215,35 +244,86 @@ export interface GetOperationStatsFilter {
   readonly days: number;
 }
 
+/** The capability behind every `<gate>.<op>` observe tool call (`request-action-handler.ts`'s own
+ *  doc comment) — the `action` value `dispatch.ts` audits observe-class Operation calls under. */
+const OBSERVE_OPERATION_AUDIT_ACTION = 'observe_operation';
+
+function operationStatsKey(gatekeeperId: string, operationName: string): string {
+  return `${gatekeeperId}::${operationName}`;
+}
+
 export async function getOperationStats(
   client: PoolClient,
   workspaceId: string,
   filter: GetOperationStatsFilter,
 ): Promise<readonly OperationStatsRow[]> {
-  const result = await client.query<OperationStatsDbRow>(
-    `select gatekeeper_id, action_kind,
-            count(*)::bigint as calls,
-            count(*) filter (where status = 'approved')::bigint as approved,
-            count(*) filter (where status = 'rejected')::bigint as rejected,
-            count(*) filter (where status = 'auto_approved')::bigint as auto_approved,
-            count(*) filter (where status = 'failed')::bigint as failed,
-            max(requested_at) as last_called_at
-     from action_requests
-     where workspace_id = $1
-       and requested_at >= now() - make_interval(days => $2::int)
-       and ($3::uuid is null or gatekeeper_id = $3)
-     group by gatekeeper_id, action_kind
-     order by gatekeeper_id, action_kind`,
-    [workspaceId, filter.days, filter.gatekeeperId ?? null],
+  const [executeResult, observeRows] = await Promise.all([
+    client.query<OperationStatsDbRow>(
+      `select gatekeeper_id, action_kind,
+              count(*)::bigint as calls,
+              count(*) filter (where status = 'approved')::bigint as approved,
+              count(*) filter (where status = 'rejected')::bigint as rejected,
+              count(*) filter (where status = 'auto_approved')::bigint as auto_approved,
+              count(*) filter (where status = 'failed')::bigint as failed,
+              max(requested_at) as last_called_at
+       from action_requests
+       where workspace_id = $1
+         and requested_at >= now() - make_interval(days => $2::int)
+         and ($3::uuid is null or gatekeeper_id = $3)
+       group by gatekeeper_id, action_kind
+       order by gatekeeper_id, action_kind`,
+      [workspaceId, filter.days, filter.gatekeeperId ?? null],
+    ),
+    queryAuditActionOperationStats(client, workspaceId, {
+      actions: [OBSERVE_OPERATION_AUDIT_ACTION],
+      sinceDays: filter.days,
+      gatekeeperId: filter.gatekeeperId,
+    }),
+  ]);
+
+  const merged = new Map<string, OperationStatsRow>();
+  for (const row of executeResult.rows) {
+    merged.set(operationStatsKey(row.gatekeeper_id, row.action_kind), {
+      gatekeeperId: row.gatekeeper_id,
+      operationName: row.action_kind,
+      calls: Number(row.calls),
+      approved: Number(row.approved),
+      rejected: Number(row.rejected),
+      autoApproved: Number(row.auto_approved),
+      failed: Number(row.failed),
+      observeCalls: 0,
+      lastCalledAt: row.last_called_at,
+    });
+  }
+  for (const row of observeRows) {
+    const key = operationStatsKey(row.gatekeeperId, row.operationName);
+    const existing = merged.get(key);
+    if (existing) {
+      merged.set(key, {
+        ...existing,
+        calls: existing.calls + row.calls,
+        observeCalls: row.calls,
+        lastCalledAt:
+          row.lastCalledAt > existing.lastCalledAt ? row.lastCalledAt : existing.lastCalledAt,
+      });
+    } else {
+      merged.set(key, {
+        gatekeeperId: row.gatekeeperId,
+        operationName: row.operationName,
+        calls: row.calls,
+        approved: 0,
+        rejected: 0,
+        autoApproved: 0,
+        failed: 0,
+        observeCalls: row.calls,
+        lastCalledAt: row.lastCalledAt,
+      });
+    }
+  }
+
+  return [...merged.values()].sort((a, b) =>
+    a.gatekeeperId === b.gatekeeperId
+      ? a.operationName.localeCompare(b.operationName)
+      : a.gatekeeperId.localeCompare(b.gatekeeperId),
   );
-  return result.rows.map((row) => ({
-    gatekeeperId: row.gatekeeper_id,
-    operationName: row.action_kind,
-    calls: Number(row.calls),
-    approved: Number(row.approved),
-    rejected: Number(row.rejected),
-    autoApproved: Number(row.auto_approved),
-    failed: Number(row.failed),
-    lastCalledAt: row.last_called_at,
-  }));
 }

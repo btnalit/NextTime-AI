@@ -205,6 +205,7 @@ function toWireOperationStats(row: OperationStatsRow) {
     rejected: row.rejected,
     autoApproved: row.autoApproved,
     failed: row.failed,
+    observeCalls: row.observeCalls,
     lastCalledAt: row.lastCalledAt.toISOString(),
   };
 }
