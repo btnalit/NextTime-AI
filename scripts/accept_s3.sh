@@ -589,7 +589,7 @@ collector_first_run_step() {
   esac
   pass "collector-first-run" "objectsUpserted=$objects_upserted factsAsserted=$facts_asserted"
 
-  out=$(cap "$OWNER_KEY" search '{"objectType":"Container"}' "d.result.items[0]&&d.result.items[0].id||''")
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items[0]&&d.result.items[0].id||''")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "collector-container-search" "search HTTP $status: $(parse_kv "$out" BODY)"
   container_id=$(parse_kv "$out" EXTRACTED)
@@ -666,7 +666,7 @@ chat_dependency_step() {
   esac
   pass "chat-dependency-reply" "entry agent replied: $last_reply"
 
-  out=$(cap "$OWNER_KEY" search '{"objectType":"Container"}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "chat-dependency-search-kernel" "search HTTP $status: $(parse_kv "$out" BODY)"
   KERNEL_CONTAINER_ID=$(parse_kv "$out" EXTRACTED)
