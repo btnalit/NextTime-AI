@@ -1,0 +1,236 @@
+# ops-assets domain pack, v1 (design doc §5.1.2 Code 子本体的兄弟——领域包 `ontology/<domain>/`
+# "ops-assets 是第一个，库存 / 报销 / 排班各一个"; §7.10; docs/development-tasks.md S3.1 本体注册表与
+# 本体 v1). The infra-facts domain this platform's own `host-inventory` collector (S3.3) will
+# observe: which Hosts run which Docker Compose projects, which Containers those projects run,
+# what Images/Volumes/Networks/Endpoints those Containers use, which Repository an Image was built
+# from, and who owns what.
+#
+# Published under the stable family name `ops-assets` (not the file's own `-v1` suffix — see
+# `substrate/ontology/loader.ts`'s `publishOntologyDomainPack`/`deriveOntologyPackId` doc comments):
+# a future `ops-assets-v2.yaml` (S3.4, "本体 v2" — adds KnowledgeBase/Document/Dataset) is published
+# with the *same* `packName: 'ops-assets'` and a different `fileName`, so it stacks as the next
+# version of this same ontology family rather than starting a sibling family at v1. Loaded by
+# `substrate/ontology/schema.ts`'s `OntologyDefinitionSchema` (`@nexttime/shared`'s
+# `ontology-definition.ts` is authoritative) — same `objectTypes`/`linkTypes` shape
+# `platform-meta.yaml` uses, plus this task's two additions: `identityKey` per ObjectType and the
+# (here, unused — see below) optional `actionTypes` array.
+#
+# No `actionTypes` declared here (deliberately — the field is optional in `OntologyDefinitionSchema`
+# precisely so a domain pack can omit it): every ObjectType below is an *observed infrastructure
+# fact* a collector writes (S3.3, `submit_observations`/`assert_fact`), never something an agent
+# *acts on* directly through this ontology. Actions on these resources (`docker.restart`,
+# `systemctl.stop`, …) are governed Gatekeeper Operations (design doc §5.1.4 InterfaceManifest),
+# registered by a *接入包* (`gatekeepers/<system>/manifest.yaml`), not by this *领域包* — S3.1's own
+# task brief lists no ActionType names for `ops-assets-v1.yaml`, and inventing placeholder ones here
+# would misrepresent what the collector actually does (read-only observation, S3.3's own acceptance
+# criteria: "批准：否（只读）").
+#
+# -------------------------------------------------------------------------------------------
+# identityKey choices (docs/development-tasks.md S3.1: "身份键：Container = 项目 + 服务名，Image =
+# digest，Repository = 远程地址，Process = 可执行路径 + 工作目录 + 父进程" fixes four of the eleven;
+# the remaining seven are this file's own choice, recorded here per that same task's instruction to
+# state them). Two conventions carried over unchanged from every other ObjectType identity already
+# in this codebase (WorkerDefinition `{definitionId, version}`, Gatekeeper `{gatekeeperId}`,
+# Operation `{gatekeeperId, name, version}` — `substrate/ontology/meta-objects.ts`):
+#   (a) a property named `<Type>Id` (e.g. `hostId`, `composeProjectId`) holds *another Object's own
+#       graph id*, not a raw external value — so a Container's identity references the
+#       ComposeProject Object it belongs to, not a re-derived host+project-name pair.
+#   (b) identity keys are scoped to the narrowest thing that actually needs disambiguating.
+#
+#   - Host: `[hostname]` — this platform is one Docker daemon per Host in its current deployment
+#     shape (design doc has no multi-daemon-per-host scenario yet); the machine's own hostname is
+#     the simplest stable label. A future multi-tenant-per-host or multi-daemon design would need to
+#     widen this — not needed by anything S3.1–S3.3 describe.
+#   - ComposeProject: `[hostId, projectName]` — a compose project name (`docker compose ls`) is only
+#     unique per Docker daemon/Host, not globally (two Hosts may each run a project named `web`).
+#   - Container: `[composeProjectId, serviceName]` (design doc: "项目 + 服务名") — `composeProjectId`
+#     is the ComposeProject Object's id (convention (a) above), so this is transitively host-scoped
+#     without repeating `hostId` in the key. A container outside any compose project (no
+#     ComposeProject to reference) is out of this v1's identity scheme — S3.3's collector only
+#     observes compose-managed containers (its own deliverable: "dockerode ... 只保留 agent 运行时进
+#     程树下的非 systemd 子进程" for *processes*; compose is assumed for containers).
+#   - Image: `[digest]` (design doc: "digest") — a content digest is already globally unique;
+#     no host/registry scoping needed.
+#   - SystemdService: `[hostId, unitName]` — a systemd unit name is only unique per Host.
+#   - Process: `[executablePath, workingDirectory, parentPid]` (design doc, verbatim three
+#     components — no `hostId` added: the design doc fixes exactly these three, and S3.3's own
+#     collector scope is host-local by construction (one collector run = one Activity = one Host),
+#     so omitting `hostId` here follows the spec literally rather than widening it unasked).
+#   - Volume: `[hostId, volumeName]` — Docker named volumes are host-local by default (no swarm/
+#     multi-host volume driver assumed at v1).
+#   - Network: `[hostId, networkName]` — same host-local reasoning as Volume.
+#   - Endpoint: `[hostId, address, port]` — the network endpoint a Container exposes; scoped to the
+#     Host it is reachable on (two different Hosts may both expose port 8080 on their own address).
+#   - Repository: `[remoteUrl]` (design doc: "远程地址") — a git remote URL is already globally
+#     unique; no further scoping needed.
+#   - Owner: `[ownerId]` — an external identifier (e.g. an email or team slug) for the human/team
+#     responsible for a Host/ComposeProject/Repository; S3.3's collector does not itself resolve
+#     Owner identities (out of that task's read-only, structural-fields-only scope) — this
+#     ObjectType and its `owned_by` edges exist for a human/CLI to assert directly, or for a later
+#     task's collector extension to populate.
+#
+# -------------------------------------------------------------------------------------------
+# LinkType domain/range choices. A name may list more than one `{domain, range}` pair — see
+# `ontology-definition.ts`'s own doc comment on why this is legal (`validate`, S3.1's own
+# `substrate/ontology/registry.ts`, accepts a candidate link matching *any* pair sharing its name)
+# and preferred here over a `"*"` wildcard: every relationship below is fully enumerable (unlike
+# `platform-meta.yaml`'s `reads`/`writes`/`can_act_on`, whose other end is a domain-pack ObjectType
+# this platform-meta ontology cannot itself name), so exact pairs are strictly more precise for I2.
+#   - runs_on: things that execute — Container, Process, SystemdService — plus ComposeProject
+#     itself (the project as a whole "runs on" a Host, alongside its individual Containers).
+#   - part_of: static compose-file membership — Container/Volume/Network all "belong to" the
+#     ComposeProject that declares them (docker compose labels each with its own project).
+#   - uses_image / mounts / attached_to / exposes / depends_on: all Container-centric — a compose
+#     service's image, volumes, networks, exposed endpoints, and its `depends_on:` peers.
+#   - built_from: Image -> Repository (the source an image's build came from).
+#   - owned_by: Host / ComposeProject / Repository -> Owner (the three "someone is responsible for
+#     this" anchors — Container/Volume/Network ownership is inherited through their ComposeProject,
+#     not asserted a second time).
+#   - spawned_by: Process -> Process (parent/child, matching Process's own identity key).
+
+objectTypes:
+  - name: Host
+    description: >-
+      A machine running a Docker daemon this platform observes — physical, VM, or cloud instance.
+    identityKey: [hostname]
+
+  - name: ComposeProject
+    description: >-
+      One `docker compose` project on a Host: a named group of Containers, Volumes, and Networks
+      declared together (one `compose.yaml`).
+    identityKey: [hostId, projectName]
+
+  - name: Container
+    description: >-
+      One running (or stopped) container instance, a single service within a ComposeProject.
+    identityKey: [composeProjectId, serviceName]
+
+  - name: Image
+    description: >-
+      A Docker image a Container was instantiated from, identified by content digest.
+    identityKey: [digest]
+
+  - name: SystemdService
+    description: >-
+      A systemd unit on a Host (e.g. `docker.service`, a compose-wrapping unit) — observed
+      alongside Docker resources since some Hosts manage container lifecycle through systemd.
+    identityKey: [hostId, unitName]
+
+  - name: Process
+    description: >-
+      An OS process observed within the agent runtime's own process tree on a Host (S3.3's
+      collector: "只保留 agent 运行时进程树下的非 systemd 子进程" — not every process on the
+      machine).
+    identityKey: [executablePath, workingDirectory, parentPid]
+
+  - name: Volume
+    description: >-
+      A Docker named volume declared by a ComposeProject.
+    identityKey: [hostId, volumeName]
+
+  - name: Network
+    description: >-
+      A Docker network declared by a ComposeProject.
+    identityKey: [hostId, networkName]
+
+  - name: Endpoint
+    description: >-
+      A network endpoint (address + port) a Container exposes on its Host.
+    identityKey: [hostId, address, port]
+
+  - name: Repository
+    description: >-
+      A git repository an Image was built from, identified by its remote address.
+    identityKey: [remoteUrl]
+
+  - name: Owner
+    description: >-
+      The human or team responsible for a Host, ComposeProject, or Repository — an external
+      identity (e.g. an email or team slug), not a platform Principal.
+    identityKey: [ownerId]
+
+linkTypes:
+  - name: runs_on
+    domain: Container
+    range: Host
+    description: This Container instance is currently running on this Host.
+
+  - name: runs_on
+    domain: Process
+    range: Host
+    description: This Process is running on this Host.
+
+  - name: runs_on
+    domain: SystemdService
+    range: Host
+    description: This systemd unit is registered on this Host.
+
+  - name: runs_on
+    domain: ComposeProject
+    range: Host
+    description: This compose project's Containers run on this Host.
+
+  - name: part_of
+    domain: Container
+    range: ComposeProject
+    description: This Container is one of the services declared by this ComposeProject.
+
+  - name: part_of
+    domain: Volume
+    range: ComposeProject
+    description: This named volume is declared by this ComposeProject's compose file.
+
+  - name: part_of
+    domain: Network
+    range: ComposeProject
+    description: This network is declared by this ComposeProject's compose file.
+
+  - name: uses_image
+    domain: Container
+    range: Image
+    description: This Container was instantiated from this Image.
+
+  - name: mounts
+    domain: Container
+    range: Volume
+    description: This Container mounts this Volume.
+
+  - name: attached_to
+    domain: Container
+    range: Network
+    description: This Container is attached to this Network.
+
+  - name: exposes
+    domain: Container
+    range: Endpoint
+    description: This Container exposes this network Endpoint.
+
+  - name: depends_on
+    domain: Container
+    range: Container
+    description: This Container's compose service declares `depends_on` on the other Container.
+
+  - name: built_from
+    domain: Image
+    range: Repository
+    description: This Image was built from this Repository.
+
+  - name: owned_by
+    domain: Host
+    range: Owner
+    description: This Host's responsible human/team.
+
+  - name: owned_by
+    domain: ComposeProject
+    range: Owner
+    description: This ComposeProject's responsible human/team.
+
+  - name: owned_by
+    domain: Repository
+    range: Owner
+    description: This Repository's responsible human/team.
+
+  - name: spawned_by
+    domain: Process
+    range: Process
+    description: This Process's parent Process (matching Process's own identityKey component).

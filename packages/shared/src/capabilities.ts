@@ -3,6 +3,7 @@ import { ConnectionRequestStatusSchema, RoleSchema, WorkerDefinitionKindSchema }
 import { ActionRequestStatusSchema } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
+import { OntologyDefinitionSchema } from './ontology-definition.js';
 import * as wire from './wire/index.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
@@ -217,60 +218,82 @@ const chatCapabilities: readonly Capability[] = [
 
 const ontologyCapabilities: readonly Capability[] = [
   {
-    // Not in CAPABILITY_HANDLERS (docs/development-tasks.md's own "registered but unhandled"
-    // list, this PR body's own table) — no handler exists yet to derive a precise shape from;
-    // `jsonRecord` is a permissive, documented placeholder (this file's own module doc comment).
+    // S3.1: handled by `application/gateway/ontology-handlers.ts`'s `publishOntologyVersionHandler`
+    // (`substrate/ontology/registry.ts`'s `publishOntologyDraft`). `id`/`version` together address
+    // one exact `ontology_versions` row (its primary key, `migrations/core/0002_substrate.sql`) —
+    // no separate synthetic id exists to name a row with one field.
     name: 'publish_ontology_version',
     group: 'ontology',
     mode: 'execute',
     channel: 'human',
-    paramsSchema: z.object({ ontologyVersionId: id }).strict(),
-    resultSchema: jsonRecord,
+    paramsSchema: z.object({ id: id, version: z.number().int().positive() }).strict(),
+    resultSchema: wire.OntologyPublishResultWireSchema,
     description: 'Publish a draft OntologyVersion (I16). Human channel only.',
   },
   {
-    // Unhandled — see `publish_ontology_version`'s neighboring comment above.
+    // S3.1: handled by `proposeOntologyChangeHandler` (`registry.ts`'s `proposeOntologyChange`).
+    // `id` omitted starts a brand-new ontology family (fresh id, version 1); given, proposes the
+    // next version under that existing family. `change` is validated against the real
+    // `OntologyDefinitionSchema` here (not a permissive placeholder) so a structurally invalid
+    // proposal 400s at the params-validation step (`dispatchCapability`), never reaching the
+    // handler as an unmapped 500 — see `ontology-definition.ts`'s own doc comment on why this
+    // schema lives in `packages/shared` rather than kernel.
     name: 'propose_ontology_change',
     group: 'ontology',
     mode: 'propose',
     channel: 'handle',
     minRole: 'builder',
-    paramsSchema: z.object({ change: jsonRecord }).strict(),
-    resultSchema: jsonRecord,
+    paramsSchema: z.object({ id: id.optional(), change: OntologyDefinitionSchema }).strict(),
+    resultSchema: wire.OntologyProposeResultWireSchema,
     description:
       'Propose a private draft ontology change (I16); visible only to the proposer until published.',
   },
   {
-    // Unhandled — see `publish_ontology_version`'s neighboring comment above.
+    // S3.1: handled by `getTypeHandler` (`registry.ts`'s `getType`) — looks up `typeName` across
+    // every OntologyVersion currently visible to the caller (every published family's latest
+    // version, plus the caller's own pending drafts; `loadVisibleOntology`'s own doc comment).
     name: 'get_type',
     group: 'ontology',
     mode: 'observe',
     channel: 'handle',
     paramsSchema: z.object({ typeName: z.string() }).strict(),
-    resultSchema: jsonRecord,
+    resultSchema: wire.OntologyTypeWireSchema.nullable(),
     description: 'Read one ObjectType/LinkType/ActionType definition.',
   },
   {
-    // Unhandled — see `publish_ontology_version`'s neighboring comment above. Name starts with
-    // `list_` (vocabulary guard rule (e)) — wrapped in `listEnvelope`.
+    // S3.1: handled by `listTypesHandler` (`registry.ts`'s `listTypes`). Name starts with `list_`
+    // (vocabulary guard rule (e)) — wrapped in `listEnvelope`.
     name: 'list_types',
     group: 'ontology',
     mode: 'observe',
     channel: 'handle',
     paramsSchema: z.object({ kind: z.enum(['object', 'link', 'action']).optional() }).strict(),
-    resultSchema: listEnvelope(jsonRecord),
+    resultSchema: listEnvelope(wire.OntologyTypeWireSchema),
     description: 'List type definitions in the published OntologyVersion.',
   },
   {
-    // Unhandled — see `publish_ontology_version`'s neighboring comment above.
+    // S3.1: handled by `validateHandler` (`registry.ts`'s `validateLink`) — domain/range check
+    // (I2), not generic JSON-Schema payload validation (the placeholder this capability carried
+    // before a handler existed); "validate_link" in docs/development-tasks.md S3.1 names this
+    // exact semantics, there is no separately-registered `validate_link` capability.
     name: 'validate',
     group: 'ontology',
     mode: 'observe',
     channel: 'handle',
-    paramsSchema: z.object({ typeName: z.string(), payload: z.unknown() }).strict(),
-    resultSchema: z.object({ valid: z.boolean(), errors: z.array(jsonRecord).optional() }).strict(),
+    paramsSchema: z
+      .object({
+        link: z
+          .object({
+            linkType: z.string().min(1),
+            sourceType: z.string().min(1),
+            targetType: z.string().min(1),
+          })
+          .strict(),
+      })
+      .strict(),
+    resultSchema: wire.OntologyValidateLinkResultWireSchema,
     description:
-      'Validate a payload against a type’s JSON Schema projection without writing anything.',
+      'Validate a candidate Link’s linkType/sourceType/targetType against every visible LinkType signature’s domain/range (I2).',
   },
 ];
 

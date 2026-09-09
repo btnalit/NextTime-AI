@@ -8,6 +8,7 @@
 
 export * from './chat.js';
 export * from './graph.js';
+export * from './ontology.js';
 export * from './governance.js';
 export * from './connection.js';
 export * from './task.js';
