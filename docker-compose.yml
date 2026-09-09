@@ -516,15 +516,20 @@ services:
     volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA:?}/caddy:/data"]
     # S3.5 (docs/development-tasks.md §S3.5): EXPLORER_API_KEY — the API key of a Principal the
     # Explorer static bundle's requests are attributed to (Caddyfile's own comment on why: the
-    # unmodified bundle sends no X-API-Key itself). Same "credentials live only in an
-    # ${NEXTTIME_DATA}/secrets/*.env file, never in this tracked compose file or in .env.example"
-    # convention as llm-proxy's own env_file below — see docs/runbooks/host-explorer.md for how
-    # this file/key is provisioned. Caddy reads it from its own process environment via the
-    # Caddyfile's `{$EXPLORER_API_KEY}` placeholder — unset/empty substitutes an empty header
-    # value, which the kernel's own `X-API-Key` auth then 401s (fails closed at the kernel, not
-    # silently unauthenticated); Caddy itself has no built-in "refuse to start" for an unset
-    # placeholder without a custom module, so this is not a startup-time check.
-    env_file: ${NEXTTIME_DATA:?}/secrets/explorer.env
+    # unmodified bundle sends no X-API-Key itself). Not `env_file` (llm-proxy's own
+    # `${NEXTTIME_DATA}/secrets/llm-proxy.env` pattern) deliberately — `env_file` requires the
+    # referenced file to already exist at `docker compose up` time, which broke this workflow's own
+    # CI e2e job (it provisions secrets only for the services it actually starts, and does not know
+    # about this one — caught on the first PR push, see that job's run history). `${VAR:-}` compose-
+    # level substitution has no such file dependency: unset defaults to an empty string, which the
+    # Caddyfile's `{$EXPLORER_API_KEY}` placeholder then substitutes into an equally empty
+    # `X-API-Key` header, which the kernel's own auth 401s (fails closed, not silently
+    # unauthenticated) — a real deployment sets `EXPLORER_API_KEY` in `.env` (see
+    # docs/runbooks/host-explorer.md); this file's own credential-handling convention otherwise
+    # keeps *provider*/database/token secrets out of `.env` (`.env.example`'s own comment) — a
+    # platform-issued API key for one dedicated, least-privileged Principal is a smaller-consequence
+    # exception, already visible in the same category `KERNEL_PUBLIC_URL`/`NEXTTIME_SUBNET_*` sit in.
+    environment: { EXPLORER_API_KEY: "${EXPLORER_API_KEY:-}" }
     depends_on: { kernel: { condition: service_healthy } }
     networks: [control]
     restart: unless-stopped

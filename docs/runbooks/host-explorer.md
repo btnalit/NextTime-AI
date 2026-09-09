@@ -43,17 +43,21 @@ curl -sk -X POST "https://${BIND_ADDR}:8443/api/cap/create_principal" \
 响应的 `result.apiKey` 只显示这一次（`create_principal` 的契约——明文 key 不会再被存储或读出），
 立刻记下来。
 
-### 2. 写入 `${NEXTTIME_DATA}/secrets/explorer.env`
+### 2. 写入 `.env` 的 `EXPLORER_API_KEY`
 
 ```bash
-echo "EXPLORER_API_KEY=<上一步拿到的 key>" > "${NEXTTIME_DATA}/secrets/explorer.env"
-chmod 600 "${NEXTTIME_DATA}/secrets/explorer.env"
+echo "EXPLORER_API_KEY=<上一步拿到的 key>" >> .env
 ```
 
-这个文件不入库（同 `llm-proxy.env`/`pg_password` 的既有约定）；`docker-compose.yml` 的 `caddy`
-服务把它当 `env_file`，Caddyfile 用 `{$EXPLORER_API_KEY}` 把它注入到每个 Explorer API 请求的
-`X-API-Key` 头——未改动的 Explorer 静态前端自己不发这个头（`fetch("/api/graph/nodes")` 这类
-根相对路径调用没有自定义 header），所以由 caddy 代为附加。
+`.env` 本身不入库（`.gitignore`）；`docker-compose.yml` 的 `caddy` 服务把它按
+`${EXPLORER_API_KEY:-}` 展开进容器环境，Caddyfile 用 `{$EXPLORER_API_KEY}` 把它注入到每个
+Explorer API 请求的 `X-API-Key` 头——未改动的 Explorer 静态前端自己不发这个头
+（`fetch("/api/graph/nodes")` 这类根相对路径调用没有自定义 header），所以由 caddy 代为附加。
+**没按 `llm-proxy.env` 那样放进 `${NEXTTIME_DATA}/secrets/`**：那需要 `docker compose` 的
+`env_file` 在启动时该文件已存在，CI 的 web-e2e 工作流只为它实际起的三个服务（postgres/kernel/
+caddy）预置 secrets，不知道这个新文件，第一次提交就把它跑挂了；`${VAR:-}` 展开没有这个文件依赖，
+未设置时是空字符串，Explorer 的调用会拿到空 `X-API-Key`，内核侧照样 401（fail closed，不是
+放行）。
 
 ### 3. 构建 Explorer 静态包
 
@@ -82,7 +86,7 @@ docker compose up -d caddy
 ```bash
 cd <CODE_DIR>
 BIND_ADDR=$(grep '^KERNEL_BIND_ADDR=' .env | cut -d= -f2)
-EXPLORER_KEY=$(grep '^EXPLORER_API_KEY=' "${NEXTTIME_DATA}/secrets/explorer.env" | cut -d= -f2)
+EXPLORER_KEY=$(grep '^EXPLORER_API_KEY=' .env | cut -d= -f2)
 
 # 九个端点各探一次（期望 200；/decisions/:id/chain 与 /provenance 需要真实 id，用图里已有的随便一个）
 curl -sk -o /dev/null -w 'nodes: %{http_code}\n' \
@@ -117,16 +121,16 @@ docker compose build caddy
 docker compose up -d caddy
 ```
 
-只想临时下线 Explorer 的 API 访问而不动静态页：把 `${NEXTTIME_DATA}/secrets/explorer.env` 清空
-或删掉该 Principal（`disable_principal`），`docker compose restart caddy`——之后的 Explorer API
-请求会带一个空/失效的 `X-API-Key`，内核侧一律 401。
+只想临时下线 Explorer 的 API 访问而不动静态页：把 `.env` 里的 `EXPLORER_API_KEY` 清空或删掉该
+Principal（`disable_principal`），`docker compose up -d caddy`（重新展开 `.env`）——之后的
+Explorer API 请求会带一个空/失效的 `X-API-Key`，内核侧一律 401。
 
 ## 常见问题
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `/explorer/` 显示"Explorer bundle not built" | 还没跑过 `explorer/build.sh`，或跑完没有 `docker compose build caddy` | 按"步骤 3–4"补跑 |
-| Explorer 页面能打开，但 Graph/Decisions 一直转圈或报错，Network 面板里 `/api/graph/nodes` 等是 401 | `EXPLORER_API_KEY` 没配置、配错、或对应 Principal 被 `disable_principal` 了 | 重新走"步骤 1–2"，`docker compose restart caddy` |
+| Explorer 页面能打开，但 Graph/Decisions 一直转圈或报错，Network 面板里 `/api/graph/nodes` 等是 401 | `EXPLORER_API_KEY` 没配置、配错、或对应 Principal 被 `disable_principal` 了 | 重新走"步骤 1–2"，`docker compose up -d caddy`（`restart` 不会重新展开 `.env`，必须 `up -d` 才会用新值重建容器） |
 | 页面加载出来但静态资源（JS/CSS）404，或 Network 里看到请求打到 `/assets/...` 而不是 `/explorer/assets/...` | 构建时没有 `--base=/explorer/`（例如手工跑了 `vite build` 而不是 `explorer/build.sh`） | 用 `explorer/build.sh`，不要绕过它手工构建 |
 | Ontology Hub / Enrich / Manage 里的 KG Overview、SPARQL 等标签页报错或空白 | 预期——本任务只实现 Graph/Decision/Lineage 三个工作区的后端（design doc §9.5"只做这些"），其余标签页仍在导航里但没有对应后端 | 无需处理；不要把这当成故障 |
 | `create_principal` 返回 403 | 调用者不是 owner 角色 | 换一个 owner 的 API key |
