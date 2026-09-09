@@ -78,17 +78,31 @@ describe('ragflow result mapping (sample API responses -> KnowledgeBase/Document
     ]);
   });
 
-  it('document.upload maps a sample upload response to a Document fact', () => {
+  it('document.upload (type=local, S3.4) maps a sample response to a Document fact', () => {
     const op = operationWithMapping('document.upload');
+    // Shape verified against RAGFlow's HTTP API reference (real multipart `?type=local` upload,
+    // not the old `?type=empty` placeholder) — see README "document.upload now sends real file
+    // content".
     const sampleResponse = {
       code: 0,
-      data: [{ id: 'doc2', name: 'empty-placeholder', dataset_id: 'ds1', size: 0, run: 'UNSTART' }],
+      data: [
+        {
+          id: 'doc2',
+          name: 'note.txt',
+          dataset_id: 'ds1',
+          location: 'note.txt',
+          size: 17966,
+          run: 'UNSTART',
+          type: 'doc',
+          chunk_method: 'naive',
+        },
+      ],
     };
     expect(applyResultMapping(sampleResponse, op.result_mapping)).toEqual([
       {
         objectType: 'Document',
         identity: { id: 'doc2' },
-        properties: { name: 'empty-placeholder', size: 0, run: 'UNSTART' },
+        properties: { name: 'note.txt', size: 17966, run: 'UNSTART' },
       },
     ]);
   });

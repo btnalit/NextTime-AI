@@ -1,0 +1,301 @@
+# ops-assets domain pack, v2 (design doc §5.1.2; docs/development-tasks.md S3.4 `gatekeeper-
+# ragflow` 与本体 v2). Extends v1 (`ontology/ops-assets-v1.yaml`) with the RAGFlow knowledge-base
+# domain `gatekeepers/ragflow` (S2.5 instance, S3.4 v2 manifest) observes: which KnowledgeBases a
+# RAGFlow Gatekeeper serves, and which Documents each KnowledgeBase contains.
+#
+# **Published under the same pack family as v1** — `packages/kernel/src/substrate/ontology/
+# loader.ts`'s `publishOntologyDomainPack({packName: 'ops-assets', fileName: 'ops-assets-v2.yaml'})`
+# (same `packName` as v1's own publish call, different `fileName`) stacks this as the *next
+# version* of the `ops-assets` family (`deriveOntologyPackId('ops-assets')` — same derived id,
+# `nextOntologyVersion` bumps `version` to 2) rather than starting a sibling family at v1, exactly
+# as v1's own header comment predicted this file's existence. `seed-domain-pack --pack-name
+# ops-assets --file-name ops-assets-v2.yaml` on a workspace that has already published
+# `ops-assets-v1.yaml` publishes this file as version 2 of that same family — verified against the
+# S3.1/S3.3 loader test pattern (`packages/kernel/src/cli/bootstrap.test.ts`'s
+# `seedDomainPackFromCli` case), see `gatekeepers/ragflow/src/ontology-v2.test.ts` for this file's
+# own load-time (schema-shape) verification — the DB-gated publish round trip itself needs no new
+# kernel code (`publishOntologyDomainPack` is pack-content-agnostic) and is exercised on a target
+# host per `docs/runbooks/host-gatekeepers.md` §11 rather than by a new kernel test (this task's own
+# dispatch: touch `packages/kernel/src/**` only if the loader cannot load a v2 pack that extends
+# v1 — it can, unmodified, so no kernel change was needed or made).
+#
+# **"Extends v1"**: every v1 `objectTypes`/`linkTypes` entry below is byte-identical to
+# `ops-assets-v1.yaml` (same names, same `identityKey`s, same descriptions) — a v2 publish is a
+# *replacement* `definition` (S3.1's `ontology_versions` schema has no partial-update/merge
+# mechanism; each version is the complete `objectTypes`/`linkTypes` array), so "extends" here means
+# "this file's own content is v1's content plus the new entries appended", not an incremental diff
+# applied by the loader. A workspace that publishes only this file (skipping v1) gets the same
+# result a workspace that published v1 then this file gets — this file is self-contained.
+#
+# -------------------------------------------------------------------------------------------
+# New ObjectTypes (S3.4 deliverable 2) — identityKey choices:
+#
+#   - KnowledgeBase: `[gatekeeperId, kbId]`. `gatekeeperId` follows convention (a) from v1's own
+#     header comment (another Object's own graph id — the RAGFlow Gatekeeper instance that observed
+#     this KnowledgeBase; `platform-meta.yaml`'s `Gatekeeper` ObjectType, identity `{gatekeeperId}`,
+#     `substrate/ontology/meta-objects.ts`'s `registerGatekeeperObject`). `kbId` is RAGFlow's own
+#     `dataset_id`/`id` field (`GET /api/v1/datasets` — RAGFlow's HTTP API reference, verified
+#     2026-09) — a raw external identifier (like v1's `Image.identityKey: [digest]` or
+#     `Repository.identityKey: [remoteUrl]`), not a graph object id, since no separate graph Object
+#     represents "a knowledge base's identity" independent of the KnowledgeBase Object itself.
+#     Scoped by `gatekeeperId` so the same raw RAGFlow dataset id from two different RAGFlow
+#     Gatekeeper instances (e.g. staging vs. production) never collides into one Object.
+#   - Document: `[gatekeeperId, kbId, documentId]` — `documentId` is RAGFlow's own document `id`
+#     (`GET /api/v1/datasets/{dataset_id}/documents`), scoped the same way as `KnowledgeBase.kbId`
+#     and further nested under the KnowledgeBase it belongs to (matching v1's `Container`
+#     convention: identity nested under the parent scope, not re-deriving it from a separate
+#     `hostId`-style field).
+#   - Dataset: `[gatekeeperId, datasetId]` — declared per this task's own deliverable text, but
+#     **not populated by this task's own gate or collector code**, and **no `part_of` link to
+#     KnowledgeBase is declared for it** (see the LinkTypes section below for why). Reserved the
+#     same way v1 reserves `Owner` ("this ObjectType and its edges exist for a human/CLI to assert
+#     directly, or for a later task's collector extension to populate") — here, for a future gate
+#     whose upstream system genuinely distinguishes a "Dataset" from a "KnowledgeBase" the way
+#     RAGFlow's own API does not (see below).
+#
+# **Why `KnowledgeBase` and `Dataset` are two names, not two related resources** — verified against
+# RAGFlow's own HTTP API reference (https://ragflow.io/docs/http_api_reference, fetched 2026-09):
+# `GET /api/v1/datasets` **is** RAGFlow's knowledge-base list (the product UI calls this resource
+# "Knowledge Base"; RAGFlow's own REST API and every request/response field name it — `dataset_id`,
+# `POST /api/v1/datasets/{dataset_id}/documents`, `dataset_ids` in `POST /api/v1/retrieval` — calls
+# the identical resource a "dataset"). There is no separate, nested "Dataset" grouping either above
+# a KnowledgeBase (one Dataset containing several KnowledgeBases) or below one (a KnowledgeBase
+# containing several Datasets) anywhere in RAGFlow's documented API surface — `dataset` and
+# "knowledge base" are RAGFlow's own two names for the *same* resource, not a parent/child pair.
+# Declaring a `part_of (Dataset -> KnowledgeBase)` LinkType would therefore invent a hierarchy this
+# system does not have (A4 principle: "name relationships that must never exist" applies in the
+# negative here — this one must not). `gatekeepers/ragflow/manifest.json`'s `kb.list`/
+# `kb.documents` map to `KnowledgeBase`/`Document` (not `Dataset`) precisely because those
+# ObjectType names read clearly for what a human/agent observes; `Dataset` stays declared-but-idle
+# until some other gate's upstream system needs the distinction for real.
+#
+# -------------------------------------------------------------------------------------------
+# New LinkTypes (S3.4 deliverable 2):
+#   - part_of (Document -> KnowledgeBase): a Document belongs to the KnowledgeBase RAGFlow lists it
+#     under (`GET /api/v1/datasets/{dataset_id}/documents`'s own path scoping).
+#   - served_by (KnowledgeBase -> Gatekeeper): the RAGFlow Gatekeeper instance that observed this
+#     KnowledgeBase. `range: Gatekeeper` references `platform-meta.yaml`'s ObjectType by name — legal
+#     across domain-pack files (`substrate/ontology/registry.ts`'s `mergeVisibleOntology` merges
+#     every visible ontology family, including `platform-meta`, into one flat type namespace before
+#     `validateLink`/`get_type` ever run), the same mechanism v1's own header comment anticipated
+#     for `Operation --reads/writes--> ObjectType` (there, the reference runs the other direction —
+#     platform-meta naming a domain-pack type via `"*"`; here a domain-pack LinkType names a
+#     platform-meta type directly, since `Gatekeeper` is a single, enumerable target, not a
+#     wildcard-shaped one).
+#
+# -------------------------------------------------------------------------------------------
+# **Two independent write paths produce KnowledgeBase/Document facts — documented, not a bug**
+# (same duality `gatekeepers/docker`'s own `Container`-typed `result_mapping` already has against
+# `ops-assets-v1.yaml`'s own, differently-scoped `Container.identityKey: [composeProjectId,
+# serviceName]`, predating this file):
+#
+#   1. **The gate's own observe path** (`request_action`/`observe_operation` ->
+#      `application/gateway/observed-facts.ts`'s `writeObservedFacts`, driven by
+#      `gatekeepers/ragflow/manifest.json`'s own `result_mapping`): identity `{id: <raw RAGFlow
+#      id>}` only — the JMESPath-based `result_mapping` mechanism
+#      (`packages/gatekeeper-base/src/result-mapping.ts`'s `pickIdentity`) has no access to the
+#      calling Gatekeeper's own id, so it cannot express this file's `[gatekeeperId, kbId]`/
+#      `[gatekeeperId, kbId, documentId]` composite keys. Attributed to the shared "Gatekeeper
+#      service Principal" (`governance/gatekeepers`'s `getOrCreateGatekeeperServicePrincipal`), not
+#      to any one Gatekeeper instance's own identity — a quick, low-fidelity fact from an ad hoc
+#      `kb.list`/`kb.documents` observe call.
+#   2. **The `host-inventory` collector's own extension** (S3.4 deliverable 3,
+#      `collectors/host-inventory/src/ragflow.ts`, when `RAGFLOW_GATEKEEPER_ID` is configured): the
+#      fully-scoped identity this file declares, plus `part_of`/`served_by` links, submitted via
+#      `submit_observations` (I2/identity-key-validated, `application/gateway/ingest-handlers.ts`)
+#      under the collector's own `kind='service'` Principal — `deriveEpistemicStatus` maps
+#      `service -> 'observed'` (`substrate/graph/store.ts`), matching this task's own deliverable
+#      ("submits ... as observed Facts (service principal)").
+#
+# These two paths write two *different* graph Objects for the same real-world KnowledgeBase/
+# Document (different `identity_key` shapes never collide in `objects`' own partial unique index,
+# `migrations/core/0006_object_identity.sql`) — an accepted, pre-existing platform shape (see the
+# `gatekeepers/docker` precedent above), not something this file's identityKey choices reconcile.
+# The `part_of`/`served_by`/`explain`-to-the-gate acceptance criteria this task's dispatch names
+# ("图里有 Document part_of KnowledgeBase；explain 到 ragflow@<gatekeeper>") are produced by path 2
+# (the collector), which is the only one of the two that writes any link at all for these two
+# ObjectTypes.
+
+objectTypes:
+  # --- carried over from ops-assets-v1.yaml, unchanged (same identityKey per type) ---
+  - name: Host
+    description: >-
+      A machine running a Docker daemon this platform observes — physical, VM, or cloud instance.
+    identityKey: [hostname]
+
+  - name: ComposeProject
+    description: >-
+      One `docker compose` project on a Host: a named group of Containers, Volumes, and Networks
+      declared together (one `compose.yaml`).
+    identityKey: [hostId, projectName]
+
+  - name: Container
+    description: >-
+      One running (or stopped) container instance, a single service within a ComposeProject.
+    identityKey: [composeProjectId, serviceName]
+
+  - name: Image
+    description: >-
+      A Docker image a Container was instantiated from, identified by content digest.
+    identityKey: [digest]
+
+  - name: SystemdService
+    description: >-
+      A systemd unit on a Host (e.g. `docker.service`, a compose-wrapping unit) — observed
+      alongside Docker resources since some Hosts manage container lifecycle through systemd.
+    identityKey: [hostId, unitName]
+
+  - name: Process
+    description: >-
+      An OS process observed within the agent runtime's own process tree on a Host (S3.3's
+      collector: "只保留 agent 运行时进程树下的非 systemd 子进程" — not every process on the
+      machine).
+    identityKey: [executablePath, workingDirectory, parentPid]
+
+  - name: Volume
+    description: >-
+      A Docker named volume declared by a ComposeProject.
+    identityKey: [hostId, volumeName]
+
+  - name: Network
+    description: >-
+      A Docker network declared by a ComposeProject.
+    identityKey: [hostId, networkName]
+
+  - name: Endpoint
+    description: >-
+      A network endpoint (address + port) a Container exposes on its Host.
+    identityKey: [hostId, address, port]
+
+  - name: Repository
+    description: >-
+      A git repository an Image was built from, identified by its remote address.
+    identityKey: [remoteUrl]
+
+  - name: Owner
+    description: >-
+      The human or team responsible for a Host, ComposeProject, or Repository — an external
+      identity (e.g. an email or team slug), not a platform Principal.
+    identityKey: [ownerId]
+
+  # --- new in v2 (S3.4) ---
+  - name: KnowledgeBase
+    description: >-
+      A RAGFlow "knowledge base" — RAGFlow's own REST API calls the identical resource a
+      "dataset" (`GET /api/v1/datasets`, `dataset_id`) — served by one RAGFlow Gatekeeper
+      instance: embedding model, chunk method, and the Documents it contains.
+    identityKey: [gatekeeperId, kbId]
+
+  - name: Document
+    description: >-
+      One document (file, or a `type=empty` placeholder) within a RAGFlow KnowledgeBase —
+      RAGFlow's own parse/chunk status (`run`), size, and name.
+    identityKey: [gatekeeperId, kbId, documentId]
+
+  - name: Dataset
+    description: >-
+      Reserved for a future gate whose upstream system distinguishes a "Dataset" from a
+      "KnowledgeBase" — RAGFlow's own API does not (see this file's own header comment); no
+      `gatekeepers/ragflow` operation or `collectors/host-inventory` extension populates this
+      ObjectType or links it to KnowledgeBase.
+    identityKey: [gatekeeperId, datasetId]
+
+linkTypes:
+  # --- carried over from ops-assets-v1.yaml, unchanged ---
+  - name: runs_on
+    domain: Container
+    range: Host
+    description: This Container instance is currently running on this Host.
+
+  - name: runs_on
+    domain: Process
+    range: Host
+    description: This Process is running on this Host.
+
+  - name: runs_on
+    domain: SystemdService
+    range: Host
+    description: This systemd unit is registered on this Host.
+
+  - name: runs_on
+    domain: ComposeProject
+    range: Host
+    description: This compose project's Containers run on this Host.
+
+  - name: part_of
+    domain: Container
+    range: ComposeProject
+    description: This Container is one of the services declared by this ComposeProject.
+
+  - name: part_of
+    domain: Volume
+    range: ComposeProject
+    description: This named volume is declared by this ComposeProject's compose file.
+
+  - name: part_of
+    domain: Network
+    range: ComposeProject
+    description: This network is declared by this ComposeProject's compose file.
+
+  - name: uses_image
+    domain: Container
+    range: Image
+    description: This Container was instantiated from this Image.
+
+  - name: mounts
+    domain: Container
+    range: Volume
+    description: This Container mounts this Volume.
+
+  - name: attached_to
+    domain: Container
+    range: Network
+    description: This Container is attached to this Network.
+
+  - name: exposes
+    domain: Container
+    range: Endpoint
+    description: This Container exposes this network Endpoint.
+
+  - name: depends_on
+    domain: Container
+    range: Container
+    description: This Container's compose service declares `depends_on` on the other Container.
+
+  - name: built_from
+    domain: Image
+    range: Repository
+    description: This Image was built from this Repository.
+
+  - name: owned_by
+    domain: Host
+    range: Owner
+    description: This Host's responsible human/team.
+
+  - name: owned_by
+    domain: ComposeProject
+    range: Owner
+    description: This ComposeProject's responsible human/team.
+
+  - name: owned_by
+    domain: Repository
+    range: Owner
+    description: This Repository's responsible human/team.
+
+  - name: spawned_by
+    domain: Process
+    range: Process
+    description: This Process's parent Process (matching Process's own identityKey component).
+
+  # --- new in v2 (S3.4) ---
+  - name: part_of
+    domain: Document
+    range: KnowledgeBase
+    description: This Document belongs to this KnowledgeBase.
+
+  - name: served_by
+    domain: KnowledgeBase
+    range: Gatekeeper
+    description: >-
+      This KnowledgeBase is served by this Gatekeeper instance (a `platform-meta.yaml` ObjectType
+      — see this file's own header comment on why a domain-pack LinkType may name it directly).

@@ -16,5 +16,8 @@
   "dependencies": {
     "@nexttime/gatekeeper-base": "workspace:*",
     "@nexttime/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "yaml": "^2.7.0"
   }
 }
