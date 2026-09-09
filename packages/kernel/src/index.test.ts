@@ -323,13 +323,20 @@ describe('createBackgroundServices: outbox-prune loop', () => {
     const { pool } = createRecoveryOnlyFakePool();
     const pruneSpy = vi.spyOn(OutboxDispatcher.prototype, 'pruneDispatched').mockResolvedValue(0);
     // `setTimeout` (as opposed to `setInterval`) is used nowhere else in `createBackgroundServices`
-    // — only the outbox-prune loop's own initial delay — so its total absence proves the loop's
-    // timer never started, with no need to advance fake time at all (let alone the 7 real days
-    // that would otherwise have to elapse to be sure nothing was merely scheduled far in the
-    // future — which would also drag every other reaper's own faster timer through that same
-    // span, the same cost this suite's other rewritten test avoids).
+    // — only the outbox-prune loop's own initial delay and (S3.8) the invariant-check loop's own
+    // initial delay — so its total absence, with the latter also opted out via
+    // `invariantCheckIntervalMs: 0`, proves the prune loop's timer never started, with no need to
+    // advance fake time at all (let alone the 7 real days that would otherwise have to elapse to
+    // be sure nothing was merely scheduled far in the future — which would also drag every other
+    // reaper's own faster timer through that same span, the same cost this suite's other
+    // rewritten test avoids).
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
-    const background = createBackgroundServices({ pool, kind: 'fake', outboxPruneDays: 0 });
+    const background = createBackgroundServices({
+      pool,
+      kind: 'fake',
+      outboxPruneDays: 0,
+      invariantCheckIntervalMs: 0,
+    });
 
     await background.start();
 
