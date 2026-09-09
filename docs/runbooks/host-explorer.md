@@ -18,8 +18,10 @@ Explorer 是第三方开源的 Knowledge Explorer 静态前端（`semantica-agi/
 1. `host-caddy.md` 已完成，`caddy` 容器已起，`/api/*` 反代工作正常。
 2. 内核已有至少一个 owner 角色的 Principal（`host-bootstrap.md`/`host-checkout.md` 的首次
    引导已创建）。
-3. 构建 Explorer 静态包需要 `node`/`npm`（仅在运行 `explorer/build.sh` 的主机或
-   `deploy/caddy/Dockerfile` 构建阶段里需要，不进 caddy 运行时镜像本身）。
+3. 构建 Explorer 静态包（步骤 3）：正常路径只需要主机有 Docker——`node`/`npm`/`git` 都在
+   `deploy/caddy/Dockerfile` 的构建阶段内部装、用完即弃，不进 caddy 运行时镜像，主机本身不需要
+   装它们。只有选择步骤 3 末尾"没有 Docker、只想本地验证构建产物"那条不常见的替代路径
+   （直接在主机上跑 `sh explorer/build.sh`）时，主机才需要自带 `node`/`npm`/`git`。
 
 ## 信任边界（先读，再决定要不要开）
 
@@ -76,27 +78,37 @@ caddy）预置 secrets，不知道这个新文件，第一次提交就把它跑�
 未设置时是空字符串，Explorer 的调用会拿到空 `X-API-Key`，内核侧照样 401（fail closed，不是
 放行）。
 
-### 3. 构建 Explorer 静态包
+### 3. 构建 Explorer 静态包并重建 caddy
+
+W4 收尾后，构建 Explorer 静态包这一步已经并入 `docker compose build caddy` 本身
+（`deploy/caddy/Dockerfile` 新增的 `explorer-build` 构建阶段——见该文件"Explorer bundle
+selection"注释），**只需要主机上有 Docker，不再需要 node/npm/git**：
 
 ```bash
 cd <CODE_DIR>
-sh explorer/build.sh
-```
-
-默认克隆 `semantica-agi/semantica` 的 `v0.6.7` 标签并构建；也可以指向一份已有的本地检出
-（`SEMANTICA_SRC=/path/to/checkout sh explorer/build.sh`，跳过克隆）。构建产物替换
-`deploy/caddy/explorer-placeholder/` 的内容——见 `explorer/README.md` 的完整说明。
-
-**Windows 主机**：在 WSL 里跑这一步，不要用原生 Git-Bash/MSYS——MSYS 的路径转换会破坏传给
-`vite build` 的 `--base=/explorer/`/`--outDir` 参数（`explorer/build.sh` 自己的注释有细节）。
-
-### 4. 重建并重启 caddy
-
-```bash
-cd <CODE_DIR>
+echo "EXPLORER_BUILD=1" >> .env    # 默认 0（不构建，用占位页）——见 .env.example 自己的说明
 docker compose build caddy
 docker compose up -d caddy
 ```
+
+默认克隆 `semantica-agi/semantica` 的 `v0.6.7` 标签并构建；换一个标签在 `.env` 里加
+`SEMANTICA_REF=<tag>`。构建阶段替换的是镜像内部的 `/srv/explorer`，不是仓库里的
+`deploy/caddy/explorer-placeholder/` 目录本身——那个目录仍然只是提交进库的占位页，
+`EXPLORER_BUILD=1` 不会、也不需要改动它。
+
+`EXPLORER_BUILD` 不设（或设为 `0`）时行为与之前完全一致：`docker compose build caddy`
+不联网、不克隆，直接用 `deploy/caddy/explorer-placeholder/` 里已提交的占位页（或主机上
+曾经手工跑过 `sh explorer/build.sh`、就地替换过该目录内容后的产物——两条路径产出的目录
+形状相同，`Dockerfile` 对它们一视同仁）。
+
+**在主机上没有 Docker、只想本地验证构建产物本身的场景**（不常见——正常操作流程走上面的
+`docker compose build caddy`）：仍可以直接跑 `sh explorer/build.sh`（需要主机自带
+node/npm/git；也可以 `SEMANTICA_SRC=/path/to/checkout sh explorer/build.sh` 跳过克隆），
+产物同样落在 `deploy/caddy/explorer-placeholder/`，之后 `docker compose build caddy`
+（不设 `EXPLORER_BUILD`）会把这份本地构建的产物原样打进镜像。**Windows 主机**用这条路径时
+要在 WSL 里跑，不要用原生 Git-Bash/MSYS——MSYS 的路径转换会破坏传给 `vite build` 的
+`--base=/explorer/`/`--outDir` 参数（`explorer/build.sh` 自己的注释有细节；`Dockerfile`
+内部的构建阶段跑在 Linux 容器里，不受此影响）。
 
 ## 验证
 
@@ -133,7 +145,9 @@ curl -sk "https://${BIND_ADDR}:8443/explorer/" | head -1   # 应是 <!doctype ht
 
 ```bash
 cd <CODE_DIR>
-git checkout -- deploy/caddy/explorer-placeholder   # 恢复占位页
+sed -i '/^EXPLORER_BUILD=/d' .env   # 或手工删掉/注释掉该行——不删 EXPLORER_BUILD=1 重建只会再构建一次
+git checkout -- deploy/caddy/explorer-placeholder   # 只在曾经用"步骤 3 末尾"的直接主机构建路径
+                                                     # 就地替换过该目录内容时才需要这一步
 docker compose build caddy
 docker compose up -d caddy
 ```
@@ -146,7 +160,7 @@ Explorer API 请求会带一个空/失效的 `X-API-Key`，内核侧一律 401�
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `/explorer/` 显示"Explorer bundle not built" | 还没跑过 `explorer/build.sh`，或跑完没有 `docker compose build caddy` | 按"步骤 3–4"补跑 |
+| `/explorer/` 显示"Explorer bundle not built" | `.env` 里没设 `EXPLORER_BUILD=1`（默认用占位页），或设了但还没 `docker compose build caddy` | 按"步骤 3"补跑 |
 | Explorer 页面能打开，但 Graph/Decisions 一直转圈或报错，Network 面板里 `/api/graph/nodes` 等是 401 | `EXPLORER_API_KEY` 没配置、配错、或对应 Principal 被 `disable_principal` 了 | 重新走"步骤 1–2"，`docker compose up -d caddy`（`restart` 不会重新展开 `.env`，必须 `up -d` 才会用新值重建容器） |
 | 页面加载出来但静态资源（JS/CSS）404，或 Network 里看到请求打到 `/assets/...` 而不是 `/explorer/assets/...` | 构建时没有 `--base=/explorer/`（例如手工跑了 `vite build` 而不是 `explorer/build.sh`） | 用 `explorer/build.sh`，不要绕过它手工构建 |
 | Ontology Hub / Enrich / Manage 里的 KG Overview、SPARQL 等标签页报错或空白 | 预期——本任务只实现 Graph/Decision/Lineage 三个工作区的后端（design doc §9.5"只做这些"），其余标签页仍在导航里但没有对应后端 | 无需处理；不要把这当成故障 |

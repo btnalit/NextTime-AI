@@ -628,17 +628,29 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   caddy:
-    build: { context: ., dockerfile: deploy/caddy/Dockerfile } # caddy:2.10 + 内建 web 静态产物（E8 + S1.8）
+    # EXPLORER_BUILD/SEMANTICA_REF (W4 closeout; deploy/caddy/Dockerfile's own "Explorer bundle
+    # selection" comment): both default inside the Dockerfile itself (0 / v0.6.7), so leaving
+    # either unset in `.env` reproduces the exact pre-W4 behavior (the committed placeholder page,
+    # no network access during `docker compose build caddy`). Set `EXPLORER_BUILD=1` in `.env`
+    # (optionally with `SEMANTICA_REF=<tag>`) to have the build itself clone and build the real
+    # Explorer bundle — see docs/runbooks/host-explorer.md.
+    build:
+      context: .
+      dockerfile: deploy/caddy/Dockerfile
+      args:
+        EXPLORER_BUILD: "${EXPLORER_BUILD:-0}"
+        SEMANTICA_REF: "${SEMANTICA_REF:-v0.6.7}"
     image: nexttime-ai-caddy
     # ${KERNEL_BIND_ADDR:?}: unset/empty would otherwise interpolate to "" and Compose defaults
     # the missing host part to 0.0.0.0 — exposing the HTTPS entrypoint on every interface instead
     # of the intended bind address (lane-7 P1 fix).
     ports: ["${KERNEL_BIND_ADDR:?}:8443:8443"]
     # Static roots ship inside the image: deploy/caddy/Dockerfile builds packages/web and copies
-    # dist/ to /srv/web (/srv/explorer holds the S3.5 Explorer bundle once a host operator has
-    # run `sh explorer/build.sh` — a placeholder page until then, see explorer/README.md).
-    # Rebuild the image to deploy a web change. ${NEXTTIME_DATA:?}/caddy:/data persists the
-    # internal CA and issued certs (chowned by scripts/host-env-init.sh).
+    # dist/ to /srv/web (/srv/explorer holds the S3.5 Explorer bundle — either built inside the
+    # image itself, EXPLORER_BUILD=1 above, or a placeholder/host-built directory copied in as-is;
+    # see explorer/README.md). Rebuild the image to deploy a web (or Explorer) change.
+    # ${NEXTTIME_DATA:?}/caddy:/data persists the internal CA and issued certs (chowned by
+    # scripts/host-env-init.sh).
     volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA:?}/caddy:/data"]
     # S3.5 (docs/development-tasks.md §S3.5): EXPLORER_API_KEY — the API key of a Principal the
     # Explorer static bundle's requests are attributed to (Caddyfile's own comment on why: the
