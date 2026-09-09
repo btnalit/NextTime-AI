@@ -798,37 +798,67 @@ const metaCapabilities: readonly Capability[] = [
     description: 'List published Procedures plus the caller’s own draft Procedures.',
   },
   {
-    // Registered in CAPABILITY_HANDLERS, but `assertFactHandler` always throws
-    // `AssertFactWriteNotImplementedError` today (handlers.ts's own doc comment: "the graph write
-    // is not implemented ... pre-existing gap") — no successful return has ever happened. The
-    // Fact this would return once implemented is well-defined (`wire.FactWireSchema`), so that is
-    // used here rather than a bare permissive placeholder.
+    // S3.3: real handler (`application/gateway/fact-handlers.ts`'s `assertFactHandler`), replacing
+    // the `AssertFactWriteNotImplementedError` stub. `paramsSchema` was previously
+    // `{objectId, linkType, value, sourceId?}` — a shape that predated S2.6, never carried the
+    // `sourceObjectId`/`targetObjectId`/`activityId` `substrate/graph/store.ts`'s `AssertFactInput`
+    // actually requires (I3), and could never have backed a real write (see that stub's own doc
+    // comment, removed by this task). Replaced with the real shape a single-Fact write needs;
+    // `activityId` is optional — omitted, the handler starts and ends its own Activity around this
+    // one call (I3 "every Fact must trace to an Activity"); given, the caller's own already-open
+    // Activity is reused (its lifecycle stays the caller's to manage).
     name: 'assert_fact',
     group: 'meta',
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z
-      .object({ objectId: id, linkType: z.string(), value: z.unknown(), sourceId: id.optional() })
+      .object({
+        sourceObjectId: id,
+        targetObjectId: id,
+        linkType: z.string().min(1),
+        properties: jsonRecord.optional(),
+        activityId: id.optional(),
+        validFrom: z.string().optional(),
+        validUntil: z.string().nullable().optional(),
+        confidence: z.number().min(0).max(1).optional(),
+      })
       .strict(),
     resultSchema: wire.FactWireSchema,
     description:
       'Assert a Fact; resulting epistemic_status depends on the caller’s principal kind (§5.5).',
   },
   {
-    // Unhandled (no CAPABILITY_HANDLERS entry) — see `assert_fact`'s neighboring comment: the
-    // Fact shape it would return is well-defined regardless.
+    // S3.3: real handler (`supersedeFactHandler`) — same params-shape reasoning as `assert_fact`
+    // above (this capability's old `{factId, value}` placeholder could never have backed a real
+    // `substrate/graph/store.ts` `SupersedeFactInput` call either, which needs the replacement's
+    // full `(linkType, sourceObjectId, targetObjectId)` to match the Fact it supersedes — I5, see
+    // `SupersedeIdentityMismatchError`'s own doc comment in that module).
     name: 'supersede_fact',
     group: 'meta',
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ factId: id, value: z.unknown() }).strict(),
+    paramsSchema: z
+      .object({
+        factId: id,
+        sourceObjectId: id,
+        targetObjectId: id,
+        linkType: z.string().min(1),
+        properties: jsonRecord.optional(),
+        activityId: id.optional(),
+        validFrom: z.string().optional(),
+        validUntil: z.string().nullable().optional(),
+        confidence: z.number().min(0).max(1).optional(),
+      })
+      .strict(),
     resultSchema: wire.FactWireSchema,
     description: 'Supersede a Fact from the same Source with a newer value.',
   },
   {
-    // Unhandled — see `assert_fact`'s neighboring comment above.
+    // S3.3: real handler (`invalidateFactHandler`) — this capability's params/result shape was
+    // already correct (well-defined regardless of a handler existing, per the pre-existing note on
+    // this row); only the handler itself was missing.
     name: 'invalidate_fact',
     group: 'meta',
     mode: 'write',
@@ -1545,34 +1575,76 @@ const workerCapabilities: readonly Capability[] = [
 ];
 
 // -------------------------------------------------------------------------------------------
-// ingest — service principals (collectors, §7.8)
+// ingest — service principals (collectors, §7.8; docs/development-tasks.md S3.3)
 // -------------------------------------------------------------------------------------------
+
+/** One `submit_observations` link — the observed Object's own `{objectType, identity}` (§16
+ *  identity keys) plus the Fact's own `properties`. `target` never carries an `id` — a collector
+ *  observes structural facts by identity, never by an already-known graph id (that would require
+ *  the collector to have looked the target object up first, defeating the point of upsert-by-
+ *  identity). */
+const ingestLinkTargetSchema = z
+  .object({ objectType: z.string().min(1), identity: jsonRecord })
+  .strict();
+const ingestLinkSchema = z
+  .object({
+    linkType: z.string().min(1),
+    target: ingestLinkTargetSchema,
+    properties: jsonRecord.optional(),
+  })
+  .strict();
+/** One `submit_observations` observation — design doc §5.1.3 "Observation：a single observed
+ *  input" — an Object identity/properties plus zero or more outgoing Links from it. */
+const ingestObservationSchema = z
+  .object({
+    objectType: z.string().min(1),
+    identity: jsonRecord,
+    properties: jsonRecord.optional(),
+    links: z.array(ingestLinkSchema).optional(),
+  })
+  .strict();
 
 const ingestCapabilities: readonly Capability[] = [
   {
-    // Unhandled — permissive placeholder (this file's own module doc comment).
+    // S3.3: real handler (`application/gateway/ingest-handlers.ts`'s `registerSourceHandler`).
+    // `ownerPrincipalId` is deliberately not a caller-supplied param (the pre-existing placeholder
+    // shape had one) — a Source's owner is always the calling principal (I13's own "on_behalf_of
+    // only from the Handle, never the request body" discipline applied to this table's equivalent
+    // field), never a value the caller names.
     name: 'register_source',
     group: 'ingest',
     mode: 'write',
     channel: 'handle',
     paramsSchema: z
       .object({
-        name: z.string(),
-        ownerPrincipalId: id.optional(),
+        kind: z.string().min(1),
+        name: z.string().min(1),
         visibility: z.enum(['workspace', 'private']),
+        uri: z.string().optional(),
+        metadata: jsonRecord.optional(),
       })
       .strict(),
-    resultSchema: jsonRecord,
+    resultSchema: wire.SourceWireSchema,
     description: 'Register a Source (document/DB/API/person/agent session).',
   },
   {
-    // Unhandled — permissive placeholder.
+    // S3.3: real handler (`submitObservationsHandler`). `activityId` optional — see this file's
+    // own `assert_fact` doc comment for the same omitted/given convention; here the default (no
+    // `activityId`) is what "one Activity per submission" (docs/development-tasks.md S3.3, a
+    // collector's own per-run acceptance criterion) actually means in practice, since a collector
+    // never has a pre-existing Activity to hand in.
     name: 'submit_observations',
     group: 'ingest',
     mode: 'write',
     channel: 'handle',
-    paramsSchema: z.object({ sourceId: id, observations: z.array(jsonRecord) }).strict(),
-    resultSchema: jsonRecord,
+    paramsSchema: z
+      .object({
+        sourceId: id,
+        activityId: id.optional(),
+        observations: z.array(ingestObservationSchema).min(1),
+      })
+      .strict(),
+    resultSchema: wire.SubmitObservationsResultWireSchema,
     description: 'Submit a batch of Observations from one Activity (collectors, §7.8).',
   },
 ];

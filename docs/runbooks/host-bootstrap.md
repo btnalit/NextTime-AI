@@ -23,6 +23,7 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=/path/to/data sh -s' < scripts/host-bootstrap.s
 | `config/` | `kernel`、`worker-supervisor`（均只读）、`llm-proxy`（只读）、`egress-proxy`（只读）、`backup`（只读子挂载） |
 | `caddy/` | `caddy`（TLS 状态数据）、`backup`（只读子挂载，CA 私钥备份） |
 | `gatekeepers/`（含 `docker/`、`ragflow/` 两个子目录） | `gatekeeper-docker`、`gatekeeper-ragflow`（各自的幂等存储；只读子挂载给 `backup`） |
+| `collectors/`（含 `host-inventory/` 子目录，S3.3） | `collector-host-inventory`（`register_source` 幂等缓存——`host-inventory-source.json`，见 `collectors/host-inventory/README.md`） |
 | `backups/` | `backup` 容器（唯一可写挂载——`backup.sh` 的 `pg_dump`/tar.gz 输出落地处） |
 | `artifacts/` | 预留：当前 compose 骨架未显式挂载任何服务 |
 
@@ -36,9 +37,10 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=/path/to/data sh -s' < scripts/host-bootstrap.s
 stat -c '%a %n' ${NEXTTIME_DATA}/secrets
 find ${NEXTTIME_DATA} -maxdepth 2 -printf '%M %u %p\n'
 ```
-期望：`secrets` 为 `700`；十一个目录路径齐全（八个一级子目录 `pgdata workspaces secrets
-config artifacts backups caddy gatekeepers` + 三个二级子目录 `workspaces/tasks
-gatekeepers/docker gatekeepers/ragflow`），另有 `config/.keep`（占位文件，非目录）一并列出；
+期望：`secrets` 为 `700`；十三个目录路径齐全（九个一级子目录 `pgdata workspaces secrets
+config artifacts backups caddy gatekeepers collectors` + 四个二级子目录 `workspaces/tasks
+gatekeepers/docker gatekeepers/ragflow collectors/host-inventory`，S3.3 新增 `collectors`/
+`collectors/host-inventory` 两条），另有 `config/.keep`（占位文件，非目录）一并列出；
 `secrets/pg_password` 为 `600` 且非空；其余目录为 `750`。
 
 ## 删除 Workspace（Deleting a workspace，操作员专用，破坏性操作）

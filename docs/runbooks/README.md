@@ -23,6 +23,7 @@
 | [`host-worker-runtime.md`](./host-worker-runtime.md) | `worker-runtime` 镜像 + `worker-supervisor` 常驻/一次性两种模式 |
 | [`host-agent-host.md`](./host-agent-host.md) | `agent-host` 事件桥 + 内核 `AgentHostRuntime`；`fake-llm` 端到端对话链路 |
 | [`host-gatekeepers.md`](./host-gatekeepers.md) | 预置的 `docker`/`ragflow` 两个门实例主机验收（CLI 与 capability 两条注册路径） |
+| [`host-collector.md`](./host-collector.md) | 采集器 `host-inventory` 部署：`ops-assets-v1` 领域包发布、`issue-service-handle` 铸造采集器自己的 Handle、起服务、验证图里出现 `Container runs_on Host` |
 
 密钥生成本身（`scripts/gen-handle-keys.sh`：Handle 签名密钥对、`internal.token`、`gate.token`）
 穿插在 `host-checkout.md`/`host-gatekeepers.md` 的前置条件里说明；轮换（而非首次生成）见

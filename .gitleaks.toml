@@ -1,0 +1,24 @@
+# gitleaks config (guards CI job, .github/workflows/ci.yml — gitleaks/gitleaks-action).
+#
+# Path-based allowlist for collectors/host-inventory's redaction test fixtures
+# (docs/development-tasks.md S3.3): redact.test.ts / run.test.ts deliberately contain
+# secret-shaped strings (a fake JWT, fake opaque hex tokens, a fake Bearer header) to exercise
+# redact.ts's own tier-2 "does this still look like a live secret after redaction" sniff and the
+# acceptance criterion's own "a value that resists redaction" case — gitleaks' generic detectors
+# correctly flag them as secret-shaped, which is exactly what the test proves redact.ts catches.
+# None of these are real credentials; inline `gitleaks:allow` comments on the matched lines do not
+# suppress a finding from an *earlier* commit in the same PR's history (gitleaks scans the commit
+# log, not just the final tree), so this repo-level, path-scoped allowlist is the correct
+# mechanism — narrower than disabling a whole rule, and it never has to be touched again as this
+# file's own fixtures evolve.
+title = "NextTime-AI gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic secret-shaped fixtures in the host-inventory collector's redaction tests"
+paths = [
+  '''collectors/host-inventory/src/redact\.test\.ts''',
+  '''collectors/host-inventory/src/run\.test\.ts''',
+]

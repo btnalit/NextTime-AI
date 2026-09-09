@@ -11,7 +11,6 @@ import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/ch
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   AgentProfileValidationError,
-  AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
   ConnectionCredentialRequiredError,
@@ -21,8 +20,10 @@ import {
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
   ModelsCatalogUnavailableError,
+  ObservationIdentityError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
+  SourceNotFoundError,
   UnauthorizedError,
 } from '../../application/gateway/index.js';
 import {
@@ -186,11 +187,9 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof CapabilityNotImplementedError) {
     return { code: WS_ERROR_CODES.NOT_IMPLEMENTED, message: err.message };
   }
-  // S2.6: `assert_fact`'s handler runs the I16 guard, then throws this because the write half is
-  // still unimplemented — same code as the registry-level "no handler" case (see
-  // interfaces/http/capability-route.ts for why it is not a subclass).
-  if (err instanceof AssertFactWriteNotImplementedError) {
-    return { code: WS_ERROR_CODES.NOT_IMPLEMENTED, message: err.message };
+  // S3.3 `submit_observations` — WS equivalent of capability-route.ts's own mapping.
+  if (err instanceof ObservationIdentityError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof TurnAlreadyRunningError) {
     return { code: WS_ERROR_CODES.TURN_ALREADY_RUNNING, message: err.message };
@@ -234,7 +233,8 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     err instanceof GrantNotFoundError ||
     err instanceof GatekeeperNotFoundError ||
     err instanceof OperationNotFoundError ||
-    err instanceof ConnectionRequestNotFoundError
+    err instanceof ConnectionRequestNotFoundError ||
+    err instanceof SourceNotFoundError
   ) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
