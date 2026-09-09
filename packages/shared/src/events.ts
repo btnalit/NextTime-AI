@@ -1,10 +1,13 @@
 import { z } from 'zod';
+import { ActionKindSchema } from './action-description.js';
 import {
   ActionRequestStatusSchema,
   EpistemicStatusSchema,
   TaskStatusSchema,
   WorkerRunStatusSchema,
 } from './enums.js';
+import { ActionRequestWireSchema } from './wire/governance.js';
+import { TaskWireSchema } from './wire/task.js';
 
 /**
  * Platform event vocabulary (design doc §7.10 domain/outbox events; §9.4 chat WebSocket push
@@ -259,7 +262,10 @@ const ActionPendingEvent = z.object({
   gatekeeperId: z.string(),
   title: z.string(),
   description: z.string(),
-  actionKind: z.object({ tag: z.string(), label: z.string() }),
+  // S3.7 wire fix (docs/wire-contract-conventions.md §1/§5): reuses `ActionKindSchema`
+  // (action-description.ts) — the vocabulary table's own definition of `actionKind` — rather than
+  // an equivalent inline `{tag,label}` shape defined a second time here.
+  actionKind: ActionKindSchema,
   awaitDecision: z.boolean(),
   simulated: z.unknown().optional(),
 });
@@ -271,16 +277,19 @@ const ActionPendingEvent = z.object({
 // different — a synthesized notification card with its own display fields (title/description/
 // actionKind) no ActionRequest wire object carries, so `actionRequestId` there is a genuine
 // `<resource>Id` cross-reference, not a same-shape subset; left unchanged.
+// S3.7 wire fix (docs/wire-contract-conventions.md §3, 2026-09-08 decision: "服务端推送事件的
+// payload 与对应资源对象同形"): `.pick()`'d directly off the same `ActionRequestWireSchema`/
+// `TaskWireSchema` the `get_action`/`approve`/`reject`/`get_task` capability results use
+// (`packages/shared/src/capabilities.ts`, `./wire/*.ts`) — a literal same-shape subset, not a
+// second, independently-typed `{id, status}` guess.
 const ActionUpdatedEvent = z.object({
   type: z.literal('action.updated'),
-  id: z.string(),
-  status: ActionRequestStatusSchema,
+  ...ActionRequestWireSchema.pick({ id: true, status: true }).shape,
 });
 
 const TaskUpdatedPushEvent = z.object({
   type: z.literal('task.updated'),
-  id: z.string(),
-  status: TaskStatusSchema,
+  ...TaskWireSchema.pick({ id: true, status: true }).shape,
 });
 
 /** Discriminated union of every event that crosses a module, WS, or MCP boundary in the platform. */

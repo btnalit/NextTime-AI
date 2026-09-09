@@ -1,8 +1,21 @@
 import { z } from 'zod';
 import { ConnectionRequestStatusSchema, RoleSchema, WorkerDefinitionKindSchema } from './enums.js';
+import { ActionRequestStatusSchema } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
+import * as wire from './wire/index.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
+
+/**
+ * `resultSchema` reuse note (docs/wire-contract-conventions.md §5, S3.7): every schema below that
+ * projects a first-class platform resource (Task, ActionRequest, Principal, ...) imports it from
+ * `./wire/*.ts` (aliased `wire` here) rather than redefining an equivalent shape inline — see that
+ * directory's own `index.ts` doc comment. A handful of capabilities have no wired handler yet
+ * (`docs/development-tasks.md`'s own "registered but unhandled" list, this PR body's own table) —
+ * their `resultSchema` is a permissive, documented placeholder (reusing `jsonRecord`, defined
+ * below, or `listEnvelope(jsonRecord)` for a `list_*`/`find_*`/`query_*` name) rather than a guess
+ * at a shape no handler has ever produced.
+ */
 
 /**
  * Capability registry (design doc §9.3, "Capability 契约 — HTTP 与 MCP 两个投影"). Pure data: one
@@ -121,6 +134,7 @@ const chatCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.ChatWireSchema),
     description: 'List the chats owned by the calling principal.',
   },
   {
@@ -130,6 +144,7 @@ const chatCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ title: z.string().optional() }).strict(),
+    resultSchema: wire.ChatWireSchema,
     description: 'Create a new private Chat for the calling principal.',
   },
   {
@@ -139,6 +154,7 @@ const chatCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ chatId: id, text: z.string().min(1) }).strict(),
+    resultSchema: z.object({ messageId: id, sequence: z.number(), turnId: z.string() }).strict(),
     description:
       'Send a message on a Chat and start a Turn (§8.1 sendChatMessage). Rejected if a Turn is already running.',
   },
@@ -149,6 +165,7 @@ const chatCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ chatId: id }).strict(),
+    resultSchema: z.object({ stopped: z.boolean() }).strict(),
     description: 'Stop the in-progress Turn on a Chat.',
   },
   {
@@ -164,6 +181,7 @@ const chatCapabilities: readonly Capability[] = [
         limit: z.number().int().positive().optional(),
       })
       .strict(),
+    resultSchema: listEnvelope(wire.ChatMessageWireSchema),
     description:
       'Page through a Chat’s persisted messages. Must be called after subscribe_chat (§9.4).',
   },
@@ -174,6 +192,7 @@ const chatCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ chatId: id, startAfter: z.string().optional() }).strict(),
+    resultSchema: z.object({ subscribed: z.boolean() }).strict(),
     description:
       'Subscribe to a Chat’s push events before paging history, so no event is missed (§9.4).',
   },
@@ -185,45 +204,58 @@ const chatCapabilities: readonly Capability[] = [
 
 const ontologyCapabilities: readonly Capability[] = [
   {
+    // Not in CAPABILITY_HANDLERS (docs/development-tasks.md's own "registered but unhandled"
+    // list, this PR body's own table) — no handler exists yet to derive a precise shape from;
+    // `jsonRecord` is a permissive, documented placeholder (this file's own module doc comment).
     name: 'publish_ontology_version',
     group: 'ontology',
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ ontologyVersionId: id }).strict(),
+    resultSchema: jsonRecord,
     description: 'Publish a draft OntologyVersion (I16). Human channel only.',
   },
   {
+    // Unhandled — see `publish_ontology_version`'s neighboring comment above.
     name: 'propose_ontology_change',
     group: 'ontology',
     mode: 'propose',
     channel: 'handle',
     minRole: 'builder',
     paramsSchema: z.object({ change: jsonRecord }).strict(),
+    resultSchema: jsonRecord,
     description:
       'Propose a private draft ontology change (I16); visible only to the proposer until published.',
   },
   {
+    // Unhandled — see `publish_ontology_version`'s neighboring comment above.
     name: 'get_type',
     group: 'ontology',
     mode: 'observe',
     channel: 'handle',
     paramsSchema: z.object({ typeName: z.string() }).strict(),
+    resultSchema: jsonRecord,
     description: 'Read one ObjectType/LinkType/ActionType definition.',
   },
   {
+    // Unhandled — see `publish_ontology_version`'s neighboring comment above. Name starts with
+    // `list_` (vocabulary guard rule (e)) — wrapped in `listEnvelope`.
     name: 'list_types',
     group: 'ontology',
     mode: 'observe',
     channel: 'handle',
     paramsSchema: z.object({ kind: z.enum(['object', 'link', 'action']).optional() }).strict(),
+    resultSchema: listEnvelope(jsonRecord),
     description: 'List type definitions in the published OntologyVersion.',
   },
   {
+    // Unhandled — see `publish_ontology_version`'s neighboring comment above.
     name: 'validate',
     group: 'ontology',
     mode: 'observe',
     channel: 'handle',
     paramsSchema: z.object({ typeName: z.string(), payload: z.unknown() }).strict(),
+    resultSchema: z.object({ valid: z.boolean(), errors: z.array(jsonRecord).optional() }).strict(),
     description:
       'Validate a payload against a type’s JSON Schema projection without writing anything.',
   },
@@ -241,6 +273,7 @@ const graphCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ objectId: id }).strict(),
+    resultSchema: wire.ObjectWireSchema.nullable(),
     description: 'Read one Object with its current PropertyAssertions.',
   },
   {
@@ -256,6 +289,22 @@ const graphCapabilities: readonly Capability[] = [
         depth: z.number().int().min(1).max(3).optional(),
       })
       .strict(),
+    resultSchema: z
+      .object({
+        nodes: z.array(z.string()),
+        edges: z.array(
+          z
+            .object({
+              linkId: z.string(),
+              linkType: z.string(),
+              sourceObjectId: z.string(),
+              targetObjectId: z.string(),
+              depth: z.number().int().positive(),
+            })
+            .strict(),
+        ),
+      })
+      .strict(),
     description: 'Walk Links from an Object, bounded to depth ≤ 3 (I18-adjacent traversal cap).',
   },
   {
@@ -265,6 +314,11 @@ const graphCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ query: z.string(), objectType: z.string().optional() }).strict(),
+    // S3.7 wire fix (see PR body): previously a bare `GraphObject[]` — §3 "不返回裸数组". Now
+    // `{items}`, same envelope shape as every `list_*`/`find_*` capability even though this name
+    // does not match that prefix pattern (the vocabulary guard's rule (e) does not require it —
+    // fixed anyway, since a bare array is the one thing §3 unconditionally forbids).
+    resultSchema: listEnvelope(wire.ObjectWireSchema),
     description: 'Search Objects/Facts, results carry epistemic_status.',
   },
   {
@@ -274,6 +328,7 @@ const graphCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ objectId: id, at: z.string() }).strict(),
+    resultSchema: wire.ObjectFactsWireSchema,
     description: 'Bitemporal read: the Object’s state as of a given instant.',
   },
   {
@@ -283,6 +338,7 @@ const graphCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ need: z.string() }).strict(),
+    resultSchema: listEnvelope(wire.ObjectWireSchema),
     description:
       'Traverse the platform meta-ontology for Operations matching a need, intersected with the caller’s Grant.',
   },
@@ -293,6 +349,17 @@ const graphCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ need: z.string() }).strict(),
+    resultSchema: listEnvelope(
+      z
+        .object({
+          definitionId: id,
+          version: z.number().int().positive(),
+          kind: z.string(),
+          name: z.string().optional(),
+          description: z.string().optional(),
+        })
+        .strict(),
+    ),
     description:
       'Traverse the platform meta-ontology for WorkerDefinition@version matching a need.',
   },
@@ -303,6 +370,16 @@ const graphCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ need: z.string() }).strict(),
+    resultSchema: listEnvelope(
+      z
+        .object({
+          procedureId: id,
+          version: z.number().int().positive(),
+          name: z.string().optional(),
+          description: z.string().optional(),
+        })
+        .strict(),
+    ),
     description: 'Traverse the platform meta-ontology for Procedures matching a need.',
   },
 ];
@@ -332,25 +409,41 @@ const gateCapabilities: readonly Capability[] = [
     paramsSchema: z
       .object({ gatekeeperId: id, operation: z.string().min(1), params: jsonRecord.optional() })
       .strict(),
+    resultSchema: z
+      .object({
+        status: z.literal('ok'),
+        data: z.unknown(),
+        observedFactCount: z.number().int().nonnegative(),
+      })
+      .strict(),
     description:
       'Run one published observe-class Operation on a Gatekeeper and return its data (the capability behind every <gate>.<op> observe tool); execute-class Operations are refused.',
   },
   {
+    // Placeholder pattern (this group's own module doc comment: "not dispatchable — the real
+    // dynamic names are generated at runtime"). Permissive, documented `resultSchema` (S3.7 task
+    // brief): the real result is whatever the underlying Gatekeeper Operation's own
+    // `result_mapping` produces, which this static registry row cannot know ahead of time.
     name: '<gate>.<op>',
     group: 'gate',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: jsonRecord,
+    resultSchema: jsonRecord,
     description:
       'Observe-class Operation projected from a Gatekeeper’s interface manifest as a tool (placeholder pattern, not dispatchable — the tool calls `observe_operation`); params validated against that Operation’s own params_schema at runtime. Available to entry and Worker Handles.',
   },
   {
+    // Placeholder pattern — see `<gate>.<op>`'s neighboring comment above. Never actually dispatched
+    // as itself either (intercepted client-side and turned into `request_action`, whose own
+    // `resultSchema` documents the real result shape).
     name: '<gate>.<op>:execute',
     group: 'gate',
     mode: 'execute',
     channel: 'handle',
     paramsSchema: jsonRecord,
+    resultSchema: jsonRecord,
     description:
       'Execute-class Operation projected from a Gatekeeper’s interface manifest; the tool call is intercepted and turned into request_action (§7.4). Only a Worker’s Handle may hold this.',
   },
@@ -370,6 +463,7 @@ const connectionCapabilities: readonly Capability[] = [
     paramsSchema: z
       .object({ kind: z.enum(['http', 'mcp', 'cli', 'ssh']), target: z.string() })
       .strict(),
+    resultSchema: wire.ConnectionRequestCreatedWireSchema,
     description:
       'Propose connecting a new system; produces a connection-request card for a human to fill in credentials.',
   },
@@ -411,6 +505,7 @@ const connectionCapabilities: readonly Capability[] = [
         manifestSource: z.string().optional(),
       })
       .strict(),
+    resultSchema: wire.CreateConnectionResultWireSchema,
     description:
       'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp.',
     redactedParamKeys: ['credentials'],
@@ -422,6 +517,7 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ gatekeeperId: id }).strict(),
+    resultSchema: wire.PublishManifestResultWireSchema,
     description: 'Publish every draft Operation in a Gatekeeper’s interface manifest (I16/I17).',
   },
   {
@@ -431,6 +527,7 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ gatekeeperId: id, principalId: id }).strict(),
+    resultSchema: wire.CapabilityGrantWireSchema,
     description: 'Grant a user’s entry agent use of an existing Gatekeeper (a CapabilityGrant).',
   },
   {
@@ -442,6 +539,7 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ status: ConnectionRequestStatusSchema.optional() }).strict(),
+    resultSchema: listEnvelope(wire.ConnectionRequestWireSchema),
     description: 'List ConnectionRequests, optionally filtered by status.',
   },
   // -----------------------------------------------------------------------------------------
@@ -458,6 +556,7 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.GatekeeperSummaryWireSchema),
     description:
       'List every registered Gatekeeper instance (health/manifest not included — see get_gatekeeper).',
   },
@@ -468,6 +567,7 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ gatekeeperId: id }).strict(),
+    resultSchema: wire.GatekeeperDetailWireSchema,
     description: 'One Gatekeeper instance with its Operations and a live health probe.',
   },
   {
@@ -477,6 +577,7 @@ const connectionCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ gatekeeperId: id.optional() }).strict(),
+    resultSchema: listEnvelope(wire.OperationSummaryWireSchema),
     description:
       'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to one gate.',
   },
@@ -545,6 +646,7 @@ const metaCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'builder',
     paramsSchema: z.object({ gatekeeperId: id, operation: jsonRecord }).strict(),
+    resultSchema: wire.OperationProposeResultWireSchema,
     description: 'Propose a private draft Operation after exploring a Gatekeeper (I16).',
   },
   {
@@ -562,6 +664,7 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
+    resultSchema: wire.OperationPublishResultWireSchema,
     description: 'Publish a draft Operation (I16).',
   },
   {
@@ -570,6 +673,7 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ gatekeeperId: id, name: z.string().min(1) }).strict(),
+    resultSchema: wire.OperationDeprecateResultWireSchema,
     description: 'Deprecate a published Operation.',
   },
   {
@@ -579,6 +683,7 @@ const metaCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'builder',
     paramsSchema: z.object({ skill: jsonRecord }).strict(),
+    resultSchema: wire.SkillProposeResultWireSchema,
     description: 'Propose a private draft Skill, typically at the end of a successful WorkerRun.',
   },
   {
@@ -588,6 +693,7 @@ const metaCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'builder',
     paramsSchema: z.object({ procedure: jsonRecord }).strict(),
+    resultSchema: wire.ProcedureProposeResultWireSchema,
     description: 'Propose a private draft Procedure distilled from a successful Task.',
   },
   {
@@ -596,6 +702,7 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ skillId: id }).strict(),
+    resultSchema: wire.SkillPublishResultWireSchema,
     description: 'Publish a draft Skill (I16).',
   },
   {
@@ -604,6 +711,7 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ procedureId: id }).strict(),
+    resultSchema: wire.ProcedurePublishResultWireSchema,
     description: 'Publish a draft Procedure (I16).',
   },
   {
@@ -612,6 +720,7 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ skillId: id }).strict(),
+    resultSchema: wire.SkillPublishResultWireSchema,
     description: 'Deprecate a published Skill.',
   },
   {
@@ -620,6 +729,7 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ procedureId: id }).strict(),
+    resultSchema: wire.ProcedurePublishResultWireSchema,
     description: 'Deprecate a published Procedure.',
   },
   {
@@ -635,6 +745,7 @@ const metaCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.SkillSummaryWireSchema),
     description: 'List published Skills plus the caller’s own draft Skills.',
   },
   {
@@ -644,9 +755,15 @@ const metaCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.ProcedureSummaryWireSchema),
     description: 'List published Procedures plus the caller’s own draft Procedures.',
   },
   {
+    // Registered in CAPABILITY_HANDLERS, but `assertFactHandler` always throws
+    // `AssertFactWriteNotImplementedError` today (handlers.ts's own doc comment: "the graph write
+    // is not implemented ... pre-existing gap") — no successful return has ever happened. The
+    // Fact this would return once implemented is well-defined (`wire.FactWireSchema`), so that is
+    // used here rather than a bare permissive placeholder.
     name: 'assert_fact',
     group: 'meta',
     mode: 'write',
@@ -655,25 +772,31 @@ const metaCapabilities: readonly Capability[] = [
     paramsSchema: z
       .object({ objectId: id, linkType: z.string(), value: z.unknown(), sourceId: id.optional() })
       .strict(),
+    resultSchema: wire.FactWireSchema,
     description:
       'Assert a Fact; resulting epistemic_status depends on the caller’s principal kind (§5.5).',
   },
   {
+    // Unhandled (no CAPABILITY_HANDLERS entry) — see `assert_fact`'s neighboring comment: the
+    // Fact shape it would return is well-defined regardless.
     name: 'supersede_fact',
     group: 'meta',
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ factId: id, value: z.unknown() }).strict(),
+    resultSchema: wire.FactWireSchema,
     description: 'Supersede a Fact from the same Source with a newer value.',
   },
   {
+    // Unhandled — see `assert_fact`'s neighboring comment above.
     name: 'invalidate_fact',
     group: 'meta',
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ factId: id, reason: z.string().optional() }).strict(),
+    resultSchema: wire.FactWireSchema,
     description: 'Invalidate a Fact.',
   },
 ];
@@ -692,6 +815,7 @@ const epistemicCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ nodeId: id }).strict(),
+    resultSchema: wire.ExplainResultWireSchema,
     description:
       'Fact/Decision/Turn → Observation → Activity → Source + Principal provenance chain (Semantica get_provenance).',
   },
@@ -708,70 +832,86 @@ const epistemicCapabilities: readonly Capability[] = [
         relatedTaskId: id.optional(),
       })
       .strict(),
+    resultSchema: z.object({ id, status: z.string(), turnId: z.string() }).strict(),
     description: 'Record a Decision (starts in `proposed`, see transitions.ts).',
   },
   {
+    // Unhandled — name starts with `query_` (vocabulary guard rule (e)): `listEnvelope`.
     name: 'query_decisions',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ filter: jsonRecord.optional() }).strict(),
+    resultSchema: listEnvelope(jsonRecord),
     description: 'Query recorded Decisions.',
   },
   {
+    // Unhandled — name starts with `find_` (vocabulary guard rule (e)): `listEnvelope`.
     name: 'find_precedents',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ need: z.string() }).strict(),
+    resultSchema: listEnvelope(jsonRecord),
     description: 'Find prior Decisions/Tasks addressing a similar need.',
   },
   {
+    // Unhandled — permissive placeholder (this file's own module doc comment).
     name: 'causal_chain',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ decisionId: id }).strict(),
+    resultSchema: jsonRecord,
     description: 'Causal chain leading to a Decision (Semantica get_causal_chain).',
   },
   {
+    // Unhandled — permissive placeholder.
     name: 'decision_impact',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ decisionId: id }).strict(),
+    resultSchema: jsonRecord,
     description: 'Downstream impact of a Decision (Semantica analyze_decision_impact).',
   },
   {
+    // Unhandled — name starts with `list_` (vocabulary guard rule (e)): `listEnvelope`.
     name: 'list_conflicts',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ status: z.string().optional() }).strict(),
+    resultSchema: listEnvelope(jsonRecord),
     description:
       'List Conflicts visible to the caller (private-Source Conflicts are one-sided, §5.6).',
   },
   {
+    // Unhandled — permissive placeholder.
     name: 'resolve_conflict',
     group: 'epistemic',
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ conflictId: id, resolution: z.string() }).strict(),
+    resultSchema: jsonRecord,
     description: 'Resolve a Conflict.',
   },
   {
+    // Unhandled — see `assert_fact`'s (meta group) neighboring comment: the Fact shape it would
+    // return is well-defined regardless of no handler existing yet.
     name: 'verify_fact',
     group: 'epistemic',
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ factId: id, evidenceIds: z.array(id) }).strict(),
+    resultSchema: wire.FactWireSchema,
     description: 'Promote a Fact to epistemic_status=verified with Evidence (I3.6).',
   },
 ];
@@ -811,6 +951,31 @@ const governanceCapabilities: readonly Capability[] = [
         idempotencyKey: z.string().min(1).optional(),
       })
       .strict(),
+    // request-action-handler.ts's `runGovernedRequest`: a two-phase handler whose real result
+    // (what `dispatchCapability` actually returns — see dispatch.ts's own doc comment: once an
+    // `afterCommit` continuation is present, *its* resolved value replaces the phase-1 `result`)
+    // is one of two shapes depending on which branch of the ActionRequest's resolved status is
+    // taken (that function's own decision-table doc comment):
+    //   - no `afterCommit` (a terminal/no-op status, or `pending_approval && !awaitDecision`) →
+    //     the full ActionRequest wire projection, optionally with a `simulate` field.
+    //   - `afterCommit` present (auto_approved/approved/executing/executed/verified/failed, or
+    //     `pending_approval && awaitDecision`) → the narrower `{id, status, data?, reason?}`
+    //     execution-outcome shape those continuations (`tryExecuteInline`/
+    //     `awaitConcurrentExecution`/`pollAndExecute`/`readTerminalOutcome`) resolve to. Modeled
+    //     as a union rather than "fixed" into one shape — unifying them is a real, larger behavior
+    //     change to a heavily fought-over handler (see that file's own module doc comment), out of
+    //     this task's "no runtime behaviour change" scope.
+    resultSchema: z.union([
+      wire.ActionRequestWireSchema.extend({ simulate: z.unknown().optional() }),
+      z
+        .object({
+          id: z.string(),
+          status: ActionRequestStatusSchema,
+          data: z.unknown().optional(),
+          reason: z.string().optional(),
+        })
+        .strict(),
+    ]),
     description:
       'A Worker’s only execute-mode entry point onto a Gatekeeper; creates an ActionRequest.',
   },
@@ -821,6 +986,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: z.object({ actionRequestId: id }).strict(),
+    resultSchema: wire.ActionRequestWireSchema,
     description:
       'Approve a pending ActionRequest (I14: the approver must hold the requested scope).',
   },
@@ -831,6 +997,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: z.object({ actionRequestId: id, reason: z.string().optional() }).strict(),
+    resultSchema: wire.ActionRequestWireSchema,
     description: 'Reject a pending ActionRequest.',
   },
   {
@@ -840,6 +1007,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: z.object({}).strict(),
+    resultSchema: listEnvelope(wire.ActionRequestWireSchema),
     description: 'List ActionRequests pending the caller’s approval.',
   },
   {
@@ -849,6 +1017,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: z.object({ actionRequestId: id }).strict(),
+    resultSchema: wire.ActionRequestWireSchema,
     description: 'Read one ActionRequest.',
   },
   {
@@ -858,6 +1027,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: z.object({ actionKindTag: z.string() }).strict(),
+    resultSchema: wire.PolicyWireSchema,
     description:
       '"Always allow this kind" — writes a workspace auto-approval rule for an ActionKind.',
   },
@@ -884,6 +1054,7 @@ const governanceCapabilities: readonly Capability[] = [
         scope: jsonRecord.optional(),
       })
       .strict(),
+    resultSchema: wire.CapabilityGrantWireSchema,
     description: 'Grant a Capability to a Principal.',
   },
   {
@@ -893,6 +1064,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ grantId: id }).strict(),
+    resultSchema: wire.CapabilityGrantWireSchema,
     description: 'Revoke a CapabilityGrant.',
   },
   {
@@ -902,6 +1074,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ policy: jsonRecord }).strict(),
+    resultSchema: wire.PolicyWireSchema,
     description: 'Write a Policy rule (allow/require_approval/deny).',
   },
   {
@@ -911,15 +1084,20 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ key: z.string(), value: z.unknown() }).strict(),
+    resultSchema: wire.QuotaWireSchema,
     description: 'Set an I18 quota (invoke_worker depth, concurrency, token/time, daily cost).',
   },
   {
+    // Unhandled (no CAPABILITY_HANDLERS entry). Best-effort placeholder: whatever issues a
+    // CapabilityHandle must return the signed token itself, or the capability would be useless —
+    // more specific than a bare permissive record, but not derived from any real handler.
     name: 'issue_handle',
     group: 'governance',
     mode: 'execute',
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ sessionId: id, scope: jsonRecord }).strict(),
+    resultSchema: z.object({ token: z.string() }).strict(),
     description: 'Issue a CapabilityHandle for a Session.',
   },
   // -----------------------------------------------------------------------------------------
@@ -936,6 +1114,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: z.object({ principalId: id.optional() }).strict(),
+    resultSchema: listEnvelope(wire.CapabilityGrantWireSchema),
     description: 'List CapabilityGrants, optionally filtered to one Principal.',
   },
   {
@@ -945,6 +1124,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.PolicyWireSchema),
     description: 'List every Policy row in the workspace.',
   },
   {
@@ -954,6 +1134,7 @@ const governanceCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.QuotaListEntryWireSchema),
     description:
       'List the workspace’s I18 quota values (overrides merged over compiled-in defaults).',
   },
@@ -993,6 +1174,16 @@ const taskCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: z
+      .object({
+        // `application/linkage`'s own undelivered-item payloads — opaque per-kind JSON, not one
+        // fixed shape (`DrainedContextItems`, application/linkage/store.ts).
+        pendingApprovals: z.array(jsonRecord),
+        tasks: z.array(jsonRecord),
+        facts: z.array(wire.FactWireSchema),
+        precedents: z.array(z.unknown()),
+      })
+      .strict(),
     description:
       'Entry-mode context bootstrap (§7.4 `context` injection, S1 scope): the calling principal’s ' +
       'pending approvals, running Tasks and their results, relevant Facts (with epistemic_status), ' +
@@ -1011,17 +1202,23 @@ const taskCapabilities: readonly Capability[] = [
         decisions: z.array(id).optional(),
       })
       .strict(),
+    resultSchema: z.object({ turnId: id, status: z.string() }).strict(),
     description:
       'Report a completed Turn’s outcome back to the kernel (§7.2 "每轮回传 Turn 与决策"); called ' +
       'from the entry agent’s pi `agent_end` handler.',
   },
   {
+    // Unhandled (docs/development-tasks.md S2.7's own explicit "not wired" decision, still true —
+    // see handlers.ts's `setQuotaHandler`-neighboring comment). If ever wired it can only create a
+    // well-formed Task (§5.5 "Task 固定引用启动时版本"), the same resource `get_task`/`invoke_worker`
+    // already return — reused rather than a bare placeholder.
     name: 'create_task',
     group: 'task',
     mode: 'write',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ input: z.unknown() }).strict(),
+    resultSchema: wire.TaskWireSchema,
     description: 'Create a Task.',
   },
   {
@@ -1049,6 +1246,7 @@ const taskCapabilities: readonly Capability[] = [
         gates: z.array(id).optional(),
       })
       .strict(),
+    resultSchema: wire.InvokeWorkerResultWireSchema,
     description:
       'invoke_worker(definition@version, input, wait, timeout, gates?) — §8.2; wait defaults to ' +
       'false — returns { taskId, status } immediately and the caller polls get_task for the ' +
@@ -1062,6 +1260,7 @@ const taskCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ taskId: id }).strict(),
+    resultSchema: wire.TaskWireSchema,
     description: 'Read one Task and its WorkerRun.',
   },
   {
@@ -1080,6 +1279,21 @@ const taskCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'handle',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(
+      z
+        .object({
+          gatekeeperId: id,
+          gateName: z.string(),
+          name: z.string(),
+          // The Operation's own manifest shape (`OperationSchema`, action-description.ts) —
+          // `unknown` here rather than that schema itself: `worker-result-handler.ts`'s
+          // `toWireOperation` passes `record.operation` straight through untyped
+          // (`listPublishedOperationsForGatekeepers`'s own row shape), so this is honestly what
+          // the handler returns today, not a guaranteed-valid `Operation`.
+          operation: z.unknown(),
+        })
+        .strict(),
+    ),
     description:
       'List the published Operations of every Gatekeeper in the calling Handle’s own ' +
       'resources.gatekeeper scope (§7.4 worker-mode tool registration) — one entry per ' +
@@ -1097,6 +1311,7 @@ const taskCapabilities: readonly Capability[] = [
     mode: 'write',
     channel: 'handle',
     paramsSchema: WorkerResultCapabilityParamsSchema,
+    resultSchema: wire.ReportTaskResultWireSchema,
     description:
       'Post a Worker’s result contract ({summary, findings?, factsToAssert?, evidence?, ' +
       'artifacts?, proposedSkill?, proposedOperations?}) back to the kernel; completes the Task ' +
@@ -1115,6 +1330,7 @@ const taskCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.TaskWireSchema),
     description: "List the caller's own Tasks (newest first), each with its WorkerRuns.",
   },
   {
@@ -1124,6 +1340,7 @@ const taskCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ taskId: id }).strict(),
+    resultSchema: wire.CancelTaskResultWireSchema,
     description: 'Request cancellation of a running Task.',
   },
 ];
@@ -1154,6 +1371,7 @@ const workerCapabilities: readonly Capability[] = [
         definition: jsonRecord,
       })
       .strict(),
+    resultSchema: wire.WorkerDefinitionWireSchema,
     description:
       'Propose a private draft WorkerDefinition version (definitionId omitted starts a new family).',
   },
@@ -1163,6 +1381,7 @@ const workerCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ definitionId: id, version: z.number().int().positive() }).strict(),
+    resultSchema: wire.WorkerDefinitionWireSchema,
     description: 'Publish a draft WorkerDefinition (I12: immutable once published).',
   },
   {
@@ -1171,6 +1390,7 @@ const workerCapabilities: readonly Capability[] = [
     mode: 'execute',
     channel: 'human',
     paramsSchema: z.object({ definitionId: id, version: z.number().int().positive() }).strict(),
+    resultSchema: wire.WorkerDefinitionWireSchema,
     description: 'Deprecate a published WorkerDefinition version.',
   },
   {
@@ -1180,6 +1400,7 @@ const workerCapabilities: readonly Capability[] = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ kind: z.enum(['entry', 'worker']).optional() }).strict(),
+    resultSchema: listEnvelope(wire.WorkerDefinitionWireSchema),
     description: 'List published WorkerDefinitions.',
   },
 ];
@@ -1190,6 +1411,7 @@ const workerCapabilities: readonly Capability[] = [
 
 const ingestCapabilities: readonly Capability[] = [
   {
+    // Unhandled — permissive placeholder (this file's own module doc comment).
     name: 'register_source',
     group: 'ingest',
     mode: 'write',
@@ -1201,14 +1423,17 @@ const ingestCapabilities: readonly Capability[] = [
         visibility: z.enum(['workspace', 'private']),
       })
       .strict(),
+    resultSchema: jsonRecord,
     description: 'Register a Source (document/DB/API/person/agent session).',
   },
   {
+    // Unhandled — permissive placeholder.
     name: 'submit_observations',
     group: 'ingest',
     mode: 'write',
     channel: 'handle',
     paramsSchema: z.object({ sourceId: id, observations: z.array(jsonRecord) }).strict(),
+    resultSchema: jsonRecord,
     description: 'Submit a batch of Observations from one Activity (collectors, §7.8).',
   },
 ];
@@ -1225,6 +1450,10 @@ const auditCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'auditor',
     paramsSchema: z.object({ filter: jsonRecord.optional() }).strict(),
+    // S3.7 wire fix (see PR body): previously a bare `AuditRecordRow[]` — §3 "不返回裸数组". This
+    // name does not match `list_*`/`find_*` either, same reasoning as `search` (graph group)
+    // above — fixed anyway.
+    resultSchema: listEnvelope(wire.AuditRecordWireSchema),
     description: 'Query AuditRecords.',
   },
   {
@@ -1234,15 +1463,24 @@ const auditCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'auditor',
     paramsSchema: z.object({ entityId: id }).strict(),
+    resultSchema: z
+      .object({
+        object: wire.ObjectWireSchema.nullable(),
+        facts: z.array(wire.FactWireSchema),
+        auditRecords: z.array(wire.AuditRecordWireSchema),
+      })
+      .strict(),
     description: 'Reconstruct an entity’s history from AuditRecords.',
   },
   {
+    // Unhandled — permissive placeholder: a PROV-O graph has no fixed shape in this codebase.
     name: 'export_prov',
     group: 'audit',
     mode: 'observe',
     channel: 'human',
     minRole: 'auditor',
     paramsSchema: z.object({ scope: jsonRecord.optional() }).strict(),
+    resultSchema: jsonRecord,
     description: 'Export a PROV-O provenance graph.',
   },
 ];
@@ -1271,6 +1509,7 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'operator',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.PrincipalWireSchema),
     description:
       'List every Principal in the workspace (kind/role/hasApiKey/disabledAt — never the key hash).',
   },
@@ -1281,6 +1520,7 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ role: RoleSchema, displayName: z.string().min(1) }).strict(),
+    resultSchema: wire.CreatePrincipalResultWireSchema,
     description:
       'Create a kind=human Principal and its API key; the plaintext key is returned once and never stored or readable again.',
   },
@@ -1291,6 +1531,7 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ principalId: id, role: RoleSchema }).strict(),
+    resultSchema: wire.PrincipalWireSchema,
     description:
       'Change a Principal’s role. Refuses to demote the last remaining owner and refuses any non-human (agent/service) Principal.',
   },
@@ -1305,6 +1546,7 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ principalId: id }).strict(),
+    resultSchema: wire.RotateApiKeyResultWireSchema,
     description:
       'Rotate a Principal’s API key — the old key stops working immediately; the new plaintext key is returned once.',
   },
@@ -1315,6 +1557,7 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'owner',
     paramsSchema: z.object({ principalId: id }).strict(),
+    resultSchema: wire.PrincipalWireSchema,
     description:
       'Disable a Principal: its API key and entry-session Handles stop working immediately. Refuses the last remaining owner and refuses disabling oneself.',
   },
@@ -1325,6 +1568,7 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: wire.WorkspaceWireSchema,
     description:
       'The calling workspace’s identity and summary counts (principals, gatekeepers), plus the resolved calling Principal’s own identity and role (caller).',
   },
@@ -1335,6 +1579,7 @@ const membersCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.ModelCatalogEntryWireSchema),
     description:
       'The llm-proxy model whitelist, read from the kernel’s read-only models.json mount (never provider keys).',
   },
@@ -1362,6 +1607,7 @@ const agentProfileCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: z.object({ principalId: id.optional() }).strict(),
+    resultSchema: wire.AgentProfileWireSchema,
     description:
       'Read one Principal’s AgentProfile — raw fields (null = inherit) plus the resolved `effective` values after applying the workspace AgentPolicy and the principal’s Grants. Omit principalId for the caller’s own; naming another principal requires owner.',
   },
@@ -1386,6 +1632,7 @@ const agentProfileCapabilities: readonly Capability[] = [
         autoApproveLow: z.boolean().nullable().optional(),
       })
       .strict(),
+    resultSchema: wire.AgentProfileWireSchema,
     description:
       'Update one Principal’s AgentProfile (never widens past the principal’s own Grants or the workspace AgentPolicy — 400 invalid_params on a model outside the whitelist, a Skill that is not published, a Gatekeeper the principal holds no Grant for, an addendum over the policy’s length cap, or auto-approve-low when the policy forbids it). A member may edit only their own profile, and only when AgentPolicy.memberCanEditProfile is true; an owner may edit anyone’s. Immediate and audited; revokes the target principal’s entry-session Handles so the next turn re-mints under the new scope.',
   },
@@ -1396,6 +1643,7 @@ const agentProfileCapabilities: readonly Capability[] = [
     channel: 'human',
     minRole: 'member',
     paramsSchema: noParams,
+    resultSchema: wire.AgentPolicyWireSchema,
     description:
       'Read the workspace’s AgentPolicy (compiled-in defaults projected when no row has ever been written).',
   },
@@ -1416,6 +1664,7 @@ const agentProfileCapabilities: readonly Capability[] = [
         allowMemberAutoApproveLow: z.boolean().optional(),
       })
       .strict(),
+    resultSchema: wire.AgentPolicyWireSchema,
     description:
       'Update the workspace’s AgentPolicy — a partial update, omitted fields are left unchanged. Owner only.',
   },
