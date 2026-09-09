@@ -16,7 +16,7 @@ import { defineConfig, devices } from '@playwright/test';
  *     (packages/kernel/src/application/host-bridge/fake-runtime.ts echoes the prompt back).
  *
  * See README.md's "End-to-end (Playwright)" section for exact commands, docs/runbooks/
- * web-console.md's "CI (Playwright)" section for how `.github/workflows/e2e.yml` wires this up,
+ * web-console.md's "CI（Playwright）" section for how `.github/workflows/e2e.yml` wires this up,
  * and how S1.10's `scripts/accept_s1.sh` bootstraps the same kind of workspace by hand.
  */
 export default defineConfig({
@@ -24,6 +24,16 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
+  // Every spec here drives one shared kernel/Postgres (a real deployment, or the throwaway CI
+  // stack) and several assume exclusive access to server-side state a second concurrent test
+  // could perturb (e.g. approvals.spec.ts's own "the most recently created Chat" — see its doc
+  // comment). `fullyParallel: false` alone only serializes tests *within* one file; Playwright's
+  // default worker count still runs separate spec files concurrently. Forced to 1 after the first
+  // real `.github/workflows/e2e.yml` run showed chat.spec.ts's Turn taking long enough under a
+  // second worker's concurrent CPU/DB load on a shared runner to blow its own 15s settle timeout
+  // — this suite's total runtime is small enough that trading a little wall-clock time for
+  // determinism is the right call.
+  workers: 1,
   retries: 0,
   // CI additionally gets an HTML report written to disk (never auto-opened — `open: 'never'`) so
   // `.github/workflows/e2e.yml` has something to upload as an artifact on failure; local runs stay
