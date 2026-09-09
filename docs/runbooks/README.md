@@ -20,6 +20,7 @@
 | [`host-checkout.md`](./host-checkout.md) | 代码检出、生成 `.env`、密钥/配置占位文件、起 Postgres |
 | [`host-bootstrap.md`](./host-bootstrap.md) | `${NEXTTIME_DATA}` 数据目录树与 `secrets/pg_password`；另含"删除 Workspace"的操作员清理脚本 |
 | [`host-caddy.md`](./host-caddy.md) | TLS（内网 CA 自签）与 web 静态产物上线，平台唯一公网面 |
+| [`host-explorer.md`](./host-explorer.md) | Explorer 静态包构建与挂载（`/explorer`）、专用 API key 配置、Graph/Decision/Lineage 三工作区验证 |
 | [`host-worker-runtime.md`](./host-worker-runtime.md) | `worker-runtime` 镜像 + `worker-supervisor` 常驻/一次性两种模式 |
 | [`host-agent-host.md`](./host-agent-host.md) | `agent-host` 事件桥 + 内核 `AgentHostRuntime`；`fake-llm` 端到端对话链路 |
 | [`host-gatekeepers.md`](./host-gatekeepers.md) | 预置的 `docker`/`ragflow` 两个门实例主机验收（CLI 与 capability 两条注册路径） |

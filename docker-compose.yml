@@ -509,10 +509,22 @@ services:
     # of the intended bind address (lane-7 P1 fix).
     ports: ["${KERNEL_BIND_ADDR:?}:8443:8443"]
     # Static roots ship inside the image: deploy/caddy/Dockerfile builds packages/web and copies
-    # dist/ to /srv/web (/srv/explorer stays a placeholder until S3). Rebuild the image to deploy
-    # a web change. ${NEXTTIME_DATA:?}/caddy:/data persists the internal CA and issued certs
-    # (chowned by scripts/host-env-init.sh).
+    # dist/ to /srv/web (/srv/explorer holds the S3.5 Explorer bundle once a host operator has
+    # run `sh explorer/build.sh` — a placeholder page until then, see explorer/README.md).
+    # Rebuild the image to deploy a web change. ${NEXTTIME_DATA:?}/caddy:/data persists the
+    # internal CA and issued certs (chowned by scripts/host-env-init.sh).
     volumes: ["./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", "${NEXTTIME_DATA:?}/caddy:/data"]
+    # S3.5 (docs/development-tasks.md §S3.5): EXPLORER_API_KEY — the API key of a Principal the
+    # Explorer static bundle's requests are attributed to (Caddyfile's own comment on why: the
+    # unmodified bundle sends no X-API-Key itself). Same "credentials live only in an
+    # ${NEXTTIME_DATA}/secrets/*.env file, never in this tracked compose file or in .env.example"
+    # convention as llm-proxy's own env_file below — see docs/runbooks/host-explorer.md for how
+    # this file/key is provisioned. Caddy reads it from its own process environment via the
+    # Caddyfile's `{$EXPLORER_API_KEY}` placeholder — unset/empty substitutes an empty header
+    # value, which the kernel's own `X-API-Key` auth then 401s (fails closed at the kernel, not
+    # silently unauthenticated); Caddy itself has no built-in "refuse to start" for an unset
+    # placeholder without a custom module, so this is not a startup-time check.
+    env_file: ${NEXTTIME_DATA:?}/secrets/explorer.env
     depends_on: { kernel: { condition: service_healthy } }
     networks: [control]
     restart: unless-stopped
