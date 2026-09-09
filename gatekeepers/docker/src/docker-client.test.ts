@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { demuxDockerLogBuffer } from './docker-client.js';
+import { demuxDockerLogBuffer, parseDockerConnection } from './docker-client.js';
 
 /**
  * Docker's `container.logs()` for a non-TTY container multiplexes stdout/stderr with an 8-byte
@@ -38,5 +38,58 @@ describe('demuxDockerLogBuffer', () => {
     const truncatedSecond = frame(1, 'partial-payload').subarray(0, 10);
     const buf = Buffer.concat([complete, truncatedSecond]);
     expect(demuxDockerLogBuffer(buf)).toBe('ok\n');
+  });
+});
+
+// fix/gate-docker-socket-proxy: DOCKER_HOST parsing — docker-socket-proxy-gate now sits between
+// this gate and /var/run/docker.sock (docker-compose.yml's `dockerapi-gate` network); every
+// non-`tcp://` or unparsable value must fall back to the plain socket path instead of being
+// guessed at (same contract as `@nexttime/worker-supervisor`'s config.ts / `@nexttime/agent-host`'s
+// container-io.ts own `parseDockerConnection` — see `parseDockerConnection`'s own doc comment in
+// docker-client.ts).
+describe('parseDockerConnection', () => {
+  it('falls back to the socket path when DOCKER_HOST is unset', () => {
+    expect(parseDockerConnection(undefined, '/var/run/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/var/run/docker.sock',
+    });
+  });
+
+  it('parses a tcp:// DOCKER_HOST into host/port', () => {
+    expect(
+      parseDockerConnection('tcp://docker-socket-proxy-gate:2375', '/var/run/docker.sock'),
+    ).toEqual({
+      kind: 'tcp',
+      host: 'docker-socket-proxy-gate',
+      port: 2375,
+    });
+  });
+
+  it('defaults the port to 2375 when DOCKER_HOST omits one', () => {
+    expect(parseDockerConnection('tcp://docker-socket-proxy-gate', '/var/run/docker.sock')).toEqual(
+      {
+        kind: 'tcp',
+        host: 'docker-socket-proxy-gate',
+        port: 2375,
+      },
+    );
+  });
+
+  it('falls back to the socket path for a unix:// DOCKER_HOST (not produced by this repo)', () => {
+    expect(parseDockerConnection('unix:///var/run/docker.sock', '/tmp/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/tmp/docker.sock',
+    });
+  });
+
+  it('falls back to the socket path for an unparsable DOCKER_HOST', () => {
+    expect(parseDockerConnection('tcp://', '/tmp/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/tmp/docker.sock',
+    });
+    expect(parseDockerConnection('not a url', '/tmp/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/tmp/docker.sock',
+    });
   });
 });

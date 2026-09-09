@@ -2,8 +2,11 @@
 #
 # Multi-stage build for gatekeepers/docker (design doc §7.5, §7.10, §10.1, §10.2;
 # docs/development-tasks.md S2.5) — the preset cli-kind Gatekeeper for the host's own Docker
-# Engine. Talks to /var/run/docker.sock via dockerode (see README.md) — no docker CLI binary is
-# installed in this image, matching the task brief's "no docker CLI in the image".
+# Engine. Talks to the Docker Engine API via dockerode (see README.md) — no docker CLI binary is
+# installed in this image, matching the task brief's "no docker CLI in the image". As of
+# fix/gate-docker-socket-proxy this container reaches the Engine API over DOCKER_HOST (docker-
+# compose.yml: docker-socket-proxy-gate on the dockerapi-gate network), not a bind-mounted
+# /var/run/docker.sock — see README.md.
 #
 # NOTE: image build is unverified on this machine — Docker is not installed here. It must be
 # built and smoke-tested on the target host (docs/runbooks/host-gatekeepers.md) before use.
@@ -33,9 +36,9 @@ RUN mkdir -p /data/gate && chown nexttime:nexttime /data/gate
 ENV GATE_DATA_DIR=/data/gate
 ENV GATE_PORT=8083
 
-# Runs as non-root (uid 10001) but still needs to reach /var/run/docker.sock — the host's docker
-# group gid is added via docker-compose.yml's `group_add` on this service, same pattern as
-# packages/worker-supervisor/Dockerfile.
+# Runs as non-root (uid 10001). fix/gate-docker-socket-proxy: no longer needs the host's docker
+# group gid / `group_add` — this container never touches /var/run/docker.sock's file permissions
+# at all, only docker-socket-proxy-gate's own network-reachable HTTP listener (DOCKER_HOST).
 USER nexttime
 ENV NODE_ENV=production
 CMD ["node", "dist/index.js"]

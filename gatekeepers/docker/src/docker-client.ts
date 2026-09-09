@@ -14,6 +14,16 @@ import Docker from 'dockerode';
  * this dockerode client, not `@nexttime/gatekeeper-base`'s own shell-executing `CliTransport`
  * (`kinds/cli.ts`) — see `transport.ts`'s module doc for why `main()`'s env-driven bootstrap
  * cannot be reused here.
+ *
+ * Connection (fix/gate-docker-socket-proxy): `docker-compose.yml` no longer bind-mounts
+ * `/var/run/docker.sock` into this gate's own container — this was the last direct docker.sock
+ * consumer in the file (agent-host/worker-supervisor already went through their own
+ * `docker-socket-proxy` instance, see that service's own compose comment). `createDockerClient`
+ * now goes through a second, gate-dedicated proxy instance instead
+ * (`DOCKER_HOST=tcp://docker-socket-proxy-gate:2375` on the `dockerapi-gate` network, parsed by
+ * `parseDockerConnection` below — same contract as the other two consumers' own copies). The
+ * `socket` variant survives as the fallback for tests and any non-compose run that never sets
+ * `DOCKER_HOST`.
  */
 
 export interface ContainerSummary {
@@ -121,12 +131,49 @@ function isNotModified(err: unknown): boolean {
   return typeof err === 'object' && err !== null && 'statusCode' in err && err.statusCode === 304;
 }
 
+/** How this module reaches the Docker Engine API — a plain Unix socket (`socketPath`, the pre-
+ *  fix/gate-docker-socket-proxy default and what tests still use) or a `docker-socket-proxy`
+ *  instance's HTTP listener (`tcp`, `DOCKER_HOST=tcp://docker-socket-proxy-gate:2375` —
+ *  docker-compose.yml's `dockerapi-gate` network). Duplicated from `@nexttime/worker-supervisor`'s
+ *  `config.ts` / `@nexttime/agent-host`'s `container-io.ts` identical type rather than shared:
+ *  same reasoning both of those give on their own copy — each internal-plane client owns its own
+ *  IO-free env parsing. */
+export type DockerConnection =
+  | { readonly kind: 'socket'; readonly socketPath: string }
+  | { readonly kind: 'tcp'; readonly host: string; readonly port: number };
+
+/** Parses `DOCKER_HOST` into a `DockerConnection` — same contract (and same reasoning: only
+ *  `tcp://host:port` is recognized, everything else falls back to `fallbackSocketPath`) as
+ *  `@nexttime/worker-supervisor`'s `config.ts` `parseDockerConnection` / `@nexttime/agent-host`'s
+ *  `container-io.ts` `parseDockerConnection`, duplicated for the reason given on `DockerConnection`
+ *  above. */
+export function parseDockerConnection(
+  dockerHost: string | undefined,
+  fallbackSocketPath: string,
+): DockerConnection {
+  const fallback: DockerConnection = { kind: 'socket', socketPath: fallbackSocketPath };
+  if (!dockerHost || !dockerHost.startsWith('tcp://')) return fallback;
+  let url: URL;
+  try {
+    url = new URL(dockerHost);
+  } catch {
+    return fallback;
+  }
+  if (!url.hostname) return fallback;
+  const port = url.port ? Number.parseInt(url.port, 10) : 2375;
+  if (!Number.isFinite(port) || port <= 0) return fallback;
+  return { kind: 'tcp', host: url.hostname, port };
+}
+
 export interface CreateDockerClientOptions {
-  readonly socketPath: string;
+  readonly connection: DockerConnection;
 }
 
 export function createDockerClient(options: CreateDockerClientOptions): DockerClient {
-  const docker = new Docker({ socketPath: options.socketPath });
+  const docker =
+    options.connection.kind === 'tcp'
+      ? new Docker({ host: options.connection.host, port: options.connection.port })
+      : new Docker({ socketPath: options.connection.socketPath });
 
   return {
     async listContainers(listOptions: ListContainersOptions = {}): Promise<ContainerSummary[]> {

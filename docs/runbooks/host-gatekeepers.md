@@ -8,12 +8,60 @@
 `scripts/host-env-init.sh` 已跑过且是**这次 S2.5 改动之后的版本**（新增了
 `${NEXTTIME_DATA}/gatekeepers/{docker,ragflow}` 目录与 `secrets/gatekeeper-ragflow.env` 的新占位
 变量名 `RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY`——如果这台主机是用旧版本的脚本初始化
-的，重新跑一次这两个脚本，幂等，不会破坏已有数据）；`.env` 里 `DOCKER_GID` 是本机真实的 `docker`
-组 gid（`stat -c '%g' /var/run/docker.sock`）；`kernel` 容器已起且能连 Postgres（S2.4 已合并——
-`packages/gatekeeper-base` 与 kernel 侧 `governance/gatekeepers`/`adapters/gatekeeper-client` 就位）；
-`scripts/gen-handle-keys.sh` 跑过且是 **fix/gate-protocol-hardening 之后的版本**（额外生成
+的，重新跑一次这两个脚本，幂等，不会破坏已有数据）；`kernel` 容器已起且能连 Postgres（S2.4 已合
+并——`packages/gatekeeper-base` 与 kernel 侧 `governance/gatekeepers`/`adapters/gatekeeper-client`
+就位）；`scripts/gen-handle-keys.sh` 跑过且是 **fix/gate-protocol-hardening 之后的版本**（额外生成
 `${NEXTTIME_DATA}/secrets/gate.token`）——如果这台主机在此之前跑过旧版本，重新跑一次同一个脚本
-（幂等，只补 `gate.token`，不动已有的 `handle.key`/`internal.token`）。
+（幂等，只补 `gate.token`，不动已有的 `handle.key`/`internal.token`）。**`.env` 里的 `DOCKER_GID`
+不再是 `gatekeeper-docker` 的前置条件**（fix/gate-docker-socket-proxy，见下方同名段落）——留着不
+影响，删不删都行。
+
+**fix/gate-docker-socket-proxy**：`gatekeeper-docker` 不再直接挂载 `/var/run/docker.sock`——
+`docker-compose.yml` 新增了专用的第二个 `docker-socket-proxy-gate` 服务（独立的 `dockerapi-gate`
+网络，与 `agent-host`/`worker-supervisor` 共用的 `docker-socket-proxy`/`dockerapi` 互不相通），
+`gatekeeper-docker` 现在经 `DOCKER_HOST=tcp://docker-socket-proxy-gate:2375` 访问 Docker Engine
+API；`group_add`/`DOCKER_GID` 已从这个服务的配置里去掉。`docker compose up` 里 `gatekeeper-docker`
+现在 `depends_on: docker-socket-proxy-gate（service_healthy）`，正常 `docker compose up -d
+gatekeeper-docker` 会自动先把代理带起来，不需要手动分两步——下面单独列出的顺序仅用于**从旧版本
+（直连 socket）切换到这个版本**时验证切换本身生效，不是每次启动都要做的手动步骤：
+
+```bash
+cd <CODE_DIR>
+git pull   # 或 git checkout 本 fix 分支
+set -a; . ./.env; set +a
+
+# 1. 先起新代理（即使不手动跑这一步，下一条命令的 depends_on 也会自动带起它）
+docker compose up -d docker-socket-proxy-gate
+docker compose ps docker-socket-proxy-gate   # 期望 healthy
+
+# 2. 重新起 gatekeeper-docker（--force-recreate：确保用的是新镜像 + 新 compose 配置，不是复用旧容器）
+docker compose up -d --force-recreate gatekeeper-docker
+
+# 3. 验证：容器里已经没有 docker.sock 的挂载了
+docker inspect gatekeeper-docker --format '{{json .Mounts}}' | grep -c docker.sock
+# 期望：0（旧版本这里会输出 1，形如 [{"Type":"bind",...,"Source":"/var/run/docker.sock",...}]）
+
+# 4. 验证：/gate/health 仍然 200（换了传输层，协议行为不变）——见 §3 的 curl 例子，这里先拿 token
+GATE_TOKEN=$(cat "${NEXTTIME_DATA}/secrets/gate.token")
+docker compose exec -T kernel node -e "
+fetch('http://gatekeeper-docker:8083/gate/health', {headers:{authorization:'Bearer ${GATE_TOKEN}'}}).then(r=>r.text()).then(t=>console.log('docker:',t))
+"
+# 期望：{"ok":true,"result":{"status":"ok"}}
+```
+
+第 4 步之后再验证一次真实的 `container.restart` 生效：要么走 `scripts/accept_s2.sh`（S2.12 step 2/4
+——step 2 是"聊天里说'重启测试容器' → entry agent → invoke_worker → 审批卡 → 执行"这条链路，step 4
+是同一批验收里对 Worker 断言的 Fact 复核，见该脚本 `connections_step`/相关注释),要么直接走本
+runbook §7 手工那一遍（对自建的 `nexttime-gate-test` 容器 `request_action(container.restart)` +
+`approve` + 核对 `StartedAt` 变化）——两条路径验证的是同一件事：**门通过新代理也能真的重启容器**，
+选哪条取决于这台主机上 accept-s2 fixture 是否已经起了。
+
+**回滚**：`git revert` 这个 fix 的提交（或切回旧分支）后 `docker compose up -d
+--force-recreate gatekeeper-docker`——旧版本的 compose 文件里 `gatekeeper-docker` 恢复直接挂载
+`/var/run/docker.sock` + `group_add: ["${DOCKER_GID:-999}"]`，`.env` 的 `DOCKER_GID` 需要重新是本
+机真实的 `docker` 组 gid（`stat -c '%g' /var/run/docker.sock`）；`docker-socket-proxy-gate` 容器可
+以留着不管（`docker compose down docker-socket-proxy-gate` 清理，非必需——它不是 `gatekeeper-
+docker` 以外任何服务的依赖）。
 
 **fix/gate-protocol-hardening（P1-1）**：`/gate/*` 的每一个路由现在都要求
 `Authorization: Bearer <token>`（`@nexttime/gatekeeper-base` 的 `gate-auth.ts`；缺失或错误的
@@ -70,8 +118,10 @@ docker compose ps gatekeeper-docker gatekeeper-ragflow
 `gatekeeper-ragflow` 需要 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 里
 `RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY` 有值才能真正连上一个 RAGFlow 实例——本机若
 没有可用的 RAGFlow 部署，容器仍会正常起（这两个值只在真正发起 HTTP 调用时才用到），`describe_
-operations`/`health` 不需要它们生效。两个服务都只在 `control` 网络（compose 未发布任何主机端
-口），从主机 `curl` 不到；用 `kernel` 容器自带的 Node `fetch()`：
+operations`/`health` 不需要它们生效。两个服务的 `/gate/*` 协议端口都只在 `control` 网络上暴露
+（`gatekeeper-docker` 额外还在 `dockerapi-gate` 网络上，那是它和 `docker-socket-proxy-gate` 之间
+的私有通道，不影响这一点——compose 都没有发布任何主机端口），从主机 `curl` 不到；用 `kernel` 容器
+自带的 Node `fetch()`：
 
 ```bash
 # GATE_TOKEN was set at the top of this runbook (§1 前置之后的 fix/gate-protocol-hardening 段落).
@@ -428,3 +478,10 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
 - **镜像构建未在本机验证**（Docker 不在这台开发机上）：`docker compose build gatekeeper-docker
   gatekeeper-ragflow`（§2）、`docker compose up`（§3）及之后所有步骤都需要在目标主机上首次跑一
   遍——这正是本 runbook 存在的原因。
+- **`docker-socket-proxy-gate` 的 healthcheck/hardening 未在真实主机验证**（fix/gate-docker-
+  socket-proxy，同 Docker 不在这台开发机上的限制）：`wget` 是否存在于该镜像的 userland、
+  `cap_drop: [ALL]` 是否会让 haproxy 启动失败——两者都是照抄已有 `docker-socket-proxy` 服务自己已
+  记录的同一条 UNVERIFIED 说明（该服务的 image/Dockerfile/entrypoint 与新实例完全相同，只是
+  environment/network 不同），不是重新验证；第一个实例部署时若已经确认这两点在目标主机上没问题，
+  第二个实例大概率也没问题，但仍建议 `docker compose up -d docker-socket-proxy-gate` 后单独确认
+  一次 `docker compose ps docker-socket-proxy-gate` 是 `healthy` 而不是重启循环。

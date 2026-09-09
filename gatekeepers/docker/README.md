@@ -1,8 +1,14 @@
 # gatekeepers/docker
 
 Preset `cli`-kind Gatekeeper 接入包 (design doc §7.5, §7.10; docs/development-tasks.md S2.5) for
-the host's own Docker Engine. Talks to `/var/run/docker.sock` via `dockerode` — **no `docker` CLI
-binary in this image**.
+the host's own Docker Engine. Talks to the Docker Engine API via `dockerode` — **no `docker` CLI
+binary in this image**. As of fix/gate-docker-socket-proxy this container no longer bind-mounts
+`/var/run/docker.sock` directly: `docker-compose.yml` puts it behind its own dedicated
+`docker-socket-proxy-gate` instance (`DOCKER_HOST=tcp://docker-socket-proxy-gate:2375` on the
+`dockerapi-gate` network) — see that service's own compose comment for the endpoint inventory and
+allowlist flags, and `src/docker-client.ts`'s module doc comment for the `DOCKER_HOST` wiring.
+`DOCKER_SOCKET_PATH` (a plain Unix socket) survives as the fallback for tests and any non-compose
+run that never sets `DOCKER_HOST`.
 
 ## Which build (task brief: "a small TS package … or a config-only instance … say which")
 
@@ -49,9 +55,10 @@ implementation of Compose's file-parsing + reconciliation logic; out of scope he
 
 ## Credentials
 
-None — the trust boundary is the `/var/run/docker.sock` mount itself (`docker-compose.yml`'s
-`gatekeeper-docker` service), not a bearer token. `src/index.ts`'s `NoCredentialResolver` always
-resolves to `{}`.
+None — the trust boundary is network reachability to the Docker Engine API itself (as of
+fix/gate-docker-socket-proxy: the `dockerapi-gate`-network-only, allowlisted
+`docker-socket-proxy-gate` service — see above), not a bearer token. `src/index.ts`'s
+`NoCredentialResolver` always resolves to `{}`.
 
 ## Idempotent `apply`
 
@@ -65,7 +72,8 @@ stays at length 1 across two `apply` calls with the same key).
 
 | Var | Default | Notes |
 |---|---|---|
-| `DOCKER_SOCKET_PATH` | `/var/run/docker.sock` | passed to `dockerode`'s `socketPath` |
+| `DOCKER_SOCKET_PATH` | `/var/run/docker.sock` | fallback `dockerode` `socketPath` — only used when `DOCKER_HOST` is unset/unparsable |
+| `DOCKER_HOST` | (unset) | `tcp://docker-socket-proxy-gate:2375` in `docker-compose.yml` (fix/gate-docker-socket-proxy) — only a `tcp://host[:port]` value is recognized (`src/docker-client.ts`'s `parseDockerConnection`); anything else falls back to `DOCKER_SOCKET_PATH` |
 | `GATE_KERNEL_TOKEN_FILE` | `/run/secrets/gate_token` | the shared secret every `/gate/*` route requires as `Authorization: Bearer <token>` (review lane 5, P1-1) — this gate refuses to start without a readable, valid file here |
 | `GATE_DATA_DIR` | `./data` | idempotency store JSON file (`@nexttime/gatekeeper-base`'s `resolveGateDataDir`) — mount a persistent volume here in production |
 | `GATE_MANIFEST_FILE` | (bundled `manifest.json`) | override the manifest without rebuilding the image |
