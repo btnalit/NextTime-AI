@@ -198,21 +198,44 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activityId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
         "linkType": {
-          "type": "string"
-        },
-        "objectId": {
           "minLength": 1,
           "type": "string"
         },
-        "sourceId": {
+        "properties": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "sourceObjectId": {
           "minLength": 1,
           "type": "string"
         },
-        "value": {}
+        "targetObjectId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "validFrom": {
+          "type": "string"
+        },
+        "validUntil": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "required": [
-        "objectId",
+        "sourceObjectId",
+        "targetObjectId",
         "linkType"
       ],
       "type": "object"
@@ -7853,11 +7876,19 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "name": {
+        "kind": {
+          "minLength": 1,
           "type": "string"
         },
-        "ownerPrincipalId": {
+        "metadata": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "name": {
           "minLength": 1,
+          "type": "string"
+        },
+        "uri": {
           "type": "string"
         },
         "visibility": {
@@ -7869,6 +7900,7 @@
         }
       },
       "required": [
+        "kind",
         "name",
         "visibility"
       ],
@@ -7876,7 +7908,54 @@
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ownerPrincipalId": {
+          "type": "string"
+        },
+        "uri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "enum": [
+            "workspace",
+            "private"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "ownerPrincipalId",
+        "visibility",
+        "uri",
+        "metadata",
+        "createdAt"
+      ],
       "type": "object"
     }
   },
@@ -10060,11 +10139,73 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activityId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "observations": {
           "items": {
-            "additionalProperties": {},
+            "additionalProperties": false,
+            "properties": {
+              "identity": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "links": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "linkType": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "properties": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "target": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "identity": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "objectType": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "objectType",
+                        "identity"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "linkType",
+                    "target"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "objectType": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "properties": {
+                "additionalProperties": {},
+                "type": "object"
+              }
+            },
+            "required": [
+              "objectType",
+              "identity"
+            ],
             "type": "object"
           },
+          "minItems": 1,
           "type": "array"
         },
         "sourceId": {
@@ -10080,7 +10221,55 @@
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
+      "additionalProperties": false,
+      "properties": {
+        "activityId": {
+          "type": "string"
+        },
+        "factsAsserted": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "factsSuperseded": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "objects": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "identity": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "objectType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "objectType",
+              "identity",
+              "id"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "objectsUpserted": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "activityId",
+        "objectsUpserted",
+        "factsAsserted",
+        "factsSuperseded",
+        "objects"
+      ],
       "type": "object"
     }
   },
@@ -10131,14 +10320,50 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activityId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
         "factId": {
           "minLength": 1,
           "type": "string"
         },
-        "value": {}
+        "linkType": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "sourceObjectId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "targetObjectId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "validFrom": {
+          "type": "string"
+        },
+        "validUntil": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "required": [
-        "factId"
+        "factId",
+        "sourceObjectId",
+        "targetObjectId",
+        "linkType"
       ],
       "type": "object"
     },

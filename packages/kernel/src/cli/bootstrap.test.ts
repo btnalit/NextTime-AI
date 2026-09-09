@@ -1,12 +1,20 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Operation } from '@nexttime/shared';
+import { exportPKCS8, exportSPKI } from 'jose';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { hashApiKey } from '../application/gateway/index.js';
+import {
+  generateEphemeralHandleKeyPair,
+  loadHandleKeyPair,
+  verifyHandle,
+} from '../governance/capability/index.js';
 import { getOperation, getPublishedOperation } from '../governance/gatekeepers/index.js';
 import {
   WorkspaceDeletionOrderCycleError,
@@ -14,8 +22,10 @@ import {
   checkDeleteWorkspaceGuards,
   computeWorkspaceTableDeletionOrder,
   createWorkspace,
+  issueServiceHandleFromCli,
   parseDeleteWorkspaceArgs,
   registerGatekeeperFromCli,
+  seedDomainPackFromCli,
 } from './bootstrap.js';
 import type { WorkspaceScopedSchema } from './bootstrap.js';
 
@@ -227,6 +237,8 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+const REPO_ROOT = path.resolve(KERNEL_ROOT, '..', '..');
+const ONTOLOGY_DIR = path.join(REPO_ROOT, 'ontology');
 
 /** A `GatekeeperClient` fake for `registerGatekeeperFromCli` tests below — never touches a real
  *  socket/port; only `describeOperations` is ever called by that function. */
@@ -511,6 +523,144 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
           ),
       );
       expect(record?.status).toBe('published');
+    });
+  });
+
+  describe('seedDomainPackFromCli / issueServiceHandleFromCli (S3.3 collector bootstrap seam)', () => {
+    it('seedDomainPackFromCli publishes ops-assets-v1.yaml; a second call publishes v2 of the same family', async () => {
+      const owner = await createWorkspace(
+        pool,
+        'bootstrap-test-workspace-seed-domain-pack',
+        'Alice',
+      );
+
+      const v1 = await seedDomainPackFromCli(pool, {
+        workspaceId: owner.workspaceId,
+        principalId: owner.ownerPrincipalId,
+        packName: 'ops-assets',
+        fileName: 'ops-assets-v1.yaml',
+        dir: ONTOLOGY_DIR,
+      });
+      expect(v1.version).toBe(1);
+
+      const v2 = await seedDomainPackFromCli(pool, {
+        workspaceId: owner.workspaceId,
+        principalId: owner.ownerPrincipalId,
+        packName: 'ops-assets',
+        fileName: 'ops-assets-v1.yaml',
+        dir: ONTOLOGY_DIR,
+      });
+      expect(v2.id).toBe(v1.id); // same family
+      expect(v2.version).toBe(2);
+    });
+
+    describe('with a Handle signing keypair on disk', () => {
+      let keyDir: string;
+      let savedPrivateKeyFile: string | undefined;
+      let savedPublicKeyFile: string | undefined;
+
+      beforeEach(async () => {
+        keyDir = await mkdtemp(path.join(tmpdir(), 'nexttime-issue-service-handle-test-'));
+        const keyPair = await generateEphemeralHandleKeyPair();
+        const [privatePem, publicPem] = await Promise.all([
+          exportPKCS8(keyPair.privateKey),
+          exportSPKI(keyPair.publicKey),
+        ]);
+        const privateKeyFile = path.join(keyDir, 'handle.key');
+        const publicKeyFile = path.join(keyDir, 'handle.pub');
+        await writeFile(privateKeyFile, privatePem, 'utf8');
+        await writeFile(publicKeyFile, publicPem, 'utf8');
+
+        savedPrivateKeyFile = process.env.HANDLE_PRIVATE_KEY_FILE;
+        savedPublicKeyFile = process.env.HANDLE_PUBLIC_KEY_FILE;
+        process.env.HANDLE_PRIVATE_KEY_FILE = privateKeyFile;
+        process.env.HANDLE_PUBLIC_KEY_FILE = publicKeyFile;
+      });
+
+      afterEach(async () => {
+        process.env.HANDLE_PRIVATE_KEY_FILE = savedPrivateKeyFile;
+        process.env.HANDLE_PUBLIC_KEY_FILE = savedPublicKeyFile;
+        await rm(keyDir, { recursive: true, force: true });
+      });
+
+      it('mints a service Principal + a Handle whose claims verify and carry exactly the given scope', async () => {
+        const owner = await createWorkspace(
+          pool,
+          'bootstrap-test-workspace-issue-service-handle',
+          'Alice',
+        );
+
+        const result = await issueServiceHandleFromCli(pool, {
+          workspaceId: owner.workspaceId,
+          name: 'host-inventory-test',
+          scope: ['register_source', 'submit_observations'],
+        });
+
+        expect(result.principalId).toBeTruthy();
+        expect(result.token).toBeTruthy();
+
+        const claims = await verifyHandle(result.token, {
+          publicKey: (await loadHandleKeyPair()).publicKey,
+          isRevoked: () => false,
+        });
+        expect(claims.ws).toBe(owner.workspaceId);
+        expect(claims.obo).toBe(result.principalId);
+        expect(claims.scope.capabilities.slice().sort()).toEqual([
+          'register_source',
+          'submit_observations',
+        ]);
+
+        const principalRow = await withWorkspace(
+          pool,
+          { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+          (client) =>
+            client.query<{ kind: string; display_name: string | null }>(
+              'select kind, display_name from principals where workspace_id = $1 and id = $2',
+              [owner.workspaceId, result.principalId],
+            ),
+        );
+        expect(principalRow.rows[0]?.kind).toBe('service');
+        expect(principalRow.rows[0]?.display_name).toBe('host-inventory-test');
+      });
+
+      it('re-running with the same --name reuses the same service Principal (a fresh Session/Handle each time)', async () => {
+        const owner = await createWorkspace(
+          pool,
+          'bootstrap-test-workspace-issue-service-handle-reuse',
+          'Alice',
+        );
+
+        const first = await issueServiceHandleFromCli(pool, {
+          workspaceId: owner.workspaceId,
+          name: 'host-inventory-reuse-test',
+          scope: ['register_source'],
+        });
+        const second = await issueServiceHandleFromCli(pool, {
+          workspaceId: owner.workspaceId,
+          name: 'host-inventory-reuse-test',
+          scope: ['register_source'],
+        });
+
+        expect(second.principalId).toBe(first.principalId);
+        expect(second.sessionId).not.toBe(first.sessionId);
+        expect(second.jti).not.toBe(first.jti);
+      });
+
+      it('rejects an unknown capability name in --scope before minting anything', async () => {
+        const owner = await createWorkspace(
+          pool,
+          'bootstrap-test-workspace-issue-service-handle-bad-scope',
+          'Alice',
+        );
+
+        await expect(
+          issueServiceHandleFromCli(pool, {
+            workspaceId: owner.workspaceId,
+            name: 'host-inventory-bad-scope-test',
+            scope: ['this_capability_does_not_exist'],
+          }),
+        ).rejects.toMatchObject({ name: 'ScopeValidationError' });
+      });
     });
   });
 });

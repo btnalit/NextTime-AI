@@ -11,13 +11,18 @@ import { HttpGatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { generateApiKey, hashApiKey } from '../application/gateway/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../application/worker/index.js';
+import { issueHandle, loadHandleKeyPair } from '../governance/capability/index.js';
 import {
   importManifest,
   publishOperation,
   registerGatekeeper,
 } from '../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../substrate/epistemic/index.js';
-import { resolveOntologyDir, seedPlatformMetaOntology } from '../substrate/ontology/index.js';
+import {
+  publishOntologyDomainPack,
+  resolveOntologyDir,
+  seedPlatformMetaOntology,
+} from '../substrate/ontology/index.js';
 
 /**
  * Bootstrap CLI (docs/development-tasks.md S1.3 item 6; needed by S1.8/S1.10; S2.6 extends
@@ -28,6 +33,13 @@ import { resolveOntologyDir, seedPlatformMetaOntology } from '../substrate/ontol
  *   node dist/cli/bootstrap.js add-principal --workspace <id> --name <display-name> [--role <role>]
  *   node dist/cli/bootstrap.js list-workspaces
  *   node dist/cli/bootstrap.js delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]
+ *   node dist/cli/bootstrap.js seed-domain-pack --workspace <id> --principal <id> --pack-name <name> [--file-name <file>] [--dir <dir>]
+ *   node dist/cli/bootstrap.js issue-service-handle --workspace <id> --name <name> --scope <cap1,cap2,...> [--ttl-days <n>]
+ *
+ * `seed-domain-pack`/`issue-service-handle` (S3.3, docs/development-tasks.md S3.3 "collector auth
+ * seam"): the operator-run bootstrap steps a collector needs before its first run — see this
+ * file's own "seed-domain-pack" / "issue-service-handle" sections below for the full doc comments,
+ * and `docs/runbooks/host-collector.md` for the end-to-end operator walkthrough.
  *
  * `create-workspace` creates the Workspace and its first Principal (`kind='human'`,
  * `role='owner'` — design doc §5.1.1), generates an API key, and prints it exactly once: only its
@@ -296,6 +308,167 @@ export async function registerGatekeeperFromCli(
         publishedOperationNames,
       };
     },
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// seed-domain-pack (S3.3): publishes an `ontology/<pack>.yaml` domain pack into a workspace — the
+// operator-run step `substrate/ontology/loader.ts`'s own `publishOntologyDomainPack` doc comment
+// names as its intended caller ("not wired into `create-workspace`... it is the seam a bootstrap
+// follow-up or an operator-run CLI calls to publish `ontology/ops-assets-v1.yaml`... into a given
+// workspace"). A collector like `collectors/host-inventory` needs the domain pack it observes
+// against (S3.1's `ops-assets-v1.yaml`) published into the target workspace before its first run,
+// or `submit_observations`' own identity-key validation (`application/gateway/ingest-handlers.ts`)
+// rejects every observation as an unknown ObjectType — see `docs/runbooks/host-collector.md`.
+// -------------------------------------------------------------------------------------------
+
+export interface SeedDomainPackCliInput {
+  readonly workspaceId: string;
+  readonly principalId: string;
+  readonly packName: string;
+  readonly fileName?: string;
+  readonly dir?: string;
+}
+
+export interface SeedDomainPackCliResult {
+  readonly id: string;
+  readonly version: number;
+}
+
+/** Publishes `<dir>/<fileName ?? packName>.yaml` as the next version of `packName`'s own id
+ *  family. `principalId` must already exist in `workspaceId` (an owner/builder — this runs over
+ *  the ordinary RLS-scoped path, not the admin/skip-role-switch one `createWorkspace` above uses,
+ *  since both the workspace and the principal already exist by the time this is called). */
+export async function seedDomainPackFromCli(
+  pool: PoolLike,
+  input: SeedDomainPackCliInput,
+): Promise<SeedDomainPackCliResult> {
+  return withWorkspace(
+    pool,
+    { workspaceId: input.workspaceId, principalId: input.principalId },
+    (client) =>
+      publishOntologyDomainPack(client, input.workspaceId, {
+        packName: input.packName,
+        fileName: input.fileName,
+        dir: input.dir,
+        principalId: input.principalId,
+      }),
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// issue-service-handle (S3.3): mints a Handle for a `kind='service'` Principal — the collector
+// auth seam this task's own dispatch names ("if no path exists to mint a service Handle, add a CLI
+// subcommand bootstrap issue-service-handle"). No capability exposes Handle issuance for a service
+// Principal today (`issue_handle`, the one capability with that name, is `channel:'human'`-only
+// and mints a Handle for an *existing session* — S3.6/W2-B territory, not this task's — and no
+// mechanism anywhere creates a `service`-kind session at all); this is the interim, CLI-only,
+// operator-run path, the same shape `register-gatekeeper` above already established for "no
+// capability exists yet for this bootstrap need".
+//
+// `getOrCreateServicePrincipal` mirrors `governance/gatekeepers/service-principal.ts`'s
+// `getOrCreateGatekeeperServicePrincipal` (lookup by `kind='service'` + `display_name`, insert on
+// first use) — re-running this subcommand for the same `--name` reuses the same Principal (a fresh
+// Session + Handle each time, e.g. to rotate a leaked token, never a second, differently-identified
+// collector). `role: 'member'` — a service Principal calling `register_source`/`submit_observations`
+// through its own scoped Handle needs no elevated role (role gates human-channel capability calls
+// only, §5.1.1; a Handle caller is authorized by `scope.capabilities` alone, `authorize.ts`).
+//
+// The minted Handle's `ttlSeconds` defaults to one year (`DEFAULT_SERVICE_HANDLE_TTL_SECONDS`) —
+// a collector is a long-running/periodically-scheduled process an operator does not want to re-
+// bootstrap weekly; `--ttl-days` overrides it. `issueHandle` itself (`governance/capability/
+// handles.ts`) already rejects any capability name in `--scope` that is unknown or human-channel-
+// only (`assertValidScope`), so a typo'd scope fails loudly here rather than minting a Handle that
+// can never call anything.
+// -------------------------------------------------------------------------------------------
+
+const DEFAULT_SERVICE_HANDLE_TTL_SECONDS = 365 * 24 * 60 * 60;
+
+async function getOrCreateServicePrincipal(
+  client: PoolClient,
+  workspaceId: string,
+  displayName: string,
+): Promise<string> {
+  const existing = await client.query<{ id: string }>(
+    "select id from principals where workspace_id = $1 and kind = 'service' and display_name = $2 limit 1",
+    [workspaceId, displayName],
+  );
+  const found = existing.rows[0];
+  if (found) return found.id;
+
+  const inserted = await client.query<{ id: string }>(
+    `insert into principals (workspace_id, kind, role, display_name)
+     values ($1, 'service', 'member', $2)
+     returning id`,
+    [workspaceId, displayName],
+  );
+  const row = inserted.rows[0];
+  if (!row) {
+    throw new Error('issue-service-handle: principal INSERT ... RETURNING produced no row');
+  }
+  return row.id;
+}
+
+export interface IssueServiceHandleCliInput {
+  readonly workspaceId: string;
+  readonly name: string;
+  readonly scope: readonly string[];
+  /** Defaults to `DEFAULT_SERVICE_HANDLE_TTL_SECONDS` (one year). */
+  readonly ttlSeconds?: number;
+}
+
+export interface IssueServiceHandleCliResult {
+  readonly principalId: string;
+  readonly sessionId: string;
+  readonly jti: string;
+  readonly token: string;
+  readonly expiresAt: Date;
+}
+
+/** Gets-or-creates a `kind='service'` Principal named `input.name`, opens a fresh `kind='service'`
+ *  session for it (`on_behalf_of` = itself — a service Principal never acts "on behalf of" a
+ *  human), and issues a Handle scoped to exactly `input.scope`. Runs over the admin/skip-role-
+ *  switch path (same reasoning as `createWorkspace`/`addPrincipal` above): the service Principal
+ *  may not exist yet for RLS to scope the `principals`/`sessions` inserts against. */
+export async function issueServiceHandleFromCli(
+  pool: PoolLike,
+  input: IssueServiceHandleCliInput,
+): Promise<IssueServiceHandleCliResult> {
+  const keyPair = await loadHandleKeyPair();
+
+  return withWorkspace(
+    pool,
+    { workspaceId: input.workspaceId, principalId: randomUUID() },
+    async (client) => {
+      const principalId = await getOrCreateServicePrincipal(client, input.workspaceId, input.name);
+
+      const sessionResult = await client.query<{ id: string }>(
+        `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+         values ($1, $2, 'service', $2, 'active')
+         returning id`,
+        [input.workspaceId, principalId],
+      );
+      const sessionRow = sessionResult.rows[0];
+      if (!sessionRow) {
+        throw new Error('issue-service-handle: session INSERT ... RETURNING produced no row');
+      }
+
+      const issued = await issueHandle(client, {
+        sessionId: sessionRow.id,
+        scope: { capabilities: [...input.scope], resources: {} },
+        ttlSeconds: input.ttlSeconds ?? DEFAULT_SERVICE_HANDLE_TTL_SECONDS,
+        privateKey: keyPair.privateKey,
+      });
+
+      return {
+        principalId,
+        sessionId: sessionRow.id,
+        jti: issued.jti,
+        token: issued.token,
+        expiresAt: issued.expiresAt,
+      };
+    },
+    { skipRoleSwitch: true },
   );
 }
 
@@ -891,6 +1064,74 @@ async function runRegisterGatekeeper(argv: readonly string[]): Promise<void> {
   }
 }
 
+async function runSeedDomainPack(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const workspaceId = flags.workspace;
+  const principalId = flags.principal;
+  const packName = flags['pack-name'];
+  if (!workspaceId || !principalId || !packName) {
+    throw new BootstrapUsageError(
+      'usage: bootstrap seed-domain-pack --workspace <id> --principal <id> --pack-name <name> ' +
+        '[--file-name <file>] [--dir <dir>]',
+    );
+  }
+
+  const pool = createPool();
+  try {
+    const result = await seedDomainPackFromCli(pool, {
+      workspaceId,
+      principalId,
+      packName,
+      fileName: flags['file-name'],
+      dir: flags.dir,
+    });
+    console.log(`domain pack published: ${packName} (id=${result.id}, version=${result.version})`);
+  } finally {
+    await pool.end();
+  }
+}
+
+async function runIssueServiceHandle(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const workspaceId = flags.workspace;
+  const name = flags.name;
+  const scopeFlag = flags.scope;
+  if (!workspaceId || !name || !scopeFlag) {
+    throw new BootstrapUsageError(
+      'usage: bootstrap issue-service-handle --workspace <id> --name <name> ' +
+        '--scope <cap1,cap2,...> [--ttl-days <n>]',
+    );
+  }
+  const scope = scopeFlag
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const ttlDaysFlag = flags['ttl-days'];
+  const ttlSeconds = ttlDaysFlag ? Number(ttlDaysFlag) * 24 * 60 * 60 : undefined;
+  if (ttlDaysFlag && (!Number.isFinite(ttlSeconds) || (ttlSeconds ?? 0) <= 0)) {
+    throw new BootstrapUsageError(
+      `usage: bootstrap issue-service-handle: --ttl-days must be a positive number (got "${ttlDaysFlag}")`,
+    );
+  }
+
+  const pool = createPool();
+  try {
+    const result = await issueServiceHandleFromCli(pool, { workspaceId, name, scope, ttlSeconds });
+    console.log(`service principal: ${result.principalId}`);
+    console.log(`session:            ${result.sessionId}`);
+    console.log(`handle jti:         ${result.jti}`);
+    console.log(`expires at:         ${result.expiresAt.toISOString()}`);
+    console.log('');
+    console.log(
+      'Handle token (shown once — capture it now, e.g.: ... > ' +
+        '${NEXTTIME_DATA}/secrets/<collector>.token — never printed again by this command):',
+    );
+    console.log(result.token);
+  } finally {
+    await pool.end();
+  }
+}
+
 /**
  * `delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]`.
  * Always reads and prints the workspace's info first (name/created_at/principal count/task
@@ -999,6 +1240,14 @@ async function run(): Promise<void> {
     await runListWorkspaces();
     return;
   }
+  if (command === 'seed-domain-pack') {
+    await runSeedDomainPack(rest);
+    return;
+  }
+  if (command === 'issue-service-handle') {
+    await runIssueServiceHandle(rest);
+    return;
+  }
   throw new BootstrapUsageError(
     'usage: bootstrap create-workspace --name <ws> --owner <display-name>\n' +
       '   or: bootstrap add-principal --workspace <id> --name <display-name> [--role <role>]\n' +
@@ -1006,7 +1255,11 @@ async function run(): Promise<void> {
       '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]\n' +
       '   or: bootstrap delete-workspace <workspaceId> --yes [--name <expected name>] ' +
       '[--allow-name-pattern <regex>]\n' +
-      '   or: bootstrap list-workspaces',
+      '   or: bootstrap list-workspaces\n' +
+      '   or: bootstrap seed-domain-pack --workspace <id> --principal <id> --pack-name <name> ' +
+      '[--file-name <file>] [--dir <dir>]\n' +
+      '   or: bootstrap issue-service-handle --workspace <id> --name <name> ' +
+      '--scope <cap1,cap2,...> [--ttl-days <n>]',
   );
 }
 

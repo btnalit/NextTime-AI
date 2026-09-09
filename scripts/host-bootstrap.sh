@@ -31,7 +31,7 @@ echo "host-bootstrap: target NEXTTIME_DATA=$NEXTTIME_DATA"
 # --- create data root and subdirectories -----------------------------------
 mkdir -p "$NEXTTIME_DATA"
 
-for d in pgdata workspaces workspaces/tasks secrets config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow; do
+for d in pgdata workspaces workspaces/tasks secrets config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow collectors collectors/host-inventory; do
 	mkdir -p "$NEXTTIME_DATA/$d"
 done
 
@@ -42,8 +42,10 @@ chmod 700 "$NEXTTIME_DATA/secrets"
 # Every other subdirectory: 0750 (owner rwx, group rx, no world access).
 # gatekeepers/{docker,ragflow}: each gate's own GATE_DATA_DIR (idempotency store; see
 # docs/development-tasks.md S2.5) — bind-mounted into gatekeeper-docker/gatekeeper-ragflow
-# (docker-compose.yml).
-for d in pgdata workspaces workspaces/tasks config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow; do
+# (docker-compose.yml). collectors/host-inventory (S3.3): the host-inventory collector's own
+# local state directory (register_source idempotency cache) — bind-mounted into
+# collector-host-inventory as /data/state (docker-compose.yml).
+for d in pgdata workspaces workspaces/tasks config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow collectors collectors/host-inventory; do
 	chmod 750 "$NEXTTIME_DATA/$d"
 done
 

@@ -781,18 +781,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       );
 
-      const assertFactCaller = handleCallerWithScope(workspaceId, builderId, ['assert_fact']);
-      await expect(
-        dispatchCapability({ pool }, assertFactCaller, 'assert_fact', {
-          objectId: workerDefinitionObjectId,
-          linkType: 'test_link',
-          value: 'anything',
-        }),
-      ).rejects.toMatchObject({ name: 'MetaOntologyWriteForbiddenError' });
-    });
-
-    it('assert_fact on a non-meta-ontology Object from the Handle channel is not blocked by I16 (falls through to the pre-existing not-implemented gap)', async () => {
-      const plainObjectId = await withWorkspace(
+      const plainTargetId = await withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
         async (client) => {
@@ -807,11 +796,52 @@ describe.runIf(DATABASE_URL !== undefined)(
       const assertFactCaller = handleCallerWithScope(workspaceId, builderId, ['assert_fact']);
       await expect(
         dispatchCapability({ pool }, assertFactCaller, 'assert_fact', {
-          objectId: plainObjectId,
+          sourceObjectId: workerDefinitionObjectId,
+          targetObjectId: plainTargetId,
           linkType: 'test_link',
-          value: 'anything',
         }),
-      ).rejects.toMatchObject({ name: 'AssertFactWriteNotImplementedError' });
+      ).rejects.toMatchObject({ name: 'MetaOntologyWriteForbiddenError' });
+    });
+
+    it('assert_fact on non-meta-ontology Objects from the Handle channel writes a real Fact (S3.3, I16 does not block it)', async () => {
+      const { plainSourceId, plainTargetId } = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const source = await graphStore.upsertObject(client, workspaceId, {
+            objectType: 'test.plain',
+            properties: {},
+          });
+          const target = await graphStore.upsertObject(client, workspaceId, {
+            objectType: 'test.plain',
+            properties: {},
+          });
+          return { plainSourceId: source.id, plainTargetId: target.id };
+        },
+      );
+
+      const assertFactCaller = handleCallerWithScope(workspaceId, builderId, ['assert_fact']);
+      const fact = (await dispatchCapability({ pool }, assertFactCaller, 'assert_fact', {
+        sourceObjectId: plainSourceId,
+        targetObjectId: plainTargetId,
+        linkType: 'test_link',
+        properties: { note: 'anything' },
+      })) as {
+        sourceObjectId: string;
+        targetObjectId: string;
+        linkType: string;
+        epistemicStatus: string;
+      };
+
+      expect(fact.sourceObjectId).toBe(plainSourceId);
+      expect(fact.targetObjectId).toBe(plainTargetId);
+      expect(fact.linkType).toBe('test_link');
+      // `resolveCallerKind` (substrate/graph/sql-store.ts) derives epistemic_status from the
+      // caller's real `principals.kind` row, never from which channel the call arrived on —
+      // builderId is a `kind: 'human'` fixture (see this describe block's own
+      // `adminInsertPrincipal`), so deriveEpistemicStatus(human) === 'asserted' even though this
+      // particular call went through a Handle (§5.6).
+      expect(fact.epistemicStatus).toBe('asserted');
     });
   },
 );

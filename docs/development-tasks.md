@@ -863,6 +863,64 @@
 ### S3.3 采集器 `host-inventory`（TS）
 - 交付物：`collectors/host-inventory`：dockerode + `systemctl` + `git remote` + 进程树（只保留 agent 运行时进程树下的非 systemd 子进程；命令行在形成 Observation 前脱敏，`environ` 不读）；service Principal；只采结构性字段；一次运行一个 Activity。
 - 验收：跑两遍无重复无 Conflict；改一个端口后第三遍旧 Fact supersede；fixture 含 `--token=abc` 入库为 `***`（脱敏失败整批不提交）。依赖：S3.1、S3.2。批准：否（只读）。
+- 实现说明（S3.3 PR，2026-09，W3-A）：
+  - **五个"已注册未实现"的 ingest/meta 能力全部挂上真实 handler**：`register_source`（新
+    `application/gateway/ingest-handlers.ts`，直接写 `sources` 表——`substrate/epistemic/
+    sources.ts` 的 `registerPrivateSource` 只写 `visibility:'private'`，而采集器的 Source 必须
+    `workspace` 可见（Fact 可见性继承自 Source，`migrations/core/0010_link_visibility.sql`），
+    否则 owner 之外任何人都看不到采集器写的 Fact；本任务派发文字明确排除触碰
+    `substrate/epistemic/**`，这条 6 行 INSERT 是与 `substrate/epistemic/explain.ts` 自己模块
+    注释同款的"最窄偏离"，非二次实现）；`submit_observations`（同文件，identity-key 完整性对
+    S3.1 本体注册表校验，缺字段 400；纯粹通过 `GraphStore.assertFact`/`supersedeFact` 写——不
+    做任何去重/同源判定，S3.2（并行落地，merge 到 main 时这条判定已经在 `assertFact` 自己内部
+    实现，见下）；`assert_fact`/`supersede_fact`/`invalidate_fact`（新
+    `application/gateway/fact-handlers.ts`，`assert_fact`/`supersede_fact` 的 `paramsSchema`
+    从占位的 `{objectId,value,sourceId?}`/`{factId,value}` 换成真实的
+    `{sourceObjectId,targetObjectId,linkType,activityId?,...}`——旧形状从未能支撑一次真实的
+    `AssertFactInput` 写，见移除的 `AssertFactWriteNotImplementedError` 桩自己的注释）。
+  - **`submit_observations` 的三阶段依赖顺序，与 S3.2 的关系**：`ontology/ops-assets-v1.yaml`
+    的身份键约定（"一个 `<Type>Id` 属性持有另一个 Object 自己的图 id"）意味着 `ComposeProject`
+    的 `hostId`、`Container` 的 `composeProjectId` 不能由调用方凭空构造——`submit_observations`
+    的结果因此在派发文字给的 `{activityId, objectsUpserted, factsAsserted, factsSuperseded}`
+    之外加了一个 `objects[]`（每个被写对象的 `{objectType, identity, id}`），供调用方跨多次
+    `submit_observations`（共享同一个 `activityId`，靠可选的 `activityId` 参数）分阶段学到上一
+    阶段真实解析出的图 id——采集器自己按这个协议分三阶段提交（Host/Repository/Image/Process →
+    ComposeProject/Volume/Network/SystemdService → Container，`observation-builder.ts` 自己的
+    模块注释有完整依赖表）。**本任务开工时 S3.2 尚未合并**，`ingest-handlers.ts` 最初自己实现了
+    "同一 caller principal 的既有 Fact→supersede-or-noop"判定；S3.2 合并到 `main`
+    后（`SqlGraphStore.assertFact` 自己判定同 identity 的既有 Fact、用 `resolveFactOrigin`
+    判定同源/异源、同源直接委托给 `supersedeFact`），这条本地判定与 store 自己新加的判定重复且
+    可能相互矛盾，按派发文字"就写透过 `assertFact`/`supersedeFact`（缝合点）、依赖它的行为"这条
+    指示整段移除——`submit_observations` 现在对每条 Link 直接调 `assertFact`，用返回 Fact 的
+    `supersedesId` 是否非空区分"新断言"与"（被 store 判定为同源而）supersede"。这也是"两遍无重复
+    无 Conflict"验收成立的真正机制：采集器的 `register_source` 只在真正首次运行时调用一次（返回
+    的 `sourceId` 缓存进采集器自己的本地状态文件，此后每次运行复用），使得同一条边每次重新提交都
+    经 `resolveFactOrigin` 解析到同一个 Source，S3.2 自己判定为"同源"、走 supersede，从不开
+    Conflict——这条链路完全由 S3.2 的 store 逻辑保证，S3.3 这边不实现、不重复任何冲突判定。
+  - **两个新 CLI 子命令**（`packages/kernel/src/cli/bootstrap.ts`）：`issue-service-handle`（铸造
+    `kind='service'` Principal + Session + 一个按 `--scope` 限定能力的 Handle——派发文字本身预见
+    到这个缺口："if no path exists to mint a service Handle, add a CLI subcommand"；今天没有任何
+    capability 能给一个 service Principal 签发 Handle，`issue_handle` 那个唯一同名 capability是
+    `channel:'human'`、给已有 session 续签，且没有任何机制创建 `kind='service'` 的 session）；
+    `seed-domain-pack`（`publishOntologyDomainPack` 自己的模块注释早就点名"这是留给 bootstrap 后
+    续任务或运维 CLI 的缝合点"——S3.1 落地时没有 wire 进任何 CLI，本任务是第一个真正需要在真实
+    workspace 里发布 `ops-assets-v1.yaml` 的调用方）。
+  - **`sources` 无 `name` 列**：`register_source` 的 `name` 参数折进 `metadata.name`，
+    `resource-wire.ts` 的 `toWireSource` 读回时投影成顶层字段——新增
+    `packages/shared/src/wire/ingest.ts`（`SourceWireSchema`/`SubmitObservationsResultWireSchema`）。
+  - **门（gates）**：`pnpm -r typecheck/lint`、`pnpm --filter @nexttime/kernel test`、
+    `pnpm --filter @nexttime/shared test`、`pnpm --filter @nexttime/collector-host-inventory
+    test`（79 例，纯函数 + fake 注入，无需真实 Docker/`/proc`/内核）均在本机（Windows，无
+    Docker）跑通；`pnpm depcruise`、`pnpm ci:guards`、`pnpm contract:snapshot` +
+    `pnpm contract:check`、`node scripts/validate-compose.mjs` 同样本机跑通。DB-gated 的
+    `application/gateway/{ingest,fact}-handlers.integration.test.ts`（`describe.runIf
+    (DATABASE_URL)`）遵循既有约定，本机自动 SKIP，交给 CI 的 Postgres service 验证。
+  - **已知偏离 / 未覆盖**：①进程树采集在当前默认部署形态（无 `pid: host`）下必然
+    `skipped:true`——`process-tree.ts`/`docs/runbooks/host-collector.md` 都有完整记录，这是刻意
+    的权限收紧决定，不是遗漏；②`Owner` ObjectType 与 `owned_by` 边不由本采集器写入（
+    `ontology/ops-assets-v1.yaml` 自己的文件头已经这样约定）；③容器级验证（真实构建、真实
+    Docker Engine API、`docker-socket-proxy-collector` 的 `wget` healthcheck 是否真的存在于该
+    镜像的用户态）留给目标主机验收，步骤见 `docs/runbooks/host-collector.md`。
 
 ### S3.4 `gatekeeper-ragflow` 与本体 v2
 - 交付物：observe `kb.list / kb.documents / retrieve`；execute `document.upload`（medium）、`document.parse`（low）；`ops-assets-v2.yaml` 增 `KnowledgeBase / Document / Dataset`；采集器扩展经门 observe 写 `observed` Fact。

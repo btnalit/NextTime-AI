@@ -322,21 +322,26 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('a registered but unimplemented capability → 501', async () => {
-      // `invalidate_fact` (meta group, handle channel) has no wired handler yet — used here rather
-      // than `query_decisions` (S3.2, feat/s3-2-conflicts-epistemic, gave it a handler alongside
-      // list_conflicts/resolve_conflict/verify_fact/causal_chain/decision_impact/find_precedents)
-      // or `issue_handle` (S3.6, docs/development-tasks.md W2-B, gave *it* a handler) — same
-      // reasoning as application/gateway/dispatch.test.ts's own swap chain for this exact cause:
-      // `set_quota` → `issue_handle` (S2.7) → `export_prov`/`invalidate_fact` (S3.2+S3.6, two
-      // capabilities implemented in the same merge window, so both call sites needed a fresh
-      // still-unimplemented name — this file picked `invalidate_fact`, dispatch.test.ts picked
-      // `export_prov`, deliberately different so the two tests never depend on the same one).
+      // `create_task` (task group, handle channel, minRole:'member') has no wired handler yet —
+      // S2.7's own deliberate decision (application/gateway/handlers.ts's neighboring doc comment:
+      // its paramsSchema carries no definitionId/version, and tasks.worker_definition_id/.version
+      // are NOT NULL, so there is no way to build a well-formed Task from this capability's own
+      // params alone). `channel:'handle'` is still reachable from this HTTP route's human caller
+      // (authorize.ts's own doc comment: "human is a superset" — a human Principal may call
+      // anything a Handle could). Swap chain for this exact cause (a capability this test picks as
+      // "still unimplemented" getting implemented by a later task): `set_quota` → `issue_handle`
+      // (S2.7) → `export_prov`/`invalidate_fact` (S3.2+S3.6) → `invalidate_fact` (S3.3, gave it a
+      // real handler alongside assert_fact/supersede_fact/register_source/submit_observations) →
+      // `export_prov` (S3.5, this task, gave it a real handler too — application/gateway/dispatch.
+      // test.ts's own "auditor calling export_prov" test was removed for the identical reason, see
+      // that file's own comment) → `create_task`, the one remaining registry capability with no
+      // wired handler as of this task.
       const app = createServer({ pool });
       const response = await app.inject({
         method: 'POST',
-        url: '/api/cap/invalidate_fact',
+        url: '/api/cap/create_task',
         headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: { factId: '00000000-0000-0000-0000-000000000000' },
+        payload: { input: {} },
       });
 
       expect(response.statusCode).toBe(501);
@@ -410,20 +415,47 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(published.json().error.code).toBe('invalid_step_reference');
     });
 
-    it('assert_fact (handler present, write unimplemented) → 501 not_implemented, not 500', async () => {
-      // S2.6 gave assert_fact a handler (the I16 meta-ontology guard); its write half still throws
-      // AssertFactWriteNotImplementedError, which must map to the same stable 501 code as a
-      // capability with no handler at all — not fall through to a generic 500.
+    it('assert_fact writes a real Fact end-to-end (S3.3)', async () => {
+      const { sourceObjectId, targetObjectId } = await withWorkspace(
+        pool,
+        { workspaceId, principalId: randomUUID() },
+        async (client) => {
+          const source = await client.query<{ id: string }>(
+            `insert into objects (workspace_id, object_type, properties) values ($1, 'test.http-fact-source', '{}'::jsonb) returning id`,
+            [workspaceId],
+          );
+          const target = await client.query<{ id: string }>(
+            `insert into objects (workspace_id, object_type, properties) values ($1, 'test.http-fact-target', '{}'::jsonb) returning id`,
+            [workspaceId],
+          );
+          const sourceRow = source.rows[0];
+          const targetRow = target.rows[0];
+          if (!sourceRow || !targetRow) throw new Error('fixture: object insert produced no row');
+          return { sourceObjectId: sourceRow.id, targetObjectId: targetRow.id };
+        },
+      );
+
       const app = createServer({ pool });
       const response = await app.inject({
         method: 'POST',
         url: '/api/cap/assert_fact',
         headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: { objectId: randomUUID(), linkType: 'has_note', value: 'x' },
+        payload: {
+          sourceObjectId,
+          targetObjectId,
+          linkType: 'has_note',
+          properties: { note: 'x' },
+        },
       });
 
-      expect(response.statusCode).toBe(501);
-      expect(response.json().error.code).toBe('not_implemented');
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.ok).toBe(true);
+      expect(body.result.sourceObjectId).toBe(sourceObjectId);
+      expect(body.result.targetObjectId).toBe(targetObjectId);
+      expect(body.result.linkType).toBe('has_note');
+      // owner is a human principal — deriveEpistemicStatus(human) === 'asserted' (§5.6).
+      expect(body.result.epistemicStatus).toBe('asserted');
     });
 
     it('get_object round-trips a real Object end-to-end', async () => {

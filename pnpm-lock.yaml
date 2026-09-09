@@ -33,6 +33,16 @@ importers:
         specifier: 3.24.1
         version: 3.24.1(zod@3.25.76)
 
+  collectors/host-inventory:
+    dependencies:
+      dockerode:
+        specifier: ^5.0.1
+        version: 5.0.1(supports-color@7.2.0)
+    devDependencies:
+      '@types/dockerode':
+        specifier: ^4.0.1
+        version: 4.0.1
+
   gatekeepers/docker:
     dependencies:
       '@nexttime/gatekeeper-base':

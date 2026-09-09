@@ -1,4 +1,4 @@
-import type { CapabilityChannel, HandleClaims, Role, WorkerDefinitionKind } from '@nexttime/shared';
+import type { HandleClaims, Role, WorkerDefinitionKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ChatMessageRow,
@@ -94,12 +94,14 @@ import {
 // S3.5 (docs/development-tasks.md §S3.5) — `export_prov` was registered but had no handler
 // (S3.7's inventory); wired here like every other capability handler in this file.
 import { exportProvHandler } from './export-prov-handler.js';
+import { assertFactHandler, invalidateFactHandler, supersedeFactHandler } from './fact-handlers.js';
 import {
   getGatekeeperHandler,
   getOperationStatsHandler,
   listGatekeepersHandler,
   listOperationsHandler,
 } from './gatekeeper-read-handlers.js';
+import { registerSourceHandler, submitObservationsHandler } from './ingest-handlers.js';
 import { issueHandleHandler } from './issue-handle-handler.js';
 import {
   createPrincipalHandler,
@@ -109,7 +111,6 @@ import {
   rotateApiKeyHandler,
   setPrincipalRoleHandler,
 } from './members-handlers.js';
-import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
 import { listModelsHandler } from './models-catalog-handler.js';
 import {
   getTypeHandler,
@@ -615,50 +616,9 @@ const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspace
 };
 
 // -------------------------------------------------------------------------------------------
-// S2.6 I16 graph-write-path guard (docs/development-tasks.md S2.6 deliverable 4: "Handle 通道
-// assert_fact(WorkerDefinition …) 403"). See application/gateway/meta-ontology-guard.ts's own
-// doc comment for why this handler stops at the guard rather than performing a real write: the
-// registered `assert_fact` capability's paramsSchema (`{objectId, linkType, value, sourceId?}`,
-// packages/shared/src/capabilities.ts) predates S2.6, is not owned by it, and does not carry the
-// `sourceObjectId`/`targetObjectId`/`activityId` `substrate/graph/store.ts`'s `AssertFactInput`
-// requires (I3) — wiring the write itself is a separate, pre-existing gap this task does not
-// silently paper over. `ctx?.channel` defaults to `'handle'` (fail-closed) for the theoretical
-// case of a caller with no context attached (e.g. a handler invoked directly in a unit test).
-// -------------------------------------------------------------------------------------------
-
-export class AssertFactWriteNotImplementedError extends Error {
-  constructor() {
-    super(
-      'assert_fact: the graph write is not implemented (pre-existing gap, not S2.6 scope — see ' +
-        'application/gateway/handlers.ts module doc); only the I16 meta-ontology guard on the ' +
-        'referenced object(s) runs here',
-    );
-    this.name = 'AssertFactWriteNotImplementedError';
-  }
-}
-
-const assertFactHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { objectId, sourceId } = params as {
-    objectId: string;
-    linkType: string;
-    value: unknown;
-    sourceId?: string;
-  };
-  const channel: CapabilityChannel = ctx?.channel ?? 'handle';
-
-  const referencedIds = [objectId, sourceId].filter(
-    (candidate): candidate is string => typeof candidate === 'string',
-  );
-  for (const id of referencedIds) {
-    const object = await graphStore.getObject(client, workspaceId, id);
-    if (object) {
-      assertMetaOntologyHandleWriteAllowed(channel, object.objectType);
-    }
-  }
-
-  throw new AssertFactWriteNotImplementedError();
-};
-
+// S3.3: `assert_fact`/`supersede_fact`/`invalidate_fact` are now real handlers
+// (`fact-handlers.ts`, imported above) — the I16 meta-ontology guard they apply is unchanged from
+// the S2.6 stub this replaced (`meta-ontology-guard.ts`'s own doc comment still describes it).
 // -------------------------------------------------------------------------------------------
 // S2.2/S2.3 governance handlers (docs/development-tasks.md S2.2/S2.3). Every one of these is
 // human-channel-only (packages/shared/src/capabilities.ts `channel: 'human'`) — `authorizeCapabilityCall`
@@ -1131,6 +1091,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],
   ['list_worker_definitions', listWorkerDefinitionsHandler],
   ['assert_fact', assertFactHandler],
+  ['supersede_fact', supersedeFactHandler],
+  ['invalidate_fact', invalidateFactHandler],
   ['approve', approveHandler],
   ['reject', rejectHandler],
   ['list_pending', listPendingHandler],
@@ -1208,4 +1170,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_ontology_version', publishOntologyVersionHandler],
   // S3.5 (docs/development-tasks.md §S3.5) — export-prov-handler.ts.
   ['export_prov', exportProvHandler],
+  // S3.3 (docs/development-tasks.md S3.3) — ingest-handlers.ts.
+  ['register_source', registerSourceHandler],
+  ['submit_observations', submitObservationsHandler],
 ]);

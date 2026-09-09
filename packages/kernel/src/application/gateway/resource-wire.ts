@@ -4,6 +4,7 @@ import type { CapabilityGrantRow } from '../../governance/capability/index.js';
 import type { ConnectionRequestRow } from '../../governance/connections/index.js';
 import type { PolicyRow } from '../../governance/policy/index.js';
 import type { AuditRecordRow } from '../../substrate/audit/index.js';
+import type { SourceRow } from '../../substrate/epistemic/index.js';
 import type { Fact, GraphObject } from '../../substrate/graph/index.js';
 
 /**
@@ -121,6 +122,26 @@ export function toWireQuota(row: QuotaRow) {
     value: row.value,
     updatedBy: row.updatedBy,
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * S3.3 addition: `register_source`'s result projection. `SourceRow.metadata.name` (folded in by
+ * `application/gateway/ingest-handlers.ts`'s `registerSourceHandler` — `sources` has no `name`
+ * column of its own) is surfaced as a top-level `name` field here; `null` when a Source's metadata
+ * was never written with one (e.g. a hypothetical future caller that skips this convention).
+ */
+export function toWireSource(row: SourceRow) {
+  const name = typeof row.metadata.name === 'string' ? row.metadata.name : null;
+  return {
+    id: row.id,
+    kind: row.kind,
+    name,
+    ownerPrincipalId: row.ownerPrincipalId,
+    visibility: row.visibility,
+    uri: row.uri,
+    metadata: row.metadata,
+    createdAt: row.createdAt.toISOString(),
   };
 }
 

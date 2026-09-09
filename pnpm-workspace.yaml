@@ -4,6 +4,10 @@ packages:
   # (manifest + binding), not just YAML content — see gatekeepers/docker and gatekeepers/ragflow
   # (S2.5).
   - "gatekeepers/*"
+  # 采集器 (design doc §7.8/§10.1): collectors/<name>/ ships a small runnable TS package that
+  # observes host-level structural facts and writes them through the ingest capabilities
+  # (register_source/submit_observations) — see collectors/host-inventory (S3.3).
+  - "collectors/*"
 allowBuilds:
   '@biomejs/biome': true
   # Transitive deps of @earendil-works/pi-ai (S1.6, platform-extension devDependency) for

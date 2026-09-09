@@ -14,4 +14,5 @@ export * from './connection.js';
 export * from './task.js';
 export * from './worker.js';
 export * from './identity.js';
+export * from './ingest.js';
 export * from './provenance.js';

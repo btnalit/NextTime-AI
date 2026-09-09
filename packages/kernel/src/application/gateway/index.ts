@@ -35,8 +35,6 @@ export {
 } from './dispatch.js';
 export type { DispatchDeps } from './dispatch.js';
 
-export { AssertFactWriteNotImplementedError } from './handlers.js';
-
 // S3.5 (docs/development-tasks.md §S3.5) — export-prov-handler.ts's own input-validation error;
 // `interfaces/http/capability-route.ts` maps it to 400 like every other caller-input error here.
 export { ExportProvInputError } from './export-prov-handler.js';
@@ -150,3 +148,6 @@ export type { ModelCatalogEntry } from './models-catalog-handler.js';
 
 // S3.13 (docs/development-tasks.md "每用户智能体配置") — agent-profile-handlers.ts.
 export { AgentProfileValidationError } from './agent-profile-handlers.js';
+
+// S3.3 (docs/development-tasks.md S3.3) — ingest-handlers.ts.
+export { ObservationIdentityError, SourceNotFoundError } from './ingest-handlers.js';
