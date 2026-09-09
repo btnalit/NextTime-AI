@@ -388,11 +388,15 @@ async function main() {
   await fn(rest);
 }
 
+// Flush stdout before exiting: inside a container stdout is not a synchronous pipe, and
+// process.exit() right after a large console.log (explain on a collector Fact is >400KB)
+// drops the tail — the EXTRACTED= line — of the output. write('', cb) fires only after
+// every earlier chunk has been flushed.
 main()
-  .then(() => process.exit(0))
+  .then(() => process.stdout.write('', () => process.exit(0)))
   .catch((err) => {
     console.log(`ERROR=${(err && err.message) || String(err)}`);
-    process.exit(1);
+    process.stdout.write('', () => process.exit(1));
   });
 DRIVER_JS
 
@@ -589,7 +593,7 @@ collector_first_run_step() {
   esac
   pass "collector-first-run" "objectsUpserted=$objects_upserted factsAsserted=$facts_asserted"
 
-  out=$(cap "$OWNER_KEY" search '{"objectType":"Container"}' "d.result.items[0]&&d.result.items[0].id||''")
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items[0]&&d.result.items[0].id||''")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "collector-container-search" "search HTTP $status: $(parse_kv "$out" BODY)"
   container_id=$(parse_kv "$out" EXTRACTED)
@@ -666,7 +670,7 @@ chat_dependency_step() {
   esac
   pass "chat-dependency-reply" "entry agent replied: $last_reply"
 
-  out=$(cap "$OWNER_KEY" search '{"objectType":"Container"}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "chat-dependency-search-kernel" "search HTTP $status: $(parse_kv "$out" BODY)"
   KERNEL_CONTAINER_ID=$(parse_kv "$out" EXTRACTED)

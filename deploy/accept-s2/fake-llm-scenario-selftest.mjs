@@ -307,7 +307,7 @@ async function main() {
       const call = toolCallOf(json);
       check(
         'entry-dependency-chat-turn1',
-        call?.name === 'search' && JSON.stringify(call.args) === '{"objectType":"Container"}',
+        call?.name === 'search' && JSON.stringify(call.args) === '{"query":"","objectType":"Container"}',
         JSON.stringify(json.choices[0]),
       );
     }
@@ -320,7 +320,7 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"objectType":"Container"}' } }],
+          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' } }],
         },
         {
           role: 'tool',
@@ -352,7 +352,7 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"objectType":"Container"}' } }],
+          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' } }],
         },
         { role: 'tool', tool_call_id: 'call_s', content: JSON.stringify({ items: [] }) },
       ];
@@ -374,7 +374,7 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"objectType":"Container"}' } }],
+          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' } }],
         },
         {
           role: 'tool',
@@ -412,7 +412,7 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"objectType":"Container"}' } }],
+          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' } }],
         },
         {
           role: 'tool',

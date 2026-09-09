@@ -182,11 +182,15 @@ async function main() {
   await cmdCap(rest);
 }
 
+// Flush stdout before exiting: inside a container stdout is not a synchronous pipe, and
+// process.exit() right after a large console.log drops the tail of the output (accept_s3's
+// explain step lost its EXTRACTED= line that way). write('', cb) fires only after every
+// earlier chunk has been flushed.
 main()
-  .then(() => process.exit(0))
+  .then(() => process.stdout.write('', () => process.exit(0)))
   .catch((err) => {
     console.log(`ERROR=${(err && err.message) || String(err)}`);
-    process.exit(1);
+    process.stdout.write('', () => process.exit(1));
   });
 DRIVER_JS
 

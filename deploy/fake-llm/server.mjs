@@ -399,7 +399,7 @@ function entryDependencyChatScenario(messages) {
       : undefined;
 
   return [
-    { tool: { name: 'search', args: { objectType: 'Container' } } },
+    { tool: { name: 'search', args: { query: '', objectType: 'Container' } } },
     kernelContainer
       ? {
           tool: {
