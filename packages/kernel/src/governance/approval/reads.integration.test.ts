@@ -5,7 +5,6 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { writeAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { registerGatekeeper } from '../gatekeepers/index.js';
 import { getOperationStats } from './reads.js';
@@ -62,44 +61,38 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool.end();
     });
 
-    /** Seeds one `observe_operation` AuditRecord — the exact shape `dispatch.ts`'s
+    /** Seeds one `observe_operation` AuditRecord — the exact payload shape `dispatch.ts`'s
      *  `dispatchCapability` writes for a real call (`payload.params` = the parsed capability
-     *  params verbatim, `observe_operation` has no `redactedParamKeys`). */
+     *  params verbatim, `observe_operation` has no `redactedParamKeys`). Raw SQL, not
+     *  `substrate/audit`'s `writeAudit` — `writeAudit` always stamps `created_at = now()` with no
+     *  override, and `audit_records` is append-only (0004_audit.sql's own trigger blocks *every*
+     *  UPDATE unconditionally, not just of content columns — insert-then-back-date does not work
+     *  here), so a caller that needs a specific `created_at` (the days-window test below) must
+     *  set it at INSERT time. `resource_type`/`resource_id` are omitted (default null), matching
+     *  what `writeAudit` itself would produce for a call with neither given. */
     async function seedObserveCall(params: {
       gatekeeperId: string;
       operation: string;
       at?: Date;
     }): Promise<void> {
+      const payload = JSON.stringify({
+        channel: 'handle',
+        onBehalfOf: ownerId,
+        params: { gatekeeperId: params.gatekeeperId, operation: params.operation, params: {} },
+      });
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        writeAudit(client, {
-          workspaceId,
-          actorPrincipalId: ownerId,
-          action: 'observe_operation',
-          payload: {
-            channel: 'handle',
-            onBehalfOf: ownerId,
-            params: { gatekeeperId: params.gatekeeperId, operation: params.operation, params: {} },
-          },
-        }),
-      );
-      if (params.at) {
-        // writeAudit always stamps created_at = now(); back-date it for the days-window test below
-        // the same way a real production row from days ago would already have one.
-        await withWorkspace(
-          pool,
-          { workspaceId, principalId: ownerId },
-          (client) =>
-            client.query(
-              `update audit_records set created_at = $1
-               where workspace_id = $2 and action = 'observe_operation'
-                 and payload->'params'->>'gatekeeperId' = $3
-                 and payload->'params'->>'operation' = $4
-                 and created_at > now() - interval '1 minute'`,
-              [params.at, workspaceId, params.gatekeeperId, params.operation],
+        params.at
+          ? client.query(
+              `insert into audit_records (workspace_id, actor_principal_id, action, payload, created_at)
+               values ($1, $2, 'observe_operation', $3::jsonb, $4)`,
+              [workspaceId, ownerId, payload, params.at],
+            )
+          : client.query(
+              `insert into audit_records (workspace_id, actor_principal_id, action, payload)
+               values ($1, $2, 'observe_operation', $3::jsonb)`,
+              [workspaceId, ownerId, payload],
             ),
-          { skipRoleSwitch: true },
-        );
-      }
+      );
     }
 
     it('an observe-class Operation with no action_requests rows appears with calls === observeCalls, execute counters at 0', async () => {

@@ -11,8 +11,8 @@ import type { PoolClient } from 'pg';
  * (a migration drops a trigger, a code path forgets to call the right helper) or where the
  * invariant is enforced entirely in application code with no DB-level backstop at all, and so has
  * no independent check *except* one written here. A check reading `violations: 0` on every tick
- * therefore does not mean "this invariant is unimportant" — several (I4, I7, I12) are checks the
- * DB is already expected to make structurally impossible to violate; they exist as defense in
+ * therefore does not mean "this invariant is unimportant" — several (I4, I7, I12, I13) are checks
+ * the DB is already expected to make structurally impossible to violate; they exist as defense in
  * depth, not because a violation is expected.
  *
  * **Cross-workspace, admin-mode reads.** Every query here scans the whole database, not one
@@ -52,7 +52,7 @@ import type { PoolClient } from 'pg';
  * | I10 | agent egress only via the proxy | No | Network/routing-level (no direct route from an agent container; proxy allow/deny) — outside anything a database query can observe. |
  * | I11 | every governed transition writes an AuditRecord in the same transaction | Yes | `checkI11` — a representative, not exhaustive, check: every `action_requests` row past `proposed` must have at least one `audit_records` row with `resource_type = 'action_request'` and matching `resource_id` (the shape `transition-log.ts`'s `recordTransition` always writes). Exhaustive coverage would mean one such check per governed table in the system — out of this task's bounded scope; ActionRequest is the invariant's own table-level example (§5.3 item 3: "已执行的 ActionRequest 没有 Policy 决策记录"). |
  * | I12 | a published OntologyVersion/WorkerDefinition is immutable | Yes | `checkI12` — same trigger-presence posture as I4: verifies `ontology_versions_immutable_definition` and `worker_definitions_immutable_published` are present and enabled. |
- * | I13 | `on_behalf_of` only from a Handle; a child Handle inherits from its parent | Yes | `checkI13` — for every `capability_handles` row with a `parent_jti`, its `on_behalf_of` must equal its parent's and its `expires_at` must not exceed its parent's. Unlike `on_behalf_of`'s own *post-issuance* immutability (governance/0001_capability_handles.sql's `before update` trigger), nothing in the DB stops a wrong value being **inserted** in the first place (the trigger only fires on `UPDATE`) — this is a real, independent check, not defense in depth over an already-enforced rule. |
+ * | I13 | `on_behalf_of` only from a Handle; a child Handle inherits from its parent | Yes | `checkI13` — for every `capability_handles` row with a `parent_jti`, its `on_behalf_of` must equal its parent's and its `expires_at` must not exceed its parent's. Correction from an earlier draft of this table (caught by CI's real-Postgres run, not reproducible on a no-docker dev machine): `governance/0001_capability_handles.sql`'s own `before update` trigger only blocks `on_behalf_of` from changing *after* issuance, but a separate, later migration — `governance/0008_capability_handle_inheritance.sql`'s `capability_handles_inheritance`, `before insert` — already enforces both of this check's own conditions at write time (a session-mismatch or parent-mismatch `on_behalf_of`, or an `expires_at` exceeding the parent's, is rejected on `INSERT`, not just blocked from being changed afterward). This check is therefore defense in depth like I4/I7/I12, not an independent backstop over an unenforced rule — kept anyway because a trigger-presence check alone would not catch the trigger's own *logic* regressing (e.g. a future edit flips the comparison), only its absence. |
  * | I14 | an approver must hold the `action_kind × resource_scope` they approved | Yes | `checkI14` — for every `approved` ActionRequest, the deciding Principal (via its Approval `decisions` row) must either be `owner` or have held a matching active `capability_grants` row *at `decided_at`* (compared against that row's own `created_at`/`revoked_at`/`expires_at` window, not "is it still active now" — a grant legitimately revoked after a valid approval must not read as a violation). Mirrors `governance/approval/reads.ts`'s own `approverHasScope`/`listPendingForApprover` matching logic. |
  * | I15 | an entry container's working directory/pi dir is mounted only to that user's own entry container | No | Container/filesystem mount-level (`worker-supervisor`'s own spawn spec) — no database representation of what is bind-mounted where. |
  * | I16 | a platform meta-ontology object may only be **published** over the human channel | Yes | `checkI16` — every `audit_records` row whose `action` is one of the five `publish_*` meta-ontology capabilities (`publish_ontology_version`/`publish_operation`/`publish_skill`/`publish_procedure`/`publish_worker_definition`) must carry `payload.channel = 'human'` (the shape `dispatch.ts` always writes). Every one of those five is already registered `channel: 'human'` (so `authorizeCapabilityCall` should refuse a Handle-channel call before a handler — let alone this audit write — is ever reached); this is an independent, DB-level backstop for that registry-level rule, not a re-check of something else already blocks structurally. The companion "Handle 通道只能写对提议者私有的草稿" half of I16 is not covered — it needs the object's `proposed_by` at call time, which the audit payload does not carry, and is left as a documented gap. |
@@ -240,7 +240,10 @@ async function checkI11(client: PoolClient): Promise<InvariantCheckResult> {
 }
 
 // -------------------------------------------------------------------------------------------
-// I13 — child Handle attenuation: on_behalf_of inheritance + expires_at ceiling.
+// I13 — child Handle attenuation: on_behalf_of inheritance + expires_at ceiling. Defense in
+// depth — governance/0008_capability_handle_inheritance.sql's `capability_handles_inheritance`
+// (`before insert`) already rejects both conditions below at write time; see this module's own
+// doc comment table for the correction from an earlier draft that missed that later migration.
 // -------------------------------------------------------------------------------------------
 
 async function checkI13(client: PoolClient): Promise<InvariantCheckResult> {
