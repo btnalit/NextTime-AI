@@ -14,6 +14,7 @@ import {
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
+  CapabilityNotImplementedError,
   ConflictNotFoundError,
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
@@ -121,6 +122,30 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     // Other SQLSTATEs stay internal errors — never leak a DB message.
     const other = Object.assign(new Error('deadlock detected'), { code: '40P01' });
     expect(mapCapabilityError(other)).toMatchObject({ status: 500 });
+  });
+
+  // W4 closeout: this used to be an integration test ('a registered but unimplemented capability
+  // → 501') that dispatched the real `create_task` capability end-to-end through a live server —
+  // `create_task` was, at the time, the one remaining registry entry with no wired handler (a swap
+  // chain going back to S2.3: `request_action` → `cancel_task` → `set_quota` → `issue_handle` →
+  // `export_prov` → `create_task`, each retired once that capability got a real handler — see
+  // `application/gateway/dispatch.test.ts`'s own comment on the identical chain for its sibling
+  // unit test). `create_task` now has a real handler (`application/task/invoke.ts`'s `createTask`)
+  // — grepping the registry against `CAPABILITY_HANDLERS` (`packages/shared/src/capabilities.ts`
+  // vs. `application/gateway/handlers.ts`) confirms zero remaining registered-but-unimplemented
+  // capabilities, so there is no real fixture left to swap to and none is expected (the registry
+  // does not grow new unimplemented entries on its own — same reasoning `dispatch.test.ts`'s
+  // sibling comment already gives for its own now-removed human-channel variant). Rather than swap
+  // to a fake registry entry (the registry is a real, shared, module-level singleton — mutating it
+  // for one test would leak into every other test in this file/process) or delete this coverage
+  // outright, this now directly unit-tests the mapping `dispatch.ts`'s `if (!handler) throw new
+  // CapabilityNotImplementedError(name)` feeds into — the actual thing this test ever verified —
+  // with a synthetic capability name that dispatch.ts would only ever see if a *future* capability
+  // really were left unwired again.
+  it('CapabilityNotImplementedError → 501 not_implemented', () => {
+    const mapped = mapCapabilityError(new CapabilityNotImplementedError('some_future_capability'));
+    expect(mapped.status).toBe(501);
+    expect(mapped.code).toBe('not_implemented');
   });
 });
 
@@ -372,33 +397,6 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(response.statusCode).toBe(404);
       expect(response.json().error.code).toBe('not_found');
-    });
-
-    it('a registered but unimplemented capability → 501', async () => {
-      // `create_task` (task group, handle channel, minRole:'member') has no wired handler yet —
-      // S2.7's own deliberate decision (application/gateway/handlers.ts's neighboring doc comment:
-      // its paramsSchema carries no definitionId/version, and tasks.worker_definition_id/.version
-      // are NOT NULL, so there is no way to build a well-formed Task from this capability's own
-      // params alone). `channel:'handle'` is still reachable from this HTTP route's human caller
-      // (authorize.ts's own doc comment: "human is a superset" — a human Principal may call
-      // anything a Handle could). Swap chain for this exact cause (a capability this test picks as
-      // "still unimplemented" getting implemented by a later task): `set_quota` → `issue_handle`
-      // (S2.7) → `export_prov`/`invalidate_fact` (S3.2+S3.6) → `invalidate_fact` (S3.3, gave it a
-      // real handler alongside assert_fact/supersede_fact/register_source/submit_observations) →
-      // `export_prov` (S3.5, this task, gave it a real handler too — application/gateway/dispatch.
-      // test.ts's own "auditor calling export_prov" test was removed for the identical reason, see
-      // that file's own comment) → `create_task`, the one remaining registry capability with no
-      // wired handler as of this task.
-      const app = createServer({ pool });
-      const response = await app.inject({
-        method: 'POST',
-        url: '/api/cap/create_task',
-        headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: { input: {} },
-      });
-
-      expect(response.statusCode).toBe(501);
-      expect(response.json().error.code).toBe('not_implemented');
     });
 
     it('set_quota (owner) → 200, persisted, audited with a null resource_id (quota keys are not uuids)', async () => {

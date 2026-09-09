@@ -176,7 +176,9 @@ true`，等 owner 逐条审核后再发布，I17）——不需要手写每一�
 curl -s https://<host>:8443/api/cap/request_connection \
   -H "Authorization: Bearer ${MEMBER_OR_OWNER_KEY}" -H 'content-type: application/json' \
   -d '{"kind":"http","target":"<system>"}'
-# {"ok":true,"result":{"connectionRequestId":"<cr-uuid>","status":"requested"}}
+# {"ok":true,"result":{"id":"<cr-uuid>","status":"requested",...}}   —— 主键统一叫 id
+#   （docs/wire-contract-conventions.md §1"单资源结果主键一律 id"），第 3 步 create_connection
+#   参数里的 connectionRequestId 字段名不变，只是这里取的是 result.id 这个值。
 
 # 2. owner 在 web 控制台"治理 → 系统接入"（#/govern/systems）能看到这张卡片；或 CLI/curl：
 curl -s https://<host>:8443/api/cap/list_connection_requests \
@@ -258,6 +260,54 @@ curl -s https://<host>:8443/api/cap/explain \
   -H "Authorization: Bearer ${TARGET_USER_KEY}" -H 'content-type: application/json' \
   -d '{"nodeId":"<fact-id>"}'
 ```
+
+### 10.1 自动化演练：`scripts/drill-add-gatekeeper.sh`
+
+S3.10 交付物——把本文档 §7 request → create → publish_manifest → grant 与本节 observe 验证这五步
+自动化成一个 PASS/FAIL 分明、可重复跑的脚本，对应 `docs/development-tasks.md` § S3.10 的验收句
+"按「新增接入包」手册接入一个 fake 系统成功"：
+
+```bash
+cd <CODE_DIR>
+sh scripts/drill-add-gatekeeper.sh
+```
+
+用的"fake 系统"就是 §9 之外这份文档里反复提到的 accept-s2 OpenAPI fixture
+（`deploy/accept-s2/openapi-fixture/`，一个 `stock.get` observe Operation）——不是另起一套新
+fixture，与 `scripts/accept_s2.sh` 自己的 http 连接那一段共用同一对 compose 服务
+（`accept-s2-openapi`/`accept-s2-http-gate`）与同一个 `${NEXTTIME_DATA}/accept-s2/http-gate/`
+目录，因此**不要**与一次正在跑的 `accept_s2.sh` 并发执行（两者都会重新生成令牌并让 compose 重建
+这两个容器，谁先起的就会被谁后起的顶掉——脚本自己的头部注释也记了这条）。
+
+脚本自己新建一个 `drill-add-gatekeeper-<ts>` workspace（owner + member 两个 Principal），member
+发起 `request_connection`，owner 完成 `create_connection`（`manifestSource` 指向 fixture 的
+`openapi.json`，走§2 的自动导入路径）→ `publish_manifest` → `connect_gatekeeper`（把门授权给
+member，不是 owner 自己），最后由 **member**（被授权的那个人，不是 owner）调用 `request_action`
+观察 `stock.get`，断言 `result.status === "ok"` 且 `observedFactCount >= 1`——真的证明了这条授权
+链本身生效，不只是"owner 反正什么都能调"。
+
+期望输出（末尾）：
+```
+PASS preflight-services postgres, kernel running
+PASS preflight-build accept-s2-openapi, accept-s2-http-gate images built
+PASS bootstrap-workspace workspace=... owner=... key=...(redacted)
+PASS bootstrap-member member=... key=...(redacted)
+PASS fixtures-store-key ...
+PASS fixtures-api-token bearer token generated: ...(redacted)
+PASS fixtures-up accept-s2-openapi, accept-s2-http-gate up and healthy
+PASS request-connection connectionRequestId=...
+PASS create-connection gatekeeperId=... (imported stock.get from OpenAPI manifest)
+PASS publish-manifest manifest published
+PASS connect-gatekeeper gatekeeper granted to member ...
+PASS observe-operation stock.get -> status=ok observedFactCount=1 (member observed through the granted gatekeeper)
+PASS cleanup workspace retained: ...
+DRILL-ADD-GATEKEEPER OK
+```
+任何一步失败都打印 `FAIL <step> <detail>` 到 stderr 并以非零退出。默认跑完会 `docker compose
+--profile accept-s2 stop accept-s2-openapi accept-s2-http-gate`（不影响 §4/§5 起的其它门实例，
+只停这两个 fixture 容器）；创建的 workspace 按 accept_s1.sh/accept_s2.sh 同样的约定保留作审计
+轨迹，`sh scripts/delete-workspaces-matching.sh '^drill-add-gatekeeper' --yes` 定期清理。想跑完
+之后保留 fixture 容器方便手动继续探查，加 `--keep`。
 
 ## 11. 回滚
 

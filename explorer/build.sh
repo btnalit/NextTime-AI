@@ -1,7 +1,7 @@
 #!/bin/sh
 # explorer/build.sh — builds the reference Knowledge Explorer's static bundle for this platform's
 # own Explorer mount (docs/development-tasks.md §S3.5; design doc §9.5/§7.6). Runs ON THE HOST
-# (or as a Docker build stage — see deploy/caddy/Dockerfile's "explorer" stage), not in CI: CI
+# (or as a Docker build stage — see deploy/caddy/Dockerfile's "explorer-build" stage), not in CI: CI
 # never has network access to an upstream project it does not own, and the explorer bundle is a
 # build artifact, not source this repo vendors (see this directory's own README.md for the "why
 # not vendor it" reasoning). The Explorer's own front-end source is NOT copied into this repo —

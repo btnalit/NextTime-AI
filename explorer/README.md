@@ -70,31 +70,52 @@ arguments passed to `vite build` (a Git-Bash-only artifact; the Docker build sta
 and any real Linux host are unaffected).
 
 Default output: `deploy/caddy/explorer-placeholder/` — the exact directory
-`deploy/caddy/Dockerfile`'s `caddy` build stage already `COPY`s into `/srv/explorer`
-(see that Dockerfile's own comment). Running this script and then
-`docker compose build caddy && docker compose up -d caddy` is the whole deploy step
-for an Explorer update — see `docs/runbooks/host-explorer.md`.
+`deploy/caddy/Dockerfile`'s `explorer-src-0` stage `COPY`s from when the build
+never runs inside the image (see below). Running this script directly and then
+`docker compose build caddy && docker compose up -d caddy` (leaving `EXPLORER_BUILD`
+unset) is one way to deploy an Explorer update — see the "W4 closeout" note in the
+next section for the other, now more common one — either way ends with the same
+`docker compose build caddy && docker compose up -d caddy`, see
+`docs/runbooks/host-explorer.md`.
+
+## W4 closeout: the build now also happens inside `deploy/caddy/Dockerfile` itself
+
+`deploy/caddy/Dockerfile` gained its own `explorer-build` stage that runs this
+exact script (`explorer/build.sh`, COPYed in and executed verbatim — not
+re-implemented) on a host with **Docker only**, no node/npm/git needed on the host
+itself. It is gated behind a build arg, `EXPLORER_BUILD` (default `0`), so both
+paths documented in this file keep working:
+
+- `EXPLORER_BUILD=0` (default, unset) — **unchanged from before this closeout**:
+  `docker compose build caddy` never clones or builds anything; it copies whatever
+  `deploy/caddy/explorer-placeholder/` already holds (the committed placeholder, or
+  a bundle this script already wrote there directly on the host, per "Usage" above).
+- `EXPLORER_BUILD=1` — the Dockerfile's own `explorer-build` stage clones
+  `SEMANTICA_REF` (default `v0.6.7`, a separate build arg) and builds it, entirely
+  inside the image; the repo's own `deploy/caddy/explorer-placeholder/` directory is
+  never read or written in this path.
+
+See `docs/runbooks/host-explorer.md` for the full walkthrough of both.
 
 ## CI does not build this
 
 `deploy/caddy/explorer-placeholder/` ships committed with a small static
 `index.html` that says the bundle has not been built ("explorer bundle not built —
-run `sh explorer/build.sh`"), so `deploy/caddy/Dockerfile`'s `COPY
-deploy/caddy/explorer-placeholder /srv/explorer` always succeeds — in CI, in a
-fresh checkout, or on a host that has never run `build.sh` — without ever cloning
-the reference project or needing network access from CI. Running `build.sh`
-replaces that placeholder's contents with the real built bundle; nothing about the
-Dockerfile changes either way.
+run `sh explorer/build.sh`"), so with the default `EXPLORER_BUILD=0`,
+`deploy/caddy/Dockerfile`'s `COPY deploy/caddy/explorer-placeholder /out` always
+succeeds — in CI, in a fresh checkout, or on a host that has never run
+`build.sh` — without ever cloning the reference project or needing network access.
+CI never passes `EXPLORER_BUILD=1` (it does not have network access to a project
+this repo does not own), so it always takes this path.
 
 ## Deploy wiring
 
-- `deploy/caddy/Caddyfile`: `handle_path /explorer/*` serves
-  `deploy/caddy/explorer-placeholder`'s built contents (via the image's
-  `/srv/explorer`, see below) as static files, and a second `handle` block
-  reverse-proxies the nine Explorer API paths to `kernel:8080` with an injected
-  `X-API-Key` header (the unmodified Explorer bundle sends none itself — see that
-  file's own comment for why, and `docs/runbooks/host-explorer.md` for how the key
-  is provisioned).
-- `deploy/caddy/Dockerfile`: a `caddy` build stage `COPY`s
-  `deploy/caddy/explorer-placeholder` (whatever it currently holds — placeholder or
-  real build) into the image's `/srv/explorer`.
+- `deploy/caddy/Caddyfile`: `handle_path /explorer/*` serves whatever
+  `deploy/caddy/Dockerfile` copied into the image's `/srv/explorer` (see below) as
+  static files, and a second `handle` block reverse-proxies the nine Explorer API
+  paths to `kernel:8080` with an injected `X-API-Key` header (the unmodified
+  Explorer bundle sends none itself — see that file's own comment for why, and
+  `docs/runbooks/host-explorer.md` for how the key is provisioned).
+- `deploy/caddy/Dockerfile`: picks one of two candidate stages by the
+  `EXPLORER_BUILD` build arg (see "W4 closeout" above for what each one does) and
+  `COPY`s its output into the final image's `/srv/explorer`.

@@ -161,6 +161,194 @@ async function resolveCallerWorkerRun(
 }
 
 /**
+ * The quota-gated "insert one queued Task row" step shared by `invokeWorkerCreate` (which goes on
+ * to spawn a WorkerRun for it) and `createTask` (which does not — see that function's own doc
+ * comment for why `create_task` never spawns). Factored out rather than duplicated: both callers
+ * need the *identical* I18 depth/concurrency/cost-budget checks running inside the *identical*
+ * advisory-locked transaction as the INSERT itself (P2-6 fix's own reasoning, below, applies
+ * equally to a Task created without a WorkerRun — a caller spamming `create_task` must not be able
+ * to bypass the same concurrency ceiling `invoke_worker` enforces, since the resulting `queued`
+ * rows count toward that same ceiling's query either way).
+ */
+async function insertQueuedTaskWithQuotaCheck(
+  workspaceId: string,
+  caller: InvokeWorkerCallerCtx,
+  input: { readonly definitionId: string; readonly version: number; readonly input: unknown },
+  deps: TaskRuntimeDeps,
+): Promise<{
+  readonly newDepth: number;
+  readonly parentWorkerRun: WorkerRunRow | null;
+  readonly task: TaskRow;
+}> {
+  // P2-6 fix (review job 652a4abc: "quota checks in separate txns, no lock → concurrent invokes
+  // exceed maxConcurrentWorkerRunsPerUser"): the I18 quota checks and the Task INSERT that makes
+  // the *next* caller's own concurrency count accurate now share one transaction, serialized per
+  // (workspace, principal) by a session-scoped advisory lock (`pg_advisory_xact_lock`, the same
+  // "auto-released at COMMIT/ROLLBACK" convention `application/chat/service.ts`'s own
+  // `insertChatMessage` already uses for its own sequence-allocation race) — a second concurrent
+  // `invoke_worker`/`create_task` call for the same principal blocks here until the first commits
+  // (or rolls back on a quota violation), then re-reads the *already-committed* count.
+  //
+  // **Deviation from the S2.7 dispatch text's own "每用户并发 WorkerRun" wording**: the concurrency
+  // count below is `tasks.status in ('queued','running','waiting_approval')`, not a `worker_runs`
+  // join (the pre-existing query, still used by `find_workers`'s own unrelated depth math is not
+  // affected). `worker_runs` rows are deliberately created in a *separate*, later-committed
+  // transaction (`spawnWorkerRun`'s own module doc comment: a freshly-minted Handle must be usable
+  // before any Task/WorkerRun creation transaction... commits, so it cannot share this lock without
+  // reopening the exact race this fix closes) — locking around a `tasks` count instead means the
+  // count and the row that makes the *next* caller's own count accurate are atomic with each
+  // other, which no `worker_runs`-based count could achieve without an equally-locked WorkerRun
+  // insert. A `queued`/`running`/`waiting_approval` Task has, in every real case, exactly one
+  // active WorkerRun underneath it (a crash-requeue terminates the old one before spawning a new
+  // one — `lifecycle.ts`'s `spawnWorkerRunForRetry`), so this is a faithful proxy for "concurrent
+  // WorkerRuns per user", not a different quota — a `create_task`-created Task has *zero* WorkerRuns
+  // underneath it (no spawn), so it counts toward this same ceiling without contributing an actual
+  // running container; documented, not a bug (`createTask`'s own doc comment).
+  return withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: caller.principalId },
+    async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+        `${workspaceId}:${caller.principalId}`,
+      ]);
+
+      const callerWorkerRun = caller.claims
+        ? await resolveCallerWorkerRun(client, workspaceId, caller.claims.sid)
+        : null;
+      const depth = (callerWorkerRun?.depth ?? 0) + 1;
+      const resolvedQuotas = await resolveQuotas(client, workspaceId);
+
+      if (depth > resolvedQuotas.maxDepth) {
+        throw new QuotaExceededError(
+          'depth_exceeded',
+          `${input.definitionId}: derivation depth ${depth} exceeds the workspace's max depth (${resolvedQuotas.maxDepth}, hard ceiling ${HARD_MAX_DEPTH}) — invoke from a shallower WorkerRun or reduce nesting`,
+        );
+      }
+
+      const concurrentResult = await client.query<{ count: string }>(
+        `select count(*)::bigint as count
+         from tasks
+         where workspace_id = $1
+           and on_behalf_of = $2
+           and status in ('queued', 'running', 'waiting_approval')`,
+        [workspaceId, caller.principalId],
+      );
+      const concurrentCount = Number(concurrentResult.rows[0]?.count ?? 0);
+      if (concurrentCount >= resolvedQuotas.maxConcurrentWorkerRunsPerUser) {
+        throw new QuotaExceededError(
+          'concurrency_exceeded',
+          `${concurrentCount} WorkerRun(s)/queued Task(s) already active for this user, at or above ` +
+            `the workspace limit (${resolvedQuotas.maxConcurrentWorkerRunsPerUser})`,
+        );
+      }
+
+      if (resolvedQuotas.dailyCostBudgetUsd !== null) {
+        const spentToday = await sumTodayCostUsd(client, workspaceId);
+        if (spentToday >= resolvedQuotas.dailyCostBudgetUsd) {
+          throw new QuotaExceededError(
+            'daily_cost_exceeded',
+            `workspace has spent $${spentToday.toFixed(2)} today, at or above the daily cost budget ` +
+              `($${resolvedQuotas.dailyCostBudgetUsd.toFixed(2)})`,
+          );
+        }
+      }
+
+      const taskResult = await client.query(
+        `insert into tasks (
+           workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
+           worker_definition_version, input, token_budget, duration_limit_sec
+         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8)
+         returning ${TASK_ROW_COLUMNS}`,
+        [
+          workspaceId,
+          caller.principalId,
+          caller.turnId ?? null,
+          input.definitionId,
+          input.version,
+          JSON.stringify(input.input ?? null),
+          resolvedQuotas.defaultTokenBudget,
+          resolvedQuotas.defaultDurationLimitSec,
+        ],
+      );
+      const row = taskResult.rows[0];
+      if (!row)
+        throw new Error(
+          'insertQueuedTaskWithQuotaCheck: tasks INSERT ... RETURNING produced no row',
+        );
+      const mappedTask = mapTaskRow(row);
+      await recordTaskTransition(client, workspaceId, {
+        actorPrincipalId: caller.principalId,
+        action: 'task.queue',
+        taskId: mappedTask.id,
+        resultingStatus: 'queued',
+      });
+
+      return { newDepth: depth, parentWorkerRun: callerWorkerRun, task: mappedTask };
+    },
+  );
+}
+
+/**
+ * `create_task`: resolves and validates the published WorkerDefinition (must be `kind: 'worker'`)
+ * and the AgentProfile `enabledWorkerDefinitions` narrowing — identical checks `invokeWorkerCreate`
+ * runs — then inserts the Task row via `insertQueuedTaskWithQuotaCheck` and returns it **without**
+ * spawning a WorkerRun (contrast `invokeWorkerCreate`, which spawns and transitions to `running`
+ * right after the same insert). §5.5 already has a `queued` status for exactly this "created, not
+ * yet running" state, so no new state was invented.
+ *
+ * **Known limitation, documented rather than papered over**: nothing in this codebase today
+ * transitions a Task out of `queued` unless a WorkerRun already exists for it —
+ * `application/task/reaper.ts`'s `runTaskReaper` only scans `worker_runs` joined to `tasks`, so a
+ * Task created this way sits at `queued` indefinitely (still visible via `get_task`/`list_tasks`,
+ * still counted by future `invoke_worker`/`create_task` calls' own concurrency quota) until some
+ * future capability actually spawns a WorkerRun for it — no such capability exists yet. This
+ * matches the task brief's own framing ("create only, to be run later by the reaper/dispatcher or
+ * an explicit invoke — pick the semantics the existing lifecycle supports without a new state"):
+ * the semantics the existing lifecycle supports is exactly "insert at `queued`", and no more.
+ */
+export async function createTask(
+  workspaceId: string,
+  caller: InvokeWorkerCallerCtx,
+  input: { readonly definitionId: string; readonly version: number; readonly input: unknown },
+  deps: TaskRuntimeDeps,
+): Promise<TaskRow> {
+  const definition = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: caller.principalId },
+    (client) =>
+      requirePublishedWorkerDefinition(client, workspaceId, {
+        definitionId: input.definitionId,
+        version: input.version,
+      }),
+  );
+
+  if (definition.kind !== 'worker') {
+    throw new InvokeWorkerValidationError(
+      `create_task: WorkerDefinition ${input.definitionId}@${input.version} is kind ` +
+        `"${definition.kind}", not "worker" — only a worker-kind WorkerDefinition may back a Task`,
+    );
+  }
+
+  // S3.13 runtime consumer, same rule `invokeWorkerCreate` applies (see that function's own
+  // comment): an owner is not exempt — a Profile is a preference the principal set for themselves,
+  // not a privilege boundary.
+  const agentProfile = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: caller.principalId },
+    (client) => readAgentProfile(client, workspaceId, caller.principalId),
+  );
+  if (
+    agentProfile?.enabledWorkerDefinitions &&
+    !agentProfile.enabledWorkerDefinitions.includes(input.definitionId)
+  ) {
+    throw new InvokeWorkerDefinitionNotEnabledError(input.definitionId);
+  }
+
+  const { task } = await insertQueuedTaskWithQuotaCheck(workspaceId, caller, input, deps);
+  return task;
+}
+
+/**
  * `invoke_worker`'s create phase: resolves and validates the WorkerDefinition, runs the I18 quota
  * checks, mints the child Handle, and spawns the WorkerRun — never waits for the Task to reach a
  * terminal (or `waiting_approval`) status. Split out from `invokeWorker` below (P1-4 fix, review
@@ -258,111 +446,14 @@ export async function invokeWorkerCreate(
     requestedGates: input.gates,
   });
 
-  // P2-6 fix (review job 652a4abc: "quota checks in separate txns, no lock → concurrent invokes
-  // exceed maxConcurrentWorkerRunsPerUser"): the I18 quota checks and the Task INSERT that makes
-  // the *next* caller's own concurrency count accurate now share one transaction, serialized per
-  // (workspace, principal) by a session-scoped advisory lock (`pg_advisory_xact_lock`, the same
-  // "auto-released at COMMIT/ROLLBACK" convention `application/chat/service.ts`'s own
-  // `insertChatMessage` already uses for its own sequence-allocation race) — a second concurrent
-  // `invoke_worker` call for the same principal blocks here until the first commits (or rolls
-  // back on a quota violation), then re-reads the *already-committed* count.
-  //
-  // **Deviation from the S2.7 dispatch text's own "每用户并发 WorkerRun" wording**: the concurrency
-  // count below is `tasks.status in ('queued','running','waiting_approval')`, not a `worker_runs`
-  // join (the pre-existing query, still used by `find_workers`'s own unrelated depth math is not
-  // affected). `worker_runs` rows are deliberately created in a *separate*, later-committed
-  // transaction (`spawnWorkerRun`'s own module doc comment: a freshly-minted Handle must be usable
-  // before any Task/WorkerRun creation transaction... commits, so it cannot share this lock without
-  // reopening the exact race this fix closes) — locking around a `tasks` count instead means the
-  // count and the row that makes the *next* caller's own count accurate are atomic with each
-  // other, which no `worker_runs`-based count could achieve without an equally-locked WorkerRun
-  // insert. A `queued`/`running`/`waiting_approval` Task has, in every real case, exactly one
-  // active WorkerRun underneath it (a crash-requeue terminates the old one before spawning a new
-  // one — `lifecycle.ts`'s `spawnWorkerRunForRetry`), so this is a faithful proxy for "concurrent
-  // WorkerRuns per user", not a different quota.
-  const { newDepth, parentWorkerRun, quotas, task } = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: caller.principalId },
-    async (client) => {
-      await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
-        `${workspaceId}:${caller.principalId}`,
-      ]);
-
-      const callerWorkerRun = caller.claims
-        ? await resolveCallerWorkerRun(client, workspaceId, caller.claims.sid)
-        : null;
-      const depth = (callerWorkerRun?.depth ?? 0) + 1;
-      const resolvedQuotas = await resolveQuotas(client, workspaceId);
-
-      if (depth > resolvedQuotas.maxDepth) {
-        throw new QuotaExceededError(
-          'depth_exceeded',
-          `invoke_worker: derivation depth ${depth} exceeds the workspace's max depth (${resolvedQuotas.maxDepth}, hard ceiling ${HARD_MAX_DEPTH}) — invoke from a shallower WorkerRun or reduce nesting`,
-        );
-      }
-
-      const concurrentResult = await client.query<{ count: string }>(
-        `select count(*)::bigint as count
-         from tasks
-         where workspace_id = $1
-           and on_behalf_of = $2
-           and status in ('queued', 'running', 'waiting_approval')`,
-        [workspaceId, caller.principalId],
-      );
-      const concurrentCount = Number(concurrentResult.rows[0]?.count ?? 0);
-      if (concurrentCount >= resolvedQuotas.maxConcurrentWorkerRunsPerUser) {
-        throw new QuotaExceededError(
-          'concurrency_exceeded',
-          `invoke_worker: ${concurrentCount} WorkerRun(s) already running for this user, at or ` +
-            `above the workspace limit (${resolvedQuotas.maxConcurrentWorkerRunsPerUser})`,
-        );
-      }
-
-      if (resolvedQuotas.dailyCostBudgetUsd !== null) {
-        const spentToday = await sumTodayCostUsd(client, workspaceId);
-        if (spentToday >= resolvedQuotas.dailyCostBudgetUsd) {
-          throw new QuotaExceededError(
-            'daily_cost_exceeded',
-            `invoke_worker: workspace has spent $${spentToday.toFixed(2)} today, at or above ` +
-              `the daily cost budget ($${resolvedQuotas.dailyCostBudgetUsd.toFixed(2)})`,
-          );
-        }
-      }
-
-      const taskResult = await client.query(
-        `insert into tasks (
-           workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
-           worker_definition_version, input, token_budget, duration_limit_sec
-         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8)
-         returning ${TASK_ROW_COLUMNS}`,
-        [
-          workspaceId,
-          caller.principalId,
-          caller.turnId ?? null,
-          input.definitionId,
-          input.version,
-          JSON.stringify(input.input ?? null),
-          resolvedQuotas.defaultTokenBudget,
-          resolvedQuotas.defaultDurationLimitSec,
-        ],
-      );
-      const row = taskResult.rows[0];
-      if (!row) throw new Error('invokeWorker: tasks INSERT ... RETURNING produced no row');
-      const mappedTask = mapTaskRow(row);
-      await recordTaskTransition(client, workspaceId, {
-        actorPrincipalId: caller.principalId,
-        action: 'task.queue',
-        taskId: mappedTask.id,
-        resultingStatus: 'queued',
-      });
-
-      return {
-        newDepth: depth,
-        parentWorkerRun: callerWorkerRun,
-        quotas: resolvedQuotas,
-        task: mappedTask,
-      };
-    },
+  // I18 quota checks (depth/concurrency/daily cost) + the Task INSERT itself, in one
+  // advisory-locked transaction — see `insertQueuedTaskWithQuotaCheck`'s own doc comment (P2-6 fix,
+  // review job 652a4abc) for the full "why one shared locked transaction, not per-call" rationale.
+  const { newDepth, parentWorkerRun, task } = await insertQueuedTaskWithQuotaCheck(
+    workspaceId,
+    caller,
+    input,
+    deps,
   );
 
   const parentClaimsForLineage: MintWorkerRunHandleInput['parentClaims'] = caller.claims

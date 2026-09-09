@@ -1283,8 +1283,20 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "input": {}
+        "definitionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "input": {},
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
       },
+      "required": [
+        "definitionId",
+        "version"
+      ],
       "type": "object"
     },
     "result": {

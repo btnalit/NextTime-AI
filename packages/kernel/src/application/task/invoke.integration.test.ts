@@ -12,6 +12,7 @@ import type {
   TaskSupervisorClientPort,
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
+import { setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   type IssuedHandle,
   entryScope,
@@ -19,11 +20,15 @@ import {
   issueHandle,
 } from '../../governance/capability/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
-import { invokeWorker } from './invoke.js';
+import { createTask, invokeWorker } from './invoke.js';
 import { reactToSupervisorStatus, readTaskRow, readWorkerRunRow } from './lifecycle.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { recordWorkerRunUsage, terminateTask } from './service.js';
-import { InvokeWorkerAttenuationError, QuotaExceededError } from './types.js';
+import {
+  InvokeWorkerAttenuationError,
+  InvokeWorkerDefinitionNotEnabledError,
+  QuotaExceededError,
+} from './types.js';
 
 /**
  * application/task/invoke.integration.test: DB-gated (real Postgres; auto-skip without
@@ -654,5 +659,124 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       return result.rows;
     });
     expect(outboxEvents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // W4 closeout: `create_task` — "create only", never spawns (contrast every `invoke_worker` test
+  // above, which always does). See `createTask`'s own doc comment (invoke.ts) for the semantics
+  // decision.
+  describe('create_task — create only, never spawns', () => {
+    it('creates a Task at status "queued", pinned to the WorkerDefinition, with zero WorkerRuns and no supervisor call', async () => {
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const task = await createTask(
+        workspaceId,
+        { principalId: ownerId, channel: 'handle' },
+        { definitionId: workerDefinitionId, version: 1, input: { foo: 'bar' } },
+        deps(supervisorClient),
+      );
+
+      expect(task.status).toBe('queued');
+      expect(task.workerDefinitionId).toBe(workerDefinitionId);
+      expect(task.workerDefinitionVersion).toBe(1);
+      expect(task.onBehalfOf).toBe(ownerId);
+      expect(supervisorClient.spawnCalls).toHaveLength(0); // never spawns
+
+      const reread = await inTx(ownerId, (client) => readTaskRow(client, workspaceId, task.id));
+      expect(reread?.status).toBe('queued');
+      const workerRunCount = await inTx(ownerId, (client) =>
+        client.query<{ count: string }>(
+          'select count(*)::int as count from worker_runs where workspace_id = $1 and task_id = $2',
+          [workspaceId, task.id],
+        ),
+      );
+      expect(Number(workerRunCount.rows[0]?.count)).toBe(0); // no WorkerRun ever created for it
+    });
+
+    it('honors AgentProfile.enabledWorkerDefinitions the same way invoke_worker does', async () => {
+      const principalId = await adminInsertPrincipal('owner', 'create-task-profile-owner');
+      const definitionA = await publishWorkerDef({
+        systemPrompt: 'You are worker A.',
+        name: 'create-task-profile-worker-a-unique',
+      });
+      const definitionB = await publishWorkerDef({
+        systemPrompt: 'You are worker B.',
+        name: 'create-task-profile-worker-b-unique',
+      });
+
+      // Owners are not exempt (a Profile is a preference the principal set for themselves, not a
+      // privilege boundary) — same rule `invoke-worker-handler.integration.test.ts`'s own
+      // equivalent test asserts for `invoke_worker`.
+      await inTx(principalId, (client) =>
+        setAgentProfile(client, workspaceId, principalId, principalId, {
+          enabledWorkerDefinitions: [definitionA.id],
+        }),
+      );
+
+      const supervisorClient = new FakeTaskSupervisorClient();
+      const err = await createTask(
+        workspaceId,
+        { principalId, channel: 'handle' },
+        { definitionId: definitionB.id, version: definitionB.version, input: {} },
+        deps(supervisorClient),
+      ).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvokeWorkerDefinitionNotEnabledError);
+
+      // A itself stays creatable — the profile narrows, it does not additionally break the
+      // definition it does list.
+      const task = await createTask(
+        workspaceId,
+        { principalId, channel: 'handle' },
+        { definitionId: definitionA.id, version: definitionA.version, input: {} },
+        deps(supervisorClient),
+      );
+      expect(task.status).toBe('queued');
+      expect(supervisorClient.spawnCalls).toHaveLength(0);
+    });
+
+    // Documents the known limitation `createTask`'s own doc comment (invoke.ts) calls out: a Task
+    // created without a WorkerRun still counts toward the same `queued`/`running`/`waiting_approval`
+    // concurrency ceiling `invoke_worker` enforces (`insertQueuedTaskWithQuotaCheck` is shared), so
+    // it can consume a real caller's quota slot with nothing ever running to show for it.
+    it('a create_task-created queued Task counts toward the same concurrency ceiling invoke_worker enforces', async () => {
+      const quotaRacerId = await adminInsertPrincipal('member', 'create-task-quota-racer');
+
+      // Seed to exactly one below the default concurrency limit (5) via create_task itself, not a
+      // raw INSERT — proving the shared quota gate really did run for each of these.
+      const supervisorClient = new FakeTaskSupervisorClient();
+      for (let i = 0; i < 4; i += 1) {
+        await createTask(
+          workspaceId,
+          { principalId: quotaRacerId, channel: 'handle' },
+          { definitionId: workerDefinitionId, version: 1, input: {} },
+          deps(supervisorClient),
+        );
+      }
+      expect(supervisorClient.spawnCalls).toHaveLength(0); // still never spawns
+
+      // The 5th create_task succeeds (fills the ceiling)...
+      await createTask(
+        workspaceId,
+        { principalId: quotaRacerId, channel: 'handle' },
+        { definitionId: workerDefinitionId, version: 1, input: {} },
+        deps(supervisorClient),
+      );
+
+      // ...and now a real invoke_worker for the same principal is rejected — the phantom `queued`
+      // Tasks from create_task above already exhausted the ceiling, with zero WorkerRuns among
+      // them.
+      const sessionId = await insertSession('entry', quotaRacerId, quotaRacerId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const invokeErr = await invokeWorker(
+        workspaceId,
+        { principalId: quotaRacerId, channel: 'handle', claims: claimsFromIssued(issued) },
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        deps(supervisorClient),
+      ).catch((e: unknown) => e);
+
+      expect(invokeErr).toBeInstanceOf(QuotaExceededError);
+      expect((invokeErr as InstanceType<typeof QuotaExceededError>).code).toBe(
+        'concurrency_exceeded',
+      );
+      expect(supervisorClient.spawnCalls).toHaveLength(0);
+    });
   });
 });

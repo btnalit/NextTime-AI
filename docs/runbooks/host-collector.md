@@ -124,11 +124,13 @@ curl -s https://<host>:8443/api/cap/search \
   -d '{"objectType":"Container"}'
 # {"ok":true,"result":{"items":[{"id":"<container-object-id>","objectType":"Container",...}]}}
 
-# 2. traverse 一跳，确认 runs_on 边指向一个 Host
+# 2. traverse 一跳，确认 runs_on 边指向一个 Host —— 注意 traverse 的 paramsSchema 没有 direction
+#    字段（packages/shared/src/capabilities.ts 的 traverse 条目，.strict()）：永远两个方向都找，
+#    从返回的 edges[].sourceObjectId/targetObjectId 自己判断谁是起点谁是终点即可。
 curl -s https://<host>:8443/api/cap/traverse \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d '{"fromId":"<container-object-id>","direction":"out","linkType":"runs_on","depth":1}'
-# {"ok":true,"result":{"nodes":["<host-object-id>"],"edges":[{"linkType":"runs_on",...}]}}
+  -d '{"fromId":"<container-object-id>","linkType":"runs_on","depth":1}'
+# {"ok":true,"result":{"nodes":["<host-object-id>"],"edges":[{"linkId":"<fact-id>","linkType":"runs_on","sourceObjectId":"<container-object-id>","targetObjectId":"<host-object-id>","depth":1}]}}
 ```
 
 ### 4.3 `explain` 溯源到这个采集器的 Source
@@ -164,16 +166,17 @@ curl -s https://<host>:8443/api/cap/search \
   -d '{"objectType":"Document"}'
 # {"ok":true,"result":{"items":[{"id":"<document-object-id>","objectType":"Document",...}]}}
 
-# 2. traverse 一跳，确认 part_of 边指向一个 KnowledgeBase
+# 2. traverse 一跳，确认 part_of 边指向一个 KnowledgeBase —— 同 §4.2 的提醒：traverse 的
+#    paramsSchema 没有 direction 字段（.strict()），永远两个方向都找。
 curl -s https://<host>:8443/api/cap/traverse \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d '{"fromId":"<document-object-id>","direction":"out","linkType":"part_of","depth":1}'
+  -d '{"fromId":"<document-object-id>","linkType":"part_of","depth":1}'
 # {"ok":true,"result":{"nodes":["<knowledgebase-object-id>"],"edges":[{"linkType":"part_of",...}]}}
 
 # 3. 再从这个 KnowledgeBase traverse 一跳，确认 served_by 边指向 ragflow 门自己的 Gatekeeper Object
 curl -s https://<host>:8443/api/cap/traverse \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d '{"fromId":"<knowledgebase-object-id>","direction":"out","linkType":"served_by","depth":1}'
+  -d '{"fromId":"<knowledgebase-object-id>","linkType":"served_by","depth":1}'
 # {"ok":true,"result":{"nodes":["<ragflow-gatekeeper-object-id>"],"edges":[{"linkType":"served_by",...}]}}
 # <ragflow-gatekeeper-object-id> 应等于 RAGFLOW_GATEKEEPER_ID 本身。
 

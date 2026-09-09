@@ -36,7 +36,7 @@
 |---|---|
 | [`operations.md`](./operations.md) | 服务依赖图、重启/恢复顺序、健康检查清单、日志与指标现状 |
 | [`key-rotation.md`](./key-rotation.md) | 五种密钥/令牌各自的轮换机制：Handle 签名密钥（硬切换）、`internal_token`/`gate_token`（同步重启）、provider key、平台用户 API key（`rotate_api_key`） |
-| [`backup-restore.md`](./backup-restore.md) | 每日备份内容、`backup` 容器的 root+单一 capability 权限模型、`scripts/restore.sh` 恢复演练 |
+| [`backup-restore.md`](./backup-restore.md) | 每日备份内容、`backup` 容器的 root+单一 capability 权限模型、`scripts/restore.sh` 恢复演练（`scripts/drill-restore.sh` 自动化版本） |
 | [`pi-upgrade.md`](./pi-upgrade.md) | pi 版本升级契约：耦合面清单、单一版本源、升级步骤、漂移检测（`pi-drift.yml`）、回滚 |
 | [`web-console.md`](./web-console.md) | web 控制台每个页面依赖哪些 capability、角色可见性、排障表 |
 | [`release.md`](./release.md) | release-please 发布契约：单一根版本、release PR 合并前手动踢一次 CI、主机怎么跟随 tag、hotfix 流程 |
@@ -46,7 +46,7 @@
 
 | Runbook | 一句话 |
 |---|---|
-| [`add-gatekeeper.md`](./add-gatekeeper.md) | 新增一个接入包：通用门 vs 专属包、清单编写与 Operation 分类、`request_connection → create_connection → publish_manifest → connect_gatekeeper`、MCP 门的一个已核实陷阱 |
+| [`add-gatekeeper.md`](./add-gatekeeper.md) | 新增一个接入包：通用门 vs 专属包、清单编写与 Operation 分类、`request_connection → create_connection → publish_manifest → connect_gatekeeper`、MCP 门的一个已核实陷阱（`scripts/drill-add-gatekeeper.sh` 自动化版本，见该文档 §10.1） |
 | [`add-domain-pack.md`](./add-domain-pack.md) | 新增一个领域包：`ontology/<domain>.yaml` 的当前 schema 与真实发布路径缺口（S3.1 未落地部分已标注）；Skill/Procedure/WorkerDefinition 今天已可用 |
 
 ## ④ 排障
@@ -56,9 +56,10 @@
 | [`troubleshoot-task.md`](./troubleshoot-task.md) | 从一次失败/卡住的 Task 出发的诊断流程，含 `failure_reason`/ActionRequest 状态的根因表 |
 | [`accept-s1.md`](./accept-s1.md) | S1 验收脚本 `scripts/accept_s1.sh`：一轮对话、隔离、崩溃恢复、出网代理端到端验证 |
 | [`host-accept-s2.md`](./host-accept-s2.md) | S2 验收脚本 `scripts/accept_s2.sh`：卡片审批全链路、SSH/HTTP/Docker/MCP 四类连接、Worker 结果契约 |
+| [`host-accept-s3.md`](./host-accept-s3.md) | S3 验收脚本 `scripts/accept_s3.sh`：采集器 `host-inventory` 端到端、聊天驱动的依赖问答 + `explain` 溯源、Explorer 端点、MCP `tools/list`/`traverse` |
 | [`host-chaos.md`](./host-chaos.md) | 不变量监控（I1–I16 定时校验、`/internal/metrics`）与混沌演练脚本：杀 Worker 容器验证 Task 重试、杀入口容器验证自愈重建 |
 
-两份验收脚本 runbook 既是"怎么跑验收"的操作手册，也是理解"平台在这一层应该长什么样"的参照——
+三份验收脚本 runbook 既是"怎么跑验收"的操作手册，也是理解"平台在这一层应该长什么样"的参照——
 `troubleshoot-task.md` 的诊断流程大量引用它们记录过的真实命令与已知偏离。
 
 ## 其它相关文档（不在 `docs/runbooks/` 下）
