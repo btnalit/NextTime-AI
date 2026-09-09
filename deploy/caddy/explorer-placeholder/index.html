@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Explorer bundle not built</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #0b1220;
+        color: #d8e2f0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+        padding: 24px;
+      }
+      main {
+        max-width: 640px;
+      }
+      h1 {
+        font-size: 1.25rem;
+        margin-bottom: 0.5rem;
+      }
+      code {
+        background: rgba(255, 255, 255, 0.08);
+        padding: 0.15em 0.4em;
+        border-radius: 4px;
+      }
+      p {
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Explorer bundle not built</h1>
+      <p>
+        This is the placeholder page for the platform's Explorer mount
+        (design doc &sect;9.5; <code>docs/development-tasks.md</code> &sect;S3.5).
+        The Explorer front-end is a third-party static bundle built on the host,
+        not shipped in this image by default — see
+        <code>explorer/README.md</code> and <code>docs/runbooks/host-explorer.md</code>.
+      </p>
+      <p>
+        To build it: <code>sh explorer/build.sh</code>, then
+        <code>docker compose build caddy &amp;&amp; docker compose up -d caddy</code>.
+      </p>
+    </main>
+  </body>
+</html>

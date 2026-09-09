@@ -6,8 +6,16 @@
 # being bind-mounted from the checkout: no Node toolchain on the host, no root-owned dist/ in the
 # working tree, and `docker compose build caddy && docker compose up -d caddy` is the whole
 # deploy step for a web change. The Caddyfile stays a bind mount (docker-compose.yml) so a
-# routing change never needs an image rebuild. /srv/explorer is an empty placeholder until the
-# Explorer build exists (S3) — it will be copied in here the same way.
+# routing change never needs an image rebuild.
+#
+# /srv/explorer (S3.5, docs/development-tasks.md §S3.5; explorer/README.md): COPYs whatever
+# deploy/caddy/explorer-placeholder/ currently holds — the committed placeholder page ("explorer
+# bundle not built") by default, or a real built Explorer bundle after a host operator has run
+# `sh explorer/build.sh` (which replaces that directory's own contents in place; this COPY line
+# itself never changes either way — see explorer/build.sh's own doc comment). CI never runs
+# explorer/build.sh (it would need network access to a project this repo does not own), so this
+# COPY must always succeed against whatever is already committed — that is exactly why the
+# placeholder ships checked in rather than the directory being empty.
 #
 # Build context is the repo root: docker build -f deploy/caddy/Dockerfile .
 

@@ -68,9 +68,35 @@ https://:8443 {
 		-Server
 	}
 
+	# S3.5 (docs/development-tasks.md §S3.5; design doc §9.5) — the nine Explorer endpoints, matched
+	# and handled *before* the general @backend block below (Caddy wraps consecutive `handle`/
+	# `handle_path` blocks in an implicit `route` — mutually exclusive, first match wins — so this
+	# block's own matches never also fall through to @backend). Reverse-proxied to the same kernel
+	# these paths would reach via @backend anyway (they are ordinary Fastify routes on that same
+	# process, interfaces/explorer-contract/index.ts) — the only reason this is a separate block at
+	# all is `header_up X-API-Key`: the unmodified Explorer static bundle's own `fetch(...)` calls
+	# (hard-coded root-relative paths, e.g. `fetch("/api/graph/nodes")`) never send an X-API-Key
+	# header themselves, so this is where it gets attached — every Explorer viewer is therefore
+	# attributed to the single Principal EXPLORER_API_KEY belongs to (design doc §7.6 "Explorer 是
+	# human 通道客户端，用 API key，不用 Handle"; docker-compose.yml's own comment on that env var,
+	# and docs/runbooks/host-explorer.md for how it is provisioned). `/api/decisions*` and
+	# `/api/provenance*` (with the trailing `*`) each need two patterns — the bare path (`GET
+	# /api/decisions`, `GET /api/provenance`) and the `*` for their own sub-routes (`/api/decisions/
+	# <id>/chain`, `/api/provenance/report`) — Caddy's `path` matcher does not treat a bare segment
+	# as a prefix of its own `/*` sibling.
+	@explorer_api path /api/graph/* /api/temporal/* /api/decisions /api/decisions/* /api/provenance /api/provenance/*
+	handle @explorer_api {
+		reverse_proxy kernel:8080 {
+			header_up X-API-Key {$EXPLORER_API_KEY}
+		}
+	}
+
 	# Reverse-proxied to the kernel exactly as docs/development-tasks.md §E8 states ("反代 /api
 	# /ws /mcp /llm 到 kernel"). reverse_proxy handles the WebSocket upgrade for /ws
-	# transparently — no extra directives needed.
+	# transparently — no extra directives needed. Everything under /api/* that the @explorer_api
+	# block above did not already claim (§9.3's own capability route, /api/health, ...) still
+	# reaches the kernel here, unchanged and with no X-API-Key injected — this block's callers
+	# (the web console, MCP/agent clients) authenticate themselves.
 	#
 	# S3.6 fix: the E8 matcher below originally had only `/mcp/*` (no bare `/mcp`) — anticipatory,
 	# written before the MCP gateway existed. The real endpoint (interfaces/mcp/index.ts,
@@ -89,8 +115,11 @@ https://:8443 {
 		reverse_proxy kernel:8080
 	}
 
-	# Explorer (S3) static build. Empty placeholder mount until S3 lands — see
-	# docs/runbooks/host-caddy.md.
+	# Explorer (S3.5) static build — deploy/caddy/explorer-placeholder/, copied into the image at
+	# /srv/explorer by deploy/caddy/Dockerfile (a placeholder page by default; a real built bundle
+	# once a host operator has run `sh explorer/build.sh` — see explorer/README.md and
+	# docs/runbooks/host-explorer.md). `handle_path` strips the `/explorer` prefix before serving,
+	# matching the `--base=/explorer/` the build script passes to `vite build`.
 	handle_path /explorer/* {
 		root * /srv/explorer
 		file_server
