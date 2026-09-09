@@ -611,6 +611,19 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(result.status).toBe('pending_approval'); // narrowed — would otherwise auto-approve
       expect(transport.calls[AUTO_OP.name]).toBe(before); // the gate was never called
+
+      // Clean up: same convention as the "does not jump ahead" test above — the ApprovalDrainer
+      // will not let a *later* ActionRequest execute while an *earlier* one on the same Gatekeeper
+      // is still `pending_approval`; leaving this row unresolved would silently block every later
+      // test's own AUTO_OP call on this same `gatekeeperId` from ever reaching `executed`.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        rejectActionRequest(client, workspaceId, {
+          actionRequestId: result.id,
+          approverPrincipalId: ownerId,
+          approverRole: 'owner',
+        }),
+      );
+      await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
     });
 
     it('S3.13: a principal with no AgentProfile row at all still auto-approves (the compiled-in AgentPolicy default never narrows on its own)', async () => {
