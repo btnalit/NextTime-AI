@@ -158,6 +158,92 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
+    /** Seeds one `action_requests` row directly (bypasses the governed `requestAction`/`decide.ts`
+     *  flow — this test only exercises `get_operation_stats`'s own read-side aggregation, not the
+     *  state machine that produces these rows in production) — satisfies that table's own CHECK
+     *  constraints (migrations/governance/0003_action_requests.sql): every non-`proposed` status
+     *  needs `policyDecision` set, and `approved`/`rejected` additionally need a real
+     *  `approvalDecisionId` (a `decisions` row — see `adminInsertDecision` below). */
+    async function adminInsertActionRequest(params: {
+      gatekeeperId: string;
+      actionKind: string;
+      status: string;
+      policyDecision: string;
+      approvalDecisionId?: string;
+      requestedAt: Date;
+    }): Promise<string> {
+      const id = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query(
+            `insert into action_requests
+               (workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
+                policy_decision, approval_decision_id, await_decision, on_behalf_of, actor_runtime,
+                requested_at)
+             values ($1, $2, $3, $4, $5, $4, 'low', $6, $7, false, $8, 'human', $9)`,
+            [
+              workspaceId,
+              id,
+              params.status,
+              params.gatekeeperId,
+              params.actionKind,
+              params.policyDecision,
+              params.approvalDecisionId ?? null,
+              ownerId,
+              params.requestedAt,
+            ],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      return id;
+    }
+
+    /** A minimal `decisions` row — `action_requests`'s own `approval_decision_id` FK target for a
+     *  seeded `approved`/`rejected` row above; needs a real `activities` row of its own
+     *  (`decisions.activity_id` is `not null`). */
+    async function adminInsertDecision(status: 'approved' | 'rejected'): Promise<string> {
+      return withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.get_operation_stats_decision',
+            principalId: ownerId,
+          });
+          const result = await client.query<{ id: string }>(
+            `insert into decisions (workspace_id, status, activity_id, decided_by, decided_at)
+             values ($1, $2, $3, $4, now()) returning id`,
+            [workspaceId, status, activity.id, ownerId],
+          );
+          const row = result.rows[0];
+          if (!row) throw new Error('adminInsertDecision: INSERT ... RETURNING produced no row');
+          return row.id;
+        },
+        { skipRoleSwitch: true },
+      );
+    }
+
+    async function adminRegisterGatekeeper(name: string): Promise<string> {
+      return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.register_gatekeeper',
+          principalId: ownerId,
+        });
+        const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
+          name,
+          transportKind: 'http',
+          target: `members-flow-test-system-${name}`,
+          endpoint: `https://gate.members-flow-test.invalid/${name}`,
+          activityId: activity.id,
+          registeredBy: { id: ownerId, kind: 'human' },
+        });
+        return gatekeeperId;
+      });
+    }
+
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
@@ -429,6 +515,136 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperId,
       })) as { items: readonly unknown[] };
       expect(Array.isArray(ops.items)).toBe(true);
+    });
+
+    it('get_operation_stats: aggregates seeded action_requests by current status within the days window, filterable by gatekeeperId', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const gateA = await adminRegisterGatekeeper('get-operation-stats-gate-a');
+      const gateB = await adminRegisterGatekeeper('get-operation-stats-gate-b');
+      const now = new Date();
+      const days45Ago = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000);
+
+      const approvedDecisionId = await adminInsertDecision('approved');
+      const rejectedDecisionId = await adminInsertDecision('rejected');
+
+      // gateA / opA: one row each of auto_approved / approved / rejected / failed / pending_approval
+      // (5 calls total; pending_approval counts toward `calls` but none of the four named buckets),
+      // plus one auto_approved row 45 days back — outside the default 30-day window, inside a 60-day
+      // one.
+      await adminInsertActionRequest({
+        gatekeeperId: gateA,
+        actionKind: 'opA',
+        status: 'auto_approved',
+        policyDecision: 'allow',
+        requestedAt: now,
+      });
+      await adminInsertActionRequest({
+        gatekeeperId: gateA,
+        actionKind: 'opA',
+        status: 'approved',
+        policyDecision: 'require_approval',
+        approvalDecisionId: approvedDecisionId,
+        requestedAt: now,
+      });
+      await adminInsertActionRequest({
+        gatekeeperId: gateA,
+        actionKind: 'opA',
+        status: 'rejected',
+        policyDecision: 'require_approval',
+        approvalDecisionId: rejectedDecisionId,
+        requestedAt: now,
+      });
+      await adminInsertActionRequest({
+        gatekeeperId: gateA,
+        actionKind: 'opA',
+        status: 'failed',
+        policyDecision: 'allow',
+        requestedAt: now,
+      });
+      await adminInsertActionRequest({
+        gatekeeperId: gateA,
+        actionKind: 'opA',
+        status: 'pending_approval',
+        policyDecision: 'require_approval',
+        requestedAt: now,
+      });
+      await adminInsertActionRequest({
+        gatekeeperId: gateA,
+        actionKind: 'opA',
+        status: 'auto_approved',
+        policyDecision: 'allow',
+        requestedAt: days45Ago,
+      });
+
+      // gateB / opB: one `executed` row — proves a status outside the four named buckets still
+      // counts toward `calls` without polluting approved/rejected/autoApproved/failed.
+      await adminInsertActionRequest({
+        gatekeeperId: gateB,
+        actionKind: 'opB',
+        status: 'executed',
+        policyDecision: 'allow',
+        requestedAt: now,
+      });
+
+      type OperationStatsWire = {
+        gatekeeperId: string;
+        operationName: string;
+        calls: number;
+        approved: number;
+        rejected: number;
+        autoApproved: number;
+        failed: number;
+        lastCalledAt: string;
+      };
+
+      const defaultWindow = (await dispatchCapability(
+        { pool },
+        owner,
+        'get_operation_stats',
+        {},
+      )) as { items: readonly OperationStatsWire[] };
+      const opAStats = defaultWindow.items.find(
+        (item) => item.gatekeeperId === gateA && item.operationName === 'opA',
+      );
+      expect(opAStats).toBeDefined();
+      expect(opAStats).toMatchObject({
+        calls: 5,
+        approved: 1,
+        rejected: 1,
+        autoApproved: 1,
+        failed: 1,
+      });
+      expect(new Date(opAStats?.lastCalledAt ?? 0).getTime()).toBeGreaterThanOrEqual(
+        now.getTime() - 1000,
+      );
+
+      const opBStats = defaultWindow.items.find(
+        (item) => item.gatekeeperId === gateB && item.operationName === 'opB',
+      );
+      expect(opBStats).toMatchObject({
+        calls: 1,
+        approved: 0,
+        rejected: 0,
+        autoApproved: 0,
+        failed: 0,
+      });
+
+      // days=60 pulls the 45-day-old row back into the window.
+      const widerWindow = (await dispatchCapability({ pool }, owner, 'get_operation_stats', {
+        days: 60,
+      })) as { items: readonly OperationStatsWire[] };
+      const opAWider = widerWindow.items.find(
+        (item) => item.gatekeeperId === gateA && item.operationName === 'opA',
+      );
+      expect(opAWider?.calls).toBe(6);
+      expect(opAWider?.autoApproved).toBe(2);
+
+      // gatekeeperId filters to just that gate.
+      const scoped = (await dispatchCapability({ pool }, owner, 'get_operation_stats', {
+        gatekeeperId: gateB,
+      })) as { items: readonly OperationStatsWire[] };
+      expect(scoped.items.every((item) => item.gatekeeperId === gateB)).toBe(true);
+      expect(scoped.items.some((item) => item.gatekeeperId === gateA)).toBe(false);
     });
 
     it('get_workspace: id/name/counts, plus the resolved caller (no re-query by API key)', async () => {

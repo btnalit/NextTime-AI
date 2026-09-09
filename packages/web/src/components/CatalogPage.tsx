@@ -3,11 +3,14 @@ import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
+import { formatRelative } from '../lib/format.js';
 import {
   type OperationCatalogRow,
+  type OperationStatsRow,
   type ProcedureRow,
   type SkillRow,
   operationKey,
+  operationStatsKey,
 } from '../lib/governance.js';
 import type { CatalogTab } from '../lib/router.js';
 import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
@@ -48,6 +51,12 @@ const TAB_LABEL: Readonly<Record<CatalogTab, string>> = {
  * `list_worker_definitions` only ever returns *published* rows (its own kernel-side doc comment,
  * `lib/tasks.ts`), so unlike Skills/Procedures (which also show the caller's own drafts) the
  * Workers tab has nothing to Publish — Deprecate only.
+ *
+ * Operations rows also carry a usage summary (调用/批准/拒绝/最近, S3.12 catalog-usage follow-up)
+ * fed by its own `get_operation_stats` capability call, joined client-side by `{gatekeeperId,
+ * name}` (`lib/governance.ts`'s `operationStatsKey`) — a separate `useCapabilityList` from
+ * `list_operations`'s own, so a stats failure (not deployed, transient error, or simply no calls
+ * in the window) degrades one row's usage span to "—" rather than the whole tab.
  */
 export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
   return (
@@ -120,11 +129,21 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   const permissions = usePermissions();
   const toast = useToast();
   const operations = useCapabilityList<OperationCatalogRow>(http, 'list_operations');
+  // Own capability call, own degrade path — a `get_operation_stats` failure (not deployed yet, a
+  // transient error, whatever) never blocks the Operations list itself; a row simply renders "—"
+  // for its usage columns when no matching stats entry comes back (see `statsFor` below).
+  const stats = useCapabilityList<OperationStatsRow>(http, 'get_operation_stats');
   const [busy, setBusy] = useState<string | null>(null);
 
   function refresh(): void {
     invalidateCapability(http, 'list_operations');
     void operations.reload();
+  }
+
+  function statsFor(row: OperationCatalogRow): OperationStatsRow | undefined {
+    if (stats.state.status !== 'ready') return undefined;
+    const key = operationStatsKey({ gatekeeperId: row.gatekeeperId, operationName: row.name });
+    return stats.state.data.items.find((item) => operationStatsKey(item) === key);
   }
 
   async function act(
@@ -165,14 +184,10 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   }
   return (
     <>
-      {/* TODO(S3.12 deliverable 4, "Catalog usage stats"): no `get_operation_stats` capability
-          exists in the registry yet (packages/shared/src/capabilities.ts, checked as of this PR)
-          — the near-30-day call/approval counts the task brief describes have no read side to
-          render. Wire a usage column here once that capability lands; do not fabricate the
-          numbers in the meantime. */}
       <DataList ariaLabel="Operations" testId="catalog-list">
         {rows.map((row) => {
           const key = operationKey(row);
+          const usage = statsFor(row);
           return (
             <DataRow
               key={key}
@@ -198,6 +213,19 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
                       </span>
                     </>
                   ) : null}
+                  <span className="meta-sep" />
+                  <span
+                    data-testid="catalog-row-usage"
+                    title={
+                      usage
+                        ? `${usage.calls} calls, ${usage.approved} approved, ${usage.rejected} rejected in the trailing window`
+                        : 'No usage data for this Operation (get_operation_stats unavailable, or no calls in the window)'
+                    }
+                  >
+                    {usage
+                      ? `${usage.calls} 调用 · ${usage.approved} 批准 · ${usage.rejected} 拒绝 · ${formatRelative(usage.lastCalledAt)}`
+                      : '—'}
+                  </span>
                 </>
               }
               trailing={

@@ -35,16 +35,21 @@ export interface OnboardingWizardReviewProps {
  *
  * "Propose reclassification" is deliberately the two-step `propose_operation` → `publish_operation`
  * pair, never a direct edit (docs/wire-contract-conventions.md: "UI 不得提供'直接改分类'的捷径") —
- * same convention `CatalogPage`'s publish/deprecate buttons already follow. **Known kernel
- * interaction gap** (not a bug in this UI): `propose_operation`'s own conflict guard
- * (`governance/gatekeepers/manifest.ts`'s `isOwnProposalDraft`) only ever replaces a draft the
- * *same* proposer already wrote through `propose_operation` itself — an `origin:'import'` draft
- * (what every Operation on this review screen is, fresh out of step ③'s manifest import) is never
- * "the proposer's own draft," so a reclassification attempt here throws `OperationIdentityConflictError`
- * (409 `conflict`) regardless of who submits it, published or still draft. The button still calls
- * the real capability and surfaces whatever the kernel says via `ErrorBanner` — this screen does
- * not swallow or pre-empt that response, since only the kernel side owns whether/how that rule
- * changes.
+ * same convention `CatalogPage`'s publish/deprecate buttons already follow. **Narrower kernel
+ * interaction gap than this screen used to have** (not a bug in this UI; fix/operation-revision-via-
+ * propose, S3.12): `propose_operation`'s own conflict guard (`governance/gatekeepers/manifest.ts`'s
+ * `isOwnProposalDraft`) only ever replaces a draft the *same* proposer already wrote through
+ * `propose_operation` itself — an `origin:'import'` draft (what every Operation on this review
+ * screen starts as, fresh out of step ③'s manifest import, before `publish_manifest` publishes it)
+ * is never "the proposer's own draft," so reclassifying it here still throws
+ * `OperationIdentityConflictError` (409 `conflict`) as long as it stays unpublished. Once
+ * `publish_manifest` has published it, though, `propose_operation` no longer 409s: it opens a new
+ * revision draft one version above the published row (`draftOf` pointing back at it), which the
+ * existing "propose → publish" two-step then carries to publish normally — the row this screen
+ * shows a reclassify attempt against on a *second* visit (or any row already published by the time
+ * a reviewer gets to it) reclassifies successfully, not always 409. The button still calls the real
+ * capability and surfaces whatever the kernel says via `ErrorBanner` either way — this screen does
+ * not swallow, pre-empt, or special-case either outcome.
  */
 export function OnboardingWizardReview({
   http,

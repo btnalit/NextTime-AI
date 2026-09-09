@@ -83,6 +83,7 @@ import {
 } from './connection-handlers.js';
 import {
   getGatekeeperHandler,
+  getOperationStatsHandler,
   listGatekeepersHandler,
   listOperationsHandler,
 } from './gatekeeper-read-handlers.js';
@@ -1098,6 +1099,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_gatekeepers', listGatekeepersHandler],
   ['get_gatekeeper', getGatekeeperHandler],
   ['list_operations', listOperationsHandler],
+  // S3.12 catalog-usage follow-up — same module as list_operations above.
+  ['get_operation_stats', getOperationStatsHandler],
   // S3.11 — members-handlers.ts.
   ['list_principals', listPrincipalsHandler],
   ['create_principal', createPrincipalHandler],

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ConnectionRequestStatusSchema, RoleSchema, WorkerDefinitionKindSchema } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
+import { listEnvelope } from './envelope.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
 /**
@@ -81,6 +82,14 @@ export interface Capability {
   readonly channel: CapabilityChannel;
   readonly minRole?: Role;
   readonly paramsSchema: z.ZodType;
+  /**
+   * docs/wire-contract-conventions.md §5 ("为每个 capability 增加 `resultSchema`...列表结果复用
+   * `listEnvelope(itemSchema)`") — the workspace-wide rollout (contract snapshots, the vocabulary
+   * guard, every existing capability) is S3.7's own job, not this one; left `undefined` on every
+   * pre-existing row rather than guessed at. `get_operation_stats` (S3.12 follow-up) is the first
+   * entry to carry one, since its own task brief asked for it explicitly ahead of S3.7 landing.
+   */
+  readonly resultSchema?: z.ZodType;
   readonly description: string;
   /**
    * S2.13 addition (design doc §11 "凭证不进任何 agent 进程，也不进内核进程"; docs/development-
@@ -470,6 +479,57 @@ const connectionCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ gatekeeperId: id.optional() }).strict(),
     description:
       'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to one gate.',
+  },
+  {
+    // S3.12 catalog-usage follow-up (docs/development-tasks.md S3.12, 2026-09-08+): the catalog's
+    // per-Operation "调用/批准/拒绝/最近" (calls/approved/rejected/last-called) usage widget —
+    // `list_operations` joins this by `{gatekeeperId, operationName}`.
+    //
+    // Source and semantics (`governance/approval/reads.ts`'s `getOperationStats` owns the query):
+    // execute-class Operations only — `calls`/`approved`/`rejected`/`autoApproved`/`failed` are
+    // counts of `action_requests` rows for that `{gatekeeperId, action_kind}` within the trailing
+    // `days` window, grouped by the row's **current** `status` column (governance/approval's own
+    // 13-state machine, `@nexttime/shared`'s `transitions.ts` `ACTION_REQUEST_TRANSITIONS`):
+    // `approved`/`auto_approved`(→`autoApproved`)/`rejected`/`failed` count rows *currently sitting
+    // in* that status — not a cumulative "ever passed through" history, so a request that was
+    // `approved` and has since finished executing (`executing`/`executed`/`verified`) is counted
+    // under `calls` only, since `executing` does not itself distinguish the `approved` vs.
+    // `auto_approved` path it arrived from. `calls` is every status, unfiltered.
+    //
+    // Observe-class Operations (`<gate>.<op>` / `observe_operation`, §11 "观察免审" — never create
+    // an ActionRequest row at all) are **not** included: `substrate/audit`'s own `queryAudit`
+    // service interface (the only sanctioned way to read `audit_records` — that module's boundary
+    // forbids querying its table directly) has no date-range filter and no payload-path grouping,
+    // so an efficient per-operation, `days`-windowed observe count is not achievable through it
+    // without extending that module's query surface — out of this task's bounded scope. Left as a
+    // documented gap rather than an approximate guess; the web catalog degrades to "—" for any
+    // Operation absent from `items` (which, today, is every observe-class one, and any execute-class
+    // one with zero calls in the window — the two are indistinguishable on this wire shape, and
+    // "no calls happened" is the correct real-world reading of "—" either way).
+    name: 'get_operation_stats',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({ gatekeeperId: id.optional(), days: z.number().int().min(1).max(90).optional() })
+      .strict(),
+    resultSchema: listEnvelope(
+      z
+        .object({
+          gatekeeperId: id,
+          operationName: z.string().min(1),
+          calls: z.number().int().nonnegative(),
+          approved: z.number().int().nonnegative(),
+          rejected: z.number().int().nonnegative(),
+          autoApproved: z.number().int().nonnegative(),
+          failed: z.number().int().nonnegative(),
+          lastCalledAt: z.string(),
+        })
+        .strict(),
+    ),
+    description:
+      'Per-Operation call/approve/reject counters over the trailing `days` window (default 30, max 90) — execute-class only, aggregated from action_requests.status (see this entry’s own doc comment for the observe-class gap and the "current status, not decision history" semantics).',
   },
 ];
 
@@ -1422,6 +1482,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'list_gatekeepers',
   'get_gatekeeper',
   'list_operations',
+  'get_operation_stats',
   'get_workspace',
   'list_models',
   // S3.13 (docs/development-tasks.md "每用户智能体配置") — AgentProfile/AgentPolicy management and

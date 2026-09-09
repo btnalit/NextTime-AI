@@ -3,6 +3,8 @@ import {
   HttpGatekeeperClient,
 } from '../../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import { getOperationStats } from '../../governance/approval/index.js';
+import type { OperationStatsRow } from '../../governance/approval/index.js';
 import {
   type GatekeeperListEntry,
   GatekeeperNotFoundError,
@@ -187,4 +189,31 @@ export const listOperationsHandler: CapabilityHandler = async (client, workspace
   const { gatekeeperId } = params as { gatekeeperId?: string };
   const records = await listOperations(client, workspaceId, { gatekeeperId });
   return { result: { items: records.map(toWireOperationSummary) } };
+};
+
+/** `get_operation_stats` (S3.12 catalog-usage follow-up) — no existence check on `gatekeeperId`,
+ *  same choice `listOperationsHandler` above already makes: an unknown/mistyped id simply narrows
+ *  to zero rows rather than a 404, since this is a filter, not a single-resource lookup. */
+const DEFAULT_OPERATION_STATS_DAYS = 30;
+
+function toWireOperationStats(row: OperationStatsRow) {
+  return {
+    gatekeeperId: row.gatekeeperId,
+    operationName: row.operationName,
+    calls: row.calls,
+    approved: row.approved,
+    rejected: row.rejected,
+    autoApproved: row.autoApproved,
+    failed: row.failed,
+    lastCalledAt: row.lastCalledAt.toISOString(),
+  };
+}
+
+export const getOperationStatsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { gatekeeperId, days } = params as { gatekeeperId?: string; days?: number };
+  const stats = await getOperationStats(client, workspaceId, {
+    gatekeeperId,
+    days: days ?? DEFAULT_OPERATION_STATS_DAYS,
+  });
+  return { result: { items: stats.map(toWireOperationStats) } };
 };

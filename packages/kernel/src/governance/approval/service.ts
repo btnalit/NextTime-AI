@@ -12,7 +12,9 @@
  *                        `getActionRequestForUpdate`/`getActionRequestForUpdateOrThrow`
  *                        (`SELECT ... FOR UPDATE` — every governed mutator uses these, never the
  *                        lock-free pair), `listPendingForApprover` (I14), `listExecutableQueue`
- *                        (drainer.ts's lock-free queue read), `approverHasScope` (I14 precheck).
+ *                        (drainer.ts's lock-free queue read), `approverHasScope` (I14 precheck),
+ *                        `getOperationStats` (S3.12 catalog-usage follow-up — the `get_operation_stats`
+ *                        capability's own read, `application/gateway/gatekeeper-read-handlers.ts`).
  *   - `status-transition.ts` — `updateActionRequestStatusConditional`: the one conditional
  *                        `UPDATE ... WHERE status = $expected` every governed mutator uses to
  *                        actually change `status` — the correctness guarantee behind the locking
@@ -48,12 +50,15 @@ export {
 
 export {
   approverHasScope,
+  type GetOperationStatsFilter,
   getActionRequest,
   getActionRequestForUpdate,
   getActionRequestForUpdateOrThrow,
   getActionRequestOrThrow,
+  getOperationStats,
   listExecutableQueue,
   listPendingForApprover,
+  type OperationStatsRow,
 } from './reads.js';
 
 export {
