@@ -10,6 +10,7 @@ import { createServer } from '../../index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { hashApiKey } from './auth.js';
+import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -52,6 +53,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     const store = new SqlGraphStore();
     let workspaceId: string;
     let ownerId: string;
+    let memberId: string;
     let factId: string;
     let decisionId: string;
     let activityId: string;
@@ -90,6 +92,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await runMigrations(pool, MIGRATIONS_DIR);
       workspaceId = await adminInsertWorkspace('export-prov-test-workspace');
       ownerId = await adminInsertPrincipal('owner', 'owner');
+      memberId = await adminInsertPrincipal('member', 'member');
 
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
         const host = await store.upsertObject(client, workspaceId, {
@@ -157,6 +160,17 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.format).toBe('prov-json');
       expect(Object.keys(result.document.activity)).toContain(activityId);
       expect(Object.keys(result.document.wasGeneratedBy)).toHaveLength(0);
+    });
+
+    it('member calling export_prov (minRole:auditor) → ForbiddenError, before the handler ever runs', async () => {
+      // Completes the role-hierarchy pair dispatch.test.ts's own "auditor calling export_prov
+      // passes authorization" test used to cover with `neverConnectPool` before export_prov had a
+      // handler (see that test's own removal comment) — auditor passing is exercised by every
+      // other test in this file (`humanCaller`'s own default role); this is the member-403 half.
+      const caller = humanCaller(workspaceId, memberId, 'member');
+      await expect(dispatchCapability({ pool }, caller, 'export_prov', { factId })).rejects.toThrow(
+        ForbiddenError,
+      );
     });
 
     it('export_prov({}) — none of factId/decisionId/activityId — rejects', async () => {
