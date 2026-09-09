@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { ConnectionRequestStatusSchema, RoleSchema, WorkerDefinitionKindSchema } from './enums.js';
+import {
+  ConflictStatusSchema,
+  ConnectionRequestStatusSchema,
+  RoleSchema,
+  WorkerDefinitionKindSchema,
+} from './enums.js';
 import { ActionRequestStatusSchema } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
@@ -899,81 +904,125 @@ const epistemicCapabilities: readonly Capability[] = [
     description: 'Record a Decision (starts in `proposed`, see transitions.ts).',
   },
   {
-    // Unhandled — name starts with `query_` (vocabulary guard rule (e)): `listEnvelope`.
+    // S3.2: `substrate/epistemic/decisions.ts`'s `queryDecisions` — name starts with `query_`
+    // (vocabulary guard rule (e)): `listEnvelope`.
     name: 'query_decisions',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ filter: jsonRecord.optional() }).strict(),
-    resultSchema: listEnvelope(jsonRecord),
-    description: 'Query recorded Decisions.',
+    paramsSchema: z
+      .object({
+        objectId: id.optional(),
+        since: z.string().optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.DecisionWireSchema),
+    description: 'Query recorded Decisions, optionally by related Object or since a timestamp.',
   },
   {
-    // Unhandled — name starts with `find_` (vocabulary guard rule (e)): `listEnvelope`.
+    // S3.2: `substrate/epistemic/decisions.ts`'s `findPrecedents` — name starts with `find_`
+    // (vocabulary guard rule (e)): `listEnvelope`.
     name: 'find_precedents',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ need: z.string() }).strict(),
-    resultSchema: listEnvelope(jsonRecord),
-    description: 'Find prior Decisions/Tasks addressing a similar need.',
+    paramsSchema: z
+      .object({
+        objectId: id.optional(),
+        actionKindTag: z.string().optional(),
+        limit: z.number().int().positive().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.DecisionWireSchema),
+    description:
+      'Prior Decisions on the same Object or ActionType, ordered by recency (Semantica precedent search).',
   },
   {
-    // Unhandled — permissive placeholder (this file's own module doc comment).
+    // S3.2: `substrate/epistemic/decisions.ts`'s `causalChain`.
     name: 'causal_chain',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ decisionId: id }).strict(),
-    resultSchema: jsonRecord,
-    description: 'Causal chain leading to a Decision (Semantica get_causal_chain).',
+    paramsSchema: z
+      .object({
+        factId: id.optional(),
+        decisionId: id.optional(),
+        depth: z.number().int().min(1).max(5).optional(),
+      })
+      .strict(),
+    resultSchema: wire.CausalChainResultWireSchema,
+    description:
+      'Provenance chain leading to a Fact or Decision, bounded depth ≤5 (Semantica get_causal_chain).',
   },
   {
-    // Unhandled — permissive placeholder.
+    // S3.2: `substrate/epistemic/decisions.ts`'s `decisionImpact`.
     name: 'decision_impact',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ decisionId: id }).strict(),
-    resultSchema: jsonRecord,
+    resultSchema: wire.DecisionImpactResultWireSchema,
     description: 'Downstream impact of a Decision (Semantica analyze_decision_impact).',
   },
   {
-    // Unhandled — name starts with `list_` (vocabulary guard rule (e)): `listEnvelope`.
+    // S3.2: `substrate/epistemic/conflicts.ts`'s `listConflicts` — name starts with `list_`
+    // (vocabulary guard rule (e)): `listEnvelope`.
     name: 'list_conflicts',
     group: 'epistemic',
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ status: z.string().optional() }).strict(),
-    resultSchema: listEnvelope(jsonRecord),
+    paramsSchema: z
+      .object({
+        status: ConflictStatusSchema.optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.ConflictWireSchema),
     description:
       'List Conflicts visible to the caller (private-Source Conflicts are one-sided, §5.6).',
   },
   {
-    // Unhandled — permissive placeholder.
+    // S3.2: `application/gateway/epistemic-handlers.ts`'s `resolveConflictHandler`. `channel:
+    // 'human'` (deviation from the pre-S3.2 placeholder's `'handle'` — see PR body "假设"):
+    // resolving a Conflict invalidates a Fact and records a Decision, a governed human judgment
+    // call the S3.2 dispatch text itself marks "(human)" — not something a Worker's Handle should
+    // reach on its own.
     name: 'resolve_conflict',
     group: 'epistemic',
     mode: 'write',
-    channel: 'handle',
+    channel: 'human',
     minRole: 'member',
-    paramsSchema: z.object({ conflictId: id, resolution: z.string() }).strict(),
-    resultSchema: jsonRecord,
-    description: 'Resolve a Conflict.',
+    paramsSchema: z
+      .object({
+        conflictId: id,
+        resolution: z.enum(['keep_a', 'keep_b', 'invalidate_both']),
+        reason: z.string(),
+      })
+      .strict(),
+    resultSchema: wire.ConflictWireSchema,
+    description: 'Resolve a Conflict — keep one Fact, or invalidate both (I4 lifecycle).',
   },
   {
-    // Unhandled — see `assert_fact`'s (meta group) neighboring comment: the Fact shape it would
-    // return is well-defined regardless of no handler existing yet.
+    // S3.2: `application/gateway/epistemic-handlers.ts`'s `verifyFactHandler`. `channel: 'human'`
+    // (same deviation/reasoning as `resolve_conflict` above — the S3.2 dispatch text marks this one
+    // "(human)" too); `paramsSchema` narrowed from the placeholder's `{factId, evidenceIds}` to
+    // just `{factId}` — Evidence is attached separately (the existing, unrelated `attach_evidence`
+    // capability written path); `verify_fact` only checks Evidence already exists (I3.6) and
+    // promotes, it does not itself attach any.
     name: 'verify_fact',
     group: 'epistemic',
     mode: 'write',
-    channel: 'handle',
+    channel: 'human',
     minRole: 'member',
-    paramsSchema: z.object({ factId: id, evidenceIds: z.array(id) }).strict(),
+    paramsSchema: z.object({ factId: id }).strict(),
     resultSchema: wire.FactWireSchema,
     description: 'Promote a Fact to epistemic_status=verified with Evidence (I3.6).',
   },

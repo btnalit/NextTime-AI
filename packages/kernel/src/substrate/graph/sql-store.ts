@@ -1,8 +1,14 @@
 import type { EpistemicStatus, PrincipalKind } from '@nexttime/shared';
-import { FACT_LIFECYCLE_TRANSITIONS, transition } from '@nexttime/shared';
+import {
+  EPISTEMIC_PROMOTION_TRANSITIONS,
+  FACT_LIFECYCLE_TRANSITIONS,
+  transition,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { openConflict, resolveFactOrigin, sameFactOrigin } from '../epistemic/index.js';
 import { enqueue } from '../outbox/index.js';
 import {
+  buildFindActiveFactByIdentityQuery,
   buildGetFactForUpdateQuery,
   buildGetObjectByIdentityQuery,
   buildGetObjectQuery,
@@ -15,6 +21,7 @@ import {
   buildStateAtFactsQuery,
   buildTraverseQuery,
   buildUpsertObjectQuery,
+  buildVerifyFactQuery,
 } from './queries.js';
 import {
   type AssertFactInput,
@@ -34,6 +41,7 @@ import {
   type TraverseInput,
   type TraverseResult,
   type UpsertObjectInput,
+  type VerifyFactInput,
   assertNoCallerSuppliedEpistemicStatus,
   deriveEpistemicStatus,
   factLifecycleState,
@@ -217,6 +225,25 @@ export class SqlGraphStore implements GraphStore {
     return row === undefined ? null : mapObjectRow(row);
   }
 
+  /**
+   * S3.2 conflict detection (I5, docs/development-tasks.md S3.2) runs first, before any insert:
+   * `buildFindActiveFactByIdentityQuery` looks for an existing non-superseded/non-invalidated Fact
+   * with the same `(linkType, sourceObjectId, targetObjectId)` identity (`for update` — locks it
+   * for the rest of this transaction, serializing a concurrent assertion against the same
+   * identity). None found → the ordinary insert-only path below, unchanged.
+   *
+   * A prior Fact *is* found → `resolveFactOrigin` (substrate/epistemic) resolves "who/what asserted
+   * this" for both sides (the epistemic Source feeding each side's Activity when there is exactly
+   * one, else the asserting principal — see `conflicts.ts`'s own module doc comment for why this is
+   * the generalization I5's "按 source_id 判定" needs to be correct for every writer in this
+   * codebase, not only the one that happens to attach an Observation). Same origin → this call
+   * *is* a supersede (delegates to `this.supersedeFact`, which the caller could equally well have
+   * called directly had it already known the prior Fact's id — the delegation is exactly that same
+   * path, just discovered here instead of by the caller). Different origin → both Facts stay
+   * `recorded`; `openConflict` (substrate/epistemic) opens a `status='open'` Conflict referencing
+   * both, keyed to *this* insert's own Activity (the one whose assertion discovered the
+   * disagreement).
+   */
   async assertFact(
     client: PoolClient,
     workspaceId: string,
@@ -224,6 +251,69 @@ export class SqlGraphStore implements GraphStore {
     input: AssertFactInput,
   ): Promise<Fact> {
     assertNoCallerSuppliedEpistemicStatus(input);
+
+    const priorQuery = buildFindActiveFactByIdentityQuery(workspaceId, {
+      linkType: input.linkType,
+      sourceObjectId: input.sourceObjectId,
+      targetObjectId: input.targetObjectId,
+    });
+    const priorResult = await client.query<FactRow>(
+      priorQuery.text,
+      priorQuery.values as unknown[],
+    );
+    const priorRow = priorResult.rows[0];
+
+    if (priorRow) {
+      const [priorOrigin, newOrigin] = await Promise.all([
+        resolveFactOrigin(client, workspaceId, {
+          activityId: priorRow.activity_id,
+          assertedBy: priorRow.asserted_by,
+        }),
+        resolveFactOrigin(client, workspaceId, {
+          activityId: input.activityId,
+          assertedBy: caller.id,
+        }),
+      ]);
+
+      if (sameFactOrigin(priorOrigin, newOrigin)) {
+        return this.supersedeFact(client, workspaceId, caller, { ...input, factId: priorRow.id });
+      }
+
+      const callerKind = await resolveCallerKind(client, workspaceId, caller.id);
+      const epistemicStatus = deriveEpistemicStatus(callerKind);
+      const insertQuery = buildInsertFactQuery(workspaceId, {
+        linkType: input.linkType,
+        sourceObjectId: input.sourceObjectId,
+        targetObjectId: input.targetObjectId,
+        properties: input.properties ?? {},
+        validFrom: input.validFrom ?? null,
+        validUntil: input.validUntil ?? null,
+        epistemicStatus,
+        confidence: input.confidence ?? null,
+        activityId: input.activityId,
+        assertedBy: caller.id,
+        supersedesId: null,
+      });
+      const insertResult = await client.query<FactRow>(
+        insertQuery.text,
+        insertQuery.values as unknown[],
+      );
+      const newFact = mapFactRow(
+        firstRowOrThrow(
+          insertResult.rows,
+          () => new Error('assertFact: INSERT ... RETURNING produced no row'),
+        ),
+      );
+
+      await openConflict(client, workspaceId, {
+        factAId: priorRow.id,
+        factBId: newFact.id,
+        activityId: input.activityId,
+      });
+      await enqueueFactAsserted(client, workspaceId, newFact);
+      return newFact;
+    }
+
     const callerKind = await resolveCallerKind(client, workspaceId, caller.id);
     const epistemicStatus = deriveEpistemicStatus(callerKind);
 
@@ -356,6 +446,33 @@ export class SqlGraphStore implements GraphStore {
     const markResult = await client.query<FactRow>(markQuery.text, markQuery.values as unknown[]);
     return mapFactRow(
       firstRowOrThrow(markResult.rows, () => new FactNotFoundError(workspaceId, input.factId)),
+    );
+  }
+
+  /** S3.2 `verify_fact` — see `VerifyFactInput`'s own doc comment in store.ts for why the Evidence
+   *  precondition (I3.6) is checked by the caller, not here. */
+  async verifyFact(
+    client: PoolClient,
+    workspaceId: string,
+    caller: CallerPrincipal,
+    input: VerifyFactInput,
+  ): Promise<Fact> {
+    const currentQuery = buildGetFactForUpdateQuery(workspaceId, input.factId);
+    const currentResult = await client.query<FactRow>(
+      currentQuery.text,
+      currentQuery.values as unknown[],
+    );
+    const currentRow = firstRowOrThrow(
+      currentResult.rows,
+      () => new FactNotFoundError(workspaceId, input.factId),
+    );
+
+    transition(EPISTEMIC_PROMOTION_TRANSITIONS, currentRow.epistemic_status, 'verify');
+
+    const query = buildVerifyFactQuery(workspaceId, input.factId, caller.id);
+    const result = await client.query<FactRow>(query.text, query.values as unknown[]);
+    return mapFactRow(
+      firstRowOrThrow(result.rows, () => new FactNotFoundError(workspaceId, input.factId)),
     );
   }
 
