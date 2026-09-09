@@ -1,0 +1,733 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "anyOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "type": "string"
+        },
+        "chatMessageId": {
+          "type": "string"
+        },
+        "principalId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "TurnStarted",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "chatId",
+        "turnId",
+        "principalId",
+        "chatMessageId"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "TurnCompleted",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "chatId",
+        "turnId",
+        "status"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "created",
+            "queued",
+            "running",
+            "waiting_approval",
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "TaskUpdated",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "taskId",
+        "status"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "provisioning",
+            "running",
+            "suspended",
+            "terminated"
+          ],
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "WorkerRunUpdated",
+          "type": "string"
+        },
+        "workerRunId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "workerRunId",
+        "taskId",
+        "status"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "actionKindTag": {
+          "type": "string"
+        },
+        "actionRequestId": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "holderPrincipalIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resourceScope": {
+          "type": "string"
+        },
+        "type": {
+          "const": "ActionRequestPending",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "actionRequestId",
+        "gatekeeperId",
+        "actionKindTag",
+        "holderPrincipalIds"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "actionRequestId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "policy_evaluated",
+            "auto_approved",
+            "pending_approval",
+            "approved",
+            "rejected",
+            "expired",
+            "denied",
+            "executing",
+            "executed",
+            "failed",
+            "verified",
+            "compensated"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "const": "ActionRequestUpdated",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "actionRequestId",
+        "status"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "connectionRequestId": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "requestedBy": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "type": {
+          "const": "ConnectionRequested",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "connectionRequestId",
+        "kind",
+        "target",
+        "requestedBy"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "type": {
+          "const": "ConnectionCreated",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "gatekeeperId",
+        "kind",
+        "target"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "epistemicStatus": {
+          "enum": [
+            "observed",
+            "extracted",
+            "inferred",
+            "asserted",
+            "verified",
+            "contradicted"
+          ],
+          "type": "string"
+        },
+        "factId": {
+          "type": "string"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "FactAsserted",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "factId",
+        "epistemicStatus"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "activityId": {
+          "type": "string"
+        },
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "type": {
+          "const": "EgressObserved",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "activityId",
+        "domain"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "scope": {
+          "enum": [
+            "task",
+            "turn",
+            "workspace_daily"
+          ],
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "BudgetWarning",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "scope",
+        "percent"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "type": "string"
+        },
+        "message": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "additionalProperties": {},
+              "type": "object"
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "role": {
+              "enum": [
+                "user",
+                "assistant",
+                "tool",
+                "system"
+              ],
+              "type": "string"
+            },
+            "sequence": {
+              "type": "number"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "role",
+            "text",
+            "createdAt",
+            "sequence"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "chat.message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "chatId",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "type": "string"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "delta": {
+                  "type": "string"
+                },
+                "streamKind": {
+                  "const": "textDelta",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "streamKind",
+                "delta"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "args": {},
+                "name": {
+                  "type": "string"
+                },
+                "streamKind": {
+                  "const": "toolCallStarted",
+                  "type": "string"
+                },
+                "toolCallId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "streamKind",
+                "toolCallId",
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "result": {},
+                "streamKind": {
+                  "const": "toolCallEnded",
+                  "type": "string"
+                },
+                "toolCallId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "streamKind",
+                "toolCallId"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "definitionId": {
+                  "type": "string"
+                },
+                "streamKind": {
+                  "const": "workerSpawned",
+                  "type": "string"
+                },
+                "taskId": {
+                  "type": "string"
+                },
+                "workerRunId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "streamKind",
+                "taskId",
+                "workerRunId",
+                "definitionId"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "enum": [
+                    "created",
+                    "queued",
+                    "running",
+                    "waiting_approval",
+                    "completed",
+                    "failed",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                "streamKind": {
+                  "const": "taskUpdated",
+                  "type": "string"
+                },
+                "taskId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "streamKind",
+                "taskId",
+                "status"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "chat.stream",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "chatId",
+        "turnId",
+        "payload"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "type": {
+          "const": "chat.metadata",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "chatId",
+        "metadata"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "actionKind": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tag",
+            "label"
+          ],
+          "type": "object"
+        },
+        "actionRequestId": {
+          "type": "string"
+        },
+        "awaitDecision": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "simulated": {},
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "const": "action.pending",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "actionRequestId",
+        "gatekeeperId",
+        "title",
+        "description",
+        "actionKind",
+        "awaitDecision"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "policy_evaluated",
+            "auto_approved",
+            "pending_approval",
+            "approved",
+            "rejected",
+            "expired",
+            "denied",
+            "executing",
+            "executed",
+            "failed",
+            "verified",
+            "compensated"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "const": "action.updated",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "status"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "created",
+            "queued",
+            "running",
+            "waiting_approval",
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "const": "task.updated",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "status"
+      ],
+      "type": "object"
+    }
+  ]
+}

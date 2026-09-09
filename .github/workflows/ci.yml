@@ -51,6 +51,15 @@ jobs:
       - name: Dependency graph purity (dependency-cruiser)
         run: pnpm depcruise
 
+      - name: Contract snapshot drift (S3.7, docs/wire-contract-conventions.md §4)
+        run: pnpm contract:check
+
+      - name: Vocabulary guard detector unit tests (S3.7)
+        run: node --test scripts/guards/vocabulary.test.mjs
+
+      - name: Vocabulary guard (S3.7, docs/wire-contract-conventions.md §5)
+        run: node scripts/guards/vocabulary.mjs
+
   test:
     name: test
     runs-on: ubuntu-latest
