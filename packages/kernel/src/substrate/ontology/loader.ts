@@ -1,91 +1,47 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PoolClient } from 'pg';
-import { parse as parseYaml } from 'yaml';
-import { z } from 'zod';
+import { OntologyDefinitionParseError, parseOntologyDefinition } from './schema.js';
+import type { OntologyDefinition } from './schema.js';
 
 /**
  * substrate/ontology/loader: parses and publishes a `ontology/*.yaml` file as an `ontology_versions`
  * row (design doc §5.1.2 OntologyVersion/ObjectType/LinkType, §7.10 "机制与内容分离...`ontology/
- * <domain>/`...走 git 与 PR，经 human 通道发布进图"; docs/development-tasks.md S2.6).
+ * <domain>/`...走 git 与 PR，经 human 通道发布进图"; docs/development-tasks.md S2.6, S3.1).
  *
- * No such loader existed before S2.6 — `substrate/ontology/index.ts` was an R1 placeholder with no
- * implementation (`export {}`), and the core domain ontology itself has not landed yet (S3.1 is
- * still ahead in the roadmap). This is therefore the *first* mechanism to read an `ontology/*.yaml`
- * file and publish it as an `ontology_versions` row, built to the shape §9.2's own DDL already
- * fixed (`(workspace_id, id, version)` identity, `status`, `definition jsonb`, `proposed_by`/
- * `published_by`) — S3.1 is expected to reuse `publishOntologyVersion`/`OntologyDefinitionSchema`
- * for the core domain ontology rather than write a second loader.
+ * S2.6 shipped the bootstrap-only path (`publishOntologyVersion`/`seedPlatformMetaOntology`): a
+ * single, fixed file (`platform-meta.yaml`) published once per workspace at `create-workspace`
+ * time, always starting a fresh `id`. S3.1 (this task) generalizes that into a reusable domain-
+ * pack loader (`publishOntologyDomainPack`, `deriveOntologyPackId`) any number of named packs can
+ * call, republishing under the *same* `id` family each time — see those functions' own doc
+ * comments. The Zod parsing itself (`OntologyDefinitionSchema` et al.) moved to `./schema.ts` (and,
+ * beneath that, `@nexttime/shared`'s `ontology-definition.ts`) as part of the same task — re-
+ * exported below for every import site that used to reach it through this file.
  *
- * Seeding happens at **bootstrap time** (`packages/kernel/src/cli/bootstrap.ts`'s `create-workspace`
- * calls `publishOntologyVersion` for `ontology/platform-meta.yaml`), not inside a SQL migration —
- * `ontology_versions` rows are workspace-scoped (I1: every row carries `workspace_id`, RLS-gated),
- * while migrations run once per *database*, before any workspace exists. Each workspace therefore
- * gets its own `ontology_versions` row for the platform meta-ontology, published directly (no
- * separate draft phase — a bootstrap seed has no other reviewer than the same owner who is
- * creating the workspace), mirroring how `worker/definitions.ts`'s `create-workspace` seeding
- * publishes the entry WorkerDefinition's v1 in the same call.
+ * Seeding happens at **bootstrap/publish time** (not inside a SQL migration): `ontology_versions`
+ * rows are workspace-scoped (I1: every row carries `workspace_id`, RLS-gated), while migrations
+ * run once per *database*, before any workspace exists. `create-workspace` seeds
+ * `platform-meta.yaml` directly (no separate draft phase — a bootstrap seed has no other reviewer
+ * than the same owner who is creating the workspace), mirroring how `worker/definitions.ts`'s
+ * `create-workspace` seeding publishes the entry WorkerDefinition's v1 in the same call.
+ * `publishOntologyDomainPack` is not wired into `create-workspace` by this task (`cli/bootstrap.ts`
+ * is not in this task's owned files) — it is the seam a bootstrap follow-up or an operator-run CLI
+ * calls to publish `ontology/ops-assets-v1.yaml` (or a future domain pack) into a given workspace.
  */
 
-// -------------------------------------------------------------------------------------------
-// OntologyDefinition — the YAML content shape (I2: LinkType domain/range must be explicit)
-// -------------------------------------------------------------------------------------------
-
-const ObjectTypeDefinitionSchema = z
-  .object({
-    name: z.string().min(1),
-    description: z.string().min(1),
-  })
-  .strict();
-export type ObjectTypeDefinition = z.infer<typeof ObjectTypeDefinitionSchema>;
-
-/** `domain`/`range` name an ObjectType from this same definition's `objectTypes`, or the sentinel
- *  `"*"` for a Link whose other end is not confined to one platform-meta ObjectType — e.g.
- *  `Operation --reads/writes--> ObjectType` (any domain ObjectType, not one of the six platform
- *  meta-ontology types) and `Gatekeeper --connects_to--> 系统对象` (an arbitrary connected-system
- *  object). I2 ("Link 符合 LinkType 的 domain/range") still holds — `"*"` is an explicit, named
- *  wildcard, not an omitted field. */
-const LinkTypeDefinitionSchema = z
-  .object({
-    name: z.string().min(1),
-    domain: z.string().min(1),
-    range: z.string().min(1),
-    description: z.string().min(1),
-  })
-  .strict();
-export type LinkTypeDefinition = z.infer<typeof LinkTypeDefinitionSchema>;
-
-export const OntologyDefinitionSchema = z
-  .object({
-    objectTypes: z.array(ObjectTypeDefinitionSchema).min(1),
-    linkTypes: z.array(LinkTypeDefinitionSchema).min(1),
-  })
-  .strict();
-export type OntologyDefinition = z.infer<typeof OntologyDefinitionSchema>;
-
-export class OntologyDefinitionParseError extends Error {
-  constructor(source: string, cause: unknown) {
-    super(`failed to parse ontology definition "${source}": ${String(cause)}`, { cause });
-    this.name = 'OntologyDefinitionParseError';
-  }
-}
-
-/** Parses and validates raw YAML text against `OntologyDefinitionSchema`. Pure — no IO. `source`
- *  is only used to make a parse error identify which file it came from. */
-export function parseOntologyDefinition(yamlText: string, source = '<inline>'): OntologyDefinition {
-  let raw: unknown;
-  try {
-    raw = parseYaml(yamlText);
-  } catch (err) {
-    throw new OntologyDefinitionParseError(source, err);
-  }
-  const result = OntologyDefinitionSchema.safeParse(raw);
-  if (!result.success) {
-    throw new OntologyDefinitionParseError(source, result.error);
-  }
-  return result.data;
-}
+export {
+  OntologyDefinitionParseError,
+  OntologyDefinitionSchema,
+  parseOntologyDefinition,
+} from './schema.js';
+export type {
+  ActionTypeDefinition,
+  LinkTypeDefinition,
+  ObjectTypeDefinition,
+  OntologyDefinition,
+} from './schema.js';
 
 /** Reads and parses one `ontology/*.yaml` file from disk. */
 export async function loadOntologyDefinitionFile(filePath: string): Promise<OntologyDefinition> {
@@ -129,7 +85,7 @@ export function resolveOntologyDir(env: NodeJS.ProcessEnv = process.env): string
 // publishOntologyVersion — bootstrap-time seeding (no draft phase, see this module's doc comment)
 // -------------------------------------------------------------------------------------------
 
-interface OntologyVersionDbRow {
+export interface OntologyVersionDbRow {
   workspace_id: string;
   id: string;
   version: number;
@@ -153,7 +109,9 @@ export interface OntologyVersionRow {
   readonly publishedAt: Date | null;
 }
 
-function mapRow(row: OntologyVersionDbRow): OntologyVersionRow {
+/** Exported so `registry.ts` maps the identical `ontology_versions` row shape the same way,
+ *  rather than redefining an equivalent function against a second copy of `OntologyVersionDbRow`. */
+export function mapOntologyVersionRow(row: OntologyVersionDbRow): OntologyVersionRow {
   return {
     workspaceId: row.workspace_id,
     id: row.id,
@@ -205,10 +163,13 @@ export async function publishOntologyVersion(
   );
   const row = result.rows[0];
   if (!row) throw new Error('publishOntologyVersion: INSERT ... RETURNING produced no row');
-  return mapRow(row);
+  return mapOntologyVersionRow(row);
 }
 
-async function nextOntologyVersion(
+/** Exported for `registry.ts`'s `proposeOntologyChange` to reuse (S3.1) — the same "what's the
+ *  next version under this id, or 1 for a fresh one" computation `publishOntologyVersion` already
+ *  needed, now shared rather than re-derived a second way. */
+export async function nextOntologyVersion(
   client: PoolClient,
   workspaceId: string,
   id: string | undefined,
@@ -233,4 +194,80 @@ export async function seedPlatformMetaOntology(
   const filePath = path.join(dir, 'platform-meta.yaml');
   const definition = await loadOntologyDefinitionFile(filePath);
   return publishOntologyVersion(client, workspaceId, { definition, principalId });
+}
+
+// -------------------------------------------------------------------------------------------
+// publishOntologyDomainPack (S3.1 deliverable 1: "Loader for ontology/*.yaml domain packs →
+// validated (zod) → published version; publishing identical content again yields the next version
+// number"). Generalizes `seedPlatformMetaOntology` above (one fixed file, always a fresh id) into
+// "any named pack, republished under its own stable id family" — a domain pack has no `name`
+// column to look itself up by (`ontology_versions`' own DDL, migrations/core/0002_substrate.sql,
+// only has `(workspace_id, id, version)` — `id` is an opaque uuid, not a human name), so rather
+// than add one (a migration outside this task's owned files: `migrations/core/**` belongs to no
+// wave-1 item this task inspected, and adding a lookup column is more machinery than this problem
+// needs), `deriveOntologyPackId` derives a stable uuid *deterministically* from the pack's own
+// name — same name in, same id out, every time, with no DB round trip needed to find it.
+// -------------------------------------------------------------------------------------------
+
+/**
+ * Fixed, arbitrary namespace for `deriveOntologyPackId` below (RFC 4122 §4.3 UUIDv5-style
+ * derivation: `SHA-1(namespace || name)`, version/variant bits forced) — chosen once and never to
+ * change: changing it would silently fork every existing domain pack's version history onto a new
+ * id on its very next publish (`nextOntologyVersion` would find no rows under the new id and start
+ * back at version 1). Not a "real" RFC 4122 namespace registered anywhere — an internal constant,
+ * fixed for this platform's own lifetime.
+ */
+const ONTOLOGY_PACK_NAMESPACE_HEX = '2a611b0a7b0e5b2a9b7b2e6b9f0d6a11';
+
+/** Deterministic `ontology_versions.id` for a domain pack named `packName` — same input always
+ *  produces the same uuid-shaped output, so `publishOntologyDomainPack` can find "the existing
+ *  version history for this pack" without any lookup table. Exported for tests and for a future
+ *  CLI/runbook step that needs to predict a pack's id ahead of publishing it. */
+export function deriveOntologyPackId(packName: string): string {
+  const namespaceBytes = Buffer.from(ONTOLOGY_PACK_NAMESPACE_HEX, 'hex');
+  const nameBytes = Buffer.from(packName, 'utf8');
+  const bytes = Buffer.from(
+    createHash('sha1').update(namespaceBytes).update(nameBytes).digest().subarray(0, 16),
+  );
+  bytes.writeUInt8((bytes.readUInt8(6) & 0x0f) | 0x50, 6); // version 5
+  bytes.writeUInt8((bytes.readUInt8(8) & 0x3f) | 0x80, 8); // RFC 4122 variant
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export interface PublishOntologyDomainPackInput {
+  /** The pack's stable family name (e.g. `"ops-assets"`) — what `deriveOntologyPackId` hashes.
+   *  Deliberately separate from `fileName` below: `ops-assets-v1.yaml` and a future
+   *  `ops-assets-v2.yaml` (S3.4, "本体 v2") name the *same* family so the second publish stacks a
+   *  new version onto the first pack's history rather than starting a sibling family at v1 — a
+   *  caller publishing a new file revision passes the same `packName` with a different
+   *  `fileName`. */
+  readonly packName: string;
+  /** YAML file to read, relative to `dir`. Defaults to `` `${packName}.yaml` `` (this task's own
+   *  `ops-assets-v1.yaml` is published with `packName: 'ops-assets', fileName: 'ops-assets-v1.yaml'`
+   *  — see that file's own header comment). */
+  readonly fileName?: string;
+  readonly dir?: string;
+  readonly principalId: string;
+}
+
+/** Loads `<dir>/<fileName ?? packName>.yaml`, validates it, and publishes it as the next version
+ *  of `packName`'s own id family (`deriveOntologyPackId`) — republishing byte-identical content
+ *  still consumes the next version number (no dedup/no-op short-circuit; `publishOntologyVersion`
+ *  itself never compared `definition` across versions, and this function does not add that check
+ *  either), which is exactly S3.1's own acceptance criterion ("同内容再发布得 v2"). */
+export async function publishOntologyDomainPack(
+  client: PoolClient,
+  workspaceId: string,
+  input: PublishOntologyDomainPackInput,
+): Promise<OntologyVersionRow> {
+  const dir = input.dir ?? resolveOntologyDir();
+  const fileName = input.fileName ?? `${input.packName}.yaml`;
+  const definition = await loadOntologyDefinitionFile(path.join(dir, fileName));
+  const id = deriveOntologyPackId(input.packName);
+  return publishOntologyVersion(client, workspaceId, {
+    id,
+    definition,
+    principalId: input.principalId,
+  });
 }
