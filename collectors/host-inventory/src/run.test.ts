@@ -206,7 +206,7 @@ describe('runOnce', () => {
   it('aborts before any kernel call when a process command line resists sanitization (S3.3 acceptance)', async () => {
     const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
-    const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+    const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'; // gitleaks:allow (synthetic fixture)
 
     await expect(
       runOnce({

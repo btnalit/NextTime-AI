@@ -38,9 +38,9 @@ describe('redactCommandLine', () => {
   });
 
   it('redacts a bearer string', () => {
-    expect(redactCommandLine('curl -H "Authorization: Bearer abc.def.ghi"')).toBe(
-      'curl -H "Authorization: Bearer ***"',
-    );
+    // Synthetic fixture, not a real credential.
+    const input = 'curl -H "Authorization: Bearer abc.def.ghi"'; // gitleaks:allow
+    expect(redactCommandLine(input)).toBe('curl -H "Authorization: Bearer ***"');
   });
 
   it('redacts multiple secrets in one command line', () => {
@@ -69,13 +69,14 @@ describe('sanitizeCommandLine', () => {
   });
 
   it('throws SecretRedactionError when a value still resists redaction after tier 1 (e.g. a bare JWT with no recognizable key name)', () => {
+    // Synthetic fixture (not a real token). gitleaks:allow
     const jwt =
-      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U'; // gitleaks:allow
     expect(() => sanitizeCommandLine(`myapp --forward ${jwt}`)).toThrow(SecretRedactionError);
   });
 
   it('throws SecretRedactionError for a long opaque token with no recognizable key name (high-entropy fallback)', () => {
-    const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+    const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'; // gitleaks:allow (synthetic fixture)
     expect(() => sanitizeCommandLine(`myapp --send ${opaqueToken}`)).toThrow(SecretRedactionError);
   });
 
@@ -98,7 +99,7 @@ describe('sanitizeCommandLines (batch)', () => {
   });
 
   it('drops the whole batch (throws) when any single entry resists redaction', () => {
-    const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+    const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'; // gitleaks:allow (synthetic fixture)
     const input = [
       { id: 'p1', commandLine: 'myapp --token=abc' }, // this one alone would be fine
       { id: 'p2', commandLine: `myapp --send ${opaqueToken}` }, // this one resists redaction
@@ -107,7 +108,7 @@ describe('sanitizeCommandLines (batch)', () => {
   });
 
   it('never returns a partial result when a later entry fails', () => {
-    const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+    const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'; // gitleaks:allow (synthetic fixture)
     const input = [
       { id: 'p1', commandLine: 'myapp --token=abc' },
       { id: 'p2', commandLine: `myapp --send ${opaqueToken}` },
