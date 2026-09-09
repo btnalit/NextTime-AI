@@ -29,7 +29,7 @@ describe('toNodeResponse', () => {
       id: 'obj-1',
       objectType: 'ops.host',
       identityKey: { hostname: 'db-1' },
-      properties: { hostname: 'db-1', ip: '10.0.0.1' },
+      properties: { hostname: 'db-1', ip: '192.0.2.10' },
       createdAt: new Date('2026-01-01T00:00:00Z'),
       updatedAt: new Date('2026-01-02T00:00:00Z'),
     };
@@ -37,7 +37,7 @@ describe('toNodeResponse', () => {
     expect(response).toMatchObject({
       id: 'obj-1',
       type: 'ops.host',
-      properties: { hostname: 'db-1', ip: '10.0.0.1' },
+      properties: { hostname: 'db-1', ip: '192.0.2.10' },
       valid_from: null,
       valid_until: null,
     });
