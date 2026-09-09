@@ -3115,8 +3115,134 @@
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
-      "type": "object"
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "identityKey": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "const": "object",
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "name",
+                "description"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "link",
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "signatures": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "description": {
+                        "type": "string"
+                      },
+                      "domain": {
+                        "type": "string"
+                      },
+                      "range": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "domain",
+                      "range",
+                      "description"
+                    ],
+                    "type": "object"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "kind",
+                "name",
+                "signatures"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "autoApprovable": {
+                  "type": "boolean"
+                },
+                "awaitDecision": {
+                  "type": "boolean"
+                },
+                "blastRadius": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "action",
+                  "type": "string"
+                },
+                "mode": {
+                  "enum": [
+                    "observe",
+                    "execute"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "requesterCanApprove": {
+                  "type": "boolean"
+                },
+                "reversibility": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "name",
+                "description",
+                "mode",
+                "blastRadius"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   {
@@ -4993,8 +5119,127 @@
       "properties": {
         "items": {
           "items": {
-            "additionalProperties": {},
-            "type": "object"
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "identityKey": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "object",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "description"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "link",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "signatures": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "domain": {
+                          "type": "string"
+                        },
+                        "range": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "domain",
+                        "range",
+                        "description"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "signatures"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "awaitDecision": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "action",
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "requesterCanApprove": {
+                    "type": "boolean"
+                  },
+                  "reversibility": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "description",
+                  "mode",
+                  "blastRadius"
+                ],
+                "type": "object"
+              }
+            ]
           },
           "type": "array"
         },
@@ -5224,8 +5469,130 @@
       "additionalProperties": false,
       "properties": {
         "change": {
-          "additionalProperties": {},
+          "additionalProperties": false,
+          "properties": {
+            "actionTypes": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "awaitDecision": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "description": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "requesterCanApprove": {
+                    "type": "boolean"
+                  },
+                  "reversibility": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "description",
+                  "mode",
+                  "blastRadius"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "linkTypes": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "description": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "domain": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "range": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "domain",
+                  "range",
+                  "description"
+                ],
+                "type": "object"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "objectTypes": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "description": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "identityKey": {
+                    "items": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "description"
+                ],
+                "type": "object"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "objectTypes",
+            "linkTypes"
+          ],
           "type": "object"
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "required": [
@@ -5235,7 +5602,37 @@
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "published",
+            "deprecated"
+          ],
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "status",
+        "proposedBy",
+        "createdAt"
+      ],
       "type": "object"
     }
   },
@@ -5559,19 +5956,60 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "ontologyVersionId": {
+        "id": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "ontologyVersionId"
+        "id",
+        "version"
       ],
       "type": "object"
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "publishedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publishedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "published",
+            "deprecated"
+          ],
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "status",
+        "publishedBy",
+        "publishedAt"
+      ],
       "type": "object"
     }
   },
@@ -8783,13 +9221,32 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "payload": {},
-        "typeName": {
-          "type": "string"
+        "link": {
+          "additionalProperties": false,
+          "properties": {
+            "linkType": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sourceType": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "targetType": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "linkType",
+            "sourceType",
+            "targetType"
+          ],
+          "type": "object"
         }
       },
       "required": [
-        "typeName"
+        "link"
       ],
       "type": "object"
     },
@@ -8799,8 +9256,7 @@
       "properties": {
         "errors": {
           "items": {
-            "additionalProperties": {},
-            "type": "object"
+            "type": "string"
           },
           "type": "array"
         },

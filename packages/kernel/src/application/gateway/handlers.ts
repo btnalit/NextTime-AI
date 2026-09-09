@@ -99,6 +99,13 @@ import {
 import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
 import { listModelsHandler } from './models-catalog-handler.js';
 import {
+  getTypeHandler,
+  listTypesHandler,
+  proposeOntologyChangeHandler,
+  publishOntologyVersionHandler,
+  validateHandler,
+} from './ontology-handlers.js';
+import {
   deprecateOperationHandler,
   proposeOperationHandler,
   publishManifestHandler,
@@ -1171,4 +1178,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['set_agent_profile', setAgentProfileHandler],
   ['get_agent_policy', getAgentPolicyHandler],
   ['set_agent_policy', setAgentPolicyHandler],
+  // S3.1 (docs/development-tasks.md S3.1) — ontology-handlers.ts.
+  ['get_type', getTypeHandler],
+  ['list_types', listTypesHandler],
+  ['validate', validateHandler],
+  ['propose_ontology_change', proposeOntologyChangeHandler],
+  ['publish_ontology_version', publishOntologyVersionHandler],
 ]);
