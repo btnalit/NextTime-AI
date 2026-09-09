@@ -82,7 +82,6 @@ import {
   listConnectionRequestsHandler,
   requestConnectionHandler,
 } from './connection-handlers.js';
-import { assertFactHandler, invalidateFactHandler, supersedeFactHandler } from './fact-handlers.js';
 import {
   causalChainHandler,
   decisionImpactHandler,
@@ -92,6 +91,7 @@ import {
   resolveConflictHandler,
   verifyFactHandler,
 } from './epistemic-handlers.js';
+import { assertFactHandler, invalidateFactHandler, supersedeFactHandler } from './fact-handlers.js';
 import {
   getGatekeeperHandler,
   getOperationStatsHandler,
