@@ -14,9 +14,16 @@ import {
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
+  ConflictNotFoundError,
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
+  DecisionNotFoundError,
   ExplainNodeNotFoundError,
+  FactHasNoEvidenceError,
+  FactNotFoundError,
+  OntologyChangeValidationError,
+  OntologyDraftNotFoundError,
+  SupersedeIdentityMismatchError,
   WorkerResultValidationError,
   hashApiKey,
 } from '../../application/gateway/index.js';
@@ -196,6 +203,52 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new WorkerResultValidationError('bad ref'));
     expect(mapped.status).toBe(400);
     expect(mapped.code).toBe('invalid_params');
+  });
+
+  // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500"): S3.1
+  // (substrate/ontology), S3.2 (substrate/epistemic conflicts + causal_chain/decision_impact +
+  // verify_fact's I3.6 precondition), S3.3 (supersede_fact/invalidate_fact/verify_fact's
+  // substrate/graph errors) classes that previously fell through to the generic 500 branch.
+  it('OntologyChangeValidationError (propose_ontology_change) → 400 invalid_params, not 500', () => {
+    const mapped = mapCapabilityError(new OntologyChangeValidationError([{ path: ['x'] }]));
+    expect(mapped.status).toBe(400);
+    expect(mapped.code).toBe('invalid_params');
+  });
+
+  it('OntologyDraftNotFoundError (publish_ontology_version) → 404 not_found, not 500', () => {
+    const mapped = mapCapabilityError(new OntologyDraftNotFoundError('ont-1', 2));
+    expect(mapped.status).toBe(404);
+    expect(mapped.code).toBe('not_found');
+  });
+
+  it('ConflictNotFoundError (resolve_conflict/list_conflicts) → 404 not_found, not 500', () => {
+    const mapped = mapCapabilityError(new ConflictNotFoundError('ws-1', 'conflict-1'));
+    expect(mapped.status).toBe(404);
+    expect(mapped.code).toBe('not_found');
+  });
+
+  it('DecisionNotFoundError (causal_chain/decision_impact) → 404 not_found, not 500', () => {
+    const mapped = mapCapabilityError(new DecisionNotFoundError('ws-1', 'decision-1'));
+    expect(mapped.status).toBe(404);
+    expect(mapped.code).toBe('not_found');
+  });
+
+  it('FactNotFoundError (supersede_fact/invalidate_fact/verify_fact) → 404 not_found, not 500', () => {
+    const mapped = mapCapabilityError(new FactNotFoundError('ws-1', 'fact-1'));
+    expect(mapped.status).toBe(404);
+    expect(mapped.code).toBe('not_found');
+  });
+
+  it('SupersedeIdentityMismatchError (supersede_fact, I5) → 400 invalid_params, not 500', () => {
+    const mapped = mapCapabilityError(new SupersedeIdentityMismatchError('ws-1', 'fact-1'));
+    expect(mapped.status).toBe(400);
+    expect(mapped.code).toBe('invalid_params');
+  });
+
+  it('FactHasNoEvidenceError (verify_fact, I3.6) → 409 conflict, not 500', () => {
+    const mapped = mapCapabilityError(new FactHasNoEvidenceError('fact-1'));
+    expect(mapped.status).toBe(409);
+    expect(mapped.code).toBe('conflict');
   });
 });
 

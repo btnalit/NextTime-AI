@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
-import { ExplainNodeNotFoundError } from '../../application/gateway/index.js';
+import {
+  ConflictNotFoundError,
+  DecisionNotFoundError,
+  ExplainNodeNotFoundError,
+  FactHasNoEvidenceError,
+  FactNotFoundError,
+  OntologyChangeValidationError,
+  OntologyDraftNotFoundError,
+  SupersedeIdentityMismatchError,
+} from '../../application/gateway/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
 import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
@@ -58,5 +67,42 @@ describe('mapDispatchError — lane-4 hookup: ExplainNodeNotFoundError (explain)
   it('maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {
     const mapped = mapDispatchError(new ExplainNodeNotFoundError('fact', 'ws-1', 'fact-1'));
     expect(mapped.code).toBe(WS_ERROR_CODES.NOT_FOUND);
+  });
+});
+
+describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/S3.2/S3.3 error classes → 500', () => {
+  it('OntologyChangeValidationError (propose_ontology_change) maps to INVALID_PARAMS (-32602), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new OntologyChangeValidationError([{ path: ['x'] }]));
+    expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
+  });
+
+  it('OntologyDraftNotFoundError (publish_ontology_version) maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new OntologyDraftNotFoundError('ont-1', 2));
+    expect(mapped.code).toBe(WS_ERROR_CODES.NOT_FOUND);
+  });
+
+  it('ConflictNotFoundError (resolve_conflict/list_conflicts) maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new ConflictNotFoundError('ws-1', 'conflict-1'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.NOT_FOUND);
+  });
+
+  it('DecisionNotFoundError (causal_chain/decision_impact) maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new DecisionNotFoundError('ws-1', 'decision-1'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.NOT_FOUND);
+  });
+
+  it('FactNotFoundError (supersede_fact/invalidate_fact/verify_fact) maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new FactNotFoundError('ws-1', 'fact-1'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.NOT_FOUND);
+  });
+
+  it('SupersedeIdentityMismatchError (supersede_fact, I5) maps to INVALID_PARAMS (-32602), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new SupersedeIdentityMismatchError('ws-1', 'fact-1'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
+  });
+
+  it('FactHasNoEvidenceError (verify_fact, I3.6) maps to ILLEGAL_TRANSITION (-32011), not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new FactHasNoEvidenceError('fact-1'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
   });
 });

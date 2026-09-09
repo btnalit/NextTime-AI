@@ -27,6 +27,41 @@ export { authorizeCapabilityCall, roleSatisfiesMinRole, ForbiddenError } from '.
 // layering workaround — see this module's own doc comment ("interfaces/http is the only consumer").
 export { ExplainNodeNotFoundError } from '../../substrate/epistemic/index.js';
 
+// Error-mapping followup (docs/development-tasks.md, "unmapped error classes → 500"): four more
+// substrate error classes reachable through real S3.2/S3.3 handlers that `interfaces/http/
+// capability-route.ts`/`interfaces/ws/rpc.ts` had no mapping for — same re-export shape as
+// `ExplainNodeNotFoundError` just above.
+//  - `ConflictNotFoundError` (`resolve_conflict`'s `getConflictForUpdate`/`markConflictResolved` —
+//    also the "not visible" case: `conflicts_visibility` RLS makes a Conflict the caller cannot
+//    see indistinguishable from one that does not exist, so this one class already covers both)
+//    and `DecisionNotFoundError` (`causal_chain`/`decision_impact`'s `getDecisionRow`) — both S3.2
+//    `epistemic`-group capabilities (`epistemic-handlers.ts`'s own module doc comment).
+//  - `FactNotFoundError`/`SupersedeIdentityMismatchError` (`substrate/graph`) — `supersede_fact`/
+//    `invalidate_fact`/`verify_fact` (`fact-handlers.ts`) pass a caller-supplied `factId` straight
+//    into `GraphStore.supersedeFact`/`invalidateFact`/`verifyFact`, which read the row (or check
+//    I5's identity match) before writing; these two became live-reachable, not merely defined,
+//    once S3.3 replaced the pre-S3.3 write stubs with real handlers.
+export {
+  ConflictNotFoundError,
+  DecisionNotFoundError,
+} from '../../substrate/epistemic/index.js';
+export {
+  FactNotFoundError,
+  SupersedeIdentityMismatchError,
+} from '../../substrate/graph/index.js';
+// S3.1 (docs/development-tasks.md S3.1) — `propose_ontology_change`/`publish_ontology_version`
+// (`ontology-handlers.ts`) pass caller input straight into `substrate/ontology/registry.ts`'s
+// `proposeOntologyChange`/`publishOntologyDraft`.
+export {
+  OntologyChangeValidationError,
+  OntologyDraftNotFoundError,
+} from '../../substrate/ontology/index.js';
+// S3.2 `verify_fact` (I3.6's "harder half" — epistemic-handlers.ts's own doc comment on this
+// class): defined in the handler file itself, not a substrate module, so no six-layer workaround
+// is needed — re-exported here purely to keep every capability-reachable error class importable
+// from this one curated surface, matching every sibling error re-export above.
+export { FactHasNoEvidenceError } from './epistemic-handlers.js';
+
 export {
   dispatchCapability,
   CapabilityNotFoundError,

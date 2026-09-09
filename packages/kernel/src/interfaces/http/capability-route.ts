@@ -16,20 +16,27 @@ import {
   AgentProfileValidationError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
+  ConflictNotFoundError,
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
+  DecisionNotFoundError,
   type DispatchDeps,
   ExplainNodeNotFoundError,
+  FactHasNoEvidenceError,
+  FactNotFoundError,
   ForbiddenError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
   MetaOntologyWriteForbiddenError,
   ModelsCatalogUnavailableError,
   ObservationIdentityError,
+  OntologyChangeValidationError,
+  OntologyDraftNotFoundError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
   type ResolveCallerDeps,
   SourceNotFoundError,
+  SupersedeIdentityMismatchError,
   UnauthorizedError,
   WorkerResultValidationError,
   dispatchCapability,
@@ -157,6 +164,20 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof ObservationIdentityError) {
     return { status: 400, code: 'invalid_params', message: err.message };
   }
+  // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500"): S3.1
+  // `propose_ontology_change` (ontology-handlers.ts → substrate/ontology/registry.ts's
+  // `proposeOntologyChange`) — `input.change` fails `OntologyDefinitionSchema` validation. Same
+  // 400 bucket as every other handler-level semantic-validation error in this file.
+  if (err instanceof OntologyChangeValidationError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // S3.3 `supersede_fact` (fact-handlers.ts → substrate/graph): the replacement's
+  // (linkType, sourceObjectId, targetObjectId) does not match the Fact it targets (I5) — a
+  // caller-input mismatch, not a state-machine conflict (the caller should assertFact a new Fact
+  // instead — SupersedeIdentityMismatchError's own doc comment in substrate/graph/store.ts).
+  if (err instanceof SupersedeIdentityMismatchError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
   // governance/approval + governance/policy domain errors (S2.2/S2.3). ApprovalScopeError is I14
   // ("does the approver hold this action_kind × resource_scope") — a *narrower* forbidden than
   // ForbiddenError's role-gate, but the same HTTP shape. IllegalTransition (packages/shared,
@@ -173,7 +194,21 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     err instanceof OperationNotFoundError ||
     err instanceof ConnectionRequestNotFoundError ||
     // S3.3 `submit_observations`: sourceId names no Source visible to this caller.
-    err instanceof SourceNotFoundError
+    err instanceof SourceNotFoundError ||
+    // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500"):
+    //  - S3.1 `publish_ontology_version`: no `draft` ontology_versions row for the given
+    //    (id, version) — already published/deprecated, or never proposed.
+    //  - S3.2 `resolve_conflict`/`list_conflicts`: unknown conflictId, or one RLS hides from this
+    //    caller (`conflicts_visibility`'s `using` clause — same "not visible = not found"
+    //    fail-closed shape `links_visibility` already has for Facts, ConflictNotFoundError's own
+    //    doc comment on `getConflictForUpdate`).
+    //  - S3.2 `causal_chain`/`decision_impact`: unknown decisionId.
+    //  - `supersede_fact`/`invalidate_fact`/`verify_fact` (S3.3 real handlers, substrate/graph):
+    //    unknown factId.
+    err instanceof OntologyDraftNotFoundError ||
+    err instanceof ConflictNotFoundError ||
+    err instanceof DecisionNotFoundError ||
+    err instanceof FactNotFoundError
   ) {
     return { status: 404, code: 'not_found', message: err.message };
   }
@@ -192,6 +227,14 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // OperationIdentityConflictError/IllegalTransition above (last-owner protection, self-disable,
   // a non-human target for set_principal_role/rotate_api_key/disable_principal).
   if (err instanceof PrincipalOperationRefusedError) {
+    return { status: 409, code: 'conflict', message: err.message };
+  }
+  // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500"): S3.2
+  // `verify_fact`'s I3.6 precondition (epistemic-handlers.ts's own doc comment on this class) —
+  // the Fact exists and the request is well-formed, but it has no Evidence on file yet. Same 409
+  // "well-formed request, current state forbids it" family as OperationIdentityConflictError/
+  // PrincipalOperationRefusedError above.
+  if (err instanceof FactHasNoEvidenceError) {
     return { status: 409, code: 'conflict', message: err.message };
   }
   if (err instanceof PrincipalNotFoundError) {

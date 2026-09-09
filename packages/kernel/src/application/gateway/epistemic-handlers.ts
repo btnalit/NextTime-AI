@@ -193,9 +193,12 @@ export const resolveConflictHandler: CapabilityHandler = async (
 
 /** I3.6's "harder half" (design doc §5.3 item 6, migrations/core/0002_substrate.sql's own comment)
  *  — the DB CHECK alone only enforces `verified ⇒ verified_by not null`; this is the "⇒ Evidence"
- *  half. Not mapped in interfaces/ws/rpc.ts or interfaces/http/capability-route.ts, matching this
- *  same handler group's sibling `NoActiveTurnError`/`TurnNotFoundError` (handlers.ts) — falls
- *  through to a generic 500/INTERNAL_ERROR. */
+ *  half. Mapped to 409 `conflict` in `interfaces/http/capability-route.ts`/`interfaces/ws/rpc.ts`
+ *  (error-mapping followup, docs/development-tasks.md "unmapped error classes → 500") — the Fact
+ *  exists and the request is well-formed, but its *current* state (no Evidence on file) forbids
+ *  `verify_fact` right now, same "well-formed request, state forbids it" family as
+ *  `IllegalTransition`. Re-exported from `application/gateway/index.ts` so both interface files
+ *  can import it without reaching into this handler file directly. */
 export class FactHasNoEvidenceError extends Error {
   constructor(factId: string) {
     super(`verify_fact: Fact ${factId} has no Evidence on file (I3.6)`);
