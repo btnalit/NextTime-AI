@@ -130,6 +130,17 @@ export interface SupersedeFactInput extends AssertFactInput {
   readonly factId: string;
 }
 
+/** `verifyFact` (S3.2 `verify_fact` capability, design doc §5.3 item 6 / I3.6): promotes an
+ *  existing Fact's `epistemic_status` to `verified` and stamps `verified_by: caller.id`. Evidence
+ *  presence (the "harder half" of I3.6 — 0002_substrate.sql's own comment: "verified 的 Fact 没有
+ *  verified_by 与 Evidence" needs a cross-table check the DB CHECK alone cannot express) is the
+ *  caller's responsibility to verify first (`application/gateway/epistemic-handlers.ts`'s
+ *  `verifyFactHandler` checks `substrate/epistemic`'s `hasEvidence` before calling this) — kept out
+ *  of `GraphStore` itself so this module never has to read the `evidence` table it does not own. */
+export interface VerifyFactInput {
+  readonly factId: string;
+}
+
 export interface InvalidateFactInput {
   readonly factId: string;
   /**
@@ -355,6 +366,13 @@ export interface GraphStore {
     workspaceId: string,
     caller: CallerPrincipal,
     input: InvalidateFactInput,
+  ): Promise<Fact>;
+
+  verifyFact(
+    client: PoolClient,
+    workspaceId: string,
+    caller: CallerPrincipal,
+    input: VerifyFactInput,
   ): Promise<Fact>;
 
   neighbors(

@@ -7,6 +7,14 @@
  * 0006_object_identity.sql) and exposes only the `GraphStore` service interface here — it must
  * not be reached into from another module's internal files, and other modules must not query its
  * tables directly; cross-module coordination happens through domain events (see packages/shared).
+ *
+ * **One deliberate exception (S3.2, docs/development-tasks.md)**: `SqlGraphStore.assertFact`
+ * itself calls `substrate/epistemic`'s `resolveFactOrigin`/`sameFactOrigin`/`openConflict`
+ * directly, not via an outbox event — I5's "异源不一致 → Conflict；同源变化 → supersede" must be
+ * decided synchronously, in the same transaction as the insert it gates (the design doc's own
+ * "写入路径按 source_id 判定"), which an async outbox consumer cannot give. This is one direction
+ * only (`substrate/graph` → `substrate/epistemic`'s public interface, never its tables) — see
+ * `epistemic/conflicts.ts`'s own module doc comment for the full reasoning.
  */
 
 export {
@@ -43,6 +51,7 @@ export type {
   TraverseInput,
   TraverseResult,
   UpsertObjectInput,
+  VerifyFactInput,
 } from './store.js';
 
 export { SqlGraphStore } from './sql-store.js';

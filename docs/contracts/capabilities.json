@@ -466,16 +466,506 @@
         "decisionId": {
           "minLength": 1,
           "type": "string"
+        },
+        "depth": {
+          "maximum": 5,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "factId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
-      "required": [
-        "decisionId"
-      ],
       "type": "object"
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "activity": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "createdAt": {
+                        "type": "string"
+                      },
+                      "endedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "metadata": {
+                        "additionalProperties": {},
+                        "type": "object"
+                      },
+                      "observations": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "ownerPrincipal": {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "displayName": {
+                                              "type": [
+                                                "string",
+                                                "null"
+                                              ]
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "kind": {
+                                              "type": "string"
+                                            },
+                                            "role": {
+                                              "type": [
+                                                "string",
+                                                "null"
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "kind",
+                                            "role",
+                                            "displayName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "uri": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "visibility": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "kind",
+                                    "uri",
+                                    "visibility",
+                                    "ownerPrincipal"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "createdAt",
+                            "source"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "onBehalfOfPrincipal": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "displayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "role",
+                              "displayName"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "startedByPrincipal": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "displayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "role",
+                              "displayName"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "kind",
+                      "status",
+                      "createdAt",
+                      "endedAt",
+                      "startedByPrincipal",
+                      "observations",
+                      "metadata",
+                      "onBehalfOfPrincipal"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "decision": {
+                "additionalProperties": false,
+                "properties": {
+                  "decidedByPrincipal": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "role",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "ownerPrincipal": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "displayName": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "type": "string"
+                                  },
+                                  "role": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "kind",
+                                  "role",
+                                  "displayName"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "uri": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "visibility": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "uri",
+                          "visibility",
+                          "ownerPrincipal"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "status",
+                  "summary",
+                  "decidedByPrincipal",
+                  "source"
+                ],
+                "type": "object"
+              },
+              "fact": {
+                "additionalProperties": false,
+                "properties": {
+                  "assertedByPrincipal": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "role",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "epistemicStatus": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "linkType": {
+                    "type": "string"
+                  },
+                  "verifiedByPrincipal": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "role",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "linkType",
+                  "epistemicStatus",
+                  "assertedByPrincipal",
+                  "verifiedByPrincipal"
+                ],
+                "type": "object"
+              },
+              "nodeType": {
+                "enum": [
+                  "fact",
+                  "activity",
+                  "decision"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "nodeType",
+              "activity"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "rootId": {
+          "type": "string"
+        },
+        "rootType": {
+          "enum": [
+            "fact",
+            "decision"
+          ],
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rootType",
+        "rootId",
+        "chain",
+        "truncated"
+      ],
       "type": "object"
     }
   },
@@ -942,7 +1432,160 @@
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
+      "additionalProperties": false,
+      "properties": {
+        "actionRequests": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "actionKindTag": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "actionKindTag",
+              "gatekeeperId"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "facts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "activityId": {
+                "type": "string"
+              },
+              "assertedBy": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "epistemicStatus": {
+                "enum": [
+                  "observed",
+                  "extracted",
+                  "inferred",
+                  "asserted",
+                  "verified",
+                  "contradicted"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "invalidatedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "invalidationReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "linkType": {
+                "type": "string"
+              },
+              "properties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "recordedAt": {
+                "type": "string"
+              },
+              "sourceObjectId": {
+                "type": "string"
+              },
+              "supersededAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "supersedesId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "targetObjectId": {
+                "type": "string"
+              },
+              "validFrom": {
+                "type": "string"
+              },
+              "validUntil": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verifiedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "linkType",
+              "sourceObjectId",
+              "targetObjectId",
+              "properties",
+              "validFrom",
+              "validUntil",
+              "recordedAt",
+              "supersededAt",
+              "invalidatedAt",
+              "invalidationReason",
+              "supersedesId",
+              "epistemicStatus",
+              "confidence",
+              "activityId",
+              "assertedBy",
+              "verifiedBy"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "taskIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "decisionId",
+        "facts",
+        "actionRequests",
+        "taskIds"
+      ],
       "type": "object"
     }
   },
@@ -1853,13 +2496,18 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "need": {
+        "actionKindTag": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "objectId": {
+          "minLength": 1,
           "type": "string"
         }
       },
-      "required": [
-        "need"
-      ],
       "type": "object"
     },
     "result": {
@@ -1868,7 +2516,67 @@
       "properties": {
         "items": {
           "items": {
-            "additionalProperties": {},
+            "additionalProperties": false,
+            "properties": {
+              "activityId": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decidedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "rationale": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sourceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "activityId",
+              "sourceId",
+              "summary",
+              "rationale",
+              "decidedBy",
+              "createdAt",
+              "decidedAt"
+            ],
             "type": "object"
           },
           "type": "array"
@@ -3803,7 +4511,20 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
         "status": {
+          "enum": [
+            "open",
+            "resolved",
+            "accepted_both",
+            "dismissed"
+          ],
           "type": "string"
         }
       },
@@ -3815,7 +4536,72 @@
       "properties": {
         "items": {
           "items": {
-            "additionalProperties": {},
+            "additionalProperties": false,
+            "properties": {
+              "activityId": {
+                "type": "string"
+              },
+              "conflictType": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "factAId": {
+                "type": "string"
+              },
+              "factBId": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "openedAt": {
+                "type": "string"
+              },
+              "resolution": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "resolvedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resolvedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "conflictType",
+              "status",
+              "factAId",
+              "factBId",
+              "description",
+              "activityId",
+              "openedAt",
+              "resolvedAt",
+              "resolvedBy",
+              "resolution"
+            ],
             "type": "object"
           },
           "type": "array"
@@ -6481,9 +7267,19 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "filter": {
-          "additionalProperties": {},
-          "type": "object"
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "objectId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -6494,7 +7290,67 @@
       "properties": {
         "items": {
           "items": {
-            "additionalProperties": {},
+            "additionalProperties": false,
+            "properties": {
+              "activityId": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decidedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "rationale": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sourceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "activityId",
+              "sourceId",
+              "summary",
+              "rationale",
+              "decidedBy",
+              "createdAt",
+              "decidedAt"
+            ],
             "type": "object"
           },
           "type": "array"
@@ -7793,7 +8649,7 @@
     }
   },
   {
-    "channel": "handle",
+    "channel": "human",
     "group": "epistemic",
     "minRole": "member",
     "mode": "write",
@@ -7806,19 +8662,93 @@
           "minLength": 1,
           "type": "string"
         },
+        "reason": {
+          "type": "string"
+        },
         "resolution": {
+          "enum": [
+            "keep_a",
+            "keep_b",
+            "invalidate_both"
+          ],
           "type": "string"
         }
       },
       "required": [
         "conflictId",
-        "resolution"
+        "resolution",
+        "reason"
       ],
       "type": "object"
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
+      "additionalProperties": false,
+      "properties": {
+        "activityId": {
+          "type": "string"
+        },
+        "conflictType": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "factAId": {
+          "type": "string"
+        },
+        "factBId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "openedAt": {
+          "type": "string"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "additionalProperties": {},
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resolvedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "conflictType",
+        "status",
+        "factAId",
+        "factBId",
+        "description",
+        "activityId",
+        "openedAt",
+        "resolvedAt",
+        "resolvedBy",
+        "resolution"
+      ],
       "type": "object"
     }
   },
@@ -9271,7 +10201,7 @@
     }
   },
   {
-    "channel": "handle",
+    "channel": "human",
     "group": "epistemic",
     "minRole": "member",
     "mode": "write",
@@ -9280,21 +10210,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "evidenceIds": {
-          "items": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "type": "array"
-        },
         "factId": {
           "minLength": 1,
           "type": "string"
         }
       },
       "required": [
-        "factId",
-        "evidenceIds"
+        "factId"
       ],
       "type": "object"
     },
