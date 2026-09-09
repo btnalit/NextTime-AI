@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/btnalit/NextTime-AI/compare/v0.2.0...v0.3.0) (2026-09-09)
+
+
+### Features
+
+* **caddy:** build the Explorer bundle inside the caddy image build ([48ecb1b](https://github.com/btnalit/NextTime-AI/commit/48ecb1bf5ba6f5df75ac0548b2bcc087f816d072))
+* **kernel:** implement create_task capability (create-only, no spawn) ([46cf5d7](https://github.com/btnalit/NextTime-AI/commit/46cf5d7672be48d3cfd5527b7f9ba9900da1b2e4))
+* **scripts:** S3.10 operational drills as scripts ([2c8702c](https://github.com/btnalit/NextTime-AI/commit/2c8702c8f6db22b0174d9ca2260d5ceaff71f56a))
+* **scripts:** S3.9 accept_s3.sh — S3 acceptance script ([04cf26e](https://github.com/btnalit/NextTime-AI/commit/04cf26e8ac9388dfe72d2bc5e5cd04ac9a347dba))
+* W4 closeout — accept_s3.sh, create_task, Explorer-in-caddy build, S3.10 drills ([2ca38c6](https://github.com/btnalit/NextTime-AI/commit/2ca38c6a4b7d095dfc7507281ff6a1da868b46cf))
+
+
+### Bug Fixes
+
+* **accept-s3:** pass required 'query' to search in collector steps ([ecbc4bc](https://github.com/btnalit/NextTime-AI/commit/ecbc4bc952ed86c5fd790552d531d6157825d199))
+* **accept-s3:** pass required 'query' to search in collector steps ([e8ec044](https://github.com/btnalit/NextTime-AI/commit/e8ec04496da03b27dfc71a8133ce409525d9ce9f))
+* **accept:** flush driver stdout before process.exit ([0994f15](https://github.com/btnalit/NextTime-AI/commit/0994f1542f4316136d4045247c0a8805d29155d7))
+* **fake-llm:** S3 dependency scenario sends required 'query' to search ([2fd2b7d](https://github.com/btnalit/NextTime-AI/commit/2fd2b7dd3f8d3d89f75ef05b45e4fb76c1604ce4))
+
 ## [0.2.0](https://github.com/btnalit/NextTime-AI/compare/v0.1.0...v0.2.0) (2026-09-09)
 
 
