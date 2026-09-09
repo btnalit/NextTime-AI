@@ -655,6 +655,11 @@ services:
     # keeps *provider*/database/token secrets out of `.env` (`.env.example`'s own comment) — a
     # platform-issued API key for one dedicated, least-privileged Principal is a smaller-consequence
     # exception, already visible in the same category `KERNEL_PUBLIC_URL`/`NEXTTIME_SUBNET_*` sit in.
+    # TRUST BOUNDARY: this one key is injected by caddy into EVERY request reaching the Explorer
+    # endpoints — anyone who can reach :8443 reads the graph as that Principal, unauthenticated,
+    # and audit attributes to it, not to the viewer. Leave empty (default → 401) unless :8443 is
+    # LAN/VPN-only, and then use a dedicated `auditor`-role Principal's key, never an owner's.
+    # See docs/runbooks/host-explorer.md "信任边界".
     environment: { EXPLORER_API_KEY: "${EXPLORER_API_KEY:-}" }
     depends_on: { kernel: { condition: service_healthy } }
     networks: [control]

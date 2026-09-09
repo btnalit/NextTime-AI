@@ -21,6 +21,23 @@ Explorer 是第三方开源的 Knowledge Explorer 静态前端（`semantica-agi/
 3. 构建 Explorer 静态包需要 `node`/`npm`（仅在运行 `explorer/build.sh` 的主机或
    `deploy/caddy/Dockerfile` 构建阶段里需要，不进 caddy 运行时镜像本身）。
 
+## 信任边界（先读，再决定要不要开）
+
+`EXPLORER_API_KEY` 的工作方式是 **caddy 给每一个到达九个 Explorer 端点的请求注入同一把
+`X-API-Key`**（Explorer 静态包原样使用，不会自己带用户凭证）。后果：**任何能在网络上到达 caddy
+`:8443` 的人，不用登录就能以这个 Principal 的身份读整个工作区的图、决策与血缘**，审计记录也只会
+归到这个 Principal，而不是真正看图的人。这与控制台"每个用户用自己的 API key"的人类通道模型不同，
+是一个**明确的降级**，只在满足以下条件时启用：
+
+- 只在受信网络（LAN / VPN）暴露 `:8443`；公网入口不得开启此项。
+- 为 Explorer 专门创建一个 **`auditor` 角色的 Principal**（只读能力集，`create_principal { role:
+  'auditor', displayName: 'explorer-reader' }`），用它的 key，**不要**复用 owner/operator 的 key；
+  不需要时 `rotate_api_key` / `disable_principal` 即可立刻失效。
+- `.env` 里不设 `EXPLORER_API_KEY`（默认空）时，注入的是空头，端点一律 401——这是安全默认值。
+
+后续方向（S3.5 未做）：让 Explorer 静态包从控制台会话读取当前用户自己的 key（同源
+`sessionStorage`），取消 caddy 注入；届时删掉本节。
+
 ## 步骤
 
 ### 1. 创建 Explorer 专用 Principal 并取得 API key
