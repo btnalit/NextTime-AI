@@ -9,13 +9,15 @@
 本文档只覆盖"服务本身"层面的运维，三份姊妹 runbook 各自覆盖更窄的场景，本文档在相关小节末尾链接过去。
 
 **当前现实与设计文档的差距（先说明，避免误导）**：设计文档 §12 描述的结构化日志固定字段
-（`workspace_id/principal_id/.../duration_ms`）、OpenTelemetry trace、Prometheus 风格指标
-（待批准数、Conflict 数、token 成本……）、`invariant-checks.ts` 定时校验（development-tasks.md
-S3.8，development-tasks.md 的 S3 实施波次表 W1-B 项）**均未实现**——写本文档时 `packages/kernel/src`
-下没有任何模块产出这些指标，`docker compose logs` 看到的是每个服务各自的、未统一格式的 stdout/
-stderr（`kernel` 服务用 Fastify 自带的请求日志，`logger: true`；其余服务多数是零散
-`console.log`/`console.error`）。本文档记录的是**能用的现状**：`docker compose logs`、
-`audit_records` 表、`tasks`/`worker_runs`/`action_requests` 表——不是 §12 描述的目标形态。
+（`workspace_id/principal_id/.../duration_ms`）、OpenTelemetry trace、待批准数/Conflict 数/token
+成本这类业务级 Prometheus 指标**均未实现**——写本文档时 `packages/kernel/src` 下没有任何模块产出
+这些指标，`docker compose logs` 看到的是每个服务各自的、未统一格式的 stdout/stderr（`kernel` 服务
+用 Fastify 自带的请求日志，`logger: true`；其余服务多数是零散 `console.log`/`console.error`）。
+`invariant-checks.ts` 定时校验（development-tasks.md S3.8）**已实现**（`GET /internal/metrics`，
+Prometheus 文本格式——见 `docs/runbooks/host-chaos.md` §5），是当前唯一产出真正 Prometheus 格式
+指标的模块，规模仅限 I1–I16 违反计数，不覆盖上面这几项业务指标。本文档记录的是**能用的现状**：
+`docker compose logs`、`/internal/metrics`、`audit_records` 表、`tasks`/`worker_runs`/
+`action_requests` 表——不是 §12 描述的目标形态。
 
 ## 1. 目的
 
@@ -218,9 +220,10 @@ exporter/collector 接入（`packages/kernel/src` 下没有 `prom-client`/`opent
 | 入口 agent 重启次数 | `docker compose exec -T worker-supervisor node -e "fetch('http://localhost:8081/resident/<principalId>', {headers:{authorization:'Bearer '+require('fs').readFileSync('/run/secrets/internal_token','utf8').trim()}}).then(r=>r.json()).then(b=>console.log(b.restarts))"`（见 `docs/runbooks/host-worker-runtime.md` §9） |
 | Worker 失败率 | `select failure_reason, count(*) from tasks where workspace_id = '<ws>' and status = 'failed' group by failure_reason;`（`failure_reason` 取值见 `docs/runbooks/troubleshoot-task.md`） |
 
-`invariant-checks.ts`（development-tasks.md S3.8，I1–I16 定时校验 → 指标与日志）截至本文档写作时
-**尚未实现**（development-tasks.md 的 S3 实施波次表 W1-B 项）——`packages/kernel/src/substrate/`
-下只有 `invariants.test.ts`（不变量的单元测试断言），没有一个定时运行、产出告警计数的调度器。
+`invariant-checks.ts`（development-tasks.md S3.8，I1–I16 定时校验 → 指标与日志）已实现——
+`packages/kernel/src/substrate/audit/invariant-checks.ts`，随内核进程按 `INVARIANT_CHECK_INTERVAL_MS`
+（默认 10 分钟）定时跑，违反的不变量打结构化 `warn` 日志、`GET /internal/metrics` 暴露当前计数；
+混沌演练脚本（主动杀容器验证 §13 自愈）与这个监控器的运维面见 `docs/runbooks/host-chaos.md`。
 
 ## 8. 验证
 

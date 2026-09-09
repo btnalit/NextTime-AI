@@ -52,6 +52,7 @@
 | [`troubleshoot-task.md`](./troubleshoot-task.md) | 从一次失败/卡住的 Task 出发的诊断流程，含 `failure_reason`/ActionRequest 状态的根因表 |
 | [`accept-s1.md`](./accept-s1.md) | S1 验收脚本 `scripts/accept_s1.sh`：一轮对话、隔离、崩溃恢复、出网代理端到端验证 |
 | [`host-accept-s2.md`](./host-accept-s2.md) | S2 验收脚本 `scripts/accept_s2.sh`：卡片审批全链路、SSH/HTTP/Docker/MCP 四类连接、Worker 结果契约 |
+| [`host-chaos.md`](./host-chaos.md) | 不变量监控（I1–I16 定时校验、`/internal/metrics`）与混沌演练脚本：杀 Worker 容器验证 Task 重试、杀入口容器验证自愈重建 |
 
 两份验收脚本 runbook 既是"怎么跑验收"的操作手册，也是理解"平台在这一层应该长什么样"的参照——
 `troubleshoot-task.md` 的诊断流程大量引用它们记录过的真实命令与已知偏离。
