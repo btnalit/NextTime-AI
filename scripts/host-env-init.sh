@@ -12,7 +12,8 @@
 #
 # Requires: $NEXTTIME_DATA already bootstrapped by scripts/host-bootstrap.sh (task E2) — this
 # script does not create the top-level directory tree, only files inside it plus an ownership
-# fix-up on a few of those directories.
+# fix-up on a few of those directories. One exception: collectors/host-inventory/ (S3.3) is
+# `mkdir -p`'d defensively right before it is chowned — see that step's own comment for why.
 #
 # Scope: writes secrets/{kernel,llm-proxy,gatekeeper-ragflow}.env and
 # config/{llm-providers.yaml,models.json,handle.pub,egress-sources.json} as placeholders/
@@ -20,10 +21,11 @@
 # later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc §7.9 — an
 # empty object is a valid "no sources registered yet" map, not a stub for a later task to
 # overwrite; gatekeeper-ragflow.env's real shape is S2.5's, see below).
-# Then chowns workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/
-# (S3.3) to the non-root uid:gid (backups/ is forced back to root-owned — see its own step), and
-# the platform's containers run as, makes config/ world-readable (it holds no secrets), and
-# chmod -R o+rX's caddy/ (root-owned — chown doesn't help there, see that step's own comment).
+# Then creates collectors/host-inventory/ if missing (S3.3) and chowns workspaces/ artifacts/
+# gatekeepers/{docker,ragflow}/ collectors/host-inventory/ to the non-root uid:gid (backups/ is
+# forced back to root-owned — see its own step), and the platform's containers run as, makes
+# config/ world-readable (it holds no secrets), and chmod -R o+rX's caddy/ (root-owned — chown
+# doesn't help there, see that step's own comment).
 # Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
 
 set -eu
@@ -210,13 +212,26 @@ else
 	SKIPPED="$SKIPPED config/egress-sources.json"
 fi
 
+# --- collectors/host-inventory/: S3.3's directory, created here defensively -------------------
+# docker-compose.yml bind-mounts ${NEXTTIME_DATA}/collectors/host-inventory as collector-host-
+# inventory's own /data/state (docker-compose.yml). scripts/host-bootstrap.sh (E2) also creates it
+# today, but a host whose directory tree was bootstrapped before S3.3 added this line to that
+# script never got it — found on the host as an EACCES on /data/state (Compose auto-creates a
+# *root-owned* directory for a missing bind-mount source, which the non-root `nexttime` container
+# user then cannot write into), fixed by hand until now. `mkdir -p` is idempotent — a no-op on a
+# host where it already exists (freshly bootstrapped, or a second run of this script).
+mkdir -p "$NEXTTIME_DATA/collectors/host-inventory"
+
 # --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/ ---
 # must be usable by the platform's non-root containers (uid:gid 10001:10001 — gatekeepers/*/
 # Dockerfile and collectors/host-inventory/Dockerfile all create the same `nexttime` uid:gid as
 # every other @nexttime/* image, S2.5/S3.3). pgdata/ (the postgres image manages its own
 # ownership) and secrets/ (root-owned, 0700 — compose passes its contents via env_file / Docker
 # secrets, not a bind-mounted directory read by a container process) are left untouched, per task
-# scope. `caddy/` is deliberately NOT in this loop — see its own step below.
+# scope. `caddy/` is deliberately NOT in this loop — see its own step below. workspaces/artifacts/
+# gatekeepers/{docker,ragflow} are not `mkdir -p`'d here (unlike collectors/host-inventory just
+# above) — scripts/host-bootstrap.sh (E2) has created all four of those since before this script
+# existed, with no equivalent drift ever reported for them.
 for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow collectors/host-inventory; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
