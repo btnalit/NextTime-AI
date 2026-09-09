@@ -4,7 +4,8 @@ import { expect, test } from '@playwright/test';
  * e2e/approvals.spec.ts: the S2.10 acceptance flow (docs/development-tasks.md S2.10: "卡片出现 →
  * 批准 → 状态更新 → 对话里出现更新；用户 B 的界面看不到 A 的卡片；把 B 授予该动作范围后，卡片出现在 B
  * 自己的对话与队列里并可批准，A 的对话里只显示状态"). Opt-in only, same convention as
- * `e2e/chat.spec.ts` — `pnpm --filter @nexttime/web e2e`, never `pnpm test`/CI.
+ * `e2e/chat.spec.ts` — `pnpm --filter @nexttime/web e2e`, never `pnpm test`/CI's `quality`/`test`
+ * jobs.
  *
  * Unlike chat.spec.ts, this suite needs a *pending ActionRequest* already sitting in the database
  * before it runs — S2.10 owns `packages/web` only, not a capability that can conjure one from a
@@ -14,6 +15,13 @@ import { expect, test } from '@playwright/test';
  * this file also hardcodes (`E2E_APPROVE_SCOPE` / `E2E_ISOLATION_SCOPE`) so each test can find its
  * own row unambiguously even if a previous run's (now-decided) rows are still present.
  *
+ * `WEB_E2E_SEED_ACTION_REQUESTS=1` gates both scenarios below, in addition to their own API-key
+ * checks — `.github/workflows/e2e.yml` never sets it: the CI stack it brings up has no seeded
+ * ActionRequest rows and no second principal, so both scenarios stay skipped there. CI's own
+ * lighter "queue renders, empty state is fine" smoke check lives in `e2e/governance.spec.ts`
+ * instead. Set this locally once you have run the `psql` seed block(s) below (and, for the
+ * isolation scenario, created a second principal).
+ *
  * Requires: `WEB_E2E_BASE_URL`, `WEB_E2E_API_KEY` (workspace owner — `grant_capability` is
  * `minRole:'owner'`), `WEB_E2E_API_KEY_B` (a second principal, role `operator` — `list_pending`/
  * `approve` are `minRole:'operator'`), and a kernel started `AGENT_RUNTIME=fake` (unused by this
@@ -22,6 +30,7 @@ import { expect, test } from '@playwright/test';
 
 const API_KEY = process.env.WEB_E2E_API_KEY;
 const API_KEY_B = process.env.WEB_E2E_API_KEY_B;
+const SEED_ACTION_REQUESTS = process.env.WEB_E2E_SEED_ACTION_REQUESTS === '1';
 
 /** Must match the `resource_scope` the README's seed commands are given for each scenario. */
 const E2E_APPROVE_SCOPE = 'e2e-approve-flow';
@@ -32,7 +41,14 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   await page.goto('/');
   await page.getByPlaceholder('sk-...').fill(apiKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/#\/chats$/, { timeout: 15_000 });
+  // Not a URL/hash assertion: a bare `/` load has no `location.hash` at all, and
+  // `lib/router.ts`'s `routeFromHash('')` resolves straight to the default `chats` route without
+  // ever calling `navigate()` (only a stray `#/login` hash triggers App.tsx's own redirect
+  // effect) — so the URL stays hash-less through and after login (verified against a live kernel
+  // via `.github/workflows/e2e.yml`; this suite's own stale `#/chats` assertion here predated
+  // that and was never actually run). The signed-in shell (Sidebar's connection indicator) is the
+  // reliable "we're past the login screen" signal instead.
+  await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
 }
 
 /** Locates the inline chat card (or status-only line) whose scope text contains `marker` —
@@ -56,8 +72,8 @@ async function openQueueRow(page: import('@playwright/test').Page, marker: strin
 
 test.describe('S2.10 acceptance: approval card -> approve -> status update', () => {
   test.skip(
-    !API_KEY,
-    'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY, and seed a pending ActionRequest (see README.md) to run this suite',
+    !API_KEY || !SEED_ACTION_REQUESTS,
+    'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY, seed a pending ActionRequest (see README.md), and set WEB_E2E_SEED_ACTION_REQUESTS=1 to run this suite',
   );
 
   test('card appears in the approval queue, approving it there updates the chat card in place and adds a status line', async ({
@@ -68,7 +84,7 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
 
     // --- approval queue: the seeded request is a row; selecting it opens the drawer with
     //     Approve / Reject / "Always allow" ---
-    await page.goto('/#/approvals');
+    await page.goto('/#/work/approvals');
     await expect(queueRowByMarker(page, E2E_APPROVE_SCOPE)).toBeVisible({ timeout: 15_000 });
     const drawer = await openQueueRow(page, E2E_APPROVE_SCOPE);
     await expect(drawer.getByRole('button', { name: 'Approve' })).toBeVisible();
@@ -85,7 +101,7 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     //     shows the *original* system.action_pending card with its buttons now gone (live
     //     `action.updated` push updating it in place, ChatPage.tsx `actionStatusOverrides`) and a
     //     new compact system.action_update status line ---
-    await page.goto('/#/chats');
+    await page.goto('/#/work/chats');
     await page.locator('.chat-list-item').first().click();
     const chatCard = cardByMarker(page, E2E_APPROVE_SCOPE);
     await expect(chatCard).toBeVisible({ timeout: 15_000 });
@@ -105,8 +121,8 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
 
 test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act on A’s card until granted', () => {
   test.skip(
-    !API_KEY || !API_KEY_B,
-    'set WEB_E2E_API_KEY and WEB_E2E_API_KEY_B, and seed a second pending ActionRequest (see README.md) to run this suite',
+    !API_KEY || !API_KEY_B || !SEED_ACTION_REQUESTS,
+    'set WEB_E2E_API_KEY and WEB_E2E_API_KEY_B, seed a second pending ActionRequest (see README.md), and set WEB_E2E_SEED_ACTION_REQUESTS=1 to run this suite',
   );
 
   test("B's queue is empty for A's ActionRequest until grant_capability, then B can approve it", async ({
@@ -118,14 +134,14 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
 
     // --- A sees the row (isHolder: true — A is on_behalf_of and the sole initial holder) ---
     await login(page, apiKeyA);
-    await page.goto('/#/approvals');
+    await page.goto('/#/work/approvals');
     await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toBeVisible({ timeout: 15_000 });
 
     // --- B does not: neither the queue nor B's chat mentions this ActionRequest at all (§8.5 —
     //     an unrelated principal is not even in the requester/holder target set). Wait for the
     //     queue to settle (empty state or a list) before asserting absence. ---
     await login(page, apiKeyB);
-    await page.goto('/#/approvals');
+    await page.goto('/#/work/approvals');
     await expect(
       page.getByTestId('approvals-empty').or(page.getByTestId('approvals-list')),
     ).toBeVisible({ timeout: 15_000 });
@@ -152,7 +168,7 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
 
     // --- B's queue now shows it, and B can approve; the card leaves B's queue once decided (same
     //     reasoning as the first test above — `list_pending` only lists `pending_approval` rows) ---
-    await page.goto('/#/approvals');
+    await page.goto('/#/work/approvals');
     await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toBeVisible({ timeout: 15_000 });
     const drawerForB = await openQueueRow(page, E2E_ISOLATION_SCOPE);
     await drawerForB.getByRole('button', { name: 'Approve' }).click();
@@ -162,7 +178,7 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     // --- A's chat shows only the status update, never Approve/Reject buttons for a decision B
     //     (not A) made — the original card A saw transitions to decided in place ---
     await login(page, apiKeyA);
-    await page.goto('/#/chats');
+    await page.goto('/#/work/chats');
     await page.locator('.chat-list-item').first().click();
     const chatCardForA = cardByMarker(page, E2E_ISOLATION_SCOPE);
     await expect(chatCardForA).toBeVisible({ timeout: 15_000 });
