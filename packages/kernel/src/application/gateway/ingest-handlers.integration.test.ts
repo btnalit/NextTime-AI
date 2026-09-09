@@ -20,13 +20,16 @@ import type { ResolvedCaller } from './resolve-caller.js';
  *
  * "No duplicate, no Conflict" (S3.2, merged to `main` while this task was in flight) concretely
  * means: exactly one active (non-superseded, non-invalidated) Fact ever exists per edge, and the
- * `conflicts` table gains no row for it — *not* that a repeat submission is a literal no-op write.
- * `SqlGraphStore.assertFact` delegates every same-origin re-assertion to `supersedeFact`
- * unconditionally (it does not compare `properties` first — `substrate/epistemic/conflicts.test.ts`'s
- * own T0.4 case exercises exactly this), so an *identical* second submission still produces a fresh
- * (superseding) Fact row, exactly like a genuinely *changed* one does — this file's own assertions
- * are written against that real, current behavior, not against a stricter "true no-op" this task
- * does not implement itself (`ingest-handlers.ts`'s own module doc comment has the full reasoning).
+ * `conflicts` table gains no row for it. Since the S3.2 followup ("idempotent re-assertion",
+ * docs/development-tasks.md) it also means a *literal* no-op write for an identical resubmission:
+ * `SqlGraphStore.assertFact`'s same-origin branch now compares content first
+ * (`store.ts`'s `factContentEquals`) and only delegates to `supersedeFact` when it actually
+ * differs — an identical second submission returns the *same* Fact row unchanged (`factsAsserted:
+ * 0, factsSuperseded: 0, factsUnchanged: 1`), which is exactly what stops a collector re-running
+ * unchanged observations on a schedule from growing `links` by one row per run forever. A
+ * genuinely *changed* re-assertion (run 3 below) still supersedes exactly as before
+ * (`substrate/epistemic/conflicts.test.ts`'s own T0.4 case exercises the cross-source variant of
+ * this same branch).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -65,6 +68,7 @@ interface SubmitObservationsResult {
   readonly objectsUpserted: number;
   readonly factsAsserted: number;
   readonly factsSuperseded: number;
+  readonly factsUnchanged: number;
   readonly objects: readonly {
     objectType: string;
     identity: Record<string, unknown>;
@@ -245,22 +249,35 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(run1.objectsUpserted).toBe(2);
       expect(run1.factsAsserted).toBe(1);
       expect(run1.factsSuperseded).toBe(0);
+      expect(run1.factsUnchanged).toBe(0);
       expect(run1.objects).toHaveLength(2);
       const hostObjectId = run1.objects.find((o) => o.objectType === 'Host')?.id;
       const containerObjectId = run1.objects.find((o) => o.objectType === 'Container')?.id;
       expect(hostObjectId).toBeTruthy();
       expect(containerObjectId).toBeTruthy();
 
-      // --- Run 2: identical resubmission — same origin (same Source) re-assertion always
-      // delegates to supersede in the current SqlGraphStore (see this file's own module doc
-      // comment) — the acceptance-relevant invariant is "no duplicate Object row, exactly one
-      // active Fact, no Conflict", checked below via direct queries, not "factsAsserted stays 0".
+      const activeFactId = async (): Promise<string | undefined> =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const rows = await client.query<{ id: string }>(
+            `select id from links
+               where workspace_id = $1 and source_object_id = $2 and target_object_id = $3
+                 and link_type = 'runs_on' and superseded_at is null and invalidated_at is null`,
+            [workspaceId, containerObjectId, hostObjectId],
+          );
+          return rows.rows[0]?.id;
+        });
+      const run1FactId = await activeFactId();
+      expect(run1FactId).toBeTruthy();
+
+      // --- Run 2: identical resubmission, same origin (same Source) — the S3.2 followup no-op
+      // path: content-identical, so `assertFact` writes nothing and returns the *same* Fact row.
       const run2 = (await dispatchCapability({ pool }, caller, 'submit_observations', {
         sourceId: source.id,
         observations: observationsWithPort(8080),
       })) as SubmitObservationsResult;
       expect(run2.factsAsserted).toBe(0);
-      expect(run2.factsSuperseded).toBe(1);
+      expect(run2.factsSuperseded).toBe(0);
+      expect(run2.factsUnchanged).toBe(1);
       expect(run2.objects.find((o) => o.objectType === 'Host')?.id).toBe(hostObjectId);
       expect(run2.objects.find((o) => o.objectType === 'Container')?.id).toBe(containerObjectId);
 
@@ -277,7 +294,8 @@ describe.runIf(DATABASE_URL !== undefined)(
                and link_type = 'runs_on' and superseded_at is null and invalidated_at is null`,
           [workspaceId, containerObjectId, hostObjectId],
         );
-        expect(activeFacts.rows).toHaveLength(1); // exactly one active Fact.
+        expect(activeFacts.rows).toHaveLength(1); // still exactly one active Fact.
+        expect(activeFacts.rows[0]?.id).toBe(run1FactId); // the *same* row — no supersede happened.
         expect(activeFacts.rows[0]?.properties).toEqual({ port: 8080 });
 
         const conflicts = await client.query(
@@ -286,15 +304,24 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, hostObjectId],
         );
         expect(conflicts.rows[0]?.count).toBe(0); // no Conflict.
+
+        // No FactAsserted outbox row for the no-op — run 1's real insert produced exactly one.
+        const outboxRows = await client.query(
+          `select count(*)::int as count from outbox
+             where workspace_id = $1 and event_type = 'FactAsserted' and payload->>'factId' = $2`,
+          [workspaceId, run1FactId],
+        );
+        expect(outboxRows.rows[0]?.count).toBe(1);
       });
 
-      // --- Run 3: changed port → old (run 2's) Fact superseded, new value visible.
+      // --- Run 3: changed port → old (run 1/2's) Fact superseded, new value visible.
       const run3 = (await dispatchCapability({ pool }, caller, 'submit_observations', {
         sourceId: source.id,
         observations: observationsWithPort(9090),
       })) as SubmitObservationsResult;
       expect(run3.factsAsserted).toBe(0);
       expect(run3.factsSuperseded).toBe(1);
+      expect(run3.factsUnchanged).toBe(0);
 
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
         const activeFacts = await client.query(
@@ -304,6 +331,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, containerObjectId, hostObjectId],
         );
         expect(activeFacts.rows).toHaveLength(1); // still exactly one active Fact.
+        expect(activeFacts.rows[0]?.id).not.toBe(run1FactId); // a genuine new row this time.
         expect(activeFacts.rows[0]?.properties).toEqual({ port: 9090 }); // the new value.
       });
     });

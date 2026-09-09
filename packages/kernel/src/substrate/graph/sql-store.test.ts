@@ -345,6 +345,100 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
     });
   });
 
+  describe('assertFact — S3.2 followup: idempotent re-assertion (docs/development-tasks.md)', () => {
+    it('same-origin re-assertion with identical content (properties in a different key order) is a no-op: no new links/outbox row, returns the unchanged Fact', async () => {
+      const beforeLinks = await countRows('links');
+      const beforeOutbox = await countRows('outbox');
+
+      const { first, second } = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const activity1 = await makeActivity(client);
+        const first = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity1.id,
+          properties: { port: 80, tags: ['x', 'y'] },
+        });
+        const activity2 = await makeActivity(client);
+        const second = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity2.id,
+          properties: { tags: ['x', 'y'], port: 80 }, // same content, reordered keys
+        });
+        return { first, second };
+      });
+
+      expect(first.unchanged).toBeUndefined();
+      expect(second.unchanged).toBe(true);
+      expect(second.id).toBe(first.id); // the same row — nothing new was written.
+      expect(second.supersedesId).toBeNull(); // still the original, never-superseded Fact.
+
+      expect(await countRows('links')).toBe(beforeLinks + 1); // only run 1's insert.
+      expect(await countRows('outbox')).toBe(beforeOutbox + 1); // only run 1's FactAsserted.
+    });
+
+    it('same-origin re-assertion with changed properties still supersedes (unchanged behavior)', async () => {
+      const { first, second } = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const activity1 = await makeActivity(client);
+        const first = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity1.id,
+          properties: { port: 80 },
+        });
+        const activity2 = await makeActivity(client);
+        const second = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity2.id,
+          properties: { port: 8080 },
+        });
+        return { first, second };
+      });
+
+      expect(second.unchanged).toBeUndefined();
+      expect(second.supersedesId).toBe(first.id);
+      expect(second.id).not.toBe(first.id);
+    });
+
+    it('same-origin re-assertion of a Fact with a non-null validUntil never takes the no-op path (falls through to supersede)', async () => {
+      const { first, second } = await inTx(async (client) => {
+        const a = await makeObject(client, 'A');
+        const b = await makeObject(client, 'B');
+        const activity1 = await makeActivity(client);
+        const first = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity1.id,
+          properties: { port: 80 },
+          validUntil: new Date('2999-01-01T00:00:00Z'),
+        });
+        const activity2 = await makeActivity(client);
+        const second = await store.assertFact(client, workspaceId, humanCaller(), {
+          linkType: 'test.rel',
+          sourceObjectId: a.id,
+          targetObjectId: b.id,
+          activityId: activity2.id,
+          properties: { port: 80 },
+          validUntil: new Date('2999-01-01T00:00:00Z'),
+        });
+        return { first, second };
+      });
+
+      expect(second.unchanged).toBeUndefined();
+      expect(second.supersedesId).toBe(first.id);
+    });
+  });
+
   describe('supersedeFact / stateAt — bitemporal read across a supersede (§5.5, §9.3)', () => {
     it('state_at(t0) still returns the old Fact after a later supersede', async () => {
       const { a, fact1 } = await inTx(async (client) => {

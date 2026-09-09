@@ -10234,6 +10234,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "factsUnchanged": {
+          "minimum": 0,
+          "type": "integer"
+        },
         "objects": {
           "items": {
             "additionalProperties": false,
@@ -10268,6 +10272,7 @@
         "objectsUpserted",
         "factsAsserted",
         "factsSuperseded",
+        "factsUnchanged",
         "objects"
       ],
       "type": "object"

@@ -280,6 +280,13 @@ interface SubmitObservationsState {
   objectsUpserted: number;
   factsAsserted: number;
   factsSuperseded: number;
+  /** S3.2 followup ("idempotent re-assertion", docs/development-tasks.md): a Link whose
+   *  `assertFact` call resolved to the store's own no-op path (`fact.unchanged === true`) — a
+   *  same-origin re-assertion whose content exactly matched the currently-active Fact, so nothing
+   *  was written. Counted separately from `factsSuperseded` so a collector re-submitting an
+   *  unchanged inventory sees `factsSuperseded: 0` on its second run, not a number that grows
+   *  `links` forever. */
+  factsUnchanged: number;
   /** One entry per distinct `(objectType, identity)` touched — surfaced back to the caller as
    *  `objects` (`SubmitObservationsResultWireSchema`'s own doc comment,
    *  `packages/shared/src/wire/ingest.ts`, explains why: a dependency-ordered multi-phase
@@ -324,12 +331,12 @@ async function upsertCounted(
 /**
  * Writes one Link purely through `GraphStore.assertFact` (this file's own module doc comment: "the
  * seam" — no pre-check, no dedup, no origin comparison here). `assertFact`'s own returned Fact
- * tells this handler which of the two things happened: `supersedesId === null` is a fresh assert
- * (a genuinely new edge, or the first time this collector observed it); a non-null `supersedesId`
- * means the store itself found a prior active Fact on this identity, resolved this submission's
- * origin as the same as that prior Fact's, and delegated to `supersedeFact` — whether or not the
- * `properties` actually differ (the store does not compare values before delegating; see this
- * file's module doc comment for why that is still correct for this handler's acceptance criteria).
+ * tells this handler which of three things happened: `fact.unchanged === true` is the S3.2 followup
+ * no-op (a same-origin re-assertion whose content exactly matched the currently-active Fact — the
+ * store wrote nothing); otherwise `supersedesId === null` is a fresh assert (a genuinely new edge,
+ * or the first time this collector observed it), and a non-null `supersedesId` means the store
+ * found a prior active Fact on this identity, resolved this submission's origin as the same as that
+ * prior Fact's, and its content actually differed, so it delegated to `supersedeFact`.
  */
 async function writeLink(
   client: PoolClient,
@@ -354,7 +361,9 @@ async function writeLink(
       properties,
     },
   );
-  if (fact.supersedesId) {
+  if (fact.unchanged) {
+    state.factsUnchanged += 1;
+  } else if (fact.supersedesId) {
     state.factsSuperseded += 1;
   } else {
     state.factsAsserted += 1;
@@ -400,6 +409,7 @@ export const submitObservationsHandler: CapabilityHandler = async (
     objectsUpserted: 0,
     factsAsserted: 0,
     factsSuperseded: 0,
+    factsUnchanged: 0,
     touchedObjects: new Map(),
   };
 
@@ -456,6 +466,7 @@ export const submitObservationsHandler: CapabilityHandler = async (
       objectsUpserted: state.objectsUpserted,
       factsAsserted: state.factsAsserted,
       factsSuperseded: state.factsSuperseded,
+      factsUnchanged: state.factsUnchanged,
       objects: [...state.touchedObjects.values()],
     },
     resourceType: 'activity',
