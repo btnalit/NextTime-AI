@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { ConflictStatus, ConflictType } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 
@@ -154,6 +155,17 @@ export class ConflictNotFoundError extends Error {
  * origins (I5). `activityId` is the *new* Fact's own Activity — the one whose assertion discovered
  * the disagreement (migrations/core/0017's own column comment). Called from
  * `SqlGraphStore.assertFact` only — never from the `resolve_conflict` write path.
+ *
+ * **No `RETURNING`, deliberately** (regression found by CI, not by local testing — this sandbox
+ * has no Postgres): PostgreSQL's RLS checks a `RETURNING` clause's output against the table's
+ * `USING`-bearing (SELECT-equivalent) policy too, not only `WITH CHECK` — a documented behavior
+ * distinct from an ordinary `WITH CHECK` failure, and it raises the *same* "new row violates
+ * row-level security policy" error rather than silently omitting the row. `conflicts_visibility`'s
+ * `using` clause is `conflict_visible_to_caller`, which is false for exactly the caller this
+ * function is most often invoked by — I5's whole premise is that the inserting principal is
+ * frequently *not* someone who can see the other side's private Fact, so `INSERT ... RETURNING`
+ * would fail here on every such call. The id and `opened_at` are generated in this function
+ * instead of read back, and the returned `ConflictRow` is assembled from already-known inputs.
  */
 export async function openConflict(
   client: PoolClient,
@@ -165,15 +177,28 @@ export async function openConflict(
     readonly conflictType?: ConflictType;
   },
 ): Promise<ConflictRow> {
-  const result = await client.query<ConflictDbRow>(
-    `insert into conflicts (workspace_id, conflict_type, status, link_a_id, link_b_id, activity_id)
-     values ($1, $2, 'open', $3, $4, $5)
-     returning ${CONFLICT_COLUMNS}`,
-    [workspaceId, input.conflictType ?? 'value', input.factAId, input.factBId, input.activityId],
+  const id = randomUUID();
+  const conflictType = input.conflictType ?? 'value';
+  const openedAt = new Date();
+  await client.query(
+    `insert into conflicts (workspace_id, id, conflict_type, status, link_a_id, link_b_id, activity_id, opened_at)
+     values ($1, $2, $3, 'open', $4, $5, $6, $7)`,
+    [workspaceId, id, conflictType, input.factAId, input.factBId, input.activityId, openedAt],
   );
-  const row = result.rows[0];
-  if (row === undefined) throw new Error('openConflict: INSERT ... RETURNING produced no row');
-  return mapConflictRow(row);
+  return {
+    workspaceId,
+    id,
+    conflictType,
+    status: 'open',
+    factAId: input.factAId,
+    factBId: input.factBId,
+    description: null,
+    activityId: input.activityId,
+    openedAt,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolution: null,
+  };
 }
 
 /** `list_conflicts`: RLS (`conflicts_visibility`, migrations/core/0017) already restricts rows to
@@ -260,12 +285,21 @@ export async function getConflictForUpdate(
   return mapConflictRow(row);
 }
 
-/** `resolve_conflict`'s row update — the Fact-lifecycle side (invalidating the losing Fact(s) via
- *  `GraphStore.invalidateFact`) and the Decision record are the caller's job
- *  (`application/gateway/epistemic-handlers.ts`'s `resolveConflictHandler` — the one place in this
- *  codebase that legitimately coordinates `substrate/graph` and `substrate/epistemic` together,
- *  same shape as `application/task/result.ts`'s `postWorkerResult`); this function only ever
- *  touches `conflicts` itself, matching `openConflict`/`listConflicts` above. */
+/**
+ * `resolve_conflict`'s row update — the Fact-lifecycle side (invalidating the losing Fact(s) via
+ * `GraphStore.invalidateFact`) and the Decision record are the caller's job
+ * (`application/gateway/epistemic-handlers.ts`'s `resolveConflictHandler` — the one place in this
+ * codebase that legitimately coordinates `substrate/graph` and `substrate/epistemic` together,
+ * same shape as `application/task/result.ts`'s `postWorkerResult`); this function only ever
+ * touches `conflicts` itself, matching `openConflict`/`listConflicts` above.
+ *
+ * `RETURNING` here is safe (unlike `openConflict`'s own — see that function's comment on the RLS/
+ * RETURNING interaction): this UPDATE never touches `link_a_id`/`link_b_id`, the only columns
+ * `conflicts_visibility`'s `using` clause depends on, so the row's visibility to the caller is
+ * identical before and after — and the caller already proved they can see it, by construction,
+ * since `resolveConflictHandler` only reaches this call after `getConflictForUpdate` (itself
+ * `using`-gated) already found the row.
+ */
 export async function markConflictResolved(
   client: PoolClient,
   workspaceId: string,
