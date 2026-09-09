@@ -1532,7 +1532,9 @@ const workerCapabilities: readonly Capability[] = [
  *  observes structural facts by identity, never by an already-known graph id (that would require
  *  the collector to have looked the target object up first, defeating the point of upsert-by-
  *  identity). */
-const ingestLinkTargetSchema = z.object({ objectType: z.string().min(1), identity: jsonRecord }).strict();
+const ingestLinkTargetSchema = z
+  .object({ objectType: z.string().min(1), identity: jsonRecord })
+  .strict();
 const ingestLinkSchema = z
   .object({
     linkType: z.string().min(1),

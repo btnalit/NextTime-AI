@@ -20,8 +20,8 @@
 # later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc §7.9 — an
 # empty object is a valid "no sources registered yet" map, not a stub for a later task to
 # overwrite; gatekeeper-ragflow.env's real shape is S2.5's, see below).
-# Then chowns workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ to the non-root uid:gid (backups/
-# is forced back to root-owned — see its own step), and
+# Then chowns workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/
+# (S3.3) to the non-root uid:gid (backups/ is forced back to root-owned — see its own step), and
 # the platform's containers run as, makes config/ world-readable (it holds no secrets), and
 # chmod -R o+rX's caddy/ (root-owned — chown doesn't help there, see that step's own comment).
 # Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
@@ -210,13 +210,14 @@ else
 	SKIPPED="$SKIPPED config/egress-sources.json"
 fi
 
-# --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ must be usable by the -------
-# platform's non-root containers (uid:gid 10001:10001 — both gatekeepers/*/Dockerfile create
-# the same `nexttime` uid:gid as every other @nexttime/* image, S2.5). pgdata/ (the postgres image
-# manages its own ownership) and secrets/ (root-owned, 0700 — compose passes its contents via
-# env_file / Docker secrets, not a bind-mounted directory read by a container process) are left
-# untouched, per task scope. `caddy/` is deliberately NOT in this loop — see its own step below.
-for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow; do
+# --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/ ---
+# must be usable by the platform's non-root containers (uid:gid 10001:10001 — gatekeepers/*/
+# Dockerfile and collectors/host-inventory/Dockerfile all create the same `nexttime` uid:gid as
+# every other @nexttime/* image, S2.5/S3.3). pgdata/ (the postgres image manages its own
+# ownership) and secrets/ (root-owned, 0700 — compose passes its contents via env_file / Docker
+# secrets, not a bind-mounted directory read by a container process) are left untouched, per task
+# scope. `caddy/` is deliberately NOT in this loop — see its own step below.
+for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow collectors/host-inventory; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
 
