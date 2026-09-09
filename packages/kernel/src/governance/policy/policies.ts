@@ -91,9 +91,17 @@ export async function listPolicies(
 // this module's own business-level structure, not a generic JSON blob at every layer).
 // -------------------------------------------------------------------------------------------
 
+// S3.7 wire fix (docs/wire-contract-conventions.md §1, 2026-09-08 decision — "不得把裸字符串叫
+// actionKind"; found by this task's own vocabulary guard, scripts/guards/vocabulary.mjs, on its
+// first run): the wire-facing field is `actionKindTag` (a bare action-kind tag string), not
+// `actionKind` — that word is reserved for the ActionDescription `{tag,label}` display object.
+// `SetPolicyInput` below (this module's own internal parameter shape, matches the
+// `policies.action_kind` DB column and every other governance/policy|approval internal type) is
+// deliberately *not* derived from this schema anymore, so this rename does not ripple through
+// this module's own SQL/engine calls.
 export const SetPolicyPayloadSchema = z
   .object({
-    actionKind: z.string().min(1),
+    actionKindTag: z.string().min(1),
     blastRadius: BlastRadiusSchema.optional(),
     autoApprove: z.boolean(),
     requesterCanApprove: z.boolean().optional(),
@@ -124,7 +132,15 @@ export function parseSetPolicyPayload(raw: unknown): SetPolicyPayload {
   return parsed.data;
 }
 
-export interface SetPolicyInput extends SetPolicyPayload {
+/** This module's own internal parameter shape for `setPolicy` — deliberately independent of
+ *  `SetPolicyPayload` above (see that type's own doc comment): `actionKind` here matches the
+ *  `policies.action_kind` DB column, the name every other governance/policy|approval internal
+ *  type already uses for this same value. */
+export interface SetPolicyInput {
+  readonly actionKind: string;
+  readonly blastRadius?: BlastRadius;
+  readonly autoApprove: boolean;
+  readonly requesterCanApprove?: boolean;
   readonly setBy: string;
 }
 

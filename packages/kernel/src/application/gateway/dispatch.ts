@@ -65,6 +65,51 @@ export class CapabilityNotImplementedError extends Error {
   }
 }
 
+/**
+ * S3.7 (docs/wire-contract-conventions.md §5): thrown by `dispatchCapability` when
+ * `KERNEL_VALIDATE_RESULTS=1` is set and a capability's actual result does not match its own
+ * registered `resultSchema` — an internal bug (the handler drifted from the contract its own
+ * registry entry declares), never a caller-input problem, so this is deliberately not shaped like
+ * `InvalidCapabilityParamsError`; `interfaces/http`/`interfaces/ws` fall through to their generic
+ * 500/INTERNAL_ERROR mapping for it, same as any other unmapped internal `Error`.
+ */
+export class CapabilityResultValidationError extends Error {
+  readonly issues: unknown;
+  constructor(name: string, issues: unknown) {
+    super(
+      `capability "${name}" returned a result that does not match its own resultSchema (KERNEL_VALIDATE_RESULTS=1) — this is an internal contract bug, not a caller error`,
+    );
+    this.name = 'CapabilityResultValidationError';
+    this.issues = issues;
+  }
+}
+
+/**
+ * Env var gating `dispatchCapability`'s own result-shape self-check (docs/wire-contract-
+ * conventions.md §5, S3.7 "为每个 capability 增加 resultSchema... 结果校验只在测试/CI 跑，不进生产").
+ * Unset in production (default): zero runtime cost, zero behavior change — every capability
+ * result is returned exactly as the handler produced it, same as before this flag existed. Set to
+ * `'1'` in `vitest.base.ts` (kernel unit + integration tests) and in CI's `quality` job, so every
+ * existing test exercises every dispatched capability's own contract for free. Read fresh on every
+ * call (not cached at module load) so a test can toggle it per-case.
+ */
+const RESULT_VALIDATION_ENV_VAR = 'KERNEL_VALIDATE_RESULTS';
+
+/** Exported for a narrow unit test (dispatch.test.ts) that does not want to depend on vitest.base
+ *  .ts's own global env wiring to prove the flag itself works. */
+export function isResultValidationEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[RESULT_VALIDATION_ENV_VAR] === '1';
+}
+
+function validateResultAgainstSchema(capability: Capability, name: string, result: unknown): void {
+  if (!isResultValidationEnabled()) return;
+  if (!capability.resultSchema) return;
+  const parsed = capability.resultSchema.safeParse(result);
+  if (!parsed.success) {
+    throw new CapabilityResultValidationError(name, parsed.error.issues);
+  }
+}
+
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -126,8 +171,9 @@ function redactAuditParams(
 
 /**
  * Dispatches one capability call. Throws `CapabilityNotFoundError` (404), `ForbiddenError` (403,
- * authorize.ts), `InvalidCapabilityParamsError` (400), or `CapabilityNotImplementedError` (501);
- * resolves with the handler's `result` on success.
+ * authorize.ts), `InvalidCapabilityParamsError` (400), `CapabilityNotImplementedError` (501), or —
+ * only when `KERNEL_VALIDATE_RESULTS=1` — `CapabilityResultValidationError`; resolves with the
+ * handler's `result` on success.
  */
 export async function dispatchCapability(
   deps: DispatchDeps,
@@ -195,8 +241,9 @@ export async function dispatchCapability(
     },
   );
 
-  if (handlerResult.afterCommit) {
-    return handlerResult.afterCommit(deps.pool);
-  }
-  return handlerResult.result;
+  const finalResult = handlerResult.afterCommit
+    ? await handlerResult.afterCommit(deps.pool)
+    : handlerResult.result;
+  validateResultAgainstSchema(capability, name, finalResult);
+  return finalResult;
 }

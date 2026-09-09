@@ -12,7 +12,9 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "depcruise": "depcruise --config .dependency-cruiser.cjs --output-type err packages/*/src",
-    "ci:guards": "sh scripts/check-kernel-purity.sh && sh scripts/check-pi-version-consistency.sh && sh scripts/check-membership-capabilities-not-in-handle-scope.sh && sh -c \"! git ls-files -s 'scripts/*.sh' | grep -qv '^100755 ' && ! grep -Uql \\\"$(printf '\\r')\\\" scripts/*.sh\""
+    "ci:guards": "sh scripts/check-kernel-purity.sh && sh scripts/check-pi-version-consistency.sh && sh scripts/check-membership-capabilities-not-in-handle-scope.sh && node scripts/guards/vocabulary.mjs && sh -c \"! git ls-files -s 'scripts/*.sh' | grep -qv '^100755 ' && ! grep -Uql \\\"$(printf '\\r')\\\" scripts/*.sh\"",
+    "contract:snapshot": "pnpm --filter @nexttime/shared build && node scripts/contract-snapshot.mjs",
+    "contract:check": "pnpm --filter @nexttime/shared build && node scripts/contract-snapshot.mjs --check"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
@@ -20,6 +22,8 @@
     "dependency-cruiser": "^16.10.0",
     "typescript": "^5.8.2",
     "vitest": "^2.1.8",
-    "yaml": "^2.7.0"
+    "yaml": "^2.7.0",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "3.24.1"
   }
 }

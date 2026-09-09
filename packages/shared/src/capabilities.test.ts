@@ -161,6 +161,19 @@ describe('CAPABILITY_REGISTRY', () => {
     }
   });
 
+  // docs/wire-contract-conventions.md §5 / S3.7: every capability carries a resultSchema now
+  // (previously only `get_operation_stats`) — a working Zod schema, not necessarily precise for
+  // an unimplemented capability (see capabilities.ts's own module doc comment on placeholders).
+  it('gives every capability a working Zod resultSchema', () => {
+    for (const capability of CAPABILITY_REGISTRY) {
+      expect(
+        capability.resultSchema,
+        `expected "${capability.name}" to carry a resultSchema`,
+      ).toBeDefined();
+      expect(typeof capability.resultSchema?.safeParse).toBe('function');
+    }
+  });
+
   // docs/wire-contract-conventions.md §1 vocabulary table / §5 "词表守卫" (2026-09-08 decision):
   // `mode: 'propose'` is reserved for a name that starts with `propose_` or `request_` (plus the
   // one named exception, `propose_ontology_change`, which already matches the `propose_` prefix) —

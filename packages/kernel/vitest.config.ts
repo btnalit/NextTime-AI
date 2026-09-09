@@ -13,6 +13,15 @@ import { baseConfig } from '../../vitest.base.ts';
 export default mergeConfig(
   baseConfig,
   defineConfig({
-    test: { fileParallelism: process.env.DATABASE_URL === undefined },
+    test: {
+      fileParallelism: process.env.DATABASE_URL === undefined,
+      // S3.7 (docs/wire-contract-conventions.md §5): `dispatchCapability`'s own resultSchema
+      // self-check is opt-in via this env var (unset in production — zero cost, zero behavior
+      // change, dispatch.ts's own module doc comment). Set here so every kernel unit *and*
+      // integration test exercises every capability it dispatches against its own registered
+      // contract "for free" — CI's `quality` job sets the same var for the same reason
+      // (docs/development-tasks.md S3.7).
+      env: { KERNEL_VALIDATE_RESULTS: '1' },
+    },
   }),
 );

@@ -239,11 +239,12 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
         });
         let facts: readonly unknown[] = [];
         try {
-          const searchResult = await options.kernelClient.call<{ objects?: unknown[] } | unknown[]>(
-            'search',
-            { query: toSearchQuery(task.input) },
-          );
-          facts = Array.isArray(searchResult) ? searchResult : (searchResult.objects ?? []);
+          // S3.7 wire fix (docs/wire-contract-conventions.md §3): `search` now returns
+          // `{items}`, same envelope every list-shaped capability uses (was a bare array).
+          const searchResult = await options.kernelClient.call<{ items?: unknown[] }>('search', {
+            query: toSearchQuery(task.input),
+          });
+          facts = searchResult.items ?? [];
         } catch (error) {
           logKernelError(error, 'search');
         }

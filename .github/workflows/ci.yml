@@ -51,6 +51,15 @@ jobs:
       - name: Dependency graph purity (dependency-cruiser)
         run: pnpm depcruise
 
+      - name: Contract snapshot drift (S3.7, docs/wire-contract-conventions.md §4)
+        run: pnpm contract:check
+
+      - name: Vocabulary guard detector unit tests (S3.7)
+        run: node --test scripts/guards/vocabulary.test.mjs
+
+      - name: Vocabulary guard (S3.7, docs/wire-contract-conventions.md §5)
+        run: node scripts/guards/vocabulary.mjs
+
   test:
     name: test
     runs-on: ubuntu-latest
@@ -70,6 +79,10 @@ jobs:
           --health-retries=5
     env:
       DATABASE_URL: postgres://nexttime:nexttime@localhost:5432/nexttime_test
+      # S3.7 (docs/wire-contract-conventions.md §5): belt-and-suspenders alongside
+      # packages/kernel/vitest.config.ts's own `test.env` — dispatchCapability's resultSchema
+      # self-check stays opt-in (unset in production, dispatch.ts's own module doc comment).
+      KERNEL_VALIDATE_RESULTS: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
