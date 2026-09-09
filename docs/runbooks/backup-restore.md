@@ -88,6 +88,40 @@ docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE "
 中始终可达。`--files` 恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `workspaces/
 config/`。
 
+## 验证（自动化演练：`scripts/drill-restore.sh`）
+
+S3.10 交付物——把上面"恢复演练"一节的手动步骤（找到最新 dump → `scripts/restore.sh --db ...` →
+`\dt` 数数 → `DROP DATABASE`）自动化成一个 PASS/FAIL 分明、可重复跑的脚本，对应
+`docs/development-tasks.md` § S3.10 的验收句"按「从备份恢复」手册在临时环境走一遍成功"：
+
+```bash
+cd <CODE_DIR>
+sh scripts/drill-restore.sh
+```
+
+没有指定 `--db` 时，自动找 `${NEXTTIME_DATA}/backups/db/` 下最新的 dump；一份都没有（全新主机、
+还没跑过备份）会自动先跑一次 `docker compose run --rm -e BACKUP_NOW=1 backup` 补一份出来，不需要
+操作员先手动执行"手动跑一次"那一节。跑的仍是**真实**的 `scripts/restore.sh`（未改动、原样调用），
+恢复目标固定是它自己默认的一次性 `nexttime_restore_<ts>` 库（脚本从不传 `--target-db`，因此永远
+不会碰到活库 `nexttime`），断言恢复出的库里 `select count(*) from information_schema.tables where
+table_schema='public'` 大于 0（证明 dump 不是空的/损坏的，而不只是命令退出码为 0），随后
+`DROP DATABASE` 清理并复查确认已删除。
+
+期望输出（末尾）：
+```
+PASS preflight-services postgres running
+PASS resolve-dump using newest existing dump: ...
+PASS restore restored into nexttime_restore_<ts> from ...
+PASS restore-table-count nexttime_restore_<ts> has <N> table(s) in schema public
+PASS drop-temp-db nexttime_restore_<ts> dropped
+DRILL-RESTORE OK
+```
+任何一步失败都打印 `FAIL <step> <detail>` 到 stderr 并以非零退出——不会把半失败状态误报成成功。
+
+指定某一份具体 dump（例如复现某次故障时的状态）：`sh scripts/drill-restore.sh --db
+${NEXTTIME_DATA}/backups/db/nexttime-<ts>.dump`；想跑完之后手动检查恢复出的库再自己清理，加
+`--keep`（脚本会打印手动 `\dt`/`DROP DATABASE` 的命令）。
+
 ## LVM 提醒
 
 `${NEXTTIME_DATA}/backups/` 落在根 LV（未挂独立卷），空间与 `pgdata/` 共享；`BACKUP_RETENTION`
