@@ -190,14 +190,20 @@ export function buildGetFactForUpdateQuery(workspaceId: string, factId: string):
 /**
  * S3.2 conflict detection (I5, docs/development-tasks.md S3.2): the identity `assertFact` checks
  * before every insert — "the same (source object, link type, target) as an existing non-superseded
- * Fact". `for update` (same convention as `buildGetFactForUpdateQuery`) locks the row for the rest
- * of `assertFact`'s transaction, so two concurrent assertions against the same identity serialize
- * rather than both reading "no prior Fact" and both inserting independently. Only the *most
- * recently recorded* still-active Fact is considered (`order by recorded_at desc limit 1`) — after
- * a Conflict has been opened once, more than one Fact can be simultaneously `recorded` for the same
- * identity (that is the whole point of "keep both"); a third assertion is compared against the
- * latest of those, not exhaustively against every open side (see `conflicts.ts`'s own module
- * comment for why this scope boundary is acceptable for S3.2).
+ * Fact". Calls `find_active_fact_for_identity` (migrations/core/0017 — a `security definer`
+ * function, same escape hatch as `link_visible_to_caller`/0013) rather than a plain `select ...
+ * from links` here: the asserting caller's own `links_visibility` RLS would otherwise hide exactly
+ * the case I5 exists to catch — a prior Fact fed by a private Source the caller does not own (see
+ * that migration's own comment on the function for the full "why a plain SELECT is wrong here"
+ * reasoning). The function's own `for update` (same convention as `buildGetFactForUpdateQuery`)
+ * locks the row for the rest of `assertFact`'s transaction, so two concurrent assertions against
+ * the same identity serialize rather than both reading "no prior Fact" and both inserting
+ * independently. Only the *most recently recorded* still-active Fact is considered (the function's
+ * own `order by recorded_at desc limit 1`) — after a Conflict has been opened once, more than one
+ * Fact can be simultaneously `recorded` for the same identity (that is the whole point of "keep
+ * both"); a third assertion is compared against the latest of those, not exhaustively against
+ * every open side (see `conflicts.ts`'s own module comment for why this scope boundary is
+ * acceptable for S3.2).
  */
 export function buildFindActiveFactByIdentityQuery(
   workspaceId: string,
@@ -208,14 +214,7 @@ export function buildFindActiveFactByIdentityQuery(
   },
 ): SqlQuery {
   return {
-    text: `
-      select ${FACT_COLUMNS} from links
-      where workspace_id = $1 and link_type = $2 and source_object_id = $3 and target_object_id = $4
-        and superseded_at is null and invalidated_at is null
-      order by recorded_at desc
-      limit 1
-      for update
-    `,
+    text: `select ${FACT_COLUMNS} from find_active_fact_for_identity($1, $2, $3, $4)`,
     values: [workspaceId, identity.linkType, identity.sourceObjectId, identity.targetObjectId],
   };
 }

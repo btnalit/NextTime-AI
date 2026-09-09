@@ -53,6 +53,19 @@ export interface FactOrigin {
  * Resolves "who/what is asserting this" for one Fact: the single distinct epistemic Source feeding
  * `activityId` via `observations`, if there is exactly one — otherwise `assertedBy` (the Fact's own
  * `asserted_by` principal). Reads only this module's own tables (`observations`).
+ *
+ * **This read is RLS-scoped to the current caller (deliberately, unlike `queries.ts`'s
+ * `buildFindActiveFactByIdentityQuery`, which bypasses RLS — migrations/core/0017's own comment on
+ * why)**: when `activityId` names an Activity fed by a *private* Source the current caller does not
+ * own, `observations_visibility` hides that row, and this function falls back to the
+ * `{kind:'principal', id: assertedBy}` case even though the true origin is that private Source.
+ * This never flips a same/different verdict, though: a private Source's Observation can only ever
+ * be inserted by that Source's own owner (`observations_visibility`'s `with check`), so the only
+ * way this fallback fires is when the *caller* differs from that owner — and the fallback's id
+ * (`assertedBy`, the *prior* Fact's own asserter) is then compared against the *current* caller's
+ * own freshly-resolved origin, which by construction is never mistaken for someone else's identity.
+ * The comparison in `sameFactOrigin` therefore still lands on "different" in every case where the
+ * true, RLS-unaware comparison would have too.
  */
 export async function resolveFactOrigin(
   client: PoolClient,

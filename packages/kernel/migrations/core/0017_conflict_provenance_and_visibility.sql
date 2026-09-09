@@ -45,6 +45,45 @@ alter table conflicts
   add constraint conflicts_resolved_fields_check
   check (status = 'open' or (resolved_by is not null and resolved_at is not null));
 
+-- Identity lookup bypass (I5's actual detection path, not just Conflict's own visibility below):
+-- `assertFact` (`substrate/graph/sql-store.ts`) must find the prior still-`recorded` Fact for a
+-- given `(link_type, source_object_id, target_object_id)` identity *before* it can decide
+-- same-origin (supersede) vs. different-origin (Conflict) — but a plain `select ... from links`
+-- there runs as `nexttime_app` under `links_visibility` (migrations/core/0010, redefined by 0013),
+-- which hides a Fact fed by a private Source the *asserting* caller does not own. That is exactly
+-- backwards for detection: I5's whole point is to catch a disagreement between two different
+-- observers, so the second observer asserting a conflicting Fact is, structurally, often precisely
+-- the caller `links_visibility` would hide the *first* observer's private Fact from — without this
+-- bypass, `assertFact` simply never finds the prior Fact at all when it is privately owned by
+-- someone else, silently inserts an unrelated duplicate, and no Conflict is ever opened. Same
+-- `security definer` escape hatch as `link_visible_to_caller`/`conflict_visible_to_caller` above,
+-- narrowed the same way: returns only the located row (never more than the one query already
+-- would), `for update` locks it for the rest of `assertFact`'s transaction exactly like the
+-- pre-bypass query did. `returns setof links` (not a bare `links`): a non-`setof` composite-
+-- returning function used in a `FROM` clause still yields exactly one (possibly all-`null`) row
+-- when its body finds none, which `sql-store.ts`'s `priorResult.rows[0] === undefined` check would
+-- misread as "found a row of nulls"; `setof` correctly yields zero rows instead.
+create or replace function find_active_fact_for_identity(
+  p_workspace_id uuid, p_link_type text, p_source_object_id uuid, p_target_object_id uuid
+)
+returns setof links
+language sql security definer
+set search_path = public, pg_temp
+as $$
+  select * from links
+  where workspace_id = p_workspace_id
+    and link_type = p_link_type
+    and source_object_id = p_source_object_id
+    and target_object_id = p_target_object_id
+    and superseded_at is null
+    and invalidated_at is null
+  order by recorded_at desc
+  limit 1
+  for update
+$$;
+
+grant execute on function find_active_fact_for_identity(uuid, text, uuid, uuid) to nexttime_app;
+
 -- Visibility (§5.6, design doc's own "两个死角" rule; this is the S3.2 gap 0002's own comment
 -- flagged): a Conflict is visible to the caller only if *both* Facts it references are — reusing
 -- `link_visible_to_caller` (migrations/core/0013_link_visibility_security_definer.sql) once per
