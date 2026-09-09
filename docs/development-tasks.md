@@ -925,6 +925,100 @@
 ### S3.4 `gatekeeper-ragflow` 与本体 v2
 - 交付物：observe `kb.list / kb.documents / retrieve`；execute `document.upload`（medium）、`document.parse`（low）；`ops-assets-v2.yaml` 增 `KnowledgeBase / Document / Dataset`；采集器扩展经门 observe 写 `observed` Fact。
 - 验收：图里有 `Document part_of KnowledgeBase`；`explain` 到 `ragflow@<gatekeeper>`。依赖：S2.4、S3.3。
+- **已完成（feat/s3-4-ragflow-v2，2026-09-09+）**：
+  - **起点核对**：S2.5 已经交付了 `kb.list`/`kb.documents`/`retrieve`/`document.upload`/
+    `document.parse` 五个 Operation 与 `KnowledgeBase`/`Document` 两个"经门 observe 写"的低保真
+    `result_mapping`（`gatekeepers/ragflow/manifest.json`），本任务不是从零建这五个 Operation——
+    是把它们从"能起、能注册"补到"清单本身正确 + 有本体 v2 + 有采集器自己的 phase 4"。
+  - **`document.upload` 从 `?type=empty` 换成真的文件上传**（S2.5 README 自己记录的已知限制）：
+    RAGFlow 真实文件上传是 `POST .../documents?type=local` 的 `multipart/form-data`，而
+    `@nexttime/gatekeeper-base`'s `HttpTransport` 只发 JSON body。新增
+    `gatekeepers/ragflow/src/transport.ts`：`RagflowTransport` 包一层既有 `HttpTransport`，只在
+    `document.upload` 这一个 Operation 上手写 multipart 请求（全局 `fetch`/`FormData`/`Blob`），
+    其它 Operation 原样委托。`manifest.json` 的 `document.upload.params_schema` 换成
+    `{dataset_id, name, content, encoding?}`（`content` 是 utf8 文本或 base64，`encoding` 缺省
+    utf8）；`simulate()` 只解码 `content` 量字节数、不发请求，保持"simulate 无副作用"契约。
+  - **`document.parse` 改 `auto_approvable: true`**：`blast_radius` 仍是 `low`，`await_decision`
+    仍是 `true`——S2.5 沿用的是 `importOpenApi` 对新导入 execute 类 Operation 的保守默认
+    （`auto_approvable:false`），但这份清单从来都是手写、经审阅的，不是导入草稿；这次审阅后认为
+    "低影响半径 + 手写审阅过"不需要再保留那个默认，改成走 workspace 内置的低影响半径自动批准
+    （`governance/policy/engine.ts` 的 `effectiveWorkspaceAutoApprove`）。`document.upload` 的
+    `auto_approvable`/`await_decision` 不变（medium 半径不因这个 flag 自动批准，除非 workspace
+    策略显式为 medium 开了口）。
+  - **`ontology/ops-assets-v2.yaml`**（新文件，同 `packName: 'ops-assets'` 的下一个 version，
+    loader 侧无需改动——`publishOntologyDomainPack` 本就与 pack 内容无关）：完整携带 v1 的每个
+    ObjectType/LinkType（同 identityKey，未改动，`ontology-v2.test.ts` 逐项断言），新增
+    `KnowledgeBase [gatekeeperId, kbId]`、`Document [gatekeeperId, kbId, documentId]`、
+    `part_of (Document -> KnowledgeBase)`、`served_by (KnowledgeBase -> Gatekeeper)`（`range:
+    Gatekeeper` 引用 `platform-meta.yaml` 的类型，跨领域包合法，`mergeVisibleOntology` 把两者
+    合并进同一个类型命名空间）。也声明了派发文字点名的 `Dataset [gatekeeperId, datasetId]`，但
+    **本任务的门/采集器代码都不写它、也不给它任何 `part_of` 边**——核对 RAGFlow 自己的 HTTP API
+    参考（`GET /api/v1/datasets` 就是"知识库"列表，RAGFlow 自己的 REST API 全程管这个资源叫
+    `dataset`）：`Dataset` 和 `KnowledgeBase` 是 RAGFlow 给同一个资源的两个名字，不是一层父子
+    关系——声明一条 `part_of (Dataset -> KnowledgeBase)` 会凭空发明一层这个系统里不存在的层级
+    （A4"命名不该存在的关系"的反向应用）。`Dataset` 留着不填，同 v1 自己给 `Owner` 的先例——留给
+    未来某个门若真的需要这个区分时再接。
+  - **采集器 phase 4**（`collectors/host-inventory`，扩展 S3.3 既有三阶段结构，不改其行为）：
+    - `kernel-client.ts` 加 `observeOperation`（新 capability 客户端方法，`POST
+      /api/cap/observe_operation`）——用它而不是 `submitObservations`/`request_action`，因为
+      `kb.list`/`kb.documents` 都是 `mode: 'observe'`，`observe_operation` 正是为"没有可批准动作
+      的读"设计的能力（S2.12），不产生 ActionRequest。
+    - `config.ts` 加 `ragflowGatekeeperId`（`RAGFLOW_GATEKEEPER_ID`，可选，缺省 unset）——这个门
+      实例自己的图 Object id，运行时才知道（某个 workspace 真的接入过一个 ragflow 门之后），不能
+      像其它 env 一样给编译期默认值。
+    - 新增 `ragflow.ts`：`buildRagflowObservations`（纯函数，同 `observation-builder.ts` 的
+      "纯构建 + 编排分离"结构）把 `kb.list`/`kb.documents` 的原始 RAGFlow 响应映射成
+      `KnowledgeBase`/`Document` 两类 `IngestObservation`（`identity: {gatekeeperId, kbId}` /
+      `{gatekeeperId, kbId, documentId}`，`served_by`/`part_of` 两条边）；
+      `collectRagflowObservations` 编排两次 `observe_operation` 调用 + RAGFlow 自己 `{code,
+      data}` 信封的解包（非 0 `code` 记 warning、当"没观察到"处理，不抛错——同
+      `gatekeepers/ragflow/README.md` 早就记录的"这个信封对协议不可见，调用方要自己查"）。
+    - `run.ts` 加"phase 4"：只在 `config.ragflowGatekeeperId` 设置时跑，独立于 Host/Container（
+      不需要任何前序阶段解出的图 id），跑在 phase 1-3 之后、共用同一个 `activityId`。**非致命**
+      ——RAGFlow 门不可达/未接入/`kb.list` 报错只记一条 warning、跳过这个 phase，不让整次
+      `runOnce` 失败（Docker 才是本采集器唯一的硬性数据源，S3.3 既有的失败契约不变）；单个
+      KnowledgeBase 的 `kb.documents` 调用失败只让那一个 KnowledgeBase 的 Document 数为零，不
+      影响其它 KnowledgeBase 或让整个 phase 4 失败。
+  - **两条独立写入路径，记录而非消解**：`observe_operation`（无论谁调用）都会无条件地经门自己的
+    `result_mapping` 再写一份低保真 `{id}`-only 的 KnowledgeBase/Document Fact（经共享的
+    Gatekeeper service Principal，`request-action-handler.ts` 的 `runObserve`）——这是既有的、
+    S3.4 之前就存在的门侧行为，采集器无法也不需要抑制它。采集器 phase 4 是**第二条**独立写入：
+    身份更完整（`gatekeeperId`/`kbId`/`documentId`）、带 `served_by`/`part_of` 边、经采集器自己的
+    service Principal 直接 `submit_observations`。两份 Object 因身份键形状不同而不会互相覆盖或
+    合并——`ontology/ops-assets-v2.yaml` 自己的文件头、`ragflow.ts`/`README.md`/两个 runbook 都
+    在同一处记录了这个已知形状（同 `gatekeepers/docker` 的 `Container`-typed observe 写入早就有
+    的先例，不是本任务引入的新问题）。
+  - **测试**（全部纯函数/fake 注入，无需真实 RAGFlow/Docker/内核）：
+    `gatekeepers/ragflow/src/transport.test.ts`（multipart 请求体形状、base64/utf8 解码、非 2xx
+    包装、`simulate` 无副作用、其它 Operation 仍走纯 JSON）；
+    `gatekeepers/ragflow/src/ontology-v2.test.ts`（v2 对 `OntologyDefinitionSchema` 的 schema
+    校验、v1 全量携带、新类型/边、`Dataset` 故意无边、清单 `result_mapping.object_type` 与本体
+    声明一致）；`manifest.test.ts`/`result-mapping.test.ts` 更新到新的 auto_approvable/参数形状；
+    `collectors/host-inventory/src/ragflow.test.ts`（纯构建函数 + fake `KernelClient` 编排，含
+    "kb.list 非 0 code"、"单个 KnowledgeBase 的 kb.documents 失败降级"、"kb.list 失败向上抛"三个
+    分支）；`kernel-client.test.ts`/`config.test.ts`/`run.test.ts` 加 `observeOperation`/
+    `ragflowGatekeeperId`/phase 4（未设置时不调用、设置时提交第四阶段并计入 summary、
+    RAGFlow 不可达时整次运行仍成功）各自的用例。
+  - **门（gates）全部本机（Windows，无 Docker/psql）跑通**：`pnpm -r typecheck`、`pnpm -r
+    lint`、`pnpm -r test`（含 kernel 的 555 例、web 165 例、platform-extension 75 例等，DB-gated
+    套件按既有约定本机自动 SKIP，交给 CI 的 Postgres service）、`pnpm ci:guards`、
+    `pnpm contract:check`（无漂移——本任务未改动任何 kernel capability 的 params/result
+    schema）、`pnpm depcruise`（346 模块无违规）、`node scripts/validate-compose.mjs`（22 个
+    服务、`collector-host-inventory` 新 `RAGFLOW_GATEKEEPER_ID` env 解析正常）均通过。
+  - **`docker-compose.yml`**：只加了一行——`collector-host-inventory.environment` 里
+    `RAGFLOW_GATEKEEPER_ID: "${RAGFLOW_GATEKEEPER_ID:-}"`（缺省空串，`config.ts` 当 unset 处理，
+    phase 4 整体跳过）；`gatekeeper-ragflow` 服务块本身未改动（S3.4 只改了它的清单/代码，不改它
+    的 compose 配置）。
+  - **运行手册**：`docs/runbooks/host-collector.md` 加 `observe_operation` scope、
+    `RAGFLOW_GATEKEEPER_ID` 配置步骤、§4.5"`Document part_of KnowledgeBase`/`served_by`
+    `traverse`+`explain`"验证（含两条独立写入路径的提醒）、§5 三条新的已知限制（无分页循环、
+    phase 4 非致命、两条写入路径不去重）；`docs/runbooks/host-gatekeepers.md` 更新 §12 两条过期
+    的已知偏离（`document.upload` 已修复、`document.parse` 的 `auto_approvable` 变化），新增
+    §13（真实文件上传验证步骤 + 指向 `host-collector.md` 对应小节，不重复内容）。
+  - **未做/超出范围**：`kb.list`/`kb.documents` 无分页循环（各调用一次、较大 `page_size`，见
+    `ragflow.ts`/两个 runbook 的已知限制记录）；主机上对一个真实 RAGFlow 实例的端到端验收（真实
+    `document.upload` 落地文件、`RAGFLOW_GATEKEEPER_ID` 配置后 phase 4 真的写出
+    `part_of`/`served_by` 边）留给目标主机验收，步骤已写进两个 runbook，本机无 Docker 无法跑。
 
 ### S3.5 Explorer 契约与挂载
 - 交付物：`kernel/src/explorer-contract/*`：设计 §9.5 的 9 个端点，响应形状按 Semantica `explorer/schemas.py`，`207` 约定，`X-API-Key`（human 通道）；`explorer/` 构建脚本从 Semantica 源码 `explorer/` 构建静态包，caddy 挂 `/explorer`，隐藏 Ontology 等工作区。

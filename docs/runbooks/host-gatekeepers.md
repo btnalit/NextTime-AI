@@ -413,11 +413,9 @@ document.parse`）。若 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 已�
 `RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY` 并重启过 `gatekeeper-ragflow`
 （`docker compose up -d --force-recreate gatekeeper-ragflow`，env_file 改动不会自动生效），可以
 同 §6 的方式跑 `request_action(kb.list)`，核对 `objects` 表出现 `object_type = 'KnowledgeBase'`
-的行。**不要**用 `document.upload` 验证"真实上传文件"——见
-`gatekeepers/ragflow/README.md`"已知限制"：这个 Operation 目前只能创建 RAGFlow 的
-`type=empty` 空占位文档，不支持真实文件内容（`HttpTransport` 只发 JSON body，RAGFlow 的真实文件
-上传要求 `multipart/form-data`）。本机没有可用 RAGFlow 部署时，跳过本节，§3/§5 的服务可达性 +
-清单注册/发布已经是 S2.5 对 `ragflow` 门的完整交付范围。
+的行。本机没有可用 RAGFlow 部署时，跳过本节，§3/§5 的服务可达性 + 清单注册/发布已经是 S2.5 对
+`ragflow` 门的完整交付范围；`document.upload` 的真实文件上传 + `ontology/ops-assets-v2.yaml` 见
+§13（S3.4）。
 
 ### 11.1 RAGFlow 走 https 且证书自签时：用 `GATE_TLS_CA_FILE`，不要关校验
 
@@ -448,7 +446,6 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
 ```
 
 证书轮换后重做第 1 步并 `--force-recreate` 即可；CA 文件读不到时门拒绝启动（不会静默退回系统信任库）。
-
 ## 12. 已知偏离 / 待确认（PR 中一并说明）
 
 - **`compose.up`/`compose.down` 是"启动/停止该 compose 项目下已存在的容器"，不是完整的
@@ -457,7 +454,10 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
   network/volume。见 `gatekeepers/docker/README.md`"compose.up/compose.down — 已知偏离"。S2.5
   验收原文只要求 `container.restart` 的幂等 apply，没有把 `compose.up`/`compose.down` 的真实语义
   列入验收范围，因此这个简化没有拿掉任何验收覆盖。
-- **`document.upload` 不支持真实文件内容**：见 §11 与 `gatekeepers/ragflow/README.md`。
+- **`document.upload` 不支持真实文件内容（S2.5；S3.4 已修复）**：S2.5 版本只能创建 RAGFlow 的
+  `type=empty` 空占位文档——`HttpTransport` 只发 JSON body，RAGFlow 的真实文件上传要求
+  `multipart/form-data`。S3.4 加了 `RagflowTransport`（`gatekeepers/ragflow/src/transport.ts`）
+  专门处理这一个 Operation，见 §13。
 - **RAGFlow 的 `{code, data}` 错误信封对协议不可见**：一次 `code != 0` 的 RAGFlow 响应会被这个
   门当成`ok:true`（HTTP 200），`observedFacts` 为空——调用方需要自己检查 `data.code`/
   `data.message`。见 `gatekeepers/ragflow/README.md`。
@@ -475,7 +475,10 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
 - **`document.upload`/`document.parse` 的 `await_decision` 同理设为 `true`**：S2.5 派发文字只
   给了两者的 `blast_radius`（medium/low），未提及 `await_decision`/`auto_approvable`——沿用
   `@nexttime/gatekeeper-base`'s `importOpenApi` 对新导入 execute 类 Operation 的既有默认
-  （`auto_approvable:false, await_decision:true`，owner 必须先审后发布，I17）。
+  （`auto_approvable:false, await_decision:true`，owner 必须先审后发布，I17）。**S3.4**：
+  `document.parse` 的 `auto_approvable` 改成了 `true`（`await_decision` 不变，仍是 `true`）——见
+  §13，这份清单是手写、经过审阅的，不是 `importOpenApi` 草稿，S2.5 保留下来的保守默认在这次审阅
+  后不再适用于这一个 Operation；`document.upload` 的 `auto_approvable`/`await_decision` 不变。
 - **镜像构建未在本机验证**（Docker 不在这台开发机上）：`docker compose build gatekeeper-docker
   gatekeeper-ragflow`（§2）、`docker compose up`（§3）及之后所有步骤都需要在目标主机上首次跑一
   遍——这正是本 runbook 存在的原因。
@@ -486,3 +489,39 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
   environment/network 不同），不是重新验证；第一个实例部署时若已经确认这两点在目标主机上没问题，
   第二个实例大概率也没问题，但仍建议 `docker compose up -d docker-socket-proxy-gate` 后单独确认
   一次 `docker compose ps docker-socket-proxy-gate` 是 `healthy` 而不是重启循环。
+
+
+## 13. S3.4：`ragflow` v2 清单（真实文件上传 + `document.parse` 自动批准）+ 本体 v2 + 采集器 phase 4
+
+`gatekeepers/ragflow/manifest.json` 的两处变化（`gatekeepers/ragflow/README.md` 有完整推理）：
+
+- `document.upload` 现在真的把文件内容传给 RAGFlow（`?type=local` + `multipart/form-data`），不
+  再是 S2.5 版本的 `?type=empty` 空占位——`RagflowTransport`（`src/transport.ts`）替这一个
+  Operation 手写 multipart 请求，其余 Operation 不变。
+- `document.parse` 现在 `auto_approvable: true`（`blast_radius` 仍是 `low`）——沿用 workspace
+  内置的低影响半径自动批准默认（`governance/policy/engine.ts` 的
+  `effectiveWorkspaceAutoApprove`），除非该 workspace 显式关闭了它。
+
+### 13.1 验证真实文件上传
+
+```bash
+# request_action(document.upload) —— 同 §7 的完整审批流程（medium 半径，仍需人工批准）
+curl -s https://<host>:8443/api/cap/request_action \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"gatekeeperId":"<ragflow-gatekeeper-id>","operation":"document.upload",
+       "params":{"dataset_id":"<dataset-id>","name":"note.txt","content":"hello from S3.4","encoding":"utf8"}}'
+# approve_action_request（decisionId 来自上一条的返回）……同 §7，此处从略
+
+# 核对 RAGFlow 那一侧真的收到了文件内容（不是空占位）——GET 这份 Document 或直接在 RAGFlow 自己的
+# UI/API 里看 size 字段：应等于 "hello from S3.4" 的字节数（15），不是 0。
+```
+
+### 13.2 发布本体 v2 + 采集器 phase 4 验收
+
+`ontology/ops-assets-v2.yaml`（`KnowledgeBase`/`Document`/`part_of`/`served_by`）的发布步骤、
+`collector-host-inventory` 的 `RAGFLOW_GATEKEEPER_ID` 配置、`observe_operation` scope、以及
+`Document part_of KnowledgeBase`/`KnowledgeBase served_by Gatekeeper` 的 `traverse`/`explain`
+验证，全部在 `docs/runbooks/host-collector.md`（§1 "S3.4"、§2 "`observe_operation`"、§3 "S3.4（可
+选）"、§4.5）——不在本文件重复，`ragflow` 门本身（本文件 §5/§11）与本体/采集器（
+`host-collector.md`）是两个独立的验收面。
+

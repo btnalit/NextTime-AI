@@ -17,15 +17,19 @@ covers the package's own internals.
 | systemd | `systemd.ts` | `systemctl list-units --type=service`, only when `/run/systemd` is mounted (optional — skips cleanly otherwise). |
 | Process tree | `process-tree.ts` | Limited to the agent-runtime process's own subtree. **Current default deployment has no `pid: host`**, so this collector's own `/proc` never shows a different container's processes — `collectProcessTree` legitimately returns `skipped: true` every run in that shape; this is documented, not a bug. See that module's own doc comment for the full reasoning and the (declined) alternative. |
 | git remotes | `repository.ts` | `git remote -v` for each path in `HOST_INVENTORY_REPOSITORY_PATHS` (optional, empty by default). |
+| RAGFlow KnowledgeBase/Document (S3.4) | `ragflow.ts` | `observe_operation(kb.list)` / `observe_operation(kb.documents)` on a RAGFlow Gatekeeper, only when `RAGFLOW_GATEKEEPER_ID` is set (optional, off by default). |
 
 ## Ontology mapping
 
-Every ObjectType/LinkType this collector writes comes from `ontology/ops-assets-v1.yaml` (S3.1) —
-`observation-builder.ts` is the pure module that maps raw collected data onto that scheme. Some
-identity fields (`ComposeProject.hostId`, `Container.composeProjectId`, …) must hold *another
-Object's own graph id* (that YAML file's own header comment) — a value this collector cannot invent
-ahead of time. It resolves this with a three-phase submission, all sharing one Activity
-(`run.ts`'s own doc comment has the full phase table):
+Every ObjectType/LinkType this collector writes for phases 1-3 comes from `ontology/ops-assets-
+v1.yaml` (S3.1); phase 4's `KnowledgeBase`/`Document`/`part_of`/`served_by` come from `ontology/
+ops-assets-v2.yaml` (S3.4, a superset of v1 — same family, next version). `observation-builder.ts`
+(phases 1-3) and `ragflow.ts`'s `buildRagflowObservations` (phase 4) are the pure modules that map
+raw collected data onto those schemes. Some identity fields (`ComposeProject.hostId`,
+`Container.composeProjectId`, `KnowledgeBase.gatekeeperId`, …) must hold *another Object's own graph
+id* (`ops-assets-v1.yaml`'s own header comment) — a value this collector cannot invent ahead of
+time. It resolves this with dependency-ordered `submit_observations` phases, all sharing one
+Activity (`run.ts`'s own doc comment has the full phase table):
 
 1. **Phase 1** — Host, Repository, Image, Process (no dependency on any resolved id). The response's
    `objects[]` gives back Host's real graph id.
@@ -34,6 +38,14 @@ ahead of time. It resolves this with a three-phase submission, all sharing one A
 3. **Phase 3** — Container (needs its ComposeProject's resolved id from phase 2), with every link
    hanging off it (`uses_image`, `mounts`, `attached_to`, `exposes`, `depends_on`, `part_of`,
    `runs_on`).
+4. **Phase 4** (S3.4, optional) — KnowledgeBase/Document, only when `RAGFLOW_GATEKEEPER_ID` is set.
+   Independent of Host/Container (`gatekeeperId` here is a *configured* value, not one resolved from
+   an earlier phase), so it needs no previously-resolved id and runs after phase 3 unconditionally
+   of whether phase 3 ran. Non-fatal: unlike Docker, a RAGFlow Gatekeeper being unreachable only
+   skips this one phase (logged as a warning) — it never fails the run. See `ragflow.ts`'s own doc
+   comment for the two-independent-write-paths note (the gate's own `observe_operation` call also
+   writes its own low-fidelity `{id}`-identified facts, unconditionally — documented in
+   `ontology/ops-assets-v2.yaml`'s header comment, not something this collector reconciles).
 
 ## Sanitization (`redact.ts`)
 
@@ -75,6 +87,7 @@ See `src/config.ts` for the authoritative list; summary:
 | `HOST_INVENTORY_INTERVAL_MS` | no | `900000` (15 min) | Loop interval when not run with `--once`. |
 | `HOST_INVENTORY_SOURCE_STATE_FILE` | no | `/data/state/host-inventory-source.json` | Local Source-id cache (see above). |
 | `HOST_INVENTORY_SOURCE_NAME` / `HOST_INVENTORY_SOURCE_KIND` | no | `host-inventory` / `host-inventory-collector` | `register_source`'s own `name`/`kind`. |
+| `RAGFLOW_GATEKEEPER_ID` | no | (unset — phase 4 skipped) | S3.4: the RAGFlow Gatekeeper instance's own graph object id (`docs/runbooks/host-gatekeepers.md`). Requires this collector's own Handle to also hold `observe_operation` in its capability scope (`docs/runbooks/host-collector.md`). |
 
 CLI: `--once` runs a single cycle and exits with that cycle's own exit code (for a host cron/
 systemd-timer-driven invocation); omitted, this process loops until `SIGTERM`/`SIGINT`.
