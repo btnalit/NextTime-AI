@@ -153,11 +153,15 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
 不看退出码（SIGKILL 后的退出码往往非 0，不该被误读成 failed）；其余按 Docker 退出码分类，`0` →
 `exited`，非 0 → `failed`（借鉴 Kubernetes Job 的 Complete/Failed 划分）。
 
-- **超时**：`timeoutSec`（或默认 `TASK_MAX_RUNTIME_SEC`，默认 3600）到期由周期性 `reap()`（每 30s
-  一次，`index.ts`）杀掉，标 `terminated` + `reason:"timeout"`。
+- **超时**：`timeoutSec`（或默认 `TASK_MAX_RUNTIME_SEC`，默认 3600）到期由周期性 `reap()`（默认
+  10s 一次，`TASK_REAP_INTERVAL_MS`，`index.ts`——lane-6 review P2-7 从最初的固定 30s 收紧，见该
+  字段自己在 `config.ts` 的文档注释；本文件早前这里写的"每 30s 一次"是过期表述，随
+  feat/egress-docker-events 一并订正）杀掉，标 `terminated` + `reason:"timeout"`。
 - **自然退出**：`reap()` 同一循环里也会发现自己退出的容器（无需等 `GET` 被轮询）；`GET
   /task/:workerRunId` 也会做一次同样的即时核对，所以刚退出就查询也能立刻看到终态，不用等下一次
-  `reap()` tick。
+  `reap()` tick。**feat/egress-docker-events**：容器真正死亡（`die`/`destroy`/`kill`/`stop`）现在
+  还会经 Docker 自己的事件流（见下方独立一节）在约 1 秒内触发同一条 `reconcileOne` 路径——`reap()`
+  仍然原样保留、作为这条事件流断线或从未连上时的兜底，不是被取代。
 - **`/workspace` 保留为 artifact**：容器结束后被 remove，但工作目录不删——退休策略见下。
 - **egress 来源映射**：spawn 时写 `worker:<workspaceId>:<workerRunId>`（`egress-map.ts`
   `taskSourceId`），退出/`terminate` 时摘除。内核 host-bridge 目前只认 `entry:` 前缀（见
@@ -172,6 +176,49 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
 且登记表里没有标记为 `running` 的目录。小、朴素、可配置、每次删除都打一行日志
 （`task-service.ts` `sweepRetention`）。
 
+## 事件驱动的 egress 来源反注册（`src/docker-events.ts`，feat/egress-docker-events）
+
+**背景/问题**：常驻入口容器与 Task/Worker 容器崩溃或被 `docker kill` 后，`SOURCE_MAP_FILE`
+里那条 egress 来源登记（`egress-map.ts`）只有下一次周期性动作（resident 模式：下一次
+`spawn()`/`sweepIdle()`；Task 模式：下一次 `reap()` tick，默认 `TASK_REAP_INTERVAL_MS=10s`）才会
+摘除——这段窗口内，若 Docker 把这个已死容器的 IP 重新分配给另一个容器，egress-proxy 会把新容器的
+流量误记到旧来源的 `sourceId` 上（fail-open）。
+
+**修法**：`worker-supervisor` 现在同时经既有的 `dockerode` 客户端订阅 Docker Engine 自己的容器生命
+周期事件流（`GET /events`，`docker-client.ts` `getContainerEvents`，经 `docker-socket-proxy`，见
+docker-compose.yml 该服务块的 `EVENTS` flag 与其注释）——服务端过滤 `type=container`、
+`event=die|destroy|kill|stop`、`label=nexttime.role`（裸 key，同时匹配 resident 模式的
+`nexttime.role=entry` 与 Task 模式的 `nexttime.role=worker`，宿主机上其它容器的事件根本不会送达这
+个进程）。匹配到一个已知容器（`ResidentService`/`TaskService` 各自新增的
+`notifyContainerExited(containerId, action)`）时：
+
+- **先核实容器真的死了**——Docker 的 `kill` 事件是"信号已发送"，不是"进程已退出"（`docker stop`
+  的优雅 SIGTERM 最多可以等 `STOP_TIMEOUT_SECONDS` 秒才真正退出）；两个方法都会重新
+  `docker.inspectByName`（Task 模式直接复用 `reconcileOne`），仍在跑就直接返回 `false`，不摘除、
+  不动登记表——否则会把一个仍在合法运行、可能正在处理请求的容器提前判死。
+- 走与 `reap()`/崩溃检测完全相同的 `unregisterEgress` 路径与登记表更新，只是触发时机提前到事件
+  到达的那一刻（约 1 秒内），不是等下一次轮询。
+- 打一行结构化日志（`level:'info', msg:'... container exited (docker event)', ...`）。
+- 天然幂等——一次容器退出，Docker 可能连续发出 `kill` → `die` → `destroy`/`stop` 好几个事件，
+  只有第一个"容器确认已死"的事件真正摘除，其余返回 `false`。
+
+**这是既有轮询机制之上的补充，不是替代**：`reap()`（Task 模式）、`sweepIdle()`/`spawn()` 自身的崩溃
+检测（resident 模式）原样保留、原有周期不变——事件流断线，或（`docker-socket-proxy` 的 `EVENTS`
+flag 被设成 `0`，例如回滚）从未连上，`subscribeToContainerEvents`（`docker-events.ts`）只打**一条**
+警告日志、之后带着封顶退避（初始 1s，倍增，封顶 30s）在后台无限重试，从不让整个 supervisor 崩溃——
+上面这条 fail-open 窗口的上界回退到轮询机制原有的间隔，不会更差。
+
+**断线重连**：事件流断开后按上面的退避重连；每次成功（re）连接之后（含启动时的第一次）都会重新跑一
+遍 `residentService.reconcile()` + `taskService.reconcile()`——这两个方法本身对"已经认识的容器"是幂
+等的，所以补这一趟不会有副作用；它真正的作用是补上断线期间可能错过的事件。**已知需要注意的一点**：
+resident 模式的 `reconcile()` 原本只在进程启动时跑一次（那时登记表是空的），本次改动前它会无条件把
+每个仍在跑的容器 `lastTouchedAt` 重置为"现在"——事件流频繁重连的极端情况下，重复调用 `reconcile()`
+会不断刷新这个时间戳，等于悄悄关掉 `sweepIdle()` 的空闲超时。已在这次改动里修：`reconcile()` 现在
+保留已知 principal 原有的 `lastTouchedAt`，只有真正首次发现（进程重启后的登记表为空）才写"现在"。
+
+**启动顺序**：`index.ts` 的 `main()` 里，两个 `reconcile()` 先跑完，再启动事件订阅，再 `app.listen`
+——与 `sweepIdle`/`reap`/`sweepRetention` 三个既有定时器完全并列，互不替代。
+
 ## Env vars
 
 除常驻模式已有的那些（见 `src/config.ts` 顶部文档注释）外，Task 模式新增：
@@ -184,7 +231,14 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
 
 ## 测试
 
-`src/test-support/fake-docker-client.ts` 是内存版 `DockerClient`（两种模式共用），从不碰真实 socket。
+`src/test-support/fake-docker-client.ts` 是内存版 `DockerClient`（两种模式共用），从不碰真实 socket；
+它的 `getContainerEvents()` 故意只是个 `throw`（哪个既有测试都不驱动事件流，见该方法自己的注释）——
+`src/docker-events.test.ts` 单独用一个最小的、只实现 `getContainerEvents` 的假 docker（配一个可以
+`.emit()` 的 `EventEmitter` 充当假事件流）来驱动 `subscribeToContainerEvents` 本身：已知容器
+`die`→反注册+登记表更新、未知/畸形事件被忽略、流 `error` 触发重连+补一次 `reconcile()`、订阅本身建
+不起来只打一条警告并在后台持续重试（`vi.useFakeTimers()` 驱动退避）。`ResidentService`/
+`TaskService` 各自新增的 `notifyContainerExited` 在 `resident-service.test.ts`/
+`task-service.test.ts` 里单独测（含"容器其实还在跑，不该被摘除"与"同一次退出的重复事件必须幂等"两条）。
 `docker-client.ts` 本身（`dockerode` 实现）与两个 Dockerfile 都未在本机验证——本机没有 Docker（见
 两个 Dockerfile 头部注释）；镜像构建与容器级行为在目标主机上验收，见
 `docs/runbooks/host-worker-runtime.md`。

@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { createDockerClient } from './docker-client.js';
+import type { ContainerLifecycleEvent } from './docker-events.js';
+import { subscribeToContainerEvents } from './docker-events.js';
 import { createEgressMapStore } from './egress-map.js';
 import { loadInternalToken } from './internal-auth.js';
 import { createResidentService } from './resident-service.js';
@@ -24,6 +26,8 @@ export type {
 } from './config.js';
 export { createDockerClient } from './docker-client.js';
 export type { ContainerSpec, ContainerState, DockerClient } from './docker-client.js';
+export { subscribeToContainerEvents } from './docker-events.js';
+export type { ContainerEventsSubscriber, ContainerLifecycleEvent } from './docker-events.js';
 export { createEgressMapStore, entrySourceId, taskSourceId } from './egress-map.js';
 export type { EgressMapStore, SourceMapEntry, SourceMapFile } from './egress-map.js';
 export { loadInternalToken, requireInternalToken } from './internal-auth.js';
@@ -57,6 +61,14 @@ export { createServer } from './server.js';
  * TASK_RETENTION_SWEEP_INTERVAL_MS is deliberately much coarser — deleting finished Task workdirs
  * is "small, boring" housekeeping (S2.8 task brief), not latency-sensitive the way noticing a
  * container exited is.
+ *
+ * feat/egress-docker-events: `subscribeToContainerEvents` (docker-events.ts) is started here too,
+ * after both startup `reconcile()` calls (its own "startup: reconcile first, then subscribe"
+ * ordering) and before `app.listen` — a faster, best-effort path to the same egress
+ * de-registration `sweepIdle`/`reap` already perform on their own intervals, which stay exactly as
+ * they were as the fail-open-bounding fallback (see that module's own doc comment). Each matched
+ * event is routed to whichever service's registry recognizes the containerId — `handleContainerEvent`
+ * below tries resident mode first, then Task mode, since a containerId belongs to at most one.
  */
 export const VERSION = '0.1.0';
 
@@ -75,6 +87,41 @@ export async function main(): Promise<void> {
 
   await residentService.reconcile();
   await taskService.reconcile();
+
+  // feat/egress-docker-events: a containerId belongs to at most one of the two registries — try
+  // resident mode first (arbitrary but fixed order), fall through to Task mode only if resident
+  // mode doesn't recognize it. Errors from either are caught here (not left to reject inside
+  // docker-events.ts's own `onContainerEvent` callback, which is synchronous) so a bug in this
+  // routing can never take down the events subscription itself.
+  async function handleContainerEvent(event: ContainerLifecycleEvent): Promise<void> {
+    try {
+      const handledByResident = await residentService.notifyContainerExited(
+        event.containerId,
+        event.action,
+      );
+      if (handledByResident) return;
+      await taskService.notifyContainerExited(event.containerId, event.action);
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          msg: 'container event handling failed',
+          containerId: event.containerId,
+          action: event.action,
+          error: String(err),
+        }),
+      );
+    }
+  }
+
+  const eventsSubscriber = subscribeToContainerEvents({
+    docker,
+    onContainerEvent: (event) => void handleContainerEvent(event),
+    reconcile: async () => {
+      await residentService.reconcile();
+      await taskService.reconcile();
+    },
+  });
 
   const sweepTimer = setInterval(() => {
     residentService.sweepIdle().catch((err) => {
@@ -110,6 +157,7 @@ export async function main(): Promise<void> {
     clearInterval(sweepTimer);
     clearInterval(taskReapTimer);
     clearInterval(taskRetentionTimer);
+    eventsSubscriber.stop();
     await app.close();
     process.exit(0);
   };

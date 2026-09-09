@@ -809,3 +809,87 @@ docker exec "$CONTAINER" cat /workspace/.pi/agent/skills/host-smoke-skill/SKILL.
 同 §13 的 `TOOL_TRIGGER_WORD` 限制——`fake-llm` 不理解系统提示里的指令，Worker 大概率走
 `agent_settled` 的兜底路径而不是模型真的读了这个 Skill 并照做；本节验证的是**挂载机制本身**（文件
 确实出现在容器能看到的路径上），不是"模型用上了这个 Skill"，后者需要接一个真实 provider。
+
+## 15. `feat/egress-docker-events` 之后：事件驱动的 egress 来源反注册
+
+前置：§4 已起 `egress-proxy`/`worker-supervisor`（这次改动之后，`docker-socket-proxy` 的 `EVENTS`
+flag 应为 `1`——docker-compose.yml 该服务块，非本任务所有权范围内的改动不应把它改回 `0`）。本节验证
+的是：常驻入口容器/Task 容器被 `docker kill` 后，`SOURCE_MAP_FILE` 里对应的 egress 来源登记条目在
+约 1 秒内消失（不必等下一次 `sweepIdle()`/`reap()` 轮询），且 `worker-supervisor` 自己的日志里能看
+到这条事件驱动路径留下的一行结构化日志。本机没有 Docker，以下步骤未在本机跑过（同本文档其余各节的
+一贯说明）——按下面的命令在目标主机上跑。
+
+### 15.1 事件驱动路径本身（常驻容器）
+
+```bash
+cd <CODE_DIR>
+docker compose logs docker-socket-proxy | tail -20   # 期望：无 EVENTS 相关的拒绝/报错
+```
+
+按 §5 起一个常驻容器（或复用已经在跑的 `demo-alice`），记下返回的 `containerId`/`ip`：
+
+```bash
+cat "${NEXTTIME_DATA}/config/egress-sources.json"   # 期望：能看到 <ip>: {"sourceId":"entry:..."}
+docker kill nexttime-entry-demo-alice
+sleep 1
+cat "${NEXTTIME_DATA}/config/egress-sources.json"   # 期望：上面那条 <ip> 的 key 已经消失
+docker compose logs worker-supervisor --since 10s | grep "docker event"
+```
+
+期望最后一条命令能看到一行形如
+`{"level":"info","msg":"resident container exited (docker event)","principalId":"demo-alice",...}`
+的 JSON 日志——这是 `resident-service.ts` `notifyContainerExited` 打的那一行，证明反注册是被 Docker
+事件流触发的，不是等下一次 `sweepIdle()`（默认 `ENTRY_IDLE_TIMEOUT_MS=30` 分钟，`sleep 1` 这个时间
+窗口内不可能是它起的作用）。
+
+用 `docker compose exec -T worker-supervisor node -e "..."` 重新 `POST /resident/spawn`
+`demo-alice`（同 §5/§7 的写法）能验证服务本身没有受影响——`created:true`，`restarts` 比 kill 前加 1。
+
+### 15.2 事件驱动路径本身（Task 容器）
+
+按 §10 起一个 Task（`WORKER_RUN_ID` 取自那次 spawn 返回值），**在它自己因为 S2.9 之前的预期现象
+（§10 开头说明）自然退出之前**手动 kill 一次以确定性地触发这条路径：
+
+```bash
+docker kill "nexttime-task-${WORKER_RUN_ID}"
+sleep 1
+cat "${NEXTTIME_DATA}/config/egress-sources.json" | grep "${WORKER_RUN_ID}" || echo "条目已消失（预期）"
+docker ps -a --filter "name=nexttime-task-${WORKER_RUN_ID}" --format '{{.Names}}'   # 期望：空——容器已被 docker rm
+docker compose logs worker-supervisor --since 10s | grep "docker event"
+```
+
+期望能看到一行 `{"level":"info","msg":"task container exited (docker event)","workerRunId":"...",...}`
+——比等 `reap()` 下一轮（默认 `TASK_REAP_INTERVAL_MS=10s`）更快看到容器被清理和 egress 条目消失。
+
+### 15.3 回滚验证：把 `EVENTS` 改回 `0`，确认周期性兜底（`reap()`/`sweepIdle()`）仍然覆盖
+
+```bash
+cd <CODE_DIR>
+# docker-compose.yml：把 docker-socket-proxy 服务块的 EVENTS 从 "1" 改回 "0"（仅此一行）
+docker compose up -d docker-socket-proxy
+docker compose restart worker-supervisor
+sleep 2
+docker compose logs worker-supervisor --since 30s | grep "docker events subscription could not be established"
+```
+
+期望：**恰好一行**这样的 warn 日志（`docker-events.ts` 的"只警告一次"设计——之后仍在后台按退避重试，
+不会反复刷屏），且 `worker-supervisor` 进程没有崩溃、`GET /healthz` 仍然 `200`（同 §4 的检查方式）。
+
+再重复一次 §15.1 的 `docker kill` + 立即 `cat egress-sources.json`：这次预期条目**不会**在 1 秒内消
+失（事件流建不起来，走不到这条快路径）；等到下一次 `sweepIdle()`/该 principal 的下一次 `spawn()`
+（resident 模式的既有崩溃检测路径）或 `reap()` 下一轮（Task 模式，默认 10 秒），条目最终还是会被摘
+除——这就是"回滚 = 把 EVENTS 设回 0，reaper 仍然覆盖"这条设计承诺的验证点：事件驱动路径只是把这个
+本来就存在的清理动作提前，从不是这个清理动作唯一的实现。验证完记得把 `EVENTS` 改回 `1`
+并 `docker compose up -d docker-socket-proxy && docker compose restart worker-supervisor`，恢复到
+本节开头的前置状态，不要把这个临时回滚状态留在工作目录里。
+
+### 15.4 已知限制
+
+- 本机没有 Docker，§15.1–§15.3 均未在本机实跑过——按代码逻辑与 `docker-events.test.ts`/
+  `resident-service.test.ts`/`task-service.test.ts` 的单元测试推导写出，需要在目标主机上补一次真实
+  验收记录（同本文档其余各节的一贯做法）。
+- `docker-socket-proxy` 的 `EVENTS` flag 语义（`GET /events` 是否确实被这个开关单独门控）来自
+  docker-compose.yml 该服务块自己的既有注释——"Flags (haproxy.cfg verified line-by-line against the
+  v0.5.0 tag)"这句话是首次接入这个代理时对全部 flag 的一次性审计，`EVENTS` 当时就在审计范围内（只
+  是被显式设成 `0`）；本次改动只把值从 `0` 改成 `1`，flag 本身的语义没有变过，因此没有为这次改动
+  重新单独跑一次 `gh api`/读源码核对——如果 v0.5.0 之后升级过镜像版本，应该重新走一次那条审计。

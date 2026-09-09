@@ -100,8 +100,11 @@ services:
   #     (createAndStart), POST /containers/{id}/start, POST /containers/{id}/stop,
   #     DELETE /containers/{id}?force=true (remove), GET /containers/{id}/json (inspectByName),
   #     GET /containers/json?filters=... (listByLabel), GET /networks?filters=...
-  #     (resolveNetworkByComposeLabel). No image/exec/volume/event/swarm call anywhere in the
-  #     package (grepped for docker.getImage/listImages/pull/getEvents/getNetwork — none found).
+  #     (resolveNetworkByComposeLabel), GET /events?filters=... (getContainerEvents —
+  #     feat/egress-docker-events: event-driven egress de-registration, docker-events.ts; a
+  #     read-only subscription, filtered server-side to type=container and this platform's own
+  #     nexttime.role label — see EVENTS below). No image/exec/volume/swarm call anywhere in the
+  #     package (grepped for docker.getImage/listImages/pull/getNetwork — none found).
   #   agent-host (packages/agent-host/src/container-io.ts): POST /containers/{id}/attach?
   #     stream=1&stdin=1&stdout=1&stderr=1&hijack=1 only — never create/start/stop/remove (see
   #     that file's own module doc comment: "agent-host 只做 docker attach，不 create/start/stop
@@ -129,9 +132,14 @@ services:
   #   IMAGES=0: deliberately NOT granted — no docker.getImage/listImages/pull call in either
   #     package (the resident/task container image is built by `docker compose build
   #     worker-runtime`, never pulled or inspected at runtime).
-  #   EVENTS=0: explicit override — this image's own Dockerfile defaults EVENTS=1 ("access granted
-  #     by default"); neither consumer subscribes to the Engine's event stream, so it's turned back
-  #     off instead of left on the image's default.
+  #   EVENTS=1 (feat/egress-docker-events, was 0): worker-supervisor now subscribes to GET /events
+  #     to de-register a crashed/killed container's egress-source-map entry promptly instead of
+  #     waiting for the next periodic reaper tick (docker-events.ts's own module doc comment) — the
+  #     reaper stays as the fallback if this can never connect (e.g. EVENTS is reverted to 0 here;
+  #     see docs/runbooks/host-worker-runtime.md's rollback note). This grant is GET-only (events
+  #     is a read-only subscription, not gated behind POST=1 the way CONTAINERS/NETWORKS are) and
+  #     narrowed server-side to type=container + label=nexttime.role — agent-host does not use this
+  #     flag at all (its own endpoint inventory above is unchanged).
   #   PING=1 / VERSION=1: image defaults, left as-is (harmless — no container/image/secret
   #     information) — this service's own healthcheck below uses PING.
   #   Everything else (AUTH, BUILD, COMMIT, CONFIGS, DISTRIBUTION, EXEC, GRPC, INFO, NODES,
@@ -156,7 +164,7 @@ services:
         ALLOW_PAUSE: "0",
         ALLOW_UNPAUSE: "0",
         IMAGES: "0",
-        EVENTS: "0",
+        EVENTS: "1",
         PING: "1",
         VERSION: "1",
         EXEC: "0",
