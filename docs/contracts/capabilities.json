@@ -3477,7 +3477,10 @@
       "additionalProperties": false,
       "properties": {
         "failureReason": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "id": {
           "type": "string"
@@ -7085,6 +7088,25 @@
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {},
+            "observedFactCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "const": "ok",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "observedFactCount"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "properties": {

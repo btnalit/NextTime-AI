@@ -122,6 +122,19 @@ const id = z.string().min(1);
 const jsonRecord = z.record(z.string(), z.unknown());
 const noParams = z.object({}).strict();
 
+/** The shape `application/gateway/request-action-handler.ts`'s `runObserve` produces —
+ *  `observe_operation`'s own result, and (fixed after this task's first CI run caught the
+ *  mismatch — real Postgres, not reproducible locally) also one of `request_action`'s three
+ *  possible result shapes, taken whenever the resolved Operation is `mode: 'observe'` (see that
+ *  entry's own resultSchema doc comment below). Defined once, reused by both. */
+const gateObserveResultSchema = z
+  .object({
+    status: z.literal('ok'),
+    data: z.unknown(),
+    observedFactCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
 // -------------------------------------------------------------------------------------------
 // chat — human channel only ("只走 human 通道")
 // -------------------------------------------------------------------------------------------
@@ -409,13 +422,7 @@ const gateCapabilities: readonly Capability[] = [
     paramsSchema: z
       .object({ gatekeeperId: id, operation: z.string().min(1), params: jsonRecord.optional() })
       .strict(),
-    resultSchema: z
-      .object({
-        status: z.literal('ok'),
-        data: z.unknown(),
-        observedFactCount: z.number().int().nonnegative(),
-      })
-      .strict(),
+    resultSchema: gateObserveResultSchema,
     description:
       'Run one published observe-class Operation on a Gatekeeper and return its data (the capability behind every <gate>.<op> observe tool); execute-class Operations are refused.',
   },
@@ -951,21 +958,27 @@ const governanceCapabilities: readonly Capability[] = [
         idempotencyKey: z.string().min(1).optional(),
       })
       .strict(),
-    // request-action-handler.ts's `runGovernedRequest`: a two-phase handler whose real result
+    // request-action-handler.ts's `requestActionHandler`: a two-phase handler whose real result
     // (what `dispatchCapability` actually returns — see dispatch.ts's own doc comment: once an
     // `afterCommit` continuation is present, *its* resolved value replaces the phase-1 `result`)
-    // is one of two shapes depending on which branch of the ActionRequest's resolved status is
-    // taken (that function's own decision-table doc comment):
-    //   - no `afterCommit` (a terminal/no-op status, or `pending_approval && !awaitDecision`) →
-    //     the full ActionRequest wire projection, optionally with a `simulate` field.
-    //   - `afterCommit` present (auto_approved/approved/executing/executed/verified/failed, or
-    //     `pending_approval && awaitDecision`) → the narrower `{id, status, data?, reason?}`
-    //     execution-outcome shape those continuations (`tryExecuteInline`/
-    //     `awaitConcurrentExecution`/`pollAndExecute`/`readTerminalOutcome`) resolve to. Modeled
-    //     as a union rather than "fixed" into one shape — unifying them is a real, larger behavior
-    //     change to a heavily fought-over handler (see that file's own module doc comment), out of
-    //     this task's "no runtime behaviour change" scope.
+    // is one of three shapes:
+    //   - the resolved Operation is `mode: 'observe'` → the handler returns `runObserve`'s result
+    //     directly (no ActionRequest is ever created for an observe-class Operation, §11
+    //     "观察免审") — the same shape `observe_operation` returns (`gateObserveResultSchema`
+    //     above; found missing from this union entirely by this task's own first CI run — real
+    //     Postgres, not reproducible locally, `KERNEL_VALIDATE_RESULTS=1`).
+    //   - `mode: 'execute'`, `runGovernedRequest` resolves with no `afterCommit` (a terminal/no-op
+    //     status, or `pending_approval && !awaitDecision`) → the full ActionRequest wire
+    //     projection, optionally with a `simulate` field.
+    //   - `mode: 'execute'`, `afterCommit` present (auto_approved/approved/executing/executed/
+    //     verified/failed, or `pending_approval && awaitDecision`) → the narrower `{id, status,
+    //     data?, reason?}` execution-outcome shape those continuations (`tryExecuteInline`/
+    //     `awaitConcurrentExecution`/`pollAndExecute`/`readTerminalOutcome`) resolve to.
+    // Modeled as a union rather than "fixed" into one shape — unifying them is a real, larger
+    // behavior change to a heavily fought-over handler (see that file's own module doc comment),
+    // out of this task's "no runtime behaviour change" scope.
     resultSchema: z.union([
+      gateObserveResultSchema,
       wire.ActionRequestWireSchema.extend({ simulate: z.unknown().optional() }),
       z
         .object({

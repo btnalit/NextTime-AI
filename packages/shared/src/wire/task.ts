@@ -56,7 +56,10 @@ export const InvokeWorkerResultWireSchema = z
     workerRunId: z.string(),
     status: TaskStatusSchema,
     result: z.unknown().optional(),
-    failureReason: z.string().optional(),
+    // `toWireInvokeWorkerResult` (handlers.ts) only omits this key when the internal
+    // `InvokeWorkerResult.failureReason` is `undefined` — an explicit `null` (its type is
+    // `string | null | undefined`) still spreads through as a literal `null` value.
+    failureReason: z.string().nullable().optional(),
   })
   .strict();
 export type InvokeWorkerResultWire = z.infer<typeof InvokeWorkerResultWireSchema>;
