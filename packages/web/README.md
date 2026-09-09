@@ -212,12 +212,25 @@ case for the new `initialKind`/`hideKindField` props the wizard's own step ② u
 
 ## End-to-end (Playwright)
 
-Opt-in — **not** part of `pnpm test`/CI (no browser, no kernel there). Two suites:
+Not part of `pnpm test`/the `quality`/`test` CI jobs (no browser, no kernel there) — but
+`.github/workflows/e2e.yml` *does* run a subset of this suite in CI, in a separate, currently
+non-required workflow: it brings up its own throwaway `AGENT_RUNTIME=fake` docker compose stack
+(postgres/kernel/caddy, plus a one-off `llm-proxy` build to generate `models.json`) and runs
+`chat.spec.ts` and `governance.spec.ts` against it — see docs/runbooks/web-console.md's own
+"CI（Playwright）" section for exactly what it starts, how long it takes, and how to reproduce it
+locally. Three suites:
 
-- `e2e/chat.spec.ts` — the S1.8 flow (登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整).
+- `e2e/chat.spec.ts` — the S1.8 flow (登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整). Runs in
+  CI.
+- `e2e/governance.spec.ts` — CI smoke coverage for the S3.11+ governance surface against a single
+  fresh owner key: approvals queue renders (empty state is fine), Members lists the owner and
+  create-a-member shows the key once, My Agent loads with the models list, Systems opens the
+  onboarding wizard to step ①. Runs in CI; needs no seeded data and no second principal.
 - `e2e/approvals.spec.ts` — the S2.10 flow (queue row → drawer → Approve → the chat card's chip
   turns `approved` and a status notice appears; holder isolation for a second principal). Needs a
-  pending ActionRequest seeded first — see "Seeding a pending ActionRequest".
+  pending ActionRequest seeded first — see "Seeding a pending ActionRequest" — and
+  `WEB_E2E_SEED_ACTION_REQUESTS=1`. **Not** run in CI (no seeded rows, no second principal there);
+  local-only.
 
 ```bash
 corepack pnpm --filter @nexttime/web exec playwright install chromium   # once per machine
@@ -229,10 +242,17 @@ corepack pnpm --filter @nexttime/web dev
 node packages/kernel/dist/cli/bootstrap.js add-principal \
   --workspace <workspace-id> --name bob --role operator   # prints principal id + API key
 
+# chat.spec.ts + governance.spec.ts (owner key only):
+WEB_E2E_BASE_URL=http://127.0.0.1:5173 \
+WEB_E2E_API_KEY=<owner-api-key> \
+corepack pnpm --filter @nexttime/web e2e
+
+# + approvals.spec.ts's two seeded scenarios (after "Seeding a pending ActionRequest" below):
 WEB_E2E_BASE_URL=http://127.0.0.1:5173 \
 WEB_E2E_API_KEY=<owner-api-key> \
 WEB_E2E_API_KEY_B=<bob-api-key> \
 WEB_E2E_PRINCIPAL_ID_B=<bob-principal-id> \
+WEB_E2E_SEED_ACTION_REQUESTS=1 \
 corepack pnpm --filter @nexttime/web e2e
 ```
 
@@ -240,8 +260,9 @@ corepack pnpm --filter @nexttime/web e2e
 
 The web owns no capability that can create a *pending* ActionRequest from a bare API key (a real
 one needs `request_action` over a Handle plus a reachable Gatekeeper). `e2e/approvals.spec.ts`
-expects the database to already hold one per scenario — run the block below **twice**, once per
-`resource_scope` marker (`e2e-approve-flow`, `e2e-isolation-flow`; the spec hardcodes both):
+expects the database to already hold one per scenario (and `WEB_E2E_SEED_ACTION_REQUESTS=1` set,
+see above) — run the block below **twice**, once per `resource_scope` marker (`e2e-approve-flow`,
+`e2e-isolation-flow`; the spec hardcodes both):
 
 ```bash
 psql "$DATABASE_URL" -v workspace_id=<workspace-id> -v on_behalf_of=<owner-principal-id> \

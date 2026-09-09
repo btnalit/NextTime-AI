@@ -99,6 +99,81 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 12. ~~（S3.12）目录页与接入向导都没有 Operation 调用/审批统计列~~——**已实现（feat/operation-stats-and-worker-definition-filter）**：`get_operation_stats{gatekeeperId?, days?}`（`connection` 组，`mode: observe`，`minRole: member`）注册在 `packages/shared/src/capabilities.ts`，`handler` 与 `list_operations` 同一模块（`gatekeeper-read-handlers.ts`）。返回 `{items: [{gatekeeperId, operationName, calls, approved, rejected, autoApproved, failed, lastCalledAt}]}`——**execute 类 Operation 专属**：四个分类计数来自 `action_requests` 的 `status` 列，按**当前**状态取（`governance/approval/reads.ts` 的 `getOperationStats`），不是"曾经历过"的累计决策历史；`calls` 是窗口内不限状态的总数。**observe 类 Operation（`<gate>.<op>`/`observe_operation`）未纳入**——`substrate/audit` 的 `queryAudit` 服务接口既无日期范围过滤也无 payload 路径分组，直接查 `audit_records` 表又违反该模块自己的边界（"其它模块不得直接查询其表"），扩展这个查询面超出本次范围；留作已记录的缺口而非编造近似值。`CatalogPage.tsx` 的 Operations tab 已去掉 TODO，加了调用/批准/拒绝/最近四列（独立于 `list_operations` 的 `useCapabilityList` 调用，取不到该 capability 或某一行没有匹配的 stats 时单独显示"—"，不拖垮整个列表）。
 13. **（S3.13）`get_agent_profile`/`set_agent_profile`/`get_agent_policy`/`set_agent_policy` 均由并行内核 PR 落地**——见上文"内核并行落地"一节；控制台已按契约把 UI 编完，等待该 PR 合并部署。
 
+## CI（Playwright）
+
+`.github/workflows/e2e.yml`（新增工作流，与 `ci.yml` 完全分离，`ci.yml` 本身未改动）在每个 PR 和
+推送到 `main` 时跑一遍本节 e2e 的一个子集——单个 job `web-e2e`：
+
+1. checkout（pinned SHA，与 `ci.yml` 同一约定）、`pnpm/setup`（Node 22）、`pnpm install
+   --frozen-lockfile`，`pnpm --filter @nexttime/web exec playwright install --with-deps
+   chromium`。
+2. 在 runner 自己的临时目录生成一份 `NEXTTIME_DATA`（`deploy/ci/env.ci.template` 套上这个路径写出
+   `.env`），依次 `sudo` 跑 `scripts/host-bootstrap.sh` → `scripts/host-env-init.sh` →
+   `scripts/gen-handle-keys.sh`（与真实主机部署同一套脚本，未做任何 CI 专用改写——只是加了
+   `sudo`，因为这些脚本按设计把 `secrets/*.env`/`secrets/*.key` 写成 `0600`/`0640` 且 root 拥有，
+   之后每一条 `docker compose` 调用因此也带 `sudo`），再把 `config/llm-providers.fake.example.yaml`
+   复制成 `${NEXTTIME_DATA}/config/llm-providers.yaml` 并给 `secrets/llm-proxy.env` 追加
+   `FAKE_LLM_API_KEY=fake`（与 `docs/runbooks/host-agent-host.md` §3 的手工步骤一致）。`.env` 里
+   `AGENT_RUNTIME=fake`——见下方"为什么只需要三个常驻容器"。
+3. `docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml build kernel caddy
+   llm-proxy`，然后一次性 `docker compose run --rm --no-deps llm-proxy node dist/cli/gen-models.js`
+   （与 Makefile `gen-models` target 同一条命令，只是直接内联在工作流里而不经 `make`，见
+   `deploy/ci/env.ci.template` 头部注释），把 `llm-providers.yaml` 里的 `fake`/`fake-echo` 投影成
+   `models.json`，供治理页的模型列表用。
+4. `docker compose ... up -d --wait postgres`，然后**先于 `kernel` 服务**跑
+   `docker compose run --rm --no-deps kernel node dist/cli/migrate.js`。顺序是硬约束，不只是习惯：
+   `kernel` 自己的启动流程有一个不带 try/catch 的 `await interruptStaleRunningTurns(...)`
+   （`packages/kernel/src/index.ts` `BackgroundServices.start()` 第一行；`main()` 外层只把这个
+   reject 打个日志，不重新抛出也不重试）——如果这时 `activities` 表还不存在，这一步直接抛错，
+   紧跟其后的 `dispatcher.start()` 永远不会执行，`send_chat_message` 仍然返回成功（消息与 Turn
+   行都建好了），但没有任何东西驱动这个 Turn 往下走，页面上的 Turn 会永远停在 `running`。第一次真
+   实跑通这个工作流时踩到的坑——最初的版本是 `up -d --wait postgres kernel caddy` 在前、migrate
+   在后，`chat.spec.ts` 因此稳定失败在"等 Turn completed"这一步。
+5. `docker compose ... up -d --wait kernel caddy`（此时数据库已迁移完毕，`kernel` 的启动恢复扫描
+   能正常跑完），再对 `https://127.0.0.1:8443/api/health` 轮询 `curl -sk`（caddy 是自签证书，
+   Playwright 侧对应 `playwright.config.ts` 的 `use.ignoreHTTPSErrors: true`）直到 200——caddy 本身
+   在 `docker-compose.yml` 里没有声明 `healthcheck:`，`--wait` 只能确认它在跑，这一步才是真正的就
+   绪门槛。
+6. `docker compose run --rm --no-deps kernel node dist/cli/bootstrap.js create-workspace --name
+   ci-e2e --owner owner`（与 `scripts/accept_s1.sh` `bootstrap_step` 同一套输出解析）拿到一个
+   owner API key（`::add-mask::` 遮蔽，日志里不出现）。
+7. `WEB_E2E_BASE_URL=https://127.0.0.1:8443 WEB_E2E_API_KEY=<刚拿到的 key> corepack pnpm
+   --filter @nexttime/web e2e`——只跑 `chat.spec.ts` 与 `governance.spec.ts`
+   （`approvals.spec.ts` 的两个场景需要种子 ActionRequest 与第二个 principal，`WEB_E2E_
+   SEED_ACTION_REQUESTS` 未设置时自动 skip，见该文件自己的注释）。`playwright.config.ts` 强制
+   `workers: 1`——这几个 spec 共用同一个 kernel/Postgres，部分场景假设对服务端状态的独占访问
+   （如"最近创建的那个 Chat"），跨文件并发跑没有意义，序列化换来的确定性比省下来的几秒钟值。
+8. 失败时把 `packages/web/playwright-report/` 与 `packages/web/test-results/`（trace，
+   `retain-on-failure`）当 artifact 上传；`docker compose ... down -v` 无论成败都执行。
+
+**为什么只需要三个常驻容器（postgres/kernel/caddy）**：登录/对话/审批队列/治理四类页面全部经
+`AGENT_RUNTIME=fake`（`packages/kernel/src/application/host-bridge/fake-runtime.ts`）在内核进程
+内直接回显，从不经 agent-host/worker-supervisor/llm-proxy/egress-proxy/docker-socket-proxy 出站——
+这正是 `.env.example` 里 `AGENT_RUNTIME=fake` 那条注释说的"跳过整条容器/pi 链路"，也是本工作流刻意
+不起这些服务的原因（顺带绕开了 agent-host/worker-supervisor 需要的 docker-in-docker）。`llm-proxy`
+只在第 3 步被一次性 `run`（生成 `models.json`），从不 `up`；`fake-llm` 干脆不建——`gen-models.js`
+只本地解析 `llm-providers.yaml`，从不请求 `fake-llm`，而聊天走的是内核自己的 FakeAgentRuntime，同样
+不请求它。
+
+**耗时**：三个多阶段镜像各自 `pnpm install --frozen-lockfile` + 构建，runner 本地无跨次持久层缓存
+（每次全新 VM）——预计几分钟量级；未接入 GitHub 的 Docker layer cache action（`docker compose
+build` 走 compose 自身路径，没有直接的 `--cache-from/--cache-to type=gha`，需要额外的 buildx bake
+接线，留作后续如果这几分钟成为瓶颈时再做）。
+
+**目前不是必需检查**：`e2e.yml` 与 `ci.yml` 是两个独立工作流，仓库分支保护规则目前只列
+`ci.yml` 的三个 job（`quality`/`test`/`guards`）为必需——`e2e / web-e2e` 想升级为必需检查，需要仓库
+管理员在 GitHub 仓库设置的 branch protection 里手动把它加进必需状态检查列表（这个仓库里没有别的
+地方能声明"必需"，它是 GitHub 项目设置，不是任何 workflow 文件的属性）。建议观察若干次运行确认不
+flaky 后再升级。
+
+**已知的不稳定来源**：docker 镜像构建时间随 runner 负载波动；`docker compose up --wait` 与
+`/api/health` 轮询给了启动一定余量，但一个明显偏慢的 runner 仍可能需要放宽 job 的
+`timeout-minutes`；`gen-models`/`bootstrap`/`migrate` 都是一次性 `docker compose run`，不依赖任何
+定时任务或后台重试，失败即报错退出，不会静默重试掩盖问题。
+
+**本地复现**：`deploy/ci/env.ci.template` 头部注释有完整命令；本质上就是上面 1-6 步去掉 checkout/
+pnpm setup（本地已有）。
+
 ## 验证
 
 ```bash

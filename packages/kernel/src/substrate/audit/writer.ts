@@ -128,3 +128,92 @@ export async function queryAudit(
   );
   return result.rows.map(mapAuditRecordRow);
 }
+
+/**
+ * `queryAuditActionOperationStats` (S3.8, `get_operation_stats`'s observe-class attribution gap —
+ * packages/shared/src/capabilities.ts's own `get_operation_stats` doc comment: "`substrate/audit`'s
+ * own `queryAudit` service interface ... has no date-range filter and no payload-path grouping, so
+ * an efficient per-operation, `days`-windowed observe count is not achievable through it ... out of
+ * scope"). This is that extension — a date-range, grouped read scoped to a caller-chosen set of
+ * `action` values (the capability name `dispatch.ts` audits under, e.g. `observe_operation`), with
+ * `gatekeeperId`/`operationName` pulled out of `payload.params` (the parsed capability params
+ * `dispatch.ts` always writes verbatim there unless redacted — see that module's own doc comment;
+ * `observe_operation`'s `paramsSchema` is `{gatekeeperId, operation, params}`, has no
+ * `redactedParamKeys`, so both fields are always present verbatim for a real call).
+ *
+ * Kept generic (grouped by `action` too, not hardcoded to one capability name) rather than a
+ * single-purpose "observe operation stats" query — `governance/approval/reads.ts`'s
+ * `getOperationStats` is the first caller, filtering to `['observe_operation']`, but nothing here
+ * assumes that.
+ */
+export interface AuditActionOperationStatsFilter {
+  /** `audit_records.action` values to include (an exact-match `= any(...)`, not a pattern). */
+  readonly actions: readonly string[];
+  /** Trailing window size in days from now — clamped to [1, `MAX_AUDIT_ACTION_STATS_DAYS`], same
+   *  defense-in-depth convention {@link resolveLimit} already applies to `queryAudit`'s `limit`. */
+  readonly sinceDays: number;
+  readonly gatekeeperId?: string;
+}
+
+export interface AuditActionOperationStatsRow {
+  readonly action: string;
+  readonly gatekeeperId: string;
+  readonly operationName: string;
+  readonly calls: number;
+  readonly lastCalledAt: Date;
+}
+
+interface AuditActionOperationStatsDbRow {
+  action: string;
+  gatekeeper_id: string;
+  operation_name: string;
+  calls: string;
+  last_called_at: Date;
+}
+
+export const DEFAULT_AUDIT_ACTION_STATS_DAYS = 30;
+export const MAX_AUDIT_ACTION_STATS_DAYS = 90;
+
+function resolveSinceDays(days: number): number {
+  if (!Number.isFinite(days) || days <= 0) return DEFAULT_AUDIT_ACTION_STATS_DAYS;
+  return Math.min(Math.floor(days), MAX_AUDIT_ACTION_STATS_DAYS);
+}
+
+/** Reads `audit_records` grouped by `(action, gatekeeperId, operationName)` within the trailing
+ *  `filter.sinceDays` window — `gatekeeperId`/`operationName` are read out of
+ *  `payload->'params'->>'gatekeeperId'`/`...->>'operation'`; a row missing either (defensive —
+ *  every real caller's `paramsSchema` requires both) is excluded rather than surfaced as a
+ *  `null`-keyed group. Empty `filter.actions` short-circuits to `[]` without a round trip — an
+ *  `= any('{}')` would already return nothing, but this avoids the query entirely. */
+export async function queryAuditActionOperationStats(
+  client: PoolClient,
+  workspaceId: string,
+  filter: AuditActionOperationStatsFilter,
+): Promise<readonly AuditActionOperationStatsRow[]> {
+  if (filter.actions.length === 0) return [];
+
+  const result = await client.query<AuditActionOperationStatsDbRow>(
+    `select action,
+            payload->'params'->>'gatekeeperId' as gatekeeper_id,
+            payload->'params'->>'operation' as operation_name,
+            count(*)::bigint as calls,
+            max(created_at) as last_called_at
+     from audit_records
+     where workspace_id = $1
+       and action = any($2::text[])
+       and created_at >= now() - make_interval(days => $3::int)
+       and payload->'params'->>'gatekeeperId' is not null
+       and payload->'params'->>'operation' is not null
+       and ($4::uuid is null or payload->'params'->>'gatekeeperId' = $4::text)
+     group by action, gatekeeper_id, operation_name
+     order by action, gatekeeper_id, operation_name`,
+    [workspaceId, filter.actions, resolveSinceDays(filter.sinceDays), filter.gatekeeperId ?? null],
+  );
+  return result.rows.map((row) => ({
+    action: row.action,
+    gatekeeperId: row.gatekeeper_id,
+    operationName: row.operation_name,
+    calls: Number(row.calls),
+    lastCalledAt: row.last_called_at,
+  }));
+}
