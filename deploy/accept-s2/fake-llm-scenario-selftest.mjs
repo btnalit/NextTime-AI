@@ -307,7 +307,7 @@ async function main() {
       const call = toolCallOf(json);
       check(
         'entry-dependency-chat-turn1',
-        call?.name === 'search' && JSON.stringify(call.args) === '{"objectType":"Container"}',
+        call?.name === 'search' && JSON.stringify(call.args) === '{"query":"","objectType":"Container"}',
         JSON.stringify(json.choices[0]),
       );
     }
