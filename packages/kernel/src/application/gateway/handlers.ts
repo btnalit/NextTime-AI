@@ -83,6 +83,15 @@ import {
   requestConnectionHandler,
 } from './connection-handlers.js';
 import {
+  causalChainHandler,
+  decisionImpactHandler,
+  findPrecedentsHandler,
+  listConflictsHandler,
+  queryDecisionsHandler,
+  resolveConflictHandler,
+  verifyFactHandler,
+} from './epistemic-handlers.js';
+import {
   getGatekeeperHandler,
   getOperationStatsHandler,
   listGatekeepersHandler,
@@ -1107,6 +1116,13 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_entry_context', getEntryContextHandler],
   ['report_turn', reportTurnHandler],
   ['record_decision', recordDecisionHandler],
+  ['list_conflicts', listConflictsHandler],
+  ['resolve_conflict', resolveConflictHandler],
+  ['verify_fact', verifyFactHandler],
+  ['query_decisions', queryDecisionsHandler],
+  ['causal_chain', causalChainHandler],
+  ['decision_impact', decisionImpactHandler],
+  ['find_precedents', findPrecedentsHandler],
   ['propose_worker_definition', proposeWorkerDefinitionHandler],
   ['publish_worker_definition', publishWorkerDefinitionHandler],
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],

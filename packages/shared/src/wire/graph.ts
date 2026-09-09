@@ -142,3 +142,80 @@ export const ExplainResultWireSchema = z
   })
   .strict();
 export type ExplainResultWire = z.infer<typeof ExplainResultWireSchema>;
+
+/**
+ * S3.2 冲突检测 (docs/development-tasks.md S3.2, `substrate/epistemic/conflicts.ts`'s
+ * `ConflictRow`) — `link_a_id`/`link_b_id` renamed `factAId`/`factBId` on the wire (the resource
+ * these ids reference is projected elsewhere as "Fact", never "Link" — docs/wire-contract-
+ * conventions.md §2 "引用另一资源时用 `<resource>Id`"). `resolution` is the free-form jsonb
+ * `{choice, reason}` `resolve_conflict` (epistemic-handlers.ts) writes, `null` while `open`.
+ */
+export const ConflictWireSchema = z
+  .object({
+    id: z.string(),
+    conflictType: z.string(),
+    status: z.string(),
+    factAId: z.string(),
+    factBId: z.string(),
+    description: z.string().nullable(),
+    activityId: z.string(),
+    openedAt: z.string(),
+    resolvedAt: z.string().nullable(),
+    resolvedBy: z.string().nullable(),
+    resolution: z.record(z.string(), z.unknown()).nullable(),
+  })
+  .strict();
+export type ConflictWire = z.infer<typeof ConflictWireSchema>;
+
+/** `decisions` row (`substrate/epistemic/decisions.ts`'s `DecisionRow`) — `record_decision`'s own
+ *  resultSchema stays its narrower `{id, status, turnId}` shape (capabilities.ts); this is the
+ *  fuller projection `query_decisions`/`find_precedents` return. */
+export const DecisionWireSchema = z
+  .object({
+    id: z.string(),
+    status: z.string(),
+    activityId: z.string(),
+    sourceId: z.string().nullable(),
+    summary: z.string().nullable(),
+    rationale: z.record(z.string(), z.unknown()).nullable(),
+    decidedBy: z.string().nullable(),
+    createdAt: z.string(),
+    decidedAt: z.string().nullable(),
+  })
+  .strict();
+export type DecisionWire = z.infer<typeof DecisionWireSchema>;
+
+/** `causal_chain` (§9.3 Semantica `get_causal_chain`) — a bounded (`depth` ≤ 5) walk of
+ *  `explain()`-shaped steps; see `substrate/epistemic/decisions.ts`'s `causalChain` for how
+ *  `rootType`/`chain`/`truncated` are derived. */
+export const CausalChainResultWireSchema = z
+  .object({
+    rootType: z.enum(['fact', 'decision']),
+    rootId: z.string(),
+    chain: z.array(ExplainResultWireSchema),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type CausalChainResultWire = z.infer<typeof CausalChainResultWireSchema>;
+
+/** `decision_impact` (§9.3 Semantica `analyze_decision_impact`) — see `substrate/epistemic/
+ *  decisions.ts`'s `decisionImpact` for why `tasks` is `taskIds` (ids only) rather than full Task
+ *  objects. */
+export const DecisionImpactResultWireSchema = z
+  .object({
+    decisionId: z.string(),
+    facts: z.array(FactWireSchema),
+    actionRequests: z.array(
+      z
+        .object({
+          id: z.string(),
+          status: z.string(),
+          actionKindTag: z.string(),
+          gatekeeperId: z.string(),
+        })
+        .strict(),
+    ),
+    taskIds: z.array(z.string()),
+  })
+  .strict();
+export type DecisionImpactResultWire = z.infer<typeof DecisionImpactResultWireSchema>;

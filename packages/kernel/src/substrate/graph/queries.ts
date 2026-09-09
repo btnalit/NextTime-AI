@@ -187,6 +187,61 @@ export function buildGetFactForUpdateQuery(workspaceId: string, factId: string):
   };
 }
 
+/**
+ * S3.2 conflict detection (I5, docs/development-tasks.md S3.2): the identity `assertFact` checks
+ * before every insert — "the same (source object, link type, target) as an existing non-superseded
+ * Fact". Calls `find_active_fact_for_identity` (migrations/core/0017 — a `security definer`
+ * function, same escape hatch as `link_visible_to_caller`/0013) rather than a plain `select ...
+ * from links` here: the asserting caller's own `links_visibility` RLS would otherwise hide exactly
+ * the case I5 exists to catch — a prior Fact fed by a private Source the caller does not own (see
+ * that migration's own comment on the function for the full "why a plain SELECT is wrong here"
+ * reasoning). The function's own `for update` (same convention as `buildGetFactForUpdateQuery`)
+ * locks the row for the rest of `assertFact`'s transaction, so two concurrent assertions against
+ * the same identity serialize rather than both reading "no prior Fact" and both inserting
+ * independently. Only the *most recently recorded* still-active Fact is considered (the function's
+ * own `order by recorded_at desc limit 1`) — after a Conflict has been opened once, more than one
+ * Fact can be simultaneously `recorded` for the same identity (that is the whole point of "keep
+ * both"); a third assertion is compared against the latest of those, not exhaustively against
+ * every open side (see `conflicts.ts`'s own module comment for why this scope boundary is
+ * acceptable for S3.2).
+ */
+export function buildFindActiveFactByIdentityQuery(
+  workspaceId: string,
+  identity: {
+    readonly linkType: string;
+    readonly sourceObjectId: string;
+    readonly targetObjectId: string;
+  },
+): SqlQuery {
+  return {
+    text: `select ${FACT_COLUMNS} from find_active_fact_for_identity($1, $2, $3, $4)`,
+    values: [workspaceId, identity.linkType, identity.sourceObjectId, identity.targetObjectId],
+  };
+}
+
+/**
+ * `verifyFact` (S3.2 `verify_fact` capability): promotes `epistemic_status` to `verified` and
+ * stamps `verified_by`. The I4 content-immutability trigger (`links_block_content_update`,
+ * migrations/core/0002_substrate.sql) explicitly excludes `epistemic_status`/`verified_by` from
+ * its blocklist — "verify/contradict are legitimate follow-on writes to an already-recorded Fact,
+ * not a content edit" — so this UPDATE is not blocked by I4 despite `links` otherwise being
+ * append-only.
+ */
+export function buildVerifyFactQuery(
+  workspaceId: string,
+  factId: string,
+  verifiedBy: string,
+): SqlQuery {
+  return {
+    text: `
+      update links set epistemic_status = 'verified', verified_by = $3
+      where workspace_id = $1 and id = $2
+      returning ${FACT_COLUMNS}
+    `,
+    values: [workspaceId, factId, verifiedBy],
+  };
+}
+
 export function buildMarkFactSupersededQuery(workspaceId: string, factId: string): SqlQuery {
   return {
     text: `

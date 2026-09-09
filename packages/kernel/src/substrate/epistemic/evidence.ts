@@ -51,6 +51,25 @@ function mapEvidenceRow(row: EvidenceDbRow): EvidenceRow {
   };
 }
 
+/** S3.2 `verify_fact` (design doc §5.3 item 6 / I3.6 "verified 的 Fact 没有 verified_by 与
+ *  Evidence"): whether at least one Evidence row exists for `factId`. The DB CHECK
+ *  (migrations/core/0002_substrate.sql) only enforces the `verified_by not null` half of I3.6 —
+ *  the "and Evidence" half needs a cross-table read, left to the application write path by that
+ *  migration's own comment. `application/gateway/epistemic-handlers.ts`'s `verifyFactHandler`
+ *  calls this before `GraphStore.verifyFact` so the graph module itself never has to read a table
+ *  it does not own. */
+export async function hasEvidence(
+  client: PoolClient,
+  workspaceId: string,
+  factId: string,
+): Promise<boolean> {
+  const result = await client.query(
+    'select 1 from evidence where workspace_id = $1 and link_id = $2 limit 1',
+    [workspaceId, factId],
+  );
+  return result.rows.length > 0;
+}
+
 /** Attaches one Evidence row to an existing Fact (`link_id`). Throws the DB's own FK-violation
  *  error if `linkId` does not name a Fact in this workspace — callers that need a clean 400/404
  *  should verify the Fact exists first (same convention `application/task/result.ts` follows for
