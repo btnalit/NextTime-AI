@@ -2,7 +2,8 @@
 
 对应任务：development-tasks.md § S2.5（`gatekeepers/docker`、`gatekeepers/ragflow` 两个预置门实例
 + `docker-compose.yml` 的 `gatekeeper-docker`/`gatekeeper-ragflow` 服务）。占位符取值见
-`docs/private/`（不入库）。
+`docs/private/`（不入库）。新增一个本仓库还没有的接入包（第三方系统），走通用步骤，见
+`docs/runbooks/add-gatekeeper.md`。
 
 前置：E1–E4（数据目录已建、`.env` 已生成、Postgres 已起）；`scripts/host-bootstrap.sh` /
 `scripts/host-env-init.sh` 已跑过且是**这次 S2.5 改动之后的版本**（新增了
