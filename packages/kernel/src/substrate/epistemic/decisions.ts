@@ -175,6 +175,25 @@ function extractFactIdsFromRationale(rationale: Record<string, unknown> | null):
   return [...ids];
 }
 
+/**
+ * SQL expression yielding every Fact id `rationale` names, as a jsonb array — `relatedFactIds`
+ * (`record_decision`) unioned with `factAId`/`factBId` (`resolve_conflict`) when present. Mirrors
+ * `extractFactIdsFromRationale` above exactly (TS-side, used by `causalChain`/`decisionImpact`) so
+ * `query_decisions`'/`find_precedents`' `objectId` filter recognizes the same Decisions those two
+ * capabilities do — a function of the table alias (never string-substituted) so both SQL call
+ * sites below can never drift apart.
+ */
+function rationaleFactIdsJsonb(alias: string): string {
+  const col = `${alias}.rationale`;
+  return `(
+    coalesce(${col} -> 'relatedFactIds', '[]'::jsonb)
+    || case when ${col} ->> 'factAId' is not null
+         then jsonb_build_array(${col} ->> 'factAId') else '[]'::jsonb end
+    || case when ${col} ->> 'factBId' is not null
+         then jsonb_build_array(${col} ->> 'factBId') else '[]'::jsonb end
+  )`;
+}
+
 async function getDecisionRow(
   client: PoolClient,
   workspaceId: string,
@@ -249,7 +268,7 @@ export async function queryDecisions(
          $3::uuid is null
          or exists (
            select 1
-           from jsonb_array_elements_text(coalesce(d.rationale -> 'relatedFactIds', '[]'::jsonb)) fid
+           from jsonb_array_elements_text(${rationaleFactIdsJsonb('d')}) fid
            join links l on l.workspace_id = d.workspace_id and l.id = fid::uuid
            where l.source_object_id = $3 or l.target_object_id = $3
          )
@@ -302,7 +321,7 @@ export async function findPrecedents(
            $2::uuid is not null
            and exists (
              select 1
-             from jsonb_array_elements_text(coalesce(d.rationale -> 'relatedFactIds', '[]'::jsonb)) fid
+             from jsonb_array_elements_text(${rationaleFactIdsJsonb('d')}) fid
              join links l on l.workspace_id = d.workspace_id and l.id = fid::uuid
              where l.source_object_id = $2 or l.target_object_id = $2
            )
