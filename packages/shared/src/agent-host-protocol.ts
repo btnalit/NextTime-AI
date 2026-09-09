@@ -163,6 +163,20 @@ export type AgentHostToKernelFrame = z.infer<typeof AgentHostToKernelFrameSchema
  *  `/resident/spawn` contract, docs/runbooks/host-worker-runtime.md §9) — the kernel is the one
  *  process that already knows the configured `KERNEL_LLM_URL`; agent-host does not need its own
  *  opinion about it. */
+/** One Skill mounted by *content*, not a host path — the same `skillsInline` shape S2.14's Task
+ *  path already established (`worker-supervisor`'s `config.ts` `TaskSkillInlineSchema`; this
+ *  package cannot import that package's schema directly, so the shape is re-declared here,
+ *  structurally identical). `files` keys are relative filenames under `<agentDir>/skills/<name>/`
+ *  (`"SKILL.md"` at minimum). The kernel resolves this from the caller's `effective.enabledSkills`
+ *  (S3.13) on every `startTurn`, the same way `systemPrompt`/`model`/`egressDeny` below are already
+ *  resolved fresh each time. */
+const AgentHostSkillInlineSchema = z
+  .object({
+    name: z.string().min(1),
+    files: z.record(z.string(), z.string()),
+  })
+  .strict();
+
 export const KernelStartTurnCommandSchema = z
   .object({
     type: z.literal('startTurn'),
@@ -195,6 +209,13 @@ export const KernelStartTurnCommandSchema = z
      *  platform's fixed deny list. Omitted (no definition published, or none set) leaves the
      *  existing/no per-source deny list untouched — never a widening either way. */
     egressDeny: z.array(z.string()).optional(),
+    /** S3.13: the caller's own `effective.enabledSkills`, resolved and rendered by the kernel
+     *  (`application/gateway`'s `resolvePublishedSkills`/`renderSkillMarkdownFile`, the same
+     *  functions `application/task/definition-content.ts`'s `resolveSkillsInline` already uses for
+     *  the Task path) — forwarded by agent-host as `/resident/spawn`'s own `skillsInline`, which
+     *  worker-supervisor writes to the entry container's `<agentDir>/skills/<name>/` before
+     *  (re)creating it. Omitted/empty means no Skill is mounted — never a widening. */
+    skillsInline: z.array(AgentHostSkillInlineSchema).optional(),
   })
   .strict();
 

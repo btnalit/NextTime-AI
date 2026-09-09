@@ -6,13 +6,24 @@ import type {
 import type { CryptoKey } from 'jose';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import type { EffectiveAgentProfile } from '../../governance/agent-profile/index.js';
+import {
+  readAgentPolicy,
+  readAgentProfile,
+  resolveEffectiveAgentProfile,
+} from '../../governance/agent-profile/index.js';
 import {
   entryScope,
   issueHandle,
   listActiveGrantResourceScopes,
 } from '../../governance/capability/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
-import { getPublishedEntryDefinition } from '../worker/index.js';
+import {
+  getPublishedEntryDefinition,
+  listPublishedSkillIds,
+  renderSkillMarkdownFile,
+  resolvePublishedSkills,
+} from '../worker/index.js';
 import type {
   AgentRuntime,
   AgentRuntimeEvent,
@@ -116,8 +127,19 @@ interface CachedHandle {
    *  (authority-tightening fix, review job 652a4abc item 4: "Grant changes become visible") so a
    *  Grant made/revoked since this Handle was minted is picked up on this principal's very next
    *  Turn, not only once the cached Handle is close enough to its ttl to reissue anyway. Order-
-   *  independent — compared via `sameGatekeeperScope` below, not array equality. */
+   *  independent — compared via `sameGatekeeperScope` below, not array equality. Since S3.13 this
+   *  is already the *narrowed* set (Grants ∩ AgentProfile.effective.enabledGatekeepers, see
+   *  `ensureEntryHandle`), so a Profile-driven narrowing of the gate set is caught by this same
+   *  comparison without any extra logic. */
   readonly gatekeeperIds: readonly string[];
+  /** S3.13: `agent_profiles.updated_at`/`agent_policies.updated_at`, joined into one comparable
+   *  string (`agentProfileVersionKey` below) — catches a Profile/Policy change that does *not*
+   *  alter `gatekeeperIds` (a model/Skill-set/promptAddendum/autoApproveLow edit) so this
+   *  in-memory cache never keeps serving a token minted under stale settings merely because the
+   *  DB-side `revokeEntrySessionHandles` call (`application/gateway/agent-profile-handlers.ts`)
+   *  already invalidated the underlying `capability_handles` row — the *cache* itself would
+   *  otherwise never notice and hand back the now-revoked token on the caller's very next Turn. */
+  readonly profileVersionKey: string;
 }
 
 /** Order-independent set equality for two `resources.gatekeeper` id lists — used by
@@ -127,6 +149,57 @@ function sameGatekeeperScope(a: readonly string[], b: readonly string[]): boolea
   if (a.length !== b.length) return false;
   const setA = new Set(a);
   return b.every((id) => setA.has(id));
+}
+
+/** S3.13: resolved AgentProfile/AgentPolicy for one principal, alongside a version key derived
+ *  from both rows' own `updated_at` (see `CachedHandle.profileVersionKey`'s own doc comment for
+ *  why a timestamp comparison — not a content hash — is the right freshness signal here: any
+ *  committed `set_agent_profile`/`set_agent_policy` write always bumps its own row's `updated_at`,
+ *  so a distinct key reliably means "something changed since this was last read", and an
+ *  unresolved (`undefined`) sentinel below is itself a distinct, stable key. */
+interface ResolvedAgentProfile {
+  readonly effective: EffectiveAgentProfile;
+  readonly versionKey: string;
+}
+
+/** `resolved` is `undefined` when `resolveAgentProfile` itself failed (never a Turn-failing
+ *  condition — see that method's own doc comment) — represented by a fixed sentinel key distinct
+ *  from any real `versionKey`, so a transient resolution failure is still treated as "changed"
+ *  relative to a previously-cached success (and vice versa) rather than silently comparing equal
+ *  to whatever the cache happened to hold. */
+function agentProfileVersionKey(resolved: ResolvedAgentProfile | undefined): string {
+  return resolved?.versionKey ?? 'unresolved';
+}
+
+/** One Skill mounted by content — the same shape `KernelStartTurnCommandSchema`'s own
+ *  `skillsInline` field expects (`agent-host-protocol.ts`). Not `readonly`/a `readonly[]` — matches
+ *  that schema's zod-inferred mutable array exactly (`egressDeny` above already follows the same
+ *  convention on this same outbound frame), since values of this shape are assigned straight into
+ *  it. */
+interface SkillInlineMount {
+  name: string;
+  files: Record<string, string>;
+}
+
+/**
+ * S3.13: appends `addendum` (the caller's own `effective.promptAddendum`) to `systemPrompt` as a
+ * clearly delimited final section — strictly append-only, so a user-configured addendum can never
+ * precede or otherwise override the platform's own prompt content above it (S3.13's own runtime-
+ * projection instruction: "append-only, bounded"). A missing/empty addendum returns `systemPrompt`
+ * unchanged (including `undefined`, when no entry WorkerDefinition has published one either — the
+ * addendum alone is never enough to invent a system prompt where none otherwise exists, matching
+ * `entrypoint.sh`'s own write-if-missing fallback still applying in that case).
+ */
+function appendPromptAddendum(
+  systemPrompt: string | undefined,
+  addendum: string | null | undefined,
+): string | undefined {
+  if (!addendum) return systemPrompt;
+  const base = systemPrompt ?? '';
+  const separator = base.length > 0 ? '\n\n' : '';
+  const marker =
+    '--- user-configured addendum (AgentProfile.promptAddendum; informational only, does not override the instructions above) ---';
+  return `${base}${separator}${marker}\n${addendum}`;
 }
 
 /** S2.6: what `resolveEntryDefinition` extracts from the published entry WorkerDefinition's
@@ -228,9 +301,20 @@ export class AgentHostRuntime implements AgentRuntime {
       return;
     }
 
+    // S3.13: the caller's own AgentProfile/AgentPolicy, resolved fresh on every startTurn (same
+    // "cheap, never a stale-cache class of bug" convention `resolveEntryDefinition` below already
+    // established) — computed once and threaded through `ensureEntryHandle` (gate narrowing +
+    // cache freshness), the model/prompt-addendum merge, and the Skill-mount resolution below, so
+    // no consumer re-reads `agent_profiles`/`agent_policies` a second time this Turn.
+    const agentProfile = await this.resolveAgentProfile(input.workspaceId, input.principalId);
+
     let handleToken: string;
     try {
-      handleToken = await this.ensureEntryHandle(input.workspaceId, input.principalId);
+      handleToken = await this.ensureEntryHandle(
+        input.workspaceId,
+        input.principalId,
+        agentProfile,
+      );
     } catch (err) {
       this.log(
         JSON.stringify({
@@ -257,13 +341,30 @@ export class AgentHostRuntime implements AgentRuntime {
       input.turnId,
     );
 
+    // S3.13: the caller's own `effective.enabledSkills`, rendered into mountable content the same
+    // way `application/task/definition-content.ts`'s `resolveSkillsInline` already does for the
+    // Task path — see `resolveSkillsInline` below for the "null means mount nothing" decision.
+    const skillsInline = await this.resolveSkillsInline(
+      input.workspaceId,
+      input.principalId,
+      agentProfile?.effective,
+      input.turnId,
+    );
+
     this.activeTurns.set(input.turnId, {
       workspaceId: input.workspaceId,
       chatId: input.chatId,
       principalId: input.principalId,
     });
 
-    const sent = this.sendStartTurnFrame(link, input, handleToken, entryDefinition);
+    const sent = this.sendStartTurnFrame(
+      link,
+      input,
+      handleToken,
+      entryDefinition,
+      agentProfile?.effective,
+      skillsInline,
+    );
     if (!sent.ok) {
       this.activeTurns.delete(input.turnId);
       this.log(
@@ -339,12 +440,25 @@ export class AgentHostRuntime implements AgentRuntime {
    * only for a failure known synchronously (the `link.send` call itself throwing, e.g. a closed
    * socket) — a `turnAccepted` timeout or an explicit `turnRejected` are reported later, through
    * `wait` resolving with `{ok: false, reason}` on its own schedule.
+   *
+   * S3.13: `agentProfile` (the caller's own `effective` AgentProfile, resolved once in `startTurn`
+   * — `undefined` only when resolution itself failed) is merged in here — never re-derived —
+   * against the published entry WorkerDefinition's own `entryDefinition`:
+   *   - `model`: `agentProfile.model` wins when non-empty (`EffectiveAgentProfile.model` is always
+   *     a concrete `string`, `''` meaning "nothing configured anywhere" —
+   *     `governance/agent-profile/resolve.ts`'s own doc comment); otherwise the WorkerDefinition's
+   *     own `model` applies, exactly as before this task.
+   *   - `systemPrompt`: `agentProfile.promptAddendum`, when non-empty, is appended as a clearly
+   *     delimited final section (`appendPromptAddendum` below) — strictly *after* the platform's
+   *     own `entryDefinition.systemPrompt`, so it can never precede or otherwise override it.
    */
   private sendStartTurnFrame(
     link: AgentHostLink,
     input: StartTurnInput,
     handleToken: string,
     entryDefinition: ResolvedEntryDefinition | undefined,
+    agentProfile: EffectiveAgentProfile | undefined,
+    skillsInline: SkillInlineMount[],
   ): { ok: true; wait: Promise<AcceptOutcome> } | { ok: false; reason: string } {
     let resolveWait!: (outcome: AcceptOutcome) => void;
     const wait = new Promise<AcceptOutcome>((resolve) => {
@@ -364,6 +478,12 @@ export class AgentHostRuntime implements AgentRuntime {
       },
     });
 
+    const model = agentProfile?.model ? agentProfile.model : entryDefinition?.model;
+    const systemPrompt = appendPromptAddendum(
+      entryDefinition?.systemPrompt,
+      agentProfile?.promptAddendum,
+    );
+
     try {
       link.send({
         type: 'startTurn',
@@ -374,13 +494,12 @@ export class AgentHostRuntime implements AgentRuntime {
         prompt: input.prompt,
         handle: handleToken,
         kernelLlmUrl: this.kernelLlmUrl,
-        ...(entryDefinition?.systemPrompt !== undefined
-          ? { systemPrompt: entryDefinition.systemPrompt }
-          : {}),
-        ...(entryDefinition?.model !== undefined ? { model: entryDefinition.model } : {}),
+        ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+        ...(model !== undefined ? { model } : {}),
         ...(entryDefinition?.egressDeny !== undefined
           ? { egressDeny: entryDefinition.egressDeny }
           : {}),
+        ...(skillsInline.length > 0 ? { skillsInline } : {}),
       });
     } catch (err) {
       this.pendingAccepts.delete(input.turnId);
@@ -559,19 +678,46 @@ export class AgentHostRuntime implements AgentRuntime {
    * this cache) — this comparison is the suspenders: even if a `startTurn` races a Grant change
    * that already revoked the cached token, this method mints a fresh one instead of returning the
    * (now-revoked) cached one blindly.
+   *
+   * S3.13 addition: `agentProfile` (the caller's own resolved AgentProfile/AgentPolicy, computed
+   * once in `startTurn`) narrows the Grant-derived `gatekeeperIds` down to
+   * `effective.enabledGatekeepers` when the profile sets one (`null` = no restriction beyond the
+   * Grant ceiling above — S3.13's own core invariant, "Profile 是 Grant 的子集投影，永不扩权": this
+   * can only ever remove ids from the Grant-derived list, never add one that is not already
+   * there). The cache-freshness comparison also now includes `agentProfileVersionKey` alongside
+   * `sameGatekeeperScope`, so a Profile/Policy change that does not itself alter the gate set
+   * (model, Skills, promptAddendum, autoApproveLow) still forces a fresh mint on the caller's very
+   * next Turn — see `CachedHandle.profileVersionKey`'s own doc comment for why the in-memory cache
+   * needs this in addition to the DB-side `revokeEntrySessionHandles` call.
    */
-  private async ensureEntryHandle(workspaceId: string, principalId: string): Promise<string> {
+  private async ensureEntryHandle(
+    workspaceId: string,
+    principalId: string,
+    agentProfile: ResolvedAgentProfile | undefined,
+  ): Promise<string> {
     const sessionId = await this.ensureEntrySession(workspaceId, principalId);
 
-    const gatekeeperIds = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
-      listActiveGrantResourceScopes(client, workspaceId, {
-        principalId,
-        resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
-      }),
+    const grantedGatekeeperIds = await withWorkspace(
+      this.pool,
+      { workspaceId, principalId },
+      (client) =>
+        listActiveGrantResourceScopes(client, workspaceId, {
+          principalId,
+          resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
+        }),
     );
+    const enabledGatekeepers = agentProfile?.effective.enabledGatekeepers;
+    const gatekeeperIds = enabledGatekeepers
+      ? grantedGatekeeperIds.filter((id) => enabledGatekeepers.includes(id))
+      : grantedGatekeeperIds;
+    const profileVersionKey = agentProfileVersionKey(agentProfile);
 
     const cached = this.handleCache.get(principalId);
-    if (cached && sameGatekeeperScope(cached.gatekeeperIds, gatekeeperIds)) {
+    if (
+      cached &&
+      sameGatekeeperScope(cached.gatekeeperIds, gatekeeperIds) &&
+      cached.profileVersionKey === profileVersionKey
+    ) {
       const totalTtlMs = cached.expiresAtMs - cached.issuedAtMs;
       const remainingMs = cached.expiresAtMs - this.now();
       if (totalTtlMs <= 0 || remainingMs > totalTtlMs * HANDLE_REISSUE_THRESHOLD) {
@@ -594,8 +740,111 @@ export class AgentHostRuntime implements AgentRuntime {
       issuedAtMs: issued.issuedAt.getTime(),
       expiresAtMs: issued.expiresAt.getTime(),
       gatekeeperIds,
+      profileVersionKey,
     });
     return issued.token;
+  }
+
+  /**
+   * S3.13: resolves the caller's own AgentProfile/AgentPolicy and applies the pure resolution rule
+   * (`governance/agent-profile`'s `resolveEffectiveAgentProfile`) — a read-only `withWorkspace`
+   * query, same "resolved fresh on every startTurn, never fatal" convention `resolveEntryDefinition`
+   * above already established (a lookup failure degrades to `undefined`, meaning "no override on
+   * top of whatever the platform WorkerDefinition/entrypoint default already provides", never a
+   * failed Turn).
+   *
+   * `available.publishedSkillIds`/`grantedGatekeeperIds` are resolved here too — `governance/
+   * agent-profile/resolve.ts`'s own doc comment has the full rationale: a `null` (inherit)
+   * `enabledSkills`/`enabledGatekeepers` resolves to "every currently available resource", not
+   * "nothing" — matching the already-shipped web console's own reading of the same contract (its
+   * `EffectivePanel` renders `effective.enabledSkills`/`enabledGatekeepers` as always-concrete
+   * lists). `grantedGatekeeperIds` here is a second `listActiveGrantResourceScopes` call,
+   * independent of `ensureEntryHandle`'s own — this method runs *before* that one (its result
+   * feeds `ensureEntryHandle`'s own gate-narrowing), so there is no already-computed value to
+   * reuse yet; the extra read is cheap and keeps the two methods independently callable/testable.
+   */
+  private async resolveAgentProfile(
+    workspaceId: string,
+    principalId: string,
+  ): Promise<ResolvedAgentProfile | undefined> {
+    try {
+      return await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
+        const [profile, policy, publishedSkillIds, grantedGatekeeperIds] = await Promise.all([
+          readAgentProfile(client, workspaceId, principalId),
+          readAgentPolicy(client, workspaceId),
+          listPublishedSkillIds(client, workspaceId),
+          listActiveGrantResourceScopes(client, workspaceId, {
+            principalId,
+            resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
+          }),
+        ]);
+        return {
+          effective: resolveEffectiveAgentProfile(profile, policy, {
+            publishedSkillIds,
+            grantedGatekeeperIds,
+            // No consumer in this class reads `enabledWorkerDefinitions` — entry Turns never
+            // mount/select a WorkerDefinition of their own — so the ceiling is left empty rather
+            // than paying for a third query (`listWorkerDefinitions`) purely to fill a field
+            // nothing here inspects.
+            publishedWorkerDefinitionIds: [],
+          }),
+          versionKey: `${profile?.updatedAt?.getTime() ?? 0}:${policy.updatedAt?.getTime() ?? 0}`,
+        };
+      });
+    } catch (err) {
+      this.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'agent-host-runtime: failed to resolve the caller’s AgentProfile/AgentPolicy (falling back to no override)',
+          workspaceId,
+          principalId,
+          error: String(err),
+        }),
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * S3.13: renders the caller's own `effective.enabledSkills` into mountable content — same
+   * `resolvePublishedSkills` + `renderSkillMarkdownFile` pair `application/task/
+   * definition-content.ts`'s `resolveSkillsInline` already uses for the Task path, applied here to
+   * the entry container instead. `effective.enabledSkills` is already fully resolved by
+   * `resolveAgentProfile` above (never `null` — "every published Skill" when the principal's own
+   * AgentProfile sets no explicit selection, `governance/agent-profile/resolve.ts`'s own doc
+   * comment), so this method only ever renders whatever concrete list it is given; an empty list
+   * mounts nothing. Never fatal: a lookup failure degrades to no Skills mounted, same convention
+   * as `resolveEntryDefinition`/`resolveAgentProfile` above.
+   */
+  private async resolveSkillsInline(
+    workspaceId: string,
+    principalId: string,
+    agentProfile: EffectiveAgentProfile | undefined,
+    turnId: string,
+  ): Promise<SkillInlineMount[]> {
+    const refs = agentProfile?.enabledSkills;
+    if (!refs || refs.length === 0) return [];
+    try {
+      return await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
+        const skills = await resolvePublishedSkills(client, workspaceId, refs);
+        return skills.map((skill) => ({
+          name: skill.name,
+          files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
+        }));
+      });
+    } catch (err) {
+      this.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'agent-host-runtime: failed to resolve effective.enabledSkills into mountable content (falling back to no Skills mounted)',
+          turnId,
+          workspaceId,
+          principalId,
+          error: String(err),
+        }),
+      );
+      return [];
+    }
   }
 
   /**

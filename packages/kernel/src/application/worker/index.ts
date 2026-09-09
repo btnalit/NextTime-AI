@@ -33,6 +33,7 @@ export type {
 
 export {
   deprecateSkill,
+  listPublishedSkillIds,
   listSkills,
   proposeSkill,
   publishSkill,

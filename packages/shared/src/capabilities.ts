@@ -45,6 +45,11 @@ export const CAPABILITY_GROUP_VALUES = [
   // `disable_principal`), plus `get_workspace`/`list_models`, which are workspace-summary/config
   // reads with no other natural home.
   'members',
+  // S3.13 (docs/development-tasks.md "每用户智能体配置"): per-principal AgentProfile
+  // (`get_agent_profile`/`set_agent_profile`) plus the workspace-wide AgentPolicy that governs it
+  // (`get_agent_policy`/`set_agent_policy`) — a distinct enough concept (its own two tables, its
+  // own resolution semantics) to earn its own group rather than further overloading `members`.
+  'agent_profile',
 ] as const;
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
@@ -1275,6 +1280,87 @@ const membersCapabilities: readonly Capability[] = [
   },
 ];
 
+// -------------------------------------------------------------------------------------------
+// agent_profile (S3.13, docs/development-tasks.md "每用户智能体配置：AgentProfile / AgentPolicy"):
+// per-(workspace,principal) AgentProfile — a never-widening subset projection of the principal's
+// Grant, resolved against the workspace's own AgentPolicy defaults — plus the AgentPolicy itself.
+// All `channel: 'human'`: a principal's own agent configuration (and the workspace policy
+// governing it) is never a Handle-scope concern (I13, same reasoning `membersCapabilities`'s own
+// doc comment already gives for Principal CRUD — a Handle only ever narrows what its own
+// on_behalf_of principal may already do, it never manages configuration of any principal at all).
+//
+// `mode` (docs/wire-contract-conventions.md §1, MANDATORY): both `get_*` reads are `observe`; both
+// `set_*` writes are immediate, in-platform, audited state changes with no policy-gated external
+// Gatekeeper call — `write`, never `execute` (S3.13's own spec: "变更是即时的、不走 propose/approve").
+// -------------------------------------------------------------------------------------------
+
+const agentProfileCapabilities: readonly Capability[] = [
+  {
+    name: 'get_agent_profile',
+    group: 'agent_profile',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ principalId: id.optional() }).strict(),
+    description:
+      'Read one Principal’s AgentProfile — raw fields (null = inherit) plus the resolved `effective` values after applying the workspace AgentPolicy and the principal’s Grants. Omit principalId for the caller’s own; naming another principal requires owner.',
+  },
+  {
+    name: 'set_agent_profile',
+    group: 'agent_profile',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        principalId: id.optional(),
+        // Every field is independently optional (a partial update — an omitted field is left
+        // unchanged) and, where present, `nullable` (an explicit `null` resets that field to
+        // "inherit the workspace AgentPolicy default") — distinguishable because zod leaves an
+        // omitted key as `undefined` while a present-but-null key parses to `null`.
+        model: z.string().min(1).nullable().optional(),
+        enabledSkills: z.array(z.string().min(1)).nullable().optional(),
+        enabledGatekeepers: z.array(id).nullable().optional(),
+        enabledWorkerDefinitions: z.array(id).nullable().optional(),
+        promptAddendum: z.string().nullable().optional(),
+        autoApproveLow: z.boolean().nullable().optional(),
+      })
+      .strict(),
+    description:
+      'Update one Principal’s AgentProfile (never widens past the principal’s own Grants or the workspace AgentPolicy — 400 invalid_params on a model outside the whitelist, a Skill that is not published, a Gatekeeper the principal holds no Grant for, an addendum over the policy’s length cap, or auto-approve-low when the policy forbids it). A member may edit only their own profile, and only when AgentPolicy.memberCanEditProfile is true; an owner may edit anyone’s. Immediate and audited; revokes the target principal’s entry-session Handles so the next turn re-mints under the new scope.',
+  },
+  {
+    name: 'get_agent_policy',
+    group: 'agent_profile',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: noParams,
+    description:
+      'Read the workspace’s AgentPolicy (compiled-in defaults projected when no row has ever been written).',
+  },
+  {
+    name: 'set_agent_policy',
+    group: 'agent_profile',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({
+        allowedModels: z.array(z.string().min(1)).optional(),
+        defaultModel: z.string().min(1).nullable().optional(),
+        memberCanEditProfile: z.boolean().optional(),
+        maxPromptAddendumChars: z.number().int().positive().optional(),
+        allowedSkills: z.array(z.string().min(1)).optional(),
+        allowedGatekeepers: z.array(id).optional(),
+        allowMemberAutoApproveLow: z.boolean().optional(),
+      })
+      .strict(),
+    description:
+      'Update the workspace’s AgentPolicy — a partial update, omitted fields are left unchanged. Owner only.',
+  },
+];
+
 /** The complete capability registry (design doc §9.3). */
 export const CAPABILITY_REGISTRY: readonly Capability[] = [
   ...chatCapabilities,
@@ -1290,6 +1376,7 @@ export const CAPABILITY_REGISTRY: readonly Capability[] = [
   ...ingestCapabilities,
   ...auditCapabilities,
   ...membersCapabilities,
+  ...agentProfileCapabilities,
 ];
 
 /** Capability names that must always be on the human channel (I16/I17/§9.3), never handle. */
@@ -1337,6 +1424,13 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'list_operations',
   'get_workspace',
   'list_models',
+  // S3.13 (docs/development-tasks.md "每用户智能体配置") — AgentProfile/AgentPolicy management and
+  // its read side: a principal's own agent configuration, never a legitimate Handle-scope member
+  // (same reasoning as the S3.11 membership names right above).
+  'get_agent_profile',
+  'set_agent_profile',
+  'get_agent_policy',
+  'set_agent_policy',
 ]);
 
 /** Execute-mode capabilities allowed on the handle channel: only request_action and the gate execute pattern (§9.3, §7.4). */

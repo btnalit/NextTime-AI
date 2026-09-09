@@ -332,6 +332,129 @@ describe('resident-service spawn', () => {
   });
 });
 
+describe('resident-service spawn — S3.13 skillsInline', () => {
+  const SKILL = { name: 'writing-tips', files: { 'SKILL.md': '# writing tips\n\nbody' } };
+
+  it('writes skillsInline[] under <agentDir>/skills/<name>/ on first spawn', async () => {
+    const { service } = setup();
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      skillsInline: [SKILL],
+    });
+
+    const filePath = join(
+      dir,
+      'workspaces',
+      'alice',
+      '.pi',
+      'agent',
+      'skills',
+      'writing-tips',
+      'SKILL.md',
+    );
+    expect(existsSync(filePath)).toBe(true);
+    expect(readFileSync(filePath, 'utf8')).toBe('# writing tips\n\nbody');
+  });
+
+  it('stamps hashSkillsInline(skillsInline) onto the skills-hash label', async () => {
+    const { docker } = setup();
+    const service = createResidentService({
+      config: loadConfig({
+        NEXTTIME_DATA: '/host/data',
+        LOCAL_DATA_DIR: dir,
+        EGRESS_SOURCE_MAP_FILE: join(dir, 'egress-sources.json'),
+      }),
+      docker,
+      egressMap: createEgressMapStore(join(dir, 'egress-sources.json')),
+    });
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      skillsInline: [SKILL],
+    });
+    const label = docker.createCalls[0]?.labels['nexttime.skills-hash'];
+    expect(label).toBeDefined();
+    expect(label).not.toBe('');
+  });
+
+  it('stamps the empty-string skills-hash label when no Skill is given', async () => {
+    const { service, docker } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(docker.createCalls[0]?.labels['nexttime.skills-hash']).toBe('');
+  });
+
+  it('reuses a running container when skillsInline is unchanged across spawns', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      skillsInline: [SKILL],
+    });
+    const second = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      skillsInline: [SKILL],
+    });
+    expect(second.created).toBe(false);
+    expect(second.containerId).toBe(first.containerId);
+    expect(docker.createCalls).toHaveLength(1);
+  });
+
+  it('recreates (does not reuse) a running container when skillsInline changes — the gate scope stays identical', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      skillsInline: [SKILL],
+    });
+    expect(first.created).toBe(true);
+
+    const second = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      skillsInline: [SKILL, { name: 'other-skill', files: { 'SKILL.md': '# other' } }],
+    });
+    expect(second.created).toBe(true);
+    expect(second.containerId).not.toBe(first.containerId);
+    expect(second.restarts).toBe(1);
+    expect(docker.createCalls).toHaveLength(2);
+  });
+
+  it('recreates when a Skill is removed (skillsInline becomes empty) — never leaves a stale Skill mounted', async () => {
+    const { service, docker } = setup();
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      skillsInline: [SKILL],
+    });
+    const filePath = join(
+      dir,
+      'workspaces',
+      'alice',
+      '.pi',
+      'agent',
+      'skills',
+      'writing-tips',
+      'SKILL.md',
+    );
+    expect(existsSync(filePath)).toBe(true);
+
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(second.created).toBe(true); // recreated — the running container's Skill mount was stale
+    expect(docker.createCalls).toHaveLength(2);
+    // The stale Skill directory is gone — a removed Skill must never linger on disk.
+    expect(existsSync(filePath)).toBe(false);
+  });
+});
+
 describe('resident-service stop', () => {
   it('stops the container and unregisters its egress IP', async () => {
     const { service, docker, egressMap } = setup();

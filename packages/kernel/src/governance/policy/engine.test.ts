@@ -205,3 +205,76 @@ describe('assertPolicyWriteAllowed — S2.2 acceptance "试图为 high 开自动
     ).not.toThrow();
   });
 });
+
+describe('evaluate — S3.13 principalAutoApproveLowEnabled (AgentProfile.autoApproveLow)', () => {
+  it('narrows an otherwise-allow low-blast-radius outcome to require_approval when false', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'low',
+        operationAutoApprovable: true,
+        workspacePolicy: { autoApprove: true },
+        principalAutoApproveLowEnabled: false,
+      }),
+    );
+    expect(result.decision).toBe('require_approval');
+    expect(result.reason).toBe('principal_auto_approve_low_disabled');
+  });
+
+  it('does not narrow when true — the low-blast-radius outcome resolves allow as before', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'low',
+        operationAutoApprovable: true,
+        workspacePolicy: { autoApprove: true },
+        principalAutoApproveLowEnabled: true,
+      }),
+    );
+    expect(result.decision).toBe('allow');
+  });
+
+  it('omitted reproduces the exact pre-S3.13 behavior — resolves allow, same as never having called it', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'low',
+        operationAutoApprovable: true,
+        workspacePolicy: { autoApprove: true },
+      }),
+    );
+    expect(result.decision).toBe('allow');
+    expect(result.reason).toBe('auto_approved_by_operation_and_workspace_policy');
+  });
+
+  it('is a no-op on a medium-blast-radius Operation — that outcome was already require_approval', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'medium',
+        operationAutoApprovable: true,
+        workspacePolicy: { autoApprove: true },
+        principalAutoApproveLowEnabled: false,
+      }),
+    );
+    // A medium-blast-radius operation resolves allow when the workspace policy explicitly opts
+    // in — principalAutoApproveLowEnabled only ever gates the low-blast-radius path.
+    expect(result.decision).toBe('allow');
+  });
+
+  it('never produces allow on its own — deny/require_approval signals still take priority', () => {
+    const deniedByScope = evaluate(
+      baseInput({
+        requesterScope: NON_COVERING_SCOPE,
+        blastRadius: 'low',
+        principalAutoApproveLowEnabled: true,
+      }),
+    );
+    expect(deniedByScope.decision).toBe('deny');
+
+    const notAutoApprovable = evaluate(
+      baseInput({
+        blastRadius: 'low',
+        operationAutoApprovable: false,
+        principalAutoApproveLowEnabled: true,
+      }),
+    );
+    expect(notAutoApprovable.decision).toBe('require_approval');
+  });
+});

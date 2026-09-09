@@ -69,6 +69,10 @@ export interface RequestActionInput {
    *  `resources['gatekeeper']` from this (see that module's `GATEKEEPER_RESOURCE_SCOPE_KEY` doc
    *  comment for the exact convention). */
   readonly requesterScope: CapabilityScope;
+  /** S3.13: threaded straight through to `evaluate()`'s own field of the same name — see that
+   *  module's doc comment. Omitted (the default, `true` inside `evaluate()`) reproduces this
+   *  function's exact pre-S3.13 behavior for every caller that has not resolved an AgentProfile. */
+  readonly principalAutoApproveLowEnabled?: boolean;
 }
 
 const RESOLUTION_EVENT_BY_DECISION: Record<PolicyDecision, ActionRequestEvent> = {
@@ -158,6 +162,7 @@ export async function requestAction(
         }
       : undefined,
     requesterScope: input.requesterScope,
+    principalAutoApproveLowEnabled: input.principalAutoApproveLowEnabled,
   });
 
   // I6: validate the full hop sequence against the shared transition table before writing

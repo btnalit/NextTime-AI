@@ -2,7 +2,7 @@ import type { AgentRuntimeEventWire, KernelToAgentHostFrame } from '@nexttime/sh
 import { buildAbortCommand, buildPromptCommand, translatePiEvent } from './bridge.js';
 import type { AttachedContainerIo, ContainerIoClient } from './container-io.js';
 import type { KernelLink } from './kernel-link.js';
-import type { SupervisorClientPort } from './supervisor-client.js';
+import type { SpawnInput, SupervisorClientPort } from './supervisor-client.js';
 
 /**
  * host: orchestrates one principal's entry container across its whole lifecycle — spawn/reuse
@@ -182,6 +182,7 @@ export function createHost(options: HostOptions): Host {
     systemPrompt: string | undefined,
     model: string | undefined,
     egressDeny: readonly string[] | undefined,
+    skillsInline: SpawnInput['skillsInline'],
   ): Promise<AttachmentRecord> {
     const spawnResult = await supervisorClient.spawn({
       workspaceId,
@@ -192,6 +193,7 @@ export function createHost(options: HostOptions): Host {
       systemPrompt,
       model,
       egressDeny,
+      skillsInline,
     });
 
     // Best-effort — spawn() itself already refreshed worker-supervisor's idle clock for this
@@ -262,6 +264,7 @@ export function createHost(options: HostOptions): Host {
           cmd.systemPrompt,
           cmd.model,
           cmd.egressDeny,
+          cmd.skillsInline,
         );
       } catch (err) {
         activeTurns.delete(cmd.principalId); // release the reservation — this turn never started

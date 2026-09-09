@@ -72,6 +72,27 @@ export interface PolicyEvaluationInput {
    *  below; `evaluate()` does not otherwise care which capabilities the scope lists (that is
    *  `authorize.ts`'s job, already run before `request_action`'s handler is ever reached). */
   readonly requesterScope: CapabilityScope;
+  /**
+   * S3.13 (docs/development-tasks.md "每用户智能体配置" — `AgentProfile.autoApproveLow`): the
+   * requesting principal's own **raw** `AgentProfile.autoApproveLow` — deliberately *not* the
+   * fully-resolved `effective.autoApproveLow` (`governance/agent-profile/resolve.ts`'s
+   * `resolveEffectiveAgentProfile`, which folds in `AgentPolicy.allowMemberAutoApproveLow`'s own
+   * compiled-in-`false` default). The task's own instruction for this projection is specifically
+   * "per-principal false disables auto-approve ... even when the workspace default allows it" —
+   * the principal's own explicit choice, not the workspace policy's default flowing through on
+   * its own. Feeding the resolved `effective` value here instead would mean every workspace that
+   * has never written an `agent_policies` row (i.e. every workspace that predates S3.13) gets
+   * that compiled-in default narrowing every low-blast-radius auto-approval platform-wide the
+   * moment this feature ships — caught in CI by `request-action.integration.test.ts` regressing.
+   * `true` when omitted/`undefined` (no AgentProfile row, or one that has never set this field) —
+   * every pre-S3.13 caller, and every principal who has not explicitly narrowed themselves, keeps
+   * this module's exact prior behavior. `false` narrows: even a `low`-blast-radius,
+   * `auto_approvable` Operation that a workspace policy would otherwise auto-approve must still
+   * `require_approval` for *this* requester — never the other direction (this can only ever
+   * remove an `allow` outcome, never manufacture one an operation/workspace-policy combination
+   * would not already produce on its own).
+   */
+  readonly principalAutoApproveLowEnabled?: boolean;
 }
 
 export interface PolicyEvaluationResult {
@@ -103,7 +124,12 @@ export type PolicyEvaluationReason =
   | 'blast_radius_high_requires_approval'
   | 'operation_not_auto_approvable'
   | 'workspace_policy_disables_auto_approve'
-  | 'no_workspace_policy_and_not_low_blast_radius';
+  | 'no_workspace_policy_and_not_low_blast_radius'
+  // S3.13: the requester's own AgentProfile.autoApproveLow (resolved false, whether by explicit
+  // choice or by inheriting a workspace AgentPolicy.allowMemberAutoApproveLow of false) narrows
+  // an otherwise-`allow` low-blast-radius outcome back to `require_approval` for this requester
+  // only — see `PolicyEvaluationInput.principalAutoApproveLowEnabled`'s own doc comment.
+  | 'principal_auto_approve_low_disabled';
 
 /** The exact coverage rule this module implements (see `GATEKEEPER_RESOURCE_SCOPE_KEY`'s doc
  *  comment for the resource-key convention it reads). */
@@ -181,6 +207,19 @@ export function evaluate(input: PolicyEvaluationInput): PolicyEvaluationResult {
       ? 'workspace_policy_disables_auto_approve'
       : 'no_workspace_policy_and_not_low_blast_radius';
     return { decision: 'require_approval', reason, requesterCanApprove };
+  }
+
+  // S3.13: the requester's own AgentProfile.autoApproveLow narrows a low-blast-radius `allow`
+  // back to `require_approval` — checked only once every other signal has already agreed on
+  // `allow`, so this can only ever remove that outcome, never produce one on its own (a `false`
+  // here on a `medium`/`high` Operation is a no-op: those can never reach this line either
+  // already-`require_approval` above, or, for `high`, refused even earlier).
+  if (input.blastRadius === 'low' && input.principalAutoApproveLowEnabled === false) {
+    return {
+      decision: 'require_approval',
+      reason: 'principal_auto_approve_low_disabled',
+      requesterCanApprove,
+    };
   }
 
   const reason: PolicyEvaluationReason = input.workspacePolicy

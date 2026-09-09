@@ -67,6 +67,12 @@ import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { toWireActionRequest } from './action-request-wire.js';
+import {
+  getAgentPolicyHandler,
+  getAgentProfileHandler,
+  setAgentPolicyHandler,
+  setAgentProfileHandler,
+} from './agent-profile-handlers.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
@@ -1101,4 +1107,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_workspace', getWorkspaceHandler],
   // S3.11 — models-catalog-handler.ts.
   ['list_models', listModelsHandler],
+  // S3.13 (docs/development-tasks.md "每用户智能体配置") — agent-profile-handlers.ts.
+  ['get_agent_profile', getAgentProfileHandler],
+  ['set_agent_profile', setAgentProfileHandler],
+  ['get_agent_policy', getAgentPolicyHandler],
+  ['set_agent_policy', setAgentPolicyHandler],
 ]);

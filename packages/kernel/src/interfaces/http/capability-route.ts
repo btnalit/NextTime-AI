@@ -13,6 +13,7 @@ import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/ch
 // "go through index.ts" naming convention is bypassed, not the six-layer rule itself.
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
+  AgentProfileValidationError,
   AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
@@ -191,6 +192,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof PrincipalNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S3.13 (docs/development-tasks.md "每用户智能体配置"): `set_agent_profile`'s own semantic
+  // validation (model not in the whitelist, an unpublished Skill, an ungranted Gatekeeper, an
+  // addendum over the policy's length cap, autoApproveLow when the policy forbids it) — same 400
+  // bucket as HighBlastRadiusAutoApproveError/SetPolicyValidationError below.
+  if (err instanceof AgentProfileValidationError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
   }
   // Postgres 22P02 invalid_text_representation — a well-typed but malformed value reached a typed
   // column (e.g. a non-uuid `actionRequestId` on `approve`: the registry's `id` params are

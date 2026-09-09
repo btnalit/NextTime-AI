@@ -10,6 +10,7 @@ import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/ch
 // line addition is inside application/gateway/**, outside this task's file ownership.
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
+  AgentProfileValidationError,
   AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
@@ -247,6 +248,12 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof PrincipalNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // S3.13 — same bucket as capability-route.ts's mapCapabilityError (AgentProfile semantic
+  // validation: model whitelist, unpublished Skill, ungranted Gatekeeper, addendum length cap,
+  // autoApproveLow policy gate).
+  if (err instanceof AgentProfileValidationError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.
   if (isPgInvalidTextRepresentation(err)) {

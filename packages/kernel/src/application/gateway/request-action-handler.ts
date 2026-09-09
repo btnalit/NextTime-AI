@@ -9,6 +9,7 @@ import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { findWorkerRunBySessionId } from '../../application/task/index.js';
+import { readAgentProfile } from '../../governance/agent-profile/index.js';
 import type { ActionRequestRow, ApprovalDrainer } from '../../governance/approval/index.js';
 import {
   awaitActionRequestResolution,
@@ -522,6 +523,9 @@ interface RunGovernedRequestArgs {
    *  `application/task/reaper.ts`'s ActionRequestPending/Updated routing can move the right Task
    *  to/from `waiting_approval`. `undefined` for a human caller (no WorkerRun to attribute to). */
   readonly parentWorkerRunId?: string;
+  /** S3.13: `onBehalfOf`'s own resolved `effective.autoApproveLow` — threaded straight through to
+   *  `requestAction`/`evaluate()`'s field of the same name (see that module's own doc comment). */
+  readonly principalAutoApproveLowEnabled: boolean;
 }
 
 /** The phase-1 `{result, resourceType, resourceId}` shape every branch of `runGovernedRequest`'s
@@ -574,6 +578,7 @@ async function runGovernedRequest(
     params: args.operationParams,
     idempotencyKey: args.idempotencyKey,
     parentWorkerRunId: args.parentWorkerRunId,
+    principalAutoApproveLowEnabled: args.principalAutoApproveLowEnabled,
   });
 
   switch (actionRequest.status) {
@@ -969,6 +974,27 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     return runObserve(client, workspaceId, gatekeeper, operationName, resolvedParams, onBehalfOf);
   }
 
+  // S3.13: `onBehalfOf`'s own *raw* AgentProfile.autoApproveLow — not the resolved
+  // `effective.autoApproveLow`. This is deliberate, not an oversight: the task's own runtime-
+  // projection instruction is specifically about "per-principal false" ("per-principal false
+  // disables auto-approve for that requester even when the workspace default allows it") — the
+  // *principal's own explicit choice*, not the workspace AgentPolicy's compiled-in/defaulted
+  // stance flowing through on its own. Using the fully-resolved `effective.autoApproveLow`
+  // instead (as an earlier version of this code did) meant every workspace that has never
+  // written an `agent_policies` row — i.e. every workspace that predates this feature entirely —
+  // got `allowMemberAutoApproveLow`'s own compiled-in default (`false`) fed straight into this
+  // narrowing check, silently disabling auto-approval for every low-blast-radius action across
+  // the whole platform the moment this shipped (caught by `request-action.integration.test.ts`
+  // failing in CI — real Postgres, not reproducible on this machine). A principal with no
+  // AgentProfile row (`profile` `undefined`) or one that has never touched this field
+  // (`autoApproveLow: null`) resolves to `true` here — "not narrowed" — reproducing the exact
+  // pre-S3.13 behavior; only an *explicit* `false` on the principal's own profile narrows.
+  // Resolved once, here, so both `runGovernedRequest` call sites below narrow identically (a
+  // no-op on the I17 unclassified path, whose `blastRadius` is always `'medium'`, but threaded
+  // through uniformly rather than special-cased).
+  const principalAutoApproveLowEnabled =
+    (await readAgentProfile(client, workspaceId, onBehalfOf))?.autoApproveLow ?? true;
+
   if (!published) {
     // I17: draft/unknown Operation → unclassified, always require_approval, never execute.
     return runGovernedRequest(client, workspaceId, {
@@ -983,6 +1009,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       awaitDecision: true,
       idempotencyKey,
       parentWorkerRunId,
+      principalAutoApproveLowEnabled,
     });
   }
 
@@ -993,6 +1020,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     operationParams: resolvedParams,
     onBehalfOf,
     actorRuntime,
+    principalAutoApproveLowEnabled,
     requesterScope,
     blastRadius: operation.blast_radius,
     autoApprovable: operation.auto_approvable,

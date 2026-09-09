@@ -58,6 +58,36 @@ describe('SupervisorClient.spawn', () => {
     });
   });
 
+  it('POSTs skillsInline verbatim when given (S3.13)', async () => {
+    const skillsInline = [{ name: 'writing-tips', files: { 'SKILL.md': '# writing tips' } }];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({
+        workspaceId: 'ws-1',
+        principalId: 'p-1',
+        handle: 'jwt-token',
+        skillsInline,
+      });
+      return jsonResponse(200, {
+        containerId: 'c1',
+        ip: '100.64.0.2',
+        status: 'running',
+        created: true,
+        restarts: 0,
+      });
+    });
+    const client = new SupervisorClient({
+      supervisorUrl: 'http://worker-supervisor:8081',
+      fetchImpl,
+    });
+
+    await client.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'p-1',
+      handle: 'jwt-token',
+      skillsInline,
+    });
+  });
+
   it('strips a trailing slash from supervisorUrl', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       expect(url).toBe('http://worker-supervisor:8081/resident/spawn');

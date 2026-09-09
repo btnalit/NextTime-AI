@@ -33,7 +33,7 @@ if [ ! -f "$HANDLES_FILE" ]; then
   exit 1
 fi
 
-NAMES="list_principals create_principal set_principal_role rotate_api_key disable_principal get_workspace list_models list_grants list_policies list_quotas list_gatekeepers get_gatekeeper list_operations"
+NAMES="list_principals create_principal set_principal_role rotate_api_key disable_principal get_workspace list_models list_grants list_policies list_quotas list_gatekeepers get_gatekeeper list_operations get_agent_profile set_agent_profile get_agent_policy set_agent_policy"
 
 FOUND=0
 for name in $NAMES; do
