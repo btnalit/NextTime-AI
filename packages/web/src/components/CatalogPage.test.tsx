@@ -48,6 +48,7 @@ describe('CatalogPage', () => {
   it('defaults to the Operations tab and switches on click, loading each tab’s own capability', async () => {
     const http = scriptedHttp({
       list_operations: () => ({ items: [] }),
+      get_operation_stats: () => ({ items: [] }),
       list_skills: () => ({ items: [] }),
     });
     renderPage(http);
@@ -82,6 +83,7 @@ describe('CatalogPage', () => {
               : [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' }],
         };
       },
+      get_operation_stats: () => ({ items: [] }),
       publish_operation: (params) => {
         expect(params).toEqual({ gatekeeperId: 'gk-1', name: 'docker.restart' });
         return {};
@@ -94,6 +96,50 @@ describe('CatalogPage', () => {
     await waitFor(() =>
       expect(http.calls.filter((c) => c.name === 'list_operations')).toHaveLength(2),
     );
+  });
+
+  it('Operations: renders usage counters from get_operation_stats, degrading to "—" for a row with no matching stats', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' },
+          { gatekeeperId: 'gk-1', name: 'docker.no_stats', status: 'published' },
+        ],
+      }),
+      get_operation_stats: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            operationName: 'docker.restart',
+            calls: 12,
+            approved: 3,
+            rejected: 1,
+            autoApproved: 8,
+            failed: 0,
+            lastCalledAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('catalog-row');
+    expect(rows).toHaveLength(2);
+    const usageSpans = rows.map((row) => within(row).getByTestId('catalog-row-usage').textContent);
+    expect(usageSpans.some((text) => text?.includes('12') && text?.includes('3'))).toBe(true);
+    expect(usageSpans).toContain('—');
+  });
+
+  it('Operations: a get_operation_stats failure degrades the usage column to "—" without blocking the list', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' }],
+      }),
+      get_operation_stats: () =>
+        Promise.reject(new HttpError('capability_error', 'no handler', 'not_found')),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    expect(within(row).getByTestId('catalog-row-usage').textContent).toBe('—');
   });
 
   it('Workers tab: only offers Deprecate (list_worker_definitions never returns drafts)', async () => {

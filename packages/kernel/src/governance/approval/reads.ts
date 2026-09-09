@@ -178,3 +178,72 @@ export async function getActionRequestForUpdateOrThrow(
   if (!row) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
   return row;
 }
+
+/** `get_operation_stats` (S3.12 catalog-usage follow-up) — one row per `{gatekeeperId,
+ *  operationName}` (`action_kind`, the Operation's own name, `manifest.ts`'s own doc comment) that
+ *  has at least one `action_requests` row in the trailing `days` window. `approved`/`rejected`/
+ *  `autoApproved`/`failed` count rows *currently* in that literal `status` — see this module's own
+ *  capability-registry entry (`packages/shared/src/capabilities.ts`) for why that is a live
+ *  snapshot, not cumulative decision history. */
+export interface OperationStatsRow {
+  readonly gatekeeperId: string;
+  readonly operationName: string;
+  readonly calls: number;
+  readonly approved: number;
+  readonly rejected: number;
+  readonly autoApproved: number;
+  readonly failed: number;
+  readonly lastCalledAt: Date;
+}
+
+interface OperationStatsDbRow {
+  gatekeeper_id: string;
+  action_kind: string;
+  calls: string;
+  approved: string;
+  rejected: string;
+  auto_approved: string;
+  failed: string;
+  last_called_at: Date;
+}
+
+export interface GetOperationStatsFilter {
+  readonly gatekeeperId?: string;
+  /** Days back from now — the capability's own paramsSchema already clamps this to [1, 90]; not
+   *  re-validated here (this function trusts its caller, same convention every other read in this
+   *  module already follows). */
+  readonly days: number;
+}
+
+export async function getOperationStats(
+  client: PoolClient,
+  workspaceId: string,
+  filter: GetOperationStatsFilter,
+): Promise<readonly OperationStatsRow[]> {
+  const result = await client.query<OperationStatsDbRow>(
+    `select gatekeeper_id, action_kind,
+            count(*)::bigint as calls,
+            count(*) filter (where status = 'approved')::bigint as approved,
+            count(*) filter (where status = 'rejected')::bigint as rejected,
+            count(*) filter (where status = 'auto_approved')::bigint as auto_approved,
+            count(*) filter (where status = 'failed')::bigint as failed,
+            max(requested_at) as last_called_at
+     from action_requests
+     where workspace_id = $1
+       and requested_at >= now() - make_interval(days => $2::int)
+       and ($3::uuid is null or gatekeeper_id = $3)
+     group by gatekeeper_id, action_kind
+     order by gatekeeper_id, action_kind`,
+    [workspaceId, filter.days, filter.gatekeeperId ?? null],
+  );
+  return result.rows.map((row) => ({
+    gatekeeperId: row.gatekeeper_id,
+    operationName: row.action_kind,
+    calls: Number(row.calls),
+    approved: Number(row.approved),
+    rejected: Number(row.rejected),
+    autoApproved: Number(row.auto_approved),
+    failed: Number(row.failed),
+    lastCalledAt: row.last_called_at,
+  }));
+}

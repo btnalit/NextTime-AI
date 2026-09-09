@@ -37,6 +37,7 @@ import {
 import {
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
+  InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
   QuotaExceededError,
   TaskNotFoundError,
@@ -266,6 +267,14 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof InvokeWorkerAttenuationError) {
     return { status: 403, code: 'attenuation_denied', message: err.message };
+  }
+  // S3.13 runtime consumer (this task): the target WorkerDefinition is outside the calling
+  // principal's AgentProfile.enabledWorkerDefinitions — same 403 bucket as the attenuation-denied
+  // check just above (both are "this Worker is not reachable for this caller right now"), distinct
+  // `code` since the two reasons are unrelated and an entry agent relaying this verbatim should not
+  // conflate them.
+  if (err instanceof InvokeWorkerDefinitionNotEnabledError) {
+    return { status: 403, code: 'worker_definition_not_enabled', message: err.message };
   }
   if (err instanceof InvokeWorkerValidationError || err instanceof InvalidQuotaValueError) {
     return { status: 400, code: 'invalid_params', message: err.message };

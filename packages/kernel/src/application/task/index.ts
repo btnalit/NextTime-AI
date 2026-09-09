@@ -100,6 +100,7 @@ export {
 
 export {
   InvokeWorkerAttenuationError,
+  InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
   QuotaExceededError,
   type QuotaViolationCode,

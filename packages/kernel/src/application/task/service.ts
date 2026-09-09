@@ -349,6 +349,15 @@ export async function recordWorkerRunUsage(
 
 export interface FindMeansCaller {
   readonly parentAuthority: ParentAuthority;
+  /** `findWorkers` only (S3.13 runtime consumer) — `findOperations`/`findProcedures` never read
+   *  this field; AgentProfile narrows WorkerDefinition visibility only (S3.13's own six-item
+   *  runtime-projection list, docs/development-tasks.md, never named Operation/Procedure search).
+   *  The calling principal's raw `AgentProfile.enabledWorkerDefinitions` — `undefined`/`null`
+   *  ("no profile row" or an explicit `null` field, both mean "inherit") applies no filter at all:
+   *  `governance/agent-profile/resolve.ts`'s own doc comment notes this field has no AgentPolicy
+   *  cap, so a non-null value here already *is* the caller's final effective list — nothing left to
+   *  intersect against `resolveEffectiveAgentProfile`'s own "available" ceiling for. */
+  readonly enabledWorkerDefinitionIds?: readonly string[] | null;
 }
 
 export interface WorkerDefinitionMatch {
@@ -386,6 +395,12 @@ function toWorkerDefinitionMatch(object: GraphObject): WorkerDefinitionMatch | u
  * out here rather than surfaced only to fail later at `invoke_worker` time. `kind='entry'`
  * WorkerDefinitions never appear (`find_workers` finds things *to invoke*, and only `kind='worker'`
  * is invocable — `invoke.ts`'s own check).
+ *
+ * S3.13 runtime consumer: also filtered to `caller.enabledWorkerDefinitionIds` when the caller's
+ * AgentProfile sets one — the same narrowing `invoke_worker` itself now enforces
+ * (`InvokeWorkerDefinitionNotEnabledError`, `invoke.ts`), applied here so a definition the caller
+ * could never successfully invoke never even surfaces as a candidate, same reasoning as the
+ * attenuation filter just above.
  */
 export async function findWorkers(
   client: PoolClient,
@@ -425,7 +440,9 @@ export async function findWorkers(
     matches.push(match);
   }
 
-  return matches;
+  if (caller.enabledWorkerDefinitionIds == null) return matches;
+  const enabled = new Set(caller.enabledWorkerDefinitionIds);
+  return matches.filter((match) => enabled.has(match.definitionId));
 }
 
 /**

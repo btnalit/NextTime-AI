@@ -160,6 +160,31 @@ export function operationKey(row: Pick<OperationCatalogRow, 'gatekeeperId' | 'na
   return `${row.gatekeeperId}::${row.name}`;
 }
 
+/** `get_operation_stats` (S3.12 catalog-usage follow-up, `gatekeeper-read-handlers.ts`'s
+ *  `toWireOperationStats`) — verified against the real kernel projection. Execute-class Operations
+ *  only, current-status snapshot rather than cumulative decision history, and never includes an
+ *  Operation with zero calls in the window — see that capability's own registry description
+ *  (`packages/shared/src/capabilities.ts`) for the full accounting. `CatalogPage.tsx` degrades to
+ *  "—" for any `OperationCatalogRow` with no matching entry here (`operationStatsKey()` below). */
+export interface OperationStatsRow {
+  readonly gatekeeperId: string;
+  readonly operationName: string;
+  readonly calls: number;
+  readonly approved: number;
+  readonly rejected: number;
+  readonly autoApproved: number;
+  readonly failed: number;
+  readonly lastCalledAt: string;
+}
+
+/** Same `{gatekeeperId}::{name}` shape as `operationKey()` — the two are joined by this key, not by
+ *  a shared id column (neither wire type has one). */
+export function operationStatsKey(
+  row: Pick<OperationStatsRow, 'gatekeeperId' | 'operationName'>,
+): string {
+  return `${row.gatekeeperId}::${row.operationName}`;
+}
+
 /** `list_skills` (`application/gateway/skill-procedure-handlers.ts` `listSkillsHandler`, already
  *  wired) — verified against the kernel's own projection, not a guess. */
 export interface SkillRow {
