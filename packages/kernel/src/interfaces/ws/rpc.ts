@@ -28,6 +28,7 @@ import {
 import {
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
+  InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
   QuotaExceededError,
   TaskNotFoundError,
@@ -156,6 +157,11 @@ export const WS_ERROR_CODES = {
    *  `getConfiguredTaskRuntime`) throws when the composition root never called
    *  `configureTaskRuntime` — the kernel process itself, not this request, is not ready yet. */
   SERVICE_UNAVAILABLE: -32015,
+  /** S3.13 runtime consumer (this task) — mirrors HTTP 403 `worker_definition_not_enabled`: the
+   *  target WorkerDefinition is outside the calling principal's own
+   *  `AgentProfile.enabledWorkerDefinitions`. A distinct code from `ATTENUATION_DENIED` — the two
+   *  403 reasons are unrelated and an entry agent relaying this verbatim should not conflate them. */
+  WORKER_DEFINITION_NOT_ENABLED: -32016,
 } as const;
 
 /** Maps an error thrown by `resolveCaller`/`dispatchCapability` (application/gateway) or by
@@ -279,6 +285,9 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof InvokeWorkerAttenuationError) {
     return { code: WS_ERROR_CODES.ATTENUATION_DENIED, message: err.message };
+  }
+  if (err instanceof InvokeWorkerDefinitionNotEnabledError) {
+    return { code: WS_ERROR_CODES.WORKER_DEFINITION_NOT_ENABLED, message: err.message };
   }
   if (err instanceof InvokeWorkerValidationError || err instanceof InvalidQuotaValueError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };

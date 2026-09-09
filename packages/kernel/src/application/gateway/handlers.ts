@@ -42,6 +42,7 @@ import {
   proposeWorkerDefinition,
   publishWorkerDefinition,
 } from '../../application/worker/index.js';
+import { readAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ActionRequestNotFoundError,
   approveActionRequest,
@@ -959,6 +960,12 @@ const setQuotaHandler: CapabilityHandler = async (client, workspaceId, params) =
   return { result, resourceType: 'quota' };
 };
 
+/** S3.13 runtime consumer: `find_workers`/`invoke_worker` are `channel: 'handle'`-only
+ *  (`capabilities.ts`'s own registry entries) — `ctx.principalId` is therefore always already
+ *  `claims.obo` (`dispatch.ts`'s `callerContext`), the chain's originating human, never the
+ *  immediate calling agent's own identity; a Worker→Worker call inherits the same principal
+ *  unchanged, so no session-kind branching is needed here to make "the calling principal's own
+ *  profile" mean the right thing in either case. */
 const findWorkersHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { need } = params as { need: string };
   const parentAuthority = await resolveParentAuthority(client, workspaceId, {
@@ -966,7 +973,18 @@ const findWorkersHandler: CapabilityHandler = async (client, workspaceId, params
     channel: ctx?.channel ?? 'handle',
     claims: ctx?.claims,
   });
-  const result = await findWorkers(client, workspaceId, { parentAuthority }, need);
+  const agentProfile = ctx?.principalId
+    ? await readAgentProfile(client, workspaceId, ctx.principalId)
+    : undefined;
+  const result = await findWorkers(
+    client,
+    workspaceId,
+    {
+      parentAuthority,
+      enabledWorkerDefinitionIds: agentProfile?.enabledWorkerDefinitions ?? null,
+    },
+    need,
+  );
   return { result: { items: result } };
 };
 

@@ -196,3 +196,33 @@ export class InvokeWorkerValidationError extends Error {
     this.name = 'InvokeWorkerValidationError';
   }
 }
+
+/**
+ * S3.13 runtime consumer (docs/development-tasks.md S3.13's own "已知缺口" — `enabledWorkerDefinitions`
+ * was resolved but never enforced): `invoke_worker`'s target WorkerDefinition is outside the
+ * calling principal's `AgentProfile.effective.enabledWorkerDefinitions`. The calling principal is
+ * always the chain's originating human (`on_behalf_of`/`claims.obo` — a Worker→Worker
+ * `invoke_worker` call inherits it unchanged from its own parent Handle, never substitutes its own
+ * immediate agent identity, `invoke.ts`'s own module doc comment on `caller.principalId`), and a
+ * Profile only ever *narrows* what that human is willing to see — including for the human's own
+ * `owner` role: AgentProfile is a preference the principal set for themselves, not a privilege
+ * boundary an owner is exempt from (unlike I14's owner-override, which governs a *different*
+ * question — approval scope, not the owner's own agent's visibility).
+ *
+ * A thin, task-module-specific wrapper (same convention `InvokeWorkerAttenuationError`'s own doc
+ * comment already establishes) rather than importing `application/gateway`'s `ForbiddenError`:
+ * `application/task` is a peer of `application/gateway`, not a layer beneath it, and importing
+ * "downward" from a sibling would be a step toward a cycle dependency-cruiser's own `no-circular`
+ * rule flags — every consumer maps this by `instanceof`, exactly like every other error this module
+ * already defines. */
+export class InvokeWorkerDefinitionNotEnabledError extends Error {
+  readonly definitionId: string;
+
+  constructor(definitionId: string) {
+    super(
+      `invoke_worker: WorkerDefinition "${definitionId}" is outside the calling principal's AgentProfile.enabledWorkerDefinitions`,
+    );
+    this.name = 'InvokeWorkerDefinitionNotEnabledError';
+    this.definitionId = definitionId;
+  }
+}

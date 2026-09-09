@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { HandleClaims } from '@nexttime/shared';
+import type { HandleClaims, Role } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -18,6 +18,7 @@ import {
   generateEphemeralHandleKeyPair,
   issueHandle,
 } from '../../governance/capability/index.js';
+import { InvokeWorkerDefinitionNotEnabledError } from '../task/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -179,6 +180,54 @@ describe.runIf(DATABASE_URL !== undefined)(
       };
     }
 
+    /** `set_agent_profile` is `channel: 'human'`-only (capabilities.ts) — the one call in the S3.13
+     *  runtime-consumer tests below that cannot go through a Handle. */
+    function humanCaller(principalId: string, role: Role): ResolvedCaller {
+      return {
+        channel: 'human',
+        principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
+        session: {
+          workspaceId,
+          id: randomUUID(),
+          principalId,
+          kind: 'web',
+          onBehalfOf: principalId,
+          status: 'active',
+          createdAt: new Date(),
+          expiresAt: null,
+        },
+      };
+    }
+
+    /** find_workers/invoke_worker for `principalId`, over a fresh entry session/Handle (S3.13
+     *  runtime-consumer tests below) — same shape the existing "two-phase wait" test above already
+     *  establishes, generalized to any principal rather than the module's own `ownerId`. */
+    async function entryHandleCallerFor(principalId: string): Promise<ResolvedCaller> {
+      const sessionId = await insertSession('entry', principalId, principalId);
+      const issued = await issueTestHandle(sessionId);
+      return { channel: 'handle', claims: claimsFromIssued(issued) };
+    }
+
+    /** Proposes and publishes one `kind: 'worker'` WorkerDefinition with a unique `name` — the
+     *  S3.13 runtime-consumer tests below need two independently-invocable definitions per test to
+     *  prove narrowing (one enabled, one not), never reusing the module-level `workerDefinitionId`
+     *  the "two-phase wait" test above already exercises. */
+    async function publishTestWorkerDefinition(name: string): Promise<string> {
+      const proposed = await inTx(ownerId, (client) =>
+        proposeWorkerDefinition(client, workspaceId, ownerId, {
+          kind: 'worker',
+          definition: { systemPrompt: `You are worker ${name}.`, name },
+        }),
+      );
+      await inTx(ownerId, (client) =>
+        publishWorkerDefinition(client, workspaceId, ownerId, {
+          definitionId: proposed.id,
+          version: proposed.version,
+        }),
+      );
+      return proposed.id;
+    }
+
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
@@ -226,6 +275,90 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(result.status).toBe('running'); // timed out still-running, never hangs (§8.2)
       expect(supervisorClient.auditVisibleOnFirstPoll).toBe(true);
+    });
+
+    describe('S3.13 runtime consumer — AgentProfile.enabledWorkerDefinitions', () => {
+      it('a profile with enabledWorkerDefinitions=[A] narrows find_workers to A and refuses invoke_worker(B) with 403', async () => {
+        configureTaskRuntime({
+          pool,
+          privateKey,
+          supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
+        });
+
+        const principalId = await adminInsertPrincipal('owner', 'profile-narrow-owner');
+        const definitionA = await publishTestWorkerDefinition(
+          'agent-profile-narrow-worker-a-unique',
+        );
+        const definitionB = await publishTestWorkerDefinition(
+          'agent-profile-narrow-worker-b-unique',
+        );
+
+        // Owners are not exempt (a Profile is a preference the principal set for themselves) —
+        // deliberately an `owner`-role principal here, not a `member`.
+        await dispatchCapability({ pool }, humanCaller(principalId, 'owner'), 'set_agent_profile', {
+          enabledWorkerDefinitions: [definitionA],
+        });
+
+        const caller = await entryHandleCallerFor(principalId);
+
+        const found = (await dispatchCapability({ pool }, caller, 'find_workers', {
+          need: 'agent-profile-narrow-worker',
+        })) as { items: readonly { definitionId: string }[] };
+        const foundIds = found.items.map((item) => item.definitionId);
+        expect(foundIds).toContain(definitionA);
+        expect(foundIds).not.toContain(definitionB);
+
+        await expect(
+          dispatchCapability({ pool }, caller, 'invoke_worker', {
+            definitionId: definitionB,
+            version: 1,
+            input: {},
+          }),
+        ).rejects.toBeInstanceOf(InvokeWorkerDefinitionNotEnabledError);
+
+        // A itself stays invocable — the profile narrows, it does not additionally break the
+        // enabled definition.
+        const invokedA = (await dispatchCapability({ pool }, caller, 'invoke_worker', {
+          definitionId: definitionA,
+          version: 1,
+          input: {},
+        })) as { status: string };
+        expect(invokedA.status).toBe('running');
+      });
+
+      it('a principal with no AgentProfile row (null = inherit) sees and can invoke every published WorkerDefinition', async () => {
+        configureTaskRuntime({
+          pool,
+          privateKey,
+          supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
+        });
+
+        const principalId = await adminInsertPrincipal('member', 'profile-unset-member');
+        const definitionA = await publishTestWorkerDefinition(
+          'agent-profile-unset-worker-a-unique',
+        );
+        const definitionB = await publishTestWorkerDefinition(
+          'agent-profile-unset-worker-b-unique',
+        );
+
+        const caller = await entryHandleCallerFor(principalId);
+
+        const found = (await dispatchCapability({ pool }, caller, 'find_workers', {
+          need: 'agent-profile-unset-worker',
+        })) as { items: readonly { definitionId: string }[] };
+        const foundIds = found.items.map((item) => item.definitionId);
+        expect(foundIds).toContain(definitionA);
+        expect(foundIds).toContain(definitionB);
+
+        for (const definitionId of [definitionA, definitionB]) {
+          const invoked = (await dispatchCapability({ pool }, caller, 'invoke_worker', {
+            definitionId,
+            version: 1,
+            input: {},
+          })) as { status: string };
+          expect(invoked.status).toBe('running');
+        }
+      });
     });
   },
 );

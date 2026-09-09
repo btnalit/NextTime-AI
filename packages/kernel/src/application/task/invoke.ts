@@ -2,7 +2,10 @@ import { INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS } from '@nexttime/shared';
 import type { CapabilityChannel, HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
-import { readEffectiveAgentProfile } from '../../governance/agent-profile/index.js';
+import {
+  readAgentProfile,
+  readEffectiveAgentProfile,
+} from '../../governance/agent-profile/index.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { sumTodayCostUsd } from '../../governance/llm-usage/index.js';
 import { requirePublishedWorkerDefinition } from '../worker/index.js';
@@ -19,6 +22,7 @@ import type { TaskRuntimeDeps } from './runtime.js';
 import { spawnWorkerRun } from './spawn.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
+  InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
   QuotaExceededError,
   TASK_ROW_COLUMNS,
@@ -201,7 +205,7 @@ export async function invokeWorkerCreate(
   const definitionName =
     typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
 
-  const { parentAuthority, skillsInline, effectiveModel } = await withWorkspace(
+  const { parentAuthority, skillsInline, effectiveModel, agentProfile } = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
     async (client) => ({
@@ -218,8 +222,24 @@ export async function invokeWorkerCreate(
           ? (await readEffectiveAgentProfile(client, workspaceId, caller.principalId)).model ||
             undefined
           : undefined,
+      // S3.13 runtime consumer (this task): the raw row, not `readEffectiveAgentProfile` — this
+      // field carries no AgentPolicy cap (`resolve.ts`'s own doc comment), so `null`/no-row already
+      // *is* "no restriction" without needing the "available" resolution machinery; see
+      // `InvokeWorkerDefinitionNotEnabledError`'s own doc comment (types.ts) for the full reasoning.
+      agentProfile: await readAgentProfile(client, workspaceId, caller.principalId),
     }),
   );
+
+  // S3.13 runtime consumer: narrowing only, checked before anything is created (same "before any
+  // Task row exists" placement the quota checks below and the attenuation pre-check just after this
+  // both already use) — an owner is not exempt (a Profile is a preference the principal set for
+  // themselves, not a privilege boundary).
+  if (
+    agentProfile?.enabledWorkerDefinitions &&
+    !agentProfile.enabledWorkerDefinitions.includes(input.definitionId)
+  ) {
+    throw new InvokeWorkerDefinitionNotEnabledError(input.definitionId);
+  }
 
   // Pre-check the child-Handle scope *before* creating anything (docs/development-tasks.md S2.7
   // "quota checks (I18) before anything is created" — this is the attenuation-equivalent of that
