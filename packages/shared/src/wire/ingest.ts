@@ -40,6 +40,11 @@ export type SourceWire = z.infer<typeof SourceWireSchema>;
  * reports what it did, not one resource object). `activityId` is a reference to the (new or
  * caller-supplied) Activity every Fact in this submission traces to (I3).
  *
+ * `factsUnchanged` — S3.2 followup ("idempotent re-assertion", docs/development-tasks.md): a Link
+ * whose `assertFact` call resolved to the store's own no-op path (same origin, content-identical
+ * to the currently-active Fact) — counted separately from `factsSuperseded` so a collector
+ * re-submitting an unchanged inventory sees `factsSuperseded: 0` on its second run.
+ *
  * `objects` — additive beyond the task dispatch's own literal `{activityId, objectsUpserted,
  * factsAsserted, factsSuperseded}` shape, one entry per distinct `(objectType, identity)` this
  * submission touched, carrying back the graph id `upsertObject` resolved it to. This exists to
@@ -59,6 +64,7 @@ export const SubmitObservationsResultWireSchema = z
     objectsUpserted: z.number().int().nonnegative(),
     factsAsserted: z.number().int().nonnegative(),
     factsSuperseded: z.number().int().nonnegative(),
+    factsUnchanged: z.number().int().nonnegative(),
     objects: z.array(
       z
         .object({

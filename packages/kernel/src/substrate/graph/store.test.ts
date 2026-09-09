@@ -7,6 +7,7 @@ import {
   TraverseDepthError,
   assertNoCallerSuppliedEpistemicStatus,
   deriveEpistemicStatus,
+  factContentEquals,
   factLifecycleState,
   normalizeTraverseDepth,
 } from './store.js';
@@ -85,5 +86,67 @@ describe('normalizeTraverseDepth', () => {
 
   it('throws TraverseDepthError for a non-integer depth', () => {
     expect(() => normalizeTraverseDepth(1.5)).toThrow(TraverseDepthError);
+  });
+});
+
+describe('factContentEquals — S3.2 followup idempotent-re-assertion equality', () => {
+  const base = {
+    linkType: 'test.runs_on',
+    sourceObjectId: 'src-1',
+    targetObjectId: 'tgt-1',
+    properties: { port: 80, tags: ['a', 'b'] },
+    validUntil: null,
+  } as const;
+
+  it('is true for identical properties in identical key order', () => {
+    expect(factContentEquals(base, { ...base })).toBe(true);
+  });
+
+  it('is true when properties keys are reordered (order is never meaningful content)', () => {
+    const reordered = { tags: ['a', 'b'], port: 80 };
+    expect(factContentEquals(base, { ...base, properties: reordered })).toBe(true);
+  });
+
+  it('is true for nested objects with reordered keys too (deep key sort)', () => {
+    const prior = { ...base, properties: { outer: { a: 1, b: 2 } } };
+    const input = { ...base, properties: { outer: { b: 2, a: 1 } } };
+    expect(factContentEquals(prior, input)).toBe(true);
+  });
+
+  it('treats a missing `properties` on the input as `{}`', () => {
+    expect(
+      factContentEquals(
+        { ...base, properties: {} },
+        {
+          linkType: base.linkType,
+          sourceObjectId: base.sourceObjectId,
+          targetObjectId: base.targetObjectId,
+          validUntil: null,
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it('is false when a property value differs', () => {
+    expect(
+      factContentEquals(base, { ...base, properties: { ...base.properties, port: 8080 } }),
+    ).toBe(false);
+  });
+
+  it('is false when linkType differs', () => {
+    expect(factContentEquals(base, { ...base, linkType: 'test.other' })).toBe(false);
+  });
+
+  it('is false when sourceObjectId or targetObjectId differs', () => {
+    expect(factContentEquals(base, { ...base, sourceObjectId: 'src-2' })).toBe(false);
+    expect(factContentEquals(base, { ...base, targetObjectId: 'tgt-2' })).toBe(false);
+  });
+
+  it('is false when the prior Fact has a non-null validUntil, even with identical properties', () => {
+    expect(factContentEquals({ ...base, validUntil: new Date() }, { ...base })).toBe(false);
+  });
+
+  it('is false when the new input carries a non-null validUntil, even with identical properties', () => {
+    expect(factContentEquals(base, { ...base, validUntil: new Date() })).toBe(false);
   });
 });

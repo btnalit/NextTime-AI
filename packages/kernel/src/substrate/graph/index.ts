@@ -26,15 +26,18 @@ export {
   FactNotFoundError,
   MAX_TRAVERSE_DEPTH,
   MIN_TRAVERSE_DEPTH,
+  SupersedeIdentityMismatchError,
   TRAVERSE_DIRECTION_VALUES,
   TraverseDepthError,
   assertNoCallerSuppliedEpistemicStatus,
   deriveEpistemicStatus,
+  factContentEquals,
   factLifecycleState,
   normalizeTraverseDepth,
 } from './store.js';
 export type {
   AssertFactInput,
+  AssertFactResult,
   CallerPrincipal,
   Fact,
   FactLifecycleState,

@@ -130,6 +130,18 @@ export interface SupersedeFactInput extends AssertFactInput {
   readonly factId: string;
 }
 
+/**
+ * `assertFact`'s return: the written/found Fact, plus — only on the idempotent no-op path
+ * (docs/development-tasks.md S3.2 followup "idempotent re-assertion"; `factContentEquals` below)
+ * — `unchanged: true`. Every other path (fresh assert, same-origin content-changed supersede,
+ * different-origin conflict-branch insert) never sets the flag, so this remains structurally
+ * exactly a `Fact` (one additional *optional* property) — every existing caller that only ever
+ * used a bare `Fact` (six of the eight `assertFact` call sites in this codebase) keeps compiling
+ * and behaving exactly as before. The one caller that reads it today is `ingest-handlers.ts`'s
+ * `submit_observations`, which reports it back to a collector as `factsUnchanged`.
+ */
+export type AssertFactResult = Fact & { readonly unchanged?: true };
+
 /** `verifyFact` (S3.2 `verify_fact` capability, design doc §5.3 item 6 / I3.6): promotes an
  *  existing Fact's `epistemic_status` to `verified` and stamps `verified_by: caller.id`. Evidence
  *  presence (the "harder half" of I3.6 — 0002_substrate.sql's own comment: "verified 的 Fact 没有
@@ -307,6 +319,72 @@ export function factLifecycleState(fact: {
   return 'recorded';
 }
 
+/** Deterministic JSON serialization — sorts object keys recursively so two `properties` objects
+ *  with the same content but different key order compare equal. A local copy of `application/
+ *  gateway/action-executor.ts`'s own `stableStringify` (same pattern, same scope limit: no BigInt/
+ *  Date/cyclic handling, fine because a Fact's `properties` is always JSON-shaped caller input) —
+ *  not imported from there because substrate may not depend on the application layer (§7.10
+ *  six-layer rule). */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * Idempotent-re-assertion equality (docs/development-tasks.md S3.2 followup —
+ * `SqlGraphStore.assertFact`'s "same-origin re-assertion" branch): whether re-asserting `input` on
+ * top of the currently-active `prior` Fact (same `(linkType, sourceObjectId, targetObjectId)`
+ * identity, same origin — both already established by the caller before this is invoked) should be
+ * treated as a no-op rather than a supersede. Exactly three things are compared, deliberately no
+ * more:
+ *
+ *  - `linkType`/`sourceObjectId`/`targetObjectId` — already guaranteed equal by the identity
+ *    lookup that found `prior` in the first place; re-checked here anyway so this function's own
+ *    contract is self-evidently complete rather than silently relying on a fact only true at its
+ *    one call site.
+ *  - `properties` deep-equal after (recursively) sorting keys — key order is never meaningful
+ *    content, same convention `ingest-handlers.ts`'s `identityCacheKey` already uses for identity
+ *    objects, extended here to nested values via `stableStringify` above.
+ *  - `validUntil` both `null` — only an open-ended Fact on *both* sides is eligible for the no-op
+ *    path; a Fact with an explicit business-time end on either side conservatively falls through to
+ *    the existing supersede path (no writer in this codebase gives `validUntil` today, so this
+ *    never actually excludes a real caller — it exists so a future bitemporal-close caller is not
+ *    silently short-circuited by this fix).
+ *
+ * Deliberately excludes `validFrom`: no writer in this codebase — the host-inventory collector
+ * included, `ingest-handlers.ts`'s `IngestLink` has no `validFrom` field at all — ever supplies
+ * one, so every insert gets `coalesce($, now())`. Comparing it would make every re-assertion "not
+ * equal" purely from insert-time clock drift, defeating the very idempotency this function exists
+ * to provide.
+ *
+ * Also excludes `confidence`: no writer in this codebase varies `confidence` across otherwise-
+ * identical re-assertions today, and `epistemic_status` (caller-kind-derived, never caller content
+ * — `assertNoCallerSuppliedEpistemicStatus` already forbids supplying it) is not part of "content"
+ * at all.
+ */
+export function factContentEquals(
+  prior: Pick<Fact, 'linkType' | 'sourceObjectId' | 'targetObjectId' | 'properties' | 'validUntil'>,
+  input: Pick<
+    AssertFactInput,
+    'linkType' | 'sourceObjectId' | 'targetObjectId' | 'properties' | 'validUntil'
+  >,
+): boolean {
+  if (
+    prior.linkType !== input.linkType ||
+    prior.sourceObjectId !== input.sourceObjectId ||
+    prior.targetObjectId !== input.targetObjectId
+  ) {
+    return false;
+  }
+  if (prior.validUntil !== null || (input.validUntil ?? null) !== null) return false;
+  return stableStringify(prior.properties) === stableStringify(input.properties ?? {});
+}
+
 /** Validates and normalizes a `traverse`/`neighbors` depth; throws `TraverseDepthError` if out of range. */
 export function normalizeTraverseDepth(depth: number | undefined): number {
   const resolved = depth ?? DEFAULT_TRAVERSE_DEPTH;
@@ -352,7 +430,7 @@ export interface GraphStore {
     workspaceId: string,
     caller: CallerPrincipal,
     input: AssertFactInput,
-  ): Promise<Fact>;
+  ): Promise<AssertFactResult>;
 
   supersedeFact(
     client: PoolClient,
