@@ -1,0 +1,20 @@
+# deploy/ci/docker-compose.ci.yml — CI override for the web console e2e workflow
+# (.github/workflows/e2e.yml; docs/runbooks/web-console.md "CI（Playwright）"). Merged on top of
+# the root docker-compose.yml via `-f docker-compose.yml -f deploy/ci/docker-compose.ci.yml` —
+# never used standalone (it has no service of its own, only overrides onto services the root file
+# already defines).
+#
+# Only change from the real-deployment file: `restart: "no"` on the three services this workflow
+# actually starts (postgres/kernel/caddy — see env.ci.template's own comment for why nothing else
+# needs to run). The root file's `unless-stopped` is right for a long-lived host but wrong for a
+# throwaway CI job — a crash-looping container would otherwise keep respawning after the failure
+# that should end the job, and `docker compose up --wait`/the workflow's own `/api/health` curl
+# loop would see a container repeatedly flapping between "starting" and "restarting" instead of a
+# single clean failure to report.
+services:
+  postgres:
+    restart: 'no'
+  kernel:
+    restart: 'no'
+  caddy:
+    restart: 'no'

@@ -1,0 +1,186 @@
+name: e2e
+
+# Web console Playwright e2e (docs/runbooks/web-console.md "CI（Playwright）"). A separate
+# workflow from ci.yml on purpose: it brings up its own throwaway `AGENT_RUNTIME=fake` docker
+# compose stack inside the runner (postgres/kernel/caddy, plus a one-off llm-proxy build to
+# generate models.json) and runs a browser against it — a materially different, materially
+# slower job than ci.yml's three (lint/typecheck/build/test/guards, no Docker, no browser). Not
+# wired into ci.yml's own required-checks set; see this file's own final comment for how to
+# promote it once it has proven non-flaky.
+#
+# What this starts, and why only three long-running services: docs/runbooks/web-console.md's own
+# "CI（Playwright）" section (short version: AGENT_RUNTIME=fake makes the kernel answer chat
+# turns entirely in-process — packages/kernel/src/application/host-bridge/fake-runtime.ts — so
+# none of agent-host/worker-supervisor/docker-socket-proxy/egress-proxy, and no docker-in-docker
+# for resident containers, is needed for the login/chat/approvals/governance paths this suite
+# exercises).
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-e2e:
+    name: web-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same pin as ci.yml's own "Setup pnpm and Node 22" step — pnpm/action-setup does not
+      # support pnpm v11+ (root package.json pins packageManager: pnpm@11.25.0).
+      - name: Setup pnpm and Node 22
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm --filter @nexttime/web exec playwright install --with-deps chromium
+
+      # --- bring up the stack ------------------------------------------------------------------
+
+      - name: Generate CI .env (deploy/ci/env.ci.template)
+        run: |
+          set -euo pipefail
+          NEXTTIME_DATA="$RUNNER_TEMP/nexttime-data"
+          sed "s#__NEXTTIME_DATA__#$NEXTTIME_DATA#" deploy/ci/env.ci.template > .env
+          echo "NEXTTIME_DATA=$NEXTTIME_DATA" >>"$GITHUB_ENV"
+
+      # scripts/host-bootstrap.sh / host-env-init.sh / gen-handle-keys.sh are the same,
+      # unmodified host scripts every real deployment runs (docs/runbooks/host-bootstrap.md) —
+      # `sudo` here only because those scripts deliberately write secrets/*.env and secrets/*.key
+      # as 0600/0640, root-owned (by design, not a CI-only choice — see deploy/ci/
+      # env.ci.template's own header comment), and every `docker compose` invocation below
+      # therefore also runs as root so its CLI-side `env_file:` reads succeed.
+      - name: Bootstrap host data directory and secrets
+        run: |
+          set -euo pipefail
+          sudo env "NEXTTIME_DATA=$NEXTTIME_DATA" sh scripts/host-bootstrap.sh
+          sudo env "NEXTTIME_DATA=$NEXTTIME_DATA" sh scripts/host-env-init.sh
+          sudo env "NEXTTIME_DATA=$NEXTTIME_DATA" sh scripts/gen-handle-keys.sh
+          sudo cp config/llm-providers.fake.example.yaml "$NEXTTIME_DATA/config/llm-providers.yaml"
+          echo 'FAKE_LLM_API_KEY=fake' | sudo tee -a "$NEXTTIME_DATA/secrets/llm-proxy.env" >/dev/null
+
+      - name: Build kernel/caddy/llm-proxy images
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            build kernel caddy llm-proxy
+
+      # One-off `docker compose run` (never `up`) — llm-proxy is otherwise unused by this suite
+      # (see this file's header comment); this is the only thing it is built for.
+      - name: Generate models.json (fake provider)
+        run: |
+          set -euo pipefail
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null \
+            | sudo tee "$NEXTTIME_DATA/config/models.json" >/dev/null
+
+      - name: Start postgres/kernel/caddy
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            up -d --wait postgres kernel caddy
+
+      # caddy has no `healthcheck:` in docker-compose.yml, so `up --wait` above only confirms it
+      # is running, not that its reverse proxy to kernel (and its own on-demand TLS issuance) is
+      # actually serving — this curl loop is the real readiness gate. `-k`: caddy's leaf is
+      # signed by its own internal CA (deploy/caddy/Caddyfile `tls internal`), self-signed by
+      # design for this deployment (docs/runbooks/web-console.md).
+      - name: Wait for /api/health via caddy
+        run: |
+          set -euo pipefail
+          code=""
+          for i in $(seq 1 30); do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/api/health || true)
+            if [ "$code" = "200" ]; then
+              echo "caddy /api/health is up (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "caddy /api/health never returned 200 (last: $code)" >&2
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color
+          exit 1
+
+      - name: Run kernel migrations
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            run --rm --no-deps -T kernel node dist/cli/migrate.js </dev/null
+
+      # Same bootstrap.js output shape scripts/accept_s1.sh's own bootstrap_step already parses
+      # (`workspace created: <id>` / `API key` on the following line) — see that script for the
+      # precedent. `set +e`/`set -e` around the capture (rather than letting `set -e` abort mid-
+      # substitution) so a failure here prints the actual captured output before exiting, instead
+      # of silently swallowing it.
+      - name: Bootstrap a workspace and owner API key
+        run: |
+          set -euo pipefail
+          set +e
+          out=$(sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name ci-e2e --owner owner </dev/null 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "create-workspace exited $rc:" >&2
+            printf '%s\n' "$out" >&2
+            exit 1
+          fi
+          workspace_id=$(printf '%s\n' "$out" | sed -n 's/^workspace created: //p')
+          api_key=$(printf '%s\n' "$out" | awk '/^API key/{getline; print; exit}')
+          if [ -z "$workspace_id" ] || [ -z "$api_key" ]; then
+            echo "could not parse create-workspace output:" >&2
+            printf '%s\n' "$out" >&2
+            exit 1
+          fi
+          echo "::add-mask::$api_key"
+          echo "WEB_E2E_API_KEY=$api_key" >>"$GITHUB_ENV"
+          echo "WEB_E2E_BASE_URL=https://127.0.0.1:8443" >>"$GITHUB_ENV"
+          echo "bootstrapped workspace $workspace_id"
+
+      # --- the actual e2e suite ----------------------------------------------------------------
+
+      # Runs every file under packages/web/e2e/ — chat.spec.ts and governance.spec.ts run for
+      # real (only WEB_E2E_BASE_URL/WEB_E2E_API_KEY set above); approvals.spec.ts's two seeded
+      # scenarios skip themselves (no WEB_E2E_SEED_ACTION_REQUESTS, no WEB_E2E_API_KEY_B — see
+      # that file's own doc comment).
+      - name: Run web e2e
+        run: pnpm --filter @nexttime/web e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            packages/web/playwright-report/
+            packages/web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: docker compose logs (on failure)
+        if: failure()
+        run: sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color
+
+      - name: docker compose down
+        if: always()
+        run: sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml down -v
+
+# Promoting to a required check: this workflow is intentionally NOT in the branch protection
+# rule's required-status-checks list yet (only ci.yml's quality/test/guards are). There is no
+# in-repo file that declares that list — a repository admin adds "e2e / web-e2e" to it from the
+# GitHub repo Settings → Branches → branch protection rule for `main`, once this workflow has run
+# clean on a handful of PRs.
