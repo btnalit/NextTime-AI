@@ -301,6 +301,158 @@ async function main() {
       );
     }
 
+    // 6e. S3.9 entryDependencyChatScenario turn 1: "哪个服务依赖哪个" -> search({objectType:'Container'}).
+    {
+      const { json } = await post([{ role: 'user', content: '哪个服务依赖哪个' }]);
+      const call = toolCallOf(json);
+      check(
+        'entry-dependency-chat-turn1',
+        call?.name === 'search' && JSON.stringify(call.args) === '{"objectType":"Container"}',
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 6f. turn 2: once search's *real* result (containing the kernel Container) is in history, the
+    //     scenario chains traverse off its real id — never a guessed one.
+    {
+      const messages = [
+        { role: 'user', content: '哪个服务依赖哪个' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"objectType":"Container"}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_s',
+          content: JSON.stringify({
+            items: [
+              { id: 'postgres-container-id', identityKey: { composeProjectId: 'p', serviceName: 'postgres' } },
+              { id: 'kernel-container-id', identityKey: { composeProjectId: 'p', serviceName: 'kernel' } },
+            ],
+          }),
+        },
+      ];
+      const { json } = await post(messages);
+      const call = toolCallOf(json);
+      check(
+        'entry-dependency-chat-turn2',
+        call?.name === 'traverse' &&
+          call.args.fromId === 'kernel-container-id' &&
+          call.args.linkType === 'depends_on' &&
+          call.args.depth === 1,
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 6g. turn 2, search found no kernel Container — never guesses a fromId.
+    {
+      const messages = [
+        { role: 'user', content: '哪个服务依赖哪个' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"objectType":"Container"}' } }],
+        },
+        { role: 'tool', tool_call_id: 'call_s', content: JSON.stringify({ items: [] }) },
+      ];
+      const { json } = await post(messages);
+      check(
+        'entry-dependency-chat-turn2-unresolved',
+        json.choices[0].finish_reason === 'stop' &&
+          typeof json.choices[0].message.content === 'string' &&
+          json.choices[0].message.content.includes('did not resolve'),
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 6h. turn 3: once traverse's *real* result is in history, the scenario chains get_object off
+    //     the edge's real targetObjectId.
+    {
+      const messages = [
+        { role: 'user', content: '哪个服务依赖哪个' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"objectType":"Container"}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_s',
+          content: JSON.stringify({ items: [{ id: 'kernel-container-id', identityKey: { serviceName: 'kernel' } }] }),
+        },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_t', type: 'function', function: { name: 'traverse', arguments: '{"fromId":"kernel-container-id","linkType":"depends_on","depth":1}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_t',
+          content: JSON.stringify({
+            nodes: ['postgres-container-id'],
+            edges: [{ linkId: 'fact-1', linkType: 'depends_on', sourceObjectId: 'kernel-container-id', targetObjectId: 'postgres-container-id', depth: 1 }],
+          }),
+        },
+      ];
+      const { json } = await post(messages);
+      const call = toolCallOf(json);
+      check(
+        'entry-dependency-chat-turn3',
+        call?.name === 'get_object' && call.args.objectId === 'postgres-container-id',
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 6i. turn 4: once get_object's *real* result is in history, the final text names the real
+    //     dependency's serviceName.
+    {
+      const messages = [
+        { role: 'user', content: '哪个服务依赖哪个' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"objectType":"Container"}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_s',
+          content: JSON.stringify({ items: [{ id: 'kernel-container-id', identityKey: { serviceName: 'kernel' } }] }),
+        },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_t', type: 'function', function: { name: 'traverse', arguments: '{}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_t',
+          content: JSON.stringify({
+            nodes: ['postgres-container-id'],
+            edges: [{ linkId: 'fact-1', linkType: 'depends_on', sourceObjectId: 'kernel-container-id', targetObjectId: 'postgres-container-id', depth: 1 }],
+          }),
+        },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_g', type: 'function', function: { name: 'get_object', arguments: '{"objectId":"postgres-container-id"}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_g',
+          content: JSON.stringify({ id: 'postgres-container-id', identityKey: { serviceName: 'postgres' } }),
+        },
+      ];
+      const { json } = await post(messages);
+      check(
+        'entry-dependency-chat-turn4',
+        json.choices[0].finish_reason === 'stop' &&
+          json.choices[0].message.content.includes('postgres') &&
+          json.choices[0].message.content.includes('depends_on'),
+        JSON.stringify(json.choices[0]),
+      );
+    }
+
     // 7. Streaming mode also honors scenarios (SSE contains the scripted tool name).
     {
       const { sse } = await post(

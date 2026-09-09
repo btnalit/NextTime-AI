@@ -354,6 +354,75 @@ function entryObserveChatScenario(messages) {
   ];
 }
 
+/** S3.9 step (c) (docs/development-tasks.md §S3.9; scripts/accept_s3.sh): "哪个服务依赖哪个" — a
+ *  real three-tool chain, entirely over already-registered entry observe tools (`search`/
+ *  `traverse`/`get_object` — packages/platform-extension/src/modes/entry.ts's
+ *  `ENTRY_TOOL_CAPABILITY_NAMES`, all S1, none of the "not yet registered for entry mode" caveats
+ *  the older Worker-dispatch scenarios above carry), so every step below chains off a *real*
+ *  kernel result (`findToolResult`), never a value accept_s3.sh guessed ahead of time:
+ *
+ *  Turn 1: `search({objectType:'Container'})` — every Container the host-inventory collector
+ *  (S3.3) has written for this workspace.
+ *
+ *  Turn 2: `traverse({fromId, linkType:'depends_on', depth:1})` on whichever turn-1 result has
+ *  `identityKey.serviceName === 'kernel'` — this repo's own docker-compose.yml declares `kernel:
+ *  depends_on: {postgres: ...}` (a real, always-true relationship on any running stack, not a
+ *  fixture), and Docker Compose stamps that as the `com.docker.compose.depends_on` label the
+ *  collector reads (collectors/host-inventory/src/observation-builder.ts) — so this is a genuine
+ *  round trip against real observed data, not a canned answer.
+ *
+ *  Turn 3: `get_object({objectId: <turn 2's first edge's targetObjectId>})` — resolves the
+ *  dependency target's own `identityKey.serviceName` (a Container's `depends_on` edge only carries
+ *  an opaque object id; naming the dependency by service name needs this extra hop).
+ *
+ *  Turn 4: final text naming the dependency (`"kernel 依赖（depends_on）服务 <name>。"` when every
+ *  hop resolved) — scripts/accept_s3.sh's own chat step asserts this reply is non-empty and names
+ *  a dependency; it independently rediscovers a `depends_on` Fact via its own direct `traverse` +
+ *  `explain` calls (not by parsing this reply) to verify `explain` resolves back to the
+ *  collector's own Source — see that script's own comment for why.
+ */
+function entryDependencyChatScenario(messages) {
+  const searched = findToolResult(messages, 'search');
+  const items = Array.isArray(searched?.items) ? searched.items : [];
+  const kernelContainer = items.find(
+    (item) => item && item.identityKey && item.identityKey.serviceName === 'kernel',
+  );
+  const traversed = findToolResult(messages, 'traverse');
+  const edge =
+    traversed && Array.isArray(traversed.edges) && traversed.edges.length > 0
+      ? traversed.edges[0]
+      : undefined;
+  const dependency = findToolResult(messages, 'get_object');
+  const dependencyName =
+    dependency && dependency.identityKey && typeof dependency.identityKey.serviceName === 'string'
+      ? dependency.identityKey.serviceName
+      : undefined;
+
+  return [
+    { tool: { name: 'search', args: { objectType: 'Container' } } },
+    kernelContainer
+      ? {
+          tool: {
+            name: 'traverse',
+            args: { fromId: kernelContainer.id, linkType: 'depends_on', depth: 1 },
+          },
+        }
+      : {
+          text: 'echo: 哪个服务依赖哪个 (search did not resolve a kernel Container — see docs/runbooks/host-accept-s3.md)',
+        },
+    edge
+      ? { tool: { name: 'get_object', args: { objectId: edge.targetObjectId } } }
+      : {
+          text: 'echo: 哪个服务依赖哪个 (traverse returned no depends_on edge — see docs/runbooks/host-accept-s3.md)',
+        },
+    dependencyName
+      ? { text: `kernel 依赖（depends_on）服务 ${dependencyName}。` }
+      : {
+          text: 'echo: 哪个服务依赖哪个 (get_object did not resolve — see docs/runbooks/host-accept-s3.md)',
+        },
+  ];
+}
+
 // Order matters: the entry-chat scenarios must be tested first. Once the entry agent has called
 // `invoke_worker`, its own message history contains the Worker marker (inside the tool-call
 // arguments' `input`), so a Worker-marker-first table would hand the *entry* agent the Worker's
@@ -362,6 +431,7 @@ function entryObserveChatScenario(messages) {
 const SCENARIOS = [
   { marker: '重启测试容器', build: entryRestartChatScenario, chat: true },
   { marker: '测试 API 的 GET 返回什么', build: entryObserveChatScenario, chat: true },
+  { marker: '哪个服务依赖哪个', build: entryDependencyChatScenario, chat: true },
   { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
 ];
