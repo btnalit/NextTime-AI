@@ -160,6 +160,20 @@ export interface TaskService {
    *  an interval, separate from `reap()`: this one walks the filesystem, not the registry, and
    *  belongs on a much longer, "boring" cadence. */
   sweepRetention(): Promise<void>;
+  /** feat/egress-docker-events: called by `index.ts`'s docker-events subscriber for every
+   *  container-lifecycle event (`die`/`destroy`/`kill`/`stop`) matching the platform's own label
+   *  filter — see `docker-events.ts`'s module doc comment. `containerId` is Docker's own event
+   *  `Actor.ID`, matched against this service's in-memory registry by `RegistryEntry.containerId`.
+   *  Reuses `reconcileOne` verbatim — the exact same finalize/unregister/remove path a `reap()`
+   *  tick would eventually take for this entry — so the classification (`exited`/`failed`) and
+   *  egress unregistration are identical to the reaper's own behavior, just triggered promptly
+   *  instead of on the next poll. Returns `false` (no-op) both for a `workerRunId` this instance
+   *  doesn't know about *and* for a still-`running` entry after `reconcileOne` — Docker's `kill`
+   *  event fires when the signal is sent, not once the process has actually died, and
+   *  `reconcileOne` itself no-ops when `docker.inspectByName` still reports it running (see that
+   *  method's own doc comment) — a container can emit `kill` → `die` → `destroy`/`stop` for one
+   *  exit, so this must be safe to call more than once for the same exit. */
+  notifyContainerExited(containerId: string, action: string): Promise<boolean>;
 }
 
 export function createTaskService(deps: TaskServiceDeps): TaskService {
@@ -454,6 +468,32 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           );
         }
       }
+    },
+
+    async notifyContainerExited(containerId: string, action: string): Promise<boolean> {
+      const match = [...registry.entries()].find(
+        ([, entry]) => entry.containerId === containerId && entry.state === 'running',
+      );
+      if (!match) return false;
+      const [workerRunId, entry] = match;
+
+      await reconcileOne(workerRunId, entry);
+      // `reconcileOne` itself no-ops (leaves `entry.state === 'running'`) when Docker still
+      // reports the container running — Docker's `kill` event fires when the signal is sent, not
+      // once the process has actually died. Only report this event as "handled" once the
+      // container is confirmed no longer running.
+      if (entry.state === 'running') return false;
+
+      console.log(
+        JSON.stringify({
+          level: 'info',
+          msg: 'task container exited (docker event)',
+          workerRunId,
+          containerId,
+          action,
+        }),
+      );
+      return true;
     },
   };
 }

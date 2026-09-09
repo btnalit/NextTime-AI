@@ -360,6 +360,55 @@ describe('task-service reconcile', () => {
   });
 });
 
+describe('task-service notifyContainerExited (feat/egress-docker-events)', () => {
+  it('reconciles a known running Task the moment its container exits, without waiting for reap()', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn(spawnInput);
+    docker.simulateExit('nexttime-task-run-1', 0);
+
+    const handled = await service.notifyContainerExited(outcome.containerId, 'die');
+
+    expect(handled).toBe(true);
+    expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
+    expect(docker.removeCalls).toEqual(['nexttime-task-run-1']);
+    const status = await service.status('run-1');
+    expect(status).toMatchObject({ status: 'exited', exitCode: 0 });
+  });
+
+  it('does not treat a still-running Task as exited (Docker’s kill fires on signal-sent, not on exit)', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn(spawnInput);
+
+    // No simulateExit — the fake container is still "running".
+    const handled = await service.notifyContainerExited(outcome.containerId, 'kill');
+
+    expect(handled).toBe(false);
+    expect(egressMap.read()[outcome.ip as string]).toBeDefined();
+    expect(docker.removeCalls).toHaveLength(0);
+    expect((await service.status('run-1'))?.status).toBe('running');
+  });
+
+  it('is idempotent — a second event for the same already-reconciled container is a no-op', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn(spawnInput);
+    docker.simulateExit('nexttime-task-run-1', 0);
+
+    expect(await service.notifyContainerExited(outcome.containerId, 'die')).toBe(true);
+    expect(await service.notifyContainerExited(outcome.containerId, 'destroy')).toBe(false);
+    expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
+  });
+
+  it('is a no-op for an unrecognized containerId', async () => {
+    const { service, docker } = setup();
+    await service.spawn(spawnInput);
+
+    const handled = await service.notifyContainerExited('not-a-known-container-id', 'die');
+
+    expect(handled).toBe(false);
+    expect(docker.removeCalls).toHaveLength(0);
+  });
+});
+
 describe('task-service sweepRetention', () => {
   // Retention compares each directory's real filesystem mtime against `now()` — unlike the other
   // describe blocks here, this one deliberately does NOT inject the virtual `clock` (it would

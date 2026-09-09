@@ -92,6 +92,17 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
       return explicitName ?? options.networkName ?? 'fake_workers';
     },
 
+    async getContainerEvents(): Promise<NodeJS.ReadableStream> {
+      // Not exercised by resident-service.test.ts / task-service.test.ts / server.test.ts — none
+      // of them drive the Docker events stream. docker-events.test.ts uses its own minimal fake
+      // (an EventEmitter it can `.emit()` on directly) instead of this shared fake, since
+      // simulating a live stream's data/error/close events needs different machinery than the
+      // request/response methods above — see that test file for why.
+      throw new Error(
+        'FakeDockerClient.getContainerEvents is not implemented — use a dedicated fake',
+      );
+    },
+
     simulateExternalKill(name: string): void {
       const existing = containers.get(name);
       if (existing) {

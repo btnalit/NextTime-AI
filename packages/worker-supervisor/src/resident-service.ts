@@ -121,11 +121,28 @@ export interface ResidentService {
   /** Lists containers labelled `nexttime.role=entry`, re-registers each running one's IP with the
    *  egress source map, and seeds the idle-timeout registry — called once at startup (design doc
    *  §13 "agent-host 重启...事件桥重连"; the supervisor's own analogue for its egress registrations
-   *  and idle clocks, which are both in-memory). */
+   *  and idle clocks, which are both in-memory). feat/egress-docker-events: also called again after
+   *  every docker-events reconnect (`index.ts`/`docker-events.ts`) — see its own doc comment for
+   *  why that's safe to do repeatedly. */
   reconcile(): Promise<void>;
   /** Stops every resident container whose `lastTouchedAt` is older than `entryIdleTimeoutMs`
    *  (design doc §7.2 "空闲超时停容器"). Call on an interval — see `index.ts`. */
   sweepIdle(): Promise<void>;
+  /** feat/egress-docker-events: called by `index.ts`'s docker-events subscriber for every
+   *  container-lifecycle event (`die`/`destroy`/`kill`/`stop`) matching the platform's own label
+   *  filter — see `docker-events.ts`'s module doc comment. `containerId` is Docker's own event
+   *  `Actor.ID` (full container id), matched against this service's in-memory registry the same
+   *  way `spawn()`'s own crash-detection path already does. Re-inspects the container before
+   *  treating it as gone: Docker's `kill` event fires when the signal is *sent*, not once the
+   *  process has actually died (`docker stop`'s graceful SIGTERM can take up to
+   *  `STOP_TIMEOUT_SECONDS` before the container truly exits) — unregistering egress and dropping
+   *  the registry entry at that point would fail-close a container that's still legitimately
+   *  running mid-Turn, with no recovery path (`touch()`'s own recovery path re-registers the
+   *  registry entry but never re-registers egress). Idempotent: a container can emit `kill` → `die`
+   *  → `destroy`/`stop` for one exit, and this returns `false` on every call after the first that
+   *  actually unregisters it (or for a container this instance never knew about). Returns `true`
+   *  only when it actually unregistered a known, now-confirmed-not-running container. */
+  notifyContainerExited(containerId: string, action: string): Promise<boolean>;
 }
 
 export function createResidentService(deps: ResidentServiceDeps): ResidentService {
@@ -466,7 +483,16 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
             workspaceId,
             containerId: state.id,
             ip: state.ip,
-            lastTouchedAt: now(),
+            // feat/egress-docker-events: preserve an already-known principal's existing idle
+            // clock rather than unconditionally resetting it to `now()` — this method used to run
+            // only once, at process startup (an empty registry, so this branch was always a first
+            // write). It now also re-runs after every docker-events reconnect
+            // (`docker-events.ts`'s own doc comment), and a flapping proxy connection reconnecting
+            // every few seconds would otherwise keep refreshing every running container's
+            // `lastTouchedAt` forever, silently disabling `sweepIdle()` for as long as the
+            // flapping continues. A genuine restart still starts from an empty registry, so this
+            // branch behaves exactly as before in that case.
+            lastTouchedAt: registry.get(principalId)?.lastTouchedAt ?? now(),
           });
           // Restores the egress deny list this container was (re)created with (EGRESS_DENY_LABEL)
           // — without this, a supervisor restart would re-register every still-running entry
@@ -491,6 +517,32 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         unregisterEgress(entry.ip);
         registry.delete(principalId);
       }
+    },
+
+    async notifyContainerExited(containerId: string, action: string): Promise<boolean> {
+      const match = [...registry.entries()].find(([, entry]) => entry.containerId === containerId);
+      if (!match) return false;
+      const [principalId, entry] = match;
+
+      // Docker's `kill` event fires when the signal is sent, not once the container has actually
+      // exited — see this method's own doc comment. Re-inspect rather than trust the event alone;
+      // `state === undefined` (404, e.g. after a `destroy` following `docker rm`) counts as "not
+      // running" just like `state.running === false`.
+      const state = await docker.inspectByName(entryContainerName(principalId));
+      if (state?.running) return false;
+
+      unregisterEgress(entry.ip);
+      registry.delete(principalId);
+      console.log(
+        JSON.stringify({
+          level: 'info',
+          msg: 'resident container exited (docker event)',
+          principalId,
+          containerId,
+          action,
+        }),
+      );
+      return true;
     },
   };
 }

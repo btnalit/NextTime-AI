@@ -607,4 +607,74 @@ describe('resident-service reconcile', () => {
       deny: ['blocked.example.com'],
     });
   });
+
+  it('does not reset an already-known principal’s idle clock on a repeated reconcile (feat/egress-docker-events)', async () => {
+    // docker-events.ts re-runs reconcile() after every reconnect — a flapping proxy connection
+    // must not keep resetting lastTouchedAt to "now", which would silently disable sweepIdle for
+    // as long as the flapping continues.
+    const { service, docker, advanceClock } = setup({ ENTRY_IDLE_TIMEOUT_MS: '1000' });
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' }); // touched at t=0
+
+    advanceClock(600);
+    await service.reconcile(); // simulates a docker-events reconnect's reconcile pass at t=600 —
+    // must NOT bump alice's lastTouchedAt from 0 to 600
+
+    advanceClock(500); // t=1100: 1100ms since the real (t=0) touch, only 500ms since t=600
+    await service.sweepIdle();
+
+    // Before the fix, reconcile() would have reset lastTouchedAt to 600, making alice look only
+    // 500ms idle (< 1000ms timeout) and survive the sweep — this asserts she doesn't.
+    expect(docker.stopCalls.map((c) => c.name)).toEqual(['nexttime-entry-alice']);
+  });
+});
+
+describe('resident-service notifyContainerExited (feat/egress-docker-events)', () => {
+  it('unregisters egress and drops the registry entry once the container is confirmed not running', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(egressMap.read()[outcome.ip as string]).toBeDefined();
+
+    docker.simulateExternalKill('nexttime-entry-alice'); // the container has actually died
+    const handled = await service.notifyContainerExited(outcome.containerId, 'die');
+
+    expect(handled).toBe(true);
+    expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
+    // The registry entry is gone — touch()'s recovery path re-inspects Docker directly and finds
+    // it not running.
+    expect(await service.touch('alice')).toBe(false);
+  });
+
+  it('does not unregister a container that is still running (Docker’s kill fires on signal-sent, not on exit)', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+
+    // No simulateExternalKill — the fake container is still "running", mirroring a `docker stop`
+    // whose SIGTERM was just sent but hasn't taken effect yet.
+    const handled = await service.notifyContainerExited(outcome.containerId, 'kill');
+
+    expect(handled).toBe(false);
+    expect(egressMap.read()[outcome.ip as string]).toBeDefined();
+    expect(await service.touch('alice')).toBe(true);
+  });
+
+  it('is idempotent — a second event for the same already-unregistered container is a no-op', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    docker.simulateExternalKill('nexttime-entry-alice');
+
+    expect(await service.notifyContainerExited(outcome.containerId, 'die')).toBe(true);
+    expect(await service.notifyContainerExited(outcome.containerId, 'destroy')).toBe(false);
+    expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
+  });
+
+  it('is a no-op for an unrecognized containerId', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+
+    const handled = await service.notifyContainerExited('not-a-known-container-id', 'die');
+
+    expect(handled).toBe(false);
+    expect(egressMap.read()[outcome.ip as string]).toBeDefined();
+    expect(await service.touch('alice')).toBe(true);
+  });
 });
