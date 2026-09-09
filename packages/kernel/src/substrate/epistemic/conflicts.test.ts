@@ -180,6 +180,75 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    it('S3.2 followup: a same-origin re-assertion with identical content is a no-op, not a supersede — no new Fact row, no Conflict', async () => {
+      await asPrincipal(ownerId, async (client) => {
+        const objectA = await store.upsertObject(client, workspaceId, { objectType: 'test.host' });
+        const objectB = await store.upsertObject(client, workspaceId, {
+          objectType: 'test.service',
+        });
+
+        const sourceS1 = await registerPrivateSource(client, workspaceId, {
+          kind: 'test.collector',
+          ownerPrincipalId: ownerId,
+        });
+
+        // Step 1: assert A from source S1.
+        const activity1 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS1.id,
+          activityId: activity1.id,
+        });
+        const factA = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectB.id,
+            targetObjectId: objectA.id,
+            activityId: activity1.id,
+            properties: { port: 80 },
+          },
+        );
+        expect(factA.supersedesId).toBeNull();
+
+        // Step 2: re-assert the *same* content, from the *same* source S1 → no-op, not a supersede.
+        const activity2 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS1.id,
+          activityId: activity2.id,
+        });
+        const factA2 = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectB.id,
+            targetObjectId: objectA.id,
+            activityId: activity2.id,
+            properties: { port: 80 }, // identical to step 1
+          },
+        );
+        expect(factA2.unchanged).toBe(true);
+        expect(factA2.id).toBe(factA.id);
+
+        // factA is still the one and only active Fact — never superseded.
+        const activeRows = await client.query<{ id: string; superseded_at: Date | null }>(
+          'select id, superseded_at from links where workspace_id = $1 and id = $2',
+          [workspaceId, factA.id],
+        );
+        expect(activeRows.rows[0]?.superseded_at).toBeNull();
+
+        // No Conflict was opened either.
+        const page = await listConflicts(client, workspaceId, { status: 'open' });
+        const conflict = page.items.find(
+          (item) => item.factAId === factA.id || item.factBId === factA.id,
+        );
+        expect(conflict).toBeUndefined();
+      });
+    });
+
     it('a Conflict involving a private-source Fact is visible only to that source’s owner', async () => {
       // Object/link identity shared by both assertions.
       const { objectAId, objectBId } = await asPrincipal(ownerId, async (client) => {

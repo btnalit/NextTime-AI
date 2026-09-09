@@ -1,0 +1,43 @@
+name: release-please
+
+# docs/runbooks/release.md. Single root version (release-please-config.json `packages["."]`,
+# release-type node → reads/writes package.json's own "version"; manifest starts both
+# .release-please-manifest.json and package.json at 0.1.0). On every push to main,
+# release-please either opens or updates one standing "chore: release X.Y.Z" PR with the
+# accumulated CHANGELOG.md entry, parsed from this repo's existing feat/fix/docs/chore(...)
+# conventional-commit prefixes. Merging that PR is what actually cuts the release: release-please
+# tags the merge commit vX.Y.Z (include-component-in-tag: false in the config — plain vX.Y.Z, no
+# component prefix, since this is a single-package manifest) and creates a GitHub Release from it.
+#
+# Uses the default GITHUB_TOKEN (no new secret) — the one documented consequence is that the
+# release PR release-please opens does NOT itself trigger pull_request-triggered workflows
+# (ci.yml/codeql.yml/pr-title.yml), a GitHub Actions restriction on GITHUB_TOKEN-authored PRs,
+# not a bug here. See docs/runbooks/release.md for the one manual step this requires before
+# merging that PR (push an empty commit, or close/reopen it, so a human action fires the
+# pull_request event and the required checks actually run).
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

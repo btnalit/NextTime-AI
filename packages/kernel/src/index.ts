@@ -129,7 +129,13 @@ export function createServer(
   // reasoning `buildGatekeeperExecutionDeps`'s own doc comment gives for `ActionExecutor`.
   setConnectionHandlerDeps({ gatekeeperClient });
 
-  app.get('/api/health', async () => ({ status: 'ok' }));
+  app.get('/api/health', async (_request, reply) => {
+    if (options.isBackgroundReady && !options.isBackgroundReady()) {
+      reply.code(503);
+      return { status: 'starting' };
+    }
+    return { status: 'ok' };
+  });
 
   // Internal-plane shared-secret guard (interfaces/internal-auth): one root-level `onRequest`
   // hook that 401s every route whose pattern starts with `/internal/` — the HTTP routes below
@@ -191,6 +197,18 @@ export interface CreateServerOptions {
    *  Omitted → the internal plane is fail-closed (every request 401), never unauthenticated; a
    *  test that exercises an internal route must pass one. */
   internalAuth?: InternalPlaneAuthConfig;
+  /**
+   * Startup fail-fast followup (docs/development-tasks.md, "the health endpoint must not report
+   * ok before background services are up"): `GET /api/health` calls this (when given) and reports
+   * 503 `{status:'starting'}` instead of 200 `{status:'ok'}` while it returns `false`. `main()`
+   * passes `() => backgroundReady`, flipped to `true` only once `background.start()` (the
+   * stale-Turn recovery scan + the outbox dispatcher) actually succeeds — see
+   * `startBackgroundServicesOrExit` below. Omitted (the default) → health always reports `ok`,
+   * unchanged from before this option existed — `createServer()`'s own module doc comment already
+   * establishes that a test exercising only the HTTP surface must not accidentally depend on
+   * background services ever starting at all.
+   */
+  isBackgroundReady?: () => boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -834,6 +852,43 @@ export function parseNonNegativeIntEnvVar(
   return parsed;
 }
 
+/**
+ * Startup fail-fast (docs/development-tasks.md: found by the web e2e workflow — a missing
+ * migration, e.g. "relation \"chat_turns\" does not exist", made `interruptStaleRunningTurns`
+ * throw inside `background.start()`; before this fix `main()`'s outer `.catch` just logged the
+ * error and kept serving traffic with the outbox dispatcher silently never started). Awaits
+ * `background.start()` (the stale-Turn recovery scan, then the outbox dispatcher + every reaper —
+ * `createBackgroundServices`'s own `start()` doc comment); on failure, logs one `fatal` line and
+ * terminates the process with a non-zero exit code rather than leaving the kernel running
+ * degraded and unobservable (a "recovery scan throws" case is never a benign, retry-safe failure —
+ * whatever migration/config problem caused it will not fix itself on the next poll tick, and the
+ * process supervisor restarting the container is the correct recovery here, same as any other
+ * failed liveness check).
+ *
+ * `log` (required — `main()` always has a real Fastify/pino logger to pass) and `exit` (defaults
+ * to `process.exit`) are both injected purely so this is unit-testable with a throwing fake
+ * `background.start()` and no real process kill — see index.test.ts.
+ */
+export async function startBackgroundServicesOrExit(
+  background: Pick<BackgroundServices, 'start' | 'stop'>,
+  log: { fatal: (obj: unknown, msg?: string) => void },
+  exit: (code: number) => void = process.exit,
+): Promise<void> {
+  try {
+    await background.start();
+  } catch (err) {
+    log.fatal(
+      { err },
+      'kernel startup failed: the stale-Turn recovery scan / outbox dispatcher did not start — exiting so the process supervisor restarts the kernel',
+    );
+    // Best-effort: clears whatever timers `start()` managed to set up before the failure (usually
+    // none — the recovery scan is its own first line — but harmless either way, same
+    // `background?.stop()` shutdown() already calls unconditionally elsewhere in this file).
+    background.stop();
+    exit(1);
+  }
+}
+
 export function main(): void {
   // Fail fast on a misconfigured AGENT_RUNTIME before doing anything else (opening the DB pool,
   // binding a port).
@@ -862,12 +917,17 @@ export function main(): void {
   // `InvariantMetricsStore`'s own doc comment for why this cannot simply be a module-level
   // singleton instead.
   const invariantMetrics = createInvariantMetricsStore();
+  // Startup fail-fast followup: flips to `true` only once `startBackgroundServicesOrExit` below
+  // confirms `background.start()` actually succeeded — declared here, before `createServer`, so
+  // the closure `isBackgroundReady` captures below can be handed to it.
+  let backgroundReady = false;
   const app = createServer(
     { pool, renderMetrics: invariantMetrics.renderMetrics },
     {
       logger: true,
       requestActionAwaitDecisionTimeoutMs,
       internalAuth,
+      isBackgroundReady: () => backgroundReady,
     },
   );
 
@@ -1010,10 +1070,24 @@ export function main(): void {
 
     // A request that races the still-in-flight recovery scan is not unsafe — the partial unique
     // index (migrations/core/0008_chat_messages.sql) still prevents two Turns from ever running
-    // for the same Chat at once regardless of how far recovery has gotten.
-    await background.start();
+    // for the same Chat at once regardless of how far recovery has gotten. `GET /api/health`
+    // reports 503 `{status:'starting'}` for the whole duration of this await (`isBackgroundReady`
+    // above) — a caller polling health during a slow recovery scan sees "not ready", never a false
+    // "ok". `startBackgroundServicesOrExit` itself never rejects: a throwing recovery scan or
+    // dispatcher-start failure exits the process from inside it (startup fail-fast followup,
+    // docs/development-tasks.md) rather than reaching the `.catch` below.
+    await startBackgroundServicesOrExit(background, app.log);
+    backgroundReady = true;
   })().catch((err: unknown) => {
-    app.log.error(err);
+    // Reached only by a failure *before* `background` was even constructed (e.g. `kind ===
+    // 'agent-host'`'s `loadHandleKeyPair()` rethrow above) — `startBackgroundServicesOrExit`
+    // handles every failure from that point on by exiting directly, so this is still a genuine
+    // "the kernel cannot serve correctly" condition, not a benign one either.
+    app.log.fatal(
+      { err },
+      'kernel startup failed before background services were constructed — exiting',
+    );
+    process.exit(1);
   });
 }
 

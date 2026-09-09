@@ -13,17 +13,24 @@ import {
   AgentProfileValidationError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
+  ConflictNotFoundError,
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
+  DecisionNotFoundError,
   ExplainNodeNotFoundError,
+  FactHasNoEvidenceError,
+  FactNotFoundError,
   ForbiddenError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
   ModelsCatalogUnavailableError,
   ObservationIdentityError,
+  OntologyChangeValidationError,
+  OntologyDraftNotFoundError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
   SourceNotFoundError,
+  SupersedeIdentityMismatchError,
   UnauthorizedError,
 } from '../../application/gateway/index.js';
 import {
@@ -191,6 +198,16 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof ObservationIdentityError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
+  // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500") — WS
+  // equivalents of capability-route.ts's own new mappings (see that file's comments on these same
+  // classes): S3.1 `propose_ontology_change`'s change-validation failure, and S3.3 `supersede_fact`'s
+  // I5 identity-mismatch — both caller-input problems, INVALID_PARAMS.
+  if (
+    err instanceof OntologyChangeValidationError ||
+    err instanceof SupersedeIdentityMismatchError
+  ) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
   if (err instanceof TurnAlreadyRunningError) {
     return { code: WS_ERROR_CODES.TURN_ALREADY_RUNNING, message: err.message };
   }
@@ -234,7 +251,16 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     err instanceof GatekeeperNotFoundError ||
     err instanceof OperationNotFoundError ||
     err instanceof ConnectionRequestNotFoundError ||
-    err instanceof SourceNotFoundError
+    err instanceof SourceNotFoundError ||
+    // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500") — WS
+    // equivalents of capability-route.ts's own new mappings (see that file's comments on these
+    // same four classes): S3.1 `publish_ontology_version` draft lookup; S3.2 `resolve_conflict`/
+    // `list_conflicts` (also covers "not visible", same RLS fail-closed shape) and
+    // `causal_chain`/`decision_impact`; S3.3 `supersede_fact`/`invalidate_fact`/`verify_fact`.
+    err instanceof OntologyDraftNotFoundError ||
+    err instanceof ConflictNotFoundError ||
+    err instanceof DecisionNotFoundError ||
+    err instanceof FactNotFoundError
   ) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
@@ -250,6 +276,13 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // S3.11 (docs/development-tasks.md "中台控制面") — same additions as capability-route.ts's
   // mapCapabilityError (member-management invariant refusals / not-found).
   if (err instanceof PrincipalOperationRefusedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500") — WS
+  // equivalent of capability-route.ts's own new mapping: S3.2 `verify_fact`'s I3.6 precondition
+  // (well-formed request, current state — no Evidence on file — forbids it), same 409-family
+  // bucket as PrincipalOperationRefusedError/OperationIdentityConflictError above.
+  if (err instanceof FactHasNoEvidenceError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (err instanceof PrincipalNotFoundError) {

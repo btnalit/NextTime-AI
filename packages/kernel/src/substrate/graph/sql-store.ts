@@ -25,6 +25,7 @@ import {
 } from './queries.js';
 import {
   type AssertFactInput,
+  type AssertFactResult,
   type CallerPrincipal,
   type Fact,
   FactNotFoundError,
@@ -44,6 +45,7 @@ import {
   type VerifyFactInput,
   assertNoCallerSuppliedEpistemicStatus,
   deriveEpistemicStatus,
+  factContentEquals,
   factLifecycleState,
 } from './store.js';
 
@@ -236,20 +238,24 @@ export class SqlGraphStore implements GraphStore {
    * this" for both sides (the epistemic Source feeding each side's Activity when there is exactly
    * one, else the asserting principal — see `conflicts.ts`'s own module doc comment for why this is
    * the generalization I5's "按 source_id 判定" needs to be correct for every writer in this
-   * codebase, not only the one that happens to attach an Observation). Same origin → this call
-   * *is* a supersede (delegates to `this.supersedeFact`, which the caller could equally well have
-   * called directly had it already known the prior Fact's id — the delegation is exactly that same
-   * path, just discovered here instead of by the caller). Different origin → both Facts stay
-   * `recorded`; `openConflict` (substrate/epistemic) opens a `status='open'` Conflict referencing
-   * both, keyed to *this* insert's own Activity (the one whose assertion discovered the
-   * disagreement).
+   * codebase, not only the one that happens to attach an Observation). Same origin, content
+   * *unchanged* (`factContentEquals`, store.ts — docs/development-tasks.md S3.2 followup
+   * "idempotent re-assertion") → a true no-op: returns the existing Fact as-is (`unchanged: true`),
+   * writes nothing, and enqueues no `FactAsserted` — a collector re-submitting the same structural
+   * fact on every run must not grow `links`/`outbox` by one row per run forever. Same origin,
+   * content *changed* → this call *is* a supersede (delegates to `this.supersedeFact`, which the
+   * caller could equally well have called directly had it already known the prior Fact's id — the
+   * delegation is exactly that same path, just discovered here instead of by the caller). Different
+   * origin → both Facts stay `recorded`; `openConflict` (substrate/epistemic) opens a
+   * `status='open'` Conflict referencing both, keyed to *this* insert's own Activity (the one whose
+   * assertion discovered the disagreement).
    */
   async assertFact(
     client: PoolClient,
     workspaceId: string,
     caller: CallerPrincipal,
     input: AssertFactInput,
-  ): Promise<Fact> {
+  ): Promise<AssertFactResult> {
     assertNoCallerSuppliedEpistemicStatus(input);
 
     const priorQuery = buildFindActiveFactByIdentityQuery(workspaceId, {
@@ -276,6 +282,10 @@ export class SqlGraphStore implements GraphStore {
       ]);
 
       if (sameFactOrigin(priorOrigin, newOrigin)) {
+        const priorFact = mapFactRow(priorRow);
+        if (factContentEquals(priorFact, input)) {
+          return { ...priorFact, unchanged: true };
+        }
         return this.supersedeFact(client, workspaceId, caller, { ...input, factId: priorRow.id });
       }
 
