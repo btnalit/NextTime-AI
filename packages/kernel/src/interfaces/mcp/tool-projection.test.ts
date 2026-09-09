@@ -143,6 +143,36 @@ describe('buildToolCatalog — Semantica aliases', () => {
   });
 });
 
+describe('buildToolCatalog — registry-driven, so newly-wired capabilities need no changes here', () => {
+  it('the S3.2 epistemic handlers newly wired on the handle channel (list_conflicts/query_decisions/causal_chain/decision_impact/find_precedents) appear in tools/list whenever they are in scope — proven purely by being registered handle-channel capabilities, no hardcoded tool list to update', async () => {
+    const handleChannelEpistemicCapabilities = [
+      'list_conflicts',
+      'query_decisions',
+      'causal_chain',
+      'decision_impact',
+      'find_precedents',
+    ];
+    const claims = claimsWithScope({
+      capabilities: handleChannelEpistemicCapabilities,
+      resources: {},
+    });
+    const catalog = await buildToolCatalog({ pool: neverConnectPool }, claims);
+    const names = catalog.tools.map((t) => t.name);
+    for (const capabilityName of handleChannelEpistemicCapabilities) {
+      expect(names).toContain(capabilityName);
+    }
+  });
+
+  it('the S3.2 epistemic handlers that landed on the human channel (resolve_conflict/verify_fact — a governance-sensitive write, per capabilities.ts’s own current registry entries) never appear as MCP tools, even hypothetically "in scope" — MCP tools/list is Handle-channel-only by construction (listByChannel(\'handle\') in tool-projection.ts)', async () => {
+    const claims = claimsWithScope({
+      capabilities: ['resolve_conflict', 'verify_fact'],
+      resources: {},
+    });
+    const catalog = await buildToolCatalog({ pool: neverConnectPool }, claims);
+    expect(catalog.tools.map((t) => t.name)).toEqual([]);
+  });
+});
+
 describe('buildToolCatalog — gate projection triggers', () => {
   it('does not touch the database when neither gate pattern is in scope', async () => {
     const claims = claimsWithScope({
