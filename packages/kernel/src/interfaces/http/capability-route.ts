@@ -14,7 +14,6 @@ import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/ch
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   AgentProfileValidationError,
-  AssertFactWriteNotImplementedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
   ConnectionCredentialRequiredError,
@@ -26,9 +25,11 @@ import {
   InvalidCapabilityParamsError,
   MetaOntologyWriteForbiddenError,
   ModelsCatalogUnavailableError,
+  ObservationIdentityError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
   type ResolveCallerDeps,
+  SourceNotFoundError,
   UnauthorizedError,
   WorkerResultValidationError,
   dispatchCapability,
@@ -149,12 +150,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof CapabilityNotImplementedError) {
     return { status: 501, code: 'not_implemented', message: err.message };
   }
-  // S2.6: `assert_fact` now has a handler (the I16 meta-ontology guard runs first) whose write half
-  // is still unimplemented — same 501 the registry-level "no handler" case gets, so a client sees
-  // one stable `not_implemented` code either way. Not a subclass of CapabilityNotImplementedError:
-  // that class lives in dispatch.ts, which imports handlers.ts (an import cycle).
-  if (err instanceof AssertFactWriteNotImplementedError) {
-    return { status: 501, code: 'not_implemented', message: err.message };
+  // S3.3 `submit_observations`: an observation's (or link target's) identity is missing a key
+  // field the ontology registry declares required for its ObjectType, or names an ObjectType no
+  // visible ontology family declares at all (I2) — same 400 bucket as every other handler-level
+  // semantic-validation error in this file (WorkerResultValidationError, AgentProfileValidationError, …).
+  if (err instanceof ObservationIdentityError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
   }
   // governance/approval + governance/policy domain errors (S2.2/S2.3). ApprovalScopeError is I14
   // ("does the approver hold this action_kind × resource_scope") — a *narrower* forbidden than
@@ -170,7 +171,9 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     err instanceof GrantNotFoundError ||
     err instanceof GatekeeperNotFoundError ||
     err instanceof OperationNotFoundError ||
-    err instanceof ConnectionRequestNotFoundError
+    err instanceof ConnectionRequestNotFoundError ||
+    // S3.3 `submit_observations`: sourceId names no Source visible to this caller.
+    err instanceof SourceNotFoundError
   ) {
     return { status: 404, code: 'not_found', message: err.message };
   }

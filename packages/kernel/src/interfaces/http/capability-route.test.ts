@@ -405,20 +405,47 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(published.json().error.code).toBe('invalid_step_reference');
     });
 
-    it('assert_fact (handler present, write unimplemented) → 501 not_implemented, not 500', async () => {
-      // S2.6 gave assert_fact a handler (the I16 meta-ontology guard); its write half still throws
-      // AssertFactWriteNotImplementedError, which must map to the same stable 501 code as a
-      // capability with no handler at all — not fall through to a generic 500.
+    it('assert_fact writes a real Fact end-to-end (S3.3)', async () => {
+      const { sourceObjectId, targetObjectId } = await withWorkspace(
+        pool,
+        { workspaceId, principalId: randomUUID() },
+        async (client) => {
+          const source = await client.query<{ id: string }>(
+            `insert into objects (workspace_id, object_type, properties) values ($1, 'test.http-fact-source', '{}'::jsonb) returning id`,
+            [workspaceId],
+          );
+          const target = await client.query<{ id: string }>(
+            `insert into objects (workspace_id, object_type, properties) values ($1, 'test.http-fact-target', '{}'::jsonb) returning id`,
+            [workspaceId],
+          );
+          const sourceRow = source.rows[0];
+          const targetRow = target.rows[0];
+          if (!sourceRow || !targetRow) throw new Error('fixture: object insert produced no row');
+          return { sourceObjectId: sourceRow.id, targetObjectId: targetRow.id };
+        },
+      );
+
       const app = createServer({ pool });
       const response = await app.inject({
         method: 'POST',
         url: '/api/cap/assert_fact',
         headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: { objectId: randomUUID(), linkType: 'has_note', value: 'x' },
+        payload: {
+          sourceObjectId,
+          targetObjectId,
+          linkType: 'has_note',
+          properties: { note: 'x' },
+        },
       });
 
-      expect(response.statusCode).toBe(501);
-      expect(response.json().error.code).toBe('not_implemented');
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.ok).toBe(true);
+      expect(body.result.sourceObjectId).toBe(sourceObjectId);
+      expect(body.result.targetObjectId).toBe(targetObjectId);
+      expect(body.result.linkType).toBe('has_note');
+      // owner is a human principal — deriveEpistemicStatus(human) === 'asserted' (§5.6).
+      expect(body.result.epistemicStatus).toBe('asserted');
     });
 
     it('get_object round-trips a real Object end-to-end', async () => {

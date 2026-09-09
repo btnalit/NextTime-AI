@@ -39,6 +39,19 @@ export type SourceWire = z.infer<typeof SourceWireSchema>;
  * family as `wire/connection.ts`'s `PublishManifestResultWireSchema`: a bulk-write capability
  * reports what it did, not one resource object). `activityId` is a reference to the (new or
  * caller-supplied) Activity every Fact in this submission traces to (I3).
+ *
+ * `objects` — additive beyond the task dispatch's own literal `{activityId, objectsUpserted,
+ * factsAsserted, factsSuperseded}` shape, one entry per distinct `(objectType, identity)` this
+ * submission touched, carrying back the graph id `upsertObject` resolved it to. This exists to
+ * close a real dependency-ordering need in ops-assets-v1's own identity scheme
+ * (`ontology/ops-assets-v1.yaml`'s header comment: "a property named `<Type>Id`... holds *another
+ * Object's own graph id*") — e.g. a ComposeProject's identity is `{hostId, projectName}`, where
+ * `hostId` must be the Host Object's real `objects.id`, not a value the caller can invent ahead of
+ * time. A caller (a collector) submits in dependency order across multiple calls that all share
+ * one `activityId` (the second/third call passing back the `activityId` the first call returned —
+ * see this capability's own `activityId?` param doc comment), reading each call's `objects` back to
+ * learn the real ids it needs to construct the next layer's identity. `collectors/host-inventory`'s
+ * own README documents the concrete phase order it submits in.
  */
 export const SubmitObservationsResultWireSchema = z
   .object({
@@ -46,6 +59,15 @@ export const SubmitObservationsResultWireSchema = z
     objectsUpserted: z.number().int().nonnegative(),
     factsAsserted: z.number().int().nonnegative(),
     factsSuperseded: z.number().int().nonnegative(),
+    objects: z.array(
+      z
+        .object({
+          objectType: z.string(),
+          identity: z.record(z.string(), z.unknown()),
+          id: z.string(),
+        })
+        .strict(),
+    ),
   })
   .strict();
 export type SubmitObservationsResultWire = z.infer<typeof SubmitObservationsResultWireSchema>;
