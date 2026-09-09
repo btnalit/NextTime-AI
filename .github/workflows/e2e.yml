@@ -90,10 +90,30 @@ jobs:
             run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null \
             | sudo tee "$NEXTTIME_DATA/config/models.json" >/dev/null
 
-      - name: Start postgres/kernel/caddy
+      - name: Start postgres
         run: |
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
-            up -d --wait postgres kernel caddy
+            up -d --wait postgres
+
+      # Migrations run against the already-healthy postgres via a throwaway `docker compose run`
+      # container — BEFORE the long-lived `kernel` service (next step) is ever created. Order
+      # matters here, not just tidiness: `kernel`'s own startup does a synchronous, unguarded
+      # `await interruptStaleRunningTurns(...)` before it starts its outbox dispatcher
+      # (packages/kernel/src/index.ts `BackgroundServices.start()` — no try/catch around that
+      # first await, and `main()`'s own `.catch()` only logs the rejection). Starting `kernel`
+      # first, against a not-yet-migrated database, throws `relation "activities" does not exist`
+      # from that call and the dispatcher never starts — `send_chat_message` still returns success
+      # (the row and the Turn get created), but nothing ever drives the Turn to completion, so
+      # every chat hangs at `running` forever. Caught by the first real run of this workflow.
+      - name: Run kernel migrations
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            run --rm --no-deps -T kernel node dist/cli/migrate.js </dev/null
+
+      - name: Start kernel/caddy
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            up -d --wait kernel caddy
 
       # caddy has no `healthcheck:` in docker-compose.yml, so `up --wait` above only confirms it
       # is running, not that its reverse proxy to kernel (and its own on-demand TLS issuance) is
@@ -115,11 +135,6 @@ jobs:
           echo "caddy /api/health never returned 200 (last: $code)" >&2
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color
           exit 1
-
-      - name: Run kernel migrations
-        run: |
-          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
-            run --rm --no-deps -T kernel node dist/cli/migrate.js </dev/null
 
       # Same bootstrap.js output shape scripts/accept_s1.sh's own bootstrap_step already parses
       # (`workspace created: <id>` / `API key` on the following line) — see that script for the

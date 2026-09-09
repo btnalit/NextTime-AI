@@ -120,19 +120,30 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
    （与 Makefile `gen-models` target 同一条命令，只是直接内联在工作流里而不经 `make`，见
    `deploy/ci/env.ci.template` 头部注释），把 `llm-providers.yaml` 里的 `fake`/`fake-echo` 投影成
    `models.json`，供治理页的模型列表用。
-4. `docker compose ... up -d --wait postgres kernel caddy`，再对
-   `https://127.0.0.1:8443/api/health` 轮询 `curl -sk`（caddy 是自签证书，Playwright 侧对应
-   `playwright.config.ts` 的 `use.ignoreHTTPSErrors: true`）直到 200——caddy 本身在
-   `docker-compose.yml` 里没有声明 `healthcheck:`，`--wait` 只能确认它在跑，这一步才是真正的就绪
-   门槛。
-5. `docker compose run --rm --no-deps kernel node dist/cli/migrate.js`，再
-   `... bootstrap.js create-workspace --name ci-e2e --owner owner`（与 `scripts/accept_s1.sh`
-   `bootstrap_step` 同一套输出解析）拿到一个 owner API key（`::add-mask::` 遮蔽，日志里不出现）。
-6. `WEB_E2E_BASE_URL=https://127.0.0.1:8443 WEB_E2E_API_KEY=<刚拿到的 key> corepack pnpm
+4. `docker compose ... up -d --wait postgres`，然后**先于 `kernel` 服务**跑
+   `docker compose run --rm --no-deps kernel node dist/cli/migrate.js`。顺序是硬约束，不只是习惯：
+   `kernel` 自己的启动流程有一个不带 try/catch 的 `await interruptStaleRunningTurns(...)`
+   （`packages/kernel/src/index.ts` `BackgroundServices.start()` 第一行；`main()` 外层只把这个
+   reject 打个日志，不重新抛出也不重试）——如果这时 `activities` 表还不存在，这一步直接抛错，
+   紧跟其后的 `dispatcher.start()` 永远不会执行，`send_chat_message` 仍然返回成功（消息与 Turn
+   行都建好了），但没有任何东西驱动这个 Turn 往下走，页面上的 Turn 会永远停在 `running`。第一次真
+   实跑通这个工作流时踩到的坑——最初的版本是 `up -d --wait postgres kernel caddy` 在前、migrate
+   在后，`chat.spec.ts` 因此稳定失败在"等 Turn completed"这一步。
+5. `docker compose ... up -d --wait kernel caddy`（此时数据库已迁移完毕，`kernel` 的启动恢复扫描
+   能正常跑完），再对 `https://127.0.0.1:8443/api/health` 轮询 `curl -sk`（caddy 是自签证书，
+   Playwright 侧对应 `playwright.config.ts` 的 `use.ignoreHTTPSErrors: true`）直到 200——caddy 本身
+   在 `docker-compose.yml` 里没有声明 `healthcheck:`，`--wait` 只能确认它在跑，这一步才是真正的就
+   绪门槛。
+6. `docker compose run --rm --no-deps kernel node dist/cli/bootstrap.js create-workspace --name
+   ci-e2e --owner owner`（与 `scripts/accept_s1.sh` `bootstrap_step` 同一套输出解析）拿到一个
+   owner API key（`::add-mask::` 遮蔽，日志里不出现）。
+7. `WEB_E2E_BASE_URL=https://127.0.0.1:8443 WEB_E2E_API_KEY=<刚拿到的 key> corepack pnpm
    --filter @nexttime/web e2e`——只跑 `chat.spec.ts` 与 `governance.spec.ts`
    （`approvals.spec.ts` 的两个场景需要种子 ActionRequest 与第二个 principal，`WEB_E2E_
-   SEED_ACTION_REQUESTS` 未设置时自动 skip，见该文件自己的注释）。
-7. 失败时把 `packages/web/playwright-report/` 与 `packages/web/test-results/`（trace，
+   SEED_ACTION_REQUESTS` 未设置时自动 skip，见该文件自己的注释）。`playwright.config.ts` 强制
+   `workers: 1`——这几个 spec 共用同一个 kernel/Postgres，部分场景假设对服务端状态的独占访问
+   （如"最近创建的那个 Chat"），跨文件并发跑没有意义，序列化换来的确定性比省下来的几秒钟值。
+8. 失败时把 `packages/web/playwright-report/` 与 `packages/web/test-results/`（trace，
    `retain-on-failure`）当 artifact 上传；`docker compose ... down -v` 无论成败都执行。
 
 **为什么只需要三个常驻容器（postgres/kernel/caddy）**：登录/对话/审批队列/治理四类页面全部经
