@@ -166,16 +166,17 @@ curl -s https://<host>:8443/api/cap/search \
   -d '{"objectType":"Document"}'
 # {"ok":true,"result":{"items":[{"id":"<document-object-id>","objectType":"Document",...}]}}
 
-# 2. traverse 一跳，确认 part_of 边指向一个 KnowledgeBase
+# 2. traverse 一跳，确认 part_of 边指向一个 KnowledgeBase —— 同 §4.2 的提醒：traverse 的
+#    paramsSchema 没有 direction 字段（.strict()），永远两个方向都找。
 curl -s https://<host>:8443/api/cap/traverse \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d '{"fromId":"<document-object-id>","direction":"out","linkType":"part_of","depth":1}'
+  -d '{"fromId":"<document-object-id>","linkType":"part_of","depth":1}'
 # {"ok":true,"result":{"nodes":["<knowledgebase-object-id>"],"edges":[{"linkType":"part_of",...}]}}
 
 # 3. 再从这个 KnowledgeBase traverse 一跳，确认 served_by 边指向 ragflow 门自己的 Gatekeeper Object
 curl -s https://<host>:8443/api/cap/traverse \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d '{"fromId":"<knowledgebase-object-id>","direction":"out","linkType":"served_by","depth":1}'
+  -d '{"fromId":"<knowledgebase-object-id>","linkType":"served_by","depth":1}'
 # {"ok":true,"result":{"nodes":["<ragflow-gatekeeper-object-id>"],"edges":[{"linkType":"served_by",...}]}}
 # <ragflow-gatekeeper-object-id> 应等于 RAGFLOW_GATEKEEPER_ID 本身。
 
