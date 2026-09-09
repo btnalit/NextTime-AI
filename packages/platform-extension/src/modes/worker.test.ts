@@ -221,7 +221,7 @@ describe('registerWorkerMode', () => {
 
   it('the context handler injects Task input (get_task) and related facts (search) as a non-persisted custom message', async () => {
     kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'restart the flaky pod' } }));
-    kernel.setHandler('search', () => ({ ok: true, result: { objects: [{ id: 'obj-1' }] } }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [{ id: 'obj-1' }] } }));
     const contextHandler = fake.handlers.get('context');
     if (!contextHandler) throw new Error('context handler not registered');
 
@@ -242,7 +242,7 @@ describe('registerWorkerMode', () => {
 
   it('the context handler caches Task input across calls (one get_task round trip)', async () => {
     kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'x' } }));
-    kernel.setHandler('search', () => ({ ok: true, result: { objects: [] } }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
     const contextHandler = fake.handlers.get('context');
     if (!contextHandler) throw new Error('context handler not registered');
 

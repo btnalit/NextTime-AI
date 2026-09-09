@@ -106,6 +106,15 @@ import {
 } from './operation-manifest-handlers.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
 import {
+  toWireAuditRecord,
+  toWireChat,
+  toWireFact,
+  toWireGrant,
+  toWireObject,
+  toWirePolicy,
+  toWireQuota,
+} from './resource-wire.js';
+import {
   deprecateProcedureHandler,
   deprecateSkillHandler,
   listProceduresHandler,
@@ -159,8 +168,12 @@ const graphStore = new SqlGraphStore();
 
 const getObjectHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { objectId } = params as { objectId: string };
-  const result = await graphStore.getObject(client, workspaceId, objectId);
-  return { result, resourceType: 'object', resourceId: objectId };
+  const object = await graphStore.getObject(client, workspaceId, objectId);
+  return {
+    result: object ? toWireObject(object) : null,
+    resourceType: 'object',
+    resourceId: objectId,
+  };
 };
 
 const traverseHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -169,16 +182,25 @@ const traverseHandler: CapabilityHandler = async (client, workspaceId, params) =
   return { result, resourceType: 'object', resourceId: input.fromId };
 };
 
+// S3.7 wire fix (see PR body): previously a bare `GraphObject[]` — docs/wire-contract-
+// conventions.md §3 "不返回裸数组".
 const searchHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const input = params as SearchInput;
-  const result = await graphStore.search(client, workspaceId, input);
-  return { result };
+  const objects = await graphStore.search(client, workspaceId, input);
+  return { result: { items: objects.map(toWireObject) } };
 };
 
 const stateAtHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { objectId, at } = params as { objectId: string; at: string };
-  const result = await graphStore.stateAt(client, workspaceId, { objectId, at: new Date(at) });
-  return { result, resourceType: 'object', resourceId: objectId };
+  const state = await graphStore.stateAt(client, workspaceId, { objectId, at: new Date(at) });
+  return {
+    result: {
+      object: state.object ? toWireObject(state.object) : null,
+      facts: state.facts.map(toWireFact),
+    },
+    resourceType: 'object',
+    resourceId: objectId,
+  };
 };
 
 const explainHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -200,16 +222,25 @@ function toAuditQueryFilter(filter: Record<string, unknown> | undefined): AuditQ
   return result;
 }
 
+// S3.7 wire fix (see PR body): previously a bare `AuditRecordRow[]` — §3 "不返回裸数组".
 const auditQueryHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { filter } = params as { filter?: Record<string, unknown> };
-  const result = await queryAudit(client, workspaceId, toAuditQueryFilter(filter));
-  return { result };
+  const rows = await queryAudit(client, workspaceId, toAuditQueryFilter(filter));
+  return { result: { items: rows.map(toWireAuditRecord) } };
 };
 
 const reconstructHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { entityId } = params as { entityId: string };
   const result = await reconstruct(client, workspaceId, { objectId: entityId });
-  return { result, resourceType: 'object', resourceId: entityId };
+  return {
+    result: {
+      object: result.object ? toWireObject(result.object) : null,
+      facts: result.facts.map(toWireFact),
+      auditRecords: result.auditRecords.map(toWireAuditRecord),
+    },
+    resourceType: 'object',
+    resourceId: entityId,
+  };
 };
 
 // -------------------------------------------------------------------------------------------
@@ -231,14 +262,14 @@ export function setAgentRuntimeForHandlers(runtime: AgentRuntime): void {
 const listChatsHandler: CapabilityHandler = async (client, workspaceId) => {
   const principalId = await currentPrincipalId(client);
   const rows = await listChats(client, workspaceId, principalId);
-  return { result: { items: rows } };
+  return { result: { items: rows.map(toWireChat) } };
 };
 
 const newChatHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { title } = params as { title?: string };
   const principalId = await currentPrincipalId(client);
   const chat = await newChat(client, workspaceId, principalId, { title });
-  return { result: chat, resourceType: 'chat', resourceId: chat.id };
+  return { result: toWireChat(chat), resourceType: 'chat', resourceId: chat.id };
 };
 
 const sendChatMessageHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -364,7 +395,7 @@ const getEntryContextHandler: CapabilityHandler = async (client, workspaceId) =>
     result: {
       pendingApprovals: drained.pendingApprovals,
       tasks: drained.tasks,
-      facts,
+      facts: facts.map(toWireFact),
       precedents: [],
     },
   };
@@ -726,15 +757,21 @@ const setAutoApprovedActionKindHandler: CapabilityHandler = async (client, works
     actionKind: actionKindTag,
     setBy: caller.id,
   });
-  return { result, resourceType: 'policy', resourceId: result.id };
+  return { result: toWirePolicy(result), resourceType: 'policy', resourceId: result.id };
 };
 
 const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { policy } = params as { policy: unknown };
   const payload = parseSetPolicyPayload(policy);
   const setBy = await currentPrincipalId(client);
-  const result = await setPolicy(client, workspaceId, { ...payload, setBy });
-  return { result, resourceType: 'policy', resourceId: result.id };
+  const result = await setPolicy(client, workspaceId, {
+    actionKind: payload.actionKindTag,
+    blastRadius: payload.blastRadius,
+    autoApprove: payload.autoApprove,
+    requesterCanApprove: payload.requesterCanApprove,
+    setBy,
+  });
+  return { result: toWirePolicy(result), resourceType: 'policy', resourceId: result.id };
 };
 
 const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -752,13 +789,13 @@ const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, pa
     scope,
     grantedBy,
   });
-  return { result, resourceType: 'capability_grant', resourceId: result.id };
+  return { result: toWireGrant(result), resourceType: 'capability_grant', resourceId: result.id };
 };
 
 const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { grantId } = params as { grantId: string };
   const result = await revokeCapabilityGrant(client, workspaceId, grantId);
-  return { result, resourceType: 'capability_grant', resourceId: result.id };
+  return { result: toWireGrant(result), resourceType: 'capability_grant', resourceId: result.id };
 };
 
 /** `list_grants` (S3.11, docs/development-tasks.md "中台控制面"): every CapabilityGrant, optionally
@@ -770,14 +807,15 @@ const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, p
 const listGrantsHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { principalId } = params as { principalId?: string };
   const rows = await listGrants(client, workspaceId, { principalId });
-  return { result: { items: rows } };
+  return { result: { items: rows.map(toWireGrant) } };
 };
 
 /** `list_policies` (S3.11) — every explicit `policies` row (`governance/policy/policies.ts`'s
- *  `PolicyRow`, already the wire shape this needs). */
+ *  `PolicyRow`), projected through `toWirePolicy` (S3.7 wire fix — see resource-wire.ts's own
+ *  module doc comment). */
 const listPoliciesHandler: CapabilityHandler = async (client, workspaceId) => {
   const rows = await listPolicies(client, workspaceId);
-  return { result: { items: rows } };
+  return { result: { items: rows.map(toWirePolicy) } };
 };
 
 /** `list_quotas` (S3.11) — every I18 quota key with its resolved value and whether that value is
@@ -957,7 +995,7 @@ const setQuotaHandler: CapabilityHandler = async (client, workspaceId, params) =
   // and a quota key (`task.max_depth`) is not one — returning it here made every `set_quota` call
   // fail its audit INSERT with a 500 (found on the host, S2.7 apply). The key is already in the
   // audit payload's `params`.
-  return { result, resourceType: 'quota' };
+  return { result: toWireQuota(result), resourceType: 'quota' };
 };
 
 /** S3.13 runtime consumer: `find_workers`/`invoke_worker` are `channel: 'handle'`-only
@@ -996,7 +1034,7 @@ const findOperationsHandler: CapabilityHandler = async (client, workspaceId, par
     claims: ctx?.claims,
   });
   const result = await findOperations(client, workspaceId, { parentAuthority }, need);
-  return { result: { items: result } };
+  return { result: { items: result.map(toWireObject) } };
 };
 
 const findProceduresHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {

@@ -35,7 +35,9 @@ export const ActionRequestWireSchema = z
     executingAt: z.string().nullable(),
     executedAt: z.string().nullable(),
     failedAt: z.string().nullable(),
-    requesterCanApprove: z.boolean(),
+    // Nullable: rows written before migrations/governance/0007 have no value on file
+    // (governance/approval/types.ts's own `ActionRequestRow.requesterCanApprove` doc comment).
+    requesterCanApprove: z.boolean().nullable(),
   })
   .strict();
 export type ActionRequestWire = z.infer<typeof ActionRequestWireSchema>;

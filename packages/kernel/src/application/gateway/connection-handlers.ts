@@ -12,6 +12,7 @@ import {
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
 
 /**
  * application/gateway/connection-handlers: `request_connection`, `create_connection` (this
@@ -261,7 +262,11 @@ export const connectGatekeeperHandler: CapabilityHandler = async (
     grantedBy,
   });
 
-  return { result: grant, resourceType: 'capability_grant', resourceId: grant.id };
+  return {
+    result: toWireGrant(grant),
+    resourceType: 'capability_grant',
+    resourceId: grant.id,
+  };
 };
 
 /** `list_connection_requests` — owner's queue (§9.3). */
@@ -272,5 +277,5 @@ export const listConnectionRequestsHandler: CapabilityHandler = async (
 ) => {
   const { status } = params as { status?: 'requested' | 'completed' | 'cancelled' };
   const rows = await listConnectionRequests(client, workspaceId, { status });
-  return { result: { items: rows } };
+  return { result: { items: rows.map(toWireConnectionRequest) } };
 };

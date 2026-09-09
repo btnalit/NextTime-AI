@@ -32,7 +32,7 @@ export const TaskWireSchema = z
     input: z.unknown(),
     result: z.unknown(),
     tokenBudget: z.number().nullable(),
-    tokensUsed: z.number().nullable(),
+    tokensUsed: z.number(),
     durationLimitSec: z.number().nullable(),
     failureReason: z.string().nullable(),
     createdAt: z.string(),

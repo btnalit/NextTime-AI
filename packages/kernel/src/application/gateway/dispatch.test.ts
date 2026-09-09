@@ -14,6 +14,7 @@ import {
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
   dispatchCapability,
+  isResultValidationEnabled,
 } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -141,6 +142,41 @@ describe('dispatchCapability — decided before any transaction (unit, no DB)', 
         },
       ),
     ).rejects.toThrow(CapabilityNotImplementedError);
+  });
+});
+
+// S3.7 (docs/wire-contract-conventions.md §5): `isResultValidationEnabled` is the pure predicate
+// `dispatchCapability`'s own result-shape self-check gates on — tested directly (an explicit `env`
+// argument, never mutating the real `process.env`) rather than through a full dispatch, since
+// every other integration test in this file already exercises the *enabled* path for free
+// (packages/kernel/vitest.config.ts sets `KERNEL_VALIDATE_RESULTS=1` for this whole test file —
+// see that config's own doc comment).
+describe('isResultValidationEnabled — KERNEL_VALIDATE_RESULTS flag', () => {
+  it('is enabled only when the env var is exactly "1"', () => {
+    expect(isResultValidationEnabled({ KERNEL_VALIDATE_RESULTS: '1' })).toBe(true);
+  });
+
+  it('is disabled when the env var is unset (production default)', () => {
+    expect(isResultValidationEnabled({})).toBe(false);
+  });
+
+  it('is disabled for any other value (not silently truthy on "true"/"yes"/etc.)', () => {
+    expect(isResultValidationEnabled({ KERNEL_VALIDATE_RESULTS: 'true' })).toBe(false);
+    expect(isResultValidationEnabled({ KERNEL_VALIDATE_RESULTS: '0' })).toBe(false);
+    expect(isResultValidationEnabled({ KERNEL_VALIDATE_RESULTS: '' })).toBe(false);
+  });
+
+  it('defaults to reading the real process.env when no argument is given', () => {
+    const previous = process.env.KERNEL_VALIDATE_RESULTS;
+    try {
+      process.env.KERNEL_VALIDATE_RESULTS = '1';
+      expect(isResultValidationEnabled()).toBe(true);
+      process.env.KERNEL_VALIDATE_RESULTS = '0';
+      expect(isResultValidationEnabled()).toBe(false);
+    } finally {
+      if (previous === undefined) process.env.KERNEL_VALIDATE_RESULTS = undefined;
+      else process.env.KERNEL_VALIDATE_RESULTS = previous;
+    }
   });
 });
 
