@@ -23,6 +23,9 @@ ci: lint typecheck test build depcruise
 
 # Runs the idempotent migration runner (packages/kernel/src/adapters/db/migrate.ts) against
 # DATABASE_URL. Pass MIGRATE_ARGS=--dry-run to list pending migrations without applying them.
+# Needs Node/corepack on this machine (dev box, CI) — a target host without them instead uses the
+# containerized equivalent `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js`
+# (docs/runbooks/operations.md §4.1; scripts/accept_s1.sh, scripts/accept_s2.sh).
 migrate:
 	corepack pnpm --filter @nexttime/kernel build
 	corepack pnpm --filter @nexttime/kernel run migrate -- $(MIGRATE_ARGS)

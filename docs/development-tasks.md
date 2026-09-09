@@ -93,7 +93,7 @@
 
 ### R2 迁移机制与连接池
 - 交付物：`packages/kernel/src/adapters/db/{migrate,pool}.ts`（每请求设置 `app.workspace_id` 与 `app.principal_id` 会话变量）、`packages/kernel/src/cli/migrate.ts`（迁移 CLI 入口）、`migrations/0000_extensions.sql`。
-- 验收：`make migrate` 两次，第二次 no-op。依赖：R1。
+- 验收：`make migrate` 两次，第二次 no-op。依赖：R1。（`make migrate` 需要目标机器装了 Node/corepack；没装的主机用容器化等价命令 `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js`——所有 host 脚本〔`scripts/accept_s1.sh`/`scripts/accept_s2.sh`〕和 `docs/runbooks/operations.md` §4.1 都用这个形式。）
 
 ### R3 CI
 - 交付物：`.github/workflows/ci.yml`：Biome + Vitest（`services: postgres`）+ gitleaks + 内网 IP 守门（`grep -rE '10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.'` 命中即失败）+ `dependency-cruiser` 违规即失败 + 内核纯度守门 `scripts/check-kernel-purity.sh`（`grep -rniE -f scripts/system-names.txt packages/kernel/src --exclude-dir=__fixtures__ --exclude='*.test.ts'`，清单初始为 `docker|ragflow|routeros|erp|oa|semantica|hermes`，命中即失败）。
