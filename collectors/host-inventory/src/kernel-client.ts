@@ -44,6 +44,29 @@ export interface SubmitObservationsResult {
   }[];
 }
 
+/** S3.4: params for the `observe_operation` capability (`packages/kernel/src/application/gateway/
+ *  request-action-handler.ts`'s `observeOperationHandler`) — dispatches one `mode: 'observe'`
+ *  Operation on a Gatekeeper and returns its raw response, with no ActionRequest/approval flow (the
+ *  entire reason `ragflow.ts` uses this instead of `request_action`: `kb.list`/`kb.documents` are
+ *  read-only, so there is nothing to approve). */
+export interface ObserveOperationParams {
+  readonly gatekeeperId: string;
+  readonly operation: string;
+  readonly params?: Record<string, unknown>;
+}
+
+/** `data` is whatever the target system's own API returned, untouched
+ *  (`packages/gatekeeper-base/src/gatekeeper-base.ts`'s `observe()`: `{data: result.data, ...}`) —
+ *  for `gatekeepers/ragflow`'s `kb.list`/`kb.documents` that is RAGFlow's own `{code, data}`
+ *  envelope, not this platform's own capability envelope. Callers must inspect `code` themselves
+ *  (`gatekeepers/ragflow/README.md`'s own documented limitation: "RAGFlow's own `{code, data}`
+ *  error envelope is invisible to the protocol"). */
+export interface ObserveOperationResult {
+  readonly status: 'ok';
+  readonly data: unknown;
+  readonly observedFactCount: number;
+}
+
 export class KernelClientError extends Error {
   readonly code: string;
   readonly status: number;
@@ -67,6 +90,10 @@ export interface KernelClientOptions {
 export interface KernelClient {
   registerSource(params: RegisterSourceParams): Promise<RegisterSourceResult>;
   submitObservations(params: SubmitObservationsParams): Promise<SubmitObservationsResult>;
+  /** S3.4 — see `ObserveOperationParams`/`ObserveOperationResult`'s own doc comments. Requires this
+   *  collector's own Handle to hold `observe_operation` in its capability scope
+   *  (`docs/runbooks/host-collector.md`'s `issue-service-handle --scope` step). */
+  observeOperation(params: ObserveOperationParams): Promise<ObserveOperationResult>;
 }
 
 async function defaultReadToken(file: string): Promise<string> {
@@ -119,6 +146,9 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
         'submit_observations',
         params,
       )) as SubmitObservationsResult;
+    },
+    async observeOperation(params: ObserveOperationParams): Promise<ObserveOperationResult> {
+      return (await callCapability(options, 'observe_operation', params)) as ObserveOperationResult;
     },
   };
 }

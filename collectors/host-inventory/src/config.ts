@@ -27,6 +27,15 @@ export interface CollectorConfig {
   readonly sourceStateFile: string;
   readonly sourceName: string;
   readonly sourceKind: string;
+  /** S3.4: the RAGFlow Gatekeeper instance's own graph object id (`platform-meta.yaml`'s
+   *  `Gatekeeper` ObjectType identity — `substrate/ontology/meta-objects.ts`'s
+   *  `registerGatekeeperObject`), used to build `ontology/ops-assets-v2.yaml`'s
+   *  `KnowledgeBase.identity: {gatekeeperId, kbId}` (see `ragflow.ts`'s own doc comment). Optional
+   *  and unset by default — this run-time value is only known once a workspace has actually
+   *  registered a RAGFlow Gatekeeper (`docs/runbooks/host-gatekeepers.md`), so it cannot have a
+   *  compiled-in default the way `sourceKind` etc. do. When unset, `run.ts` skips the RAGFlow
+   *  observation phase entirely (no partial/best-effort attempt with a guessed id). */
+  readonly ragflowGatekeeperId: string | undefined;
 }
 
 const DEFAULT_RUN_SYSTEMD_PATH = '/run/systemd';
@@ -90,5 +99,6 @@ export function loadConfig(options: LoadConfigOptions = {}): CollectorConfig {
     sourceStateFile: env.HOST_INVENTORY_SOURCE_STATE_FILE ?? DEFAULT_SOURCE_STATE_FILE,
     sourceName: env.HOST_INVENTORY_SOURCE_NAME ?? DEFAULT_SOURCE_NAME,
     sourceKind: env.HOST_INVENTORY_SOURCE_KIND ?? DEFAULT_SOURCE_KIND,
+    ragflowGatekeeperId: env.RAGFLOW_GATEKEEPER_ID || undefined,
   };
 }

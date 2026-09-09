@@ -92,15 +92,17 @@
     "binding": {
       "kind": "http",
       "method": "POST",
-      "path": "/api/v1/datasets/{dataset_id}/documents?type=empty"
+      "path": "/api/v1/datasets/{dataset_id}/documents?type=local"
     },
     "params_schema": {
       "type": "object",
       "properties": {
         "dataset_id": { "type": "string", "minLength": 1 },
-        "name": { "type": "string", "minLength": 1 }
+        "name": { "type": "string", "minLength": 1 },
+        "content": { "type": "string", "minLength": 1 },
+        "encoding": { "type": "string", "enum": ["utf8", "base64"] }
       },
-      "required": ["dataset_id", "name"],
+      "required": ["dataset_id", "name", "content"],
       "additionalProperties": false
     },
     "mode": "execute",
@@ -132,7 +134,7 @@
     "mode": "execute",
     "blast_radius": "low",
     "reversibility": false,
-    "auto_approvable": false,
+    "auto_approvable": true,
     "await_decision": true,
     "reads": ["Document"],
     "writes": ["Document"]

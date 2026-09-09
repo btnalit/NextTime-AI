@@ -20,32 +20,49 @@ to parameterize env var names, not to change transport behavior.
 
 ## Manifest (`manifest.json`)
 
-REST API shapes below were verified against RAGFlow's public HTTP API reference (`docs/references/
-http_api_reference.md`, upstream `infiniflow/ragflow`), not written from memory.
+REST API shapes below were verified against RAGFlow's public HTTP API reference
+(https://ragflow.io/docs/http_api_reference, fetched 2026-09, upstream `infiniflow/ragflow`), not
+written from memory.
 
 | Operation | mode | blast_radius | auto_approvable | HTTP | notes |
 |---|---|---|---|---|---|
 | `kb.list` | observe | low | true | `GET /api/v1/datasets` | → `KnowledgeBase` facts |
 | `kb.documents` | observe | low | true | `GET /api/v1/datasets/{dataset_id}/documents` | → `Document` facts |
 | `retrieve` | observe | low | true | `POST /api/v1/retrieval` | read-only despite the HTTP verb — no side effects |
-| `document.upload` | execute | medium | **false** | `POST /api/v1/datasets/{dataset_id}/documents?type=empty` | see "known limitation" below |
-| `document.parse` | execute | low | **false** | `POST /api/v1/datasets/{dataset_id}/chunks` | starts an async parse job |
+| `document.upload` | execute | medium | **false** | `POST /api/v1/datasets/{dataset_id}/documents?type=local` | real file content (S3.4), see below |
+| `document.parse` | execute | low | **true** (S3.4) | `POST /api/v1/datasets/{dataset_id}/chunks` | starts an async parse job |
 
 Every response follows RAGFlow's own `{code, data}` envelope; `result_mapping.jmes_path` is
 written against the whole response (`data[*]` / `data.docs[*]`), not just its `data` field.
 
-### Known limitation: `document.upload` cannot send real file content
+`document.parse` is `auto_approvable: true` (S3.4 — the S2.5 version left it `false`, the
+conservative default `@nexttime/gatekeeper-base`'s `importOpenApi` gives every newly-imported
+execute Operation, I17 "owner review before publish"). This manifest is hand-authored and reviewed
+directly (never run through `importOpenApi`), so that review has already happened by the time this
+file is merged — `auto_approvable: true` + `blast_radius: 'low'` resolves to `allow` under a
+workspace's compiled-in low-blast-radius default (`governance/policy/engine.ts`'s
+`effectiveWorkspaceAutoApprove`) unless a workspace has explicitly opted out. `document.upload`
+stays `auto_approvable: false` (`blast_radius: 'medium'` never auto-approves regardless of this
+flag *unless* a workspace policy explicitly enables it for `medium` — I8's own double-signal rule).
+
+### `document.upload` now sends real file content (S3.4)
 
 RAGFlow's real "upload a file" mode (`?type=local`) is `multipart/form-data`
 (`file=@path/to/file`). `@nexttime/gatekeeper-base`'s `HttpTransport` only ever sends a JSON body
 (`kinds/http.ts` — every non-path param goes into `JSON.stringify(remaining)`), so it cannot
-express a multipart request. This gate's `document.upload` therefore only supports RAGFlow's
-`?type=empty` mode — creating a named placeholder Document with **no** file content — not a real
-file upload. A real multipart upload would need either multipart support added to
-`@nexttime/gatekeeper-base`'s `HttpTransport` (a base-package change, out of this task's scope) or
-a custom `Transport` for this gate (the way `gatekeepers/docker` has one) that does its own
-`fetch` with a `FormData` body. Do not claim this operation uploads real files without that
-follow-up.
+express a multipart request — the S2.5 version of this gate therefore only supported RAGFlow's
+`?type=empty` mode (a named placeholder Document with **no** file content), and documented the gap
+as a known limitation with two possible fixes: multipart support added to
+`@nexttime/gatekeeper-base`'s `HttpTransport` (a base-package change), or a custom `Transport` for
+this gate. S3.4 takes the second path: `src/transport.ts`'s `RagflowTransport` wraps `HttpTransport`
+for every other Operation and builds `document.upload`'s multipart request by hand (Node's global
+`fetch`/`FormData`/`Blob`, this repo's `engines.node >=22`).
+
+`document.upload` params: `{dataset_id, name, content, encoding?}` — `content` is the file's bytes
+as either UTF-8 text (`encoding` omitted or `"utf8"`) or base64 (`encoding: "base64"`), decoded into
+a `Buffer` and sent as the multipart `file` field (filename = `name`). `simulate` decodes `content`
+only to report its byte length — it never calls `fetch` (no side effects, same contract every other
+Operation's `simulate` already has).
 
 ### Known limitation: RAGFlow's own `{code, data}` error envelope is invisible to the protocol
 

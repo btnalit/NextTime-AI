@@ -20,6 +20,21 @@ describe('loadConfig', () => {
     expect(config.intervalMs).toBe(15 * 60 * 1000);
     expect(config.sourceName).toBe('host-inventory');
     expect(config.sourceKind).toBe('host-inventory-collector');
+    expect(config.ragflowGatekeeperId).toBeUndefined();
+  });
+
+  it('parses RAGFLOW_GATEKEEPER_ID when set, treating "" as unset (S3.4)', () => {
+    const withId = loadConfig({
+      env: { KERNEL_URL: 'http://kernel:8080', RAGFLOW_GATEKEEPER_ID: 'gk-1' },
+      argv: [],
+    });
+    expect(withId.ragflowGatekeeperId).toBe('gk-1');
+
+    const withEmpty = loadConfig({
+      env: { KERNEL_URL: 'http://kernel:8080', RAGFLOW_GATEKEEPER_ID: '' },
+      argv: [],
+    });
+    expect(withEmpty.ragflowGatekeeperId).toBeUndefined();
   });
 
   it('parses --once from argv', () => {
