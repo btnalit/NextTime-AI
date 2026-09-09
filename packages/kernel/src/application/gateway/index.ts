@@ -36,6 +36,43 @@ export {
 export type { DispatchDeps } from './dispatch.js';
 
 export { AssertFactWriteNotImplementedError } from './handlers.js';
+
+// S3.5 (docs/development-tasks.md §S3.5) — export-prov-handler.ts's own input-validation error;
+// `interfaces/http/capability-route.ts` maps it to 400 like every other caller-input error here.
+export { ExportProvInputError } from './export-prov-handler.js';
+
+// S3.5 — explorer-read-service.ts's own `channel: 'human'` read surface for the nine Explorer
+// endpoints (design doc §9.5); `interfaces/explorer-contract` is the only consumer, the same
+// "one module, one purpose-built consumer" shape `gatekeeper-read-handlers.ts`'s exports below
+// already follow for the web console.
+export {
+  getDecisionChainForExplorer,
+  getProvenanceForExplorer,
+  getProvenanceReportForExplorer,
+  getTemporalBoundsForExplorer,
+  getTemporalSnapshotForExplorer,
+  listDecisionsForExplorer,
+  listGraphEdgesForExplorer,
+  listGraphNodesForExplorer,
+  searchGraphForExplorer,
+} from './explorer-read-service.js';
+export type {
+  DecisionChainResult,
+  DecisionChainStep,
+  DecisionRow as ExplorerDecisionRow,
+  ExplorerEdgesParams,
+  ExplorerNodesParams,
+  ExplorerPage,
+  ExplorerProvenanceReport,
+  ExplorerProvenanceResult,
+  ExplorerSearchParams,
+  ExplorerSearchResultItem,
+  ExplorerTemporalSnapshotResult,
+  Fact as ExplorerFact,
+  GraphObject as ExplorerGraphObject,
+} from './explorer-read-service.js';
+
+export type { ProvEdge, ProvGraph, ProvKind, ProvNode } from './provenance-graph.js';
 export type {
   CapabilityHandler,
   CapabilityHandlerContext,

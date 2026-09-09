@@ -2392,16 +2392,134 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "scope": {
-          "additionalProperties": {},
-          "type": "object"
+        "activityId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "decisionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "depth": {
+          "maximum": 5,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "factId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "type": "object"
     },
     "result": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": {},
+      "additionalProperties": false,
+      "properties": {
+        "document": {
+          "additionalProperties": false,
+          "properties": {
+            "actedOnBehalfOf": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "activity": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "agent": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "entity": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "prefix": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "used": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "wasAssociatedWith": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "wasAttributedTo": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "wasDerivedFrom": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "wasGeneratedBy": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "wasRevisionOf": {
+              "additionalProperties": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "prefix",
+            "entity",
+            "activity",
+            "agent",
+            "wasGeneratedBy",
+            "used",
+            "wasAssociatedWith",
+            "wasAttributedTo",
+            "wasDerivedFrom",
+            "actedOnBehalfOf",
+            "wasRevisionOf"
+          ],
+          "type": "object"
+        },
+        "format": {
+          "const": "prov-json",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "document"
+      ],
       "type": "object"
     }
   },

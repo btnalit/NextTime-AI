@@ -91,6 +91,9 @@ import {
   resolveConflictHandler,
   verifyFactHandler,
 } from './epistemic-handlers.js';
+// S3.5 (docs/development-tasks.md §S3.5) — `export_prov` was registered but had no handler
+// (S3.7's inventory); wired here like every other capability handler in this file.
+import { exportProvHandler } from './export-prov-handler.js';
 import {
   getGatekeeperHandler,
   getOperationStatsHandler,
@@ -1200,4 +1203,6 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['validate', validateHandler],
   ['propose_ontology_change', proposeOntologyChangeHandler],
   ['publish_ontology_version', publishOntologyVersionHandler],
+  // S3.5 (docs/development-tasks.md §S3.5) — export-prov-handler.ts.
+  ['export_prov', exportProvHandler],
 ]);

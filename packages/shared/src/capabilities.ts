@@ -1561,15 +1561,31 @@ const auditCapabilities: readonly Capability[] = [
     description: 'Reconstruct an entity’s history from AuditRecords.',
   },
   {
-    // Unhandled — permissive placeholder: a PROV-O graph has no fixed shape in this codebase.
+    // S3.5 (docs/development-tasks.md §S3.5, design doc §9.5's Lineage mapping): PROV-JSON-style
+    // export of the provenance around one Fact/Decision/Activity, built from `explain`'s own data
+    // (`application/gateway/provenance-graph.ts`'s `buildProvJsonDocument`, reused by
+    // `export-prov-handler.ts`). Exactly one of `factId`/`decisionId`/`activityId` is required —
+    // this file's existing convention (decisions.ts's own module doc comment: "no `.refine()` in
+    // paramsSchema") leaves that "exactly one" check to the handler, same as `causal_chain` above
+    // does for its own `factId`/`decisionId` pair. `depth` only affects a `factId`/`decisionId`
+    // root (walked the same way `causal_chain` does); ignored for an `activityId` root, which has
+    // no further "chain" to walk beyond itself — see the handler's own doc comment.
     name: 'export_prov',
     group: 'audit',
     mode: 'observe',
     channel: 'human',
     minRole: 'auditor',
-    paramsSchema: z.object({ scope: jsonRecord.optional() }).strict(),
-    resultSchema: jsonRecord,
-    description: 'Export a PROV-O provenance graph.',
+    paramsSchema: z
+      .object({
+        factId: id.optional(),
+        decisionId: id.optional(),
+        activityId: id.optional(),
+        depth: z.number().int().min(1).max(5).optional(),
+      })
+      .strict(),
+    resultSchema: wire.ExportProvResultSchema,
+    description:
+      'Export a PROV-JSON-style provenance graph around a Fact, Decision, or Activity, built from explain().',
   },
 ];
 
