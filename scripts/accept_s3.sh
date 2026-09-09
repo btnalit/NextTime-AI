@@ -388,11 +388,15 @@ async function main() {
   await fn(rest);
 }
 
+// Flush stdout before exiting: inside a container stdout is not a synchronous pipe, and
+// process.exit() right after a large console.log (explain on a collector Fact is >400KB)
+// drops the tail — the EXTRACTED= line — of the output. write('', cb) fires only after
+// every earlier chunk has been flushed.
 main()
-  .then(() => process.exit(0))
+  .then(() => process.stdout.write('', () => process.exit(0)))
   .catch((err) => {
     console.log(`ERROR=${(err && err.message) || String(err)}`);
-    process.exit(1);
+    process.stdout.write('', () => process.exit(1));
   });
 DRIVER_JS
 
