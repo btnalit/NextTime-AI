@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PoolLike } from './adapters/db/pool.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
+import type { BackgroundServices } from './index.js';
 import {
   DEFAULT_OUTBOX_PRUNE_DAYS,
   DEFAULT_OUTBOX_PRUNE_INTERVAL_MS,
@@ -11,6 +12,7 @@ import {
   createServer,
   parseNonNegativeIntEnvVar,
   parsePositiveIntEnvVar,
+  startBackgroundServicesOrExit,
 } from './index.js';
 
 /** The internal-plane shared secret every `/internal/*` test below presents (or deliberately
@@ -34,6 +36,76 @@ describe('GET /api/health', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: 'ok' });
+  });
+
+  // Startup fail-fast followup (docs/development-tasks.md "the health endpoint must not report ok
+  // before background services are up").
+  it('with isBackgroundReady omitted, still reports ok — a test exercising only the HTTP surface must not depend on background services', async () => {
+    const app = createServer({ pool: unusedPool }, {});
+
+    const response = await app.inject({ method: 'GET', url: '/api/health' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: 'ok' });
+  });
+
+  it('with isBackgroundReady() === false, reports 503 {status:"starting"}, not ok', async () => {
+    const app = createServer({ pool: unusedPool }, { isBackgroundReady: () => false });
+
+    const response = await app.inject({ method: 'GET', url: '/api/health' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ status: 'starting' });
+  });
+
+  it('with isBackgroundReady() === true, reports 200 ok', async () => {
+    const app = createServer({ pool: unusedPool }, { isBackgroundReady: () => true });
+
+    const response = await app.inject({ method: 'GET', url: '/api/health' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: 'ok' });
+  });
+});
+
+// Startup fail-fast followup (docs/development-tasks.md, "found by the web e2e workflow"): a
+// throwing startup recovery scan (e.g. a missing migration — "relation ... does not exist")
+// previously left `main()` logging the error and silently continuing to serve traffic with the
+// outbox dispatcher never started. `startBackgroundServicesOrExit` is the extracted, injectable
+// wrapper `main()` now calls instead of awaiting `background.start()` directly.
+describe('startBackgroundServicesOrExit — startup fail-fast (docs/development-tasks.md)', () => {
+  it('a throwing recovery/background-start function logs fatal, stops the background services, and exits(1) — never rethrows', async () => {
+    const startError = new Error('relation "chat_turns" does not exist');
+    const stop = vi.fn();
+    const throwingBackground: Pick<BackgroundServices, 'start' | 'stop'> = {
+      start: vi.fn().mockRejectedValue(startError),
+      stop,
+    };
+    const fatal = vi.fn();
+    const exit = vi.fn();
+
+    await startBackgroundServicesOrExit(throwingBackground, { fatal }, exit);
+
+    expect(fatal).toHaveBeenCalledTimes(1);
+    expect(fatal.mock.calls[0]?.[0]).toMatchObject({ err: startError });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('a successful background.start() logs nothing and never exits', async () => {
+    const start = vi.fn().mockResolvedValue(undefined);
+    const stop = vi.fn();
+    const succeedingBackground: Pick<BackgroundServices, 'start' | 'stop'> = { start, stop };
+    const fatal = vi.fn();
+    const exit = vi.fn();
+
+    await startBackgroundServicesOrExit(succeedingBackground, { fatal }, exit);
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(fatal).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
   });
 });
 
