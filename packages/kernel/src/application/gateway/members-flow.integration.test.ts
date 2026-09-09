@@ -182,7 +182,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                (workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
                 policy_decision, approval_decision_id, await_decision, on_behalf_of, actor_runtime,
                 requested_at)
-             values ($1, $2, $3, $4, $5, $4, 'low', $6, $7, false, $8, 'human', $9)`,
+             values ($1, $2, $3, $4::uuid, $5, $4::text, 'low', $6, $7, false, $8, 'human', $9)`,
             [
               workspaceId,
               id,
