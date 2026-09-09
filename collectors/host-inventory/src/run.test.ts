@@ -11,7 +11,24 @@ import type {
   SubmitObservationsParams,
   SubmitObservationsResult,
 } from './kernel-client.js';
+import type { RunOptions, RunSummary } from './run.js';
 import { RunFailedError, runOnce } from './run.js';
+
+/**
+ * Wraps `runOnce` with a hermetic default `processTreeOverride` (`{skipped: true, processes: []}`)
+ * so these tests behave identically regardless of the *real* OS/`/proc` this test suite happens to
+ * run on — without this, `collectProcessTree()`'s own real `/proc`-backed reader (invoked whenever
+ * a test omits `processTreeOverride`) sees nothing on this repo's Windows dev machines (`/proc`
+ * does not exist there) but sees the *actual CI runner's own real process list* on Linux CI, which
+ * can legitimately contain a command line `redact.ts`'s tier-2 sniff flags as secret-shaped —
+ * exactly what broke this suite on GitHub Actions before this wrapper existed (a real, environment-
+ * dependent hermeticity bug this task's own CI run caught). Every test that specifically exercises
+ * process-tree/sanitization behavior still passes its own explicit `processTreeOverride`, which
+ * this shallow merge preserves unchanged.
+ */
+async function run(options: RunOptions): Promise<RunSummary> {
+  return runOnce({ processTreeOverride: { skipped: true, processes: [] }, ...options });
+}
 
 function baseConfig(stateFile: string, overrides: Partial<CollectorConfig> = {}): CollectorConfig {
   return {
@@ -142,7 +159,7 @@ describe('runOnce', () => {
     const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
 
-    const summary = await runOnce({
+    const summary = await run({
       config: baseConfig(stateFile),
       dockerClient: fakeDockerClient(),
       kernelClient,
@@ -185,7 +202,7 @@ describe('runOnce', () => {
     const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
 
-    await runOnce({
+    await run({
       config: baseConfig(stateFile),
       dockerClient: fakeDockerClient(),
       kernelClient,
@@ -195,7 +212,7 @@ describe('runOnce', () => {
     const cached = JSON.parse(await readFile(stateFile, 'utf8'));
     expect(cached.sourceId).toBe('src-1');
 
-    await runOnce({
+    await run({
       config: baseConfig(stateFile),
       dockerClient: fakeDockerClient(),
       kernelClient,
@@ -209,7 +226,7 @@ describe('runOnce', () => {
     const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'; // gitleaks:allow (synthetic fixture)
 
     await expect(
-      runOnce({
+      run({
         config: baseConfig(stateFile),
         dockerClient: fakeDockerClient(),
         kernelClient,
@@ -237,7 +254,7 @@ describe('runOnce', () => {
     const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
 
-    await runOnce({
+    await run({
       config: baseConfig(stateFile),
       dockerClient: fakeDockerClient(),
       kernelClient,
@@ -267,7 +284,7 @@ describe('runOnce', () => {
     });
 
     await expect(
-      runOnce({ config: baseConfig(stateFile), dockerClient, kernelClient }),
+      run({ config: baseConfig(stateFile), dockerClient, kernelClient }),
     ).rejects.toThrow(RunFailedError);
     expect(calls.registerSource).toBe(0);
     expect(calls.submitObservations).toHaveLength(0);
@@ -278,7 +295,7 @@ describe('runOnce', () => {
     const { client: kernelClient, calls } = fakeKernelClient();
     const dockerClient = fakeDockerClient({ listContainers: async () => [] });
 
-    await runOnce({ config: baseConfig(stateFile), dockerClient, kernelClient });
+    await run({ config: baseConfig(stateFile), dockerClient, kernelClient });
     expect(calls.submitObservations).toHaveLength(2); // phase 1 + phase 2 only.
   });
 });

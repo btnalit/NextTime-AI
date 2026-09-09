@@ -322,21 +322,22 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('a registered but unimplemented capability → 501', async () => {
-      // `invalidate_fact` (meta group, handle channel) has no wired handler yet — used here rather
-      // than `query_decisions` (S3.2, feat/s3-2-conflicts-epistemic, gave it a handler alongside
-      // list_conflicts/resolve_conflict/verify_fact/causal_chain/decision_impact/find_precedents)
-      // or `issue_handle` (S3.6, docs/development-tasks.md W2-B, gave *it* a handler) — same
-      // reasoning as application/gateway/dispatch.test.ts's own swap chain for this exact cause:
-      // `set_quota` → `issue_handle` (S2.7) → `export_prov`/`invalidate_fact` (S3.2+S3.6, two
-      // capabilities implemented in the same merge window, so both call sites needed a fresh
-      // still-unimplemented name — this file picked `invalidate_fact`, dispatch.test.ts picked
-      // `export_prov`, deliberately different so the two tests never depend on the same one).
+      // `export_prov` (audit group, human channel, minRole:'auditor' — `ownerApiKey` satisfies it,
+      // owner is a super-role, authorize.ts's own `roleSatisfiesMinRole`) has no wired handler yet.
+      // Swap chain for this exact cause (a capability this test picks as "still unimplemented"
+      // getting implemented by a later task): `set_quota` → `issue_handle` (S2.7) →
+      // `export_prov`/`invalidate_fact` (S3.2+S3.6) → `invalidate_fact` (S3.3, this task, gave it a
+      // real handler alongside assert_fact/supersede_fact/register_source/submit_observations) →
+      // `export_prov` (this file's own next pick — `application/gateway/dispatch.test.ts` already
+      // uses this same name for its own two now-implemented-swap tests; reusing it here is fine,
+      // the two files exercise different layers (HTTP route mapping vs `dispatchCapability`
+      // directly), not the same assertion twice).
       const app = createServer({ pool });
       const response = await app.inject({
         method: 'POST',
-        url: '/api/cap/invalidate_fact',
+        url: '/api/cap/export_prov',
         headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: { factId: '00000000-0000-0000-0000-000000000000' },
+        payload: {},
       });
 
       expect(response.statusCode).toBe(501);
