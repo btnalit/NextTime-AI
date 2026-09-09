@@ -25,10 +25,17 @@ const REQUIRED_WORKER_ENV = {
   TASK_ID: 'task-1',
 } as const;
 
+const REQUIRED_INTERACTIVE_ENV = {
+  NEXTTIME_MODE: 'interactive',
+  KERNEL_URL: 'http://127.0.0.1:1',
+  CAPABILITY_HANDLE: 'test-handle',
+} as const;
+
 const ENV_KEYS = [
   ...new Set([
     ...Object.keys(REQUIRED_ENTRY_ENV),
     ...Object.keys(REQUIRED_WORKER_ENV),
+    ...Object.keys(REQUIRED_INTERACTIVE_ENV),
     'NEXTTIME_TURN_ID',
   ]),
 ] as const;
@@ -71,14 +78,9 @@ describe('platformExtension() activation', () => {
     expect(() => platformExtension(fakePi())).toThrow(/NEXTTIME_MODE/);
   });
 
-  it('throws a clear "not implemented yet" error for interactive mode', () => {
-    process.env.NEXTTIME_MODE = 'interactive';
-    expect(() => platformExtension(fakePi())).toThrow(/not implemented yet/);
-  });
-
-  it('does not touch pi at all for an unimplemented or invalid mode', () => {
+  it('does not touch pi at all for an invalid mode', () => {
     const pi = fakePi();
-    process.env.NEXTTIME_MODE = 'interactive';
+    process.env.NEXTTIME_MODE = 'bogus';
     expect(() => platformExtension(pi)).toThrow();
     expect(pi.on).not.toHaveBeenCalled();
     expect(pi.registerTool).not.toHaveBeenCalled();
@@ -149,5 +151,48 @@ describe('platformExtension() activation', () => {
     expect(subscribedEvents).toEqual(
       expect.arrayContaining(['session_start', 'context', 'agent_end', 'agent_settled']),
     );
+  });
+
+  for (const missing of ['KERNEL_URL', 'CAPABILITY_HANDLE'] as const) {
+    it(`throws a clear error when ${missing} is missing in interactive mode`, () => {
+      for (const [key, value] of Object.entries(REQUIRED_INTERACTIVE_ENV)) {
+        if (key !== missing) process.env[key] = value;
+      }
+      expect(() => platformExtension(fakePi())).toThrow(new RegExp(missing));
+    });
+  }
+
+  it('interactive mode needs no WORKSPACE_ID (no Turn to correlate — modes/interactive.ts’s own "默认不回传")', () => {
+    process.env.NEXTTIME_MODE = REQUIRED_INTERACTIVE_ENV.NEXTTIME_MODE;
+    process.env.KERNEL_URL = REQUIRED_INTERACTIVE_ENV.KERNEL_URL;
+    process.env.CAPABILITY_HANDLE = REQUIRED_INTERACTIVE_ENV.CAPABILITY_HANDLE;
+    expect(() => platformExtension(fakePi())).not.toThrow();
+  });
+
+  it('registers the same 17 capability tools as entry mode, no turn-id/report_turn wiring, with all env vars set', () => {
+    for (const [key, value] of Object.entries(REQUIRED_INTERACTIVE_ENV)) process.env[key] = value;
+    const pi = fakePi();
+
+    expect(() => platformExtension(pi)).not.toThrow();
+
+    expect(pi.registerTool).toHaveBeenCalledTimes(17);
+    const registeredNames = vi.mocked(pi.registerTool).mock.calls.map(([tool]) => tool.name);
+    expect(registeredNames.slice(0, 5)).toEqual([
+      'get_object',
+      'traverse',
+      'search',
+      'explain',
+      'get_task',
+    ]);
+    expect(registeredNames).toEqual(
+      expect.arrayContaining(['find_workers', 'invoke_worker', 'request_connection']),
+    );
+
+    const subscribedEvents = vi.mocked(pi.on).mock.calls.map(([event]) => event);
+    expect(subscribedEvents).toEqual(expect.arrayContaining(['session_start', 'context']));
+    expect(subscribedEvents).not.toEqual(
+      expect.arrayContaining(['input', 'agent_start', 'agent_end', 'agent_settled']),
+    );
+    expect(pi.appendEntry).not.toHaveBeenCalled();
   });
 });

@@ -97,6 +97,7 @@ import {
   listGatekeepersHandler,
   listOperationsHandler,
 } from './gatekeeper-read-handlers.js';
+import { issueHandleHandler } from './issue-handle-handler.js';
 import {
   createPrincipalHandler,
   disablePrincipalHandler,
@@ -1135,6 +1136,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['set_policy', setPolicyHandler],
   ['grant_capability', grantCapabilityHandler],
   ['revoke_capability', revokeCapabilityHandler],
+  // S3.6 (docs/development-tasks.md W2-B) — issue-handle-handler.ts.
+  ['issue_handle', issueHandleHandler],
   // S3.11 (docs/development-tasks.md "中台控制面") — governance read-side additions.
   ['list_grants', listGrantsHandler],
   ['list_policies', listPoliciesHandler],
