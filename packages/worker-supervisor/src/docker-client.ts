@@ -84,6 +84,21 @@ export interface DockerClient {
    *  is exactly why the label lookup exists instead of hardcoding the prefixed name). Throws if
    *  zero or more than one network matches and no explicit override was given. */
   resolveNetworkByComposeLabel(networkLabel: string, explicitName?: string): Promise<string>;
+  /** Subscribes to the Docker Engine's container-lifecycle event stream (`GET /events?filters=
+   *  {"type":["container"],"event":[...],"label":[...]}`) — feat/egress-docker-events, used by
+   *  `docker-events.ts` for event-driven egress de-registration (see that module's own doc
+   *  comment). `event`/`label` are passed through verbatim as Engine API filter values (a bare
+   *  label key, no `=value`, matches the key regardless of value — `docker-events.ts` relies on
+   *  this to match both resident mode's `nexttime.role=entry` and Task mode's
+   *  `nexttime.role=worker` with one filter entry). Rejects if the connection cannot be
+   *  established (e.g. `docker-socket-proxy`'s `EVENTS` flag is off, docker-compose.yml) — unlike
+   *  every other method here, this is NOT translated into a resolved "not found" value; callers
+   *  must catch it themselves (`docker-events.ts` does, per this task's fail-safe requirement:
+   *  never crash the supervisor over a missing events subscription). */
+  getContainerEvents(options: {
+    readonly event: readonly string[];
+    readonly label: readonly string[];
+  }): Promise<NodeJS.ReadableStream>;
 }
 
 const COMPOSE_NETWORK_LABEL = 'com.docker.compose.network';
@@ -221,6 +236,19 @@ export function createDockerClient(options: CreateDockerClientOptions): DockerCl
           ? `no Docker network found with label ${COMPOSE_NETWORK_LABEL}=${networkLabel} — set NETWORK_WORKERS explicitly if this is not running under docker compose`
           : `${networks.length} Docker networks found with label ${COMPOSE_NETWORK_LABEL}=${networkLabel} — set NETWORK_WORKERS explicitly to disambiguate`,
       );
+    },
+
+    async getContainerEvents(options: {
+      readonly event: readonly string[];
+      readonly label: readonly string[];
+    }): Promise<NodeJS.ReadableStream> {
+      return docker.getEvents({
+        filters: {
+          type: ['container'],
+          event: [...options.event],
+          label: [...options.label],
+        },
+      });
     },
   };
 }

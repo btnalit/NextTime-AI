@@ -1,6 +1,7 @@
 # Runbook：backup-restore（每日备份与恢复演练）
 
-对应任务：development-tasks.md § S1.12。设计 §10.2 / §10.4 / §13。`backup` 容器的权限模型
+对应任务：development-tasks.md § S1.12。设计 §10.2 / §10.4 / §13。服务重启顺序/健康检查见
+`docs/runbooks/operations.md`，本文档只覆盖数据层面的备份与恢复。`backup` 容器的权限模型
 （2026-09-08 定稿）：**root + `cap_drop: [ALL]` + 仅 `cap_add: [DAC_READ_SEARCH]`**，只读根文件系统，
 `no-new-privileges`，挂载只有只读的备份来源与可写的 `backups/`。本节先说这个模型为什么是这样、
 主机要准备什么、怎么验证；下面"备份什么"等章节不变。

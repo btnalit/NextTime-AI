@@ -980,6 +980,25 @@
 
 ---
 
+### S3 实施波次（2026-09-09 排定）
+
+依据：S3.1–S3.10 的依赖声明、复审遗留（Docker 事件驱动 egress 反注册、observe 类操作统计归因、19 个已注册未实现 capability、web e2e 进 CI）。同一波次内各项**文件互斥**，可并行派子代理；每个 PR 过 CI 三门 + `pnpm contract:snapshot`（注册表变更必须提交快照）；含运行时/线上变化的 PR 先在主机分支跑 `accept_s1/s2` 再合；合入即清分支、主机应用、回归。
+
+| 波次 | 项 | 范围（文件所有权） | 交付 |
+|------|----|-------------------|------|
+| W1-A | **S3.1** 本体注册表与 v1 | `packages/kernel/src/substrate/ontology/**`、`ontology/ops-assets-v1.yaml`、`shared` 注册表 `ontology` 组 5 个能力的 handler（`get_type / list_types / validate / propose_ontology_change / publish_ontology_version`） | 版本化本体注册表、identity_key 每 ObjectType、domain/range 校验、草稿私有 |
+| W1-B | **S3.8** 不变量监控与混沌 + observe 统计归因 | `substrate/audit/invariant-checks.ts` + `index.ts` 调度、`scripts/chaos-kill-{worker,entry}.sh`、`audit` 模块日期范围/分组读能力、`get_operation_stats` observe 归因 | I1–I16 定时校验 → 指标/日志；杀入口/Worker 后状态符合 §13 |
+| W1-C | egress 反注册事件化 | `packages/worker-supervisor`（订阅 Docker 事件 `die/destroy`）、`docker-compose.yml`（supervisor 的 proxy `EVENTS=1`） | 容器退出即从 source map 移除，reap 间隔只作兜底 |
+| W1-D | web Playwright e2e 进 CI | `.github/workflows/ci.yml` 新 `e2e` job、`packages/web/e2e/**`、compose 精简 profile | 登录 → 审批 → 治理三条主路径在 CI 用 compose 起 postgres+kernel+caddy+fake-llm 跑通 |
+| W1-E | **S3.10** 运行手册（不依赖 S3.9 的部分） | `docs/runbooks/*.md`、`docs/testing.md` | 重启/恢复顺序、密钥轮换、新增接入包、新增领域包、排查失败 Task；测试分层与命令 |
+| W2-A | **S3.2** 冲突检测 + epistemic 7 能力 | `substrate/epistemic/**`、`list_conflicts / resolve_conflict / verify_fact / query_decisions / causal_chain / decision_impact / find_precedents` handler | 同源 supersede、异源 Conflict(open)、私有可见性、决策/血缘查询 |
+| W2-B | **S3.6** MCP gateway + `interactive` 模式 + `issue_handle` | `packages/kernel/src/interfaces/mcp/**`、`platform-extension/src/modes/interactive.ts`、`docs/howto-connect-{claude-code,pi}.md` | `tools/list` = 注册表 Handle 通道集合 + Semantica 别名；无 Handle 拒绝 |
+| W3-A | **S3.3** 采集器 `host-inventory` + 写入能力 | 新包 `collectors/host-inventory`、`register_source / submit_observations / assert_fact / supersede_fact / invalidate_fact` handler（service principal）、compose 服务 | 两遍无重复无 Conflict；改端口第三遍 supersede；脱敏失败整批不提交 |
+| W3-B | **S3.5** Explorer 契约与挂载 + `export_prov` | `interfaces/explorer-contract/**`、`explorer/` 构建脚本、caddy `/explorer` | Graph / Decision / Lineage 三工作区加载 |
+| W4 | **S3.4** ragflow 门 v2 与本体 v2；**S3.9** `accept_s3.sh`；**S3.10** 收尾（恢复/接入手册演练）；`create_task` | 依前序 | `S3 OK` |
+
+---
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |
