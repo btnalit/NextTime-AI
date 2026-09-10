@@ -57,17 +57,24 @@ parse_kv() {
 # then a hard check on the "other" read bit with a clear message instead of a late failure.
 ACCEPT_DRIVER_PATH="${ACCEPT_DRIVER_PATH:-$PWD/deploy/accept/driver.mjs}"
 
-require_driver() {
-  if [ ! -r "$ACCEPT_DRIVER_PATH" ]; then
-    echo "accept: driver not found at $ACCEPT_DRIVER_PATH — run from the checkout root" >&2
+# Best-effort `chmod a+r` (git tracks only the executable bit, so this never dirties the tree),
+# then a hard check on the "other" read bit with a clear message instead of a late EACCES from
+# inside a container running as uid 10001.
+require_world_readable() {
+  if [ ! -r "$1" ]; then
+    echo "accept: $2 not found at $1 — run from the checkout root" >&2
     exit 1
   fi
-  chmod a+r "$ACCEPT_DRIVER_PATH" 2>/dev/null || true
-  other_read=$(ls -ld "$ACCEPT_DRIVER_PATH" | cut -c8)
+  chmod a+r "$1" 2>/dev/null || true
+  other_read=$(ls -ld "$1" | cut -c8)
   if [ "$other_read" != "r" ]; then
-    echo "accept: $ACCEPT_DRIVER_PATH is not world-readable (uid 10001 inside the kernel container must read it): chmod a+r it" >&2
+    echo "accept: $1 is not world-readable (uid 10001 inside a container must read it): chmod a+r it" >&2
     exit 1
   fi
+}
+
+require_driver() {
+  require_world_readable "$ACCEPT_DRIVER_PATH" "driver"
 }
 
 # Runs one driver subcommand. Combines stdout+stderr into one blob for parse_kv. `</dev/null`
@@ -99,4 +106,67 @@ wait_for_gate_health() {
     sleep 2
   done
   return 1
+}
+
+# --------------------------------------------------------------------------------------------
+# Fake provider via compose override (W6, retrospective §5.3). `accept_provider_up` generates the
+# fake-provider models.json into ${NEXTTIME_DATA}/accept/ and recreates llm-proxy /
+# worker-supervisor / fake-llm with deploy/accept/docker-compose.fake.yml merged in;
+# `accept_provider_restore` recreates the two production services from the root file alone.
+# The production ${NEXTTIME_DATA}/config/llm-providers.yaml and models.json are never touched.
+# Scripts install `trap accept_provider_restore EXIT` (plus INT/TERM/HUP/PIPE handlers that
+# restore and exit) *before* calling `accept_provider_up`, so a run that dies half-way — including
+# a dropped ssh session — still leaves the host on its real provider.
+# --------------------------------------------------------------------------------------------
+
+ACCEPT_FAKE_OVERRIDE="${ACCEPT_FAKE_OVERRIDE:-$PWD/deploy/accept/docker-compose.fake.yml}"
+ACCEPT_PROVIDER_SWITCHED=0
+
+compose_accept() {
+  docker compose -f docker-compose.yml -f "$ACCEPT_FAKE_OVERRIDE" "$@"
+}
+
+# Generates ${NEXTTIME_DATA}/accept/models.json from the fake provider file (the override mounts
+# it into llm-proxy, so gen-models reads it) and brings the three services up on the override.
+# Prints nothing on success; returns non-zero with a message on stderr otherwise.
+accept_provider_up() {
+  if [ ! -r "$ACCEPT_FAKE_OVERRIDE" ]; then
+    echo "accept: override not found at $ACCEPT_FAKE_OVERRIDE — run from the checkout root" >&2
+    return 1
+  fi
+  # The fake provider file is bind-mounted into llm-proxy (uid 10001) — same umask hazard as the
+  # driver, same guard.
+  require_world_readable "$PWD/config/llm-providers.fake.example.yaml" "fake provider file"
+  mkdir -p "$NEXTTIME_DATA/accept" || return 1
+  if ! compose_accept run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js \
+      </dev/null >"$NEXTTIME_DATA/accept/models.json.tmp" 2>"$NEXTTIME_DATA/accept/gen-models.err"; then
+    echo "accept: gen-models (fake provider) failed: $(tail -5 "$NEXTTIME_DATA/accept/gen-models.err")" >&2
+    rm -f "$NEXTTIME_DATA/accept/models.json.tmp"
+    return 1
+  fi
+  mv "$NEXTTIME_DATA/accept/models.json.tmp" "$NEXTTIME_DATA/accept/models.json" || return 1
+  # Read inside spawned containers as uid 10001 (see require_driver for the same reasoning).
+  chmod a+r "$NEXTTIME_DATA/accept/models.json"
+  # Marked as switched *before* the recreate: `up` can succeed for llm-proxy and then fail on
+  # worker-supervisor, and the caller's EXIT trap (installed before calling this function) must
+  # still restore whatever did get recreated onto the override.
+  ACCEPT_PROVIDER_SWITCHED=1
+  if ! up_out=$(compose_accept --profile test up -d --force-recreate llm-proxy worker-supervisor fake-llm </dev/null 2>&1); then
+    echo "accept: bringing up the fake provider failed: $(printf '%s' "$up_out" | tail -10)" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Recreates llm-proxy and worker-supervisor from the root compose file alone (production
+# provider config, production models.json path). Idempotent; a no-op if accept_provider_up never
+# succeeded. fake-llm is left running — it is harmless and `--profile test` only.
+accept_provider_restore() {
+  [ "$ACCEPT_PROVIDER_SWITCHED" -eq 1 ] || return 0
+  if ! restore_out=$(docker compose up -d --force-recreate llm-proxy worker-supervisor </dev/null 2>&1); then
+    echo "accept: restoring the production provider failed — run 'docker compose up -d --force-recreate llm-proxy worker-supervisor' by hand: $(printf '%s' "$restore_out" | tail -10)" >&2
+    return 1
+  fi
+  ACCEPT_PROVIDER_SWITCHED=0
+  return 0
 }

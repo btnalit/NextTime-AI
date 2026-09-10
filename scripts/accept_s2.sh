@@ -12,11 +12,15 @@
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s2.sh' </dev/null
 #
 # --keep skips removing the accept-s2 fixture containers (leaves the fixtures/gates/workspace up
-# for inspection).
+# for inspection). --keep does not skip the fake-provider restore below — the EXIT trap always
+# runs.
 #
 # Preconditions (see docs/runbooks/host-accept-s2.md for the full walkthrough):
-#   - `docker compose --profile test up -d` already running (accept_s1.sh's own preconditions —
-#     fake-llm, the fake provider config swap) plus `docker compose up -d gatekeeper-docker`.
+#   - `docker compose --profile test up -d` already running plus `docker compose up -d
+#     gatekeeper-docker`. The script switches llm-proxy / worker-supervisor / fake-llm to the fake
+#     provider itself via deploy/accept/docker-compose.fake.yml and restores production wiring
+#     from an EXIT trap, so ${NEXTTIME_DATA}/config/llm-providers.yaml and models.json are never
+#     modified — no manual provider switch is needed before or after.
 #   - `docker compose --profile accept-s2 build` has been run at least once (images built).
 #   - `docker compose build worker-runtime` (profile build-only) has produced
 #     `nexttime-ai-worker-runtime` — step 6's fallback env/egress probe runs that image directly.
@@ -82,6 +86,14 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
+# Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
+# whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
+# to run this script), which would otherwise kill the shell without running the EXIT trap.
+trap accept_provider_restore EXIT
+trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
+accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
+pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
 fetch('http://worker-supervisor:8081/resident/stop', {
@@ -112,15 +124,6 @@ preflight_step() {
     fail "preflight-services" "not running:$missing"
   fi
   pass "preflight-services" "running: $required_services"
-
-  providers_file="${NEXTTIME_DATA}/config/llm-providers.yaml"
-  if [ ! -f "$providers_file" ]; then
-    fail "preflight-fake-provider" "$providers_file not found — see docs/runbooks/host-agent-host.md §3"
-  fi
-  if ! grep -qE '^[[:space:]]*fake:[[:space:]]*$' "$providers_file"; then
-    fail "preflight-fake-provider" "no 'fake:' provider entry in $providers_file — see docs/runbooks/host-agent-host.md §3"
-  fi
-  pass "preflight-fake-provider" "fake provider configured in $providers_file"
 
   migrate_out=$(docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js --dry-run </dev/null 2>&1)
   migrate_rc=$?

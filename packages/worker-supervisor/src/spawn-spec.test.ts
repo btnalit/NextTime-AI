@@ -99,6 +99,21 @@ describe('buildSpawnSpec', () => {
     ]);
   });
 
+  it('mounts models.json from MODELS_JSON_HOST_PATH when set (W6 — acceptance override)', () => {
+    const withFakeModelsPath = buildSpawnSpec({
+      config: loadConfig({ ...configEnv, MODELS_JSON_HOST_PATH: '/host/data/accept/models.json' }),
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      networkName: 'workers',
+      restarts: 0,
+    });
+    expect(withFakeModelsPath.binds).toEqual([
+      '/host/data/workspaces/alice:/workspace',
+      '/host/data/accept/models.json:/workspace/.pi/agent/models.json:ro',
+    ]);
+  });
+
   it('sets the resource limits from config', () => {
     expect(spec.memoryMb).toBe(2048);
     expect(spec.pidsLimit).toBe(512);

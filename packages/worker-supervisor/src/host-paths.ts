@@ -46,8 +46,10 @@ export function workspacePaths(config: SupervisorConfig, principalId: string): W
   };
 }
 
+/** Host-side source of the models.json bind mount — `MODELS_JSON_HOST_PATH` when set (an
+ *  acceptance run's fake-provider file), else `${NEXTTIME_DATA}/config/models.json`. */
 export function hostModelsJsonPath(config: SupervisorConfig): string {
-  return `${config.nextTimeData}/config/models.json`;
+  return config.modelsJsonHostPath;
 }
 
 export function localModelsJsonPath(config: SupervisorConfig): string {

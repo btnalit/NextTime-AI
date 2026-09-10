@@ -33,6 +33,7 @@ describe('loadConfig', () => {
     expect(config.entryIdleTimeoutMs).toBe(30 * 60 * 1000);
     expect(config.egressSourceMapFile).toBe('/data/config/egress-sources.json');
     expect(config.dockerSocketPath).toBe('/var/run/docker.sock');
+    expect(config.modelsJsonHostPath).toBe('/data-host/config/models.json');
     expect(config.dockerConnection).toEqual({
       kind: 'socket',
       socketPath: '/var/run/docker.sock',
@@ -68,6 +69,7 @@ describe('loadConfig', () => {
       TASK_WORKDIR_RETENTION_HOURS: '24',
       TASK_REAP_INTERVAL_MS: '5000',
       WORKER_IMAGE_ALLOWLIST: 'extra-image-a, extra-image-b',
+      MODELS_JSON_HOST_PATH: '/x/accept/models.json',
     });
     expect(config).toMatchObject({
       port: 9090,
@@ -88,6 +90,7 @@ describe('loadConfig', () => {
       egressSourceMapFile: '/x/sources.json',
       dockerSocketPath: '/tmp/docker.sock',
       dockerConnection: { kind: 'tcp', host: 'docker-socket-proxy', port: 2375 },
+      modelsJsonHostPath: '/x/accept/models.json',
       taskMaxRuntimeSec: 600,
       taskWorkdirRetentionHours: 24,
       taskReapIntervalMs: 5000,

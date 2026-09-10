@@ -111,6 +111,22 @@ describe('buildTaskSpawnSpec', () => {
     ]);
   });
 
+  it('mounts models.json from MODELS_JSON_HOST_PATH when set (W6 — acceptance override)', () => {
+    const withFakeModelsPath = buildTaskSpawnSpec({
+      config: loadConfig({ ...configEnv, MODELS_JSON_HOST_PATH: '/host/data/accept/models.json' }),
+      taskId: 'task-1',
+      workerRunId: 'run-1',
+      workspaceId: 'ws-1',
+      capabilityHandle: 'the-worker-handle-jwt',
+      image: 'nexttime-ai-worker-runtime',
+      networkName: 'nexttime-ai_workers',
+    });
+    expect(withFakeModelsPath.binds).toEqual([
+      '/host/data/workspaces/tasks/task-1:/workspace',
+      '/host/data/accept/models.json:/workspace/.pi/agent/models.json:ro',
+    ]);
+  });
+
   it('sets no CMD when model is omitted', () => {
     expect(spec.cmd).toBeUndefined();
   });

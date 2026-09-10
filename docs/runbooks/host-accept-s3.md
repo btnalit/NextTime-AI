@@ -9,11 +9,11 @@ Handle）、`docs/runbooks/host-explorer.md`（Explorer 九个端点里本脚本
 ## 1. 前提
 
 - `docker compose up -d`（或至少 `postgres kernel llm-proxy egress-proxy worker-supervisor
-  agent-host docker-socket-proxy-collector`）与 `docker compose --profile test up -d fake-llm` 已起
-  （同 `docs/runbooks/accept-s1.md` §1 的前提）。
-- `${NEXTTIME_DATA}/config/llm-providers.yaml` 已指向 `fake` provider，且切换后跑过
-  `make gen-models`（同 host-accept-s2.md §1 的同款提醒——不重生成 `models.json` 会让入口容器报
-  `Model "fake/fake-echo" not found`）。
+  agent-host docker-socket-proxy-collector`）已起。
+- 不需要手动切换 provider：脚本自己会通过 `deploy/accept/docker-compose.fake.yml` 把 llm-proxy /
+  worker-supervisor / fake-llm 切到 fake provider，并在退出时用 EXIT trap 恢复生产配置——
+  `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `models.json` 全程不会被改动，跑前跑后都不用重跑
+  `make gen-models`；唯一要求是 llm-proxy、worker-supervisor、fake-llm 镜像已经构建好。
 - `fake-llm` 镜像是用当前代码构建的（本任务在 `deploy/fake-llm/server.mjs` 新增了
   `entryDependencyChatScenario`——见 §4）：`docker compose --profile test build fake-llm && docker
   compose --profile test up -d --force-recreate fake-llm`，否则"哪个服务依赖哪个"这句话不会命中新

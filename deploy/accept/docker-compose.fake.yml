@@ -1,0 +1,34 @@
+# deploy/accept/docker-compose.fake.yml — acceptance-only compose override that switches the
+# stack to the deterministic fake LLM provider (deploy/fake-llm) WITHOUT touching the production
+# provider configuration (W6, STATUS leftover 7 / retrospective-2026-09-09.md §5.3). Merged on top
+# of the root file by scripts/lib/accept-common.sh's `compose_accept`:
+#
+#   docker compose -f docker-compose.yml -f deploy/accept/docker-compose.fake.yml ...
+#
+# Never used standalone. Relative paths resolve against the project directory (the first -f
+# file's), i.e. the checkout root.
+#
+# What it changes:
+#   - llm-proxy reads the repo's own config/llm-providers.fake.example.yaml in place of
+#     ${NEXTTIME_DATA}/config/llm-providers.yaml (same container path, so the base mount is
+#     replaced, not added to) and gets FAKE_LLM_API_KEY inline — fake-llm never validates it, and
+#     it is not a secret, so it need not live in secrets/llm-proxy.env.
+#   - worker-supervisor points every container it spawns at a separately generated models.json
+#     (${NEXTTIME_DATA}/accept/models.json, written by `accept_provider_up` from the fake provider
+#     file through this same override) via MODELS_JSON_HOST_PATH, so the production
+#     ${NEXTTIME_DATA}/config/models.json is never rewritten.
+#
+# Restoring production wiring is a plain `docker compose up -d --force-recreate llm-proxy
+# worker-supervisor` (no override) — `accept_provider_restore`, run from the scripts' EXIT trap.
+# Before W6 every acceptance run copied the fake yaml over the production one, regenerated
+# models.json, and restored both at the end; a script that died half-way left the host on the fake
+# provider until someone noticed.
+services:
+  llm-proxy:
+    volumes:
+      - ./config/llm-providers.fake.example.yaml:/data/config/llm-providers.yaml:ro
+    environment:
+      FAKE_LLM_API_KEY: fake
+  worker-supervisor:
+    environment:
+      MODELS_JSON_HOST_PATH: "${NEXTTIME_DATA:?}/accept/models.json"

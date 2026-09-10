@@ -76,7 +76,7 @@
 | 项 | 范围 | 状态 |
 |---|---|---|
 | 四份 heredoc driver 抽成一份 | `deploy/accept/driver.mjs` + `scripts/lib/accept-common.sh`，四份脚本只做编排 | 完成（PR #145；driver 有 14 例 vitest；主机从分支连跑 S1 22 / S2 66 / S3 28 全过） |
-| fake provider 切换改为 compose override，不再改生产 provider 配置 | `docker-compose.yml`、验收脚本 | 未开工（§4 第 7 项） |
+| fake provider 切换改为 compose override，不再改生产 provider 配置 | `deploy/accept/docker-compose.fake.yml`、`accept_provider_up/restore`、worker-supervisor `MODELS_JSON_HOST_PATH` | 完成（PR #146；主机从分支连跑 S1 22 / S2 66 / S3 28 全过，生产 `llm-providers.yaml` / `models.json` 前后校验和不变） |
 | 至少 S1 精简版进 CI | `.github/workflows/`、compose 精简 profile | 未开工（§4 第 7 项） |
 
 W6 之后：W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定期 → 镜像发布与 P5。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
@@ -100,7 +100,7 @@ W6 之后：W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定
 | 4 | fake-llm 自检 `entry-restart-chat-turn2/3` 预存失败 | P3 | W5 | 关闭（PR #129：自检夹具对齐线上契约形状，自检进 CI `quality`） |
 | 5 | Renovate 首跑未见 | P3 | W5 | 关闭（决定：暂不安装；Dependabot 告警暂不处理，见 §3） |
 | 6 | E7 主机备份定时器"S3 后重评" | — | 运维，最后 | 待决定（2026-09-10 维护者：运维项排在开发波次之后） |
-| 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4）。W6 进度：driver 抽成一份已完成（PR #145）；provider 改 compose override、fake-llm 场景按 paramsSchema 校验、S1 精简版进 CI 待做 | P2 | W6 | 开放 |
+| 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4）。W6 进度：driver 抽成一份已完成（PR #145）；provider 改 compose override 已完成（PR #146）；fake-llm 场景按 paramsSchema 校验、S1 精简版进 CI 待做 | P2 | W6 | 开放 |
 | 8 | Explorer 由 caddy 注入 key 的信任边界（§5.8） | P2 | W7 | 开放 |
 | 9 | 领域包烤进 kernel 镜像（§5.7）；采集器 Source 状态按文件缓存（§5.9） | P3 | 待排 | 开放 |
 | 10 | `extension_ui_request` 子协议；Trigger；CLI help 清单解析 | 功能缺口 | P5 | 开放 |

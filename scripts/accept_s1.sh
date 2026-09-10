@@ -9,6 +9,12 @@
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s1.sh' </dev/null
 #
 # --keep skips the cleanup step (leaves alice/bob's entry containers running for inspection).
+# --keep does not skip the fake-provider restore below — the EXIT trap always runs.
+#
+# The script switches llm-proxy / worker-supervisor / fake-llm to the fake provider itself via
+# deploy/accept/docker-compose.fake.yml and restores production wiring from an EXIT trap, so
+# ${NEXTTIME_DATA}/config/llm-providers.yaml and models.json are never modified — no manual
+# provider switch is needed before or after this script runs.
 #
 # Every docker compose run/exec below carries </dev/null: this script is meant to work when
 # piped or invoked non-interactively over ssh, where stdin may not be a terminal — a command that
@@ -71,6 +77,14 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
+# Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
+# whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
+# to run this script), which would otherwise kill the shell without running the EXIT trap.
+trap accept_provider_restore EXIT
+trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
+accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
+pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+
 # GET /resident/<principalId> via the kernel image's own fetch() against worker-supervisor
 # (control-network-only — no host port; docs/runbooks/host-worker-runtime.md's own established
 # `node -e "fetch(...)..."` pattern, run from the kernel image here rather than exec'ing into the
@@ -124,15 +138,6 @@ preflight_step() {
     fail "preflight-services" "not running:$missing — run: docker compose --profile test up -d"
   fi
   pass "preflight-services" "running: $required_services"
-
-  providers_file="${NEXTTIME_DATA}/config/llm-providers.yaml"
-  if [ ! -f "$providers_file" ]; then
-    fail "preflight-fake-provider" "$providers_file not found — see docs/runbooks/host-agent-host.md §3: cp config/llm-providers.fake.example.yaml \"\$NEXTTIME_DATA/config/llm-providers.yaml\" && echo 'FAKE_LLM_API_KEY=fake' >> \"\$NEXTTIME_DATA/secrets/llm-proxy.env\" && make gen-models"
-  fi
-  if ! grep -qE '^[[:space:]]*fake:[[:space:]]*$' "$providers_file"; then
-    fail "preflight-fake-provider" "no 'fake:' provider entry in $providers_file — see docs/runbooks/host-agent-host.md §3"
-  fi
-  pass "preflight-fake-provider" "fake provider configured in $providers_file"
 
   migrate_out=$(docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js --dry-run </dev/null 2>&1)
   migrate_rc=$?
