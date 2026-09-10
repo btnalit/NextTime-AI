@@ -199,9 +199,11 @@ async function main() {
         {
           role: 'tool',
           tool_call_id: 'call_fw',
-          content: JSON.stringify([
-            { definitionId: 'ops-runner-uuid', version: 3, kind: 'worker', name: 'ops-runner' },
-          ]),
+          // find_workers is a find_* capability: `{items}` envelope, not a bare array
+          // (docs/wire-contract-conventions.md §3; server.mjs reads `.items`).
+          content: JSON.stringify({
+            items: [{ definitionId: 'ops-runner-uuid', version: 3, kind: 'worker', name: 'ops-runner' }],
+          }),
         },
       ];
       const { json } = await post(messages);
@@ -254,7 +256,7 @@ async function main() {
         {
           role: 'tool',
           tool_call_id: 'call_fw',
-          content: JSON.stringify([{ definitionId: 'ops-runner-uuid', version: 3, kind: 'worker' }]),
+          content: JSON.stringify({ items: [{ definitionId: 'ops-runner-uuid', version: 3, kind: 'worker' }] }),
         },
         {
           role: 'assistant',
@@ -264,7 +266,9 @@ async function main() {
         {
           role: 'tool',
           tool_call_id: 'call_iw',
-          content: JSON.stringify({ taskId: 'task-999', workerRunId: 'wr-1', status: 'running' }),
+          // invoke_worker's result is the created Task resource keyed `id` (docs/wire-contract-
+          // conventions.md §2), not `taskId`.
+          content: JSON.stringify({ id: 'task-999', workerRunId: 'wr-1', status: 'running' }),
         },
       ];
       const { json } = await post(messages);
