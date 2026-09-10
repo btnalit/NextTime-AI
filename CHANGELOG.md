@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/btnalit/NextTime-AI/compare/v0.3.0...v0.4.0) (2026-09-10)
+
+
+### Features
+
+* **kernel:** explain narrows to the Fact's own Observation, search gains limit/cursor pagination ([#132](https://github.com/btnalit/NextTime-AI/issues/132)) ([#133](https://github.com/btnalit/NextTime-AI/issues/133)) ([9501936](https://github.com/btnalit/NextTime-AI/commit/950193673468673bf5919fb53992d615f9e7ebeb))
+* **kernel:** retire create_task capability (W5, leftover [#3](https://github.com/btnalit/NextTime-AI/issues/3)) ([#131](https://github.com/btnalit/NextTime-AI/issues/131)) ([c502561](https://github.com/btnalit/NextTime-AI/commit/c50256192d9b2e3b7ab949a81aae5f07efad9065))
+
+
+### Bug Fixes
+
+* **accept-s2:** fake-llm self-test fixtures match wire shapes; self-test runs in CI ([#129](https://github.com/btnalit/NextTime-AI/issues/129)) ([2f9be38](https://github.com/btnalit/NextTime-AI/commit/2f9be38df6946f81569b37b4b4e9d78aa136d736))
+
 ## [0.3.0](https://github.com/btnalit/NextTime-AI/compare/v0.2.0...v0.3.0) (2026-09-09)
 
 
