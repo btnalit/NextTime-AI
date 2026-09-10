@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-10（v0.3.0；W5 开工前复核 + 全量通读复审 + 遗留 15 关闭，无代码变更）
+最后更新：2026-09-10（v0.4.0；W5 收口完成并发版，当前波次切到 W6）
 
 ## 1. 入口指引
 
@@ -30,7 +30,7 @@
 | S2 | 说需求 → find_workers → invoke_worker → 门动作 → 审批 → 执行 → 写回 | 达成 | `accept_s2.sh` 66 PASS（2026-09-09） |
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | 达成 | `accept_s3.sh` 24 PASS（2026-09-09，PR #125） |
 | S3.11–S3.15 | 控制面、接入向导、AgentProfile、web 控制台、pi 漂移 | 达成 | `development-tasks.md` 各节实现说明 |
-| 发布 | — | v0.3.0 | `CHANGELOG.md` |
+| 发布 | — | v0.4.0（2026-09-10，PR #130） | `CHANGELOG.md` |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 全量通读复审发现 S3.2 的冲突检测在
 > Worker 断言这条主路径上不生效（`code-review-2026-09-10.md` §2.1）。验收对 Conflict 的唯一断言是
@@ -47,6 +47,7 @@
 | 2026-09-08 | F1–F10 全部合入并在目标主机验证；排定 S3 实施波次 | `development-tasks.md`「S3 实施波次」 |
 | 2026-09-09 | S3 波次 W1–W4 合入，主机三份验收通过；发布 v0.2.0、v0.3.0；本文建立 | `retrospective-2026-09-09.md`、`CHANGELOG.md` |
 | 2026-09-10 | 全量通读（约 6.2 万行源码）+ 三轮定向复审；新增 P1 三条 | `code-review-2026-09-10.md` |
+| 2026-09-10 | W5 收口：遗留 1–5、15 关闭（PR #128 / #129 / #131 / #132），fake-llm 自检进 CI，仓库只留 squash；发布 v0.4.0（PR #130）。主机未应用（停栈中），迁移 0018 待下次起栈时随 `make migrate` 落地 | `CHANGELOG.md`、本文 §4 |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -58,21 +59,23 @@
 - **对 Conflict 的唯一断言是「采集器跑两遍后为零」**，因此任何**压制** Conflict 的缺陷，
   存在与否验收都表现为通过（§4 第 16 项即属此类）。缺一条「异源矛盾断言 → 恰好一个 open Conflict」
   的正向用例。
+- **v0.4.0 未在主机验收**：W5 的 #132 改了 `explain`（collector Fact 只返回喂给它的那一条 Observation）
+  与 `search`（分页参数）并带迁移 0018；主机停栈中，三份验收的证据仍是 v0.3.0 的 09-09 结果。下次起栈
+  按 `runbooks/host-*.md` 应用后复跑 `accept_s3.sh`，里程碑状态在那之前不改。
 
 ## 3. 当前波次
 
-**W5 收口**（排定 2026-09-09，预计 1–2 天；范围见 `retrospective-2026-09-09.md` §4。完成标准以本表为准：遗留 1–6 关闭；retrospective 里列入 W5 的第 8 项已移至 W7）
+**W5 收口：完成**（2026-09-10，一天）。六项里五项关闭（PR #128 文档漂移、#129 fake-llm 自检、#131 `create_task` 下架、#132 `explain` 收敛 + `search` 分页、仓库设置只留 squash、Renovate 决定暂不装），E7 仍待决定；各项细节见 §4 第 1–6 项与 `development-tasks.md` 的 W5 实现说明。复审新发现一条（§4 第 23 项：`query_decisions` / `list_conflicts` 的 cursor 精度）。
 
-2026-09-10 开工前复核：六项仍全部未开工，主线无未合入 PR，CI 三门与 e2e / CodeQL / Scorecard 均绿。
+**当前波次：W6 验收工具链治理**（范围与完成标准见 `retrospective-2026-09-09.md` §4；未开工）
 
-| 项 | 范围 | 状态（2026-09-10 复核） |
+| 项 | 范围 | 状态 |
 |---|---|---|
-| `explain` 收敛到喂给该 Fact 的 Observation + `search` 分页 | 内核 epistemic / graph 读，同一 PR | 完成（PR #132）：迁移 0018 加 `links.observation_id`；`explain(factId)` 按其收窄 `activity.observations`；`search` 加 `limit`/`cursor` 与 `searchPage` 方法，`MAX_SEARCH_LIMIT=200` 截断标 `truncated:true` |
-| `create_task` 接现有 spawn 路径，或先下架 | 内核 task | 完成（PR #131，下架）。注册表 / handler / `createTask` / Worker ceiling / 集成测试块一并移除，契约快照同步；理由见 `code-review-2026-09-10.md` §3.2 |
-| fake-llm 自检两个预存失败 | `deploy/accept-s2` | 完成（PR #129）。根因是夹具还喂旧线上形状（`find_workers` 裸数组、`invoke_worker` 的 `taskId`），server 早已改成 `{items}` / `id`；自检 18 PASS 并加入 CI `quality` job |
-| 单 commit PR 改 squash（CHANGELOG 去重） | 流程 | 完成（2026-09-10，仓库设置）。已关闭 merge commit 与 rebase，只留 squash，合并后自动删分支；release-please 读到的就是 PR 标题 |
-| Renovate 首跑确认 | 自动化 | 决定（2026-09-10）：暂不安装 Renovate，Dependabot 的 9 条告警（全部是 vitest / vite / esbuild 开发链，2 critical：vitest < 3.2.6，不在运行时镜像里）暂不处理。`renovate.json` 保留，待稳定期后再定 |
-| E7 主机备份定时器决定 | 运维 | 待决定 |
+| 四份 heredoc driver 抽成一份 | `scripts/accept_s{1,2,3}.sh`、`deploy/accept-s2` | 未开工（§4 第 7 项） |
+| fake provider 切换改为 compose override，不再改生产 provider 配置 | `docker-compose.yml`、验收脚本 | 未开工（§4 第 7 项） |
+| 至少 S1 精简版进 CI | `.github/workflows/`、compose 精简 profile | 未开工（§4 第 7 项） |
+
+W6 开工前需要维护者拍板的两件事：P1 第 16 / 17 / 18 项是否插到 W6 之前（复审建议提前）；E7 备份定时器（§4 第 6 项）。
 
 目标主机：09-09 验收后处于停栈状态，仅 `llm-proxy` 与 `fake-llm` 在跑，Postgres 干净停机、数据与镜像完好；W5 若需主机验收，先按 `runbooks/host-*.md` 起栈。
 
@@ -90,7 +93,7 @@
 | 3 | `create_task` 的 Task 永远 `queued`；2026-09-10 复审确认它在唯一现实路径上不可达，**建议下架**（`code-review-2026-09-10.md` §3.2） | P2 | W5 | 关闭（PR #131：下架，接线留到授权衰减模型有结论之后） |
 | 4 | fake-llm 自检 `entry-restart-chat-turn2/3` 预存失败 | P3 | W5 | 关闭（PR #129：自检夹具对齐线上契约形状，自检进 CI `quality`） |
 | 5 | Renovate 首跑未见 | P3 | W5 | 关闭（决定：暂不安装；Dependabot 告警暂不处理，见 §3） |
-| 6 | E7 主机备份定时器"S3 后重评" | — | W5 | 待决定 |
+| 6 | E7 主机备份定时器"S3 后重评" | — | W5 → 待决定 | 待决定（W5 收口时仍未决） |
 | 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4） | P2 | W6 | 开放 |
 | 8 | Explorer 由 caddy 注入 key 的信任边界（§5.8） | P2 | W7 | 开放 |
 | 9 | 领域包烤进 kernel 镜像（§5.7）；采集器 Source 状态按文件缓存（§5.9） | P3 | 待排 | 开放 |
