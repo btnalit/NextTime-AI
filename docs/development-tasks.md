@@ -318,7 +318,7 @@
 - 验收：退出 0 打印 `S1 OK`。
 - 实现说明（S1.10 PR，2026-09）：
   - 落地路径：`scripts/accept_s1.sh`（POSIX sh，一次性 kernel 镜像容器跑每一次 JSON-RPC 交互——
-    宿主机没有 node/corepack；挂载只读的 `ws-client.mjs` 驱动脚本，见其自身头注释）；
+    宿主机没有 node/corepack；挂载只读的 `deploy/accept/driver.mjs` 驱动脚本，见其自身头注释）；
     `docs/runbooks/accept-s1.md`。
   - **"发布入口 WorkerDefinition"未做，如实 `SKIP entry-worker-definition (S2.6)`**：
     WorkerDefinition 注册表是 S2.6 的交付物；S1 阶段入口定义是烧进 `worker-runtime` 镜像的静态
@@ -1125,7 +1125,7 @@
 ### S3.9 S3 验收脚本
 - 交付物：`scripts/accept_s3.sh`：采集 → 入口 agent 回答「哪个服务依赖哪个」并 explain → Explorer 端点返回图 → Claude Code 经 MCP 观察同一图。
 - 验收：退出 0 打印 `S3 OK`。
-- **已完成（W4 收尾，2026-09-09+）**：`scripts/accept_s3.sh`（镜像 accept_s1.sh/accept_s2.sh 结构：preflight、driver.mjs、PASS/FAIL、`--keep`）覆盖派发文字的五点：(a) `bootstrap.js seed-domain-pack` 发 `ops-assets-v1`；(b) `bootstrap.js issue-service-handle` 铸采集器 Handle → 跑两遍 `collector-host-inventory --once`，第一遍断言 `Container runs_on Host` 与 `factsAsserted>0`，第二遍断言 `factsAsserted=0 && factsSuperseded=0`（等价于派发文字的 `factsUnchanged>0, factsSuperseded=0`——采集器自己的 console 摘要不转发 `factsUnchanged` 字段，见脚本自己的注释）与 `list_conflicts` 无 open；(c) 聊天"哪个服务依赖哪个"——`deploy/fake-llm/server.mjs` 新增 `entryDependencyChatScenario`（search→traverse→get_object 三跳真实工具链，落在 `kernel depends_on postgres` 这条 `docker-compose.yml` 自身就有的真实关系上），脚本另外直接 `traverse`+`explain` 验证 `explain` 溯源到采集器 Source（不解析聊天记录里的工具结果）；(d) 直接对内核镜像（不经 caddy）调三个 Explorer 端点；(e) `issue_handle{sessionKind:'interactive'}` 铸 Handle 后走 `/mcp` 的 `tools/list`/`tools/call(traverse)`，无 Handle 401（对照已安装的 `@modelcontextprotocol/sdk` 源码与一次本地真实 SDK server 验证过 driver 的 JSON-RPC 请求形状）。运行手册 `docs/runbooks/host-accept-s3.md`。本机无 Docker，脚本本身未端到端跑过；`entryDependencyChatScenario` 已用 `deploy/accept-s2/fake-llm-scenario-selftest.mjs` 新增的 6 个用例对真实运行的 fake-llm 验证过。
+- **已完成（W4 收尾，2026-09-09+）**：`scripts/accept_s3.sh`（镜像 accept_s1.sh/accept_s2.sh 结构：preflight、共用的 `deploy/accept/driver.mjs`、PASS/FAIL、`--keep`）覆盖派发文字的五点：(a) `bootstrap.js seed-domain-pack` 发 `ops-assets-v1`；(b) `bootstrap.js issue-service-handle` 铸采集器 Handle → 跑两遍 `collector-host-inventory --once`，第一遍断言 `Container runs_on Host` 与 `factsAsserted>0`，第二遍断言 `factsAsserted=0 && factsSuperseded=0`（等价于派发文字的 `factsUnchanged>0, factsSuperseded=0`——采集器自己的 console 摘要不转发 `factsUnchanged` 字段，见脚本自己的注释）与 `list_conflicts` 无 open；(c) 聊天"哪个服务依赖哪个"——`deploy/fake-llm/server.mjs` 新增 `entryDependencyChatScenario`（search→traverse→get_object 三跳真实工具链，落在 `kernel depends_on postgres` 这条 `docker-compose.yml` 自身就有的真实关系上），脚本另外直接 `traverse`+`explain` 验证 `explain` 溯源到采集器 Source（不解析聊天记录里的工具结果）；(d) 直接对内核镜像（不经 caddy）调三个 Explorer 端点；(e) `issue_handle{sessionKind:'interactive'}` 铸 Handle 后走 `/mcp` 的 `tools/list`/`tools/call(traverse)`，无 Handle 401（对照已安装的 `@modelcontextprotocol/sdk` 源码与一次本地真实 SDK server 验证过 driver 的 JSON-RPC 请求形状）。运行手册 `docs/runbooks/host-accept-s3.md`。本机无 Docker，脚本本身未端到端跑过；`entryDependencyChatScenario` 已用 `deploy/accept-s2/fake-llm-scenario-selftest.mjs` 新增的 6 个用例对真实运行的 fake-llm 验证过。
 
 ### S3.10 运行手册与测试策略文档
 - 目标：换人能维护。

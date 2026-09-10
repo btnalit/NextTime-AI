@@ -17,26 +17,25 @@
 #
 # Toolset (task brief: "uses only docker compose + curl + node *inside the kernel image*" — the
 # host has neither node nor corepack, docs/runbooks/host-worker-runtime.md §10): every JSON-RPC
-# interaction with the kernel's chat WebSocket runs through a small driver script
-# (WS_CLIENT_JS below), mounted read-only into a throwaway kernel-image container per invocation
-# (`docker compose run --rm --no-deps -T -v <tmpfile>:/tmp/ws-client.mjs:ro kernel node
-# /tmp/ws-client.mjs <subcommand> ...`) rather than passed inline via `node -e "..."` — the script
-# is long enough (event handling, promises, several subcommands) that inlining it as a single -e
-# argument would be unreadable and risk shell-quoting mistakes; a few short one-off calls
-# (worker-supervisor status/stop) use `node -e "..."` directly instead, matching
+# interaction with the kernel's chat WebSocket runs through the shared driver, deploy/accept/
+# driver.mjs, bind-mounted read-only into a throwaway kernel-image container per invocation by
+# the shared `run_driver` helper in scripts/lib/ (see that file's own header comment for the exact
+# `docker compose run` invocation — no temp file) rather than passed inline via `node -e "..."` —
+# the script is long enough (event
+# handling, promises, several subcommands) that inlining it as a single -e argument would be
+# unreadable and risk shell-quoting mistakes; a few short one-off calls (worker-supervisor
+# status/stop) use `node -e "..."` directly instead, matching
 # docs/runbooks/host-worker-runtime.md's own established pattern. Every such node process talks to
 # the kernel's `/ws` and `/api/cap/*` surface directly inside the `control` network
 # (ws://kernel:8080/ws) rather than through caddy's self-signed TLS — except the `explain` step,
 # which the task brief explicitly routes through caddy with `curl -sk` (exercising the one
-# host-reachable path, caddy's published port, for that specific assertion) — see the ws-client.mjs
+# host-reachable path, caddy's published port, for that specific assertion) — see driver.mjs's own
 # header comment and the explain_step() comment below for why each transport was chosen.
 #
 # Confidentiality (repo is public): API keys are held only in shell variables and container env
 # vars for this process's lifetime, never written to a file, and only ever printed via redact()
-# (first 6 characters). The one temp file this script creates (the mounted ws-client.mjs driver)
-# never contains a key — keys are passed to it as CLI arguments at each `docker compose run`
-# invocation, not baked into the file — and is removed by the EXIT trap regardless of how the
-# script terminates.
+# (first 6 characters). Keys are passed to the driver as CLI arguments at each `docker compose run`
+# invocation, never baked into a file.
 
 set -u
 
@@ -69,273 +68,8 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
   exit 1
 fi
 
-# --------------------------------------------------------------------------------------------
-# PASS/FAIL/SKIP helpers — abort the whole script on the first FAIL (task brief: "each printing
-# PASS <name> / FAIL <name> <detail> and aborting on FAIL").
-# --------------------------------------------------------------------------------------------
-
-pass() {
-  printf 'PASS %s %s\n' "$1" "$2"
-}
-
-fail() {
-  printf 'FAIL %s %s\n' "$1" "$2" >&2
-  exit 1
-}
-
-skip() {
-  printf 'SKIP %s\n' "$1"
-}
-
-# First 6 characters of a secret, for logging without exposing it (task brief: "never prints API
-# keys or Handles beyond their first 6 characters").
-redact() {
-  prefix=$(printf '%s' "$1" | cut -c1-6)
-  printf '%s...(redacted)' "$prefix"
-}
-
-# Extracts the value of the last `KEY=...` line in $1's output (blob of stdout+stderr text).
-parse_kv() {
-  printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -n 1
-}
-
-# --------------------------------------------------------------------------------------------
-# ws-client.mjs — mounted read-only into a throwaway kernel-image container per call. See the
-# file header above for why this exists as a mounted script instead of an inline `node -e`.
-# --------------------------------------------------------------------------------------------
-
-WS_CLIENT_HOST_PATH=$(mktemp /tmp/nt-accept-s1-ws-client.XXXXXX.mjs) || {
-  echo "accept_s1: mktemp failed" >&2
-  exit 1
-}
-# mktemp defaults to mode 0600 (owner-only) — the kernel image's own container process runs as a
-# non-root uid (10001, packages/kernel/Dockerfile) that will not generally match whatever uid runs
-# this script on the host, so the bind-mounted file needs to be world-readable or the container
-# gets EACCES trying to read it. Contains no secret (see file header "Confidentiality").
-chmod 644 "$WS_CLIENT_HOST_PATH"
-
-cleanup_tmp() {
-  rm -f "$WS_CLIENT_HOST_PATH"
-}
-trap cleanup_tmp EXIT INT TERM
-
-cat >"$WS_CLIENT_HOST_PATH" <<'WS_CLIENT_JS'
-// ws-client.mjs — minimal JSON-RPC/WebSocket driver for scripts/accept_s1.sh (S1.10 design doc
-// §9.4 chat WS protocol). Talks to the kernel's own /ws endpoint directly inside the `control`
-// network (ws://kernel:8080/ws), not through caddy: this avoids a self-signed-TLS dance inside a
-// throwaway container for what is otherwise a plain internal JSON-RPC session — caddy's reverse
-// proxy path is separately exercised by accept_s1.sh's explain_step (curl -sk through caddy, per
-// the task brief). Uses Node's built-in global `WebSocket` (stable, no flag needed, node:24).
-//
-// Every subcommand prints its result as `KEY=value` lines on stdout — never JSON, since the
-// calling POSIX shell has no JSON parser available (the host has no node/corepack either) — and
-// exits 0 on success. Any thrown error prints `ERROR=<message>` and exits 1.
-
-const WS_URL = 'ws://kernel:8080/ws';
-const RPC_TIMEOUT_MS = 30000;
-
-function connect(url) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
-    ws.addEventListener('open', () => resolve(ws));
-    ws.addEventListener('error', () => reject(new Error(`ws connect failed: ${url}`)));
-  });
-}
-
-function idCounter() {
-  let n = 0;
-  return () => {
-    n += 1;
-    return n;
-  };
-}
-
-/** One JSON-RPC request/response pair over an already-open socket (§9.4). Ignores push
- *  notifications (frames with no `id`) and replies for any other in-flight id — several `call()`s
- *  and one `onPush()` listener can coexist on the same socket. */
-function call(ws, id, method, params) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.removeEventListener('message', onMessage);
-      reject(new Error(`rpc timeout: ${method}`));
-    }, RPC_TIMEOUT_MS);
-    function onMessage(ev) {
-      const raw = typeof ev.data === 'string' ? ev.data : String(ev.data);
-      let msg;
-      try {
-        msg = JSON.parse(raw);
-      } catch {
-        return;
-      }
-      if (msg.id !== id) return;
-      clearTimeout(timer);
-      ws.removeEventListener('message', onMessage);
-      if (msg.error) {
-        reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
-      } else {
-        resolve(msg.result);
-      }
-    }
-    ws.addEventListener('message', onMessage);
-    ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }));
-  });
-}
-
-/** Registers a listener for every push notification (a frame with no `id` — §9.4
- *  chat.message/chat.stream/chat.metadata) for the socket's lifetime. */
-function onPush(ws, handler) {
-  ws.addEventListener('message', (ev) => {
-    const raw = typeof ev.data === 'string' ? ev.data : String(ev.data);
-    let msg;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (msg.id !== undefined) return; // request/response frame, not a push
-    if (typeof msg.method === 'string') handler(msg);
-  });
-}
-
-function print(fields) {
-  for (const [k, v] of Object.entries(fields)) console.log(`${k}=${v}`);
-}
-
-/**
- * authenticate -> (new_chat, if chatId omitted) -> subscribe_chat -> send_chat_message(text) ->
- * wait for that Turn's chat.metadata (turnStatus) or timeoutMs, whichever first -> get_chat_history.
- * Covers both "first message on a fresh chat" (chatId omitted) and "another message on an
- * existing chat" (chatId given — the kill-and-continue step's second message).
- */
-async function cmdSendAndWait(args) {
-  const [token, chatIdArg, text, timeoutMsArg] = args;
-  const timeoutMs = Number(timeoutMsArg || 120000);
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
-
-  let chatId = chatIdArg;
-  if (!chatId) {
-    const chat = await call(ws, nextId(), 'new_chat', {});
-    chatId = chat.id;
-  }
-
-  await call(ws, nextId(), 'subscribe_chat', { chatId, startAfter: '0' });
-
-  let turnId;
-  let turnStatus;
-  let echoSeen = false;
-  const settled = new Promise((resolve) => {
-    onPush(ws, (msg) => {
-      if (msg.method === 'chat.metadata' && msg.params?.chatId === chatId) {
-        const md = msg.params.metadata ?? {};
-        if (turnId && md.turnId === turnId && md.turnStatus) {
-          turnStatus = md.turnStatus;
-          resolve();
-        }
-      }
-      if (msg.method === 'chat.message' && msg.params?.chatId === chatId) {
-        const m = msg.params.message ?? {};
-        if (m.role === 'assistant' && typeof m.text === 'string' && m.text.includes('echo:')) {
-          echoSeen = true;
-        }
-      }
-    });
-  });
-
-  const sendResult = await call(ws, nextId(), 'send_chat_message', { chatId, text });
-  turnId = sendResult.turnId;
-
-  await Promise.race([
-    settled,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('turn did not settle before timeout')), timeoutMs),
-    ),
-  ]);
-
-  const history = await call(ws, nextId(), 'get_chat_history', { chatId });
-
-  print({
-    CHAT_ID: chatId,
-    TURN_ID: turnId,
-    TURN_STATUS: turnStatus,
-    ECHO_SEEN: echoSeen ? 1 : 0,
-    HISTORY_COUNT: history.items.length,
-  });
-  ws.close();
-}
-
-/** authenticate -> send_chat_message(text) -> print immediately, without waiting for the Turn to
- *  settle. Used by the egress step: the caller runs a container-internal curl right after this
- *  returns, aiming to overlap it with the Turn actually running. */
-async function cmdSendOnly(args) {
-  const [token, chatId, text] = args;
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
-  const sendResult = await call(ws, nextId(), 'send_chat_message', { chatId, text });
-  print({ CHAT_ID: chatId, TURN_ID: sendResult.turnId });
-  ws.close();
-}
-
-/** Isolation check (design doc §14 "隔离"): authenticate as a second principal, call
- *  get_chat_history on a chatId that belongs to someone else (expect a JSON-RPC error — -32004 =
- *  WS_ERROR_CODES.NOT_FOUND, interfaces/ws/rpc.ts), and list_chats (expect it not to include that
- *  chatId). */
-async function cmdIsolationCheck(args) {
-  const [token, otherChatId] = args;
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
-
-  let historyErrorCode = 'none';
-  try {
-    await call(ws, nextId(), 'get_chat_history', { chatId: otherChatId });
-  } catch (err) {
-    historyErrorCode = String(err?.code ?? 'unknown');
-  }
-
-  const chats = await call(ws, nextId(), 'list_chats', {});
-  const containsOther =
-    Array.isArray(chats.items) && chats.items.some((c) => c.id === otherChatId) ? 1 : 0;
-
-  print({ HISTORY_ERROR_CODE: historyErrorCode, LIST_CONTAINS_OTHER: containsOther });
-  ws.close();
-}
-
-const COMMANDS = {
-  'send-and-wait': cmdSendAndWait,
-  'send-only': cmdSendOnly,
-  'isolation-check': cmdIsolationCheck,
-};
-
-async function main() {
-  const [, , cmd, ...rest] = process.argv;
-  const fn = COMMANDS[cmd];
-  if (!fn) throw new Error(`unknown subcommand: ${cmd}`);
-  await fn(rest);
-}
-
-// Flush stdout before exiting: inside a container stdout is not a synchronous pipe, and
-// process.exit() right after a large console.log drops the tail of the output (accept_s3's
-// explain step lost its EXTRACTED= line that way). write('', cb) fires only after every
-// earlier chunk has been flushed.
-main()
-  .then(() => process.stdout.write('', () => process.exit(0)))
-  .catch((err) => {
-    console.log(`ERROR=${(err && err.message) || String(err)}`);
-    process.stdout.write('', () => process.exit(1));
-  });
-WS_CLIENT_JS
-
-# Runs one ws-client.mjs subcommand in a throwaway kernel-image container, on the control network,
-# with the driver script mounted read-only. Combines stdout+stderr into one blob for parse_kv to
-# pick KEY=value lines out of (an ERROR= line, an ExperimentalWarning, or Fastify/compose noise on
-# stderr are all harmless to a caller that only greps for specific keys).
-compose_run_ws() {
-  docker compose run --rm --no-deps -T -v "$WS_CLIENT_HOST_PATH:/tmp/ws-client.mjs:ro" kernel \
-    node /tmp/ws-client.mjs "$@" </dev/null 2>&1
-}
+. "$(dirname "$0")/lib/accept-common.sh"
+require_driver
 
 # GET /resident/<principalId> via the kernel image's own fetch() against worker-supervisor
 # (control-network-only — no host port; docs/runbooks/host-worker-runtime.md's own established
@@ -508,7 +242,7 @@ entry_worker_definition_step() {
 }
 
 chat_step() {
-  out=$(compose_run_ws send-and-wait "$ALICE_KEY" "" "hello from alice" 120000)
+  out=$(run_driver send-and-wait "$ALICE_KEY" "" "hello from alice" 120000 strict)
   if printf '%s\n' "$out" | grep -q '^ERROR='; then
     fail "chat-alice" "$(parse_kv "$out" ERROR)"
   fi
@@ -523,7 +257,7 @@ chat_step() {
   [ "$history_count" = "2" ] || fail "chat-alice" "chat history has $history_count message(s), expected 2: $out"
   pass "chat-alice" "chat=$ALICE_CHAT_ID turn=$ALICE_TURN1_ID status=$status history=$history_count"
 
-  out=$(compose_run_ws send-and-wait "$BOB_KEY" "" "hello from bob" 120000)
+  out=$(run_driver send-and-wait "$BOB_KEY" "" "hello from bob" 120000 strict)
   if printf '%s\n' "$out" | grep -q '^ERROR='; then
     fail "chat-bob" "$(parse_kv "$out" ERROR)"
   fi
@@ -539,7 +273,7 @@ chat_step() {
 }
 
 isolation_step() {
-  out=$(compose_run_ws isolation-check "$BOB_KEY" "$ALICE_CHAT_ID")
+  out=$(run_driver isolation-check "$BOB_KEY" "$ALICE_CHAT_ID")
   if printf '%s\n' "$out" | grep -q '^ERROR='; then
     fail "isolation" "$(parse_kv "$out" ERROR)"
   fi
@@ -560,7 +294,7 @@ kill_and_continue_step() {
   fi
   pass "kill-alice-entry" "killed $alice_container"
 
-  out=$(compose_run_ws send-and-wait "$ALICE_KEY" "$ALICE_CHAT_ID" "hello again from alice" 120000)
+  out=$(run_driver send-and-wait "$ALICE_KEY" "$ALICE_CHAT_ID" "hello again from alice" 120000 strict)
   if printf '%s\n' "$out" | grep -q '^ERROR='; then
     fail "continue-alice" "$(parse_kv "$out" ERROR)"
   fi
@@ -615,7 +349,7 @@ egress_step() {
   # attribution fallback (a short grace window onto the most recently-ended Turn — see
   # packages/kernel/src/application/host-bridge/egress-observations.ts) makes the exact timing
   # non-critical either way.
-  send_out=$(compose_run_ws send-only "$ALICE_KEY" "$ALICE_CHAT_ID" "egress check $(date +%s)")
+  send_out=$(run_driver send-only "$ALICE_KEY" "$ALICE_CHAT_ID" "egress check $(date +%s)")
   if printf '%s\n' "$send_out" | grep -q '^ERROR='; then
     fail "egress-turn-start" "$(parse_kv "$send_out" ERROR)"
   fi

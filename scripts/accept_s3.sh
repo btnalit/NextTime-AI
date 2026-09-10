@@ -5,8 +5,8 @@
 # scripts/accept_s1.sh/accept_s2.sh (this script's own structural template): every docker compose
 # run/exec carries </dev/null, every kernel interaction runs through one mounted driver script
 # inside a throwaway kernel-image container, secrets are held only in shell variables and printed
-# only via redact(), an EXIT trap cleans up every temp file regardless of how the script
-# terminates, and PASS/FAIL lines abort on the first real defect.
+# only via redact(), no temp file is ever written (the driver is a checked-in file mounted by
+# path), and PASS/FAIL lines abort on the first real defect.
 #
 # Usage:
 #   sh scripts/accept_s3.sh [--keep]
@@ -43,22 +43,21 @@
 # lineage on its very next scheduled run.
 #
 # Toolset: identical rationale to accept_s1.sh/accept_s2.sh's own header comments — every kernel
-# capability call and every Explorer/MCP HTTP call runs through one mounted driver script
-# (DRIVER_JS below) inside a throwaway kernel-image container (`docker compose run --rm --no-deps
-# -T kernel node /tmp/driver.mjs <subcommand> ...`), talking to the real running kernel over the
-# `control` network (`http://kernel:8080/...`) — never through caddy (docs/development-tasks.md
-# §S3.9 (d) is explicit: "call the kernel directly from the kernel image like other steps, not via
-# caddy"). No `jq` dependency — every JSON field this script needs is extracted with a real
-# `JS.parse()`/JS expression evaluated inside the same driver.mjs invocation that made the call
-# (verbatim copy of accept_s2.sh's own driver.mjs `cap`/`send-and-wait`/`get-history`
-# subcommands — see that script's own header comment for the design rationale — plus two new
-# subcommands this script needs: `explorer` and `mcp`, same output-line conventions).
+# capability call and every Explorer/MCP HTTP call runs through the shared driver,
+# deploy/accept/driver.mjs, bind-mounted read-only into a throwaway kernel-image container by
+# the shared `run_driver` helper in scripts/lib/ (see that file's own header comment for the exact
+# `docker compose run` invocation — no temp file), talking to the real running kernel over the
+# `control` network
+# (`http://kernel:8080/...`) — never through caddy (docs/development-tasks.md §S3.9 (d) is
+# explicit: "call the kernel directly from the kernel image like other steps, not via caddy"). No
+# `jq` dependency — every JSON field this script needs is extracted with a real `JS.parse()`/JS
+# expression evaluated inside the same driver.mjs invocation that made the call — see driver.mjs's
+# own header comment for the `cap`/`send-and-wait`/`get-history`/`explorer`/`mcp` subcommand
+# contracts.
 #
 # Confidentiality (repo is public): every generated secret (the collector's service-Handle token,
 # API keys) is held only in shell variables/files under ${NEXTTIME_DATA} for this process's
-# lifetime and only ever printed via redact(); the one temp file this script creates in the repo
-# checkout itself (the mounted driver.mjs) never contains a secret and is removed by the EXIT trap
-# regardless of how the script terminates.
+# lifetime and only ever printed via redact().
 
 set -u
 
@@ -91,327 +90,8 @@ if [ -z "${NEXTTIME_DATA:-}" ]; then
   exit 1
 fi
 
-# --------------------------------------------------------------------------------------------
-# PASS/FAIL helpers — abort the whole script on the first FAIL (a real defect), same contract
-# accept_s1.sh uses.
-# --------------------------------------------------------------------------------------------
-
-pass() {
-  printf 'PASS %s %s\n' "$1" "$2"
-}
-
-fail() {
-  printf 'FAIL %s %s\n' "$1" "$2" >&2
-  exit 1
-}
-
-redact() {
-  prefix=$(printf '%s' "$1" | cut -c1-6)
-  printf '%s...(redacted)' "$prefix"
-}
-
-parse_kv() {
-  printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -n 1
-}
-
-# --------------------------------------------------------------------------------------------
-# driver.mjs — mounted read-only into a throwaway kernel-image container per call (see file
-# header above for why). Four subcommands: `cap`/`send-and-wait`/`get-history` are verbatim
-# copies of accept_s2.sh's own driver.mjs (see that script's own header comment for their exact
-# contracts); `explorer` and `mcp` are new for this script.
-#   explorer <apiKey> <path>
-#     GET http://kernel:8080<path> with `X-API-Key: <apiKey>` (docs/development-tasks.md §S3.9
-#     (d): call the kernel directly, not via caddy — the Explorer HTTP routes themselves
-#     (packages/kernel/src/interfaces/explorer-contract/) do X-API-Key auth exactly like the human
-#     capability channel, just outside the /api/cap/<name> envelope). Prints HTTP_STATUS=/BODY=,
-#     same convention as `cap`.
-#   mcp <handleToken> <method> <paramsJson> [extractExpr]
-#     POST http://kernel:8080/mcp — one JSON-RPC 2.0 request (packages/kernel/src/interfaces/mcp/
-#     index.ts, StreamableHTTPServerTransport in stateless JSON-response mode). `Accept:
-#     application/json, text/event-stream` is required by the SDK's own webStandardStreamableHttp
-#     transport (406 otherwise); a stateless server with no `sessionIdGenerator` configured
-#     (this kernel's own setup) skips both its session-id check and its "must send `initialize`
-#     first" check entirely (`validateSession` returns immediately when `sessionIdGenerator ===
-#     undefined` — verified by reading the installed SDK's own dist source, not assumed), so a
-#     bare `tools/list`/`tools/call` request needs no prior handshake call. `enableJsonResponse:
-#     true` server-side means the HTTP response is a single `application/json` body (never SSE)
-#     for a one-request call, which every call this script makes is — prints HTTP_STATUS=/BODY=,
-#     same convention as `cap`. Empty `handleToken` omits the Authorization header entirely (the
-#     no-Handle → 401 check).
-WS_CLIENT_HOST_PATH=$(mktemp /tmp/nt-accept-s3-driver.XXXXXX.mjs) || {
-  echo "accept_s3: mktemp failed" >&2
-  exit 1
-}
-# mktemp defaults to mode 0600 — the kernel image's own container process runs as a non-root uid
-# that will not generally match whatever uid runs this script on the host, so the bind-mounted
-# file needs to be world-readable (same reasoning as accept_s1.sh's own WS_CLIENT_HOST_PATH
-# comment). Contains no secret — see this file's "Confidentiality" header comment.
-chmod 644 "$WS_CLIENT_HOST_PATH"
-
-cleanup_tmp() {
-  rm -f "$WS_CLIENT_HOST_PATH"
-}
-trap cleanup_tmp EXIT INT TERM
-
-cat >"$WS_CLIENT_HOST_PATH" <<'DRIVER_JS'
-// driver.mjs — S3.9 acceptance driver (scripts/accept_s3.sh). See that script's own header
-// comment for the `cap`/`send-and-wait`/`get-history`/`explorer`/`mcp` subcommand contracts.
-
-const KERNEL_HTTP = 'http://kernel:8080';
-const WS_URL = 'ws://kernel:8080/ws';
-const RPC_TIMEOUT_MS = 30000;
-
-function connect(url) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
-    ws.addEventListener('open', () => resolve(ws));
-    ws.addEventListener('error', () => reject(new Error(`ws connect failed: ${url}`)));
-  });
-}
-
-function idCounter() {
-  let n = 0;
-  return () => {
-    n += 1;
-    return n;
-  };
-}
-
-function call(ws, id, method, params) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.removeEventListener('message', onMessage);
-      reject(new Error(`rpc timeout: ${method}`));
-    }, RPC_TIMEOUT_MS);
-    function onMessage(ev) {
-      const raw = typeof ev.data === 'string' ? ev.data : String(ev.data);
-      let msg;
-      try {
-        msg = JSON.parse(raw);
-      } catch {
-        return;
-      }
-      if (msg.id !== id) return;
-      clearTimeout(timer);
-      ws.removeEventListener('message', onMessage);
-      if (msg.error) {
-        reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
-      } else {
-        resolve(msg.result);
-      }
-    }
-    ws.addEventListener('message', onMessage);
-    ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }));
-  });
-}
-
-function onPush(ws, handler) {
-  ws.addEventListener('message', (ev) => {
-    const raw = typeof ev.data === 'string' ? ev.data : String(ev.data);
-    let msg;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (msg.id !== undefined) return;
-    if (typeof msg.method === 'string') handler(msg);
-  });
-}
-
-function print(fields) {
-  for (const [k, v] of Object.entries(fields)) console.log(`${k}=${v}`);
-}
-
-function printExtraction(parsed, expr) {
-  if (!expr) return;
-  try {
-    const d = parsed;
-    // eslint-disable-next-line no-eval -- expr is authored by this script's own caller, never
-    // untrusted input; see driver.mjs's own header comment.
-    const v = eval(expr);
-    if (v === undefined || v === null) {
-      console.log('EXTRACTED=');
-    } else {
-      console.log(`EXTRACTED=${typeof v === 'string' ? v : JSON.stringify(v)}`);
-    }
-  } catch (err) {
-    console.log('EXTRACTED=');
-    console.log(`EXTRACT_ERROR=${(err && err.message) || String(err)}`);
-  }
-}
-
-async function cmdCap(args) {
-  const [token, capabilityName, paramsJson, extractExpr] = args;
-  const res = await fetch(`${KERNEL_HTTP}/api/cap/${capabilityName}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: paramsJson && paramsJson.length > 0 ? paramsJson : '{}',
-  });
-  const text = await res.text();
-  console.log(`HTTP_STATUS=${res.status}`);
-  console.log(`BODY=${text}`);
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = undefined;
-  }
-  printExtraction(parsed, extractExpr);
-}
-
-async function cmdSendAndWait(args) {
-  const [token, chatIdArg, text, timeoutMsArg] = args;
-  const timeoutMs = Number(timeoutMsArg || 120000);
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
-
-  let chatId = chatIdArg;
-  if (!chatId) {
-    const chat = await call(ws, nextId(), 'new_chat', {});
-    chatId = chat.id;
-  }
-
-  await call(ws, nextId(), 'subscribe_chat', { chatId, startAfter: '0' });
-
-  let turnId;
-  let turnStatus;
-  let echoSeen = false;
-  const settled = new Promise((resolve) => {
-    onPush(ws, (msg) => {
-      if (msg.method === 'chat.metadata' && msg.params?.chatId === chatId) {
-        const md = msg.params.metadata ?? {};
-        if (turnId && md.turnId === turnId && md.turnStatus) {
-          turnStatus = md.turnStatus;
-          resolve();
-        }
-      }
-      if (msg.method === 'chat.message' && msg.params?.chatId === chatId) {
-        const m = msg.params.message ?? {};
-        if (m.role === 'assistant' && typeof m.text === 'string' && m.text.includes('echo:')) {
-          echoSeen = true;
-        }
-      }
-    });
-  });
-
-  const sendResult = await call(ws, nextId(), 'send_chat_message', { chatId, text });
-  turnId = sendResult.turnId;
-
-  await Promise.race([
-    settled,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('turn did not settle before timeout')), timeoutMs),
-    ),
-  ]).catch(() => {
-    // Timeout is reported via TURN_STATUS=(empty), not a thrown ERROR= — same convention
-    // accept_s2.sh's own driver.mjs already establishes.
-  });
-
-  const history = await call(ws, nextId(), 'get_chat_history', { chatId });
-
-  print({
-    CHAT_ID: chatId,
-    TURN_ID: turnId,
-    TURN_STATUS: turnStatus ?? '',
-    ECHO_SEEN: echoSeen ? 1 : 0,
-    HISTORY_COUNT: history.items.length,
-  });
-  ws.close();
-}
-
-async function cmdGetHistory(args) {
-  const [token, chatId, extractExpr] = args;
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
-  const history = await call(ws, nextId(), 'get_chat_history', { chatId });
-  console.log(`RESULT=${JSON.stringify(history.items)}`);
-  printExtraction(history.items, extractExpr);
-  ws.close();
-}
-
-async function cmdExplorer(args) {
-  const [apiKey, path] = args;
-  const res = await fetch(`${KERNEL_HTTP}${path}`, {
-    headers: apiKey ? { 'x-api-key': apiKey } : {},
-  });
-  const text = await res.text();
-  console.log(`HTTP_STATUS=${res.status}`);
-  console.log(`BODY=${text}`);
-}
-
-async function cmdMcp(args) {
-  const [token, method, paramsJson, extractExpr] = args;
-  const res = await fetch(`${KERNEL_HTTP}/mcp`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method,
-      params: paramsJson && paramsJson.length > 0 ? JSON.parse(paramsJson) : {},
-    }),
-  });
-  const text = await res.text();
-  console.log(`HTTP_STATUS=${res.status}`);
-  console.log(`BODY=${text}`);
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = undefined;
-  }
-  printExtraction(parsed, extractExpr);
-}
-
-const COMMANDS = {
-  cap: cmdCap,
-  'send-and-wait': cmdSendAndWait,
-  'get-history': cmdGetHistory,
-  explorer: cmdExplorer,
-  mcp: cmdMcp,
-};
-
-async function main() {
-  const [, , cmd, ...rest] = process.argv;
-  const fn = COMMANDS[cmd];
-  if (!fn) throw new Error(`unknown subcommand: ${cmd}`);
-  await fn(rest);
-}
-
-// Flush stdout before exiting: inside a container stdout is not a synchronous pipe, and
-// process.exit() right after a large console.log (explain on a collector Fact is >400KB)
-// drops the tail — the EXTRACTED= line — of the output. write('', cb) fires only after
-// every earlier chunk has been flushed.
-main()
-  .then(() => process.stdout.write('', () => process.exit(0)))
-  .catch((err) => {
-    console.log(`ERROR=${(err && err.message) || String(err)}`);
-    process.stdout.write('', () => process.exit(1));
-  });
-DRIVER_JS
-
-# Runs one driver.mjs subcommand in a throwaway kernel-image container, on the control network,
-# with the driver script mounted read-only. Combines stdout+stderr into one blob (same convention
-# as accept_s1.sh's compose_run_ws).
-run_driver() {
-  docker compose run --rm --no-deps -T -v "$WS_CLIENT_HOST_PATH:/tmp/driver.mjs:ro" kernel \
-    node /tmp/driver.mjs "$@" </dev/null 2>&1
-}
-
-# One capability call. Prints HTTP_STATUS=/BODY=/EXTRACTED= — callers extract with parse_kv.
-cap() {
-  run_driver cap "$1" "$2" "$3" "${4:-}"
-}
+. "$(dirname "$0")/lib/accept-common.sh"
+require_driver
 
 # One Explorer HTTP call (X-API-Key). Prints HTTP_STATUS=/BODY=.
 explorer() {
