@@ -5,11 +5,18 @@
 # ./.env from cwd — same convention as scripts/restore.sh).
 #
 # Usage:
-#   sh scripts/accept_s1.sh [--keep]
+#   sh scripts/accept_s1.sh [--keep] [--lite]
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s1.sh' </dev/null
 #
 # --keep skips the cleanup step (leaves alice/bob's entry containers running for inspection).
 # --keep does not skip the fake-provider restore below — the EXIT trap always runs.
+# --lite (W6, CI): runs the subset that needs no entry container — bootstrap, WorkerDefinition
+# v2 via caddy, two chats, isolation, a second turn on the same chat, explain — against a stack
+# of only postgres/kernel/caddy with the kernel's own in-process AGENT_RUNTIME=fake answering
+# the turns (.github/workflows/e2e.yml brings exactly that stack up). No provider switch (the
+# CI data dir is already on the fake provider file and llm-proxy is not even running), no kill /
+# egress / env / cleanup steps (there is no container to kill or inspect). The full script on the
+# target host remains the S1 acceptance of record; --lite is the regression net in CI.
 #
 # The script switches llm-proxy / worker-supervisor / fake-llm to the fake provider itself via
 # deploy/accept/docker-compose.fake.yml and restores production wiring from an EXIT trap, so
@@ -46,9 +53,11 @@
 set -u
 
 KEEP=0
+LITE=0
 for arg in "$@"; do
   case "$arg" in
     --keep) KEEP=1 ;;
+    --lite) LITE=1 ;;
     *)
       echo "accept_s1: unknown argument: $arg" >&2
       exit 1
@@ -80,10 +89,14 @@ require_driver
 # Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
 # whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
 # to run this script), which would otherwise kill the shell without running the EXIT trap.
-trap accept_provider_restore EXIT
-trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
-accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
-pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+if [ "$LITE" -eq 0 ]; then
+  trap accept_provider_restore EXIT
+  trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
+  accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
+  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+else
+  skip "preflight-fake-provider" "--lite: the stack is already on the fake provider / fake agent runtime"
+fi
 
 # GET /resident/<principalId> via the kernel image's own fetch() against worker-supervisor
 # (control-network-only — no host port; docs/runbooks/host-worker-runtime.md's own established
@@ -123,7 +136,11 @@ fetch('http://worker-supervisor:8081/resident/stop', {
 # --------------------------------------------------------------------------------------------
 
 preflight_step() {
-  required_services="postgres kernel caddy llm-proxy egress-proxy worker-supervisor agent-host fake-llm"
+  if [ "$LITE" -eq 1 ]; then
+    required_services="postgres kernel caddy"
+  else
+    required_services="postgres kernel caddy llm-proxy egress-proxy worker-supervisor agent-host fake-llm"
+  fi
   running=$(docker compose --profile test ps --status running --services 2>/dev/null)
   if [ -z "$running" ]; then
     fail "preflight-services" "docker compose --profile test ps returned nothing — is the stack up?"
@@ -294,10 +311,14 @@ isolation_step() {
 
 kill_and_continue_step() {
   alice_container="nexttime-entry-$ALICE_PRINCIPAL_ID"
-  if ! docker kill "$alice_container" >/dev/null 2>&1; then
-    fail "kill-alice-entry" "docker kill $alice_container failed (was it running?)"
+  if [ "$LITE" -eq 1 ]; then
+    skip "kill-alice-entry" "--lite: no entry container to kill; the second turn below still runs"
+  else
+    if ! docker kill "$alice_container" >/dev/null 2>&1; then
+      fail "kill-alice-entry" "docker kill $alice_container failed (was it running?)"
+    fi
+    pass "kill-alice-entry" "killed $alice_container"
   fi
-  pass "kill-alice-entry" "killed $alice_container"
 
   out=$(run_driver send-and-wait "$ALICE_KEY" "$ALICE_CHAT_ID" "hello again from alice" 120000 strict)
   if printf '%s\n' "$out" | grep -q '^ERROR='; then
@@ -312,6 +333,10 @@ kill_and_continue_step() {
   [ "$history_count" = "4" ] || fail "continue-alice" "chat history has $history_count message(s), expected 4: $out"
   pass "continue-alice" "second turn=$ALICE_TURN2_ID status=$status history=$history_count"
 
+  if [ "$LITE" -eq 1 ]; then
+    skip "continue-restarts" "--lite: no worker-supervisor in the stack"
+    return
+  fi
   out=$(resident_status "$ALICE_PRINCIPAL_ID")
   restarts=$(parse_kv "$out" RESTARTS)
   case "$restarts" in
@@ -346,6 +371,10 @@ explain_step() {
 }
 
 egress_step() {
+  if [ "$LITE" -eq 1 ]; then
+    skip "egress" "--lite: no entry container / egress-proxy in the stack"
+    return
+  fi
   alice_container="nexttime-entry-$ALICE_PRINCIPAL_ID"
 
   # Fire a fresh Turn without waiting for it, then immediately exercise egress from inside the
@@ -402,6 +431,10 @@ egress_step() {
 }
 
 env_step() {
+  if [ "$LITE" -eq 1 ]; then
+    skip "env" "--lite: no entry container to inspect"
+    return
+  fi
   alice_container="nexttime-entry-$ALICE_PRINCIPAL_ID"
   env_dump=$(docker exec "$alice_container" env)
   rc=$?
@@ -423,6 +456,10 @@ env_step() {
 }
 
 cleanup_step() {
+  if [ "$LITE" -eq 1 ]; then
+    skip "cleanup" "--lite: nothing to stop; workspace retained: $WORKSPACE_ID"
+    return
+  fi
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving alice/bob entry containers running"
     return
