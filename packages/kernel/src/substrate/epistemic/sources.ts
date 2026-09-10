@@ -70,10 +70,11 @@ export async function registerPrivateSource(
 }
 
 /** Registers a Source with an explicit visibility (W5.5, STATUS leftover 16): `postWorkerResult`
- *  needs a workspace-visible per-run Source when no session transcript is attached, so that fixing
- *  origin resolution does not also flip those runs' Facts to private (`links_visibility` derives
- *  Fact visibility from the Sources on the Activity, migrations/core/0013). Every other caller
- *  keeps using `registerPrivateSource` above. */
+ *  records every WorkerRun as a workspace-visible `worker_run` Source so the run's Facts are
+ *  workspace knowledge (`links_visibility` derives Fact visibility from the Sources observed on
+ *  the Activity, migrations/core/0013); the transcript, when present, goes through
+ *  `registerPrivateSource` above on its own Activity. Every other caller keeps using
+ *  `registerPrivateSource`. */
 export async function registerSource(
   client: PoolClient,
   workspaceId: string,

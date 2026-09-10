@@ -24,8 +24,8 @@ import type { PoolClient } from 'pg';
  *
  * **Origin, not literally always `sources.id`**: I5's design-doc wording ("写入路径按 source_id
  * 判定") assumes every Fact-producing Activity has exactly one epistemic Source attached via
- * `observations` — true for the Worker-session flow (`postWorkerResult` records a private
- * `worker_session` Source on the same Activity as `factsToAssert`) but *not* true for most other
+ * `observations` — true for the Worker-result flow (`postWorkerResult` records a workspace-visible
+ * `worker_run` Source on the same Activity as `factsToAssert`) but *not* true for most other
  * writers today: `observed-facts.ts`, `worker/procedures.ts`, `worker/skills.ts`, and
  * `meta-objects.ts` never attach an Observation to the Activity they assert Facts from at all. A
  * literal "compare `sources.id`" rule would then have **no** origin signal to compare on either

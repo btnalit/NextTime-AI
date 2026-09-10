@@ -758,6 +758,17 @@
     `private` 且对另一 principal 不可读、两个不同 principal 各自私有会话下断言相同结论时互不可见但都
     不开 Conflict）、`substrate/epistemic/conflicts.test.ts`（同 principal 异源同内容 `unchanged`，
     随后异源异内容仍正确开 Conflict）。
+  - **可见性决定（2026-09-10，PR #142）**：上一条"可见性刻意维持原样"的规则被产品决定取代——Worker
+    经结果契约写回的 Fact 默认 `workspace` 可见，不再取决于运行有没有落会话转录。`postWorkerResult`
+    现在注册两种 Source：每次运行一个 `worker_run`（`visibility: 'workspace'`，`uri` 空，metadata 带
+    `taskId` / `workerRunId` / `transcriptSourceId`），其 Observation 挂在 `worker_result` Activity 上，
+    Fact 的 `observationId` 指向它；有 `sessionJsonlPath` 时另注册一个 `worker_session`
+    Source（`private`，owner 是 on_behalf_of 人类，`uri` 是转录路径），其 Observation 挂在一个单独的
+    `worker_session` Activity 上（metadata 带 `resultActivityId` 与 `sourceId`，双向可查）。分开挂是
+    必须的：`link_visible_to_caller`（0013）只要 Fact 所在 Activity 观察到任一非本人的私有 Source 就把
+    整个 Activity 的 Fact 藏起来，转录若挂在结果 Activity 上，结果就会重新变成私有。测试同上文件：无转录
+    与有转录两种运行的 Fact 都对另一 principal 可读，转录 Source 只对 owner 可读；两个不同 principal
+    先后得出相同结论时第二次是佐证（返回同一 Fact id），不开 Conflict。
 
 ### S2.10 审批卡片与任务视图（web）
 - 交付物：`action.pending / action.updated / task.updated` 推送；卡片：标题、Markdown 描述、模拟效果、动作种类、批准 / 拒绝 / 「总是批准此类」（`set_auto_approved_action_kind`）、`await_decision` 时的阻塞样式；任务与 Worker 列表；「连接系统」页与连接卡片（`request_connection` → 填地址、凭证、种类 → 门实例；`http` / `mcp` 自动导入清单草稿并展示给 owner 发布）；审批卡片出现在**持有范围者**的对话与队列（可能不是发起者）。
