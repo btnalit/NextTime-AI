@@ -60,6 +60,9 @@ jobs:
       - name: Vocabulary guard (S3.7, docs/wire-contract-conventions.md §5)
         run: node scripts/guards/vocabulary.mjs
 
+      - name: fake-llm scenario self-test (S2.12; spawns deploy/fake-llm/server.mjs on a local port)
+        run: node deploy/accept-s2/fake-llm-scenario-selftest.mjs
+
   test:
     name: test
     runs-on: ubuntu-latest
