@@ -58,7 +58,9 @@
   从未被验证过——这正是 W7 的内容。
 - **对 Conflict 的唯一断言是「采集器跑两遍后为零」**，因此任何**压制** Conflict 的缺陷，
   存在与否验收都表现为通过（§4 第 16 项即属此类）。缺一条「异源矛盾断言 → 恰好一个 open Conflict」
-  的正向用例。
+  的正向用例。**PR #136**：`accept_s3.sh` 已加入 `collector_conflict_positive_step`，把这条正向用例
+  接了进脚本（`docs/runbooks/host-accept-s3.md` §3/§4）；本条盲区在代码层面已补，但 §2 表格 S3 那行
+  的验收证据仍是主机跑通新脚本之前的旧结果，未随此 PR 更新——里程碑状态与证据在下次主机验收前不改。
 - **v0.4.0 未在主机验收**：W5 的 #132 改了 `explain`（collector Fact 只返回喂给它的那一条 Observation）
   与 `search`（分页参数）并带迁移 0018；主机停栈中，三份验收的证据仍是 v0.3.0 的 09-09 结果。下次起栈
   按 `runbooks/host-*.md` 应用后复跑 `accept_s3.sh`，里程碑状态在那之前不改。
