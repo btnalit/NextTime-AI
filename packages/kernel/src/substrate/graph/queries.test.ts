@@ -11,6 +11,8 @@ import {
   buildStateAtFactsQuery,
   buildTraverseQuery,
   buildUpsertObjectQuery,
+  decodeSearchCursor,
+  encodeSearchCursor,
 } from './queries.js';
 import {
   DEFAULT_RECENT_FACTS_LIMIT,
@@ -72,7 +74,7 @@ describe('buildGetObjectQuery', () => {
 });
 
 describe('buildInsertFactQuery', () => {
-  it('binds all 12 params in order, including a null supersedesId for a fresh assert', () => {
+  it('binds all 13 params in order, including a null supersedesId for a fresh assert', () => {
     const q = buildInsertFactQuery('ws1', {
       linkType: 'test.rel',
       sourceObjectId: 'src1',
@@ -85,6 +87,7 @@ describe('buildInsertFactQuery', () => {
       activityId: 'act1',
       assertedBy: 'principal1',
       supersedesId: null,
+      observationId: null,
     });
     expect(q.values).toEqual([
       'ws1',
@@ -99,11 +102,12 @@ describe('buildInsertFactQuery', () => {
       'act1',
       'principal1',
       null,
+      null,
     ]);
     expect(q.text).toContain('coalesce($6::timestamptz, now())');
   });
 
-  it('carries a non-null supersedesId through for supersedeFact', () => {
+  it('carries a non-null supersedesId and observationId through for supersedeFact', () => {
     const q = buildInsertFactQuery('ws1', {
       linkType: 'test.rel',
       sourceObjectId: 'src1',
@@ -116,8 +120,10 @@ describe('buildInsertFactQuery', () => {
       activityId: 'act1',
       assertedBy: 'principal1',
       supersedesId: 'old-fact-1',
+      observationId: 'obs1',
     });
-    expect(q.values.at(-1)).toBe('old-fact-1');
+    expect(q.values.at(-1)).toBe('obs1');
+    expect(q.values.at(-2)).toBe('old-fact-1');
     expect(q.values[8]).toBe(0.9);
   });
 });
@@ -226,12 +232,59 @@ describe('buildStateAtFactsQuery', () => {
 describe('buildSearchQuery', () => {
   it('wraps the query in ILIKE wildcards and defaults the limit', () => {
     const q = buildSearchQuery('ws1', { query: 'widget' });
-    expect(q.values).toEqual(['ws1', null, '%widget%', DEFAULT_SEARCH_LIMIT]);
+    expect(q.values).toEqual(['ws1', null, '%widget%', DEFAULT_SEARCH_LIMIT, null, null]);
   });
 
   it('binds an explicit objectType and limit', () => {
     const q = buildSearchQuery('ws1', { query: 'widget', objectType: 'test.thing', limit: 10 });
-    expect(q.values).toEqual(['ws1', 'test.thing', '%widget%', 10]);
+    expect(q.values).toEqual(['ws1', 'test.thing', '%widget%', 10, null, null]);
+  });
+
+  it('with a valid cursor binds the decoded timestamp and id as values 5 and 6, and orders/filters by (updated_at, id)', () => {
+    const updatedAt = new Date('2026-01-01T00:00:00.000Z');
+    const cursor = encodeSearchCursor(updatedAt, '11111111-2222-4333-8444-555555555555');
+    const q = buildSearchQuery('ws1', { query: 'widget', cursor });
+    expect(q.values).toEqual([
+      'ws1',
+      null,
+      '%widget%',
+      DEFAULT_SEARCH_LIMIT,
+      updatedAt.toISOString(),
+      '11111111-2222-4333-8444-555555555555',
+    ]);
+    // Millisecond-truncated on the SQL side to match the cursor's JS-Date precision (see
+    // buildSearchQuery's doc comment) — a raw `updated_at` here would skip boundary rows.
+    expect(q.text).toContain(
+      "(date_trunc('milliseconds', updated_at), id) < ($5::timestamptz, $6::uuid)",
+    );
+    expect(q.text).toContain("order by date_trunc('milliseconds', updated_at) desc, id desc");
+  });
+});
+
+describe('encodeSearchCursor / decodeSearchCursor', () => {
+  it('round-trips an updatedAt/id pair', () => {
+    const updatedAt = new Date('2026-03-04T05:06:07.000Z');
+    const cursor = encodeSearchCursor(updatedAt, '0f4b6c2e-1d3a-4e5f-8a9b-0c1d2e3f4a5b');
+    expect(decodeSearchCursor(cursor)).toEqual({
+      updatedAt: updatedAt.toISOString(),
+      id: '0f4b6c2e-1d3a-4e5f-8a9b-0c1d2e3f4a5b',
+    });
+  });
+
+  it('returns null for a malformed, undefined, or separator-less cursor rather than throwing', () => {
+    expect(decodeSearchCursor('not-base64!!')).toBeNull();
+    expect(decodeSearchCursor(undefined)).toBeNull();
+    // Valid base64url with no `|` separator between timestamp and id.
+    expect(
+      decodeSearchCursor(Buffer.from('no-separator-here', 'utf8').toString('base64url')),
+    ).toBeNull();
+    // A well-formed timestamp with a non-UUID id must also read as "no cursor" — it is bound as
+    // `$6::uuid`, so letting it through would surface as a Postgres cast error (a 500).
+    expect(
+      decodeSearchCursor(
+        Buffer.from('2026-01-01T00:00:00.000Z|not-a-uuid', 'utf8').toString('base64url'),
+      ),
+    ).toBeNull();
   });
 });
 

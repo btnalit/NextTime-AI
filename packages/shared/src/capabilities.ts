@@ -355,13 +355,25 @@ const graphCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ query: z.string(), objectType: z.string().optional() }).strict(),
+    // W5 (docs/STATUS.md 遗留 2): `limit` / `cursor` per docs/wire-contract-conventions.md §3 — a
+    // `limit` above the kernel's `MAX_SEARCH_LIMIT` is clamped and the result carries
+    // `truncated: true`; `cursor` is the previous page's opaque `nextCursor`.
+    paramsSchema: z
+      .object({
+        query: z.string(),
+        objectType: z.string().optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
     // S3.7 wire fix (see PR body): previously a bare `GraphObject[]` — §3 "不返回裸数组". Now
     // `{items}`, same envelope shape as every `list_*`/`find_*` capability even though this name
     // does not match that prefix pattern (the vocabulary guard's rule (e) does not require it —
     // fixed anyway, since a bare array is the one thing §3 unconditionally forbids).
     resultSchema: listEnvelope(wire.ObjectWireSchema),
-    description: 'Search Objects/Facts, results carry epistemic_status.',
+    description:
+      'Search Objects by substring over properties/identity, optionally filtered by objectType; ' +
+      'keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     name: 'state_at',

@@ -269,6 +269,23 @@ describe.runIf(DATABASE_URL !== undefined)(
       const run1FactId = await activeFactId();
       expect(run1FactId).toBeTruthy();
 
+      // W5: submit_observations threads the per-item Observation id into assertFact's
+      // observationId, and that Observation is recorded under run1's own Activity.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const factRows = await client.query<{ observation_id: string | null }>(
+          'select observation_id from links where workspace_id = $1 and id = $2',
+          [workspaceId, run1FactId],
+        );
+        const observationId = factRows.rows[0]?.observation_id;
+        expect(observationId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+
+        const observationRows = await client.query<{ activity_id: string }>(
+          'select activity_id from observations where workspace_id = $1 and id = $2',
+          [workspaceId, observationId],
+        );
+        expect(observationRows.rows[0]?.activity_id).toBe(run1.activityId);
+      });
+
       // --- Run 2: identical resubmission, same origin (same Source) — the S3.2 followup no-op
       // path: content-identical, so `assertFact` writes nothing and returns the *same* Fact row.
       const run2 = (await dispatchCapability({ pool }, caller, 'submit_observations', {

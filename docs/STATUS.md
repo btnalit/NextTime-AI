@@ -67,11 +67,11 @@
 
 | 项 | 范围 | 状态（2026-09-10 复核） |
 |---|---|---|
-| `explain` 收敛到喂给该 Fact 的 Observation + `search` 分页 | 内核 epistemic / graph 读，同一 PR | 未开工。`search` 的 `paramsSchema` 仍只有 `query` / `objectType`（`packages/shared/src/capabilities.ts`），无 `limit` / `cursor` |
+| `explain` 收敛到喂给该 Fact 的 Observation + `search` 分页 | 内核 epistemic / graph 读，同一 PR | 完成（PR #132）：迁移 0018 加 `links.observation_id`；`explain(factId)` 按其收窄 `activity.observations`；`search` 加 `limit`/`cursor` 与 `searchPage` 方法，`MAX_SEARCH_LIMIT=200` 截断标 `truncated:true` |
 | `create_task` 接现有 spawn 路径，或先下架 | 内核 task | 完成（PR #131，下架）。注册表 / handler / `createTask` / Worker ceiling / 集成测试块一并移除，契约快照同步；理由见 `code-review-2026-09-10.md` §3.2 |
 | fake-llm 自检两个预存失败 | `deploy/accept-s2` | 完成（PR #129）。根因是夹具还喂旧线上形状（`find_workers` 裸数组、`invoke_worker` 的 `taskId`），server 早已改成 `{items}` / `id`；自检 18 PASS 并加入 CI `quality` job |
-| 单 commit PR 改 squash（CHANGELOG 去重） | 流程 | 未开工。仓库当前 merge / squash / rebase 三种方式都开着，靠合并时人工选 squash；也可只留 squash 从设置上根治 |
-| Renovate 首跑确认 | 自动化 | 确认未安装：无 renovate 作者的 PR、无 Dependency Dashboard issue（2026-09-10 再查）。Dependabot 反而在跑：它开过的 #117 / #118（vitest 4、vite 6）已被关闭，且当前默认分支有 9 条开放告警，全部是 vitest / vite / esbuild 这组开发工具链（2 critical：vitest < 3.2.6）。需要一个决定：装 Renovate App 并让它接管，或直接处理 Dependabot 的告警 |
+| 单 commit PR 改 squash（CHANGELOG 去重） | 流程 | 完成（2026-09-10，仓库设置）。已关闭 merge commit 与 rebase，只留 squash，合并后自动删分支；release-please 读到的就是 PR 标题 |
+| Renovate 首跑确认 | 自动化 | 决定（2026-09-10）：暂不安装 Renovate，Dependabot 的 9 条告警（全部是 vitest / vite / esbuild 开发链，2 critical：vitest < 3.2.6，不在运行时镜像里）暂不处理。`renovate.json` 保留，待稳定期后再定 |
 | E7 主机备份定时器决定 | 运维 | 待决定 |
 
 目标主机：09-09 验收后处于停栈状态，仅 `llm-proxy` 与 `fake-llm` 在跑，Postgres 干净停机、数据与镜像完好；W5 若需主机验收，先按 `runbooks/host-*.md` 起栈。
@@ -85,11 +85,11 @@
 
 | # | 项 | 级别 | 归属 | 状态 |
 |---|---|---|---|---|
-| 1 | `explain` 对 collector Fact 返回整批 Observation（>400KB）；根因是 Fact 与 Observation 无直接关系（`retrospective-2026-09-09.md` §5.1） | P2 | W5 | 开放 |
-| 2 | `search` 无 `limit` / `cursor`，硬上限 50（§5.5） | P2 | W5 | 开放（2026-09-10 对注册表复核仍如此） |
+| 1 | `explain` 对 collector Fact 返回整批 Observation（>400KB）；根因是 Fact 与 Observation 无直接关系（`retrospective-2026-09-09.md` §5.1） | P2 | W5 | 关闭（PR #132：迁移 0018 加 `links.observation_id`，`explain(factId)` 收窄到该 Fact 自己的 Observation） |
+| 2 | `search` 无 `limit` / `cursor`，硬上限 50（§5.5） | P2 | W5 | 关闭（PR #132：加 `limit`/`cursor` 与 `GraphStore.searchPage`，`MAX_SEARCH_LIMIT=200` 截断标 `truncated:true`） |
 | 3 | `create_task` 的 Task 永远 `queued`；2026-09-10 复审确认它在唯一现实路径上不可达，**建议下架**（`code-review-2026-09-10.md` §3.2） | P2 | W5 | 关闭（PR #131：下架，接线留到授权衰减模型有结论之后） |
 | 4 | fake-llm 自检 `entry-restart-chat-turn2/3` 预存失败 | P3 | W5 | 关闭（PR #129：自检夹具对齐线上契约形状，自检进 CI `quality`） |
-| 5 | Renovate 首跑未见 | P3 | W5 | 开放。2026-09-10 复核仍无 PR、无 Dependency Dashboard issue，先确认 App 是否安装（详见 §3） |
+| 5 | Renovate 首跑未见 | P3 | W5 | 关闭（决定：暂不安装；Dependabot 告警暂不处理，见 §3） |
 | 6 | E7 主机备份定时器"S3 后重评" | — | W5 | 待决定 |
 | 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4） | P2 | W6 | 开放 |
 | 8 | Explorer 由 caddy 注入 key 的信任边界（§5.8） | P2 | W7 | 开放 |
@@ -107,6 +107,7 @@
 | 20 | 两个门容器与 caddy / postgres 无 `read_only` / `cap_drop:[ALL]` / `no-new-privileges`，其余服务均有；门是唯一持外部凭证的进程（`code-review-2026-09-10.md` §3.3） | P2 | 待排 | 开放 |
 | 21 | 控制台看不到审批历史：注册表只有 `list_pending` 与 `get_action`，无列出已决 ActionRequest 的能力（`code-review-2026-09-10.md` §3.4） | P2 | 待排 | 开放 |
 | 22 | 出网拒绝表在 `reconcile()` 后回退到容器创建时的旧值：标签只在创建时打，复用分支刷新 source map 却回写不了标签，而 `reconcile()` 每次 docker-events 重连都跑；与 `EGRESS_DENY_LABEL` 自称的「永不放宽，哪怕暂时」冲突（`code-review-2026-09-10.md` §3.5；平台级拒绝不受影响） | P2 | 待排 | 开放 |
+| 23 | `query_decisions` / `list_conflicts` 的 keyset cursor 与 `search` 修复前同一模式：`created_at` 经 JS `Date` 只剩毫秒，回传后与微秒精度的列做 `<` 比较，同一毫秒内（同事务写入）的行会在翻页边界被漏掉；`search` 在 PR #132 里改为 `date_trunc('milliseconds', …)` 作排序键，这两处未改 | P2 | 待排 | 开放 |
 
 ## 5. 更新规则
 

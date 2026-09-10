@@ -42,14 +42,16 @@ describe('MCP_TOOL_ALIASES', () => {
     expect(alias.translate({ decision_id: 'dec-1' })).toEqual({ decisionId: 'dec-1' });
   });
 
-  it('search_graph → search: query passthrough, node_type → objectType, limit dropped', () => {
+  it('search_graph → search: query passthrough, node_type → objectType, limit → limit', () => {
     const alias = findAlias('search_graph');
     expect(alias.capability).toBe('search');
     expect(alias.translate({ query: 'foo', node_type: 'test.thing', limit: 20 })).toEqual({
       query: 'foo',
       objectType: 'test.thing',
+      limit: 20,
     });
     expect(alias.translate({ query: 'foo' })).toEqual({ query: 'foo' });
+    expect(alias.inputSchema.properties).toHaveProperty('limit');
   });
 
   it('add_relationship → assert_fact: source → objectId, target → value, type → linkType (optional)', () => {

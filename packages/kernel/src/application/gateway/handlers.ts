@@ -66,7 +66,7 @@ import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { queryAudit, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
-import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { MAX_SEARCH_LIMIT, SqlGraphStore } from '../../substrate/graph/index.js';
 import { toWireActionRequest } from './action-request-wire.js';
 import {
   getAgentPolicyHandler,
@@ -205,10 +205,20 @@ const traverseHandler: CapabilityHandler = async (client, workspaceId, params) =
 
 // S3.7 wire fix (see PR body): previously a bare `GraphObject[]` — docs/wire-contract-
 // conventions.md §3 "不返回裸数组".
+// W5 (docs/STATUS.md 遗留 2): keyset-paginated via `SqlGraphStore.searchPage`. A requested `limit`
+// above `MAX_SEARCH_LIMIT` is clamped by the store and reported here as `truncated: true`
+// (docs/wire-contract-conventions.md §3: "超出按上限截断并在结果 `truncated: true` 标记，而非静默").
 const searchHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const input = params as SearchInput;
-  const objects = await graphStore.search(client, workspaceId, input);
-  return { result: { items: objects.map(toWireObject) } };
+  const page = await graphStore.searchPage(client, workspaceId, input);
+  const truncated = input.limit !== undefined && input.limit > MAX_SEARCH_LIMIT;
+  return {
+    result: {
+      items: page.items.map(toWireObject),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(truncated ? { truncated: true as const } : {}),
+    },
+  };
 };
 
 const stateAtHandler: CapabilityHandler = async (client, workspaceId, params) => {
