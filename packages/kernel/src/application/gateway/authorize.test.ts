@@ -121,6 +121,13 @@ describe('authorizeCapabilityCall', () => {
   });
 
   it('does not apply minRole to handle callers — scope alone governs', () => {
+    // W5.5 (STATUS leftover 18): `minRole` on the handle channel is now enforced at issuance, not
+    // here — the entry ceiling itself is role-aware (`entryScope({ role })`, governance/capability/
+    // handles.ts), so by the time a Handle's scope reaches this function, a capability the
+    // on-behalf-of Principal's role does not satisfy has already been dropped from it. This
+    // function's own `channel === 'handle'` branch still checks scope membership only (see
+    // authorizeCapabilityCall's own doc comment) — scope is therefore the *whole* contract here,
+    // not a partial one minRole also gates; this assertion is unchanged from before W5.5.
     const cap = capability({ name: 'get_object', channel: 'handle', minRole: 'owner' });
     // The handle's own scope grants it, even though a Handle has no "role" of its own.
     expect(() => authorizeCapabilityCall(handleCaller(['get_object']), cap)).not.toThrow();

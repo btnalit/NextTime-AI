@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentHostToKernelFrame, KernelToAgentHostFrame } from '@nexttime/shared';
+import type { AgentHostToKernelFrame, KernelToAgentHostFrame, Role } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
@@ -84,6 +84,12 @@ function createFakePool(
   /** S3.13: published Skills `application/worker/skills.ts`'s `resolvePublishedSkills` should
    *  resolve — empty by default. */
   publishedSkills: readonly FakePublishedSkill[] = [],
+  /** W5.5 (STATUS leftover 18): `principals.role` per principalId, read by `ensureEntryHandle`'s
+   *  `resolvePrincipalRole` to narrow the entry ceiling. Defaults to `owner` for every principal
+   *  not listed, so every pre-W5.5 test keeps the full ceiling exactly as before. */
+  rolesByPrincipal: ReadonlyMap<string, Role> = new Map(),
+  /** W5.5: jtis `readHandleFreshness` should report as revoked (empty by default). */
+  revokedJtis: ReadonlySet<string> = new Set(),
 ) {
   const sessionsByPrincipal = new Map<string, FakeSessionRow>();
   const handleCount = new Map<string, number>();
@@ -142,6 +148,18 @@ function createFakePool(
       };
       sessionsByPrincipal.set(principalId, row);
       return { rows: [{ id: row.id }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select (revoked_at is null) as live from capability_handles')) {
+      // W5.5: `readHandleFreshness`'s revocation probe — this fake never revokes, so a cached jti
+      // is always live (tests that need a revocation can override via `revokedJtis`).
+      const [, jti] = params as [string, string];
+      return { rows: [{ live: !revokedJtis.has(jti) }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select role from principals')) {
+      const [, principalId] = params as [string, string];
+      return { rows: [{ role: rolesByPrincipal.get(principalId) ?? 'owner' }], rowCount: 1 };
     }
 
     if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
@@ -533,6 +551,147 @@ describe('AgentHostRuntime — startTurn happy path', () => {
       scope: { resources: Record<string, readonly string[]> };
     };
     expect(new Set(claims.scope.resources.gatekeeper)).toEqual(new Set(['gk-1', 'gk-2']));
+  });
+
+  it("W5.5 (STATUS leftover 18): a member principal's issued entry Handle excludes propose_* and keeps get_object", async () => {
+    const principalId = randomUUID();
+    const rolesByPrincipal = new Map<string, Role>([[principalId, 'member']]);
+    const { pool } = createFakePool(
+      new Map(),
+      new Map(),
+      new Map(),
+      undefined,
+      [],
+      rolesByPrincipal,
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ principalId });
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    const payloadSegment = command.handle.split('.')[1] ?? '';
+    const claims = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8')) as {
+      scope: { capabilities: readonly string[] };
+    };
+    expect(claims.scope.capabilities.some((name) => name.startsWith('propose_'))).toBe(false);
+    expect(claims.scope.capabilities).toContain('get_object');
+
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+  });
+
+  it('W5.5 (STATUS leftover 18): a role change between two Turns reissues the entry Handle instead of reusing the cache', async () => {
+    const principalId = randomUUID();
+    const workspaceId = randomUUID();
+    const rolesByPrincipal = new Map<string, Role>([[principalId, 'member']]);
+    const { pool, handleCount } = createFakePool(
+      new Map(),
+      new Map(),
+      new Map(),
+      undefined,
+      [],
+      rolesByPrincipal,
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      entryHandleTtlSeconds: 3600, // deliberately long — ttl-based reissue would not fire here
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const first = startTurnInput({ principalId, workspaceId });
+    const firstPromise = runtime.startTurn(first);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: first.turnId });
+    await firstPromise;
+
+    // Role changed (workspace owner ran `set_principal_role`) — simulated here by mutating the
+    // fake pool's own role map, exactly as a real `principals.role` update between two
+    // `ensureEntryHandle` reads would.
+    rolesByPrincipal.set(principalId, 'builder');
+
+    const second = startTurnInput({ principalId, workspaceId });
+    const secondPromise = runtime.startTurn(second);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: second.turnId });
+    await secondPromise;
+
+    expect(handleCount.get(principalId)).toBe(2); // reissued despite a still-fresh ttl
+    const firstCommand = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    const secondCommand = sent[1] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(secondCommand.handle).not.toBe(firstCommand.handle);
+  });
+
+  it('reissues the entry Handle when the cached jti has been revoked DB-side, even though the role and gate set are unchanged (W5.5 review fix)', async () => {
+    const principalId = randomUUID();
+    const workspaceId = randomUUID();
+    const revokedJtis = new Set<string>();
+    const { pool, handleCount } = createFakePool(
+      new Map(),
+      new Map(),
+      new Map(),
+      undefined,
+      [],
+      new Map(),
+      revokedJtis,
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      entryHandleTtlSeconds: 3600, // deliberately long — ttl-based reissue would not fire here
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const first = startTurnInput({ principalId, workspaceId });
+    const firstPromise = runtime.startTurn(first);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: first.turnId });
+    await firstPromise;
+
+    const firstCommand = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    const firstPayloadSegment = firstCommand.handle.split('.')[1] ?? '';
+    const firstClaims = JSON.parse(
+      Buffer.from(firstPayloadSegment, 'base64url').toString('utf8'),
+    ) as { jti: string };
+
+    // The Handle was revoked DB-side since it was cached (e.g. `disable_principal`/
+    // `set_principal_role` on some other, unrelated path) — role and gate set are both
+    // unchanged, so a value comparison alone would wrongly reuse the cached token.
+    revokedJtis.add(firstClaims.jti);
+
+    const second = startTurnInput({ principalId, workspaceId });
+    const secondPromise = runtime.startTurn(second);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: second.turnId });
+    await secondPromise;
+
+    expect(handleCount.get(principalId)).toBe(2); // reissued despite unchanged role/gate set
+    const secondCommand = sent[1] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(secondCommand.handle).not.toBe(firstCommand.handle);
   });
 });
 

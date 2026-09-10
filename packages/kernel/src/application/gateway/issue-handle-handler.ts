@@ -94,8 +94,11 @@ export const issueHandleHandler: CapabilityHandler = async (client, workspaceId,
     principalId: onBehalfOf,
     resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
   });
+  // W5.5 (STATUS leftover 18): narrow the ceiling by the calling Principal's role. `issue_handle`
+  // is `minRole:'owner'` today, so this is a no-op here, but the rule is applied at every issuer.
   const ceiling = entryScope(
     grantedGatekeeperIds.length > 0 ? { resources: { gatekeeper: grantedGatekeeperIds } } : {},
+    ctx?.principal ? { role: ctx.principal.role } : {},
   );
   const scope = intersectScope(ceiling, input.scope);
 

@@ -391,6 +391,116 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(HandleRevoked);
     });
 
+    /** Mirrors `issue-handle-handler.ts`'s own `kind='mcp_session'` session + Handle issuance,
+     *  the shape `revokeRoleScopedSessionHandles` (governance/capability/handles.ts, W5.5 review
+     *  fix) must also reach — unlike `revokeEntrySessionHandles`, which is `kind='entry'` only. */
+    async function issueMcpSessionHandle(
+      ws: string,
+      principalId: string,
+      keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
+    ): Promise<{ token: string; jti: string }> {
+      return withWorkspace(
+        pool,
+        { workspaceId: ws, principalId },
+        async (client) => {
+          const sessionResult = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'mcp_session', $2, 'active') returning id`,
+            [ws, principalId],
+          );
+          const sessionId = sessionResult.rows[0]?.id;
+          if (!sessionId) throw new Error('issueMcpSessionHandle: failed to insert mcp_session');
+          const issued = await issueHandle(client, {
+            sessionId,
+            scope: entryScope(),
+            ttlSeconds: 3600,
+            privateKey: keyPair.privateKey,
+          });
+          return { token: issued.token, jti: issued.jti };
+        },
+        { skipRoleSwitch: true },
+      );
+    }
+
+    it('set_principal_role: an actual role change revokes both the target’s entry and mcp_session Handles, but not another principal’s (W5.5, STATUS leftover 18)', async () => {
+      const targetId = await adminInsertPrincipal(workspaceId, 'member', 'Grace');
+      const otherId = await adminInsertPrincipal(workspaceId, 'member', 'Ivan');
+      const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      const { token, jti } = await issueEntryHandle(workspaceId, targetId, keyPair);
+      const { token: mcpToken, jti: mcpJti } = await issueMcpSessionHandle(
+        workspaceId,
+        targetId,
+        keyPair,
+      );
+      const { token: otherToken } = await issueEntryHandle(workspaceId, otherId, keyPair);
+
+      // Sanity: all three Handles verify before the role change.
+      await expect(
+        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+      ).resolves.toMatchObject({ obo: targetId });
+      await expect(
+        authenticateHandle(pool, mcpToken, { publicKey: keyPair.publicKey }),
+      ).resolves.toMatchObject({ obo: targetId });
+      await expect(
+        authenticateHandle(pool, otherToken, { publicKey: keyPair.publicKey }),
+      ).resolves.toMatchObject({ obo: otherId });
+
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const updated = (await dispatchCapability({ pool }, owner, 'set_principal_role', {
+        principalId: targetId,
+        role: 'builder',
+      })) as { role: string };
+      expect(updated.role).toBe('builder');
+
+      // Both the entry and mcp_session Handles are revoked — directly (capability_handles.
+      // revoked_at) and via authenticateHandle's own verification path (mirrors
+      // disable_principal's own assertion above; here the *role*, not disabled_at, is what
+      // changed).
+      const revokedRows = await pool.query<{ jti: string; revoked_at: Date | null }>(
+        'select jti, revoked_at from capability_handles where jti = any($1)',
+        [[jti, mcpJti]],
+      );
+      expect(revokedRows.rows).toHaveLength(2);
+      for (const row of revokedRows.rows) {
+        expect(row.revoked_at, `expected jti ${row.jti} to be revoked`).not.toBeNull();
+      }
+      await expect(
+        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+      ).rejects.toThrow(HandleRevoked);
+      await expect(
+        authenticateHandle(pool, mcpToken, { publicKey: keyPair.publicKey }),
+      ).rejects.toThrow(HandleRevoked);
+
+      // A different principal's Handle is untouched.
+      await expect(
+        authenticateHandle(pool, otherToken, { publicKey: keyPair.publicKey }),
+      ).resolves.toMatchObject({ obo: otherId });
+    });
+
+    it('set_principal_role: setting the same role is a no-op and does not revoke the target’s entry Handle', async () => {
+      const targetId = await adminInsertPrincipal(workspaceId, 'member', 'Heidi');
+      const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      const { token } = await issueEntryHandle(workspaceId, targetId, keyPair);
+
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const updated = (await dispatchCapability({ pool }, owner, 'set_principal_role', {
+        principalId: targetId,
+        role: 'member',
+      })) as { role: string };
+      expect(updated.role).toBe('member');
+
+      // Same role in, same role out — the Handle issued under that (unchanged) role stays valid.
+      await expect(
+        authenticateHandle(pool, token, { publicKey: keyPair.publicKey }),
+      ).resolves.toMatchObject({ obo: targetId });
+    });
+
     it('last-owner protection: refuses demoting or disabling the sole active owner, but allows it once a second owner exists', async () => {
       const soloWs = await adminInsertWorkspace('members-flow-last-owner-workspace');
       const soloOwnerId = await adminInsertPrincipal(soloWs, 'owner', 'Solo Owner');

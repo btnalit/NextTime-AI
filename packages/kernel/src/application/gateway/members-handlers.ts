@@ -1,6 +1,9 @@
 import type { PrincipalKind, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { revokeEntrySessionHandles } from '../../governance/capability/index.js';
+import {
+  revokeEntrySessionHandles,
+  revokeRoleScopedSessionHandles,
+} from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { generateApiKey, hashApiKey } from './auth.js';
@@ -250,6 +253,16 @@ export const setPrincipalRoleHandler: CapabilityHandler = async (client, workspa
   );
   if ((updated.rowCount ?? 0) !== 1) {
     throw new PrincipalNotFoundError(workspaceId, principalId);
+  }
+
+  // W5.5 (STATUS leftover 18): a Handle's ceiling is narrowed by role at issuance
+  // (`entryScope({ role })`), so a role change must invalidate every Handle issued under the old
+  // role — the resident entry agent's *and* any `issue_handle` `mcp_session` ones (which can carry
+  // a ttl of up to 30 days) — otherwise a demoted member keeps builder-gated `propose_*` until ttl,
+  // and a promoted one waits for it. The agent-host runtime's in-memory cache re-checks its cached
+  // Handle's revocation on the next Turn and reissues on its own.
+  if (role !== target.role) {
+    await revokeRoleScopedSessionHandles(client, workspaceId, principalId);
   }
 
   const wire = toWirePrincipal({ ...target, role });

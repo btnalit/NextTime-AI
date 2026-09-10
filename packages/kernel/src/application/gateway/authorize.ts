@@ -1,4 +1,5 @@
-import type { Capability, Role } from '@nexttime/shared';
+import type { Capability } from '@nexttime/shared';
+import { roleSatisfiesMinRole } from '../../governance/capability/index.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -43,58 +44,31 @@ export class ForbiddenError extends Error {
   }
 }
 
-/** Whether a human Principal's `role` satisfies a capability's `minRole` (see module doc). */
-export function roleSatisfiesMinRole(role: Role, minRole: Role | undefined): boolean {
-  if (minRole === undefined) return true;
-  if (role === 'owner') return true;
-  if (minRole === 'member') return true;
-  return role === minRole;
-}
+/** Re-exported from governance (`governance/capability/roles.ts`, W5.5) so existing importers and
+ *  `authorize.test.ts` keep working; the rule itself now lives one layer down because Handle
+ *  issuance applies it too (see `authorizeCapabilityCall`'s doc comment). */
+export { roleSatisfiesMinRole };
 
 /**
  * Authorizes `caller` to invoke `capability`. Throws `ForbiddenError` (→ HTTP 403) if not — never
  * returns a boolean, so a call site cannot forget to check the result.
  *
- * **Known gap, deliberately not closed here** (authority-tightening review, job 652a4abc, item 6:
- * "handle channel honours `minRole` via the Handle's on-behalf-of principal role ... or document
- * why not"): the `channel === 'handle'` branch below never checks `capability.minRole` — it is
- * exactly what `authorize.test.ts`'s own `'does not apply minRole to handle callers — scope alone
- * governs'` test locks in as the existing, intentional contract (this module's own "Role hierarchy"
- * doc comment above only ever reasons about the *human* channel). In principle a Handle's
- * on-behalf-of Principal has a `role` too, and a stricter reading would deny a `minRole:'builder'`
- * capability to a Handle whose `obo` is only a `member` — concretely, every `propose_*` capability
- * (`propose_worker_definition`/`propose_skill`/`propose_procedure`/`propose_operation`/
- * `propose_ontology_change`, all `minRole:'builder'`) is unconditionally in
- * `governance/capability/handles.ts`'s `ENTRY_CEILING_CAPABILITIES` (every name starting with
- * `propose_` is included, regardless of role — that ceiling is fixed, role-independent platform
- * policy), so a `member`-role principal's own entry Handle structurally carries these
- * builder-gated capability names in its `scope.capabilities`, and this function's handle-channel
- * branch — scope-only — lets the call through.
- *
- * Not fixed here because every fix this file alone can make is either unsound or out of this
- * task's owned files:
- *   - This function is documented as pure/no-IO ("every input is already in hand by the time this
- *     runs"); the on-behalf-of Principal's `role` is not on `HandleClaims`
- *     (`packages/shared/src/handle-token.ts`, not owned by this task) and resolving it here would
- *     require a DB round trip, breaking that contract for every capability call, not just the
- *     handle-channel ones that would need it.
- *   - The structurally correct fix is making the entry-Handle *ceiling* itself role-aware — either
- *     add `role` to `HandleClaims` and filter `ENTRY_CEILING_CAPABILITIES` by it at issuance
- *     (`governance/capability/handles.ts`'s `entryScope()`), or have the one production caller
- *     (`application/host-bridge/agent-host-runtime.ts`'s `ensureEntryHandle`) resolve the
- *     principal's role and narrow the scope it requests. Both cross files this task's dispatch
- *     explicitly scoped narrower than "general Handle-issuance changes"
- *     (`agent-host-runtime.ts`: "Handle reissue on Grant change only") or does not own at all
- *     (`dispatch.ts`/`resolve-caller.ts`, which would need to thread a resolved role into
- *     `CapabilityHandlerContext`; `application/worker/definitions.ts`, which validates a
- *     WorkerDefinition's declared capabilities against this same ceiling in the role-independent
- *     abstract).
- *
- * Left as a follow-up: narrow `ENTRY_CEILING_CAPABILITIES` (or an `entryScope()` variant) by the
- * on-behalf-of Principal's actual role at issuance time, so a `member`'s entry Handle never
- * receives a `minRole:'builder'` capability name in the first place — at which point this
- * function's existing scope-only check for handle callers becomes sufficient again with no change
- * needed here, and `authorize.test.ts`'s locked-in test above would need to flip.
+ * **`minRole` on the handle channel is enforced at issuance, not here** (W5.5, STATUS leftover 18;
+ * previously a documented gap — see this file's git history for the original ~40-line note). The
+ * `channel === 'handle'` branch below still checks scope membership only, on purpose: this
+ * function is pure/no-IO and a Handle's claims carry no role. What changed is the *ceiling*: every
+ * entry Handle is now issued through `governance/capability/handles.ts`'s `entryScope({ role })`,
+ * which drops from `ENTRY_CEILING_CAPABILITIES` every capability whose `minRole` the on-behalf-of
+ * Principal's role does not satisfy (the same `roleSatisfiesMinRole` rule the human branch uses,
+ * moved to governance so both layers share it). Both production issuers pass the role —
+ * `application/host-bridge/agent-host-runtime.ts`'s `ensureEntryHandle` (resolved from the
+ * principals row, and part of its cache-freshness key) and `issue-handle-handler.ts` (from the
+ * calling Principal). `computeChildHandleScope` (application/task/handle-mint.ts) intersects a
+ * Worker's scope with its parent's, so a `member`'s Workers inherit the same narrowing. A
+ * `set_principal_role` change revokes the principal's entry-session Handles so the narrowing (or
+ * widening) takes effect on the next Turn rather than at ttl. `authorize.test.ts`'s "does not
+ * apply minRole to handle callers — scope alone governs" case therefore still holds: scope is the
+ * whole contract here, and the scope is what became role-aware.
  */
 export function authorizeCapabilityCall(caller: ResolvedCaller, capability: Capability): void {
   if (capability.channel === 'human' && caller.channel !== 'human') {
