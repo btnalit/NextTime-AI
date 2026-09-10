@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.1](https://github.com/btnalit/NextTime-AI/compare/v0.4.0...v0.4.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **kernel:** entry Handle ceiling narrowed by the on-behalf-of role at issuance (W5.5, leftover 18) ([#138](https://github.com/btnalit/NextTime-AI/issues/138)) ([2d4ad07](https://github.com/btnalit/NextTime-AI/commit/2d4ad07bbe420340fd0b74e642f4d4601220e78a))
+* **kernel:** serialize concurrent first assertions of one Fact identity (W5.5, leftover 17) ([#140](https://github.com/btnalit/NextTime-AI/issues/140)) ([5b48430](https://github.com/btnalit/NextTime-AI/commit/5b48430ae8ffbfab7ac74cd96634c026c874d841))
+* **kernel:** Worker runs are their own epistemic Source; contradicting runs open a Conflict (W5.5, leftover 16) ([#137](https://github.com/btnalit/NextTime-AI/issues/137)) ([c283d0e](https://github.com/btnalit/NextTime-AI/commit/c283d0e2831333b7919afad33163e1a094d870b8))
+
 ## [0.4.0](https://github.com/btnalit/NextTime-AI/compare/v0.3.0...v0.4.0) (2026-09-10)
 
 
