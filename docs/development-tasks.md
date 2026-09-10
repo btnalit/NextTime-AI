@@ -758,7 +758,7 @@
     `private` 且对另一 principal 不可读、两个不同 principal 各自私有会话下断言相同结论时互不可见但都
     不开 Conflict）、`substrate/epistemic/conflicts.test.ts`（同 principal 异源同内容 `unchanged`，
     随后异源异内容仍正确开 Conflict）。
-  - **可见性决定（2026-09-10，PR #TBD）**：上一条"可见性刻意维持原样"的规则被产品决定取代——Worker
+  - **可见性决定（2026-09-10，PR #142）**：上一条"可见性刻意维持原样"的规则被产品决定取代——Worker
     经结果契约写回的 Fact 默认 `workspace` 可见，不再取决于运行有没有落会话转录。`postWorkerResult`
     现在注册两种 Source：每次运行一个 `worker_run`（`visibility: 'workspace'`，`uri` 空，metadata 带
     `taskId` / `workerRunId` / `transcriptSourceId`），其 Observation 挂在 `worker_result` Activity 上，

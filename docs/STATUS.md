@@ -83,7 +83,7 @@
 
 W6 之后：W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定期 → 镜像发布与 P5。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
 
-**产品决定已做**（2026-09-10，PR #TBD）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。同样待主机应用后由 `accept_s2.sh` 覆盖。
+**产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。同样待主机应用后由 `accept_s2.sh` 覆盖。
 
 目标主机：09-09 验收后处于停栈状态，仅 `llm-proxy` 与 `fake-llm` 在跑，Postgres 干净停机、数据与镜像完好；下次起栈按 `runbooks/host-*.md` 应用最新 tag（≥ v0.4.1，迁移 0018）后复跑三份验收，`accept_s3.sh` 现为 28 项。
 
