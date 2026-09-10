@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/btnalit/NextTime-AI/compare/v0.4.1...v0.4.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **kernel:** worker result facts are workspace-visible, transcript stays a private source ([#142](https://github.com/btnalit/NextTime-AI/issues/142)) ([85d0eea](https://github.com/btnalit/NextTime-AI/commit/85d0eea5d7a74a93d7350669e511303858c59f0a))
+
 ## [0.4.1](https://github.com/btnalit/NextTime-AI/compare/v0.4.0...v0.4.1) (2026-09-10)
 
 
