@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/btnalit/NextTime-AI/compare/v0.4.2...v0.4.3) (2026-09-10)
+
+
+### Bug Fixes
+
+* **accept:** switch to the fake provider through a compose override, never the production config ([#146](https://github.com/btnalit/NextTime-AI/issues/146)) ([e010836](https://github.com/btnalit/NextTime-AI/commit/e0108367542c5e9585520666eb5614fe0bd4d279))
+
 ## [0.4.2](https://github.com/btnalit/NextTime-AI/compare/v0.4.1...v0.4.2) (2026-09-10)
 
 
