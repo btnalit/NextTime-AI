@@ -113,6 +113,100 @@ describe.runIf(DATABASE_URL !== undefined)('explain (integration, real Postgres)
     expect(result.activity?.observations[0]?.source?.ownerPrincipal?.id).toBe(ownerId);
   });
 
+  it('explain(factId) narrows activity.observations to the Fact’s own observationId (W5); explain(activityId) still returns every Observation, and a Fact asserted without observationId falls back to the Activity-level list', async () => {
+    const { activityId, firstObservationId, factWithObsId, factWithoutObsId } = await inTx(
+      async (client) => {
+        const sourceResult = await client.query<{ id: string }>(
+          `insert into sources (workspace_id, kind, owner_principal_id, visibility, uri)
+           values ($1, 'document', $2, 'workspace', 'https://example.test/doc')
+           returning id`,
+          [workspaceId, ownerId],
+        );
+        const sourceRow = sourceResult.rows[0];
+        if (!sourceRow) throw new Error('fixture: source insert produced no row');
+        const sourceId = sourceRow.id;
+
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.ingest',
+          principalId: ownerId,
+        });
+
+        const firstObservationResult = await client.query<{ id: string }>(
+          `insert into observations (workspace_id, source_id, activity_id, content)
+           values ($1, $2, $3, $4::jsonb)
+           returning id`,
+          [workspaceId, sourceId, activity.id, JSON.stringify({ note: 'first' })],
+        );
+        const firstObservationRow = firstObservationResult.rows[0];
+        if (!firstObservationRow)
+          throw new Error('fixture: first observation insert produced no row');
+        const firstObservationId = firstObservationRow.id;
+
+        const secondObservationResult = await client.query<{ id: string }>(
+          `insert into observations (workspace_id, source_id, activity_id, content)
+           values ($1, $2, $3, $4::jsonb)
+           returning id`,
+          [workspaceId, sourceId, activity.id, JSON.stringify({ note: 'second' })],
+        );
+        const secondObservationRow = secondObservationResult.rows[0];
+        if (!secondObservationRow)
+          throw new Error('fixture: second observation insert produced no row');
+
+        const a = await store.upsertObject(client, workspaceId, { objectType: 'test.thing' });
+        const b = await store.upsertObject(client, workspaceId, { objectType: 'test.thing' });
+
+        const factWithObs = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.narrowed_rel',
+            sourceObjectId: a.id,
+            targetObjectId: b.id,
+            activityId: activity.id,
+            observationId: firstObservationId,
+          },
+        );
+
+        const c = await store.upsertObject(client, workspaceId, { objectType: 'test.thing' });
+        const factWithoutObs = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.unnarrowed_rel',
+            sourceObjectId: a.id,
+            targetObjectId: c.id,
+            activityId: activity.id,
+          },
+        );
+
+        return {
+          activityId: activity.id,
+          firstObservationId,
+          factWithObsId: factWithObs.id,
+          factWithoutObsId: factWithoutObs.id,
+        };
+      },
+    );
+
+    const narrowedResult = await inTx((client) =>
+      explain(client, workspaceId, { factId: factWithObsId }),
+    );
+    expect(narrowedResult.fact?.observationId).toBe(firstObservationId);
+    expect(narrowedResult.activity?.observations).toHaveLength(1);
+    expect(narrowedResult.activity?.observations[0]?.id).toBe(firstObservationId);
+
+    const activityResult = await inTx((client) => explain(client, workspaceId, { activityId }));
+    expect(activityResult.activity?.observations).toHaveLength(2);
+
+    const unnarrowedResult = await inTx((client) =>
+      explain(client, workspaceId, { factId: factWithoutObsId }),
+    );
+    expect(unnarrowedResult.fact?.observationId).toBeNull();
+    expect(unnarrowedResult.activity?.observations).toHaveLength(2);
+  });
+
   it('explain(activityId) reaches Source and Principal for a Turn-shaped Activity (kind=agent_turn)', async () => {
     const { activityId, sourceId } = await inTx(async (client) => {
       const sourceResult = await client.query<{ id: string }>(

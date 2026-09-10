@@ -22,18 +22,22 @@ import {
   buildTraverseQuery,
   buildUpsertObjectQuery,
   buildVerifyFactQuery,
+  encodeSearchCursor,
 } from './queries.js';
 import {
   type AssertFactInput,
   type AssertFactResult,
   type CallerPrincipal,
+  DEFAULT_SEARCH_LIMIT,
   type Fact,
   FactNotFoundError,
   type GraphObject,
   type GraphStore,
   type InvalidateFactInput,
+  MAX_SEARCH_LIMIT,
   type NeighborsInput,
   type SearchInput,
+  type SearchPage,
   type StateAtInput,
   type StateAtResult,
   type SupersedeFactInput,
@@ -92,6 +96,7 @@ interface FactRow {
   activity_id: string;
   asserted_by: string;
   verified_by: string | null;
+  observation_id: string | null;
 }
 
 interface TraverseRow {
@@ -135,6 +140,7 @@ function mapFactRow(row: FactRow): Fact {
     activityId: row.activity_id,
     assertedBy: row.asserted_by,
     verifiedBy: row.verified_by,
+    observationId: row.observation_id,
   };
 }
 
@@ -303,6 +309,7 @@ export class SqlGraphStore implements GraphStore {
         activityId: input.activityId,
         assertedBy: caller.id,
         supersedesId: null,
+        observationId: input.observationId ?? null,
       });
       const insertResult = await client.query<FactRow>(
         insertQuery.text,
@@ -339,6 +346,7 @@ export class SqlGraphStore implements GraphStore {
       activityId: input.activityId,
       assertedBy: caller.id,
       supersedesId: null,
+      observationId: input.observationId ?? null,
     });
     const result = await client.query<FactRow>(query.text, query.values as unknown[]);
     const fact = mapFactRow(
@@ -404,6 +412,7 @@ export class SqlGraphStore implements GraphStore {
       activityId: input.activityId,
       assertedBy: caller.id,
       supersedesId: input.factId,
+      observationId: input.observationId ?? null,
     });
     const insertResult = await client.query<FactRow>(
       insertQuery.text,
@@ -559,6 +568,24 @@ export class SqlGraphStore implements GraphStore {
     const query = buildSearchQuery(workspaceId, input);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     return result.rows.map(mapObjectRow);
+  }
+
+  async searchPage(
+    client: PoolClient,
+    workspaceId: string,
+    input: SearchInput,
+  ): Promise<SearchPage> {
+    const limit = Math.min(Math.max(input.limit ?? DEFAULT_SEARCH_LIMIT, 1), MAX_SEARCH_LIMIT);
+    // Over-fetch by one: a (limit + 1)th row proves there is a next page without a second query,
+    // and is never returned itself — it will be the first row of that next page.
+    const query = buildSearchQuery(workspaceId, { ...input, limit: limit + 1 });
+    const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
+    const rows = result.rows.slice(0, limit);
+    const items = rows.map(mapObjectRow);
+    const last = items[items.length - 1];
+    const nextCursor =
+      result.rows.length > limit && last ? encodeSearchCursor(last.updatedAt, last.id) : undefined;
+    return nextCursor === undefined ? { items } : { items, nextCursor };
   }
 
   /**

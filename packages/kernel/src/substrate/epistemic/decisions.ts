@@ -111,6 +111,8 @@ export interface FactRef {
   readonly activityId: string;
   readonly assertedBy: string;
   readonly verifiedBy: string | null;
+  /** W5: see `substrate/graph/store.ts`'s `Fact.observationId` — same column, second projection. */
+  readonly observationId: string | null;
 }
 
 interface FactDbRow {
@@ -132,11 +134,13 @@ interface FactDbRow {
   activity_id: string;
   asserted_by: string;
   verified_by: string | null;
+  observation_id: string | null;
 }
 
 const FACT_REF_COLUMNS = `workspace_id, id, link_type, source_object_id, target_object_id, properties,
   valid_from, valid_until, recorded_at, superseded_at, invalidated_at, invalidation_reason,
-  supersedes_id, epistemic_status, confidence, activity_id, asserted_by, verified_by`;
+  supersedes_id, epistemic_status, confidence, activity_id, asserted_by, verified_by,
+  observation_id`;
 
 function mapFactRefRow(row: FactDbRow): FactRef {
   return {
@@ -158,6 +162,7 @@ function mapFactRefRow(row: FactDbRow): FactRef {
     activityId: row.activity_id,
     assertedBy: row.asserted_by,
     verifiedBy: row.verified_by,
+    observationId: row.observation_id,
   };
 }
 

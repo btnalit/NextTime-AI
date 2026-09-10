@@ -25,7 +25,8 @@ export interface SqlQuery {
 
 const FACT_COLUMNS = `workspace_id, id, link_type, source_object_id, target_object_id, properties,
   valid_from, valid_until, recorded_at, superseded_at, invalidated_at, invalidation_reason,
-  supersedes_id, epistemic_status, confidence, activity_id, asserted_by, verified_by`;
+  supersedes_id, epistemic_status, confidence, activity_id, asserted_by, verified_by,
+  observation_id`;
 
 const OBJECT_COLUMNS =
   'workspace_id, id, object_type, identity_key, properties, created_at, updated_at';
@@ -117,10 +118,56 @@ export function buildGetObjectByIdentityQuery(
   };
 }
 
-/** S1 minimal search (docs/development-tasks.md S1.2): ILIKE over properties and identity_key. */
+/**
+ * `search` keyset cursor (W5, docs/STATUS.md 遗留 2 / retrospective-2026-09-09.md §5.5): the page
+ * boundary is the last row's `(updated_at, id)`, the same pair `buildSearchQuery` orders by, so a
+ * page never skips or repeats a row even when `updated_at` ties. Opaque on the wire (base64url of
+ * `<iso>|<uuid>`), same encoding `substrate/epistemic/decisions.ts` and `conflicts.ts` use for
+ * their own cursors — a fourth private copy, deliberately (see this task's PR body: no shared
+ * helper refactor in a W5 closeout).
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function encodeSearchCursor(updatedAt: Date, id: string): string {
+  return Buffer.from(`${updatedAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+/** Same "never throws on a malformed cursor" convention as the decisions/conflicts decoders — a
+ *  cursor that does not parse reads as "no cursor" (first page), never as a 500. */
+export function decodeSearchCursor(
+  cursor: string | undefined,
+): { readonly updatedAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const updatedAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    // Both halves are bound with explicit casts (`$5::timestamptz`, `$6::uuid`) — validate both
+    // here so a hand-crafted cursor can never reach Postgres and surface as a 500.
+    if (!updatedAt || Number.isNaN(Date.parse(updatedAt)) || !UUID_PATTERN.test(id)) return null;
+    return { updatedAt, id };
+  } catch {
+    return null;
+  }
+}
+
+/** S1 minimal search (docs/development-tasks.md S1.2): ILIKE over properties and identity_key.
+ *  W5: keyset-paginated on `(updated_at desc, id desc)` via `input.cursor` (see
+ *  `encodeSearchCursor`); `limit` is bound as given — callers clamp (`MAX_SEARCH_LIMIT`, store.ts)
+ *  and may over-fetch by one to detect a next page (`SqlGraphStore.searchPage`).
+ *
+ *  The sort/keyset column is `date_trunc('milliseconds', updated_at)`, not the raw column: the
+ *  cursor round-trips through a JS `Date` (node-postgres parses `timestamptz` into one), which
+ *  carries milliseconds only, while Postgres stores microseconds. Comparing the raw column against
+ *  a millisecond-truncated cursor would drop every row sharing the boundary millisecond (all rows
+ *  written in one transaction share the same `now()`), so both sides are truncated to the same
+ *  precision and `id` breaks the ties. */
 export function buildSearchQuery(workspaceId: string, input: SearchInput): SqlQuery {
   const pattern = `%${input.query}%`;
   const limit = input.limit ?? DEFAULT_SEARCH_LIMIT;
+  const cursor = decodeSearchCursor(input.cursor);
   return {
     text: `
       select ${OBJECT_COLUMNS}
@@ -128,10 +175,21 @@ export function buildSearchQuery(workspaceId: string, input: SearchInput): SqlQu
       where workspace_id = $1
         and ($2::text is null or object_type = $2)
         and (properties::text ilike $3 or coalesce(identity_key::text, '') ilike $3)
-      order by updated_at desc
+        and (
+          $5::timestamptz is null
+          or (date_trunc('milliseconds', updated_at), id) < ($5::timestamptz, $6::uuid)
+        )
+      order by date_trunc('milliseconds', updated_at) desc, id desc
       limit $4
     `,
-    values: [workspaceId, input.objectType ?? null, pattern, limit],
+    values: [
+      workspaceId,
+      input.objectType ?? null,
+      pattern,
+      limit,
+      cursor?.updatedAt ?? null,
+      cursor?.id ?? null,
+    ],
   };
 }
 
@@ -152,6 +210,9 @@ export interface InsertFactParams {
   readonly assertedBy: string;
   /** Set only by `supersedeFact` — the Fact this new row supersedes. */
   readonly supersedesId: string | null;
+  /** The single Observation that fed this Fact (migrations/core/0018), or `null` when the writer
+   *  has no single Observation to name (ad-hoc `assert_fact`, worker results today). */
+  readonly observationId: string | null;
 }
 
 export function buildInsertFactQuery(workspaceId: string, params: InsertFactParams): SqlQuery {
@@ -159,8 +220,9 @@ export function buildInsertFactQuery(workspaceId: string, params: InsertFactPara
     text: `
       insert into links
         (workspace_id, link_type, source_object_id, target_object_id, properties, valid_from,
-         valid_until, epistemic_status, confidence, activity_id, asserted_by, supersedes_id)
-      values ($1, $2, $3, $4, $5::jsonb, coalesce($6::timestamptz, now()), $7::timestamptz, $8, $9, $10, $11, $12)
+         valid_until, epistemic_status, confidence, activity_id, asserted_by, supersedes_id,
+         observation_id)
+      values ($1, $2, $3, $4, $5::jsonb, coalesce($6::timestamptz, now()), $7::timestamptz, $8, $9, $10, $11, $12, $13)
       returning ${FACT_COLUMNS}
     `,
     values: [
@@ -176,6 +238,7 @@ export function buildInsertFactQuery(workspaceId: string, params: InsertFactPara
       params.activityId,
       params.assertedBy,
       params.supersedesId,
+      params.observationId,
     ],
   };
 }

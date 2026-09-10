@@ -115,6 +115,13 @@
 ### S1.2 graph store 最小实现
 - 交付物：`packages/kernel/src/graph/{store,sql-store}.ts`：`upsert_object / assert_fact / supersede_fact / invalidate_fact / get_object / neighbors / traverse(≤3) / state_at`；`epistemic_status` 由调用方 Principal 类型决定。
 - 验收：`state_at(t0)` 在 supersede 后仍返回旧值；事务失败无半条记录。依赖：S1.1。
+- **W5 实现说明（`search` 分页，PR 待填）**：`SearchInput` 加 `limit`/`cursor` 参数，keyset
+  分页建在 `(updated_at, id)` 上（`queries.ts` 的 `encodeSearchCursor`/`decodeSearchCursor`，
+  base64url 编码，恶意/畸形游标一律按"无游标"处理，不抛错）；`MAX_SEARCH_LIMIT = 200` 截断
+  过大的 `limit`，能力结果标 `truncated: true`。`GraphStore` 新增 `searchPage` 方法与原来的
+  裸数组 `search` 并存——`search` 保留给它现有的调用方（explorer-read-service 的批量取、
+  find-means），新调用方要游标就用 `searchPage`；MCP `search_graph` 别名（`interfaces/mcp/
+  reference-tool-aliases.ts`）现在把 `limit` 也转发给 `search` 能力。
 
 ### S1.3 gateway human 通道 + audit + explain
 - 交付物：`gateway/auth.ts`（API key → Principal，创建 `web` 会话）、`audit/{writer,reconstruct}.ts`、`epistemic/explain.ts`（Fact / Decision / Turn → Observation → Activity → Source + Principal）。
@@ -922,6 +929,16 @@
     `ontology/ops-assets-v1.yaml` 自己的文件头已经这样约定）；③容器级验证（真实构建、真实
     Docker Engine API、`docker-socket-proxy-collector` 的 `wget` healthcheck 是否真的存在于该
     镜像的用户态）留给目标主机验收，步骤见 `docs/runbooks/host-collector.md`。
+  - **W5 实现说明（Fact → Observation，PR 待填）**：迁移 `0018_fact_observation.sql` 给
+    `links` 加可空的 `observation_id`（外键到 `observations(workspace_id, id)`）；
+    `submit_observations`（本文件）现在把每条已写 Link 对应的、`recordSourceObservation`
+    返回的 Observation id 逐条传进 `assertFact` 的 `observationId`。`substrate/epistemic/
+    explain.ts` 的 `explain(factId)` 据此把 `activity.observations` 收窄到该 Fact 自己的
+    这一条，`observationId` 为 `null` 时（`assert_fact` 临时断言、Worker 结果、以及所有
+    0018 之前的旧行）回退为原来的整个 Activity 级列表，行为不变。`assert_fact`/Worker 结果
+    写路径本次未改，仍写 `null`——遗留 16（复用 `AssertFactInput.observationId`）留给后续
+    任务补上这两条写路径。线上契约新增字段：`ExplainFactRef.observationId`、
+    `FactWire.observationId`。
 
 ### S3.4 `gatekeeper-ragflow` 与本体 v2
 - 交付物：observe `kb.list / kb.documents / retrieve`；execute `document.upload`（medium）、`document.parse`（low）；`ops-assets-v2.yaml` 增 `KnowledgeBase / Document / Dataset`；采集器扩展经门 observe 写 `observed` Fact。

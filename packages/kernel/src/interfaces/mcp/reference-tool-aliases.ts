@@ -20,7 +20,7 @@
  *   | `get_provenance`         | `explain`        | `entity_id` → `nodeId`        | design doc §9.3 names this pair explicitly ("get_provenance=explain"). |
  *   | `get_causal_chain`       | `causal_chain`   | `decision_id` → `decisionId`  | design doc §9.3 explicit pairing; Semantica's optional `direction`/`max_depth` have no counterpart on our side and are dropped (our `causal_chain` accepts only `decisionId`, `.strict()`). |
  *   | `analyze_decision_impact`| `decision_impact`| `decision_id` → `decisionId`  | design doc §9.3 explicit pairing. |
- *   | `search_graph`           | `search`         | `query` → `query` (identity); optional `node_type` → `objectType` | both are "find Objects matching a term, optionally filtered by type"; Semantica's optional `limit` has no counterpart and is dropped. |
+ *   | `search_graph`           | `search`         | `query` → `query` (identity); optional `node_type` → `objectType`, optional `limit` → `limit` | both are "find Objects matching a term, optionally filtered by type"; `limit` gained a counterpart in W5 (`search` pagination) — a value above the kernel's page cap is clamped, the result says `truncated: true`. |
  *   | `add_relationship`       | `assert_fact`    | `source` → `objectId`, `target` → `value`, optional `type` → `linkType` | our ontology models a relationship as a LinkType-typed Fact on the source Object whose value is the target's identity — the same shape `validate`'s own `{link:{linkType,sourceType,targetType}}` domain/range check assumes. Semantica's `type` is optional; our `linkType` is required (`.strict()`) — omitting it fails validation exactly as it would calling `assert_fact` directly, never silently defaulted. |
  *   | `record_decision`        | *(native, not aliased)* | — | the capability name is already `record_decision` — adding a second tool under the same name would collide. Semantica's required shape (`category`/`scenario`/`reasoning`/`outcome`/`confidence`) has no correspondence to ours (`summary`/optional `relatedFactIds`/`relatedTaskId`); a caller gets the *native* `record_decision` tool (our own schema), not a translated one. |
  *   | `query_decisions`        | *(native, not aliased)* | — | same name collision as `record_decision`; Semantica's optional `query`/`category`/`outcome`/`limit` vs. our optional `filter: object` — no clean rename. |
@@ -123,13 +123,18 @@ export const MCP_TOOL_ALIASES: readonly ReferenceToolAlias[] = [
       properties: {
         query: { type: 'string', description: 'Search term or phrase' },
         node_type: { type: 'string', description: 'Filter by node type (optional)' },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Page size (optional; clamped to the kernel cap)',
+        },
       },
       required: ['query'],
     },
     description:
-      'Search Objects/Facts (Semantica search_graph; our capability: search — Semantica\u2019s ' +
-      'optional limit has no counterpart here).',
-    translate: (args) => renamed(args, { query: 'query', node_type: 'objectType' }),
+      'Search Objects (Semantica search_graph; our capability: search — keyset-paginated, the ' +
+      'result carries nextCursor; pass it back as the native search tool\u2019s cursor).',
+    translate: (args) => renamed(args, { query: 'query', node_type: 'objectType', limit: 'limit' }),
   },
   {
     aliasName: 'add_relationship',

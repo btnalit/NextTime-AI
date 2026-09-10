@@ -81,6 +81,16 @@ export interface ExplainFactRef {
   readonly epistemicStatus: string;
   readonly assertedByPrincipal: ExplainPrincipalRef | null;
   readonly verifiedByPrincipal: ExplainPrincipalRef | null;
+  /**
+   * W5 (migrations/core/0018, docs/retrospective-2026-09-09.md §5.1): the single Observation that
+   * fed this Fact when its writer named one (`submit_observations` does, one per submitted item).
+   * When set, `activity.observations` below is narrowed to exactly that Observation instead of
+   * every Observation the Activity recorded (a collector ingest records hundreds under one
+   * Activity — the whole batch answered "this ingest", never "this observation"). `null` for
+   * ad-hoc `assert_fact` writes, worker results, and every pre-0018 Fact — those keep the
+   * Activity-level list exactly as before.
+   */
+  readonly observationId: string | null;
 }
 
 export interface ExplainDecisionRef {
@@ -155,6 +165,7 @@ interface FactDbRow {
   activity_id: string;
   asserted_by: string;
   verified_by: string | null;
+  observation_id: string | null;
 }
 
 interface DecisionDbRow {
@@ -207,14 +218,23 @@ async function fetchSourceRef(
   };
 }
 
+/** `onlyObservationId` (W5): when the Fact being explained names its own Observation
+ *  (`links.observation_id`), return just that one — still scoped to `activityId`, so a stale or
+ *  foreign id yields an empty list rather than an Observation from some other Activity. `null`
+ *  keeps the Activity-level behaviour (every Observation recorded under it, oldest first). RLS on
+ *  `observations` still applies either way: a Source the caller cannot see reads back as no row. */
 async function fetchObservationRefs(
   client: PoolClient,
   workspaceId: string,
   activityId: string,
+  onlyObservationId: string | null = null,
 ): Promise<readonly ExplainObservationRef[]> {
   const result = await client.query<ObservationDbRow>(
-    'select id, source_id, created_at from observations where workspace_id = $1 and activity_id = $2 order by created_at asc',
-    [workspaceId, activityId],
+    `select id, source_id, created_at from observations
+     where workspace_id = $1 and activity_id = $2
+       and ($3::uuid is null or id = $3)
+     order by created_at asc`,
+    [workspaceId, activityId, onlyObservationId],
   );
   const observations: ExplainObservationRef[] = [];
   for (const row of result.rows) {
@@ -228,6 +248,7 @@ async function fetchActivityRef(
   client: PoolClient,
   workspaceId: string,
   activityId: string,
+  onlyObservationId: string | null = null,
 ): Promise<ExplainActivityRef | null> {
   const result = await client.query<ActivityDbRow>(
     'select id, kind, status, created_at, ended_at, started_by, metadata from activities where workspace_id = $1 and id = $2',
@@ -240,7 +261,7 @@ async function fetchActivityRef(
   const [startedByPrincipal, onBehalfOfPrincipal, observations] = await Promise.all([
     fetchPrincipalRef(client, workspaceId, row.started_by),
     fetchPrincipalRef(client, workspaceId, onBehalfOfId),
-    fetchObservationRefs(client, workspaceId, row.id),
+    fetchObservationRefs(client, workspaceId, row.id, onlyObservationId),
   ]);
   return {
     id: row.id,
@@ -265,7 +286,7 @@ async function explainFact(
   factId: string,
 ): Promise<ExplainResult> {
   const result = await client.query<FactDbRow>(
-    'select id, link_type, epistemic_status, activity_id, asserted_by, verified_by from links where workspace_id = $1 and id = $2',
+    'select id, link_type, epistemic_status, activity_id, asserted_by, verified_by, observation_id from links where workspace_id = $1 and id = $2',
     [workspaceId, factId],
   );
   const row = result.rows[0];
@@ -274,7 +295,8 @@ async function explainFact(
   const [assertedByPrincipal, verifiedByPrincipal, activity] = await Promise.all([
     fetchPrincipalRef(client, workspaceId, row.asserted_by),
     fetchPrincipalRef(client, workspaceId, row.verified_by),
-    fetchActivityRef(client, workspaceId, row.activity_id),
+    // W5: narrow to the Fact's own Observation when it has one (see `ExplainFactRef.observationId`).
+    fetchActivityRef(client, workspaceId, row.activity_id, row.observation_id),
   ]);
 
   return {
@@ -285,6 +307,7 @@ async function explainFact(
       epistemicStatus: row.epistemic_status,
       assertedByPrincipal,
       verifiedByPrincipal,
+      observationId: row.observation_id,
     },
     activity,
   };

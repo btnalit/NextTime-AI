@@ -63,6 +63,7 @@ export function toWireFact(fact: Fact) {
     activityId: fact.activityId,
     assertedBy: fact.assertedBy,
     verifiedBy: fact.verifiedBy,
+    observationId: fact.observationId,
   };
 }
 

@@ -20,6 +20,7 @@
 export {
   DEFAULT_RECENT_FACTS_LIMIT,
   DEFAULT_SEARCH_LIMIT,
+  MAX_SEARCH_LIMIT,
   DEFAULT_TRAVERSE_DEPTH,
   DEFAULT_TRAVERSE_DIRECTION,
   EpistemicStatusOverrideError,
@@ -46,6 +47,7 @@ export type {
   InvalidateFactInput,
   NeighborsInput,
   SearchInput,
+  SearchPage,
   StateAtInput,
   StateAtResult,
   SupersedeFactInput,

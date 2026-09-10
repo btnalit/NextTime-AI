@@ -17,6 +17,7 @@ function factStep(overrides: Partial<NonNullable<ExplainResult['fact']>> = {}): 
       epistemicStatus: 'asserted',
       assertedByPrincipal: { id: 'human-1', kind: 'human', role: 'owner', displayName: 'Alice' },
       verifiedByPrincipal: null,
+      observationId: null,
       ...overrides,
     },
     activity: {

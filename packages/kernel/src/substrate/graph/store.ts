@@ -57,6 +57,11 @@ export interface Fact {
   readonly activityId: string;
   readonly assertedBy: string;
   readonly verifiedBy: string | null;
+  /** W5 (migrations/core/0018): the single Observation that fed this Fact, when the writer knew
+   *  it — `submit_observations` threads one per submitted item; `null` for ad-hoc `assert_fact`
+   *  and every pre-0018 row. `explain(factId)` narrows to it when set (§5.1.3 provenance one
+   *  level below the Activity), and falls back to the Activity's whole Observation list otherwise. */
+  readonly observationId: string | null;
 }
 
 /** The derived lifecycle state of a Fact row (§5.5) — not a stored column, computed from timestamps. */
@@ -123,6 +128,8 @@ export interface AssertFactInput {
   readonly validFrom?: Date;
   readonly validUntil?: Date | null;
   readonly confidence?: number | null;
+  /** See `Fact.observationId`. Optional — most writers have no single Observation to name. */
+  readonly observationId?: string | null;
 }
 
 export interface SupersedeFactInput extends AssertFactInput {
@@ -211,9 +218,22 @@ export interface SearchInput {
   readonly query: string;
   readonly objectType?: string;
   readonly limit?: number;
+  /** Opaque keyset cursor from a previous `SearchPage.nextCursor` (queries.ts
+   *  `encodeSearchCursor`); absent or malformed → first page. */
+  readonly cursor?: string;
+}
+
+/** `searchPage` (W5 `search` pagination): one page plus the cursor for the next, `nextCursor`
+ *  absent on the last page. */
+export interface SearchPage {
+  readonly items: readonly GraphObject[];
+  readonly nextCursor?: string;
 }
 
 export const DEFAULT_SEARCH_LIMIT = 50;
+/** Hard cap a single `search` page may carry; a larger requested `limit` is clamped here and the
+ *  capability result marks `truncated: true` (docs/wire-contract-conventions.md §3). */
+export const MAX_SEARCH_LIMIT = 200;
 
 /**
  * `listRecentFacts` (docs/development-tasks.md S1.4 `get_entry_context`: "up to N recent
@@ -468,6 +488,11 @@ export interface GraphStore {
     workspaceId: string,
     input: SearchInput,
   ): Promise<readonly GraphObject[]>;
+
+  /** W5: the paginated form of `search` — same predicate and ordering, keyset cursor in/out.
+   *  `search` itself keeps returning a bare page-less array for its existing callers
+   *  (explorer-read-service's batch fetch, find-means); new callers wanting a cursor use this. */
+  searchPage(client: PoolClient, workspaceId: string, input: SearchInput): Promise<SearchPage>;
 
   /** Up to `limit` (default `DEFAULT_RECENT_FACTS_LIMIT`) currently-active (non-superseded,
    *  non-invalidated) Facts for the workspace, newest `recorded_at` first. */

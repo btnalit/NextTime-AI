@@ -751,6 +751,65 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
     });
   });
 
+  describe('searchPage — W5 keyset pagination', () => {
+    async function makePagedObjects(marker: string): Promise<readonly string[]> {
+      return inTx(async (client) => {
+        const ids: string[] = [];
+        for (let i = 0; i < 3; i++) {
+          const obj = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.paged',
+            properties: { label: marker, i },
+          });
+          ids.push(obj.id);
+        }
+        return ids;
+      });
+    }
+
+    it('pages through 3 matching Objects with limit 2, then limit 5, and a malformed cursor behaves like the first page', async () => {
+      const marker = `paged-${randomUUID()}`;
+      const createdIds = await makePagedObjects(marker);
+
+      const page1 = await inTx((client) =>
+        store.searchPage(client, workspaceId, { query: marker, limit: 2 }),
+      );
+      expect(page1.items).toHaveLength(2);
+      expect(page1.nextCursor).toBeDefined();
+
+      const page2 = await inTx((client) =>
+        store.searchPage(client, workspaceId, {
+          query: marker,
+          limit: 2,
+          cursor: page1.nextCursor,
+        }),
+      );
+      expect(page2.items).toHaveLength(1);
+      expect(page2.nextCursor).toBeUndefined();
+
+      const seenIds = [...page1.items, ...page2.items].map((obj) => obj.id);
+      expect(new Set(seenIds)).toEqual(new Set(createdIds));
+      expect(seenIds).toHaveLength(createdIds.length);
+
+      const wholePage = await inTx((client) =>
+        store.searchPage(client, workspaceId, { query: marker, limit: 5 }),
+      );
+      expect(wholePage.items).toHaveLength(3);
+      expect(wholePage.nextCursor).toBeUndefined();
+
+      const malformedCursorPage = await inTx((client) =>
+        store.searchPage(client, workspaceId, {
+          query: marker,
+          limit: 2,
+          cursor: 'not-a-real-cursor',
+        }),
+      );
+      expect(malformedCursorPage.items).toHaveLength(2);
+      expect(malformedCursorPage.items.map((obj) => obj.id)).toEqual(
+        page1.items.map((obj) => obj.id),
+      );
+    });
+  });
+
   describe('listRecentFacts — S1.4 get_entry_context', () => {
     it('returns currently-active facts newest-first, excluding a superseded one, respecting limit', async () => {
       const [a, b] = await inTx(async (client) => [

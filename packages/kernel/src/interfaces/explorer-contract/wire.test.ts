@@ -67,6 +67,7 @@ describe('toEdgeResponse', () => {
       activityId: 'activity-1',
       assertedBy: 'human-1',
       verifiedBy: null,
+      observationId: null,
     };
     const response = toEdgeResponse(fact);
     expect(response).toMatchObject({

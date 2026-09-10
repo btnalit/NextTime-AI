@@ -285,6 +285,12 @@
         "linkType": {
           "type": "string"
         },
+        "observationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "properties": {
           "additionalProperties": {},
           "type": "object"
@@ -343,7 +349,8 @@
         "confidence",
         "activityId",
         "assertedBy",
-        "verifiedBy"
+        "verifiedBy",
+        "observationId"
       ],
       "type": "object"
     }
@@ -905,6 +912,12 @@
                   "linkType": {
                     "type": "string"
                   },
+                  "observationId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "verifiedByPrincipal": {
                     "anyOf": [
                       {
@@ -948,7 +961,8 @@
                   "linkType",
                   "epistemicStatus",
                   "assertedByPrincipal",
-                  "verifiedByPrincipal"
+                  "verifiedByPrincipal",
+                  "observationId"
                 ],
                 "type": "object"
               },
@@ -1372,6 +1386,12 @@
               "linkType": {
                 "type": "string"
               },
+              "observationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "properties": {
                 "additionalProperties": {},
                 "type": "object"
@@ -1430,7 +1450,8 @@
               "confidence",
               "activityId",
               "assertedBy",
-              "verifiedBy"
+              "verifiedBy",
+              "observationId"
             ],
             "type": "object"
           },
@@ -2182,6 +2203,12 @@
             "linkType": {
               "type": "string"
             },
+            "observationId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "verifiedByPrincipal": {
               "anyOf": [
                 {
@@ -2225,7 +2252,8 @@
             "linkType",
             "epistemicStatus",
             "assertedByPrincipal",
-            "verifiedByPrincipal"
+            "verifiedByPrincipal",
+            "observationId"
           ],
           "type": "object"
         },
@@ -3246,6 +3274,12 @@
               "linkType": {
                 "type": "string"
               },
+              "observationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "properties": {
                 "additionalProperties": {},
                 "type": "object"
@@ -3304,7 +3338,8 @@
               "confidence",
               "activityId",
               "assertedBy",
-              "verifiedBy"
+              "verifiedBy",
+              "observationId"
             ],
             "type": "object"
           },
@@ -4188,6 +4223,12 @@
         "linkType": {
           "type": "string"
         },
+        "observationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "properties": {
           "additionalProperties": {},
           "type": "object"
@@ -4246,7 +4287,8 @@
         "confidence",
         "activityId",
         "assertedBy",
-        "verifiedBy"
+        "verifiedBy",
+        "observationId"
       ],
       "type": "object"
     }
@@ -7533,6 +7575,12 @@
               "linkType": {
                 "type": "string"
               },
+              "observationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "properties": {
                 "additionalProperties": {},
                 "type": "object"
@@ -7591,7 +7639,8 @@
               "confidence",
               "activityId",
               "assertedBy",
-              "verifiedBy"
+              "verifiedBy",
+              "observationId"
             ],
             "type": "object"
           },
@@ -8990,6 +9039,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
         "objectType": {
           "type": "string"
         },
@@ -9816,6 +9872,12 @@
               "linkType": {
                 "type": "string"
               },
+              "observationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "properties": {
                 "additionalProperties": {},
                 "type": "object"
@@ -9874,7 +9936,8 @@
               "confidence",
               "activityId",
               "assertedBy",
-              "verifiedBy"
+              "verifiedBy",
+              "observationId"
             ],
             "type": "object"
           },
@@ -10257,6 +10320,12 @@
         "linkType": {
           "type": "string"
         },
+        "observationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "properties": {
           "additionalProperties": {},
           "type": "object"
@@ -10315,7 +10384,8 @@
         "confidence",
         "activityId",
         "assertedBy",
-        "verifiedBy"
+        "verifiedBy",
+        "observationId"
       ],
       "type": "object"
     }
@@ -10521,6 +10591,12 @@
         "linkType": {
           "type": "string"
         },
+        "observationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "properties": {
           "additionalProperties": {},
           "type": "object"
@@ -10579,7 +10655,8 @@
         "confidence",
         "activityId",
         "assertedBy",
-        "verifiedBy"
+        "verifiedBy",
+        "observationId"
       ],
       "type": "object"
     }

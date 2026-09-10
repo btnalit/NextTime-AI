@@ -41,6 +41,8 @@ export const FactWireSchema = z
     activityId: z.string(),
     assertedBy: z.string(),
     verifiedBy: z.string().nullable(),
+    /** W5: the single Observation that fed this Fact, or `null` (see kernel migration 0018). */
+    observationId: z.string().nullable(),
   })
   .strict();
 export type FactWire = z.infer<typeof FactWireSchema>;
@@ -118,6 +120,8 @@ const ExplainFactRefSchema = z
     epistemicStatus: z.string(),
     assertedByPrincipal: ExplainPrincipalRefSchema,
     verifiedByPrincipal: ExplainPrincipalRefSchema,
+    /** W5: when non-null, `activity.observations` is narrowed to exactly this Observation. */
+    observationId: z.string().nullable(),
   })
   .strict();
 

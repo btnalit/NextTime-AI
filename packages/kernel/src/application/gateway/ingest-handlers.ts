@@ -348,6 +348,7 @@ async function writeLink(
   linkType: string,
   properties: Record<string, unknown>,
   state: SubmitObservationsState,
+  observationId: string,
 ): Promise<void> {
   const fact = await graphStore.assertFact(
     client,
@@ -359,6 +360,9 @@ async function writeLink(
       targetObjectId: targetObject.id,
       activityId,
       properties,
+      // W5 (migrations/core/0018): the Observation this item recorded is the one that fed this
+      // Link — `explain(factId)` narrows to it instead of the Activity's whole batch.
+      observationId,
     },
   );
   if (fact.unchanged) {
@@ -429,7 +433,10 @@ export const submitObservationsHandler: CapabilityHandler = async (
       // `explain(factId)` can trace every Fact this item's links produce back to it, and (see this
       // file's module doc comment) so `resolveFactOrigin` (S3.2) always finds exactly one distinct
       // `source_id` feeding this Activity.
-      await recordSourceObservation(client, workspaceId, { sourceId: params.sourceId, activityId });
+      const recorded = await recordSourceObservation(client, workspaceId, {
+        sourceId: params.sourceId,
+        activityId,
+      });
 
       for (const link of observation.links ?? []) {
         const targetObject = await upsertCounted(
@@ -450,6 +457,7 @@ export const submitObservationsHandler: CapabilityHandler = async (
           link.linkType,
           link.properties ?? {},
           state,
+          recorded.id,
         );
       }
     }
