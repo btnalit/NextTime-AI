@@ -7,6 +7,7 @@ import {
   HandleClaimsSchema,
   HandleTokenExpired,
   HandleTokenInvalid,
+  type Role,
   getCapability,
   verifyHandleToken,
 } from '@nexttime/shared';
@@ -14,6 +15,7 @@ import { SignJWT } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
 import { HANDLE_SIGNING_ALG } from './keys.js';
+import { roleSatisfiesMinRole } from './roles.js';
 
 /** Re-exported unchanged so every existing importer of `./handles.js` keeps working — the schema
  *  and type now live in `@nexttime/shared`'s `handle-token` module (S1.7 "共享 Handle-token 原语"),
@@ -294,15 +296,36 @@ export interface EntryWorkerDefinitionInput {
  * from `definition.resources` (e.g. which Gatekeepers/objects this entry WorkerDefinition may
  * observe) and defaults to `{}` (no resource access) when omitted.
  */
-export function entryScope(definition: EntryWorkerDefinitionInput = {}): CapabilityScope {
+export function entryScope(
+  definition: EntryWorkerDefinitionInput = {},
+  options: EntryScopeOptions = {},
+): CapabilityScope {
   const resources: Record<string, string[]> = {};
   for (const [key, ids] of Object.entries(definition.resources ?? {})) {
     resources[key] = [...ids];
   }
-  return {
-    capabilities: [...ENTRY_CEILING_CAPABILITIES],
-    resources,
-  };
+  const role = options.role;
+  const capabilities =
+    role === undefined
+      ? [...ENTRY_CEILING_CAPABILITIES]
+      : ENTRY_CEILING_CAPABILITIES.filter((name) =>
+          roleSatisfiesMinRole(role, getCapability(name)?.minRole),
+        );
+  return { capabilities, resources };
+}
+
+/**
+ * W5.5 (STATUS leftover 18): the on-behalf-of Principal's role, when the issuer knows it. With a
+ * role, `entryScope` drops every ceiling capability whose registry `minRole` that role does not
+ * satisfy (`roleSatisfiesMinRole`, roles.ts) — concretely, a `member`'s entry Handle no longer
+ * carries the five `minRole:'builder'` `propose_*` capabilities the fixed ceiling includes.
+ * `<gate>.<op>` (not a registry row) and every capability without `minRole` are always kept.
+ * Without a role (tests, callers that only need the abstract ceiling such as
+ * `application/worker/definitions.ts`'s declared-capability validation) the full ceiling is
+ * returned exactly as before.
+ */
+export interface EntryScopeOptions {
+  readonly role?: Role;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -712,6 +735,30 @@ export async function revokeEntrySessionHandles(
   const result = await client.query<{ id: string }>(
     `select id from sessions
      where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = 'entry'`,
+    [workspaceId, principalId],
+  );
+  for (const row of result.rows) {
+    await revokeSession(client, row.id);
+  }
+}
+
+/**
+ * W5.5 (STATUS leftover 18): every Handle whose ceiling was narrowed by `principalId`'s role at
+ * issuance — the resident entry agent's `kind='entry'` session(s) *and* every `kind='mcp_session'`
+ * session `issue_handle` (application/gateway/issue-handle-handler.ts) opened on their behalf. A
+ * role change must reach both: an `mcp_session` Handle can carry a caller-chosen ttl of up to 30
+ * days, so leaving it alone would keep owner/builder-gated capability names on a demoted principal
+ * for exactly that long. `revokeEntrySessionHandles` above stays entry-only for its existing
+ * Grant/Profile-change callers, whose ceilings do not depend on session kind the same way.
+ */
+export async function revokeRoleScopedSessionHandles(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `select id from sessions
+     where workspace_id = $1 and on_behalf_of = $2 and kind in ('entry', 'mcp_session')`,
     [workspaceId, principalId],
   );
   for (const row of result.rows) {

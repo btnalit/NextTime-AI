@@ -1,3 +1,4 @@
+import type { Role } from '@nexttime/shared';
 import type {
   AgentHostToKernelFrame,
   AgentRuntimeEventWire,
@@ -122,6 +123,15 @@ interface CachedHandle {
   readonly token: string;
   readonly issuedAtMs: number;
   readonly expiresAtMs: number;
+  /** W5.5 (STATUS leftover 18): the principal's `role` the cached Handle's ceiling was narrowed
+   *  by (`entryScope({ role })`). Re-read on every `ensureEntryHandle` call and compared, so a
+   *  `set_principal_role` change reissues on the very next Turn. */
+  readonly role: Role | undefined;
+  /** The cached Handle's own `jti`, so `ensureEntryHandle` can ask the database whether it has
+   *  been revoked since it was cached (W5.5 review): a value comparison alone (role, gates,
+   *  profile) misses any revocation that leaves the compared values unchanged — e.g. a role
+   *  changed and changed back between two Turns, which revoked this token DB-side both times. */
+  readonly jti: string;
   /** The `resources.gatekeeper` ids baked into this cached Handle at issuance (S2.13) — compared
    *  against a fresh `listActiveGrantResourceScopes` read on every `ensureEntryHandle` call
    *  (authority-tightening fix, review job 652a4abc item 4: "Grant changes become visible") so a
@@ -713,10 +723,18 @@ export class AgentHostRuntime implements AgentRuntime {
     const profileVersionKey = agentProfileVersionKey(agentProfile);
 
     const cached = this.handleCache.get(principalId);
+    const { role, cachedRevoked } = await this.readHandleFreshness(
+      workspaceId,
+      principalId,
+      cached?.jti,
+    );
+
     if (
       cached &&
+      !cachedRevoked &&
       sameGatekeeperScope(cached.gatekeeperIds, gatekeeperIds) &&
-      cached.profileVersionKey === profileVersionKey
+      cached.profileVersionKey === profileVersionKey &&
+      cached.role === role
     ) {
       const totalTtlMs = cached.expiresAtMs - cached.issuedAtMs;
       const remainingMs = cached.expiresAtMs - this.now();
@@ -730,6 +748,7 @@ export class AgentHostRuntime implements AgentRuntime {
         sessionId,
         scope: entryScope(
           gatekeeperIds.length > 0 ? { resources: { gatekeeper: gatekeeperIds } } : {},
+          role === undefined ? {} : { role },
         ),
         ttlSeconds: this.entryHandleTtlSeconds,
         privateKey: this.privateKey,
@@ -741,8 +760,42 @@ export class AgentHostRuntime implements AgentRuntime {
       expiresAtMs: issued.expiresAt.getTime(),
       gatekeeperIds,
       profileVersionKey,
+      role,
+      jti: issued.jti,
     });
     return issued.token;
+  }
+
+  /**
+   * One round trip for the two DB-side freshness signals `ensureEntryHandle` needs (W5.5, see
+   * `CachedHandle.role` / `CachedHandle.jti`): the principal's current `role`, and whether the
+   * cached Handle (if any) has been revoked since it was cached. `role` is `undefined` only if the
+   * principals row is gone — `entryScope` then falls back to the full ceiling and the Handle is
+   * refused downstream anyway (`handle-auth.ts` treats a missing on-behalf-of principal as
+   * disabled). `cachedRevoked` is `true` when the jti is unknown *or* revoked — either way the
+   * cache entry is not to be trusted. Same inline role query `application/task/handle-mint.ts`
+   * uses.
+   */
+  private async readHandleFreshness(
+    workspaceId: string,
+    principalId: string,
+    cachedJti: string | undefined,
+  ): Promise<{ readonly role: Role | undefined; readonly cachedRevoked: boolean }> {
+    return withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
+      const roleResult = await client.query<{ role: Role }>(
+        'select role from principals where workspace_id = $1 and id = $2',
+        [workspaceId, principalId],
+      );
+      let cachedRevoked = false;
+      if (cachedJti !== undefined) {
+        const handleResult = await client.query<{ live: boolean }>(
+          'select (revoked_at is null) as live from capability_handles where workspace_id = $1 and jti = $2',
+          [workspaceId, cachedJti],
+        );
+        cachedRevoked = handleResult.rows[0]?.live !== true;
+      }
+      return { role: roleResult.rows[0]?.role, cachedRevoked };
+    });
   }
 
   /**

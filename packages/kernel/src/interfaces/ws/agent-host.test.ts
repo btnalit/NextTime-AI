@@ -58,6 +58,15 @@ function createFakePool(): PoolLike {
       sessionIdByPrincipal.set(principalId, id);
       return { rows: [{ id }], rowCount: 1 };
     }
+    if (sql.startsWith('select (revoked_at is null) as live from capability_handles')) {
+      return { rows: [{ live: true }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select role from principals')) {
+      // W5.5 (STATUS leftover 18): `ensureEntryHandle`'s role read — owner keeps the full ceiling.
+      return { rows: [{ role: 'owner' }], rowCount: 1 };
+    }
+
     if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
       const [sessionId] = params as [string];
       const principalId = [...sessionIdByPrincipal.entries()].find(

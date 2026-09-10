@@ -22,6 +22,7 @@ import {
   issueHandle,
   revokeEntrySessionHandles,
   revokeHandle,
+  revokeRoleScopedSessionHandles,
   revokeSession,
   verifyHandle,
 } from './handles.js';
@@ -652,6 +653,66 @@ describe('entryScope', () => {
     expect(withResources.resources).toEqual({ gatekeeper: ['gk-1'] });
     expect(withResources.capabilities).toEqual([...ENTRY_CEILING_CAPABILITIES]);
   });
+
+  it('with no role, is identical to the full fixed ceiling (unchanged pre-W5.5 behavior)', () => {
+    const scope = entryScope();
+    expect(scope.capabilities).toEqual([...ENTRY_CEILING_CAPABILITIES]);
+  });
+
+  describe('role-aware narrowing (W5.5, STATUS leftover 18)', () => {
+    // Derived from the registry rather than hardcoded, so this test tracks CAPABILITY_REGISTRY
+    // if a future capability's minRole changes.
+    const builderOnlyCeilingNames = ENTRY_CEILING_CAPABILITIES.filter(
+      (name) => getCapability(name)?.minRole === 'builder',
+    );
+
+    it('has at least the five known builder-gated propose_* capabilities on the ceiling', () => {
+      // Sanity check on the derivation itself: every builder-gated ceiling name should be a
+      // propose_* capability (design doc §5.1.4 — entry never holds any other builder-only
+      // capability), and there should be at least one, or the exclusion assertion below would be
+      // vacuous.
+      expect(builderOnlyCeilingNames.length).toBeGreaterThan(0);
+      for (const name of builderOnlyCeilingNames) {
+        expect(name.startsWith('propose_')).toBe(true);
+      }
+    });
+
+    it("a member role's scope contains none of the registry's builder-minRole ceiling capabilities", () => {
+      const scope = entryScope({}, { role: 'member' });
+
+      for (const name of builderOnlyCeilingNames) {
+        expect(scope.capabilities).not.toContain(name);
+      }
+    });
+
+    it("a member role's scope still contains capabilities with minRole member/undefined", () => {
+      const scope = entryScope({}, { role: 'member' });
+
+      expect(scope.capabilities).toContain('get_object');
+      expect(scope.capabilities).toContain('explain');
+      expect(scope.capabilities).toContain('invoke_worker');
+      expect(scope.capabilities).toContain('<gate>.<op>');
+    });
+
+    it('owner role gets the full ceiling as a set', () => {
+      const scope = entryScope({}, { role: 'owner' });
+      expect(new Set(scope.capabilities)).toEqual(new Set(ENTRY_CEILING_CAPABILITIES));
+    });
+
+    it('builder role gets the full ceiling as a set, since no ceiling capability requires a role other than member or builder', () => {
+      // Confirm the registry assumption this test relies on, rather than hardcoding it: if some
+      // future ceiling capability ever gains a minRole of 'operator'/'auditor'/'owner', this
+      // assertion (not the entryScope behavior) is what should fail first.
+      const nonBuilderNonMemberCeilingNames = ENTRY_CEILING_CAPABILITIES.filter((name) => {
+        const minRole = getCapability(name)?.minRole;
+        return minRole !== undefined && minRole !== 'member' && minRole !== 'builder';
+      });
+      expect(nonBuilderNonMemberCeilingNames).toEqual([]);
+
+      const scope = entryScope({}, { role: 'builder' });
+      expect(new Set(scope.capabilities)).toEqual(new Set(ENTRY_CEILING_CAPABILITIES));
+    });
+  });
 });
 
 // -------------------------------------------------------------------------------------------
@@ -917,6 +978,98 @@ describe.runIf(DATABASE_URL !== undefined)(
         HandleRevoked,
       );
       // Untouched: not a `kind='entry'` session, or belongs to a different principal.
+      await expect(verifyHandle(webIssued.token, { publicKey, isRevoked })).resolves.toBeTruthy();
+      await expect(
+        verifyHandle(otherOwnerIssued.token, { publicKey, isRevoked }),
+      ).resolves.toBeTruthy();
+    });
+
+    // W5.5 review fix: `set_principal_role` now calls this instead of `revokeEntrySessionHandles`
+    // above — a role change must reach every session kind whose ceiling depends on role, not just
+    // the resident entry agent's.
+    it('revokeRoleScopedSessionHandles revokes handles under both kind=entry and kind=mcp_session sessions, and leaves other kinds/principals untouched', async () => {
+      const { privateKey, publicKey } = await generateEphemeralHandleKeyPair();
+      const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
+
+      const targetPrincipalId = otherPrincipalId;
+      const entrySessionId = await insertSession(workspaceId, targetPrincipalId, targetPrincipalId);
+      const mcpSessionId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: targetPrincipalId },
+        async (client) => {
+          const id = randomUUID();
+          await client.query(
+            `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, $3, 'mcp_session', $3, 'active')`,
+            [workspaceId, id, targetPrincipalId],
+          );
+          return id;
+        },
+      );
+      // A non-role-scoped (web) session for the same principal, and an entry session for a
+      // *different* principal — neither must be touched.
+      const webSessionId = await withWorkspace(
+        pool,
+        { workspaceId, principalId: targetPrincipalId },
+        async (client) => {
+          const id = randomUUID();
+          await client.query(
+            `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, $3, 'web', $3, 'active')`,
+            [workspaceId, id, targetPrincipalId],
+          );
+          return id;
+        },
+      );
+
+      const [entryIssued, mcpIssued, webIssued, otherOwnerIssued] = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const entry = await issueHandle(client, {
+            sessionId: entrySessionId,
+            scope,
+            ttlSeconds: 300,
+            privateKey,
+          });
+          const mcp = await issueHandle(client, {
+            sessionId: mcpSessionId,
+            scope,
+            ttlSeconds: 300,
+            privateKey,
+          });
+          const web = await issueHandle(client, {
+            sessionId: webSessionId,
+            scope,
+            ttlSeconds: 300,
+            privateKey,
+          });
+          const otherOwner = await issueHandle(client, {
+            sessionId,
+            scope,
+            ttlSeconds: 300,
+            privateKey,
+          });
+          return [entry, mcp, web, otherOwner];
+        },
+      );
+
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        revokeRoleScopedSessionHandles(client, workspaceId, targetPrincipalId),
+      );
+
+      const isRevoked = (jti: string): Promise<boolean> =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          createDbRevocationCheck(client)(jti),
+        );
+
+      await expect(verifyHandle(entryIssued.token, { publicKey, isRevoked })).rejects.toThrow(
+        HandleRevoked,
+      );
+      await expect(verifyHandle(mcpIssued.token, { publicKey, isRevoked })).rejects.toThrow(
+        HandleRevoked,
+      );
+      // Untouched: not an `entry`/`mcp_session` kind, or belongs to a different principal.
       await expect(verifyHandle(webIssued.token, { publicKey, isRevoked })).resolves.toBeTruthy();
       await expect(
         verifyHandle(otherOwnerIssued.token, { publicKey, isRevoked }),

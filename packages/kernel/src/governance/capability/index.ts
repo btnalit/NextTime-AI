@@ -14,4 +14,5 @@
  */
 export * from './keys.js';
 export * from './handles.js';
+export * from './roles.js';
 export * from './grants.js';
