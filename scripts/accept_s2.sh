@@ -4,15 +4,15 @@
 # conventions as scripts/accept_s1.sh (this script's structural template): every docker compose
 # run/exec carries </dev/null, a mounted driver script drives every kernel interaction from inside
 # a throwaway kernel-image container (the host has no node/corepack), secrets are held only in
-# shell variables and printed only via redact(), and an EXIT trap cleans up every temp file
-# regardless of how the script terminates.
+# shell variables and printed only via redact(), and no temp file is ever written (the driver is
+# a checked-in file mounted by path).
 #
 # Usage:
 #   sh scripts/accept_s2.sh [--keep]
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s2.sh' </dev/null
 #
-# --keep skips the accept-s2 profile teardown (leaves the fixtures/gates/workspace up for
-# inspection).
+# --keep skips removing the accept-s2 fixture containers (leaves the fixtures/gates/workspace up
+# for inspection).
 #
 # Preconditions (see docs/runbooks/host-accept-s2.md for the full walkthrough):
 #   - `docker compose --profile test up -d` already running (accept_s1.sh's own preconditions —
@@ -22,18 +22,19 @@
 #     `nexttime-ai-worker-runtime` — step 6's fallback env/egress probe runs that image directly.
 #
 # Toolset: identical rationale to accept_s1.sh's own header comment — every kernel interaction
-# (chat WS, and here also every `POST /api/cap/<name>` capability call) runs through one mounted
-# driver script (DRIVER_JS below) inside a throwaway `kernel`-image container
-# (`docker compose run --rm --no-deps -T -v <tmpfile>:/tmp/driver.mjs:ro kernel node
-# /tmp/driver.mjs <subcommand> ...`), talking to the real running kernel over the `control`
-# network (`http://kernel:8080/...`, `ws://kernel:8080/ws`) — not through caddy's self-signed TLS,
+# (chat WS, and here also every `POST /api/cap/<name>` capability call) runs through the shared
+# driver, deploy/accept/driver.mjs, bind-mounted read-only into a throwaway `kernel`-image
+# container by the shared `run_driver` helper in scripts/lib/ (see that file's own header comment for
+# the exact `docker compose run` invocation — no temp file), talking to the real running kernel
+# over the `control` network
+# (`http://kernel:8080/...`, `ws://kernel:8080/ws`) — not through caddy's self-signed TLS,
 # same reasoning as accept_s1.sh's own header comment (this script has no single "the one step
 # that deliberately goes through caddy" the way accept_s1.sh's explain_step does; every capability
 # call here uses the same internal path uniformly, matching docs/runbooks/host-gatekeepers.md's own
 # `docker compose exec -T kernel node -e "fetch('http://localhost:8080/...')"` precedent — the
 # difference being `run --rm --no-deps` + the service DNS name `kernel`, not `exec` inside the
 # already-running container + `localhost`, because this script's driver runs in its *own* fresh
-# container each invocation, same as accept_s1.sh's ws-client.mjs).
+# container each invocation, same as accept_s1.sh's own driver invocation).
 #
 # JSON handling: this script has no `jq` dependency (not guaranteed present on the target host) —
 # every capability-call/chat-history result that needs field extraction is parsed with a real
@@ -78,298 +79,8 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
   exit 1
 fi
 
-# --------------------------------------------------------------------------------------------
-# PASS/FAIL/SKIP helpers. FAIL aborts immediately (a real defect). SKIP records a known,
-# documented platform gap (docs/runbooks/host-accept-s2.md "已知偏离") and lets the script keep
-# running every other step — but the script exits non-zero and never prints "S2 OK" if any SKIP
-# was recorded (task brief: "the script must then exit non-zero, not print S2 OK").
-# --------------------------------------------------------------------------------------------
-
-pass() {
-  printf 'PASS %s %s\n' "$1" "$2"
-}
-
-fail() {
-  printf 'FAIL %s %s\n' "$1" "$2" >&2
-  exit 1
-}
-
-SKIP_COUNT=0
-SKIP_LOG=""
-skip() {
-  printf 'SKIP %s %s\n' "$1" "$2"
-  SKIP_COUNT=$((SKIP_COUNT + 1))
-  SKIP_LOG="${SKIP_LOG}SKIP $1 $2
-"
-}
-
-redact() {
-  prefix=$(printf '%s' "$1" | cut -c1-6)
-  printf '%s...(redacted)' "$prefix"
-}
-
-parse_kv() {
-  printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -n 1
-}
-
-# --------------------------------------------------------------------------------------------
-# driver.mjs — mounted read-only into a throwaway kernel-image container per call (see file
-# header above for why). Three subcommands:
-#   cap <token> <capabilityName> <paramsJson> [extractExpr]
-#     POST http://kernel:8080/api/cap/<capabilityName> with `Authorization: Bearer <token>`.
-#     Prints `HTTP_STATUS=<n>` then `BODY=<raw json, one line>`. If `extractExpr` is given, it is
-#     evaluated as a JS expression (parsed body bound to `d`) and the result printed as
-#     `EXTRACTED=<value>` (strings printed verbatim, everything else JSON-stringified; `undefined`/
-#     `null`/a parse or eval failure prints an empty `EXTRACTED=` line, never throws).
-#   send-and-wait <token> <chatId|""> <text> <timeoutMs>
-#     Verbatim copy of accept_s1.sh's own ws-client.mjs subcommand of the same name (chat WS
-#     JSON-RPC — §9.4): authenticate -> (new_chat if chatId omitted) -> subscribe_chat ->
-#     send_chat_message(text) -> wait for that Turn's chat.metadata (turnStatus) or timeoutMs,
-#     whichever first -> get_chat_history. Prints CHAT_ID/TURN_ID/TURN_STATUS/ECHO_SEEN/
-#     HISTORY_COUNT.
-#   get-history <token> <chatId> [extractExpr]
-#     authenticate -> get_chat_history({chatId}). Prints `RESULT=<json array of messages>`; same
-#     optional trailing JS-expression extraction as `cap` (bound to `d`, the parsed messages
-#     array).
-WS_CLIENT_HOST_PATH=$(mktemp /tmp/nt-accept-s2-driver.XXXXXX.mjs) || {
-  echo "accept_s2: mktemp failed" >&2
-  exit 1
-}
-# mktemp defaults to mode 0600 — the kernel image's own container process runs as a non-root uid
-# (10001) that will not generally match whatever uid runs this script on the host, so the
-# bind-mounted file needs to be world-readable (same reasoning as accept_s1.sh's own WS_CLIENT_
-# HOST_PATH comment). Contains no secret — see this file's "Confidentiality" header comment.
-chmod 644 "$WS_CLIENT_HOST_PATH"
-
-FIXTURE_DIRS_CREATED=0
-cleanup_tmp() {
-  rm -f "$WS_CLIENT_HOST_PATH"
-}
-trap cleanup_tmp EXIT INT TERM
-
-cat >"$WS_CLIENT_HOST_PATH" <<'DRIVER_JS'
-// driver.mjs — S2.12 acceptance driver (scripts/accept_s2.sh). See that script's own header
-// comment for why this exists as a mounted file rather than inline `node -e`, and for the
-// `cap`/`send-and-wait`/`get-history` subcommand contracts.
-
-const KERNEL_HTTP = 'http://kernel:8080';
-const WS_URL = 'ws://kernel:8080/ws';
-const RPC_TIMEOUT_MS = 30000;
-
-function connect(url) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
-    ws.addEventListener('open', () => resolve(ws));
-    ws.addEventListener('error', () => reject(new Error(`ws connect failed: ${url}`)));
-  });
-}
-
-function idCounter() {
-  let n = 0;
-  return () => {
-    n += 1;
-    return n;
-  };
-}
-
-function call(ws, id, method, params) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.removeEventListener('message', onMessage);
-      reject(new Error(`rpc timeout: ${method}`));
-    }, RPC_TIMEOUT_MS);
-    function onMessage(ev) {
-      const raw = typeof ev.data === 'string' ? ev.data : String(ev.data);
-      let msg;
-      try {
-        msg = JSON.parse(raw);
-      } catch {
-        return;
-      }
-      if (msg.id !== id) return;
-      clearTimeout(timer);
-      ws.removeEventListener('message', onMessage);
-      if (msg.error) {
-        reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
-      } else {
-        resolve(msg.result);
-      }
-    }
-    ws.addEventListener('message', onMessage);
-    ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }));
-  });
-}
-
-function onPush(ws, handler) {
-  ws.addEventListener('message', (ev) => {
-    const raw = typeof ev.data === 'string' ? ev.data : String(ev.data);
-    let msg;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (msg.id !== undefined) return;
-    if (typeof msg.method === 'string') handler(msg);
-  });
-}
-
-function print(fields) {
-  for (const [k, v] of Object.entries(fields)) console.log(`${k}=${v}`);
-}
-
-function printExtraction(parsed, expr) {
-  if (!expr) return;
-  try {
-    const d = parsed;
-    // eslint-disable-next-line no-eval -- expr is authored by this script's own caller, never
-    // untrusted input; see driver.mjs's own header comment.
-    const v = eval(expr);
-    if (v === undefined || v === null) {
-      console.log('EXTRACTED=');
-    } else {
-      console.log(`EXTRACTED=${typeof v === 'string' ? v : JSON.stringify(v)}`);
-    }
-  } catch (err) {
-    console.log('EXTRACTED=');
-    console.log(`EXTRACT_ERROR=${(err && err.message) || String(err)}`);
-  }
-}
-
-async function cmdCap(args) {
-  const [token, capabilityName, paramsJson, extractExpr] = args;
-  const res = await fetch(`${KERNEL_HTTP}/api/cap/${capabilityName}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: paramsJson && paramsJson.length > 0 ? paramsJson : '{}',
-  });
-  const text = await res.text();
-  console.log(`HTTP_STATUS=${res.status}`);
-  console.log(`BODY=${text}`);
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = undefined;
-  }
-  printExtraction(parsed, extractExpr);
-}
-
-async function cmdSendAndWait(args) {
-  const [token, chatIdArg, text, timeoutMsArg] = args;
-  const timeoutMs = Number(timeoutMsArg || 120000);
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
-
-  let chatId = chatIdArg;
-  if (!chatId) {
-    const chat = await call(ws, nextId(), 'new_chat', {});
-    chatId = chat.id;
-  }
-
-  await call(ws, nextId(), 'subscribe_chat', { chatId, startAfter: '0' });
-
-  let turnId;
-  let turnStatus;
-  let echoSeen = false;
-  const settled = new Promise((resolve) => {
-    onPush(ws, (msg) => {
-      if (msg.method === 'chat.metadata' && msg.params?.chatId === chatId) {
-        const md = msg.params.metadata ?? {};
-        if (turnId && md.turnId === turnId && md.turnStatus) {
-          turnStatus = md.turnStatus;
-          resolve();
-        }
-      }
-      if (msg.method === 'chat.message' && msg.params?.chatId === chatId) {
-        const m = msg.params.message ?? {};
-        if (m.role === 'assistant' && typeof m.text === 'string' && m.text.includes('echo:')) {
-          echoSeen = true;
-        }
-      }
-    });
-  });
-
-  const sendResult = await call(ws, nextId(), 'send_chat_message', { chatId, text });
-  turnId = sendResult.turnId;
-
-  await Promise.race([
-    settled,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('turn did not settle before timeout')), timeoutMs),
-    ),
-  ]).catch(() => {
-    // Timeout is reported via TURN_STATUS=(empty), not a thrown ERROR= — several accept_s2.sh
-    // scenarios (the entry-mode-gap scripted scenarios, see fake-llm's own doc comment)
-    // deliberately do not settle to 'completed' and the caller needs to observe that, not have
-    // this driver exit 1 out from under it.
-  });
-
-  const history = await call(ws, nextId(), 'get_chat_history', { chatId });
-
-  print({
-    CHAT_ID: chatId,
-    TURN_ID: turnId,
-    TURN_STATUS: turnStatus ?? '',
-    ECHO_SEEN: echoSeen ? 1 : 0,
-    HISTORY_COUNT: history.items.length,
-  });
-  ws.close();
-}
-
-async function cmdGetHistory(args) {
-  const [token, chatId, extractExpr] = args;
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
-  const history = await call(ws, nextId(), 'get_chat_history', { chatId });
-  console.log(`RESULT=${JSON.stringify(history.items)}`);
-  printExtraction(history.items, extractExpr);
-  ws.close();
-}
-
-const COMMANDS = {
-  cap: cmdCap,
-  'send-and-wait': cmdSendAndWait,
-  'get-history': cmdGetHistory,
-};
-
-async function main() {
-  const [, , cmd, ...rest] = process.argv;
-  const fn = COMMANDS[cmd];
-  if (!fn) throw new Error(`unknown subcommand: ${cmd}`);
-  await fn(rest);
-}
-
-// Flush stdout before exiting: inside a container stdout is not a synchronous pipe, and
-// process.exit() right after a large console.log drops the tail of the output (accept_s3's
-// explain step lost its EXTRACTED= line that way). write('', cb) fires only after every
-// earlier chunk has been flushed.
-main()
-  .then(() => process.stdout.write('', () => process.exit(0)))
-  .catch((err) => {
-    console.log(`ERROR=${(err && err.message) || String(err)}`);
-    process.stdout.write('', () => process.exit(1));
-  });
-DRIVER_JS
-
-# Runs one driver.mjs subcommand in a throwaway kernel-image container, on the control network,
-# with the driver script mounted read-only. Combines stdout+stderr into one blob (same convention
-# as accept_s1.sh's compose_run_ws).
-run_driver() {
-  docker compose run --rm --no-deps -T -v "$WS_CLIENT_HOST_PATH:/tmp/driver.mjs:ro" kernel \
-    node /tmp/driver.mjs "$@" </dev/null 2>&1
-}
-
-# One capability call. Prints the same blob run_driver's `cap` subcommand prints
-# (HTTP_STATUS=/BODY=/EXTRACTED=); callers extract with parse_kv.
-cap() {
-  run_driver cap "$1" "$2" "$3" "${4:-}"
-}
+. "$(dirname "$0")/lib/accept-common.sh"
+require_driver
 
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
@@ -379,31 +90,6 @@ fetch('http://worker-supervisor:8081/resident/stop', {
   body: JSON.stringify({ principalId: '$1' }),
 }).then((r) => console.log('STATUS=' + r.status));
 " </dev/null 2>&1
-}
-
-# Polls one gate's /gate/health (reachable only inside the control network — no host port) from
-# inside the kernel image, same node-fetch pattern docs/runbooks/host-gatekeepers.md's own §3
-# uses. Every gate route — health included — requires the shared kernel↔gate token since the
-# gate-protocol hardening (review lane 5 P1-1, `gate_token` compose secret), so the probe reads
-# the kernel container's own copy at /run/secrets/gate_token and sends it as a Bearer; without it
-# the gate answers 401 and this loop would time out against a perfectly healthy gate (2026-09-08
-# regression run). Retries for up to ~30s (gate containers can take a few seconds to bind their
-# port after `docker compose up -d`).
-wait_for_gate_health() {
-  gate_url="$1"
-  attempt=0
-  while [ "$attempt" -lt 15 ]; do
-    out=$(docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/gate_token', 'utf8').trim();
-fetch('$gate_url/gate/health', { headers: { authorization: 'Bearer ' + token } }).then((r) => r.json()).then((b) => console.log('OK=' + (b.ok === true)))
-" </dev/null 2>&1)
-    case "$out" in
-      *OK=true*) return 0 ;;
-    esac
-    attempt=$((attempt + 1))
-    sleep 2
-  done
-  return 1
 }
 
 # --------------------------------------------------------------------------------------------
@@ -1218,14 +904,17 @@ cleanup_step() {
   fi
   resident_stop "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
   resident_stop "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
-  down_out=$(docker compose --profile accept-s2 down 2>&1)
+  # `down` on a profile also stops every default-profile service (postgres/kernel/…), which broke
+  # running accept_s3.sh right after this script (STATUS leftover 26) — `rm -sf` the six accept-s2
+  # fixture/gate containers by name instead, leaving the rest of the stack untouched.
+  down_out=$(docker compose --profile accept-s2 rm -sf accept-s2-sshd accept-s2-openapi accept-s2-mcp accept-s2-ssh-gate accept-s2-http-gate accept-s2-restart-target 2>&1)
   down_rc=$?
   if [ "$down_rc" -ne 0 ]; then
-    echo "cleanup: docker compose --profile accept-s2 down failed: $down_out" >&2
+    echo "cleanup: docker compose --profile accept-s2 rm -sf failed: $down_out" >&2
   fi
   # Workspace/principal/chat/activity/graph rows are the audit trail (design doc §12) — left in
   # place on purpose, same precedent as accept_s1.sh's own cleanup_step.
-  pass "cleanup" "stopped alice/bob entry containers, tore down the accept-s2 profile; workspace retained: $WORKSPACE_ID"
+  pass "cleanup" "stopped alice/bob entry containers, removed the accept-s2 fixture containers; workspace retained: $WORKSPACE_ID"
 }
 
 # --------------------------------------------------------------------------------------------

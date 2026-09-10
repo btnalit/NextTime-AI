@@ -3,7 +3,7 @@
 # "按「新增接入包」手册接入一个 fake 系统成功"). POSIX sh, run ON THE HOST from the checkout root,
 # same conventions as scripts/accept_s1.sh/accept_s2.sh (every docker compose run/exec carries
 # </dev/null, secrets held only in shell variables and printed only via redact(), PASS/FAIL lines,
-# an EXIT trap that cleans up every temp file regardless of how the script terminates).
+# no temp file ever written — the driver is a checked-in file mounted by path).
 #
 # What this drills: walks docs/runbooks/add-gatekeeper.md end to end — request_connection (as a
 # member) -> create_connection (as owner, importing an OpenAPI manifest) -> publish_manifest ->
@@ -40,20 +40,17 @@
 # started its containers first will have them recreated out from under it with a different token.
 #
 # Toolset: identical rationale to accept_s1.sh/accept_s2.sh's own header comments — every kernel
-# capability call runs through one mounted driver script (DRIVER_JS below) inside a throwaway
-# kernel-image container (`docker compose run --rm --no-deps -T kernel node /tmp/driver.mjs cap
-# ...`), talking to the real running kernel over the `control` network
-# (`http://kernel:8080/api/cap/...`) — the host has no node/corepack (docs/runbooks/
-# host-worker-runtime.md §10). No jq dependency — JSON field extraction happens inside the same
-# driver.mjs invocation via a real `JSON.parse()` (an optional trailing argv element, a JS
-# expression evaluated against the parsed body, bound to `d` — verbatim copy of accept_s2.sh's own
-# driver.mjs `cap` subcommand, trimmed to just that one subcommand since this drill needs no
-# chat/WS interaction).
+# capability call runs through the shared driver, deploy/accept/driver.mjs, bind-mounted read-only
+# into a throwaway kernel-image container by the shared `run_driver` helper in scripts/lib/ (see that
+# file's own header comment for the exact `docker compose run` invocation — no temp file), talking
+# to the real running kernel over the `control` network (`http://kernel:8080/api/cap/...`) — the
+# host has no node/corepack (docs/runbooks/host-worker-runtime.md §10). No jq dependency — JSON
+# field extraction happens inside the same driver.mjs invocation via a real `JSON.parse()` (an
+# optional trailing argv element, a JS expression evaluated against the parsed body, bound to `d`
+# — see driver.mjs's own header comment for the `cap` subcommand's contract).
 #
 # Confidentiality (repo is public): the generated bearer token is held only in a shell variable
-# for this process's lifetime and only ever printed via redact(); the one temp file this script
-# creates (the mounted driver.mjs) never contains a secret and is removed by the EXIT trap
-# regardless of how the script terminates.
+# for this process's lifetime and only ever printed via redact().
 
 set -u
 
@@ -86,142 +83,8 @@ if [ -z "${NEXTTIME_DATA:-}" ]; then
   exit 1
 fi
 
-# --------------------------------------------------------------------------------------------
-# PASS/FAIL helpers — abort on the first FAIL (a real defect), same contract accept_s1.sh uses.
-# --------------------------------------------------------------------------------------------
-
-pass() {
-  printf 'PASS %s %s\n' "$1" "$2"
-}
-
-fail() {
-  printf 'FAIL %s %s\n' "$1" "$2" >&2
-  exit 1
-}
-
-redact() {
-  prefix=$(printf '%s' "$1" | cut -c1-6)
-  printf '%s...(redacted)' "$prefix"
-}
-
-parse_kv() {
-  printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -n 1
-}
-
-# --------------------------------------------------------------------------------------------
-# driver.mjs — mounted read-only into a throwaway kernel-image container per call. Verbatim copy
-# of accept_s2.sh's own `cap` subcommand (see that script's own header comment for the full
-# rationale) — every other subcommand accept_s2.sh's driver has (send-and-wait/get-history) is
-# omitted, this drill never touches chat.
-# --------------------------------------------------------------------------------------------
-
-DRIVER_HOST_PATH=$(mktemp /tmp/nt-drill-add-gatekeeper-driver.XXXXXX.mjs) || {
-  echo "drill-add-gatekeeper: mktemp failed" >&2
-  exit 1
-}
-# mktemp defaults to mode 0600 — the kernel image's own container process runs as a non-root uid
-# that will not generally match whatever uid runs this script on the host, so the bind-mounted
-# file needs to be world-readable (same reasoning as accept_s1.sh's own WS_CLIENT_HOST_PATH
-# comment). Contains no secret — see this file's "Confidentiality" header comment.
-chmod 644 "$DRIVER_HOST_PATH"
-
-cleanup_tmp() {
-  rm -f "$DRIVER_HOST_PATH"
-}
-trap cleanup_tmp EXIT INT TERM
-
-cat >"$DRIVER_HOST_PATH" <<'DRIVER_JS'
-// driver.mjs — drill-add-gatekeeper.sh's own minimal driver. See that script's own header
-// comment for why this exists as a mounted file and the `cap` subcommand's contract.
-
-const KERNEL_HTTP = 'http://kernel:8080';
-
-function printExtraction(parsed, expr) {
-  if (!expr) return;
-  try {
-    const d = parsed;
-    // eslint-disable-next-line no-eval -- expr is authored by this script's own caller, never
-    // untrusted input; see driver.mjs's own header comment.
-    const v = eval(expr);
-    if (v === undefined || v === null) {
-      console.log('EXTRACTED=');
-    } else {
-      console.log(`EXTRACTED=${typeof v === 'string' ? v : JSON.stringify(v)}`);
-    }
-  } catch (err) {
-    console.log('EXTRACTED=');
-    console.log(`EXTRACT_ERROR=${(err && err.message) || String(err)}`);
-  }
-}
-
-async function cmdCap(args) {
-  const [token, capabilityName, paramsJson, extractExpr] = args;
-  const res = await fetch(`${KERNEL_HTTP}/api/cap/${capabilityName}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: paramsJson && paramsJson.length > 0 ? paramsJson : '{}',
-  });
-  const text = await res.text();
-  console.log(`HTTP_STATUS=${res.status}`);
-  console.log(`BODY=${text}`);
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = undefined;
-  }
-  printExtraction(parsed, extractExpr);
-}
-
-async function main() {
-  const [, , cmd, ...rest] = process.argv;
-  if (cmd !== 'cap') throw new Error(`unknown subcommand: ${cmd}`);
-  await cmdCap(rest);
-}
-
-// Flush stdout before exiting: inside a container stdout is not a synchronous pipe, and
-// process.exit() right after a large console.log drops the tail of the output (accept_s3's
-// explain step lost its EXTRACTED= line that way). write('', cb) fires only after every
-// earlier chunk has been flushed.
-main()
-  .then(() => process.stdout.write('', () => process.exit(0)))
-  .catch((err) => {
-    console.log(`ERROR=${(err && err.message) || String(err)}`);
-    process.stdout.write('', () => process.exit(1));
-  });
-DRIVER_JS
-
-run_driver() {
-  docker compose run --rm --no-deps -T -v "$DRIVER_HOST_PATH:/tmp/driver.mjs:ro" kernel \
-    node /tmp/driver.mjs "$@" </dev/null 2>&1
-}
-
-# One capability call. Prints HTTP_STATUS=/BODY=/EXTRACTED= — callers extract with parse_kv.
-cap() {
-  run_driver cap "$1" "$2" "$3" "${4:-}"
-}
-
-# Polls one gate's /gate/health from inside the kernel image — verbatim copy of accept_s2.sh's own
-# wait_for_gate_health helper (see that script's own comment for the gate-token/timing rationale).
-wait_for_gate_health() {
-  gate_url="$1"
-  attempt=0
-  while [ "$attempt" -lt 15 ]; do
-    out=$(docker compose run --rm --no-deps -T kernel node -e "
-const token = require('fs').readFileSync('/run/secrets/gate_token', 'utf8').trim();
-fetch('$gate_url/gate/health', { headers: { authorization: 'Bearer ' + token } }).then((r) => r.json()).then((b) => console.log('OK=' + (b.ok === true)))
-" </dev/null 2>&1)
-    case "$out" in
-      *OK=true*) return 0 ;;
-    esac
-    attempt=$((attempt + 1))
-    sleep 2
-  done
-  return 1
-}
+. "$(dirname "$0")/lib/accept-common.sh"
+require_driver
 
 # --------------------------------------------------------------------------------------------
 # Steps
