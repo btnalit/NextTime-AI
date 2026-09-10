@@ -640,6 +640,68 @@ collector_second_run_step() {
   pass "collector-no-open-conflicts" "0 open Conflicts"
 }
 
+# docs/STATUS.md §2.2's own known blind spot: the only Conflict assertion above
+# (collector_second_run_step) checks that TWO IDENTICAL collector runs open zero Conflicts — a
+# defect that *suppresses* Conflict-opening entirely would still pass that check. This step
+# exercises the actual open-a-Conflict path (substrate/graph/sql-store.ts's `assertFact`, W5.5):
+# an assertion from a DIFFERENT Source, with DIFFERENT content, against the SAME
+# (linkType, sourceObjectId, targetObjectId) identity as an existing active Fact must open exactly
+# one `open` Conflict. Reuses the real Container/Host pair `collector_first_run_step` already
+# established ($container_id, plus the Host discovered here via the same `runs_on` traverse) so
+# the contradicting assertion lands on a real active Fact, not a fixture. Both `register_source`
+# and `submit_observations` are handle-channel capabilities, but `cap "$OWNER_KEY" ...` already
+# calls handle-channel capabilities with the owner API key elsewhere in this script (e.g.
+# `list_conflicts` just above) — `authorizeCapabilityCall` only blocks human-only capabilities for
+# handles, not the reverse. Leaves the Conflict open on purpose: the workspace is retained
+# (cleanup_step) but not reused across acceptance runs, and `chat_dependency_step`'s own `explain`
+# below targets a `depends_on` Fact (kernel -> postgres), not this `runs_on` Fact, so it is
+# unaffected by the open Conflict left behind here.
+collector_conflict_positive_step() {
+  out=$(cap "$OWNER_KEY" register_source '{"kind":"host-inventory-collector","name":"accept-s3-second-source","visibility":"workspace"}' "d.result.id")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "collector-conflict-positive-source" "register_source HTTP $status: $(parse_kv "$out" BODY)"
+  second_source_id=$(parse_kv "$out" EXTRACTED)
+  [ -n "$second_source_id" ] || fail "collector-conflict-positive-source" "no id in register_source response: $(parse_kv "$out" BODY)"
+  pass "collector-conflict-positive-source" "second Source=$second_source_id"
+
+  out=$(cap "$OWNER_KEY" get_object "{\"objectId\":\"$container_id\"}" "d.result&&d.result.identityKey")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "collector-conflict-positive-identity" "get_object(container $container_id) HTTP $status: $(parse_kv "$out" BODY)"
+  container_identity=$(parse_kv "$out" EXTRACTED)
+  [ -n "$container_identity" ] || fail "collector-conflict-positive-identity" "no identityKey on Container $container_id: $(parse_kv "$out" BODY)"
+
+  out=$(cap "$OWNER_KEY" traverse "{\"fromId\":\"$container_id\",\"linkType\":\"runs_on\",\"depth\":1}" "d.result.edges[0]&&d.result.edges[0].targetObjectId||''")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "collector-conflict-positive-identity" "traverse(runs_on) from Container $container_id HTTP $status: $(parse_kv "$out" BODY)"
+  host_id=$(parse_kv "$out" EXTRACTED)
+  [ -n "$host_id" ] || fail "collector-conflict-positive-identity" "no runs_on edge from Container $container_id to resolve the Host identity from: $(parse_kv "$out" BODY)"
+
+  out=$(cap "$OWNER_KEY" get_object "{\"objectId\":\"$host_id\"}" "d.result&&d.result.identityKey")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "collector-conflict-positive-identity" "get_object(host $host_id) HTTP $status: $(parse_kv "$out" BODY)"
+  host_identity=$(parse_kv "$out" EXTRACTED)
+  [ -n "$host_identity" ] || fail "collector-conflict-positive-identity" "no identityKey on Host $host_id: $(parse_kv "$out" BODY)"
+  pass "collector-conflict-positive-identity" "container=$container_identity host=$host_identity"
+
+  submit_params="{\"sourceId\":\"$second_source_id\",\"observations\":[{\"objectType\":\"Container\",\"identity\":$container_identity,\"links\":[{\"linkType\":\"runs_on\",\"target\":{\"objectType\":\"Host\",\"identity\":$host_identity},\"properties\":{\"accept_s3_marker\":\"contradiction\"}}]}]}"
+  out=$(cap "$OWNER_KEY" submit_observations "$submit_params" "d.result.factsAsserted")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "collector-conflict-positive-submit" "submit_observations HTTP $status: $(parse_kv "$out" BODY)"
+  facts_asserted=$(parse_kv "$out" EXTRACTED)
+  [ "$facts_asserted" = "1" ] || fail "collector-conflict-positive-submit" "factsAsserted=$facts_asserted (expected 1 — a contradicting assertion from a different Source inserts a new active Fact alongside the prior one and opens a Conflict, substrate/graph/sql-store.ts's assertFact): $(parse_kv "$out" BODY)"
+  pass "collector-conflict-positive-submit" "second Source's contradicting runs_on assertion: factsAsserted=1"
+
+  out=$(cap "$OWNER_KEY" list_conflicts '{"status":"open"}' "JSON.stringify({count: d.result.items.length, factAId: d.result.items[0]&&d.result.items[0].factAId, factBId: d.result.items[0]&&d.result.items[0].factBId})")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "collector-conflict-positive-open-count" "list_conflicts HTTP $status: $(parse_kv "$out" BODY)"
+  conflict_summary=$(parse_kv "$out" EXTRACTED)
+  case "$conflict_summary" in
+    *'"count":1'*) : ;;
+    *) fail "collector-conflict-positive-open-count" "expected exactly 1 open Conflict after the contradicting cross-Source assertion, got: $conflict_summary ($(parse_kv "$out" BODY))" ;;
+  esac
+  pass "collector-conflict-positive-open-count" "1 open Conflict: $conflict_summary"
+}
+
 # S3.9 (c): "哪个服务依赖哪个" — the entry agent's chat reply (deploy/fake-llm/server.mjs's
 # `entryDependencyChatScenario`), plus an independent `explain` on a `depends_on` Fact resolving to
 # the collector's own Source. The Fact `explain` targets is *not* parsed out of the chat transcript
@@ -775,6 +837,7 @@ seed_domain_pack_step
 collector_fixtures_step
 collector_first_run_step
 collector_second_run_step
+collector_conflict_positive_step
 chat_dependency_step
 explorer_step
 mcp_step
