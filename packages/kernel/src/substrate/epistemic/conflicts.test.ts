@@ -378,6 +378,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         await recordSourceObservation(client, workspaceId, {
           sourceId: privateSource.id,
           activityId: activity.id,
+          // W5.5: content must differ — identical content from another origin is a corroboration.
+          properties: { port: 80 },
         });
         return store.assertFact(
           client,
@@ -388,6 +390,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             sourceObjectId: objectBId,
             targetObjectId: objectAId,
             activityId: activity.id,
+            properties: { port: 81 },
           },
         );
       });

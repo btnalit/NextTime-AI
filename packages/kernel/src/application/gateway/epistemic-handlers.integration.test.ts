@@ -163,6 +163,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           await recordSourceObservation(client, workspaceId, {
             sourceId: sourceS1.id,
             activityId: activityA.id,
+            // W5.5: content must differ — identical content from another origin is a corroboration.
+            properties: { port: 80 },
           });
           const factA = await store.assertFact(
             client,
@@ -180,6 +182,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           await recordSourceObservation(client, workspaceId, {
             sourceId: sourceS2.id,
             activityId: activityB.id,
+            properties: { port: 81 },
           });
           const factB = await store.assertFact(
             client,
