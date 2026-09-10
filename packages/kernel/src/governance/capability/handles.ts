@@ -205,7 +205,6 @@ const WORKER_CEILING_EXTRA_CAPABILITY_NAMES = [
   'invalidate_fact',
   'get_task',
   'invoke_worker',
-  'create_task',
   'request_action',
   // S2.9 — see WORKER_INFRASTRUCTURE_CAPABILITY_NAMES's own doc comment below.
   'list_allowed_operations',

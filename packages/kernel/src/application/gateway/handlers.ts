@@ -21,7 +21,6 @@ import {
   type InvokeWorkerResult,
   type TaskRow,
   type WorkerRunRow,
-  createTask,
   findOperations,
   findProcedures,
   findWorkers,
@@ -808,12 +807,15 @@ const listQuotasHandler: CapabilityHandler = async (client, workspaceId) => {
 };
 
 // -------------------------------------------------------------------------------------------
-// S2.7 task/find_* handlers (docs/development-tasks.md S2.7). `invoke_worker`/`create_task`
-// deliberately never touch the `client` dispatch.ts hands them — see `application/task/invoke.ts`'s
-// own module doc comment for why (both manage their own independently-committed transactions via
-// the configured `TaskRuntimeDeps.pool` — `invoke_worker` so a freshly-minted WorkerRun Handle is
-// usable the moment the Worker container can reach the kernel, `create_task` for the identical I18
-// quota-locked-insert machinery the two share, see `insertQueuedTaskWithQuotaCheck`).
+// S2.7 task/find_* handlers (docs/development-tasks.md S2.7). `invoke_worker` deliberately never
+// touches the `client` dispatch.ts hands it — see `application/task/invoke.ts`'s own module doc
+// comment for why (it manages its own independently-committed transactions via the configured
+// `TaskRuntimeDeps.pool`, so a freshly-minted WorkerRun Handle is usable the moment the Worker
+// container can reach the kernel). `create_task` ("create only, never spawn") was retired in W5
+// (docs/code-review-2026-09-10.md §3.2): unreachable on the only real path — it sat in the Worker
+// ceiling but not the entry ceiling, and `computeChildHandleScope` silently drops what the parent
+// lacks — while its `queued` Tasks still counted toward the per-principal concurrency ceiling with
+// nothing ever able to run or reclaim them.
 // -------------------------------------------------------------------------------------------
 
 /**
@@ -951,44 +953,6 @@ const listTasksHandler: CapabilityHandler = async (client, workspaceId) => {
   const principalId = await currentPrincipalId(client);
   const rows = await listTasksForPrincipal(client, workspaceId, principalId);
   return { result: { items: rows.map(({ task, workerRuns }) => toWireTask(task, workerRuns)) } };
-};
-
-/**
- * `create_task`: W4 closeout, reversing S2.7's original "not wired" decision (that decision's own
- * reasoning is preserved above in `packages/shared/src/capabilities.ts`'s registry-entry comment —
- * the blocker was the missing `definitionId`/`version` params, now added). Semantics chosen: create
- * only — resolve + validate the published WorkerDefinition, run the same AgentProfile
- * `enabledWorkerDefinitions` narrowing `invoke_worker` runs, then insert the Task row at `queued`
- * through the same quota-gated path `invoke_worker` uses (`application/task/invoke.ts`'s
- * `insertQueuedTaskWithQuotaCheck`) — but never spawn a WorkerRun. `invoke_worker` remains "create +
- * spawn"; this is "create" alone. §5.5 already has a `queued` status for exactly this "created, not
- * yet running" state — no new state was invented, per this task's own instruction. Known,
- * documented limitation: no code path in this codebase currently spawns a WorkerRun for a Task
- * created this way (`application/task/reaper.ts`'s `runTaskReaper` only scans Tasks that already
- * have a WorkerRun) — see `createTask`'s own doc comment (invoke.ts) for the full reasoning; a
- * caller of `create_task` today gets a durable, queryable Task record and nothing that will ever
- * run it automatically. `toWireTask(task, [])` — a freshly created Task has zero WorkerRuns.
- */
-const createTaskHandler: CapabilityHandler = async (_client, workspaceId, params, ctx) => {
-  const principalId = ctx?.principalId ?? '';
-  const attributedTurn = principalId
-    ? await findAttributableTurn(_client, { workspaceId, principalId, at: new Date() })
-    : undefined;
-  const turnId = attributedTurn?.wasRunning ? attributedTurn.id : undefined;
-  const input = params as { definitionId: string; version: number; input: unknown };
-
-  const task = await createTask(
-    workspaceId,
-    { principalId, channel: ctx?.channel ?? 'handle', claims: ctx?.claims, turnId },
-    input,
-    getConfiguredTaskRuntime(),
-  );
-
-  return {
-    result: toWireTask(task, []),
-    resourceType: 'task',
-    resourceId: task.id,
-  };
 };
 
 const setQuotaHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -1144,9 +1108,6 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_procedure', publishProcedureHandler],
   ['deprecate_procedure', deprecateProcedureHandler],
   ['list_procedures', listProceduresHandler],
-  // W4 closeout — `create_task` (see `createTaskHandler`'s own doc comment above for the "create,
-  // never spawn" semantics decision, reversing S2.7's original "not wired" note).
-  ['create_task', createTaskHandler],
   ['invoke_worker', invokeWorkerHandler],
   ['get_task', getTaskHandler],
   ['list_tasks', listTasksHandler],

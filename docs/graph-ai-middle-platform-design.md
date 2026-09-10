@@ -576,7 +576,7 @@ create table worker_definitions (
 | governance | `request_action` | execute | Worker |
 | | `approve` / `reject` / `list_pending` / `get_action` / `set_auto_approved_action_kind` | human | I14 |
 | | `grant_capability` / `revoke_capability` / `set_policy` / `set_quota` / `issue_handle` | human（owner） | |
-| task | `create_task` / `invoke_worker` / `cancel_task` / `get_task` / `list_tasks` | write / observe | 注册表里 `create_task` / `invoke_worker` / `cancel_task` 为 `write`，不是 `propose` |
+| task | `invoke_worker` / `cancel_task` / `get_task` / `list_tasks` | write / observe | `invoke_worker` / `cancel_task` 为 `write`，不是 `propose`。`create_task`（只建不跑）于 W5 下架，见 `development-tasks.md` S2.7 实现说明 |
 | worker | `propose_worker_definition` / `publish_worker_definition` / `deprecate_worker_definition` / `list_worker_definitions` | propose / human / observe | |
 | ingest | `register_source` / `submit_observations` | propose | service |
 | audit | `audit_query` / `reconstruct` / `export_prov` | observe（auditor） | |
