@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-10（v0.4.0；W5 收口完成并发版，当前波次切到 W6）
+最后更新：2026-09-10（v0.4.0；W5 收口完成并发版；维护者决定 P1 三项提前，当前波次为 W5.5 P1 修复）
 
 ## 1. 入口指引
 
@@ -67,15 +67,17 @@
 
 **W5 收口：完成**（2026-09-10，一天）。六项里五项关闭（PR #128 文档漂移、#129 fake-llm 自检、#131 `create_task` 下架、#132 `explain` 收敛 + `search` 分页、仓库设置只留 squash、Renovate 决定暂不装），E7 仍待决定；各项细节见 §4 第 1–6 项与 `development-tasks.md` 的 W5 实现说明。复审新发现一条（§4 第 23 项：`query_decisions` / `list_conflicts` 的 cursor 精度）。
 
-**当前波次：W6 验收工具链治理**（范围与完成标准见 `retrospective-2026-09-09.md` §4；未开工）
+**当前波次：W5.5 P1 修复**（2026-09-10 维护者决定：复审新增的 P1 三项提前到 W6 之前；未开工）
 
 | 项 | 范围 | 状态 |
 |---|---|---|
-| 四份 heredoc driver 抽成一份 | `scripts/accept_s{1,2,3}.sh`、`deploy/accept-s2` | 未开工（§4 第 7 项） |
-| fake provider 切换改为 compose override，不再改生产 provider 配置 | `docker-compose.yml`、验收脚本 | 未开工（§4 第 7 项） |
-| 至少 S1 精简版进 CI | `.github/workflows/`、compose 精简 profile | 未开工（§4 第 7 项） |
+| 16 Worker 断言的 Fact 按 principal 判定来源，同定义两次运行的矛盾断言被静默 supersede | `application/task/result.ts`、`substrate/graph` 的 `resolveFactOrigin` | 未开工 |
+| 17 并发首次断言同一身份不开 Conflict | `substrate/graph/sql-store.ts` `assertFact`、迁移 | 未开工 |
+| 18 Handle 通道不校验 `minRole` | `governance/capability`、`application/gateway/authorize` | 未开工 |
 
-W6 开工前需要维护者拍板的两件事：P1 第 16 / 17 / 18 项是否插到 W6 之前（复审建议提前）；E7 备份定时器（§4 第 6 项）。
+完成标准：三项各有正向用例（异源矛盾断言 → 恰好一个 open Conflict；并发首次断言 → 一个 Conflict 而非两条并存；member Handle 调 `minRole:'builder'` 能力 → 403），`accept_s3.sh` 加一条异源 Conflict 正向断言（§2.2 第二条盲区）。
+
+之后：W6 验收工具链治理（§4 第 7 项三件事）→ W7 → 稳定期。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
 
 目标主机：09-09 验收后处于停栈状态，仅 `llm-proxy` 与 `fake-llm` 在跑，Postgres 干净停机、数据与镜像完好；W5 若需主机验收，先按 `runbooks/host-*.md` 起栈。
 
@@ -93,7 +95,7 @@ W6 开工前需要维护者拍板的两件事：P1 第 16 / 17 / 18 项是否插
 | 3 | `create_task` 的 Task 永远 `queued`；2026-09-10 复审确认它在唯一现实路径上不可达，**建议下架**（`code-review-2026-09-10.md` §3.2） | P2 | W5 | 关闭（PR #131：下架，接线留到授权衰减模型有结论之后） |
 | 4 | fake-llm 自检 `entry-restart-chat-turn2/3` 预存失败 | P3 | W5 | 关闭（PR #129：自检夹具对齐线上契约形状，自检进 CI `quality`） |
 | 5 | Renovate 首跑未见 | P3 | W5 | 关闭（决定：暂不安装；Dependabot 告警暂不处理，见 §3） |
-| 6 | E7 主机备份定时器"S3 后重评" | — | W5 → 待决定 | 待决定（W5 收口时仍未决） |
+| 6 | E7 主机备份定时器"S3 后重评" | — | 运维，最后 | 待决定（2026-09-10 维护者：运维项排在开发波次之后） |
 | 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4） | P2 | W6 | 开放 |
 | 8 | Explorer 由 caddy 注入 key 的信任边界（§5.8） | P2 | W7 | 开放 |
 | 9 | 领域包烤进 kernel 镜像（§5.7）；采集器 Source 状态按文件缓存（§5.9） | P3 | 待排 | 开放 |
@@ -103,9 +105,9 @@ W6 开工前需要维护者拍板的两件事：P1 第 16 / 17 / 18 项是否插
 | 13 | 容器镜像不发布到 GitHub（决定：稳定后再做） | — | 决定 | 关闭 |
 | 14 | 主机验收记录断档：09-09 的 S3 验收与 v0.2.0 / v0.3.0 发版都没有 `docs/private/` 记录（主机上也没有该目录），最新一份记录停在 09-04；§2 的 22 / 66 / 24 目前只有 retrospective 与 PR 正文为据 | P2 | W5 / 流程 | 开放 |
 | 15 | 入库文档与代码状态漂移：`README.md` 仍称「设计阶段（v0.2）…仓库只有文档，尚无可运行组件」；设计文档头部仍写「全部为提案…尚无任何组件实现」、§7.6 仍写「当前实现只有『工作』区」、§9.3 把 task 组标 `propose / observe` 而注册表里 `create_task` / `cancel_task` 均为 `write`；`development-tasks.md` 的 S3.6 一节没有完成标记，而其代码与验收都已落地 | P3 | docs PR | 关闭（PR #128：README 重写、设计文档头部 / §7.6 / §9.3 修正、S3.6 完成标记） |
-| 16 | **Worker 断言的 Fact 永远按 principal 判定来源**：`postWorkerResult` 先断言后记 Observation，`resolveFactOrigin` 因此拿不到 Source；叠加 agent principal 每 WorkerDefinition 一个，同一定义两次运行的矛盾断言被静默 supersede 而非开 Conflict —— S3.2 的核心场景（`code-review-2026-09-10.md` §2.1） | **P1** | 待排（建议提前至 W5） | 开放 |
-| 17 | 并发首次断言同一身份不开 Conflict：`FOR UPDATE` 锁不住不存在的行，`links` 上也无 `(link_type, source, target)` 唯一约束（`code-review-2026-09-10.md` §2.2） | **P1** | 待排（建议提前至 W5） | 开放 |
-| 18 | Handle 通道不校验 `minRole`，`member` 的入口 Handle 结构性携带 5 个 `minRole:'builder'` 的 `propose_*` 并可调用；不构成越权发布（草稿私有 + I16），但 `minRole` 在该通道事实失效（`code-review-2026-09-10.md` §2.3；代码已自认并写明修法） | **P1** | 待排 | 开放 |
+| 16 | **Worker 断言的 Fact 永远按 principal 判定来源**：`postWorkerResult` 先断言后记 Observation，`resolveFactOrigin` 因此拿不到 Source；叠加 agent principal 每 WorkerDefinition 一个，同一定义两次运行的矛盾断言被静默 supersede 而非开 Conflict —— S3.2 的核心场景（`code-review-2026-09-10.md` §2.1） | **P1** | W5.5 | 开放 |
+| 17 | 并发首次断言同一身份不开 Conflict：`FOR UPDATE` 锁不住不存在的行，`links` 上也无 `(link_type, source, target)` 唯一约束（`code-review-2026-09-10.md` §2.2） | **P1** | W5.5 | 开放 |
+| 18 | Handle 通道不校验 `minRole`，`member` 的入口 Handle 结构性携带 5 个 `minRole:'builder'` 的 `propose_*` 并可调用；不构成越权发布（草稿私有 + I16），但 `minRole` 在该通道事实失效（`code-review-2026-09-10.md` §2.3；代码已自认并写明修法） | **P1** | W5.5 | 开放 |
 | 19 | `llm-proxy` 无任何预算代码，设计 §5.4 I18 的「100% 时代理返回预算耗尽错误」未实现，超支只能由内核事后止损（`code-review-2026-09-10.md` §3.1） | P2 | 待排 | 开放 |
 | 20 | 两个门容器与 caddy / postgres 无 `read_only` / `cap_drop:[ALL]` / `no-new-privileges`，其余服务均有；门是唯一持外部凭证的进程（`code-review-2026-09-10.md` §3.3） | P2 | 待排 | 开放 |
 | 21 | 控制台看不到审批历史：注册表只有 `list_pending` 与 `get_action`，无列出已决 ActionRequest 的能力（`code-review-2026-09-10.md` §3.4） | P2 | 待排 | 开放 |
