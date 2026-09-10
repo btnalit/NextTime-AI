@@ -736,6 +736,28 @@
     是这个镜像跑出来的**任何**容器都该满足的不变量，不是 Task 专属：入口容器共享同一套凭证/出网隔离
     保证，而且比一次性 Worker 活得久得多（常驻，动辄几小时到几天）。条件放宽为 `worker` 或
     `entry`；`interactive` 模式仍不检查（本地开发/测试路径，不在完整部署拓扑内）。
+  - **W5.5 实现说明（遗留 16，PR #137）**：`postWorkerResult`（`application/task/result.ts`）现在
+    先注册一个 `worker_session` Source 并记一条 Observation 到 `worker_result` Activity 上，再断言
+    `factsToAssert`，每条 Fact 的 `observationId` 都指向这条 Observation——`assertFact` 的
+    `resolveFactOrigin` 由此按"这一次 WorkerRun"判定来源，而不是回退到每个 WorkerDefinition 共享
+    一个的 agent principal；两次运行是两个不同的 origin，矛盾断言正确开 Conflict。**可见性刻意维持
+    修复前的原样，不因为这次改动而改变**（`substrate/epistemic/sources.ts` 新增 `registerSource`，
+    显式传 `visibility`，`registerPrivateSource` 变成对它的 `visibility: 'private'` 包装）：带
+    `sessionJsonlPath` 的运行仍是 `private`（owner 是 on_behalf_of 人类，同修复前）；不带的运行此前
+    根本没有 Source、Fact 走 workspace 默认可见，所以现在给它一个 `visibility: 'workspace'` 的
+    Source（`uri` 仍为空），而不是像先前误提交版本那样一律 `private`——否则会把此前工作区可见的
+    Worker 结果意外收紧成私有，是本任务范围外的可见性收紧，不做。`SqlGraphStore.assertFact` 异源
+    分支新增判定：内容相同（`factContentEquals`，佐证 corroboration）时，先看调用方是否能看见既有
+    Fact（对 `links` 做一次普通 `select`，走调用方自己的 RLS，不是 SECURITY DEFINER 的身份判定查询）
+    ——能看见就返回既有 Fact 并置 `unchanged: true`，不再误开 Conflict；看不见（既有 Fact 的 Source
+    私有于别的 principal）则由调用方在自己的 Activity 下插入一条自己的 Fact，同样不开 Conflict（两者
+    结论一致，只是调用方读不到对方那条）。内容不同则不受影响，仍然保留两条 Fact 并开 Conflict。
+    测试：`application/gateway/worker-result.integration.test.ts`（同定义两次运行矛盾断言开一个
+    Conflict、同一 principal 前后两次一致结论是佐证而非 Conflict、无 JSONL 的运行拿到
+    `visibility: 'workspace'` 的 Source 且其 Fact 对工作区内另一 principal 可读、带 JSONL 的运行仍是
+    `private` 且对另一 principal 不可读、两个不同 principal 各自私有会话下断言相同结论时互不可见但都
+    不开 Conflict）、`substrate/epistemic/conflicts.test.ts`（同 principal 异源同内容 `unchanged`，
+    随后异源异内容仍正确开 Conflict）。
 
 ### S2.10 审批卡片与任务视图（web）
 - 交付物：`action.pending / action.updated / task.updated` 推送；卡片：标题、Markdown 描述、模拟效果、动作种类、批准 / 拒绝 / 「总是批准此类」（`set_auto_approved_action_kind`）、`await_decision` 时的阻塞样式；任务与 Worker 列表；「连接系统」页与连接卡片（`request_connection` → 填地址、凭证、种类 → 门实例；`http` / `mcp` 自动导入清单草稿并展示给 owner 发布）；审批卡片出现在**持有范围者**的对话与队列（可能不是发起者）。

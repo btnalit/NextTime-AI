@@ -287,12 +287,35 @@ export class SqlGraphStore implements GraphStore {
         }),
       ]);
 
+      const priorFact = mapFactRow(priorRow);
       if (sameFactOrigin(priorOrigin, newOrigin)) {
-        const priorFact = mapFactRow(priorRow);
         if (factContentEquals(priorFact, input)) {
           return { ...priorFact, unchanged: true };
         }
         return this.supersedeFact(client, workspaceId, caller, { ...input, factId: priorRow.id });
+      }
+
+      // Different origin, identical content: corroboration, not disagreement (W5.5, STATUS
+      // leftover 16). Before every WorkerRun became its own Source this branch was only reached
+      // with genuinely differing sources; now two runs of the same Worker that reach the same
+      // conclusion land here too, and opening a Conflict between two agreeing Facts would be
+      // wrong. Two cases, split on whether the caller can *see* the prior Fact — the identity
+      // lookup above is SECURITY DEFINER (migrations/core/0017) and finds rows RLS would hide:
+      //   - visible: the prior Fact is returned `unchanged` (the agreeing Observation stays on its
+      //     own Activity for `explain(activityId)`); a first-class "corroborated by" record is a
+      //     possible follow-up, not built here.
+      //   - hidden (the prior's Activity carries a Source private to someone else): returning its
+      //     id would hand the caller a Fact it can never read back, so the caller gets its own
+      //     Fact on its own Activity — and no Conflict, since the two agree.
+      if (factContentEquals(priorFact, input)) {
+        const visible = await client.query(
+          'select 1 from links where workspace_id = $1 and id = $2',
+          [workspaceId, priorRow.id],
+        );
+        if (visible.rows.length > 0) {
+          return { ...priorFact, unchanged: true };
+        }
+        return this.insertFreshFact(client, workspaceId, caller, input);
       }
 
       const callerKind = await resolveCallerKind(client, workspaceId, caller.id);
@@ -331,6 +354,18 @@ export class SqlGraphStore implements GraphStore {
       return newFact;
     }
 
+    return this.insertFreshFact(client, workspaceId, caller, input);
+  }
+
+  /** The "no prior active Fact this caller may build on" insert `assertFact` ends in: a new row with
+   *  `supersedes_id` null, epistemic status derived from the caller's real principal kind, and the
+   *  `FactAsserted` outbox event. */
+  private async insertFreshFact(
+    client: PoolClient,
+    workspaceId: string,
+    caller: CallerPrincipal,
+    input: AssertFactInput,
+  ): Promise<Fact> {
     const callerKind = await resolveCallerKind(client, workspaceId, caller.id);
     const epistemicStatus = deriveEpistemicStatus(callerKind);
 

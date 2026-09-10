@@ -249,6 +249,111 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    it('different-source re-assertion with identical content is a corroboration: no new Fact, no Conflict', async () => {
+      await asPrincipal(ownerId, async (client) => {
+        const objectA = await store.upsertObject(client, workspaceId, { objectType: 'test.host' });
+        const objectB = await store.upsertObject(client, workspaceId, {
+          objectType: 'test.service',
+        });
+
+        const sourceS1 = await registerPrivateSource(client, workspaceId, {
+          kind: 'test.collector',
+          ownerPrincipalId: ownerId,
+        });
+        const sourceS2 = await registerPrivateSource(client, workspaceId, {
+          kind: 'test.collector',
+          ownerPrincipalId: ownerId,
+        });
+
+        // Step 1: assert A from source S1.
+        const activity1 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS1.id,
+          activityId: activity1.id,
+        });
+        const factA = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectB.id,
+            targetObjectId: objectA.id,
+            activityId: activity1.id,
+            properties: { port: 80 },
+          },
+        );
+        expect(factA.supersedesId).toBeNull();
+
+        // Step 2: re-assert the *same* content, from a *different* source S2 — W5.5 (STATUS
+        // leftover 16): different origin + identical content is corroboration, not disagreement, so
+        // this must be a no-op returning the prior Fact `unchanged`, not a Conflict.
+        const activity2 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS2.id,
+          activityId: activity2.id,
+        });
+        const factA2 = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectB.id,
+            targetObjectId: objectA.id,
+            activityId: activity2.id,
+            properties: { port: 80 }, // identical to step 1
+          },
+        );
+        expect(factA2.unchanged).toBe(true);
+        expect(factA2.id).toBe(factA.id);
+
+        // factA is still the one and only active Fact.
+        const activeRows = await client.query<{ id: string; superseded_at: Date | null }>(
+          'select id, superseded_at from links where workspace_id = $1 and id = $2',
+          [workspaceId, factA.id],
+        );
+        expect(activeRows.rows[0]?.superseded_at).toBeNull();
+
+        // No Conflict was opened.
+        const pageAfterCorroboration = await listConflicts(client, workspaceId, { status: 'open' });
+        const noConflict = pageAfterCorroboration.items.find(
+          (item) => item.factAId === factA.id || item.factBId === factA.id,
+        );
+        expect(noConflict).toBeUndefined();
+
+        // Step 3: assert *different* content from S2 — confirms the corroboration path above did
+        // not disable Conflict detection for this identity.
+        const activity3 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS2.id,
+          activityId: activity3.id,
+        });
+        const factA3 = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectB.id,
+            targetObjectId: objectA.id,
+            activityId: activity3.id,
+            properties: { port: 81 }, // differs from step 1/2
+          },
+        );
+        expect(factA3.supersedesId).toBeNull();
+
+        const pageAfterConflict = await listConflicts(client, workspaceId, { status: 'open' });
+        const conflict = pageAfterConflict.items.find(
+          (item) =>
+            (item.factAId === factA.id && item.factBId === factA3.id) ||
+            (item.factAId === factA3.id && item.factBId === factA.id),
+        );
+        expect(conflict).toBeDefined();
+        expect(conflict?.status).toBe('open');
+      });
+    });
+
     it('a Conflict involving a private-source Fact is visible only to that source’s owner', async () => {
       // Object/link identity shared by both assertions.
       const { objectAId, objectBId } = await asPrincipal(ownerId, async (client) => {
