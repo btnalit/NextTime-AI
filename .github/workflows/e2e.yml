@@ -13,7 +13,8 @@ name: e2e
 # turns entirely in-process — packages/kernel/src/application/host-bridge/fake-runtime.ts — so
 # none of agent-host/worker-supervisor/docker-socket-proxy/egress-proxy, and no docker-in-docker
 # for resident containers, is needed for the login/chat/approvals/governance paths this suite
-# exercises).
+# exercises). W6 added `scripts/accept_s1.sh --lite` at the end of the job — the S1 acceptance
+# script's container-free subset, reusing this very stack (see that step's own comment).
 
 on:
   pull_request:
@@ -174,6 +175,15 @@ jobs:
       # that file's own doc comment).
       - name: Run web e2e
         run: pnpm --filter @nexttime/web e2e
+
+      # S1 lite (W6, STATUS leftover 7): the subset of scripts/accept_s1.sh that needs no entry
+      # container — bootstrap, WorkerDefinition v2 via caddy, two chats answered by the kernel's
+      # in-process fake runtime, isolation, a second turn, explain — run against the same stack
+      # this job already brought up. Plain `docker compose` inside the script resolves to the same
+      # project (same directory, same service names); `run`/`exec`/`ps` never recreate anything.
+      # `sudo` for the same reason every compose call above uses it (root-owned secrets/*.env).
+      - name: S1 lite acceptance (scripts/accept_s1.sh --lite)
+        run: sudo sh scripts/accept_s1.sh --lite
 
       - name: Upload Playwright report
         if: failure()
