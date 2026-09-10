@@ -13,14 +13,16 @@
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s3.sh' </dev/null
 #
 # --keep leaves the resident entry container running and skips tearing anything down (workspace
-# rows are always retained regardless — see cleanup_step).
+# rows are always retained regardless — see cleanup_step). --keep does not skip the fake-provider
+# restore below — the EXIT trap always runs.
 #
 # Preconditions (see docs/runbooks/host-accept-s3.md for the full walkthrough):
 #   - `docker compose up -d` (or at least: postgres kernel llm-proxy egress-proxy worker-supervisor
-#     agent-host docker-socket-proxy-collector) already running, plus
-#     `docker compose --profile test up -d fake-llm` and the fake provider config swap
-#     (docs/runbooks/host-agent-host.md §3 — same precondition accept_s1.sh's own header comment
-#     documents).
+#     agent-host docker-socket-proxy-collector) already running. The script switches llm-proxy /
+#     worker-supervisor / fake-llm to the fake provider itself via
+#     deploy/accept/docker-compose.fake.yml and restores production wiring from an EXIT trap, so
+#     ${NEXTTIME_DATA}/config/llm-providers.yaml and models.json are never modified — no manual
+#     provider switch is needed before or after.
 #   - `${NEXTTIME_DATA}/secrets/gate_token` and the other host-bootstrap secrets already exist
 #     (docs/runbooks/host-bootstrap.md) — this script does not generate them.
 #
@@ -93,6 +95,11 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
+accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
+trap accept_provider_restore EXIT
+trap 'accept_provider_restore; exit 130' INT TERM
+pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+
 # One Explorer HTTP call (X-API-Key). Prints HTTP_STATUS=/BODY=.
 explorer() {
   run_driver explorer "$1" "$2"
@@ -150,15 +157,6 @@ preflight_step() {
     fail "preflight-services" "not running:$missing"
   fi
   pass "preflight-services" "running: $required_services"
-
-  providers_file="${NEXTTIME_DATA}/config/llm-providers.yaml"
-  if [ ! -f "$providers_file" ]; then
-    fail "preflight-fake-provider" "$providers_file not found — see docs/runbooks/host-agent-host.md §3"
-  fi
-  if ! grep -qE '^[[:space:]]*fake:[[:space:]]*$' "$providers_file"; then
-    fail "preflight-fake-provider" "no 'fake:' provider entry in $providers_file — see docs/runbooks/host-agent-host.md §3"
-  fi
-  pass "preflight-fake-provider" "fake provider configured in $providers_file"
 
   migrate_out=$(docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js --dry-run </dev/null 2>&1)
   migrate_rc=$?

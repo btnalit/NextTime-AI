@@ -105,6 +105,10 @@ echo 'FAKE_LLM_API_KEY=fake' >> "${NEXTTIME_DATA}/secrets/llm-proxy.env"
 make gen-models   # 容器化生成 models.json——见 Makefile 自己的注释；本机不需要 corepack/node
 ```
 
+（这一手动切换只对本节这种手工主机验收流程还有效——`scripts/accept_s1.sh`/`accept_s2.sh`/
+`accept_s3.sh` 不再需要它：验收脚本自己经 `deploy/accept/docker-compose.fake.yml` 切到 fake
+provider，并在退出时恢复生产配置，见 `docs/runbooks/accept-s1.md` §1。）
+
 起服务（`AGENT_RUNTIME=agent-host` 现在是 compose 默认值——见 docker-compose.yml 的 `kernel`
 服务；仍可用 `.env` 里的 `AGENT_RUNTIME=fake` 切回旧行为）：
 
