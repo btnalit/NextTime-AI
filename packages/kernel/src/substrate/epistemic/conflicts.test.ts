@@ -433,5 +433,235 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(memberSees).toBe(false);
     });
+
+    /** Small promise helper for the two concurrency tests below — no external libs. */
+    function deferred<T = void>(): {
+      readonly promise: Promise<T>;
+      readonly resolve: (value: T) => void;
+    } {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    }
+
+    /** Races `candidate` against a ~300ms timer and reports which one won, without ever leaving
+     *  an unhandled rejection behind if `candidate` eventually rejects. */
+    async function settledWithin300ms(candidate: Promise<unknown>): Promise<boolean> {
+      const outcome = await Promise.race([
+        candidate.then(
+          () => 'settled' as const,
+          () => 'settled' as const,
+        ),
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 300)),
+      ]);
+      return outcome === 'settled';
+    }
+
+    it('two concurrent first assertions of one identity from different sources serialize and open exactly one Conflict', async () => {
+      const { objectAId, objectBId, sourceS1, sourceS2 } = await asPrincipal(
+        ownerId,
+        async (client) => {
+          const objectA = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.host',
+          });
+          const objectB = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.service',
+          });
+          const sourceS1 = await registerPrivateSource(client, workspaceId, {
+            kind: 'test.collector',
+            ownerPrincipalId: ownerId,
+          });
+          const sourceS2 = await registerPrivateSource(client, workspaceId, {
+            kind: 'test.collector',
+            ownerPrincipalId: ownerId,
+          });
+          return { objectAId: objectA.id, objectBId: objectB.id, sourceS1, sourceS2 };
+        },
+      );
+
+      const t1Asserted = deferred<Awaited<ReturnType<typeof store.assertFact>>>();
+      const releaseT1 = deferred<void>();
+
+      // T1: asserts, signals it has asserted, then holds its transaction open until released.
+      const t1 = withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const activity1 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS1.id,
+          activityId: activity1.id,
+        });
+        const fact1 = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectBId,
+            targetObjectId: objectAId,
+            activityId: activity1.id,
+            properties: { port: 80 },
+          },
+        );
+        t1Asserted.resolve(fact1);
+        await releaseT1.promise;
+      });
+
+      const fact1 = await t1Asserted.promise;
+
+      // T2: starts only after T1 has asserted (and is still holding its transaction open) — it
+      // must block on the advisory lock T1 took for this identity's first-assertion path.
+      const t2 = withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const activity2 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS2.id,
+          activityId: activity2.id,
+        });
+        return store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectBId,
+            targetObjectId: objectAId,
+            activityId: activity2.id,
+            properties: { port: 81 },
+          },
+        );
+      });
+
+      // try/finally: if the `settledWithin300ms` assertion below throws, T1's `fn` is still
+      // waiting on `releaseT1.promise` — without releasing it here too, T1's `withWorkspace` never
+      // COMMITs, its client is never released back to the pool, and `afterAll`'s `pool.end()`
+      // hangs until vitest's hook timeout, masking the real assertion failure.
+      try {
+        expect(await settledWithin300ms(t2)).toBe(false);
+      } finally {
+        releaseT1.resolve();
+      }
+      await t1;
+      const fact2 = await t2;
+
+      expect(fact2.id).not.toBe(fact1.id);
+      expect(fact2.supersedesId).toBeNull();
+
+      await asPrincipal(ownerId, async (client) => {
+        const activeRows = await client.query<{ id: string }>(
+          `select id from links
+           where workspace_id = $1 and link_type = $2
+             and source_object_id = $3 and target_object_id = $4
+             and superseded_at is null and invalidated_at is null`,
+          [workspaceId, 'test.runs_on', objectBId, objectAId],
+        );
+        expect(activeRows.rows.map((row) => row.id).sort()).toEqual([fact1.id, fact2.id].sort());
+
+        const page = await listConflicts(client, workspaceId, { status: 'open' });
+        const matching = page.items.filter(
+          (item) =>
+            (item.factAId === fact1.id && item.factBId === fact2.id) ||
+            (item.factAId === fact2.id && item.factBId === fact1.id),
+        );
+        expect(matching).toHaveLength(1);
+        expect(matching[0]?.status).toBe('open');
+      });
+    });
+
+    it('two concurrent first assertions of one identity, same source and identical content: the second serializes behind the first and comes back unchanged', async () => {
+      // Deliberately the *same* Source (S1) for both T1 and T2 here, not two different sources:
+      // `resolveFactOrigin`/`sameFactOrigin` (conflicts.ts) key the unchanged-vs-Conflict decision
+      // on origin, and a *different*-origin re-assertion always opens a Conflict regardless of
+      // whether the content matches (see assertFact's priorRow branch in sql-store.ts) — so a
+      // same-content, different-origin race would still open a Conflict, not return `unchanged`.
+      // To actually exercise the no-op branch under the same lock-then-reread race, T2 must share
+      // T1's origin.
+      const { objectAId, objectBId, sourceS1 } = await asPrincipal(ownerId, async (client) => {
+        const objectA = await store.upsertObject(client, workspaceId, { objectType: 'test.host' });
+        const objectB = await store.upsertObject(client, workspaceId, {
+          objectType: 'test.service',
+        });
+        const sourceS1 = await registerPrivateSource(client, workspaceId, {
+          kind: 'test.collector',
+          ownerPrincipalId: ownerId,
+        });
+        return { objectAId: objectA.id, objectBId: objectB.id, sourceS1 };
+      });
+
+      const t1Asserted = deferred<Awaited<ReturnType<typeof store.assertFact>>>();
+      const releaseT1 = deferred<void>();
+
+      const t1 = withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const activity1 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS1.id,
+          activityId: activity1.id,
+        });
+        const fact1 = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectBId,
+            targetObjectId: objectAId,
+            activityId: activity1.id,
+            properties: { port: 80 },
+          },
+        );
+        t1Asserted.resolve(fact1);
+        await releaseT1.promise;
+      });
+
+      const fact1 = await t1Asserted.promise;
+
+      const t2 = withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const activity2 = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS1.id,
+          activityId: activity2.id,
+        });
+        return store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.runs_on',
+            sourceObjectId: objectBId,
+            targetObjectId: objectAId,
+            activityId: activity2.id,
+            properties: { port: 80 }, // identical to T1
+          },
+        );
+      });
+
+      // See the sibling test above for why this is try/finally rather than a bare assert-then-release.
+      try {
+        expect(await settledWithin300ms(t2)).toBe(false);
+      } finally {
+        releaseT1.resolve();
+      }
+      await t1;
+      const fact2 = await t2;
+
+      expect(fact2.unchanged).toBe(true);
+      expect(fact2.id).toBe(fact1.id);
+
+      await asPrincipal(ownerId, async (client) => {
+        const activeRows = await client.query<{ id: string }>(
+          `select id from links
+           where workspace_id = $1 and link_type = $2
+             and source_object_id = $3 and target_object_id = $4
+             and superseded_at is null and invalidated_at is null`,
+          [workspaceId, 'test.runs_on', objectBId, objectAId],
+        );
+        expect(activeRows.rows.map((row) => row.id)).toEqual([fact1.id]);
+
+        const page = await listConflicts(client, workspaceId, { status: 'open' });
+        const matching = page.items.filter(
+          (item) => item.factAId === fact1.id || item.factBId === fact1.id,
+        );
+        expect(matching).toHaveLength(0);
+      });
+    });
   },
 );

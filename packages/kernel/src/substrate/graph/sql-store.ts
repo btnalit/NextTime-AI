@@ -269,10 +269,26 @@ export class SqlGraphStore implements GraphStore {
       sourceObjectId: input.sourceObjectId,
       targetObjectId: input.targetObjectId,
     });
-    const priorResult = await client.query<FactRow>(
-      priorQuery.text,
-      priorQuery.values as unknown[],
-    );
+    let priorResult = await client.query<FactRow>(priorQuery.text, priorQuery.values as unknown[]);
+    if (priorResult.rows.length === 0) {
+      // W5.5 (docs/code-review-2026-09-10.md §2.2, STATUS leftover 17): a *first* assertion of an
+      // identity has no row for `FOR UPDATE` to lock, and `links` deliberately has no unique
+      // constraint on the identity (the Conflict path keeps two active rows on purpose), so two
+      // concurrent first assertions from different origins both saw "no prior Fact", both inserted,
+      // and no Conflict was opened. Serialize on the identity with a transaction-scoped advisory
+      // lock (same `pg_advisory_xact_lock(hashtext(...))` convention `application/task/invoke.ts`'s
+      // quota-locked insert uses) and re-read: the second transaction now blocks until the first
+      // commits and sees its row through the ordinary origin comparison below. Taken only on the
+      // no-prior-row path so steady-state re-observation of known edges never locks; a hashtext
+      // collision merely over-serializes. Two batches locking overlapping first-time identities in
+      // opposite order can still deadlock — Postgres aborts one (`40P01`), which surfaces as a 500
+      // to that caller; the collector's interval loop re-submits on its next cycle and the ingest
+      // is idempotent, so the batch is retried rather than lost.
+      await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+        `${workspaceId}:fact:${input.linkType}:${input.sourceObjectId}:${input.targetObjectId}`,
+      ]);
+      priorResult = await client.query<FactRow>(priorQuery.text, priorQuery.values as unknown[]);
+    }
     const priorRow = priorResult.rows[0];
 
     if (priorRow) {
