@@ -7,6 +7,11 @@
 //   2. Each S2.12 scenario picks the right tool/args on its first turn and advances to its second
 //      scripted turn once one prior assistant message is in history.
 //   3. A request matching no scenario and no "search" word still falls through to plain echo.
+//   4. Every scripted tool call whose name is a registry capability (search/traverse/get_object/
+//      find_workers/invoke_worker) has its args validated against that capability's params JSON
+//      Schema in docs/contracts/capabilities.json — a contract drift (e.g. a new required field)
+//      fails here instead of surfacing on the host. Non-registry names (gate operations, worker
+//      report_result) are skipped, not failed.
 //
 // Not part of `pnpm test` — this directory is not a pnpm workspace package (same reason
 // deploy/fake-llm/server.mjs itself is plain ESM, see its own header comment). Run directly:
@@ -15,12 +20,21 @@
 // otherwise.
 
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = join(HERE, '..', 'fake-llm', 'server.mjs');
 const PORT = 8790;
+
+// name -> params JSON Schema (draft-07), loaded once from the capability registry itself.
+const REGISTRY = new Map(
+  JSON.parse(readFileSync(new URL('../../docs/contracts/capabilities.json', import.meta.url))).map((c) => [
+    c.name,
+    c.params,
+  ]),
+);
 
 let failures = 0;
 
@@ -31,6 +45,70 @@ function check(label, condition, detail) {
     failures += 1;
     console.log(`FAIL ${label} ${detail ?? ''}`);
   }
+}
+
+// Minimal draft-07 subset validator: required, additionalProperties:false, per-property type/enum.
+// anyOf/oneOf/$ref are not evaluated (treated as pass) — none of the capabilities this self-test
+// drives use them for their top-level params.
+function validateParams(schema, args) {
+  const problems = [];
+  const props = schema.properties ?? {};
+  for (const key of schema.required ?? []) {
+    if (!(key in args)) problems.push(`missing required "${key}"`);
+  }
+  if (schema.additionalProperties === false) {
+    for (const key of Object.keys(args)) {
+      if (!(key in props)) problems.push(`unknown property "${key}"`);
+    }
+  }
+  const typeMatches = (type, value) => {
+    if (type === 'string') return typeof value === 'string';
+    if (type === 'number') return typeof value === 'number';
+    if (type === 'integer') return Number.isInteger(value);
+    if (type === 'boolean') return typeof value === 'boolean';
+    if (type === 'array') return Array.isArray(value);
+    if (type === 'object') return typeof value === 'object' && value !== null && !Array.isArray(value);
+    if (type === 'null') return value === null;
+    return true; // unrecognized type keyword - don't fail on it
+  };
+  for (const [key, value] of Object.entries(args)) {
+    const propSchema = props[key];
+    if (!propSchema || !(key in args)) continue;
+    if (propSchema.type) {
+      const types = Array.isArray(propSchema.type) ? propSchema.type : [propSchema.type];
+      if (!types.some((t) => typeMatches(t, value))) {
+        problems.push(`"${key}" expected type ${types.join('|')}, got ${JSON.stringify(value)}`);
+      }
+    }
+    if (propSchema.enum && !propSchema.enum.includes(value)) {
+      problems.push(`"${key}" expected one of ${JSON.stringify(propSchema.enum)}, got ${JSON.stringify(value)}`);
+    }
+  }
+  return problems;
+}
+
+// Prove the validator actually bites before relying on it below.
+check(
+  'validator-catches-missing-required',
+  validateParams(REGISTRY.get('search'), { objectType: 'Container' }).some((p) => p.includes('query')),
+  JSON.stringify(validateParams(REGISTRY.get('search'), { objectType: 'Container' })),
+);
+check(
+  'validator-catches-unknown-property',
+  validateParams(REGISTRY.get('get_object'), { objectId: 'x', extra: 1 }).some((p) => p.includes('extra')),
+  JSON.stringify(validateParams(REGISTRY.get('get_object'), { objectId: 'x', extra: 1 })),
+);
+
+// Gate operations and the Worker-side report_result aren't registry capabilities; skip those,
+// don't fail them.
+function checkToolCallAgainstRegistry(label, call) {
+  if (!call) return;
+  if (!REGISTRY.has(call.name)) {
+    console.log(`skip ${label}: ${call.name} is not a registry capability`);
+    return;
+  }
+  const problems = validateParams(REGISTRY.get(call.name), call.args);
+  check(`${label}-params-vs-registry`, problems.length === 0, problems.join('; '));
 }
 
 async function post(messages, stream = false) {
@@ -94,6 +172,7 @@ async function main() {
           JSON.stringify(call.args) === '{"query":"test"}',
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('search-trigger-unchanged', call);
     }
 
     // 3. docker_restart scenario, turn 1 (no prior assistant messages): tool call with extracted
@@ -114,6 +193,7 @@ async function main() {
         call?.name === 'docker_container_restart' && call.args.id === 'abc123',
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('docker-restart-turn1', call);
     }
 
     // 4. docker_restart scenario, turn 2 (one prior assistant message): report_result call.
@@ -142,6 +222,7 @@ async function main() {
           call.args.factsToAssert[0].source.identity.containerId === 'abc123',
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('docker-restart-turn2', call);
     }
 
     // 5. ssh_run scenario, turn 1: tool call with extracted COMMAND, reused identically across two
@@ -161,6 +242,7 @@ async function main() {
         call?.name === 'accept_s2_ssh_ssh_run_command' && call.args.command === 'uptime',
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('ssh-run-turn1', call);
     }
 
     // 6. Entry-mode chat scenarios, turn 1: scripted regardless of whether packages/platform-
@@ -174,6 +256,7 @@ async function main() {
         call?.name === 'find_workers' && call.args.need === 'restart',
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('entry-restart-chat-turn1', call);
     }
     {
       const { json } = await post([{ role: 'user', content: '测试 API 的 GET 返回什么' }]);
@@ -183,6 +266,7 @@ async function main() {
         call?.name === 'accept_s2_api_stock_get',
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('entry-observe-chat-turn1', call);
     }
 
     // 6a. entryRestartChatScenario turn 2: once find_workers' *real* result is in history, the
@@ -219,6 +303,7 @@ async function main() {
           call.args.input.includes('CONTAINER_ID=deadbeef'),
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('entry-restart-chat-turn2', call);
     }
 
     // 6b. entryRestartChatScenario turn 2, find_workers came back empty/unresolved (today's
@@ -314,6 +399,7 @@ async function main() {
         call?.name === 'search' && JSON.stringify(call.args) === '{"query":"","objectType":"Container"}',
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('entry-dependency-chat-turn1', call);
     }
 
     // 6f. turn 2: once search's *real* result (containing the kernel Container) is in history, the
@@ -347,6 +433,7 @@ async function main() {
           call.args.depth === 1,
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('entry-dependency-chat-turn2', call);
     }
 
     // 6g. turn 2, search found no kernel Container — never guesses a fromId.
@@ -406,6 +493,7 @@ async function main() {
         call?.name === 'get_object' && call.args.objectId === 'postgres-container-id',
         JSON.stringify(json.choices[0]),
       );
+      checkToolCallAgainstRegistry('entry-dependency-chat-turn3', call);
     }
 
     // 6i. turn 4: once get_object's *real* result is in history, the final text names the real
