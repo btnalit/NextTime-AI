@@ -392,9 +392,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('two runs of the same WorkerDefinition asserting contradicting facts open exactly one Conflict', async () => {
-      // W5.5 (STATUS leftover 16): each WorkerRun now registers its own private `worker_session`
-      // Source before asserting — two runs of the *same* WorkerDefinition (one shared agent
-      // principal) are therefore two different origins, so a contradicting re-assertion of the
+      // W5.5 (STATUS leftover 16): each WorkerRun now registers its own workspace-visible
+      // `worker_run` Source before asserting — two runs of the *same* WorkerDefinition (one shared
+      // agent principal) are therefore two different origins, so a contradicting re-assertion of the
       // same identity must open a Conflict rather than silently supersede.
       const identity = { name: `contradict-${randomUUID()}` };
       const otherIdentity = { name: `contradict-target-${randomUUID()}` };
@@ -475,9 +475,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect([conflictRow?.link_a_id, conflictRow?.link_b_id]).toContain(factId1);
       expect([conflictRow?.link_a_id, conflictRow?.link_b_id]).toContain(factId2);
 
-      // Each run's Fact carries its own Observation, pointing at its own private worker_session
-      // Source owned by the on_behalf_of principal (spawnWorkerRun's ownerId) — two different
-      // Source rows, not one shared per-WorkerDefinition principal.
+      // Each run's Fact carries its own Observation, pointing at its own workspace-visible
+      // worker_run Source owned by the on_behalf_of principal (spawnWorkerRun's ownerId) — two
+      // different Source rows, not one shared per-WorkerDefinition principal.
       const sourceRows = await inTx(ownerId, async (client) => {
         const rows = await client.query<{
           fact_id: string;
@@ -496,7 +496,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(sourceRows).toHaveLength(2);
       for (const row of sourceRows) {
-        expect(row.kind).toBe('worker_session');
+        expect(row.kind).toBe('worker_run');
         expect(row.owner_principal_id).toBe(ownerId);
       }
       const sourceIds = new Set(sourceRows.map((row) => row.source_id));
@@ -579,8 +579,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(conflictRows).toHaveLength(0);
     });
 
-    it('a run without sessionJsonlPath gets a workspace-visible worker_session Source with null uri', async () => {
-      const { claims } = await spawnWorkerRun();
+    it('a run without sessionJsonlPath gets a workspace-visible worker_run Source with null uri', async () => {
+      const { workerRunId, claims } = await spawnWorkerRun();
       const caller: ResolvedCaller = { channel: 'handle', claims };
       const identity = { name: `visibility-workspace-${randomUUID()}` };
       const otherIdentity = { name: `visibility-workspace-target-${randomUUID()}` };
@@ -619,7 +619,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(observationRows).toHaveLength(1);
       expect(observationRows[0]?.uri).toBeNull();
       expect(observationRows[0]?.visibility).toBe('workspace');
-      expect(observationRows[0]?.kind).toBe('worker_session');
+      expect(observationRows[0]?.kind).toBe('worker_run');
+
+      // No private worker_session transcript Source was ever registered for this run.
+      const sessionSourceRows = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const rows = await client.query<{ id: string }>(
+            `select id from sources
+             where workspace_id = $1 and kind = 'worker_session'
+               and metadata->>'workerRunId' = $2`,
+            [workspaceId, workerRunId],
+          );
+          return rows.rows;
+        },
+        { skipRoleSwitch: true },
+      );
+      expect(sessionSourceRows).toHaveLength(0);
 
       // Workspace-visibility Source -> the Fact is readable by any other principal in the
       // workspace, not only the on_behalf_of owner (`links_visibility`, migrations/core/0013).
@@ -636,7 +653,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(seenByOther).toHaveLength(1);
     });
 
-    it('a run with sessionJsonlPath gets a private worker_session Source, invisible to another principal', async () => {
+    it('a run with sessionJsonlPath keeps the transcript private but its Facts workspace-visible', async () => {
       const { claims } = await spawnWorkerRun();
       const caller: ResolvedCaller = { channel: 'handle', claims };
       const identity = { name: `visibility-private-${randomUUID()}` };
@@ -655,9 +672,16 @@ describe.runIf(DATABASE_URL !== undefined)(
         ],
       })) as { activityId: string; factIds: string[] };
 
+      // The Fact's own Observation -> Source is the workspace-visible worker_run Source, with a
+      // null uri and a pointer to the private transcript Source in its metadata.
       const observationRows = await inTx(ownerId, async (client) => {
-        const rows = await client.query<{ uri: string | null; visibility: string; kind: string }>(
-          `select s.uri, s.visibility, s.kind
+        const rows = await client.query<{
+          uri: string | null;
+          visibility: string;
+          kind: string;
+          metadata: { transcriptSourceId?: string };
+        }>(
+          `select s.uri, s.visibility, s.kind, s.metadata
            from observations o
            join sources s on s.workspace_id = o.workspace_id and s.id = o.source_id
            where o.workspace_id = $1 and o.activity_id = $2`,
@@ -666,11 +690,86 @@ describe.runIf(DATABASE_URL !== undefined)(
         return rows.rows;
       });
       expect(observationRows).toHaveLength(1);
-      expect(observationRows[0]?.uri).toBe('/workspace/sessions/visibility-private.jsonl');
-      expect(observationRows[0]?.visibility).toBe('private');
-      expect(observationRows[0]?.kind).toBe('worker_session');
+      const [runSourceRow] = observationRows;
+      expect(runSourceRow?.uri).toBeNull();
+      expect(runSourceRow?.visibility).toBe('workspace');
+      expect(runSourceRow?.kind).toBe('worker_run');
+      const transcriptSourceId = runSourceRow?.metadata.transcriptSourceId;
+      expect(typeof transcriptSourceId).toBe('string');
+      // uuid shape
+      expect(transcriptSourceId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
 
-      // Private Source -> the Fact is hidden from every other principal in the workspace.
+      // The transcript Source itself: private, owned by ownerId, uri = the JSONL path. Read with
+      // skipRoleSwitch — it's expected to be invisible under RLS to everyone but its owner.
+      const transcriptSourceRow = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const rows = await client.query<{
+            kind: string;
+            visibility: string;
+            uri: string | null;
+            owner_principal_id: string;
+          }>(
+            'select kind, visibility, uri, owner_principal_id from sources where workspace_id = $1 and id = $2',
+            [workspaceId, transcriptSourceId],
+          );
+          return rows.rows[0];
+        },
+        { skipRoleSwitch: true },
+      );
+      expect(transcriptSourceRow?.kind).toBe('worker_session');
+      expect(transcriptSourceRow?.visibility).toBe('private');
+      expect(transcriptSourceRow?.uri).toBe('/workspace/sessions/visibility-private.jsonl');
+      expect(transcriptSourceRow?.owner_principal_id).toBe(ownerId);
+
+      // The transcript Source is observed on its own worker_session Activity — pointing back at
+      // this Fact's own worker_result Activity via metadata.resultActivityId — never on the
+      // worker_result Activity itself: exactly one Observation sits on that Activity, and it's the
+      // worker_run Source, not the transcript.
+      const transcriptObservationRows = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const rows = await client.query<{
+            activity_kind: string;
+            activity_metadata: { resultActivityId?: string };
+          }>(
+            `select a.kind as activity_kind, a.metadata as activity_metadata
+             from observations o
+             join activities a on a.workspace_id = o.workspace_id and a.id = o.activity_id
+             where o.workspace_id = $1 and o.source_id = $2`,
+            [workspaceId, transcriptSourceId],
+          );
+          return rows.rows;
+        },
+        { skipRoleSwitch: true },
+      );
+      expect(transcriptObservationRows).toHaveLength(1);
+      expect(transcriptObservationRows[0]?.activity_kind).toBe('worker_session');
+      expect(transcriptObservationRows[0]?.activity_metadata.resultActivityId).toBe(
+        result.activityId,
+      );
+
+      const factActivityObservationRows = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const rows = await client.query<{ source_id: string }>(
+            'select source_id from observations where workspace_id = $1 and activity_id = $2',
+            [workspaceId, result.activityId],
+          );
+          return rows.rows;
+        },
+        { skipRoleSwitch: true },
+      );
+      expect(factActivityObservationRows).toHaveLength(1);
+      expect(factActivityObservationRows[0]?.source_id).not.toBe(transcriptSourceId);
+
+      // Workspace-visible Fact -> another member principal can read it; the private transcript
+      // Source stays invisible to them, while ownerId (its owner) can read it.
       const [factId] = result.factIds;
       if (!factId) throw new Error('expected a written fact id');
       const otherId = await adminInsertPrincipal('member', `visibility-private-${factId}`);
@@ -681,15 +780,32 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         return rows.rows;
       });
-      expect(seenByOther).toHaveLength(0);
+      expect(seenByOther).toHaveLength(1);
+
+      const transcriptSeenByOther = await inTx(otherId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          'select id from sources where workspace_id = $1 and id = $2',
+          [workspaceId, transcriptSourceId],
+        );
+        return rows.rows;
+      });
+      expect(transcriptSeenByOther).toHaveLength(0);
+
+      const transcriptSeenByOwner = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          'select id from sources where workspace_id = $1 and id = $2',
+          [workspaceId, transcriptSourceId],
+        );
+        return rows.rows;
+      });
+      expect(transcriptSeenByOwner).toHaveLength(1);
     });
 
-    it('two runs of the same WorkerDefinition on behalf of different principals, agreeing with each other’s private Fact, open no Conflict', async () => {
-      // W5.5 follow-up: `assertFact`'s different-origin/identical-content corroboration branch
-      // first checks whether the caller can *see* the prior Fact — visible corroborates onto it
-      // (already covered above, same principal both times); hidden (the prior Fact's Source is
-      // private to a different principal) instead writes the caller's own Fact on its own
-      // Activity, still with no Conflict, since the two agree.
+    it('two runs on behalf of different principals reaching the same conclusion corroborate one workspace-visible Fact, no Conflict', async () => {
+      // W5.5 follow-up: with the Fact's Source now always workspace-visible (regardless of
+      // transcript), run B can see run A's Fact — `assertFact`'s corroboration branch returns the
+      // prior Fact rather than writing a second one. (The hidden-prior branch — a caller that
+      // cannot see the prior Fact — is now covered by sql-store.test.ts, not here.)
       const otherId = await adminInsertPrincipal('member', 'cross-principal-corroborator');
       const identity = { name: `cross-principal-${randomUUID()}` };
       const otherIdentity = { name: `cross-principal-target-${randomUUID()}` };
@@ -721,32 +837,29 @@ describe.runIf(DATABASE_URL !== undefined)(
             linkType: 'observed_state',
             source: { objectType: 'Host', identity },
             target: { objectType: 'Host', identity: otherIdentity },
-            properties: { port: 80 }, // identical to run A — B cannot see A's private Fact though
+            properties: { port: 80 }, // identical to run A, and now B can see A's workspace Fact
           },
         ],
       })) as { factIds: string[] };
       const [factIdB] = resultB.factIds;
       if (!factIdB) throw new Error('expected run B to write a fact id');
-      expect(factIdB).not.toBe(factIdA);
+      expect(factIdB).toBe(factIdA);
 
-      // Neither owner nor member can see both rows at once (each Fact is private to its own
-      // on_behalf_of principal) — count them the way `explain.test.ts`'s beforeAll bypasses RLS,
-      // with `skipRoleSwitch: true`.
       const activeRows = await withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
         async (client) => {
           const rows = await client.query<{ id: string }>(
             `select id from links
-             where workspace_id = $1 and id = any($2::uuid[])
+             where workspace_id = $1 and id = $2
                and superseded_at is null and invalidated_at is null`,
-            [workspaceId, [factIdA, factIdB]],
+            [workspaceId, factIdA],
           );
           return rows.rows;
         },
         { skipRoleSwitch: true },
       );
-      expect(activeRows).toHaveLength(2);
+      expect(activeRows).toHaveLength(1);
 
       const conflictRows = await withWorkspace(
         pool,
@@ -754,8 +867,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         async (client) => {
           const rows = await client.query<{ id: string }>(
             `select id from conflicts
-             where workspace_id = $1 and (link_a_id = any($2::uuid[]) or link_b_id = any($2::uuid[]))`,
-            [workspaceId, [factIdA, factIdB]],
+             where workspace_id = $1 and (link_a_id = $2 or link_b_id = $2)`,
+            [workspaceId, factIdA],
           );
           return rows.rows;
         },
@@ -763,7 +876,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(conflictRows).toHaveLength(0);
 
-      // B can read its own Fact back.
+      // B can read the corroborated Fact back (it's workspace-visible, and B is the caller of the
+      // second run regardless).
       const seenByB = await inTx(otherId, async (client) => {
         const rows = await client.query<{ id: string }>(
           'select id from links where workspace_id = $1 and id = $2',

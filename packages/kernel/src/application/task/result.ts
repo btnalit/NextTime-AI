@@ -5,6 +5,7 @@ import {
   attachEvidence,
   endActivity,
   recordSourceObservation,
+  registerPrivateSource,
   registerSource,
   startActivity,
 } from '../../substrate/epistemic/index.js';
@@ -147,6 +148,22 @@ export async function postWorkerResult(
   });
 
   try {
+    // The session transcript (§7.3 "会话 JSONL 回流为私有 Source"), when the run shipped one, is a
+    // *private* `worker_session` Source owned by the on_behalf_of human — and it is deliberately
+    // observed on its own `worker_session` Activity below, never on the `worker_result` Activity
+    // that carries the Facts. `link_visible_to_caller` (migrations/core/0013) hides every Fact of
+    // an Activity that observes any private Source the caller does not own, so a transcript
+    // Observation on the Fact Activity would make the run's results private to one person. The
+    // kernel never reads the file itself — `uri` is a pointer.
+    const transcriptSource = contract.sessionJsonlPath
+      ? await registerPrivateSource(client, workspaceId, {
+          kind: 'worker_session',
+          ownerPrincipalId: actorPrincipalId,
+          uri: contract.sessionJsonlPath,
+          metadata: { taskId: input.taskId, workerRunId: input.workerRunId },
+        })
+      : null;
+
     // This WorkerRun as an epistemic Source, recorded on the Activity *before* any Fact is
     // asserted (W5.5, docs/code-review-2026-09-10.md §2.1 / STATUS leftover 16). Order is
     // load-bearing: `SqlGraphStore.assertFact` decides same-origin (supersede) vs different-origin
@@ -156,28 +173,46 @@ export async function postWorkerResult(
     // contradicting each other were silently superseded instead of opening a Conflict. Same
     // pattern `application/gateway/ingest-handlers.ts`'s `submit_observations` already uses.
     //
-    // Registered unconditionally, not only when a session JSONL exists (§7.3): the run is the
-    // Source whether or not a transcript pointer is available; `uri` is null without one. The
-    // kernel never reads the file itself — `uri` is a pointer.
-    //
-    // Visibility is deliberately unchanged from before this fix: a run that ships its session
-    // transcript gets a *private* Source owned by the on_behalf_of human (§5.6 "会话派生内容默认
-    // private"), so its Facts stay visible to that human only (`links_visibility`, migrations/
-    // core/0013) exactly as they already were; a run without a transcript previously had no Source
-    // at all and its Facts were workspace-visible, so it gets a *workspace* Source now. Whether
-    // Worker-derived Facts should be private by default at all is a product decision recorded as a
-    // STATUS follow-up, not decided here.
+    // Always `workspace`-visible (product decision 2026-09-10, STATUS W5.5 closeout): a Worker's
+    // `factsToAssert` are workspace knowledge — "所有 agent 共享同一份图" — whether or not a
+    // transcript exists. Before this, a run with a transcript had its Facts hidden from everyone
+    // but the on_behalf_of human purely because the transcript Source sat on the same Activity.
     const runSource = await registerSource(client, workspaceId, {
-      kind: 'worker_session',
+      kind: 'worker_run',
       ownerPrincipalId: actorPrincipalId,
-      visibility: contract.sessionJsonlPath ? 'private' : 'workspace',
-      ...(contract.sessionJsonlPath ? { uri: contract.sessionJsonlPath } : {}),
-      metadata: { taskId: input.taskId, workerRunId: input.workerRunId },
+      visibility: 'workspace',
+      metadata: {
+        taskId: input.taskId,
+        workerRunId: input.workerRunId,
+        ...(transcriptSource ? { transcriptSourceId: transcriptSource.id } : {}),
+      },
     });
     const runObservation = await recordSourceObservation(client, workspaceId, {
       sourceId: runSource.id,
       activityId: activity.id,
     });
+
+    // The transcript's own Activity: keeps the private Source reachable through
+    // `explain(activityId).observations[].source` for its owner without touching Fact visibility
+    // (see above). Linked both ways through metadata so either side can be found from the other.
+    if (transcriptSource) {
+      const transcriptActivity = await startActivity(client, workspaceId, {
+        kind: 'worker_session',
+        principalId: agentPrincipalId,
+        metadata: {
+          taskId: input.taskId,
+          workerRunId: input.workerRunId,
+          onBehalfOf: actorPrincipalId,
+          resultActivityId: activity.id,
+          sourceId: transcriptSource.id,
+        },
+      });
+      await recordSourceObservation(client, workspaceId, {
+        sourceId: transcriptSource.id,
+        activityId: transcriptActivity.id,
+      });
+      await endActivity(client, workspaceId, transcriptActivity.id, 'completed');
+    }
 
     // facts_to_assert -> Facts under this Activity (I3). epistemic_status: `inferred` (§5.6 — a
     // Worker is an agent), derived the ordinary way — `agentPrincipalId` is a real `kind='agent'`
