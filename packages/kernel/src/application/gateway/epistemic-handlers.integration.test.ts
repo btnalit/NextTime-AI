@@ -173,6 +173,8 @@ describe.runIf(DATABASE_URL !== undefined)(
               sourceObjectId: objectB.id,
               targetObjectId: objectA.id,
               activityId: activityA.id,
+              // W5.5: content must differ — identical content from another origin is a corroboration.
+              properties: { port: 80 },
             },
           );
 
@@ -190,6 +192,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               sourceObjectId: objectB.id,
               targetObjectId: objectA.id,
               activityId: activityB.id,
+              properties: { port: 81 },
             },
           );
 

@@ -5,7 +5,7 @@ import {
   attachEvidence,
   endActivity,
   recordSourceObservation,
-  registerPrivateSource,
+  registerSource,
   startActivity,
 } from '../../substrate/epistemic/index.js';
 import type { Fact } from '../../substrate/graph/index.js';
@@ -147,12 +147,45 @@ export async function postWorkerResult(
   });
 
   try {
+    // This WorkerRun as an epistemic Source, recorded on the Activity *before* any Fact is
+    // asserted (W5.5, docs/code-review-2026-09-10.md §2.1 / STATUS leftover 16). Order is
+    // load-bearing: `SqlGraphStore.assertFact` decides same-origin (supersede) vs different-origin
+    // (Conflict) through `resolveFactOrigin`, which reads the Observations already on this
+    // Activity — with nothing recorded yet it fell back to the asserting principal, and the agent
+    // principal is one per (workspace, WorkerDefinition), so two runs of the same definition
+    // contradicting each other were silently superseded instead of opening a Conflict. Same
+    // pattern `application/gateway/ingest-handlers.ts`'s `submit_observations` already uses.
+    //
+    // Registered unconditionally, not only when a session JSONL exists (§7.3): the run is the
+    // Source whether or not a transcript pointer is available; `uri` is null without one. The
+    // kernel never reads the file itself — `uri` is a pointer.
+    //
+    // Visibility is deliberately unchanged from before this fix: a run that ships its session
+    // transcript gets a *private* Source owned by the on_behalf_of human (§5.6 "会话派生内容默认
+    // private"), so its Facts stay visible to that human only (`links_visibility`, migrations/
+    // core/0013) exactly as they already were; a run without a transcript previously had no Source
+    // at all and its Facts were workspace-visible, so it gets a *workspace* Source now. Whether
+    // Worker-derived Facts should be private by default at all is a product decision recorded as a
+    // STATUS follow-up, not decided here.
+    const runSource = await registerSource(client, workspaceId, {
+      kind: 'worker_session',
+      ownerPrincipalId: actorPrincipalId,
+      visibility: contract.sessionJsonlPath ? 'private' : 'workspace',
+      ...(contract.sessionJsonlPath ? { uri: contract.sessionJsonlPath } : {}),
+      metadata: { taskId: input.taskId, workerRunId: input.workerRunId },
+    });
+    const runObservation = await recordSourceObservation(client, workspaceId, {
+      sourceId: runSource.id,
+      activityId: activity.id,
+    });
+
     // facts_to_assert -> Facts under this Activity (I3). epistemic_status: `inferred` (§5.6 — a
     // Worker is an agent), derived the ordinary way — `agentPrincipalId` is a real `kind='agent'`
     // principals row (`spawn.ts`'s `ensureWorkerAgentPrincipal`), so `SqlGraphStore.assertFact`'s
     // own `resolveCallerKind` finds `kind='agent'` and `deriveEpistemicStatus` does the rest. No
     // downgrade flag needed (replaces PR #84's `CallerPrincipal.viaAgent`, see this module's own
-    // doc comment).
+    // doc comment). `observationId` (migrations/core/0018) points every Fact at this run's
+    // Observation so `explain(factId)` narrows to it.
     const writtenFacts: Fact[] = [];
     for (const factInput of contract.factsToAssert ?? []) {
       const sourceObjectId = await resolveObjectRef(client, workspaceId, factInput.source);
@@ -168,6 +201,7 @@ export async function postWorkerResult(
           activityId: activity.id,
           properties: factInput.properties,
           confidence: factInput.confidence,
+          observationId: runObservation.id,
         },
       );
       writtenFacts.push(fact);
@@ -190,21 +224,6 @@ export async function postWorkerResult(
           createdBy: actorPrincipalId,
         });
       }
-    }
-
-    // session JSONL -> a private Source, observed by this Activity (§7.3 "会话 JSONL 回流为私有
-    // Source"). The kernel never reads the file itself — `uri` is a pointer.
-    if (contract.sessionJsonlPath) {
-      const source = await registerPrivateSource(client, workspaceId, {
-        kind: 'worker_session',
-        ownerPrincipalId: actorPrincipalId,
-        uri: contract.sessionJsonlPath,
-        metadata: { taskId: input.taskId, workerRunId: input.workerRunId },
-      });
-      await recordSourceObservation(client, workspaceId, {
-        sourceId: source.id,
-        activityId: activity.id,
-      });
     }
 
     // proposed_operations -> the existing propose_operation service (S2.4), draft-only (I16).

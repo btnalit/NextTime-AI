@@ -211,14 +211,17 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     /** Spawns a fresh entry session + Handle, invokes the plain worker definition (wait: false), and
-     *  returns the real minted WorkerRun claims to call `report_task_result` as. */
-    async function spawnWorkerRun(): Promise<{
+     *  returns the real minted WorkerRun claims to call `report_task_result` as. `principalId`
+     *  (default `ownerId`) is both the entry session's own principal and the Task's `on_behalf_of`
+     *  — pass a second human principal (see `adminInsertPrincipal`) to spawn a run on their behalf
+     *  instead of the suite's default owner (W5.5 cross-principal corroboration test). */
+    async function spawnWorkerRun(principalId: string = ownerId): Promise<{
       taskId: string;
       workerRunId: string;
       claims: HandleClaims;
     }> {
-      const entrySessionId = await insertSession('entry', ownerId, ownerId);
-      const entryIssued = await inTx(ownerId, (client) =>
+      const entrySessionId = await insertSession('entry', principalId, principalId);
+      const entryIssued = await inTx(principalId, (client) =>
         issueHandle(client, {
           sessionId: entrySessionId,
           scope: entryScope(),
@@ -229,7 +232,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const entryClaims: HandleClaims = {
         ws: workspaceId,
         sid: entrySessionId,
-        obo: ownerId,
+        obo: principalId,
         scope: entryIssued.scope,
         jti: entryIssued.jti,
         iat: Math.floor(entryIssued.issuedAt.getTime() / 1000),
@@ -239,12 +242,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const supervisorClient = new FakeTaskSupervisorClient();
       const invoked = await invokeWorker(
         workspaceId,
-        { principalId: ownerId, channel: 'handle', claims: entryClaims },
+        { principalId, channel: 'handle', claims: entryClaims },
         { definitionId: workerDefinitionId, version: 1, input: { foo: 'bar' }, wait: false },
         deps(supervisorClient),
       );
 
-      const workerRun = await inTx(ownerId, (client) =>
+      const workerRun = await inTx(principalId, (client) =>
         readWorkerRunRow(client, workspaceId, invoked.workerRunId),
       );
       if (!workerRun?.sessionId) throw new Error('spawned WorkerRun has no session');
@@ -386,6 +389,389 @@ describe.runIf(DATABASE_URL !== undefined)(
           ],
         }),
       ).rejects.toThrow(/does not exist/);
+    });
+
+    it('two runs of the same WorkerDefinition asserting contradicting facts open exactly one Conflict', async () => {
+      // W5.5 (STATUS leftover 16): each WorkerRun now registers its own private `worker_session`
+      // Source before asserting — two runs of the *same* WorkerDefinition (one shared agent
+      // principal) are therefore two different origins, so a contradicting re-assertion of the
+      // same identity must open a Conflict rather than silently supersede.
+      const identity = { name: `contradict-${randomUUID()}` };
+      const otherIdentity = { name: `contradict-target-${randomUUID()}` };
+
+      const run1 = await spawnWorkerRun();
+      const caller1: ResolvedCaller = { channel: 'handle', claims: run1.claims };
+      const result1 = (await dispatchCapability({ pool }, caller1, 'report_task_result', {
+        summary: 'run 1',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectType: 'Host', identity },
+            target: { objectType: 'Host', identity: otherIdentity },
+            properties: { port: 80 },
+          },
+        ],
+      })) as { factIds: string[] };
+      const [factId1] = result1.factIds;
+      if (!factId1) throw new Error('expected run 1 to write a fact id');
+
+      const run2 = await spawnWorkerRun();
+      const caller2: ResolvedCaller = { channel: 'handle', claims: run2.claims };
+      const result2 = (await dispatchCapability({ pool }, caller2, 'report_task_result', {
+        summary: 'run 2',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectType: 'Host', identity },
+            target: { objectType: 'Host', identity: otherIdentity },
+            properties: { port: 81 },
+          },
+        ],
+      })) as { factIds: string[] };
+      const [factId2] = result2.factIds;
+      if (!factId2) throw new Error('expected run 2 to write a fact id');
+      expect(factId2).not.toBe(factId1);
+
+      const identityRow = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{
+          link_type: string;
+          source_object_id: string;
+          target_object_id: string;
+        }>(
+          'select link_type, source_object_id, target_object_id from links where workspace_id = $1 and id = $2',
+          [workspaceId, factId1],
+        );
+        return rows.rows[0];
+      });
+      if (!identityRow) throw new Error('expected fact1 to exist');
+
+      const activeRows = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          `select id from links
+           where workspace_id = $1 and link_type = $2 and source_object_id = $3
+             and target_object_id = $4 and superseded_at is null and invalidated_at is null`,
+          [
+            workspaceId,
+            identityRow.link_type,
+            identityRow.source_object_id,
+            identityRow.target_object_id,
+          ],
+        );
+        return rows.rows;
+      });
+      expect(activeRows).toHaveLength(2);
+
+      const conflictRows = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ status: string; link_a_id: string; link_b_id: string }>(
+          `select status, link_a_id, link_b_id from conflicts
+           where workspace_id = $1 and (link_a_id = any($2::uuid[]) or link_b_id = any($2::uuid[]))`,
+          [workspaceId, [factId1, factId2]],
+        );
+        return rows.rows;
+      });
+      expect(conflictRows).toHaveLength(1);
+      const [conflictRow] = conflictRows;
+      expect(conflictRow?.status).toBe('open');
+      expect([conflictRow?.link_a_id, conflictRow?.link_b_id]).toContain(factId1);
+      expect([conflictRow?.link_a_id, conflictRow?.link_b_id]).toContain(factId2);
+
+      // Each run's Fact carries its own Observation, pointing at its own private worker_session
+      // Source owned by the on_behalf_of principal (spawnWorkerRun's ownerId) — two different
+      // Source rows, not one shared per-WorkerDefinition principal.
+      const sourceRows = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{
+          fact_id: string;
+          source_id: string;
+          kind: string;
+          owner_principal_id: string;
+        }>(
+          `select l.id as fact_id, s.id as source_id, s.kind, s.owner_principal_id
+           from links l
+           join observations o on o.workspace_id = l.workspace_id and o.id = l.observation_id
+           join sources s on s.workspace_id = o.workspace_id and s.id = o.source_id
+           where l.workspace_id = $1 and l.id = any($2::uuid[])`,
+          [workspaceId, [factId1, factId2]],
+        );
+        return rows.rows;
+      });
+      expect(sourceRows).toHaveLength(2);
+      for (const row of sourceRows) {
+        expect(row.kind).toBe('worker_session');
+        expect(row.owner_principal_id).toBe(ownerId);
+      }
+      const sourceIds = new Set(sourceRows.map((row) => row.source_id));
+      expect(sourceIds.size).toBe(2);
+    });
+
+    it('a second run reaching the same conclusion is a corroboration, not a Conflict', async () => {
+      const identity = { name: `corroborate-${randomUUID()}` };
+      const otherIdentity = { name: `corroborate-target-${randomUUID()}` };
+
+      const run1 = await spawnWorkerRun();
+      const caller1: ResolvedCaller = { channel: 'handle', claims: run1.claims };
+      const result1 = (await dispatchCapability({ pool }, caller1, 'report_task_result', {
+        summary: 'run 1',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectType: 'Host', identity },
+            target: { objectType: 'Host', identity: otherIdentity },
+            properties: { port: 80 },
+          },
+        ],
+      })) as { factIds: string[] };
+      const [factId1] = result1.factIds;
+      if (!factId1) throw new Error('expected run 1 to write a fact id');
+
+      const run2 = await spawnWorkerRun();
+      const caller2: ResolvedCaller = { channel: 'handle', claims: run2.claims };
+      const result2 = (await dispatchCapability({ pool }, caller2, 'report_task_result', {
+        summary: 'run 2',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectType: 'Host', identity },
+            target: { objectType: 'Host', identity: otherIdentity },
+            properties: { port: 80 }, // identical to run 1 — corroboration, not disagreement
+          },
+        ],
+      })) as { factIds: string[] };
+      // The wire result's factIds still name the first run's Fact — assertFact's `unchanged: true`
+      // path returns the prior Fact rather than inserting a second one.
+      expect(result2.factIds).toEqual([factId1]);
+
+      const identityRow = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{
+          link_type: string;
+          source_object_id: string;
+          target_object_id: string;
+        }>(
+          'select link_type, source_object_id, target_object_id from links where workspace_id = $1 and id = $2',
+          [workspaceId, factId1],
+        );
+        return rows.rows[0];
+      });
+      if (!identityRow) throw new Error('expected fact1 to exist');
+
+      const activeRows = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          `select id from links
+           where workspace_id = $1 and link_type = $2 and source_object_id = $3
+             and target_object_id = $4 and superseded_at is null and invalidated_at is null`,
+          [
+            workspaceId,
+            identityRow.link_type,
+            identityRow.source_object_id,
+            identityRow.target_object_id,
+          ],
+        );
+        return rows.rows;
+      });
+      expect(activeRows).toHaveLength(1);
+
+      const conflictRows = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          'select id from conflicts where workspace_id = $1 and (link_a_id = $2 or link_b_id = $2)',
+          [workspaceId, factId1],
+        );
+        return rows.rows;
+      });
+      expect(conflictRows).toHaveLength(0);
+    });
+
+    it('a run without sessionJsonlPath gets a workspace-visible worker_session Source with null uri', async () => {
+      const { claims } = await spawnWorkerRun();
+      const caller: ResolvedCaller = { channel: 'handle', claims };
+      const identity = { name: `visibility-workspace-${randomUUID()}` };
+      const otherIdentity = { name: `visibility-workspace-target-${randomUUID()}` };
+
+      const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+        summary: 'no session jsonl',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectType: 'Host', identity },
+            target: { objectType: 'Host', identity: otherIdentity },
+            properties: { note: 'workspace visible' },
+          },
+        ],
+      })) as { activityId: string; factIds: string[] };
+
+      const activityRow = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ kind: string }>(
+          'select kind from activities where workspace_id = $1 and id = $2',
+          [workspaceId, result.activityId],
+        );
+        return rows.rows[0];
+      });
+      expect(activityRow?.kind).toBe('worker_result');
+
+      const observationRows = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ uri: string | null; visibility: string; kind: string }>(
+          `select s.uri, s.visibility, s.kind
+           from observations o
+           join sources s on s.workspace_id = o.workspace_id and s.id = o.source_id
+           where o.workspace_id = $1 and o.activity_id = $2`,
+          [workspaceId, result.activityId],
+        );
+        return rows.rows;
+      });
+      expect(observationRows).toHaveLength(1);
+      expect(observationRows[0]?.uri).toBeNull();
+      expect(observationRows[0]?.visibility).toBe('workspace');
+      expect(observationRows[0]?.kind).toBe('worker_session');
+
+      // Workspace-visibility Source -> the Fact is readable by any other principal in the
+      // workspace, not only the on_behalf_of owner (`links_visibility`, migrations/core/0013).
+      const [factId] = result.factIds;
+      if (!factId) throw new Error('expected a written fact id');
+      const otherId = await adminInsertPrincipal('member', `visibility-workspace-${factId}`);
+      const seenByOther = await inTx(otherId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          'select id from links where workspace_id = $1 and id = $2',
+          [workspaceId, factId],
+        );
+        return rows.rows;
+      });
+      expect(seenByOther).toHaveLength(1);
+    });
+
+    it('a run with sessionJsonlPath gets a private worker_session Source, invisible to another principal', async () => {
+      const { claims } = await spawnWorkerRun();
+      const caller: ResolvedCaller = { channel: 'handle', claims };
+      const identity = { name: `visibility-private-${randomUUID()}` };
+      const otherIdentity = { name: `visibility-private-target-${randomUUID()}` };
+
+      const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+        summary: 'has session jsonl',
+        sessionJsonlPath: '/workspace/sessions/visibility-private.jsonl',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectType: 'Host', identity },
+            target: { objectType: 'Host', identity: otherIdentity },
+            properties: { note: 'private' },
+          },
+        ],
+      })) as { activityId: string; factIds: string[] };
+
+      const observationRows = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ uri: string | null; visibility: string; kind: string }>(
+          `select s.uri, s.visibility, s.kind
+           from observations o
+           join sources s on s.workspace_id = o.workspace_id and s.id = o.source_id
+           where o.workspace_id = $1 and o.activity_id = $2`,
+          [workspaceId, result.activityId],
+        );
+        return rows.rows;
+      });
+      expect(observationRows).toHaveLength(1);
+      expect(observationRows[0]?.uri).toBe('/workspace/sessions/visibility-private.jsonl');
+      expect(observationRows[0]?.visibility).toBe('private');
+      expect(observationRows[0]?.kind).toBe('worker_session');
+
+      // Private Source -> the Fact is hidden from every other principal in the workspace.
+      const [factId] = result.factIds;
+      if (!factId) throw new Error('expected a written fact id');
+      const otherId = await adminInsertPrincipal('member', `visibility-private-${factId}`);
+      const seenByOther = await inTx(otherId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          'select id from links where workspace_id = $1 and id = $2',
+          [workspaceId, factId],
+        );
+        return rows.rows;
+      });
+      expect(seenByOther).toHaveLength(0);
+    });
+
+    it('two runs of the same WorkerDefinition on behalf of different principals, agreeing with each other’s private Fact, open no Conflict', async () => {
+      // W5.5 follow-up: `assertFact`'s different-origin/identical-content corroboration branch
+      // first checks whether the caller can *see* the prior Fact — visible corroborates onto it
+      // (already covered above, same principal both times); hidden (the prior Fact's Source is
+      // private to a different principal) instead writes the caller's own Fact on its own
+      // Activity, still with no Conflict, since the two agree.
+      const otherId = await adminInsertPrincipal('member', 'cross-principal-corroborator');
+      const identity = { name: `cross-principal-${randomUUID()}` };
+      const otherIdentity = { name: `cross-principal-target-${randomUUID()}` };
+
+      const runA = await spawnWorkerRun(ownerId);
+      const callerA: ResolvedCaller = { channel: 'handle', claims: runA.claims };
+      const resultA = (await dispatchCapability({ pool }, callerA, 'report_task_result', {
+        summary: 'run A',
+        sessionJsonlPath: '/workspace/sessions/cross-principal-a.jsonl',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectType: 'Host', identity },
+            target: { objectType: 'Host', identity: otherIdentity },
+            properties: { port: 80 },
+          },
+        ],
+      })) as { factIds: string[] };
+      const [factIdA] = resultA.factIds;
+      if (!factIdA) throw new Error('expected run A to write a fact id');
+
+      const runB = await spawnWorkerRun(otherId);
+      const callerB: ResolvedCaller = { channel: 'handle', claims: runB.claims };
+      const resultB = (await dispatchCapability({ pool }, callerB, 'report_task_result', {
+        summary: 'run B',
+        sessionJsonlPath: '/workspace/sessions/cross-principal-b.jsonl',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectType: 'Host', identity },
+            target: { objectType: 'Host', identity: otherIdentity },
+            properties: { port: 80 }, // identical to run A — B cannot see A's private Fact though
+          },
+        ],
+      })) as { factIds: string[] };
+      const [factIdB] = resultB.factIds;
+      if (!factIdB) throw new Error('expected run B to write a fact id');
+      expect(factIdB).not.toBe(factIdA);
+
+      // Neither owner nor member can see both rows at once (each Fact is private to its own
+      // on_behalf_of principal) — count them the way `explain.test.ts`'s beforeAll bypasses RLS,
+      // with `skipRoleSwitch: true`.
+      const activeRows = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const rows = await client.query<{ id: string }>(
+            `select id from links
+             where workspace_id = $1 and id = any($2::uuid[])
+               and superseded_at is null and invalidated_at is null`,
+            [workspaceId, [factIdA, factIdB]],
+          );
+          return rows.rows;
+        },
+        { skipRoleSwitch: true },
+      );
+      expect(activeRows).toHaveLength(2);
+
+      const conflictRows = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const rows = await client.query<{ id: string }>(
+            `select id from conflicts
+             where workspace_id = $1 and (link_a_id = any($2::uuid[]) or link_b_id = any($2::uuid[]))`,
+            [workspaceId, [factIdA, factIdB]],
+          );
+          return rows.rows;
+        },
+        { skipRoleSwitch: true },
+      );
+      expect(conflictRows).toHaveLength(0);
+
+      // B can read its own Fact back.
+      const seenByB = await inTx(otherId, async (client) => {
+        const rows = await client.query<{ id: string }>(
+          'select id from links where workspace_id = $1 and id = $2',
+          [workspaceId, factIdB],
+        );
+        return rows.rows;
+      });
+      expect(seenByB).toHaveLength(1);
     });
   },
 );

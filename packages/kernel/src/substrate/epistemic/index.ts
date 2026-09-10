@@ -31,7 +31,7 @@ export type {
 export { attachEvidence, hasEvidence } from './evidence.js';
 export type { AttachEvidenceInput, EvidenceRow } from './evidence.js';
 
-export { registerPrivateSource, recordSourceObservation } from './sources.js';
+export { registerPrivateSource, registerSource, recordSourceObservation } from './sources.js';
 export type { RegisterPrivateSourceInput, SourceRow } from './sources.js';
 
 // S3.2 冲突检测 (docs/development-tasks.md S3.2) — see conflicts.ts's own module doc comment for

@@ -209,6 +209,10 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
       const { humanFact, agentFact } = await inTx(async (client) => {
         const a = await makeObject(client, 'A');
         const b = await makeObject(client, 'B');
+        // W5.5: a different identity for the agent's Fact — the same identity with identical content
+        // from a different origin is now a corroboration (returns the human's Fact unchanged), and
+        // this test is about epistemic_status derivation, not identity collisions.
+        const c = await makeObject(client, 'C');
         const activity = await makeActivity(client);
         const humanFact = await store.assertFact(client, workspaceId, humanCaller(), {
           linkType: 'test.rel',
@@ -223,7 +227,7 @@ describe.runIf(DATABASE_URL !== undefined)('SqlGraphStore (integration, real Pos
           {
             linkType: 'test.rel',
             sourceObjectId: a.id,
-            targetObjectId: b.id,
+            targetObjectId: c.id,
             activityId: activity.id,
           },
         );

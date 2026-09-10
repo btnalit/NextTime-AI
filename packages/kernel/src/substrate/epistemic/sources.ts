@@ -18,6 +18,11 @@ export interface RegisterPrivateSourceInput {
   readonly metadata?: Record<string, unknown>;
 }
 
+/** `registerSource` (W5.5): same as `RegisterPrivateSourceInput` plus an explicit visibility. */
+export interface RegisterSourceInput extends RegisterPrivateSourceInput {
+  readonly visibility: 'private' | 'workspace';
+}
+
 export interface SourceRow {
   readonly workspaceId: string;
   readonly id: string;
@@ -61,21 +66,35 @@ export async function registerPrivateSource(
   workspaceId: string,
   input: RegisterPrivateSourceInput,
 ): Promise<SourceRow> {
+  return registerSource(client, workspaceId, { ...input, visibility: 'private' });
+}
+
+/** Registers a Source with an explicit visibility (W5.5, STATUS leftover 16): `postWorkerResult`
+ *  needs a workspace-visible per-run Source when no session transcript is attached, so that fixing
+ *  origin resolution does not also flip those runs' Facts to private (`links_visibility` derives
+ *  Fact visibility from the Sources on the Activity, migrations/core/0013). Every other caller
+ *  keeps using `registerPrivateSource` above. */
+export async function registerSource(
+  client: PoolClient,
+  workspaceId: string,
+  input: RegisterSourceInput,
+): Promise<SourceRow> {
   const result = await client.query<SourceDbRow>(
     `insert into sources (workspace_id, kind, owner_principal_id, visibility, uri, metadata)
-     values ($1, $2, $3, 'private', $4, $5::jsonb)
+     values ($1, $2, $3, $4, $5, $6::jsonb)
      returning workspace_id, id, kind, owner_principal_id, visibility, uri, metadata, created_at`,
     [
       workspaceId,
       input.kind,
       input.ownerPrincipalId,
+      input.visibility,
       input.uri ?? null,
       JSON.stringify(input.metadata ?? {}),
     ],
   );
   const row = result.rows[0];
   if (row === undefined) {
-    throw new Error('registerPrivateSource: INSERT ... RETURNING produced no row');
+    throw new Error('registerSource: INSERT ... RETURNING produced no row');
   }
   return mapSourceRow(row);
 }
