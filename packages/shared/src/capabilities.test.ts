@@ -82,7 +82,6 @@ const EXPECTED_CAPABILITY_NAMES = [
   'set_quota',
   'issue_handle',
   // task
-  'create_task',
   'invoke_worker',
   'get_task',
   'list_tasks',
@@ -194,7 +193,6 @@ describe('CAPABILITY_REGISTRY', () => {
       'resolve_conflict',
       'verify_fact',
       'report_turn',
-      'create_task',
       'invoke_worker',
       'report_task_result',
       'cancel_task',

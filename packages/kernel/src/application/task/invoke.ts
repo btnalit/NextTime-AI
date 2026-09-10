@@ -161,14 +161,12 @@ async function resolveCallerWorkerRun(
 }
 
 /**
- * The quota-gated "insert one queued Task row" step shared by `invokeWorkerCreate` (which goes on
- * to spawn a WorkerRun for it) and `createTask` (which does not — see that function's own doc
- * comment for why `create_task` never spawns). Factored out rather than duplicated: both callers
- * need the *identical* I18 depth/concurrency/cost-budget checks running inside the *identical*
- * advisory-locked transaction as the INSERT itself (P2-6 fix's own reasoning, below, applies
- * equally to a Task created without a WorkerRun — a caller spamming `create_task` must not be able
- * to bypass the same concurrency ceiling `invoke_worker` enforces, since the resulting `queued`
- * rows count toward that same ceiling's query either way).
+ * The quota-gated "insert one queued Task row" step of `invokeWorkerCreate` (which goes on to
+ * spawn a WorkerRun for it). Kept as its own function so the I18 depth/concurrency/cost-budget
+ * checks and the INSERT stay inside one advisory-locked transaction (P2-6 fix's own reasoning,
+ * below). It used to be shared with `create_task`'s "create only, never spawn" `createTask`, retired
+ * in W5 (docs/code-review-2026-09-10.md §3.2) — a second caller must keep running these checks
+ * inside this same locked transaction, never around it.
  */
 async function insertQueuedTaskWithQuotaCheck(
   workspaceId: string,
@@ -186,7 +184,7 @@ async function insertQueuedTaskWithQuotaCheck(
   // (workspace, principal) by a session-scoped advisory lock (`pg_advisory_xact_lock`, the same
   // "auto-released at COMMIT/ROLLBACK" convention `application/chat/service.ts`'s own
   // `insertChatMessage` already uses for its own sequence-allocation race) — a second concurrent
-  // `invoke_worker`/`create_task` call for the same principal blocks here until the first commits
+  // `invoke_worker` call for the same principal blocks here until the first commits
   // (or rolls back on a quota violation), then re-reads the *already-committed* count.
   //
   // **Deviation from the S2.7 dispatch text's own "每用户并发 WorkerRun" wording**: the concurrency
@@ -201,9 +199,7 @@ async function insertQueuedTaskWithQuotaCheck(
   // insert. A `queued`/`running`/`waiting_approval` Task has, in every real case, exactly one
   // active WorkerRun underneath it (a crash-requeue terminates the old one before spawning a new
   // one — `lifecycle.ts`'s `spawnWorkerRunForRetry`), so this is a faithful proxy for "concurrent
-  // WorkerRuns per user", not a different quota — a `create_task`-created Task has *zero* WorkerRuns
-  // underneath it (no spawn), so it counts toward this same ceiling without contributing an actual
-  // running container; documented, not a bug (`createTask`'s own doc comment).
+  // WorkerRuns per user", not a different quota.
   return withWorkspace(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
@@ -286,66 +282,6 @@ async function insertQueuedTaskWithQuotaCheck(
       return { newDepth: depth, parentWorkerRun: callerWorkerRun, task: mappedTask };
     },
   );
-}
-
-/**
- * `create_task`: resolves and validates the published WorkerDefinition (must be `kind: 'worker'`)
- * and the AgentProfile `enabledWorkerDefinitions` narrowing — identical checks `invokeWorkerCreate`
- * runs — then inserts the Task row via `insertQueuedTaskWithQuotaCheck` and returns it **without**
- * spawning a WorkerRun (contrast `invokeWorkerCreate`, which spawns and transitions to `running`
- * right after the same insert). §5.5 already has a `queued` status for exactly this "created, not
- * yet running" state, so no new state was invented.
- *
- * **Known limitation, documented rather than papered over**: nothing in this codebase today
- * transitions a Task out of `queued` unless a WorkerRun already exists for it —
- * `application/task/reaper.ts`'s `runTaskReaper` only scans `worker_runs` joined to `tasks`, so a
- * Task created this way sits at `queued` indefinitely (still visible via `get_task`/`list_tasks`,
- * still counted by future `invoke_worker`/`create_task` calls' own concurrency quota) until some
- * future capability actually spawns a WorkerRun for it — no such capability exists yet. This
- * matches the task brief's own framing ("create only, to be run later by the reaper/dispatcher or
- * an explicit invoke — pick the semantics the existing lifecycle supports without a new state"):
- * the semantics the existing lifecycle supports is exactly "insert at `queued`", and no more.
- */
-export async function createTask(
-  workspaceId: string,
-  caller: InvokeWorkerCallerCtx,
-  input: { readonly definitionId: string; readonly version: number; readonly input: unknown },
-  deps: TaskRuntimeDeps,
-): Promise<TaskRow> {
-  const definition = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: caller.principalId },
-    (client) =>
-      requirePublishedWorkerDefinition(client, workspaceId, {
-        definitionId: input.definitionId,
-        version: input.version,
-      }),
-  );
-
-  if (definition.kind !== 'worker') {
-    throw new InvokeWorkerValidationError(
-      `create_task: WorkerDefinition ${input.definitionId}@${input.version} is kind ` +
-        `"${definition.kind}", not "worker" — only a worker-kind WorkerDefinition may back a Task`,
-    );
-  }
-
-  // S3.13 runtime consumer, same rule `invokeWorkerCreate` applies (see that function's own
-  // comment): an owner is not exempt — a Profile is a preference the principal set for themselves,
-  // not a privilege boundary.
-  const agentProfile = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: caller.principalId },
-    (client) => readAgentProfile(client, workspaceId, caller.principalId),
-  );
-  if (
-    agentProfile?.enabledWorkerDefinitions &&
-    !agentProfile.enabledWorkerDefinitions.includes(input.definitionId)
-  ) {
-    throw new InvokeWorkerDefinitionNotEnabledError(input.definitionId);
-  }
-
-  const { task } = await insertQueuedTaskWithQuotaCheck(workspaceId, caller, input, deps);
-  return task;
 }
 
 /**

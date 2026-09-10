@@ -83,7 +83,7 @@ export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
  *
  *   - `observe`  — read-only.
  *   - `write`    — an immediate, in-platform state change: audited, no human approval gate
- *     (`assert_fact`, `create_task`, `invoke_worker`, `report_task_result`, `cancel_task`,
+ *     (`assert_fact`, `invoke_worker`, `report_task_result`, `cancel_task`,
  *     `register_source`, `submit_observations`, `record_decision`, `resolve_conflict`,
  *     `verify_fact`, `report_turn`, `supersede_fact`, `invalidate_fact` — the exact list the
  *     conventions doc names, previously mistagged `propose`).
@@ -1375,39 +1375,6 @@ const taskCapabilities: readonly Capability[] = [
     description:
       'Report a completed Turn’s outcome back to the kernel (§7.2 "每轮回传 Turn 与决策"); called ' +
       'from the entry agent’s pi `agent_end` handler.',
-  },
-  {
-    // W4 closeout (docs/development-tasks.md S2.7's original "not wired" decision — reversed here):
-    // the params shape that decision itself said was missing (`definitionId`/`version` — §5.5 "Task
-    // 固定引用启动时版本"; `tasks.worker_definition_id`/`.worker_definition_version` are NOT NULL)
-    // is now present, so a well-formed Task can actually be built. Semantics: create only — pins a
-    // published WorkerDefinition and inserts the Task row at `queued`, exactly like the first half
-    // of `invoke_worker`, but never spawns a WorkerRun (`application/task/invoke.ts`'s `createTask`,
-    // sharing its quota-gated insert with `invokeWorkerCreate` via `insertQueuedTaskWithQuotaCheck`
-    // — see that function's own doc comment for why "create" and "create + spawn" share one locked
-    // transaction). `invoke_worker` remains "create + spawn"; this is "create" alone, matching
-    // §5.5's own existing `queued` status rather than inventing a new one — see handlers.ts's
-    // `createTaskHandler` doc comment for the full reasoning, including the known limitation that
-    // nothing in this codebase today spawns a WorkerRun for a Task created this way (no reaper path
-    // scans WorkerRun-less Tasks) — a caller must otherwise resolve the resulting Task itself.
-    name: 'create_task',
-    group: 'task',
-    mode: 'write',
-    channel: 'handle',
-    minRole: 'member',
-    paramsSchema: z
-      .object({
-        definitionId: id,
-        version: z.number().int().positive(),
-        input: z.unknown(),
-      })
-      .strict(),
-    resultSchema: wire.TaskWireSchema,
-    description:
-      'create_task(definition@version, input) — creates a Task pinned to a published ' +
-      'WorkerDefinition at status "queued", without spawning a WorkerRun (contrast invoke_worker, ' +
-      'which creates and spawns). Honors AgentProfile.enabledWorkerDefinitions the same way ' +
-      'invoke_worker does.',
   },
   {
     name: 'invoke_worker',
