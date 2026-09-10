@@ -95,9 +95,12 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
-accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
+# Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
+# whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
+# to run this script), which would otherwise kill the shell without running the EXIT trap.
 trap accept_provider_restore EXIT
-trap 'accept_provider_restore; exit 130' INT TERM
+trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
+accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
 pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
 
 # One Explorer HTTP call (X-API-Key). Prints HTTP_STATUS=/BODY=.
