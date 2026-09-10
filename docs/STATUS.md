@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-10（v0.4.2 已在目标主机应用，S1 / S2 / S3 全部通过；当前波次 W6）
+最后更新：2026-09-10（W6 验收工具链治理完成并发 v0.4.3；当前波次 W7 未开工）
 
 ## 1. 入口指引
 
@@ -30,7 +30,7 @@
 | S2 | 说需求 → find_workers → invoke_worker → 门动作 → 审批 → 执行 → 写回 | 达成 | `accept_s2.sh` 66 PASS（2026-09-10，v0.4.2） |
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | 达成 | `accept_s3.sh` 28 PASS（2026-09-10，v0.4.2，含异源 Conflict 正向断言） |
 | S3.11–S3.15 | 控制面、接入向导、AgentProfile、web 控制台、pi 漂移 | 达成 | `development-tasks.md` 各节实现说明 |
-| 发布 | — | v0.4.2（2026-09-10，PR #143） | `CHANGELOG.md` |
+| 发布 | — | v0.4.3（2026-09-10，PR #147） | `CHANGELOG.md` |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 复审曾发现 S3.2 的冲突检测在 Worker 断言主路径上不生效
 > （`code-review-2026-09-10.md` §2.1），当时验收对 Conflict 的唯一断言是「采集器跑两遍后为零」，压制 Conflict 的缺陷
@@ -50,6 +50,7 @@
 | 2026-09-10 | W5 收口：遗留 1–5、15 关闭（PR #128 / #129 / #131 / #132），fake-llm 自检进 CI，仓库只留 squash；发布 v0.4.0（PR #130）。主机未应用（停栈中），迁移 0018 待下次起栈时随 `make migrate` 落地 | `CHANGELOG.md`、本文 §4 |
 | 2026-09-10 | W5.5：P1 三项关闭（#137 Worker run 作为自己的 Source、#140 并发首次断言加锁、#138 入口 ceiling 按角色收窄），`accept_s3.sh` 加异源 Conflict 正向断言（#136）；发布 v0.4.1（PR #139）。复审新增遗留 24、25 | `CHANGELOG.md`、本文 §4 |
 | 2026-09-10 | 产品决定：Worker 结果 Fact 默认工作区可见、转录另作私有 Source（#142），发布 v0.4.2（PR #143）。主机应用 v0.4.2（迁移 0018）并复跑三份验收：S1 22 PASS + 1 SKIP、S2 66 PASS、S3 28 PASS（Conflict 正向断言首次在主机通过）；发现 S2 cleanup 会把基础栈一起停掉（遗留 26） | `docs/private/` §34、本文 §2 |
+| 2026-09-10 | W6 验收工具链治理：四份 heredoc driver 抽成 `deploy/accept/driver.mjs` + `scripts/lib/accept-common.sh`（#145，14 例 vitest）；fake provider 改 compose override，验收不再改生产配置（#146）；`accept_s1.sh --lite` 进 e2e 工作流（#148，CI 首跑 13 PASS + 6 SKIP）；fake-llm 场景参数按注册表 paramsSchema 校验（#149）；发布 v0.4.3（PR #147）。每个脚本 PR 都先在主机从分支连跑 S1→S2→S3 验证 | `CHANGELOG.md`、本文 §3 |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -63,7 +64,7 @@
   的正向用例。**PR #136**：`accept_s3.sh` 已加入 `collector_conflict_positive_step`，把这条正向用例
   接了进脚本（`docs/runbooks/host-accept-s3.md` §3/§4）；本条盲区在代码层面已补，但 §2 表格 S3 那行
   的验收证据仍是主机跑通新脚本之前的旧结果，未随此 PR 更新——里程碑状态与证据在下次主机验收前不改。
-- **三份验收脚本不能连跑**：`accept_s2.sh` 的 cleanup 对 accept-s2 profile 做 `down` 时把基础栈（postgres / kernel / …）一起停掉，紧接着跑 `accept_s3.sh` 会在 preflight 失败，必须重新 `up -d` 后单独跑（2026-09-10 主机实测，遗留 26，属 W6 第 7 项「driver 抽成一份」的范围）
+- **S2 / S3 仍只在主机验收**：CI 里只有 `accept_s1.sh --lite`（无入口容器、fake agent runtime）这一条通路；Worker 容器、门、采集器、Explorer 的链路仍靠主机上按 tag 复跑三份脚本，发版与主机验收之间的空窗依旧存在（W6 后主机已对齐 v0.4.3 前的脚本内容，v0.4.3 本身只含验收工具链与 supervisor 的 `MODELS_JSON_HOST_PATH`，已在主机从分支验证）
 
 ## 3. 当前波次
 
@@ -71,21 +72,22 @@
 
 **W5.5 P1 修复：完成**（2026-09-10，与 W5 同日）。三项各有正向用例并在 CI 的真 Postgres 上通过（#137 / #140 / #138），`accept_s3.sh` 的异源 Conflict 正向断言已加（#136，待主机复跑）。分工：核心代码与迁移由主会话写，测试 / 文档由 builder 子代理写，每个 PR 经 reviewer 子代理复查；两次复查各抓到真问题并已在合入前修正（16 的可见性副作用与跨用户佐证、18 的缓存吊销与 mcp_session Handle）。
 
-**当前波次：W6 验收工具链治理**（范围与完成标准见 `retrospective-2026-09-09.md` §4；未开工）
+**W6 验收工具链治理：完成**（2026-09-10；范围与完成标准见 `retrospective-2026-09-09.md` §4，四项全部达成：脚本里不再有 JS、CI 有一条 S1 通路、验收不碰 `${NEXTTIME_DATA}/config`、S1→S2→S3 可在主机连跑）
 
 | 项 | 范围 | 状态 |
 |---|---|---|
 | 四份 heredoc driver 抽成一份 | `deploy/accept/driver.mjs` + `scripts/lib/accept-common.sh`，四份脚本只做编排 | 完成（PR #145；driver 有 14 例 vitest；主机从分支连跑 S1 22 / S2 66 / S3 28 全过） |
 | fake provider 切换改为 compose override，不再改生产 provider 配置 | `deploy/accept/docker-compose.fake.yml`、`accept_provider_up/restore`、worker-supervisor `MODELS_JSON_HOST_PATH` | 完成（PR #146；主机从分支连跑 S1 22 / S2 66 / S3 28 全过，生产 `llm-providers.yaml` / `models.json` 前后校验和不变） |
-| 至少 S1 精简版进 CI | `.github/workflows/`、compose 精简 profile | 未开工（§4 第 7 项） |
+| 至少 S1 精简版进 CI | `scripts/accept_s1.sh --lite` + `.github/workflows/e2e.yml` 末尾一步（复用已起的 postgres/kernel/caddy + fake agent runtime） | 完成（PR #148；CI 首跑 13 PASS + 6 SKIP，跳过的是需要入口容器的步骤） |
+| fake-llm 场景参数按注册表校验 | `deploy/accept-s2/fake-llm-scenario-selftest.mjs` 读 `docs/contracts/capabilities.json` | 完成（PR #149；含两条验证器自检） |
 
-W6 之后：W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定期 → 镜像发布与 P5。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
+**当前波次：W7 真实模型验证 + Explorer 按调用者鉴权**（未开工；范围见 `retrospective-2026-09-09.md` §4：真实模型跑 S2 / S3 场景并统计工具调用成功率，Explorer 鉴权改为按调用者身份、caddy 不再持有 Explorer key）。之后：两周稳定期 → 镜像发布与 P5。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
 
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
-目标主机：2026-09-10 已应用 v0.4.2（迁移 0018，全部镜像重建），S1 / S2 / S3 全部通过；验收后恢复真实 provider 配置并回到停栈状态（仅 llm-proxy 与 fake-llm 在跑，起栈只需 `docker compose up -d`，无需再迁移）。记录在 `docs/private/`（§34）。
+目标主机：2026-09-10 已应用 v0.4.2（迁移 0018，全部镜像重建），S1 / S2 / S3 全部通过；W6 的三个脚本 PR 各自从分支在主机连跑验证后合入，主机检出已回到 main（v0.4.3 无新迁移）；验收后恢复真实 provider 配置并回到停栈状态（仅 llm-proxy 与 fake-llm 在跑，起栈只需 `docker compose up -d`，无需再迁移）。记录在 `docs/private/`（§34）。
 
-后续：W6 验收工具链治理 → W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定期 → 镜像发布与 P5。
+后续：W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定期 → 镜像发布与 P5。
 
 ## 4. 遗留清单
 
@@ -100,7 +102,7 @@ W6 之后：W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定
 | 4 | fake-llm 自检 `entry-restart-chat-turn2/3` 预存失败 | P3 | W5 | 关闭（PR #129：自检夹具对齐线上契约形状，自检进 CI `quality`） |
 | 5 | Renovate 首跑未见 | P3 | W5 | 关闭（决定：暂不安装；Dependabot 告警暂不处理，见 §3） |
 | 6 | E7 主机备份定时器"S3 后重评" | — | 运维，最后 | 待决定（2026-09-10 维护者：运维项排在开发波次之后） |
-| 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4）。W6 进度：driver 抽成一份已完成（PR #145）；provider 改 compose override 已完成（PR #146）；fake-llm 场景按 paramsSchema 校验、S1 精简版进 CI 待做 | P2 | W6 | 开放 |
+| 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4） | P2 | W6 | 关闭（W6：#145 driver 抽成一份、#146 provider 改 compose override、#148 S1 精简版进 CI、#149 场景参数按注册表校验） |
 | 8 | Explorer 由 caddy 注入 key 的信任边界（§5.8） | P2 | W7 | 开放 |
 | 9 | 领域包烤进 kernel 镜像（§5.7）；采集器 Source 状态按文件缓存（§5.9） | P3 | 待排 | 开放 |
 | 10 | `extension_ui_request` 子协议；Trigger；CLI help 清单解析 | 功能缺口 | P5 | 开放 |
