@@ -1040,6 +1040,12 @@
 ### S3.6 MCP gateway 与 `interactive` 模式
 - 交付物：`kernel/src/mcp/*`（TS SDK，streamable HTTP，工具由注册表生成，Semantica 17 个工具名与必填参数别名）；扩展 `modes/interactive.ts`；`docs/howto-connect-claude-code.md`、`docs/howto-connect-pi.md`。
 - 验收：`tools/list` = 注册表 Handle 通道集合 + 别名；Claude Code 经 MCP `traverse` 到同一图；无 Handle 连接被拒。依赖：S1.9、S3.1。
+- **已完成（feat/s3-6-mcp-gateway，PR #113，2026-09-09；`accept_s3.sh` 的 MCP `tools/list` / `traverse` 步骤通过）**：
+  - `packages/kernel/src/interfaces/mcp/**`：`POST /mcp`，`@modelcontextprotocol/sdk` streamable HTTP、无状态（每请求新建 Server + Transport，按 Handle 当前 scope 重建工具目录）。只认 Handle 通道：Bearer 一律按 CapabilityHandle 校验，API key 与其它垃圾 token 同样 401，在 JSON-RPC 层之前决定。每 Handle 固定窗口限流（默认 60 req/min）+ 1 MiB body 上限，是仓库里第一个带限流的接口面。
+  - `tools/list` = Handle scope 内所有 `channel:'handle'` 能力（注册表驱动，新能力零改动）+ 参考工具名别名表（`reference-tool-aliases.ts`，文件名不含具体系统名以过内核纯度守卫，该守卫为此文件加了唯一豁免）+ scope 允许门访问时的动态 `<gate>.<op>` 工具。别名只映射有对应能力的 5 个（`get_provenance`→`explain` 等），同名能力不重复投影，无对应物的（抽取、分析、推理、RDF 导出）不伪造。
+  - `issue_handle`：`channel:'human'`、`minRole:'owner'`，为新的 `kind='mcp_session'` 会话签发 Handle，scope = 请求 ∩ entry 上限 ∩ 调用者自己的 Grant（纯交集，静默收窄，永不宽于入口 Handle）。无单独吊销能力，`disable_principal` 级联即可。
+  - `platform-extension/src/modes/interactive.ts`：与 `entry` 同一组工具，但不回传 Turn；走 `/api/cap/*` 而非 `/mcp`（自己就是 pi 扩展，不需要再做 MCP 客户端）。
+  - `deploy/caddy/Caddyfile` 补裸 `/mcp` 路由（E8 只写了 `/mcp/*`）；`docs/howto-connect-claude-code.md`、`docs/howto-connect-pi.md`。
 
 ### S3.7 语义一致性校验
 - **前置决策（2026-09-08）**：线上契约词表与信封规则已定在 `docs/wire-contract-conventions.md`（`idempotencyKey` 只指调用方去重键、门协议执行键改 `actionRequestId`；`actionKind` 只指 `{tag,label}`、裸标识改 `actionKindTag`；Grant 用 `resourceType`/`resourceId` 不再借用「capability」；capability `mode` 四值 `observe / write / propose / execute`，即时写操作从 `propose` 改 `write`；单资源结果主键一律 `id`、引用用 `<resource>Id`；列表统一 `{ items, nextCursor? }`；时间戳 ISO 8601）。对齐实现是一个跨层 PR（shared → kernel → gatekeeper-base/门实例 → platform-extension/web/fake-llm/验收脚本），主机跑 `accept_s1.sh` + `accept_s2.sh` 通过后合入；本条 S3.7 随后把 `resultSchema`、契约快照与词表守卫做进 CI。

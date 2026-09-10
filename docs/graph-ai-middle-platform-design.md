@@ -1,7 +1,7 @@
 # 基于 Graph 的 AI 中台 —— 架构设计 v0.3
 
 > 文档性质：架构设计 / 领域建模（Ontology-first）。
-> 状态：**全部为提案（Target Architecture）**，尚无任何组件实现。凡描述「内核」「入口容器」「Gatekeeper」「Worker」等组件，均指待建目标。
+> 状态：本文是**目标架构（Target Architecture）**。截至 2026-09-10 已实现到 v0.3.0，S1–S3 三个切片经验收脚本通过；实现进度、当前波次与遗留清单以 `STATUS.md` 为准，本文与代码冲突时以代码为准。
 > 版本脉络：v0.1 图内核与治理；v0.2 入口改为 **Web + 每用户一个常驻 pi agent**、全 TypeScript、用户隔离模型；v0.3 安全模型收敛为三条底线、agent 有真实工作环境、通用门与接口清单、三档编排、内核六层依赖与领域事件、`llm-proxy` 拆出、失控配额。差量与理由见 `design-review-2026-09-01.md` §8–§10。
 > 参考项目源码分析见 `reference-projects-and-oss-landscape.md`。环境具体值在未入库的 `docs/private/`。
 > 日期：2026-09-01
@@ -384,7 +384,7 @@ flowchart TB
 - 页面：登录；对话（流式文本、工具调用行、Worker 拉起行、审批卡片：标题、Markdown 描述、模拟效果、动作种类、批准 / 拒绝 / 「总是批准此类」）；任务与 Worker 列表；连接系统（两件事：建立新门并填凭证；把已有的门授予某用户的入口 agent，cloudflare-os 的 capsule 语义）；审计与 explain 视图。
 - **Explorer 挂载（S3）**：Semantica Explorer 静态构建挂在 `/explorer`，内核实现其 Graph / Decision / Lineage 契约（§9.5）；Ontology 与其他工作区隐藏，不承诺。Explorer 是 human 通道客户端，用 API key，不用 Handle。
 
-- **控制面（目标架构，S3.11–S3.14；当前实现只有"工作"区）**：web 分「工作」（对话、任务、待我审批）与「治理」（成员与授权、系统接入、能力目录、模型与配额、审计）两区，治理区按 role 可见；每用户一份 **AgentProfile**（模型、启用的 Skill、可见的门、提示词附加）作为其 Grant 的**子集投影**，永不扩权；第三方能力只有 Gatekeeper（含 `kind: mcp`）与 Skill 两种来源，不开放第三方 pi extension。详见 `docs/development-tasks.md` S3.11–S3.14。
+- **控制面（S3.11–S3.14，已实现）**：web 分「工作」（对话、任务、待我审批）与「治理」（成员与授权、系统接入、能力目录、模型与配额、审计）两区，治理区按 role 可见；每用户一份 **AgentProfile**（模型、启用的 Skill、可见的门、提示词附加）作为其 Grant 的**子集投影**，永不扩权；第三方能力只有 Gatekeeper（含 `kind: mcp`）与 Skill 两种来源，不开放第三方 pi extension。详见 `docs/development-tasks.md` S3.11–S3.14。
 
 ### 7.7 模型策略
 
@@ -576,7 +576,7 @@ create table worker_definitions (
 | governance | `request_action` | execute | Worker |
 | | `approve` / `reject` / `list_pending` / `get_action` / `set_auto_approved_action_kind` | human | I14 |
 | | `grant_capability` / `revoke_capability` / `set_policy` / `set_quota` / `issue_handle` | human（owner） | |
-| task | `create_task` / `invoke_worker` / `get_task` / `cancel_task` | propose / observe | |
+| task | `create_task` / `invoke_worker` / `cancel_task` / `get_task` / `list_tasks` | write / observe | 注册表里 `create_task` / `invoke_worker` / `cancel_task` 为 `write`，不是 `propose` |
 | worker | `propose_worker_definition` / `publish_worker_definition` / `deprecate_worker_definition` / `list_worker_definitions` | propose / human / observe | |
 | ingest | `register_source` / `submit_observations` | propose | service |
 | audit | `audit_query` / `reconstruct` / `export_prov` | observe（auditor） | |
