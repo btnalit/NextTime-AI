@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-10（v0.4.0；W5 收口完成并发版；维护者决定 P1 三项提前，当前波次为 W5.5 P1 修复）
+最后更新：2026-09-10（v0.4.1；W5.5 P1 三项全部关闭并发版，当前波次切到 W6）
 
 ## 1. 入口指引
 
@@ -30,7 +30,7 @@
 | S2 | 说需求 → find_workers → invoke_worker → 门动作 → 审批 → 执行 → 写回 | 达成 | `accept_s2.sh` 66 PASS（2026-09-09） |
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | 达成 | `accept_s3.sh` 24 PASS（2026-09-09，PR #125） |
 | S3.11–S3.15 | 控制面、接入向导、AgentProfile、web 控制台、pi 漂移 | 达成 | `development-tasks.md` 各节实现说明 |
-| 发布 | — | v0.4.0（2026-09-10，PR #130） | `CHANGELOG.md` |
+| 发布 | — | v0.4.1（2026-09-10，PR #139） | `CHANGELOG.md` |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 全量通读复审发现 S3.2 的冲突检测在
 > Worker 断言这条主路径上不生效（`code-review-2026-09-10.md` §2.1）。验收对 Conflict 的唯一断言是
@@ -48,6 +48,7 @@
 | 2026-09-09 | S3 波次 W1–W4 合入，主机三份验收通过；发布 v0.2.0、v0.3.0；本文建立 | `retrospective-2026-09-09.md`、`CHANGELOG.md` |
 | 2026-09-10 | 全量通读（约 6.2 万行源码）+ 三轮定向复审；新增 P1 三条 | `code-review-2026-09-10.md` |
 | 2026-09-10 | W5 收口：遗留 1–5、15 关闭（PR #128 / #129 / #131 / #132），fake-llm 自检进 CI，仓库只留 squash；发布 v0.4.0（PR #130）。主机未应用（停栈中），迁移 0018 待下次起栈时随 `make migrate` 落地 | `CHANGELOG.md`、本文 §4 |
+| 2026-09-10 | W5.5：P1 三项关闭（#137 Worker run 作为自己的 Source、#140 并发首次断言加锁、#138 入口 ceiling 按角色收窄），`accept_s3.sh` 加异源 Conflict 正向断言（#136）；发布 v0.4.1（PR #139）。复审新增遗留 24、25。主机仍未应用 | `CHANGELOG.md`、本文 §4 |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -61,27 +62,30 @@
   的正向用例。**PR #136**：`accept_s3.sh` 已加入 `collector_conflict_positive_step`，把这条正向用例
   接了进脚本（`docs/runbooks/host-accept-s3.md` §3/§4）；本条盲区在代码层面已补，但 §2 表格 S3 那行
   的验收证据仍是主机跑通新脚本之前的旧结果，未随此 PR 更新——里程碑状态与证据在下次主机验收前不改。
-- **v0.4.0 未在主机验收**：W5 的 #132 改了 `explain`（collector Fact 只返回喂给它的那一条 Observation）
-  与 `search`（分页参数）并带迁移 0018；主机停栈中，三份验收的证据仍是 v0.3.0 的 09-09 结果。下次起栈
-  按 `runbooks/host-*.md` 应用后复跑 `accept_s3.sh`，里程碑状态在那之前不改。
+- **v0.4.0 / v0.4.1 未在主机验收**：W5 的 #132 改了 `explain`（collector Fact 只返回喂给它的那一条 Observation）
+  与 `search`（分页参数）并带迁移 0018；W5.5 改了 Worker 结果的来源判定、`assertFact` 的并发路径与入口 Handle
+  的 ceiling；主机停栈中，三份验收的证据仍是 v0.3.0 的 09-09 结果。下次起栈按 `runbooks/host-*.md` 应用后复跑
+  三份验收，里程碑状态在那之前不改。
 
 ## 3. 当前波次
 
 **W5 收口：完成**（2026-09-10，一天）。六项里五项关闭（PR #128 文档漂移、#129 fake-llm 自检、#131 `create_task` 下架、#132 `explain` 收敛 + `search` 分页、仓库设置只留 squash、Renovate 决定暂不装），E7 仍待决定；各项细节见 §4 第 1–6 项与 `development-tasks.md` 的 W5 实现说明。复审新发现一条（§4 第 23 项：`query_decisions` / `list_conflicts` 的 cursor 精度）。
 
-**当前波次：W5.5 P1 修复**（2026-09-10 维护者决定：复审新增的 P1 三项提前到 W6 之前；进行中，见下表）
+**W5.5 P1 修复：完成**（2026-09-10，与 W5 同日）。三项各有正向用例并在 CI 的真 Postgres 上通过（#137 / #140 / #138），`accept_s3.sh` 的异源 Conflict 正向断言已加（#136，待主机复跑）。分工：核心代码与迁移由主会话写，测试 / 文档由 builder 子代理写，每个 PR 经 reviewer 子代理复查；两次复查各抓到真问题并已在合入前修正（16 的可见性副作用与跨用户佐证、18 的缓存吊销与 mcp_session Handle）。
+
+**当前波次：W6 验收工具链治理**（范围与完成标准见 `retrospective-2026-09-09.md` §4；未开工）
 
 | 项 | 范围 | 状态 |
 |---|---|---|
-| 16 Worker 断言的 Fact 按 principal 判定来源，同定义两次运行的矛盾断言被静默 supersede | `application/task/result.ts`、`substrate/graph` 的 `resolveFactOrigin` | 完成（PR #137）：每次 WorkerRun 各注册私有 Source，来源按 run 判定 |
-| 17 并发首次断言同一身份不开 Conflict | `substrate/graph/sql-store.ts` `assertFact`、迁移 | 完成（PR #140）：无既有 Fact 时按身份取事务级 advisory lock 并重读，序列化两个并发首次断言，第二个走正常的同源/异源比较 |
-| 18 Handle 通道不校验 `minRole` | `governance/capability`、`application/gateway/authorize` | 完成（PR #138）：入口 Handle 按 on_behalf_of 角色收窄 ceiling，`member` 不再结构性携带 `propose_*` |
+| 四份 heredoc driver 抽成一份 | `scripts/accept_s{1,2,3}.sh`、`deploy/accept-s2` | 未开工（§4 第 7 项） |
+| fake provider 切换改为 compose override，不再改生产 provider 配置 | `docker-compose.yml`、验收脚本 | 未开工（§4 第 7 项） |
+| 至少 S1 精简版进 CI | `.github/workflows/`、compose 精简 profile | 未开工（§4 第 7 项） |
 
-完成标准：三项各有正向用例（异源矛盾断言 → 恰好一个 open Conflict；并发首次断言 → 一个 Conflict 而非两条并存；member Handle 调 `minRole:'builder'` 能力 → 403），`accept_s3.sh` 加一条异源 Conflict 正向断言（§2.2 第二条盲区）。
+W6 之后：W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定期 → 镜像发布与 P5。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
 
-之后：W6 验收工具链治理（§4 第 7 项三件事）→ W7 → 稳定期。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
+**产品决定待定**（W5.5 复审提出，不阻塞 W6）：Worker 派生的 Fact 是否默认私有。现状沿用旧行为——带会话 JSONL 的运行其 Fact 只对派发人可见，不带的对工作区可见（`development-tasks.md` S2.9 W5.5 实现说明）。
 
-目标主机：09-09 验收后处于停栈状态，仅 `llm-proxy` 与 `fake-llm` 在跑，Postgres 干净停机、数据与镜像完好；W5 若需主机验收，先按 `runbooks/host-*.md` 起栈。
+目标主机：09-09 验收后处于停栈状态，仅 `llm-proxy` 与 `fake-llm` 在跑，Postgres 干净停机、数据与镜像完好；下次起栈按 `runbooks/host-*.md` 应用 v0.4.1（迁移 0018）后复跑三份验收，`accept_s3.sh` 现为 28 项。
 
 后续：W6 验收工具链治理 → W7 真实模型验证 + Explorer 按调用者鉴权 → 两周稳定期 → 镜像发布与 P5。
 
@@ -116,6 +120,7 @@
 | 22 | 出网拒绝表在 `reconcile()` 后回退到容器创建时的旧值：标签只在创建时打，复用分支刷新 source map 却回写不了标签，而 `reconcile()` 每次 docker-events 重连都跑；与 `EGRESS_DENY_LABEL` 自称的「永不放宽，哪怕暂时」冲突（`code-review-2026-09-10.md` §3.5；平台级拒绝不受影响） | P2 | 待排 | 开放 |
 | 23 | `query_decisions` / `list_conflicts` 的 keyset cursor 与 `search` 修复前同一模式：`created_at` 经 JS `Date` 只剩毫秒，回传后与微秒精度的列做 `<` 比较，同一毫秒内（同事务写入）的行会在翻页边界被漏掉；`search` 在 PR #132 里改为 `date_trunc('milliseconds', …)` 作排序键，这两处未改 | P2 | 待排 | 开放 |
 | 24 | `find_active_fact_for_identity`（0017）的 `for update` 在被阻塞期间若持锁方 supersede 了该行，重查按 `superseded_at is null` 过滤后返回 0 行而非后继行；PR 17 的 advisory lock + 重读封住了两事务形态，三事务交错（第二个等锁者的重读又阻塞在第三个事务的 supersede 上）仍可能插入一条多余的活跃 Fact。0017 既有机制的局限，复审 17 时发现 | P3 | 待排 | 开放 |
+| 25 | CI 偶发：`interfaces/ws/server.test.ts` 的 WS 端到端用例在 PR #140 首跑时 5 秒超时，重跑通过（其余 1100 用例均过）；疑为 runner 争用，若复现需给该用例单独 `testTimeout` 或查 listener 启动时序 | P3 | 待排 | 开放 |
 
 ## 5. 更新规则
 
