@@ -112,10 +112,14 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     const chatCard = cardByMarker(page, E2E_APPROVE_SCOPE);
     await expect(chatCard).toBeVisible({ timeout: 15_000 });
     // The status chip carries the raw kernel state in `data-status` (components/ui/StatusChip.tsx)
-    // and a human label as text — assert on the state, not the label.
+    // and a human label as text — assert on the state, not the label. The seeded row's
+    // Gatekeeper is a bare `objects` row with no reachable endpoint, so right after `approved`
+    // the kernel's own drainer tries to execute it and marks it `failed` — any post-decision
+    // state proves the card left `pending_approval`; the `approved` status line below is the
+    // durable record of the decision itself.
     await expect(chatCard.locator('.action-card-status')).toHaveAttribute(
       'data-status',
-      'approved',
+      /^(approved|executing|executed|failed)$/,
       { timeout: 15_000 },
     );
     await expect(chatCard.getByRole('button', { name: 'Approve' })).toHaveCount(0);
@@ -168,7 +172,11 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
 
     const grantResponse = await request.post('/api/cap/grant_capability', {
       headers: { authorization: `Bearer ${apiKeyA}` },
-      data: { principalId: principalIdB, capability: E2E_ACTION_KIND, scope: {} },
+      // `grant_capability`'s params are `{principalId, resourceType, resourceId?, scope?}`
+      // (packages/shared capabilities.ts): a grant on `resourceType = <action kind>` with no
+      // `resourceId` covers every resource_scope of that kind — exactly what I14 holder routing
+      // (governance/approval/routing.ts) matches.
+      data: { principalId: principalIdB, resourceType: E2E_ACTION_KIND },
     });
     expect(grantResponse.ok()).toBe(true);
 
@@ -188,9 +196,10 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     await page.locator('.chat-list-item').first().click();
     const chatCardForA = cardByMarker(page, E2E_ISOLATION_SCOPE);
     await expect(chatCardForA).toBeVisible({ timeout: 15_000 });
+    // Same post-decision reasoning as the first scenario: the seeded Gatekeeper cannot execute.
     await expect(chatCardForA.locator('.action-card-status')).toHaveAttribute(
       'data-status',
-      'approved',
+      /^(approved|executing|executed|failed)$/,
       { timeout: 15_000 },
     );
     await expect(chatCardForA.getByRole('button', { name: 'Approve' })).toHaveCount(0);

@@ -292,6 +292,27 @@ jobs:
         if: failure()
         run: sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color
 
+      # The kernel's outbox dispatcher swallows consumer errors unless it is constructed with an
+      # `onError` hook (application/outbox/dispatcher.ts), so a linkage consumer that fails on a
+      # seeded row leaves no trace in the logs above — this dump shows the durable evidence
+      # instead: undelivered / dead-lettered outbox rows (`dispatched_at is null`, `attempts`),
+      # every ActionRequest's status, and the system chat messages the linkage did write.
+      - name: Dump outbox / action_requests / chat_messages state (on failure)
+        if: failure()
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=0 <<'SQL' || true
+          \echo === outbox
+          select id, event_type, attempts, dispatched_at, created_at from outbox order by id;
+          \echo === action_requests
+          select id, status, action_kind, resource_scope, requested_at from action_requests order by requested_at;
+          \echo === chat_messages (system)
+          select chat_id, sequence, role, content->>'kind' as kind, content->>'actionRequestId' as action_request_id, content->>'status' as status
+            from chat_messages where role = 'system' order by chat_id, sequence;
+          \echo === pending_context_items
+          select principal_id, kind, subject_id, source_outbox_id from pending_context_items order by created_at;
+          SQL
+
       - name: docker compose down
         if: always()
         run: sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml down -v
