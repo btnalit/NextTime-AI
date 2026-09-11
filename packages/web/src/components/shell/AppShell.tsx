@@ -19,6 +19,9 @@ export interface AppShellProps {
   readonly onSwitchWorkspace?: (workspaceId: string) => void;
   /** A switch is in flight — the Sidebar disables its switcher so a second pick cannot race. */
   readonly switchingWorkspace?: boolean;
+  /** P-A1: `session.user?.platformRole` — `undefined` for an apiKey session. Threaded straight to
+   *  the Sidebar, which uses it to gate 管理 → 用户/平台设置 and all of 维护. */
+  readonly platformRole?: 'admin' | 'user';
   readonly children: ReactNode;
 }
 
@@ -33,6 +36,7 @@ export function AppShell({
   selectedWorkspaceId,
   onSwitchWorkspace,
   switchingWorkspace,
+  platformRole,
   children,
 }: AppShellProps) {
   const pendingCount = usePendingCount(http, pushes);
@@ -52,6 +56,7 @@ export function AppShell({
         selectedWorkspaceId={selectedWorkspaceId}
         onSwitchWorkspace={onSwitchWorkspace}
         switchingWorkspace={switchingWorkspace}
+        platformRole={platformRole}
       />
       <main className="main">{children}</main>
     </div>

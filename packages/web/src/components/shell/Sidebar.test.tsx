@@ -51,10 +51,76 @@ describe('Sidebar', () => {
       expect(screen.queryByTestId('nav-members')).toBeNull();
       expect(screen.queryByTestId('nav-audit')).toBeNull();
       expect(screen.queryByTestId('nav-explorer')).toBeNull();
-      // 工作 Work (including 我的智能体/我的账户) is always visible.
+      // 使用 Use (including 我的智能体/我的账户) is always visible.
       expect(screen.getByTestId('nav-chats')).toBeTruthy();
       expect(screen.getByTestId('nav-agent')).toBeTruthy();
       expect(screen.getByTestId('nav-account')).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it('hides 工作区配置 in cookie mode when no workspace is selected, even for a non-member role', () => {
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        authMode="cookie"
+        onLogout={vi.fn()}
+        selectedWorkspaceId={undefined}
+      />,
+    );
+    expect(screen.queryByTestId('nav-members')).toBeNull();
+    expect(screen.queryByTestId('nav-audit')).toBeNull();
+    expect(screen.queryByTestId('nav-explorer')).toBeNull();
+    // No 管理 group at all when neither 工作区配置 nor a platform admin's items apply.
+    expect(screen.queryByTestId('nav-section-manage')).toBeNull();
+  });
+
+  it('shows 用户/平台设置 and 维护 only for a platform admin, independent of workspace role', () => {
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_MEMBER}
+        authMode="cookie"
+        onLogout={vi.fn()}
+        selectedWorkspaceId={undefined}
+        platformRole="admin"
+      />,
+    );
+    // A proven member with no workspace selected still gets no 工作区配置...
+    expect(screen.queryByTestId('nav-members')).toBeNull();
+    // ...but does get the platform-admin items.
+    expect(screen.getByTestId('nav-platformUsers')).toBeTruthy();
+    expect(screen.getByTestId('nav-platformSettings')).toBeTruthy();
+    expect(screen.getByTestId('nav-platformOverview')).toBeTruthy();
+    expect(screen.getByTestId('nav-platformAudit')).toBeTruthy();
+  });
+
+  it('shows no platform-admin items for a non-admin platformRole, or an apiKey session (no platform user)', () => {
+    for (const platformRole of ['user', undefined] as const) {
+      const { unmount } = render(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="apiKey"
+          onLogout={vi.fn()}
+          platformRole={platformRole}
+        />,
+      );
+      expect(screen.queryByTestId('nav-platformUsers')).toBeNull();
+      expect(screen.queryByTestId('nav-platformSettings')).toBeNull();
+      expect(screen.queryByTestId('nav-section-maintain')).toBeNull();
+      // 工作区配置 still shows — an apiKey session always has an implicit workspace.
+      expect(screen.getByTestId('nav-members')).toBeTruthy();
       unmount();
     }
   });

@@ -13,9 +13,13 @@ import { LoginPage } from './components/LoginPage.js';
 import { MembersPage } from './components/MembersPage.js';
 import { ModelsPage } from './components/ModelsPage.js';
 import { NoWorkspacePage } from './components/NoWorkspacePage.js';
-import { SetupPage } from './components/SetupPage.js';
 import { TasksPage } from './components/TasksPage.js';
+import { PlatformAuditPage } from './components/platform/PlatformAuditPage.js';
+import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage.js';
+import { PlatformSettingsPage } from './components/platform/PlatformSettingsPage.js';
+import { PlatformUsersPage } from './components/platform/PlatformUsersPage.js';
 import { AppShell } from './components/shell/AppShell.js';
+import { EmptyState } from './components/ui/EmptyState.js';
 import { ToastProvider } from './components/ui/Toast.js';
 import { PermissionsProvider } from './hooks/usePermissions.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
@@ -24,7 +28,6 @@ import {
   type WireUser,
   logout as apiLogout,
   getMe,
-  getSetupState,
   setWorkspaceCookie,
 } from './lib/auth-api.js';
 import { HttpClient } from './lib/http-client.js';
@@ -59,11 +62,14 @@ interface Session {
  * `e2e/approvals.spec.ts`'s login helper explicitly treats "no login input in the DOM yet" as
  * "still booting", not "ready to sign in"). `changePassword`/`noWorkspace` both carry the
  * already-known `user`/`memberships` so `AccountPage`/`ChangePasswordPage` never have to re-fetch
- * them.
+ * them. `noWorkspace` is reached only by a `platformRole === 'user'` cookie user with zero
+ * memberships (design doc §4/§6.7) — a platform admin with zero memberships instead gets a
+ * `Session` with `selectedWorkspaceId` undefined (`openPlatformOnlySession` below), since an
+ * administrator always has the platform plane even with no workspace data access (§2 "平台管理员
+ * 在业务工作区没有任何数据权限").
  */
 type PreSessionState =
   | { readonly kind: 'boot' }
-  | { readonly kind: 'setup'; readonly tokenAvailable: boolean }
   | { readonly kind: 'login' }
   | {
       readonly kind: 'changePassword';
@@ -83,19 +89,19 @@ type PreSessionState =
  *
  * Two independent credential channels reach the same shell: the pre-existing API key
  * (`lib/session.ts` sessionStorage, re-used on reload to reconnect) and, S4.1, the console session
- * cookie (HttpOnly — this file never reads it, only `GET /api/auth/me`'s response). Boot sequence:
+ * cookie (HttpOnly — this file never reads it, only `GET /api/auth/me`'s response). Boot sequence
+ * (P-A1 revised — no setup token/page any more; the kernel pre-creates `admin`, design doc §4):
  *   1. `GET /api/auth/me`. 200 → cookie session (`proceedAfterCookieAuth` below decides
- *      changePassword / noWorkspace / open-a-workspace from there). 401 (or any other failure —
- *      fails open rather than showing nothing forever) → `GET /api/platform/setup-state`:
- *      `initialized:false` → `SetupPage`; otherwise → `LoginPage`. Either way, also try the stored
- *      API key auto-connect — the two channels are independent, so a held API key must keep
- *      working whether or not anyone has ever completed platform setup (see `SetupPage`'s own
- *      module doc comment for why it *also* offers a way back to `LoginPage`/the API-key form).
+ *      changePassword / noWorkspace / platform-only / open-a-workspace from there). 401 (or any
+ *      other failure — fails open rather than showing nothing forever) → `LoginPage`. Either way,
+ *      also try the stored API key auto-connect — the two channels are independent.
  *   2. Workspace selection (`proceedAfterCookieAuth`): auto-select when there is exactly one
  *      active membership; else the last-selected workspace from this tab's sessionStorage if it is
  *      still a membership; else (deviation from a literal "none" — there is no separate workspace-
  *      chooser screen in this task's scope) the first membership, with the Sidebar's switcher
- *      (`>1` membership) covering the rest.
+ *      (`>1` membership) covering the rest. Zero memberships: `platformRole === 'admin'` opens a
+ *      platform-only session (`openPlatformOnlySession`) landing on `#/platform/overview`;
+ *      `platformRole === 'user'` sees `NoWorkspacePage`.
  */
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -204,6 +210,36 @@ export function App() {
     [],
   );
 
+  /** Opens a session for a cookie-authenticated platform admin with zero workspace memberships —
+   *  the normal state before anyone else exists / has been added anywhere (design doc §4 "平台管
+   *  理员在业务工作区没有任何数据权限"). There is no workspace to open a WS session against — the
+   *  kernel's `authenticate {workspaceId}` always requires one and throws `WorkspaceRequiredError`
+   *  otherwise (`resolve-caller.ts`) — so unlike `openCookieSession` this never calls `connect()`/
+   *  `authenticate()` at all: the `WsClient` stays `closed` (the Sidebar honestly shows
+   *  "Disconnected"), and every page this session can reach (`platform_overview`,
+   *  `platform_audit_query`, ...) calls over `http` only, never `session.ws.call()`. `http` uses
+   *  `workspaceId: null` — `scope:'platform'` capabilities ignore the workspace header entirely
+   *  (`resolvePlatformCaller`), so this degrades cleanly. `replacing` mirrors `openCookieSession`'s
+   *  own — the previous socket, closed once this session publishes. */
+  const openPlatformOnlySession = useCallback(
+    (user: WireUser, memberships: readonly WireMembership[], replacing?: WsClient): void => {
+      attempt.current += 1;
+      replacing?.close();
+      setWorkspaceCookie(null);
+      generation.current += 1;
+      setSession({
+        ws: new WsClient({ url: wsUrl() }),
+        http: new HttpClient({ auth: { kind: 'cookie', workspaceId: null } }),
+        generation: generation.current,
+        authMode: 'cookie',
+        user,
+        memberships,
+        selectedWorkspaceId: undefined,
+      });
+    },
+    [],
+  );
+
   const proceedAfterCookieAuth = useCallback(
     async (user: WireUser, memberships: readonly WireMembership[]): Promise<void> => {
       if (user.mustChangePassword) {
@@ -211,6 +247,10 @@ export function App() {
         return;
       }
       if (memberships.length === 0) {
+        if (user.platformRole === 'admin') {
+          openPlatformOnlySession(user, memberships);
+          return;
+        }
         setPreSession({ kind: 'noWorkspace', user, memberships });
         return;
       }
@@ -228,20 +268,11 @@ export function App() {
             : firstMembership.workspaceId;
       await openCookieSession(user, memberships, chosen);
     },
-    [openCookieSession],
+    [openCookieSession, openPlatformOnlySession],
   );
 
   const bootUnauthenticated = useCallback(async (): Promise<void> => {
-    try {
-      const state = await getSetupState();
-      setPreSession(
-        state.initialized
-          ? { kind: 'login' }
-          : { kind: 'setup', tokenAvailable: state.tokenAvailable },
-      );
-    } catch {
-      setPreSession({ kind: 'login' });
-    }
+    setPreSession({ kind: 'login' });
     const stored = loadApiKey();
     if (stored) void connectApiKey(stored);
   }, [connectApiKey]);
@@ -346,17 +377,6 @@ export function App() {
   switch (preSession.kind) {
     case 'boot':
       return null;
-    case 'setup':
-      return (
-        <SetupPage
-          tokenAvailable={preSession.tokenAvailable}
-          onSetupComplete={(result) => void proceedAfterCookieAuth(result.user, result.memberships)}
-          onLoginInstead={() => setPreSession({ kind: 'login' })}
-          onApiKeyLogin={(key) => void connectApiKey(key)}
-          apiKeyPending={apiKeyConnecting}
-          apiKeyError={apiKeyError}
-        />
-      );
     case 'login':
       return (
         <LoginPage
@@ -420,7 +440,23 @@ function Routed({
   useEffect(() => {
     if (route.kind === 'login') navigate(hrefs.chats());
   }, [route.kind]);
+
+  // A platform-only session (`App`'s `openPlatformOnlySession` — a cookie admin with zero
+  // workspace memberships, `selectedWorkspaceId` undefined) has no workspace to render any
+  // workspace-scoped route against. `#/me/account` is let through (`AccountPage` takes only
+  // `user`/`memberships`, no capability call — same as the old `noWorkspace` preSession state
+  // allowed) — every other non-platform route redirects to `#/platform/overview`, covering both a
+  // fresh landing and a reload on a stale workspace hash. Computed before either early `return`
+  // below so both `useEffect` calls above always run in the same order (Rules of Hooks).
+  const platformOnly = session.authMode === 'cookie' && session.selectedWorkspaceId === undefined;
+  const platformOnlyBlocked =
+    platformOnly && !isPlatformRoute(route.kind) && route.kind !== 'account';
+  useEffect(() => {
+    if (platformOnlyBlocked) navigate(hrefs.platformOverview());
+  }, [platformOnlyBlocked]);
+
   if (route.kind === 'login') return null;
+  if (platformOnlyBlocked) return null;
 
   let page: JSX.Element;
   switch (route.kind) {
@@ -503,6 +539,18 @@ function Routed({
     case 'audit':
       page = <AuditPage http={session.http} />;
       break;
+    case 'platformOverview':
+      page = requireAdmin(session, <PlatformOverviewPage http={session.http} />);
+      break;
+    case 'platformUsers':
+      page = requireAdmin(session, <PlatformUsersPage http={session.http} />);
+      break;
+    case 'platformSettings':
+      page = requireAdmin(session, <PlatformSettingsPage http={session.http} />);
+      break;
+    case 'platformAudit':
+      page = requireAdmin(session, <PlatformAuditPage http={session.http} />);
+      break;
   }
 
   return (
@@ -516,8 +564,36 @@ function Routed({
       selectedWorkspaceId={session.selectedWorkspaceId}
       onSwitchWorkspace={onSwitchWorkspace}
       switchingWorkspace={switchingWorkspace}
+      platformRole={session.user?.platformRole}
     >
       {page}
     </AppShell>
+  );
+}
+
+/** True for the four `#/platform/*` route kinds — used by `Routed`'s platform-only redirect. */
+function isPlatformRoute(kind: Route['kind']): boolean {
+  return (
+    kind === 'platformOverview' ||
+    kind === 'platformUsers' ||
+    kind === 'platformSettings' ||
+    kind === 'platformAudit'
+  );
+}
+
+/** Gates a `#/platform/*` page on `platformRole === 'admin'` (design doc §7 "scope:'platform'" —
+ *  cookie session + admin only; an apiKey session has no `user` at all here, same denial). A
+ *  non-admin who navigates here directly (a stale link, a manually-typed hash) sees a short
+ *  explanation rather than a capability call that can only 403. */
+function requireAdmin(session: Session, page: JSX.Element): JSX.Element {
+  if (session.user?.platformRole === 'admin') return page;
+  return (
+    <div className="page">
+      <EmptyState
+        icon="shield"
+        title="需要管理员 Administrator only"
+        testId="platform-admin-required"
+      />
+    </div>
   );
 }
