@@ -181,8 +181,12 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     expect(grantResponse.ok()).toBe(true);
 
     // --- B's queue now shows it, and B can approve; the card leaves B's queue once decided (same
-    //     reasoning as the first test above — `list_pending` only lists `pending_approval` rows) ---
-    await page.goto('/#/work/approvals');
+    //     reasoning as the first test above — `list_pending` only lists `pending_approval` rows).
+    //     A full reload, not another hash `goto`: the tab is already on `#/work/approvals`, so a
+    //     same-hash navigation is a no-op for the SPA and `useCapability`'s cached (empty)
+    //     `list_pending` page would stay on screen — a grant made out of band reaches an open
+    //     queue only through the user's own Refresh/reload, exactly what a real operator does. ---
+    await page.reload();
     await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toBeVisible({ timeout: 15_000 });
     const drawerForB = await openQueueRow(page, E2E_ISOLATION_SCOPE);
     await drawerForB.getByRole('button', { name: 'Approve' }).click();
