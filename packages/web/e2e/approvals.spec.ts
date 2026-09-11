@@ -52,7 +52,10 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
     .poll(
       async () => {
         if (await forgetKey.isVisible()) return 'shell';
-        if (await keyInput.isEnabled().catch(() => false)) return 'login';
+        // `isEnabled()` waits for the element to be attached (its own 30s default), which stalls
+        // the whole predicate if the login form unmounts mid-poll — bound it tightly instead.
+        if ((await keyInput.count()) === 0) return 'pending';
+        if (await keyInput.isEnabled({ timeout: 500 }).catch(() => false)) return 'login';
         return 'pending';
       },
       { timeout: 15_000 },
