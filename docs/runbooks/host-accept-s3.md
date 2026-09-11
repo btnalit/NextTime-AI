@@ -83,6 +83,7 @@ PASS chat-dependency-explain explain(depends_on Fact) resolves to the collector'
 PASS explorer-graph-nodes 200 (graph returned)
 PASS explorer-decisions 200
 PASS explorer-provenance 200 (provenance graph for the depends_on Fact returned)
+PASS explorer-no-credentials no X-API-Key and no session cookie -> 401
 PASS mcp-issue-handle interactive Handle minted: eyJhbGc...(redacted)
 PASS mcp-tools-list tools=explain,get_object,get_task,search,state_at,traverse,...
 PASS mcp-traverse MCP traverse sees the same graph: {"isError":false,"edges":1}
@@ -99,7 +100,7 @@ S3 OK
 | `collector_fixtures_step`/`collector_first_run_step`/`collector_second_run_step` | "(b) run the collector once ... assert `Container runs_on Host` Facts exist and a second run yields ... no open conflicts" |
 | `collector_conflict_positive_step` | 补 §2.2 已知盲区的正向用例：异源、内容矛盾的断言针对同一 `(linkType, sourceObjectId, targetObjectId)` 身份必须恰好开一个 `open` Conflict（不在 S3.9 派单原文里，W5.5 遗留项 16/17 完成标准新增） |
 | `chat_dependency_step` | "(c) chat: the entry agent ... answers with a dependency statement and `explain` on one returned Fact resolves to the collector's Source" |
-| `explorer_step` | "(d) Explorer endpoints ... return the graph with `X-API-Key` of the workspace owner ... not via caddy" |
+| `explorer_step` | "(d) Explorer endpoints ... return the graph with `X-API-Key` of the workspace owner ... not via caddy" + a no-credentials call must 401 (W7) |
 | `mcp_step` | "(e) MCP: `issue_handle` for an `interactive` session, then a JSON-RPC `tools/list` + `traverse` call ... no-Handle → 401" |
 
 `entryDependencyChatScenario`（`deploy/fake-llm/server.mjs`）是本任务新增的脚本化场景——见该文件自

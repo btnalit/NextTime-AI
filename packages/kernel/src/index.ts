@@ -45,7 +45,11 @@ import type { HandleKeyPair } from './governance/capability/index.js';
 import { loadHandleKeyPair } from './governance/capability/index.js';
 import { SYSTEM_ACTOR_PLACEHOLDER } from './governance/gatekeepers/index.js';
 import type { CapabilityRouteDeps } from './interfaces/http/index.js';
-import { registerCapabilityRoutes, registerExplorerHttpRoutes } from './interfaces/http/index.js';
+import {
+  type ExplorerRouteDeps,
+  registerCapabilityRoutes,
+  registerExplorerHttpRoutes,
+} from './interfaces/http/index.js';
 import type { InternalRoutesDeps } from './interfaces/http/internal/index.js';
 import { registerInternalRoutes } from './interfaces/http/internal/index.js';
 import type { InternalPlaneAuthConfig } from './interfaces/internal-auth/index.js';
@@ -180,7 +184,10 @@ export function createServer(
   return app;
 }
 
-export interface KernelServerDeps extends CapabilityRouteDeps, InternalRoutesDeps {}
+export interface KernelServerDeps
+  extends CapabilityRouteDeps,
+    ExplorerRouteDeps,
+    InternalRoutesDeps {}
 
 export interface CreateServerOptions {
   /** Fastify's own `logger` option — the structured per-call log (§12) is written regardless of

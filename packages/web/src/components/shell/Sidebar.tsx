@@ -15,6 +15,30 @@ interface NavItem {
   readonly href: string;
 }
 
+/** A nav entry that opens outside the console's own hash-routed shell — no `section` (it never
+ *  matches `NavSection`/`aria-current`), always `target="_blank"`. Rendered separately from
+ *  `NavItem`s rather than folding it into `NavSection` (`lib/router.ts`), which is one-to-one with
+ *  an internal hash route. */
+interface ExternalNavItem {
+  readonly testId: string;
+  readonly label: string;
+  readonly sub: string;
+  readonly icon: IconName;
+  readonly href: string;
+}
+
+/** 图 Explorer — the read-only graph/decision/provenance UI (kernel `interfaces/explorer-
+ *  contract`), an unmodified third-party static bundle served by caddy at `/explorer/` on this
+ *  same origin. Opens in a new tab; same visibility as 治理 Governance (`showGovern`) since every
+ *  Explorer endpoint requires at least the same role. */
+const EXPLORER_NAV: ExternalNavItem = {
+  testId: 'nav-explorer',
+  label: '图',
+  sub: 'Explorer',
+  icon: 'search',
+  href: '/explorer/',
+};
+
 /** 工作 Work — always visible, every role. 我的智能体 (S3.13 placeholder) sits here rather than in
  *  a third section: S3.11's own background note only ever describes two nav groups ("member 只见
  *  工作区 + 「我的智能体」"), and it is per-user configuration, not governance. */
@@ -140,6 +164,7 @@ export function Sidebar({
             items={GOVERN_NAV}
             active={active}
             pendingCount={pendingCount}
+            extra={EXPLORER_NAV}
           />
         ) : null}
       </nav>
@@ -165,12 +190,16 @@ function NavSectionGroup({
   items,
   active,
   pendingCount,
+  extra,
 }: {
   readonly titleZh: string;
   readonly titleEn: string;
   readonly items: readonly NavItem[];
   readonly active: NavSection;
   readonly pendingCount: number | null;
+  /** An external nav entry (opens in a new tab) rendered after `items`, still inside this
+   *  section's own visual group. */
+  readonly extra?: ExternalNavItem;
 }) {
   return (
     <div className="nav-section">
@@ -202,6 +231,22 @@ function NavSectionGroup({
           </a>
         );
       })}
+      {extra ? (
+        <a
+          href={extra.href}
+          className="nav-item"
+          title={`${extra.label} ${extra.sub}`}
+          data-testid={extra.testId}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <Icon name={extra.icon} />
+          <span className="nav-label">
+            {extra.label}
+            <span className="nav-label-sub">{extra.sub}</span>
+          </span>
+        </a>
+      ) : null}
     </div>
   );
 }

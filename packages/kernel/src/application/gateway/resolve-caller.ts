@@ -42,6 +42,14 @@ export interface ResolveCallerDeps {
 // after the first request arrives).
 let cachedPublicKeyPromise: Promise<CryptoKey> | undefined;
 
+/** The Handle-verification public key for `deps` — the injected loader when a test (or a caller
+ *  with its own key source) supplies one, else the cached default above. Exported for
+ *  interfaces/explorer-contract's cookie session (W7), which verifies its own token kind against
+ *  the same key and must resolve it exactly the way `resolveCaller` does. */
+export function loadHandlePublicKeyFor(deps: ResolveCallerDeps): Promise<CryptoKey> {
+  return (deps.loadHandlePublicKey ?? defaultLoadHandlePublicKey)();
+}
+
 async function defaultLoadHandlePublicKey(): Promise<CryptoKey> {
   if (!cachedPublicKeyPromise) {
     cachedPublicKeyPromise = loadHandleKeyPair()
@@ -83,7 +91,7 @@ export async function resolveCaller(
   }
 
   try {
-    const publicKey = await (deps.loadHandlePublicKey ?? defaultLoadHandlePublicKey)();
+    const publicKey = await loadHandlePublicKeyFor(deps);
     const claims = await authenticateHandle(deps.pool, token, { publicKey });
     return { channel: 'handle', claims };
   } catch (err) {

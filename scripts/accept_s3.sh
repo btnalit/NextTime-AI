@@ -454,6 +454,11 @@ explorer_step() {
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "explorer-provenance" "GET /api/provenance HTTP $status: $(parse_kv "$out" BODY)"
   pass "explorer-provenance" "200 (provenance graph for the depends_on Fact returned)"
+
+  out=$(explorer "" "/api/graph/nodes")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "401" ] || fail "explorer-no-credentials" "GET /api/graph/nodes with no X-API-Key and no session cookie HTTP $status (expected 401): $(parse_kv "$out" BODY)"
+  pass "explorer-no-credentials" "no X-API-Key and no session cookie -> 401"
 }
 
 # S3.9 (e): mint an `interactive`-session Handle via `issue_handle`, then reach the same graph

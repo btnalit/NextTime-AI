@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { CryptoKey } from 'jose';
 import {
   ExplainNodeNotFoundError,
   type ResolveCallerDeps,
@@ -11,6 +12,8 @@ import {
   listDecisionsForExplorer,
   listGraphEdgesForExplorer,
   listGraphNodesForExplorer,
+  loadHandlePublicKeyFor,
+  lookupWebSessionPrincipal,
   resolveCaller,
   searchGraphForExplorer,
 } from '../../application/gateway/index.js';
@@ -26,6 +29,16 @@ import {
   type TemporalBoundsResponse,
   type TemporalSnapshotResponse,
 } from './schemas.js';
+import {
+  EXPLORER_SESSION_COOKIE,
+  EXPLORER_SESSION_TTL_SECONDS,
+  clearSessionCookie,
+  defaultLoadHandlePrivateKey,
+  mintExplorerSessionToken,
+  parseCookieHeader,
+  serializeSessionCookie,
+  verifyExplorerSessionToken,
+} from './session.js';
 import {
   toDecisionResponse,
   toEdgeResponse,
@@ -79,7 +92,17 @@ import {
  * independently.
  */
 
-export interface ExplorerRouteDeps extends ResolveCallerDeps {}
+export interface ExplorerRouteDeps extends ResolveCallerDeps {
+  /**
+   * W7 (session.ts): loads the Handle-signing *private* key `POST /api/explorer/session` mints
+   * the caller's Explorer session cookie with. Defaults to a cached
+   * governance/capability/keys.ts `loadHandleKeyPair()` (the same key pair `resolveCaller`'s
+   * default public-key loader reads); injectable for tests. When loading fails (no Handle keys
+   * configured) the session route answers 503 and the nine read routes still work with
+   * `X-API-Key` — the cookie path is additive, never required.
+   */
+  readonly loadHandlePrivateKey?: () => Promise<CryptoKey>;
+}
 
 interface ExplorerCaller {
   readonly workspaceId: string;
@@ -107,20 +130,51 @@ function extractApiKey(request: FastifyRequest): string | undefined {
   return firstQueryValue(request.headers['x-api-key'] as string | string[] | undefined);
 }
 
-/** `X-API-Key` -> `resolveCaller`'s own `Authorization: Bearer <token>` contract (module doc
- *  comment) — throws `UnauthorizedError` for a missing key, an unrecognized key, or a caller that
- *  somehow resolves to the `handle` channel. */
+function extractSessionCookie(request: FastifyRequest): string | undefined {
+  const cookies = parseCookieHeader(request.headers.cookie);
+  const token = cookies[EXPLORER_SESSION_COOKIE];
+  return token ? token : undefined;
+}
+
+/**
+ * Two credentials, checked in this order (W7, session.ts's module doc comment):
+ *   1. `X-API-Key` (a script, curl, scripts/accept_s3.sh's driver) -> `resolveCaller`'s own
+ *      `Authorization: Bearer <token>` contract; must resolve to the human channel.
+ *   2. Otherwise the `nexttime_explorer_session` cookie the console installed after its own
+ *      login (`POST /api/explorer/session` below) -> verify the token, then re-resolve the
+ *      Principal + web session it names (`lookupWebSessionPrincipal`: not disabled, still active).
+ * An explicit header always wins over the ambient cookie — a caller that sends a key means it,
+ * and a wrong key must not silently succeed via a cookie left over from someone else's login in
+ * the same browser profile. Throws `UnauthorizedError` for everything else.
+ */
 async function authenticateExplorerCaller(
   request: FastifyRequest,
   deps: ExplorerRouteDeps,
 ): Promise<ExplorerCaller> {
   const apiKey = extractApiKey(request);
-  if (!apiKey) throw new UnauthorizedError('missing X-API-Key header');
-  const caller = await resolveCaller(`Bearer ${apiKey}`, deps);
-  if (caller.channel !== 'human') {
-    throw new UnauthorizedError('Explorer requires a human API key, not a Handle');
+  if (apiKey) {
+    const caller = await resolveCaller(`Bearer ${apiKey}`, deps);
+    if (caller.channel !== 'human') {
+      throw new UnauthorizedError('Explorer requires a human API key, not a Handle');
+    }
+    return { workspaceId: caller.principal.workspaceId, principalId: caller.principal.id };
   }
-  return { workspaceId: caller.principal.workspaceId, principalId: caller.principal.id };
+
+  const cookie = extractSessionCookie(request);
+  if (!cookie) throw new UnauthorizedError('missing X-API-Key header and explorer session cookie');
+  let claims: Awaited<ReturnType<typeof verifyExplorerSessionToken>>;
+  try {
+    claims = await verifyExplorerSessionToken(cookie, await loadHandlePublicKeyFor(deps));
+  } catch (err) {
+    throw new UnauthorizedError('invalid explorer session cookie', { cause: err });
+  }
+  const principal = await lookupWebSessionPrincipal(deps.pool, {
+    workspaceId: claims.ws,
+    principalId: claims.sub,
+    sessionId: claims.sid,
+  });
+  if (!principal) throw new UnauthorizedError('explorer session no longer valid');
+  return { workspaceId: principal.workspaceId, principalId: principal.id };
 }
 
 /** FastAPI's default `HTTPException` body shape (`{"detail": "..."}`) — several Explorer
@@ -148,7 +202,11 @@ function guarded(deps: ExplorerRouteDeps, routeName: string, fn: Handler) {
     try {
       caller = await authenticateExplorerCaller(request, deps);
     } catch {
-      return sendDetail(reply, 401, 'Invalid or missing API key. Send it as the X-API-Key header.');
+      return sendDetail(
+        reply,
+        401,
+        'Invalid or missing credentials. Send an API key as the X-API-Key header, or sign in to the console first.',
+      );
     }
 
     try {
@@ -224,6 +282,56 @@ function renderMarkdownReport(report: {
 }
 
 export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRouteDeps): void {
+  // W7 (session.ts): the console calls this right after a successful login, with the same
+  // `Authorization: Bearer <api key>` it uses for `/api/cap/*`, and gets the Explorer session
+  // cookie back; `DELETE` is its "Forget key" counterpart. Human channel only — a Handle here is
+  // a 401, same as everywhere else on the Explorer surface. Never reads the cookie itself.
+  app.post('/api/explorer/session', async (request, reply) => {
+    let caller: Awaited<ReturnType<typeof resolveCaller>>;
+    try {
+      caller = await resolveCaller(request.headers.authorization, deps);
+    } catch {
+      return sendDetail(
+        reply,
+        401,
+        'Invalid or missing API key. Send it as Authorization: Bearer.',
+      );
+    }
+    if (caller.channel !== 'human') {
+      return sendDetail(
+        reply,
+        401,
+        'Explorer sessions are issued to human API keys only, not Handles.',
+      );
+    }
+    let privateKey: CryptoKey;
+    try {
+      privateKey = await (deps.loadHandlePrivateKey ?? defaultLoadHandlePrivateKey)();
+    } catch (err) {
+      request.log.error({
+        route: 'explorer.session',
+        errorName: err instanceof Error ? err.name : typeof err,
+      });
+      return sendDetail(reply, 503, 'Explorer sessions are not configured on this kernel.');
+    }
+    const minted = await mintExplorerSessionToken({
+      privateKey,
+      workspaceId: caller.principal.workspaceId,
+      principalId: caller.principal.id,
+      sessionId: caller.session.id,
+    });
+    reply.header('Set-Cookie', serializeSessionCookie(minted.token, EXPLORER_SESSION_TTL_SECONDS));
+    reply.header('Cache-Control', 'no-store');
+    return { ok: true, expiresAt: minted.expiresAt.toISOString() };
+  });
+
+  app.delete('/api/explorer/session', async (_request, reply) => {
+    reply.header('Set-Cookie', clearSessionCookie());
+    reply.header('Cache-Control', 'no-store');
+    reply.code(204);
+    return null;
+  });
+
   app.get(
     '/api/graph/nodes',
     guarded(deps, 'graph.nodes', async (request, _reply, caller) => {
