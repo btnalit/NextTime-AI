@@ -102,7 +102,7 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 ## CI（Playwright）
 
 `.github/workflows/e2e.yml`（新增工作流，与 `ci.yml` 完全分离，`ci.yml` 本身未改动）在每个 PR 和
-推送到 `main` 时跑一遍本节 e2e 的一个子集——单个 job `web-e2e`：
+推送到 `main` 时把本节的三个 e2e spec 全部跑一遍——单个 job `web-e2e`：
 
 1. checkout（pinned SHA，与 `ci.yml` 同一约定）、`pnpm/setup`（Node 22）、`pnpm install
    --frozen-lockfile`，`pnpm --filter @nexttime/web exec playwright install --with-deps
@@ -136,15 +136,23 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
    绪门槛。
 6. `docker compose run --rm --no-deps kernel node dist/cli/bootstrap.js create-workspace --name
    ci-e2e --owner owner`（与 `scripts/accept_s1.sh` `bootstrap_step` 同一套输出解析）拿到一个
-   owner API key（`::add-mask::` 遮蔽，日志里不出现）。
-7. `WEB_E2E_BASE_URL=https://127.0.0.1:8443 WEB_E2E_API_KEY=<刚拿到的 key> corepack pnpm
-   --filter @nexttime/web e2e`——只跑 `chat.spec.ts` 与 `governance.spec.ts`
-   （`approvals.spec.ts` 的两个场景需要种子 ActionRequest 与第二个 principal，`WEB_E2E_
-   SEED_ACTION_REQUESTS` 未设置时自动 skip，见该文件自己的注释）。`playwright.config.ts` 强制
-   `workers: 1`——这几个 spec 共用同一个 kernel/Postgres，部分场景假设对服务端状态的独占访问
-   （如"最近创建的那个 Chat"），跨文件并发跑没有意义，序列化换来的确定性比省下来的几秒钟值。
-8. 失败时把 `packages/web/playwright-report/` 与 `packages/web/test-results/`（trace，
-   `retain-on-failure`）当 artifact 上传；`docker compose ... down -v` 无论成败都执行。
+   owner API key 与 owner principal id（`::add-mask::` 遮蔽 key，日志里不出现）。接着两步（W7 新增）：
+   "Add a second principal (operator) for approvals.spec.ts" 跑 `bootstrap.js add-principal
+   --workspace <id> --name bob --role operator`，导出 `WEB_E2E_API_KEY_B`（遮蔽）与
+   `WEB_E2E_PRINCIPAL_ID_B`；"Seed two pending ActionRequests (approvals.spec.ts)" 把 README 的
+   `psql` 种子块通过 `docker compose exec -T postgres psql … <<'SQL'`（SQL 走 stdin）跑两遍，分别用
+   `e2e-approve-flow`/`e2e-isolation-flow` 两个 `resource_scope`，再导出 `WEB_E2E_
+   SEED_ACTION_REQUESTS=1`。
+7. `WEB_E2E_BASE_URL=https://127.0.0.1:8443 WEB_E2E_API_KEY=<刚拿到的 key> ... corepack pnpm
+   --filter @nexttime/web e2e`——跑全部三个 spec（`chat.spec.ts`、`governance.spec.ts`、
+   `approvals.spec.ts`；后者靠上一步新建的第二 principal 与种子行不再 skip）。
+   `playwright.config.ts` 强制 `workers: 1`——这几个 spec 共用同一个 kernel/Postgres，部分场景假设
+   对服务端状态的独占访问（如"最近创建的那个 Chat"），跨文件并发跑没有意义，序列化换来的确定性比
+   省下来的几秒钟值。
+8. `packages/web/playwright-report/` 与 `packages/web/test-results/`（trace，
+   `retain-on-failure`）无论成败（`if: always()`）都当 artifact 上传——`playwright.config.ts` 的
+   `retries: process.env.CI ? 1 : 0` 让重试后才通过的用例仍在报告里显示为 flaky，而不是被一次性
+   的失败上传掩盖；`docker compose ... down -v` 同样无论成败都执行。
 
 **为什么只需要三个常驻容器（postgres/kernel/caddy）**：登录/对话/审批队列/治理四类页面全部经
 `AGENT_RUNTIME=fake`（`packages/kernel/src/application/host-bridge/fake-runtime.ts`）在内核进程
@@ -163,8 +171,10 @@ build` 走 compose 自身路径，没有直接的 `--cache-from/--cache-to type=
 **目前不是必需检查**：`e2e.yml` 与 `ci.yml` 是两个独立工作流，仓库分支保护规则目前只列
 `ci.yml` 的三个 job（`quality`/`test`/`guards`）为必需——`e2e / web-e2e` 想升级为必需检查，需要仓库
 管理员在 GitHub 仓库设置的 branch protection 里手动把它加进必需状态检查列表（这个仓库里没有别的
-地方能声明"必需"，它是 GitHub 项目设置，不是任何 workflow 文件的属性）。建议观察若干次运行确认不
-flaky 后再升级。
+地方能声明"必需"，它是 GitHub 项目设置，不是任何 workflow 文件的属性）。W7 跑通全部三个 spec 之
+后，这个工作流已经具备升级为必需检查的条件；一旦升级，`e2e` / `web-e2e` 这两个名字必须保持字节
+不变，且不能给这个工作流加 `paths`/`paths-ignore` 过滤器——一个必需检查如果对某次 push 不产生任何
+运行记录，GitHub 会把它当成"仍在等待"而不是"跳过"，纯文档 PR 会因此永远卡在合并前，无法合并。
 
 **已知的不稳定来源**：docker 镜像构建时间随 runner 负载波动；`docker compose up --wait` 与
 `/api/health` 轮询给了启动一定余量，但一个明显偏慢的 runner 仍可能需要放宽 job 的

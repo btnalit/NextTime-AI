@@ -14,7 +14,14 @@ name: e2e
 # none of agent-host/worker-supervisor/docker-socket-proxy/egress-proxy, and no docker-in-docker
 # for resident containers, is needed for the login/chat/approvals/governance paths this suite
 # exercises). W6 added `scripts/accept_s1.sh --lite` at the end of the job — the S1 acceptance
-# script's container-free subset, reusing this very stack (see that step's own comment).
+# script's container-free subset, reusing this very stack (see that step's own comment). W7 made
+# every e2e spec run for real (a second principal plus two seeded ActionRequests unlock
+# approvals.spec.ts) and gave CI one Playwright retry with the report always uploaded — the
+# state this workflow is meant to be promoted to a required check in (final comment below).
+#
+# Keep the workflow name (`e2e`) and job name (`web-e2e`) byte-stable, and never add a `paths` /
+# `paths-ignore` filter: a required check that does not report on a PR (docs-only or otherwise)
+# blocks that PR from merging — this job is cheap enough (~2.5 min) to run unconditionally.
 
 on:
   pull_request:
@@ -156,8 +163,9 @@ jobs:
             exit 1
           fi
           workspace_id=$(printf '%s\n' "$out" | sed -n 's/^workspace created: //p')
+          owner_id=$(printf '%s\n' "$out" | sed -n 's/^owner principal: *//p')
           api_key=$(printf '%s\n' "$out" | awk '/^API key/{getline; print; exit}')
-          if [ -z "$workspace_id" ] || [ -z "$api_key" ]; then
+          if [ -z "$workspace_id" ] || [ -z "$owner_id" ] || [ -z "$api_key" ]; then
             echo "could not parse create-workspace output:" >&2
             printf '%s\n' "$out" >&2
             exit 1
@@ -165,14 +173,95 @@ jobs:
           echo "::add-mask::$api_key"
           echo "WEB_E2E_API_KEY=$api_key" >>"$GITHUB_ENV"
           echo "WEB_E2E_BASE_URL=https://127.0.0.1:8443" >>"$GITHUB_ENV"
-          echo "bootstrapped workspace $workspace_id"
+          echo "E2E_WORKSPACE_ID=$workspace_id" >>"$GITHUB_ENV"
+          echo "E2E_OWNER_PRINCIPAL_ID=$owner_id" >>"$GITHUB_ENV"
+          echo "bootstrapped workspace $workspace_id (owner $owner_id)"
+
+      # W7: approvals.spec.ts's holder-isolation scenario needs a second principal of role
+      # `operator` (`list_pending`/`approve` are `minRole:'operator'`) — the same `add-principal`
+      # subcommand scripts/accept_s2.sh's bootstrap_step uses for "bob". Output shape:
+      # `principal created: <id>` / `API key` on the following line.
+      - name: Add a second principal (operator) for approvals.spec.ts
+        run: |
+          set -euo pipefail
+          set +e
+          out=$(sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            run --rm --no-deps -T kernel node dist/cli/bootstrap.js add-principal --workspace "$E2E_WORKSPACE_ID" --name bob --role operator </dev/null 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "add-principal exited $rc:" >&2
+            printf '%s\n' "$out" >&2
+            exit 1
+          fi
+          principal_id_b=$(printf '%s\n' "$out" | sed -n 's/^principal created: //p')
+          api_key_b=$(printf '%s\n' "$out" | awk '/^API key/{getline; print; exit}')
+          if [ -z "$principal_id_b" ] || [ -z "$api_key_b" ]; then
+            echo "could not parse add-principal output:" >&2
+            printf '%s\n' "$out" >&2
+            exit 1
+          fi
+          echo "::add-mask::$api_key_b"
+          echo "WEB_E2E_API_KEY_B=$api_key_b" >>"$GITHUB_ENV"
+          echo "WEB_E2E_PRINCIPAL_ID_B=$principal_id_b" >>"$GITHUB_ENV"
+          echo "added operator principal $principal_id_b"
+
+      # W7: seed the two pending ActionRequests approvals.spec.ts expects (one per
+      # `resource_scope` marker that file hardcodes) — the exact psql block packages/web/README.md
+      # "Seeding a pending ActionRequest" documents for a local run, executed here inside the
+      # already-running postgres container. The `outbox` row is what makes the kernel's linkage
+      # consumer (already up, previous steps) write the `system.action_pending` chat card and push
+      # `action.pending`, exactly as a real `request_action` would. SQL goes in on stdin, never via
+      # `-c`: psql only performs `:'var'` interpolation and `\gset` on input it parses itself (the
+      # same finding scripts/accept_s2.sh's leak check records).
+      - name: Seed two pending ActionRequests (approvals.spec.ts)
+        run: |
+          set -euo pipefail
+          for scope in e2e-approve-flow e2e-isolation-flow; do
+            sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+              exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 \
+              -v workspace_id="$E2E_WORKSPACE_ID" -v on_behalf_of="$E2E_OWNER_PRINCIPAL_ID" \
+              -v resource_scope="$scope" <<'SQL'
+          insert into objects (workspace_id, object_type, properties)
+          values (:'workspace_id'::uuid, 'Gatekeeper', '{"name":"e2e-test-gate"}'::jsonb)
+          returning id as gatekeeper_id \gset
+
+          insert into action_requests
+            (workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
+             policy_decision, await_decision, on_behalf_of, actor_runtime, params)
+          values
+            (:'workspace_id'::uuid, 'pending_approval', :'gatekeeper_id'::uuid, 'e2e.approval_card_test',
+             :'resource_scope', 'medium', 'require_approval', true, :'on_behalf_of'::uuid, 'worker',
+             '{}'::jsonb)
+          returning id as action_request_id \gset
+
+          insert into outbox (workspace_id, event_type, payload)
+          values (
+            :'workspace_id'::uuid,
+            'ActionRequestPending',
+            jsonb_build_object(
+              'type', 'ActionRequestPending',
+              'workspaceId', :'workspace_id',
+              'actionRequestId', :'action_request_id',
+              'gatekeeperId', :'gatekeeper_id',
+              'actionKindTag', 'e2e.approval_card_test',
+              'resourceScope', :'resource_scope',
+              'holderPrincipalIds', jsonb_build_array(:'on_behalf_of')
+            )
+          );
+
+          \echo seeded action_request_id: :action_request_id
+          SQL
+          done
+          echo "WEB_E2E_SEED_ACTION_REQUESTS=1" >>"$GITHUB_ENV"
 
       # --- the actual e2e suite ----------------------------------------------------------------
 
-      # Runs every file under packages/web/e2e/ — chat.spec.ts and governance.spec.ts run for
-      # real (only WEB_E2E_BASE_URL/WEB_E2E_API_KEY set above); approvals.spec.ts's two seeded
-      # scenarios skip themselves (no WEB_E2E_SEED_ACTION_REQUESTS, no WEB_E2E_API_KEY_B — see
-      # that file's own doc comment).
+      # Runs every file under packages/web/e2e/ for real: chat.spec.ts and governance.spec.ts
+      # (WEB_E2E_BASE_URL/WEB_E2E_API_KEY) and, since W7, approvals.spec.ts's two seeded scenarios
+      # too (WEB_E2E_API_KEY_B/WEB_E2E_PRINCIPAL_ID_B/WEB_E2E_SEED_ACTION_REQUESTS from the two
+      # steps above). playwright.config.ts gives CI one retry per test so a runner hiccup shows up
+      # as "flaky" in the uploaded report instead of failing the whole gate.
       - name: Run web e2e
         run: pnpm --filter @nexttime/web e2e
 
@@ -185,8 +274,11 @@ jobs:
       - name: S1 lite acceptance (scripts/accept_s1.sh --lite)
         run: sudo sh scripts/accept_s1.sh --lite
 
+      # `always()`, not `failure()`: a retried-then-passed ("flaky") test only shows up in the
+      # report, never in the job's conclusion — uploading it every time is how a flake stays
+      # visible now that this workflow is meant to become a required check.
       - name: Upload Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report
@@ -199,6 +291,27 @@ jobs:
       - name: docker compose logs (on failure)
         if: failure()
         run: sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color
+
+      # The kernel's outbox dispatcher swallows consumer errors unless it is constructed with an
+      # `onError` hook (application/outbox/dispatcher.ts), so a linkage consumer that fails on a
+      # seeded row leaves no trace in the logs above — this dump shows the durable evidence
+      # instead: undelivered / dead-lettered outbox rows (`dispatched_at is null`, `attempts`),
+      # every ActionRequest's status, and the system chat messages the linkage did write.
+      - name: Dump outbox / action_requests / chat_messages state (on failure)
+        if: failure()
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=0 <<'SQL' || true
+          \echo === outbox
+          select id, event_type, attempts, dispatched_at, created_at from outbox order by id;
+          \echo === action_requests
+          select id, status, action_kind, resource_scope, requested_at from action_requests order by requested_at;
+          \echo === chat_messages (system)
+          select chat_id, sequence, role, content->>'kind' as kind, content->>'actionRequestId' as action_request_id, content->>'status' as status
+            from chat_messages where role = 'system' order by chat_id, sequence;
+          \echo === pending_context_items
+          select principal_id, kind, subject_id, source_outbox_id from pending_context_items order by created_at;
+          SQL
 
       - name: docker compose down
         if: always()

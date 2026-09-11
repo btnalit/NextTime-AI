@@ -16,11 +16,11 @@ import { expect, test } from '@playwright/test';
  * own row unambiguously even if a previous run's (now-decided) rows are still present.
  *
  * `WEB_E2E_SEED_ACTION_REQUESTS=1` gates both scenarios below, in addition to their own API-key
- * checks — `.github/workflows/e2e.yml` never sets it: the CI stack it brings up has no seeded
- * ActionRequest rows and no second principal, so both scenarios stay skipped there. CI's own
- * lighter "queue renders, empty state is fine" smoke check lives in `e2e/governance.spec.ts`
- * instead. Set this locally once you have run the `psql` seed block(s) below (and, for the
- * isolation scenario, created a second principal).
+ * checks — `.github/workflows/e2e.yml` now sets it: the workflow creates the second (operator)
+ * principal and seeds both rows itself, running the same `psql` block as this package's README
+ * against the CI postgres container, so both scenarios run in CI. Set this locally once you have
+ * run the `psql` seed block(s) below (and, for the isolation scenario, created a second
+ * principal) — the manual local setup is unchanged.
  *
  * Requires: `WEB_E2E_BASE_URL`, `WEB_E2E_API_KEY` (workspace owner — `grant_capability` is
  * `minRole:'owner'`), `WEB_E2E_API_KEY_B` (a second principal, role `operator` — `list_pending`/
@@ -39,7 +39,31 @@ const E2E_ACTION_KIND = 'e2e.approval_card_test';
 
 async function login(page: import('@playwright/test').Page, apiKey: string): Promise<void> {
   await page.goto('/');
-  await page.getByPlaceholder('sk-...').fill(apiKey);
+  // The isolation scenario below signs in as A, then B, then A again in the *same tab*. A previous
+  // login survives in `sessionStorage` (`lib/session.ts`) and App.tsx auto-connects with it on
+  // load, so the login form is disabled while that connect is in flight and gone once it lands.
+  // Sign the old session out through the product's own "Forget key" (clearing storage under an
+  // in-flight connect is not enough — `connect()` re-saves the key once the WS authenticate
+  // resolves). Wait until the page has settled either way: shell (Forget key visible) or an
+  // enabled login form; a fresh context lands on the second immediately.
+  const forgetKey = page.getByRole('button', { name: 'Forget key' });
+  const keyInput = page.getByPlaceholder('sk-...');
+  await expect
+    .poll(
+      async () => {
+        if (await forgetKey.isVisible()) return 'shell';
+        // `isEnabled()` waits for the element to be attached (its own 30s default), which stalls
+        // the whole predicate if the login form unmounts mid-poll — bound it tightly instead.
+        if ((await keyInput.count()) === 0) return 'pending';
+        if (await keyInput.isEnabled({ timeout: 500 }).catch(() => false)) return 'login';
+        return 'pending';
+      },
+      { timeout: 15_000 },
+    )
+    .not.toBe('pending');
+  if (await forgetKey.isVisible()) await forgetKey.click();
+  await expect(keyInput).toBeEnabled({ timeout: 15_000 });
+  await keyInput.fill(apiKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
   // Not a URL/hash assertion: a bare `/` load has no `location.hash` at all, and
   // `lib/router.ts`'s `routeFromHash('')` resolves straight to the default `chats` route without
@@ -106,10 +130,14 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     const chatCard = cardByMarker(page, E2E_APPROVE_SCOPE);
     await expect(chatCard).toBeVisible({ timeout: 15_000 });
     // The status chip carries the raw kernel state in `data-status` (components/ui/StatusChip.tsx)
-    // and a human label as text — assert on the state, not the label.
+    // and a human label as text — assert on the state, not the label. The seeded row's
+    // Gatekeeper is a bare `objects` row with no reachable endpoint, so right after `approved`
+    // the kernel's own drainer tries to execute it and marks it `failed` — any post-decision
+    // state proves the card left `pending_approval`; the `approved` status line below is the
+    // durable record of the decision itself.
     await expect(chatCard.locator('.action-card-status')).toHaveAttribute(
       'data-status',
-      'approved',
+      /^(approved|executing|executed|failed)$/,
       { timeout: 15_000 },
     );
     await expect(chatCard.getByRole('button', { name: 'Approve' })).toHaveCount(0);
@@ -162,13 +190,21 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
 
     const grantResponse = await request.post('/api/cap/grant_capability', {
       headers: { authorization: `Bearer ${apiKeyA}` },
-      data: { principalId: principalIdB, capability: E2E_ACTION_KIND, scope: {} },
+      // `grant_capability`'s params are `{principalId, resourceType, resourceId?, scope?}`
+      // (packages/shared capabilities.ts): a grant on `resourceType = <action kind>` with no
+      // `resourceId` covers every resource_scope of that kind — exactly what I14 holder routing
+      // (governance/approval/routing.ts) matches.
+      data: { principalId: principalIdB, resourceType: E2E_ACTION_KIND },
     });
     expect(grantResponse.ok()).toBe(true);
 
     // --- B's queue now shows it, and B can approve; the card leaves B's queue once decided (same
-    //     reasoning as the first test above — `list_pending` only lists `pending_approval` rows) ---
-    await page.goto('/#/work/approvals');
+    //     reasoning as the first test above — `list_pending` only lists `pending_approval` rows).
+    //     A full reload, not another hash `goto`: the tab is already on `#/work/approvals`, so a
+    //     same-hash navigation is a no-op for the SPA and `useCapability`'s cached (empty)
+    //     `list_pending` page would stay on screen — a grant made out of band reaches an open
+    //     queue only through the user's own Refresh/reload, exactly what a real operator does. ---
+    await page.reload();
     await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toBeVisible({ timeout: 15_000 });
     const drawerForB = await openQueueRow(page, E2E_ISOLATION_SCOPE);
     await drawerForB.getByRole('button', { name: 'Approve' }).click();
@@ -182,9 +218,10 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     await page.locator('.chat-list-item').first().click();
     const chatCardForA = cardByMarker(page, E2E_ISOLATION_SCOPE);
     await expect(chatCardForA).toBeVisible({ timeout: 15_000 });
+    // Same post-decision reasoning as the first scenario: the seeded Gatekeeper cannot execute.
     await expect(chatCardForA.locator('.action-card-status')).toHaveAttribute(
       'data-status',
-      'approved',
+      /^(approved|executing|executed|failed)$/,
       { timeout: 15_000 },
     );
     await expect(chatCardForA.getByRole('button', { name: 'Approve' })).toHaveCount(0);
