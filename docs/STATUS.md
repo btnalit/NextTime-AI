@@ -5,13 +5,14 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-11（W8 S4.1 用户目录与登录合入 PR #164 并发 v0.6.0；主机仍在 v0.5.1；当前波次：W8 平台管理 + 稳定期）
+最后更新：2026-09-11（W8：S4.1 合入 PR #164 并发 v0.6.0 后，维护者否决其首登路径并要求先把平台管理面想清楚；`platform-admin-design.md` v3 定稿，S4.2–S4.5 改为 P-A1 / P-A2 / P-B / P-C / P-D；主机仍在 v0.5.1；当前波次：W8 平台管理 + 稳定期）
 
 ## 1. 入口指引
 
 | 想知道 | 去哪 |
 |---|---|
 | 系统是什么、领域模型、三条底线 | `graph-ai-middle-platform-design.md`、`design-review-2026-09-01.md` |
+| 平台怎么配置、怎么用起来、怎么维护（使用面 / 管理面 / 维护面） | `platform-admin-design.md`（§7.11 的上位文档） |
 | 任务拆解、依赖图、每个任务怎么实现的 | `development-tasks.md`（"实现说明"随合入追加） |
 | 线上契约与语义约定 | `wire-contract-conventions.md`、`contracts/*.json`（`pnpm contract:check`） |
 | 怎么部署、验收、演练、排障 | `runbooks/README.md` 起步；验收 `runbooks/accept-s1.md`、`runbooks/host-accept-s2.md`、`runbooks/host-accept-s3.md` |
@@ -102,21 +103,22 @@
 | 真实模型验证模式 | `--real <provider/model> [--runs N]` | 完成（PR #156；主机验证，数字见 `retrospective-2026-09-11.md` §2） |
 | 顺带修复 | grants 作用域按文本比对（#152）；采集器 `depends_on` 条件后缀（#157），均由真实模型或 CI 首次发现 | 完成 |
 
-**当前波次：W8 平台管理 + 稳定期**（2026-09-11 起。维护者 2026-09-11 指出：装好的主机上没有任何能登录的账户，登录后也没有地方建工作区、加用户、配模型——这是设计缺口，优先于其他一切。设计见 `graph-ai-middle-platform-design.md` §7.11，任务见 `development-tasks.md` S4.1–S4.5（同日按维护者要求修订：平台级用户目录 + 用户名密码登录，S4.1 用户目录与登录 → S4.2 用户与工作区管理 → S4.3 供应商 → S4.4 门目录 → S4.5 状态）。主机整栈常驻供真实使用；已关 27（#159）、29（#160）；33 按 chat 隔离已决定、排在 S4 之后；其后 30 / 23 / 21 / 20 / 22。）
+**当前波次：W8 平台管理 + 稳定期**（2026-09-11 起。维护者同日先指出：装好的主机上没有任何能登录的账户，登录后也没有地方建工作区、加用户、配模型；S4.1 合入后又否决其"读令牌 + 初始化页、查表设密码"的首登路径，并要求**先想清楚再做**：S1–S3 交付的是使用面与内核，"做完之后我怎么配置这个平台、怎么用起来、怎么维护"没有答案。答案是 `platform-admin-design.md` v3（对照本地克隆的 cloudflare-os 源码逐文件核对过）：**使用面**——普通用户登录即落在自己的对话页，选自己的模型、有自己的上下文，不配置任何东西；**管理面**——用户、工作区配置（今天的 owner 页面搬家）、模型与供应商、集成、模块、平台设置；**维护面**——概览与首次运行清单、运行层升级、运行状态、平台审计。个人区在共享图内自动就位，不做"每用户一个工作区"，也不做多租户管理页。S4.2–S4.5 作废，改为 P-A1 → P-A2 → P-B → P-C → P-D（`development-tasks.md` 同名小节）。主机整栈常驻供真实使用；已关 27（#159）、29（#160）；33 按 chat 隔离已决定、并入 P-A2；其后 30 / 23 / 21 / 20 / 22。）
 
-| S4 项 | 状态 |
+| 项 | 状态 |
 |---|---|
-| S4.1 用户目录与登录 | 完成（PR #164，2026-09-11；e2e `login.spec.ts` 进 CI；迁移 0019 待下次主机 `make migrate` 落地，同 0018 先例；`scope:'platform'` 注册表字段留到 S4.2 随 `list_users` 一起加） |
-| S4.2 用户管理与工作区管理 | 待做（下一项） |
-| S4.3 模型与供应商 / S4.4 门目录 / S4.5 运行状态 | 待做 |
+| S4.1 用户目录与登录 | 完成（PR #164，2026-09-11；e2e `login.spec.ts` 进 CI；迁移 0019 待主机 `make migrate`）。其"一次性令牌 + 初始化页"首登路径被否决，由 P-A1 的预置 `admin` 取代；身份模型、登录、cookie 会话、API key 路径沿用 |
+| P-A1 身份、用户与管理面骨架 | 待做（下一项；本地有一支 WIP 分支 `feat/s4-1-claim-identity`，含预置 `admin` / `bind-api-key` / `claim` / 迁移 0020 的半成品，将并入） |
+| P-A2 使用面收口 | 待做（含遗留 33） |
+| P-B 集成与模块 / P-C 运行层与运行状态 / P-D 模型与供应商 | 待做 |
 
-**S4.1 主机应用注意**（下次应用时按此顺序，细节记 `docs/private/`）：① 先重跑 `host-env-init.sh`（幂等）——kernel 新增 bind mount `secrets/setup`，主机上还没有这个目录，若让 Docker 代建会是 root 所有，kernel 只会记一条 error 而写不出令牌；② `make migrate`（0019 回填：每个既有 human Principal 得到一个无密码用户，登录名 `<显示名 slug>-<principal id 前 8 位>`，维护者自己的那条要到 `users` 表里查）；③ 重建 kernel + caddy。之后：既有 API key 照常可用；要用密码登录就 `set-password --login <登录名>`；用令牌建出的平台管理员在 S4.2 之前没有任何工作区成员资格（`add-principal` 建的是新 Principal，不能把已有用户加进工作区），业务操作仍用 owner 身份。
+**主机应用注意**：v0.6.0 **不单独应用**——它的首登路径已作废，单独上去只会多一个没人用的初始化页。等 P-A1 发版后一起应用，顺序仍是：① 重跑 `host-env-init.sh`（幂等，补建 `secrets/setup`，否则 Docker 代建目录为 root 所有、kernel 写不出初始密码）；② `make migrate`（0019 回填 + 0020 + P-A1 的迁移）；③ 重建 kernel + caddy + web。之后全部在浏览器里：用 `secrets/setup/initial-admin-password` 里的临时密码登录 `admin` → 改密 → 概览页"绑定已有 API key"贴上手里的 owner key → 原工作区归到 `admin`；其他既有成员由管理员在用户页重置临时密码，或自己用 key 登录一次设密码。不需要查表、不需要 CLI。
 
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
 目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29）并于同日应用 v0.5.1（kernel 重建 + `worker-runtime` 重建，无迁移，未复跑验收），主机 `.env` 不再含 Explorer key；v0.6.0（S4.1，迁移 0019）**尚未应用**，应用步骤见 §3 "S4.1 主机应用注意"；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），建了一个真实使用的工作区并注册两个门；不再在验收后停栈。
 
-后续：S4 平台管理 → 遗留 33 / 30 → 加固批次（23 / 21 / 20 / 22）→ 镜像发布与 P5。
+后续：P-A1 → P-A2（含 33）→ P-B → P-C → P-D → 遗留 30 → 加固批次（23 / 21 / 20 / 22）→ 镜像发布与 P5。
 
 ## 4. 遗留清单
 
@@ -157,7 +159,7 @@
 | 30 | 真实模型下 docker_restart 一次 ActionRequest executed、容器已重启但 Task failed 且 result 为空（S2 real 1/3 的失败） | P2 | 稳定期 | 开放 |
 | 31 | Explorer 会话 cookie 不随 `rotate_api_key` 失效（8 小时 TTL 为界；`disable_principal` 即时生效） | P3 | 记债 | 开放 |
 | 32 | CodeQL 预存告警：`hashApiKey` 用 sha256（32 字节随机 key，判定为合理）需维护者 dismiss；`e2e / web-e2e` 需维护者加为必需检查 | — | 决定 | 关闭（2026-09-11 维护者已把 `e2e / web-e2e` 加为必需检查并 dismiss 告警 57） |
-| 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | 决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件；待实现，排在 S4 之后。已核实 pi 0.84.4 源码：`switch_session` 对不存在的路径会新建、`new_session` 后 `get_state` 立即有 `sessionFile`、`session_start` 在切换时重触发且 `registerTool` 同名覆盖——因此可以由 agent-host 单方面按 `chatId` 派生会话文件路径实现，不需要内核新列或新帧 |
+| 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | 决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件；待实现，并入 P-A2。已核实 pi 0.84.4 源码：`switch_session` 对不存在的路径会新建、`new_session` 后 `get_state` 立即有 `sessionFile`、`session_start` 在切换时重触发且 `registerTool` 同名覆盖——因此可以由 agent-host 单方面按 `chatId` 派生会话文件路径实现，不需要内核新列或新帧 |
 | 34 | kernel 日志有 pg `DeprecationWarning: Calling client.query() when the client is already executing a query`（2026-09-11 主机 v0.5.0 首轮对话时出现）——同一 client 上并发 query，pg@9 将不再允许；需定位是哪条路径在 `withWorkspace` 的 client 上不等待就发第二条语句 | P2 | 待排 | 开放 |
 | 35 | 用 API key 登录控制台的会话没有控制台 cookie，浏览器里打不开 Explorer（S4.1 起 Explorer 只认 `X-API-Key` 或控制台 cookie）；API key 是给自动化与过渡期的，人用密码登录即可——记为已知行为，随"验收 harness 迁到 service Principal"一起看 | P3 | 记债 | 开放 |
 

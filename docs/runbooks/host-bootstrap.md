@@ -45,6 +45,9 @@ gatekeepers/docker gatekeepers/ragflow collectors/host-inventory`，S3.3 新增 
 
 ## 首次登录：平台初始化令牌（S4.1，design §7.11）
 
+> **已作废（2026-09-11 维护者决定）**：本节的“读令牌、填初始化页”路径由 P-A1 的**预置 `admin` + 主机文件里的
+> 随机初始密码**取代（`docs/platform-admin-design.md` §4）。v0.6.0 不单独应用；P-A1 发版时本节随之重写。
+
 装好的主机上没有默认账户。kernel 启动时若**没有任何活跃的平台管理员**，会生成一枚一次性初始化令牌：
 哈希入库（`platform_setup` 表，24 小时过期，5 次错误作废），明文写到
 `${NEXTTIME_DATA}/secrets/setup/token`（0600，kernel 容器内唯一可写挂载 `/run/setup`，由
