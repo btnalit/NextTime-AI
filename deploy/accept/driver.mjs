@@ -26,7 +26,11 @@
 //   send-and-wait <token> <chatId|""> <text> <timeoutMs> [strict]
 //     Chat WS (design doc §9.4): authenticate -> new_chat if chatId is empty -> subscribe_chat ->
 //     send_chat_message(text) -> wait for that Turn's chat.metadata turnStatus or timeoutMs ->
-//     get_chat_history. Prints CHAT_ID/TURN_ID/TURN_STATUS/ECHO_SEEN/HISTORY_COUNT. On timeout
+//     get_chat_history. Prints CHAT_ID/TURN_ID/TURN_STATUS/ECHO_SEEN/HISTORY_COUNT plus (W7) the
+//     Turn's tool-call outcomes counted from the ephemeral chat.stream deltas: TOOL_CALLS
+//     (toolCallStarted), TOOL_ENDED (toolCallEnded), TOOL_ERRORS (toolCallEnded with
+//     isError:true), TOOL_ERRORS_KNOWN (toolCallEnded that carried an isError at all — 0 on a
+//     runtime that predates the field), TOOL_NAMES and TOOL_ERROR_NAMES (comma-joined). On timeout
 //     the default is to report TURN_STATUS= (empty) and exit 0 — accept_s2's entry-mode-gap
 //     scenarios deliberately never settle and the caller needs to observe that; pass `strict` as
 //     the fifth argument (accept_s1.sh) to make a timeout an ERROR= + exit 1 instead.
@@ -46,6 +50,10 @@
 //   gate-health <gateUrl>
 //     GET <gateUrl>/gate/health with the kernel container's own /run/secrets/gate_token as
 //     Bearer (every gate route needs it since the gate-protocol hardening). Prints OK=true|false.
+//   transcript-stats <path>
+//     (W7) Tool-call outcomes of one Worker run, read from its pi session JSONL (mounted
+//     read-only by the caller; no kernel call). Prints ASSISTANT_MESSAGES=, MODEL= and the same
+//     TOOL_* fields as send-and-wait. See cmdTranscriptStats for the pinned pi entry shape.
 //
 // Extraction: when `extractExpr` is given it is evaluated as a JS expression with `d` bound to the
 // parsed response (or the messages array for get-history) and printed as EXTRACTED=<value>
@@ -192,6 +200,11 @@ async function cmdSendAndWait(args) {
   let turnId;
   let turnStatus;
   let echoSeen = false;
+  // W7: tool-call outcome counters from the ephemeral `chat.stream` deltas — every
+  // `toolCallStarted` is one call, every `toolCallEnded` with `isError: true` is one error
+  // (the agent runtime's own verdict, forwarded from pi's `tool_execution_end`; absent on an
+  // older runtime, in which case TOOL_ERRORS stays at 0 and TOOL_ERRORS_KNOWN reports 0).
+  const toolStats = newToolStats();
   const settled = new Promise((resolve) => {
     onPush(ws, (msg) => {
       if (msg.method === 'chat.metadata' && msg.params?.chatId === chatId) {
@@ -206,6 +219,9 @@ async function cmdSendAndWait(args) {
         if (m.role === 'assistant' && typeof m.text === 'string' && m.text.includes('echo:')) {
           echoSeen = true;
         }
+      }
+      if (msg.method === 'chat.stream' && msg.params?.chatId === chatId) {
+        recordStreamPayload(toolStats, msg.params.payload ?? {});
       }
     });
   });
@@ -238,8 +254,109 @@ async function cmdSendAndWait(args) {
     TURN_STATUS: turnStatus ?? '',
     ECHO_SEEN: echoSeen ? 1 : 0,
     HISTORY_COUNT: history.items.length,
+    ...toolStatsFields(toolStats),
   });
   ws.close();
+}
+
+// ---- W7: tool-call outcome counting -----------------------------------------------------------
+
+function newToolStats() {
+  return {
+    calls: 0,
+    ended: 0,
+    errors: 0,
+    errorsKnown: 0,
+    names: [],
+    errorNames: [],
+    byId: new Map(),
+  };
+}
+
+/** One `chat.stream` payload (`toolCallStarted` / `toolCallEnded`); anything else is ignored. */
+function recordStreamPayload(stats, payload) {
+  if (payload.streamKind === 'toolCallStarted') {
+    stats.calls += 1;
+    const name = typeof payload.name === 'string' ? payload.name : '?';
+    stats.names.push(name);
+    if (typeof payload.toolCallId === 'string') stats.byId.set(payload.toolCallId, name);
+    return;
+  }
+  if (payload.streamKind === 'toolCallEnded') {
+    stats.ended += 1;
+    if (typeof payload.isError === 'boolean') {
+      stats.errorsKnown += 1;
+      if (payload.isError) {
+        stats.errors += 1;
+        stats.errorNames.push(stats.byId.get(payload.toolCallId) ?? '?');
+      }
+    }
+  }
+}
+
+/** The KEY=value fields both `send-and-wait` and `transcript-stats` print (same names, so a shell
+ *  caller parses either with the same parse_kv calls). */
+function toolStatsFields(stats) {
+  return {
+    TOOL_CALLS: stats.calls,
+    TOOL_ENDED: stats.ended,
+    TOOL_ERRORS: stats.errors,
+    TOOL_ERRORS_KNOWN: stats.errorsKnown,
+    TOOL_NAMES: stats.names.join(','),
+    TOOL_ERROR_NAMES: stats.errorNames.join(','),
+  };
+}
+
+/**
+ * transcript-stats <path>: tool-call outcomes of one Worker run, read from the Worker's own pi
+ * session JSONL (`sessionJsonlPath` on the `report_task_result` contract; on the host
+ * `${NEXTTIME_DATA}/workspaces/tasks/<taskId>/.pi/sessions/*.jsonl`, mounted read-only into this
+ * container by the caller). Format (pi-coding-agent 0.84.x, pinned by
+ * scripts/check-pi-version-consistency.sh): one JSON entry per line; `type: "message"` entries
+ * carry `message.role` = `assistant` (with `content[]` blocks, `type: "toolCall"` = one call,
+ * `name`) or `toolResult` (`toolName`, `isError: boolean`). Counts every toolCall block as a call
+ * and every toolResult as an ended call, `isError` known for each of them. Prints the same
+ * TOOL_* fields as send-and-wait plus ASSISTANT_MESSAGES= and MODEL=.
+ */
+async function cmdTranscriptStats(args) {
+  const [filePath] = args;
+  if (!filePath) throw new Error('transcript-stats: missing <path>');
+  const { readFile } = await import('node:fs/promises');
+  const raw = await readFile(filePath, 'utf8');
+  const stats = newToolStats();
+  let assistantMessages = 0;
+  let model = '';
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry?.type !== 'message' || !entry.message) continue;
+    const message = entry.message;
+    if (message.role === 'assistant') {
+      assistantMessages += 1;
+      if (typeof message.model === 'string' && !model) model = message.model;
+      for (const block of Array.isArray(message.content) ? message.content : []) {
+        if (block?.type === 'toolCall') {
+          recordStreamPayload(stats, {
+            streamKind: 'toolCallStarted',
+            toolCallId: block.id,
+            name: block.name,
+          });
+        }
+      }
+    } else if (message.role === 'toolResult') {
+      recordStreamPayload(stats, {
+        streamKind: 'toolCallEnded',
+        toolCallId: message.toolCallId,
+        isError: typeof message.isError === 'boolean' ? message.isError : undefined,
+      });
+    }
+  }
+  print({ ASSISTANT_MESSAGES: assistantMessages, MODEL: model, ...toolStatsFields(stats) });
 }
 
 async function cmdSendOnly(args) {
@@ -335,6 +452,7 @@ const COMMANDS = {
   explorer: cmdExplorer,
   mcp: cmdMcp,
   'gate-health': cmdGateHealth,
+  'transcript-stats': cmdTranscriptStats,
 };
 
 async function main() {

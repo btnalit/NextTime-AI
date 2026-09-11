@@ -35,6 +35,14 @@ describe('AgentRuntimeEventWireSchema', () => {
       },
       { type: 'toolCallEnded', toolCallId: 'call_1', ...correlation() },
       { type: 'toolCallEnded', toolCallId: 'call_1', result: { ok: true }, ...correlation() },
+      // W7: toolCallEnded.isError
+      {
+        type: 'toolCallEnded',
+        toolCallId: 'call_1',
+        result: { ok: false },
+        isError: true,
+        ...correlation(),
+      },
       { type: 'message', role: 'assistant', content: { text: 'hi' }, ...correlation() },
       { type: 'message', role: 'tool', content: { text: 'result' }, ...correlation() },
       { type: 'turnEnded', status: 'completed', ...correlation() },
@@ -68,6 +76,38 @@ describe('AgentRuntimeEventWireSchema', () => {
         ...correlation(),
       }).success,
     ).toBe(false);
+  });
+
+  it('toolCallEnded.isError: parses true, rejects a non-boolean, and omitted stays omitted', () => {
+    const withError = AgentRuntimeEventWireSchema.safeParse({
+      type: 'toolCallEnded',
+      toolCallId: 'call_1',
+      isError: true,
+      ...correlation(),
+    });
+    expect(withError.success).toBe(true);
+    if (withError.success) {
+      expect((withError.data as { isError?: boolean }).isError).toBe(true);
+    }
+
+    expect(
+      AgentRuntimeEventWireSchema.safeParse({
+        type: 'toolCallEnded',
+        toolCallId: 'call_1',
+        isError: 'yes',
+        ...correlation(),
+      }).success,
+    ).toBe(false);
+
+    const withoutError = AgentRuntimeEventWireSchema.safeParse({
+      type: 'toolCallEnded',
+      toolCallId: 'call_1',
+      ...correlation(),
+    });
+    expect(withoutError.success).toBe(true);
+    if (withoutError.success) {
+      expect((withoutError.data as { isError?: boolean }).isError).toBeUndefined();
+    }
   });
 
   it('rejects an extra unknown field (strict object)', () => {

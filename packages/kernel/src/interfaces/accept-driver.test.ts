@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -190,6 +190,48 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
             reply({ turnId: 'turn-1' });
             if (text !== 'never settles') {
               setTimeout(() => {
+                if (text === 'tools please') {
+                  push('chat.stream', {
+                    chatId,
+                    turnId: 'turn-1',
+                    payload: {
+                      streamKind: 'toolCallStarted',
+                      toolCallId: 'tc1',
+                      name: 'search',
+                      args: {},
+                    },
+                  });
+                  push('chat.stream', {
+                    chatId,
+                    turnId: 'turn-1',
+                    payload: {
+                      streamKind: 'toolCallEnded',
+                      toolCallId: 'tc1',
+                      result: { ok: true },
+                      isError: false,
+                    },
+                  });
+                  push('chat.stream', {
+                    chatId,
+                    turnId: 'turn-1',
+                    payload: {
+                      streamKind: 'toolCallStarted',
+                      toolCallId: 'tc2',
+                      name: 'traverse',
+                      args: {},
+                    },
+                  });
+                  push('chat.stream', {
+                    chatId,
+                    turnId: 'turn-1',
+                    payload: {
+                      streamKind: 'toolCallEnded',
+                      toolCallId: 'tc2',
+                      result: { ok: false },
+                      isError: true,
+                    },
+                  });
+                }
                 push('chat.message', {
                   chatId,
                   message: { role: 'assistant', text: 'echo: hi' },
@@ -331,6 +373,27 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
     expect(kv.get('ERROR')).toContain('did not settle');
   });
 
+  it('send-and-wait: W7 tool-call outcome counters from chat.stream pushes', async () => {
+    const { code, kv } = await runDriver(
+      ['send-and-wait', 'tok', '', 'tools please', '3000'],
+      env(),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('TOOL_CALLS')).toBe('2');
+    expect(kv.get('TOOL_ENDED')).toBe('2');
+    expect(kv.get('TOOL_ERRORS')).toBe('1');
+    expect(kv.get('TOOL_ERRORS_KNOWN')).toBe('2');
+    expect(kv.get('TOOL_NAMES')).toBe('search,traverse');
+    expect(kv.get('TOOL_ERROR_NAMES')).toBe('traverse');
+  });
+
+  it('send-and-wait: an ordinary turn with no stream pushes reports zero tool-call counters', async () => {
+    const { code, kv } = await runDriver(['send-and-wait', 'tok', '', 'hi', '3000'], env());
+    expect(code).toBe(0);
+    expect(kv.get('TOOL_CALLS')).toBe('0');
+    expect(kv.get('TOOL_ERRORS_KNOWN')).toBe('0');
+  });
+
   it('send-only: sends without waiting and reports CHAT_ID/TURN_ID', async () => {
     const { code, kv } = await runDriver(['send-only', 'tok', 'chat-1', 'hi'], env());
     expect(code).toBe(0);
@@ -401,5 +464,72 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
     expect(code).toBe(0);
     const lines = stdout.split('\n').filter((l) => l.length > 0);
     expect(lines[lines.length - 1]).toBe('EXTRACTED=true');
+  });
+});
+
+describe('deploy/accept/driver.mjs transcript-stats (against a fixture pi session JSONL)', () => {
+  let dir: string;
+  let jsonlPath: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'accept-driver-transcript-'));
+    jsonlPath = path.join(dir, 'session.jsonl');
+    const lines = [
+      { type: 'session', id: 's1' },
+      { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          model: 'provider/model-x',
+          content: [
+            { type: 'toolCall', id: 'c1', name: 'bash' },
+            { type: 'toolCall', id: 'c2', name: 'report_result' },
+          ],
+        },
+      },
+      {
+        type: 'message',
+        message: { role: 'toolResult', toolCallId: 'c1', toolName: 'bash', isError: true },
+      },
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 'c2',
+          toolName: 'report_result',
+          isError: false,
+        },
+      },
+      'not json',
+      { type: 'thinking_level_change' },
+    ];
+    writeFileSync(
+      jsonlPath,
+      lines.map((l) => (typeof l === 'string' ? l : JSON.stringify(l))).join('\n'),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('parses the fixture into ASSISTANT_MESSAGES/MODEL and the TOOL_* fields', async () => {
+    const { code, kv } = await runDriver(['transcript-stats', jsonlPath], {});
+    expect(code).toBe(0);
+    expect(kv.get('ASSISTANT_MESSAGES')).toBe('1');
+    expect(kv.get('MODEL')).toBe('provider/model-x');
+    expect(kv.get('TOOL_CALLS')).toBe('2');
+    expect(kv.get('TOOL_ENDED')).toBe('2');
+    expect(kv.get('TOOL_ERRORS')).toBe('1');
+    expect(kv.get('TOOL_ERRORS_KNOWN')).toBe('2');
+    expect(kv.get('TOOL_NAMES')).toBe('bash,report_result');
+    expect(kv.get('TOOL_ERROR_NAMES')).toBe('bash');
+  });
+
+  it('a missing path argument prints ERROR= and exits 1', async () => {
+    const { code, kv } = await runDriver(['transcript-stats'], {});
+    expect(code).toBe(1);
+    expect(kv.get('ERROR')).toContain('missing <path>');
   });
 });

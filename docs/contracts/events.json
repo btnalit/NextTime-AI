@@ -502,6 +502,9 @@
             {
               "additionalProperties": false,
               "properties": {
+                "isError": {
+                  "type": "boolean"
+                },
                 "result": {},
                 "streamKind": {
                   "const": "toolCallEnded",

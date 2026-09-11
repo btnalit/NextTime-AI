@@ -60,6 +60,10 @@ const AgentRuntimeEventToolCallEndedSchema = z
     type: z.literal('toolCallEnded'),
     toolCallId: z.string(),
     result: z.unknown().optional(),
+    // W7: pi's own `tool_execution_end.isError` — whether the tool threw / returned an error
+    // result to the model. Optional and additive: a runtime that does not know (older agent-host,
+    // FakeAgentRuntime) simply omits it, and every consumer treats "absent" as "not known".
+    isError: z.boolean().optional(),
     ...CorrelationFieldsSchema,
   })
   .strict();

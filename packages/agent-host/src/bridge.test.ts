@@ -77,7 +77,50 @@ describe('translatePiEvent — tool_execution_start / tool_execution_end', () =>
         type: 'toolCallEnded',
         toolCallId: 'call_abc123',
         result: { content: [{ type: 'text', text: 'total 48' }] },
+        isError: false,
       },
+    });
+  });
+
+  it('W7: forwards isError:true, omits the field when missing or non-boolean', () => {
+    const withError = translatePiEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'call_abc123',
+      toolName: 'bash',
+      result: { content: [{ type: 'text', text: 'boom' }] },
+      isError: true,
+    });
+    expect(withError).toEqual({
+      kind: 'event',
+      fields: {
+        type: 'toolCallEnded',
+        toolCallId: 'call_abc123',
+        result: { content: [{ type: 'text', text: 'boom' }] },
+        isError: true,
+      },
+    });
+
+    const missing = translatePiEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'call_abc123',
+      toolName: 'bash',
+      result: { content: [] },
+    });
+    expect(missing).toEqual({
+      kind: 'event',
+      fields: { type: 'toolCallEnded', toolCallId: 'call_abc123', result: { content: [] } },
+    });
+
+    const nonBoolean = translatePiEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'call_abc123',
+      toolName: 'bash',
+      result: { content: [] },
+      isError: 'x',
+    });
+    expect(nonBoolean).toEqual({
+      kind: 'event',
+      fields: { type: 'toolCallEnded', toolCallId: 'call_abc123', result: { content: [] } },
     });
   });
 
