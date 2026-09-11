@@ -222,9 +222,9 @@ fi
 # host where it already exists (freshly bootstrapped, or a second run of this script).
 mkdir -p "$NEXTTIME_DATA/collectors/host-inventory"
 
-# --- secrets/setup/: platform setup token directory (S4.1, docker-compose.yml's own kernel
-# service comment) — the kernel writes a one-time setup token here (mode 0600) when no platform
-# administrator exists yet, so unlike the rest of secrets/ (root-owned, 0700 — see this script's
+# --- secrets/setup/: initial administrator password directory (S4.1, docker-compose.yml's own
+# kernel service comment) — the kernel writes admin's temporary password here (mode 0600) when no
+# platform administrator exists yet, so unlike the rest of secrets/ (root-owned, 0700 — see this script's
 # own header comment), this one directory must be owned by the same uid:gid the kernel container
 # runs as. mkdir -p is idempotent.
 mkdir -p "$SECRETS_DIR/setup"
@@ -302,6 +302,7 @@ echo ""
 echo "host-env-init: left untouched: pgdata/ secrets/ (dir itself)"
 echo "host-env-init: done (idempotent — safe to re-run)"
 echo ""
-echo "platform setup: after the first \`docker compose up\`, the kernel writes a one-time setup"
-echo "token to \$NEXTTIME_DATA/secrets/setup/token (only when no platform administrator exists)."
-echo "Open the web console and use it to create the first administrator."
+echo "platform admin: after the first \`docker compose up\`, the kernel creates the user 'admin' and"
+echo "writes its temporary password to \$NEXTTIME_DATA/secrets/setup/initial-admin-password"
+echo "(only when no platform administrator exists). Log in to the web console as admin with it;"
+echo "you will be asked to change it."

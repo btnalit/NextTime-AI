@@ -49,8 +49,14 @@ async function isPrincipalDisabled(
   workspaceId: string,
   principalId: string,
 ): Promise<boolean> {
+  // P-A1: a Handle acting on behalf of a Principal whose platform user is disabled is refused
+  // the same way as a disabled Principal — `set_user_status` closes every channel at once.
   const result = await client.query<DisabledCheckRow>(
-    'select disabled_at from principals where workspace_id = $1 and id = $2',
+    `select case when p.disabled_at is not null then p.disabled_at
+                 when u.status = 'disabled' then now() end as disabled_at
+       from principals p
+       left join users u on u.id = p.user_id
+      where p.workspace_id = $1 and p.id = $2`,
     [workspaceId, principalId],
   );
   const row = result.rows[0];

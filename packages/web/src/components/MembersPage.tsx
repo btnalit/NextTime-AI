@@ -5,6 +5,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { type PrincipalRow, principalDisplayRole } from '../lib/governance.js';
+import { AddMemberForm } from './AddMemberForm.js';
 import { CreatePrincipalForm } from './CreatePrincipalForm.js';
 import { PrincipalDetail } from './PrincipalDetail.js';
 import { Button } from './ui/Button.js';
@@ -24,16 +25,25 @@ export interface MembersPageProps {
 
 type DrawerState =
   | { readonly kind: 'closed' }
+  | { readonly kind: 'addMember' }
   | { readonly kind: 'create' }
   | { readonly kind: 'detail'; readonly principal: PrincipalRow };
 
 /**
  * components/MembersPage: 成员与授权 Members (`/govern/members`, S3.11) — `list_principals`,
- * `create_principal`, `set_principal_role`, `rotate_api_key`, `disable_principal`. All owner-only
- * per the design doc's own minRole table ("成员/授权/策略 = owner"), except `rotate_api_key`
- * ("owner 或本人" — a non-owner rotating their own key would need a `principalId` they cannot
- * discover from this page anyway, since a member never sees `/govern/*` once role is proven — see
- * `Sidebar`), so this page's write affordances hide behind a single `canManage` 403-derived flag.
+ * `add_member`, `create_principal`, `set_principal_role`, `rotate_api_key`, `disable_principal`.
+ * All owner-only per the design doc's own minRole table ("成员/授权/策略 = owner"), except
+ * `rotate_api_key` ("owner 或本人" — a non-owner rotating their own key would need a `principalId`
+ * they cannot discover from this page anyway, since a member never sees `/govern/*` once role is
+ * proven — see `Sidebar`), so this page's write affordances hide behind a single `canManage`
+ * 403-derived flag.
+ *
+ * P-A1 splits the two things "add a member" used to mean (design doc §5): a **person** joins by
+ * their platform login (`add_member` — a membership Principal with no API key, they sign in with
+ * the password their platform account already has), and a **service credential** (`create_principal`
+ * — a `kind: 'service'` Principal and its one-time API key, for scripts and acceptance harnesses).
+ * `canManage` still keys off `create_principal`: both writes are owner-only and the kernel denies
+ * them together.
  */
 export function MembersPage({ http }: MembersPageProps) {
   const permissions = usePermissions();
@@ -68,9 +78,18 @@ export function MembersPage({ http }: MembersPageProps) {
         description="Who can sign in, what role they hold, and their API key lifecycle."
         actions={
           canManage ? (
-            <Button variant="primary" icon="plus" onClick={() => setDrawer({ kind: 'create' })}>
-              创建成员 Add member
-            </Button>
+            <>
+              <Button
+                variant="primary"
+                icon="plus"
+                onClick={() => setDrawer({ kind: 'addMember' })}
+              >
+                添加成员 Add member
+              </Button>
+              <Button variant="secondary" icon="key" onClick={() => setDrawer({ kind: 'create' })}>
+                服务凭证 Service credential (API key)
+              </Button>
+            </>
           ) : undefined
         }
       />
@@ -142,10 +161,30 @@ export function MembersPage({ http }: MembersPageProps) {
       )}
 
       <Drawer
+        open={drawer.kind === 'addMember'}
+        onClose={() => setDrawer({ kind: 'closed' })}
+        title="添加成员 Add member"
+        subtitle="By platform login — no account is created here and no API key is issued."
+        testId="add-member-drawer"
+      >
+        {drawer.kind === 'addMember' ? (
+          <AddMemberForm
+            http={http}
+            onCancel={() => setDrawer({ kind: 'closed' })}
+            onDone={(principal) => {
+              setDrawer({ kind: 'closed' });
+              toast.push({ tone: 'ok', title: `${principal.displayName} added` });
+              refreshList();
+            }}
+          />
+        ) : null}
+      </Drawer>
+
+      <Drawer
         open={drawer.kind === 'create'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title="创建成员 Add member"
-        subtitle="Always a human principal — agent/service principals come from a WorkerDefinition spawn."
+        title="服务凭证 Service credential (API key)"
+        subtitle="Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person."
         testId="create-principal-drawer"
       >
         {drawer.kind === 'create' ? (

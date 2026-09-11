@@ -29,9 +29,10 @@ import {
   FakeAgentRuntime,
   registerTurnStartedConsumer,
 } from './application/host-bridge/index.js';
-import { ensureSetupToken } from './application/identity/index.js';
+import { ensureInitialAdmin } from './application/identity/index.js';
 import { registerLinkageConsumers } from './application/linkage/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
+import { ensureDefaultWorkspace } from './application/platform/index.js';
 import {
   configureTaskRuntime,
   registerActionRequestRoutingConsumer,
@@ -972,19 +973,30 @@ export function main(): void {
   process.once('SIGINT', shutdown);
 
   void (async (): Promise<void> => {
-    // S4.1 (design doc §7.11 "初始化"): with no active platform administrator, mint the one-time
-    // setup token (hash in `platform_setup`, plaintext in `PLATFORM_SETUP_TOKEN_FILE`). Never
-    // fatal — a not-yet-migrated database or an unwritable token directory must not take the
-    // kernel down; the error line names what to fix and the API-key channel keeps working.
+    // S4.1 (design doc §7.11 "初始化"): with no active platform administrator, create `admin`
+    // with a random temporary password written to `INITIAL_ADMIN_PASSWORD_FILE`. Never fatal — a
+    // not-yet-migrated database or an unwritable directory must not take the kernel down; the
+    // error line names what to fix and the API-key channel keeps working.
     try {
-      await ensureSetupToken(pool, {
-        tokenFile: process.env.PLATFORM_SETUP_TOKEN_FILE,
+      await ensureInitialAdmin(pool, {
+        passwordFile: process.env.INITIAL_ADMIN_PASSWORD_FILE,
         log: (line) => app.log.warn(line),
       });
     } catch (err) {
       app.log.error(
         { err },
-        'platform setup token could not be prepared — password login setup is unavailable until this is fixed (is the database migrated, is PLATFORM_SETUP_TOKEN_FILE writable?)',
+        'initial administrator could not be prepared — password login is unavailable until this is fixed (is the database migrated, is INITIAL_ADMIN_PASSWORD_FILE writable?)',
+      );
+    }
+    // P-A1 (docs/platform-admin-design.md §2/§4 "登录即对话"): a fresh install gets its default
+    // workspace, owned by the administrator; an upgraded one adopts its single workspace as the
+    // default. Its own try: a failure here must not hide, nor be hidden by, the step above.
+    try {
+      await ensureDefaultWorkspace(pool, { log: (line) => app.log.info(line) });
+    } catch (err) {
+      app.log.error(
+        { err },
+        'default workspace could not be prepared — create one from the console or with bootstrap.js create-workspace',
       );
     }
 

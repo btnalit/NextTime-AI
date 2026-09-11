@@ -9,8 +9,11 @@ export {
   LOGIN_LOCK_MINUTES,
   LOGIN_PATTERN,
   assertPasswordStrength,
+  bindPrincipalToUser,
   changeOwnPassword,
   checkPassword,
+  claimIdentity,
+  claimIdentityOnClient,
   countActivePlatformAdmins,
   createUser,
   derivedLogin,
@@ -27,6 +30,8 @@ export {
   updateUserDisplayName,
 } from './users.js';
 export type {
+  BindPrincipalInput,
+  ClaimIdentityInput,
   IdentityErrorKind,
   CreateUserInput,
   MembershipRow,
@@ -58,13 +63,10 @@ export {
 } from './console-session.js';
 export type { ConsoleSessionClaims, UserSessionRow } from './console-session.js';
 export {
-  DEFAULT_SETUP_TOKEN_FILE,
-  SETUP_TOKEN_MAX_FAILURES,
-  SETUP_TOKEN_TTL_HOURS,
-  SetupError,
-  completeSetup,
+  DEFAULT_INITIAL_ADMIN_PASSWORD_FILE,
+  INITIAL_ADMIN_DISPLAY_NAME,
+  INITIAL_ADMIN_LOGIN,
   createPlatformAdmin,
-  ensureSetupToken,
-  getSetupState,
+  ensureInitialAdmin,
 } from './setup.js';
-export type { CompleteSetupInput, SetupErrorKind, SetupState } from './setup.js';
+export type { EnsureInitialAdminOptions } from './setup.js';

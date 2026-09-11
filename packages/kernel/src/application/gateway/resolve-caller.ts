@@ -240,6 +240,40 @@ export async function resolveConsoleUser(
  *      be determined) → membership Principal + web Session (403 when none).
  *   3. Neither → 401.
  */
+export class PlatformAdminRequiredError extends ForbiddenError {
+  constructor() {
+    super('this capability requires a platform administrator');
+    this.name = 'PlatformAdminRequiredError';
+  }
+}
+
+/**
+ * P-A1: resolves the caller of a `scope: 'platform'` capability — cookie only (an API key or a
+ * Handle names a Principal, and Principals have no platform role), CSRF header, no pending
+ * password change, and `platform_role = 'admin'`. No workspace is consulted: the platform plane
+ * has none, and an administrator with zero memberships is the normal first-run state.
+ */
+export async function resolvePlatformCaller(
+  credentials: Pick<
+    RequestCredentials,
+    'authorization' | 'cookie' | 'requestedWith' | 'requireCsrfHeader'
+  >,
+  deps: ResolveCallerDeps,
+): Promise<Extract<ResolvedCaller, { channel: 'platform' }>> {
+  if (credentials.authorization) {
+    // Resolve it anyway so a bad token is a 401 and a good one a 403 — never leak which.
+    await resolveCaller(credentials.authorization, deps);
+    throw new PlatformAdminRequiredError();
+  }
+  const user = await resolveConsoleUser(credentials.cookie, deps);
+  if (credentials.requireCsrfHeader && credentials.requestedWith !== CSRF_HEADER_VALUE) {
+    throw new CsrfHeaderRequiredError();
+  }
+  if (user.mustChangePassword) throw new PasswordChangeRequiredError();
+  if (user.platformRole !== 'admin') throw new PlatformAdminRequiredError();
+  return { channel: 'platform', user };
+}
+
 export async function resolveRequestCaller(
   credentials: RequestCredentials,
   deps: ResolveCallerDeps,

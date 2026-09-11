@@ -4,7 +4,10 @@ import { z } from 'zod';
 import type { ResolveCallerDeps } from '../../application/gateway/index.js';
 import {
   UnauthorizedError,
+  hashApiKey,
   loadHandlePrivateKeyFor,
+  lookupPrincipalByApiKeyHash,
+  resolveCaller,
   resolveConsoleUser,
 } from '../../application/gateway/index.js';
 import type { MembershipRow, UserRow } from '../../application/identity/index.js';
@@ -13,14 +16,13 @@ import {
   CSRF_HEADER,
   CSRF_HEADER_VALUE,
   IdentityError,
-  SetupError,
+  bindPrincipalToUser,
   changeOwnPassword,
   checkPassword,
+  claimIdentity,
   clearConsoleSessionCookie,
-  completeSetup,
   createUserSession,
   findUserById,
-  getSetupState,
   listActiveMemberships,
   mintConsoleSessionToken,
   revokeUserSession,
@@ -29,13 +31,21 @@ import {
 } from '../../application/identity/index.js';
 
 /**
- * interfaces/http/auth-routes: the console login surface (S4.1; design doc §7.11 "登录" and
- * "初始化：一次性令牌"). Cookie-only — none of these routes accept an API key or a Handle, and
- * none of them touch a workspace: a user logs in *before* choosing one (`X-Workspace-Id` on the
+ * interfaces/http/auth-routes: the console login surface (S4.1; design doc §7.11 "登录"). The
+ * first administrator is pre-created by the kernel (identity/setup.ts) — there is no setup route.
+ * Cookie-only except `claim` (which is *how* a key-only member gets a cookie) — and none of these
+ * routes touch a workspace: a user logs in *before* choosing one (`X-Workspace-Id` on the
  * capability calls that follow, `interfaces/http/capability-route.ts`).
  *
- *   GET  /api/platform/setup-state   {initialized, tokenAvailable}            (no auth)
- *   POST /api/platform/setup         {token, login, displayName, password} → first admin + login
+ *   POST /api/auth/bind-api-key      cookie + {apiKey} → the key's Principal (workspace membership)
+ *                                    now belongs to the calling user; {user, memberships}. How the
+ *                                    pre-created `admin` (identity/setup.ts) — or anyone who logs
+ *                                    in with a password — picks up the workspaces they already
+ *                                    had under pre-S4.1 API keys. Once per key.
+ *   POST /api/auth/claim             Authorization: Bearer <API key> + {login, displayName,
+ *                                    password} → the key's passwordless user becomes login-able
+ *                                    and the browser gets a console session (self-service
+ *                                    migration for a member who has only a key; once only)
  *   POST /api/auth/login             {login, password} → cookie + {user, memberships}
  *   POST /api/auth/logout            revoke the cookie's user_sessions row, clear the cookie
  *   GET  /api/auth/me                {user, memberships}
@@ -52,13 +62,9 @@ import {
 export type AuthRouteDeps = ResolveCallerDeps;
 
 const LoginBody = z.object({ login: z.string().min(1), password: z.string().min(1) }).strict();
-const SetupBody = z
-  .object({
-    token: z.string().min(1),
-    login: z.string().min(1),
-    displayName: z.string().min(1),
-    password: z.string().min(1),
-  })
+const BindBody = z.object({ apiKey: z.string().min(1) }).strict();
+const ClaimBody = z
+  .object({ login: z.string().min(1), displayName: z.string().min(1), password: z.string().min(1) })
   .strict();
 const PasswordBody = z
   .object({ currentPassword: z.string().min(1), newPassword: z.string().min(1) })
@@ -125,20 +131,14 @@ function mapAuthError(request: FastifyRequest, reply: FastifyReply, err: unknown
         return fail(reply, 409, err.kind, err.message);
       case 'user_not_found':
         return fail(reply, 404, err.kind, err.message);
+      case 'invalid_api_key':
+        return fail(reply, 401, err.kind, err.message);
+      case 'already_claimed':
+      case 'already_member':
       case 'last_admin':
         return fail(reply, 409, err.kind, err.message);
       default:
         return fail(reply, 400, err.kind, err.message);
-    }
-  }
-  if (err instanceof SetupError) {
-    switch (err.kind) {
-      case 'already_initialized':
-        return fail(reply, 409, err.kind, err.message);
-      case 'token_exhausted':
-        return fail(reply, 403, err.kind, err.message);
-      default:
-        return fail(reply, 401, err.kind, err.message);
     }
   }
   request.log.error({
@@ -206,17 +206,12 @@ function isEnvelope(value: unknown): value is Envelope {
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
   app.addHook('onRequest', async (request, reply) => {
-    if (request.url.startsWith('/api/auth/') || request.url.startsWith('/api/platform/')) {
+    if (request.url.startsWith('/api/auth/')) {
       reply.header('Cache-Control', 'no-store');
     }
   });
 
-  app.get('/api/platform/setup-state', async (_request, _reply): Promise<Envelope> => {
-    const state = await getSetupState(deps.pool);
-    return { ok: true, result: state };
-  });
-
-  app.post('/api/platform/setup', async (request, reply): Promise<Envelope> => {
+  app.post('/api/auth/bind-api-key', async (request, reply): Promise<Envelope> => {
     if (!hasCsrfHeader(request)) {
       return fail(
         reply,
@@ -225,18 +220,62 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         `send X-Requested-With: ${CSRF_HEADER_VALUE}`,
       );
     }
-    const body = SetupBody.safeParse(request.body ?? {});
-    if (!body.success)
+    const body = BindBody.safeParse(request.body ?? {});
+    if (!body.success) return fail(reply, 400, 'invalid_params', 'apiKey is required');
+    try {
+      const consoleUser = await resolveConsoleUser(request.headers.cookie, deps);
+      const principal = await lookupPrincipalByApiKeyHash(deps.pool, hashApiKey(body.data.apiKey));
+      if (!principal || principal.kind !== 'human') {
+        return fail(reply, 401, 'invalid_api_key', 'that API key does not belong to a person');
+      }
+      await bindPrincipalToUser(deps.pool, {
+        userId: consoleUser.id,
+        workspaceId: principal.workspaceId,
+        principalId: principal.id,
+      });
+      const user = await findUserById(deps.pool, consoleUser.id);
+      if (!user) return fail(reply, 401, 'unauthorized', 'unauthorized');
+      const memberships = await listActiveMemberships(deps.pool, user.id);
+      return {
+        ok: true,
+        result: { user: toWireUser(user), memberships: memberships.map(toWireMembership) },
+      };
+    } catch (err) {
+      return mapAuthError(request, reply, err);
+    }
+  });
+
+  app.post('/api/auth/claim', async (request, reply): Promise<Envelope> => {
+    if (!hasCsrfHeader(request)) {
       return fail(
         reply,
-        400,
-        'invalid_params',
-        'token, login, displayName and password are required',
+        403,
+        'csrf_header_required',
+        `send X-Requested-With: ${CSRF_HEADER_VALUE}`,
       );
+    }
+    const body = ClaimBody.safeParse(request.body ?? {});
+    if (!body.success)
+      return fail(reply, 400, 'invalid_params', 'login, displayName and password are required');
+    // The API key *is* the proof of identity here — never the cookie (a cookie user already has
+    // a password and nothing to claim).
+    let caller: Awaited<ReturnType<typeof resolveCaller>>;
+    try {
+      caller = await resolveCaller(request.headers.authorization, deps);
+    } catch {
+      return fail(reply, 401, 'unauthorized', 'send your API key as Authorization: Bearer');
+    }
+    if (caller.channel !== 'human') {
+      return fail(reply, 401, 'unauthorized', 'a Handle cannot claim an identity');
+    }
     const key = await signingKeyOr503(request, reply, deps);
     if (isEnvelope(key)) return key;
     try {
-      const user = await completeSetup(deps.pool, body.data);
+      const user = await claimIdentity(deps.pool, {
+        workspaceId: caller.principal.workspaceId,
+        principalId: caller.principal.id,
+        ...body.data,
+      });
       return await installSession(request, reply, deps, key, user);
     } catch (err) {
       return mapAuthError(request, reply, err);

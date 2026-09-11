@@ -71,6 +71,9 @@ export const CAPABILITY_GROUP_VALUES = [
   // (`get_agent_policy`/`set_agent_policy`) — a distinct enough concept (its own two tables, its
   // own resolution semantics) to earn its own group rather than further overloading `members`.
   'agent_profile',
+  // P-A1 (docs/platform-admin-design.md §5): the platform-management plane — users, platform
+  // settings, overview, platform audit. Every member is `scope: 'platform'` (see `Capability.scope`).
+  'platform',
 ] as const;
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
@@ -95,11 +98,25 @@ export const CAPABILITY_MODE_VALUES = ['observe', 'write', 'propose', 'execute']
 export type CapabilityMode = (typeof CAPABILITY_MODE_VALUES)[number];
 export const CapabilityModeSchema = z.enum(CAPABILITY_MODE_VALUES);
 
+/**
+ * P-A1 (docs/platform-admin-design.md §7; design doc §7.11 "`scope:'platform'`"): which plane a
+ * capability lives on. `workspace` (the default, every pre-existing row) runs inside one
+ * workspace's RLS context as a Principal. `platform` has no workspace: the gateway admits it only
+ * for a console-session caller whose user is `platform_role = 'admin'` (never a Principal, never a
+ * Handle), runs it under `app.platform = on`, and audits it with `workspace_id is null` +
+ * `actor_user_id`. Distinct from `CapabilityScope` (handle-token.ts), which is a Handle's
+ * capability *set*.
+ */
+export const CAPABILITY_SCOPE_KIND_VALUES = ['workspace', 'platform'] as const;
+export type CapabilityScopeKind = (typeof CAPABILITY_SCOPE_KIND_VALUES)[number];
+
 export interface Capability {
   readonly name: string;
   readonly group: CapabilityGroup;
   readonly mode: CapabilityMode;
   readonly channel: CapabilityChannel;
+  /** See `CapabilityScopeKind`; absent = `'workspace'`. */
+  readonly scope?: CapabilityScopeKind;
   readonly minRole?: Role;
   readonly paramsSchema: z.ZodType;
   /**
@@ -1747,7 +1764,18 @@ const membersCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ role: RoleSchema, displayName: z.string().min(1) }).strict(),
     resultSchema: wire.CreatePrincipalResultWireSchema,
     description:
-      'Create a kind=human Principal and its API key; the plaintext key is returned once and never stored or readable again.',
+      'Create a kind=service Principal (an automation credential — scripts, acceptance harnesses) and its API key; the plaintext key is returned once and never stored or readable again. People join a workspace through add_member / add_membership (P-A1), never through this.',
+  },
+  {
+    name: 'add_member',
+    group: 'members',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ login: z.string().min(1), role: RoleSchema }).strict(),
+    resultSchema: wire.PrincipalWireSchema,
+    description:
+      'Add an existing platform user to this workspace by login with a role (P-A1) — creates the membership Principal (no API key). 404 user_not_found for an unknown or disabled login, 409 already_member if they already belong here.',
   },
   {
     name: 'set_principal_role',
@@ -1895,6 +1923,248 @@ const agentProfileCapabilities: readonly Capability[] = [
   },
 ];
 
+// -------------------------------------------------------------------------------------------
+// platform — P-A1 (docs/platform-admin-design.md §5/§6.1/§6.6/§6.7). All `scope: 'platform'`,
+// human channel, no `minRole`: authorization is `platform_role = 'admin'` on the console user,
+// enforced by the gateway (application/gateway/authorize.ts), not by workspace role. Every write
+// is audited as a platform row (`workspace_id is null`, `actor_user_id`).
+// -------------------------------------------------------------------------------------------
+
+const platformUserId = z.string().min(1);
+const platformCursorParams = {
+  cursor: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+};
+
+const platformCapabilities: readonly Capability[] = [
+  {
+    name: 'platform_overview',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformOverviewWireSchema,
+    description:
+      'The administrator landing page in one read: kernel version and applied migrations, user / workspace / gatekeeper counts, a service-health summary, the first-run checklist (live state of each page, never a wizard), and the most recent platform audit rows.',
+  },
+  {
+    name: 'list_users',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        status: wire.UserStatusWireSchema.optional(),
+        /** Case-insensitive substring over login and display name. */
+        query: z.string().min(1).max(100).optional(),
+        ...platformCursorParams,
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.UserWireSchema),
+    description:
+      'The platform user directory with each user’s memberships. `hasPassword: false` marks a user awaiting activation (backfilled from a pre-S4.1 Principal, or created without a password).',
+  },
+  {
+    name: 'create_user',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        login: z.string().min(3).max(64),
+        displayName: z.string().min(1).max(200),
+        platformRole: wire.PlatformRoleWireSchema.optional(),
+        /** Omit to have a temporary password generated. Either way it is returned once and must be changed on first login. */
+        password: z.string().min(1).optional(),
+        /** Membership to create alongside the user. Omit `workspaceId` to use the platform default workspace; `null` for none. */
+        workspaceId: z.string().min(1).nullable().optional(),
+        role: RoleSchema.optional(),
+      })
+      .strict(),
+    resultSchema: wire.CreateUserResultWireSchema,
+    redactedParamKeys: ['password'],
+    description:
+      'Create a platform user with a temporary password (returned exactly once) and, by default, a `member` membership in the platform default workspace so they land in a conversation on first login. Audited; the password never reaches the audit row.',
+  },
+  {
+    name: 'update_user',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        userId: platformUserId,
+        displayName: z.string().min(1).max(200).optional(),
+        platformRole: wire.PlatformRoleWireSchema.optional(),
+      })
+      .strict(),
+    resultSchema: wire.UserWireSchema,
+    description:
+      'Change a user’s display name and/or platform role. Demoting the last active administrator, or an account listed in NEXTTIME_PLATFORM_ADMINS, is refused (409 last_admin).',
+  },
+  {
+    name: 'set_user_status',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ userId: platformUserId, status: wire.UserStatusWireSchema }).strict(),
+    resultSchema: wire.UserWireSchema,
+    description:
+      'Disable or re-enable a user. Disabling revokes every console session and every workspace session of the user’s Principals immediately; the row, its memberships and its conversations are kept (audit only grows). The last active administrator cannot be disabled.',
+  },
+  {
+    name: 'reset_user_password',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        userId: platformUserId,
+        /** Omit to generate one. */
+        password: z.string().min(1).optional(),
+      })
+      .strict(),
+    resultSchema: wire.ResetUserPasswordResultWireSchema,
+    redactedParamKeys: ['password'],
+    description:
+      'Set a temporary password (returned exactly once, must be changed on first login) and clear any login lock. Also the activation path for a user without a password. Revokes the user’s console sessions.',
+  },
+  {
+    name: 'list_user_memberships',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ userId: platformUserId }).strict(),
+    resultSchema: listEnvelope(wire.UserMembershipWireSchema),
+    description: 'Every workspace membership (Principal) of one user, including disabled ones.',
+  },
+  {
+    name: 'add_membership',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({ userId: platformUserId, workspaceId: z.string().min(1), role: RoleSchema })
+      .strict(),
+    resultSchema: wire.UserMembershipWireSchema,
+    description:
+      'Add a user to a workspace with a role — creates the human Principal (no API key); the AgentProfile inherits the workspace default model until the user changes it. 409 already_member if the user already has a membership there.',
+  },
+  {
+    name: 'set_membership_role',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({ userId: platformUserId, workspaceId: z.string().min(1), role: RoleSchema })
+      .strict(),
+    resultSchema: wire.UserMembershipWireSchema,
+    description:
+      'Change a user’s role in one workspace. Takes effect immediately; the entry Handle is re-minted on the next turn (S3.11).',
+  },
+  {
+    name: 'remove_membership',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ userId: platformUserId, workspaceId: z.string().min(1) }).strict(),
+    resultSchema: wire.RemoveMembershipResultWireSchema,
+    description:
+      'Remove a user from a workspace: disables the membership Principal and revokes its sessions. The Principal row stays for audit lineage. Refused for the workspace’s last active owner (409 last_owner).',
+  },
+  {
+    name: 'merge_user',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ sourceUserId: platformUserId, targetUserId: platformUserId }).strict(),
+    resultSchema: wire.UserWireSchema,
+    description:
+      'Fold a user awaiting activation (no password) into an existing account: every membership Principal is re-pointed to the target user and the empty source row is deleted. Refused when the source has a password (an API key must never take over a password-protected account) or when both hold a membership in the same workspace.',
+  },
+  {
+    name: 'set_user_budget',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        userId: platformUserId,
+        dailyCallLimit: z.number().int().nonnegative().nullable().optional(),
+        monthlyTokenBudget: z.number().int().nonnegative().nullable().optional(),
+      })
+      .strict(),
+    resultSchema: wire.UserWireSchema,
+    description:
+      'Set a user’s daily LLM call limit and/or monthly token budget (`null` = inherit the platform default). Stored and shown from P-A1; enforcement in llm-proxy lands with P-D.',
+  },
+  {
+    name: 'get_platform_settings',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformSettingsWireSchema,
+    description:
+      'The platform settings row (compiled-in defaults projected when none has been written).',
+  },
+  {
+    name: 'update_platform_settings',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        siteName: z.string().min(1).max(80).optional(),
+        announcement: z.string().max(2000).optional(),
+        instanceInstructions: z.string().max(8000).optional(),
+        defaultWorkspaceId: z.string().min(1).nullable().optional(),
+        defaultEntryModel: z.string().min(1).nullable().optional(),
+        defaultDailyCallLimit: z.number().int().nonnegative().nullable().optional(),
+        defaultMonthlyTokenBudget: z.number().int().nonnegative().nullable().optional(),
+        defaultPlatformRole: wire.PlatformRoleWireSchema.optional(),
+        passwordMinLength: z.number().int().min(8).max(128).optional(),
+      })
+      .strict(),
+    resultSchema: wire.PlatformSettingsWireSchema,
+    description:
+      'Partial update of the platform settings — omitted fields are left unchanged. Every write is audited and bumps `version`; the previous row is kept for rollback.',
+  },
+  {
+    name: 'platform_audit_query',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        actorUserId: platformUserId.optional(),
+        action: z.string().min(1).optional(),
+        targetUserId: platformUserId.optional(),
+        targetWorkspaceId: z.string().min(1).optional(),
+        ...platformCursorParams,
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.PlatformAuditRecordWireSchema),
+    description:
+      'The platform audit stream (`workspace_id is null`): who changed what on the platform itself, newest first, filterable by actor, action, target user or target workspace.',
+  },
+];
+
 /** The complete capability registry (design doc §9.3). */
 export const CAPABILITY_REGISTRY: readonly Capability[] = [
   ...chatCapabilities,
@@ -1911,6 +2181,7 @@ export const CAPABILITY_REGISTRY: readonly Capability[] = [
   ...auditCapabilities,
   ...membersCapabilities,
   ...agentProfileCapabilities,
+  ...platformCapabilities,
 ];
 
 /** Capability names that must always be on the human channel (I16/I17/§9.3), never handle. */
@@ -1947,6 +2218,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   // second, independent enforcement of the same rule against governance/capability/handles.ts).
   'list_principals',
   'create_principal',
+  'add_member',
   'set_principal_role',
   'rotate_api_key',
   'disable_principal',
@@ -1966,7 +2238,30 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'set_agent_profile',
   'get_agent_policy',
   'set_agent_policy',
+  // P-A1: the platform plane — never a Handle-scope member, never callable by a Principal at all.
+  ...[
+    'platform_overview',
+    'list_users',
+    'create_user',
+    'update_user',
+    'set_user_status',
+    'reset_user_password',
+    'list_user_memberships',
+    'add_membership',
+    'set_membership_role',
+    'remove_membership',
+    'merge_user',
+    'set_user_budget',
+    'get_platform_settings',
+    'update_platform_settings',
+    'platform_audit_query',
+  ],
 ]);
+
+/** Every `scope: 'platform'` capability name (P-A1) — for the gateway and the CI guard. */
+export function listPlatformCapabilities(): readonly Capability[] {
+  return CAPABILITY_REGISTRY.filter((capability) => capability.scope === 'platform');
+}
 
 /** Execute-mode capabilities allowed on the handle channel: only request_action and the gate execute pattern (§9.3, §7.4). */
 const HANDLE_EXECUTE_ALLOWLIST: ReadonlySet<string> = new Set([
@@ -2005,6 +2300,30 @@ export function assertRegistryConsistent(): void {
 
     if (HUMAN_ONLY_CAPABILITY_NAMES.has(capability.name) && capability.channel !== 'human') {
       throw new Error(`capability registry: "${capability.name}" must be on the human channel`);
+    }
+
+    // P-A1: a platform-scope capability is authorized by the console user's platform_role, so it
+    // must be human-channel and must not also carry a workspace minRole (there is no workspace).
+    if (capability.scope === 'platform') {
+      if (capability.channel !== 'human') {
+        throw new Error(
+          `capability registry: "${capability.name}" is scope:platform but not human-channel`,
+        );
+      }
+      if (capability.minRole !== undefined) {
+        throw new Error(
+          `capability registry: "${capability.name}" is scope:platform but has a minRole`,
+        );
+      }
+      if (capability.group !== 'platform') {
+        throw new Error(
+          `capability registry: "${capability.name}" is scope:platform but not in group "platform"`,
+        );
+      }
+    } else if (capability.group === 'platform') {
+      throw new Error(
+        `capability registry: "${capability.name}" is in group "platform" but not scope:platform`,
+      );
     }
 
     if (

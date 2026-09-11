@@ -16,3 +16,4 @@ export * from './worker.js';
 export * from './identity.js';
 export * from './ingest.js';
 export * from './provenance.js';
+export * from './platform.js';

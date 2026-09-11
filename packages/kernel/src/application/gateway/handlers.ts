@@ -104,6 +104,7 @@ import {
 import { registerSourceHandler, submitObservationsHandler } from './ingest-handlers.js';
 import { issueHandleHandler } from './issue-handle-handler.js';
 import {
+  addMemberHandler,
   createPrincipalHandler,
   disablePrincipalHandler,
   getWorkspaceHandler,
@@ -125,6 +126,23 @@ import {
   publishManifestHandler,
   publishOperationHandler,
 } from './operation-manifest-handlers.js';
+import {
+  addMembershipHandler,
+  createUserHandler,
+  getPlatformSettingsHandler,
+  listUserMembershipsHandler,
+  listUsersHandler,
+  mergeUserHandler,
+  platformAuditQueryHandler,
+  platformOverviewHandler,
+  removeMembershipHandler,
+  resetUserPasswordHandler,
+  setMembershipRoleHandler,
+  setUserBudgetHandler,
+  setUserStatusHandler,
+  updatePlatformSettingsHandler,
+  updateUserHandler,
+} from './platform-handlers.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
 import {
   toWireAuditRecord,
@@ -1061,6 +1079,22 @@ const cancelTaskHandler: CapabilityHandler = async (client, workspaceId, params)
 
 /** capability name → handler, for every wired capability. */
 export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new Map([
+  // P-A1: the platform plane (scope:'platform'; platform-handlers.ts).
+  ['platform_overview', platformOverviewHandler],
+  ['list_users', listUsersHandler],
+  ['create_user', createUserHandler],
+  ['update_user', updateUserHandler],
+  ['set_user_status', setUserStatusHandler],
+  ['reset_user_password', resetUserPasswordHandler],
+  ['list_user_memberships', listUserMembershipsHandler],
+  ['add_membership', addMembershipHandler],
+  ['set_membership_role', setMembershipRoleHandler],
+  ['remove_membership', removeMembershipHandler],
+  ['merge_user', mergeUserHandler],
+  ['set_user_budget', setUserBudgetHandler],
+  ['get_platform_settings', getPlatformSettingsHandler],
+  ['update_platform_settings', updatePlatformSettingsHandler],
+  ['platform_audit_query', platformAuditQueryHandler],
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
   ['search', searchHandler],
@@ -1147,6 +1181,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S3.11 — members-handlers.ts.
   ['list_principals', listPrincipalsHandler],
   ['create_principal', createPrincipalHandler],
+  ['add_member', addMemberHandler],
   ['set_principal_role', setPrincipalRoleHandler],
   ['rotate_api_key', rotateApiKeyHandler],
   ['disable_principal', disablePrincipalHandler],

@@ -26,6 +26,10 @@ describe('routeFromHash', () => {
     expect(routeFromHash('#/govern/catalog/skills')).toEqual({ kind: 'catalog', tab: 'skills' });
     expect(routeFromHash('#/govern/models')).toEqual({ kind: 'models' });
     expect(routeFromHash('#/govern/audit')).toEqual({ kind: 'audit' });
+    expect(routeFromHash('#/platform/overview')).toEqual({ kind: 'platformOverview' });
+    expect(routeFromHash('#/platform/users')).toEqual({ kind: 'platformUsers' });
+    expect(routeFromHash('#/platform/settings')).toEqual({ kind: 'platformSettings' });
+    expect(routeFromHash('#/platform/audit')).toEqual({ kind: 'platformAudit' });
   });
 
   it('an unrecognized catalog tab segment falls back to "operations", not an error', () => {
@@ -61,6 +65,8 @@ describe('sectionOf', () => {
     expect(sectionOf({ kind: 'systems', gatekeeperId: 'gk-1' })).toBe('systems');
     expect(sectionOf({ kind: 'catalog', tab: 'skills' })).toBe('catalog');
     expect(sectionOf({ kind: 'login' })).toBe('chats');
+    expect(sectionOf({ kind: 'platformOverview' })).toBe('platformOverview');
+    expect(sectionOf({ kind: 'platformAudit' })).toBe('platformAudit');
   });
 });
 
@@ -84,6 +90,10 @@ describe('hrefs', () => {
       { kind: 'catalog', tab: 'workers' },
       { kind: 'models' },
       { kind: 'audit' },
+      { kind: 'platformOverview' },
+      { kind: 'platformUsers' },
+      { kind: 'platformSettings' },
+      { kind: 'platformAudit' },
     ];
     for (const route of cases) {
       const href = hrefFor(route);
@@ -120,5 +130,13 @@ function hrefFor(route: Route): string {
       return hrefs.models();
     case 'audit':
       return hrefs.audit();
+    case 'platformOverview':
+      return hrefs.platformOverview();
+    case 'platformUsers':
+      return hrefs.platformUsers();
+    case 'platformSettings':
+      return hrefs.platformSettings();
+    case 'platformAudit':
+      return hrefs.platformAudit();
   }
 }

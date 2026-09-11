@@ -55,12 +55,38 @@ interface UserDbRow {
 const USER_COLUMNS = `id, login, display_name, platform_role, status, must_change_password,
   (password_hash is not null) as has_password, created_at`;
 
+const ENV_ADMINS_VAR = 'NEXTTIME_PLATFORM_ADMINS';
+
+/** Logins that are always platform administrators (docs/platform-admin-design.md §6.6, borrowed
+ *  from cloudflare-os `ADMINS`): comma/space-separated, lower-cased; empty when unset. Applied at
+ *  the single point every reader of a user row goes through (`mapUser`), so a login named here is
+ *  `admin` for the console session, `/api/auth/me`, the platform channel and the users page alike,
+ *  whatever `users.platform_role` says — the anti-lockout backstop a hijacked admin session cannot
+ *  edit. The platform handlers additionally refuse to disable, demote or reset such an account. */
+export function envAdminLogins(env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  const raw = env[ENV_ADMINS_VAR];
+  if (!raw) return [];
+  return [
+    ...new Set(
+      raw
+        .split(/[,\s]+/)
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+/** The platform role a user effectively holds: `admin` when the login is env-pinned. */
+export function effectivePlatformRole(login: string, stored: PlatformRole): PlatformRole {
+  return envAdminLogins().includes(login) ? 'admin' : stored;
+}
+
 function mapUser(row: UserDbRow): UserRow {
   return {
     id: row.id,
     login: row.login,
     displayName: row.display_name,
-    platformRole: row.platform_role as PlatformRole,
+    platformRole: effectivePlatformRole(row.login, row.platform_role as PlatformRole),
     status: row.status as UserStatus,
     mustChangePassword: row.must_change_password,
     hasPassword: row.has_password,
@@ -74,6 +100,9 @@ export type IdentityErrorKind =
   | 'login_taken'
   | 'weak_password'
   | 'user_not_found'
+  | 'already_claimed'
+  | 'already_member'
+  | 'invalid_api_key'
   | 'last_admin';
 
 export class IdentityError extends Error {
@@ -226,6 +255,156 @@ export async function ensureUserForHumanPrincipal(
     userId,
   ]);
   return userId;
+}
+
+export interface ClaimIdentityInput {
+  readonly workspaceId: string;
+  readonly principalId: string;
+  readonly login: string;
+  readonly displayName: string;
+  readonly password: string;
+  /** Only the setup flow raises this (first administrator claiming their existing identity). */
+  readonly platformRole?: PlatformRole;
+}
+
+/**
+ * Turns the passwordless user behind an existing human Principal (migration 0019's backfill, or
+ * one created by the CLI / `create_principal`) into a login-able account, in place: the caller
+ * proves they *are* that person by holding the Principal's API key (the route resolves it to
+ * `principalId` before calling this), then chooses their own login, display name and password.
+ * One-way and once: a user that already has a password cannot be re-claimed — an API key is a
+ * workspace credential, and letting it overwrite a platform password would turn a leaked key
+ * into a platform-account takeover. Runs on `client` (caller's transaction) so the setup flow can
+ * combine it with consuming the token. Throws `IdentityError` (`already_claimed`, `login_taken`,
+ * `invalid_login`, `weak_password`, `user_not_found`).
+ */
+export async function claimIdentityOnClient(
+  client: PoolClient,
+  input: ClaimIdentityInput,
+): Promise<UserRow> {
+  const login = normalizeLogin(input.login);
+  assertPasswordStrength(input.password);
+  const displayName = input.displayName.trim();
+  if (displayName.length === 0 || displayName.length > 128) {
+    throw new IdentityError('invalid_display_name', 'display name must be 1–128 characters');
+  }
+  const principal = await client.query<{ display_name: string | null }>(
+    `select display_name from principals
+      where workspace_id = $1 and id = $2 and kind = 'human' and disabled_at is null`,
+    [input.workspaceId, input.principalId],
+  );
+  if (!principal.rows[0]) throw new IdentityError('user_not_found', 'principal not found');
+  const userId = await ensureUserForHumanPrincipal(client, {
+    workspaceId: input.workspaceId,
+    id: input.principalId,
+    displayName: principal.rows[0].display_name,
+  });
+  const current = await client.query<{ password_hash: string | null }>(
+    'select password_hash from users where id = $1 for update',
+    [userId],
+  );
+  if (current.rows[0]?.password_hash) {
+    throw new IdentityError(
+      'already_claimed',
+      'this identity already has a password; log in with it (or ask an administrator to reset it)',
+    );
+  }
+  const taken = await client.query('select 1 from users where login = $1 and id <> $2', [
+    login,
+    userId,
+  ]);
+  if ((taken.rowCount ?? 0) > 0) {
+    throw new IdentityError('login_taken', `login "${login}" is already taken`);
+  }
+  const passwordHash = await hashPassword(input.password);
+  const updated = await client.query<UserDbRow>(
+    `update users
+        set login = $2, display_name = $3, password_hash = $4,
+            platform_role = coalesce($5, platform_role), must_change_password = false,
+            failed_login_count = 0, locked_until = null, updated_at = now()
+      where id = $1
+      returning ${USER_COLUMNS}`,
+    [userId, login, displayName, passwordHash, input.platformRole ?? null],
+  );
+  const row = updated.rows[0];
+  if (!row) throw new IdentityError('user_not_found', 'user not found');
+  return mapUser(row);
+}
+
+export async function claimIdentity(pool: PoolLike, input: ClaimIdentityInput): Promise<UserRow> {
+  return withAdminClient(pool, (client) => claimIdentityOnClient(client, input));
+}
+
+export interface BindPrincipalInput {
+  /** The calling (cookie-authenticated) user — the account that will own the membership. */
+  readonly userId: string;
+  /** The Principal the API key resolved to (`lookupPrincipalByApiKeyHash`). */
+  readonly workspaceId: string;
+  readonly principalId: string;
+}
+
+/**
+ * "绑定已有 API key" (S4.1 revision): moves an existing human Principal — proven by holding its
+ * API key — onto the calling user's account, so a person who logs in with a password (the
+ * pre-created `admin`, or anyone) picks up the workspace memberships they already had under
+ * pre-S4.1 API keys. The key keeps working (same Principal, same hash); only `principals.user_id`
+ * changes, and the Principal's former passwordless user row is deleted when nothing else points
+ * at it. Refused when that former user has a password (`already_claimed`: it is somebody's
+ * account, and a workspace key must never absorb a platform account) or when the caller already
+ * has a membership in that workspace (`already_member`, the `(workspace_id, user_id)` unique
+ * index). Binding a Principal that is already the caller's own is a no-op.
+ */
+export async function bindPrincipalToUser(
+  pool: PoolLike,
+  input: BindPrincipalInput,
+): Promise<void> {
+  await withAdminClient(pool, async (client) => {
+    const current = await client.query<{ user_id: string | null }>(
+      `select user_id from principals
+        where workspace_id = $1 and id = $2 and kind = 'human' and disabled_at is null
+        for update`,
+      [input.workspaceId, input.principalId],
+    );
+    const row = current.rows[0];
+    if (!row)
+      throw new IdentityError('invalid_api_key', 'that API key does not belong to a person');
+    const formerUserId = row.user_id;
+    if (formerUserId === input.userId) return;
+    const clash = await client.query(
+      'select 1 from principals where workspace_id = $1 and user_id = $2 and id <> $3',
+      [input.workspaceId, input.userId, input.principalId],
+    );
+    if ((clash.rowCount ?? 0) > 0) {
+      throw new IdentityError('already_member', 'you already have a membership in that workspace');
+    }
+    if (formerUserId) {
+      const former = await client.query<{ password_hash: string | null }>(
+        'select password_hash from users where id = $1 for update',
+        [formerUserId],
+      );
+      if (former.rows[0]?.password_hash) {
+        throw new IdentityError(
+          'already_claimed',
+          'that API key belongs to an account that already has its own password',
+        );
+      }
+    }
+    await client.query('update principals set user_id = $3 where workspace_id = $1 and id = $2', [
+      input.workspaceId,
+      input.principalId,
+      input.userId,
+    ]);
+    if (formerUserId) {
+      const stillReferenced = await client.query(
+        'select 1 from principals where user_id = $1 limit 1',
+        [formerUserId],
+      );
+      if ((stillReferenced.rowCount ?? 0) === 0) {
+        await client.query('delete from user_sessions where user_id = $1', [formerUserId]);
+        await client.query('delete from users where id = $1', [formerUserId]);
+      }
+    }
+  });
 }
 
 export async function setUserPassword(

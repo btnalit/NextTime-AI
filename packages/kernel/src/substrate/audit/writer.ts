@@ -13,9 +13,13 @@ import type { PoolClient } from 'pg';
  */
 
 export interface AuditRecordInput {
-  readonly workspaceId: string;
+  /** `null` for a platform action (P-A1, migration 0019 `audit_records_actor_shape`): then
+   *  `actorPrincipalId` must be `null` and `actorUserId` set. */
+  readonly workspaceId: string | null;
   /** FK to `principals` — the acting Principal (I13: for a Handle call, its `on_behalf_of`). */
-  readonly actorPrincipalId: string;
+  readonly actorPrincipalId: string | null;
+  /** The acting platform user, for platform rows (`workspace_id is null`). */
+  readonly actorUserId?: string;
   /** The governed action name — the capability name for capability-dispatch audit rows. */
   readonly action: string;
   readonly resourceType?: string;
@@ -25,9 +29,10 @@ export interface AuditRecordInput {
 }
 
 export interface AuditRecordRow {
-  readonly workspaceId: string;
+  readonly workspaceId: string | null;
   readonly id: string;
-  readonly actorPrincipalId: string;
+  readonly actorPrincipalId: string | null;
+  readonly actorUserId: string | null;
   readonly action: string;
   readonly resourceType: string | null;
   readonly resourceId: string | null;
@@ -36,9 +41,10 @@ export interface AuditRecordRow {
 }
 
 interface AuditRecordDbRow {
-  workspace_id: string;
+  workspace_id: string | null;
   id: string;
-  actor_principal_id: string;
+  actor_principal_id: string | null;
+  actor_user_id?: string | null;
   action: string;
   resource_type: string | null;
   resource_id: string | null;
@@ -51,6 +57,7 @@ function mapAuditRecordRow(row: AuditRecordDbRow): AuditRecordRow {
     workspaceId: row.workspace_id,
     id: row.id,
     actorPrincipalId: row.actor_principal_id,
+    actorUserId: row.actor_user_id ?? null,
     action: row.action,
     resourceType: row.resource_type,
     resourceId: row.resource_id,
@@ -65,12 +72,13 @@ export async function writeAudit(
   record: AuditRecordInput,
 ): Promise<AuditRecordRow> {
   const result = await client.query<AuditRecordDbRow>(
-    `insert into audit_records (workspace_id, actor_principal_id, action, resource_type, resource_id, payload)
-     values ($1, $2, $3, $4, $5, $6::jsonb)
-     returning workspace_id, id, actor_principal_id, action, resource_type, resource_id, payload, created_at`,
+    `insert into audit_records (workspace_id, actor_principal_id, actor_user_id, action, resource_type, resource_id, payload)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb)
+     returning workspace_id, id, actor_principal_id, actor_user_id, action, resource_type, resource_id, payload, created_at`,
     [
       record.workspaceId,
       record.actorPrincipalId,
+      record.actorUserId ?? null,
       record.action,
       record.resourceType ?? null,
       record.resourceId ?? null,

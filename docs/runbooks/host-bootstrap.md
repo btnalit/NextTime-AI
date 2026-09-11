@@ -43,29 +43,29 @@ gatekeepers/docker gatekeepers/ragflow collectors/host-inventory`，S3.3 新增 
 `collectors/host-inventory` 两条），另有 `config/.keep`（占位文件，非目录）一并列出；
 `secrets/pg_password` 为 `600` 且非空；其余目录为 `750`。
 
-## 首次登录：平台初始化令牌（S4.1，design §7.11）
+## 首次登录：预置管理员（P-A1，design §4）
 
-> **已作废（2026-09-11 维护者决定）**：本节的“读令牌、填初始化页”路径由 P-A1 的**预置 `admin` + 主机文件里的
-> 随机初始密码**取代（`docs/platform-admin-design.md` §4）。v0.6.0 不单独应用；P-A1 发版时本节随之重写。
-
-装好的主机上没有默认账户。kernel 启动时若**没有任何活跃的平台管理员**，会生成一枚一次性初始化令牌：
-哈希入库（`platform_setup` 表，24 小时过期，5 次错误作废），明文写到
-`${NEXTTIME_DATA}/secrets/setup/token`（0600，kernel 容器内唯一可写挂载 `/run/setup`，由
-`host-env-init.sh` 建目录并归 uid 10001）；kernel 日志只提示路径，不含令牌值。
+装好的主机上没有默认账户，但也不需要任何初始化步骤。kernel 启动时若**没有任何活跃的平台管理员**，
+会直接创建用户 `admin`（`platform_role='admin'`），随机生成一个临时密码，明文写到
+`${NEXTTIME_DATA}/secrets/setup/initial-admin-password`（0600，kernel 容器内唯一可写挂载
+`/run/setup`，由 `host-env-init.sh` 建目录并归 uid 10001）；kernel 日志只提示路径，不含密码值。全新
+安装同时会建一个默认工作区（名字取站点名），`admin` 是 owner。
 
 ```sh
-sudo cat "${NEXTTIME_DATA}/secrets/setup/token"
+sudo cat "${NEXTTIME_DATA}/secrets/setup/initial-admin-password"
 ```
 
-浏览器打开控制台（`https://<BIND_ADDR>:8443/`），未初始化时会先显示"初始化平台"页：填入令牌、管理员
-登录名、显示名、密码 → 创建第一个 `platform_role='admin'` 用户并直接登录，令牌随即作废（`used_at`），
-文件在下次启动时删除。之后这页永不再出现。平台管理员没有业务数据权限（§7.11）：要进某个工作区，
-得在那里有成员资格（S4.2 之前由 owner 在成员页添加，或用下面的 CLI）。
+浏览器打开控制台（`https://<BIND_ADDR>:8443/`），用登录名 `admin` + 这个密码登录，会被强制先改密，
+改完直接落在"概览"页（首次运行清单）——没有初始化页，也没有令牌。一旦平台有了活跃管理员，这个文件
+在下次 kernel 启动时就会被删除、永不重生成；密码丢了也无法找回，只能用下面的 CLI 兜底重设。
+
+平台管理员没有业务数据权限（design §4）：要进某个工作区，得在那里有成员资格（在概览页"绑定已有 API
+key"，或去"用户"页给自己 / 其他人加成员资格）。
 
 CLI 兜底（都在 kernel 容器里跑，密码从 stdin 读，不进 argv 与日志）：
 
 ```sh
-# 跳过令牌直接建管理员（例如令牌文件丢了又不想重启）
+# 密码文件丢了又不想重启 kernel：直接建一个新管理员（要求 admin 这个登录名还没被非管理员占用）
 printf '%s\n' '<password>' | docker compose run --rm --no-deps -T kernel \
   node dist/cli/bootstrap.js create-platform-admin --login <login> [--display-name <name>] [--temporary]
 # 给已有用户设密码：迁移 0019 为每个既有 human Principal 回填了一个无密码用户，登录名为
@@ -78,9 +78,14 @@ printf '%s\n' '<password>' | docker compose run --rm --no-deps -T kernel \
 `password_change_required`。API key（`add-principal`、治理页新建成员）照旧可用，是给自动化与
 过渡期的；三份验收脚本都走 API key。
 
-在已有主机上升级到含 S4.1 的版本：**先重跑本脚本**（`host-env-init.sh` 幂等，会补建 `secrets/setup`
-并归 uid 10001）再 `docker compose up`——否则 Docker 代建的挂载目录是 root 所有，kernel 写不出令牌，
-只会在日志里记一条 error（kernel 本身照常启动）；然后 `make migrate` 落地 0019，重建 kernel 与 caddy。
+在已有主机上升级到含 P-A1 的版本：**先重跑本脚本**（`host-env-init.sh` 幂等，会补建 `secrets/setup`
+并归 uid 10001）再 `docker compose up`——否则 Docker 代建的挂载目录是 root 所有，kernel 写不出密码
+文件，只会在日志里记一条 error（kernel 本身照常启动）；然后 `make migrate` 落地新迁移，重建 kernel
+与 caddy。升级后的接管路径（design §4"升级接管"）：迁移 0019 已经给既有 human Principal 回填了无
+密码用户（用户页"待激活"）；`admin` 照常预置；在概览页"绑定已有 API key"把一把既有 API key 的成员
+资格归到当前管理员账户（原来的空壳 Principal 随之删除）；其他"待激活"用户由管理员在用户页重置临时
+密码，或者用户自己拿 API key 登录一次自设密码（"我的账户" → `POST /api/auth/claim`）——三条路都只在
+目标用户还没有密码时允许。
 
 ## 删除 Workspace（Deleting a workspace，操作员专用，破坏性操作）
 

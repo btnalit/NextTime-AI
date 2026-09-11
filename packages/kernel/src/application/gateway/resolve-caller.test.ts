@@ -59,7 +59,8 @@ function createFakePool(opts: {
     if (sql.startsWith('select set_config(') || sql === 'set local role nexttime_app') {
       return { rows: [], rowCount: 0 };
     }
-    if (sql.startsWith('select workspace_id, id, kind, role, display_name from principals')) {
+    // P-A1: the lookup joins `users` for `status`; the fake has no disabled users.
+    if (sql.startsWith('select p.workspace_id, p.id, p.kind, p.role, p.display_name')) {
       const [hash] = params as [string];
       const row = principals.find((p) => p.api_key_hash === hash);
       return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
@@ -94,7 +95,7 @@ function createFakePool(opts: {
       const [jti] = params as [string];
       return { rows: [{ revoked_at: revokedJtis.has(jti) ? new Date() : null }], rowCount: 1 };
     }
-    if (sql.startsWith('select disabled_at from principals')) {
+    if (sql.startsWith('select case when p.disabled_at is not null then p.disabled_at')) {
       const [, principalId] = params as [string, string];
       return {
         rows: [{ disabled_at: disabledPrincipalIds.has(principalId) ? new Date() : null }],

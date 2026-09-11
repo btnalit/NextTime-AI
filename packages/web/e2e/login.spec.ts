@@ -2,18 +2,19 @@ import { expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
 
 /**
- * e2e/login.spec.ts: the S4.1 acceptance flow (design doc §7.11 "登录" and "初始化：一次性令牌") —
- * initialize the platform → password login → forced temporary-password change → account lockout.
- * Opt-in only, same convention as every other spec in this directory.
+ * e2e/login.spec.ts: the P-A1 acceptance flow (docs/platform-admin-design.md §4/§5) — admin first
+ * login (forced password change → lands on the platform overview) → owner password login →
+ * temporary-password forced change → account lockout. Opt-in only, same convention as every other
+ * spec in this directory.
  *
  * `.github/workflows/e2e.yml` runs every spec alphabetically in one `playwright test` invocation
  * (`workers: 1`), so this file runs *last* — `approvals`/`chat`/`explorer`/`governance` all run
- * first, against a platform that is not yet initialized (see `e2e/auth-helpers.ts`'s own doc
- * comment on why every one of them needs the `SetupPage` → `LoginPage` escape hatch). Only this
- * file's own "initialize platform" test ever calls `POST /api/platform/setup`.
+ * first, against a platform whose `admin` user already exists (the kernel pre-creates it on
+ * startup, docs/platform-admin-design.md §4) but none of those specs ever logs in as `admin`.
  *
- * Requires: `WEB_E2E_BASE_URL`, `WEB_E2E_SETUP_TOKEN` (the one-time token minted at kernel start,
- * read from `${NEXTTIME_DATA}/secrets/setup/token` before any bootstrap step runs — see
+ * Requires: `WEB_E2E_BASE_URL`, `WEB_E2E_ADMIN_LOGIN`/`WEB_E2E_ADMIN_INITIAL_PASSWORD` (the
+ * pre-created platform administrator's random temporary password, read from
+ * `${NEXTTIME_DATA}/secrets/setup/initial-admin-password` before any bootstrap step runs — see
  * docs/runbooks/web-console.md's "CI（Playwright）" section), `WEB_E2E_OWNER_LOGIN`/
  * `WEB_E2E_OWNER_PASSWORD` (a workspace owner with a permanent console password) and
  * `WEB_E2E_TEMP_LOGIN`/`WEB_E2E_TEMP_PASSWORD` (a second principal with a temporary one, i.e.
@@ -22,79 +23,85 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  *
  * Test order within this file matters and is NOT alphabetical — Playwright runs a file's own
  * tests in declaration order. "5 wrong passwords lock the account" is declared last on purpose:
- * it locks the `e2e-admin` account this file's own first test creates for 5 minutes, and nothing
- * else in this suite uses that account afterward.
+ * it locks the `admin` account itself for 5 minutes, and nothing else in this suite (this file's
+ * own earlier tests included, all idempotent for a CI retry) or after it needs `admin` again.
  */
 
-const SETUP_TOKEN = process.env.WEB_E2E_SETUP_TOKEN;
+const ADMIN_LOGIN = process.env.WEB_E2E_ADMIN_LOGIN;
+const ADMIN_INITIAL_PASSWORD = process.env.WEB_E2E_ADMIN_INITIAL_PASSWORD;
 const OWNER_LOGIN = process.env.WEB_E2E_OWNER_LOGIN;
 const OWNER_PASSWORD = process.env.WEB_E2E_OWNER_PASSWORD;
 const TEMP_LOGIN = process.env.WEB_E2E_TEMP_LOGIN;
 const TEMP_PASSWORD = process.env.WEB_E2E_TEMP_PASSWORD;
 
-/** Fully under this spec's own control (created by its first test) — no env var needed. */
-const ADMIN_LOGIN = 'e2e-admin';
-const ADMIN_PASSWORD = 'e2e-admin-password-1';
-
 const BAD_CREDENTIALS_MESSAGE = '登录名或密码不正确';
 const LOCKED_MESSAGE = '尝试次数过多，请几分钟后再试';
 
-type Page = import('@playwright/test').Page;
-
-/** Resolves whether a bare `goto('/')` landed on `SetupPage` (platform not yet initialized) or
- *  `LoginPage` — unlike `reachLoginForm` (e2e/auth-helpers.ts), this does NOT click past
- *  `SetupPage`: the "initialize platform" test needs to tell the two apart. */
-async function waitForSetupOrLogin(page: Page): Promise<'setup' | 'login'> {
-  const loginInstead = page.getByRole('button', { name: /Already have an account\? Log in/ });
-  const passwordLoginButton = page.getByRole('button', { name: 'Log in' });
-  await expect
-    .poll(
-      async () => {
-        if (await loginInstead.isVisible().catch(() => false)) return 'setup';
-        if (await passwordLoginButton.isVisible().catch(() => false)) return 'login';
-        return 'pending';
-      },
-      { timeout: 15_000 },
-    )
-    .not.toBe('pending');
-  return (await loginInstead.isVisible().catch(() => false)) ? 'setup' : 'login';
-}
-
-test.describe('S4.1 acceptance: platform setup, password login, forced change, lockout', () => {
+test.describe('P-A1 acceptance: admin first login, password login, forced change, lockout', () => {
   test.skip(
-    !SETUP_TOKEN || !OWNER_LOGIN || !OWNER_PASSWORD || !TEMP_LOGIN || !TEMP_PASSWORD,
-    'set WEB_E2E_BASE_URL, WEB_E2E_SETUP_TOKEN, WEB_E2E_OWNER_LOGIN/PASSWORD and WEB_E2E_TEMP_LOGIN/PASSWORD to run this suite (see README.md)',
+    !ADMIN_LOGIN ||
+      !ADMIN_INITIAL_PASSWORD ||
+      !OWNER_LOGIN ||
+      !OWNER_PASSWORD ||
+      !TEMP_LOGIN ||
+      !TEMP_PASSWORD,
+    'set WEB_E2E_BASE_URL, WEB_E2E_ADMIN_LOGIN/ADMIN_INITIAL_PASSWORD, WEB_E2E_OWNER_LOGIN/PASSWORD and WEB_E2E_TEMP_LOGIN/PASSWORD to run this suite (see README.md)',
   );
 
-  test('initialize platform -> NoWorkspacePage -> sign out (idempotent for CI retry)', async ({
+  test('admin: first login -> forced change -> platform overview -> open Users -> sign out (idempotent for CI retry)', async ({
     page,
   }) => {
-    const setupToken = SETUP_TOKEN as string; // guarded by test.skip above
-    await page.goto('/');
-    const state = await waitForSetupOrLogin(page);
+    const adminLogin = ADMIN_LOGIN as string;
+    const initialPassword = ADMIN_INITIAL_PASSWORD as string;
+    const changedPassword = `${initialPassword}-changed`;
 
-    if (state === 'setup') {
-      await page.getByLabel(/一次性令牌 Setup token/).fill(setupToken);
-      await page.getByLabel(/登录名 Login/).fill(ADMIN_LOGIN);
-      await page.getByLabel(/显示名 Display name/).fill('E2E Admin');
-      await page.getByLabel(/密码 Password/).fill(ADMIN_PASSWORD);
-      await page.getByLabel(/确认密码 Confirm password/).fill(ADMIN_PASSWORD);
-      await page.getByRole('button', { name: /Create administrator/ }).click();
-    } else {
-      // A CI retry: the platform was already initialized by a previous (failed) attempt at this
-      // same test — log in as the admin it already created instead of re-running setup.
-      await loginWithPassword(page, ADMIN_LOGIN, ADMIN_PASSWORD);
+    const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
+    const overviewHeading = page.getByRole('heading', { name: '概览 Overview', exact: true });
+    const platformOverviewNav = page.getByTestId('nav-platformOverview');
+    const badCredentials = page.getByText(BAD_CREDENTIALS_MESSAGE);
+
+    // `.first()` on every `.or()` chain below: `overviewHeading` (the page `<h1>`) and
+    // `platformOverviewNav` (the sidebar item) are designed to be on screen *together* once the
+    // admin is past the change-password screen — a bare `expect(a.or(b)).toBeVisible()` would hit
+    // Playwright's strict-mode "resolved to 2 elements" error the instant both match, unlike
+    // `changePasswordHeading`/`wsStatus` elsewhere in this file, which never co-occur.
+    await page.goto('/');
+    await reachLoginForm(page);
+    await loginWithPassword(page, adminLogin, initialPassword);
+    await expect(
+      changePasswordHeading.or(overviewHeading).or(platformOverviewNav).or(badCredentials).first(),
+    ).toBeVisible({ timeout: 15_000 });
+
+    if (await badCredentials.isVisible().catch(() => false)) {
+      // A previous (retried) run already changed the password away from the initial one — try
+      // the deterministic changed password instead.
+      await page.getByLabel(/密码 Password/).fill(changedPassword);
+      await page.getByRole('button', { name: 'Log in' }).click();
+      await expect(
+        changePasswordHeading.or(overviewHeading).or(platformOverviewNav).first(),
+      ).toBeVisible({ timeout: 15_000 });
     }
 
-    // Rare retry edge case: a previous attempt's login (the branch above) already burned through
-    // enough failed attempts (e.g. a stale/incorrect token elsewhere in a flaky run) to lock the
-    // account — accept the lock message as a valid terminal state rather than failing on it.
-    const locked = page.getByText(LOCKED_MESSAGE);
-    const noWorkspace = page.getByText('You are not a member of any workspace yet');
-    await expect(locked.or(noWorkspace)).toBeVisible({ timeout: 15_000 });
-    if (await locked.isVisible().catch(() => false)) return;
+    if (await changePasswordHeading.isVisible().catch(() => false)) {
+      await page.getByLabel(/当前密码 Current password/).fill(initialPassword);
+      await page.getByLabel(/新密码 New password/).fill(changedPassword);
+      await page.getByLabel(/确认新密码 Confirm new password/).fill(changedPassword);
+      await page.getByRole('button', { name: /Change password/ }).click();
+    }
 
-    await expect(noWorkspace).toBeVisible();
+    await expect(overviewHeading.or(platformOverviewNav).first()).toBeVisible({
+      timeout: 15_000,
+    });
+    if (!(await overviewHeading.isVisible().catch(() => false))) {
+      await platformOverviewNav.click();
+      await expect(overviewHeading).toBeVisible({ timeout: 15_000 });
+    }
+
+    await page.getByTestId('nav-platformUsers').click();
+    await expect(page.getByRole('heading', { name: '用户 Users', exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+
     await page.getByRole('button', { name: /登出 Sign out/ }).click();
     await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
   });
@@ -166,14 +173,18 @@ test.describe('S4.1 acceptance: platform setup, password login, forced change, l
     await expect(wsStatus).toHaveText('Connected', { timeout: 15_000 });
   });
 
-  test('5 wrong passwords lock the e2e-admin account; a 6th, correct attempt still shows the lock message', async ({
+  test('5 wrong passwords lock the admin account; a 6th, correct attempt still shows the lock message', async ({
     page,
   }) => {
+    const adminLogin = ADMIN_LOGIN as string;
+    const initialPassword = ADMIN_INITIAL_PASSWORD as string;
+    const changedPassword = `${initialPassword}-changed`;
+
     await page.goto('/');
     await reachLoginForm(page);
 
     for (let attempt = 0; attempt < 5; attempt++) {
-      await page.getByLabel(/登录名 Login/).fill(ADMIN_LOGIN);
+      await page.getByLabel(/登录名 Login/).fill(adminLogin);
       await page.getByLabel(/密码 Password/).fill('definitely-the-wrong-password');
       await page.getByRole('button', { name: 'Log in' }).click();
       // Tolerant of an already-locked account (a retried run of this same test) — either message
@@ -183,8 +194,11 @@ test.describe('S4.1 acceptance: platform setup, password login, forced change, l
       ).toBeVisible();
     }
 
-    await page.getByLabel(/登录名 Login/).fill(ADMIN_LOGIN);
-    await page.getByLabel(/密码 Password/).fill(ADMIN_PASSWORD);
+    // The correct, current password by this point in the run is the changed one (the first test
+    // above always changes it away from the initial temporary password) — either is accepted as
+    // "the real password" here since only the lock message matters for this assertion.
+    await page.getByLabel(/登录名 Login/).fill(adminLogin);
+    await page.getByLabel(/密码 Password/).fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(page.getByText(LOCKED_MESSAGE)).toBeVisible();
   });

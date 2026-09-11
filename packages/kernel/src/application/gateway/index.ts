@@ -20,12 +20,14 @@ export type { HandleAuthDeps } from './handle-auth.js';
 
 export {
   resolveCaller,
+  resolvePlatformCaller,
   resolveRequestCaller,
   resolveConsoleUser,
   loadHandlePublicKeyFor,
   loadHandlePrivateKeyFor,
   UnauthorizedError,
   WorkspaceRequiredError,
+  PlatformAdminRequiredError,
   CsrfHeaderRequiredError,
   PasswordChangeRequiredError,
 } from './resolve-caller.js';

@@ -27,8 +27,8 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   // ever calling `navigate()` (only a stray `#/login` hash triggers App.tsx's own redirect
   // effect) — so the URL stays hash-less through and after login. The signed-in shell (Sidebar's
   // connection indicator) is the reliable "we're past the login screen" signal instead — checked
-  // inside `loginWithApiKey`. `reachLoginForm` first gets past `SetupPage` if this is the first
-  // spec to run this session (see `e2e/auth-helpers.ts`'s own doc comment).
+  // inside `loginWithApiKey`. `reachLoginForm` also tolerates an already-signed-in shell (see
+  // `e2e/auth-helpers.ts`'s own doc comment).
   await reachLoginForm(page);
   await loginWithApiKey(page, apiKey);
 }
@@ -61,7 +61,9 @@ test.describe('CI smoke: governance surface', () => {
     await expect(page.getByTestId('members-list')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('member-row').first()).toBeVisible();
 
-    await page.getByRole('button', { name: /Add member/ }).click();
+    // P-A1: "Add member" now adds an existing platform user by login (`add_member`); the API-key
+    // Principal this test creates comes from the relabelled service-credential form.
+    await page.getByRole('button', { name: /Service credential/ }).click();
     const drawer = page.getByTestId('create-principal-drawer');
     await expect(drawer).toBeVisible();
     await drawer.locator('#cp-name').fill(`ci-e2e-member-${Date.now()}`);

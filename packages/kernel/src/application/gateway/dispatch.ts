@@ -1,9 +1,10 @@
 import type { Capability } from '@nexttime/shared';
 import { getCapability } from '@nexttime/shared';
+import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { writeAudit } from '../../substrate/audit/index.js';
-import { authorizeCapabilityCall } from './authorize.js';
+import { ForbiddenError, authorizeCapabilityCall } from './authorize.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -140,7 +141,12 @@ function callerContext(caller: ResolvedCaller): { workspaceId: string; principal
   if (caller.channel === 'human') {
     return { workspaceId: caller.principal.workspaceId, principalId: caller.principal.id };
   }
-  return { workspaceId: caller.claims.ws, principalId: caller.claims.obo };
+  if (caller.channel === 'handle') {
+    return { workspaceId: caller.claims.ws, principalId: caller.claims.obo };
+  }
+  // Unreachable: dispatchCapability takes the platform branch before asking. Kept total so a
+  // future caller kind is a compile error here rather than an undefined workspace downstream.
+  throw new Error('callerContext: a platform caller has no workspace context');
 }
 
 function lookupCapabilityOrThrow(name: string): Capability {
@@ -189,8 +195,61 @@ export async function dispatchCapability(
   if (!parsed.success) throw new InvalidCapabilityParamsError(name, parsed.error.issues);
 
   const handler = CAPABILITY_HANDLERS.get(name);
-  if (!handler) throw new CapabilityNotImplementedError(name);
+  // `typeof … === 'function'` rather than a truthiness check: the registry lookup above already
+  // proved `name` is a known capability, and this makes the dynamic call's target explicit
+  // (CodeQL js/unvalidated-dynamic-method-call) — a Map entry is never a prototype property.
+  if (typeof handler !== 'function') throw new CapabilityNotImplementedError(name);
 
+  // P-A1 (docs/platform-admin-design.md §7): a platform-scope capability runs in a platform
+  // transaction — `app.platform = on`, still `nexttime_app` — with no workspace and no Principal,
+  // and its audit row is the platform shape (`workspace_id is null`, `actor_user_id`).
+  // authorizeCapabilityCall above already guaranteed `caller.channel === 'platform'` here.
+  if (capability.scope === 'platform') {
+    if (caller.channel !== 'platform') {
+      throw new ForbiddenError(`capability "${name}" requires a platform administrator`);
+    }
+    const platformUser = { id: caller.user.id, login: caller.user.login };
+    const platformResult = await withPlatform(
+      deps.pool,
+      { userId: platformUser.id },
+      async (client) => {
+        const result = await handler(client, '', parsed.data, {
+          channel: 'human',
+          principalId: '',
+          platformUser,
+        });
+        const resourceRef = auditResourceRef(result.resourceId);
+        await writeAudit(client, {
+          workspaceId: null,
+          actorPrincipalId: null,
+          actorUserId: platformUser.id,
+          action: name,
+          resourceType: result.resourceType,
+          resourceId: resourceRef.resourceId,
+          payload: {
+            channel: 'platform',
+            actorLogin: platformUser.login,
+            params: redactAuditParams(capability, parsed.data as Record<string, unknown>),
+            ...(resourceRef.resourceRef !== undefined
+              ? { resourceRef: resourceRef.resourceRef }
+              : {}),
+          },
+        });
+        return result;
+      },
+    );
+    const platformFinal = platformResult.afterCommit
+      ? await platformResult.afterCommit(deps.pool)
+      : platformResult.result;
+    validateResultAgainstSchema(capability, name, platformFinal);
+    return platformFinal;
+  }
+
+  if (caller.channel === 'platform') {
+    // authorizeCapabilityCall already refused this pairing; the check narrows `caller` for the
+    // workspace path below.
+    throw new ForbiddenError(`capability "${name}" is workspace-scoped`);
+  }
   const { workspaceId, principalId } = callerContext(caller);
   const onBehalfOf = principalId;
 

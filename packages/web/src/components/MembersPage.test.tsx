@@ -64,7 +64,7 @@ describe('MembersPage', () => {
     await screen.findByTestId('members-unavailable');
   });
 
-  it('create → the API key is shown exactly once, then the list refreshes', async () => {
+  it('服务凭证 → create_principal, the API key is shown exactly once, then the list refreshes', async () => {
     let listCallCount = 0;
     const created = principal({ id: 'p-2', displayName: 'Carol', role: 'operator' });
     const http = scriptedHttp({
@@ -80,7 +80,7 @@ describe('MembersPage', () => {
     renderPage(http);
     await screen.findByTestId('member-row');
 
-    fireEvent.click(screen.getByRole('button', { name: /Add member/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Service credential/ }));
     const form = await screen.findByTestId('create-principal-form');
     fireEvent.change(within(form).getByLabelText(/Display name/), {
       target: { value: 'Carol' },
@@ -118,6 +118,52 @@ describe('MembersPage', () => {
     await waitFor(() =>
       expect(within(drawer).getByText('Operator', { exact: false })).toBeTruthy(),
     );
+  });
+
+  it('添加成员 → add_member by platform login, with no API key of its own', async () => {
+    let listCallCount = 0;
+    const added = principal({ id: 'p-3', displayName: 'Dana', hasApiKey: false });
+    const http = scriptedHttp({
+      list_principals: () => {
+        listCallCount += 1;
+        return { items: listCallCount === 1 ? [principal()] : [principal(), added] };
+      },
+      add_member: (params) => {
+        expect(params).toEqual({ login: 'dana', role: 'operator' });
+        return added;
+      },
+    });
+    renderPage(http);
+    await screen.findByTestId('member-row');
+
+    fireEvent.click(screen.getByRole('button', { name: /Add member/ }));
+    const form = await screen.findByTestId('add-member-form');
+    fireEvent.change(within(form).getByLabelText(/登录名 Login/), { target: { value: 'dana' } });
+    fireEvent.change(within(form).getByLabelText(/角色 Role/), { target: { value: 'operator' } });
+    fireEvent.click(within(form).getByRole('button', { name: '添加 Add' }));
+
+    await waitFor(() => expect(screen.queryByTestId('add-member-drawer')).toBeNull());
+    await waitFor(() => expect(screen.getAllByTestId('member-row')).toHaveLength(2));
+    // No API key is minted for a person — `add_member`'s result carries `hasApiKey: false`.
+    expect(screen.queryByTestId('created-api-key')).toBeNull();
+  });
+
+  it('add_member maps the kernel 404 / 409 onto a bilingual inline message', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [principal()] }),
+      add_member: () =>
+        Promise.reject(new HttpError('capability_error', 'user not found', 'user_not_found')),
+    });
+    renderPage(http);
+    await screen.findByTestId('member-row');
+
+    fireEvent.click(screen.getByRole('button', { name: /Add member/ }));
+    const form = await screen.findByTestId('add-member-form');
+    fireEvent.change(within(form).getByLabelText(/登录名 Login/), { target: { value: 'nobody' } });
+    fireEvent.click(within(form).getByRole('button', { name: '添加 Add' }));
+
+    const error = await screen.findByTestId('add-member-error');
+    expect(error.textContent).toContain('找不到该用户');
   });
 
   it('disabling requires a confirm step and calls disable_principal', async () => {

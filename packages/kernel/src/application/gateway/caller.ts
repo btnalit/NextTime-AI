@@ -27,4 +27,8 @@ export type ResolvedCaller =
       readonly session: SessionRow;
       readonly user?: ConsoleUser;
     }
-  | { readonly channel: 'handle'; readonly claims: HandleClaims };
+  | { readonly channel: 'handle'; readonly claims: HandleClaims }
+  /** P-A1: a console-session administrator calling a `scope: 'platform'` capability — no
+   *  workspace, no Principal; `user.platformRole` is already verified to be `admin`
+   *  (resolve-caller.ts `resolvePlatformCaller`). */
+  | { readonly channel: 'platform'; readonly user: ConsoleUser };

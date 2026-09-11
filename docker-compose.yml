@@ -49,13 +49,20 @@ services:
         KERNEL_LLM_URL: http://llm-proxy:8082,
         SUPERVISOR_URL: http://worker-supervisor:8081,
         NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
-        PLATFORM_SETUP_TOKEN_FILE: /run/setup/token,
+        INITIAL_ADMIN_PASSWORD_FILE: /run/setup/initial-admin-password,
+        # P-A1 (design/platform-admin §6.6): logins that are always platform administrators —
+        # the console cannot disable or demote them. Optional, comma-separated. Kept in env on
+        # purpose (a hijacked admin session must not be able to lock the operator out).
+        NEXTTIME_PLATFORM_ADMINS: "${NEXTTIME_PLATFORM_ADMINS:-}",
+        # Shown on the platform overview page; set by the release/build pipeline when known.
+        KERNEL_VERSION: "${KERNEL_VERSION:-dev}",
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；
     # 这里跟随同一决定，不再补上。
-    # S4.1: one-time platform setup token (design §7.11); the kernel writes it here 0600 when no
-    # platform admin exists; host-env-init.sh creates the directory owned by uid 10001.
+    # S4.1: the pre-created `admin` user's temporary initial password (design §7.11); the kernel
+    # writes it here 0600 when no platform admin exists; host-env-init.sh creates the directory
+    # owned by uid 10001.
     volumes:
       [
         "${NEXTTIME_DATA:?}/config:/data/config:ro",

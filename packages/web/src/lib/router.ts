@@ -26,7 +26,11 @@ export type NavSection =
   | 'systems'
   | 'catalog'
   | 'models'
-  | 'audit';
+  | 'audit'
+  | 'platformOverview'
+  | 'platformUsers'
+  | 'platformSettings'
+  | 'platformAudit';
 
 export const CATALOG_TAB_VALUES = ['operations', 'skills', 'procedures', 'workers'] as const;
 export type CatalogTab = (typeof CATALOG_TAB_VALUES)[number];
@@ -44,7 +48,11 @@ export type Route =
   | { readonly kind: 'systems'; readonly gatekeeperId?: string }
   | { readonly kind: 'catalog'; readonly tab: CatalogTab }
   | { readonly kind: 'models' }
-  | { readonly kind: 'audit' };
+  | { readonly kind: 'audit' }
+  | { readonly kind: 'platformOverview' }
+  | { readonly kind: 'platformUsers' }
+  | { readonly kind: 'platformSettings' }
+  | { readonly kind: 'platformAudit' };
 
 function isCatalogTab(value: string | undefined): value is CatalogTab {
   return value !== undefined && (CATALOG_TAB_VALUES as readonly string[]).includes(value);
@@ -98,6 +106,11 @@ export function routeFromHash(hash: string): Route {
   if (hash === '#/govern/models') return { kind: 'models' };
   if (hash === '#/govern/audit') return { kind: 'audit' };
 
+  if (hash === '#/platform/overview') return { kind: 'platformOverview' };
+  if (hash === '#/platform/users') return { kind: 'platformUsers' };
+  if (hash === '#/platform/settings') return { kind: 'platformSettings' };
+  if (hash === '#/platform/audit') return { kind: 'platformAudit' };
+
   return DEFAULT_ROUTE;
 }
 
@@ -132,6 +145,10 @@ export const hrefs = {
   catalog: (tab: CatalogTab = 'operations') => `#/govern/catalog/${tab}`,
   models: () => '#/govern/models',
   audit: () => '#/govern/audit',
+  platformOverview: () => '#/platform/overview',
+  platformUsers: () => '#/platform/users',
+  platformSettings: () => '#/platform/settings',
+  platformAudit: () => '#/platform/audit',
 } as const;
 
 export function navigate(href: string): void {
