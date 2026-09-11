@@ -70,10 +70,10 @@ https://:8443 {
 
 	# S3.5 / W7 (docs/development-tasks.md §S3.5; design doc §9.5) — the nine Explorer endpoints
 	# used to be matched and handled here as a separate `@explorer_api` block so caddy could inject
-	# a shared `X-API-Key` header. Since W7 (packages/kernel/src/interfaces/explorer-contract/
-	# session.ts) each caller authenticates itself — its own `X-API-Key`, or the
-	# `nexttime_explorer_session` cookie the console installs after login (`POST`/`DELETE
-	# /api/explorer/session`) — so these nine paths are ordinary `/api/*` routes now and simply fall
+	# a shared `X-API-Key` header. Since W7 each caller authenticates itself — its own `X-API-Key`,
+	# or (S4.1, packages/kernel/src/application/identity/console-session.ts) the console session
+	# cookie `nexttime_console_session` a password login installs, plus the `nexttime_workspace`
+	# selector cookie — so these nine paths are ordinary `/api/*` routes now and simply fall
 	# through to the @backend block below. caddy deliberately holds no Explorer credential any more.
 
 	# Reverse-proxied to the kernel exactly as docs/development-tasks.md §E8 states ("反代 /api

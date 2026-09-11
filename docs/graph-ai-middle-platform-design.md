@@ -742,7 +742,7 @@ MCP 工具 = Handle 通道可用行的投影。Semantica 的 17 个工具名与�
 
 ### 9.5 Explorer 契约（S3，只做这些）
 
-内核实现 Semantica Explorer 需要的：`GET /api/graph/nodes?limit&cursor`、`GET /api/graph/edges`、`POST /api/graph/search`、`GET /api/temporal/bounds`、`GET /api/temporal/snapshot?at=`、`GET /api/decisions`、`GET /api/decisions/{id}/chain`、`GET /api/provenance?node_id=`、`GET /api/provenance/report?node_id=&format=`，响应形状按其 `explorer/schemas.py`（`NodeResponse` / `EdgeResponse` / `DecisionResponse` / `ProvenanceNode` / `ProvenanceEdge`），含 `207` 部分成功约定；鉴权为 `X-API-Key` 或控制台登录后签发的 `nexttime_explorer_session` cookie（`POST/DELETE /api/explorer/session`，W7）。Ontology、Vocabulary、Reasoning、Enrich、SPARQL、Manage 工作区隐藏。
+内核实现 Semantica Explorer 需要的：`GET /api/graph/nodes?limit&cursor`、`GET /api/graph/edges`、`POST /api/graph/search`、`GET /api/temporal/bounds`、`GET /api/temporal/snapshot?at=`、`GET /api/decisions`、`GET /api/decisions/{id}/chain`、`GET /api/provenance?node_id=`、`GET /api/provenance/report?node_id=&format=`，响应形状按其 `explorer/schemas.py`（`NodeResponse` / `EdgeResponse` / `DecisionResponse` / `ProvenanceNode` / `ProvenanceEdge`），含 `207` 部分成功约定；鉴权为 `X-API-Key` 或控制台会话 cookie `nexttime_console_session`（用户名 + 密码登录签发，§7.11；工作区由 `X-Workspace-Id` / 选择器 cookie `nexttime_workspace` / 唯一成员资格决定；W7 的 Explorer 专用 cookie 与 `/api/explorer/session` 已在 S4.1 退役）。Ontology、Vocabulary、Reasoning、Enrich、SPARQL、Manage 工作区隐藏。
 
 ---
 

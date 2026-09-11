@@ -75,6 +75,10 @@ printf '%s\n' '<password>' | docker compose run --rm --no-deps -T kernel \
 `password_change_required`。API key（`add-principal`、治理页新建成员）照旧可用，是给自动化与
 过渡期的；三份验收脚本都走 API key。
 
+在已有主机上升级到含 S4.1 的版本：**先重跑本脚本**（`host-env-init.sh` 幂等，会补建 `secrets/setup`
+并归 uid 10001）再 `docker compose up`——否则 Docker 代建的挂载目录是 root 所有，kernel 写不出令牌，
+只会在日志里记一条 error（kernel 本身照常启动）；然后 `make migrate` 落地 0019，重建 kernel 与 caddy。
+
 ## 删除 Workspace（Deleting a workspace，操作员专用，破坏性操作）
 
 `packages/kernel/src/cli/bootstrap.ts` 的 `delete-workspace`/`list-workspaces` 子命令是清理

@@ -56,7 +56,7 @@
 | 2026-09-10 | W6 验收工具链治理：四份 heredoc driver 抽成 `deploy/accept/driver.mjs` + `scripts/lib/accept-common.sh`（#145，14 例 vitest）；fake provider 改 compose override，验收不再改生产配置（#146）；`accept_s1.sh --lite` 进 e2e 工作流（#148，CI 首跑 13 PASS + 6 SKIP）；fake-llm 场景参数按注册表 paramsSchema 校验（#149）；发布 v0.4.3（PR #147）。每个脚本 PR 都先在主机从分支连跑 S1→S2→S3 验证 | `CHANGELOG.md`、本文 §3 |
 | 2026-09-11 | W7 开发：e2e 全量进 CI（#151）；Explorer 按调用者鉴权、caddy 不再持有 key（#153，遗留 8 关闭）；工具调用 `isError` 全链路 + driver 计数（#155）；真实模型验证模式 `--real`（#156）；顺带修复 grants 作用域比对（#152）与采集器 `depends_on` 解析（#157） | `retrospective-2026-09-11.md`、`CHANGELOG.md` |
 | 2026-09-11 | 主机应用 v0.5.0：删除主机 `.env` 的 `EXPLORER_API_KEY`，全部镜像重建，无新迁移；首轮 S1 首次对话被入口容器冷启动打断（遗留 29）、S2 夹具镜像拉包超时（网络），重跑后 S1 22 PASS + 1 SKIP、S2 66 PASS，S3 首轮即 29 PASS；栈回到停栈状态 | `docs/private/` §39 |
-| 2026-09-11 | W8 S4.1 用户目录与登录（PR #164）：迁移 0019 平台级 `users` / `user_sessions` / `platform_setup`、用户名 + 密码登录与控制台会话 cookie、一次性初始化令牌、web 初始化页 / 强制改密 / 工作区切换 / 我的账户、Explorer 改认控制台 cookie；API key 路径不变。两个 reviewer 子代理复查（内核半修正两处）。主机未应用 | `development-tasks.md` S4.1 实现说明 |
+| 2026-09-11 | W8 S4.1 用户目录与登录（PR #164）：迁移 0019 平台级 `users` / `user_sessions` / `platform_setup`、用户名 + 密码登录与控制台会话 cookie、一次性初始化令牌、web 初始化页 / 强制改密 / 工作区切换 / 我的账户、Explorer 改认控制台 cookie；API key 路径不变。两个 reviewer 子代理复查：内核半修正两处（初始化令牌失败计数被回滚、`workspaces` 多余授权），web 半修正会话前状态机的三处竞态（重复切换工作区泄漏 socket、切换时过早关旧 socket、改密在途时登出可复活会话）。主机未应用 | `development-tasks.md` S4.1 实现说明 |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -110,6 +110,8 @@
 | S4.2 用户管理与工作区管理 | 待做（下一项） |
 | S4.3 模型与供应商 / S4.4 门目录 / S4.5 运行状态 | 待做 |
 
+**S4.1 主机应用注意**（下次应用时按此顺序，细节记 `docs/private/`）：① 先重跑 `host-env-init.sh`（幂等）——kernel 新增 bind mount `secrets/setup`，主机上还没有这个目录，若让 Docker 代建会是 root 所有，kernel 只会记一条 error 而写不出令牌；② `make migrate`（0019 回填：每个既有 human Principal 得到一个无密码用户，登录名 `<显示名 slug>-<principal id 前 8 位>`，维护者自己的那条要到 `users` 表里查）；③ 重建 kernel + caddy。之后：既有 API key 照常可用；要用密码登录就 `set-password --login <登录名>`；用令牌建出的平台管理员在 S4.2 之前没有任何工作区成员资格（`add-principal` 建的是新 Principal，不能把已有用户加进工作区），业务操作仍用 owner 身份。
+
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
 目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29）并于同日应用 v0.5.1（kernel 重建 + `worker-runtime` 重建，无迁移，未复跑验收），主机 `.env` 不再含 Explorer key；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），建了一个真实使用的工作区并注册两个门；不再在验收后停栈。
@@ -156,8 +158,8 @@
 | 31 | Explorer 会话 cookie 不随 `rotate_api_key` 失效（8 小时 TTL 为界；`disable_principal` 即时生效） | P3 | 记债 | 开放 |
 | 32 | CodeQL 预存告警：`hashApiKey` 用 sha256（32 字节随机 key，判定为合理）需维护者 dismiss；`e2e / web-e2e` 需维护者加为必需检查 | — | 决定 | 关闭（2026-09-11 维护者已把 `e2e / web-e2e` 加为必需检查并 dismiss 告警 57） |
 | 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | 决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件；待实现，排在 S4 之后。已核实 pi 0.84.4 源码：`switch_session` 对不存在的路径会新建、`new_session` 后 `get_state` 立即有 `sessionFile`、`session_start` 在切换时重触发且 `registerTool` 同名覆盖——因此可以由 agent-host 单方面按 `chatId` 派生会话文件路径实现，不需要内核新列或新帧 |
-| 35 | 用 API key 登录控制台的会话没有控制台 cookie，浏览器里打不开 Explorer（S4.1 起 Explorer 只认 `X-API-Key` 或控制台 cookie）；API key 是给自动化与过渡期的，人用密码登录即可——记为已知行为，随"验收 harness 迁到 service Principal"一起看 | P3 | 记债 | 开放 |
 | 34 | kernel 日志有 pg `DeprecationWarning: Calling client.query() when the client is already executing a query`（2026-09-11 主机 v0.5.0 首轮对话时出现）——同一 client 上并发 query，pg@9 将不再允许；需定位是哪条路径在 `withWorkspace` 的 client 上不等待就发第二条语句 | P2 | 待排 | 开放 |
+| 35 | 用 API key 登录控制台的会话没有控制台 cookie，浏览器里打不开 Explorer（S4.1 起 Explorer 只认 `X-API-Key` 或控制台 cookie）；API key 是给自动化与过渡期的，人用密码登录即可——记为已知行为，随"验收 harness 迁到 service Principal"一起看 | P3 | 记债 | 开放 |
 
 ## 5. 更新规则
 
