@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-11（W7 真实模型验证 + Explorer 按调用者鉴权完成并发 v0.5.0；当前波次：两周稳定期）
+最后更新：2026-09-11（W8 S4.1 用户目录与登录合入 PR #164；当前波次：W8 平台管理 + 稳定期）
 
 ## 1. 入口指引
 
@@ -56,6 +56,7 @@
 | 2026-09-10 | W6 验收工具链治理：四份 heredoc driver 抽成 `deploy/accept/driver.mjs` + `scripts/lib/accept-common.sh`（#145，14 例 vitest）；fake provider 改 compose override，验收不再改生产配置（#146）；`accept_s1.sh --lite` 进 e2e 工作流（#148，CI 首跑 13 PASS + 6 SKIP）；fake-llm 场景参数按注册表 paramsSchema 校验（#149）；发布 v0.4.3（PR #147）。每个脚本 PR 都先在主机从分支连跑 S1→S2→S3 验证 | `CHANGELOG.md`、本文 §3 |
 | 2026-09-11 | W7 开发：e2e 全量进 CI（#151）；Explorer 按调用者鉴权、caddy 不再持有 key（#153，遗留 8 关闭）；工具调用 `isError` 全链路 + driver 计数（#155）；真实模型验证模式 `--real`（#156）；顺带修复 grants 作用域比对（#152）与采集器 `depends_on` 解析（#157） | `retrospective-2026-09-11.md`、`CHANGELOG.md` |
 | 2026-09-11 | 主机应用 v0.5.0：删除主机 `.env` 的 `EXPLORER_API_KEY`，全部镜像重建，无新迁移；首轮 S1 首次对话被入口容器冷启动打断（遗留 29）、S2 夹具镜像拉包超时（网络），重跑后 S1 22 PASS + 1 SKIP、S2 66 PASS，S3 首轮即 29 PASS；栈回到停栈状态 | `docs/private/` §39 |
+| 2026-09-11 | W8 S4.1 用户目录与登录（PR #164）：迁移 0019 平台级 `users` / `user_sessions` / `platform_setup`、用户名 + 密码登录与控制台会话 cookie、一次性初始化令牌、web 初始化页 / 强制改密 / 工作区切换 / 我的账户、Explorer 改认控制台 cookie；API key 路径不变。两个 reviewer 子代理复查（内核半修正两处）。主机未应用 | `development-tasks.md` S4.1 实现说明 |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -103,6 +104,12 @@
 
 **当前波次：W8 平台管理 + 稳定期**（2026-09-11 起。维护者 2026-09-11 指出：装好的主机上没有任何能登录的账户，登录后也没有地方建工作区、加用户、配模型——这是设计缺口，优先于其他一切。设计见 `graph-ai-middle-platform-design.md` §7.11，任务见 `development-tasks.md` S4.1–S4.5（同日按维护者要求修订：平台级用户目录 + 用户名密码登录，S4.1 用户目录与登录 → S4.2 用户与工作区管理 → S4.3 供应商 → S4.4 门目录 → S4.5 状态）。主机整栈常驻供真实使用；已关 27（#159）、29（#160）；33 按 chat 隔离已决定、排在 S4 之后；其后 30 / 23 / 21 / 20 / 22。）
 
+| S4 项 | 状态 |
+|---|---|
+| S4.1 用户目录与登录 | 完成（PR #164，2026-09-11；e2e `login.spec.ts` 进 CI；迁移 0019 待下次主机 `make migrate` 落地，同 0018 先例；`scope:'platform'` 注册表字段留到 S4.2 随 `list_users` 一起加） |
+| S4.2 用户管理与工作区管理 | 待做（下一项） |
+| S4.3 模型与供应商 / S4.4 门目录 / S4.5 运行状态 | 待做 |
+
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
 目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29）并于同日应用 v0.5.1（kernel 重建 + `worker-runtime` 重建，无迁移，未复跑验收），主机 `.env` 不再含 Explorer key；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），建了一个真实使用的工作区并注册两个门；不再在验收后停栈。
@@ -149,6 +156,7 @@
 | 31 | Explorer 会话 cookie 不随 `rotate_api_key` 失效（8 小时 TTL 为界；`disable_principal` 即时生效） | P3 | 记债 | 开放 |
 | 32 | CodeQL 预存告警：`hashApiKey` 用 sha256（32 字节随机 key，判定为合理）需维护者 dismiss；`e2e / web-e2e` 需维护者加为必需检查 | — | 决定 | 关闭（2026-09-11 维护者已把 `e2e / web-e2e` 加为必需检查并 dismiss 告警 57） |
 | 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | 决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件；待实现，排在 S4 之后。已核实 pi 0.84.4 源码：`switch_session` 对不存在的路径会新建、`new_session` 后 `get_state` 立即有 `sessionFile`、`session_start` 在切换时重触发且 `registerTool` 同名覆盖——因此可以由 agent-host 单方面按 `chatId` 派生会话文件路径实现，不需要内核新列或新帧 |
+| 35 | 用 API key 登录控制台的会话没有控制台 cookie，浏览器里打不开 Explorer（S4.1 起 Explorer 只认 `X-API-Key` 或控制台 cookie）；API key 是给自动化与过渡期的，人用密码登录即可——记为已知行为，随"验收 harness 迁到 service Principal"一起看 | P3 | 记债 | 开放 |
 | 34 | kernel 日志有 pg `DeprecationWarning: Calling client.query() when the client is already executing a query`（2026-09-11 主机 v0.5.0 首轮对话时出现）——同一 client 上并发 query，pg@9 将不再允许；需定位是哪条路径在 `withWorkspace` 的 client 上不等待就发第二条语句 | P2 | 待排 | 开放 |
 
 ## 5. 更新规则
