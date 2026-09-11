@@ -226,7 +226,15 @@ interface ResolvedEntryDefinition {
   readonly egressDeny: string[] | undefined;
 }
 
-type AcceptOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+type AcceptOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string; readonly alreadyEnded?: false }
+  /** The Turn ended (a `turnEnded` runtime event arrived) before agent-host ever accepted it —
+   *  e.g. the entry container exited during startup and agent-host reported `interrupted`. The
+   *  sink already has that `turnEnded`; the accept wait must not add a second, later
+   *  `{status:'failed'}` on top (W8, STATUS leftover 29: "turn not accepted" 30 s after the
+   *  Turn was already `interrupted`). */
+  | { readonly ok: false; readonly reason: string; readonly alreadyEnded: true };
 
 interface PendingAccept {
   resolve(outcome: AcceptOutcome): void;
@@ -399,6 +407,7 @@ export class AgentHostRuntime implements AgentRuntime {
     void sent.wait.then((outcome) => {
       if (outcome.ok) return;
       this.activeTurns.delete(input.turnId);
+      if (outcome.alreadyEnded) return; // the sink already saw this Turn end — nothing to add
       this.log(
         JSON.stringify({
           level: 'error',
@@ -532,6 +541,14 @@ export class AgentHostRuntime implements AgentRuntime {
     // not only once the sink has finished persisting it.
     if (event.type === 'turnEnded') {
       this.activeTurns.delete(event.turnId);
+      // A Turn can end before it was ever accepted (entry container died during startup):
+      // settle its accept wait now so the accept timeout does not later report the same Turn
+      // as `failed` a second time.
+      this.resolvePendingAccept(event.turnId, {
+        ok: false,
+        reason: `turn ended (${event.status}) before agent-host accepted it`,
+        alreadyEnded: true,
+      });
     }
     // AgentRuntimeEventWire (agent-host-protocol.ts, @nexttime/shared) is a hand-kept structural
     // mirror of AgentRuntimeEvent (agent-runtime.ts) — see the former's own doc comment for why

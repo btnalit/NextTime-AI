@@ -272,7 +272,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
   `HTTP_PROXY_FOR_WORKERS`），`--network workers`。**附带证据**（非本步骤的主断言，只是佐证）：
   `deploy/worker-runtime/entrypoint.sh` 自己的 S2.9 "worker-mode self-check" 在**每一个**真实
   Worker 容器启动时（`NEXTTIME_MODE=worker`）已经无条件跑过一遍等价检查（`check=api_key_env`/
-  `check=egress_no_direct_route`/`check=egress_via_proxy`，任何一项失败该容器直接非零退出、拒绝
+  `check=egress_no_direct_route`/`check=egress_via_proxy`，前两项或 `no_proxy_configured` 失败该容器直接非零退出、拒绝
   启动 pi）——step 2/4 已经真实 spawn 过的 Worker 容器如果这条自检没通过，那两步会先失败在别处，
   step 6 因此不是这条边界在本次运行里唯一被验证到的地方，只是唯一一处用**字面**
   `env | grep -ci api_key`（而不是 entrypoint.sh 自己更窄的 `_API_KEY=` 正则）断言的地方。

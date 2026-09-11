@@ -911,6 +911,48 @@ describe('AgentHostRuntime — turnRejected and accept timeout', () => {
     ]);
   });
 
+  it('a turnEnded that arrives before turnAccepted settles the accept wait — no second failed event after the timeout (W8, leftover 29)', async () => {
+    const { pool } = createFakePool();
+    const { sink, events } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      turnAcceptedTimeoutMs: 10,
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput();
+    await runtime.startTurn(input);
+    expect(sent.map((frame) => frame.type)).toEqual(['startTurn']);
+
+    // The entry container exited during its own startup: agent-host reports `interrupted`
+    // without ever having sent turnAccepted.
+    runtime.handleFrame({
+      type: 'runtimeEvent',
+      event: {
+        type: 'turnEnded',
+        status: 'interrupted',
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ type: 'turnEnded', status: 'interrupted' });
+
+    // Well past the 10ms accept timeout: still exactly one turnEnded, and the Turn is no longer
+    // tracked as active (stopTurn reports it as unknown).
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(events).toHaveLength(1);
+    await expect(runtime.stopTurn(input.turnId)).resolves.toBe(false);
+  });
+
   it('a link.send failure produces turnEnded {status: failed} rather than throwing', async () => {
     const { pool } = createFakePool();
     const { sink, events } = createFakeSink();

@@ -101,7 +101,7 @@
 | 真实模型验证模式 | `--real <provider/model> [--runs N]` | 完成（PR #156；主机验证，数字见 `retrospective-2026-09-11.md` §2） |
 | 顺带修复 | grants 作用域按文本比对（#152）；采集器 `depends_on` 条件后缀（#157），均由真实模型或 CI 首次发现 | 完成 |
 
-**当前波次：W8 两周稳定期**（2026-09-11 起；冻结新能力，主机整栈常驻供真实使用，同时修遗留：27 已关（#159），29 根因已定位（入口容器启动自检的公网探测在弱网下致命退出，非 Handle 竞态），33 按 chat 隔离，30 待样本；其后 23 / 21 / 20 / 22）。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
+**当前波次：W8 两周稳定期**（2026-09-11 起；冻结新能力，主机整栈常驻供真实使用，同时修遗留：27 已关（#159），29 已关（#160：入口容器启动自检的公网探测在弱网下致命退出，非 Handle 竞态），33 按 chat 隔离，30 待样本；其后 23 / 21 / 20 / 22）。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
 
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
@@ -144,7 +144,7 @@
 | 26 | `accept_s2.sh` 的 cleanup 对 accept-s2 profile 做 `down` 时连基础栈一起停掉，S1→S2→S3 无法一次连跑；应改为只 `rm -sf` 五个夹具服务，或由统一 driver 在 S3 前重新拉起（2026-09-10 主机实测） | P2 | W6 | 关闭（PR #145：cleanup 改为只 `rm -sf` 六个夹具容器，主机 S1→S2→S3 连跑通过） |
 | 27 | outbox dispatcher 构造时未传 `onError`，消费者异常被静默吞掉（#152 的根因之所以晚发现） | P2 | W8 | 关闭（PR #159：`createBackgroundServices` 加 `onOutboxError`，`main()` 传 `app.log.error`；投递失败以 `OutboxDeliveryError` 带 outbox id / 事件类型 / 次数 / 是否 dead-letter 记日志） |
 | 28 | 已有图里 `depends_on` 指向的幻影 Container（`<service>:service_healthy:false`）要等采集器下一轮 supersede；旧对象留作历史 | P3 | 稳定期 | 开放 |
-| 29 | 真实模型下新工作区首轮 Turn `interrupted`、0 次工具调用（入口容器冷启动 / Handle 就绪竞态，S3 real 1/3 的失败） | P2 | 稳定期 | 开放 |
+| 29 | 新工作区首轮 Turn `interrupted`、0 次工具调用（S3 real 1/3 与 v0.5.0 应用时 fake S1 各一次；后者有容器日志实证，前者容器已重建、只有 egress-proxy 的同型 CONNECT 记录为据）。根因不是冷启动 / Handle 竞态：入口容器启动自检的"经代理公网通"探测（5 秒）在弱网下超时且致命退出，容器 spawn 后 5 秒死亡；30 秒后内核 accept 超时再记一次 `failed` | P2 | W8 | 关闭（PR #160：探测改 `result=warn` 不退出，I9 / I10 仍致命；`AgentHostRuntime` 在 `turnEnded` 先到时结清 accept 等待。`development-tasks.md` S2.9 W8 修订） |
 | 30 | 真实模型下 docker_restart 一次 ActionRequest executed、容器已重启但 Task failed 且 result 为空（S2 real 1/3 的失败） | P2 | 稳定期 | 开放 |
 | 31 | Explorer 会话 cookie 不随 `rotate_api_key` 失效（8 小时 TTL 为界；`disable_principal` 即时生效） | P3 | 记债 | 开放 |
 | 32 | CodeQL 预存告警：`hashApiKey` 用 sha256（32 字节随机 key，判定为合理）需维护者 dismiss；`e2e / web-e2e` 需维护者加为必需检查 | — | 决定 | 关闭（2026-09-11 维护者已把 `e2e / web-e2e` 加为必需检查并 dismiss 告警 57） |
