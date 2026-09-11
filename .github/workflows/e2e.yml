@@ -144,34 +144,41 @@ jobs:
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color
           exit 1
 
-      # S4.1 (design doc §7.11 "初始化"): with no platform administrator yet, the kernel wrote a
-      # one-time setup token to `${NEXTTIME_DATA}/secrets/setup/token` (0600, uid 10001 — hence
-      # `sudo cat`) shortly after it started. login.spec.ts spends it on the "initialize platform"
-      # page to create the first administrator, so it is read here BEFORE anything below could
-      # create an admin. The write is asynchronous relative to /api/health, so poll briefly.
-      - name: Read the one-time platform setup token
+      # P-A1 (docs/platform-admin-design.md §4): with no platform administrator yet, the kernel
+      # pre-creates the user `admin` and writes its random temporary password to
+      # `${NEXTTIME_DATA}/secrets/setup/initial-admin-password` (0600, uid 10001 — hence `sudo
+      # cat`) shortly after it starts — no setup token, no initialization page. login.spec.ts logs
+      # in as `admin` with it and is forced through a password change. The write is asynchronous
+      # relative to /api/health, so poll briefly; the file is only ever removed on a *later* kernel
+      # start once an administrator already exists, so reading it here (kernel started, nothing
+      # below restarts it) is safe regardless of what the bootstrap steps below do.
+      - name: Read the initial admin password
         run: |
           set -euo pipefail
-          token_file="$NEXTTIME_DATA/secrets/setup/token"
+          password_file="$NEXTTIME_DATA/secrets/setup/initial-admin-password"
           for _ in $(seq 1 30); do
-            if sudo test -s "$token_file"; then break; fi
+            if sudo test -s "$password_file"; then break; fi
             sleep 1
           done
-          if ! sudo test -s "$token_file"; then
-            echo "setup token was not written to $token_file" >&2
+          if ! sudo test -s "$password_file"; then
+            echo "initial admin password was not written to $password_file" >&2
             sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color kernel
             exit 1
           fi
-          setup_token=$(sudo cat "$token_file" | tr -d '\n')
-          echo "::add-mask::$setup_token"
-          echo "WEB_E2E_SETUP_TOKEN=$setup_token" >>"$GITHUB_ENV"
-          echo "read setup token from $token_file"
+          admin_password=$(sudo cat "$password_file" | tr -d '\n')
+          echo "::add-mask::$admin_password"
+          echo "WEB_E2E_ADMIN_LOGIN=admin" >>"$GITHUB_ENV"
+          echo "WEB_E2E_ADMIN_INITIAL_PASSWORD=$admin_password" >>"$GITHUB_ENV"
+          echo "read initial admin password from $password_file"
 
       # Same bootstrap.js output shape scripts/accept_s1.sh's own bootstrap_step already parses
       # (`workspace created: <id>` / `API key` on the following line) — see that script for the
       # precedent. `set +e`/`set -e` around the capture (rather than letting `set -e` abort mid-
       # substitution) so a failure here prints the actual captured output before exiting, instead
-      # of silently swallowing it.
+      # of silently swallowing it. P-A1: the kernel already created a *default* workspace owned by
+      # `admin` on this fresh database (docs/platform-admin-design.md §4) — this step still creates
+      # its own separate `ci-e2e` workspace owned by `owner` for the existing specs' fixtures, so
+      # `owner` (WEB_E2E_OWNER_LOGIN) belongs to exactly that one workspace, same as before.
       - name: Bootstrap a workspace and owner API key
         run: |
           set -euo pipefail
@@ -253,32 +260,6 @@ jobs:
           echo "WEB_E2E_TEMP_LOGIN=$E2E_PRINCIPAL_LOGIN_B" >>"$GITHUB_ENV"
           echo "WEB_E2E_TEMP_PASSWORD=$temp_password" >>"$GITHUB_ENV"
 
-      # S4.1 self-service migration path (login.spec.ts "claim identity"): a third member, carol,
-      # gets an API key and NO password — exactly the state every pre-S4.1 member is in after
-      # migration 0019. The spec signs her in with the key, sets a password from "我的账户"
-      # (`POST /api/auth/claim`) and logs in again with it. No CLI in that path, by design.
-      - name: Add a third principal (member, API key only) for the claim scenario
-        run: |
-          set -euo pipefail
-          set +e
-          out=$(sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
-            run --rm --no-deps -T kernel node dist/cli/bootstrap.js add-principal --workspace "$E2E_WORKSPACE_ID" --name carol --role member </dev/null 2>&1)
-          rc=$?
-          set -e
-          if [ "$rc" -ne 0 ]; then
-            echo "add-principal (carol) exited $rc:" >&2
-            printf '%s\n' "$out" >&2
-            exit 1
-          fi
-          api_key_c=$(printf '%s\n' "$out" | awk '/^API key/{getline; print; exit}')
-          if [ -z "$api_key_c" ]; then
-            echo "could not parse add-principal (carol) output:" >&2
-            printf '%s\n' "$out" >&2
-            exit 1
-          fi
-          echo "::add-mask::$api_key_c"
-          echo "WEB_E2E_CLAIM_API_KEY=$api_key_c" >>"$GITHUB_ENV"
-
       # W7: seed the two pending ActionRequests approvals.spec.ts expects (one per
       # `resource_scope` marker that file hardcodes) — the exact psql block packages/web/README.md
       # "Seeding a pending ActionRequest" documents for a local run, executed here inside the
@@ -332,10 +313,10 @@ jobs:
 
       # Runs every file under packages/web/e2e/ for real: chat.spec.ts and governance.spec.ts
       # (WEB_E2E_BASE_URL/WEB_E2E_API_KEY), since W7 approvals.spec.ts's two seeded scenarios
-      # (WEB_E2E_API_KEY_B/WEB_E2E_PRINCIPAL_ID_B/WEB_E2E_SEED_ACTION_REQUESTS), and since S4.1
-      # login.spec.ts (WEB_E2E_SETUP_TOKEN / WEB_E2E_OWNER_LOGIN+PASSWORD / WEB_E2E_TEMP_LOGIN+
-      # PASSWORD / WEB_E2E_CLAIM_API_KEY: initialize platform → password login → forced change →
-      # claim an identity from an API key → logout → lockout) plus
+      # (WEB_E2E_API_KEY_B/WEB_E2E_PRINCIPAL_ID_B/WEB_E2E_SEED_ACTION_REQUESTS), and since P-A1
+      # login.spec.ts (WEB_E2E_ADMIN_LOGIN/WEB_E2E_ADMIN_INITIAL_PASSWORD / WEB_E2E_OWNER_LOGIN+
+      # PASSWORD / WEB_E2E_TEMP_LOGIN+PASSWORD: admin first login → forced change → land on the
+      # platform overview → owner password login → temp-password forced change → lockout) plus
       # explorer.spec.ts's password login. playwright.config.ts gives CI one retry per test so a
       # runner hiccup shows up as "flaky" in the uploaded report instead of failing the whole gate.
       - name: Run web e2e

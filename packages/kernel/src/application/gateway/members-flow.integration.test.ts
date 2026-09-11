@@ -15,12 +15,18 @@ import { HANDLE_SIGNING_ALG } from '../../governance/capability/keys.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
+import { createUser } from '../identity/index.js';
 import { authenticateHuman, hashApiKey } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { setGatekeeperReadHandlerDeps } from './gatekeeper-read-handlers.js';
 import { authenticateHandle } from './handle-auth.js';
-import { PrincipalNotFoundError, PrincipalOperationRefusedError } from './members-handlers.js';
+import {
+  AlreadyMemberError,
+  MemberUserNotFoundError,
+  PrincipalNotFoundError,
+  PrincipalOperationRefusedError,
+} from './members-handlers.js';
 import { ModelsCatalogUnavailableError } from './models-catalog-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -263,7 +269,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         displayName: 'Bob',
       })) as { principal: { id: string; kind: string; hasApiKey: boolean }; apiKey: string };
 
-      expect(created.principal.kind).toBe('human');
+      // P-A1 (docs/platform-admin-design.md §5): `create_principal` now always mints a `service`
+      // Principal — a human Principal is a platform user's membership (`add_member`/
+      // `add_membership`), never this capability.
+      expect(created.principal.kind).toBe('service');
       expect(created.principal.hasApiKey).toBe(true);
       expect(typeof created.apiKey).toBe('string');
       expect(created.apiKey.length).toBeGreaterThan(0);
@@ -287,6 +296,61 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const table of tables) {
         expect(await tableContainsSubstring(pool, table, created.apiKey)).toBe(false);
       }
+    });
+
+    it('add_member: creates a human Principal linked to that platform user by login, no API key', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const login = `add-member-${randomUUID().slice(0, 8)}`;
+      const user = await createUser(pool, {
+        login,
+        displayName: 'Add Member Fixture',
+        password: 'correct horse battery staple',
+      });
+
+      const membership = (await dispatchCapability({ pool }, owner, 'add_member', {
+        login,
+        role: 'member',
+      })) as { id: string; kind: string; role: string; hasApiKey: boolean };
+
+      expect(membership.kind).toBe('human');
+      expect(membership.role).toBe('member');
+      expect(membership.hasApiKey).toBe(false);
+
+      const principalRow = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query<{ user_id: string | null }>(
+            'select user_id from principals where workspace_id = $1 and id = $2',
+            [workspaceId, membership.id],
+          ),
+      );
+      expect(principalRow.rows[0]?.user_id).toBe(user.id);
+    });
+
+    it('add_member: an unknown login → 404 user_not_found', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      await expect(
+        dispatchCapability({ pool }, owner, 'add_member', {
+          login: `no-such-login-${randomUUID().slice(0, 8)}`,
+          role: 'member',
+        }),
+      ).rejects.toThrow(MemberUserNotFoundError);
+    });
+
+    it('add_member: a repeat add → 409 already_member', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const login = `add-member-dup-${randomUUID().slice(0, 8)}`;
+      await createUser(pool, {
+        login,
+        displayName: 'Add Member Dup Fixture',
+        password: 'correct horse battery staple',
+      });
+
+      await dispatchCapability({ pool }, owner, 'add_member', { login, role: 'member' });
+      await expect(
+        dispatchCapability({ pool }, owner, 'add_member', { login, role: 'member' }),
+      ).rejects.toThrow(AlreadyMemberError);
     });
 
     it('rotate_api_key: self-service invalidates the old key immediately and issues a new one', async () => {

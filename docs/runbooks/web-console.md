@@ -38,7 +38,7 @@
 | 侧栏徽标 | `list_pending`（计数） | — | `action.pending` `action.updated` |
 | 侧栏工作区名 + 角色徽标 | `get_workspace`（S3.11，`caller` 字段是角色的权威来源，S3.13 起启用） | — | 无 |
 
-所有 HTTP 调用都是 `POST /api/cap/<name>`；WS 为 `/ws` JSON-RPC。凭证有两种（S4.1）：**用户名 + 密码登录**得到的控制台会话 cookie `nexttime_console_session`（HttpOnly，8 小时；每个能力调用带 `X-Workspace-Id` 与 `X-Requested-With: nexttime`，WS `authenticate {workspaceId}`；登出 `POST /api/auth/logout` 服务端吊销），以及登录页折叠项里的 **API key**（`Authorization: Bearer <api key>`，给自动化与过渡期；只存在 `sessionStorage`，关标签页即失效，"Forget key" 立即清除）。登录、初始化平台、我的账户走 `/api/auth/*`、`/api/platform/*`（`packages/kernel/src/interfaces/http/auth-routes.ts`）。
+所有 HTTP 调用都是 `POST /api/cap/<name>`；WS 为 `/ws` JSON-RPC。凭证有两种（S4.1）：**用户名 + 密码登录**得到的控制台会话 cookie `nexttime_console_session`（HttpOnly，8 小时；每个能力调用带 `X-Workspace-Id` 与 `X-Requested-With: nexttime`，WS `authenticate {workspaceId}`；登出 `POST /api/auth/logout` 服务端吊销），以及登录页折叠项里的 **API key**（`Authorization: Bearer <api key>`，给自动化与过渡期；只存在 `sessionStorage`，关标签页即失效，"Forget key" 立即清除）。登录、绑定 API key、claim、我的账户改密都走 `/api/auth/*`（`packages/kernel/src/interfaces/http/auth-routes.ts`）；没有初始化路由——`admin` 由 kernel 预置，见"排障"表。
 
 ## 内核并行落地：`该能力尚未上线`
 
@@ -67,10 +67,10 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 
 | 现象 | 先查 | 说明 |
 |---|---|---|
-| 打开控制台看到"初始化平台"页 | 平台还没有任何活跃的平台管理员 | 按 `host-bootstrap.md` 读 `secrets/setup/token`，在这页建第一个管理员；令牌 24 小时或 5 次错误后作废，重启 kernel 重生成 |
-| 登录页提示登录名或密码不正确 | 用户是否存在、密码是否已由管理员设置（迁移回填的用户无密码，需 `bootstrap.js set-password` 或 S4.2 的重置） | `POST /api/auth/login` 返回 401 `bad_credentials`；5 次失败后 423 `locked`，5 分钟 |
+| `admin` 登录名或密码不正确、找不到初始密码 | 平台是否已经有活跃管理员（此时密码文件已被删除、不会重生成） | 按 `host-bootstrap.md`「首次登录」读 `secrets/setup/initial-admin-password`；文件丢了用 CLI `create-platform-admin`/`set-password` 兜底 |
+| 登录页提示登录名或密码不正确 | 用户是否存在、密码是否已由管理员设置（迁移回填的用户无密码，需 `bootstrap.js set-password` 或"用户"页重置） | `POST /api/auth/login` 返回 401 `bad_credentials`；5 次失败后 423 `locked`，5 分钟 |
 | 登录后页面要求先改密码 | 该用户的密码是临时密码（管理员设置 / `set-password --temporary`） | 内核在改完之前对所有工作区能力返回 403 `password_change_required` |
-| 登录后看到"你还不属于任何工作区" | 该用户没有活跃的成员资格（平台管理员默认没有业务数据权限，§7.11） | 由工作区 owner 在成员页添加，或 S4.2 的平台控制台 |
+| 登录后看到"你还不属于任何工作区" | 该用户没有活跃的成员资格（平台管理员默认没有业务数据权限，§7.11） | 由工作区 owner 在成员页添加，或管理员在"用户"页加成员资格 |
 | 登录页（API key 折叠项）提示"This key was not accepted" | key 是否来自本工作区的 `bootstrap add-principal` 或治理页新建的成员 | WS `authenticate` 返回 `-32001 unauthorized` |
 | 页面红色横幅显示 `network` | caddy → kernel 的 `/api` 反代、kernel 是否在跑 | `fetch` 本身失败（不是内核错误码） |
 | 横幅显示 `Illegal invocation` | 已在本 PR 修复（`lib/http-client.ts`） | 旧构建的 bug：全局 `fetch` 被当方法调用；重新 `docker compose build caddy` |
@@ -141,8 +141,9 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 6. `docker compose run --rm --no-deps kernel node dist/cli/bootstrap.js create-workspace --name
    ci-e2e --owner owner`（与 `scripts/accept_s1.sh` `bootstrap_step` 同一套输出解析）拿到一个
    owner API key、owner principal id 与 owner 的控制台登录名（`::add-mask::` 遮蔽 key，日志里不出现）。
-   在这之前（S4.1 新增）"Read the one-time platform setup token" 已经用 `sudo cat` 读走
-   `secrets/setup/token`（此时还没有管理员，kernel 启动时写下它）导出 `WEB_E2E_SETUP_TOKEN`。接着两步（W7 新增）：
+   在这之前（P-A1 新增）"Read the initial admin password" 已经用 `sudo cat` 读走
+   `secrets/setup/initial-admin-password`（kernel 启动时预置 `admin` 用户并写下它）导出
+   `WEB_E2E_ADMIN_LOGIN=admin` 与 `WEB_E2E_ADMIN_INITIAL_PASSWORD`。接着两步（W7 新增）：
    "Add a second principal (operator) for approvals.spec.ts" 跑 `bootstrap.js add-principal
    --workspace <id> --name bob --role operator`，导出 `WEB_E2E_API_KEY_B`（遮蔽）与
    `WEB_E2E_PRINCIPAL_ID_B`；"Seed two pending ActionRequests (approvals.spec.ts)" 把 README 的
@@ -154,7 +155,8 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 7. `WEB_E2E_BASE_URL=https://127.0.0.1:8443 WEB_E2E_API_KEY=<刚拿到的 key> ... corepack pnpm
    --filter @nexttime/web e2e`——跑全部 spec（`chat.spec.ts`、`governance.spec.ts`、
    `approvals.spec.ts`——后者靠上一步新建的第二 principal 与种子行不再 skip；`explorer.spec.ts`
-   用 owner 的密码登录；`login.spec.ts` 用令牌初始化平台 → 密码登录 → 临时密码强制改密 → 登出）。
+   用 owner 的密码登录；`login.spec.ts` 用 `admin` 的初始密码首登 → 强制改密 → 落在概览页 → 打开用户页 →
+   登出；随后 owner 密码登录、临时密码强制改密、连续 5 次密码错误把 `admin` 锁定）。
    `playwright.config.ts` 强制 `workers: 1`——这几个 spec 共用同一个 kernel/Postgres，部分场景假设
    对服务端状态的独占访问（如"最近创建的那个 Chat"），跨文件并发跑没有意义，序列化换来的确定性比
    省下来的几秒钟值。

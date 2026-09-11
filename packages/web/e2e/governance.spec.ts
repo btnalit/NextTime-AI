@@ -27,8 +27,8 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   // ever calling `navigate()` (only a stray `#/login` hash triggers App.tsx's own redirect
   // effect) — so the URL stays hash-less through and after login. The signed-in shell (Sidebar's
   // connection indicator) is the reliable "we're past the login screen" signal instead — checked
-  // inside `loginWithApiKey`. `reachLoginForm` first gets past `SetupPage` if this is the first
-  // spec to run this session (see `e2e/auth-helpers.ts`'s own doc comment).
+  // inside `loginWithApiKey`. `reachLoginForm` also tolerates an already-signed-in shell (see
+  // `e2e/auth-helpers.ts`'s own doc comment).
   await reachLoginForm(page);
   await loginWithApiKey(page, apiKey);
 }

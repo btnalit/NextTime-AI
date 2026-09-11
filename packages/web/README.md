@@ -72,11 +72,13 @@ src/
   components/shell/       AppShell, Sidebar (工作 Work / 治理 Governance nav, S3.14; S4.1: workspace
                           switcher when >1 membership, cookie-vs-apiKey sign-out label)
   components/             LoginPage (S4.1: primary login+password form, collapsed API-key
-                          `<details>` via ApiKeyLoginDetails) SetupPage (S4.1: first-run platform
-                          init, same API-key escape hatch) ChangePasswordPage (S4.1: forced
-                          temporary-password change) NoWorkspacePage (S4.1: zero memberships)
-                          AccountPage (S4.1: #/me/account — display name, password, read-only
-                          membership list) ChatListPage ChatPage ApprovalQueuePage
+                          `<details>` via ApiKeyLoginDetails; no setup page any more — P-A1's
+                          pre-created `admin` always reaches this form) ChangePasswordPage (S4.1:
+                          forced temporary-password change) NoWorkspacePage (S4.1: zero
+                          memberships) AccountPage (S4.1: #/me/account — display name, password,
+                          read-only membership list) BindApiKeyForm (P-A1: bind an existing API
+                          key's membership to the current admin, from the overview page)
+                          ChatListPage ChatPage ApprovalQueuePage
                           ActionRequestDetail ActionRequestCard TasksPage TaskDetail
                           ConnectionsPage (now at /govern/systems) CompleteConnectionForm
                           RequestConnectionForm RegisteredSystemsSection GatekeeperDetailDrawer
@@ -278,15 +280,14 @@ exactly what it starts, how long it takes, and how to reproduce it locally. CI a
 `retries: 1`, so a test that fails once and passes on retry still shows up as flaky in the
 uploaded report rather than as a plain pass.
 
-S4.1: `App.tsx` now shows `SetupPage` instead of `LoginPage` on a bare `goto('/')` whenever the
-platform has no active administrator yet — every suite below except `login.spec.ts`'s own
-"initialize platform" test only ever holds an API key or a password for an already-existing user,
-never touches `POST /api/platform/setup`, so each one first has to get past `SetupPage` if it is
-still showing. `e2e/auth-helpers.ts`'s `reachLoginForm` does that (clicks "已有账户？登录 Already
-have an account? Log in" when `SetupPage` is up) before `loginWithApiKey`/`loginWithPassword` fill
-and submit `LoginPage`'s own forms — `LoginPage`'s API-key form is now a collapsed `<details>`
-("用 API key 登录 Use an API key instead") rather than always visible, so `loginWithApiKey` opens it
-first. Five suites:
+P-A1 (docs/platform-admin-design.md §4): there is no setup page any more — the kernel pre-creates
+the user `admin` with a random temporary password on a fresh database, so a bare `goto('/')`
+always reaches `LoginPage` directly; every suite below only ever holds an API key or a password
+for an already-existing user. `e2e/auth-helpers.ts`'s `reachLoginForm` just waits for that form (or
+an already-signed-in shell) before `loginWithApiKey`/`loginWithPassword` fill and submit
+`LoginPage`'s own forms — `LoginPage`'s API-key form is a collapsed `<details>` ("用 API key 登录
+Use an API key instead") rather than always visible, so `loginWithApiKey` opens it first. Five
+suites:
 
 - `e2e/chat.spec.ts` — the S1.8 flow (登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整). Runs in
   CI.
@@ -305,17 +306,18 @@ first. Five suites:
   and `/api/graph/nodes` answers 200; signing out clears both → 401 again. An API-key session has
   neither cookie, so this suite logs in with a password, unlike every other spec here — requires
   `WEB_E2E_OWNER_LOGIN`/`WEB_E2E_OWNER_PASSWORD`, not `WEB_E2E_API_KEY`.
-- `e2e/login.spec.ts` (S4.1, new) — initialize the platform (fresh `SetupPage` → the first
-  administrator → `NoWorkspacePage`, since a platform admin starts with no business-workspace
-  access → sign out; idempotent for a CI retry) → owner password login → shell → sign out →
-  `GET /api/auth/me` is 401 → a temporary password forces `ChangePasswordPage` (wrong current
-  password → inline error; a real change → shell), sign out, sign back in with the new password →
-  shell → 5 wrong passwords lock the account this suite's first test created, and a 6th, correct
-  attempt still shows the lock message (declared last in the file on purpose — see its own module
-  doc comment). Runs in CI; needs `WEB_E2E_SETUP_TOKEN`, `WEB_E2E_OWNER_LOGIN`/
-  `WEB_E2E_OWNER_PASSWORD`, `WEB_E2E_TEMP_LOGIN`/`WEB_E2E_TEMP_PASSWORD` (all provided by CI's "Set
-  console passwords" step, which runs `bootstrap.js set-password` for the owner and the second
-  principal).
+- `e2e/login.spec.ts` (P-A1 rewrite) — `admin`'s first login (its kernel-generated temporary
+  password → forced `ChangePasswordPage` → lands on the platform overview `#/platform/overview` →
+  opens the Users page → sign out; idempotent for a CI retry) → owner password login → shell →
+  sign out → `GET /api/auth/me` is 401 → a temporary password forces `ChangePasswordPage` (wrong
+  current password → inline error; a real change → shell), sign out, sign back in with the new
+  password → shell → 5 wrong passwords lock the `admin` account itself, and a 6th, correct attempt
+  still shows the lock message (declared last in the file on purpose — see its own module doc
+  comment). Runs in CI; needs `WEB_E2E_ADMIN_LOGIN`/`WEB_E2E_ADMIN_INITIAL_PASSWORD`,
+  `WEB_E2E_OWNER_LOGIN`/`WEB_E2E_OWNER_PASSWORD`, `WEB_E2E_TEMP_LOGIN`/`WEB_E2E_TEMP_PASSWORD` (the
+  admin password is read from `${NEXTTIME_DATA}/secrets/setup/initial-admin-password`; the other
+  four are provided by CI's "Set console passwords" step, which runs `bootstrap.js set-password`
+  for the owner and the second principal).
 
 ```bash
 corepack pnpm --filter @nexttime/web exec playwright install chromium   # once per machine
@@ -331,8 +333,9 @@ node packages/kernel/dist/cli/bootstrap.js add-principal \
 node packages/kernel/dist/cli/bootstrap.js set-password --login <owner-login>
 node packages/kernel/dist/cli/bootstrap.js set-password --login <bob-login> --temporary
 
-# The one-time platform setup token (login.spec.ts's "initialize platform" test) — minted at
-# kernel start into ${NEXTTIME_DATA}/secrets/setup/token; read it before anything else consumes it.
+# admin's initial password (login.spec.ts) — the kernel writes it once, at start, whenever no
+# active platform administrator exists yet:
+sudo cat "${NEXTTIME_DATA}/secrets/setup/initial-admin-password"
 
 # chat.spec.ts + governance.spec.ts (owner key only):
 WEB_E2E_BASE_URL=http://127.0.0.1:5173 \
@@ -347,11 +350,12 @@ WEB_E2E_PRINCIPAL_ID_B=<bob-principal-id> \
 WEB_E2E_SEED_ACTION_REQUESTS=1 \
 corepack pnpm --filter @nexttime/web e2e
 
-# + explorer.spec.ts + login.spec.ts (password-based; run the "console passwords"/setup-token
+# + explorer.spec.ts + login.spec.ts (password-based; run the "console passwords"/admin-password
 # steps above first):
 WEB_E2E_BASE_URL=http://127.0.0.1:5173 \
 WEB_E2E_API_KEY=<owner-api-key> \
-WEB_E2E_SETUP_TOKEN=<setup-token> \
+WEB_E2E_ADMIN_LOGIN=admin \
+WEB_E2E_ADMIN_INITIAL_PASSWORD=<admin-initial-password> \
 WEB_E2E_OWNER_LOGIN=<owner-login> \
 WEB_E2E_OWNER_PASSWORD=<owner-password> \
 WEB_E2E_TEMP_LOGIN=<bob-login> \

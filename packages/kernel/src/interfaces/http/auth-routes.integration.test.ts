@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, open, readFile, rm } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateKeyPair } from 'jose';
@@ -12,7 +10,6 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
   CONSOLE_SESSION_COOKIE,
   createUser,
-  ensureSetupToken,
   findUserByLogin,
   setUserPassword,
 } from '../../application/identity/index.js';
@@ -26,15 +23,11 @@ import { createServer } from '../../index.js';
  * suite. DB-gated (`describe.runIf(DATABASE_URL !== undefined)`), auto-skipped locally.
  *
  * The DB is shared across test files in CI (no per-file schema reset), so every login/display
- * name used here gets a random suffix. The platform-setup flow is a genuine singleton
- * (`platform_setup`/`countActivePlatformAdmins` are process-wide, not workspace-scoped) and its
- * own describe block below needs a real admin-free platform to exercise "fresh DB" behavior —
- * `cli/bootstrap.test.ts`'s `createPlatformAdmin` tests already put a real active admin in this
- * same shared DB, and `vitest.config.ts` forces `fileParallelism: false` whenever `DATABASE_URL`
- * is set, so DB-gated files run strictly sequentially in a file-name order that puts
- * `cli/bootstrap.test.ts` before this file. The `platform setup` describe's own `beforeAll`/
- * `afterAll` below temporarily disables every currently-active admin (never deletes) so its tests
- * see a genuinely uninitialized platform, then restores exactly what it disabled.
+ * name used here gets a random suffix. P-A1 (docs/platform-admin-design.md §4) removed the
+ * one-time setup token and `SetupPage`/`POST /api/platform/setup`/`GET /api/platform/setup-state`
+ * entirely — the first administrator is pre-created by the kernel at startup
+ * (`application/identity/setup.ts`'s `ensureInitialAdmin`) or via the CLI's
+ * `createPlatformAdmin`, so there is no "uninitialized platform" state left to exercise here.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -49,7 +42,6 @@ describe.runIf(DATABASE_URL !== undefined)(
     let pool: Pool;
     let privateKey: CryptoKey;
     let publicKey: CryptoKey;
-    let tmpDir: string;
 
     function appWithKeys() {
       return createServer({
@@ -109,12 +101,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       const pair = await generateKeyPair(HANDLE_SIGNING_ALG, { crv: 'Ed25519' });
       privateKey = pair.privateKey;
       publicKey = pair.publicKey;
-      tmpDir = await mkdtemp(path.join(os.tmpdir(), 'nexttime-setup-'));
     });
 
     afterAll(async () => {
       await pool.end();
-      await rm(tmpDir, { recursive: true, force: true });
     });
 
     // ---- POST /api/auth/login -------------------------------------------------------------------
