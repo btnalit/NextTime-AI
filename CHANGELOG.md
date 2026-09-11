@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/btnalit/NextTime-AI/compare/v0.5.0...v0.5.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **kernel:** log outbox delivery failures with row context (leftover 27) ([#159](https://github.com/btnalit/NextTime-AI/issues/159)) ([bd880f5](https://github.com/btnalit/NextTime-AI/commit/bd880f5fc593300510f610a71685aacf378c9526))
+* **runtime:** entry self-check proxied probe is a warning, not fatal (leftover 29) ([#160](https://github.com/btnalit/NextTime-AI/issues/160)) ([770c4e4](https://github.com/btnalit/NextTime-AI/commit/770c4e43653adcc5ce2160f4302754e3d603f968))
+
 ## [0.5.0](https://github.com/btnalit/NextTime-AI/compare/v0.4.3...v0.5.0) (2026-09-11)
 
 
