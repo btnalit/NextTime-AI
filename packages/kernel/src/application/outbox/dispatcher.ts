@@ -83,8 +83,11 @@ export interface OutboxDispatcherOptions {
   /** Called whenever `processOneRow` throws (a consumer error, or a DB error) during the
    *  interval-driven loop started by `start()` — `pollOnce()` itself still rejects when called
    *  directly (e.g. from a test), this hook only covers the unattended `start()` path so a
-   *  rejection there never becomes an unhandled promise rejection. Defaults to a no-op; callers
-   *  that want visibility (structured logging, design doc §12) should pass one. */
+   *  rejection there never becomes an unhandled promise rejection. A failure after a row was
+   *  claimed arrives as an `OutboxDeliveryError` (row id, event type, attempt count, `cause`);
+   *  a failure before any claim (the claim query itself) arrives as-is. Defaults to a no-op;
+   *  production (`createBackgroundServices` → `main()`) passes the kernel logger — STATUS
+   *  leftover 27 was this default silently swallowing a consumer bug for weeks. */
   readonly onError?: (error: unknown) => void;
   /** Dead-letter cap (lane-1 P2 fix, this file's own module doc comment): a row is no longer
    *  claimed by `processOneRow` once its `attempts` reaches this value — it stays
@@ -103,6 +106,44 @@ interface OutboxRow {
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MAX_ATTEMPTS = 10;
+
+/**
+ * Thrown (and routed to `onError`) when delivering one claimed outbox row fails — a consumer threw,
+ * or the phase-2 transaction itself did. Carries what an operator needs to find the row
+ * (`select * from outbox where id = <outboxId>`) and to tell a transient failure from one that is
+ * about to be dead-lettered; the consumer's own error is `cause`.
+ */
+export class OutboxDeliveryError extends Error {
+  readonly outboxId: string;
+  readonly workspaceId: string;
+  readonly eventType: string;
+  /** The row's `attempts` value after this failed attempt was durably counted. */
+  readonly attempts: number;
+  readonly maxAttempts: number;
+  /** True when this failure exhausted `maxAttempts`: the row will not be claimed again. */
+  readonly deadLettered: boolean;
+
+  constructor(
+    row: { outboxId: string; workspaceId: string; eventType: string; attempts: number },
+    maxAttempts: number,
+    cause: unknown,
+  ) {
+    const deadLettered = row.attempts >= maxAttempts;
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `outbox delivery failed: ${row.eventType} row ${row.outboxId} attempt ${row.attempts}/${maxAttempts}` +
+        `${deadLettered ? ' (dead-lettered)' : ''}: ${causeMessage}`,
+      { cause },
+    );
+    this.name = 'OutboxDeliveryError';
+    this.outboxId = row.outboxId;
+    this.workspaceId = row.workspaceId;
+    this.eventType = row.eventType;
+    this.attempts = row.attempts;
+    this.maxAttempts = maxAttempts;
+    this.deadLettered = deadLettered;
+  }
+}
 
 /**
  * In-process outbox dispatcher over one `PoolLike` (a real `pg.Pool` in production; a fake with
@@ -215,6 +256,9 @@ export class OutboxDispatcher {
   private async processOneRow(excludeIds: string[]): Promise<boolean> {
     const client = await this.pool.connect();
     let selectedId: string | undefined;
+    let claimedRow:
+      | { outboxId: string; workspaceId: string; eventType: string; attempts: number }
+      | undefined;
     try {
       // Phase 1: claim a row and durably increment its attempts counter — committed here, on its
       // own, regardless of what phase 2 below does (see this file's own module doc comment,
@@ -237,11 +281,17 @@ export class OutboxDispatcher {
         return false;
       }
       selectedId = claimed.id;
-      await client.query(
-        'update outbox set attempts = attempts + 1 where workspace_id = $1 and id = $2',
+      const attemptsResult = await client.query<{ attempts: number }>(
+        'update outbox set attempts = attempts + 1 where workspace_id = $1 and id = $2 returning attempts',
         [claimed.workspace_id, claimed.id],
       );
       await client.query('COMMIT');
+      claimedRow = {
+        outboxId: String(claimed.id),
+        workspaceId: claimed.workspace_id,
+        eventType: claimed.event_type,
+        attempts: attemptsResult.rows[0]?.attempts ?? Number.NaN,
+      };
 
       // Phase 2: re-acquire the row and deliver. A missing row here (already dispatched by
       // another process in the narrow gap between the two transactions — see module doc comment)
@@ -284,6 +334,7 @@ export class OutboxDispatcher {
         // Best-effort: the connection may already be unusable. The original error is what matters.
       });
       if (selectedId !== undefined) excludeIds.push(selectedId);
+      if (claimedRow) throw new OutboxDeliveryError(claimedRow, this.maxAttempts, err);
       throw err;
     } finally {
       client.release();

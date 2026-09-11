@@ -8,3 +8,4 @@
  */
 export { OutboxDispatcher } from './dispatcher.js';
 export type { OutboxConsumer, OutboxDeliveryMeta, OutboxDispatcherOptions } from './dispatcher.js';
+export { OutboxDeliveryError } from './dispatcher.js';

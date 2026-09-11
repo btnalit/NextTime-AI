@@ -310,6 +310,13 @@ export interface CreateBackgroundServicesOptions {
    *  becomes an unhandled promise rejection — same shape as `OutboxDispatcher`'s own `onError`.
    *  Defaults to a no-op; `main()` passes `app.log.error`. */
   readonly onApprovalReaperError?: (error: unknown) => void;
+  /** Passed straight through as the `OutboxDispatcher`'s `onError`: called whenever delivering an
+   *  outbox row fails in the unattended poll loop (an `OutboxDeliveryError` naming the row, event
+   *  type and attempt count, with the consumer's own error as `cause`). Defaults to a no-op;
+   *  `main()` passes `app.log.error`. Until STATUS leftover 27 this option did not exist and the
+   *  production dispatcher ran with the silent default, which is why the non-uuid grant scope bug
+   *  (#152) killed the ActionRequestUpdated linkage consumer for weeks without a single log line. */
+  readonly onOutboxError?: (error: unknown) => void;
   /** How often the S2.4 Gatekeeper-queue periodic drain tick runs. Default
    *  `DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS` (1 minute — much tighter than the approval reaper's 5,
    *  since a stuck executable queue directly blocks a Worker's already-approved action, not merely
@@ -543,7 +550,7 @@ export function createInvariantMetricsStore(): InvariantMetricsStore {
 export function createBackgroundServices(
   options: CreateBackgroundServicesOptions,
 ): BackgroundServices {
-  const dispatcher = new OutboxDispatcher(options.pool);
+  const dispatcher = new OutboxDispatcher(options.pool, { onError: options.onOutboxError });
   const runtime = options.runtime ?? buildDefaultRuntime(options);
 
   setAgentRuntimeForHandlers(runtime);
@@ -1045,6 +1052,7 @@ export function main(): void {
       approvalTimeoutMs,
       approvalReaperIntervalMs,
       onApprovalReaperError: (err: unknown) => app.log.error(err),
+      onOutboxError: (err: unknown) => app.log.error(err),
       gatekeeperDrainIntervalMs,
       onGatekeeperDrainError: (err: unknown) => app.log.error(err),
       actionRequestReaperIntervalMs,
