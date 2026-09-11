@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, open, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -183,9 +183,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         firstTokenFile = path.join(tmpDir, 'token-1');
         const written = await ensureSetupToken(pool, { tokenFile: firstTokenFile });
         expect(written).toBe(firstTokenFile);
-        const stats = await stat(firstTokenFile);
-        expect(stats.mode & 0o777).toBe(0o600);
-        firstToken = (await readFile(firstTokenFile, 'utf8')).trim();
+        // One open handle for both the mode check and the read (no check-then-use on the path).
+        const handle = await open(firstTokenFile, 'r');
+        try {
+          const stats = await handle.stat();
+          expect(stats.mode & 0o777).toBe(0o600);
+          firstToken = (await handle.readFile('utf8')).trim();
+        } finally {
+          await handle.close();
+        }
         expect(firstToken.length).toBeGreaterThan(0);
 
         const app = appWithKeys();
@@ -655,6 +661,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           method: 'POST',
           url: '/api/auth/logout',
           headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          // CSRF_HEADERS declares a JSON content type; Fastify rejects an empty JSON body (400).
+          payload: {},
         });
         expect(logoutResponse.statusCode).toBe(200);
         const setCookie = setCookieHeader(logoutResponse.headers);
