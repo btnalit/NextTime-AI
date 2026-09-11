@@ -89,7 +89,9 @@ describe('bindApiKey', () => {
             platformRole: 'admin',
             mustChangePassword: false,
           },
-          memberships: [{ workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p1', role: 'owner' }],
+          memberships: [
+            { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p1', role: 'owner' },
+          ],
         },
       }),
     );

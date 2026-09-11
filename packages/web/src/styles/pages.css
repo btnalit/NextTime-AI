@@ -598,3 +598,13 @@
   font-size: 12.5px;
   color: var(--text-3);
 }
+
+/* ---- Platform users (P-A1): the directory table is wider than a narrow window; it scrolls in
+ * its own box so the page body never does. ------------------------------------------------- */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.table-scroll > .data-table {
+  min-width: 720px;
+}

@@ -129,7 +129,8 @@ export function LoginPage({
           </Button>
 
           <p className="login-footer">
-            首次登录：用户名 admin，初始密码在主机的 secrets/setup/initial-admin-password（首次登录后必须修改）。
+            首次登录：用户名 admin，初始密码在主机的
+            secrets/setup/initial-admin-password（首次登录后必须修改）。
           </p>
         </form>
 

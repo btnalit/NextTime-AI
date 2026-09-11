@@ -26,7 +26,9 @@ describe('BindApiKeyForm', () => {
             platformRole: 'admin',
             mustChangePassword: false,
           },
-          memberships: [{ workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p1', role: 'owner' }],
+          memberships: [
+            { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p1', role: 'owner' },
+          ],
         },
       }),
     );
@@ -49,9 +51,7 @@ describe('BindApiKeyForm', () => {
         error: { code: 'invalid_api_key', message: 'that API key does not belong to a person' },
       }),
     );
-    render(
-      <BindApiKeyForm onBound={vi.fn()} fetchImpl={fetchImpl as unknown as typeof fetch} />,
-    );
+    render(<BindApiKeyForm onBound={vi.fn()} fetchImpl={fetchImpl as unknown as typeof fetch} />);
 
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'sk-bad' } });
     fireEvent.click(screen.getByRole('button', { name: '绑定 Bind' }));
@@ -66,9 +66,7 @@ describe('BindApiKeyForm', () => {
         error: { code: 'already_member', message: 'already a member' },
       }),
     );
-    render(
-      <BindApiKeyForm onBound={vi.fn()} fetchImpl={fetchImpl as unknown as typeof fetch} />,
-    );
+    render(<BindApiKeyForm onBound={vi.fn()} fetchImpl={fetchImpl as unknown as typeof fetch} />);
 
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'sk-dup' } });
     fireEvent.click(screen.getByRole('button', { name: '绑定 Bind' }));

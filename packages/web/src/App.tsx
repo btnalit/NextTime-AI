@@ -24,6 +24,7 @@ import { ToastProvider } from './components/ui/Toast.js';
 import { PermissionsProvider } from './hooks/usePermissions.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import {
+  type MeResult,
   type WireMembership,
   type WireUser,
   logout as apiLogout,
@@ -241,14 +242,30 @@ export function App() {
   );
 
   const proceedAfterCookieAuth = useCallback(
-    async (user: WireUser, memberships: readonly WireMembership[]): Promise<void> => {
+    async (
+      user: WireUser,
+      memberships: readonly WireMembership[],
+      replacing?: WsClient,
+    ): Promise<void> => {
       if (user.mustChangePassword) {
         setPreSession({ kind: 'changePassword', user, memberships });
         return;
       }
+      // Administrators land on the platform plane, everyone else on chats (design doc §6.7:
+      // "概览是管理员的落地页；普通用户落在对话页"). Only when the hash carries no deliberate
+      // destination — a reload on `#/work/chats`, a bookmarked `#/govern/audit`, and the
+      // `#/platform/overview` this very function is re-entered with after a bind (below) are all
+      // left exactly where they are. `setRoute` is called alongside `navigate` because the
+      // `hashchange` event is asynchronous and `openPlatformOnlySession` right below is not: a
+      // session published against the *old* route would otherwise be redirected by `Routed`'s own
+      // stale-`#/login` effect before the hash change ever arrives.
+      if (user.platformRole === 'admin' && isDefaultLanding(window.location.hash)) {
+        navigate(hrefs.platformOverview());
+        setRoute(routeFromHash(window.location.hash));
+      }
       if (memberships.length === 0) {
         if (user.platformRole === 'admin') {
-          openPlatformOnlySession(user, memberships);
+          openPlatformOnlySession(user, memberships, replacing);
           return;
         }
         setPreSession({ kind: 'noWorkspace', user, memberships });
@@ -266,7 +283,7 @@ export function App() {
           : stored && memberships.some((m) => m.workspaceId === stored)
             ? stored
             : firstMembership.workspaceId;
-      await openCookieSession(user, memberships, chosen);
+      await openCookieSession(user, memberships, chosen, replacing);
     },
     [openCookieSession, openPlatformOnlySession],
   );
@@ -343,6 +360,19 @@ export function App() {
     );
   }, []);
 
+  /** `BindApiKeyForm` on the platform overview just folded an existing API key's membership into
+   *  this account (`POST /api/auth/bind-api-key` answers with the caller's refreshed
+   *  `{user, memberships}`). Route it through the same `proceedAfterCookieAuth` the change-password
+   *  path uses, handing over the current socket: a platform-only admin (no memberships, no WS at
+   *  all) is thereby upgraded to a real workspace session and can open the workspace it just
+   *  bound without reloading the page. */
+  const handleKeyBound = useCallback(
+    (result: MeResult): void => {
+      void proceedAfterCookieAuth(result.user, result.memberships, session?.ws);
+    },
+    [proceedAfterCookieAuth, session],
+  );
+
   const handlePasswordChanged = useCallback(
     (user: WireUser): void => {
       // Read the *current* state, not the render this callback was created in: a "Sign out"
@@ -368,6 +398,7 @@ export function App() {
             onSwitchWorkspace={(workspaceId) => void handleSwitchWorkspace(workspaceId)}
             switchingWorkspace={switchingWorkspace}
             onUserChanged={handleUserChanged}
+            onKeyBound={handleKeyBound}
           />
         </ToastProvider>
       </PermissionsProvider>
@@ -421,6 +452,7 @@ function Routed({
   onSwitchWorkspace,
   switchingWorkspace,
   onUserChanged,
+  onKeyBound,
 }: {
   readonly session: Session;
   readonly route: Route;
@@ -428,6 +460,7 @@ function Routed({
   readonly onSwitchWorkspace: (workspaceId: string) => void;
   readonly switchingWorkspace: boolean;
   readonly onUserChanged: (user: WireUser) => void;
+  readonly onKeyBound: (result: MeResult) => void;
 }) {
   const active = sectionOf(route);
   usePushToasts(session.ws, active);
@@ -540,7 +573,10 @@ function Routed({
       page = <AuditPage http={session.http} />;
       break;
     case 'platformOverview':
-      page = requireAdmin(session, <PlatformOverviewPage http={session.http} />);
+      page = requireAdmin(
+        session,
+        <PlatformOverviewPage http={session.http} onKeyBound={onKeyBound} />,
+      );
       break;
     case 'platformUsers':
       page = requireAdmin(session, <PlatformUsersPage http={session.http} />);
@@ -569,6 +605,17 @@ function Routed({
       {page}
     </AppShell>
   );
+}
+
+/**
+ * True when the current hash names no deliberate destination: empty (a fresh load), a bare `#`/
+ * `#/`, a stale `#/login`, or anything unknown that `routeFromHash` had to fall back to the
+ * default `chats` route for. An explicit `#/work/chats` — or any other real route — *is* a
+ * destination and is left alone, so a reload never moves the reader off the page they were on.
+ */
+function isDefaultLanding(hash: string): boolean {
+  if (hash === '' || hash === '#' || hash === '#/' || hash === hrefs.login()) return true;
+  return routeFromHash(hash).kind === 'chats' && hash !== hrefs.chats();
 }
 
 /** True for the four `#/platform/*` route kinds — used by `Routed`'s platform-only redirect. */

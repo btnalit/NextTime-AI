@@ -16,9 +16,11 @@ export interface CreatePrincipalFormProps {
 }
 
 /**
- * components/CreatePrincipalForm: `create_principal{role, displayName}` (S3.11) — always a
- * `kind: 'human'` principal (the capability takes no `kind` param; agent/service principals come
- * from a WorkerDefinition spawn, not this form). Two phases: `form` (role + display name) →
+ * components/CreatePrincipalForm: `create_principal{role, displayName}` (S3.11; relabelled in
+ * P-A1) — always a `kind: 'service'` principal: an automation credential for scripts and
+ * acceptance harnesses, never a person. People join a workspace through `add_member`
+ * (`AddMemberForm`) / `add_membership`, which mint no key at all (design doc §5, and
+ * `create_principal`'s own capability description). Two phases: `form` (role + display name) →
  * `created` (the returned API key, shown exactly once — `docs/development-tasks.md` §S3.11: "API
  * key 只显示一次"). The key never touches `lib/session.ts`/`sessionStorage` and is dropped from
  * this component's own state the moment the drawer closes (mirrors `CompleteConnectionForm`'s
@@ -87,6 +89,13 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
       noValidate
       data-testid="create-principal-form"
     >
+      <Notice>
+        创建的是 <code className="mono">kind: 'service'</code> Principal —
+        脚本与验收工具用的自动化凭证，不是人。 Creates a{' '}
+        <code className="mono">kind: 'service'</code> Principal — an automation credential, never a
+        person: add people with 添加成员 Add member.
+      </Notice>
+
       <Field id="cp-name" label="Display name" required>
         <Input
           id="cp-name"

@@ -133,7 +133,11 @@ export function bindApiKey(
   apiKey: string,
   fetchImpl: typeof fetch = defaultFetch,
 ): Promise<MeResult> {
-  return request<MeResult>('/api/auth/bind-api-key', { method: 'POST', body: { apiKey } }, fetchImpl);
+  return request<MeResult>(
+    '/api/auth/bind-api-key',
+    { method: 'POST', body: { apiKey } },
+    fetchImpl,
+  );
 }
 
 export function login(

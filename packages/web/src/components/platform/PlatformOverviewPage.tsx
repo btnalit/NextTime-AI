@@ -1,5 +1,6 @@
 import type { PlatformOverviewWire } from '@nexttime/shared';
 import { useCapability } from '../../hooks/useCapability.js';
+import type { MeResult } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
 import { hrefs } from '../../lib/router.js';
@@ -14,6 +15,11 @@ import { SkeletonRows } from '../ui/Skeleton.js';
 
 export interface PlatformOverviewPageProps {
   readonly http: CapabilityCaller;
+  /** The refreshed `{user, memberships}` `POST /api/auth/bind-api-key` answers with. `App` routes
+   *  it back through its own cookie-auth path, so a platform-only admin (zero memberships, no WS)
+   *  is upgraded to a real workspace session and can open the workspace it just bound without
+   *  reloading. Optional — this page renders standalone in its own tests. */
+  readonly onKeyBound?: (result: MeResult) => void;
 }
 
 type ChecklistItem = PlatformOverviewWire['checklist'][number];
@@ -55,9 +61,11 @@ const HEALTH_CHIP_CLASS: Readonly<Record<ServiceHealth['status'], string>> = {
  *
  * `counts.pendingActivationUsers > 0` also surfaces `BindApiKeyForm` (S4.1 revised, shared with
  * the old `NoWorkspacePage`) — the "已有部署一次点击接管" path (§3.7): an admin binds a
- * pre-existing API key's workspace membership onto this account without leaving the overview.
+ * pre-existing API key's workspace membership onto this account without leaving the overview. A
+ * successful bind both re-reads this page (the checklist and the pending-activation count change)
+ * and, via `onKeyBound`, refreshes the session itself.
  */
-export function PlatformOverviewPage({ http }: PlatformOverviewPageProps) {
+export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageProps) {
   const overview = useCapability<PlatformOverviewWire>(http, 'platform_overview');
 
   return (
@@ -78,7 +86,10 @@ export function PlatformOverviewPage({ http }: PlatformOverviewPageProps) {
       ) : (
         <PlatformOverviewBody
           data={overview.state.data}
-          onKeyBound={() => void overview.reload()}
+          onKeyBound={(result) => {
+            onKeyBound?.(result);
+            void overview.reload();
+          }}
         />
       )}
     </div>
@@ -90,7 +101,7 @@ function PlatformOverviewBody({
   onKeyBound,
 }: {
   readonly data: PlatformOverviewWire;
-  readonly onKeyBound: () => void;
+  readonly onKeyBound: (result: MeResult) => void;
 }) {
   return (
     <>

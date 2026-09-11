@@ -61,7 +61,9 @@ test.describe('CI smoke: governance surface', () => {
     await expect(page.getByTestId('members-list')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('member-row').first()).toBeVisible();
 
-    await page.getByRole('button', { name: /Add member/ }).click();
+    // P-A1: "Add member" now adds an existing platform user by login (`add_member`); the API-key
+    // Principal this test creates comes from the relabelled service-credential form.
+    await page.getByRole('button', { name: /Service credential/ }).click();
     const drawer = page.getByTestId('create-principal-drawer');
     await expect(drawer).toBeVisible();
     await drawer.locator('#cp-name').fill(`ci-e2e-member-${Date.now()}`);

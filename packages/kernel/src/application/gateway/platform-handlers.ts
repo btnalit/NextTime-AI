@@ -83,6 +83,9 @@ interface UserDbRow {
   monthly_token_budget: string | number | null;
   last_login_at: Date | null;
   created_at: Date;
+  /** `created_at::text` — full microsecond precision for the keyset cursor (a JS `Date` only
+   *  carries milliseconds, which would re-include or skip boundary rows). */
+  created_at_cursor: string;
 }
 
 interface MembershipDbRow {
@@ -98,6 +101,7 @@ interface MembershipDbRow {
 const USER_SELECT = `
   select u.id, u.login, u.display_name, u.platform_role, u.status, u.has_password,
          u.must_change_password, u.daily_call_limit, u.monthly_token_budget, u.created_at,
+         u.created_at::text as created_at_cursor,
          (select max(s.created_at) from user_sessions s where s.user_id = u.id) as last_login_at
     from users u`;
 
@@ -160,8 +164,8 @@ async function loadUser(client: PoolClient, userId: string): Promise<UserWire> {
   return toWireUser(row, memberships.get(row.id) ?? []);
 }
 
-function encodeCursor(row: UserDbRow): string {
-  return Buffer.from(`${row.created_at.toISOString()}|${row.id}`).toString('base64url');
+function encodeCursor(row: { created_at_cursor: string; id: string }): string {
+  return Buffer.from(`${row.created_at_cursor}|${row.id}`).toString('base64url');
 }
 
 function decodeCursor(cursor: string): { createdAt: string; id: string } | null {
@@ -471,7 +475,10 @@ export const resetUserPasswordHandler: CapabilityHandler = async (client, _works
       where id = $1`,
     [input.userId, passwordHash],
   );
+  // A reset ends every existing session, console and workspace alike: whoever held the old
+  // password (or a stolen cookie) is out until they log in with the new temporary one.
   await revokeConsoleSessions(client, input.userId);
+  await revokeWorkspaceSessions(client, input.userId);
   return {
     result: { userId: input.userId, temporaryPassword },
     resourceType: 'user',
@@ -676,6 +683,7 @@ interface AuditDbRow {
   resource_id: string | null;
   payload: Record<string, unknown>;
   created_at: Date;
+  created_at_cursor: string;
 }
 
 function toWireAudit(row: AuditDbRow): PlatformAuditRecordWire {
@@ -693,7 +701,7 @@ function toWireAudit(row: AuditDbRow): PlatformAuditRecordWire {
 
 const PLATFORM_AUDIT_SELECT = `
   select a.id, a.action, a.actor_user_id, u.login as actor_login, a.resource_type, a.resource_id,
-         a.payload, a.created_at
+         a.payload, a.created_at, a.created_at::text as created_at_cursor
     from audit_records a
     left join users u on u.id = a.actor_user_id
    where a.workspace_id is null`;
@@ -746,10 +754,7 @@ async function queryPlatformAudit(
   );
   const rows = result.rows.slice(0, filter.limit);
   const last = rows[rows.length - 1];
-  const nextCursor =
-    result.rows.length > filter.limit && last
-      ? Buffer.from(`${last.created_at.toISOString()}|${last.id}`).toString('base64url')
-      : undefined;
+  const nextCursor = result.rows.length > filter.limit && last ? encodeCursor(last) : undefined;
   const items = rows.map(toWireAudit);
   return nextCursor ? { items, nextCursor } : { items };
 }

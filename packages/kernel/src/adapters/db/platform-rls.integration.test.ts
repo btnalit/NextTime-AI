@@ -119,10 +119,14 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('a workspace transaction (nexttime_app, no platform GUC) sees only members of its own workspace', async () => {
-      const ids = await withWorkspace(pool, { workspaceId, principalId: ownerPrincipalId }, async (client) => {
-        const result = await client.query<{ id: string }>('select id from users');
-        return result.rows.map((row) => row.id);
-      });
+      const ids = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerPrincipalId },
+        async (client) => {
+          const result = await client.query<{ id: string }>('select id from users');
+          return result.rows.map((row) => row.id);
+        },
+      );
       expect(ids).toContain(memberUserId);
       expect(ids).not.toContain(outsiderUserId);
     });
@@ -168,13 +172,17 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('lookup_user_by_login resolves a non-member from inside a workspace transaction', async () => {
-      const row = await withWorkspace(pool, { workspaceId, principalId: ownerPrincipalId }, async (client) => {
-        const result = await client.query<{ id: string; display_name: string; status: string }>(
-          'select id, display_name, status from lookup_user_by_login($1)',
-          [outsiderLogin],
-        );
-        return result.rows[0];
-      });
+      const row = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerPrincipalId },
+        async (client) => {
+          const result = await client.query<{ id: string; display_name: string; status: string }>(
+            'select id, display_name, status from lookup_user_by_login($1)',
+            [outsiderLogin],
+          );
+          return result.rows[0];
+        },
+      );
       expect(row?.id).toBe(outsiderUserId);
       expect(row?.status).toBe('active');
     });

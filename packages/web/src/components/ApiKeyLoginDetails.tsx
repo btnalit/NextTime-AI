@@ -20,7 +20,12 @@ export interface ApiKeyLoginDetailsProps {
  * `onLogin`/`pending`/`error` are owned by `App.tsx`, which runs the multi-step WS connect +
  * authenticate — unlike the single-fetch password flow, this is not self-contained.
  */
-export function ApiKeyLoginDetails({ onLogin, pending, error, footerExtra }: ApiKeyLoginDetailsProps) {
+export function ApiKeyLoginDetails({
+  onLogin,
+  pending,
+  error,
+  footerExtra,
+}: ApiKeyLoginDetailsProps) {
   const [apiKey, setApiKey] = useState('');
   const [revealed, setRevealed] = useState(false);
 

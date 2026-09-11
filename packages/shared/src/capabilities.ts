@@ -2057,7 +2057,7 @@ const platformCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.UserMembershipWireSchema,
     description:
-      'Add a user to a workspace with a role — creates the human Principal (no API key) and, if none exists yet, the user’s AgentProfile with the workspace default model. 409 already_member if the user already has a membership there.',
+      'Add a user to a workspace with a role — creates the human Principal (no API key); the AgentProfile inherits the workspace default model until the user changes it. 409 already_member if the user already has a membership there.',
   },
   {
     name: 'set_membership_role',
