@@ -1426,6 +1426,49 @@
 - 不做：OIDC（之后）；每用户一个 RLS 工作区（已否决，见 §11）；工作区新建 / 禁用与 owner 委托
   （P-A2）；按对话分 pi 会话（P-A2）。
 
+- 实现说明（2026-09-11，PR #TBD）：
+  - **平台通道是第三个 caller 通道**，不是 human 通道上的一个标志：`ResolvedCaller` 增加
+    `{channel:'platform', user}`（`application/gateway/caller.ts`），`resolvePlatformCaller` 只认控制台
+    cookie + CSRF 头 + 非临时密码 + `platform_role='admin'`，带 Bearer 的请求先照常解析再 403（不泄露
+    token 是否有效）。`authorizeCapabilityCall` 两条新规则：`scope:'platform'` 的能力只放行平台 caller；
+    平台 caller 调任何工作区能力一律 403（它没有工作区）。`POST /api/cap/<name>` 按注册表的 `scope`
+    选解析器，未注册的名字仍走旧路径答 404。WS 与 MCP 不涉及平台能力（`/ws` 只解析工作区 caller）。
+  - **平台事务 `withPlatform`**（`adapters/db/platform-context.ts`）：`app.platform = on`、`app.user_id`、
+    清空 `app.workspace_id` / `app.principal_id`，仍 `set local role nexttime_app`——不是超级用户会话。
+    handler 需要写某个工作区的表时（加成员建 Principal）用 `setWorkspaceContext` 显式切 GUC。审计行是
+    0019 定义的平台形态（`workspace_id is null`、`actor_principal_id is null`、`actor_user_id`），`writeAudit`
+    的输入类型随之放宽。
+  - **迁移 0021**：`users` / `user_sessions` 开 RLS（`force`）——平台事务全见全写；工作区事务只能 `select`
+    本工作区成员对应的用户（成员页显示登录名），不能写；`password_hash` 对应用角色**只写不读**（列级
+    `update` 无 `select`），"待激活"用生成列 `has_password` 表达；`lookup_user_by_login`（security definer）
+    是工作区事务里唯一能按登录名找到非成员用户的口，只回 id / display_name / status，供 `add_member`。
+    `platform_settings` 单行 JSONB + 版本号 + `platform_settings_history`；`users.daily_call_limit` /
+    `monthly_token_budget`（P-D 才在 `llm-proxy` 强制）。因此平台 handler **不复用**身份模块的
+    `insertUser` / `setUserPassword`（它们在超级用户 client 上跑且回读 `password_hash`），SQL 按 0021 的列
+    授权重写在 `platform-handlers.ts`。
+  - **`create_principal` 改为只建 `service` Principal**（自动化凭证），人的成员资格只经 `add_member`
+    （工作区，owner，按登录名）/ `add_membership`（平台）产生，不再发 API key；0019 为 `create_principal`
+    的 human 路径授的 `users` 插入权随 0021 收回。
+  - **默认工作区**：`createWorkspace` 的种子逻辑从 `cli/bootstrap.ts` 搬到 `application/workspace/create.ts`
+    （`createWorkspaceWithOwner`，owner 可以是既有用户、可选签发 API key），CLI 只是包装；kernel 启动在
+    `ensureInitialAdmin` 之后跑 `ensureDefaultWorkspace`：零工作区 → 建（名取 `siteName`，`admin` 为 owner、
+    无 key）并写入 `defaultWorkspaceId`；有工作区但无默认且恰一个活跃 → 采纳；均非致命。
+  - **护栏**：最后一个活跃管理员不可停用 / 降级、不可停用自己；env `NEXTTIME_PLATFORM_ADMINS` 里的登录名
+    不可停用 / 降级（`protected_admin`）；工作区最后一个活跃 owner 不可降级 / 移出（`last_owner`）；
+    `merge_user` 只接受无密码的源、且两者不能同在一个工作区。错误类 `PlatformAdminError` 在路由层映射：
+    `*_not_found` → 404，其余 → 409。
+  - **web**：侧栏三组（使用 / 管理 / 维护），owner 页搬进"管理 → 工作区配置"（有工作区且非纯 member
+    时显示），`用户` / `平台设置` / `概览` / `平台审计` 仅管理员；零成员资格的管理员进入"仅平台"会话
+    （不连 WS，落在概览），普通用户零成员资格才见 `NoWorkspacePage`；管理员登录默认落在概览。工作区
+    下拉在 P-A1 由已加载用户的成员资格并集推导（`list_workspaces` 在 P-A2）。
+  - **e2e**：`.github/workflows/e2e.yml` 改读 `secrets/setup/initial-admin-password` 导出
+    `WEB_E2E_ADMIN_LOGIN=admin` / `WEB_E2E_ADMIN_INITIAL_PASSWORD`；`login.spec.ts` 首个用例为 admin 首登 →
+    强制改密 → 概览 → 用户页 → 登出（CI 重试幂等），锁定用例改锁 `admin`（该文件最后跑）；bootstrap 的
+    `create-workspace` 现在建的是第二个工作区（默认工作区由 kernel 建）。
+  - **未做 / 留到后面**：概览的服务健康只有 kernel / postgres / `llm-proxy`（读 `models.json` 是否可读），
+    运行层清单项恒为"由 CI 守卫保证"（P-C 出真实检查）；`platform_settings_history` 只写不读（回滚能力
+    未暴露）；每日 / 月度预算只存不执行（P-D）。
+
 ### P-A2 使用面收口
 
 - 交付物：
