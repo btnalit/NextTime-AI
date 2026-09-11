@@ -291,7 +291,7 @@ values (
     'workspaceId', :'workspace_id',
     'actionRequestId', :'action_request_id',
     'gatekeeperId', :'gatekeeper_id',
-    'actionKind', 'e2e.approval_card_test',
+    'actionKindTag', 'e2e.approval_card_test',
     'resourceScope', :'resource_scope',
     'holderPrincipalIds', jsonb_build_array(:'on_behalf_of')
   )

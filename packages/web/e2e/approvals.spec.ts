@@ -39,6 +39,12 @@ const E2E_ACTION_KIND = 'e2e.approval_card_test';
 
 async function login(page: import('@playwright/test').Page, apiKey: string): Promise<void> {
   await page.goto('/');
+  // The isolation scenario below signs in as A, then B, then A again in the *same tab*. A previous
+  // login survives in `sessionStorage` (`lib/session.ts`) and App.tsx auto-connects with it on
+  // load, which leaves the login form disabled (or gone) by the time `fill` runs — so drop the
+  // stored key and reload to a clean login page first. A no-op on a fresh context.
+  await page.evaluate(() => sessionStorage.clear());
+  await page.reload();
   await page.getByPlaceholder('sk-...').fill(apiKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
   // Not a URL/hash assertion: a bare `/` load has no `location.hash` at all, and
