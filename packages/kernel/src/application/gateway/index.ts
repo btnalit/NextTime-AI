@@ -9,6 +9,7 @@ export {
   generateApiKey,
   hashApiKey,
   lookupPrincipalByApiKeyHash,
+  lookupWebSessionPrincipal,
   authenticateHuman,
 } from './auth.js';
 export type { PrincipalRow, SessionRow, AuthenticatedHuman } from './auth.js';
@@ -16,7 +17,7 @@ export type { PrincipalRow, SessionRow, AuthenticatedHuman } from './auth.js';
 export { authenticateHandle } from './handle-auth.js';
 export type { HandleAuthDeps } from './handle-auth.js';
 
-export { resolveCaller, UnauthorizedError } from './resolve-caller.js';
+export { resolveCaller, loadHandlePublicKeyFor, UnauthorizedError } from './resolve-caller.js';
 export type { ResolvedCaller, ResolveCallerDeps } from './resolve-caller.js';
 
 export { authorizeCapabilityCall, roleSatisfiesMinRole, ForbiddenError } from './authorize.js';

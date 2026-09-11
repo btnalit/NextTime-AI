@@ -15,6 +15,7 @@ import { AppShell } from './components/shell/AppShell.js';
 import { ToastProvider } from './components/ui/Toast.js';
 import { PermissionsProvider } from './hooks/usePermissions.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
+import { clearExplorerSession, createExplorerSession } from './lib/explorer-session.js';
 import { HttpClient } from './lib/http-client.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
 import { clearApiKey, loadApiKey, saveApiKey } from './lib/session.js';
@@ -57,6 +58,9 @@ export function App() {
       await ws.connect();
       await ws.authenticate(apiKey);
       saveApiKey(apiKey);
+      // Fire-and-forget: installs the Explorer session cookie (lib/explorer-session.ts); login
+      // must not wait on it.
+      void createExplorerSession(apiKey);
       generation.current += 1;
       setSession({ ws, http: new HttpClient({ apiKey }), generation: generation.current });
     } catch (err) {
@@ -82,6 +86,8 @@ export function App() {
     session?.ws.close();
     setSession(null);
     clearApiKey();
+    // Fire-and-forget: clears the Explorer session cookie (lib/explorer-session.ts).
+    void clearExplorerSession();
     setAuthError(null);
     window.location.hash = '';
   }, [session]);

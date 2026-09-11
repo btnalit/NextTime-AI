@@ -382,7 +382,7 @@ flowchart TB
 
 - React + Vite SPA，由 caddy 静态服务；一个 WebSocket；JSON-RPC 请求 / 响应 + 服务端推送（§9.4）。
 - 页面：登录；对话（流式文本、工具调用行、Worker 拉起行、审批卡片：标题、Markdown 描述、模拟效果、动作种类、批准 / 拒绝 / 「总是批准此类」）；任务与 Worker 列表；连接系统（两件事：建立新门并填凭证；把已有的门授予某用户的入口 agent，cloudflare-os 的 capsule 语义）；审计与 explain 视图。
-- **Explorer 挂载（S3）**：Semantica Explorer 静态构建挂在 `/explorer`，内核实现其 Graph / Decision / Lineage 契约（§9.5）；Ontology 与其他工作区隐藏，不承诺。Explorer 是 human 通道客户端，用 API key，不用 Handle。
+- **Explorer 挂载（S3）**：Semantica Explorer 静态构建挂在 `/explorer`，内核实现其 Graph / Decision / Lineage 契约（§9.5）；Ontology 与其他工作区隐藏，不承诺。Explorer 是 human 通道客户端：用调用者自己的 API key（`X-API-Key`）或控制台登录后内核签发的同源会话 cookie，不用 Handle；caddy 不持有任何 Explorer 凭证（W7）。
 
 - **控制面（S3.11–S3.14，已实现）**：web 分「工作」（对话、任务、待我审批）与「治理」（成员与授权、系统接入、能力目录、模型与配额、审计）两区，治理区按 role 可见；每用户一份 **AgentProfile**（模型、启用的 Skill、可见的门、提示词附加）作为其 Grant 的**子集投影**，永不扩权；第三方能力只有 Gatekeeper（含 `kind: mcp`）与 Skill 两种来源，不开放第三方 pi extension。详见 `docs/development-tasks.md` S3.11–S3.14。
 
@@ -602,7 +602,7 @@ MCP 工具 = Handle 通道可用行的投影。Semantica 的 17 个工具名与�
 
 ### 9.5 Explorer 契约（S3，只做这些）
 
-内核实现 Semantica Explorer 需要的：`GET /api/graph/nodes?limit&cursor`、`GET /api/graph/edges`、`POST /api/graph/search`、`GET /api/temporal/bounds`、`GET /api/temporal/snapshot?at=`、`GET /api/decisions`、`GET /api/decisions/{id}/chain`、`GET /api/provenance?node_id=`、`GET /api/provenance/report?node_id=&format=`，响应形状按其 `explorer/schemas.py`（`NodeResponse` / `EdgeResponse` / `DecisionResponse` / `ProvenanceNode` / `ProvenanceEdge`），含 `207` 部分成功约定与 `X-API-Key`。Ontology、Vocabulary、Reasoning、Enrich、SPARQL、Manage 工作区隐藏。
+内核实现 Semantica Explorer 需要的：`GET /api/graph/nodes?limit&cursor`、`GET /api/graph/edges`、`POST /api/graph/search`、`GET /api/temporal/bounds`、`GET /api/temporal/snapshot?at=`、`GET /api/decisions`、`GET /api/decisions/{id}/chain`、`GET /api/provenance?node_id=`、`GET /api/provenance/report?node_id=&format=`，响应形状按其 `explorer/schemas.py`（`NodeResponse` / `EdgeResponse` / `DecisionResponse` / `ProvenanceNode` / `ProvenanceEdge`），含 `207` 部分成功约定；鉴权为 `X-API-Key` 或控制台登录后签发的 `nexttime_explorer_session` cookie（`POST/DELETE /api/explorer/session`，W7）。Ontology、Vocabulary、Reasoning、Enrich、SPARQL、Manage 工作区隐藏。
 
 ---
 

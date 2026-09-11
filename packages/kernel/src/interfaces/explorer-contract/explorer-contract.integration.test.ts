@@ -2,12 +2,15 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Role } from '@nexttime/shared';
+import { SignJWT, generateKeyPair } from 'jose';
+import type { CryptoKey } from 'jose';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { hashApiKey } from '../../application/gateway/index.js';
+import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
@@ -21,6 +24,7 @@ import {
   TemporalBoundsResponseSchema,
   TemporalSnapshotResponseSchema,
 } from './schemas.js';
+import { EXPLORER_SESSION_COOKIE } from './session.js';
 
 /**
  * interfaces/explorer-contract/explorer-contract.integration.test: HTTP-level tests through
@@ -371,6 +375,213 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(ids).toContain(otherWorkspaceObjectId);
       expect(ids).not.toContain(hostId);
       expect(ids).not.toContain(serviceId);
+    });
+
+    // ---- W7: caller-owned Explorer session cookie (session.ts) ---------------------------------
+
+    describe('Explorer session cookie (W7)', () => {
+      let privateKey: CryptoKey;
+      let publicKey: CryptoKey;
+
+      beforeAll(async () => {
+        const pair = await generateKeyPair(HANDLE_SIGNING_ALG, { crv: 'Ed25519' });
+        privateKey = pair.privateKey;
+        publicKey = pair.publicKey;
+      });
+
+      function appWithKeys() {
+        return createServer({
+          pool,
+          loadHandlePublicKey: async () => publicKey,
+          loadHandlePrivateKey: async () => privateKey,
+        });
+      }
+
+      function setCookieHeader(headers: Record<string, unknown>): string {
+        const raw = headers['set-cookie'];
+        const first = Array.isArray(raw) ? raw[0] : raw;
+        if (typeof first !== 'string') throw new Error('no Set-Cookie header');
+        return first;
+      }
+
+      function cookieValue(setCookie: string): string {
+        const match = new RegExp(`^${EXPLORER_SESSION_COOKIE}=([^;]*)`).exec(setCookie);
+        if (!match?.[1]) throw new Error(`unexpected Set-Cookie: ${setCookie}`);
+        return match[1];
+      }
+
+      async function createSession(app: ReturnType<typeof createServer>, apiKey: string) {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/explorer/session',
+          headers: { authorization: `Bearer ${apiKey}` },
+        });
+        return response;
+      }
+
+      it('POST /api/explorer/session with the owner key → 200 + a locked-down Set-Cookie', async () => {
+        const app = appWithKeys();
+        const response = await createSession(app, ownerApiKey);
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ ok: true, expiresAt: expect.any(String) });
+        const setCookie = setCookieHeader(response.headers);
+        expect(setCookie).toContain(`${EXPLORER_SESSION_COOKIE}=`);
+        expect(setCookie).toContain('HttpOnly');
+        expect(setCookie).toContain('Secure');
+        expect(setCookie).toContain('SameSite=Strict');
+        expect(setCookie).toContain('Path=/api');
+        expect(setCookie).toMatch(/Max-Age=\d+/);
+        expect(response.headers['cache-control']).toBe('no-store');
+      });
+
+      it('the cookie authenticates the nine read routes as the caller (no X-API-Key needed)', async () => {
+        const app = appWithKeys();
+        const token = cookieValue(setCookieHeader((await createSession(app, ownerApiKey)).headers));
+
+        const nodes = await app.inject({
+          method: 'GET',
+          url: '/api/graph/nodes?limit=1000',
+          headers: { cookie: `other=1; ${EXPLORER_SESSION_COOKIE}=${token}` },
+        });
+        expect(nodes.statusCode).toBe(200);
+        const ids = NodeListResponseSchema.parse(nodes.json()).nodes.map((n) => n.id);
+        expect(ids).toEqual(expect.arrayContaining([hostId, serviceId]));
+        expect(ids).not.toContain(otherWorkspaceObjectId);
+
+        const decisions = await app.inject({
+          method: 'GET',
+          url: '/api/decisions',
+          headers: { cookie: `${EXPLORER_SESSION_COOKIE}=${token}` },
+        });
+        expect(decisions.statusCode).toBe(200);
+      });
+
+      it('an explicit X-API-Key wins over the cookie: a wrong key + a valid cookie → 401', async () => {
+        const app = appWithKeys();
+        const token = cookieValue(setCookieHeader((await createSession(app, ownerApiKey)).headers));
+        const response = await app.inject({
+          method: 'GET',
+          url: '/api/graph/nodes',
+          headers: { 'x-api-key': 'not-a-key', cookie: `${EXPLORER_SESSION_COOKIE}=${token}` },
+        });
+        expect(response.statusCode).toBe(401);
+      });
+
+      it('a tampered cookie, and a Handle-shaped JWT signed with the same key, are both 401', async () => {
+        const app = appWithKeys();
+        const token = cookieValue(setCookieHeader((await createSession(app, ownerApiKey)).headers));
+        const [header, payload, signature] = token.split('.');
+        const tampered = `${header}.${payload?.slice(0, -2)}AA.${signature}`;
+        const tamperedResponse = await app.inject({
+          method: 'GET',
+          url: '/api/graph/nodes',
+          headers: { cookie: `${EXPLORER_SESSION_COOKIE}=${tampered}` },
+        });
+        expect(tamperedResponse.statusCode).toBe(401);
+
+        const handleLike = await new SignJWT({
+          ws: workspaceId,
+          sid: randomUUID(),
+          obo: ownerId,
+          scope: { capabilities: ['search'], resources: {} },
+          jti: randomUUID(),
+          iat: Math.floor(Date.now() / 1000),
+          exp: Math.floor(Date.now() / 1000) + 600,
+        })
+          .setProtectedHeader({ alg: HANDLE_SIGNING_ALG })
+          .sign(privateKey);
+        const handleResponse = await app.inject({
+          method: 'GET',
+          url: '/api/graph/nodes',
+          headers: { cookie: `${EXPLORER_SESSION_COOKIE}=${handleLike}` },
+        });
+        expect(handleResponse.statusCode).toBe(401);
+      });
+
+      it('the session token never works as a Bearer credential on /api/cap/* (401)', async () => {
+        const app = appWithKeys();
+        const token = cookieValue(setCookieHeader((await createSession(app, ownerApiKey)).headers));
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/cap/get_workspace',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          payload: {},
+        });
+        expect(response.statusCode).toBe(401);
+      });
+
+      it('a Handle presented to POST /api/explorer/session, or no credential at all → 401', async () => {
+        const app = appWithKeys();
+        const noCredential = await app.inject({ method: 'POST', url: '/api/explorer/session' });
+        expect(noCredential.statusCode).toBe(401);
+        expect(noCredential.json()).toEqual({ detail: expect.any(String) });
+        expect(noCredential.headers['set-cookie']).toBeUndefined();
+      });
+
+      it('disable_principal cuts a live cookie off on the next request', async () => {
+        const app = appWithKeys();
+        const apiKey = `explorer-disable-key-${randomUUID()}`;
+        const principalId = await adminInsertPrincipalWithKey({
+          workspaceId,
+          role: 'member',
+          apiKey,
+        });
+        const token = cookieValue(setCookieHeader((await createSession(app, apiKey)).headers));
+        const before = await app.inject({
+          method: 'GET',
+          url: '/api/graph/nodes',
+          headers: { cookie: `${EXPLORER_SESSION_COOKIE}=${token}` },
+        });
+        expect(before.statusCode).toBe(200);
+
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId },
+          async (client) => {
+            await client.query(
+              'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+              [workspaceId, principalId],
+            );
+          },
+          { skipRoleSwitch: true },
+        );
+
+        const after = await app.inject({
+          method: 'GET',
+          url: '/api/graph/nodes',
+          headers: { cookie: `${EXPLORER_SESSION_COOKIE}=${token}` },
+        });
+        expect(after.statusCode).toBe(401);
+      });
+
+      it('DELETE /api/explorer/session → 204 with a clearing Set-Cookie', async () => {
+        const app = appWithKeys();
+        const response = await app.inject({ method: 'DELETE', url: '/api/explorer/session' });
+        expect(response.statusCode).toBe(204);
+        const setCookie = setCookieHeader(response.headers);
+        expect(setCookie).toContain(`${EXPLORER_SESSION_COOKIE}=;`);
+        expect(setCookie).toContain('Max-Age=0');
+        expect(setCookie).toContain('Path=/api');
+      });
+
+      it('POST /api/explorer/session without a signing key → 503, and X-API-Key still works', async () => {
+        const app = createServer({
+          pool,
+          loadHandlePublicKey: async () => publicKey,
+          loadHandlePrivateKey: async () => {
+            throw new Error('no key configured');
+          },
+        });
+        const response = await createSession(app, ownerApiKey);
+        expect(response.statusCode).toBe(503);
+        expect(response.headers['set-cookie']).toBeUndefined();
+        const viaHeader = await app.inject({
+          method: 'GET',
+          url: '/api/graph/nodes',
+          headers: { 'x-api-key': ownerApiKey },
+        });
+        expect(viaHeader.statusCode).toBe(200);
+      });
     });
   },
 );

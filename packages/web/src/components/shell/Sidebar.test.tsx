@@ -28,6 +28,9 @@ describe('Sidebar', () => {
       );
       expect(screen.getByTestId('nav-members')).toBeTruthy();
       expect(screen.getByTestId('nav-audit')).toBeTruthy();
+      const explorerLink = screen.getByTestId('nav-explorer');
+      expect(explorerLink.getAttribute('href')).toBe('/explorer/');
+      expect(explorerLink.getAttribute('target')).toBe('_blank');
       unmount();
     }
 
@@ -44,6 +47,7 @@ describe('Sidebar', () => {
       );
       expect(screen.queryByTestId('nav-members')).toBeNull();
       expect(screen.queryByTestId('nav-audit')).toBeNull();
+      expect(screen.queryByTestId('nav-explorer')).toBeNull();
       // 工作 Work (including 我的智能体, S3.13's placeholder) is always visible.
       expect(screen.getByTestId('nav-chats')).toBeTruthy();
       expect(screen.getByTestId('nav-agent')).toBeTruthy();
