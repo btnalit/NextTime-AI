@@ -32,11 +32,6 @@ export interface WireMembership {
   readonly role: string;
 }
 
-export interface SetupState {
-  readonly initialized: boolean;
-  readonly tokenAvailable: boolean;
-}
-
 export interface SessionResult {
   readonly user: WireUser;
   readonly memberships: readonly WireMembership[];
@@ -62,10 +57,14 @@ function isEnvelope(value: unknown): value is Envelope {
 
 async function request<T>(
   path: string,
-  init: { readonly method: 'GET' | 'POST' | 'PATCH'; readonly body?: unknown },
+  init: {
+    readonly method: 'GET' | 'POST' | 'PATCH';
+    readonly body?: unknown;
+    readonly headers?: Record<string, string>;
+  },
   fetchImpl: typeof fetch,
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...init.headers };
   const requestInit: RequestInit = { method: init.method, headers, credentials: 'same-origin' };
   if (init.method !== 'GET') {
     headers['content-type'] = 'application/json';
@@ -109,20 +108,32 @@ async function request<T>(
   return body.result as T;
 }
 
-export function getSetupState(fetchImpl: typeof fetch = defaultFetch): Promise<SetupState> {
-  return request<SetupState>('/api/platform/setup-state', { method: 'GET' }, fetchImpl);
-}
-
-export function setupPlatform(
-  input: {
-    readonly token: string;
-    readonly login: string;
-    readonly displayName: string;
-    readonly password: string;
-  },
+/** `POST /api/auth/claim`: self-service migration for a pre-existing API-key Principal — proves
+ *  identity with the key itself (`Authorization: Bearer`), never the console session cookie (a
+ *  cookie user already has a password and nothing to claim). Same result shape as {@link login},
+ *  and installs the same console session cookie on success. */
+export function claimIdentity(
+  apiKey: string,
+  input: { readonly login: string; readonly displayName: string; readonly password: string },
   fetchImpl: typeof fetch = defaultFetch,
 ): Promise<SessionResult> {
-  return request<SessionResult>('/api/platform/setup', { method: 'POST', body: input }, fetchImpl);
+  return request<SessionResult>(
+    '/api/auth/claim',
+    { method: 'POST', body: input, headers: { authorization: `Bearer ${apiKey}` } },
+    fetchImpl,
+  );
+}
+
+/** `POST /api/auth/bind-api-key`: cookie-authenticated (the console session, not the key being
+ *  bound) — folds the Principal behind `apiKey` into the caller's own account, so the caller
+ *  gains that Principal's workspace membership without having to hold two separate credentials.
+ *  Unlike {@link claimIdentity} this mints no new session (the caller already has one); the
+ *  result is just the caller's refreshed `{user, memberships}` (same shape as {@link getMe}). */
+export function bindApiKey(
+  apiKey: string,
+  fetchImpl: typeof fetch = defaultFetch,
+): Promise<MeResult> {
+  return request<MeResult>('/api/auth/bind-api-key', { method: 'POST', body: { apiKey } }, fetchImpl);
 }
 
 export function login(

@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type ReactNode, useState } from 'react';
 import { describeError } from '../lib/errors.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -8,18 +8,19 @@ export interface ApiKeyLoginDetailsProps {
   readonly onLogin: (apiKey: string) => void;
   readonly pending: boolean;
   readonly error: unknown | null;
+  /** Extra footer copy appended after the standard "Your key is issued by..." line — currently
+   *  only `LoginPage` uses this, to point a key-only sign-in at the `/me/account` claim form. */
+  readonly footerExtra?: ReactNode;
 }
 
 /**
- * components/ApiKeyLoginDetails: the pre-S4.1 API-key sign-in, now a collapsed `<details>` shared
- * by `LoginPage` (the primary password login) and `SetupPage` (so a reader who already holds an
- * API key — or an e2e spec that only ever had one — never has to go through platform setup or
- * password login to reach the console; see `App.tsx`'s own doc comment on why `SetupPage` needs
- * this escape hatch too). `onLogin`/`pending`/`error` are owned by `App.tsx`, which runs the
- * multi-step WS connect + authenticate — unlike the single-fetch password/setup flows, this is not
- * self-contained.
+ * components/ApiKeyLoginDetails: the pre-S4.1 API-key sign-in, a collapsed `<details>` on
+ * `LoginPage` (the primary password login) — so a reader who already holds an API key, or an e2e
+ * spec that only ever had one, never has to go through password login to reach the console.
+ * `onLogin`/`pending`/`error` are owned by `App.tsx`, which runs the multi-step WS connect +
+ * authenticate — unlike the single-fetch password flow, this is not self-contained.
  */
-export function ApiKeyLoginDetails({ onLogin, pending, error }: ApiKeyLoginDetailsProps) {
+export function ApiKeyLoginDetails({ onLogin, pending, error, footerExtra }: ApiKeyLoginDetailsProps) {
   const [apiKey, setApiKey] = useState('');
   const [revealed, setRevealed] = useState(false);
 
@@ -89,6 +90,7 @@ export function ApiKeyLoginDetails({ onLogin, pending, error }: ApiKeyLoginDetai
             Your key is issued by the workspace owner (<code>bootstrap add-principal</code>) and is
             kept in this tab only until you sign out.
           </span>
+          {footerExtra ? <span>{footerExtra}</span> : null}
         </p>
       </form>
     </details>

@@ -1,6 +1,15 @@
 import { type FormEvent, useState } from 'react';
-import { type WireMembership, type WireUser, changePassword, patchMe } from '../lib/auth-api.js';
+import {
+  type MeResult,
+  type SessionResult,
+  type WireMembership,
+  type WireUser,
+  changePassword,
+  claimIdentity,
+  patchMe,
+} from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
+import { BindApiKeyForm } from './BindApiKeyForm.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -14,6 +23,15 @@ export interface AccountPageProps {
   readonly user: WireUser | null;
   readonly memberships: readonly WireMembership[];
   readonly onUserChanged: (user: WireUser) => void;
+  /** The API-key session's own key (S4.1 revised) — only present, and only needed, when `user` is
+   *  `null`: it proves identity for the claim form below (`POST /api/auth/claim`). */
+  readonly apiKey?: string;
+  /** Fires when the claim form (API-key mode) succeeds — `App.tsx`'s `handleClaimed` swaps the
+   *  API-key session for the freshly-minted cookie one. */
+  readonly onClaimed?: (result: SessionResult) => void;
+  /** Fires when the bind form (cookie mode) succeeds — `App.tsx`'s `handleBound` refreshes the
+   *  live session's/pre-session's `memberships`. */
+  readonly onBound?: (result: MeResult) => void;
   /** Injectable `fetch` for tests — see `lib/auth-api.ts`'s own module doc comment. */
   readonly fetchImpl?: typeof fetch;
 }
@@ -21,19 +39,29 @@ export interface AccountPageProps {
 /**
  * components/AccountPage: 我的账户 My Account (`#/me/account`, S4.1) — display name (`PATCH
  * /api/auth/me`), password change (`POST /api/auth/password`, optional here — unlike
- * `ChangePasswordPage`, nothing forces this one), and a read-only list of the caller's own
- * memberships. Uses `lib/auth-api.ts` directly rather than a `CapabilityCaller` — these are the
- * `/api/auth/*` routes, not `/api/cap/<name>` capability calls, and need no workspace.
+ * `ChangePasswordPage`, nothing forces this one), a read-only list of the caller's own
+ * memberships, and (cookie mode) a form to bind another pre-existing API key into this account.
+ * Uses `lib/auth-api.ts` directly rather than a `CapabilityCaller` — these are the `/api/auth/*`
+ * routes, not `/api/cap/<name>` capability calls, and need no workspace.
+ *
+ * API-key mode (`user === null`) shows a *claim* form instead (`POST /api/auth/claim`) — sets a
+ * login/password on the key's own passwordless identity and hands the caller a cookie session, so
+ * the key holder never has to re-type anything to land in the console proper.
  */
-export function AccountPage({ user, memberships, onUserChanged, fetchImpl }: AccountPageProps) {
+export function AccountPage({
+  user,
+  memberships,
+  onUserChanged,
+  apiKey,
+  onClaimed,
+  onBound,
+  fetchImpl,
+}: AccountPageProps) {
   if (!user) {
     return (
       <div className="page">
         <PageHeader title="我的账户 My Account" />
-        <Notice tone="info">
-          账户设置需要密码登录 Account settings require a password login — an API-key session has no
-          platform user to manage (<code>GET /api/auth/me</code> is cookie-only).
-        </Notice>
+        <ClaimPasswordCard apiKey={apiKey} onClaimed={onClaimed} fetchImpl={fetchImpl} />
       </div>
     );
   }
@@ -44,7 +72,146 @@ export function AccountPage({ user, memberships, onUserChanged, fetchImpl }: Acc
       <DisplayNameCard user={user} onUserChanged={onUserChanged} fetchImpl={fetchImpl} />
       <PasswordCard fetchImpl={fetchImpl} />
       <MembershipsCard memberships={memberships} />
+      {onBound ? <BindApiKeyForm onBound={onBound} fetchImpl={fetchImpl} /> : null}
     </div>
+  );
+}
+
+/** Kernel wire code → the exact Chinese copy this card shows for a claim failure
+ *  (`auth-routes.ts` `POST /api/auth/claim`). Anything else falls back to the kernel's own
+ *  message via `ErrorBanner`. */
+function claimErrorMessage(err: unknown): string | null {
+  if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
+  if (err.code === 'already_claimed') {
+    return '该身份已经有密码了；请登出后用密码登录';
+  }
+  return null;
+}
+
+const LOGIN_PATTERN = /^[a-z0-9._-]{3,64}$/;
+
+function ClaimPasswordCard({
+  apiKey,
+  onClaimed,
+  fetchImpl,
+}: {
+  readonly apiKey?: string;
+  readonly onClaimed?: (result: SessionResult) => void;
+  readonly fetchImpl?: typeof fetch;
+}) {
+  const [login, setLogin] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<unknown | null>(null);
+
+  const loginInvalid = login.length > 0 && !LOGIN_PATTERN.test(login);
+  const passwordsMismatch = confirmPassword.length > 0 && password !== confirmPassword;
+  const canSubmit =
+    Boolean(apiKey) &&
+    LOGIN_PATTERN.test(login) &&
+    displayName.trim().length > 0 &&
+    password.length >= 8 &&
+    password === confirmPassword;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!canSubmit || submitting || !apiKey) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await claimIdentity(
+        apiKey,
+        { login, displayName: displayName.trim(), password },
+        fetchImpl,
+      );
+      onClaimed?.(result);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const inline = claimErrorMessage(error);
+
+  return (
+    <Card title="设置密码以启用密码登录 Set a password to enable password login">
+      <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
+        <Field
+          id="account-claim-login"
+          label="登录名 Login"
+          required
+          hint="3–64 位，仅小写字母、数字、. _ - 3–64 characters: lowercase letters, digits, . _ -"
+          error={loginInvalid ? '登录名格式不正确 Invalid login format' : null}
+        >
+          <Input
+            id="account-claim-login"
+            autoComplete="username"
+            value={login}
+            onChange={(event) => setLogin(event.target.value)}
+            disabled={submitting}
+            invalid={loginInvalid}
+          />
+        </Field>
+
+        <Field id="account-claim-display-name" label="显示名 Display name" required>
+          <Input
+            id="account-claim-display-name"
+            autoComplete="name"
+            value={displayName}
+            onChange={(event) => setDisplayName(event.target.value)}
+            disabled={submitting}
+          />
+        </Field>
+
+        <Field
+          id="account-claim-password"
+          label="密码 Password"
+          required
+          hint="至少 8 位 At least 8 characters"
+        >
+          <Input
+            id="account-claim-password"
+            type="password"
+            autoComplete="new-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            disabled={submitting}
+          />
+        </Field>
+
+        <Field
+          id="account-claim-confirm-password"
+          label="确认密码 Confirm password"
+          required
+          error={passwordsMismatch ? '两次输入的密码不一致 Passwords do not match' : null}
+        >
+          <Input
+            id="account-claim-confirm-password"
+            type="password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            disabled={submitting}
+            invalid={passwordsMismatch}
+          />
+        </Field>
+
+        {inline ? (
+          <Notice tone="warn">{inline}</Notice>
+        ) : error !== null ? (
+          <ErrorBanner error={error} title="无法设置密码 Could not set a password" />
+        ) : null}
+
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
+            设置密码 Set password
+          </Button>
+        </div>
+      </form>
+    </Card>
   );
 }
 

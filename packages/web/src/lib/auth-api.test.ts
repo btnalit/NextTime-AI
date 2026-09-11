@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  bindApiKey,
   changePassword,
+  claimIdentity,
   getMe,
-  getSetupState,
   login,
   logout,
   patchMe,
-  setupPlatform,
 } from './auth-api.js';
 import { HttpError } from './http-client.js';
 
@@ -23,25 +23,61 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
-describe('getSetupState', () => {
-  it('GETs /api/platform/setup-state with no body/CSRF header and credentials:same-origin', async () => {
+describe('claimIdentity', () => {
+  it('POSTs to /api/auth/claim with Authorization: Bearer <apiKey>, the CSRF header and the body', async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(200, { ok: true, result: { initialized: false, tokenAvailable: true } }),
+      jsonResponse(200, {
+        ok: true,
+        result: {
+          user: {
+            id: 'u2',
+            login: 'carol',
+            displayName: 'Carol',
+            platformRole: 'user',
+            mustChangePassword: false,
+          },
+          memberships: [],
+          expiresAt: '2026-01-01T00:00:00.000Z',
+        },
+      }),
     );
-    const result = await getSetupState(fetchImpl as typeof fetch);
 
-    expect(result).toEqual({ initialized: false, tokenAvailable: true });
+    const result = await claimIdentity(
+      'sk-claim',
+      { login: 'carol', displayName: 'Carol', password: 'password123' },
+      fetchImpl as typeof fetch,
+    );
+
+    expect(result.user.login).toBe('carol');
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('/api/platform/setup-state');
-    expect(init.method).toBe('GET');
+    expect(url).toBe('/api/auth/claim');
+    expect(init.method).toBe('POST');
     expect(init.credentials).toBe('same-origin');
-    expect((init.headers as Record<string, string>)['x-requested-with']).toBeUndefined();
-    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>).authorization).toBe('Bearer sk-claim');
+    expect((init.headers as Record<string, string>)['x-requested-with']).toBe('nexttime');
+    expect(JSON.parse(init.body as string)).toEqual({
+      login: 'carol',
+      displayName: 'Carol',
+      password: 'password123',
+    });
+  });
+
+  it('throws a capability_error HttpError carrying the wire code on {ok:false}', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(409, { ok: false, error: { code: 'already_claimed', message: 'nope' } }),
+    );
+    const err = await claimIdentity(
+      'sk-claim',
+      { login: 'carol', displayName: 'Carol', password: 'password123' },
+      fetchImpl as typeof fetch,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).code).toBe('already_claimed');
   });
 });
 
-describe('setupPlatform', () => {
-  it('POSTs to /api/platform/setup with X-Requested-With and the body as JSON', async () => {
+describe('bindApiKey', () => {
+  it('POSTs {apiKey} to /api/auth/bind-api-key with the CSRF header and credentials:same-origin', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse(200, {
         ok: true,
@@ -53,35 +89,30 @@ describe('setupPlatform', () => {
             platformRole: 'admin',
             mustChangePassword: false,
           },
-          memberships: [],
-          expiresAt: '2026-01-01T00:00:00.000Z',
+          memberships: [{ workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p1', role: 'owner' }],
         },
       }),
     );
-    const input = { token: 'tok', login: 'admin', displayName: 'Admin', password: 'password123' };
 
-    const result = await setupPlatform(input, fetchImpl as typeof fetch);
+    const result = await bindApiKey('sk-bind', fetchImpl as typeof fetch);
 
-    expect(result.user.login).toBe('admin');
-    expect(result.memberships).toEqual([]);
+    expect(result.memberships).toHaveLength(1);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('/api/platform/setup');
+    expect(url).toBe('/api/auth/bind-api-key');
     expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>)['x-requested-with']).toBe('nexttime');
     expect(init.credentials).toBe('same-origin');
-    expect(JSON.parse(init.body as string)).toEqual(input);
+    expect((init.headers as Record<string, string>)['x-requested-with']).toBe('nexttime');
+    expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+    expect(JSON.parse(init.body as string)).toEqual({ apiKey: 'sk-bind' });
   });
 
   it('throws a capability_error HttpError carrying the wire code on {ok:false}', async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(409, { ok: false, error: { code: 'already_initialized', message: 'nope' } }),
+      jsonResponse(409, { ok: false, error: { code: 'already_member', message: 'nope' } }),
     );
-    const err = await setupPlatform(
-      { token: 't', login: 'l', displayName: 'd', password: 'p' },
-      fetchImpl as typeof fetch,
-    ).catch((e: unknown) => e);
+    const err = await bindApiKey('sk-bind', fetchImpl as typeof fetch).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
-    expect((err as HttpError).code).toBe('already_initialized');
+    expect((err as HttpError).code).toBe('already_member');
   });
 });
 

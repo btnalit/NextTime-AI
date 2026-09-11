@@ -17,7 +17,7 @@ import {
   setUserPassword,
 } from '../../application/identity/index.js';
 import { addPrincipal, createWorkspace } from '../../cli/bootstrap.js';
-import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
+import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
 
 /**
@@ -117,215 +117,6 @@ describe.runIf(DATABASE_URL !== undefined)(
       await rm(tmpDir, { recursive: true, force: true });
     });
 
-    // ---- platform setup (countActivePlatformAdmins is process-wide — see this describe's own
-    // beforeAll/afterAll, which makes its "no admin yet" precondition true by construction) -------
-
-    describe('platform setup', () => {
-      const adminLogin = `setup-admin-${randomUUID().slice(0, 8)}`;
-      const adminPassword = 'correct horse battery staple';
-      let firstTokenFile: string;
-      let firstToken: string;
-      let disabledAdminIds: string[] = [];
-
-      beforeAll(async () => {
-        // See this file's own module doc comment: make the "no admin yet" precondition true by
-        // construction rather than assuming it, since `cli/bootstrap.test.ts` may already have
-        // created real active admins in this shared DB by the time this describe runs. Disable
-        // (never delete) so `afterAll` below can restore exactly what was active before.
-        disabledAdminIds = await withWorkspace(
-          pool,
-          { workspaceId: randomUUID(), principalId: randomUUID() },
-          async (client) => {
-            const result = await client.query<{ id: string }>(
-              `update users set status = 'disabled'
-                 where platform_role = 'admin' and status = 'active'
-               returning id`,
-            );
-            return result.rows.map((row) => row.id);
-          },
-          { skipRoleSwitch: true },
-        );
-        await withWorkspace(
-          pool,
-          { workspaceId: randomUUID(), principalId: randomUUID() },
-          async (client) => {
-            await client.query('delete from platform_setup');
-          },
-          { skipRoleSwitch: true },
-        );
-      });
-
-      afterAll(async () => {
-        if (disabledAdminIds.length === 0) return;
-        await withWorkspace(
-          pool,
-          { workspaceId: randomUUID(), principalId: randomUUID() },
-          async (client) => {
-            await client.query("update users set status = 'active' where id = any($1::uuid[])", [
-              disabledAdminIds,
-            ]);
-          },
-          { skipRoleSwitch: true },
-        );
-      });
-
-      it('GET /api/platform/setup-state → initialized:false, tokenAvailable:false on a fresh DB with no admin and no token', async () => {
-        const app = appWithKeys();
-        const response = await app.inject({ method: 'GET', url: '/api/platform/setup-state' });
-        expect(response.statusCode).toBe(200);
-        expect(response.json()).toEqual({
-          ok: true,
-          result: { initialized: false, tokenAvailable: false },
-        });
-      });
-
-      it('ensureSetupToken writes a 0600 token file and setup-state reports tokenAvailable:true', async () => {
-        firstTokenFile = path.join(tmpDir, 'token-1');
-        const written = await ensureSetupToken(pool, { tokenFile: firstTokenFile });
-        expect(written).toBe(firstTokenFile);
-        // One open handle for both the mode check and the read (no check-then-use on the path).
-        const handle = await open(firstTokenFile, 'r');
-        try {
-          const stats = await handle.stat();
-          expect(stats.mode & 0o777).toBe(0o600);
-          firstToken = (await handle.readFile('utf8')).trim();
-        } finally {
-          await handle.close();
-        }
-        expect(firstToken.length).toBeGreaterThan(0);
-
-        const app = appWithKeys();
-        const response = await app.inject({ method: 'GET', url: '/api/platform/setup-state' });
-        expect(response.json()).toEqual({
-          ok: true,
-          result: { initialized: false, tokenAvailable: true },
-        });
-      });
-
-      it('POST /api/platform/setup without X-Requested-With → 403 csrf_header_required', async () => {
-        const app = appWithKeys();
-        const response = await app.inject({
-          method: 'POST',
-          url: '/api/platform/setup',
-          headers: { 'content-type': 'application/json' },
-          payload: {
-            token: firstToken,
-            login: adminLogin,
-            displayName: 'Admin',
-            password: adminPassword,
-          },
-        });
-        expect(response.statusCode).toBe(403);
-        expect(response.json()).toMatchObject({
-          ok: false,
-          error: { code: 'csrf_header_required' },
-        });
-      });
-
-      it('a wrong token → 401 invalid_token (failed_count increments)', async () => {
-        const app = appWithKeys();
-        const response = await app.inject({
-          method: 'POST',
-          url: '/api/platform/setup',
-          headers: CSRF_HEADERS,
-          payload: {
-            token: 'not-the-token',
-            login: adminLogin,
-            displayName: 'Admin',
-            password: adminPassword,
-          },
-        });
-        expect(response.statusCode).toBe(401);
-        expect(response.json()).toMatchObject({ ok: false, error: { code: 'invalid_token' } });
-      });
-
-      it('four more wrong tokens exhaust it; even the right token then → 403 token_exhausted', async () => {
-        const app = appWithKeys();
-        // One failure already recorded by the previous test; four more reach SETUP_TOKEN_MAX_FAILURES (5).
-        for (let i = 0; i < 4; i++) {
-          const response = await app.inject({
-            method: 'POST',
-            url: '/api/platform/setup',
-            headers: CSRF_HEADERS,
-            payload: {
-              token: 'still-not-the-token',
-              login: adminLogin,
-              displayName: 'Admin',
-              password: adminPassword,
-            },
-          });
-          expect(response.statusCode).toBe(401);
-        }
-        const response = await app.inject({
-          method: 'POST',
-          url: '/api/platform/setup',
-          headers: CSRF_HEADERS,
-          payload: {
-            token: firstToken,
-            login: adminLogin,
-            displayName: 'Admin',
-            password: adminPassword,
-          },
-        });
-        expect(response.statusCode).toBe(403);
-        expect(response.json()).toMatchObject({ ok: false, error: { code: 'token_exhausted' } });
-      });
-
-      it('a fresh token + correct fields → 200, Set-Cookie, admin user, empty memberships', async () => {
-        const freshTokenFile = path.join(tmpDir, 'token-2');
-        await ensureSetupToken(pool, { tokenFile: freshTokenFile });
-        const freshToken = (await readFile(freshTokenFile, 'utf8')).trim();
-
-        const app = appWithKeys();
-        const response = await app.inject({
-          method: 'POST',
-          url: '/api/platform/setup',
-          headers: CSRF_HEADERS,
-          payload: {
-            token: freshToken,
-            login: adminLogin,
-            displayName: 'Admin',
-            password: adminPassword,
-          },
-        });
-        expect(response.statusCode).toBe(200);
-        expect(response.headers['set-cookie']).toBeTruthy();
-        const body = response.json();
-        expect(body.ok).toBe(true);
-        expect(body.result.user.platformRole).toBe('admin');
-        expect(body.result.memberships).toEqual([]);
-      });
-
-      it('setup-state now reports initialized:true', async () => {
-        const app = appWithKeys();
-        const response = await app.inject({ method: 'GET', url: '/api/platform/setup-state' });
-        expect(response.json()).toEqual({
-          ok: true,
-          result: { initialized: true, tokenAvailable: false },
-        });
-      });
-
-      it('a second setup attempt → 409 already_initialized', async () => {
-        const app = appWithKeys();
-        const response = await app.inject({
-          method: 'POST',
-          url: '/api/platform/setup',
-          headers: CSRF_HEADERS,
-          payload: {
-            token: 'irrelevant-once-an-admin-exists',
-            login: `second-admin-${randomUUID().slice(0, 8)}`,
-            displayName: 'Second',
-            password: adminPassword,
-          },
-        });
-        expect(response.statusCode).toBe(409);
-        expect(response.json()).toMatchObject({
-          ok: false,
-          error: { code: 'already_initialized' },
-        });
-      });
-    });
-
     // ---- POST /api/auth/login -------------------------------------------------------------------
 
     describe('POST /api/auth/login', () => {
@@ -398,6 +189,264 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const noCookie = await app.inject({ method: 'GET', url: '/api/auth/me' });
         expect(noCookie.statusCode).toBe(401);
+      });
+    });
+
+    // ---- POST /api/auth/claim -------------------------------------------------------------------
+    // Self-service migration for a pre-S4.1 human Principal: its passwordless user (backfill or
+    // `ensureUserForHumanPrincipal`) becomes login-able. The API key *is* the proof of identity
+    // (`claimIdentityOnClient`'s own doc comment) — never the cookie — so every test below
+    // authenticates with `Authorization: Bearer <api key>`, never a cookie.
+
+    describe('POST /api/auth/claim', () => {
+      const password = 'correct horse battery staple';
+      let workspaceId: string;
+
+      /** A fresh `kind='human'` Principal in `workspaceId`, linked (by `addPrincipal`) to a brand
+       *  new passwordless user — i.e. an API key nothing has claimed yet. */
+      async function freshClaimableApiKey(): Promise<string> {
+        const added = await addPrincipal(
+          pool,
+          workspaceId,
+          `Claim Fixture ${randomUUID().slice(0, 8)}`,
+        );
+        return added.apiKey;
+      }
+
+      beforeAll(async () => {
+        const created = await createWorkspace(pool, `auth-routes-claim-ws-${randomUUID()}`, 'Owner');
+        workspaceId = created.workspaceId;
+      });
+
+      it('claims the passwordless identity behind an API key → 200, cookie, login works, cap call works', async () => {
+        const apiKey = await freshClaimableApiKey();
+        const login = `claim-test-${randomUUID().slice(0, 8)}`;
+
+        const app = appWithKeys();
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: `Bearer ${apiKey}` },
+          payload: { login, displayName: 'Claimed Identity', password },
+        });
+        expect(response.statusCode).toBe(200);
+        const body = response.json();
+        expect(body.ok).toBe(true);
+        expect(body.result.user.login).toBe(login);
+        expect(body.result.user.displayName).toBe('Claimed Identity');
+        expect(body.result.user.platformRole).toBe('user');
+        expect(body.result.user.mustChangePassword).toBe(false);
+        expect(response.headers['set-cookie']).toBeTruthy();
+
+        const loginResponse = await app.inject({
+          method: 'POST',
+          url: '/api/auth/login',
+          headers: CSRF_HEADERS,
+          payload: { login, password },
+        });
+        expect(loginResponse.statusCode).toBe(200);
+        const cookie = cookieValue(setCookieHeader(loginResponse.headers));
+
+        const listChats = await app.inject({
+          method: 'POST',
+          url: '/api/cap/list_chats',
+          headers: {
+            ...CSRF_HEADERS,
+            cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}`,
+            'x-workspace-id': workspaceId,
+          },
+          payload: {},
+        });
+        expect(listChats.statusCode).toBe(200);
+      });
+
+      it('a second claim on the same API key → 409 already_claimed', async () => {
+        const apiKey = await freshClaimableApiKey();
+        const app = appWithKeys();
+        const first = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: `Bearer ${apiKey}` },
+          payload: {
+            login: `claim-dup-${randomUUID().slice(0, 8)}`,
+            displayName: 'First',
+            password,
+          },
+        });
+        expect(first.statusCode).toBe(200);
+
+        const second = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: `Bearer ${apiKey}` },
+          payload: {
+            login: `claim-dup-again-${randomUUID().slice(0, 8)}`,
+            displayName: 'Second',
+            password,
+          },
+        });
+        expect(second.statusCode).toBe(409);
+        expect(second.json()).toMatchObject({ ok: false, error: { code: 'already_claimed' } });
+      });
+
+      it('a login already used by another user → 409 login_taken', async () => {
+        const takenLogin = `claim-taken-${randomUUID().slice(0, 8)}`;
+        const firstApiKey = await freshClaimableApiKey();
+        const app = appWithKeys();
+        const first = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: `Bearer ${firstApiKey}` },
+          payload: { login: takenLogin, displayName: 'Taker', password },
+        });
+        expect(first.statusCode).toBe(200);
+
+        const secondApiKey = await freshClaimableApiKey();
+        const second = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: `Bearer ${secondApiKey}` },
+          payload: { login: takenLogin, displayName: 'Wants Same Login', password },
+        });
+        expect(second.statusCode).toBe(409);
+        expect(second.json()).toMatchObject({ ok: false, error: { code: 'login_taken' } });
+      });
+
+      it('missing Authorization header → 401', async () => {
+        const app = appWithKeys();
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: CSRF_HEADERS,
+          payload: {
+            login: `claim-noauth-${randomUUID().slice(0, 8)}`,
+            displayName: 'Nope',
+            password,
+          },
+        });
+        expect(response.statusCode).toBe(401);
+        expect(response.json()).toMatchObject({ ok: false, error: { code: 'unauthorized' } });
+      });
+
+      it('an unknown API key → 401', async () => {
+        const app = appWithKeys();
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: 'Bearer not-a-real-api-key' },
+          payload: {
+            login: `claim-badkey-${randomUUID().slice(0, 8)}`,
+            displayName: 'Nope',
+            password,
+          },
+        });
+        expect(response.statusCode).toBe(401);
+        expect(response.json()).toMatchObject({ ok: false, error: { code: 'unauthorized' } });
+      });
+
+      it('a cookie with no Authorization header → 401 (the API key is the proof of identity, not the cookie)', async () => {
+        const apiKey = await freshClaimableApiKey();
+        const login = `claim-cookieonly-${randomUUID().slice(0, 8)}`;
+        const app = appWithKeys();
+        const claimed = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: `Bearer ${apiKey}` },
+          payload: { login, displayName: 'Cookie Only', password },
+        });
+        expect(claimed.statusCode).toBe(200);
+        const cookie = await loginAs(app, login, password);
+
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, cookie: `${CONSOLE_SESSION_COOKIE}=${cookie}` },
+          payload: {
+            login: `claim-should-not-happen-${randomUUID().slice(0, 8)}`,
+            displayName: 'Nope',
+            password,
+          },
+        });
+        expect(response.statusCode).toBe(401);
+      });
+
+      it('missing X-Requested-With → 403 csrf_header_required', async () => {
+        const apiKey = await freshClaimableApiKey();
+        const app = appWithKeys();
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+          payload: {
+            login: `claim-nocsrf-${randomUUID().slice(0, 8)}`,
+            displayName: 'Nope',
+            password,
+          },
+        });
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toMatchObject({
+          ok: false,
+          error: { code: 'csrf_header_required' },
+        });
+      });
+
+      it('a weak password → 400 weak_password', async () => {
+        const apiKey = await freshClaimableApiKey();
+        const app = appWithKeys();
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: `Bearer ${apiKey}` },
+          payload: {
+            login: `claim-weak-${randomUUID().slice(0, 8)}`,
+            displayName: 'Weak Password',
+            password: 'short1',
+          },
+        });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({ ok: false, error: { code: 'weak_password' } });
+      });
+
+      it('a Handle token as Bearer → 401 (a Handle cannot claim an identity)', async () => {
+        const added = await addPrincipal(
+          pool,
+          workspaceId,
+          `Handle Fixture ${randomUUID().slice(0, 8)}`,
+        );
+        const token = await withWorkspace(
+          pool,
+          { workspaceId, principalId: added.principalId },
+          async (client) => {
+            const sessionResult = await client.query<{ id: string }>(
+              `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+               values ($1, $2, 'entry', $2, 'active') returning id`,
+              [workspaceId, added.principalId],
+            );
+            const sessionRow = sessionResult.rows[0];
+            if (!sessionRow) throw new Error('fixture: session insert produced no row');
+            const issued = await issueHandle(client, {
+              sessionId: sessionRow.id,
+              scope: { capabilities: ['list_chats'], resources: {} },
+              ttlSeconds: 3600,
+              privateKey,
+            });
+            return issued.token;
+          },
+        );
+
+        const app = appWithKeys();
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/auth/claim',
+          headers: { ...CSRF_HEADERS, authorization: `Bearer ${token}` },
+          payload: {
+            login: `claim-handle-${randomUUID().slice(0, 8)}`,
+            displayName: 'Nope',
+            password,
+          },
+        });
+        expect(response.statusCode).toBe(401);
+        expect(response.json()).toMatchObject({ ok: false, error: { code: 'unauthorized' } });
       });
     });
 

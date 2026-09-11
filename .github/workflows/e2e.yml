@@ -253,6 +253,32 @@ jobs:
           echo "WEB_E2E_TEMP_LOGIN=$E2E_PRINCIPAL_LOGIN_B" >>"$GITHUB_ENV"
           echo "WEB_E2E_TEMP_PASSWORD=$temp_password" >>"$GITHUB_ENV"
 
+      # S4.1 self-service migration path (login.spec.ts "claim identity"): a third member, carol,
+      # gets an API key and NO password — exactly the state every pre-S4.1 member is in after
+      # migration 0019. The spec signs her in with the key, sets a password from "我的账户"
+      # (`POST /api/auth/claim`) and logs in again with it. No CLI in that path, by design.
+      - name: Add a third principal (member, API key only) for the claim scenario
+        run: |
+          set -euo pipefail
+          set +e
+          out=$(sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            run --rm --no-deps -T kernel node dist/cli/bootstrap.js add-principal --workspace "$E2E_WORKSPACE_ID" --name carol --role member </dev/null 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "add-principal (carol) exited $rc:" >&2
+            printf '%s\n' "$out" >&2
+            exit 1
+          fi
+          api_key_c=$(printf '%s\n' "$out" | awk '/^API key/{getline; print; exit}')
+          if [ -z "$api_key_c" ]; then
+            echo "could not parse add-principal (carol) output:" >&2
+            printf '%s\n' "$out" >&2
+            exit 1
+          fi
+          echo "::add-mask::$api_key_c"
+          echo "WEB_E2E_CLAIM_API_KEY=$api_key_c" >>"$GITHUB_ENV"
+
       # W7: seed the two pending ActionRequests approvals.spec.ts expects (one per
       # `resource_scope` marker that file hardcodes) — the exact psql block packages/web/README.md
       # "Seeding a pending ActionRequest" documents for a local run, executed here inside the
@@ -308,7 +334,8 @@ jobs:
       # (WEB_E2E_BASE_URL/WEB_E2E_API_KEY), since W7 approvals.spec.ts's two seeded scenarios
       # (WEB_E2E_API_KEY_B/WEB_E2E_PRINCIPAL_ID_B/WEB_E2E_SEED_ACTION_REQUESTS), and since S4.1
       # login.spec.ts (WEB_E2E_SETUP_TOKEN / WEB_E2E_OWNER_LOGIN+PASSWORD / WEB_E2E_TEMP_LOGIN+
-      # PASSWORD: initialize platform → password login → forced change → logout) plus
+      # PASSWORD / WEB_E2E_CLAIM_API_KEY: initialize platform → password login → forced change →
+      # claim an identity from an API key → logout → lockout) plus
       # explorer.spec.ts's password login. playwright.config.ts gives CI one retry per test so a
       # runner hiccup shows up as "flaky" in the uploaded report instead of failing the whole gate.
       - name: Run web e2e

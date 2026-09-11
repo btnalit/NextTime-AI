@@ -127,9 +127,18 @@ export function LoginPage({
           >
             Log in
           </Button>
+
+          <p className="login-footer">
+            首次登录：用户名 admin，初始密码在主机的 secrets/setup/initial-admin-password（首次登录后必须修改）。
+          </p>
         </form>
 
-        <ApiKeyLoginDetails onLogin={onApiKeyLogin} pending={apiKeyPending} error={apiKeyError} />
+        <ApiKeyLoginDetails
+          onLogin={onApiKeyLogin}
+          pending={apiKeyPending}
+          error={apiKeyError}
+          footerExtra="用 key 登录后可在「我的账户」设置密码，之后用密码登录。"
+        />
       </Card>
     </div>
   );
