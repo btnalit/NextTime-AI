@@ -31,7 +31,10 @@ export default defineConfig({
       '/ws': {
         target: KERNEL_DEV_URL,
         ws: true,
-        changeOrigin: true,
+        // S4.1: the kernel rejects a WebSocket upgrade whose `Origin` host differs from its
+        // `Host` (CSRF guard for the console session cookie, interfaces/ws/server.ts). Keeping the
+        // browser's own `Host` (localhost:5173) lets that check pass through the dev proxy.
+        changeOrigin: false,
       },
     },
   },

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
 
 /**
  * e2e/governance.spec.ts: CI smoke coverage for the S3.11/S3.12/S3.13/S3.14 governance surface
@@ -21,14 +22,15 @@ const API_KEY = process.env.WEB_E2E_API_KEY;
 
 async function login(page: import('@playwright/test').Page, apiKey: string): Promise<void> {
   await page.goto('/');
-  await page.getByPlaceholder('sk-...').fill(apiKey);
-  await page.getByRole('button', { name: 'Sign in' }).click();
   // Not a URL/hash assertion: a bare `/` load has no `location.hash` at all, and
   // `lib/router.ts`'s `routeFromHash('')` resolves straight to the default `chats` route without
   // ever calling `navigate()` (only a stray `#/login` hash triggers App.tsx's own redirect
   // effect) — so the URL stays hash-less through and after login. The signed-in shell (Sidebar's
-  // connection indicator) is the reliable "we're past the login screen" signal instead.
-  await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
+  // connection indicator) is the reliable "we're past the login screen" signal instead — checked
+  // inside `loginWithApiKey`. `reachLoginForm` first gets past `SetupPage` if this is the first
+  // spec to run this session (see `e2e/auth-helpers.ts`'s own doc comment).
+  await reachLoginForm(page);
+  await loginWithApiKey(page, apiKey);
 }
 
 test.describe('CI smoke: governance surface', () => {

@@ -14,12 +14,16 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
-describe('HttpClient', () => {
-  it('POSTs to /api/cap/<name> with Authorization: Bearer <apiKey> and the params as JSON', async () => {
+function apiKeyClient(fetchImpl: typeof fetch): HttpClient {
+  return new HttpClient({ auth: { kind: 'apiKey', apiKey: 'sk-test' }, fetchImpl });
+}
+
+describe('HttpClient (apiKey auth)', () => {
+  it('POSTs to /api/cap/<name> with Authorization: Bearer <apiKey>, X-Requested-With, and the params as JSON', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse(200, { ok: true, result: { hello: 'world' } }),
     );
-    const client = new HttpClient({ apiKey: 'sk-test', fetchImpl: fetchImpl as typeof fetch });
+    const client = apiKeyClient(fetchImpl as typeof fetch);
 
     const result = await client.call('list_pending', { foo: 'bar' });
 
@@ -28,13 +32,17 @@ describe('HttpClient', () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/cap/list_pending');
     expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>).authorization).toBe('Bearer sk-test');
+    const headers = init.headers as Record<string, string>;
+    expect(headers.authorization).toBe('Bearer sk-test');
+    expect(headers['x-requested-with']).toBe('nexttime');
+    expect(headers['x-workspace-id']).toBeUndefined();
+    expect(init.credentials).toBeUndefined();
     expect(JSON.parse(init.body as string)).toEqual({ foo: 'bar' });
   });
 
   it('defaults params to {} when omitted', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, result: null }));
-    const client = new HttpClient({ apiKey: 'sk-test', fetchImpl: fetchImpl as typeof fetch });
+    const client = apiKeyClient(fetchImpl as typeof fetch);
 
     await client.call('list_pending');
 
@@ -46,7 +54,7 @@ describe('HttpClient', () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse(403, { ok: false, error: { code: 'forbidden', message: 'nope' } }),
     );
-    const client = new HttpClient({ apiKey: 'sk-test', fetchImpl: fetchImpl as typeof fetch });
+    const client = apiKeyClient(fetchImpl as typeof fetch);
 
     const err = await client.call('approve', { actionRequestId: 'ar-1' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
@@ -57,7 +65,7 @@ describe('HttpClient', () => {
 
   it('throws an invalid_response HttpError on a non-JSON body', async () => {
     const fetchImpl = vi.fn(async () => new Response('not json', { status: 200 }));
-    const client = new HttpClient({ apiKey: 'sk-test', fetchImpl: fetchImpl as typeof fetch });
+    const client = apiKeyClient(fetchImpl as typeof fetch);
 
     const err = await client.call('get_task', { taskId: 't1' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
@@ -68,10 +76,44 @@ describe('HttpClient', () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('boom');
     });
-    const client = new HttpClient({ apiKey: 'sk-test', fetchImpl: fetchImpl as typeof fetch });
+    const client = apiKeyClient(fetchImpl as typeof fetch);
 
     const err = await client.call('get_task', { taskId: 't1' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).kind).toBe('network');
+  });
+});
+
+describe('HttpClient (cookie auth, S4.1)', () => {
+  it('sends X-Workspace-Id + X-Requested-With + credentials:same-origin, never Authorization', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, result: null }));
+    const client = new HttpClient({
+      auth: { kind: 'cookie', workspaceId: 'ws-1' },
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await client.call('list_chats');
+
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-workspace-id']).toBe('ws-1');
+    expect(headers['x-requested-with']).toBe('nexttime');
+    expect(headers.authorization).toBeUndefined();
+    expect(init.credentials).toBe('same-origin');
+  });
+
+  it('omits X-Workspace-Id when workspaceId is null', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, result: null }));
+    const client = new HttpClient({
+      auth: { kind: 'cookie', workspaceId: null },
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await client.call('get_workspace');
+
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-workspace-id']).toBeUndefined();
+    expect(init.credentials).toBe('same-origin');
   });
 });

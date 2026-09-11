@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { usePendingCount } from '../../hooks/usePendingCount.js';
 import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { useWsStatus } from '../../hooks/useWsStatus.js';
+import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import type { NavSection } from '../../lib/router.js';
 import { Sidebar } from './Sidebar.js';
@@ -10,12 +11,27 @@ export interface AppShellProps {
   readonly active: NavSection;
   readonly http: CapabilityCaller;
   readonly pushes: PushSource;
-  readonly onForgetKey: () => void;
+  readonly authMode: 'apiKey' | 'cookie';
+  readonly onLogout: () => void;
+  /** Cookie-mode only (S4.1) — see `Sidebar`'s own doc comment on the workspace switcher. */
+  readonly memberships?: readonly WireMembership[];
+  readonly selectedWorkspaceId?: string | null;
+  readonly onSwitchWorkspace?: (workspaceId: string) => void;
   readonly children: ReactNode;
 }
 
 /** components/shell/AppShell: sidebar + main. Pages render inside `main` and own their `.page`. */
-export function AppShell({ active, http, pushes, onForgetKey, children }: AppShellProps) {
+export function AppShell({
+  active,
+  http,
+  pushes,
+  authMode,
+  onLogout,
+  memberships,
+  selectedWorkspaceId,
+  onSwitchWorkspace,
+  children,
+}: AppShellProps) {
   const pendingCount = usePendingCount(http, pushes);
   const wsStatus = useWsStatus(pushes);
   const { workspaceName, role } = useWorkspaceIdentity(http);
@@ -27,7 +43,11 @@ export function AppShell({ active, http, pushes, onForgetKey, children }: AppShe
         wsStatus={wsStatus}
         workspaceName={workspaceName}
         role={role}
-        onForgetKey={onForgetKey}
+        authMode={authMode}
+        onLogout={onLogout}
+        memberships={memberships}
+        selectedWorkspaceId={selectedWorkspaceId}
+        onSwitchWorkspace={onSwitchWorkspace}
       />
       <main className="main">{children}</main>
     </div>

@@ -1,9 +1,11 @@
+import type { WireMembership } from '../../lib/auth-api.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
 import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
 import type { NavSection } from '../../lib/router.js';
 import { hrefs } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
 import { Button } from '../ui/Button.js';
+import { Select } from '../ui/Field.js';
 import { Icon, type IconName } from '../ui/Icon.js';
 import { StatusChip } from '../ui/StatusChip.js';
 
@@ -53,6 +55,8 @@ const WORK_NAV: readonly NavItem[] = [
   },
   { section: 'tasks', label: '任务', sub: 'Tasks', icon: 'tasks', href: hrefs.tasks() },
   { section: 'agent', label: '我的智能体', sub: 'My Agent', icon: 'user', href: hrefs.agent() },
+  // S4.1: sits right next to 我的智能体 — both are per-user "我的" settings, not governance.
+  { section: 'account', label: '我的账户', sub: 'My Account', icon: 'user', href: hrefs.account() },
 ];
 
 /** 治理 Governance — hidden for a *proven* member (S3.11: "member 只见工作区 + 「我的智能体」"), shown
@@ -94,7 +98,17 @@ export interface SidebarProps {
   readonly wsStatus: WsConnectionStatus;
   readonly workspaceName: string;
   readonly role: WorkspaceRole;
-  readonly onForgetKey: () => void;
+  /** S4.1: which credential this session is signed in with — governs the footer's sign-out
+   *  button label (e2e depends on the exact text: "Forget key" for `apiKey`, "登出 Sign out" for
+   *  `cookie`) and whether the workspace switcher below can ever render. */
+  readonly authMode: 'apiKey' | 'cookie';
+  readonly onLogout: () => void;
+  /** Cookie-mode only: every active membership the signed-in user holds. The switcher (a `<select>`
+   *  next to the workspace name) only renders when there is more than one — a single membership
+   *  has nothing to switch to, same as `showGovern`'s "nothing to show, don't show it" rule. */
+  readonly memberships?: readonly WireMembership[];
+  readonly selectedWorkspaceId?: string | null;
+  readonly onSwitchWorkspace?: (workspaceId: string) => void;
 }
 
 /**
@@ -117,9 +131,14 @@ export function Sidebar({
   wsStatus,
   workspaceName,
   role,
-  onForgetKey,
+  authMode,
+  onLogout,
+  memberships,
+  selectedWorkspaceId,
+  onSwitchWorkspace,
 }: SidebarProps) {
   const showGovern = !isProvenMember(role);
+  const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -129,9 +148,24 @@ export function Sidebar({
         <div className="sidebar-brand-text">
           <span className="sidebar-product">NextTime AI</span>
           <span className="sidebar-workspace-row">
-            <span className="sidebar-workspace" title={workspaceName}>
-              {workspaceName}
-            </span>
+            {showSwitcher ? (
+              <Select
+                aria-label="Switch workspace"
+                data-testid="workspace-switcher"
+                value={selectedWorkspaceId ?? ''}
+                onChange={(event) => onSwitchWorkspace?.(event.target.value)}
+              >
+                {(memberships ?? []).map((m) => (
+                  <option key={m.workspaceId} value={m.workspaceId}>
+                    {m.workspaceName} ({m.role})
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <span className="sidebar-workspace" title={workspaceName}>
+                {workspaceName}
+              </span>
+            )}
             {role.kind === 'known' ? (
               <span data-testid="role-badge" title={`Role: ${role.role}`}>
                 <StatusChip machine="role" status={role.role} size="s" />
@@ -176,9 +210,15 @@ export function Sidebar({
             {STATUS_LABEL[wsStatus]}
           </span>
         </div>
-        <Button variant="ghost" size="s" icon="logout" onClick={onForgetKey} title="Forget key">
-          Forget key
-        </Button>
+        {authMode === 'cookie' ? (
+          <Button variant="ghost" size="s" icon="logout" onClick={onLogout} title="Sign out">
+            登出 Sign out
+          </Button>
+        ) : (
+          <Button variant="ghost" size="s" icon="logout" onClick={onLogout} title="Forget key">
+            Forget key
+          </Button>
+        )}
       </div>
     </aside>
   );

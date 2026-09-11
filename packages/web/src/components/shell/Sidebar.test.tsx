@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { WireMembership } from '../../lib/auth-api.js';
 import type { WorkspaceRole } from '../../lib/role.js';
 import { Sidebar } from './Sidebar.js';
 
@@ -23,7 +24,8 @@ describe('Sidebar', () => {
           wsStatus="connected"
           workspaceName="Acme"
           role={role}
-          onForgetKey={vi.fn()}
+          authMode="apiKey"
+          onLogout={vi.fn()}
         />,
       );
       expect(screen.getByTestId('nav-members')).toBeTruthy();
@@ -42,15 +44,17 @@ describe('Sidebar', () => {
           wsStatus="connected"
           workspaceName="Acme"
           role={role}
-          onForgetKey={vi.fn()}
+          authMode="apiKey"
+          onLogout={vi.fn()}
         />,
       );
       expect(screen.queryByTestId('nav-members')).toBeNull();
       expect(screen.queryByTestId('nav-audit')).toBeNull();
       expect(screen.queryByTestId('nav-explorer')).toBeNull();
-      // 工作 Work (including 我的智能体, S3.13's placeholder) is always visible.
+      // 工作 Work (including 我的智能体/我的账户) is always visible.
       expect(screen.getByTestId('nav-chats')).toBeTruthy();
       expect(screen.getByTestId('nav-agent')).toBeTruthy();
+      expect(screen.getByTestId('nav-account')).toBeTruthy();
       unmount();
     }
   });
@@ -63,7 +67,8 @@ describe('Sidebar', () => {
         wsStatus="connected"
         workspaceName="Acme Workspace"
         role={INFERRED_OWNER}
-        onForgetKey={vi.fn()}
+        authMode="apiKey"
+        onLogout={vi.fn()}
       />,
     );
     expect(screen.getByText('Acme Workspace')).toBeTruthy();
@@ -79,7 +84,8 @@ describe('Sidebar', () => {
         wsStatus="connected"
         workspaceName="Acme Workspace"
         role={{ kind: 'known', role: 'auditor' }}
-        onForgetKey={vi.fn()}
+        authMode="apiKey"
+        onLogout={vi.fn()}
       />,
     );
     const badge = screen.getByTestId('role-badge');
@@ -94,7 +100,8 @@ describe('Sidebar', () => {
         wsStatus="connected"
         workspaceName="Acme"
         role={KNOWN_OWNER}
-        onForgetKey={vi.fn()}
+        authMode="apiKey"
+        onLogout={vi.fn()}
       />,
     );
     expect(screen.getByTestId('nav-catalog').getAttribute('aria-current')).toBe('page');
@@ -109,7 +116,8 @@ describe('Sidebar', () => {
         wsStatus="connected"
         workspaceName="Acme"
         role={KNOWN_OWNER}
-        onForgetKey={vi.fn()}
+        authMode="apiKey"
+        onLogout={vi.fn()}
       />,
     );
     expect(screen.queryByLabelText(/pending approvals/)).toBeNull();
@@ -121,9 +129,102 @@ describe('Sidebar', () => {
         wsStatus="connected"
         workspaceName="Acme"
         role={KNOWN_OWNER}
-        onForgetKey={vi.fn()}
+        authMode="apiKey"
+        onLogout={vi.fn()}
       />,
     );
     expect(screen.getByLabelText('3 pending approvals').textContent).toBe('3');
+  });
+
+  describe('S4.1: sign-out label + workspace switcher', () => {
+    const MEMBERSHIPS: readonly WireMembership[] = [
+      { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p-1', role: 'owner' },
+      { workspaceId: 'ws-2', workspaceName: 'Beta', principalId: 'p-2', role: 'member' },
+    ];
+
+    it('labels the sign-out button "Forget key" in apiKey mode and "登出 Sign out" in cookie mode', () => {
+      const onLogout = vi.fn();
+      const { rerender } = render(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="apiKey"
+          onLogout={onLogout}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Forget key' })).toBeTruthy();
+
+      rerender(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="cookie"
+          onLogout={onLogout}
+        />,
+      );
+      const signOut = screen.getByRole('button', { name: /登出 Sign out/ });
+      fireEvent.click(signOut);
+      expect(onLogout).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders no workspace switcher for apiKey mode or a single membership', () => {
+      const { rerender } = render(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="cookie"
+          onLogout={vi.fn()}
+          memberships={[MEMBERSHIPS[0] as WireMembership]}
+          selectedWorkspaceId="ws-1"
+        />,
+      );
+      expect(screen.queryByTestId('workspace-switcher')).toBeNull();
+
+      rerender(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="apiKey"
+          onLogout={vi.fn()}
+          memberships={MEMBERSHIPS}
+          selectedWorkspaceId="ws-1"
+        />,
+      );
+      expect(screen.queryByTestId('workspace-switcher')).toBeNull();
+    });
+
+    it('renders a switcher listing every membership when there is more than one, in cookie mode', () => {
+      const onSwitchWorkspace = vi.fn();
+      render(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="cookie"
+          onLogout={vi.fn()}
+          memberships={MEMBERSHIPS}
+          selectedWorkspaceId="ws-1"
+          onSwitchWorkspace={onSwitchWorkspace}
+        />,
+      );
+      const select = screen.getByTestId('workspace-switcher') as HTMLSelectElement;
+      expect(select.value).toBe('ws-1');
+      fireEvent.change(select, { target: { value: 'ws-2' } });
+      expect(onSwitchWorkspace).toHaveBeenCalledWith('ws-2');
+    });
   });
 });

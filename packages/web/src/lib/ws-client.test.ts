@@ -131,7 +131,7 @@ function createTestClient(): { client: WsClient; sockets: FakeWebSocket[] } {
 }
 
 /**
- * Connects, opens the most recently created socket, and completes an `authenticate("test-key")`
+ * Connects, opens the most recently created socket, and completes an `authenticate({ token: "test-key" })`
  * round trip. `client.connect()` synchronously invokes the injected `createSocket` factory before
  * returning its (still-pending) promise — so `sockets` already holds the new socket by the time
  * this function's very first line finishes, and this is safe to call again after a reconnect to
@@ -144,7 +144,7 @@ async function connectAndAuth(client: WsClient, sockets: FakeWebSocket[]): Promi
   socket.open();
   await connectPromise;
 
-  const authPromise = client.authenticate('test-key');
+  const authPromise = client.authenticate({ token: 'test-key' });
   respond(socket, sentFrame(socket, socket.sent.length - 1), { authenticated: true });
   await authPromise;
   return socket;
@@ -166,7 +166,7 @@ describe('WsClient', () => {
       socket.open();
       await connectPromise;
 
-      const authPromise = client.authenticate('sk-abc');
+      const authPromise = client.authenticate({ token: 'sk-abc' });
       expect(socket.sent).toHaveLength(1);
       expect(sentFrame(socket, 0)).toMatchObject({
         jsonrpc: '2.0',
@@ -186,10 +186,29 @@ describe('WsClient', () => {
       socket.open();
       await connectPromise;
 
-      const authPromise = client.authenticate('bad-key');
+      const authPromise = client.authenticate({ token: 'bad-key' });
       respondError(socket, sentFrame(socket, 0), { code: -32001, message: 'unauthorized' });
 
       await expect(authPromise).rejects.toBeInstanceOf(RpcError);
+    });
+
+    it('sends {method: "authenticate", params: {workspaceId}} for a cookie-session credential (S4.1)', async () => {
+      const { client, sockets } = harness;
+      const connectPromise = client.connect();
+      const socket = sockets[0];
+      if (!socket) throw new Error('expected a socket');
+      socket.open();
+      await connectPromise;
+
+      const authPromise = client.authenticate({ workspaceId: 'ws-1' });
+      expect(sentFrame(socket, 0)).toMatchObject({
+        jsonrpc: '2.0',
+        method: 'authenticate',
+        params: { workspaceId: 'ws-1' },
+      });
+
+      respond(socket, sentFrame(socket, 0), { authenticated: true });
+      await expect(authPromise).resolves.toBeUndefined();
     });
 
     it('rejects call() invoked before authenticate() has succeeded', async () => {
@@ -378,7 +397,7 @@ describe('WsClient', () => {
       socket.open();
       await connectPromise;
 
-      const authPromise = client.authenticate('bad-key');
+      const authPromise = client.authenticate({ token: 'bad-key' });
       respondError(socket, sentFrame(socket, 0), { code: -32001, message: 'unauthorized' });
       await authPromise.catch(() => undefined);
 

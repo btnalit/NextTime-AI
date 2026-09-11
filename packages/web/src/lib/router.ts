@@ -20,6 +20,7 @@ export type NavSection =
   | 'approvals'
   | 'tasks'
   | 'agent'
+  | 'account'
   | 'members'
   | 'access'
   | 'systems'
@@ -37,6 +38,7 @@ export type Route =
   | { readonly kind: 'approvals'; readonly actionRequestId?: string }
   | { readonly kind: 'tasks'; readonly taskId?: string }
   | { readonly kind: 'agent' }
+  | { readonly kind: 'account' }
   | { readonly kind: 'members' }
   | { readonly kind: 'access' }
   | { readonly kind: 'systems'; readonly gatekeeperId?: string }
@@ -75,6 +77,7 @@ export function routeFromHash(hash: string): Route {
   }
 
   if (hash === '#/me/agent') return { kind: 'agent' };
+  if (hash === '#/me/account') return { kind: 'account' };
 
   if (hash === '#/govern/members') return { kind: 'members' };
   if (hash === '#/govern/access') return { kind: 'access' };
@@ -121,6 +124,7 @@ export const hrefs = {
   tasks: () => '#/work/tasks',
   task: (taskId: string) => `#/work/tasks/${encodeURIComponent(taskId)}`,
   agent: () => '#/me/agent',
+  account: () => '#/me/account',
   members: () => '#/govern/members',
   access: () => '#/govern/access',
   systems: () => '#/govern/systems',

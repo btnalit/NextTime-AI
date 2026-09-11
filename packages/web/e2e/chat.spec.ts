@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
 
 /**
  * e2e/chat.spec.ts: the S1.8 acceptance flow (docs/development-tasks.md S1.8: "Playwright：登录 →
@@ -32,8 +33,8 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
 
     // --- login ---
     await page.goto('/');
-    await page.getByPlaceholder('sk-...').fill(apiKey);
-    await page.getByRole('button', { name: 'Sign in' }).click();
+    await reachLoginForm(page);
+    await loginWithApiKey(page, apiKey);
 
     // --- chat list: new chat ---
     await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();

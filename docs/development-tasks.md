@@ -1356,6 +1356,35 @@
     来跑"强制改密"，S4.1 没有建用户的 UI，用 `set-password --temporary` 给 bob 设临时密码代替。
   - 遗留：`rotate_api_key` 不使 cookie 失效（STATUS 31，同 Explorer 时期）；`create_principal` 建出的
     用户无密码，S4.2 的 `reset_user_password` 之前只能用 CLI `set-password`。
+- **实现说明（web 半，2026-09-11）**：
+  - `App.tsx` 变成一台会话前状态机：`boot`（`GET /api/auth/me` 在途，渲染空白而非闪一下登录页）→
+    `setup`（`setup-state.initialized:false`）/ `login` / `changePassword`（`user.mustChangePassword`）/
+    `noWorkspace`（零成员资格，平台管理员刚建好时就是这样）→ 打开工作区会话（WS `authenticate
+    {workspaceId}` + cookie 模式 `HttpClient`）。工作区选择：唯一成员资格自动选中；多个时取本标签页
+    `sessionStorage` 里上次的选择，否则第一个（偏离"否则不选"——本项没有单独的选工作区页，侧栏切换器
+    `data-testid="workspace-switcher"` 兜底）。切换 = 关 WS、重连认证、新 `HttpClient`、`generation+1`
+    让 `PermissionsProvider` 重挂、写选择器 cookie `nexttime_workspace`（Explorer 靠它）。
+  - `lib/http-client.ts` 的 `auth` 分 `{kind:'apiKey'}` / `{kind:'cookie', workspaceId}`；所有请求带
+    `X-Requested-With: nexttime`，cookie 模式带 `X-Workspace-Id` + `credentials:'same-origin'`，不带
+    `Authorization`。`lib/ws-client.ts` 的 `authenticate` 接 `{token}` 或 `{workspaceId}`，重连按原样
+    重发。`lib/auth-api.ts` 是七条 `/api/auth/*`、`/api/platform/*` 的类型化封装。`lib/explorer-session.ts`
+    删除。
+  - 页面：`LoginPage`（登录名 + 密码为主，提交按钮 `Log in`；折叠项 `用 API key 登录 Use an API key
+    instead` 里是原来的 API key 表单，按钮仍叫 `Sign in`、占位符仍是 `sk-...`）、`SetupPage`
+    （`创建管理员 Create administrator`；另有 `已有账户？登录 Already have an account? Log in` 回到登录
+    页——**不在清单里，但 CI 必需**：五个 Playwright spec 一次按字母序跑，只有最后的 `login.spec.ts`
+    调初始化，前面四个都会先落在初始化页）、`ChangePasswordPage`（强制改密，只能改密或登出）、
+    `NoWorkspacePage`、`AccountPage`（`#/me/account`，改显示名 / 改密码 / 成员资格只读；API key 会话下
+    提示需密码登录）。侧栏：cookie 会话的登出按钮 `登出 Sign out`，API key 会话仍是 `Forget key`（现有
+    e2e 依赖这个名字）；`我的账户 My Account` 在「我的」组。
+  - e2e：`e2e/auth-helpers.ts`（`reachLoginForm` 会点掉初始化页、`loginWithApiKey` 展开折叠项）；四个既有
+    spec 改用它；`explorer.spec.ts` 改为 owner 密码登录（API key 会话没有 cookie）；新 `login.spec.ts`
+    四个场景按声明顺序：初始化平台 → 无工作区页 → 登出（CI 重试时改为直接登录已建的 `e2e-admin`）；
+    owner 密码登录 → 登出 → `/api/auth/me` 401；bob 临时密码 → 强制改密（先试错当前密码）→ 登出 → 新密码
+    再登录；最后 5 次错误密码锁定 `e2e-admin`（放最后，锁 5 分钟不影响其他用例）。
+    `.github/workflows/e2e.yml` 新增读令牌与 `set-password` 两步（见 `runbooks/web-console.md` CI 一节）。
+  - 未做：`noWorkspace` 状态下的「我的账户」页没有返回 / 登出按钮（只能前进）；vite 开发代理 `/ws` 改
+    `changeOrigin:false` 以通过内核的 Origin 校验。
 
 ### S4.2 用户管理与工作区管理（平台控制台）
 

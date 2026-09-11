@@ -14,6 +14,7 @@ describe('routeFromHash', () => {
     expect(routeFromHash('#/work/tasks')).toEqual({ kind: 'tasks' });
     expect(routeFromHash('#/work/tasks/t-1')).toEqual({ kind: 'tasks', taskId: 't-1' });
     expect(routeFromHash('#/me/agent')).toEqual({ kind: 'agent' });
+    expect(routeFromHash('#/me/account')).toEqual({ kind: 'account' });
     expect(routeFromHash('#/govern/members')).toEqual({ kind: 'members' });
     expect(routeFromHash('#/govern/access')).toEqual({ kind: 'access' });
     expect(routeFromHash('#/govern/systems')).toEqual({ kind: 'systems' });
@@ -74,6 +75,7 @@ describe('hrefs', () => {
       { kind: 'tasks' },
       { kind: 'tasks', taskId: 't-1' },
       { kind: 'agent' },
+      { kind: 'account' },
       { kind: 'members' },
       { kind: 'access' },
       { kind: 'systems' },
@@ -104,6 +106,8 @@ function hrefFor(route: Route): string {
       return route.taskId ? hrefs.task(route.taskId) : hrefs.tasks();
     case 'agent':
       return hrefs.agent();
+    case 'account':
+      return hrefs.account();
     case 'members':
       return hrefs.members();
     case 'access':

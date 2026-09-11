@@ -1,44 +1,107 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessPage } from './components/AccessPage.js';
+import { AccountPage } from './components/AccountPage.js';
 import { AgentProfilePage } from './components/AgentProfilePage.js';
 import { ApprovalQueuePage } from './components/ApprovalQueuePage.js';
 import { AuditPage } from './components/AuditPage.js';
 import { CatalogPage } from './components/CatalogPage.js';
+import { ChangePasswordPage } from './components/ChangePasswordPage.js';
 import { ChatListPage } from './components/ChatListPage.js';
 import { ChatPage } from './components/ChatPage.js';
 import { ConnectionsPage } from './components/ConnectionsPage.js';
 import { LoginPage } from './components/LoginPage.js';
 import { MembersPage } from './components/MembersPage.js';
 import { ModelsPage } from './components/ModelsPage.js';
+import { NoWorkspacePage } from './components/NoWorkspacePage.js';
+import { SetupPage } from './components/SetupPage.js';
 import { TasksPage } from './components/TasksPage.js';
 import { AppShell } from './components/shell/AppShell.js';
 import { ToastProvider } from './components/ui/Toast.js';
 import { PermissionsProvider } from './hooks/usePermissions.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
-import { clearExplorerSession, createExplorerSession } from './lib/explorer-session.js';
+import {
+  type WireMembership,
+  type WireUser,
+  logout as apiLogout,
+  getMe,
+  getSetupState,
+  setWorkspaceCookie,
+} from './lib/auth-api.js';
 import { HttpClient } from './lib/http-client.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
-import { clearApiKey, loadApiKey, saveApiKey } from './lib/session.js';
+import {
+  clearApiKey,
+  loadApiKey,
+  loadSelectedWorkspaceId,
+  saveApiKey,
+  saveSelectedWorkspaceId,
+} from './lib/session.js';
 import { WsClient } from './lib/ws-client.js';
 import { wsUrl } from './lib/ws-url.js';
 
 interface Session {
   readonly ws: WsClient;
   readonly http: HttpClient;
-  /** Increments per sign-in so per-session state (permissions, toasts) remounts on "Forget key". */
+  /** Increments per sign-in/workspace-switch so per-session state (permissions, toasts) remounts. */
   readonly generation: number;
+  readonly authMode: 'apiKey' | 'cookie';
+  // Cookie mode only (S4.1) — undefined for an apiKey session, which has no platform user.
+  readonly user?: WireUser;
+  readonly memberships?: readonly WireMembership[];
+  readonly selectedWorkspaceId?: string;
 }
 
 /**
- * App: session + routing (design doc §7.6; S1.8, S2.10). Owns the single `WsClient` (§7.6 "一个
- * WebSocket") and the single `HttpClient` — every page receives them as props, never constructs
- * its own. Hash routes (`lib/router.ts`) so a hard reload lands back on the same view; the API key
- * lives in `sessionStorage` only (`lib/session.ts`) and is re-used on reload to reconnect.
+ * The pre-session state machine (S4.1; design doc §7.11) — everything `App` shows *before* a
+ * `Session` (a workspace-scoped WS + HTTP pair) exists. `boot` is the brief window while
+ * `GET /api/auth/me` is in flight (rendered as nothing — see `App`'s own render switch: a login
+ * form flashing into existence and then vanishing again is worse than a blank frame, and
+ * `e2e/approvals.spec.ts`'s login helper explicitly treats "no login input in the DOM yet" as
+ * "still booting", not "ready to sign in"). `changePassword`/`noWorkspace` both carry the
+ * already-known `user`/`memberships` so `AccountPage`/`ChangePasswordPage` never have to re-fetch
+ * them.
+ */
+type PreSessionState =
+  | { readonly kind: 'boot' }
+  | { readonly kind: 'setup'; readonly tokenAvailable: boolean }
+  | { readonly kind: 'login' }
+  | {
+      readonly kind: 'changePassword';
+      readonly user: WireUser;
+      readonly memberships: readonly WireMembership[];
+    }
+  | {
+      readonly kind: 'noWorkspace';
+      readonly user: WireUser;
+      readonly memberships: readonly WireMembership[];
+    };
+
+/**
+ * App: session + routing (design doc §7.6, §7.11; S1.8, S2.10, S4.1). Owns the single `WsClient`
+ * (§7.6 "一个 WebSocket") and the single `HttpClient` — every page receives them as props, never
+ * constructs its own. Hash routes (`lib/router.ts`) so a hard reload lands back on the same view.
+ *
+ * Two independent credential channels reach the same shell: the pre-existing API key
+ * (`lib/session.ts` sessionStorage, re-used on reload to reconnect) and, S4.1, the console session
+ * cookie (HttpOnly — this file never reads it, only `GET /api/auth/me`'s response). Boot sequence:
+ *   1. `GET /api/auth/me`. 200 → cookie session (`proceedAfterCookieAuth` below decides
+ *      changePassword / noWorkspace / open-a-workspace from there). 401 (or any other failure —
+ *      fails open rather than showing nothing forever) → `GET /api/platform/setup-state`:
+ *      `initialized:false` → `SetupPage`; otherwise → `LoginPage`. Either way, also try the stored
+ *      API key auto-connect — the two channels are independent, so a held API key must keep
+ *      working whether or not anyone has ever completed platform setup (see `SetupPage`'s own
+ *      module doc comment for why it *also* offers a way back to `LoginPage`/the API-key form).
+ *   2. Workspace selection (`proceedAfterCookieAuth`): auto-select when there is exactly one
+ *      active membership; else the last-selected workspace from this tab's sessionStorage if it is
+ *      still a membership; else (deviation from a literal "none" — there is no separate workspace-
+ *      chooser screen in this task's scope) the first membership, with the Sidebar's switcher
+ *      (`>1` membership) covering the rest.
  */
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  const [authError, setAuthError] = useState<unknown | null>(null);
+  const [preSession, setPreSession] = useState<PreSessionState>({ kind: 'boot' });
+  const [apiKeyConnecting, setApiKeyConnecting] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState<unknown | null>(null);
   const [route, setRoute] = useState<Route>(() => routeFromHash(window.location.hash));
   const generation = useRef(0);
 
@@ -50,71 +113,259 @@ export function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  const connect = useCallback(async (apiKey: string): Promise<void> => {
-    setConnecting(true);
-    setAuthError(null);
+  const connectApiKey = useCallback(async (apiKey: string): Promise<void> => {
+    setApiKeyConnecting(true);
+    setApiKeyError(null);
     const ws = new WsClient({ url: wsUrl() });
     try {
       await ws.connect();
-      await ws.authenticate(apiKey);
+      await ws.authenticate({ token: apiKey });
       saveApiKey(apiKey);
-      // Fire-and-forget: installs the Explorer session cookie (lib/explorer-session.ts); login
-      // must not wait on it.
-      void createExplorerSession(apiKey);
       generation.current += 1;
-      setSession({ ws, http: new HttpClient({ apiKey }), generation: generation.current });
+      setSession({
+        ws,
+        http: new HttpClient({ auth: { kind: 'apiKey', apiKey } }),
+        generation: generation.current,
+        authMode: 'apiKey',
+      });
     } catch (err) {
       ws.close();
       clearApiKey();
-      setAuthError(err);
+      setApiKeyError(err);
     } finally {
-      setConnecting(false);
+      setApiKeyConnecting(false);
     }
   }, []);
 
-  // Auto-connect once on mount if a key survived in this tab's sessionStorage. `attempted` guards
-  // React 18 StrictMode's dev-only double effect invocation from opening a second socket.
-  const autoConnectAttempted = useRef(false);
-  useEffect(() => {
-    if (autoConnectAttempted.current) return;
-    autoConnectAttempted.current = true;
+  /** Opens a workspace-scoped WS + HTTP session for an already-authenticated cookie user. Sets
+   *  the `nexttime_workspace` selector cookie (Explorer, `lib/auth-api.ts`) *before* `setSession`
+   *  so any capability call a just-rendered page fires (or a same-tab Explorer navigation) always
+   *  sees it. */
+  const openCookieSession = useCallback(
+    async (
+      user: WireUser,
+      memberships: readonly WireMembership[],
+      workspaceId: string,
+    ): Promise<void> => {
+      const ws = new WsClient({ url: wsUrl() });
+      try {
+        await ws.connect();
+        await ws.authenticate({ workspaceId });
+        setWorkspaceCookie(workspaceId);
+        saveSelectedWorkspaceId(workspaceId);
+        generation.current += 1;
+        setSession({
+          ws,
+          http: new HttpClient({ auth: { kind: 'cookie', workspaceId } }),
+          generation: generation.current,
+          authMode: 'cookie',
+          user,
+          memberships,
+          selectedWorkspaceId: workspaceId,
+        });
+      } catch (err) {
+        ws.close();
+        // The named membership disappeared, or some other race lost the cookie session between
+        // GET /api/auth/me and this WS authenticate — fall back to an always-renderable state
+        // rather than a blank screen.
+        console.warn('openCookieSession: authenticate failed', err);
+        setSession(null);
+        setPreSession(
+          memberships.length === 0 ? { kind: 'noWorkspace', user, memberships } : { kind: 'login' },
+        );
+      }
+    },
+    [],
+  );
+
+  const proceedAfterCookieAuth = useCallback(
+    async (user: WireUser, memberships: readonly WireMembership[]): Promise<void> => {
+      if (user.mustChangePassword) {
+        setPreSession({ kind: 'changePassword', user, memberships });
+        return;
+      }
+      if (memberships.length === 0) {
+        setPreSession({ kind: 'noWorkspace', user, memberships });
+        return;
+      }
+      const stored = loadSelectedWorkspaceId();
+      const firstMembership = memberships[0];
+      if (!firstMembership) {
+        setPreSession({ kind: 'noWorkspace', user, memberships });
+        return;
+      }
+      const chosen =
+        memberships.length === 1
+          ? firstMembership.workspaceId
+          : stored && memberships.some((m) => m.workspaceId === stored)
+            ? stored
+            : firstMembership.workspaceId;
+      await openCookieSession(user, memberships, chosen);
+    },
+    [openCookieSession],
+  );
+
+  const bootUnauthenticated = useCallback(async (): Promise<void> => {
+    try {
+      const state = await getSetupState();
+      setPreSession(
+        state.initialized
+          ? { kind: 'login' }
+          : { kind: 'setup', tokenAvailable: state.tokenAvailable },
+      );
+    } catch {
+      setPreSession({ kind: 'login' });
+    }
     const stored = loadApiKey();
-    if (stored) void connect(stored);
-  }, [connect]);
+    if (stored) void connectApiKey(stored);
+  }, [connectApiKey]);
+
+  // `bootAttempted` guards React 18 StrictMode's dev-only double effect invocation from firing
+  // GET /api/auth/me (and, transitively, opening a second WS) twice — same pattern S1.8's own
+  // API-key auto-connect always used.
+  const bootAttempted = useRef(false);
+  useEffect(() => {
+    if (bootAttempted.current) return;
+    bootAttempted.current = true;
+    void (async () => {
+      try {
+        const me = await getMe();
+        await proceedAfterCookieAuth(me.user, me.memberships);
+      } catch {
+        await bootUnauthenticated();
+      }
+    })();
+  }, [proceedAfterCookieAuth, bootUnauthenticated]);
 
   const handleForgetKey = useCallback((): void => {
     session?.ws.close();
     setSession(null);
     clearApiKey();
-    // Fire-and-forget: clears the Explorer session cookie (lib/explorer-session.ts).
-    void clearExplorerSession();
-    setAuthError(null);
+    setApiKeyError(null);
     window.location.hash = '';
   }, [session]);
 
-  if (!session) {
+  const handleCookieLogout = useCallback(async (): Promise<void> => {
+    session?.ws.close();
+    setSession(null);
+    setWorkspaceCookie(null);
+    setPreSession({ kind: 'login' });
+    try {
+      await apiLogout();
+    } catch {
+      // Best-effort — server-side revoke (§7.11) is not required for the client to consider
+      // itself signed out; the cookie is cleared client-side above either way.
+    }
+  }, [session]);
+
+  const handleSwitchWorkspace = useCallback(
+    async (workspaceId: string): Promise<void> => {
+      if (!session || session.authMode !== 'cookie' || !session.user || !session.memberships)
+        return;
+      if (workspaceId === session.selectedWorkspaceId) return;
+      session.ws.close();
+      await openCookieSession(session.user, session.memberships, workspaceId);
+      navigate(hrefs.chats());
+    },
+    [session, openCookieSession],
+  );
+
+  const handleUserChanged = useCallback((user: WireUser): void => {
+    setSession((s) => (s && s.authMode === 'cookie' ? { ...s, user } : s));
+    setPreSession((p) =>
+      p.kind === 'noWorkspace' || p.kind === 'changePassword' ? { ...p, user } : p,
+    );
+  }, []);
+
+  const handlePasswordChanged = useCallback(
+    (user: WireUser): void => {
+      if (preSession.kind !== 'changePassword') return;
+      void proceedAfterCookieAuth(user, preSession.memberships);
+    },
+    [preSession, proceedAfterCookieAuth],
+  );
+
+  if (session) {
     return (
-      <LoginPage onLogin={(key) => void connect(key)} pending={connecting} error={authError} />
+      <PermissionsProvider key={session.generation}>
+        <ToastProvider>
+          <Routed
+            session={session}
+            route={route}
+            onLogout={
+              session.authMode === 'cookie' ? () => void handleCookieLogout() : handleForgetKey
+            }
+            onSwitchWorkspace={(workspaceId) => void handleSwitchWorkspace(workspaceId)}
+            onUserChanged={handleUserChanged}
+          />
+        </ToastProvider>
+      </PermissionsProvider>
     );
   }
 
-  return (
-    <PermissionsProvider key={session.generation}>
-      <ToastProvider>
-        <Routed session={session} route={route} onForgetKey={handleForgetKey} />
-      </ToastProvider>
-    </PermissionsProvider>
-  );
+  switch (preSession.kind) {
+    case 'boot':
+      return null;
+    case 'setup':
+      return (
+        <SetupPage
+          tokenAvailable={preSession.tokenAvailable}
+          onSetupComplete={(result) => void proceedAfterCookieAuth(result.user, result.memberships)}
+          onLoginInstead={() => setPreSession({ kind: 'login' })}
+          onApiKeyLogin={(key) => void connectApiKey(key)}
+          apiKeyPending={apiKeyConnecting}
+          apiKeyError={apiKeyError}
+        />
+      );
+    case 'login':
+      return (
+        <LoginPage
+          onApiKeyLogin={(key) => void connectApiKey(key)}
+          apiKeyPending={apiKeyConnecting}
+          apiKeyError={apiKeyError}
+          onLoggedIn={(result) => void proceedAfterCookieAuth(result.user, result.memberships)}
+        />
+      );
+    case 'changePassword':
+      return (
+        <ChangePasswordPage
+          user={preSession.user}
+          onChanged={handlePasswordChanged}
+          onLogout={() => void handleCookieLogout()}
+        />
+      );
+    case 'noWorkspace':
+      if (route.kind === 'account') {
+        return (
+          <AccountPage
+            user={preSession.user}
+            memberships={preSession.memberships}
+            onUserChanged={handleUserChanged}
+          />
+        );
+      }
+      return (
+        <NoWorkspacePage
+          user={preSession.user}
+          onOpenAccount={() => navigate(hrefs.account())}
+          onLogout={() => void handleCookieLogout()}
+        />
+      );
+  }
 }
 
 function Routed({
   session,
   route,
-  onForgetKey,
+  onLogout,
+  onSwitchWorkspace,
+  onUserChanged,
 }: {
   readonly session: Session;
   readonly route: Route;
-  readonly onForgetKey: () => void;
+  readonly onLogout: () => void;
+  readonly onSwitchWorkspace: (workspaceId: string) => void;
+  readonly onUserChanged: (user: WireUser) => void;
 }) {
   const active = sectionOf(route);
   usePushToasts(session.ws, active);
@@ -171,6 +422,15 @@ function Routed({
     case 'agent':
       page = <AgentProfilePage http={session.http} />;
       break;
+    case 'account':
+      page = (
+        <AccountPage
+          user={session.user ?? null}
+          memberships={session.memberships ?? []}
+          onUserChanged={onUserChanged}
+        />
+      );
+      break;
     case 'members':
       page = <MembersPage http={session.http} />;
       break;
@@ -204,7 +464,16 @@ function Routed({
   }
 
   return (
-    <AppShell active={active} http={session.http} pushes={session.ws} onForgetKey={onForgetKey}>
+    <AppShell
+      active={active}
+      http={session.http}
+      pushes={session.ws}
+      authMode={session.authMode}
+      onLogout={onLogout}
+      memberships={session.memberships}
+      selectedWorkspaceId={session.selectedWorkspaceId}
+      onSwitchWorkspace={onSwitchWorkspace}
+    >
       {page}
     </AppShell>
   );

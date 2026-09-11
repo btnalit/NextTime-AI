@@ -12,8 +12,11 @@ import type { ActionRequestStatus, ChatStreamPayload, TaskStatus } from '@nextti
  * packages/shared/src/{capabilities,events}.ts — read, not modified, per this task's ownership):
  *   - One `/ws` connection, JSON-RPC 2.0 requests/responses (carry `id`) plus server-initiated
  *     notifications (no `id`, `method` = the pushed event's own `type`).
- *   - First frame must be `{method: "authenticate", params: {token}}` — the server closes the
- *     socket on anything else arriving first (interfaces/ws/server.ts `handleConnection`).
+ *   - First frame must be `{method: "authenticate", params}` — the server closes the socket on
+ *     anything else arriving first (interfaces/ws/server.ts `handleConnection`). `params` is
+ *     `{token}` for an API key (unchanged since S1.4) or, S4.1, `{workspaceId}` for a browser
+ *     whose console session cookie rode along with the WS upgrade (the cookie itself is never
+ *     visible to this client — HttpOnly).
  *   - `subscribe_chat(chatId, startAfter)` takes `startAfter` as a **string** (packages/shared/src/
  *     capabilities.ts `subscribeChat`'s paramsSchema), even though `chat_messages.sequence` is a
  *     number on the wire (packages/shared/src/events.ts `ChatMessageEvent`) — this module is the
@@ -126,6 +129,11 @@ export type Unsubscribe = () => void;
  *  in flight), `connected` (socket open — authenticated or about to be), `reconnecting` (an
  *  unexpected drop; `WsClient` is retrying on its own), `closed` (never opened, or `close()`). */
 export type WsConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'closed';
+
+/** The credential `authenticate()` sends as the first frame's `params` (S4.1). `{token}` is the
+ *  pre-existing API-key channel; `{workspaceId}` selects the workspace for a cookie-authenticated
+ *  browser session — the cookie itself rides on the WS upgrade and is never handled here. */
+export type WsCredential = { readonly token: string } | { readonly workspaceId: string };
 
 // -------------------------------------------------------------------------------------------
 // Errors
@@ -248,7 +256,10 @@ export class WsClient {
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
   private authenticated = false;
-  private token: string | undefined;
+  /** The credential the last successful `authenticate()` used — also the "worth reconnecting"
+   *  sentinel `handleClose` reads (see its own comment): `undefined` until an `authenticate()` has
+   *  actually succeeded once. */
+  private credential: WsCredential | undefined;
   private manuallyClosed = false;
   private activeSubscription: ActiveSubscription | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -303,11 +314,13 @@ export class WsClient {
     });
   }
 
-  /** Sends the mandatory first frame (§9.4) and, on success, unlocks every other `call()`. */
-  async authenticate(token: string): Promise<void> {
-    await this.rpc('authenticate', { token });
+  /** Sends the mandatory first frame (§9.4) and, on success, unlocks every other `call()`.
+   *  `credential` is `{token}` (API key) or `{workspaceId}` (cookie session, S4.1) — see
+   *  {@link WsCredential}. */
+  async authenticate(credential: WsCredential): Promise<void> {
+    await this.rpc('authenticate', credential);
     this.authenticated = true;
-    this.token = token;
+    this.credential = credential;
   }
 
   /** One JSON-RPC request/response round trip. `method` must be a registered chat capability name
@@ -526,12 +539,12 @@ export class WsClient {
     this.socket = undefined;
     void event;
 
-    // Only a socket that has *previously* authenticated successfully (this.token set) is worth
-    // auto-reconnecting: an initial connect()/authenticate() failure (bad URL, bad key, server
-    // down) is the caller's own retry decision, not this client's — auto-reconnecting behind a
-    // still-pending or already-rejected initial authenticate() would race a second socket against
-    // whatever the caller does next (e.g. the login screen letting the user retry).
-    if (this.manuallyClosed || this.token === undefined) {
+    // Only a socket that has *previously* authenticated successfully (this.credential set) is
+    // worth auto-reconnecting: an initial connect()/authenticate() failure (bad URL, bad key,
+    // server down) is the caller's own retry decision, not this client's — auto-reconnecting
+    // behind a still-pending or already-rejected initial authenticate() would race a second socket
+    // against whatever the caller does next (e.g. the login screen letting the user retry).
+    if (this.manuallyClosed || this.credential === undefined) {
       this.setStatus('closed');
       return;
     }
@@ -560,10 +573,10 @@ export class WsClient {
    */
   private async reconnect(): Promise<void> {
     const subscription = this.activeSubscription;
-    const token = this.token;
+    const credential = this.credential;
     try {
       await this.connect();
-      if (token) await this.authenticate(token);
+      if (credential) await this.authenticate(credential);
       if (subscription) {
         await this.call('subscribe_chat', {
           chatId: subscription.chatId,
