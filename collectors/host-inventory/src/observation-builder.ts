@@ -289,9 +289,13 @@ export function buildPhase3Observations(input: BuildPhase3Input): IngestObservat
 
       const dependsOn = container.labels[COMPOSE_DEPENDS_ON_LABEL];
       if (dependsOn) {
+        // Compose writes each entry as `<service>:<condition>:<required>` (e.g.
+        // `postgres:service_healthy:false`) — only the service name is the edge target. Found by
+        // W7's first real-model run: the entry agent read the graph and pointed out that every
+        // depends_on edge ended on a phantom `<service>:service_healthy:false` Container.
         for (const dependencyServiceName of dependsOn
           .split(',')
-          .map((entry) => entry.trim())
+          .map((entry) => entry.trim().split(':')[0] ?? '')
           .filter((entry) => entry.length > 0)) {
           links.push({
             linkType: 'depends_on',
