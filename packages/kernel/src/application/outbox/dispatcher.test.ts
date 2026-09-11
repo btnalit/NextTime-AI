@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
-import { OutboxDispatcher } from './dispatcher.js';
+import { OutboxDeliveryError, OutboxDispatcher } from './dispatcher.js';
 
 /**
  * Unit tests (fake `pg` pool, no Postgres) for OutboxDispatcher — mirrors the fake-pool pattern
@@ -58,7 +58,7 @@ function createFakeOutboxPool(initialRows: readonly FakeOutboxRow[]) {
           const id = String(values?.[1]);
           const row = rows.find((r) => r.id === id);
           if (row) row.attempts += 1;
-          return { rows: [], rowCount: row ? 1 : 0 };
+          return { rows: row ? [{ attempts: row.attempts }] : [], rowCount: row ? 1 : 0 };
         }
         // Phase 2: relock by (workspace_id, id).
         if (t.startsWith('select id, workspace_id, event_type, payload')) {
@@ -501,9 +501,49 @@ describe('OutboxDispatcher.start/stop', () => {
     await vi.advanceTimersByTimeAsync(50);
 
     expect(onError).toHaveBeenCalledTimes(1);
-    expect((onError.mock.calls[0]?.[0] as Error).message).toBe('boom');
+    // STATUS leftover 27: the hook receives the row's identity, not just the consumer's bare
+    // error, so a production log line is enough to find the row and judge its retry budget.
+    const reported = onError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(OutboxDeliveryError);
+    const delivery = reported as OutboxDeliveryError;
+    expect(delivery.outboxId).toBe('1');
+    expect(delivery.workspaceId).toBe('ws1');
+    expect(delivery.eventType).toBe('FactAsserted');
+    expect(delivery.attempts).toBe(1);
+    expect(delivery.deadLettered).toBe(false);
+    expect((delivery.cause as Error).message).toBe('boom');
+    expect(delivery.message).toBe('outbox delivery failed: FactAsserted row 1 attempt 1/10: boom');
 
     dispatcher.stop();
+  });
+
+  it('the delivery error flags the attempt that exhausts maxAttempts as dead-lettered', async () => {
+    const { pool } = createFakeOutboxPool([
+      {
+        id: '7',
+        workspace_id: 'ws1',
+        event_type: 'FactAsserted',
+        payload: factAssertedEvent(),
+        dispatched_at: null,
+        attempts: 2,
+      },
+    ]);
+    const dispatcher = new OutboxDispatcher(pool, { maxAttempts: 3 });
+    dispatcher.subscribe('FactAsserted', () => {
+      throw new Error('still broken');
+    });
+
+    let thrown: unknown;
+    await dispatcher.pollOnce().catch((err: unknown) => {
+      thrown = err;
+    });
+
+    expect(thrown).toBeInstanceOf(OutboxDeliveryError);
+    const delivery = thrown as OutboxDeliveryError;
+    expect(delivery.attempts).toBe(3);
+    expect(delivery.maxAttempts).toBe(3);
+    expect(delivery.deadLettered).toBe(true);
+    expect(delivery.message).toContain('attempt 3/3 (dead-lettered): still broken');
   });
 
   it('stop() prevents further polling', async () => {
