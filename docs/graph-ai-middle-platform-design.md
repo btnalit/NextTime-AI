@@ -428,16 +428,21 @@ flowchart TB
 
 ---
 
-### 7.11 平台管理：用户目录、登录、平台管理员、供应商配置、门目录
+### 7.11 平台管理：使用面 / 管理面 / 维护面（总览与页面级设计见 `platform-admin-design.md`）
 
 **问题（2026-09-11 复盘）**。到 v0.5.0 为止，一切身份都是工作区内的：一个"人"就是某个工作区里持
 API key 的 Principal，没有平台级的用户，没有平台管理员；工作区与它的首位 owner 只能用内核容器里的
 CLI 建（key 打印一次），LLM 供应商靠主机改 YAML 再重启 `llm-proxy`，门的注册也是 CLI。结果是一台
 刚装好的主机上**没有任何能登录的账户**，登录之后也没有地方建工作区、加用户、配模型、看平台状态。
 控制台只有"工作区内的治理面"（S3.11），没有"平台的管理面"。本节补上后者，且不动三条底线。
-（本节 2026-09-11 当天修订过一次：第一稿把平台管理员放在一个"平台工作区"里，维护者随后要求
+（本节 2026-09-11 当天修订过两次：第一稿把平台管理员放在一个"平台工作区"里，维护者随后要求
 平台级的用户管理——能增改停用不同权限的用户、新用户能直接登录——于是身份上移一层，"平台工作区"
-方案作废，见文末"否决的方案"。）
+方案作废；第二稿的"一次性初始化令牌 + 初始化页"在 S4.1 落地后被维护者否决——装好的主机应当**有一个
+能直接登录、直接管用户的管理员**，不该先读令牌、填一页表单、再等下一项任务才有管理页面——于是改为
+预置 `admin`；第三次修订（同日）把整个平台按**三个面**重组——使用面（普通用户只用）、管理面（配置平台）、
+维护面（维护平台），并把"管理面里的工作区管理"改为"个人区在共享图内、工作区配置归管理面"——这一版的
+上位文档是 `platform-admin-design.md`，本节只保留身份模型、登录、审计、供应商与 I9、三条底线、迁移等
+内核侧约束；两者冲突时以上位文档为准。）
 
 **身份模型：用户在平台，成员资格在工作区**。
 
@@ -478,33 +483,37 @@ CLI 建（key 打印一次），LLM 供应商靠主机改 YAML 再重启 `llm-pr
   直接设最终密码"。用户自己在"我的账户"改密码。OIDC 仍在 P5：届时 OIDC 主体映射到 `users` 行，
   本节的模型不需要改。
 
-**初始化：一次性令牌，不是默认口令**。内核启动时若没有活跃的平台管理员，生成一枚初始化令牌：
-哈希入库（`platform_setup` 表：hash、`expires_at` 24h、`used_at`、失败计数），明文写
-`${NEXTTIME_DATA}/secrets/setup/token`（0600；内核容器只对这个子目录可写），日志只提示路径不含值。
-web 未登录访问时先查 `GET /api/platform/setup-state`：未初始化则显示"初始化平台"页——输入令牌、
-管理员登录名、显示名、密码 → 创建第一个 `platform_role='admin'` 用户 → 直接登录 → 令牌作废
-（`used_at`；错误 5 次也作废，重启内核重生成）。之后这页永不再出现。CLI 兜底
-`bootstrap.js create-platform-admin --login <l>`（同一条路径，跳过令牌，密码从 stdin 读）。
-`host-env-init.sh` 在安装结束时打印令牌文件路径。
+**三个面与工作区的定位**（细节 `platform-admin-design.md` §2、§4、§5）。
 
-否决的方案：固定默认账户（`admin` / `admin` 之类）。公开仓库加局域网 TLS，人尽皆知的默认口令是
-扫描器第一个试的东西。初始化令牌给出同样的"装好就能登"体验——多一步读一个文件——而且第一个
-管理员的密码由装机的人当场设定。
+- **使用面**（普通用户）：登录直接落在对话页；侧栏只有对话、待我审批、我的任务、我的智能体、我的账户。
+  用户在"我的智能体"里从管理员允许的模型中选自己的模型（S3.11 AgentProfile），自己的对话与上下文独立
+  保存，发出的任务由后端 Worker 按共享图动态串起。**不配置任何东西**。
+- **管理面**（管理员；可把某工作区委托给其 owner）：用户、工作区配置、模型与供应商、集成、模块、平台设置。
+- **维护面**（管理员）：概览与首次运行清单、运行层、运行状态、平台审计、备份。
+- **工作区 = 一个组织（或部门）的共享图**，RLS 数据边界与授权范围，一个部署通常一到几个。它不是个人的：
+  Worker 要按全局图串任务，图必须共享。**个人区 = 用户在工作区里的私有部分**（自己的入口容器、Chat、
+  AgentProfile、任务与审批——S1 / S3.11 已按用户隔离），建人时自动加入**默认工作区**（平台设置）为
+  `member` 并生成 AgentProfile，登录即对话。否决"每用户一个 RLS 工作区"。
+- 今天 owner 才能打开的工作区页（成员与授权、访问、系统接入、能力目录、模型与配额、审计）**原样搬进管理组
+  的"工作区配置"**，普通 `member` 的侧栏里不再出现任何配置页；`owner` 角色保留为委托。
+- **预置管理员**：kernel 启动时若没有活跃的平台管理员，创建 `admin`（`platform_role='admin'`），随机临时
+  密码写 `${NEXTTIME_DATA}/secrets/setup/initial-admin-password`（0600；`host-env-init.sh` 建目录），首次登录
+  强制改密，有管理员后文件删除、永不重生成；全新安装同时建默认工作区（`admin` 为 owner）。否决写死的默认
+  口令；CLI `create-platform-admin` 只是文件丢了又不想重启时的兜底。env `NEXTTIME_PLATFORM_ADMINS`（可空）
+  里的登录名始终是管理员、页面不可停用或降级（借 cloudflare-os `ADMINS`，防锁死）。
+- **首次运行清单**（概览页，按真实状态打勾）：① 供应商与默认模型 → ② 默认工作区装了默认模块 → ③ 至少
+  一个门实例健康并在工作区启用 → ④ 除我之外有用户 → ⑤ 运行层版本一致。
+- **已有部署升级**：迁移 0019 回填的无密码用户在用户页显示"待激活"；管理员在概览页"绑定已有 API key"把
+  那把 key 的成员资格归到 `admin`（`principals.user_id` 改指、空壳删除）；其他待激活用户由管理员重置临时
+  密码或"合并到某用户"；成员也可 key 登录一次自设密码（`POST /api/auth/claim`）。三条路都只在目标用户
+  还没有密码时允许。既有工作区即默认工作区。
+- **人不用 API key 登录**：API key 是成员资格的自动化凭证；登录页的折叠项只为过渡期与验收脚本。
+- **交付顺序**：P-A1 身份、用户与管理面骨架 → P-A2 使用面收口 → P-B 集成与模块 → P-C 运行层与运行状态 →
+  P-D 模型与供应商（`platform-admin-design.md` §9；任务 `development-tasks.md` 同名小节）。
 
-**用户管理与工作区管理（平台管理员）**。web 侧栏新增"平台"分组，只对平台管理员显示（`scope:
-'platform'` 的能力可见即显示，与治理分组同一机制）：
-
-| 页 | 能力（均 `scope:'platform'`，除非注明） | 内容 |
-|---|---|---|
-| 用户 | `list_users` / `create_user` / `update_user` / `set_user_status` / `reset_user_password` / `list_user_memberships` / `add_membership` / `set_membership_role` / `remove_membership` | 列表（登录名、显示名、平台角色、状态、所属工作区与角色）；新建（登录名、显示名、平台角色、临时密码）；改显示名 / 平台角色；停用 / 启用；重置密码（临时，强制改）；把用户加进工作区并指定工作区角色、改角色、移出。**"删除用户" = 停用 + 吊销全部会话 + 移出全部工作区**，行不删（审计只增；最后一个活跃平台管理员不可停用） |
-| 工作区 | `list_workspaces` / `create_workspace` / `set_workspace_status` | 列表（名称、成员数、状态、30 天用量）；创建：名称、首位 owner（从用户里选或当场新建）、默认入口模型；禁用 / 启用（禁用 = 该工作区所有 Session 立即失效、入口容器停掉、成员登录后看不到它） |
-| 模型与供应商 | 经 `llm-proxy` 管理端点（见下），非内核能力 | 供应商列表（上游 URL、key 掩码、模型与单价）、新增 / 编辑（key 只写不回读）、测试连接、删除 |
-| 系统接入目录 | `list_gate_catalog` / `upsert_gate_catalog_entry` | 平台里可用的门（名称、种类、内部端点、说明）；工作区 owner 只能从目录里"启用" |
-| 运行状态 | `platform_status`（只读） | 各服务健康、最近备份文件与时间（只显示，定时器仍是 E7）、跨工作区 `llm_usage` 汇总与最近审计流 |
-
-工作区 owner 原有的"成员"页（S3.11）保留，语义变为**在本工作区管理成员资格**：从平台用户里按登录名
-添加（不再"创建 Principal 并发 key"）、改工作区角色、移出；`create_principal` 只剩 agent / service
-用途。每个用户有"我的账户"页：改密码、改显示名、查看自己的成员资格。
+**`scope:'platform'`**。注册表新增该字段（缺省 `workspace`）；gateway 只对 cookie 会话且
+`platform_role='admin'` 放行，不需要工作区上下文，业务 Principal / Handle 调用得 403；平台能力的事务显式
+`set_config('app.platform','on',true)`，写目标工作区时再显式切到该工作区的 GUC。
 
 **审计**。平台级操作（建用户、改角色、建工作区、配供应商、维护门目录）没有工作区。
 `audit_records.workspace_id` 改为可空，RLS 策略加一条 `or (workspace_id is null and app_platform())`
@@ -535,12 +544,17 @@ caddy `/api/llm-admin/*` → `llm-proxy` 的管理端点。鉴权用内核签发
 建工作区时选，owner 之后可在"模型与配额"页改（新能力 `set_entry_model`，minRole owner；作用于之后
 新建的入口 WorkerDefinition 版本，现有已发布版本不动）。
 
-**门目录与工作区启用**。`register-gatekeeper` 之所以是"不经过权限模型的 CLI"（`add-gatekeeper.md`），
-是因为门的端点是 compose 内部主机名，绝不能由用户输入。设计因此分两层：平台管理员维护**门目录**
-（`gate_catalog` 平台级表：name、kind、endpoint、description、enabled）；工作区 owner 在"系统接入"页
-从目录里**启用**一个门——新能力 `enable_gatekeeper(catalogEntryId)`（minRole owner，`scope:
-'workspace'`）执行现 `register-gatekeeper` 的逻辑（拉 `describe_operations`、导入并发布 Operation），
-端点来自目录而非参数。CLI 保留作兜底；之后的连接向导（S3.12）不变。
+**集成：接入包、门实例、连接**（`platform-admin-design.md` §6.3，取代此前的 `gate_catalog` 设计）。
+`register-gatekeeper` 之所以是"不经过权限模型的 CLI"，是因为门的端点是 compose 内部主机名，绝不能由用户
+输入。设计因此分三层：**接入包**（可部署的一种门：`gatekeepers/docker`、`gatekeepers/ragflow`，或通用种类
+`http` / `mcp` / `cli` / `ssh`）由管理员定三态——禁用 / 可自连 / 平台预置——并可逐个禁用 Operation；
+**门实例**由两条路产生：打包门启动时带稳定 `GATE_ID` 向内核 `POST /internal/gates/announce` 自注册（内部面
+token），或管理员在集成页于**通用门宿主**（`gatekeeper-base` 多实例模式，承载 N 个 `http` / `mcp` 实例）里
+创建，凭证由页面经 5 分钟平台 JWT 直达门宿主、不经内核；**连接**仍是 `request_connection` / ConnectedAccount。
+工作区配置里的"系统接入"从目录**启用**门实例（`enable_gatekeeper(instanceId)`，执行现 `register-gatekeeper`
+逻辑，端点来自实例而非参数）。MCP 分类与自动批准规则照 cloudflare-os `mcp-shared/src/tools.ts`：`readOnlyHint`
+→ observe，否则 execute；自动批准只在 `vetted ∧ ¬destructiveHint ∧ idempotentHint`；`vetted` 只能由管理员
+给平台预置实例打，随时可撤、立即生效。
 
 **三条底线的对照**。① I9 不变：provider key 只进 `llm-proxy`，内核不经手；密码哈希是平台自己的身份
 存储。② 审批：平台管理员在控制台做的是**人直接操作平台自身**（建用户、建工作区、配供应商、维护门
@@ -548,25 +562,18 @@ caddy `/api/llm-admin/*` → `llm-proxy` 的管理端点。鉴权用内核签发
 仍全部走门与审批。③ 隔离只增：平台管理员没有业务数据权；RLS 只加子句不加绕过开关；`llm-proxy`
 多了一个可写目录但根仍只读。
 
-**迁移与兼容**。迁移为每个现有 human Principal 建一个 `users` 行（`login` 取显示名去重后加短后缀、
-无密码、`must_change_password` 无意义直到管理员重置），`principals.user_id` 回填；它们的 API key
-原样可用。验收工作区里的测试 Principal 也会各得一个用户——它们在停用工作区后不可见即可。
+**迁移与兼容**。迁移为每个现有 human Principal 建一个 `users` 行（`login` 取显示名 slug 加短后缀、
+无密码，用户页里显示为"待激活"），`principals.user_id` 回填；它们的 API key 原样可用。升级后的接管路径
+见上文"已有部署升级"（管理员绑 key / 合并、成员自己设密码），不需要任何 SQL 或 CLI。验收工作区里的
+测试 Principal 也会各得一个用户——它们在停用工作区后不可见即可。
 
 **否决的方案：平台工作区**（本节第一稿）。把平台管理员做成一个特殊工作区里的 owner，复用 Principal
 与 Session。它回答不了"平台级的用户是谁"：一个人在三个工作区就是三个互不相识的 Principal，管理员
 无法列出"用户"、无法一次停用一个人，也没有地方放登录名与密码。上移一层之后这些都自然成立，
 而平台工作区的所有用途（承载管理员、承载平台审计）都有了更直接的落点。
 
-**什么仍需重启 / 何时生效**：
-
-| 操作 | 生效 |
-|---|---|
-| 建用户、改角色、停用用户 | 立即（停用 = `user_sessions` 全部吊销 + 该用户各 Principal 的会话失效） |
-| 新增 / 修改供应商与 key | `llm-proxy` 热加载，立即；内核 `list_models` 下次调用；agent 容器：之后启动的容器 |
-| 建工作区、禁用工作区 | 立即（禁用 = Session 失效 + 入口容器 `stop`） |
-| 门目录增删 | 立即；已启用的门不受目录条目删除影响（工作区里的 Gatekeeper 对象独立存在） |
-| 更换 Handle 密钥对 | 仍需重启 kernel + llm-proxy（不在本节范围） |
-| 备份定时器 | E7，最后做 |
+**什么仍需重启 / 何时生效**：完整生效表见 `platform-admin-design.md` §8。内核侧不变的两条：更换 Handle
+密钥对仍需重启 kernel + llm-proxy；备份定时器是 E7，最后做。
 
 ## 8. 数据流
 

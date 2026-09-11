@@ -1385,66 +1385,140 @@
     `.github/workflows/e2e.yml` 新增读令牌与 `set-password` 两步（见 `runbooks/web-console.md` CI 一节）。
   - 未做：`noWorkspace` 状态下的「我的账户」页没有返回 / 登出按钮（只能前进）；vite 开发代理 `/ws` 改
     `changeOrigin:false` 以通过内核的 Origin 校验。
+  - 一次性令牌 + `SetupPage` 这条路径由 P-A1（预置 `admin`、无令牌无初始化页）作废，见
+    `platform-admin-design.md` §4。
 
-### S4.2 用户管理与工作区管理（平台控制台）
+### P-A1 身份、用户与管理面骨架
 
 - 交付物：
-  1. 能力（`scope:'platform'`）：`list_users` / `create_user`（登录名、显示名、平台角色、临时密码
-     → `must_change_password`）/ `update_user` / `set_user_status`（停用 = 吊销全部 `user_sessions`
-     + 该用户各 Principal 的工作区会话；最后一个活跃平台管理员不可停用）/ `reset_user_password` /
-     `list_user_memberships` / `add_membership`（工作区 + 角色 → 建 human Principal）/
-     `set_membership_role` / `remove_membership`；`list_workspaces` / `create_workspace`（名称、
-     首位 owner 选现有用户或新建、入口模型）/ `set_workspace_status`（禁用 = 该工作区 Session 全部
-     失效 + 入口容器 `stop` + 成员登录后不可见）。
-  2. 工作区内（`scope:'workspace'`，minRole owner）：成员页改为按登录名添加现有用户为成员
+  1. migrations：0020（`platform_setup` 表 drop；kernel 启动时若无活跃 admin 则直接建 `admin`
+     账户 `platform_role='admin'`、随机临时密码写 `${NEXTTIME_DATA}/secrets/setup/initial-admin-password`
+     0600、同时建默认工作区并把 `admin` 设为 owner；有管理员之后该文件删除、永不重生成）。
+  2. kernel：注册表新增 `scope:'platform'` 字段，gateway 对其只放行 cookie 会话且
+     `platform_role='admin'`，业务 Principal / Handle 一律 403；平台审计 = `workspace_id is null`
+     的 `audit_records` 写路径 + `platform_audit_query`；`POST /api/auth/bind-api-key`（把某把既有
+     API key 的成员资格改指到当前管理员账户，空壳 Principal 删除）、`POST /api/auth/claim`（成员用
+     API key 登录一次后自设密码，用于升级接管）；删 `GET /api/platform/setup-state`、
+     `POST /api/platform/setup`。
+  3. kernel 能力（`scope:'platform'`）：`platform_overview`（版本/迁移、服务健康摘要、用户数、开始
+     使用清单、最近平台审计、`bind_api_key`）；`list_users` / `create_user` / `update_user` /
+     `set_user_status`（停用 = 吊销全部 `user_sessions` + 该用户各 Principal 的工作区会话；最后一个
+     活跃管理员不可停用）/ `reset_user_password` / `list_user_memberships` / `add_membership`
+     （工作区 + 角色 → 建 human Principal）/ `set_membership_role` / `remove_membership` /
+     `merge_user`（合并"待激活"用户，升级接管用）/ `set_user_budget`；`get_platform_settings` /
+     `update_platform_settings`（站点名、公告、默认工作区、平台默认入口模型、默认预算、每用户每日
+     调用上限、新用户默认平台角色、密码策略、`NEXTTIME_PLATFORM_ADMINS` 只读展示）。
+  4. kernel：工作区内（`scope:'workspace'`，minRole owner）成员页改为按登录名从平台用户里添加
      （`add_member`）、`set_principal_role` 照旧、`remove_member`；`create_principal` 限 agent /
-     service。
-  3. web：平台分组"用户"、"工作区"两页；成员页改造；建工作区时若新建 owner 则显示临时密码一次。
-  4. 平台级审计：以上每个写操作一条 `audit_records`（`workspace_id` 为空，`metadata.target_*`）。
-- 完成标准：管理员建用户 A（临时密码）→ 建工作区 W 并把 A 设为 owner → A 登录、强制改密、看到 W、
-  聊一轮；管理员把 B 加进 W 为 member → B 登录只看到 W 且不能审批；停用 A → A 的 cookie 与 W 内
-  会话立即失效；禁用 W → B 登录后列表为空；平台管理员本人调 W 的任何工作区能力得 403；所有操作在
-  审计流可见。e2e 覆盖这一整条。
-- 不做：批量导入；邀请链接（P5 随 OIDC 一起看）。
+     service，human 只走 `add_membership`。
+  5. web：删除 `SetupPage`；侧栏按 使用 / 管理 / 维护 三组重排，现有 owner 专属页（成员与授权、访问、
+     系统接入、能力目录、模型与配额、审计）搬进"管理 → 工作区配置"，普通 `member` 侧栏不出现任何
+     配置页；新增页：概览（首次运行清单）、用户（列表 + 编辑 + 重置密码 + 成员资格抽屉 + 设预算 +
+     合并"待激活"用户）、平台设置（基础项）。
+  6. compose / 主机：`host-env-init.sh` 结尾提示 `initial-admin-password` 文件路径。
+  7. e2e：删除既有 spec 里读初始化令牌的步骤；`.github/workflows/e2e.yml` 改读
+     `initial-admin-password` 文件写入 Playwright 用的环境变量。
+  8. docs：README「首次运行」与 `runbooks/host-bootstrap.md`、`runbooks/web-console.md` 按新流程
+     改写（去掉令牌 / 初始化页步骤，改成"装好即有 admin，密码在文件里"）。
+- 完成标准（design §9 P-A1 e2e）：admin 首登 → 改密 → 直接落在概览页并聊一轮验证 → 建用户 B（默认
+  进默认工作区）→ B 登录直接落在对话页、侧栏无任何配置页、能在"我的智能体"里选模型 → 停用 B → B 的
+  cookie 与 WS 会话立即失效；全程零 CLI。
+- 不做：OIDC（之后）；每用户一个 RLS 工作区（已否决，见 §11）；工作区新建 / 禁用与 owner 委托
+  （P-A2）；按对话分 pi 会话（P-A2）。
 
-### S4.3 模型与供应商
+### P-A2 使用面收口
+
+- 交付物：
+  1. kernel 能力（`scope:'platform'`）：`create_workspace`（名称、首位 owner、入口模型）、
+     `update_workspace`、`set_workspace_status`（禁用 = 该工作区 Session 全部失效 + 入口容器 `stop`
+     + 成员登录后不可见）、`set_allowed_models`（工作区允许的模型列表，约束 AgentProfile 可选范围）。
+  2. kernel：`instanceInstructions`（平台设置里的 agent 全局附加指令）拼进入口与 Worker 的 system
+     prompt（之后启动的容器生效）；按 chat 分 pi 会话（遗留 33）。
+  3. web："工作区配置"页加"新建工作区" / "禁用工作区"、owner 委托（管理员可把某工作区配置委托给
+     其 owner，owner 只在管理组看到自己那个工作区）；"我的智能体"选模型范围收窄到
+     `set_allowed_models` 的结果。
+  4. 平台级审计：以上写操作各一条。
+- 完成标准（design §9 P-A2）：用户的上下文按对话独立保存（同一用户两个 chat 的 pi 会话互不影响）；
+  管理员为一个部门新建工作区 W2、设入口模型与允许的模型、把它委托给某用户 owner；该 owner 登录只在
+  "管理 → 工作区配置"看到 W2，看不到其他工作区配置；W2 的成员在"我的智能体"只能选到允许的模型。
+- 不做：删除工作区（暂否，留 CLI `--yes`，见 §11）；工作区间数据迁移。
+
+### P-B 集成与模块
+
+> 原 S4.4 的 `gate_catalog`（平台级静态目录 + `upsert_gate_catalog_entry` 手工登记端点）设计被
+> design §6.3 取代：门实例改为打包门启动时向内核 `POST /internal/gates/announce` 自注册（稳定
+> `GATE_ID`），通用 `http` / `mcp` 门改由门宿主承载多实例、凭证页面直达门宿主，按 Operation 逐个开关。
+
+- 交付物：
+  1. kernel：`POST /internal/gates/announce`（内部面 token，同 supervisor；带 `GATE_ID`、种类、
+     `describe_operations`、健康端点，未启用的实例落"发现的门实例"、状态"未启用"；下线标"失联"）；
+     能力（`scope:'platform'`）：`list_connectors` / `set_connector_mode`（禁用 / 可自连 / 平台预置
+     三态，借 `ambientGatekeeperModes`）/ `list_gate_instances` / `create_gate_instance`（通用门宿主
+     实例：目标地址、传输种类、凭证模式）/ `test_gate_instance` / `set_gate_instance_status` /
+     `vet_mcp_endpoint`（`trust='vetted'` 标记，随时可撤、按决策时读）/ `list_external_runtimes`；
+     按 Operation 开关，过滤 gateway 签发 Handle 与能力目录；MCP 信任分级按 `readOnlyHint` /
+     `destructiveHint` / `idempotentHint` 分类（照 cloudflare-os `classifyTool` 规则，非自创）。
+  2. kernel：模块能力（§6.4）：`list_modules` / `install_module` / `upgrade_module`（复用
+     `seed-domain-pack` 逻辑生成新 OntologyVersion）/ `set_default_modules` / `promote_template`
+     （owner 的 `propose_*` Worker 模板 / Skill / Procedure 推荐到平台）。
+  3. gatekeeper-base：多实例宿主模式（一个容器承载 N 个 `http` / `mcp` 实例），实例定义由内核经
+     内部面推送，凭证由页面直接 POST 到门宿主（不经内核，同 `request_connection` 的直达路）。
+  4. web：集成页（三态目录、门实例列表 + 健康、按 Operation 开关、门宿主实例表单、`vetted` 标记）；
+     "外部运行时"标签（跨工作区盘点 + 吊销，替代 `issue-service-handle` CLI）；工作区"访问"页签发
+     service Handle；模块页（列表、安装/升级到工作区、默认模块、"推荐到平台"）；owner 的能力目录里
+     同样的安装/升级入口。
+- 完成标准（design §9 P-B e2e）：起一个 fake MCP server → 集成页新增门宿主实例 → 测试连接 →
+  工作区启用 → 入口 agent 的工具里出现它，非 `vetted` 时写操作走审批；模块页把 `ops-assets-v2`
+  装进某工作区的能力目录，运行中的旧 Worker 不受影响；接 RAGFlow、接任意 MCP server、装领域包全程
+  不登主机。
+- 不做：`cli` / `ssh` 门的通用宿主化（仍是打包门 + 自注册）；上传模块文件与外部模块仓库（之后）；
+  第三方 pi extension（已否决，见 §11）。
+
+### P-C 运行层与运行状态
+
+- 交付物：
+  1. supervisor：`GET /images`（只列带平台 label 的镜像）；`deploy/worker-runtime/Dockerfile` 加
+     `LABEL ai.nexttime.pi-version / platform-extension-version / built-from`；滚动重建复用已有
+     `/resident/stop`，下次该用户发言时按平台设置里的活动镜像 `spawn`。
+  2. kernel：活动镜像 `WORKER_IMAGE` 从 env 改为平台设置项（env 仍作缺省；`WORKER_IMAGE_ALLOWLIST`
+     仍在 env、不进页面）；能力（`scope:'platform'`）：`runtime_inventory`（活动镜像
+     tag/digest/内含 pi 版本与扩展版本、入口容器列表及是否"待重建"）/ `list_runtime_images` /
+     `set_active_runtime_image` / `roll_entry_containers`（先标 draining、拒绝新 Turn，当前 Turn
+     结束后 stop，页面支持"全部 / 选中 / 仅我自己"）/ `rollback_runtime_image`（改回上一个 digest +
+     同样的滚动重建）；`pi_drift`（`pi.version`、镜像内 pi 版本、平台扩展版本三者是否一致，读
+     `pi-drift.yml` 写的静态 JSON，不出网查 npm）。
+  3. kernel：`platform_status`（原 S4.5：各服务健康——内核内部探测 `llm-proxy` / `egress-proxy` /
+     `worker-supervisor` / 各门实例 / `postgres`——最近备份文件名与时间、30 天跨工作区 `llm_usage`
+     汇总、最近 50 条审计）。
+  4. web："运行层"页（活动镜像、镜像列表、入口容器盘点、滚动重建进度、回滚、pi 漂移）；"运行状态"
+     页（只读，服务健康 + 备份 + 用量 + 最近审计）。
+- 完成标准（design §9 P-C e2e）：构建带新 label 的运行时镜像 → 运行层页设为活动镜像 → 滚动重建
+  （页面显示进度，忙的容器在其 Turn 结束后才换）→ 入口容器 digest 变为新镜像 → 回滚 → digest 变回
+  上一个；停掉一个门实例 → 运行状态页 30 秒内标红，页面全程只读。
+- 不做：在页面里构建镜像（已否决，见 §11，构建留 CI / 主机）；备份定时器（E7，最后）；告警。
+
+### P-D 模型与供应商
 
 - 交付物：
   1. `llm-proxy`：自有可写目录 `${NEXTTIME_DATA}/llm-proxy/`（`providers.yaml` + `keys.env`，0600；
      首次启动从现 `config/llm-providers.yaml` + `secrets/llm-proxy.env` 导入）；热加载；`gen-models`
      逻辑内置，配置变更后**原地重写** `config/models.json`；管理端点 `GET/PUT/DELETE
      /admin/providers[/<id>]`、`POST /admin/providers/<id>/test`；鉴权为内核签发的平台管理员会话
-     JWT（`typ` 独立，claim `platform:true`，5 分钟）；每次变更经内部通道上报内核记审计
+     JWT（`typ` 独立，claim `platform:true`，5 分钟，同 §7.11）；每次变更经内部通道上报内核记审计
      `provider.config_changed`。
   2. kernel：`POST /api/platform/llm-session`（签发上述 JWT，仅平台管理员）；`list_models` 目录按
      `models.json` mtime 重读；`set_entry_model`（minRole owner）写 `workspaces.entry_model`
-     （CLI `--entry-model` 参数保留、写同一列）。
+     （CLI `--entry-model` 参数保留、写同一列）；能力 `set_platform_default_model`（平台默认入口
+     模型，新工作区与新用户 AgentProfile 取它）；预算 100% 拒绝在 `llm-proxy` 落地（遗留 19），
+     预算来源链：平台设置默认值 → 用户预算 → 工作区 quota。
   3. caddy：`/api/llm-admin/*` → `llm-proxy:8082/admin/*`（仅转发，不注入任何东西）。
   4. web："模型与供应商"页（平台分组）；工作区"模型与配额"页加"默认入口模型"。
   5. compose：`llm-proxy` 挂载改动（一个可写目录，根仍只读，`cap_drop` 不变）。
-- 完成标准：控制台新增一个供应商并测试连接 → 不重启任何容器，新建工作区选到该供应商的模型 → 该工作区
-  首轮对话经 `llm-proxy` 打到新上游（`llm_usage` 记到新 provider）；key 在 `GET` 里只有掩码；内核
-  进程内 `grep` 不到 key（沿用 S2 的 no-token-leak 断言形式）；`llm-proxy` 重启后配置仍在。
-- 不做：预算（遗留 19）；模型路由 / 回退。
-
-### S4.4 门目录与工作区启用
-
-- 交付物：`gate_catalog`（平台级：name、kind、endpoint、description、enabled）+ `list_gate_catalog`
-  / `upsert_gate_catalog_entry`（platform）；`enable_gatekeeper(catalogEntryId)`（workspace，minRole
-  owner）复用 `register-gatekeeper` 的 application 逻辑，端点来自目录；web 平台分组"系统接入目录"页
-  + 工作区"系统接入"页的"从目录启用"；迁移把现有 compose 内两个门（docker、ragflow）作为初始目录
-  条目播种。
-- 完成标准：owner 从目录启用 docker 门 → Operation 已发布 → 现有连接向导与审批链路照常；
-  `enable_gatekeeper` 的参数里传任意 URL 无效（只认目录 id）。
-- 不做：目录条目的健康探测（S4.5 的状态页做）。
-
-### S4.5 运行状态（只读）
-
-- 交付物：`platform_status` 扩为各服务健康（内核内部探测 `llm-proxy` / `egress-proxy` /
-  `worker-supervisor` / 目录内各门 / `postgres`）、最近备份文件名与时间（读备份目录，只显示）、
-  30 天跨工作区 `llm_usage` 汇总、最近 50 条审计；web "运行状态"页。
-- 完成标准：停掉一个门 → 状态页 30 秒内标红；页面所有数据均为只读能力，无任何写操作。
-- 不做：备份定时器（E7，最后）；告警。
+- 完成标准（design §9 P-D e2e）：控制台新增一个供应商并测试连接 → 不重启任何容器，新建工作区选到
+  该供应商的模型 → 该工作区首轮对话经 `llm-proxy` 打到新上游（`llm_usage` 记到新 provider）；key
+  在 `GET` 里只有掩码；内核进程内 `grep` 不到 key（沿用 S2 的 no-token-leak 断言形式）；`llm-proxy`
+  重启后配置仍在；预算超限的用户发消息被 100% 拒绝。
+- 不做：模型路由 / 回退；BYOK（已否决，见 §11，产品定位不同）。
 
 ## 6. 验收矩阵
 
