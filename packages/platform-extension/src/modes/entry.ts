@@ -5,7 +5,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS, getCapability } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
-import { toToolParameters } from '../tool-schema.js';
+import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
 
 /** An entry agent's projected observe tool — calls `observe_operation` (never `request_action`,
@@ -16,12 +16,12 @@ function buildGateObserveTool(
   usedNames: Set<string>,
 ): ToolDefinition {
   const { name, label } = gateToolName(op, usedNames);
-  const paramsSchema = op.operation.params_schema ?? {};
   return {
     name,
     label,
     description: gateToolDescription(op, label),
-    parameters: paramsSchema as ToolDefinition['parameters'],
+    // W7: normalized to an object schema — see tool-schema.ts `gateToolParameters`.
+    parameters: gateToolParameters(op.operation.params_schema) as ToolDefinition['parameters'],
     async execute(_toolCallId, params) {
       const result = await kernelClient.call<Record<string, unknown>>('observe_operation', {
         gatekeeperId: op.gatekeeperId,

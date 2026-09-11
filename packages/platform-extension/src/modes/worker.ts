@@ -6,7 +6,7 @@ import type {
 import { WorkerResultContractSchema } from '@nexttime/shared';
 import type { WorkerResultCapabilityParams, WorkerResultContract } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
-import { toToolParameters } from '../tool-schema.js';
+import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
 
 /**
@@ -34,17 +34,14 @@ function buildGateTool(
 ): ToolDefinition {
   const { name, label } = gateToolName(op, usedNames);
 
-  const paramsSchema = op.operation.params_schema ?? {};
-
   return {
     name,
     label,
     description: gateToolDescription(op, label),
     // An Operation's params_schema is already a JSON Schema object (imported from OpenAPI/MCP/
-    // hand-written YAML, `@nexttime/shared`'s OperationSchema) — passed straight through, no
-    // zod-to-json-schema conversion (see tool-schema.ts's own doc comment for why that helper is
-    // reserved for report_result's Zod-schema-backed tool instead).
-    parameters: paramsSchema as ToolDefinition['parameters'],
+    // hand-written YAML, `@nexttime/shared`'s OperationSchema) — no zod-to-json-schema
+    // conversion, only the W7 object-schema normalization (tool-schema.ts `gateToolParameters`).
+    parameters: gateToolParameters(op.operation.params_schema) as ToolDefinition['parameters'],
     // Both observe- and execute-class Operations call request_action uniformly (task brief: "the
     // kernel runs the gate's observe directly" for observe-class); the kernel resolves mode from
     // the published Operation itself (application/gateway/request-action-handler.ts), so this tool

@@ -480,8 +480,7 @@ real_chat_dependency_step() {
     tc=$(parse_kv "$chat_out" TOOL_CALLS); te=$(parse_kv "$chat_out" TOOL_ERRORS); tn=$(parse_kv "$chat_out" TOOL_NAMES)
     last_reply=""
     if [ -n "$chat_id" ]; then
-      history_out=$(run_driver get-history "$OWNER_KEY" "$chat_id" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")
-      last_reply=$(parse_kv "$history_out" EXTRACTED)
+      last_reply=$(chat_assistant_text "$OWNER_KEY" "$chat_id")
     fi
     reads_dependency=0
     case "$last_reply" in *depends_on*|*依赖*) reads_dependency=1 ;; esac

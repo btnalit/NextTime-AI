@@ -181,3 +181,25 @@ accept_provider_restore() {
   ACCEPT_PROVIDER_SWITCHED=0
   return 0
 }
+
+# chat_assistant_text <token> <chatId>: every assistant message of the chat, joined with spaces
+# and lower-cased, printed on one line. Polls get-history until the text stops changing (up to
+# ~10s): the Turn's `completed` metadata can reach the driver before the last assistant message
+# is readable through get_chat_history (seen with a real model on the host — the final table
+# landed a beat after `send-and-wait` returned), and a real model may also emit several assistant
+# messages per Turn, so the *last* one alone is not the answer.
+chat_assistant_text() {
+  prev=""
+  n=0
+  while [ "$n" -lt 6 ]; do
+    out=$(run_driver get-history "$1" "$2" "d.filter(m=>m.role==='assistant').map(m=>String(m.text||'')).join(' ').replace(/\\s+/g,' ').toLowerCase()")
+    cur=$(parse_kv "$out" EXTRACTED)
+    if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
+      break
+    fi
+    prev=$cur
+    n=$((n + 1))
+    sleep 2
+  done
+  printf '%s' "$prev"
+}

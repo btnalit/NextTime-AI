@@ -1082,12 +1082,12 @@ real_api_observe_run() {
   chat_id=$(parse_kv "$chat_out" CHAT_ID)
   turn_status=$(parse_kv "$chat_out" TURN_STATUS)
   tc=$(parse_kv "$chat_out" TOOL_CALLS); te=$(parse_kv "$chat_out" TOOL_ERRORS); tn=$(parse_kv "$chat_out" TOOL_NAMES)
-  history_out=$(run_driver get-history "$ALICE_KEY" "$chat_id" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")
-  last_reply=$(parse_kv "$history_out" EXTRACTED)
+  last_reply=""
+  [ -n "$chat_id" ] && last_reply=$(chat_assistant_text "$ALICE_KEY" "$chat_id")
   obs_after=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='observe_operation'")
   tasks_after=$(task_count)
   has_payload=0
-  case "$last_reply" in *NXT*) has_payload=1 ;; esac
+  case "$last_reply" in *nxt*) has_payload=1 ;; esac
   ok=0
   [ "$turn_status" = "completed" ] && [ "$has_payload" -eq 1 ] && [ "${obs_after:-0}" -gt "${obs_before:-0}" ] && [ "$tasks_before" = "$tasks_after" ] && ok=1
   detail="turn=$turn_status payload_in_reply=$has_payload observe_calls=$((${obs_after:-0} - ${obs_before:-0})) tasks_unchanged=$([ "$tasks_before" = "$tasks_after" ] && echo 1 || echo 0) turn_tools=${tc:-0}/${te:-0}[${tn}]"
