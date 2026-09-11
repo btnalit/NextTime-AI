@@ -264,17 +264,26 @@ export interface ScopeMatch {
  * non-Gatekeeper `action_kind`) — an unscoped `'gatekeeper'` grant has nothing meaningful to match
  * there.
  */
+// `resource_id::text = $4`, not `resource_id = $4` (W7 fix): `capability_grants.resource_id` is
+// `uuid` (0009_capability_grants_resource_type.sql), but the value compared against it is an
+// ActionRequest's `resource_scope` — free `text`. With a bare `=` Postgres infers `$4` as uuid and
+// aborts the whole query with 22P02 for any scope that is not a uuid string (a seeded
+// `e2e-approve-flow`, or any future non-Gatekeeper action kind), which took the I14 approver
+// precheck and — worse, silently — application/linkage's ActionRequestUpdated consumer down with
+// it (no status line ever reached the chat). Comparing as text keeps the exact-uuid semantics for
+// real ids (uuid::text is canonical lowercase, the same form every kernel-generated id has) and
+// simply never matches a non-uuid scope against a uuid-scoped grant, which is the right answer.
 const MATCHING_GRANT_WHERE = `
   workspace_id = $1
   and principal_id = $2
   and status = 'active'
   and (expires_at is null or expires_at > now())
   and (
-    (resource_type = $3 and (resource_id is null or resource_id = $4))
+    (resource_type = $3 and (resource_id is null or resource_id::text = $4))
     or (
       $4 is not null
       and resource_type = '${GATEKEEPER_GRANT_CAPABILITY}'
-      and (resource_id is null or resource_id = $4)
+      and (resource_id is null or resource_id::text = $4)
     )
   )
 `;
@@ -320,11 +329,11 @@ export async function listGrantHolderPrincipalIds(
        and status = 'active'
        and (expires_at is null or expires_at > now())
        and (
-         (resource_type = $2 and (resource_id is null or resource_id = $3))
+         (resource_type = $2 and (resource_id is null or resource_id::text = $3))
          or (
            $3 is not null
            and resource_type = '${GATEKEEPER_GRANT_CAPABILITY}'
-           and (resource_id is null or resource_id = $3)
+           and (resource_id is null or resource_id::text = $3)
          )
        )`,
     [workspaceId, query.resourceType, query.resourceId ?? null],
