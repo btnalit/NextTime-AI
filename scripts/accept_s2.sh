@@ -86,8 +86,10 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$RUNS" in
-  ''|*[!0-9]*|0) echo "accept_s2: --runs must be a positive integer" >&2; exit 1 ;;
+  ''|*[!0-9]*) echo "accept_s2: --runs must be a positive integer" >&2; exit 1 ;;
 esac
+RUNS=$((RUNS + 0))
+[ "$RUNS" -gt 0 ] || { echo "accept_s2: --runs must be a positive integer" >&2; exit 1; }
 
 if [ ! -f "./docker-compose.yml" ]; then
   echo "accept_s2: run this from the checkout root (where docker-compose.yml lives)" >&2
@@ -827,6 +829,13 @@ echo "UNREGISTERED_CODE=$unregistered_code"
   # source) by worker-supervisor for steps 2–3, and is still up (ENTRY_IDLE_TIMEOUT_MS default 30m).
   entry_container="nexttime-entry-${ALICE_PRINCIPAL_ID}"
   entry_running=$(docker inspect -f '{{.State.Running}}' "$entry_container" 2>/dev/null)
+  if [ "$entry_running" != "true" ] && [ "$REAL" -eq 1 ]; then
+    # Real-model mode: RUNS slow scenarios may outlast worker-supervisor's ENTRY_IDLE_TIMEOUT_MS,
+    # so the resident container from the chats above can already be reaped — one short chat
+    # brings it back (and re-registers it as an egress source) before the positive probe.
+    run_driver send-and-wait "$ALICE_KEY" "" "ping" 120000 >/dev/null 2>&1
+    entry_running=$(docker inspect -f '{{.State.Running}}' "$entry_container" 2>/dev/null)
+  fi
   [ "$entry_running" = "true" ] || fail "step6-registered-egress-ok" "alice's entry container $entry_container is not running (State.Running='$entry_running') — steps 2–3 should have left it up"
   registered_code=$(docker exec "$entry_container" curl -m 10 -sS -o /dev/null -w '%{http_code}' -x http://egress-proxy:3128 https://example.com </dev/null 2>/dev/null)
   [ "$registered_code" = "200" ] || fail "step6-registered-egress-ok" "proxied curl https://example.com from alice's registered entry container -> '$registered_code' (expected 200)"
@@ -1168,7 +1177,9 @@ real_summary_step() {
   for key in docker observe ssh_approve ssh_auto; do
     eval "n=\${REAL_N_$key:-0}; ok=\${REAL_OK_$key:-0}; tc=\${REAL_TC_$key:-0}; te=\${REAL_TE_$key:-0}; wc=\${REAL_WC_$key:-0}; we=\${REAL_WE_$key:-0}"
     printf 'REAL scenario=%s ok=%s/%s turn_tool_calls=%s turn_tool_errors=%s worker_tool_calls=%s worker_tool_errors=%s\n' "$key" "$ok" "$n" "$tc" "$te" "$wc" "$we"
-    [ "$n" -gt 0 ] && [ "$ok" -eq 0 ] && zero=1
+    # A scenario that never ran (n=0) is as much a failure as one that never succeeded — the
+    # summary must never report success for zero real-model runs.
+    [ "$ok" -gt 0 ] || zero=1
   done
   [ "$zero" -eq 0 ] || fail "real-summary" "at least one scenario had zero successful runs (see REAL lines)"
   pass "real-summary" "every scenario succeeded at least once under model=$REAL_MODEL"

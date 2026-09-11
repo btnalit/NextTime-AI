@@ -90,8 +90,10 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$RUNS" in
-  ''|*[!0-9]*|0) echo "accept_s3: --runs must be a positive integer" >&2; exit 1 ;;
+  ''|*[!0-9]*) echo "accept_s3: --runs must be a positive integer" >&2; exit 1 ;;
 esac
+RUNS=$((RUNS + 0))
+[ "$RUNS" -gt 0 ] || { echo "accept_s3: --runs must be a positive integer" >&2; exit 1; }
 
 if [ ! -f "./docker-compose.yml" ]; then
   echo "accept_s3: run this from the checkout root (where docker-compose.yml lives)" >&2
