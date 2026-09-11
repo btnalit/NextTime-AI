@@ -101,13 +101,13 @@
 | 真实模型验证模式 | `--real <provider/model> [--runs N]` | 完成（PR #156；主机验证，数字见 `retrospective-2026-09-11.md` §2） |
 | 顺带修复 | grants 作用域按文本比对（#152）；采集器 `depends_on` 条件后缀（#157），均由真实模型或 CI 首次发现 | 完成 |
 
-**当前波次：W8 两周稳定期**（2026-09-11 起；冻结新能力，主机整栈常驻供真实使用，同时修遗留：27 已关（#159），29 已关（#160：入口容器启动自检的公网探测在弱网下致命退出，非 Handle 竞态），33 按 chat 隔离，30 待样本；其后 23 / 21 / 20 / 22）。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
+**当前波次：W8 平台管理 + 稳定期**（2026-09-11 起。维护者 2026-09-11 指出：装好的主机上没有任何能登录的账户，登录后也没有地方建工作区、加用户、配模型——这是设计缺口，优先于其他一切。设计见 `graph-ai-middle-platform-design.md` §7.11，任务见 `development-tasks.md` S4.1–S4.4，顺序 S4.1 → S4.2 → S4.3 → S4.4。主机整栈常驻供真实使用；已关 27（#159）、29（#160）；33 按 chat 隔离已决定、排在 S4 之后；其后 30 / 23 / 21 / 20 / 22。）
 
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
 目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29），主机 `.env` 不再含 Explorer key；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），不再在验收后停栈。
 
-后续：两周稳定期 → 镜像发布与 P5。
+后续：S4 平台管理 → 遗留 33 / 30 → 加固批次（23 / 21 / 20 / 22）→ 镜像发布与 P5。
 
 ## 4. 遗留清单
 
@@ -148,7 +148,7 @@
 | 30 | 真实模型下 docker_restart 一次 ActionRequest executed、容器已重启但 Task failed 且 result 为空（S2 real 1/3 的失败） | P2 | 稳定期 | 开放 |
 | 31 | Explorer 会话 cookie 不随 `rotate_api_key` 失效（8 小时 TTL 为界；`disable_principal` 即时生效） | P3 | 记债 | 开放 |
 | 32 | CodeQL 预存告警：`hashApiKey` 用 sha256（32 字节随机 key，判定为合理）需维护者 dismiss；`e2e / web-e2e` 需维护者加为必需检查 | — | 决定 | 关闭（2026-09-11 维护者已把 `e2e / web-e2e` 加为必需检查并 dismiss 告警 57） |
-| 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | 决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件；待实现 |
+| 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | 决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件；待实现，排在 S4 之后。已核实 pi 0.84.4 源码：`switch_session` 对不存在的路径会新建、`new_session` 后 `get_state` 立即有 `sessionFile`、`session_start` 在切换时重触发且 `registerTool` 同名覆盖——因此可以由 agent-host 单方面按 `chatId` 派生会话文件路径实现，不需要内核新列或新帧 |
 | 34 | kernel 日志有 pg `DeprecationWarning: Calling client.query() when the client is already executing a query`（2026-09-11 主机 v0.5.0 首轮对话时出现）——同一 client 上并发 query，pg@9 将不再允许；需定位是哪条路径在 `withWorkspace` 的 client 上不等待就发第二条语句 | P2 | 待排 | 开放 |
 
 ## 5. 更新规则
