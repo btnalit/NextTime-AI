@@ -55,12 +55,38 @@ interface UserDbRow {
 const USER_COLUMNS = `id, login, display_name, platform_role, status, must_change_password,
   (password_hash is not null) as has_password, created_at`;
 
+const ENV_ADMINS_VAR = 'NEXTTIME_PLATFORM_ADMINS';
+
+/** Logins that are always platform administrators (docs/platform-admin-design.md §6.6, borrowed
+ *  from cloudflare-os `ADMINS`): comma/space-separated, lower-cased; empty when unset. Applied at
+ *  the single point every reader of a user row goes through (`mapUser`), so a login named here is
+ *  `admin` for the console session, `/api/auth/me`, the platform channel and the users page alike,
+ *  whatever `users.platform_role` says — the anti-lockout backstop a hijacked admin session cannot
+ *  edit. The platform handlers additionally refuse to disable, demote or reset such an account. */
+export function envAdminLogins(env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  const raw = env[ENV_ADMINS_VAR];
+  if (!raw) return [];
+  return [
+    ...new Set(
+      raw
+        .split(/[,\s]+/)
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+/** The platform role a user effectively holds: `admin` when the login is env-pinned. */
+export function effectivePlatformRole(login: string, stored: PlatformRole): PlatformRole {
+  return envAdminLogins().includes(login) ? 'admin' : stored;
+}
+
 function mapUser(row: UserDbRow): UserRow {
   return {
     id: row.id,
     login: row.login,
     displayName: row.display_name,
-    platformRole: row.platform_role as PlatformRole,
+    platformRole: effectivePlatformRole(row.login, row.platform_role as PlatformRole),
     status: row.status as UserStatus,
     mustChangePassword: row.must_change_password,
     hasPassword: row.has_password,

@@ -23,7 +23,7 @@ import { CONSOLE_SESSION_COOKIE, createPlatformAdmin, createUser } from '../iden
 import type { UserRow } from '../identity/index.js';
 import { updatePlatformSettings } from '../platform/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
-import { withAdminClient } from './auth.js';
+import { generateApiKey, hashApiKey, withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { PlatformAdminError } from './platform-handlers.js';
@@ -465,6 +465,23 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(workspaceSessions.rows.length).toBeGreaterThan(0);
         expect(workspaceSessions.rows.every((row) => row.status === 'revoked')).toBe(true);
+
+        // Reviewer finding (P-A1): disabling must close every channel, not only the cookie — an
+        // API key held by one of the user's membership Principals stops authenticating too.
+        const apiKey = generateApiKey();
+        await withAdminClient(pool, (client) =>
+          client.query(
+            `update principals set api_key_hash = $2 where user_id = $1 and kind = 'human'`,
+            [user.id, hashApiKey(apiKey)],
+          ),
+        );
+        const viaApiKey = await app.inject({
+          method: 'POST',
+          url: '/api/cap/get_workspace',
+          headers: { authorization: `Bearer ${apiKey}` },
+          payload: {},
+        });
+        expect(viaApiKey.statusCode).toBe(401);
         // A password hash plus a verify (scrypt, ~1s together on a CI runner) on top of the
         // round-trips above — past Vitest's 5s default.
       }, 30_000);

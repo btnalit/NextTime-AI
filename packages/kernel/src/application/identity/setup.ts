@@ -65,31 +65,41 @@ export async function ensureInitialAdmin(
       `login "${INITIAL_ADMIN_LOGIN}" belongs to a non-administrator user; create an administrator with bootstrap.js create-platform-admin`,
     );
   }
-  await withAdminClient(pool, async (client) => {
-    if (existing) {
-      // Disabled or passwordless `admin` row (e.g. every admin was disabled, or a backfilled
-      // user happens to carry the login): re-arm it as the temporary-password administrator.
-      await client.query(
-        `update users
+  // Write the password file *before* the database row exists: if this directory is not writable
+  // the start fails loudly and nothing was committed, so the next start simply retries. (The
+  // other order would commit an administrator whose password nobody ever saw, and once an active
+  // administrator exists the file is never regenerated.)
+  await mkdir(path.dirname(passwordFile), { recursive: true, mode: 0o700 });
+  await writeFile(passwordFile, `${password}\n`, { mode: 0o600, flag: 'w' });
+  await chmod(passwordFile, 0o600).catch(() => {});
+  try {
+    await withAdminClient(pool, async (client) => {
+      if (existing) {
+        // Disabled or passwordless `admin` row (e.g. every admin was disabled, or a backfilled
+        // user happens to carry the login): re-arm it as the temporary-password administrator.
+        await client.query(
+          `update users
             set password_hash = $2, platform_role = 'admin', status = 'active',
                 must_change_password = true, failed_login_count = 0, locked_until = null,
                 updated_at = now()
           where id = $1`,
-        [existing.id, passwordHash],
-      );
-    } else {
-      await insertUser(client, {
-        login: INITIAL_ADMIN_LOGIN,
-        displayName: INITIAL_ADMIN_DISPLAY_NAME,
-        password,
-        platformRole: 'admin',
-        mustChangePassword: true,
-      });
-    }
-  });
-  await mkdir(path.dirname(passwordFile), { recursive: true, mode: 0o700 });
-  await writeFile(passwordFile, `${password}\n`, { mode: 0o600, flag: 'w' });
-  await chmod(passwordFile, 0o600).catch(() => {});
+          [existing.id, passwordHash],
+        );
+      } else {
+        await insertUser(client, {
+          login: INITIAL_ADMIN_LOGIN,
+          displayName: INITIAL_ADMIN_DISPLAY_NAME,
+          password,
+          platformRole: 'admin',
+          mustChangePassword: true,
+        });
+      }
+    });
+  } catch (err) {
+    // No administrator was created: do not leave a password on disk that opens nothing.
+    await rm(passwordFile, { force: true }).catch(() => {});
+    throw err;
+  }
   log(
     JSON.stringify({
       level: 'warn',

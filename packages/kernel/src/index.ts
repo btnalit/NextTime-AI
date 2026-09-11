@@ -982,14 +982,21 @@ export function main(): void {
         passwordFile: process.env.INITIAL_ADMIN_PASSWORD_FILE,
         log: (line) => app.log.warn(line),
       });
-      // P-A1 (docs/platform-admin-design.md §2/§4 "登录即对话"): a fresh install gets its default
-      // workspace, owned by the administrator; an upgraded one adopts its single workspace as the
-      // default. Same non-fatal contract as the administrator step above.
+    } catch (err) {
+      app.log.error(
+        { err },
+        'initial administrator could not be prepared — password login is unavailable until this is fixed (is the database migrated, is INITIAL_ADMIN_PASSWORD_FILE writable?)',
+      );
+    }
+    // P-A1 (docs/platform-admin-design.md §2/§4 "登录即对话"): a fresh install gets its default
+    // workspace, owned by the administrator; an upgraded one adopts its single workspace as the
+    // default. Its own try: a failure here must not hide, nor be hidden by, the step above.
+    try {
       await ensureDefaultWorkspace(pool, { log: (line) => app.log.info(line) });
     } catch (err) {
       app.log.error(
         { err },
-        'initial administrator / default workspace could not be prepared — password login is unavailable until this is fixed (is the database migrated, is INITIAL_ADMIN_PASSWORD_FILE writable?)',
+        'default workspace could not be prepared — create one from the console or with bootstrap.js create-workspace',
       );
     }
 

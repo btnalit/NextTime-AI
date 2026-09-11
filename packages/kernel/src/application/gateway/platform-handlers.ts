@@ -8,8 +8,9 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
+import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
 import { hashPassword } from '../identity/password.js';
-import { LOGIN_PATTERN, normalizeLogin } from '../identity/users.js';
+import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
 import {
   DEFAULT_PLATFORM_SETTINGS,
   type PlatformSettings,
@@ -144,7 +145,7 @@ function toWireUser(row: UserDbRow, memberships: readonly UserMembershipWire[]):
     id: row.id,
     login: row.login,
     displayName: row.display_name,
-    platformRole: row.platform_role,
+    platformRole: effectivePlatformRole(row.login, row.platform_role),
     status: row.status,
     hasPassword: row.has_password,
     mustChangePassword: row.must_change_password,
@@ -461,9 +462,22 @@ export const setUserStatusHandler: CapabilityHandler = async (
   };
 };
 
-export const resetUserPasswordHandler: CapabilityHandler = async (client, _workspaceId, params) => {
+export const resetUserPasswordHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  context,
+) => {
   const input = params as { userId: string; password?: string };
-  await loadUser(client, input.userId);
+  const target = await loadUser(client, input.userId);
+  if (envAdminLogins().includes(target.login) && target.id !== actingUser(context).id) {
+    // The env-pinned administrator is the anti-lockout backstop (design §6.6): a hijacked admin
+    // session must not be able to take that account over by resetting its password.
+    throw new PlatformAdminError(
+      'protected_admin',
+      `"${target.login}" is a platform administrator by environment configuration; only they can change their password`,
+    );
+  }
   const { settings } = await readPlatformSettings(client);
   const temporaryPassword = input.password ?? generateTemporaryPassword();
   assertPasswordPolicy(temporaryPassword, settings);
@@ -580,6 +594,11 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
       where workspace_id = $1 and principal_id = $2 and status = 'active'`,
     [input.workspaceId, membership.principalId],
   );
+  if (input.role !== membership.role) {
+    // Same as the workspace-side `set_principal_role` (W5.5, leftover 18): Handles minted under
+    // the old role carry its capability set until ttl unless revoked here.
+    await revokeRoleScopedSessionHandles(client, input.workspaceId, membership.principalId);
+  }
   const after = await loadMembership(client, input.userId, input.workspaceId);
   return { result: after, resourceType: 'principal', resourceId: membership.principalId };
 };

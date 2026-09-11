@@ -1465,6 +1465,13 @@
     `WEB_E2E_ADMIN_LOGIN=admin` / `WEB_E2E_ADMIN_INITIAL_PASSWORD`；`login.spec.ts` 首个用例为 admin 首登 →
     强制改密 → 概览 → 用户页 → 登出（CI 重试幂等），锁定用例改锁 `admin`（该文件最后跑）；bootstrap 的
     `create-workspace` 现在建的是第二个工作区（默认工作区由 kernel 建）。
+  - **独立审查（opus reviewer）抓到并已修**：① 停用用户只关了 cookie——API key 与 Handle 仍可用 → API key
+    查找与 Handle 校验都 join `users.status`，一次停用关全部通道（集成测试断言停用后 Bearer key 401）；
+    ② 平台侧改角色不吊销按角色签的 Handle → 与工作区侧 `set_principal_role` 一致调 `revokeRoleScopedSessionHandles`；
+    ③ `reset_user_password` 没有 env 管理员护栏 → 非本人重置 env 管理员密码 409 `protected_admin`；
+    ④ `NEXTTIME_PLATFORM_ADMINS` 只做了"不可停用"没做"始终是管理员" → `mapUser` 处统一投影
+    `effectivePlatformRole`，登录、`/api/auth/me`、平台通道、用户页一致；⑤ 初始密码文件在 admin 行提交
+    之后才写、写失败即永久丢密码 → 先写文件再建行，建行失败删文件，默认工作区改为独立 try。
   - **未做 / 留到后面**：概览的服务健康只有 kernel / postgres / `llm-proxy`（读 `models.json` 是否可读），
     运行层清单项恒为"由 CI 守卫保证"（P-C 出真实检查）；`platform_settings_history` 只写不读（回滚能力
     未暴露）；每日 / 月度预算只存不执行（P-D）。

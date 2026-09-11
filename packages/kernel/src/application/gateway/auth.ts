@@ -146,7 +146,13 @@ export async function lookupPrincipalByApiKeyHash(
 ): Promise<PrincipalRow | null> {
   return withAdminClient(pool, async (client) => {
     const result = await client.query<PrincipalDbRow>(
-      'select workspace_id, id, kind, role, display_name from principals where api_key_hash = $1 and disabled_at is null',
+      // P-A1: a disabled platform user (`users.status`) is out on every channel, not only the
+      // console cookie — the API key of any of their membership Principals stops authenticating.
+      `select p.workspace_id, p.id, p.kind, p.role, p.display_name
+         from principals p
+         left join users u on u.id = p.user_id
+        where p.api_key_hash = $1 and p.disabled_at is null
+          and (u.id is null or u.status = 'active')`,
       [apiKeyHash],
     );
     const row = result.rows[0];

@@ -1,5 +1,6 @@
 import type { PlatformSettingsWire } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { envAdminLogins } from '../identity/users.js';
 
 /**
  * application/platform/settings: the platform settings document (docs/platform-admin-design.md
@@ -46,22 +47,9 @@ interface DbRow {
   updated_at: Date | null;
 }
 
-const ENV_ADMINS_VAR = 'NEXTTIME_PLATFORM_ADMINS';
-
-/** Logins that are always administrators (design §6.6; borrowed from cloudflare-os `ADMINS`):
- *  comma/space-separated, lower-cased. Empty when the variable is unset. */
-export function envAdminLogins(env: NodeJS.ProcessEnv = process.env): readonly string[] {
-  const raw = env[ENV_ADMINS_VAR];
-  if (!raw) return [];
-  return [
-    ...new Set(
-      raw
-        .split(/[,\s]+/)
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ];
-}
+// `envAdminLogins` lives in the identity module (users.ts) so `mapUser` can apply it; re-exported
+// here for the settings wire (`envAdmins`).
+export { envAdminLogins } from '../identity/users.js';
 
 function project(raw: Record<string, unknown>): PlatformSettings {
   const pick = <K extends keyof PlatformSettings>(key: K): PlatformSettings[K] => {
