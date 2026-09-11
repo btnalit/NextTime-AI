@@ -121,13 +121,18 @@ describe('explorer session token', () => {
 
 describe('explorer session cookie helpers', () => {
   it('parseCookieHeader: RFC 6265 shape, first occurrence wins, junk ignored', () => {
-    expect(parseCookieHeader(undefined)).toEqual({});
-    expect(parseCookieHeader('')).toEqual({});
-    expect(
-      parseCookieHeader(
-        `a=1; ${EXPLORER_SESSION_COOKIE}=tok.en.x; a=2; =novalue; noequals; b= spaced `,
-      ),
-    ).toEqual({ a: '1', [EXPLORER_SESSION_COOKIE]: 'tok.en.x', b: 'spaced' });
+    expect(parseCookieHeader(undefined).size).toBe(0);
+    expect(parseCookieHeader('').size).toBe(0);
+    const parsed = parseCookieHeader(
+      `a=1; ${EXPLORER_SESSION_COOKIE}=tok.en.x; a=2; =novalue; noequals; b= spaced ; __proto__=x`,
+    );
+    expect([...parsed.entries()]).toEqual([
+      ['a', '1'],
+      [EXPLORER_SESSION_COOKIE, 'tok.en.x'],
+      ['b', 'spaced'],
+      ['__proto__', 'x'],
+    ]);
+    expect(parsed.get('constructor')).toBeUndefined();
   });
 
   it('serializeSessionCookie / clearSessionCookie carry the same locked-down attributes', () => {

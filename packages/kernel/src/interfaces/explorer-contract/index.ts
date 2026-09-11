@@ -131,8 +131,7 @@ function extractApiKey(request: FastifyRequest): string | undefined {
 }
 
 function extractSessionCookie(request: FastifyRequest): string | undefined {
-  const cookies = parseCookieHeader(request.headers.cookie);
-  const token = cookies[EXPLORER_SESSION_COOKIE];
+  const token = parseCookieHeader(request.headers.cookie).get(EXPLORER_SESSION_COOKIE);
   return token ? token : undefined;
 }
 

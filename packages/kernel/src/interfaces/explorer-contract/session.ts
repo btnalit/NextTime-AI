@@ -123,16 +123,18 @@ export async function verifyExplorerSessionToken(
 }
 
 /** Minimal `Cookie` header parser (RFC 6265 §5.4 shape: `name=value; name2=value2`). Values are
- *  taken verbatim (a JWT never needs decoding); the first occurrence of a name wins. */
-export function parseCookieHeader(header: string | undefined): Readonly<Record<string, string>> {
-  const out: Record<string, string> = {};
+ *  taken verbatim (a JWT never needs decoding); the first occurrence of a name wins. A `Map`, not
+ *  a plain object: cookie names are attacker-chosen strings, and writing them as object keys is
+ *  the classic prototype-pollution shape (CodeQL `js/remote-property-injection`). */
+export function parseCookieHeader(header: string | undefined): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
   if (!header) return out;
   for (const part of header.split(';')) {
     const eq = part.indexOf('=');
     if (eq <= 0) continue;
     const name = part.slice(0, eq).trim();
-    if (!name || name in out) continue;
-    out[name] = part.slice(eq + 1).trim();
+    if (!name || out.has(name)) continue;
+    out.set(name, part.slice(eq + 1).trim());
   }
   return out;
 }
