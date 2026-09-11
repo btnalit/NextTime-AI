@@ -66,8 +66,16 @@ function parseBearerToken(authorizationHeader: string | undefined): string {
   if (!authorizationHeader) {
     throw new UnauthorizedError('missing Authorization header');
   }
-  const match = /^Bearer\s+(.+)$/i.exec(authorizationHeader.trim());
-  const token = match?.[1]?.trim();
+  // A plain scheme check + slice, not `/^Bearer\s+(.+)$/i`: that regex is polynomial on a
+  // header of the shape `Bearer` + many spaces (CodeQL js/polynomial-redos) — this is the one
+  // header every unauthenticated client controls, so it must parse in linear time.
+  const trimmed = authorizationHeader.trim();
+  const scheme = trimmed.slice(0, 6);
+  const separator = trimmed.charAt(6);
+  if (scheme.toLowerCase() !== 'bearer' || !(separator === ' ' || separator === '\t')) {
+    throw new UnauthorizedError('Authorization header must be "Bearer <token>"');
+  }
+  const token = trimmed.slice(7).trim();
   if (!token) {
     throw new UnauthorizedError('Authorization header must be "Bearer <token>"');
   }
