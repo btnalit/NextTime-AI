@@ -317,8 +317,9 @@ jobs:
         if: always()
         run: sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml down -v
 
-# Promoting to a required check: this workflow is intentionally NOT in the branch protection
-# rule's required-status-checks list yet (only ci.yml's quality/test/guards are). There is no
+# Promoting to a required check: this workflow is not in the branch protection rule's
+# required-status-checks list by itself (only ci.yml's quality/test/guards are). There is no
 # in-repo file that declares that list — a repository admin adds "e2e / web-e2e" to it from the
-# GitHub repo Settings → Branches → branch protection rule for `main`, once this workflow has run
-# clean on a handful of PRs.
+# GitHub repo Settings → Branches → branch protection rule for `main`. As of W7 (2026-09-11) the
+# job runs every Playwright suite plus the S1 lite acceptance and has run clean across the W7
+# PRs, so promotion is the recommended next step (docs/STATUS.md leftover 32).
