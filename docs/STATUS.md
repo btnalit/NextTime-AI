@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-11（W8 S4.1 用户目录与登录合入 PR #164；当前波次：W8 平台管理 + 稳定期）
+最后更新：2026-09-11（W8 S4.1 用户目录与登录合入 PR #164 并发 v0.6.0；主机仍在 v0.5.1；当前波次：W8 平台管理 + 稳定期）
 
 ## 1. 入口指引
 
@@ -31,7 +31,7 @@
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | 达成 | `accept_s3.sh` 29 PASS（2026-09-11，新增 explorer-no-credentials 断言，PR #153，从分支在主机验证） |
 | S3.11–S3.15 | 控制面、接入向导、AgentProfile、web 控制台、pi 漂移 | 达成 | `development-tasks.md` 各节实现说明 |
 | 真实模型验证 | 真实模型跑 S2 / S3 场景，统计工具调用成功率 | 达成 | docker_restart 2/3、api_observe 3/3、ssh_run_approve 3/3、ssh_run_auto 1/1、dependency_chat 2/3（`retrospective-2026-09-11.md` §2） |
-| 发布 | — | v0.5.0（PR #154） | `CHANGELOG.md` |
+| 发布 | — | v0.6.0（PR #165；含 S4.1） | `CHANGELOG.md` |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 复审曾发现 S3.2 的冲突检测在 Worker 断言主路径上不生效
 > （`code-review-2026-09-10.md` §2.1），当时验收对 Conflict 的唯一断言是「采集器跑两遍后为零」，压制 Conflict 的缺陷
@@ -114,7 +114,7 @@
 
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
-目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29）并于同日应用 v0.5.1（kernel 重建 + `worker-runtime` 重建，无迁移，未复跑验收），主机 `.env` 不再含 Explorer key；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），建了一个真实使用的工作区并注册两个门；不再在验收后停栈。
+目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29）并于同日应用 v0.5.1（kernel 重建 + `worker-runtime` 重建，无迁移，未复跑验收），主机 `.env` 不再含 Explorer key；v0.6.0（S4.1，迁移 0019）**尚未应用**，应用步骤见 §3 "S4.1 主机应用注意"；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），建了一个真实使用的工作区并注册两个门；不再在验收后停栈。
 
 后续：S4 平台管理 → 遗留 33 / 30 → 加固批次（23 / 21 / 20 / 22）→ 镜像发布与 P5。
 
