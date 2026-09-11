@@ -50,6 +50,11 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s2.sh' </dev/null
 sh scripts/accept_s2.sh --keep
 ```
 
+`--real <provider/model> [--runs N]`（W7）：保留主机上已部署的真实 provider，把 step2/3/4/5/7
+换成用真实模型跑、按结果判定的场景，重复 `--runs` 次（默认 3）——不切换到 fake provider，也不需要
+跑完后切回来。用法、每个场景判定什么、怎么读 `RUN`/`REAL` 输出，见专门的
+`docs/runbooks/host-accept-real-model.md`。
+
 ## 3. 期望输出
 
 逐步打印 `PASS <step> <detail>` / `SKIP <step> <detail>`；任何一步真失败打印 `FAIL <step> <detail>`

@@ -25,3 +25,42 @@ export function toToolParameters(paramsSchema: ZodTypeAny): TSchema {
   jsonSchema.$schema = undefined;
   return jsonSchema as unknown as TSchema;
 }
+
+/**
+ * W7 (found by the first real-model run of scripts/accept_s2.sh --real): a Gatekeeper Operation's
+ * `params_schema` is whatever the manifest import produced — an OpenAPI GET with no parameters
+ * yields `null`/`{}`, which the three gate-tool builders (entry/worker/interactive modes) used to
+ * pass straight through as the pi tool's `parameters`. OpenAI-compatible providers reject the
+ * *entire* request when any function's schema is not `type: "object"` ("Invalid schema for
+ * function '<tool>': schema must be a JSON Schema of 'type: "object"', got 'type: null'"), so one
+ * parameterless gate tool silently took every turn of the entry agent down with a 400 — the fake
+ * provider never validates schemas, which is why S2 passed for weeks. This normalizes every gate
+ * schema to an object schema: a missing/non-object schema becomes an empty object schema, an
+ * object schema without an explicit `type` gets one; anything already well-formed is returned as
+ * is.
+ */
+export function gateToolParameters(paramsSchema: unknown): TSchema {
+  const empty = { type: 'object', properties: {}, additionalProperties: false };
+  if (paramsSchema === null || typeof paramsSchema !== 'object' || Array.isArray(paramsSchema)) {
+    return empty as unknown as TSchema;
+  }
+  const schema = paramsSchema as Record<string, unknown>;
+  if (schema.type === 'object') {
+    return (schema.properties === undefined
+      ? { ...schema, properties: {} }
+      : schema) as unknown as TSchema;
+  }
+  if (
+    schema.type === undefined &&
+    (schema.properties !== undefined || Object.keys(schema).length === 0)
+  ) {
+    return { ...schema, type: 'object', properties: schema.properties ?? {} } as unknown as TSchema;
+  }
+  // A non-object top-level schema (e.g. `type: "string"`) cannot be a function's parameters — wrap
+  // it as a single `value` property so the model can still supply it.
+  return {
+    type: 'object',
+    properties: { value: schema },
+    required: ['value'],
+  } as unknown as TSchema;
+}

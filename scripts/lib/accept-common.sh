@@ -84,6 +84,17 @@ run_driver() {
     node /tmp/driver.mjs "$@" </dev/null 2>&1
 }
 
+# run_driver_mount <host_file> <driver args...>: like run_driver, additionally bind-mounting one
+# host file read-only at /tmp/mounted (W7: `transcript-stats /tmp/mounted` reads a Worker's pi
+# session JSONL from ${NEXTTIME_DATA}/workspaces/tasks/<taskId>/...). The file must be readable by
+# the kernel image's non-root user — same umask caveat require_world_readable documents.
+run_driver_mount() {
+  mount_src=$1
+  shift
+  docker compose run --rm --no-deps -T -v "$ACCEPT_DRIVER_PATH:/tmp/driver.mjs:ro" \
+    -v "$mount_src:/tmp/mounted:ro" kernel node /tmp/driver.mjs "$@" </dev/null 2>&1
+}
+
 # One capability call: cap <token> <capabilityName> <paramsJson> [extractExpr]. Prints the
 # HTTP_STATUS=/BODY=/EXTRACTED= blob; callers extract with parse_kv.
 cap() {
@@ -169,4 +180,26 @@ accept_provider_restore() {
   fi
   ACCEPT_PROVIDER_SWITCHED=0
   return 0
+}
+
+# chat_assistant_text <token> <chatId>: every assistant message of the chat, joined with spaces
+# and lower-cased, printed on one line. Polls get-history until the text stops changing (up to
+# ~10s): the Turn's `completed` metadata can reach the driver before the last assistant message
+# is readable through get_chat_history (seen with a real model on the host — the final table
+# landed a beat after `send-and-wait` returned), and a real model may also emit several assistant
+# messages per Turn, so the *last* one alone is not the answer.
+chat_assistant_text() {
+  prev=""
+  n=0
+  while [ "$n" -lt 6 ]; do
+    out=$(run_driver get-history "$1" "$2" "d.filter(m=>m.role==='assistant').map(m=>String(m.text||'')).join(' ').replace(/\\s+/g,' ').toLowerCase()")
+    cur=$(parse_kv "$out" EXTRACTED)
+    if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
+      break
+    fi
+    prev=$cur
+    n=$((n + 1))
+    sleep 2
+  done
+  printf '%s' "$prev"
 }

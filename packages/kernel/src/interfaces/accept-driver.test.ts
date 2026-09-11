@@ -79,6 +79,8 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
   let gateTokenFile: string;
   const capRequests: RecordedCapRequest[] = [];
   const mcpRequests: RecordedMcpRequest[] = [];
+  let listTasksCallCount = 0;
+  let listTasksMode: 'progress' | 'always-running' = 'progress';
 
   function readBody(req: IncomingMessage): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -118,6 +120,28 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
           }
           if (name === 'big') {
             sendJson(res, 200, { ok: true, pad: 'x'.repeat(600 * 1024) });
+            return;
+          }
+          if (name === 'approve') {
+            sendJson(res, 200, { ok: true, result: { id: 'ar1', status: 'approved' } });
+            return;
+          }
+          if (name === 'list_pending') {
+            sendJson(res, 200, { ok: true, result: { items: [] } });
+            return;
+          }
+          if (name === 'list_tasks') {
+            listTasksCallCount += 1;
+            const status =
+              listTasksMode === 'always-running'
+                ? 'running'
+                : listTasksCallCount === 1
+                  ? 'running'
+                  : 'completed';
+            sendJson(res, 200, {
+              ok: true,
+              result: { items: [{ id: 'task-1', status, workerRuns: [{ id: 'run-1' }] }] },
+            });
             return;
           }
           sendJson(res, 200, {
@@ -190,6 +214,16 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
             reply({ turnId: 'turn-1' });
             if (text !== 'never settles') {
               setTimeout(() => {
+                if (text === 'approve please') {
+                  push('action.pending', {
+                    actionRequestId: 'ar1',
+                    gatekeeperId: 'gk-1',
+                    title: 'x',
+                    description: 'x',
+                    actionKind: { tag: 't', label: 't' },
+                    awaitDecision: false,
+                  });
+                }
                 if (text === 'tools please') {
                   push('chat.stream', {
                     chatId,
@@ -392,6 +426,63 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
     expect(code).toBe(0);
     expect(kv.get('TOOL_CALLS')).toBe('0');
     expect(kv.get('TOOL_ERRORS_KNOWN')).toBe('0');
+  });
+
+  it('send-and-wait: auto-approve approves a matching action.pending push', async () => {
+    const before = capRequests.length;
+    const { code, kv } = await runDriver(
+      ['send-and-wait', 'tok', '', 'approve please', '3000', 'auto-approve=gk-1'],
+      env(),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('APPROVED')).toBe('ar1');
+    const approveRequests = capRequests.slice(before).filter((r) => r.path === '/api/cap/approve');
+    expect(approveRequests).toHaveLength(1);
+    expect(approveRequests[0]?.body).toEqual({ actionRequestId: 'ar1' });
+  });
+
+  it('send-and-wait: auto-approve ignores an action.pending push for a non-matching gatekeeper', async () => {
+    const before = capRequests.length;
+    const { code, kv } = await runDriver(
+      ['send-and-wait', 'tok', '', 'approve please', '3000', 'auto-approve=gk-other'],
+      env(),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('APPROVED')).toBe('');
+    const approveRequests = capRequests.slice(before).filter((r) => r.path === '/api/cap/approve');
+    expect(approveRequests).toHaveLength(0);
+  });
+
+  it('send-and-wait: without auto-approve there is no APPROVED= line at all', async () => {
+    const { code, kv } = await runDriver(
+      ['send-and-wait', 'tok', '', 'approve please', '3000'],
+      env(),
+    );
+    expect(code).toBe(0);
+    expect(kv.has('APPROVED')).toBe(false);
+  });
+
+  it('wait-task: polls until the Task reaches a terminal status', async () => {
+    listTasksMode = 'progress';
+    listTasksCallCount = 0;
+    const { code, kv } = await runDriver(['wait-task', 'tok', 'task-1', '10000'], env());
+    expect(code).toBe(0);
+    expect(kv.get('TASK_STATUS')).toBe('completed');
+    expect(kv.get('WORKER_RUN_ID')).toBe('run-1');
+  }, 10000);
+
+  it('wait-task: timeout reports empty TASK_STATUS and exits 0', async () => {
+    listTasksMode = 'always-running';
+    listTasksCallCount = 0;
+    const { code, kv } = await runDriver(['wait-task', 'tok', 'task-1', '2500'], env());
+    expect(code).toBe(0);
+    expect(kv.get('TASK_STATUS')).toBe('');
+  }, 8000);
+
+  it('wait-task: missing taskId prints ERROR= and exits 1', async () => {
+    const { code, kv } = await runDriver(['wait-task', 'tok', '', '1000'], env());
+    expect(code).toBe(1);
+    expect(kv.get('ERROR')).toContain('missing <taskId>');
   });
 
   it('send-only: sends without waiting and reports CHAT_ID/TURN_ID', async () => {

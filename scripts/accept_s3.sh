@@ -10,6 +10,7 @@
 #
 # Usage:
 #   sh scripts/accept_s3.sh [--keep]
+#   sh scripts/accept_s3.sh --real <provider/model> [--runs N] [--keep]   # W7 real-model mode
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s3.sh' </dev/null
 #
 # --keep leaves the resident entry container running and skips tearing anything down (workspace
@@ -64,15 +65,35 @@
 set -u
 
 KEEP=0
-for arg in "$@"; do
-  case "$arg" in
+REAL=0
+REAL_MODEL=""
+RUNS=3
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --keep) KEEP=1 ;;
+    --real)
+      [ "$#" -ge 2 ] || { echo "accept_s3: --real needs <provider/model>" >&2; exit 1; }
+      REAL=1
+      REAL_MODEL=$2
+      shift
+      ;;
+    --runs)
+      [ "$#" -ge 2 ] || { echo "accept_s3: --runs needs <N>" >&2; exit 1; }
+      RUNS=$2
+      shift
+      ;;
     *)
-      echo "accept_s3: unknown argument: $arg" >&2
+      echo "accept_s3: unknown argument: $1" >&2
       exit 1
       ;;
   esac
+  shift
 done
+case "$RUNS" in
+  ''|*[!0-9]*) echo "accept_s3: --runs must be a positive integer" >&2; exit 1 ;;
+esac
+RUNS=$((RUNS + 0))
+[ "$RUNS" -gt 0 ] || { echo "accept_s3: --runs must be a positive integer" >&2; exit 1; }
 
 if [ ! -f "./docker-compose.yml" ]; then
   echo "accept_s3: run this from the checkout root (where docker-compose.yml lives)" >&2
@@ -98,10 +119,19 @@ require_driver
 # Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
 # whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
 # to run this script), which would otherwise kill the shell without running the EXIT trap.
-trap accept_provider_restore EXIT
-trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
-accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
-pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+if [ "$REAL" -eq 0 ]; then
+  trap accept_provider_restore EXIT
+  trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
+  accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
+  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+else
+  # W7 real-model mode (same contract as accept_s2.sh --real): deployed provider untouched, the
+  # entry agent pinned to $REAL_MODEL, the dependency chat repeated --runs times and judged on
+  # its outcome only.
+  ACCEPT_S3_MODEL=$REAL_MODEL
+  export ACCEPT_S3_MODEL
+  pass "preflight-real-provider" "real provider left as deployed; entry agent pinned to model=$REAL_MODEL, runs=$RUNS"
+fi
 
 # One Explorer HTTP call (X-API-Key). Prints HTTP_STATUS=/BODY=.
 explorer() {
@@ -146,6 +176,7 @@ fetch('http://worker-supervisor:8081/resident/stop', {
 
 preflight_step() {
   required_services="postgres kernel llm-proxy egress-proxy worker-supervisor agent-host fake-llm docker-socket-proxy-collector"
+  [ "$REAL" -eq 1 ] && required_services="postgres kernel llm-proxy egress-proxy worker-supervisor agent-host docker-socket-proxy-collector"
   running=$(docker compose --profile test ps --status running --services 2>/dev/null)
   if [ -z "$running" ]; then
     fail "preflight-services" "docker compose --profile test ps returned nothing — is the stack up? (docker compose up -d && docker compose --profile test up -d fake-llm)"
@@ -435,6 +466,47 @@ chat_dependency_step() {
   pass "chat-dependency-explain" "explain(depends_on Fact) resolves to the collector's own Source (kind=host-inventory-collector)"
 }
 
+# W7 real-model mode: the "哪个服务依赖哪个" chat, RUNS times. The fake provider walks
+# search -> traverse -> get_object deterministically; a real model is judged only on whether its
+# completed reply reads as a dependency statement that names the real edge the collector wrote
+# (kernel depends_on postgres). Tool-call outcomes come from the driver's TOOL_* counters.
+real_chat_dependency_step() {
+  n=0; ok_n=0; tc_sum=0; te_sum=0
+  i=1
+  while [ "$i" -le "$RUNS" ]; do
+    chat_out=$(run_driver send-and-wait "$OWNER_KEY" "" "哪个服务依赖哪个" 180000)
+    chat_id=$(parse_kv "$chat_out" CHAT_ID)
+    turn_status=$(parse_kv "$chat_out" TURN_STATUS)
+    tc=$(parse_kv "$chat_out" TOOL_CALLS); te=$(parse_kv "$chat_out" TOOL_ERRORS); tn=$(parse_kv "$chat_out" TOOL_NAMES)
+    last_reply=""
+    if [ -n "$chat_id" ]; then
+      last_reply=$(chat_assistant_text "$OWNER_KEY" "$chat_id")
+    fi
+    reads_dependency=0
+    case "$last_reply" in *depends_on*|*依赖*) reads_dependency=1 ;; esac
+    names_edge=0
+    case "$last_reply" in *postgres*) names_edge=1 ;; esac
+    ok=0
+    [ "$turn_status" = "completed" ] && [ "$reads_dependency" -eq 1 ] && [ "$names_edge" -eq 1 ] && ok=1
+    printf 'RUN scenario=dependency_chat run=%s outcome=%s turn=%s reads_dependency=%s names_postgres=%s turn_tools=%s/%s[%s] reply_len=%s\n' \
+      "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "$turn_status" "$reads_dependency" "$names_edge" "${tc:-0}" "${te:-0}" "$tn" "${#last_reply}"
+    n=$((n + 1)); ok_n=$((ok_n + ok)); tc_sum=$((tc_sum + ${tc:-0})); te_sum=$((te_sum + ${te:-0}))
+    i=$((i + 1))
+  done
+  printf 'REAL scenario=dependency_chat ok=%s/%s turn_tool_calls=%s turn_tool_errors=%s worker_tool_calls=0 worker_tool_errors=0\n' "$ok_n" "$n" "$tc_sum" "$te_sum"
+  [ "$ok_n" -gt 0 ] || fail "real-chat-dependency" "0/$n dependency chats succeeded under model=$REAL_MODEL"
+  pass "real-chat-dependency" "$ok_n/$n dependency chats succeeded under model=$REAL_MODEL"
+
+  # The graph-side half of the fake-mode step is model-independent and still asserted once.
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel')&&d.result.items.find(i=>i.identityKey&&i.identityKey.serviceName==='kernel').id||''")
+  KERNEL_CONTAINER_ID=$(parse_kv "$out" EXTRACTED)
+  [ -n "$KERNEL_CONTAINER_ID" ] || fail "chat-dependency-search-kernel" "no Container with identityKey.serviceName='kernel' found: $(parse_kv "$out" BODY)"
+  out=$(cap "$OWNER_KEY" traverse "{\"fromId\":\"$KERNEL_CONTAINER_ID\",\"linkType\":\"depends_on\",\"depth\":1}" "d.result.edges[0]&&d.result.edges[0].linkId||''")
+  DEPENDS_ON_FACT_ID=$(parse_kv "$out" EXTRACTED)
+  [ -n "$DEPENDS_ON_FACT_ID" ] || fail "chat-dependency-traverse" "no depends_on edge from kernel Container $KERNEL_CONTAINER_ID: $(parse_kv "$out" BODY)"
+  pass "chat-dependency-traverse" "depends_on Fact=$DEPENDS_ON_FACT_ID (kernel -> postgres)"
+}
+
 # S3.9 (d): three Explorer endpoints, called directly against the kernel image (not via caddy —
 # the task brief's own instruction), authenticated as the workspace owner's own X-API-Key (the
 # same human-channel auth the capability calls above already use, just outside the /api/cap/<name>
@@ -524,7 +596,11 @@ collector_fixtures_step
 collector_first_run_step
 collector_second_run_step
 collector_conflict_positive_step
-chat_dependency_step
+if [ "$REAL" -eq 1 ]; then
+  real_chat_dependency_step
+else
+  chat_dependency_step
+fi
 explorer_step
 mcp_step
 cleanup_step

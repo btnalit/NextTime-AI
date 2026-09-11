@@ -9,7 +9,13 @@
 #
 # Usage:
 #   sh scripts/accept_s2.sh [--keep]
+#   sh scripts/accept_s2.sh --real <provider/model> [--runs N] [--keep]   # W7 real-model mode
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s2.sh' </dev/null
+#
+# --real <provider/model>: leave the deployed (real) provider in place, pin the entry agent and
+# the ops-runner Worker to that models.json id, and replace the fake-scripted steps 2/3/4/5/7
+# with outcome-judged scenarios repeated --runs times (default 3) — see the "W7 real-model mode"
+# section below and docs/runbooks/host-accept-real-model.md. Never defaults the model.
 #
 # --keep skips removing the accept-s2 fixture containers (leaves the fixtures/gates/workspace up
 # for inspection). --keep does not skip the fake-provider restore below — the EXIT trap always
@@ -55,15 +61,35 @@
 set -u
 
 KEEP=0
-for arg in "$@"; do
-  case "$arg" in
+REAL=0
+REAL_MODEL=""
+RUNS=3
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --keep) KEEP=1 ;;
+    --real)
+      [ "$#" -ge 2 ] || { echo "accept_s2: --real needs <provider/model>" >&2; exit 1; }
+      REAL=1
+      REAL_MODEL=$2
+      shift
+      ;;
+    --runs)
+      [ "$#" -ge 2 ] || { echo "accept_s2: --runs needs <N>" >&2; exit 1; }
+      RUNS=$2
+      shift
+      ;;
     *)
-      echo "accept_s2: unknown argument: $arg" >&2
+      echo "accept_s2: unknown argument: $1" >&2
       exit 1
       ;;
   esac
+  shift
 done
+case "$RUNS" in
+  ''|*[!0-9]*) echo "accept_s2: --runs must be a positive integer" >&2; exit 1 ;;
+esac
+RUNS=$((RUNS + 0))
+[ "$RUNS" -gt 0 ] || { echo "accept_s2: --runs must be a positive integer" >&2; exit 1; }
 
 if [ ! -f "./docker-compose.yml" ]; then
   echo "accept_s2: run this from the checkout root (where docker-compose.yml lives)" >&2
@@ -89,10 +115,19 @@ require_driver
 # Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
 # whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
 # to run this script), which would otherwise kill the shell without running the EXIT trap.
-trap accept_provider_restore EXIT
-trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
-accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
-pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+if [ "$REAL" -eq 0 ]; then
+  trap accept_provider_restore EXIT
+  trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
+  accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
+  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+else
+  # W7 real-model mode: the stack stays on whatever provider is deployed; every entry agent and
+  # Worker this script creates is pinned to $REAL_MODEL (must be one of that provider's
+  # models.json ids). No fake-llm, no override, nothing to restore.
+  ACCEPT_S2_MODEL=$REAL_MODEL
+  export ACCEPT_S2_MODEL
+  pass "preflight-real-provider" "real provider left as deployed; entry agent and ops-runner pinned to model=$REAL_MODEL, runs=$RUNS per scenario"
+fi
 
 resident_stop() {
   docker compose run --rm --no-deps -T kernel node -e "
@@ -110,6 +145,7 @@ fetch('http://worker-supervisor:8081/resident/stop', {
 
 preflight_step() {
   required_services="postgres kernel caddy llm-proxy egress-proxy worker-supervisor agent-host fake-llm gatekeeper-docker"
+  [ "$REAL" -eq 1 ] && required_services="postgres kernel caddy llm-proxy egress-proxy worker-supervisor agent-host gatekeeper-docker"
   running=$(docker compose --profile test ps --status running --services 2>/dev/null)
   if [ -z "$running" ]; then
     fail "preflight-services" "docker compose --profile test ps returned nothing — is the stack up? (docker compose --profile test up -d && docker compose up -d gatekeeper-docker)"
@@ -793,6 +829,13 @@ echo "UNREGISTERED_CODE=$unregistered_code"
   # source) by worker-supervisor for steps 2–3, and is still up (ENTRY_IDLE_TIMEOUT_MS default 30m).
   entry_container="nexttime-entry-${ALICE_PRINCIPAL_ID}"
   entry_running=$(docker inspect -f '{{.State.Running}}' "$entry_container" 2>/dev/null)
+  if [ "$entry_running" != "true" ] && [ "$REAL" -eq 1 ]; then
+    # Real-model mode: RUNS slow scenarios may outlast worker-supervisor's ENTRY_IDLE_TIMEOUT_MS,
+    # so the resident container from the chats above can already be reaped — one short chat
+    # brings it back (and re-registers it as an egress source) before the positive probe.
+    run_driver send-and-wait "$ALICE_KEY" "" "ping" 120000 >/dev/null 2>&1
+    entry_running=$(docker inspect -f '{{.State.Running}}' "$entry_container" 2>/dev/null)
+  fi
   [ "$entry_running" = "true" ] || fail "step6-registered-egress-ok" "alice's entry container $entry_container is not running (State.Running='$entry_running') — steps 2–3 should have left it up"
   registered_code=$(docker exec "$entry_container" curl -m 10 -sS -o /dev/null -w '%{http_code}' -x http://egress-proxy:3128 https://example.com </dev/null 2>/dev/null)
   [ "$registered_code" = "200" ] || fail "step6-registered-egress-ok" "proxied curl https://example.com from alice's registered entry container -> '$registered_code' (expected 200)"
@@ -921,6 +964,228 @@ cleanup_step() {
 }
 
 # --------------------------------------------------------------------------------------------
+# W7 real-model mode (--real <provider/model> [--runs N]; docs/runbooks/host-accept-real-model.md)
+#
+# The fake provider replays a hard-coded tool script, so the fake-mode steps above can assert the
+# exact tool order and the exact Fact the Worker writes. A real model decides for itself, so each
+# scenario below is judged only on its *outcome* — the governed action really reached `executed`,
+# the container really restarted, the Task really completed, the reply really carries the
+# fixture's payload — repeated RUNS times, and the per-Turn / per-Worker tool-call outcomes the
+# driver counts (TOOL_* from chat.stream; transcript-stats from the Worker's pi session JSONL)
+# are summed into the REAL summary lines at the end. A single failed run is a data point, not a
+# script failure: only a scenario with zero successes fails the script.
+# --------------------------------------------------------------------------------------------
+
+REAL_SUMMARY=""
+
+# psql_ws <sql>: one scalar for this workspace (the SQL references $WORKSPACE_ID itself).
+psql_ws() {
+  docker compose exec -T postgres psql -U nexttime -d nexttime -tAc "$1" </dev/null 2>/dev/null
+}
+
+# Tool-outcome accumulators, one set per scenario key (POSIX sh: no arrays — eval'd names).
+real_stat_add() {
+  # $1 scenario key, $2 ok(1/0), $3 turn tool calls, $4 turn tool errors, $5 worker tool calls, $6 worker tool errors
+  eval "REAL_N_$1=\$(( \${REAL_N_$1:-0} + 1 ))"
+  eval "REAL_OK_$1=\$(( \${REAL_OK_$1:-0} + $2 ))"
+  eval "REAL_TC_$1=\$(( \${REAL_TC_$1:-0} + ${3:-0} ))"
+  eval "REAL_TE_$1=\$(( \${REAL_TE_$1:-0} + ${4:-0} ))"
+  eval "REAL_WC_$1=\$(( \${REAL_WC_$1:-0} + ${5:-0} ))"
+  eval "REAL_WE_$1=\$(( \${REAL_WE_$1:-0} + ${6:-0} ))"
+}
+
+real_run_line() {
+  # $1 scenario, $2 run index, $3 ok|fail, $4 reason/detail (no secrets)
+  printf 'RUN scenario=%s run=%s outcome=%s %s\n' "$1" "$2" "$3" "$4"
+}
+
+# Worker transcript stats for a Task: the `worker_session` Source's uri is the container path
+# (`/workspace/...`); on the host that is ${NEXTTIME_DATA}/workspaces/tasks/<taskId>/... . Sets
+# WT_CALLS / WT_ERRORS / WT_NAMES ("" when no transcript is on file yet).
+worker_transcript_stats() {
+  WT_CALLS=""; WT_ERRORS=""; WT_NAMES=""
+  uri=$(psql_ws "select uri from sources where workspace_id='$WORKSPACE_ID' and kind='worker_session' and metadata->>'taskId'='$1' order by created_at desc limit 1")
+  [ -n "$uri" ] || return 0
+  case "$uri" in
+    /workspace/*) host_path="${NEXTTIME_DATA}/workspaces/tasks/$1/${uri#/workspace/}" ;;
+    *) return 0 ;;
+  esac
+  [ -r "$host_path" ] || return 0
+  chmod a+r "$host_path" 2>/dev/null || true
+  st=$(run_driver_mount "$host_path" transcript-stats /tmp/mounted)
+  WT_CALLS=$(parse_kv "$st" TOOL_CALLS)
+  WT_ERRORS=$(parse_kv "$st" TOOL_ERRORS)
+  WT_NAMES=$(parse_kv "$st" TOOL_NAMES)
+}
+
+# Newest Task of this workspace created after $1 (a psql timestamp); empty when none.
+task_created_after() {
+  psql_ws "select id from tasks where workspace_id='$WORKSPACE_ID' and created_at > '$1' order by created_at desc limit 1"
+}
+
+# Scenario A: "重启测试容器" through chat → entry agent finds a Worker → Worker calls the docker
+# gate → the ActionRequest is approved (by the driver, as alice) → executed → the fixture
+# container actually restarted → the Task completed.
+real_docker_restart_run() {
+  i=$1
+  run_ts=$(psql_ws "select now()")
+  started_before=$(docker inspect -f '{{.State.StartedAt}}' "$RESTART_TARGET_ID" 2>/dev/null)
+  [ "$i" -eq 1 ] && resident_stop "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
+
+  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "" "重启测试容器 CONTAINER_ID=$RESTART_TARGET_ID" 240000 "auto-approve=$GATEKEEPER_ID_DOCKER")
+  turn_status=$(parse_kv "$chat_out" TURN_STATUS)
+  tc=$(parse_kv "$chat_out" TOOL_CALLS); te=$(parse_kv "$chat_out" TOOL_ERRORS); tn=$(parse_kv "$chat_out" TOOL_NAMES)
+  approved=$(parse_kv "$chat_out" APPROVED)
+
+  ar_status=""
+  attempt=0
+  while [ "$attempt" -lt 60 ]; do
+    ar_status=$(psql_ws "select status from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_DOCKER' and requested_at > '$run_ts' order by requested_at desc limit 1")
+    [ "$ar_status" = "executed" ] && break
+    if [ "$ar_status" = "pending_approval" ]; then
+      ar_id=$(psql_ws "select id from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_DOCKER' and requested_at > '$run_ts' and status='pending_approval' order by requested_at desc limit 1")
+      cap "$ALICE_KEY" approve "{\"actionRequestId\":\"$ar_id\"}" "" >/dev/null
+    fi
+    attempt=$((attempt + 1))
+    sleep 3
+  done
+
+  task_id=$(task_created_after "$run_ts")
+  task_status=""
+  if [ -n "$task_id" ]; then
+    wt=$(run_driver wait-task "$ALICE_KEY" "$task_id" 150000)
+    task_status=$(parse_kv "$wt" TASK_STATUS)
+    worker_transcript_stats "$task_id"
+  else
+    WT_CALLS=""; WT_ERRORS=""; WT_NAMES=""
+  fi
+  started_after=$(docker inspect -f '{{.State.StartedAt}}' "$RESTART_TARGET_ID" 2>/dev/null)
+  restarted=0
+  [ -n "$started_before" ] && [ "$started_after" != "$started_before" ] && restarted=1
+
+  ok=0
+  [ "$ar_status" = "executed" ] && [ "$restarted" -eq 1 ] && [ "$task_status" = "completed" ] && ok=1
+  detail="turn=$turn_status task=${task_id:-none}:${task_status:-none} action=${ar_status:-none} restarted=$restarted approved=${approved:-none} turn_tools=${tc:-0}/${te:-0}[${tn}] worker_tools=${WT_CALLS:-?}/${WT_ERRORS:-?}[${WT_NAMES}]"
+  real_run_line docker_restart "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "$detail"
+  real_stat_add docker "$ok" "${tc:-0}" "${te:-0}" "${WT_CALLS:-0}" "${WT_ERRORS:-0}"
+  [ "$ok" -eq 1 ] && [ -z "$DOCKER_TASK_ID" ] && DOCKER_TASK_ID=$task_id
+  return 0
+}
+
+# Scenario B: "测试 API 的 GET 返回什么" → the entry agent observes through the http gate directly
+# (observe-class, no Task, no ActionRequest) and its reply carries the fixture's payload.
+real_api_observe_run() {
+  i=$1
+  tasks_before=$(task_count)
+  obs_before=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='observe_operation'")
+  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "" "测试 API 的 GET 返回什么" 180000)
+  chat_id=$(parse_kv "$chat_out" CHAT_ID)
+  turn_status=$(parse_kv "$chat_out" TURN_STATUS)
+  tc=$(parse_kv "$chat_out" TOOL_CALLS); te=$(parse_kv "$chat_out" TOOL_ERRORS); tn=$(parse_kv "$chat_out" TOOL_NAMES)
+  last_reply=""
+  [ -n "$chat_id" ] && last_reply=$(chat_assistant_text "$ALICE_KEY" "$chat_id")
+  obs_after=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='observe_operation'")
+  tasks_after=$(task_count)
+  has_payload=0
+  case "$last_reply" in *nxt*) has_payload=1 ;; esac
+  ok=0
+  [ "$turn_status" = "completed" ] && [ "$has_payload" -eq 1 ] && [ "${obs_after:-0}" -gt "${obs_before:-0}" ] && [ "$tasks_before" = "$tasks_after" ] && ok=1
+  detail="turn=$turn_status payload_in_reply=$has_payload observe_calls=$((${obs_after:-0} - ${obs_before:-0})) tasks_unchanged=$([ "$tasks_before" = "$tasks_after" ] && echo 1 || echo 0) turn_tools=${tc:-0}/${te:-0}[${tn}]"
+  real_run_line api_observe "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "$detail"
+  real_stat_add observe "$ok" "${tc:-0}" "${te:-0}" 0 0
+  return 0
+}
+
+# Scenario C: a Worker asked, in plain language, to run one command on the connected SSH host →
+# the unclassified command needs approval → approved (by this script, as alice) → executed → the
+# Task completed. $2 = "auto" for the post-"always allow" run, which must NOT produce a pending
+# ActionRequest at all (policy_decision=allow).
+real_ssh_run() {
+  i=$1
+  mode=${2:-approve}
+  run_ts=$(psql_ws "select now()")
+  out=$(cap "$ALICE_KEY" invoke_worker \
+    "{\"definitionId\":\"$OPS_RUNNER_ID\",\"version\":$OPS_RUNNER_VERSION,\"input\":\"Run the command \`uptime\` on the connected SSH host and report its raw output in your result summary.\",\"wait\":false,\"gates\":[\"$GATEKEEPER_ID_SSH\"]}" \
+    "d.result.id")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  task_id=$(parse_kv "$out" EXTRACTED)
+  if [ "$status" != "200" ] || [ -z "$task_id" ]; then
+    real_run_line "ssh_run_$mode" "$i" fail "invoke_worker HTTP $status"
+    real_stat_add "ssh_$mode" 0 0 0 0 0
+    return 0
+  fi
+  ar_status=""; saw_pending=0; policy=""
+  attempt=0
+  while [ "$attempt" -lt 60 ]; do
+    ar_status=$(psql_ws "select status from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_SSH' and requested_at > '$run_ts' order by requested_at desc limit 1")
+    [ "$ar_status" = "executed" ] && break
+    if [ "$ar_status" = "pending_approval" ]; then
+      saw_pending=1
+      ar_id=$(psql_ws "select id from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_SSH' and requested_at > '$run_ts' and status='pending_approval' order by requested_at desc limit 1")
+      cap "$ALICE_KEY" approve "{\"actionRequestId\":\"$ar_id\"}" "" >/dev/null
+    fi
+    attempt=$((attempt + 1))
+    sleep 3
+  done
+  policy=$(psql_ws "select policy_decision from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_SSH' and requested_at > '$run_ts' order by requested_at desc limit 1")
+  wt=$(run_driver wait-task "$ALICE_KEY" "$task_id" 150000)
+  task_status=$(parse_kv "$wt" TASK_STATUS)
+  worker_transcript_stats "$task_id"
+  ok=0
+  if [ "$mode" = "auto" ]; then
+    [ "$ar_status" = "executed" ] && [ "$saw_pending" -eq 0 ] && [ "$policy" = "allow" ] && [ "$task_status" = "completed" ] && ok=1
+  else
+    [ "$ar_status" = "executed" ] && [ "$saw_pending" -eq 1 ] && [ "$task_status" = "completed" ] && ok=1
+  fi
+  detail="task=$task_id:${task_status:-none} action=${ar_status:-none} saw_pending=$saw_pending policy=${policy:-none} worker_tools=${WT_CALLS:-?}/${WT_ERRORS:-?}[${WT_NAMES}]"
+  real_run_line "ssh_run_$mode" "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "$detail"
+  real_stat_add "ssh_$mode" "$ok" 0 0 "${WT_CALLS:-0}" "${WT_ERRORS:-0}"
+  return 0
+}
+
+real_scenarios_step() {
+  DOCKER_TASK_ID=""
+  i=1
+  while [ "$i" -le "$RUNS" ]; do real_docker_restart_run "$i"; i=$((i + 1)); done
+  i=1
+  while [ "$i" -le "$RUNS" ]; do real_api_observe_run "$i"; i=$((i + 1)); done
+  i=1
+  while [ "$i" -le "$RUNS" ]; do real_ssh_run "$i" approve; i=$((i + 1)); done
+
+  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"actionKindTag\":\"ssh.run_command\"}" "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "real-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
+  pass "real-always-allow" "workspace policy: ssh.run_command auto-approved from now on"
+  real_ssh_run 1 auto
+}
+
+# Real-mode replacement for step7_facts_inferred: a real model is free to assert any Facts (or
+# none), so assert the platform-side evidence instead — the docker Task's Worker run registered
+# its `worker_run` Source (application/task/result.ts) and a `worker_result` Activity exists.
+real_evidence_step() {
+  if [ -z "$DOCKER_TASK_ID" ]; then
+    skip "real-worker-evidence" "no successful docker_restart run to inspect"
+    return 0
+  fi
+  n=$(psql_ws "select count(*) from sources where workspace_id='$WORKSPACE_ID' and kind='worker_run' and metadata->>'taskId'='$DOCKER_TASK_ID'")
+  [ "${n:-0}" -ge 1 ] || fail "real-worker-evidence" "no worker_run Source for Task $DOCKER_TASK_ID"
+  pass "real-worker-evidence" "Task $DOCKER_TASK_ID has $n worker_run Source(s) (report_task_result landed)"
+}
+
+real_summary_step() {
+  zero=0
+  for key in docker observe ssh_approve ssh_auto; do
+    eval "n=\${REAL_N_$key:-0}; ok=\${REAL_OK_$key:-0}; tc=\${REAL_TC_$key:-0}; te=\${REAL_TE_$key:-0}; wc=\${REAL_WC_$key:-0}; we=\${REAL_WE_$key:-0}"
+    printf 'REAL scenario=%s ok=%s/%s turn_tool_calls=%s turn_tool_errors=%s worker_tool_calls=%s worker_tool_errors=%s\n' "$key" "$ok" "$n" "$tc" "$te" "$wc" "$we"
+    # A scenario that never ran (n=0) is as much a failure as one that never succeeded — the
+    # summary must never report success for zero real-model runs.
+    [ "$ok" -gt 0 ] || zero=1
+  done
+  [ "$zero" -eq 0 ] || fail "real-summary" "at least one scenario had zero successful runs (see REAL lines)"
+  pass "real-summary" "every scenario succeeded at least once under model=$REAL_MODEL"
+}
+
+# --------------------------------------------------------------------------------------------
 # Run
 # --------------------------------------------------------------------------------------------
 
@@ -930,13 +1195,22 @@ fixtures_secrets_step
 fixtures_up_step
 connections_step
 ops_runner_step
-step2_docker_restart
-step3_observe_no_worker
-step4_step5_ssh_always_allow
-step6_env_and_egress
-step7_facts_inferred
-step8_mcp_connect
-cleanup_step
+if [ "$REAL" -eq 1 ]; then
+  real_scenarios_step
+  step6_env_and_egress
+  real_evidence_step
+  step8_mcp_connect
+  cleanup_step
+  real_summary_step
+else
+  step2_docker_restart
+  step3_observe_no_worker
+  step4_step5_ssh_always_allow
+  step6_env_and_egress
+  step7_facts_inferred
+  step8_mcp_connect
+  cleanup_step
+fi
 
 if [ "$SKIP_COUNT" -gt 0 ]; then
   echo "" >&2
