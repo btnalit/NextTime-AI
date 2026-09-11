@@ -129,7 +129,19 @@ function translateToolExecutionStart(event: Record<string, unknown>): BridgeResu
 function translateToolExecutionEnd(event: Record<string, unknown>): BridgeResult {
   const toolCallId = event.toolCallId;
   if (typeof toolCallId !== 'string') return { kind: 'none' };
-  return { kind: 'event', fields: { type: 'toolCallEnded', toolCallId, result: event.result } };
+  // W7: pi's `tool_execution_end` carries `isError` alongside `result` (pi-agent-core's own event
+  // type); forwarded so the platform stream can distinguish a failed tool call. Read defensively
+  // like every other field here — absent or non-boolean degrades to "not reported".
+  const isError = typeof event.isError === 'boolean' ? event.isError : undefined;
+  return {
+    kind: 'event',
+    fields: {
+      type: 'toolCallEnded',
+      toolCallId,
+      result: event.result,
+      ...(isError !== undefined ? { isError } : {}),
+    },
+  };
 }
 
 function translateMessageEnd(event: Record<string, unknown>): BridgeResult {

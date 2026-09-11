@@ -21,6 +21,9 @@ export interface ToolCallRow {
   readonly args?: unknown;
   readonly status: 'started' | 'ended';
   readonly result?: unknown;
+  /** W7: the runtime's own verdict on the call (`toolCallEnded.isError`); `undefined` when the
+   *  runtime did not report one, which renders the same as before. */
+  readonly isError?: boolean;
 }
 
 export interface TurnState {
@@ -76,7 +79,12 @@ function applyStreamPayload(state: TurnState, payload: ChatStreamPayload): TurnS
     case 'toolCallEnded': {
       const toolCalls = state.toolCalls.map((row) =>
         row.toolCallId === payload.toolCallId
-          ? { ...row, status: 'ended' as const, result: payload.result }
+          ? {
+              ...row,
+              status: 'ended' as const,
+              result: payload.result,
+              ...(payload.isError !== undefined ? { isError: payload.isError } : {}),
+            }
           : row,
       );
       return { ...state, toolCalls };

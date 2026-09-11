@@ -48,6 +48,7 @@ function toChatStreamPayload(
         streamKind: 'toolCallEnded' as const,
         toolCallId: event.toolCallId,
         result: event.result,
+        ...(event.isError !== undefined ? { isError: event.isError } : {}),
       };
   }
 }

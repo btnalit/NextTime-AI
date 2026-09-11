@@ -56,6 +56,8 @@ export type AgentRuntimeEventFields =
       readonly type: 'toolCallEnded';
       readonly toolCallId: string;
       readonly result?: unknown;
+      /** W7: pi's `tool_execution_end.isError`, when the runtime reports it. */
+      readonly isError?: boolean;
     }
   | {
       readonly type: 'message';

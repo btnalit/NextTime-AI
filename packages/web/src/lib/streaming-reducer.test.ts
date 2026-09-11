@@ -62,6 +62,44 @@ describe('streamReducer', () => {
     ]);
   });
 
+  it('W7: toolCallEnded with isError:true marks the row isError:true', () => {
+    let state = streamReducer(initialTurnState, { kind: 'turnStarted', turnId: 't1' });
+    state = streamReducer(state, {
+      kind: 'stream',
+      turnId: 't1',
+      payload: { streamKind: 'toolCallStarted', toolCallId: 'c1', name: 'search' },
+    });
+    state = streamReducer(state, {
+      kind: 'stream',
+      turnId: 't1',
+      payload: {
+        streamKind: 'toolCallEnded',
+        toolCallId: 'c1',
+        result: { ok: false },
+        isError: true,
+      },
+    });
+    expect(state.toolCalls).toEqual([
+      { toolCallId: 'c1', name: 'search', status: 'ended', result: { ok: false }, isError: true },
+    ]);
+  });
+
+  it('W7: toolCallEnded without isError leaves the row without that field', () => {
+    let state = streamReducer(initialTurnState, { kind: 'turnStarted', turnId: 't1' });
+    state = streamReducer(state, {
+      kind: 'stream',
+      turnId: 't1',
+      payload: { streamKind: 'toolCallStarted', toolCallId: 'c1', name: 'search' },
+    });
+    state = streamReducer(state, {
+      kind: 'stream',
+      turnId: 't1',
+      payload: { streamKind: 'toolCallEnded', toolCallId: 'c1', result: { ok: true } },
+    });
+    expect(state.toolCalls).toHaveLength(1);
+    expect(state.toolCalls[0]).not.toHaveProperty('isError');
+  });
+
   it('keeps multiple concurrent tool calls independent', () => {
     let state = streamReducer(initialTurnState, { kind: 'turnStarted', turnId: 't1' });
     state = streamReducer(state, {

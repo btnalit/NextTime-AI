@@ -7,13 +7,23 @@ import { Icon } from './ui/Icon.js';
  *  summary line, arguments and result inside. */
 export function ToolCallRowView({ row }: { readonly row: ToolCallRow }) {
   const running = row.status === 'started';
+  // W7: a tool call the runtime flagged `isError` reads "failed" instead of "done" — the model saw
+  // an error result, which is the single most useful thing to know when reading a transcript.
+  const failed = row.status === 'ended' && row.isError === true;
+  const chipClass = running ? 'chip-info chip-live' : failed ? 'chip-danger' : 'chip-neutral';
+  const chipLabel = running ? 'running' : failed ? 'failed' : 'done';
   return (
-    <details className={`tool-call-row tool-call-row-${row.status}`}>
+    <details
+      className={`tool-call-row tool-call-row-${row.status}${failed ? ' tool-call-row-failed' : ''}`}
+    >
       <summary>
         <Icon name="chevron-right" size="s" className="icon-chevron" />
         <span className="tool-call-name">{row.name}</span>
-        <span className={`chip chip-s ${running ? 'chip-info chip-live' : 'chip-neutral'}`}>
-          {running ? 'running' : 'done'}
+        <span
+          className={`chip chip-s ${chipClass}`}
+          data-tool-outcome={running ? 'running' : failed ? 'failed' : 'ok'}
+        >
+          {chipLabel}
         </span>
       </summary>
       <div className="tool-call-detail">

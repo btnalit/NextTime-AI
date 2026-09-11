@@ -184,6 +184,25 @@ describe('PlatformEventSchema', () => {
     expect(() => PlatformEventSchema.parse({ type: 'TurnStarted', workspaceId: 'ws1' })).toThrow();
   });
 
+  it('W7: chat.stream toolCallEnded.isError parses a boolean and rejects a non-boolean', () => {
+    const withError = PlatformEventSchema.safeParse({
+      type: 'chat.stream',
+      chatId: 'chat1',
+      turnId: 'turn1',
+      payload: { streamKind: 'toolCallEnded', toolCallId: 'tc1', isError: false },
+    });
+    expect(withError.success).toBe(true);
+
+    expect(
+      PlatformEventSchema.safeParse({
+        type: 'chat.stream',
+        chatId: 'chat1',
+        turnId: 'turn1',
+        payload: { streamKind: 'toolCallEnded', toolCallId: 'tc1', isError: 'nope' },
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects a chat.stream payload with an unknown streamKind', () => {
     expect(() =>
       PlatformEventSchema.parse({

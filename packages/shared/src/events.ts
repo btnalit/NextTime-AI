@@ -222,6 +222,10 @@ const ChatStreamToolCallEnded = z.object({
   streamKind: z.literal('toolCallEnded'),
   toolCallId: z.string(),
   result: z.unknown().optional(),
+  // W7: forwarded from the agent runtime's `toolCallEnded.isError` (agent-host-protocol.ts) so a
+  // chat client — and the acceptance driver counting tool outcomes under a real model — can tell
+  // a failed tool call from a successful one without parsing `result`. Optional, additive.
+  isError: z.boolean().optional(),
 });
 const ChatStreamWorkerSpawned = z.object({
   streamKind: z.literal('workerSpawned'),
