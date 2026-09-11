@@ -36,6 +36,18 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s1.sh' </dev/null
 sh scripts/accept_s1.sh --keep
 ```
 
+`--lite`：跑不依赖入口容器的子集（只要 postgres/kernel/caddy 三个常驻容器，kernel
+`AGENT_RUNTIME=fake`；跳过入口容器 kill/restart、egress、env 与 cleanup 几步，这几步打印 SKIP 而
+不是 PASS；bootstrap、经 caddy 的 WorkerDefinition v2、两轮对话、isolation、第二轮对话、explain
+仍然照跑）：
+
+```
+sh scripts/accept_s1.sh --lite
+```
+
+`.github/workflows/e2e.yml` 在它的 job 末尾跑的就是这个 `--lite` 子集；主机上验收照常跑不带参数的
+完整脚本。
+
 ## 3. 期望输出
 
 逐步打印 `PASS <step> <detail>`；任何一步失败打印 `FAIL <step> <detail>` 并以非 0 退出（脚本

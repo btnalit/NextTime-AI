@@ -16,11 +16,11 @@ import { expect, test } from '@playwright/test';
  * own row unambiguously even if a previous run's (now-decided) rows are still present.
  *
  * `WEB_E2E_SEED_ACTION_REQUESTS=1` gates both scenarios below, in addition to their own API-key
- * checks — `.github/workflows/e2e.yml` never sets it: the CI stack it brings up has no seeded
- * ActionRequest rows and no second principal, so both scenarios stay skipped there. CI's own
- * lighter "queue renders, empty state is fine" smoke check lives in `e2e/governance.spec.ts`
- * instead. Set this locally once you have run the `psql` seed block(s) below (and, for the
- * isolation scenario, created a second principal).
+ * checks — `.github/workflows/e2e.yml` now sets it: the workflow creates the second (operator)
+ * principal and seeds both rows itself, running the same `psql` block as this package's README
+ * against the CI postgres container, so both scenarios run in CI. Set this locally once you have
+ * run the `psql` seed block(s) below (and, for the isolation scenario, created a second
+ * principal) — the manual local setup is unchanged.
  *
  * Requires: `WEB_E2E_BASE_URL`, `WEB_E2E_API_KEY` (workspace owner — `grant_capability` is
  * `minRole:'owner'`), `WEB_E2E_API_KEY_B` (a second principal, role `operator` — `list_pending`/

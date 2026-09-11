@@ -34,7 +34,10 @@ export default defineConfig({
   // — this suite's total runtime is small enough that trading a little wall-clock time for
   // determinism is the right call.
   workers: 1,
-  retries: 0,
+  // One retry in CI only (W7, e2e.yml's own comment): a retried-then-passed test is reported as
+  // "flaky" in the always-uploaded HTML report rather than failing a required check outright; a
+  // local run keeps 0 so a real regression is never masked while iterating.
+  retries: process.env.CI ? 1 : 0,
   // CI additionally gets an HTML report written to disk (never auto-opened — `open: 'never'`) so
   // `.github/workflows/e2e.yml` has something to upload as an artifact on failure; local runs stay
   // console-only, matching this suite's existing convention.

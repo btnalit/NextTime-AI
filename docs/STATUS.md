@@ -64,7 +64,7 @@
   的正向用例。**PR #136**：`accept_s3.sh` 已加入 `collector_conflict_positive_step`，把这条正向用例
   接了进脚本（`docs/runbooks/host-accept-s3.md` §3/§4）；本条盲区在代码层面已补，但 §2 表格 S3 那行
   的验收证据仍是主机跑通新脚本之前的旧结果，未随此 PR 更新——里程碑状态与证据在下次主机验收前不改。
-- **S2 / S3 仍只在主机验收**：CI 里只有 `accept_s1.sh --lite`（无入口容器、fake agent runtime）这一条通路；Worker 容器、门、采集器、Explorer 的链路仍靠主机上按 tag 复跑三份脚本，发版与主机验收之间的空窗依旧存在（W6 后主机已对齐 v0.4.3 前的脚本内容，v0.4.3 本身只含验收工具链与 supervisor 的 `MODELS_JSON_HOST_PATH`，已在主机从分支验证）
+- **S2 / S3 仍只在主机验收**：CI 里只有 `accept_s1.sh --lite`（无入口容器、fake agent runtime）这一条通路；Worker 容器、门、采集器、Explorer 的链路仍靠主机上按 tag 复跑三份脚本，发版与主机验收之间的空窗依旧存在（主机检出在 main（含 v0.4.3），仅 supervisor 镜像是从 #146 分支重建的，内容与合入提交相同）
 
 ## 3. 当前波次
 
