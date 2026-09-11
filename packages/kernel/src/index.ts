@@ -29,6 +29,7 @@ import {
   FakeAgentRuntime,
   registerTurnStartedConsumer,
 } from './application/host-bridge/index.js';
+import { ensureSetupToken } from './application/identity/index.js';
 import { registerLinkageConsumers } from './application/linkage/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
 import {
@@ -47,6 +48,7 @@ import { SYSTEM_ACTOR_PLACEHOLDER } from './governance/gatekeepers/index.js';
 import type { CapabilityRouteDeps } from './interfaces/http/index.js';
 import {
   type ExplorerRouteDeps,
+  registerAuthHttpRoutes,
   registerCapabilityRoutes,
   registerExplorerHttpRoutes,
 } from './interfaces/http/index.js';
@@ -152,6 +154,8 @@ export function createServer(
   registerInternalPlaneGuard(app, options.internalAuth);
 
   registerCapabilityRoutes(app, deps);
+  // S4.1: console login / first-run setup routes (interfaces/http/auth-routes.ts).
+  registerAuthHttpRoutes(app, deps);
   // S3.5 (docs/development-tasks.md §S3.5, design doc §9.5): the nine Explorer endpoints, same
   // `deps` (only `pool`/`loadHandlePublicKey` are used — `ExplorerRouteDeps` is structurally a
   // subset of `CapabilityRouteDeps`).
@@ -968,6 +972,22 @@ export function main(): void {
   process.once('SIGINT', shutdown);
 
   void (async (): Promise<void> => {
+    // S4.1 (design doc §7.11 "初始化"): with no active platform administrator, mint the one-time
+    // setup token (hash in `platform_setup`, plaintext in `PLATFORM_SETUP_TOKEN_FILE`). Never
+    // fatal — a not-yet-migrated database or an unwritable token directory must not take the
+    // kernel down; the error line names what to fix and the API-key channel keeps working.
+    try {
+      await ensureSetupToken(pool, {
+        tokenFile: process.env.PLATFORM_SETUP_TOKEN_FILE,
+        log: (line) => app.log.warn(line),
+      });
+    } catch (err) {
+      app.log.error(
+        { err },
+        'platform setup token could not be prepared — password login setup is unavailable until this is fixed (is the database migrated, is PLATFORM_SETUP_TOKEN_FILE writable?)',
+      );
+    }
+
     // S2.7: `invoke_worker` needs a Handle-signing keypair regardless of `AGENT_RUNTIME` (unlike
     // `AgentHostRuntime`'s own need for one, which is `kind === 'agent-host'`-only) — the target
     // deployment mounts the `handle_key` secret into the kernel container unconditionally (the

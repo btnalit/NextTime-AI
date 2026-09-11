@@ -49,11 +49,18 @@ services:
         KERNEL_LLM_URL: http://llm-proxy:8082,
         SUPERVISOR_URL: http://worker-supervisor:8081,
         NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
+        PLATFORM_SETUP_TOKEN_FILE: /run/setup/token,
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；
     # 这里跟随同一决定，不再补上。
-    volumes: ["${NEXTTIME_DATA:?}/config:/data/config:ro"]
+    # S4.1: one-time platform setup token (design §7.11); the kernel writes it here 0600 when no
+    # platform admin exists; host-env-init.sh creates the directory owned by uid 10001.
+    volumes:
+      [
+        "${NEXTTIME_DATA:?}/config:/data/config:ro",
+        "${NEXTTIME_DATA:?}/secrets/setup:/run/setup",
+      ]
     # healthcheck (lane-7 P2 fix): GET /api/health via node's own http client — no curl/wget in
     # the node:24-bookworm-slim runtime image (packages/kernel/Dockerfile). Backs caddy's and
     # agent-host's own `depends_on: kernel: condition: service_healthy` below.

@@ -144,6 +144,29 @@ jobs:
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color
           exit 1
 
+      # S4.1 (design doc §7.11 "初始化"): with no platform administrator yet, the kernel wrote a
+      # one-time setup token to `${NEXTTIME_DATA}/secrets/setup/token` (0600, uid 10001 — hence
+      # `sudo cat`) shortly after it started. login.spec.ts spends it on the "initialize platform"
+      # page to create the first administrator, so it is read here BEFORE anything below could
+      # create an admin. The write is asynchronous relative to /api/health, so poll briefly.
+      - name: Read the one-time platform setup token
+        run: |
+          set -euo pipefail
+          token_file="$NEXTTIME_DATA/secrets/setup/token"
+          for _ in $(seq 1 30); do
+            if sudo test -s "$token_file"; then break; fi
+            sleep 1
+          done
+          if ! sudo test -s "$token_file"; then
+            echo "setup token was not written to $token_file" >&2
+            sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml logs --no-color kernel
+            exit 1
+          fi
+          setup_token=$(sudo cat "$token_file" | tr -d '\n')
+          echo "::add-mask::$setup_token"
+          echo "WEB_E2E_SETUP_TOKEN=$setup_token" >>"$GITHUB_ENV"
+          echo "read setup token from $token_file"
+
       # Same bootstrap.js output shape scripts/accept_s1.sh's own bootstrap_step already parses
       # (`workspace created: <id>` / `API key` on the following line) — see that script for the
       # precedent. `set +e`/`set -e` around the capture (rather than letting `set -e` abort mid-
@@ -164,8 +187,9 @@ jobs:
           fi
           workspace_id=$(printf '%s\n' "$out" | sed -n 's/^workspace created: //p')
           owner_id=$(printf '%s\n' "$out" | sed -n 's/^owner principal: *//p')
+          owner_login=$(printf '%s\n' "$out" | sed -n 's/^owner login: *//p')
           api_key=$(printf '%s\n' "$out" | awk '/^API key/{getline; print; exit}')
-          if [ -z "$workspace_id" ] || [ -z "$owner_id" ] || [ -z "$api_key" ]; then
+          if [ -z "$workspace_id" ] || [ -z "$owner_id" ] || [ -z "$owner_login" ] || [ -z "$api_key" ]; then
             echo "could not parse create-workspace output:" >&2
             printf '%s\n' "$out" >&2
             exit 1
@@ -175,7 +199,8 @@ jobs:
           echo "WEB_E2E_BASE_URL=https://127.0.0.1:8443" >>"$GITHUB_ENV"
           echo "E2E_WORKSPACE_ID=$workspace_id" >>"$GITHUB_ENV"
           echo "E2E_OWNER_PRINCIPAL_ID=$owner_id" >>"$GITHUB_ENV"
-          echo "bootstrapped workspace $workspace_id (owner $owner_id)"
+          echo "WEB_E2E_OWNER_LOGIN=$owner_login" >>"$GITHUB_ENV"
+          echo "bootstrapped workspace $workspace_id (owner $owner_id, login $owner_login)"
 
       # W7: approvals.spec.ts's holder-isolation scenario needs a second principal of role
       # `operator` (`list_pending`/`approve` are `minRole:'operator'`) — the same `add-principal`
@@ -195,8 +220,9 @@ jobs:
             exit 1
           fi
           principal_id_b=$(printf '%s\n' "$out" | sed -n 's/^principal created: //p')
+          principal_login_b=$(printf '%s\n' "$out" | sed -n 's/^principal login: *//p')
           api_key_b=$(printf '%s\n' "$out" | awk '/^API key/{getline; print; exit}')
-          if [ -z "$principal_id_b" ] || [ -z "$api_key_b" ]; then
+          if [ -z "$principal_id_b" ] || [ -z "$principal_login_b" ] || [ -z "$api_key_b" ]; then
             echo "could not parse add-principal output:" >&2
             printf '%s\n' "$out" >&2
             exit 1
@@ -204,7 +230,28 @@ jobs:
           echo "::add-mask::$api_key_b"
           echo "WEB_E2E_API_KEY_B=$api_key_b" >>"$GITHUB_ENV"
           echo "WEB_E2E_PRINCIPAL_ID_B=$principal_id_b" >>"$GITHUB_ENV"
-          echo "added operator principal $principal_id_b"
+          echo "E2E_PRINCIPAL_LOGIN_B=$principal_login_b" >>"$GITHUB_ENV"
+          echo "added operator principal $principal_id_b (login $principal_login_b)"
+
+      # S4.1: give the two CLI-created users a console password so login.spec.ts and
+      # explorer.spec.ts can sign in the way a person does (login + password → console session
+      # cookie). The owner gets a permanent password; bob gets a *temporary* one
+      # (`must_change_password`), which is what login.spec.ts's forced-change scenario exercises.
+      # `bootstrap.js set-password` reads the password from stdin — it never appears in argv.
+      - name: Set console passwords (owner permanent, operator temporary)
+        run: |
+          set -euo pipefail
+          owner_password="e2e-owner-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          temp_password="e2e-temp-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::add-mask::$owner_password"
+          echo "::add-mask::$temp_password"
+          printf '%s\n' "$owner_password" | sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            run --rm --no-deps -T kernel node dist/cli/bootstrap.js set-password --login "$WEB_E2E_OWNER_LOGIN"
+          printf '%s\n' "$temp_password" | sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            run --rm --no-deps -T kernel node dist/cli/bootstrap.js set-password --login "$E2E_PRINCIPAL_LOGIN_B" --temporary
+          echo "WEB_E2E_OWNER_PASSWORD=$owner_password" >>"$GITHUB_ENV"
+          echo "WEB_E2E_TEMP_LOGIN=$E2E_PRINCIPAL_LOGIN_B" >>"$GITHUB_ENV"
+          echo "WEB_E2E_TEMP_PASSWORD=$temp_password" >>"$GITHUB_ENV"
 
       # W7: seed the two pending ActionRequests approvals.spec.ts expects (one per
       # `resource_scope` marker that file hardcodes) — the exact psql block packages/web/README.md
@@ -258,10 +305,12 @@ jobs:
       # --- the actual e2e suite ----------------------------------------------------------------
 
       # Runs every file under packages/web/e2e/ for real: chat.spec.ts and governance.spec.ts
-      # (WEB_E2E_BASE_URL/WEB_E2E_API_KEY) and, since W7, approvals.spec.ts's two seeded scenarios
-      # too (WEB_E2E_API_KEY_B/WEB_E2E_PRINCIPAL_ID_B/WEB_E2E_SEED_ACTION_REQUESTS from the two
-      # steps above). playwright.config.ts gives CI one retry per test so a runner hiccup shows up
-      # as "flaky" in the uploaded report instead of failing the whole gate.
+      # (WEB_E2E_BASE_URL/WEB_E2E_API_KEY), since W7 approvals.spec.ts's two seeded scenarios
+      # (WEB_E2E_API_KEY_B/WEB_E2E_PRINCIPAL_ID_B/WEB_E2E_SEED_ACTION_REQUESTS), and since S4.1
+      # login.spec.ts (WEB_E2E_SETUP_TOKEN / WEB_E2E_OWNER_LOGIN+PASSWORD / WEB_E2E_TEMP_LOGIN+
+      # PASSWORD: initialize platform → password login → forced change → logout) plus
+      # explorer.spec.ts's password login. playwright.config.ts gives CI one retry per test so a
+      # runner hiccup shows up as "flaky" in the uploaded report instead of failing the whole gate.
       - name: Run web e2e
         run: pnpm --filter @nexttime/web e2e
 

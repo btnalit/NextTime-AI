@@ -19,6 +19,7 @@ import {
   ConflictNotFoundError,
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
+  CsrfHeaderRequiredError,
   DecisionNotFoundError,
   type DispatchDeps,
   ExplainNodeNotFoundError,
@@ -33,6 +34,7 @@ import {
   ObservationIdentityError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  PasswordChangeRequiredError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
   type ResolveCallerDeps,
@@ -40,9 +42,16 @@ import {
   SupersedeIdentityMismatchError,
   UnauthorizedError,
   WorkerResultValidationError,
+  WorkspaceRequiredError,
   dispatchCapability,
-  resolveCaller,
+  resolveRequestCaller,
 } from '../../application/gateway/index.js';
+import {
+  CSRF_HEADER,
+  WORKSPACE_COOKIE,
+  WORKSPACE_HEADER,
+  parseCookieHeader,
+} from '../../application/identity/index.js';
 import {
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
@@ -116,6 +125,19 @@ interface ErrorMapping {
 export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof UnauthorizedError) {
     return { status: 401, code: 'unauthorized', message: 'unauthorized' };
+  }
+  // S4.1 console-session channel (resolve-caller.ts): three `ForbiddenError` subclasses with
+  // their own codes so the web client can act on them (pick a workspace / add the CSRF header /
+  // go to the change-password screen) instead of string-matching a generic 403. Checked before
+  // the generic `ForbiddenError` branch below.
+  if (err instanceof WorkspaceRequiredError) {
+    return { status: 403, code: 'workspace_required', message: err.message };
+  }
+  if (err instanceof CsrfHeaderRequiredError) {
+    return { status: 403, code: 'csrf_header_required', message: err.message };
+  }
+  if (err instanceof PasswordChangeRequiredError) {
+    return { status: 403, code: 'password_change_required', message: err.message };
   }
   // application/chat domain errors (S1.4) — the HTTP transport's equivalents of interfaces/ws/
   // rpc.ts's `-32010` / `-32004` codes: §9.4 "进行中时 send_chat_message 被拒" is a 409, a Chat that
@@ -380,6 +402,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   return { status: 500, code: 'internal_error', message: 'internal error' };
 }
 
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 /** `request.params` shape for `POST /api/cap/:name` — Fastify validates the route pattern itself. */
 interface CapabilityRouteParams {
   readonly name: string;
@@ -401,19 +427,33 @@ export async function handleCapabilityRoute(
   let principalId: string | undefined;
   let onBehalfOf: string | undefined;
   let sessionId: string | undefined;
+  let userId: string | undefined;
   let outcome: 'success' | 'error' = 'error';
 
   try {
-    const caller = await resolveCaller(request.headers.authorization, {
-      pool: deps.pool,
-      loadHandlePublicKey: deps.loadHandlePublicKey,
-    });
+    // S4.1: `Authorization` (API key / Handle) first, else the console session cookie; the
+    // cookie path additionally needs the workspace the caller wants to act in (`X-Workspace-Id`,
+    // or the `nexttime_workspace` selector cookie the console sets — see identity/console-
+    // session.ts) and, since every `/api/cap/*` call is a POST, the CSRF header.
+    const caller = await resolveRequestCaller(
+      {
+        authorization: request.headers.authorization,
+        cookie: request.headers.cookie,
+        workspaceId:
+          firstHeaderValue(request.headers[WORKSPACE_HEADER]) ??
+          parseCookieHeader(request.headers.cookie).get(WORKSPACE_COOKIE),
+        requestedWith: firstHeaderValue(request.headers[CSRF_HEADER]),
+        requireCsrfHeader: true,
+      },
+      { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
+    );
 
     if (caller.channel === 'human') {
       workspaceId = caller.principal.workspaceId;
       principalId = caller.principal.id;
       onBehalfOf = caller.principal.id;
       sessionId = caller.session.id;
+      userId = caller.user?.id;
     } else {
       workspaceId = caller.claims.ws;
       principalId = caller.claims.obo;
@@ -456,6 +496,7 @@ export async function handleCapabilityRoute(
       principalId,
       onBehalfOf,
       sessionId,
+      ...(userId !== undefined ? { userId } : {}),
       outcome,
       durationMs: reply.elapsedTime,
     });

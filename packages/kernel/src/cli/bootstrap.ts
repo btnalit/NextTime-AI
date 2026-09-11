@@ -10,6 +10,13 @@ import type { PoolLike } from '../adapters/db/pool.js';
 import { HttpGatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { generateApiKey, hashApiKey } from '../application/gateway/index.js';
+import {
+  createPlatformAdmin,
+  derivedLogin,
+  ensureUserForHumanPrincipal,
+  findUserByLogin,
+  setUserPassword,
+} from '../application/identity/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../application/worker/index.js';
 import { issueHandle, loadHandleKeyPair } from '../governance/capability/index.js';
 import {
@@ -112,6 +119,9 @@ export interface CreateWorkspaceResult {
   readonly workspaceId: string;
   readonly ownerPrincipalId: string;
   readonly apiKey: string;
+  /** S4.1: the derived login of the passwordless user `ensureUserForHumanPrincipal` linked to the
+   *  owner principal below — an admin sets a real password later (`set-password`). */
+  readonly ownerLogin: string;
 }
 
 /** Creates a Workspace and its owner Principal in one transaction, then seeds the platform
@@ -139,6 +149,15 @@ export async function createWorkspace(
          values ($1, $2, 'human', 'owner', $3, $4)`,
         [workspaceId, ownerPrincipalId, ownerDisplayName, apiKeyHash],
       );
+
+      // S4.1: every human Principal is a user's membership (principals.user_id, migration 0019);
+      // the CLI-created owner gets a passwordless user with the derived login — an admin sets a
+      // password later.
+      await ensureUserForHumanPrincipal(client, {
+        workspaceId,
+        id: ownerPrincipalId,
+        displayName: ownerDisplayName,
+      });
 
       // S2.6: platform meta-ontology (§5.1.2 WorkerDefinition/Gatekeeper/Operation/Capability/
       // Skill/Procedure ObjectTypes + their LinkTypes).
@@ -168,12 +187,20 @@ export async function createWorkspace(
     { skipRoleSwitch: true },
   );
 
-  return { workspaceId, ownerPrincipalId, apiKey };
+  return {
+    workspaceId,
+    ownerPrincipalId,
+    apiKey,
+    ownerLogin: derivedLogin(ownerDisplayName, ownerPrincipalId),
+  };
 }
 
 export interface AddPrincipalResult {
   readonly principalId: string;
   readonly apiKey: string;
+  /** S4.1: the derived login of the passwordless user `ensureUserForHumanPrincipal` linked to
+   *  this principal — same reasoning as `CreateWorkspaceResult.ownerLogin` above. */
+  readonly login: string;
 }
 
 /**
@@ -204,11 +231,16 @@ export async function addPrincipal(
          values ($1, $2, 'human', $3, $4, $5)`,
         [workspaceId, principalId, role, displayName, apiKeyHash],
       );
+
+      // S4.1: every human Principal is a user's membership (principals.user_id, migration 0019);
+      // the CLI-created owner gets a passwordless user with the derived login — an admin sets a
+      // password later.
+      await ensureUserForHumanPrincipal(client, { workspaceId, id: principalId, displayName });
     },
     { skipRoleSwitch: true },
   );
 
-  return { principalId, apiKey };
+  return { principalId, apiKey, login: derivedLogin(displayName, principalId) };
 }
 
 // -------------------------------------------------------------------------------------------
@@ -976,6 +1008,7 @@ async function runCreateWorkspace(argv: readonly string[]): Promise<void> {
     const result = await createWorkspace(pool, name, owner, { entryModel: flags['entry-model'] });
     console.log(`workspace created: ${result.workspaceId}`);
     console.log(`owner principal:   ${result.ownerPrincipalId}`);
+    console.log(`owner login:       ${result.ownerLogin}`);
     console.log('');
     console.log('API key (shown once — store it securely, only its hash is kept):');
     console.log(result.apiKey);
@@ -1005,6 +1038,7 @@ async function runAddPrincipal(argv: readonly string[]): Promise<void> {
   try {
     const result = await addPrincipal(pool, workspaceId, name, roleResult.data);
     console.log(`principal created: ${result.principalId}`);
+    console.log(`principal login:   ${result.login}`);
     console.log('');
     console.log('API key (shown once — store it securely, only its hash is kept):');
     console.log(result.apiKey);
@@ -1132,6 +1166,100 @@ async function runIssueServiceHandle(argv: readonly string[]): Promise<void> {
   }
 }
 
+// -------------------------------------------------------------------------------------------
+// create-platform-admin / set-password (S4.1): operator-run fallbacks for the platform users
+// directory (docs/development-tasks.md S4.1, design doc §7.11) — reachable only by whoever can
+// run a command inside the kernel container, same trust level as every other subcommand in this
+// file. Neither ever takes a password on the command line (shell history, `ps`, process-list
+// snapshots): both read the whole of stdin instead, trimmed of a single trailing newline.
+// -------------------------------------------------------------------------------------------
+
+/** Reads all of stdin and returns it decoded as UTF-8, with a single trailing `\n` (or `\r\n`)
+ *  stripped — the password itself is never echoed, logged, or included in any error message. */
+async function readStdinPassword(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks)
+    .toString('utf8')
+    .replace(/\r?\n$/, '');
+}
+
+const CREATE_PLATFORM_ADMIN_USAGE =
+  'usage: bootstrap create-platform-admin --login <login> [--display-name <name>] ' +
+  '[--temporary] (password is read from stdin)';
+
+/** `create-platform-admin --login <login> [--display-name <name>] [--temporary]`: the CLI
+ *  fallback for minting the first (or an additional) platform administrator without going
+ *  through `POST /api/platform/setup` — see `application/identity/setup.ts`'s own doc comment on
+ *  `createPlatformAdmin`. `--temporary` sets `must_change_password`, same shape as an admin
+ *  setting someone else's password via the console. Never prints the password. */
+async function runCreatePlatformAdmin(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const login = flags.login;
+  const displayName = flags['display-name'];
+  const temporary = argv.includes('--temporary');
+  if (!login) {
+    throw new BootstrapUsageError(CREATE_PLATFORM_ADMIN_USAGE);
+  }
+
+  const password = await readStdinPassword();
+  if (password.length === 0) {
+    throw new BootstrapUsageError(CREATE_PLATFORM_ADMIN_USAGE);
+  }
+
+  const pool = createPool();
+  try {
+    const user = await createPlatformAdmin(pool, {
+      login,
+      displayName: displayName ?? login,
+      password,
+      mustChangePassword: temporary,
+    });
+    console.log(`platform admin created: ${user.id}`);
+    console.log(`login: ${login}`);
+  } finally {
+    await pool.end();
+  }
+}
+
+const SET_PASSWORD_USAGE =
+  'usage: bootstrap set-password --login <login> [--temporary] (password is read from stdin)';
+
+/** `set-password --login <login> [--temporary]`: gives an existing user (e.g. a backfilled or
+ *  CLI-created passwordless one — `ensureUserForHumanPrincipal`'s own doc comment) a first, or
+ *  replacement, password. `--temporary` sets `must_change_password`. Refuses (exit 1) if no user
+ *  has that login. Never prints the password. */
+async function runSetPassword(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const login = flags.login;
+  const temporary = argv.includes('--temporary');
+  if (!login) {
+    throw new BootstrapUsageError(SET_PASSWORD_USAGE);
+  }
+
+  const password = await readStdinPassword();
+  if (password.length === 0) {
+    throw new BootstrapUsageError(SET_PASSWORD_USAGE);
+  }
+
+  const pool = createPool();
+  try {
+    const user = await findUserByLogin(pool, login);
+    if (!user) {
+      throw new Error(`no such user: ${login}`);
+    }
+    await setUserPassword(pool, user.id, password, { mustChangePassword: temporary });
+    console.log(`password set for: ${login}`);
+    if (temporary) {
+      console.log('must_change_password: true');
+    }
+  } finally {
+    await pool.end();
+  }
+}
+
 /**
  * `delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]`.
  * Always reads and prints the workspace's info first (name/created_at/principal count/task
@@ -1248,6 +1376,14 @@ async function run(): Promise<void> {
     await runIssueServiceHandle(rest);
     return;
   }
+  if (command === 'create-platform-admin') {
+    await runCreatePlatformAdmin(rest);
+    return;
+  }
+  if (command === 'set-password') {
+    await runSetPassword(rest);
+    return;
+  }
   throw new BootstrapUsageError(
     'usage: bootstrap create-workspace --name <ws> --owner <display-name>\n' +
       '   or: bootstrap add-principal --workspace <id> --name <display-name> [--role <role>]\n' +
@@ -1259,7 +1395,10 @@ async function run(): Promise<void> {
       '   or: bootstrap seed-domain-pack --workspace <id> --principal <id> --pack-name <name> ' +
       '[--file-name <file>] [--dir <dir>]\n' +
       '   or: bootstrap issue-service-handle --workspace <id> --name <name> ' +
-      '--scope <cap1,cap2,...> [--ttl-days <n>]',
+      '--scope <cap1,cap2,...> [--ttl-days <n>]\n' +
+      '   or: bootstrap create-platform-admin --login <login> [--display-name <name>] ' +
+      '[--temporary] (password is read from stdin)\n' +
+      '   or: bootstrap set-password --login <login> [--temporary] (password is read from stdin)',
   );
 }
 
