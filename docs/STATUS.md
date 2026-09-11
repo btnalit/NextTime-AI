@@ -108,7 +108,7 @@
 | 项 | 状态 |
 |---|---|
 | S4.1 用户目录与登录 | 完成（PR #164，2026-09-11；e2e `login.spec.ts` 进 CI；迁移 0019 待主机 `make migrate`）。其"一次性令牌 + 初始化页"首登路径被否决，由 P-A1 的预置 `admin` 取代；身份模型、登录、cookie 会话、API key 路径沿用 |
-| P-A1 身份、用户与管理面骨架 | 实现完成，PR 待合入（分支 `feat/p-a1`，2026-09-11）：预置 `admin` + 默认工作区、`scope:'platform'` 通道与 `withPlatform` 事务、15 个平台能力 + `add_member`、迁移 0020 / 0021（`users` RLS、`platform_settings`）、侧栏三组 + 概览 / 用户 / 平台设置 / 平台审计页、e2e 改为 admin 首登；实现说明见 `development-tasks.md` P-A1。集成测试只在 CI 的 Postgres 上跑 |
+| P-A1 身份、用户与管理面骨架 | 完成（PR #168，2026-09-11；CI guards / quality / test（含 Postgres 集成套件）/ web-e2e 全绿，e2e 已在真实栈上跑通 admin 首登 → 改密 → 概览 → 用户页）：预置 `admin` + 默认工作区、`scope:'platform'` 通道与 `withPlatform` 事务、15 个平台能力 + `add_member`、迁移 0020 / 0021（`users` RLS、`platform_settings`）、侧栏三组 + 概览 / 用户 / 平台设置 / 平台审计页、e2e 改为 admin 首登；实现说明见 `development-tasks.md` P-A1。主机未应用 |
 | P-A2 使用面收口 | 待做（含遗留 33） |
 | P-B 集成与模块 / P-C 运行层与运行状态 / P-D 模型与供应商 | 待做 |
 

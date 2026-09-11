@@ -1426,7 +1426,7 @@
 - 不做：OIDC（之后）；每用户一个 RLS 工作区（已否决，见 §11）；工作区新建 / 禁用与 owner 委托
   （P-A2）；按对话分 pi 会话（P-A2）。
 
-- 实现说明（2026-09-11，PR #TBD）：
+- 实现说明（2026-09-11，PR #168）：
   - **平台通道是第三个 caller 通道**，不是 human 通道上的一个标志：`ResolvedCaller` 增加
     `{channel:'platform', user}`（`application/gateway/caller.ts`），`resolvePlatformCaller` 只认控制台
     cookie + CSRF 头 + 非临时密码 + `platform_role='admin'`，带 Bearer 的请求先照常解析再 403（不泄露
