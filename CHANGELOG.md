@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/btnalit/NextTime-AI/compare/v0.6.0...v0.7.0) (2026-09-11)
+
+
+### Features
+
+* **platform:** P-A1 — pre-created admin, platform plane (users, settings, overview, audit), use/manage/maintain console ([#168](https://github.com/btnalit/NextTime-AI/issues/168)) ([84f6e9c](https://github.com/btnalit/NextTime-AI/commit/84f6e9c9580b0c8a3661893d6ba70c81c82f7075))
+
 ## [0.6.0](https://github.com/btnalit/NextTime-AI/compare/v0.5.1...v0.6.0) (2026-09-11)
 
 
