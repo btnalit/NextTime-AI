@@ -42,6 +42,15 @@
 # check=<name> result=<ok|fail|skip> ...` line per check — never an env var's *value*, only its
 # name, even on failure (I9). The public proxied-reachability probe is skippable
 # (`NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1`, for offline test runs) but defaults on.
+#
+# Which checks are fatal (W8, STATUS leftover 29): the two *invariant* checks — no provider key in
+# the environment (I9) and no direct route out (I10) — still refuse to start pi. The proxied
+# public-reachability probe is a *liveness* check, not an invariant: a slow or flaky WAN made it
+# miss its 5 s budget twice on 2026-09-11, each time killing a fresh entry container 5 s after
+# spawn, so the user's first Turn ended `interrupted` with zero tool calls and nothing retried.
+# Isolation is already proven by the direct-route check; a proxy that is merely slow right now is
+# something the agent finds out on its first fetch. So that probe now reports `result=warn` and
+# continues. `no_proxy_configured` stays fatal: that is a misconfigured container, not weather.
 
 set -eu
 
@@ -107,11 +116,11 @@ if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; th
 			echo "nexttime-selfcheck check=egress_via_proxy result=fail reason=no_proxy_configured"
 			exit 1
 		fi
+		# Non-fatal (see the header): a transient proxied failure must not take the container down.
 		if curl --max-time 5 -s -o /dev/null https://example.com; then
 			echo "nexttime-selfcheck check=egress_via_proxy result=ok"
 		else
-			echo "nexttime-selfcheck check=egress_via_proxy result=fail reason=proxied_request_failed"
-			exit 1
+			echo "nexttime-selfcheck check=egress_via_proxy result=warn reason=proxied_request_failed"
 		fi
 	fi
 fi

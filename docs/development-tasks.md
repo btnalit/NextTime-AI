@@ -737,6 +737,14 @@
     是这个镜像跑出来的**任何**容器都该满足的不变量，不是 Task 专属：入口容器共享同一套凭证/出网隔离
     保证，而且比一次性 Worker 活得久得多（常驻，动辄几小时到几天）。条件放宽为 `worker` 或
     `entry`；`interactive` 模式仍不检查（本地开发/测试路径，不在完整部署拓扑内）。
+  - **W8 修订（2026-09-11，PR #160，STATUS 遗留 29）**：三条自检里只有两条是不变量（I9 无 `*_API_KEY`、
+    I10 无直连），第三条"经代理公网通"是活性探测，却同样 `exit 1`。2026-09-11 主机上两次首轮 Turn
+    `interrupted`、0 次工具调用（一次真实模型 S3、一次 fake 模式 S1；后者容器日志实证 `result=fail` + exit 1，前者容器已被重建、以 egress-proxy 同型 CONNECT 记录推断）都是它：`curl --max-time 5
+    https://example.com` 经代理在弱网下超时（egress-proxy 记到 CONNECT `bytesDown:0`），入口容器
+    spawn 后 5 秒退出（exit 1），agent-host 报 stdio closed → `interrupted`，30 秒后内核的 accept
+    超时又把同一 Turn 记一次 `failed`。此前记成"冷启动 / Handle 就绪竞态"是误判。修法：该探测改为
+    `result=warn` 不退出（`no_proxy_configured` 仍致命，那是配置错误）；`AgentHostRuntime` 在
+    `turnEnded` 先于 `turnAccepted` 到达时结清 accept 等待，不再补第二个 `failed`。
   - **W5.5 实现说明（遗留 16，PR #137）**：`postWorkerResult`（`application/task/result.ts`）现在
     先注册一个 `worker_session` Source 并记一条 Observation 到 `worker_result` Activity 上，再断言
     `factsToAssert`，每条 Fact 的 `observationId` 都指向这条 Observation——`assertFact` 的
