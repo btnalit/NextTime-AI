@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/btnalit/NextTime-AI/compare/v0.5.1...v0.6.0) (2026-09-11)
+
+
+### Features
+
+* platform users directory and password login (S4.1) ([#164](https://github.com/btnalit/NextTime-AI/issues/164)) ([d3e9768](https://github.com/btnalit/NextTime-AI/commit/d3e9768ba664f02e9b9c580552c089bda7fbafe8))
+
 ## [0.5.1](https://github.com/btnalit/NextTime-AI/compare/v0.5.0...v0.5.1) (2026-09-11)
 
 
