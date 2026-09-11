@@ -1764,7 +1764,18 @@ const membersCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ role: RoleSchema, displayName: z.string().min(1) }).strict(),
     resultSchema: wire.CreatePrincipalResultWireSchema,
     description:
-      'Create a kind=human Principal and its API key; the plaintext key is returned once and never stored or readable again.',
+      'Create a kind=service Principal (an automation credential — scripts, acceptance harnesses) and its API key; the plaintext key is returned once and never stored or readable again. People join a workspace through add_member / add_membership (P-A1), never through this.',
+  },
+  {
+    name: 'add_member',
+    group: 'members',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ login: z.string().min(1), role: RoleSchema }).strict(),
+    resultSchema: wire.PrincipalWireSchema,
+    description:
+      'Add an existing platform user to this workspace by login with a role (P-A1) — creates the membership Principal (no API key). 404 user_not_found for an unknown or disabled login, 409 already_member if they already belong here.',
   },
   {
     name: 'set_principal_role',
@@ -2207,6 +2218,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   // second, independent enforcement of the same rule against governance/capability/handles.ts).
   'list_principals',
   'create_principal',
+  'add_member',
   'set_principal_role',
   'rotate_api_key',
   'disable_principal',

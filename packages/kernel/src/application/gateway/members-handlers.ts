@@ -6,7 +6,6 @@ import {
 } from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
 import { currentPrincipalId } from '../chat/index.js';
-import { ensureUserForHumanPrincipal } from '../identity/index.js';
 import { generateApiKey, hashApiKey } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -209,30 +208,23 @@ export const createPrincipalHandler: CapabilityHandler = async (client, workspac
   const apiKey = generateApiKey();
   const apiKeyHash = hashApiKey(apiKey);
 
+  // P-A1 (docs/platform-admin-design.md §5): people are memberships of platform users
+  // (`add_member` in the workspace, `add_membership` on the platform) — `create_principal` now
+  // mints a `service` Principal, the automation credential (scripts, acceptance harnesses,
+  // external runtimes). Migration 0021 put `users` behind RLS with no INSERT policy for a
+  // workspace transaction, so the pre-P-A1 "human Principal + passwordless user" path is gone.
   const inserted = await client.query<{ id: string; created_at: Date }>(
     `insert into principals (workspace_id, kind, role, display_name, api_key_hash)
-     values ($1, 'human', $2, $3, $4)
+     values ($1, 'service', $2, $3, $4)
      returning id, created_at`,
     [workspaceId, role, displayName, apiKeyHash],
   );
   const row = inserted.rows[0];
   if (!row) throw new Error('create_principal: INSERT ... RETURNING produced no row');
 
-  // S4.1: every human Principal is a user's membership (principals.user_id, migration 0019) —
-  // `create_principal` always writes kind='human' (see this file's module doc), so this always
-  // applies. Runs as `nexttime_app` (`SET LOCAL ROLE`, the ordinary RLS-scoped path this handler
-  // already uses): `ensureUserForHumanPrincipal` inserts exactly the two `users` columns 0019
-  // grants that role (`login`, `display_name`) and reads back only `id` — never the admin-path
-  // `insertUser`. The user has no password; an admin sets one when that person should log in.
-  await ensureUserForHumanPrincipal(client, {
-    workspaceId,
-    id: row.id,
-    displayName,
-  });
-
   const principal: PrincipalDetailRow = {
     id: row.id,
-    kind: 'human',
+    kind: 'service',
     role,
     displayName,
     createdAt: row.created_at,
@@ -249,6 +241,63 @@ export const createPrincipalHandler: CapabilityHandler = async (client, workspac
 };
 
 const SetPrincipalRoleParams = (params: unknown) => params as { principalId: string; role: Role };
+
+/**
+ * `add_member` (P-A1, docs/platform-admin-design.md §5 "工作区配置里的成员页语义变为从平台用户中添加"):
+ * an owner adds an existing platform user to this workspace by login. The lookup goes through
+ * `lookup_user_by_login` (migration 0021, `security definer`) because a workspace transaction
+ * may otherwise only see users who are *already* members (`users_workspace_members` policy);
+ * the function returns id / display name / status and nothing else. The membership Principal
+ * carries no API key — it is a person, not an automation credential.
+ */
+export const addMemberHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { login, role } = params as { login: string; role: Role };
+  const found = await client.query<{ id: string; display_name: string; status: string }>(
+    'select id, display_name, status from lookup_user_by_login($1)',
+    [login.trim().toLowerCase()],
+  );
+  const user = found.rows[0];
+  if (!user) throw new MemberUserNotFoundError(login);
+  if (user.status !== 'active') throw new MemberUserNotFoundError(login);
+  const existing = await client.query(
+    `select 1 from principals where workspace_id = $1 and user_id = $2 and kind = 'human'`,
+    [workspaceId, user.id],
+  );
+  if ((existing.rowCount ?? 0) > 0) throw new AlreadyMemberError(login);
+  const inserted = await client.query<{ id: string; created_at: Date }>(
+    `insert into principals (workspace_id, kind, role, display_name, user_id)
+     values ($1, 'human', $2, $3, $4)
+     returning id, created_at`,
+    [workspaceId, role, user.display_name, user.id],
+  );
+  const row = inserted.rows[0];
+  if (!row) throw new Error('add_member: INSERT ... RETURNING produced no row');
+  const principal: PrincipalDetailRow = {
+    id: row.id,
+    kind: 'human',
+    role,
+    displayName: user.display_name,
+    createdAt: row.created_at,
+    workerDefinitionId: null,
+    hasApiKey: false,
+    disabledAt: null,
+  };
+  return { result: toWirePrincipal(principal), resourceType: 'principal', resourceId: row.id };
+};
+
+export class MemberUserNotFoundError extends Error {
+  constructor(login: string) {
+    super(`no active platform user with login "${login}"`);
+    this.name = 'MemberUserNotFoundError';
+  }
+}
+
+export class AlreadyMemberError extends Error {
+  constructor(login: string) {
+    super(`"${login}" is already a member of this workspace`);
+    this.name = 'AlreadyMemberError';
+  }
+}
 
 export const setPrincipalRoleHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { principalId, role } = SetPrincipalRoleParams(params);

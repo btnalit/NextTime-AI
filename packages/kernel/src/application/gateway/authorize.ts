@@ -71,6 +71,23 @@ export { roleSatisfiesMinRole };
  * whole contract here, and the scope is what became role-aware.
  */
 export function authorizeCapabilityCall(caller: ResolvedCaller, capability: Capability): void {
+  // P-A1 (docs/platform-admin-design.md §7): the platform plane is its own channel. A
+  // `scope:'platform'` capability is reachable only by a platform caller (a console session whose
+  // user is `platform_role = 'admin'`, resolved as such by resolve-caller.ts), and a platform
+  // caller can reach nothing else — it has no workspace to act in. Principals and Handles get
+  // 403 here regardless of role or scope.
+  if (capability.scope === 'platform') {
+    if (caller.channel !== 'platform') {
+      throw new ForbiddenError(`capability "${capability.name}" requires a platform administrator`);
+    }
+    return;
+  }
+  if (caller.channel === 'platform') {
+    throw new ForbiddenError(
+      `capability "${capability.name}" is workspace-scoped; select a workspace to call it`,
+    );
+  }
+
   if (capability.channel === 'human' && caller.channel !== 'human') {
     throw new ForbiddenError(`capability "${capability.name}" is human-channel-only`);
   }

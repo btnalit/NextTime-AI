@@ -18,6 +18,7 @@ import {
   setUserPassword,
 } from '../application/identity/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../application/worker/index.js';
+import { createWorkspaceWithOwner } from '../application/workspace/index.js';
 import { issueHandle, loadHandleKeyPair } from '../governance/capability/index.js';
 import {
   importManifest,
@@ -125,73 +126,29 @@ export interface CreateWorkspaceResult {
 }
 
 /** Creates a Workspace and its owner Principal in one transaction, then seeds the platform
- *  meta-ontology and a published v1 entry WorkerDefinition (S2.6 — see this module's own doc
- *  comment). Never logs the API key. */
+ *  meta-ontology and a published v1 entry WorkerDefinition (S2.6). P-A1: the body moved to
+ *  `application/workspace/create.ts` (`createWorkspaceWithOwner`) so the kernel's first start
+ *  and the console share it; this wrapper keeps the CLI's own contract — an owner API key,
+ *  printed exactly once, and the derived login of the owner's passwordless user. Never logs the
+ *  API key. */
 export async function createWorkspace(
   pool: PoolLike,
   name: string,
   ownerDisplayName: string,
   options: CreateWorkspaceOptions = {},
 ): Promise<CreateWorkspaceResult> {
-  const workspaceId = randomUUID();
-  const ownerPrincipalId = randomUUID();
-  const apiKey = generateApiKey();
-  const apiKeyHash = hashApiKey(apiKey);
-  const ontologyDir = resolveOntologyDir();
-
-  await withWorkspace(
-    pool,
-    { workspaceId, principalId: ownerPrincipalId },
-    async (client) => {
-      await client.query('insert into workspaces (id, name) values ($1, $2)', [workspaceId, name]);
-      await client.query(
-        `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash)
-         values ($1, $2, 'human', 'owner', $3, $4)`,
-        [workspaceId, ownerPrincipalId, ownerDisplayName, apiKeyHash],
-      );
-
-      // S4.1: every human Principal is a user's membership (principals.user_id, migration 0019);
-      // the CLI-created owner gets a passwordless user with the derived login — an admin sets a
-      // password later.
-      await ensureUserForHumanPrincipal(client, {
-        workspaceId,
-        id: ownerPrincipalId,
-        displayName: ownerDisplayName,
-      });
-
-      // S2.6: platform meta-ontology (§5.1.2 WorkerDefinition/Gatekeeper/Operation/Capability/
-      // Skill/Procedure ObjectTypes + their LinkTypes).
-      await seedPlatformMetaOntology(client, workspaceId, ownerPrincipalId, ontologyDir);
-
-      // S2.6: the entry WorkerDefinition, proposed and immediately published as v1.
-      const entryTemplate = await loadWorkerDefinitionTemplate(
-        path.join(ontologyDir, 'entry-agent.yaml'),
-      );
-      const entryDefinition = options.entryModel
-        ? { ...entryTemplate.definition, model: options.entryModel }
-        : entryTemplate.definition;
-      const draft = await proposeWorkerDefinition(client, workspaceId, ownerPrincipalId, {
-        kind: entryTemplate.kind,
-        definition: entryDefinition,
-      });
-      await publishWorkerDefinition(client, workspaceId, ownerPrincipalId, {
-        definitionId: draft.id,
-        version: draft.version,
-      });
-    },
-    // Bootstrap: neither the workspace nor the owner principal exists yet for RLS to scope
-    // against — same admin/skip-role-switch pattern as application/gateway/auth.ts's
-    // `withAdminClient` and substrate/invariants.test.ts's `adminInsertWorkspace`. The S2.6
-    // ontology/worker-definition seed calls above run in this same transaction, under the same
-    // admin context — see this module's own doc comment.
-    { skipRoleSwitch: true },
-  );
-
+  const outcome = await createWorkspaceWithOwner(pool, {
+    name,
+    owner: { displayName: ownerDisplayName, issueApiKey: true },
+    entryModel: options.entryModel,
+    ontologyDir: resolveOntologyDir(),
+  });
+  if (!outcome.apiKey) throw new Error('createWorkspace: no API key was issued');
   return {
-    workspaceId,
-    ownerPrincipalId,
-    apiKey,
-    ownerLogin: derivedLogin(ownerDisplayName, ownerPrincipalId),
+    workspaceId: outcome.workspaceId,
+    ownerPrincipalId: outcome.ownerPrincipalId,
+    apiKey: outcome.apiKey,
+    ownerLogin: derivedLogin(ownerDisplayName, outcome.ownerPrincipalId),
   };
 }
 

@@ -319,7 +319,11 @@ async function handleSubscribeChat(
  *  version also resolves `workspaceId`, which this call site does not need (the socket's push
  *  events are already implicitly workspace-scoped — a principal id is unique per workspace). */
 function callerPrincipalId(caller: ResolvedCaller): string {
-  return caller.channel === 'human' ? caller.principal.id : caller.claims.obo;
+  if (caller.channel === 'human') return caller.principal.id;
+  if (caller.channel === 'handle') return caller.claims.obo;
+  // `/ws` authenticates with resolveRequestCaller, which never yields a platform caller (P-A1:
+  // the platform plane is HTTP-only) — total over the union for the compiler's sake.
+  throw new Error('callerPrincipalId: a platform caller cannot hold a chat socket');
 }
 
 /** Lane-4 P2 fix (docs/development-tasks.md; design doc §9.4 "一个 WS 连接 `/ws`，human 通道认证后

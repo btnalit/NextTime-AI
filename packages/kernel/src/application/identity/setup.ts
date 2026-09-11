@@ -57,7 +57,7 @@ export async function ensureInitialAdmin(
   const password = randomBytes(18).toString('base64url');
   const passwordHash = await hashPassword(password);
   const existing = await findUserByLogin(pool, INITIAL_ADMIN_LOGIN);
-  if (existing && existing.hasPassword && existing.platformRole !== 'admin') {
+  if (existing?.hasPassword && existing.platformRole !== 'admin') {
     // A person already owns the login `admin` (claimed it with their own password) — never
     // overwrite their password. The operator creates an administrator by hand instead.
     throw new IdentityError(

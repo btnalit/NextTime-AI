@@ -34,6 +34,96 @@
   },
   {
     "channel": "human",
+    "group": "members",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "add_member",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "login": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "builder",
+            "operator",
+            "member",
+            "auditor"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "login",
+        "role"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hasApiKey": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "human",
+            "agent",
+            "service"
+          ],
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "builder",
+            "operator",
+            "member",
+            "auditor"
+          ],
+          "type": "string"
+        },
+        "workerDefinitionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "role",
+        "displayName",
+        "createdAt",
+        "hasApiKey",
+        "disabledAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "platform",
     "mode": "write",
     "name": "add_membership",

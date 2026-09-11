@@ -54,6 +54,12 @@ export interface CapabilityHandlerContext {
   readonly principalId: string;
   readonly scope?: CapabilityScope;
   /**
+   * P-A1: set on a `scope:'platform'` call — the acting administrator (`users.id`, `login`). The
+   * handler's `workspaceId` argument is `''` and `principalId` is `''` on that path: there is no
+   * workspace and no Principal (dispatch.ts's platform branch, adapters/db/platform-context.ts).
+   */
+  readonly platformUser?: { readonly id: string; readonly login: string };
+  /**
    * S2.7 addition, purely additive alongside `scope` above: the calling Handle's full verified
    * claims (`jti`/`sid`/`exp`/`obo`/`scope`), `undefined` on the human channel.
    * `application/task/invoke.ts`'s child-Handle minting needs more than the bare `scope` —

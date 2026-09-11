@@ -32,6 +32,7 @@ import {
 import { ensureInitialAdmin } from './application/identity/index.js';
 import { registerLinkageConsumers } from './application/linkage/index.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
+import { ensureDefaultWorkspace } from './application/platform/index.js';
 import {
   configureTaskRuntime,
   registerActionRequestRoutingConsumer,
@@ -981,10 +982,14 @@ export function main(): void {
         passwordFile: process.env.INITIAL_ADMIN_PASSWORD_FILE,
         log: (line) => app.log.warn(line),
       });
+      // P-A1 (docs/platform-admin-design.md §2/§4 "登录即对话"): a fresh install gets its default
+      // workspace, owned by the administrator; an upgraded one adopts its single workspace as the
+      // default. Same non-fatal contract as the administrator step above.
+      await ensureDefaultWorkspace(pool, { log: (line) => app.log.info(line) });
     } catch (err) {
       app.log.error(
         { err },
-        'initial administrator could not be prepared — password login is unavailable until this is fixed (is the database migrated, is INITIAL_ADMIN_PASSWORD_FILE writable?)',
+        'initial administrator / default workspace could not be prepared — password login is unavailable until this is fixed (is the database migrated, is INITIAL_ADMIN_PASSWORD_FILE writable?)',
       );
     }
 

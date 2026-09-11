@@ -214,7 +214,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
 
       beforeAll(async () => {
-        const created = await createWorkspace(pool, `auth-routes-claim-ws-${randomUUID()}`, 'Owner');
+        const created = await createWorkspace(
+          pool,
+          `auth-routes-claim-ws-${randomUUID()}`,
+          'Owner',
+        );
         workspaceId = created.workspaceId;
       });
 

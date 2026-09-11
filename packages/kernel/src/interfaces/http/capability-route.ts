@@ -1,4 +1,4 @@
-import { IllegalTransition } from '@nexttime/shared';
+import { IllegalTransition, getCapability } from '@nexttime/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   GatekeeperClientError,
@@ -44,8 +44,14 @@ import {
   WorkerResultValidationError,
   WorkspaceRequiredError,
   dispatchCapability,
+  resolvePlatformCaller,
   resolveRequestCaller,
 } from '../../application/gateway/index.js';
+import {
+  AlreadyMemberError,
+  MemberUserNotFoundError,
+} from '../../application/gateway/members-handlers.js';
+import { PlatformAdminError } from '../../application/gateway/platform-handlers.js';
 import {
   CSRF_HEADER,
   WORKSPACE_COOKIE,
@@ -125,6 +131,18 @@ interface ErrorMapping {
 export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof UnauthorizedError) {
     return { status: 401, code: 'unauthorized', message: 'unauthorized' };
+  }
+  // P-A1 platform-plane errors (application/gateway/platform-handlers.ts): `*_not_found` → 404,
+  // everything else is a guarded conflict (last admin, login taken, already a member, …) → 409.
+  if (err instanceof PlatformAdminError) {
+    const status = err.code.endsWith('_not_found') ? 404 : 409;
+    return { status, code: err.code, message: err.message };
+  }
+  if (err instanceof MemberUserNotFoundError) {
+    return { status: 404, code: 'user_not_found', message: err.message };
+  }
+  if (err instanceof AlreadyMemberError) {
+    return { status: 409, code: 'already_member', message: err.message };
   }
   // S4.1 console-session channel (resolve-caller.ts): three `ForbiddenError` subclasses with
   // their own codes so the web client can act on them (pick a workspace / add the CSRF header /
@@ -435,20 +453,37 @@ export async function handleCapabilityRoute(
     // cookie path additionally needs the workspace the caller wants to act in (`X-Workspace-Id`,
     // or the `nexttime_workspace` selector cookie the console sets — see identity/console-
     // session.ts) and, since every `/api/cap/*` call is a POST, the CSRF header.
-    const caller = await resolveRequestCaller(
-      {
-        authorization: request.headers.authorization,
-        cookie: request.headers.cookie,
-        workspaceId:
-          firstHeaderValue(request.headers[WORKSPACE_HEADER]) ??
-          parseCookieHeader(request.headers.cookie).get(WORKSPACE_COOKIE),
-        requestedWith: firstHeaderValue(request.headers[CSRF_HEADER]),
-        requireCsrfHeader: true,
-      },
-      { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
-    );
+    // P-A1: a `scope:'platform'` capability is resolved without a workspace (an administrator's
+    // console session; resolve-caller.ts `resolvePlatformCaller`) — an unknown capability name
+    // still goes through the ordinary path so it answers 404 the way it always has.
+    const registered = getCapability(capability);
+    const caller =
+      registered?.scope === 'platform'
+        ? await resolvePlatformCaller(
+            {
+              authorization: request.headers.authorization,
+              cookie: request.headers.cookie,
+              requestedWith: firstHeaderValue(request.headers[CSRF_HEADER]),
+              requireCsrfHeader: true,
+            },
+            { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
+          )
+        : await resolveRequestCaller(
+            {
+              authorization: request.headers.authorization,
+              cookie: request.headers.cookie,
+              workspaceId:
+                firstHeaderValue(request.headers[WORKSPACE_HEADER]) ??
+                parseCookieHeader(request.headers.cookie).get(WORKSPACE_COOKIE),
+              requestedWith: firstHeaderValue(request.headers[CSRF_HEADER]),
+              requireCsrfHeader: true,
+            },
+            { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
+          );
 
-    if (caller.channel === 'human') {
+    if (caller.channel === 'platform') {
+      userId = caller.user.id;
+    } else if (caller.channel === 'human') {
       workspaceId = caller.principal.workspaceId;
       principalId = caller.principal.id;
       onBehalfOf = caller.principal.id;
