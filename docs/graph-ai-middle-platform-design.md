@@ -428,6 +428,94 @@ flowchart TB
 
 ---
 
+### 7.11 平台管理：平台管理员、初始化、供应商配置、门目录
+
+**问题（2026-09-11 复盘）**。到 v0.5.0 为止，一切身份都是工作区内的：没有平台级管理员，工作区与它的
+首位 owner 只能用内核容器里的 CLI 建（key 打印一次），LLM 供应商靠主机上手改 YAML 与 env 再重启
+`llm-proxy`，门的注册也是 CLI。结果是一台刚装好的主机上**没有任何能登录的账户**，登录之后也没有
+地方建工作区、加用户、配模型、看平台状态。控制台只有"工作区内的治理面"（S3.11），没有"平台的
+管理面"。本节补上后者，且不动三条底线。
+
+**身份模型：平台工作区**。迁移创建唯一一个 `workspaces.kind = 'platform'` 的工作区（其余为
+`kind = 'tenant'`，默认值；平台工作区不可删除、不跑入口容器、不建图）。**平台管理员**就是平台工作区
+里 `kind='human'`、`role='owner'` 的 Principal——复用 API key、Session、审计、控制台登录，不引入第二套
+身份。能力注册表新增 `scope: 'platform'`：这类能力只对平台工作区的 Principal 放行，业务工作区的
+Principal 调用得 403；反过来，**平台管理员在业务工作区没有任何数据权限**（看不到图、对话、审批），
+要在某个工作区里工作就得在那个工作区里有自己的 Principal。管理权与数据权分开，是"隔离只增不减"
+在这里的落点。
+
+跨工作区读取（列工作区、列成员、汇总 `llm_usage` 与 `audit_records`）经 `app_platform()`（新的
+`current_setting('app.platform')`）在**少数几张表**的 RLS 策略上加 `or app_platform()` 子句；写操作
+只有建工作区、建首位 owner、禁用 / 启用工作区或 Principal，每条都在事务里显式 `set_config` 到目标
+工作区执行，内核不获得任何通用的 RLS 绕过开关。平台级操作的审计写在平台工作区（`audit_records.
+workspace_id` 非空），`metadata.target_workspace_id` 指向被操作的工作区。
+
+**初始化：一次性令牌，不是默认口令**。内核启动时若平台工作区没有活跃管理员，生成一枚初始化令牌：
+哈希入库（`platform_setup` 表：hash、expires_at 24h、used_at），明文写 `${NEXTTIME_DATA}/secrets/
+setup/token`（0600；内核容器只对这个子目录可写），日志只提示路径不含值。web 未登录访问时先查
+`GET /api/platform/setup-state`：未初始化则显示"初始化平台"页——输入令牌与管理员名 → 创建平台管理员
+→ API key 显示一次 → 令牌作废（`used_at`；错误 5 次也作废，重启内核重生成）。之后这页永不再出现。
+CLI 兜底 `bootstrap.js create-platform-admin`（同一条路径，跳过令牌）。`host-env-init.sh` 在安装
+结束时打印令牌文件路径。
+
+否决的方案：固定默认账户（`admin` / `admin` 之类）。公开仓库加局域网 TLS，人尽皆知的默认口令是
+扫描器第一个试的东西，而 API key 模型里也没有"首次登录强制改密"可以配合。初始化令牌给出的是
+同样的"装好就能登"体验——多一步读一个文件。
+
+**平台控制台**。web 侧栏新增"平台"分组，只对平台管理员显示（`scope:'platform'` 的能力可见即显示，
+与治理分组同一机制）：
+
+| 页 | 能力（均 `scope:'platform'`，除非注明） | 内容 |
+|---|---|---|
+| 工作区 | `list_workspaces` / `create_workspace` / `set_workspace_status` | 列表（名称、成员数、状态、30 天用量）；创建：名称、首位 owner 显示名、入口模型（从供应商目录选）→ owner 的 key 显示一次；禁用 / 启用（禁用 = 该工作区所有 Session 立即失效、入口容器停掉） |
+| 平台管理员 | `list_platform_admins` / `create_platform_admin` / `rotate_platform_admin_key` / `disable_platform_admin` | 至少保留一个活跃管理员（最后一个不可禁用） |
+| 模型与供应商 | 经 `llm-proxy` 管理端点（见下），非内核能力 | 供应商列表（上游 URL、key 掩码、模型与单价）、新增 / 编辑（key 只写不回读）、测试连接、删除 |
+| 系统接入目录 | `list_gate_catalog` / `upsert_gate_catalog_entry` | 平台里可用的门（名称、种类、内部端点、说明）；工作区 owner 只能从目录里"启用" |
+| 运行状态 | `platform_status`（只读） | 各服务健康（内核经内部探测 `llm-proxy` / `egress-proxy` / `worker-supervisor` / 各门 / `postgres`）、最近一次备份文件与时间（只显示，定时器仍是 E7）、跨工作区的 `llm_usage` 汇总与最近审计流 |
+
+**供应商配置与 I9**。provider key 只在 `llm-proxy`（I9、决策 20），所以配置路径绕开内核：web →
+caddy `/api/llm-admin/*` → `llm-proxy` 的管理端点。鉴权用内核签发的**平台管理员会话 JWT**（与
+Explorer 会话 cookie 同一机制，§7.6：EdDSA、Handle 密钥对签名、`typ` 独立、claim `platform: true`），
+`llm-proxy` 用它已有的 `handle.pub` 验签；内核从头到尾不经手 key。`llm-proxy` 自身的改动：
+
+- 配置从只读挂载改为它**自有的可写目录** `${NEXTTIME_DATA}/llm-proxy/`（`providers.yaml` +
+  `keys.env`，0600，容器内唯一可写挂载；根文件系统仍只读，`cap_drop` 不变）；现有的
+  `config/llm-providers.yaml` + `secrets/llm-proxy.env` 作为首次启动时的导入源，之后不再读。
+- 热加载：文件变更或管理端点写入后原子替换内存配置，不再要求重启；`make gen-models` 的逻辑搬进
+  `llm-proxy`，每次配置变更重写 `config/models.json`（**原地写入，不 rename**——它以文件 bind mount
+  进每个 agent 容器，换 inode 会让运行中的容器永远看旧内容）。
+- 管理端点：`GET /admin/providers`（key 掩码）、`PUT /admin/providers/<id>`（含 key）、
+  `POST /admin/providers/<id>/test`（一次最小补全请求，只回成败与延迟）、`DELETE`。每次调用记一条
+  内核审计（`llm-proxy` 经现有的 `/internal/llm-usage` 同款内部通道上报 `provider.config_changed`）。
+
+内核侧 `list_models` 的目录改为按 `models.json` 的 mtime 重读（现为启动时读一次）。pi 只在容器启动时
+读 `models.json`：**新模型列表对之后启动的容器生效**，已在跑的入口容器要等下一次重建（空闲超时或
+`stop`）。工作区的默认入口模型从 `create-workspace --entry-model` 变为工作区设置（`workspaces.
+entry_model`），平台管理员建工作区时选，owner 之后可在"模型与配额"页改（新能力 `set_entry_model`，
+minRole owner；作用于之后新建的入口 WorkerDefinition 版本，现有已发布版本不动）。
+
+**门目录与工作区启用**。`register-gatekeeper` 之所以是"不经过权限模型的 CLI"（`add-gatekeeper.md`），
+是因为门的端点是 compose 内部主机名，绝不能由用户输入。设计因此分两层：平台管理员维护**门目录**
+（`gate_catalog` 表，平台工作区内：name、kind、endpoint、description、enabled）；工作区 owner 在
+"系统接入"页从目录里**启用**一个门——新能力 `enable_gatekeeper(catalogEntryId)`（minRole owner，
+`scope:'workspace'`）执行现 `register-gatekeeper` 的逻辑（拉 `describe_operations`、导入并发布
+Operation），端点来自目录而非参数。CLI 保留作兜底；之后的连接向导（S3.12）不变。
+
+**三条底线的对照**。① I9 不变：key 只进 `llm-proxy`，内核不经手，agent 容器不变。② 审批：平台管理员
+在控制台做的是**人直接操作平台自身**（建工作区、配供应商、维护门目录），不是 agent 经门去碰外部
+系统——**审计、不审批**，这是明确的设计决定而非疏漏；agent 触发的动作仍全部走门与审批。③ 隔离只增：
+平台管理员没有业务数据权；RLS 只加子句不加绕过开关；`llm-proxy` 多了一个可写目录但根仍只读。
+
+**什么仍需重启 / 何时生效**：
+
+| 操作 | 生效 |
+|---|---|
+| 新增 / 修改供应商与 key | `llm-proxy` 热加载，立即；内核 `list_models` 下次调用；agent 容器：之后启动的容器 |
+| 建工作区、加管理员、禁用工作区 | 立即（禁用 = Session 失效 + 入口容器 `stop`） |
+| 门目录增删 | 立即；已启用的门不受目录条目删除影响（工作区里的 Gatekeeper 对象独立存在） |
+| 更换 Handle 密钥对 | 仍需重启 kernel + llm-proxy（不在本节范围） |
+| 备份定时器 | E7，最后做 |
+
 ## 8. 数据流
 
 ### 8.1 一轮对话
@@ -793,7 +881,7 @@ nexttime explain <turn_activity_id>
 - **agent 容器**：入口与 Worker 同镜像，内置工具全开，runsc，只读根 + 可写工作目录，不继承 env，Handle 衰减，来源绑定（supervisor 注册容器 ip）。
 - **审批默认值**：`blast_radius=low` 默认自动批准（双信号中的工作区规则默认开启 low），`medium` / `high` 要人批；未分类操作要人批（I17）；`requester_can_approve` 按影响半径；高影响的工作区规则不能关闭审批。
 - **门**：自身信任域；`apply` 幂等；两种凭证；接口清单声明风险标注。
-- **TLS**：caddy。**身份**：S1 用 API key / 本地账号，P5 接自托管 OIDC；身份配置留在环境变量层。
+- **TLS**：caddy。**身份**：S1 用 API key / 本地账号，P5 接自托管 OIDC；身份配置留在环境变量层。 **平台管理员**：唯一平台工作区里的 owner，只有管理权没有业务数据权，初始化靠一次性令牌（§7.11）。
 
 去掉的东西：入口 agent 的子进程模式、每用户 OS 账号、无出网网络、内置工具白名单。加上的东西：一个出网代理容器和一张默认策略表。
 
@@ -919,6 +1007,7 @@ Trigger 与事件驱动；`db` / `browser` 门；ConnectedAccount 的 OAuth；OI
 | 20 | `llm-proxy` 拆出内核，本地验 Handle 签名；内核进程零外部凭证（I9 改写） | §7.7、§10.2 |
 | 21 | 机制与内容分离：领域包与接入包是版本化 YAML；内核代码不得出现具体系统名（CI） | §7.10、§10.1 |
 | 22 | 失控防护配额（I18）；备份以 compose 内容器回到 S1（不改主机，回滚依赖它） | §5.4、§10.2、§13 |
+| 23 | 平台管理：唯一的平台工作区承载平台管理员（管理权与数据权分开）；初始化用一次性令牌而非默认口令；provider 配置经 `llm-proxy` 自己的管理端点、内核不经手 key；门端点只来自平台维护的目录；平台管理员操作审计不审批 | §7.11、§11 |
 
 待决：无。
 
