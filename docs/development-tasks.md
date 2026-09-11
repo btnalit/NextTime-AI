@@ -1273,50 +1273,76 @@
 
 ---
 
-## 5a. S4 — 平台管理（W8，2026-09-11 立项）
+## 5a. S4 — 平台管理（W8，2026-09-11 立项，同日按维护者要求修订为平台级用户目录）
 
-设计见 `graph-ai-middle-platform-design.md` §7.11（问题、身份模型、初始化、供应商路径、门目录、生效表）。
-起因：一台刚装好的主机上没有任何能登录的账户，登录后也没有地方建工作区、加用户、配模型、看平台状态。
-顺序 S4.1 → S4.2 → S4.3 → S4.4；S4.1 单独就回答"怎么加用户"。每项完成标准里都含 CI 的 e2e 用例。
+设计见 `graph-ai-middle-platform-design.md` §7.11（用户目录、登录、平台管理员、供应商路径、门目录、
+生效表）。起因：一台刚装好的主机上没有任何能登录的账户，登录后也没有地方建工作区、加用户、配模型、
+看平台状态；维护者要求平台管理员能增改停用不同权限的用户，新用户直接登录。顺序 S4.1 → S4.2 → S4.3
+→ S4.4 → S4.5；S4.1 + S4.2 合起来回答"怎么加用户"。每项完成标准里都含 CI 的 e2e 用例。
 
-### S4.1 平台身份与初始化
-
-- 交付物：
-  1. 迁移：`workspaces.kind`（`platform` / `tenant`，默认 `tenant`）+ 唯一平台工作区（迁移内建、
-     不可删除）；`platform_setup`（令牌哈希、`expires_at`、`used_at`、失败计数）；`app_platform()`
-     与 `workspaces` / `principals` / `sessions` / `llm_usage` / `audit_records` 策略上的
-     `or app_platform()` 子句（只这几张表，且只用于读）。
-  2. 能力注册表 `scope: 'platform' | 'workspace'`（默认 `workspace`）；gateway 对 `platform` 能力
-     只放行平台工作区的 Principal。新能力：`platform_status`（只读，先只回工作区数与管理员数）、
-     `list_workspaces`、`create_workspace`（名称、首位 owner 显示名、入口模型 → 返回 owner 的 key，
-     显示一次，只存哈希）、`set_workspace_status`（禁用 = 该工作区 Session 全部失效 + 入口容器
-     `stop`；启用）、`list_platform_admins`、`create_platform_admin`、`rotate_platform_admin_key`、
-     `disable_platform_admin`（最后一个活跃管理员不可禁用）。
-  3. 初始化：kernel 启动时无活跃平台管理员则生成令牌（明文写 `${NEXTTIME_DATA}/secrets/setup/token`
-     0600，compose 只把该子目录挂为可写；日志只写路径）；`GET /api/platform/setup-state`；
-     `POST /api/platform/setup`（令牌 + 管理员名 → 管理员 + key，一次性；5 次错误作废）。CLI
-     `bootstrap.js create-platform-admin` 兜底。`host-env-init.sh` 末尾打印令牌路径。
-  4. web："初始化平台"页（未初始化时替代登录页）；侧栏"平台"分组（工作区、平台管理员两页）；
-     建工作区后的 key 一次性展示复用成员页的抽屉。
-  5. `create-workspace` CLI 保留，内部改调同一 application 函数。
-- 完成标准：全新数据库启动 kernel → 令牌文件出现 → web 初始化页建管理员 → 登录 → 建工作区拿到
-  owner key → 用它登录业务工作区聊一轮；业务工作区的 owner 调 `list_workspaces` 得 403；平台管理员
-  调业务工作区的 `list_chats` 得 403；禁用工作区后其 owner 的 WS `authenticate` 失败。e2e 覆盖
-  初始化 → 建工作区 → 切换登录这一整条。
-- 不做：OIDC / 密码登录（P5 决策不变）；平台管理员的数据权限（设计上就没有）。
-
-### S4.2 模型与供应商
+### S4.1 用户目录与登录
 
 - 交付物：
-  1. `llm-proxy`：自有可写目录 `${NEXTTIME_DATA}/llm-proxy/`（`providers.yaml` + `keys.env`，
-     0600；首次启动从现 `config/llm-providers.yaml` + `secrets/llm-proxy.env` 导入）；热加载；
-     `gen-models` 逻辑内置，配置变更后**原地重写** `config/models.json`；管理端点 `GET/PUT/DELETE
+  1. 迁移：`users`、`user_sessions`、`platform_setup`（平台级，无 RLS）；`principals.user_id`
+     （human 必填，回填现有行：每个 human Principal 一个用户，`login` 由显示名去重加短后缀）；
+     `(workspace_id, user_id)` 唯一；`audit_records.workspace_id` 可空 + `app_platform()` 与
+     `or (workspace_id is null and app_platform())` 策略子句；`workspaces.status`（`active` /
+     `disabled`）与 `workspaces.entry_model`。
+  2. 身份模块（`application/identity`）：scrypt 密码哈希与校验、登录节流（同一 login 5 次失败
+     锁 5 分钟）、`user_sessions` 签发 / 吊销、控制台会话 JWT（`typ` 独立、claims `{uid, sid}`）。
+  3. 路由：`POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/me`（用户、平台角色、
+     成员资格列表）、`GET /api/platform/setup-state`、`POST /api/platform/setup`。
+  4. gateway：cookie → 用户 → 按 `X-Workspace-Id`（HTTP）/ `authenticate {workspaceId}`（WS）找到
+     该用户在该工作区的 Principal → 之后与今天一致；`scope:'platform'` 能力只认 cookie 且要求
+     `platform_role='admin'`，不需要工作区；状态变更路由要求 `X-Requested-With: nexttime`；WS 握手
+     校验 `Origin`。**API key 路径原样保留**（Bearer / `X-API-Key` / WS `apiKey`）。Explorer 的
+     `nexttime_explorer_session` 由控制台会话替代，`/api/explorer/session` 路由退役，caddy 不变。
+  5. 初始化：kernel 启动无活跃平台管理员则生成令牌（明文写 `${NEXTTIME_DATA}/secrets/setup/token`
+     0600，compose 只把该子目录挂为可写；日志只写路径）；`POST /api/platform/setup` 一次性、5 次错误
+     作废。CLI `bootstrap.js create-platform-admin --login <l>`（密码从 stdin）。`host-env-init.sh`
+     末尾打印令牌路径。
+  6. web：登录页改为登录名 + 密码（保留"用 API key 登录"折叠项给自动化 / 过渡）；"初始化平台"页；
+     首次登录强制改密；工作区切换器（单个自动选中）；"我的账户"页（改密码、改显示名、成员资格）。
+  7. `create-workspace` CLI 保留（内部改调同一 application 函数）；`add-principal` 只用于 agent /
+     service（human 走 S4.2 的成员资格）。
+- 完成标准：全新数据库启动 kernel → 令牌文件出现 → web 初始化页建管理员并直接登录 → 管理员调
+  `list_chats` 得 403（无成员资格）；现有 owner 的 API key 在 S1 精简验收里照常通过；错误密码 5 次
+  后锁定；登出后 cookie 失效；WS 从异源 `Origin` 握手被拒。e2e 覆盖初始化 → 登录 → 强制改密 → 登出。
+- 不做：OIDC（P5）；把验收 harness 迁到 service Principal（之后）。
+
+### S4.2 用户管理与工作区管理（平台控制台）
+
+- 交付物：
+  1. 能力（`scope:'platform'`）：`list_users` / `create_user`（登录名、显示名、平台角色、临时密码
+     → `must_change_password`）/ `update_user` / `set_user_status`（停用 = 吊销全部 `user_sessions`
+     + 该用户各 Principal 的工作区会话；最后一个活跃平台管理员不可停用）/ `reset_user_password` /
+     `list_user_memberships` / `add_membership`（工作区 + 角色 → 建 human Principal）/
+     `set_membership_role` / `remove_membership`；`list_workspaces` / `create_workspace`（名称、
+     首位 owner 选现有用户或新建、入口模型）/ `set_workspace_status`（禁用 = 该工作区 Session 全部
+     失效 + 入口容器 `stop` + 成员登录后不可见）。
+  2. 工作区内（`scope:'workspace'`，minRole owner）：成员页改为按登录名添加现有用户为成员
+     （`add_member`）、`set_principal_role` 照旧、`remove_member`；`create_principal` 限 agent /
+     service。
+  3. web：平台分组"用户"、"工作区"两页；成员页改造；建工作区时若新建 owner 则显示临时密码一次。
+  4. 平台级审计：以上每个写操作一条 `audit_records`（`workspace_id` 为空，`metadata.target_*`）。
+- 完成标准：管理员建用户 A（临时密码）→ 建工作区 W 并把 A 设为 owner → A 登录、强制改密、看到 W、
+  聊一轮；管理员把 B 加进 W 为 member → B 登录只看到 W 且不能审批；停用 A → A 的 cookie 与 W 内
+  会话立即失效；禁用 W → B 登录后列表为空；平台管理员本人调 W 的任何工作区能力得 403；所有操作在
+  审计流可见。e2e 覆盖这一整条。
+- 不做：批量导入；邀请链接（P5 随 OIDC 一起看）。
+
+### S4.3 模型与供应商
+
+- 交付物：
+  1. `llm-proxy`：自有可写目录 `${NEXTTIME_DATA}/llm-proxy/`（`providers.yaml` + `keys.env`，0600；
+     首次启动从现 `config/llm-providers.yaml` + `secrets/llm-proxy.env` 导入）；热加载；`gen-models`
+     逻辑内置，配置变更后**原地重写** `config/models.json`；管理端点 `GET/PUT/DELETE
      /admin/providers[/<id>]`、`POST /admin/providers/<id>/test`；鉴权为内核签发的平台管理员会话
-     JWT（`claim platform:true`，与 Explorer 会话同一签发 / 验签机制）；每次变更经内部通道上报
-     内核记审计 `provider.config_changed`。
-  2. kernel：`POST /api/platform/llm-session`（签发上述 JWT，仅平台管理员）；`list_models` 目录
-     按 `models.json` mtime 重读；`workspaces.entry_model` 列 + `set_entry_model`（minRole owner）
-     取代 `--entry-model` 参数（CLI 参数保留、写同一列）。
+     JWT（`typ` 独立，claim `platform:true`，5 分钟）；每次变更经内部通道上报内核记审计
+     `provider.config_changed`。
+  2. kernel：`POST /api/platform/llm-session`（签发上述 JWT，仅平台管理员）；`list_models` 目录按
+     `models.json` mtime 重读；`set_entry_model`（minRole owner）写 `workspaces.entry_model`
+     （CLI `--entry-model` 参数保留、写同一列）。
   3. caddy：`/api/llm-admin/*` → `llm-proxy:8082/admin/*`（仅转发，不注入任何东西）。
   4. web："模型与供应商"页（平台分组）；工作区"模型与配额"页加"默认入口模型"。
   5. compose：`llm-proxy` 挂载改动（一个可写目录，根仍只读，`cap_drop` 不变）。
@@ -1325,18 +1351,18 @@
   进程内 `grep` 不到 key（沿用 S2 的 no-token-leak 断言形式）；`llm-proxy` 重启后配置仍在。
 - 不做：预算（遗留 19）；模型路由 / 回退。
 
-### S4.3 门目录与工作区启用
+### S4.4 门目录与工作区启用
 
-- 交付物：`gate_catalog`（平台工作区：name、kind、endpoint、description、enabled）+
-  `list_gate_catalog` / `upsert_gate_catalog_entry`（platform）；`enable_gatekeeper(catalogEntryId)`
-  （workspace，minRole owner）复用 `register-gatekeeper` 的 application 逻辑，端点来自目录；web
-  平台分组"系统接入目录"页 + 工作区"系统接入"页的"从目录启用"；迁移把现有 compose 内两个门
-  （docker、ragflow）作为初始目录条目播种。
+- 交付物：`gate_catalog`（平台级：name、kind、endpoint、description、enabled）+ `list_gate_catalog`
+  / `upsert_gate_catalog_entry`（platform）；`enable_gatekeeper(catalogEntryId)`（workspace，minRole
+  owner）复用 `register-gatekeeper` 的 application 逻辑，端点来自目录；web 平台分组"系统接入目录"页
+  + 工作区"系统接入"页的"从目录启用"；迁移把现有 compose 内两个门（docker、ragflow）作为初始目录
+  条目播种。
 - 完成标准：owner 从目录启用 docker 门 → Operation 已发布 → 现有连接向导与审批链路照常；
   `enable_gatekeeper` 的参数里传任意 URL 无效（只认目录 id）。
-- 不做：目录条目的健康探测（S4.4 的状态页做）。
+- 不做：目录条目的健康探测（S4.5 的状态页做）。
 
-### S4.4 运行状态（只读）
+### S4.5 运行状态（只读）
 
 - 交付物：`platform_status` 扩为各服务健康（内核内部探测 `llm-proxy` / `egress-proxy` /
   `worker-supervisor` / 目录内各门 / `postgres`）、最近备份文件名与时间（读备份目录，只显示）、
