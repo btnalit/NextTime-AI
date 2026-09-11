@@ -350,6 +350,29 @@ describe('buildPhase3Observations (acceptance-relevant: Container runs_on Host)'
     });
   });
 
+  it('depends_on targets are the service names only — the label carries `<service>:<condition>:<required>` entries', () => {
+    const c = container({
+      labels: {
+        'com.docker.compose.project': 'myapp',
+        'com.docker.compose.service': 'web',
+        'com.docker.compose.depends_on': 'db:service_healthy:false, cache:service_started:true',
+      },
+    });
+    const result = buildPhase3Observations({
+      hostname: 'h1',
+      hostId: 'host-id-1',
+      composeProjectIds: new Map([['myapp', 'compose-id-1']]),
+      composeProjects: [{ projectName: 'myapp', containers: [c] }],
+    });
+    const targets = (result[0]?.links ?? [])
+      .filter((l) => l.linkType === 'depends_on')
+      .map((l) => l.target.identity);
+    expect(targets).toEqual([
+      { composeProjectId: 'compose-id-1', serviceName: 'db' },
+      { composeProjectId: 'compose-id-1', serviceName: 'cache' },
+    ]);
+  });
+
   it('skips a project missing from composeProjectIds defensively (no partial/malformed Container)', () => {
     const result = buildPhase3Observations({
       hostname: 'h1',
