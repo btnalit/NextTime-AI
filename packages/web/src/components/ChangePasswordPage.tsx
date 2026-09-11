@@ -44,10 +44,15 @@ export function ChangePasswordPage({
     setError(null);
     try {
       const result = await changePassword({ currentPassword, newPassword }, fetchImpl);
+      // Success: the parent moves on (`onChanged` → open the workspace session); stay in the
+      // submitting state and clear the fields so a second click cannot re-submit the old
+      // current password (which is now wrong) while that hand-off is in flight.
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
       onChanged(result.user);
     } catch (err) {
       setError(err);
-    } finally {
       setSubmitting(false);
     }
   }
@@ -132,7 +137,14 @@ export function ChangePasswordPage({
           </Button>
 
           <div className="row" style={{ justifyContent: 'center' }}>
-            <Button type="button" variant="ghost" size="s" icon="logout" onClick={onLogout}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="s"
+              icon="logout"
+              onClick={onLogout}
+              disabled={submitting}
+            >
               登出 Sign out
             </Button>
           </div>

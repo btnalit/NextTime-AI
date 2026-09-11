@@ -103,7 +103,16 @@ export function App() {
   const [apiKeyConnecting, setApiKeyConnecting] = useState(false);
   const [apiKeyError, setApiKeyError] = useState<unknown | null>(null);
   const [route, setRoute] = useState<Route>(() => routeFromHash(window.location.hash));
+  const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
   const generation = useRef(0);
+  // Fence for every in-flight connect/authenticate continuation (review finding, S4.1): each
+  // attempt takes the next number, and only a continuation whose number is still current may
+  // publish a session. A logout, a "Forget key", or a newer attempt bumps the counter, so the
+  // loser of a race closes its own socket instead of leaking it or resurrecting a signed-out
+  // shell. `preSessionRef` mirrors `preSession` for callbacks that fire after an await.
+  const attempt = useRef(0);
+  const preSessionRef = useRef<PreSessionState>({ kind: 'boot' });
+  preSessionRef.current = preSession;
 
   useEffect(() => {
     function onHashChange(): void {
@@ -116,10 +125,15 @@ export function App() {
   const connectApiKey = useCallback(async (apiKey: string): Promise<void> => {
     setApiKeyConnecting(true);
     setApiKeyError(null);
+    const myAttempt = ++attempt.current;
     const ws = new WsClient({ url: wsUrl() });
     try {
       await ws.connect();
       await ws.authenticate({ token: apiKey });
+      if (attempt.current !== myAttempt) {
+        ws.close();
+        return;
+      }
       saveApiKey(apiKey);
       generation.current += 1;
       setSession({
@@ -130,6 +144,7 @@ export function App() {
       });
     } catch (err) {
       ws.close();
+      if (attempt.current !== myAttempt) return;
       clearApiKey();
       setApiKeyError(err);
     } finally {
@@ -140,17 +155,26 @@ export function App() {
   /** Opens a workspace-scoped WS + HTTP session for an already-authenticated cookie user. Sets
    *  the `nexttime_workspace` selector cookie (Explorer, `lib/auth-api.ts`) *before* `setSession`
    *  so any capability call a just-rendered page fires (or a same-tab Explorer navigation) always
-   *  sees it. */
+   *  sees it. `replacing` is the previous session's socket on a workspace switch: it stays open
+   *  (pages still hold it) until the new one is authenticated, then is closed — on success or
+   *  failure — by whichever continuation is still current. */
   const openCookieSession = useCallback(
     async (
       user: WireUser,
       memberships: readonly WireMembership[],
       workspaceId: string,
+      replacing?: WsClient,
     ): Promise<void> => {
+      const myAttempt = ++attempt.current;
       const ws = new WsClient({ url: wsUrl() });
       try {
         await ws.connect();
         await ws.authenticate({ workspaceId });
+        if (attempt.current !== myAttempt) {
+          ws.close();
+          return;
+        }
+        replacing?.close();
         setWorkspaceCookie(workspaceId);
         saveSelectedWorkspaceId(workspaceId);
         generation.current += 1;
@@ -165,6 +189,8 @@ export function App() {
         });
       } catch (err) {
         ws.close();
+        if (attempt.current !== myAttempt) return;
+        replacing?.close();
         // The named membership disappeared, or some other race lost the cookie session between
         // GET /api/auth/me and this WS authenticate — fall back to an always-renderable state
         // rather than a blank screen.
@@ -238,6 +264,7 @@ export function App() {
   }, [proceedAfterCookieAuth, bootUnauthenticated]);
 
   const handleForgetKey = useCallback((): void => {
+    attempt.current += 1;
     session?.ws.close();
     setSession(null);
     clearApiKey();
@@ -246,6 +273,7 @@ export function App() {
   }, [session]);
 
   const handleCookieLogout = useCallback(async (): Promise<void> => {
+    attempt.current += 1;
     session?.ws.close();
     setSession(null);
     setWorkspaceCookie(null);
@@ -262,12 +290,19 @@ export function App() {
     async (workspaceId: string): Promise<void> => {
       if (!session || session.authMode !== 'cookie' || !session.user || !session.memberships)
         return;
-      if (workspaceId === session.selectedWorkspaceId) return;
-      session.ws.close();
-      await openCookieSession(session.user, session.memberships, workspaceId);
-      navigate(hrefs.chats());
+      if (workspaceId === session.selectedWorkspaceId || switchingWorkspace) return;
+      setSwitchingWorkspace(true);
+      try {
+        // The old socket is handed over, not closed here: pages keep a working `ws` until the
+        // new workspace is authenticated (or the switch fails), and a switch that loses to a
+        // later attempt never publishes.
+        await openCookieSession(session.user, session.memberships, workspaceId, session.ws);
+        navigate(hrefs.chats());
+      } finally {
+        setSwitchingWorkspace(false);
+      }
     },
-    [session, openCookieSession],
+    [session, switchingWorkspace, openCookieSession],
   );
 
   const handleUserChanged = useCallback((user: WireUser): void => {
@@ -279,10 +314,14 @@ export function App() {
 
   const handlePasswordChanged = useCallback(
     (user: WireUser): void => {
-      if (preSession.kind !== 'changePassword') return;
-      void proceedAfterCookieAuth(user, preSession.memberships);
+      // Read the *current* state, not the render this callback was created in: a "Sign out"
+      // clicked while the change-password request was in flight has already moved us to `login`,
+      // and the late success must not reopen a session on a cookie that is being revoked.
+      const current = preSessionRef.current;
+      if (current.kind !== 'changePassword') return;
+      void proceedAfterCookieAuth(user, current.memberships);
     },
-    [preSession, proceedAfterCookieAuth],
+    [proceedAfterCookieAuth],
   );
 
   if (session) {
@@ -296,6 +335,7 @@ export function App() {
               session.authMode === 'cookie' ? () => void handleCookieLogout() : handleForgetKey
             }
             onSwitchWorkspace={(workspaceId) => void handleSwitchWorkspace(workspaceId)}
+            switchingWorkspace={switchingWorkspace}
             onUserChanged={handleUserChanged}
           />
         </ToastProvider>
@@ -359,12 +399,14 @@ function Routed({
   route,
   onLogout,
   onSwitchWorkspace,
+  switchingWorkspace,
   onUserChanged,
 }: {
   readonly session: Session;
   readonly route: Route;
   readonly onLogout: () => void;
   readonly onSwitchWorkspace: (workspaceId: string) => void;
+  readonly switchingWorkspace: boolean;
   readonly onUserChanged: (user: WireUser) => void;
 }) {
   const active = sectionOf(route);
@@ -473,6 +515,7 @@ function Routed({
       memberships={session.memberships}
       selectedWorkspaceId={session.selectedWorkspaceId}
       onSwitchWorkspace={onSwitchWorkspace}
+      switchingWorkspace={switchingWorkspace}
     >
       {page}
     </AppShell>

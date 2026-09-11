@@ -17,6 +17,8 @@ export interface AppShellProps {
   readonly memberships?: readonly WireMembership[];
   readonly selectedWorkspaceId?: string | null;
   readonly onSwitchWorkspace?: (workspaceId: string) => void;
+  /** A switch is in flight — the Sidebar disables its switcher so a second pick cannot race. */
+  readonly switchingWorkspace?: boolean;
   readonly children: ReactNode;
 }
 
@@ -30,6 +32,7 @@ export function AppShell({
   memberships,
   selectedWorkspaceId,
   onSwitchWorkspace,
+  switchingWorkspace,
   children,
 }: AppShellProps) {
   const pendingCount = usePendingCount(http, pushes);
@@ -48,6 +51,7 @@ export function AppShell({
         memberships={memberships}
         selectedWorkspaceId={selectedWorkspaceId}
         onSwitchWorkspace={onSwitchWorkspace}
+        switchingWorkspace={switchingWorkspace}
       />
       <main className="main">{children}</main>
     </div>

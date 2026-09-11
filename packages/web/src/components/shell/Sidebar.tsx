@@ -109,6 +109,7 @@ export interface SidebarProps {
   readonly memberships?: readonly WireMembership[];
   readonly selectedWorkspaceId?: string | null;
   readonly onSwitchWorkspace?: (workspaceId: string) => void;
+  readonly switchingWorkspace?: boolean;
 }
 
 /**
@@ -136,6 +137,7 @@ export function Sidebar({
   memberships,
   selectedWorkspaceId,
   onSwitchWorkspace,
+  switchingWorkspace,
 }: SidebarProps) {
   const showGovern = !isProvenMember(role);
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
@@ -153,6 +155,7 @@ export function Sidebar({
                 aria-label="Switch workspace"
                 data-testid="workspace-switcher"
                 value={selectedWorkspaceId ?? ''}
+                disabled={switchingWorkspace === true}
                 onChange={(event) => onSwitchWorkspace?.(event.target.value)}
               >
                 {(memberships ?? []).map((m) => (
