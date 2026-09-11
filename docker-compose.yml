@@ -50,6 +50,12 @@ services:
         SUPERVISOR_URL: http://worker-supervisor:8081,
         NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
         INITIAL_ADMIN_PASSWORD_FILE: /run/setup/initial-admin-password,
+        # P-A1 (design/platform-admin §6.6): logins that are always platform administrators —
+        # the console cannot disable or demote them. Optional, comma-separated. Kept in env on
+        # purpose (a hijacked admin session must not be able to lock the operator out).
+        NEXTTIME_PLATFORM_ADMINS: "${NEXTTIME_PLATFORM_ADMINS:-}",
+        # Shown on the platform overview page; set by the release/build pipeline when known.
+        KERNEL_VERSION: "${KERNEL_VERSION:-dev}",
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；
