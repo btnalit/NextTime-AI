@@ -34,6 +34,86 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "add_membership",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "owner",
+            "builder",
+            "operator",
+            "member",
+            "auditor"
+          ],
+          "type": "string"
+        },
+        "userId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId",
+        "workspaceId",
+        "role"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "disabled": {
+          "type": "boolean"
+        },
+        "principalId": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "builder",
+            "operator",
+            "member",
+            "auditor"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        },
+        "workspaceStatus": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "workspaceName",
+        "workspaceStatus",
+        "principalId",
+        "role",
+        "disabled"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "governance",
     "minRole": "operator",
     "mode": "execute",
@@ -1283,6 +1363,205 @@
       "required": [
         "principal",
         "apiKey"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "create_user",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "displayName": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "login": {
+          "maxLength": 64,
+          "minLength": 3,
+          "type": "string"
+        },
+        "password": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "platformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "builder",
+            "operator",
+            "member",
+            "auditor"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "login",
+        "displayName"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "temporaryPassword": {
+          "type": "string"
+        },
+        "user": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "type": "string"
+            },
+            "dailyCallLimit": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "hasPassword": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "lastLoginAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "login": {
+              "type": "string"
+            },
+            "memberships": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "disabled": {
+                    "type": "boolean"
+                  },
+                  "principalId": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "enum": [
+                      "owner",
+                      "builder",
+                      "operator",
+                      "member",
+                      "auditor"
+                    ],
+                    "type": "string"
+                  },
+                  "workspaceId": {
+                    "type": "string"
+                  },
+                  "workspaceName": {
+                    "type": "string"
+                  },
+                  "workspaceStatus": {
+                    "enum": [
+                      "active",
+                      "disabled"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "workspaceId",
+                  "workspaceName",
+                  "workspaceStatus",
+                  "principalId",
+                  "role",
+                  "disabled"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "monthlyTokenBudget": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mustChangePassword": {
+              "type": "boolean"
+            },
+            "platformRole": {
+              "enum": [
+                "admin",
+                "user"
+              ],
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "active",
+                "disabled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "login",
+            "displayName",
+            "platformRole",
+            "status",
+            "hasPassword",
+            "mustChangePassword",
+            "dailyCallLimit",
+            "monthlyTokenBudget",
+            "lastLoginAt",
+            "createdAt",
+            "memberships"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "user",
+        "temporaryPassword"
       ],
       "type": "object"
     }
@@ -3654,6 +3933,110 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "get_platform_settings",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "announcement": {
+          "type": "string"
+        },
+        "defaultDailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultEntryModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultMonthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPlatformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "defaultWorkspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "envAdmins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instanceInstructions": {
+          "type": "string"
+        },
+        "passwordMinLength": {
+          "maximum": 128,
+          "minimum": 8,
+          "type": "integer"
+        },
+        "siteName": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "siteName",
+        "announcement",
+        "instanceInstructions",
+        "defaultWorkspaceId",
+        "defaultEntryModel",
+        "defaultDailyCallLimit",
+        "defaultMonthlyTokenBudget",
+        "defaultPlatformRole",
+        "passwordMinLength",
+        "envAdmins",
+        "version",
+        "updatedAt"
       ],
       "type": "object"
     }
@@ -6135,6 +6518,269 @@
     }
   },
   {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_user_memberships",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "userId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "disabled": {
+                "type": "boolean"
+              },
+              "principalId": {
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "owner",
+                  "builder",
+                  "operator",
+                  "member",
+                  "auditor"
+                ],
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "workspaceName": {
+                "type": "string"
+              },
+              "workspaceStatus": {
+                "enum": [
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "workspaceName",
+              "workspaceStatus",
+              "principalId",
+              "role",
+              "disabled"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_users",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "type": "string"
+              },
+              "dailyCallLimit": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "hasPassword": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "lastLoginAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "login": {
+                "type": "string"
+              },
+              "memberships": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "disabled": {
+                      "type": "boolean"
+                    },
+                    "principalId": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "enum": [
+                        "owner",
+                        "builder",
+                        "operator",
+                        "member",
+                        "auditor"
+                      ],
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    },
+                    "workspaceName": {
+                      "type": "string"
+                    },
+                    "workspaceStatus": {
+                      "enum": [
+                        "active",
+                        "disabled"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workspaceId",
+                    "workspaceName",
+                    "workspaceStatus",
+                    "principalId",
+                    "role",
+                    "disabled"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "monthlyTokenBudget": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "mustChangePassword": {
+                "type": "boolean"
+              },
+              "platformRole": {
+                "enum": [
+                  "admin",
+                  "user"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "login",
+              "displayName",
+              "platformRole",
+              "status",
+              "hasPassword",
+              "mustChangePassword",
+              "dailyCallLimit",
+              "monthlyTokenBudget",
+              "lastLoginAt",
+              "createdAt",
+              "memberships"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "handle",
     "group": "worker",
     "minRole": "member",
@@ -6238,6 +6884,158 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "merge_user",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "sourceUserId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "targetUserId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceUserId",
+        "targetUserId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "dailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "hasPassword": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastLoginAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "login": {
+          "type": "string"
+        },
+        "memberships": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "disabled": {
+                "type": "boolean"
+              },
+              "principalId": {
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "owner",
+                  "builder",
+                  "operator",
+                  "member",
+                  "auditor"
+                ],
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "workspaceName": {
+                "type": "string"
+              },
+              "workspaceStatus": {
+                "enum": [
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "workspaceName",
+              "workspaceStatus",
+              "principalId",
+              "role",
+              "disabled"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "monthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mustChangePassword": {
+          "type": "boolean"
+        },
+        "platformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "login",
+        "displayName",
+        "platformRole",
+        "status",
+        "hasPassword",
+        "mustChangePassword",
+        "dailyCallLimit",
+        "monthlyTokenBudget",
+        "lastLoginAt",
+        "createdAt",
+        "memberships"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "chat",
     "minRole": "member",
     "mode": "execute",
@@ -6331,6 +7129,318 @@
       "required": [
         "status",
         "observedFactCount"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "platform_audit_query",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "actorUserId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "cursor": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "targetUserId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "targetWorkspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "actorLogin": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actorUserId": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "resourceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resourceType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "action",
+              "actorUserId",
+              "actorLogin",
+              "resourceType",
+              "resourceId",
+              "payload",
+              "createdAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "platform_overview",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "checklist": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "done": {
+                "type": "boolean"
+              },
+              "key": {
+                "enum": [
+                  "providers",
+                  "defaultWorkspace",
+                  "integrations",
+                  "users",
+                  "runtime"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "done",
+              "detail"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "counts": {
+          "additionalProperties": false,
+          "properties": {
+            "activeUsers": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "activeWorkspaces": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "gatekeepers": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "modelsAvailable": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pendingActivationUsers": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "users": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workspaces": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "users",
+            "activeUsers",
+            "pendingActivationUsers",
+            "workspaces",
+            "activeWorkspaces",
+            "gatekeepers",
+            "modelsAvailable"
+          ],
+          "type": "object"
+        },
+        "health": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "ok",
+                  "degraded",
+                  "down",
+                  "unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "recentAudit": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "actorLogin": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actorUserId": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "resourceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resourceType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "action",
+              "actorUserId",
+              "actorLogin",
+              "resourceType",
+              "resourceId",
+              "payload",
+              "createdAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "version": {
+          "additionalProperties": false,
+          "properties": {
+            "kernel": {
+              "type": "string"
+            },
+            "latestMigration": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "migrationsApplied": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kernel",
+            "migrationsApplied",
+            "latestMigration"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "version",
+        "counts",
+        "health",
+        "checklist",
+        "recentAudit"
       ],
       "type": "object"
     }
@@ -8008,6 +9118,52 @@
     }
   },
   {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "remove_membership",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "userId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId",
+        "workspaceId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "removed": {
+          "type": "boolean"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId",
+        "workspaceId",
+        "removed"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "handle",
     "group": "task",
     "mode": "write",
@@ -8804,6 +9960,47 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "reset_user_password",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "password": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "userId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "temporaryPassword": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId",
+        "temporaryPassword"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "epistemic",
     "minRole": "member",
     "mode": "write",
@@ -9585,6 +10782,86 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "set_membership_role",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "owner",
+            "builder",
+            "operator",
+            "member",
+            "auditor"
+          ],
+          "type": "string"
+        },
+        "userId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId",
+        "workspaceId",
+        "role"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "disabled": {
+          "type": "boolean"
+        },
+        "principalId": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "builder",
+            "operator",
+            "member",
+            "auditor"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        },
+        "workspaceStatus": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "workspaceName",
+        "workspaceStatus",
+        "principalId",
+        "role",
+        "disabled"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "governance",
     "minRole": "owner",
     "mode": "execute",
@@ -9795,6 +11072,330 @@
         "value",
         "updatedBy",
         "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "set_user_budget",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "dailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "monthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "userId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "dailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "hasPassword": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastLoginAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "login": {
+          "type": "string"
+        },
+        "memberships": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "disabled": {
+                "type": "boolean"
+              },
+              "principalId": {
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "owner",
+                  "builder",
+                  "operator",
+                  "member",
+                  "auditor"
+                ],
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "workspaceName": {
+                "type": "string"
+              },
+              "workspaceStatus": {
+                "enum": [
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "workspaceName",
+              "workspaceStatus",
+              "principalId",
+              "role",
+              "disabled"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "monthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mustChangePassword": {
+          "type": "boolean"
+        },
+        "platformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "login",
+        "displayName",
+        "platformRole",
+        "status",
+        "hasPassword",
+        "mustChangePassword",
+        "dailyCallLimit",
+        "monthlyTokenBudget",
+        "lastLoginAt",
+        "createdAt",
+        "memberships"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "set_user_status",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        },
+        "userId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId",
+        "status"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "dailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "hasPassword": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastLoginAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "login": {
+          "type": "string"
+        },
+        "memberships": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "disabled": {
+                "type": "boolean"
+              },
+              "principalId": {
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "owner",
+                  "builder",
+                  "operator",
+                  "member",
+                  "auditor"
+                ],
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "workspaceName": {
+                "type": "string"
+              },
+              "workspaceStatus": {
+                "enum": [
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "workspaceName",
+              "workspaceStatus",
+              "principalId",
+              "role",
+              "disabled"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "monthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mustChangePassword": {
+          "type": "boolean"
+        },
+        "platformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "login",
+        "displayName",
+        "platformRole",
+        "status",
+        "hasPassword",
+        "mustChangePassword",
+        "dailyCallLimit",
+        "monthlyTokenBudget",
+        "lastLoginAt",
+        "createdAt",
+        "memberships"
       ],
       "type": "object"
     }
@@ -10464,6 +12065,339 @@
       "required": [
         "nodes",
         "edges"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "update_platform_settings",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "announcement": {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "defaultDailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultEntryModel": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultMonthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPlatformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "defaultWorkspaceId": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instanceInstructions": {
+          "maxLength": 8000,
+          "type": "string"
+        },
+        "passwordMinLength": {
+          "maximum": 128,
+          "minimum": 8,
+          "type": "integer"
+        },
+        "siteName": {
+          "maxLength": 80,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "announcement": {
+          "type": "string"
+        },
+        "defaultDailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultEntryModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultMonthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPlatformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "defaultWorkspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "envAdmins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instanceInstructions": {
+          "type": "string"
+        },
+        "passwordMinLength": {
+          "maximum": 128,
+          "minimum": 8,
+          "type": "integer"
+        },
+        "siteName": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "siteName",
+        "announcement",
+        "instanceInstructions",
+        "defaultWorkspaceId",
+        "defaultEntryModel",
+        "defaultDailyCallLimit",
+        "defaultMonthlyTokenBudget",
+        "defaultPlatformRole",
+        "passwordMinLength",
+        "envAdmins",
+        "version",
+        "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "update_user",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "displayName": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "platformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "userId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "dailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "hasPassword": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastLoginAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "login": {
+          "type": "string"
+        },
+        "memberships": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "disabled": {
+                "type": "boolean"
+              },
+              "principalId": {
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "owner",
+                  "builder",
+                  "operator",
+                  "member",
+                  "auditor"
+                ],
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "workspaceName": {
+                "type": "string"
+              },
+              "workspaceStatus": {
+                "enum": [
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "workspaceName",
+              "workspaceStatus",
+              "principalId",
+              "role",
+              "disabled"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "monthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mustChangePassword": {
+          "type": "boolean"
+        },
+        "platformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "login",
+        "displayName",
+        "platformRole",
+        "status",
+        "hasPassword",
+        "mustChangePassword",
+        "dailyCallLimit",
+        "monthlyTokenBudget",
+        "lastLoginAt",
+        "createdAt",
+        "memberships"
       ],
       "type": "object"
     }
