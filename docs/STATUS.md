@@ -101,11 +101,11 @@
 | 真实模型验证模式 | `--real <provider/model> [--runs N]` | 完成（PR #156；主机验证，数字见 `retrospective-2026-09-11.md` §2） |
 | 顺带修复 | grants 作用域按文本比对（#152）；采集器 `depends_on` 条件后缀（#157），均由真实模型或 CI 首次发现 | 完成 |
 
-**当前波次：两周稳定期**（冻结新能力，真实使用，收集问题；优先看遗留 27/29/30）。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
+**当前波次：W8 两周稳定期**（2026-09-11 起；冻结新能力，主机整栈常驻供真实使用，同时修遗留：27 已关（#159），29 根因已定位（入口容器启动自检的公网探测在弱网下致命退出，非 Handle 竞态），33 按 chat 隔离，30 待样本；其后 23 / 21 / 20 / 22）。运维决定项（E7 备份定时器，§4 第 6 项）按维护者意见排在所有开发波次之后。
 
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
-目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29），主机 `.env` 不再含 Explorer key；验收后回到停栈状态（仅 llm-proxy 与 fake-llm 在跑）。
+目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29），主机 `.env` 不再含 Explorer key；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），不再在验收后停栈。
 
 后续：两周稳定期 → 镜像发布与 P5。
 
@@ -142,13 +142,14 @@
 | 24 | `find_active_fact_for_identity`（0017）的 `for update` 在被阻塞期间若持锁方 supersede 了该行，重查按 `superseded_at is null` 过滤后返回 0 行而非后继行；PR 17 的 advisory lock + 重读封住了两事务形态，三事务交错（第二个等锁者的重读又阻塞在第三个事务的 supersede 上）仍可能插入一条多余的活跃 Fact。0017 既有机制的局限，复审 17 时发现 | P3 | 待排 | 开放 |
 | 25 | CI 偶发：`interfaces/ws/server.test.ts` 的 WS 端到端用例在 PR #140 首跑时 5 秒超时，重跑通过（其余 1100 用例均过）；疑为 runner 争用，若复现需给该用例单独 `testTimeout` 或查 listener 启动时序 | P3 | 待排 | 开放 |
 | 26 | `accept_s2.sh` 的 cleanup 对 accept-s2 profile 做 `down` 时连基础栈一起停掉，S1→S2→S3 无法一次连跑；应改为只 `rm -sf` 五个夹具服务，或由统一 driver 在 S3 前重新拉起（2026-09-10 主机实测） | P2 | W6 | 关闭（PR #145：cleanup 改为只 `rm -sf` 六个夹具容器，主机 S1→S2→S3 连跑通过） |
-| 27 | outbox dispatcher 构造时未传 `onError`，消费者异常被静默吞掉（#152 的根因之所以晚发现） | P2 | 待排 | 开放 |
+| 27 | outbox dispatcher 构造时未传 `onError`，消费者异常被静默吞掉（#152 的根因之所以晚发现） | P2 | W8 | 关闭（PR #159：`createBackgroundServices` 加 `onOutboxError`，`main()` 传 `app.log.error`；投递失败以 `OutboxDeliveryError` 带 outbox id / 事件类型 / 次数 / 是否 dead-letter 记日志） |
 | 28 | 已有图里 `depends_on` 指向的幻影 Container（`<service>:service_healthy:false`）要等采集器下一轮 supersede；旧对象留作历史 | P3 | 稳定期 | 开放 |
 | 29 | 真实模型下新工作区首轮 Turn `interrupted`、0 次工具调用（入口容器冷启动 / Handle 就绪竞态，S3 real 1/3 的失败） | P2 | 稳定期 | 开放 |
 | 30 | 真实模型下 docker_restart 一次 ActionRequest executed、容器已重启但 Task failed 且 result 为空（S2 real 1/3 的失败） | P2 | 稳定期 | 开放 |
 | 31 | Explorer 会话 cookie 不随 `rotate_api_key` 失效（8 小时 TTL 为界；`disable_principal` 即时生效） | P3 | 记债 | 开放 |
-| 32 | CodeQL 预存告警：`hashApiKey` 用 sha256（32 字节随机 key，判定为合理）需维护者 dismiss；`e2e / web-e2e` 需维护者加为必需检查 | — | 决定 | 待维护者 |
-| 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | 待决定 | 开放 |
+| 32 | CodeQL 预存告警：`hashApiKey` 用 sha256（32 字节随机 key，判定为合理）需维护者 dismiss；`e2e / web-e2e` 需维护者加为必需检查 | — | 决定 | 关闭（2026-09-11 维护者已把 `e2e / web-e2e` 加为必需检查并 dismiss 告警 57） |
+| 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | 决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件；待实现 |
+| 34 | kernel 日志有 pg `DeprecationWarning: Calling client.query() when the client is already executing a query`（2026-09-11 主机 v0.5.0 首轮对话时出现）——同一 client 上并发 query，pg@9 将不再允许；需定位是哪条路径在 `withWorkspace` 的 client 上不等待就发第二条语句 | P2 | 待排 | 开放 |
 
 ## 5. 更新规则
 
