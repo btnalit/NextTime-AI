@@ -41,11 +41,26 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   await page.goto('/');
   // The isolation scenario below signs in as A, then B, then A again in the *same tab*. A previous
   // login survives in `sessionStorage` (`lib/session.ts`) and App.tsx auto-connects with it on
-  // load, which leaves the login form disabled (or gone) by the time `fill` runs — so drop the
-  // stored key and reload to a clean login page first. A no-op on a fresh context.
-  await page.evaluate(() => sessionStorage.clear());
-  await page.reload();
-  await page.getByPlaceholder('sk-...').fill(apiKey);
+  // load, so the login form is disabled while that connect is in flight and gone once it lands.
+  // Sign the old session out through the product's own "Forget key" (clearing storage under an
+  // in-flight connect is not enough — `connect()` re-saves the key once the WS authenticate
+  // resolves). Wait until the page has settled either way: shell (Forget key visible) or an
+  // enabled login form; a fresh context lands on the second immediately.
+  const forgetKey = page.getByRole('button', { name: 'Forget key' });
+  const keyInput = page.getByPlaceholder('sk-...');
+  await expect
+    .poll(
+      async () => {
+        if (await forgetKey.isVisible()) return 'shell';
+        if (await keyInput.isEnabled().catch(() => false)) return 'login';
+        return 'pending';
+      },
+      { timeout: 15_000 },
+    )
+    .not.toBe('pending');
+  if (await forgetKey.isVisible()) await forgetKey.click();
+  await expect(keyInput).toBeEnabled({ timeout: 15_000 });
+  await keyInput.fill(apiKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
   // Not a URL/hash assertion: a bare `/` load has no `location.hash` at all, and
   // `lib/router.ts`'s `routeFromHash('')` resolves straight to the default `chats` route without
