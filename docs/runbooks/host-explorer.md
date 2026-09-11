@@ -1,7 +1,7 @@
 # Runbook：host-explorer（Explorer 挂载与三工作区验证）
 
 对应任务：`docs/development-tasks.md` §S3.5。设计文档 §9.5（九个端点契约）、§7.6（Explorer 挂载与
-human 通道：调用者自己的 API key 或控制台登录后的会话 cookie，W7）。前置：`host-caddy.md`（caddy
+human 通道：调用者自己的 API key 或控制台登录后的会话 cookie，W7 / S4.1）。前置：`host-caddy.md`（caddy
 已上线，`/api` 已反代到 kernel）；至少已有一些
 Fact / Decision 可看（例如 S3.3 采集器跑过一轮，或手工 `assert_fact`/`record_decision` 过）。
 
@@ -24,23 +24,27 @@ Explorer 是第三方开源的 Knowledge Explorer 静态前端（`semantica-agi/
    装它们。只有选择步骤 1 末尾"没有 Docker、只想本地验证构建产物"那条不常见的替代路径
    （直接在主机上跑 `sh explorer/build.sh`）时，主机才需要自带 `node`/`npm`/`git`。
 
-## 鉴权（W7 起）
+## 鉴权（W7 起，S4.1 改为控制台会话）
 
-Explorer 的九个端点不再靠 caddy 注入一把共享 key。控制台登录成功后立刻用自己的
-`Authorization: Bearer <api key>` 调 `POST /api/explorer/session`，内核签发一个 `HttpOnly;
-Secure; SameSite=Strict; Path=/api` 的 cookie `nexttime_explorer_session`（内核 Handle 密钥对签的
-EdDSA JWT，独立 `typ`，8 小时 TTL，claims 为 ws/sub/sid；实现见
-`packages/kernel/src/interfaces/explorer-contract/session.ts`）；"忘记 key"调
-`DELETE /api/explorer/session` 清掉它。九个端点每次请求先认 `X-API-Key`（脚本/curl 用这条，
-`scripts/accept_s3.sh` 的 driver 也走这条），没有才认这个 cookie；走 cookie 时内核每次请求都重新
-读一遍 Principal（未被禁用）和它的 `kind='web'` 会话（`active`）。角色是平的、无序，任何角色的
-成员都能读——和 W7 之前一样，没有角色门槛。撤权：`disable_principal` 立即生效；`rotate_api_key`
-不影响已签发的 cookie（受 8 小时 TTL 约束）。caddy 不再持有任何 Explorer 凭证。若内核没配 Handle
-签名密钥，`POST /api/explorer/session` 返回 503，此时只有 `X-API-Key` 路径可用。
+Explorer 的九个端点不再靠 caddy 注入一把共享 key。S4.1 起浏览器凭证就是**控制台会话 cookie**
+`nexttime_console_session`（用户名 + 密码登录 `POST /api/auth/login` 时由内核签发；内核 Handle 密钥对
+签的 EdDSA JWT，独立 `typ`，8 小时 TTL，claims 为 uid/sid；实现见
+`packages/kernel/src/application/identity/console-session.ts`）——W7 那枚 Explorer 专用 cookie
+`nexttime_explorer_session` 与 `POST`/`DELETE /api/explorer/session` 路由已退役（返回 404）。九个端点
+每次请求先认 `X-API-Key`（脚本/curl 用这条，`scripts/accept_s3.sh` 的 driver 也走这条），没有才认这个
+cookie；走 cookie 时内核每次请求都重新读一遍用户会话（未吊销、未过期、用户未停用），再按工作区找到
+这个用户在该工作区的成员 Principal（未被禁用、工作区未停用）。工作区来自 `X-Workspace-Id` 头、控制台
+切换工作区时写下的选择器 cookie `nexttime_workspace`（非 HttpOnly，只是选择器，不是凭证——成员资格
+仍每次校验），或该用户唯一的成员资格。未改动的 Explorer 静态包发不出自定义头，所以靠后两者。角色是
+平的、无序，任何角色的成员都能读——没有角色门槛。撤权：停用用户 / `disable_principal` 立即生效；
+`rotate_api_key` 不影响已签发的 cookie（受 8 小时 TTL 约束，STATUS 遗留 31）。caddy 不再持有任何
+Explorer 凭证。若内核没配 Handle 签名密钥，`POST /api/auth/login` 返回 503，此时只有 `X-API-Key`
+路径可用。**用 API key 登录控制台的会话没有这枚 cookie**（API key 是给自动化与过渡期的），要在浏览器里
+看 Explorer 就用用户名 + 密码登录。
 
-浏览器打开方式：先在同一浏览器登录控制台，再打开 `/explorer/`（或点控制台侧栏的"图 Explorer"
-链接，新标签页打开）——未改动的 Explorer 静态包做的是普通同源 `fetch()`，浏览器会自动带上这个
-cookie。
+浏览器打开方式：先在同一浏览器用用户名 + 密码登录控制台并选中工作区，再打开 `/explorer/`（或点控制台
+侧栏的"图 Explorer"链接，新标签页打开）——未改动的 Explorer 静态包做的是普通同源 `fetch()`，浏览器会
+自动带上这两枚 cookie。
 
 ## 步骤
 
@@ -133,8 +137,9 @@ kernel——W7 起没有单独的 Explorer 凭证可撤，撤的就是账号本�
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `/explorer/` 显示"Explorer bundle not built" | `.env` 里没设 `EXPLORER_BUILD=1`（默认用占位页），或设了但还没 `docker compose build caddy` | 按"步骤 1"补跑 |
-| Explorer 页面能打开，但 Graph/Decisions 的请求是 401 | 没有先在同一浏览器登录控制台（cookie 未安装）、cookie 已过期（8 h）、或该 Principal 已被 `disable_principal` | 回控制台重新登录后再打开 `/explorer/` |
-| `POST /api/explorer/session` 返回 503 | 内核没有 Handle 签名密钥（`HANDLE_PRIVATE_KEY_FILE`） | 按 host-bootstrap.md 生成密钥；`X-API-Key` 路径不受影响 |
+| Explorer 页面能打开，但 Graph/Decisions 的请求是 401 | 没有先在同一浏览器用用户名 + 密码登录控制台（用 API key 登录的会话没有 cookie）、cookie 已过期（8 h）或已登出、用户已停用、该 Principal 已被 `disable_principal` | 回控制台用密码重新登录后再打开 `/explorer/` |
+| Explorer 请求是 403 | 控制台里没有选中工作区且该用户有多个成员资格（`workspace_required`），或在选中的工作区里没有成员资格 | 回控制台切到目标工作区（会写 `nexttime_workspace` 选择器 cookie）再刷新 Explorer |
+| `POST /api/auth/login` 返回 503 | 内核没有 Handle 签名密钥（`HANDLE_PRIVATE_KEY_FILE`） | 按 host-bootstrap.md 生成密钥；`X-API-Key` 路径不受影响 |
 | 页面加载出来但静态资源（JS/CSS）404，或 Network 里看到请求打到 `/assets/...` 而不是 `/explorer/assets/...` | 构建时没有 `--base=/explorer/`（例如手工跑了 `vite build` 而不是 `explorer/build.sh`） | 用 `explorer/build.sh`，不要绕过它手工构建 |
 | Ontology Hub / Enrich / Manage 里的 KG Overview、SPARQL 等标签页报错或空白 | 预期——本任务只实现 Graph/Decision/Lineage 三个工作区的后端（design doc §9.5"只做这些"），其余标签页仍在导航里但没有对应后端 | 无需处理；不要把这当成故障 |
 | `create_principal` 返回 403 | 调用者不是 owner 角色 | 换一个 owner 的 API key |

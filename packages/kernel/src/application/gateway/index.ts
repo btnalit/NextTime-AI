@@ -9,16 +9,32 @@ export {
   generateApiKey,
   hashApiKey,
   lookupPrincipalByApiKeyHash,
-  lookupWebSessionPrincipal,
+  lookupMembershipPrincipal,
   authenticateHuman,
+  authenticateUserInWorkspace,
 } from './auth.js';
 export type { PrincipalRow, SessionRow, AuthenticatedHuman } from './auth.js';
 
 export { authenticateHandle } from './handle-auth.js';
 export type { HandleAuthDeps } from './handle-auth.js';
 
-export { resolveCaller, loadHandlePublicKeyFor, UnauthorizedError } from './resolve-caller.js';
-export type { ResolvedCaller, ResolveCallerDeps } from './resolve-caller.js';
+export {
+  resolveCaller,
+  resolveRequestCaller,
+  resolveConsoleUser,
+  loadHandlePublicKeyFor,
+  loadHandlePrivateKeyFor,
+  UnauthorizedError,
+  WorkspaceRequiredError,
+  CsrfHeaderRequiredError,
+  PasswordChangeRequiredError,
+} from './resolve-caller.js';
+export type {
+  ResolvedCaller,
+  ResolveCallerDeps,
+  RequestCredentials,
+  ConsoleUser,
+} from './resolve-caller.js';
 
 export { authorizeCapabilityCall, roleSatisfiesMinRole, ForbiddenError } from './authorize.js';
 

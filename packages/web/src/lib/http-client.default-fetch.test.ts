@@ -32,7 +32,7 @@ describe('HttpClient default fetch binding', () => {
     });
     vi.stubGlobal('fetch', stub);
 
-    const client = new HttpClient({ apiKey: 'sk-test' });
+    const client = new HttpClient({ auth: { kind: 'apiKey', apiKey: 'sk-test' } });
     await expect(client.call('list_pending')).resolves.toEqual([]);
 
     expect(stub).toHaveBeenCalledTimes(1);
@@ -45,7 +45,7 @@ describe('HttpClient default fetch binding', () => {
   });
 
   it('resolves the global fetch at call time, so a fetch stubbed after construction is honored', async () => {
-    const client = new HttpClient({ apiKey: 'sk-test' });
+    const client = new HttpClient({ auth: { kind: 'apiKey', apiKey: 'sk-test' } });
     const stub = vi.fn(() => Promise.resolve(jsonResponse({ ok: true, result: { late: true } })));
     vi.stubGlobal('fetch', stub);
 
@@ -69,7 +69,7 @@ describe('HttpClient default fetch binding', () => {
     const buggy = { fetchImpl: fetch };
     expect(() => buggy.fetchImpl('/api/cap/x')).toThrow(/Illegal invocation/);
 
-    const client = new HttpClient({ apiKey: 'sk-test' });
+    const client = new HttpClient({ auth: { kind: 'apiKey', apiKey: 'sk-test' } });
     await expect(client.call('get_task', { taskId: 't1' })).resolves.toBeNull();
   });
 });

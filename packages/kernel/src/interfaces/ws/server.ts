@@ -14,7 +14,14 @@ import type {
   ResolveCallerDeps,
   ResolvedCaller,
 } from '../../application/gateway/index.js';
-import { dispatchCapability, resolveCaller } from '../../application/gateway/index.js';
+import {
+  ForbiddenError,
+  UnauthorizedError,
+  dispatchCapability,
+  resolveCaller,
+  resolveRequestCaller,
+} from '../../application/gateway/index.js';
+import { WORKSPACE_COOKIE, parseCookieHeader } from '../../application/identity/index.js';
 import type {
   JsonRpcErrorResponse,
   JsonRpcId,
@@ -348,7 +355,42 @@ function subscribeCallerToPrincipalPush(
   );
 }
 
+/**
+ * S4.1 (design doc §7.11 "CSRF … WS 握手校验 Origin"): a browser always sends `Origin` on a
+ * WebSocket upgrade and the console session cookie rides along with it, so a page on another
+ * origin could open `/ws` as the logged-in user — `SameSite=Strict` does not cover WebSocket
+ * upgrades in every browser. When `Origin` is present its host must equal the request's own host
+ * (`X-Forwarded-Host` if a proxy set it, else `Host`; caddy passes `Host` through unchanged).
+ * Non-browser clients (the acceptance driver, curl-style scripts) send no `Origin` and are
+ * unaffected — they authenticate with an API key, which no cross-site page can obtain.
+ */
+export function originMatchesHost(headers: {
+  readonly origin?: string | string[] | undefined;
+  readonly host?: string | string[] | undefined;
+  readonly 'x-forwarded-host'?: string | string[] | undefined;
+}): boolean {
+  const origin = Array.isArray(headers.origin) ? headers.origin[0] : headers.origin;
+  if (!origin) return true;
+  const forwarded = headers['x-forwarded-host'];
+  const hostHeader = (Array.isArray(forwarded) ? forwarded[0] : forwarded) ?? headers.host;
+  const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
+  if (!host) return false;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  return originHost.toLowerCase() === host.trim().toLowerCase();
+}
+
 function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRouteDeps): void {
+  if (!originMatchesHost(request.headers)) {
+    send(socket, errorResponse(null, WS_ERROR_CODES.FORBIDDEN, 'cross-origin WebSocket rejected'));
+    socket.close();
+    return;
+  }
+
   const state: ConnectionState = {
     caller: undefined,
     authFailed: false,
@@ -373,17 +415,47 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
     void handleFrame(raw);
   });
 
-  async function authenticateFromParams(rawParams: unknown): Promise<ResolvedCaller | undefined> {
-    const params = (rawParams ?? {}) as { token?: unknown };
+  type AuthAttempt =
+    | { readonly caller: ResolvedCaller }
+    | { readonly error: { readonly code: number; readonly message: string } };
+
+  /** First-frame `authenticate`: `{token}` (an API key — unchanged since S1.4) or, S4.1,
+   *  `{workspaceId}` for a browser whose console session cookie came with the upgrade. */
+  async function authenticateFromParams(rawParams: unknown): Promise<AuthAttempt> {
+    const params = (rawParams ?? {}) as { token?: unknown; workspaceId?: unknown };
     const token = typeof params.token === 'string' ? params.token : undefined;
-    if (!token) return undefined;
+    const workspaceId = typeof params.workspaceId === 'string' ? params.workspaceId : undefined;
+    const unauthorized: AuthAttempt = {
+      error: { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' },
+    };
+    if (!token && !workspaceId && !request.headers.cookie) return unauthorized;
     try {
-      return await resolveCaller(`Bearer ${token}`, {
-        pool: deps.pool,
-        loadHandlePublicKey: deps.loadHandlePublicKey,
-      });
-    } catch {
-      return undefined;
+      if (token) {
+        return {
+          caller: await resolveCaller(`Bearer ${token}`, {
+            pool: deps.pool,
+            loadHandlePublicKey: deps.loadHandlePublicKey,
+          }),
+        };
+      }
+      return {
+        caller: await resolveRequestCaller(
+          {
+            cookie: request.headers.cookie,
+            workspaceId:
+              workspaceId ?? parseCookieHeader(request.headers.cookie).get(WORKSPACE_COOKIE),
+            // The upgrade is protected by the Origin check in `handleConnection`, not a header.
+            requireCsrfHeader: false,
+          },
+          { pool: deps.pool, loadHandlePublicKey: deps.loadHandlePublicKey },
+        ),
+      };
+    } catch (err) {
+      if (err instanceof ForbiddenError) {
+        return { error: { code: WS_ERROR_CODES.FORBIDDEN, message: err.message } };
+      }
+      if (err instanceof UnauthorizedError) return unauthorized;
+      return unauthorized;
     }
   }
 
@@ -405,8 +477,14 @@ function handleConnection(socket: WebSocket, request: FastifyRequest, deps: WsRo
         socket.close();
         return;
       }
-      const caller = await authenticateFromParams(req.params);
-      if (!caller || !isHumanChannel(caller)) {
+      const attempt = await authenticateFromParams(req.params);
+      if ('error' in attempt) {
+        send(socket, errorResponse(req.id, attempt.error.code, attempt.error.message));
+        socket.close();
+        return;
+      }
+      const caller = attempt.caller;
+      if (!isHumanChannel(caller)) {
         send(socket, errorResponse(req.id, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));
         socket.close();
         return;

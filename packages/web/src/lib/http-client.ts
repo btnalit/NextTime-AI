@@ -29,6 +29,15 @@
  * server proxies the same path to `KERNEL_DEV_URL` (vite.config.ts) — this file never constructs
  * an absolute URL the way `lib/ws-url.ts` must for `WebSocket` (which requires an explicit
  * scheme+host; `fetch` does not).
+ *
+ * S4.1: two credential shapes now reach `/api/cap/<name>` (`interfaces/http/capability-route.ts`
+ * `resolveRequestCaller`) — the pre-existing API key (`Authorization: Bearer <key>`) and the
+ * console session cookie (`nexttime_console_session`, HttpOnly — never read from here, just relied
+ * on via `credentials: 'same-origin'`) plus the workspace the caller wants to act in
+ * (`X-Workspace-Id`). Every state-changing call already requires `X-Requested-With: nexttime`
+ * (§7.11 CSRF) on the cookie path; sent unconditionally here (harmless, and simpler than branching
+ * on HTTP method) rather than only on non-GET calls, matching every other console-side auth header
+ * already being unconditional.
  */
 
 export type HttpErrorKind = 'network' | 'invalid_response' | 'capability_error';
@@ -82,10 +91,28 @@ function parseCapabilityEnvelope(
   return undefined;
 }
 
-export interface HttpClientOptions {
-  /** The API key sent as `Authorization: Bearer <apiKey>` — the same key `WsClient.authenticate`
-   *  used, from `lib/session.ts`. Never logged. */
+/** The API key channel — unchanged since S1.8. */
+export interface ApiKeyAuth {
+  readonly kind: 'apiKey';
+  /** Sent as `Authorization: Bearer <apiKey>` — the same key `WsClient.authenticate` used, from
+   *  `lib/session.ts`. Never logged. */
   readonly apiKey: string;
+}
+
+/** The console session cookie channel (S4.1) — no `Authorization` header at all (the kernel
+ *  ignores the cookie whenever one is present, `resolveRequestCaller`'s own doc comment, so never
+ *  send both). `workspaceId` is `null` before one has been chosen or resolved (e.g. a platform
+ *  admin with no memberships) — every capability call then omits `X-Workspace-Id` and the kernel
+ *  answers 403 `workspace_required` unless the caller has exactly one active membership. */
+export interface CookieAuth {
+  readonly kind: 'cookie';
+  readonly workspaceId: string | null;
+}
+
+export type HttpClientAuth = ApiKeyAuth | CookieAuth;
+
+export interface HttpClientOptions {
+  readonly auth: HttpClientAuth;
   /** Injectable `fetch`, for tests. Defaults to a wrapper around the global `fetch` (see module
    *  doc comment — never the bare global, which would be invoked with the wrong receiver). */
   readonly fetchImpl?: typeof fetch;
@@ -97,27 +124,32 @@ export interface HttpClientOptions {
 const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
 
 export class HttpClient {
-  private readonly apiKey: string;
+  private readonly auth: HttpClientAuth;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: HttpClientOptions) {
-    this.apiKey = options.apiKey;
+    this.auth = options.auth;
     this.fetchImpl = options.fetchImpl ?? defaultFetch;
   }
 
   /** Calls one capability. Resolves with `result` on `{ok:true}`; throws {@link HttpError}
    *  otherwise (network failure, malformed response body, or `{ok:false}`). */
   async call<T = unknown>(capabilityName: string, params: unknown = {}): Promise<T> {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'x-requested-with': 'nexttime',
+    };
+    const init: RequestInit = { method: 'POST', headers, body: JSON.stringify(params ?? {}) };
+    if (this.auth.kind === 'apiKey') {
+      headers.authorization = `Bearer ${this.auth.apiKey}`;
+    } else {
+      if (this.auth.workspaceId) headers['x-workspace-id'] = this.auth.workspaceId;
+      init.credentials = 'same-origin';
+    }
+
     let response: Response;
     try {
-      response = await this.fetchImpl(`/api/cap/${capabilityName}`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify(params ?? {}),
-      });
+      response = await this.fetchImpl(`/api/cap/${capabilityName}`, init);
     } catch (error) {
       throw new HttpError(
         'network',

@@ -10,9 +10,12 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishPrincipalPushEvent } from '../../application/chat/index.js';
 import { hashApiKey } from '../../application/gateway/index.js';
+import { CONSOLE_SESSION_COOKIE, createUser } from '../../application/identity/index.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createBackgroundServices, createServer } from '../../index.js';
 import type { BackgroundServices } from '../../index.js';
+import { WS_ERROR_CODES } from './rpc.js';
+import { originMatchesHost } from './server.js';
 
 /**
  * interfaces/ws/server.test: end-to-end WS tests against a real ephemeral listener on
@@ -136,6 +139,41 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5000, stepMs = 10
     await new Promise((resolve) => setTimeout(resolve, stepMs));
   }
 }
+
+describe('originMatchesHost (unit)', () => {
+  it('no Origin header → true (non-browser clients: curl, the acceptance driver)', () => {
+    expect(originMatchesHost({ host: 'example.com' })).toBe(true);
+  });
+
+  it('Origin host matches Host → true', () => {
+    expect(originMatchesHost({ origin: 'https://example.com', host: 'example.com' })).toBe(true);
+  });
+
+  it('a different Origin host → false', () => {
+    expect(originMatchesHost({ origin: 'https://evil.example', host: 'example.com' })).toBe(false);
+  });
+
+  it('X-Forwarded-Host wins over Host', () => {
+    expect(
+      originMatchesHost({
+        origin: 'https://example.com',
+        host: 'internal-upstream:8080',
+        'x-forwarded-host': 'example.com',
+      }),
+    ).toBe(true);
+    expect(
+      originMatchesHost({
+        origin: 'https://example.com',
+        host: 'example.com',
+        'x-forwarded-host': 'other.example',
+      }),
+    ).toBe(false);
+  });
+
+  it('a malformed Origin → false', () => {
+    expect(originMatchesHost({ origin: 'not a url', host: 'example.com' })).toBe(false);
+  });
+});
 
 describe.runIf(DATABASE_URL !== undefined)(
   '/ws chat protocol (integration, real Postgres + real listener)',
@@ -326,6 +364,157 @@ describe.runIf(DATABASE_URL !== undefined)(
       } finally {
         await handleApp.close();
       }
+    });
+
+    // S4.1 (design doc §7.11 "CSRF ... WS 握手校验 Origin"): a cross-origin upgrade is rejected
+    // before any auth attempt — see interfaces/ws/server.ts's own `originMatchesHost` doc comment.
+    it('a cross-origin Origin header → FORBIDDEN as the very first frame, then the socket closes', async () => {
+      const rawSocket = new WebSocket(wsUrl, { headers: { origin: 'https://evil.example' } });
+      const firstMessage = await new Promise<JsonRpcMessage>((resolve, reject) => {
+        rawSocket.once('message', (raw) => resolve(JSON.parse(raw.toString()) as JsonRpcMessage));
+        rawSocket.once('error', reject);
+      });
+      expect(firstMessage.error?.code).toBe(WS_ERROR_CODES.FORBIDDEN);
+      await new Promise<void>((resolve) => {
+        if (rawSocket.readyState === rawSocket.CLOSED) {
+          resolve();
+          return;
+        }
+        rawSocket.once('close', () => resolve());
+      });
+    });
+
+    // S4.1: the console session cookie (application/identity/console-session.ts) authenticates
+    // `/ws` via the first-frame `authenticate {workspaceId}` RPC — the WS equivalent of
+    // resolveRequestCaller's cookie path (interfaces/http/capability-route.ts already covers the
+    // HTTP side; interfaces/http/auth-routes.integration.test.ts covers `POST /api/auth/login`
+    // itself). Needs its own server instance with an injected Handle keypair (the shared
+    // `app`/`wsUrl` above has none — see the existing Handle-token tests' own comments for why).
+    describe('console-session cookie authenticate {workspaceId}', () => {
+      let keyApp: FastifyInstance;
+      let keyWsUrl: string;
+      let consoleLogin: string;
+      const consolePassword = 'correct horse battery staple';
+      let secondWorkspaceId: string;
+      let unrelatedWorkspaceId: string;
+
+      beforeAll(async () => {
+        const { publicKey, privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+          crv: 'Ed25519',
+          extractable: true,
+        });
+
+        keyApp = createServer({
+          pool,
+          loadHandlePublicKey: async () => publicKey,
+          loadHandlePrivateKey: async () => privateKey,
+        });
+        const address = await keyApp.listen({ port: 0, host: '127.0.0.1' });
+        keyWsUrl = `${address.replace('http://', 'ws://')}/ws`;
+
+        secondWorkspaceId = await adminInsertWorkspace('ws-server-test-second-workspace');
+        unrelatedWorkspaceId = await adminInsertWorkspace('ws-server-test-unrelated-workspace');
+
+        consoleLogin = `ws-console-${randomUUID().slice(0, 8)}`;
+        const user = await createUser(pool, {
+          login: consoleLogin,
+          displayName: 'WS Console User',
+          password: consolePassword,
+        });
+
+        // Membership 1: the existing owner Principal in the outer describe's own `workspaceId`.
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) => {
+            await client.query(
+              'update principals set user_id = $3 where workspace_id = $1 and id = $2',
+              [workspaceId, ownerId, user.id],
+            );
+          },
+          { skipRoleSwitch: true },
+        );
+
+        // Membership 2: a second Principal in a second workspace — two active memberships total,
+        // so `authenticate {}` with no workspaceId hint cannot resolve one on its own.
+        const secondPrincipalId = randomUUID();
+        await withWorkspace(
+          pool,
+          { workspaceId: secondWorkspaceId, principalId: secondPrincipalId },
+          async (client) => {
+            await client.query(
+              `insert into principals (workspace_id, id, kind, role, display_name, user_id)
+             values ($1, $2, 'human', 'member', 'ws console user', $3)`,
+              [secondWorkspaceId, secondPrincipalId, user.id],
+            );
+          },
+          { skipRoleSwitch: true },
+        );
+      });
+
+      afterAll(async () => {
+        await keyApp.close();
+      });
+
+      async function loginForCookie(): Promise<string> {
+        const response = await keyApp.inject({
+          method: 'POST',
+          url: '/api/auth/login',
+          headers: { 'x-requested-with': 'nexttime', 'content-type': 'application/json' },
+          payload: { login: consoleLogin, password: consolePassword },
+        });
+        const raw = response.headers['set-cookie'];
+        const setCookie = Array.isArray(raw) ? raw[0] : raw;
+        if (typeof setCookie !== 'string') throw new Error('no Set-Cookie header');
+        const match = new RegExp(`^${CONSOLE_SESSION_COOKIE}=([^;]*)`).exec(setCookie);
+        if (!match?.[1]) throw new Error(`unexpected Set-Cookie: ${setCookie}`);
+        return match[1];
+      }
+
+      it('authenticate {workspaceId} with the cookie → {authenticated:true}, then list_chats works', async () => {
+        const token = await loginForCookie();
+        const client = await WsRpcClient.connect(keyWsUrl, {
+          cookie: `${CONSOLE_SESSION_COOKIE}=${token}`,
+        });
+        const authResult = await client.call<{ authenticated: boolean }>('authenticate', {
+          workspaceId,
+        });
+        expect(authResult.authenticated).toBe(true);
+        const chats = await client.call<{ items: unknown[] }>('list_chats', {});
+        expect(Array.isArray(chats.items)).toBe(true);
+        client.close();
+      });
+
+      it('authenticate {workspaceId} for a workspace the user is not a member of → FORBIDDEN', async () => {
+        const token = await loginForCookie();
+        const client = await WsRpcClient.connect(keyWsUrl, {
+          cookie: `${CONSOLE_SESSION_COOKIE}=${token}`,
+        });
+        await expect(
+          client.call('authenticate', { workspaceId: unrelatedWorkspaceId }),
+        ).rejects.toMatchObject({ code: WS_ERROR_CODES.FORBIDDEN });
+        await client.waitForClose();
+      });
+
+      it('authenticate {} with no workspaceId and two memberships → FORBIDDEN naming X-Workspace-Id', async () => {
+        const token = await loginForCookie();
+        const client = await WsRpcClient.connect(keyWsUrl, {
+          cookie: `${CONSOLE_SESSION_COOKIE}=${token}`,
+        });
+        await expect(client.call('authenticate', {})).rejects.toMatchObject({
+          code: WS_ERROR_CODES.FORBIDDEN,
+          message: expect.stringContaining('X-Workspace-Id'),
+        });
+        await client.waitForClose();
+      });
+
+      it('authenticate {} with no cookie at all → UNAUTHORIZED', async () => {
+        const client = await WsRpcClient.connect(keyWsUrl);
+        await expect(client.call('authenticate', {})).rejects.toMatchObject({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+        });
+        await client.waitForClose();
+      });
     });
 
     it('an unknown method → METHOD_NOT_FOUND', async () => {

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import type { ExplorerRouteDeps } from '../explorer-contract/index.js';
 import { registerExplorerRoutes } from '../explorer-contract/index.js';
+import type { AuthRouteDeps } from './auth-routes.js';
+import { registerAuthRoutes } from './auth-routes.js';
 import type { CapabilityRouteDeps } from './capability-route.js';
 import { handleCapabilityRoute } from './capability-route.js';
 
@@ -19,6 +21,7 @@ import { handleCapabilityRoute } from './capability-route.js';
  */
 
 export type { CapabilityRouteDeps } from './capability-route.js';
+export type { AuthRouteDeps } from './auth-routes.js';
 export type { ExplorerRouteDeps } from '../explorer-contract/index.js';
 
 /** Registers `POST /api/cap/:name` on `app`. `GET /api/health` stays in index.ts's `createServer`. */
@@ -33,4 +36,10 @@ export function registerCapabilityRoutes(app: FastifyInstance, deps: CapabilityR
  *  independently later without one accidentally constraining the other. */
 export function registerExplorerHttpRoutes(app: FastifyInstance, deps: ExplorerRouteDeps): void {
   registerExplorerRoutes(app, deps);
+}
+
+/** S4.1: `/api/auth/*` + `/api/platform/setup*` (console login, first-run setup) — see
+ *  auth-routes.ts's own module doc comment. Same `deps` shape as the capability routes. */
+export function registerAuthHttpRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
+  registerAuthRoutes(app, deps);
 }

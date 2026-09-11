@@ -6,6 +6,7 @@ import {
 } from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { ensureUserForHumanPrincipal } from '../identity/index.js';
 import { generateApiKey, hashApiKey } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -216,6 +217,18 @@ export const createPrincipalHandler: CapabilityHandler = async (client, workspac
   );
   const row = inserted.rows[0];
   if (!row) throw new Error('create_principal: INSERT ... RETURNING produced no row');
+
+  // S4.1: every human Principal is a user's membership (principals.user_id, migration 0019) —
+  // `create_principal` always writes kind='human' (see this file's module doc), so this always
+  // applies. Runs as `nexttime_app` (`SET LOCAL ROLE`, the ordinary RLS-scoped path this handler
+  // already uses): `ensureUserForHumanPrincipal` inserts exactly the two `users` columns 0019
+  // grants that role (`login`, `display_name`) and reads back only `id` — never the admin-path
+  // `insertUser`. The user has no password; an admin sets one when that person should log in.
+  await ensureUserForHumanPrincipal(client, {
+    workspaceId,
+    id: row.id,
+    displayName,
+  });
 
   const principal: PrincipalDetailRow = {
     id: row.id,

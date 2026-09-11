@@ -1,41 +1,83 @@
 import { type FormEvent, useState } from 'react';
+import { type SessionResult, login as apiLogin } from '../lib/auth-api.js';
 import { describeError } from '../lib/errors.js';
+import { HttpError } from '../lib/http-client.js';
+import { ApiKeyLoginDetails } from './ApiKeyLoginDetails.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Input, describedBy } from './ui/Field.js';
-import { Kbd } from './ui/Kbd.js';
+import { Field, Input } from './ui/Field.js';
 
 /**
- * components/LoginPage: the API-key sign-in (design doc §7.6; S1.8 deliverable 1). Collects the
- * key and hands it to `onLogin`, which owns opening the socket and authenticating (src/App.tsx).
- * The key is held in component state only until then; `lib/session.ts` keeps it in
- * `sessionStorage` afterwards — never localStorage, never a cookie, never logged.
+ * components/LoginPage: the console sign-in screen (design doc §7.11; S4.1). The primary form is
+ * login name + password (`POST /api/auth/login`, self-contained — this component owns the fetch,
+ * unlike the API-key path below); a collapsed `<details>` (`ApiKeyLoginDetails`) holds the
+ * pre-S4.1 API-key form, whose multi-step WS connect + authenticate is still owned by `App.tsx`
+ * (`onApiKeyLogin`/`apiKeyPending`/`apiKeyError`).
  */
 export interface LoginPageProps {
-  readonly onLogin: (apiKey: string) => void;
-  readonly pending: boolean;
-  readonly error: unknown | null;
+  readonly onApiKeyLogin: (apiKey: string) => void;
+  readonly apiKeyPending: boolean;
+  readonly apiKeyError: unknown | null;
+  readonly onLoggedIn: (result: SessionResult) => void;
+  /** Injectable `fetch` for tests — see `lib/auth-api.ts`'s own module doc comment. */
+  readonly fetchImpl?: typeof fetch;
 }
 
-export function LoginPage({ onLogin, pending, error }: LoginPageProps) {
-  const [apiKey, setApiKey] = useState('');
-  const [revealed, setRevealed] = useState(false);
+/** Kernel wire code → the exact Chinese copy this page shows for a login failure (§7.11's own
+ *  error taxonomy: `bad_credentials`/`locked`/`disabled`/`sessions_unavailable`). Anything else
+ *  falls back to the kernel's own message via `ErrorBanner`. */
+function loginErrorMessage(err: unknown): string | null {
+  if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
+  switch (err.code) {
+    case 'bad_credentials':
+      return '登录名或密码不正确';
+    case 'locked':
+      return '尝试次数过多，请几分钟后再试';
+    case 'disabled':
+      return '此账户已停用';
+    case 'sessions_unavailable':
+      return '控制台会话尚未配置签名密钥，暂时无法使用密码登录 (no Handle signing key configured on this kernel)';
+    default:
+      return null;
+  }
+}
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>): void {
+export function LoginPage({
+  onApiKeyLogin,
+  apiKeyPending,
+  apiKeyError,
+  onLoggedIn,
+  fetchImpl,
+}: LoginPageProps) {
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<unknown | null>(null);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const trimmed = apiKey.trim();
-    if (!trimmed || pending) return;
-    onLogin(trimmed);
+    const trimmedLogin = login.trim();
+    if (!trimmedLogin || !password || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await apiLogin({ login: trimmedLogin, password }, fetchImpl);
+      onLoggedIn(result);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
+  const inline = loginErrorMessage(error);
   const described = error === null || error === undefined ? null : describeError(error);
-  const unauthorized = described?.code === 'unauthorized';
 
   return (
     <div className="login-screen">
       <Card className="login-card" padded={false}>
-        <form className="stack" onSubmit={handleSubmit} noValidate>
+        <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
           <div className="login-brand">
             <div className="sidebar-mark" aria-hidden>
               N
@@ -46,63 +88,48 @@ export function LoginPage({ onLogin, pending, error }: LoginPageProps) {
             </div>
           </div>
 
-          <Field
-            id="api-key"
-            label="API key"
-            required
-            error={unauthorized ? 'This key was not accepted by the kernel.' : null}
-          >
-            <div className="input-group">
-              <Input
-                id="api-key"
-                name="api-key"
-                type={revealed ? 'text' : 'password'}
-                autoComplete="off"
-                spellCheck={false}
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                disabled={pending}
-                placeholder="sk-..."
-                invalid={unauthorized}
-                aria-describedby={describedBy('api-key', false, unauthorized)}
-                mono
-              />
-              <Button
-                variant="ghost"
-                size="s"
-                icon={revealed ? 'eye-off' : 'eye'}
-                iconOnly
-                aria-label={revealed ? 'Hide key' : 'Show key'}
-                aria-pressed={revealed}
-                onClick={() => setRevealed((value) => !value)}
-                disabled={pending}
-              />
-            </div>
+          <Field id="login-name" label="登录名 Login" required>
+            <Input
+              id="login-name"
+              name="login"
+              autoComplete="username"
+              value={login}
+              onChange={(event) => setLogin(event.target.value)}
+              disabled={submitting}
+            />
           </Field>
 
-          {described && !unauthorized ? (
+          <Field id="login-password" label="密码 Password" required>
+            <Input
+              id="login-password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              disabled={submitting}
+            />
+          </Field>
+
+          {inline ? (
+            <p className="field-error" role="alert">
+              {inline}
+            </p>
+          ) : described ? (
             <ErrorBanner error={error} title="Could not sign in" />
           ) : null}
 
           <Button
             type="submit"
             variant="primary"
-            loading={pending}
-            disabled={apiKey.trim().length === 0}
+            loading={submitting}
+            disabled={!login.trim() || !password}
           >
-            Sign in
+            Log in
           </Button>
-
-          <div className="login-footer">
-            <span>
-              Your key is issued by the workspace owner (<code>bootstrap add-principal</code>) and
-              is kept in this tab only until you sign out.
-            </span>
-            <span>
-              <Kbd>Enter</Kbd> to sign in
-            </span>
-          </div>
         </form>
+
+        <ApiKeyLoginDetails onLogin={onApiKeyLogin} pending={apiKeyPending} error={apiKeyError} />
       </Card>
     </div>
   );

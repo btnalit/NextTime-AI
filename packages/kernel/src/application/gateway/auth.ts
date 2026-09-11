@@ -155,46 +155,11 @@ export async function lookupPrincipalByApiKeyHash(
 }
 
 /**
- * W7 (interfaces/explorer-contract/session.ts): re-resolves the Principal an Explorer session
- * cookie names, on every request — the cookie is a bearer of identity, not of state, so the
- * kernel checks here that the Principal still exists and is not disabled (`disable_principal`,
- * same `disabled_at is null` predicate as {@link lookupPrincipalByApiKeyHash}) and that the
- * `kind='web'` sessions row it was minted for is still `active` and unexpired. Admin path for the
- * same reason as the API-key lookup: the row must be found before any workspace context is set,
- * and the query is pinned to one (workspace, principal, session) triple. `null` = 401.
- */
-export async function lookupWebSessionPrincipal(
-  pool: PoolLike,
-  ref: { readonly workspaceId: string; readonly principalId: string; readonly sessionId: string },
-): Promise<PrincipalRow | null> {
-  return withAdminClient(pool, async (client) => {
-    const result = await client.query<PrincipalDbRow>(
-      `select p.workspace_id, p.id, p.kind, p.role, p.display_name
-         from principals p
-         join sessions s
-           on s.workspace_id = p.workspace_id
-          and s.principal_id = p.id
-          and s.on_behalf_of = p.id
-        where p.workspace_id = $1
-          and p.id = $2
-          and p.disabled_at is null
-          and s.id = $3
-          and s.kind = 'web'
-          and s.status = 'active'
-          and (s.expires_at is null or s.expires_at > now())`,
-      [ref.workspaceId, ref.principalId, ref.sessionId],
-    );
-    const row = result.rows[0];
-    return row ? mapPrincipalRow(row) : null;
-  });
-}
-
-/**
  * Finds an unexpired `kind='web'` session for `principal` (`on_behalf_of` = the principal itself
  * — a human always acts on its own behalf, I13) and reuses it, or creates a new one. `client` must
  * already be inside a `withWorkspace()` transaction scoped to `principal.workspaceId`.
  */
-async function createOrReuseWebSession(
+export async function createOrReuseWebSession(
   client: PoolClient,
   principal: PrincipalRow,
 ): Promise<SessionRow> {
@@ -242,5 +207,54 @@ export async function authenticateHuman(
     (client) => createOrReuseWebSession(client, principal),
   );
 
+  return { principal, session };
+}
+
+/**
+ * S4.1 (design doc §7.11 "工作区上下文按请求给"): the console-session channel's equivalent of
+ * {@link lookupPrincipalByApiKeyHash} — resolves the human Principal that is `userId`'s
+ * membership in `workspaceId` (`principals.user_id`, migration 0019). Admin path for the same
+ * reason as the API-key lookup (the workspace GUC cannot be trusted before the membership is
+ * confirmed), pinned to one (workspace, user) pair by the `principals_workspace_user_key` unique
+ * index. `null` when the user has no membership there, the Principal is disabled, or the
+ * workspace itself is `disabled` (0019 `workspaces.status`) — all three read as "no access".
+ */
+export async function lookupMembershipPrincipal(
+  pool: PoolLike,
+  ref: { readonly userId: string; readonly workspaceId: string },
+): Promise<PrincipalRow | null> {
+  return withAdminClient(pool, async (client) => {
+    const result = await client.query<PrincipalDbRow>(
+      `select p.workspace_id, p.id, p.kind, p.role, p.display_name
+         from principals p
+         join workspaces w on w.id = p.workspace_id
+        where p.workspace_id = $1
+          and p.user_id = $2
+          and p.kind = 'human'
+          and p.disabled_at is null
+          and w.status = 'active'`,
+      [ref.workspaceId, ref.userId],
+    );
+    const row = result.rows[0];
+    return row ? mapPrincipalRow(row) : null;
+  });
+}
+
+/**
+ * The console-session channel's counterpart of {@link authenticateHuman}: membership Principal
+ * (above) + its create-or-reused `web` Session, so the rest of the gateway sees exactly the same
+ * `AuthenticatedHuman` an API key would have produced. `null` = no membership.
+ */
+export async function authenticateUserInWorkspace(
+  pool: PoolLike,
+  ref: { readonly userId: string; readonly workspaceId: string },
+): Promise<AuthenticatedHuman | null> {
+  const principal = await lookupMembershipPrincipal(pool, ref);
+  if (!principal) return null;
+  const session = await withWorkspace(
+    pool,
+    { workspaceId: principal.workspaceId, principalId: principal.id },
+    (client) => createOrReuseWebSession(client, principal),
+  );
   return { principal, session };
 }

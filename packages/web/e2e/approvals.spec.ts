@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
 
 /**
  * e2e/approvals.spec.ts: the S2.10 acceptance flow (docs/development-tasks.md S2.10: "卡片出现 →
@@ -41,38 +42,22 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   await page.goto('/');
   // The isolation scenario below signs in as A, then B, then A again in the *same tab*. A previous
   // login survives in `sessionStorage` (`lib/session.ts`) and App.tsx auto-connects with it on
-  // load, so the login form is disabled while that connect is in flight and gone once it lands.
-  // Sign the old session out through the product's own "Forget key" (clearing storage under an
-  // in-flight connect is not enough — `connect()` re-saves the key once the WS authenticate
-  // resolves). Wait until the page has settled either way: shell (Forget key visible) or an
-  // enabled login form; a fresh context lands on the second immediately.
-  const forgetKey = page.getByRole('button', { name: 'Forget key' });
-  const keyInput = page.getByPlaceholder('sk-...');
-  await expect
-    .poll(
-      async () => {
-        if (await forgetKey.isVisible()) return 'shell';
-        // `isEnabled()` waits for the element to be attached (its own 30s default), which stalls
-        // the whole predicate if the login form unmounts mid-poll — bound it tightly instead.
-        if ((await keyInput.count()) === 0) return 'pending';
-        if (await keyInput.isEnabled({ timeout: 500 }).catch(() => false)) return 'login';
-        return 'pending';
-      },
-      { timeout: 15_000 },
-    )
-    .not.toBe('pending');
-  if (await forgetKey.isVisible()) await forgetKey.click();
-  await expect(keyInput).toBeEnabled({ timeout: 15_000 });
-  await keyInput.fill(apiKey);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  // load, so `reachLoginForm` (e2e/auth-helpers.ts) may first resolve to `'shell'` rather than
+  // `'login'` — sign the old session out through the product's own "Forget key" (clearing storage
+  // under an in-flight connect is not enough — `connectApiKey()` re-saves the key once the WS
+  // authenticate resolves) and re-resolve.
+  if ((await reachLoginForm(page)) === 'shell') {
+    await page.getByRole('button', { name: 'Forget key' }).click();
+    await reachLoginForm(page);
+  }
+  await loginWithApiKey(page, apiKey);
   // Not a URL/hash assertion: a bare `/` load has no `location.hash` at all, and
   // `lib/router.ts`'s `routeFromHash('')` resolves straight to the default `chats` route without
   // ever calling `navigate()` (only a stray `#/login` hash triggers App.tsx's own redirect
   // effect) — so the URL stays hash-less through and after login (verified against a live kernel
   // via `.github/workflows/e2e.yml`; this suite's own stale `#/chats` assertion here predated
-  // that and was never actually run). The signed-in shell (Sidebar's connection indicator) is the
-  // reliable "we're past the login screen" signal instead.
-  await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
+  // that and was never actually run). `loginWithApiKey` already waits on the signed-in shell's
+  // connection indicator as the reliable "we're past the login screen" signal.
 }
 
 /** Locates the inline chat card (or status-only line) whose scope text contains `marker` —

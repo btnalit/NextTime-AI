@@ -43,6 +43,42 @@ gatekeepers/docker gatekeepers/ragflow collectors/host-inventory`，S3.3 新增 
 `collectors/host-inventory` 两条），另有 `config/.keep`（占位文件，非目录）一并列出；
 `secrets/pg_password` 为 `600` 且非空；其余目录为 `750`。
 
+## 首次登录：平台初始化令牌（S4.1，design §7.11）
+
+装好的主机上没有默认账户。kernel 启动时若**没有任何活跃的平台管理员**，会生成一枚一次性初始化令牌：
+哈希入库（`platform_setup` 表，24 小时过期，5 次错误作废），明文写到
+`${NEXTTIME_DATA}/secrets/setup/token`（0600，kernel 容器内唯一可写挂载 `/run/setup`，由
+`host-env-init.sh` 建目录并归 uid 10001）；kernel 日志只提示路径，不含令牌值。
+
+```sh
+sudo cat "${NEXTTIME_DATA}/secrets/setup/token"
+```
+
+浏览器打开控制台（`https://<BIND_ADDR>:8443/`），未初始化时会先显示"初始化平台"页：填入令牌、管理员
+登录名、显示名、密码 → 创建第一个 `platform_role='admin'` 用户并直接登录，令牌随即作废（`used_at`），
+文件在下次启动时删除。之后这页永不再出现。平台管理员没有业务数据权限（§7.11）：要进某个工作区，
+得在那里有成员资格（S4.2 之前由 owner 在成员页添加，或用下面的 CLI）。
+
+CLI 兜底（都在 kernel 容器里跑，密码从 stdin 读，不进 argv 与日志）：
+
+```sh
+# 跳过令牌直接建管理员（例如令牌文件丢了又不想重启）
+printf '%s\n' '<password>' | docker compose run --rm --no-deps -T kernel \
+  node dist/cli/bootstrap.js create-platform-admin --login <login> [--display-name <name>] [--temporary]
+# 给已有用户设密码：迁移 0019 为每个既有 human Principal 回填了一个无密码用户，登录名为
+# `<显示名 slug>-<principal id 前 8 位>`（create-workspace / add-principal 现在会把它打印出来）
+printf '%s\n' '<password>' | docker compose run --rm --no-deps -T kernel \
+  node dist/cli/bootstrap.js set-password --login <login> [--temporary]
+```
+
+`--temporary` 表示临时密码：该用户首次登录必须先改密，改完之前所有工作区能力返回 403
+`password_change_required`。API key（`add-principal`、治理页新建成员）照旧可用，是给自动化与
+过渡期的；三份验收脚本都走 API key。
+
+在已有主机上升级到含 S4.1 的版本：**先重跑本脚本**（`host-env-init.sh` 幂等，会补建 `secrets/setup`
+并归 uid 10001）再 `docker compose up`——否则 Docker 代建的挂载目录是 root 所有，kernel 写不出令牌，
+只会在日志里记一条 error（kernel 本身照常启动）；然后 `make migrate` 落地 0019，重建 kernel 与 caddy。
+
 ## 删除 Workspace（Deleting a workspace，操作员专用，破坏性操作）
 
 `packages/kernel/src/cli/bootstrap.ts` 的 `delete-workspace`/`list-workspaces` 子命令是清理

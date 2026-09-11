@@ -222,6 +222,15 @@ fi
 # host where it already exists (freshly bootstrapped, or a second run of this script).
 mkdir -p "$NEXTTIME_DATA/collectors/host-inventory"
 
+# --- secrets/setup/: platform setup token directory (S4.1, docker-compose.yml's own kernel
+# service comment) — the kernel writes a one-time setup token here (mode 0600) when no platform
+# administrator exists yet, so unlike the rest of secrets/ (root-owned, 0700 — see this script's
+# own header comment), this one directory must be owned by the same uid:gid the kernel container
+# runs as. mkdir -p is idempotent.
+mkdir -p "$SECRETS_DIR/setup"
+chown "${CONTAINER_UID}:${CONTAINER_GID}" "$SECRETS_DIR/setup"
+chmod 0700 "$SECRETS_DIR/setup"
+
 # --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/ ---
 # must be usable by the platform's non-root containers (uid:gid 10001:10001 — gatekeepers/*/
 # Dockerfile and collectors/host-inventory/Dockerfile all create the same `nexttime` uid:gid as
@@ -292,3 +301,7 @@ echo "host-env-init: caddy/ left root-owned; \`chmod -R o+rX\` applied instead (
 echo ""
 echo "host-env-init: left untouched: pgdata/ secrets/ (dir itself)"
 echo "host-env-init: done (idempotent — safe to re-run)"
+echo ""
+echo "platform setup: after the first \`docker compose up\`, the kernel writes a one-time setup"
+echo "token to \$NEXTTIME_DATA/secrets/setup/token (only when no platform administrator exists)."
+echo "Open the web console and use it to create the first administrator."

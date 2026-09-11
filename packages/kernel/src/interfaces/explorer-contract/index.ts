@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { CryptoKey } from 'jose';
 import {
   ExplainNodeNotFoundError,
+  ForbiddenError,
   type ResolveCallerDeps,
   UnauthorizedError,
   getDecisionChainForExplorer,
@@ -13,10 +14,15 @@ import {
   listGraphEdgesForExplorer,
   listGraphNodesForExplorer,
   loadHandlePublicKeyFor,
-  lookupWebSessionPrincipal,
   resolveCaller,
+  resolveRequestCaller,
   searchGraphForExplorer,
 } from '../../application/gateway/index.js';
+import {
+  WORKSPACE_COOKIE,
+  WORKSPACE_HEADER,
+  parseCookieHeader,
+} from '../../application/identity/index.js';
 import {
   type CausalChainResponse,
   type EdgeListResponse,
@@ -29,16 +35,6 @@ import {
   type TemporalBoundsResponse,
   type TemporalSnapshotResponse,
 } from './schemas.js';
-import {
-  EXPLORER_SESSION_COOKIE,
-  EXPLORER_SESSION_TTL_SECONDS,
-  clearSessionCookie,
-  defaultLoadHandlePrivateKey,
-  mintExplorerSessionToken,
-  parseCookieHeader,
-  serializeSessionCookie,
-  verifyExplorerSessionToken,
-} from './session.js';
 import {
   toDecisionResponse,
   toEdgeResponse,
@@ -92,17 +88,10 @@ import {
  * independently.
  */
 
-export interface ExplorerRouteDeps extends ResolveCallerDeps {
-  /**
-   * W7 (session.ts): loads the Handle-signing *private* key `POST /api/explorer/session` mints
-   * the caller's Explorer session cookie with. Defaults to a cached
-   * governance/capability/keys.ts `loadHandleKeyPair()` (the same key pair `resolveCaller`'s
-   * default public-key loader reads); injectable for tests. When loading fails (no Handle keys
-   * configured) the session route answers 503 and the nine read routes still work with
-   * `X-API-Key` — the cookie path is additive, never required.
-   */
-  readonly loadHandlePrivateKey?: () => Promise<CryptoKey>;
-}
+/** S4.1: the console session cookie (application/identity) replaced the W7 Explorer-only cookie,
+ *  so this route tree no longer mints anything — `ResolveCallerDeps` is all it needs. Kept as a
+ *  distinct alias so the two route trees' dependency contracts can still diverge later. */
+export type ExplorerRouteDeps = ResolveCallerDeps;
 
 interface ExplorerCaller {
   readonly workspaceId: string;
@@ -130,21 +119,25 @@ function extractApiKey(request: FastifyRequest): string | undefined {
   return firstQueryValue(request.headers['x-api-key'] as string | string[] | undefined);
 }
 
-function extractSessionCookie(request: FastifyRequest): string | undefined {
-  const token = parseCookieHeader(request.headers.cookie).get(EXPLORER_SESSION_COOKIE);
-  return token ? token : undefined;
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 /**
- * Two credentials, checked in this order (W7, session.ts's module doc comment):
+ * Two credentials, checked in this order:
  *   1. `X-API-Key` (a script, curl, scripts/accept_s3.sh's driver) -> `resolveCaller`'s own
  *      `Authorization: Bearer <token>` contract; must resolve to the human channel.
- *   2. Otherwise the `nexttime_explorer_session` cookie the console installed after its own
- *      login (`POST /api/explorer/session` below) -> verify the token, then re-resolve the
- *      Principal + web session it names (`lookupWebSessionPrincipal`: not disabled, still active).
+ *   2. Otherwise the console session cookie (S4.1, application/identity/console-session.ts —
+ *      the same cookie the console itself holds after `POST /api/auth/login`; it replaced W7's
+ *      Explorer-only cookie) -> user -> that user's membership Principal in the workspace named
+ *      by `X-Workspace-Id`, the `nexttime_workspace` selector cookie the console sets, or the
+ *      user's only membership. The Explorer bundle is an unmodified third-party UI that cannot add
+ *      headers, which is what the selector cookie is for.
  * An explicit header always wins over the ambient cookie — a caller that sends a key means it,
  * and a wrong key must not silently succeed via a cookie left over from someone else's login in
- * the same browser profile. Throws `UnauthorizedError` for everything else.
+ * the same browser profile. These are reads (the one POST, `/api/graph/search`, is a read with a
+ * body), so the CSRF header is not required here. Throws `UnauthorizedError`/`ForbiddenError`
+ * for everything else.
  */
 async function authenticateExplorerCaller(
   request: FastifyRequest,
@@ -159,21 +152,18 @@ async function authenticateExplorerCaller(
     return { workspaceId: caller.principal.workspaceId, principalId: caller.principal.id };
   }
 
-  const cookie = extractSessionCookie(request);
-  if (!cookie) throw new UnauthorizedError('missing X-API-Key header and explorer session cookie');
-  let claims: Awaited<ReturnType<typeof verifyExplorerSessionToken>>;
-  try {
-    claims = await verifyExplorerSessionToken(cookie, await loadHandlePublicKeyFor(deps));
-  } catch (err) {
-    throw new UnauthorizedError('invalid explorer session cookie', { cause: err });
-  }
-  const principal = await lookupWebSessionPrincipal(deps.pool, {
-    workspaceId: claims.ws,
-    principalId: claims.sub,
-    sessionId: claims.sid,
-  });
-  if (!principal) throw new UnauthorizedError('explorer session no longer valid');
-  return { workspaceId: principal.workspaceId, principalId: principal.id };
+  const caller = await resolveRequestCaller(
+    {
+      cookie: request.headers.cookie,
+      workspaceId:
+        firstHeader(request.headers[WORKSPACE_HEADER]) ??
+        parseCookieHeader(request.headers.cookie).get(WORKSPACE_COOKIE),
+      requireCsrfHeader: false,
+    },
+    deps,
+  );
+  if (caller.channel !== 'human') throw new UnauthorizedError('Explorer requires a human caller');
+  return { workspaceId: caller.principal.workspaceId, principalId: caller.principal.id };
 }
 
 /** FastAPI's default `HTTPException` body shape (`{"detail": "..."}`) — several Explorer
@@ -200,7 +190,10 @@ function guarded(deps: ExplorerRouteDeps, routeName: string, fn: Handler) {
     let caller: ExplorerCaller;
     try {
       caller = await authenticateExplorerCaller(request, deps);
-    } catch {
+    } catch (err) {
+      // S4.1: a valid console session without a usable workspace (none selected and several
+      // memberships, or no membership in the selected one) is a 403, not a credentials problem.
+      if (err instanceof ForbiddenError) return sendDetail(reply, 403, err.message);
       return sendDetail(
         reply,
         401,
@@ -281,55 +274,8 @@ function renderMarkdownReport(report: {
 }
 
 export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRouteDeps): void {
-  // W7 (session.ts): the console calls this right after a successful login, with the same
-  // `Authorization: Bearer <api key>` it uses for `/api/cap/*`, and gets the Explorer session
-  // cookie back; `DELETE` is its "Forget key" counterpart. Human channel only — a Handle here is
-  // a 401, same as everywhere else on the Explorer surface. Never reads the cookie itself.
-  app.post('/api/explorer/session', async (request, reply) => {
-    let caller: Awaited<ReturnType<typeof resolveCaller>>;
-    try {
-      caller = await resolveCaller(request.headers.authorization, deps);
-    } catch {
-      return sendDetail(
-        reply,
-        401,
-        'Invalid or missing API key. Send it as Authorization: Bearer.',
-      );
-    }
-    if (caller.channel !== 'human') {
-      return sendDetail(
-        reply,
-        401,
-        'Explorer sessions are issued to human API keys only, not Handles.',
-      );
-    }
-    let privateKey: CryptoKey;
-    try {
-      privateKey = await (deps.loadHandlePrivateKey ?? defaultLoadHandlePrivateKey)();
-    } catch (err) {
-      request.log.error({
-        route: 'explorer.session',
-        errorName: err instanceof Error ? err.name : typeof err,
-      });
-      return sendDetail(reply, 503, 'Explorer sessions are not configured on this kernel.');
-    }
-    const minted = await mintExplorerSessionToken({
-      privateKey,
-      workspaceId: caller.principal.workspaceId,
-      principalId: caller.principal.id,
-      sessionId: caller.session.id,
-    });
-    reply.header('Set-Cookie', serializeSessionCookie(minted.token, EXPLORER_SESSION_TTL_SECONDS));
-    reply.header('Cache-Control', 'no-store');
-    return { ok: true, expiresAt: minted.expiresAt.toISOString() };
-  });
-
-  app.delete('/api/explorer/session', async (_request, reply) => {
-    reply.header('Set-Cookie', clearSessionCookie());
-    reply.header('Cache-Control', 'no-store');
-    reply.code(204);
-    return null;
-  });
+  // W7's `POST`/`DELETE /api/explorer/session` were retired in S4.1: the console session cookie
+  // (`POST /api/auth/login`, interfaces/http/auth-routes.ts) now authenticates these routes.
 
   app.get(
     '/api/graph/nodes',

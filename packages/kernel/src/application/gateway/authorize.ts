@@ -1,6 +1,6 @@
 import type { Capability } from '@nexttime/shared';
 import { roleSatisfiesMinRole } from '../../governance/capability/index.js';
-import type { ResolvedCaller } from './resolve-caller.js';
+import type { ResolvedCaller } from './caller.js';
 
 /**
  * application/gateway/authorize: decides whether a `ResolvedCaller` may invoke one capability

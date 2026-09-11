@@ -32,14 +32,24 @@ enums and transition tables drive the UI), resolved to its `dist/` by the produc
 
 ```
 src/
-  App.tsx                 session (one WsClient + one HttpClient) + hash routing + providers
+  App.tsx                 session (one WsClient + one HttpClient) + hash routing + providers +
+                          the S4.1 pre-session state machine (boot/setup/login/changePassword/
+                          noWorkspace) — see its own module doc comment for the boot sequence
   lib/
-    http-client.ts        POST /api/cap/<name> — default fetch is a wrapper, never the bare global
-    ws-client.ts          /ws JSON-RPC: subscribe-then-page, reconnect, principal pushes, status
+    http-client.ts        POST /api/cap/<name> — `auth: {kind:'apiKey',apiKey} | {kind:'cookie',
+                          workspaceId}` (S4.1); default fetch is a wrapper, never the bare global
+    ws-client.ts          /ws JSON-RPC: subscribe-then-page, reconnect, principal pushes, status;
+                          `authenticate(credential)` takes `{token}` or `{workspaceId}` (S4.1)
+    auth-api.ts            S4.1: typed fetch helpers for /api/platform/* and /api/auth/* (setup,
+                          login, logout, me, password) — a separate small envelope client from
+                          http-client.ts, since these routes are not /api/cap/<name> calls; also
+                          `setWorkspaceCookie` (the `nexttime_workspace` selector cookie Explorer
+                          reads)
     errors.ts             describeError, isForbiddenError, isNotFoundError (S3.14: "not deployed yet")
     clients.ts             CapabilityCaller / PushSource — the narrow interfaces pages depend on
     status-tone.ts        status → tone/label maps typed over @nexttime/shared enums (+ grant, role)
-    router.ts             hash routes: /login, /work/*, /me/agent, /govern/* (S3.14) — see its own doc
+    router.ts             hash routes: /login, /work/*, /me/agent, /me/account (S4.1), /govern/*
+                          (S3.14) — see its own doc
     role.ts                best-effort caller-role inference — fallback only as of S3.13; see "Roles"
     governance.ts          wire shapes for the S3.11 governance capabilities (members/grants/...)
     agent-profile.ts       wire shapes for the S3.13 AgentProfile/AgentPolicy capabilities
@@ -48,7 +58,8 @@ src/
                            also has operationDetailFromObject/reclassifiedOperationPayload — the
                            full Operation payload the onboarding wizard's review step reclassifies)
     format.ts              shortId, relative time, duration, redactSensitive
-    session.ts             API key in sessionStorage only
+    session.ts             API key in sessionStorage only, plus (S4.1) the last-selected workspace
+                          id for a cookie session (a UX convenience, never the source of truth)
   hooks/
     useResource.ts        loading / error / ready(refreshing, refreshError) state machine
     useCapability.ts       S3.14 data layer: useCapability/useCapabilityList over CapabilityCaller —
@@ -58,12 +69,18 @@ src/
     usePendingCount.ts    sidebar badge; useWsStatus.ts; usePushToasts.ts
   components/ui/          Button StatusChip Card PageHeader EmptyState ErrorBanner Notice Skeleton
                           Field(+Input/Select/Textarea) Drawer Toast DataList Tabs Kbd CopyId Icon
-  components/shell/       AppShell, Sidebar (工作 Work / 治理 Governance nav, S3.14)
-  components/             LoginPage ChatListPage ChatPage ApprovalQueuePage ActionRequestDetail
-                          ActionRequestCard TasksPage TaskDetail ConnectionsPage (now at
-                          /govern/systems) CompleteConnectionForm RequestConnectionForm
-                          RegisteredSystemsSection GatekeeperDetailDrawer ToolCallRowView
-                          TurnStatusBadge SystemStatusLineView
+  components/shell/       AppShell, Sidebar (工作 Work / 治理 Governance nav, S3.14; S4.1: workspace
+                          switcher when >1 membership, cookie-vs-apiKey sign-out label)
+  components/             LoginPage (S4.1: primary login+password form, collapsed API-key
+                          `<details>` via ApiKeyLoginDetails) SetupPage (S4.1: first-run platform
+                          init, same API-key escape hatch) ChangePasswordPage (S4.1: forced
+                          temporary-password change) NoWorkspacePage (S4.1: zero memberships)
+                          AccountPage (S4.1: #/me/account — display name, password, read-only
+                          membership list) ChatListPage ChatPage ApprovalQueuePage
+                          ActionRequestDetail ActionRequestCard TasksPage TaskDetail
+                          ConnectionsPage (now at /govern/systems) CompleteConnectionForm
+                          RequestConnectionForm RegisteredSystemsSection GatekeeperDetailDrawer
+                          ToolCallRowView TurnStatusBadge SystemStatusLineView
                           — S3.11/S3.14 governance pages: MembersPage (+ CreatePrincipalForm,
                           PrincipalDetail), AccessPage (+ GrantCapabilityForm), CatalogPage,
                           ModelsPage (+ ModelsTable), AuditPage
@@ -86,12 +103,19 @@ src/
 | `#/work/tasks[/<id>]` | TasksPage | 工作 tasks |
 | `#/work/approvals[/<id>]` | ApprovalQueuePage | 工作 approvals |
 | `#/me/agent` | AgentProfilePage (S3.13) | 工作 agent |
+| `#/me/account` | AccountPage (S4.1) | 工作 account |
 | `#/govern/members` | MembersPage | 治理 members |
 | `#/govern/access` | AccessPage | 治理 access |
 | `#/govern/systems[/<gatekeeperId>]` | ConnectionsPage + GatekeeperDetailDrawer | 治理 systems |
 | `#/govern/catalog[/<tab>]` | CatalogPage (operations/skills/procedures/workers) | 治理 catalog |
 | `#/govern/models` | ModelsPage | 治理 models |
 | `#/govern/audit` | AuditPage | 治理 audit |
+
+Before any of the above, `App.tsx` may instead render one of the pre-session/pre-workspace
+screens (not hash routes — driven by the S4.1 boot state machine, see `App.tsx`'s own module doc
+comment): `SetupPage` (no platform admin yet), `LoginPage`, `ChangePasswordPage` (forced,
+`user.mustChangePassword`), or `NoWorkspacePage` (a cookie-authenticated user with zero active
+memberships — `#/me/account` is the one route it still honors, rendering `AccountPage` standalone).
 
 ## Pages and the capabilities they call
 
@@ -150,19 +174,37 @@ docs/runbooks/web-console.md.
 Typed JSON-RPC 2.0 client for `/ws` (design doc §9.4) — the one place the "subscribe first, then
 page history" rule lives. `subscribeChat(chatId, startAfter, handlers)` delivers deduped, in-order
 `onMessage`/`onStream`/`onMetadata`/`onCaughtUp`; `-32010` rejects as `TurnAlreadyRunningError`.
-Reconnect is automatic (re-authenticate, re-subscribe from the last delivered `sequence`).
-Principal-scoped pushes (`onActionPending` / `onActionUpdated` / `onTaskUpdated`) are registered
-once per listener and survive reconnects (the server re-subscribes on `authenticate`).
-`getStatus()` / `onStatusChange()` expose `connecting | connected | reconnecting | closed` for the
-sidebar indicator.
+`authenticate(credential)` takes `{token}` (API key) or, S4.1, `{workspaceId}` (a cookie-
+authenticated browser — the console session cookie itself rides on the WS upgrade and is never
+handled by this client, HttpOnly). Reconnect is automatic (re-authenticate with the same
+credential, re-subscribe from the last delivered `sequence`). Principal-scoped pushes
+(`onActionPending` / `onActionUpdated` / `onTaskUpdated`) are registered once per listener and
+survive reconnects (the server re-subscribes on `authenticate`). `getStatus()` /
+`onStatusChange()` expose `connecting | connected | reconnecting | closed` for the sidebar
+indicator.
 
 ## `lib/http-client.ts`
 
-`POST /api/cap/<name>` with `Authorization: Bearer <api key>`, envelope `{ok:true,result}` /
-`{ok:false,error:{code,message}}` → `HttpError` (`kind`: `network | invalid_response |
-capability_error`, `code` = the wire code). The default `fetchImpl` is `(input, init) =>
-fetch(input, init)` — the bare global assigned as a method was invoked with `this === HttpClient`
-and every browser rejected it with `Illegal invocation` (`http-client.default-fetch.test.ts`).
+`POST /api/cap/<name>`, envelope `{ok:true,result}` / `{ok:false,error:{code,message}}` →
+`HttpError` (`kind`: `network | invalid_response | capability_error`, `code` = the wire code).
+`HttpClientOptions.auth` (S4.1) is `{kind:'apiKey', apiKey}` (unchanged since S1.8:
+`Authorization: Bearer <api key>`) or `{kind:'cookie', workspaceId: string | null}` — no
+`Authorization` header at all (the kernel ignores the cookie whenever one is present), `X-
+Workspace-Id` sent when `workspaceId` is non-null, `credentials: 'same-origin'` so the HttpOnly
+console session cookie rides along. Both auth modes always send `X-Requested-With: nexttime`
+(§7.11 CSRF). The default `fetchImpl` is `(input, init) => fetch(input, init)` — the bare global
+assigned as a method was invoked with `this === HttpClient` and every browser rejected it with
+`Illegal invocation` (`http-client.default-fetch.test.ts`).
+
+## `lib/auth-api.ts`
+
+Typed fetch helpers for `/api/platform/*`/`/api/auth/*` (S4.1; `interfaces/http/auth-routes.ts`,
+the source of truth) — `getSetupState`, `setupPlatform`, `login`, `logout`, `getMe`, `patchMe`,
+`changePassword`, plus `setWorkspaceCookie(workspaceId | null)` (the plain, non-HttpOnly
+`nexttime_workspace` selector cookie the Explorer reads alongside the console session cookie).
+Same `{ok,result|error}` envelope and `HttpError` shape as `http-client.ts`, kept as a separate
+small client since these are not `/api/cap/<name>` calls (their own REST-ish paths, some GET, none
+needing a workspace) — see this file's own module doc comment.
 
 ## `hooks/useCapability.ts`
 
@@ -210,16 +252,41 @@ S3.12 additions: `OnboardingWizard` (the full 5-step walkthrough; a successful r
 the pre-existing "Connect a system" quick path is unchanged), `CompleteConnectionForm` gains a
 case for the new `initialKind`/`hideKindField` props the wizard's own step ② uses.
 
+S4.1 additions: `auth-api` (every `/api/platform/*`/`/api/auth/*` helper — envelope parsing,
+headers, `credentials: 'same-origin'`; `setWorkspaceCookie` set/clear), `session` (the new
+selected-workspace store, independent of the API key store), `http-client` (cookie-mode headers:
+`X-Workspace-Id` only when set, never `Authorization`), `ws-client` (`authenticate({workspaceId})`,
+reconnect resending the same credential shape), `router` (`#/me/account`). `LoginPage` (the
+password form and its per-code error copy; the collapsed API-key `<details>`, its own inline
+`unauthorized` state and `pending` disabling — props unchanged in spirit from the old always-
+visible form), `SetupPage` (submit payload, password-mismatch guard, `tokenAvailable:false`
+disabling the form, the "already have an account" escape hatch, the same API-key details),
+`ChangePasswordPage` (submit payload, wrong-current-password inline error, the only-two-actions
+constraint), `AccountPage` (API-key mode renders a note instead of crashing; display-name save;
+password change; the read-only membership list), `NoWorkspacePage` (identity + the two links),
+`Sidebar` (the "Forget key"/"登出 Sign out" label switch; the workspace switcher renders only for
+cookie mode with >1 membership, and calls back with the selected id).
+
 ## End-to-end (Playwright)
 
 Not part of `pnpm test`/the `quality`/`test` CI jobs (no browser, no kernel there) — but
-`.github/workflows/e2e.yml` *does* run all three suites below in CI, in a separate, currently
+`.github/workflows/e2e.yml` *does* run all five suites below in CI, in a separate, currently
 non-required workflow: it brings up its own throwaway `AGENT_RUNTIME=fake` docker compose stack
 (postgres/kernel/caddy, plus a one-off `llm-proxy` build to generate `models.json`) and runs the
 full suite against it — see docs/runbooks/web-console.md's own "CI（Playwright）" section for
 exactly what it starts, how long it takes, and how to reproduce it locally. CI also sets
 `retries: 1`, so a test that fails once and passes on retry still shows up as flaky in the
-uploaded report rather than as a plain pass. Three suites:
+uploaded report rather than as a plain pass.
+
+S4.1: `App.tsx` now shows `SetupPage` instead of `LoginPage` on a bare `goto('/')` whenever the
+platform has no active administrator yet — every suite below except `login.spec.ts`'s own
+"initialize platform" test only ever holds an API key or a password for an already-existing user,
+never touches `POST /api/platform/setup`, so each one first has to get past `SetupPage` if it is
+still showing. `e2e/auth-helpers.ts`'s `reachLoginForm` does that (clicks "已有账户？登录 Already
+have an account? Log in" when `SetupPage` is up) before `loginWithApiKey`/`loginWithPassword` fill
+and submit `LoginPage`'s own forms — `LoginPage`'s API-key form is now a collapsed `<details>`
+("用 API key 登录 Use an API key instead") rather than always visible, so `loginWithApiKey` opens it
+first. Five suites:
 
 - `e2e/chat.spec.ts` — the S1.8 flow (登录 → 新对话 → 发消息 → 看到流式回复 → 刷新后历史完整). Runs in
   CI.
@@ -233,6 +300,22 @@ uploaded report rather than as a plain pass. Three suites:
   ActionRequests (see `.github/workflows/e2e.yml`'s two W7 steps after the bootstrap step). A
   local run still needs "Seeding a pending ActionRequest" below plus
   `WEB_E2E_SEED_ACTION_REQUESTS=1`.
+- `e2e/explorer.spec.ts` (S4.1 rewrite) — the Explorer's cookie-based auth: no credentials → 401;
+  a password login (owner) installs the console session + `nexttime_workspace` selector cookies
+  and `/api/graph/nodes` answers 200; signing out clears both → 401 again. An API-key session has
+  neither cookie, so this suite logs in with a password, unlike every other spec here — requires
+  `WEB_E2E_OWNER_LOGIN`/`WEB_E2E_OWNER_PASSWORD`, not `WEB_E2E_API_KEY`.
+- `e2e/login.spec.ts` (S4.1, new) — initialize the platform (fresh `SetupPage` → the first
+  administrator → `NoWorkspacePage`, since a platform admin starts with no business-workspace
+  access → sign out; idempotent for a CI retry) → owner password login → shell → sign out →
+  `GET /api/auth/me` is 401 → a temporary password forces `ChangePasswordPage` (wrong current
+  password → inline error; a real change → shell), sign out, sign back in with the new password →
+  shell → 5 wrong passwords lock the account this suite's first test created, and a 6th, correct
+  attempt still shows the lock message (declared last in the file on purpose — see its own module
+  doc comment). Runs in CI; needs `WEB_E2E_SETUP_TOKEN`, `WEB_E2E_OWNER_LOGIN`/
+  `WEB_E2E_OWNER_PASSWORD`, `WEB_E2E_TEMP_LOGIN`/`WEB_E2E_TEMP_PASSWORD` (all provided by CI's "Set
+  console passwords" step, which runs `bootstrap.js set-password` for the owner and the second
+  principal).
 
 ```bash
 corepack pnpm --filter @nexttime/web exec playwright install chromium   # once per machine
@@ -243,6 +326,13 @@ corepack pnpm --filter @nexttime/web dev
 
 node packages/kernel/dist/cli/bootstrap.js add-principal \
   --workspace <workspace-id> --name bob --role operator   # prints principal id + API key
+
+# Console passwords (login.spec.ts / explorer.spec.ts) — reads each password from stdin:
+node packages/kernel/dist/cli/bootstrap.js set-password --login <owner-login>
+node packages/kernel/dist/cli/bootstrap.js set-password --login <bob-login> --temporary
+
+# The one-time platform setup token (login.spec.ts's "initialize platform" test) — minted at
+# kernel start into ${NEXTTIME_DATA}/secrets/setup/token; read it before anything else consumes it.
 
 # chat.spec.ts + governance.spec.ts (owner key only):
 WEB_E2E_BASE_URL=http://127.0.0.1:5173 \
@@ -255,6 +345,17 @@ WEB_E2E_API_KEY=<owner-api-key> \
 WEB_E2E_API_KEY_B=<bob-api-key> \
 WEB_E2E_PRINCIPAL_ID_B=<bob-principal-id> \
 WEB_E2E_SEED_ACTION_REQUESTS=1 \
+corepack pnpm --filter @nexttime/web e2e
+
+# + explorer.spec.ts + login.spec.ts (password-based; run the "console passwords"/setup-token
+# steps above first):
+WEB_E2E_BASE_URL=http://127.0.0.1:5173 \
+WEB_E2E_API_KEY=<owner-api-key> \
+WEB_E2E_SETUP_TOKEN=<setup-token> \
+WEB_E2E_OWNER_LOGIN=<owner-login> \
+WEB_E2E_OWNER_PASSWORD=<owner-password> \
+WEB_E2E_TEMP_LOGIN=<bob-login> \
+WEB_E2E_TEMP_PASSWORD=<bob-temporary-password> \
 corepack pnpm --filter @nexttime/web e2e
 ```
 

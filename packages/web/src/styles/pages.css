@@ -43,6 +43,28 @@
   color: var(--text-2);
 }
 
+/* S4.1: the collapsed API-key sign-in (components/ApiKeyLoginDetails.tsx), shared by LoginPage
+   and SetupPage. */
+.api-key-login {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
+}
+
+.api-key-login summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.api-key-login[open] summary {
+  margin-bottom: var(--space-3);
+}
+
+.api-key-login form {
+  margin-top: var(--space-3);
+}
+
 /* ---- Chat list ----------------------------------------------------------------------- */
 .chat-list-item .data-row-title {
   font-weight: 500;

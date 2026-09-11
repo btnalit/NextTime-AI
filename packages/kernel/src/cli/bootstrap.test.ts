@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,6 +11,13 @@ import { runMigrations } from '../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { hashApiKey } from '../application/gateway/index.js';
+import {
+  createPlatformAdmin,
+  derivedLogin,
+  findUserById,
+  findUserByLogin,
+  setUserPassword,
+} from '../application/identity/index.js';
 import {
   generateEphemeralHandleKeyPair,
   loadHandleKeyPair,
@@ -313,8 +321,9 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
           role: string;
           display_name: string;
           api_key_hash: string;
+          user_id: string | null;
         }>(
-          'select kind, role, display_name, api_key_hash from principals where workspace_id = $1 and id = $2',
+          'select kind, role, display_name, api_key_hash, user_id from principals where workspace_id = $1 and id = $2',
           [result.workspaceId, result.ownerPrincipalId],
         );
         return {
@@ -333,6 +342,14 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
     // assertion that matters is the one above (hash matches); this just confirms the key looks
     // like an opaque token, not e.g. the workspace id or a guessable string.
     expect(result.apiKey).not.toBe(result.workspaceId);
+
+    // S4.1: the owner principal is linked to a passwordless user with the derived login
+    // (application/identity's `ensureUserForHumanPrincipal`).
+    expect(row.principal?.user_id).toBeTruthy();
+    expect(result.ownerLogin).toBe(derivedLogin('Test Owner', result.ownerPrincipalId));
+    const ownerUser = await findUserById(pool, row.principal?.user_id as string);
+    expect(ownerUser?.login).toBe(result.ownerLogin);
+    expect(ownerUser?.hasPassword).toBe(false);
   });
 
   it('two calls produce different workspaces, principals, and API keys', async () => {
@@ -361,8 +378,9 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
           role: string;
           display_name: string;
           api_key_hash: string;
+          user_id: string | null;
         }>(
-          'select kind, role, display_name, api_key_hash from principals where workspace_id = $1 and id = $2',
+          'select kind, role, display_name, api_key_hash, user_id from principals where workspace_id = $1 and id = $2',
           [owner.workspaceId, bob.principalId],
         );
         return result.rows[0];
@@ -373,6 +391,14 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
     expect(row?.role).toBe('member');
     expect(row?.display_name).toBe('Bob');
     expect(row?.api_key_hash).toBe(hashApiKey(bob.apiKey));
+
+    // S4.1: same passwordless-user linkage as the owner principal (see the createWorkspace test
+    // above).
+    expect(row?.user_id).toBeTruthy();
+    expect(bob.login).toBe(derivedLogin('Bob', bob.principalId));
+    const bobUser = await findUserById(pool, row?.user_id as string);
+    expect(bobUser?.login).toBe(bob.login);
+    expect(bobUser?.hasPassword).toBe(false);
   });
 
   it("rejects a role outside principals.role's CHECK constraint", async () => {
@@ -661,6 +687,50 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
           }),
         ).rejects.toMatchObject({ name: 'ScopeValidationError' });
       });
+    });
+  });
+
+  describe('createPlatformAdmin (S4.1 CLI fallback — bootstrap.js create-platform-admin)', () => {
+    it('--temporary (mustChangePassword: true) yields must_change_password = true', async () => {
+      const user = await createPlatformAdmin(pool, {
+        login: `bootstrap-test-admin-${randomUUID()}`,
+        displayName: 'Test Admin',
+        password: 'a-strong-enough-password',
+        mustChangePassword: true,
+      });
+
+      expect(user.platformRole).toBe('admin');
+      expect(user.hasPassword).toBe(true);
+      expect(user.mustChangePassword).toBe(true);
+    });
+
+    it('omitting mustChangePassword defaults to false', async () => {
+      const user = await createPlatformAdmin(pool, {
+        login: `bootstrap-test-admin-${randomUUID()}`,
+        displayName: 'Test Admin',
+        password: 'a-strong-enough-password',
+      });
+
+      expect(user.mustChangePassword).toBe(false);
+    });
+  });
+
+  describe('set-password effect (S4.1 CLI fallback — bootstrap.js set-password)', () => {
+    it('gives an existing passwordless user a password, honoring --temporary', async () => {
+      const owner = await createWorkspace(pool, 'bootstrap-test-workspace-set-password', 'Carol');
+
+      const before = await findUserByLogin(pool, owner.ownerLogin);
+      expect(before?.hasPassword).toBe(false);
+
+      // Same two steps `runSetPassword` takes internally: look the user up by login, then set
+      // its password with --temporary's mustChangePassword shape.
+      await setUserPassword(pool, before?.id as string, 'a-strong-enough-password', {
+        mustChangePassword: true,
+      });
+
+      const after = await findUserByLogin(pool, owner.ownerLogin);
+      expect(after?.hasPassword).toBe(true);
+      expect(after?.mustChangePassword).toBe(true);
     });
   });
 });
