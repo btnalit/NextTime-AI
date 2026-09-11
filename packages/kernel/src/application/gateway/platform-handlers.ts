@@ -811,11 +811,12 @@ export const platformOverviewHandler: CapabilityHandler = async (client) => {
     'select id, name, status from workspaces order by created_at',
   );
   const migrations = await client
+    // Inside the platform transaction: a failed statement would abort the whole transaction,
+    // so there is deliberately no `.catch` here — migration 0021 grants the SELECT this needs.
     .query<{ n: string; latest: string | null }>(
       `select count(*)::text as n, max(lpad(version::text, 4, '0') || '_' || name) as latest
        from schema_migrations where module = 'core'`,
-    )
-    .catch(() => ({ rows: [{ n: '0', latest: null }] }));
+    );
   let modelsAvailable = 0;
   let modelsStatus: 'ok' | 'down' = 'ok';
   try {

@@ -134,6 +134,12 @@ grant delete on user_sessions to nexttime_app;
 -- ---------------------------------------------------------------------------------------------
 -- workspaces: platform transactions list and count every workspace (0001 granted SELECT
 -- already; no RLS on this table). `entry_model` / `status` came with 0019.
+--
+-- schema_migrations is created by the migration runner (adapters/db/migrate.ts) before any file
+-- runs, so it exists here; the platform overview reads the applied-migration count and latest
+-- name from it inside a platform transaction (role nexttime_app).
 -- ---------------------------------------------------------------------------------------------
+
+grant select on schema_migrations to nexttime_app;
 
 commit;

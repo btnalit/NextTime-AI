@@ -195,7 +195,10 @@ export async function dispatchCapability(
   if (!parsed.success) throw new InvalidCapabilityParamsError(name, parsed.error.issues);
 
   const handler = CAPABILITY_HANDLERS.get(name);
-  if (!handler) throw new CapabilityNotImplementedError(name);
+  // `typeof … === 'function'` rather than a truthiness check: the registry lookup above already
+  // proved `name` is a known capability, and this makes the dynamic call's target explicit
+  // (CodeQL js/unvalidated-dynamic-method-call) — a Map entry is never a prototype property.
+  if (typeof handler !== 'function') throw new CapabilityNotImplementedError(name);
 
   // P-A1 (docs/platform-admin-design.md §7): a platform-scope capability runs in a platform
   // transaction — `app.platform = on`, still `nexttime_app` — with no workspace and no Principal,

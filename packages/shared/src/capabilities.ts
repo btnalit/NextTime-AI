@@ -1923,7 +1923,6 @@ const agentProfileCapabilities: readonly Capability[] = [
   },
 ];
 
-
 // -------------------------------------------------------------------------------------------
 // platform — P-A1 (docs/platform-admin-design.md §5/§6.1/§6.6/§6.7). All `scope: 'platform'`,
 // human channel, no `minRole`: authorization is `platform_role = 'admin'` on the console user,
@@ -2119,7 +2118,8 @@ const platformCapabilities: readonly Capability[] = [
     scope: 'platform',
     paramsSchema: noParams,
     resultSchema: wire.PlatformSettingsWireSchema,
-    description: 'The platform settings row (compiled-in defaults projected when none has been written).',
+    description:
+      'The platform settings row (compiled-in defaults projected when none has been written).',
   },
   {
     name: 'update_platform_settings',
@@ -2306,16 +2306,24 @@ export function assertRegistryConsistent(): void {
     // must be human-channel and must not also carry a workspace minRole (there is no workspace).
     if (capability.scope === 'platform') {
       if (capability.channel !== 'human') {
-        throw new Error(`capability registry: "${capability.name}" is scope:platform but not human-channel`);
+        throw new Error(
+          `capability registry: "${capability.name}" is scope:platform but not human-channel`,
+        );
       }
       if (capability.minRole !== undefined) {
-        throw new Error(`capability registry: "${capability.name}" is scope:platform but has a minRole`);
+        throw new Error(
+          `capability registry: "${capability.name}" is scope:platform but has a minRole`,
+        );
       }
       if (capability.group !== 'platform') {
-        throw new Error(`capability registry: "${capability.name}" is scope:platform but not in group "platform"`);
+        throw new Error(
+          `capability registry: "${capability.name}" is scope:platform but not in group "platform"`,
+        );
       }
     } else if (capability.group === 'platform') {
-      throw new Error(`capability registry: "${capability.name}" is in group "platform" but not scope:platform`);
+      throw new Error(
+        `capability registry: "${capability.name}" is in group "platform" but not scope:platform`,
+      );
     }
 
     if (

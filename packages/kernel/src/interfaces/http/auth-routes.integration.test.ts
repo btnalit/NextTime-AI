@@ -420,7 +420,8 @@ describe.runIf(DATABASE_URL !== undefined)(
             if (!sessionRow) throw new Error('fixture: session insert produced no row');
             const issued = await issueHandle(client, {
               sessionId: sessionRow.id,
-              scope: { capabilities: ['list_chats'], resources: {} },
+              // A handle-channel capability: `assertValidScope` refuses human-only names such as list_chats.
+              scope: { capabilities: ['get_task'], resources: {} },
               ttlSeconds: 3600,
               privateKey,
             });
