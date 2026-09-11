@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/btnalit/NextTime-AI/compare/v0.4.3...v0.5.0) (2026-09-11)
+
+
+### Features
+
+* **accept:** --real &lt;provider/model&gt; mode for S2/S3 with outcome-judged repeated scenarios and tool-call outcome counts ([#156](https://github.com/btnalit/NextTime-AI/issues/156)) ([6aa9903](https://github.com/btnalit/NextTime-AI/commit/6aa99039c6b9bddc728b57665edb68d76c2f80df))
+* **agent-host:** report tool-call outcomes end to end and count them in the acceptance driver ([#155](https://github.com/btnalit/NextTime-AI/issues/155)) ([19e0fd2](https://github.com/btnalit/NextTime-AI/commit/19e0fd22b730b36cfc7c30f10cc0fea552c8db5b))
+* **explorer:** authenticate Explorer calls by the caller's own session; caddy holds no Explorer key ([#153](https://github.com/btnalit/NextTime-AI/issues/153)) ([790ea0d](https://github.com/btnalit/NextTime-AI/commit/790ea0db7df9af5fe18c58a1e35b495266438752))
+
+
+### Bug Fixes
+
+* **collector:** depends_on edge targets use the service name only, not the compose &lt;service&gt;:&lt;condition&gt;:&lt;required&gt; label entry ([#157](https://github.com/btnalit/NextTime-AI/issues/157)) ([32e2d01](https://github.com/btnalit/NextTime-AI/commit/32e2d0149dca1f64a4613ce053627c10e44d4024))
+* **kernel:** compare capability grant resource ids as text so a non-uuid resource scope cannot abort holder and approver checks ([#152](https://github.com/btnalit/NextTime-AI/issues/152)) ([7c8bb03](https://github.com/btnalit/NextTime-AI/commit/7c8bb036b0314e6a278c99132ac29c60ae5e80b0))
+
 ## [0.4.3](https://github.com/btnalit/NextTime-AI/compare/v0.4.2...v0.4.3) (2026-09-10)
 
 
