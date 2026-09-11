@@ -108,32 +108,16 @@ export class SetupError extends Error {
   }
 }
 
-/** Checks `token` against the current row on `client` (caller's transaction), counting a
- *  failure when it does not match. Throws `SetupError` on any non-success. */
-async function consumeSetupToken(client: PoolClient, token: string): Promise<void> {
-  const row = (
-    await client.query<{
-      token_hash: string;
-      expires_at: Date;
-      used_at: Date | null;
-      failed_count: number;
-    }>('select token_hash, expires_at, used_at, failed_count from platform_setup for update')
-  ).rows[0];
-  if (!row || row.used_at !== null || row.expires_at.getTime() <= Date.now()) {
-    throw new SetupError('invalid_token', 'no usable setup token; restart the kernel to mint one');
-  }
-  if (row.failed_count >= SETUP_TOKEN_MAX_FAILURES) {
-    throw new SetupError(
-      'token_exhausted',
-      'setup token invalidated after too many failures; restart the kernel to mint a new one',
-    );
-  }
-  if (row.token_hash !== hashToken(token.trim())) {
-    await client.query('update platform_setup set failed_count = failed_count + 1');
-    throw new SetupError('invalid_token', 'setup token does not match');
-  }
-  await client.query('update platform_setup set used_at = now()');
+interface SetupRow {
+  token_hash: string;
+  expires_at: Date;
+  used_at: Date | null;
+  failed_count: number;
 }
+
+type SetupOutcome =
+  | { readonly kind: 'ok'; readonly user: UserRow }
+  | { readonly kind: 'invalid_token' | 'token_exhausted' };
 
 export interface CompleteSetupInput {
   readonly token: string;
@@ -142,15 +126,35 @@ export interface CompleteSetupInput {
   readonly password: string;
 }
 
-/** Exchanges the setup token for the first platform administrator. Atomic: the token is marked
- *  used in the same transaction that creates the user, so a lost response cannot leave a used
- *  token with no admin. Throws `SetupError` / `IdentityError`. */
+/**
+ * Exchanges the setup token for the first platform administrator. One transaction, and the
+ * failure paths *return* rather than throw so the transaction commits: a wrong token's
+ * `failed_count + 1` must survive the request that caused it (a throw would roll it back with
+ * the rest of the transaction and make the five-strike invalidation unreachable). The success
+ * path marks the token used and creates the user in the same transaction, so a lost response
+ * cannot leave a used token with no admin; an `IdentityError` from `insertUser` (login taken,
+ * weak password) does propagate — and rolls the `used_at` back with it, which is the intent:
+ * the token is still good for a corrected second attempt. Throws `SetupError` / `IdentityError`.
+ */
 export async function completeSetup(pool: PoolLike, input: CompleteSetupInput): Promise<UserRow> {
   if ((await countActivePlatformAdmins(pool)) > 0) {
     throw new SetupError('already_initialized', 'the platform already has an administrator');
   }
-  return withAdminClient(pool, async (client) => {
-    await consumeSetupToken(client, input.token);
+  const outcome = await withAdminClient(pool, async (client): Promise<SetupOutcome> => {
+    const row = (
+      await client.query<SetupRow>(
+        'select token_hash, expires_at, used_at, failed_count from platform_setup for update',
+      )
+    ).rows[0];
+    if (!row || row.used_at !== null || row.expires_at.getTime() <= Date.now()) {
+      return { kind: 'invalid_token' };
+    }
+    if (row.failed_count >= SETUP_TOKEN_MAX_FAILURES) return { kind: 'token_exhausted' };
+    if (row.token_hash !== hashToken(input.token.trim())) {
+      await client.query('update platform_setup set failed_count = failed_count + 1');
+      return { kind: 'invalid_token' };
+    }
+    await client.query('update platform_setup set used_at = now()');
     const user = await insertUser(client, {
       login: input.login,
       displayName: input.displayName,
@@ -159,8 +163,22 @@ export async function completeSetup(pool: PoolLike, input: CompleteSetupInput): 
       mustChangePassword: false,
     });
     await client.query('delete from platform_setup');
-    return user;
+    return { kind: 'ok', user };
   });
+  switch (outcome.kind) {
+    case 'ok':
+      return outcome.user;
+    case 'token_exhausted':
+      throw new SetupError(
+        'token_exhausted',
+        'setup token invalidated after too many failures; restart the kernel to mint a new one',
+      );
+    default:
+      throw new SetupError(
+        'invalid_token',
+        'setup token does not match or has expired; restart the kernel to mint a new one',
+      );
+  }
 }
 
 /** CLI fallback (`bootstrap.js create-platform-admin`): same result as `completeSetup` without a

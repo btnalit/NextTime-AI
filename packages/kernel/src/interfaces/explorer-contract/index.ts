@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { CryptoKey } from 'jose';
 import {
   ExplainNodeNotFoundError,
+  ForbiddenError,
   type ResolveCallerDeps,
   UnauthorizedError,
   getDecisionChainForExplorer,
@@ -189,7 +190,10 @@ function guarded(deps: ExplorerRouteDeps, routeName: string, fn: Handler) {
     let caller: ExplorerCaller;
     try {
       caller = await authenticateExplorerCaller(request, deps);
-    } catch {
+    } catch (err) {
+      // S4.1: a valid console session without a usable workspace (none selected and several
+      // memberships, or no membership in the selected one) is a 403, not a credentials problem.
+      if (err instanceof ForbiddenError) return sendDetail(reply, 403, err.message);
       return sendDetail(
         reply,
         401,

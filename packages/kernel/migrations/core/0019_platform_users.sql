@@ -134,7 +134,9 @@ create policy sessions_platform_admin on sessions
 alter table workspaces add column if not exists status text not null default 'active'
   check (status in ('active', 'disabled'));
 alter table workspaces add column if not exists entry_model text;
-grant insert, update on workspaces to nexttime_app;
+-- No new grant on `workspaces` for the application role: `workspaces` has no RLS of its own
+-- (0001), and every current writer (the bootstrap CLI) runs on the admin path. S4.2's platform
+-- capabilities add exactly the scoped access they need when they arrive.
 
 -- ---------------------------------------------------------------------------------------------
 -- audit_records: platform rows
