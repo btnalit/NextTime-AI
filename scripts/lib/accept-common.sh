@@ -84,6 +84,17 @@ run_driver() {
     node /tmp/driver.mjs "$@" </dev/null 2>&1
 }
 
+# run_driver_mount <host_file> <driver args...>: like run_driver, additionally bind-mounting one
+# host file read-only at /tmp/mounted (W7: `transcript-stats /tmp/mounted` reads a Worker's pi
+# session JSONL from ${NEXTTIME_DATA}/workspaces/tasks/<taskId>/...). The file must be readable by
+# the kernel image's non-root user — same umask caveat require_world_readable documents.
+run_driver_mount() {
+  mount_src=$1
+  shift
+  docker compose run --rm --no-deps -T -v "$ACCEPT_DRIVER_PATH:/tmp/driver.mjs:ro" \
+    -v "$mount_src:/tmp/mounted:ro" kernel node /tmp/driver.mjs "$@" </dev/null 2>&1
+}
+
 # One capability call: cap <token> <capabilityName> <paramsJson> [extractExpr]. Prints the
 # HTTP_STATUS=/BODY=/EXTRACTED= blob; callers extract with parse_kv.
 cap() {

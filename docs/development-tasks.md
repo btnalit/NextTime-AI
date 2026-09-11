@@ -832,6 +832,22 @@
   - **`deploy/accept-s2/fake-llm-scenario-selftest.mjs` 现按 `docs/contracts/capabilities.json` 校验每一次 scripted 工具调用的参数**（W6，retrospective-2026-09-09.md §5.4）：自测启动时加载一次 registry，对 `search`/`traverse`/`get_object`/`find_workers`/`invoke_worker` 这些注册在案的 capability，逐条断言其 `args` 满足对应 `params` JSON Schema（required/additionalProperties/type/enum）——registry 一旦发生契约漂移（例如 `search` 新增必填字段）会在这里失败，而不是留到主机验收才暴露；门操作与 Worker 侧 `report_result` 不是 registry capability，按名跳过而非判失败。
   - **PR #54 后续两轮修订（2026-09）**：① `docker-compose.yml` 的 `accept-s2-openapi.environment.ACCEPT_S2_API_TOKEN` 从 `${ACCEPT_S2_API_TOKEN:?...}` 改成 `${ACCEPT_S2_API_TOKEN:-}`——compose 在按 profile 过滤之前就要对**整份文件**做变量插值，`:?` 会让任何未设置该变量的普通 `docker compose up/ps/build`（不只是 `accept-s2` profile）都直接报错退出；`deploy/accept-s2/openapi-fixture/server.mjs` 自己已经在校验空/缺失 token 并拒绝启动，`:-` 把这个校验完全留给它。② 移除 `step2_docker_restart`/`step3_observe_no_worker` 的 SKIP，改为断言真实的 chat 驱动链路（`find_workers`→`invoke_worker`、观察类 gate 工具），入口 agent 的最终回复若命中 `"did not resolve"`（或为空）判定为 `packages/platform-extension` 的 entry-mode-tools 修复（另一个 PR，分支 `fix/entry-mode-tools`）尚未部署，`FAIL` 并给出可操作信息，而不是 SKIP——`deploy/fake-llm/server.mjs` 的两个 entry scenario 因此改成真正的多轮工具链（`findToolResult` 从消息历史里解析上一步*真实*的工具返回值，喂给下一步调用，而不是脚本预先猜好的 id）。过程中发现一个更深的发现：`governance/capability/handles.ts` 的 `ENTRY_CEILING_CAPABILITIES` 按 capability **名字**（不是按目标 Operation 的 observe/execute 模式）永久排除 `request_action`（I11/§5.3 item 11），意味着一个真实入口 Handle 结构性地永远无法调用任何声明了 `request_action` 需求的 WorkerDefinition/工具——协调者的修复为此给 entry 模式的观察类 gate 工具引入了专门的、observe-only 的新 capability `observe_operation`（不是 `request_action`），解决了 step 3；step 2（`ops-runner` 需要 `request_action` 去触达 execute 类的 `container.restart`）仍可能撞上同一条限制，详见 `docs/runbooks/host-accept-s2.md` §5"已知偏离"核心缺口 2。
   - **W7 实现说明（工具调用结果可观测）**：新增可选字段 `isError` 沿链路透传——pi 的 `tool_execution_end.isError` 经 agent-host `bridge.ts` 转译进 `AgentRuntimeEvent`（`agent-host-protocol.ts` schema）、kernel `event-sink.ts` 写进 `chat.stream` 的 `toolCallEnded` payload、web `streaming-reducer.ts`/`ToolCallRowView.tsx` 渲染成工具调用行的 "failed" 芯片（`data-tool-outcome="failed"`）；全程可选且加法式，旧运行时省略该字段时行为不变，`docs/contracts/events.json` 快照已随之重新生成。`deploy/accept/driver.mjs` 同步扩展：`send-and-wait` 从 `chat.stream` 增计 `TOOL_CALLS`/`TOOL_ENDED`/`TOOL_ERRORS`/`TOOL_ERRORS_KNOWN`/`TOOL_NAMES`/`TOOL_ERROR_NAMES`；新增子命令 `transcript-stats <path>` 直接读 Worker 自己的 pi 会话 JSONL（`type:"message"` 逐行，`assistant` 消息里的 `toolCall` 块 + `toolResult` 消息的 `isError`）打印同一组字段外加 `ASSISTANT_MESSAGES`/`MODEL`——该 JSONL 格式钉在 pi 0.84.x，升级时随 `scripts/check-pi-version-consistency.sh` 一起核对。
+  - **W7 实现说明（真实模型模式）**：`scripts/accept_s2.sh`/`scripts/accept_s3.sh` 新增
+    `--real <provider/model> [--runs N]`，保留主机上已部署的真实 provider（不切到 fake-llm、不
+    需要跑完再切回），把 fake-scripted 的 step2/3/4/5/7（S2）与 `chat_dependency_step`（S3）换成
+    同一批场景用真实模型跑 N 次（默认 3），只按**结果**判定——真实模型不像 fake provider 那样保证
+    固定的工具调用顺序，因此判据全部退化成"容器真的重启了/回复真的带 payload/Task 真的
+    completed"这类可观察结果，单次失败只是数据点，只有整场景全军覆没才 FAIL。为此
+    `deploy/accept/driver.mjs` 新增两个能力：`send-and-wait` 的
+    `auto-approve=<gatekeeperId,...>` 让驱动自己以调用者身份监听 `action.pending` 推送并当场
+    批准（docker 场景用它模拟 alice 自己批准）；新子命令 `wait-task <token> <taskId> <timeoutMs>`
+    轮询 `list_tasks` 直到终态。`run_driver_mount`（`scripts/lib/accept-common.sh`）配合既有的
+    `transcript-stats` 子命令把 Worker 自己的 pi 会话 JSONL 挂进驱动容器统计工具调用出入，汇总进
+    `worker_tool_calls`/`worker_tool_errors`。每次尝试打印一行 `RUN scenario=<key> run=<i>
+    outcome=ok|fail <detail>`，每个场景跑完打印一行 `REAL scenario=<key> ok=<k>/<n>
+    turn_tool_calls=… turn_tool_errors=… worker_tool_calls=… worker_tool_errors=…` 汇总；两个脚本
+    都从不替调用者选默认模型——`<provider/model>` 必须由调用者显式传入且是已部署 provider
+    `models.json` 里真实存在的 id。详见 `docs/runbooks/host-accept-real-model.md`。
 
 ### S2.13 连接系统流程与清单导入
 - 目标：把一个新系统接进来只需要一张卡片。

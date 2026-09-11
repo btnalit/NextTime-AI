@@ -33,7 +33,16 @@
 //     runtime that predates the field), TOOL_NAMES and TOOL_ERROR_NAMES (comma-joined). On timeout
 //     the default is to report TURN_STATUS= (empty) and exit 0 — accept_s2's entry-mode-gap
 //     scenarios deliberately never settle and the caller needs to observe that; pass `strict` as
-//     the fifth argument (accept_s1.sh) to make a timeout an ERROR= + exit 1 instead.
+//     the fifth argument (accept_s1.sh) to make a timeout an ERROR= + exit 1 instead. Pass
+//     `auto-approve=<gatekeeperId>[,<gatekeeperId>...]` instead (W7 real-model mode) to approve,
+//     as the caller, every ActionRequest that lands on one of those Gatekeepers while the Turn is
+//     in flight — driven by the caller's own `action.pending` push, with a `list_pending` sweep
+//     every 3s as the fallback — and print APPROVED=<csv of ActionRequest ids>. A real entry
+//     agent may call invoke_worker with wait:true, in which case the Turn itself blocks on the
+//     approval the shell could not give while it is blocked on this command.
+//   wait-task <token> <taskId> <timeoutMs>
+//     (W7) Poll list_tasks until the Task reaches a terminal status (completed / failed /
+//     cancelled) or timeoutMs. Prints TASK_STATUS= (empty on timeout, exit 0) and WORKER_RUN_ID=.
 //   send-only <token> <chatId> <text>
 //     authenticate -> send_chat_message, print CHAT_ID/TURN_ID without waiting (accept_s1's
 //     egress step overlaps a container-internal curl with the running Turn).
@@ -185,6 +194,31 @@ async function cmdSendAndWait(args) {
   const [token, chatIdArg, text, timeoutMsArg, mode] = args;
   const timeoutMs = Number(timeoutMsArg || 120000);
   const strict = mode === 'strict';
+  const autoApproveGates = new Set(
+    typeof mode === 'string' && mode.startsWith('auto-approve=')
+      ? mode
+          .slice('auto-approve='.length)
+          .split(',')
+          .filter((id) => id.length > 0)
+      : [],
+  );
+  const approved = [];
+  const approving = new Set();
+  const approveIfMatching = async (actionRequestId, gatekeeperId) => {
+    if (!autoApproveGates.has(gatekeeperId)) return;
+    if (approving.has(actionRequestId)) return;
+    approving.add(actionRequestId);
+    const res = await capCall(token, 'approve', { actionRequestId });
+    if (res.status === 200) approved.push(actionRequestId);
+  };
+  const sweepPending = async () => {
+    const res = await capCall(token, 'list_pending', {});
+    const items = res.body?.result?.items;
+    if (!Array.isArray(items)) return;
+    for (const item of items) {
+      if (item && typeof item.id === 'string') await approveIfMatching(item.id, item.gatekeeperId);
+    }
+  };
   const ws = await connect(WS_URL);
   const nextId = idCounter();
   await call(ws, nextId(), 'authenticate', { token });
@@ -223,6 +257,12 @@ async function cmdSendAndWait(args) {
       if (msg.method === 'chat.stream' && msg.params?.chatId === chatId) {
         recordStreamPayload(toolStats, msg.params.payload ?? {});
       }
+      if (msg.method === 'action.pending' && autoApproveGates.size > 0) {
+        const p = msg.params ?? {};
+        if (typeof p.actionRequestId === 'string') {
+          approveIfMatching(p.actionRequestId, p.gatekeeperId).catch(() => {});
+        }
+      }
     });
   });
 
@@ -230,9 +270,15 @@ async function cmdSendAndWait(args) {
   turnId = sendResult.turnId;
 
   let timer;
+  let sweeper;
   const timedOut = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error('turn did not settle before timeout')), timeoutMs);
   });
+  if (autoApproveGates.size > 0) {
+    sweeper = setInterval(() => {
+      sweepPending().catch(() => {});
+    }, 3000);
+  }
   try {
     await Promise.race([settled, timedOut]);
   } catch (err) {
@@ -244,7 +290,11 @@ async function cmdSendAndWait(args) {
     }
   } finally {
     clearTimeout(timer);
+    if (sweeper) clearInterval(sweeper);
   }
+  // One last sweep: an ActionRequest raised in the final moments of the Turn (or right after it
+  // settled, by a Worker the Turn spawned with wait:false) is still the caller's to approve.
+  if (autoApproveGates.size > 0) await sweepPending().catch(() => {});
 
   const history = await call(ws, nextId(), 'get_chat_history', { chatId });
 
@@ -255,8 +305,53 @@ async function cmdSendAndWait(args) {
     ECHO_SEEN: echoSeen ? 1 : 0,
     HISTORY_COUNT: history.items.length,
     ...toolStatsFields(toolStats),
+    ...(autoApproveGates.size > 0 ? { APPROVED: approved.join(',') } : {}),
   });
   ws.close();
+}
+
+/** One capability call over HTTP (the same envelope `cap` prints) — used internally by the
+ *  auto-approve and wait-task paths. Resolves `{status, body}`; `body` is undefined on a
+ *  non-JSON response, never throws on HTTP status. */
+async function capCall(token, capabilityName, params) {
+  const res = await fetch(`${KERNEL_HTTP}/api/cap/${capabilityName}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(params ?? {}),
+  });
+  return { status: res.status, body: parseJsonOrUndefined(await res.text()) };
+}
+
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+async function cmdWaitTask(args) {
+  const [token, taskId, timeoutMsArg] = args;
+  if (!taskId) throw new Error('wait-task: missing <taskId>');
+  const timeoutMs = Number(timeoutMsArg || 180000);
+  const deadline = Date.now() + timeoutMs;
+  let status = '';
+  let workerRunId = '';
+  for (;;) {
+    const res = await capCall(token, 'list_tasks', {});
+    const items = res.body?.result?.items;
+    const task = Array.isArray(items) ? items.find((t) => t && t.id === taskId) : undefined;
+    if (task) {
+      status = typeof task.status === 'string' ? task.status : '';
+      const runs = Array.isArray(task.workerRuns) ? task.workerRuns : [];
+      const lastRun = runs[runs.length - 1];
+      workerRunId = lastRun && typeof lastRun.id === 'string' ? lastRun.id : workerRunId;
+      if (TERMINAL_TASK_STATUSES.has(status)) break;
+    }
+    if (Date.now() >= deadline) {
+      if (!TERMINAL_TASK_STATUSES.has(status)) status = '';
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  print({ TASK_STATUS: status, WORKER_RUN_ID: workerRunId });
 }
 
 // ---- W7: tool-call outcome counting -----------------------------------------------------------
@@ -453,6 +548,7 @@ const COMMANDS = {
   mcp: cmdMcp,
   'gate-health': cmdGateHealth,
   'transcript-stats': cmdTranscriptStats,
+  'wait-task': cmdWaitTask,
 };
 
 async function main() {

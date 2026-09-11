@@ -53,6 +53,11 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s3.sh' </dev/null
 sh scripts/accept_s3.sh --keep
 ```
 
+`--real <provider/model> [--runs N]`（W7）：保留主机上已部署的真实 provider，把
+`chat_dependency_step` 换成用真实模型跑、按结果判定的 `real_chat_dependency_step`，重复
+`--runs` 次（默认 3）——不切换到 fake provider，也不需要跑完后切回来。用法、判定标准、怎么读
+`RUN`/`REAL` 输出，见专门的 `docs/runbooks/host-accept-real-model.md`。
+
 ## 3. 期望输出
 
 逐步打印 `PASS <step> <detail>`；任何一步真失败打印 `FAIL <step> <detail>` 到 stderr 并立即以非 0
@@ -99,7 +104,7 @@ S3 OK
 | `seed_domain_pack_step` | "(a) seed `ops-assets` v1 (`bootstrap.js seed-domain-pack`) into a fresh workspace" |
 | `collector_fixtures_step`/`collector_first_run_step`/`collector_second_run_step` | "(b) run the collector once ... assert `Container runs_on Host` Facts exist and a second run yields ... no open conflicts" |
 | `collector_conflict_positive_step` | 补 §2.2 已知盲区的正向用例：异源、内容矛盾的断言针对同一 `(linkType, sourceObjectId, targetObjectId)` 身份必须恰好开一个 `open` Conflict（不在 S3.9 派单原文里，W5.5 遗留项 16/17 完成标准新增） |
-| `chat_dependency_step` | "(c) chat: the entry agent ... answers with a dependency statement and `explain` on one returned Fact resolves to the collector's Source" |
+| `chat_dependency_step`（`--real` 模式下换成 `real_chat_dependency_step`：同一句"哪个服务依赖哪个"改由真实模型作答，重复 N 次，按结果判定；每次打印一行 `RUN scenario=dependency_chat run=… outcome=ok\|fail …`，跑完打印一行 `REAL scenario=dependency_chat ok=k/n …` 汇总，见 `docs/runbooks/host-accept-real-model.md`） | "(c) chat: the entry agent ... answers with a dependency statement and `explain` on one returned Fact resolves to the collector's Source" |
 | `explorer_step` | "(d) Explorer endpoints ... return the graph with `X-API-Key` of the workspace owner ... not via caddy" + a no-credentials call must 401 (W7) |
 | `mcp_step` | "(e) MCP: `issue_handle` for an `interactive` session, then a JSON-RPC `tools/list` + `traverse` call ... no-Handle → 401" |
 
