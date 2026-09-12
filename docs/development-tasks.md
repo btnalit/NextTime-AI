@@ -1620,7 +1620,7 @@
      "外部运行时"标签（跨工作区盘点 + 吊销，替代 `issue-service-handle` CLI）；工作区"访问"页签发
      service Handle；模块页（列表、安装/升级到工作区、默认模块、"推荐到平台"）；owner 的能力目录里
      同样的安装/升级入口。
-- 实现说明（P-B1，2026-09-12，PR #TBD）：
+- 实现说明（P-B1，2026-09-12，PR #175 → v0.9.0）：
   - **迁移 core 0023**：`connectors`（三态 `mode` + `disabled_operations`；四个通用种类预置为
     `self_serve`，打包门首次 announce 时以 `platform_preset` 建行）、`gate_instances`（主键 = `GATE_ID`，
     存 announce 来的 manifest、状态 discovered / enabled / disabled / lost、`trust` byo / vetted、健康、
