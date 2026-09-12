@@ -1773,7 +1773,7 @@
     宿主对零 Operation 的实例每轮重试。测试 builder 另抓到：宿主行首次 announce 可改 connector / 种类 → 与定义不符
     直接 409 `identity_mismatch`、不写任何字段。
   - **未做 / 留到 P-B2b**：模块页与 `list_modules` / `install_module` / `upgrade_module` / `set_default_modules` /
-    `promote_template`；`vet_mcp_endpoint` 仍用 `update_gate_instance{trust}`。
+    `promote_template`；`vet_mcp_endpoint` 仍用 `update_gate_instance{trust}`；**遗留 36**（P1，P-B2b 前单独修）：`create_connection` 的自填端点仍可指向宿主实例、绕过链接行的禁用名单与 `vetted` 并借用共享凭证——拒绝命中 `gate_instances.endpoint` 的端点。
 - 完成标准（design §9 P-B e2e）：起一个 fake MCP server → 集成页新增门宿主实例 → 测试连接 →
   工作区启用 → 入口 agent 的工具里出现它，非 `vetted` 时写操作走审批；模块页把 `ops-assets-v2`
   装进某工作区的能力目录，运行中的旧 Worker 不受影响；接 RAGFlow、接任意 MCP server、装领域包全程

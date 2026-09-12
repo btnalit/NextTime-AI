@@ -168,6 +168,7 @@
 | 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | **已关（PR #171，P-A2）**：agent-host 在 chat 变化时先发 `switch_session`（路径按 `chatId` 派生、不存在即新建）再发 `prompt`，容器重建后必切；跨对话记忆仍靠 `context` 注入。原决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件。已核实 pi 0.84.4 源码：`switch_session` 对不存在的路径会新建、`new_session` 后 `get_state` 立即有 `sessionFile`、`session_start` 在切换时重触发且 `registerTool` 同名覆盖——因此可以由 agent-host 单方面按 `chatId` 派生会话文件路径实现，不需要内核新列或新帧 |
 | 34 | kernel 日志有 pg `DeprecationWarning: Calling client.query() when the client is already executing a query`（2026-09-11 主机 v0.5.0 首轮对话时出现）——同一 client 上并发 query，pg@9 将不再允许；需定位是哪条路径在 `withWorkspace` 的 client 上不等待就发第二条语句 | P2 | 待排 | 开放 |
 | 35 | 用 API key 登录控制台的会话没有控制台 cookie，浏览器里打不开 Explorer（S4.1 起 Explorer 只认 `X-API-Key` 或控制台 cookie）；API key 是给自动化与过渡期的，人用密码登录即可——记为已知行为，随"验收 harness 迁到 service Principal"一起看 | P3 | 记债 | 开放 |
+| 36 | `create_connection` 的 `endpoint` 由调用者给出且无白名单，内核对每个门调用都带同一把 `gate_token`：工作区 owner 可把自连的 http 门指向 `http://gate-host:8083/i/<id>`，在本工作区得到一个绕过 `workspace_gate_links`（禁用名单、`vetted`）的 Gatekeeper，并用管理员录入的共享凭证驱动宿主实例（P-B2a 审查提出前提、只封住了写凭证一半；打包门此前同样暴露，宿主的共享凭证使之实质变重）。拟修：`create_connection` 拒绝命中任何 `gate_instances.endpoint`（或宿主 `/i/` 路径）的端点 + 集成测试；单独 PR / 审查 / 发版 | P1 | P-B2b 前 | 开放 |
 
 ## 5. 更新规则
 
