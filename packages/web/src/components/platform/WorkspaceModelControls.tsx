@@ -14,6 +14,11 @@ export interface EntryModelSelectProps {
   readonly onChange: (entryModel: string | null) => void;
   readonly disabled?: boolean;
   readonly testId?: string;
+  /** `false` (the workspace drawer): no 平台默认 choice — `update_workspace` cannot clear the entry
+   *  model (the entry WorkerDefinition keeps the one it was created with); a legacy workspace
+   *  without one shows a disabled "not set" placeholder until a model is picked. Default `true`
+   *  (新建工作区, where omitting the model is a real choice). */
+  readonly allowPlatformDefault?: boolean;
 }
 
 /**
@@ -29,6 +34,7 @@ export function EntryModelSelect({
   onChange,
   disabled = false,
   testId,
+  allowPlatformDefault = true,
 }: EntryModelSelectProps) {
   return (
     <Field
@@ -45,7 +51,13 @@ export function EntryModelSelect({
         disabled={disabled}
         data-testid={testId}
       >
-        <option value={PLATFORM_DEFAULT}>平台默认 Platform default</option>
+        {allowPlatformDefault ? (
+          <option value={PLATFORM_DEFAULT}>平台默认 Platform default</option>
+        ) : (
+          <option value={PLATFORM_DEFAULT} disabled>
+            未设置 Not set — pick a model
+          </option>
+        )}
         {options.map((model) => (
           <option key={model} value={model}>
             {model}

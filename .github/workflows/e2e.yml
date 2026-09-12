@@ -317,7 +317,11 @@ jobs:
       # login.spec.ts (WEB_E2E_ADMIN_LOGIN/WEB_E2E_ADMIN_INITIAL_PASSWORD / WEB_E2E_OWNER_LOGIN+
       # PASSWORD / WEB_E2E_TEMP_LOGIN+PASSWORD: admin first login → forced change → land on the
       # platform overview → owner password login → temp-password forced change → lockout) plus
-      # explorer.spec.ts's password login. playwright.config.ts gives CI one retry per test so a
+      # explorer.spec.ts's password login, and since P-A2 workspaces.spec.ts (admin creates a
+      # department workspace, delegates an owner, the owner sees only that workspace's
+      # configuration and a narrowed model picker; needs no extra env — it creates its own user).
+      # playwright.config.ts runs login.spec.ts last as a dependent project (its lockout test
+      # locks `admin`). playwright.config.ts gives CI one retry per test so a
       # runner hiccup shows up as "flaky" in the uploaded report instead of failing the whole gate.
       - name: Run web e2e
         run: pnpm --filter @nexttime/web e2e

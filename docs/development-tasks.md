@@ -1545,6 +1545,23 @@
     `add_membership{role:'owner'}`，409 `already_member` 时改调 `set_membership_role`）、`UserPicker`
     （懒加载 `list_users`，建区与委托共用）、`WorkspaceModelControls`。"打开工作区配置"只在管理员自己
     是该工作区成员时切换过去，否则提示先把自己加为 owner。`handleSwitchWorkspace` 增加可选目标路由。
+  - **e2e**：`packages/web/e2e/workspaces.spec.ts`（serial 四步：admin 在用户页建 owner 用户并拿临时密码 →
+    工作区页建 `dept-<ts>`、只允许 `fake/fake-echo`、入口模型随之收窄 → owner 首登改密后侧栏只有工作区配置
+    项、无任何平台项，"我的智能体"下拉只有一个模型 → admin 停用再启用）。Playwright 按文件名字母序跑，
+    `workspaces` 会排在 `login` 之后而后者最后一个用例锁 `admin` 五分钟，因此 `playwright.config.ts` 拆成
+    `chromium`（其余 spec）与依赖它的 `chromium-login` 两个 project；代价是前者失败时后者跳过。
+  - **独立审查（opus reviewer）抓到并已修**：① 工作区禁用后**已认证的 WS 连接**仍可调能力，且
+    `send_chat_message` 会重新签出刚吊销的入口会话 → `dispatchCapability` 的工作区分支每次调用先读
+    `workspaces.status`，非 active 一律 403（HTTP / WS / MCP 同一卡口；集成测试断言禁用后既有 caller 的
+    `get_workspace` 被拒）；② owner 的 `set_agent_policy` 能随手改掉 / 撑破管理员设的 `allowedModels`，
+    或把 `defaultModel` 设到名单外让所有人解析成 `''` 而落到入口定义里钉死的模型 → 两个面共用
+    `governance/agent-profile` 的纯函数 `modelPolicyViolation`（非空名单必须含且必须有 defaultModel），
+    `set_agent_policy` 还校验模型在目录内（S3.13 的既有测试因此改为同时给 defaultModel）；③
+    `update_workspace{entryModel:null}` 只清了记录、入口 WorkerDefinition 里钉死的模型照旧在跑 → 该字段
+    改为不可为 null（管理员必须选一个具体模型；抽屉里不再有"平台默认"，新建时仍可不填），线上 `entryModel`
+    仍可为 null 只为表达旧工作区"未设置"；④ `switch_session` 回包是否回显 `id` 未核实 → 已对照 pi 0.84.4
+    `dist/modes/rpc/rpc-mode.js`（`success(id, "switch_session", …)`，`id = command.id`）确认，并容忍
+    无 id 的回包以免未来 pi 变更时把该用户卡死。
   - **`config/llm-providers.fake.example.yaml` 多了 `fake-echo-alt`**：只为让 e2e 能观察到"允许的模型"
     收窄"我的智能体"下拉（一个模型看不出差别）；fake-llm 不校验请求里的 model，验收脚本显式钉
     `fake/fake-echo`，不受影响。

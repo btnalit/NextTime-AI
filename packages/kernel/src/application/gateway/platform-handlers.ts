@@ -11,6 +11,7 @@ import type {
 import type { PoolClient } from 'pg';
 import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
 import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
 import { hashPassword } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
@@ -847,19 +848,9 @@ function assertEntryModelAllowed(
   entryModel: string | null,
   allowedModels: readonly string[],
 ): void {
-  if (allowedModels.length === 0) return;
-  if (!entryModel) {
-    throw new PlatformAdminError(
-      'entry_model_not_allowed',
-      'set an entry model that is in the allowed list before restricting the list',
-    );
-  }
-  if (!allowedModels.includes(entryModel)) {
-    throw new PlatformAdminError(
-      'entry_model_not_allowed',
-      `the entry model "${entryModel}" must be in the allowed list`,
-    );
-  }
+  // Shared with the owner's `set_agent_policy` (agent-profile-handlers.ts) — one rule, two planes.
+  const violation = modelPolicyViolation(entryModel, allowedModels);
+  if (violation) throw new PlatformAdminError('entry_model_not_allowed', violation);
 }
 
 /** Upserts the AgentPolicy's `default_model` / `allowed_models` from the platform plane (governance
@@ -1001,10 +992,13 @@ export const createWorkspaceHandler: CapabilityHandler = async (
 };
 
 export const updateWorkspaceHandler: CapabilityHandler = async (client, _workspaceId, params) => {
-  const input = params as { workspaceId: string; name?: string; entryModel?: string | null };
+  // `entryModel` cannot be cleared here (the wire keeps it non-nullable): the entry
+  // WorkerDefinition pins the bootstrap model in its own published content, so "null" would only
+  // hide that model from `list_workspaces` while containers kept running it (review finding).
+  const input = params as { workspaceId: string; name?: string; entryModel?: string };
   const before = await loadPlatformWorkspaceRow(client, input.workspaceId);
   if (input.entryModel !== undefined) {
-    if (input.entryModel !== null) await assertModelsInCatalog([input.entryModel]);
+    await assertModelsInCatalog([input.entryModel]);
     assertEntryModelAllowed(input.entryModel, allowedModelsOf(before));
   }
   if (input.name !== undefined) {

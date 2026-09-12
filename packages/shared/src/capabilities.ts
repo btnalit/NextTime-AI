@@ -2219,8 +2219,8 @@ const platformCapabilities: readonly Capability[] = [
       .object({
         workspaceId: z.string().min(1),
         name: z.string().min(1).max(120).optional(),
-        /** `null` clears it (pi default). Must be in the catalog and, when a non-empty allowed list exists, in that list. */
-        entryModel: z.string().min(1).nullable().optional(),
+        /** Must be in the catalog and, when a non-empty allowed list exists, in that list. Cannot be cleared: the entry WorkerDefinition keeps the model it was created with. */
+        entryModel: z.string().min(1).optional(),
       })
       .strict(),
     resultSchema: wire.PlatformWorkspaceWireSchema,

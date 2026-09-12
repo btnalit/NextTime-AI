@@ -8,6 +8,7 @@ import type {
   SetAgentProfileFields,
 } from '../../governance/agent-profile/index.js';
 import {
+  modelPolicyViolation,
   readAgentPolicy,
   readAgentProfile,
   resolveEffectiveAgentProfile,
@@ -390,6 +391,28 @@ export const setAgentPolicyHandler: CapabilityHandler = async (
     );
   }
   const params = SetAgentPolicyParams(rawParams);
+
+  // P-A2: the owner's policy edit is checked against the same facts the administrator's
+  // `set_allowed_models` / `update_workspace` are — every model in the llm-proxy catalog, and a
+  // non-empty allow-list containing the (required) defaultModel — so the two planes cannot leave
+  // the workspace resolving `''` and running the entry WorkerDefinition's pinned model instead.
+  const current = await readAgentPolicy(client, workspaceId);
+  const nextAllowed = params.allowedModels ?? current.allowedModels;
+  const nextDefault =
+    params.defaultModel !== undefined ? params.defaultModel : current.defaultModel;
+  const toCheck = [...nextAllowed, ...(nextDefault ? [nextDefault] : [])];
+  if (toCheck.length > 0) {
+    const known = new Set((await readModelCatalog()).map((entry) => entry.id));
+    const unknown = toCheck.filter((model) => !known.has(model));
+    if (unknown.length > 0) {
+      throw new AgentProfileValidationError(
+        `set_agent_policy: model(s) not in the llm-proxy model whitelist (list_models): ${unknown.join(', ')}`,
+      );
+    }
+  }
+  const violation = modelPolicyViolation(nextDefault, nextAllowed);
+  if (violation) throw new AgentProfileValidationError(`set_agent_policy: ${violation}`);
+
   const updated = await setAgentPolicy(client, workspaceId, ctx.principal.id, params);
   return {
     result: toWireAgentPolicy(updated),

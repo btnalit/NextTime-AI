@@ -54,5 +54,26 @@ export default defineConfig({
     // importing that internal root CA into the runner's trust store.
     ignoreHTTPSErrors: true,
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // Two projects for one browser, purely to pin file order. Playwright discovers spec files
+  // alphabetically (`approvals`, `chat`, `explorer`, `governance`, `login`, `workspaces`), and
+  // login.spec.ts's last test deliberately locks the `admin` account for five minutes
+  // (`LOGIN_LOCK_MINUTES`, packages/kernel/src/application/identity/users.ts) — which
+  // workspaces.spec.ts, alphabetically after it, would then run head-first into on its own `admin`
+  // sign-in. `dependencies` is the documented way to say "this project runs after that one": every
+  // other spec runs in `chromium`, login.spec.ts alone in `chromium-login` behind it. Note the
+  // trade this makes: a genuine failure anywhere in `chromium` now *skips* `chromium-login` rather
+  // than running it and reporting both.
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+      testIgnore: /login\.spec\.ts$/,
+    },
+    {
+      name: 'chromium-login',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /login\.spec\.ts$/,
+      dependencies: ['chromium'],
+    },
+  ],
 });

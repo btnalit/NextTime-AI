@@ -105,6 +105,27 @@ function resolveModel(explicit: string | null | undefined, policy: AgentPolicyRo
   return '';
 }
 
+/**
+ * P-A2: the one invariant both `set_allowed_models` / `update_workspace` (platform plane) and
+ * `set_agent_policy` (workspace owner) must hold, so neither surface can leave a workspace in a
+ * state where `resolveModel` yields `''` for everyone and the runtime falls through to the entry
+ * WorkerDefinition's own pinned model: a non-empty allow-list requires a `defaultModel`, and that
+ * model must be in the list. Returns the human-readable violation, or `null` when consistent.
+ */
+export function modelPolicyViolation(
+  defaultModel: string | null | undefined,
+  allowedModels: readonly string[],
+): string | null {
+  if (allowedModels.length === 0) return null;
+  if (!defaultModel) {
+    return 'a non-empty allowedModels list requires a defaultModel (entry model) that is in the list';
+  }
+  if (!allowedModels.includes(defaultModel)) {
+    return `the defaultModel (entry model) "${defaultModel}" must be in allowedModels`;
+  }
+  return null;
+}
+
 export function resolveEffectiveAgentProfile(
   profile: AgentProfileRow | undefined,
   policy: AgentPolicyRow,

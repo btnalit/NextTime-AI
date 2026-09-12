@@ -6,8 +6,9 @@ import { type Page, expect } from '@playwright/test';
  * do before/after, this step is byte-identical everywhere it is needed).
  *
  * `.github/workflows/e2e.yml` runs every spec under `packages/web/e2e/` in one `playwright test`
- * invocation, `workers: 1` — sequential, alphabetical by filename (`approvals`, `chat`, `explorer`,
- * `governance`, `login`). There is no setup page any more (docs/platform-admin-design.md §4): the
+ * invocation, `workers: 1` — sequential: the `chromium` project (`approvals`, `chat`, `explorer`,
+ * `governance`, `workspaces`) and then the dependent `chromium-login` project (`login`, whose
+ * lockout test must come last — `playwright.config.ts`). There is no setup page any more (docs/platform-admin-design.md §4): the
  * kernel pre-creates the `admin` user with a random temporary password on a fresh database, so a
  * bare `goto('/')` always reaches `LoginPage` — every spec below only ever holds an API key or a
  * password for an already-existing user.

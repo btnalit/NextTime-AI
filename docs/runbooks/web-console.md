@@ -107,7 +107,7 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 ## CI（Playwright）
 
 `.github/workflows/e2e.yml`（新增工作流，与 `ci.yml` 完全分离，`ci.yml` 本身未改动）在每个 PR 和
-推送到 `main` 时把本节的三个 e2e spec 全部跑一遍——单个 job `web-e2e`：
+推送到 `main` 时把 `packages/web/e2e/` 下全部 spec 跑一遍（P-A2 起含 `workspaces.spec.ts`：管理员建部门工作区 → 委托 owner → owner 只见自己工作区的配置页、模型下拉收窄；`playwright.config.ts` 用两个 project 让 `login.spec.ts` 最后跑，因为它的锁定用例会锁住 `admin`）——单个 job `web-e2e`：
 
 1. checkout（pinned SHA，与 `ci.yml` 同一约定）、`pnpm/setup`（Node 22）、`pnpm install
    --frozen-lockfile`，`pnpm --filter @nexttime/web exec playwright install --with-deps

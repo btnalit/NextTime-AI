@@ -30,6 +30,7 @@ import { getPublishedEntryDefinition } from '../worker/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { AgentProfileValidationError } from './agent-profile-handlers.js';
 import { withAdminClient } from './auth.js';
+import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { PlatformAdminError } from './platform-handlers.js';
 import type { PlatformErrorCode } from './platform-handlers.js';
@@ -841,6 +842,17 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         // auth.ts's `lookupPrincipalByApiKeyHash` now joins `workspaces.status`.
         expect((await callWithOwnerApiKey(app)).statusCode).toBe(401);
+
+        // dispatch.ts refuses every workspace-scoped call per call, so a caller resolved *before*
+        // the disable (an already-authenticated WebSocket) cannot keep dispatching either.
+        await expect(
+          dispatchCapability(
+            { pool },
+            humanCaller(workspaceId, ownerPrincipalId, 'owner'),
+            'get_workspace',
+            {},
+          ),
+        ).rejects.toThrow(ForbiddenError);
 
         const meAfter = await app.inject({
           method: 'GET',

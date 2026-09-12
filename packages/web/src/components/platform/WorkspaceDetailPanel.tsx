@@ -106,7 +106,7 @@ export function WorkspaceDetailPanel({
   /** Saved as it is picked (a one-control section with no other field to batch it with), the way
    *  `UserMembershipsPanel`'s own role select writes on change. */
   async function saveEntryModel(entryModel: string | null): Promise<void> {
-    if (savingEntryModel) return;
+    if (savingEntryModel || entryModel === null) return; // the drawer offers no "clear" choice
     setSavingEntryModel(true);
     setEntryModelError(null);
     try {
@@ -263,6 +263,7 @@ export function WorkspaceDetailPanel({
         id="wd-entry-model"
         options={entryModelOptions}
         value={workspace.entryModel}
+        allowPlatformDefault={false}
         onChange={(entryModel) => void saveEntryModel(entryModel)}
         disabled={savingEntryModel || !modelsReady}
         testId="workspace-entry-model"

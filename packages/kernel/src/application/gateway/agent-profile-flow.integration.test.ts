@@ -629,9 +629,35 @@ describe.runIf(DATABASE_URL !== undefined)(
         const owner = humanCaller(policyWs, policyOwnerId, 'owner');
         const member = humanCaller(policyWs, memberId, 'member');
 
+        // P-A2: a non-empty allow-list must come with a defaultModel that is in it — the same
+        // rule the platform plane's `set_allowed_models` enforces (`modelPolicyViolation`).
+        await expect(
+          dispatchCapability({ pool }, owner, 'set_agent_policy', {
+            allowedModels: ['anthropic/claude-haiku-5'],
+          }),
+        ).rejects.toThrow(AgentProfileValidationError);
+        await expect(
+          dispatchCapability({ pool }, owner, 'set_agent_policy', {
+            allowedModels: ['anthropic/claude-haiku-5'],
+            defaultModel: 'anthropic/claude-sonnet-5',
+          }),
+        ).rejects.toThrow(AgentProfileValidationError);
+        await expect(
+          dispatchCapability({ pool }, owner, 'set_agent_policy', {
+            allowedModels: ['anthropic/not-in-catalog'],
+            defaultModel: 'anthropic/not-in-catalog',
+          }),
+        ).rejects.toThrow(AgentProfileValidationError);
         await dispatchCapability({ pool }, owner, 'set_agent_policy', {
           allowedModels: ['anthropic/claude-haiku-5'],
+          defaultModel: 'anthropic/claude-haiku-5',
         });
+        // …and once restricted, the owner cannot move the defaultModel outside the list either.
+        await expect(
+          dispatchCapability({ pool }, owner, 'set_agent_policy', {
+            defaultModel: 'anthropic/claude-sonnet-5',
+          }),
+        ).rejects.toThrow(AgentProfileValidationError);
 
         // Listed by llm-proxy, but not in this workspace's own AgentPolicy.allowedModels.
         await expect(
