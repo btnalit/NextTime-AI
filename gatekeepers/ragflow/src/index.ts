@@ -6,6 +6,7 @@ import {
   SharedEnvCredentialResolver,
   assertTlsNotDisabled,
   buildTlsFetch,
+  createAnnouncer,
   createGatekeeperServer,
   gateTlsOptionsFromEnv,
   loadGateKernelToken,
@@ -90,11 +91,20 @@ export async function buildRagflowGate(
 export async function startRagflowGate(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ app: BuiltRagflowGate['app']; close(): Promise<void> }> {
-  const { app } = await buildRagflowGate(env);
+  const { gate, app } = await buildRagflowGate(env);
   const port = Number(env.GATE_PORT ?? DEFAULT_PORT);
   const host = env.GATE_BIND_ADDR ?? '0.0.0.0';
   await app.listen({ port, host });
-  return { app, close: () => app.close() };
+  // P-B1: announce this gate to the kernel (GATE_ID / GATE_CONNECTOR / KERNEL_URL; no-op without).
+  const announcer = createAnnouncer({ env, manifest: gate.describeOperations() });
+  announcer.start();
+  return {
+    app,
+    close: async () => {
+      announcer.stop();
+      await app.close();
+    },
+  };
 }
 
 export function main(): void {

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { Operation } from '@nexttime/shared';
+import { createAnnouncer } from './announce.js';
 import {
   ConnectedAccountCredentialResolver,
   ConnectedAccountStore,
@@ -29,6 +30,13 @@ import { assertTlsNotDisabled, buildTlsFetch, gateTlsOptionsFromEnv } from './tl
 export const VERSION = '0.1.0';
 
 export { GatekeeperBase } from './gatekeeper-base.js';
+export {
+  CONNECTOR_NAME_PATTERN,
+  GATE_ID_PATTERN,
+  buildAnnounceBody,
+  createAnnouncer,
+} from './announce.js';
+export type { AnnounceBody, Announcer, AnnouncerOptions } from './announce.js';
 export {
   assertTlsNotDisabled,
   buildTlsFetch,
@@ -293,7 +301,17 @@ export async function startGatekeeperServer(
   const host = env.GATE_BIND_ADDR ?? '0.0.0.0';
   await app.listen({ port, host });
 
-  return { app, close: () => app.close() };
+  // P-B1: self-registration with the kernel (announce.ts) — a no-op unless GATE_ID etc. are set.
+  const announcer = createAnnouncer({ env, manifest });
+  announcer.start();
+
+  return {
+    app,
+    close: async () => {
+      announcer.stop();
+      await app.close();
+    },
+  };
 }
 
 export function main(): void {

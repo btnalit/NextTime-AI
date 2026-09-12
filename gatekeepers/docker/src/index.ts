@@ -5,6 +5,7 @@ import {
   GatekeeperBase,
   JsonFileIdempotencyStore,
   type ResolvedCredential,
+  createAnnouncer,
   createGatekeeperServer,
   loadGateKernelToken,
   parseManifestJson,
@@ -82,11 +83,20 @@ export async function buildDockerGate(
 export async function startDockerGate(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ app: BuiltDockerGate['app']; close(): Promise<void> }> {
-  const { app } = await buildDockerGate(env);
+  const { gate, app } = await buildDockerGate(env);
   const port = Number(env.GATE_PORT ?? DEFAULT_PORT);
   const host = env.GATE_BIND_ADDR ?? '0.0.0.0';
   await app.listen({ port, host });
-  return { app, close: () => app.close() };
+  // P-B1: announce this gate to the kernel (GATE_ID / GATE_CONNECTOR / KERNEL_URL; no-op without).
+  const announcer = createAnnouncer({ env, manifest: gate.describeOperations() });
+  announcer.start();
+  return {
+    app,
+    close: async () => {
+      announcer.stop();
+      await app.close();
+    },
+  };
 }
 
 export function main(): void {

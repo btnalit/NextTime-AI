@@ -493,8 +493,17 @@ services:
   # (gate-auth.ts).
   gatekeeper-docker:
     build: { context: ., dockerfile: gatekeepers/docker/Dockerfile }
-    secrets: [gate_token]
-    environment: { DOCKER_HOST: tcp://docker-socket-proxy-gate:2375 }
+    # internal_token (P-B1): lets the gate announce itself to the kernel (`POST /internal/gates/
+    # announce`, GATE_ID / GATE_CONNECTOR / KERNEL_URL below) — endpoints and manifest only, never
+    # a credential. Same secret worker-supervisor and agent-host hold; still a separate trust
+    # boundary from gate_token (kernel → gate).
+    secrets: [gate_token, internal_token]
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy-gate:2375
+      GATE_ID: gatekeeper-docker
+      GATE_CONNECTOR: docker
+      GATE_SERVICE_NAME: gatekeeper-docker
+      KERNEL_URL: http://kernel:8080
     volumes: ["${NEXTTIME_DATA}/gatekeepers/docker:/data/gate"]
     networks: [control, dockerapi-gate]
     # docker-socket-proxy-gate (fix/gate-docker-socket-proxy): wait for the proxy to actually be
@@ -510,7 +519,14 @@ services:
   gatekeeper-ragflow:
     build: { context: ., dockerfile: gatekeepers/ragflow/Dockerfile }
     env_file: ${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env
-    secrets: [gate_token]
+    # internal_token / GATE_* (P-B1): see gatekeeper-docker. The announced `target` is the gate's
+    # RAGFLOW_BASE_URL from the env_file (a URL, not the API key).
+    secrets: [gate_token, internal_token]
+    environment:
+      GATE_ID: gatekeeper-ragflow
+      GATE_CONNECTOR: ragflow
+      GATE_SERVICE_NAME: gatekeeper-ragflow
+      KERNEL_URL: http://kernel:8080
     volumes: ["${NEXTTIME_DATA}/gatekeepers/ragflow:/data/gate"]
     networks: [control]
     restart: unless-stopped
