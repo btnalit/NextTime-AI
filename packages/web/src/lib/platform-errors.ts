@@ -29,6 +29,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   weak_password: '密码不满足平台的最短长度要求 Password is shorter than the platform minimum',
   invalid_login: '登录名格式不合法 Invalid login — 3–64 chars of a-z 0-9 . _ -',
   workspace_disabled: '该工作区已停用 That workspace is disabled',
+  // P-A2 (workspace configuration): the four codes the workspace capabilities add.
+  user_disabled: '该用户已停用，不能作为 owner That user is disabled and cannot be made an owner',
+  default_workspace:
+    '默认工作区不能停用 The platform default workspace cannot be disabled — point the default at another workspace first',
+  unknown_model: '模型不在目录里 No such model in the catalog',
+  entry_model_not_allowed:
+    '允许的模型列表必须包含入口模型；限制模型前要先设置入口模型 A non-empty allowed list must contain the entry model, and an entry model must be set before restricting',
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of
