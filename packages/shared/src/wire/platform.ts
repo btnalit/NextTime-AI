@@ -267,6 +267,7 @@ export const GateOperationSummaryWireSchema = z
     idempotentHint: z.boolean().nullable(),
   })
   .strict();
+export type GateOperationSummaryWire = z.infer<typeof GateOperationSummaryWireSchema>;
 
 export const GateInstanceWireSchema = z
   .object({
@@ -302,6 +303,7 @@ export const GateInstanceTestResultWireSchema = z
     checkedAt: z.string(),
   })
   .strict();
+export type GateInstanceTestResultWire = z.infer<typeof GateInstanceTestResultWireSchema>;
 
 /** One external runtime = a `service` Principal's live session (Claude Code, a local pi over
  *  `/mcp`, a collector) — listed across workspaces for inventory and revocation (design §6.3). */
@@ -323,6 +325,7 @@ export type ExternalRuntimeWire = z.infer<typeof ExternalRuntimeWireSchema>;
 export const RevokeExternalRuntimeResultWireSchema = z
   .object({ workspaceId: z.string(), sessionId: z.string(), revoked: z.boolean() })
   .strict();
+export type RevokeExternalRuntimeResultWire = z.infer<typeof RevokeExternalRuntimeResultWireSchema>;
 
 /** Workspace side (`list_available_gate_instances`): a platform gate instance an owner may enable
  *  here, with whether this workspace already did. */

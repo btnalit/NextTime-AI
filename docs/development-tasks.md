@@ -1659,6 +1659,12 @@
     给一个活跃的 service Principal 开 `service` 会话并按能力名列表签 Handle（`assertValidScope` 仍拒绝
     human-only 能力），token 只返回一次；平台 `list_external_runtimes` 跨工作区列 service Principal 的活跃
     会话，`revoke_external_runtime` 吊销。CLI 保留（无浏览器场景，`docs/runbooks/host-collector.md`）。
+  - **web**：`#/platform/integrations`（"管理 → 集成"，仅管理员；`PlatformIntegrationsPage` 三个标签：接入包——
+    三态下拉 + 展开后按 Operation 的禁用勾选清单；门实例——列表 + 抽屉（改名、启用 / 禁用、只对 mcp 显示
+    的 `vetted` 开关、"测试连接"、公告的 Operation 表）；外部运行时——跨工作区列表 + 二次确认吊销）；
+    工作区"系统接入"页新增"从平台目录启用"段（`AvailableGateInstancesSection`：已启用则链到门详情）；
+    "访问"页新增"签发外部运行时凭证"段（`IssueServiceHandleSection`：选 service Principal、能力名、
+    有效期，token 只显示一次）。
   - **e2e 播种**（决定 ③）：`.github/workflows/e2e.yml` 在 kernel 起来后 `docker compose exec kernel node -e`
     用 `/run/secrets/internal_token` 向 `/internal/gates/announce` 播一个 `ci-fixture-mcp` 实例
     （端点 `http://127.0.0.1:1`，健康如实显示不可达）。
