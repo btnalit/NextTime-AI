@@ -1492,7 +1492,7 @@
   管理员为一个部门新建工作区 W2、设入口模型与允许的模型、把它委托给某用户 owner；该 owner 登录只在
   "管理 → 工作区配置"看到 W2，看不到其他工作区配置；W2 的成员在"我的智能体"只能选到允许的模型。
 - 不做：删除工作区（暂否，留 CLI `--yes`，见 §11）；工作区间数据迁移。
-- 实现说明（2026-09-11，PR #TBD）：
+- 实现说明（2026-09-11 至 09-12，PR #171 → v0.8.0）：
   - **六个 `scope:'platform'` 能力**（`platform-handlers.ts` "workspaces" 段）：`list_workspaces`、
     `list_platform_models`（管理员不是某工作区成员时也要看到模型目录——平台 caller 调不了工作区能力
     `list_models`）、`create_workspace`、`update_workspace`、`set_workspace_status`、`set_allowed_models`，
