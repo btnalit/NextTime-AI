@@ -1602,6 +1602,40 @@
     把 `last_seen_at` 超过 3 倍间隔的实例标 `lost`；`probeGatekeeperHealth` 只在 `test_gate_instance` 里用。
     已启用实例再次 announce 保持状态；端点变化写平台审计。三态变更不拆已有链接，只管新启用与目录可见；
     按 Operation 禁用则在下一次调用就生效（与工作区禁用同一"按调用卡口"原则）。
+- **P-B2 再拆与决定（2026-09-12，P-B1 合入后、开工前）**：P-B2 再拆两个 PR 波次——**P-B2a 门宿主与页面直达凭证**
+  （风险高，先单独落地并在主机上稳住）→ **P-B2b 模块**（`ontology/modules.yaml` 索引、`list_modules` /
+  `install_module` / `upgrade_module` / `set_default_modules`、模块页与 owner 目录入口；`promote_template` 放最后
+  或再推）。P-B2a 的决定：
+  - 决定 ⑥：**实例定义由门宿主向内核拉取，不是内核推送**。design §6.3 写"内核经内部面推给门宿主"，但推需要一条
+    内核 → 宿主的凭证，今天不存在；拉（`GET /internal/gate-host/instances`，内部 token，启动时与每
+    `GATE_ANNOUNCE_INTERVAL_SEC` 一次）与 P-B1 announce 是同一个信任方向，不新增任何密钥。效果相同，记为措辞偏离。
+  - 决定 ⑦：**宿主实例就是 `gate_instances` 的一行**，不另建表：core 0024 加 `hosted boolean` 与 `definition jsonb`
+    （传输种类、目标地址、凭证模式、manifest 来源），`create_gate_instance` 直接落 `status='enabled'`、
+    `health='unknown'`、`last_seen_at null`、`endpoint ''`；宿主接管后每个实例各自走 P-B1 的 announce 路——存活、
+    接入包、链接、禁用名单全部复用，内核不需要知道宿主地址。
+  - 决定 ⑧：**身份冻结从"管理员决定后"改为"首次被看见后"**（`last_seen_at is not null`）：管理员建的宿主行首次
+    announce 不能算 `identityMismatch`；一旦 seen，connector / transport / endpoint 照旧冻结。
+  - 决定 ⑨：**宿主尚未接管的实例拒绝工作区启用**（`last_seen_at null` 或 `operations` 为空 → 409 `gate_not_ready`），
+    否则工作区会发布零个 Operation、白留一条链接。
+  - 决定 ⑩：**凭证直达路的凭证是一张 5 分钟平台 JWT**：`issue_gate_host_token{gateId}` 用 Handle 私钥签
+    EdDSA JWT（`typ` 独立、`aud:'gate-host'`、`gate:<gateId>`、`obo:<存储槽>`、`sub:<用户>`、`exp` 5 分钟）；平台面
+    签的 `obo` 固定为共享槽 `__shared__`（非 UUID，不可能撞 Principal），工作区面（connection 组、需本工作区已链接
+    该实例）签 `obo:<principalId>`。Caddy 加 `handle_path /gate-host/* → gate-host:8083`；宿主用与 llm-proxy 相同的
+    `config/handle.pub` 验签，`POST /i/<gateId>/gate/connected-accounts` 接受既有 `gate_token`（内核路）或
+    `gate` 声明等于路径 gateId 的平台 JWT，存储键取 JWT 的 `obo` 而非请求体。内核从未见过凭证——这条路第一次
+    做到"凭证不经内核"。两条反向校验入单测：内核 Handle 校验器拒绝这张 JWT（`typ` / 声明形状不同），宿主拒绝真
+    Handle（`aud` 不同）。
+  - 决定 ⑪：**宿主实例的共享凭证来自存储不来自环境变量**（`SharedEnvCredentialResolver` 服务不了 N 个实例）：
+    `credentialMode: 'shared'` 读 `__shared__` 槽（没有就无凭证调用，fake MCP 即此），`'connected_account'` 读
+    `obo`；一个宿主一把 `GATE_STORE_KEY_FILE`，每实例一个目录 `/data/gate/<gateId>/`。
+  - 决定 ⑫：**宿主路由是单组通配路由 + 内存表**，不是 N 次 Fastify 插件注册：Fastify 起监听后不能再加路由，
+    宿主又要在运行中增删实例，所以 `server.ts` 的 `/gate/*` 处理逻辑抽成 `registerGateRoutes(app, resolve, prefix)`，
+    单门（`resolve` 恒返回唯一门，前缀空）字节级不变，宿主用前缀 `/i/:gateId` 按表查。内核客户端本就拼
+    `${endpoint}/gate/observe`，端点写成 `http://gate-host:8083/i/<gateId>` 即可，客户端零改动。
+  - 决定 ⑬：**解除 P-B1 对通用 `http` / `mcp` 设 `platform_preset` 的 409**（宿主一出现就有平台跑的实例）；
+    `cli` / `ssh` 仍不能预置（无宿主）。决定 ③ 的 fake MCP 全链路 e2e 归本波：CI compose 起 `deploy/accept-s2/mcp`
+    与 `gate-host`，用例走"建 mcp 实例 → 宿主接管 → 平台启用 → 工作区启用 → 目录出现两个工具 → vetted →
+    禁用其一 → 目录隐藏"，并经 JWT 直达路存一次共享凭证（fake MCP 不用它，只证路通）。
 - 交付物：
   1. kernel：`POST /internal/gates/announce`（内部面 token，同 supervisor；带 `GATE_ID`、种类、
      `describe_operations`、健康端点，未启用的实例落"发现的门实例"、状态"未启用"；下线标"失联"）；
