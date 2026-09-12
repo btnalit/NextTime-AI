@@ -77,6 +77,8 @@ describe('Sidebar', () => {
     expect(screen.queryByTestId('nav-explorer')).toBeNull();
     // No 管理 group at all when neither 工作区配置 nor a platform admin's items apply.
     expect(screen.queryByTestId('nav-section-manage')).toBeNull();
+    expect(screen.queryByTestId('nav-subsection-workspace-config')).toBeNull();
+    expect(screen.queryByTestId('nav-platformWorkspaces')).toBeNull();
   });
 
   it('shows 用户/平台设置 and 维护 only for a platform admin, independent of workspace role', () => {
@@ -93,9 +95,16 @@ describe('Sidebar', () => {
         platformRole="admin"
       />,
     );
-    // A proven member with no workspace selected still gets no 工作区配置...
+    // A proven member with no workspace selected still gets none of the per-workspace pages...
     expect(screen.queryByTestId('nav-members')).toBeNull();
-    // ...but does get the platform-admin items.
+    expect(screen.queryByTestId('nav-explorer')).toBeNull();
+    // ...but the 工作区配置 sub-heading still renders, carrying P-A2's platform 工作区 list: an
+    // administrator configures workspaces they are not a member of.
+    expect(screen.getByTestId('nav-subsection-workspace-config')).toBeTruthy();
+    expect(screen.getByTestId('nav-platformWorkspaces').getAttribute('href')).toBe(
+      '#/platform/workspaces',
+    );
+    // ...and the rest of the platform-admin items.
     expect(screen.getByTestId('nav-platformUsers')).toBeTruthy();
     expect(screen.getByTestId('nav-platformSettings')).toBeTruthy();
     expect(screen.getByTestId('nav-platformOverview')).toBeTruthy();
@@ -119,7 +128,10 @@ describe('Sidebar', () => {
       expect(screen.queryByTestId('nav-platformUsers')).toBeNull();
       expect(screen.queryByTestId('nav-platformSettings')).toBeNull();
       expect(screen.queryByTestId('nav-section-maintain')).toBeNull();
+      // P-A2's platform 工作区 list is admin-only too — the owner pages below it are not.
+      expect(screen.queryByTestId('nav-platformWorkspaces')).toBeNull();
       // 工作区配置 still shows — an apiKey session always has an implicit workspace.
+      expect(screen.getByTestId('nav-subsection-workspace-config')).toBeTruthy();
       expect(screen.getByTestId('nav-members')).toBeTruthy();
       unmount();
     }

@@ -67,6 +67,33 @@ describe('governance/agent-profile/resolve: resolveEffectiveAgentProfile', () =>
     expect(effective.model).toBe('');
   });
 
+  it('model (P-A2): a profile model outside policy.allowedModels falls back to the allowed defaultModel', () => {
+    const effective = resolveEffectiveAgentProfile(
+      profile({ model: 'anthropic/claude-sonnet' }),
+      policy({ allowedModels: ['anthropic/claude-haiku'], defaultModel: 'anthropic/claude-haiku' }),
+      available(),
+    );
+    expect(effective.model).toBe('anthropic/claude-haiku');
+  });
+
+  it('model (P-A2): falls back to "" when neither the profile model nor the defaultModel is allowed', () => {
+    const effective = resolveEffectiveAgentProfile(
+      profile({ model: 'anthropic/claude-sonnet' }),
+      policy({ allowedModels: ['openai/gpt-x'], defaultModel: 'anthropic/claude-haiku' }),
+      available(),
+    );
+    expect(effective.model).toBe('');
+  });
+
+  it('model (P-A2): an empty allowedModels list is unrestricted — the profile model passes through', () => {
+    const effective = resolveEffectiveAgentProfile(
+      profile({ model: 'anthropic/claude-sonnet' }),
+      policy({ allowedModels: [], defaultModel: 'anthropic/claude-haiku' }),
+      available(),
+    );
+    expect(effective.model).toBe('anthropic/claude-sonnet');
+  });
+
   it('enabledGatekeepers: null (inherit) resolves to every currently-available (granted) id, not an empty list', () => {
     const effective = resolveEffectiveAgentProfile(
       profile({ enabledGatekeepers: null }),

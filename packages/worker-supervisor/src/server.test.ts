@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -422,6 +422,23 @@ describe('POST /task/spawn', () => {
       },
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  it('round-trips systemPrompt into the Task workspace’s .nexttime/system-prompt.md (P-A2)', async () => {
+    const { app } = setup(); // NEXTTIME_DATA=/host/data, LOCAL_DATA_DIR=dir
+    const res = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: AUTH,
+      payload: { ...validTaskSpawnBody, systemPrompt: 'Instance instructions.' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      readFileSync(
+        join(dir, 'workspaces', 'tasks', TASK_ID, '.nexttime', 'system-prompt.md'),
+        'utf8',
+      ),
+    ).toBe('Instance instructions.');
   });
 
   it('501s when Task mode is not wired up', async () => {

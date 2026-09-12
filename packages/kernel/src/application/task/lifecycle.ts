@@ -10,6 +10,10 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import type { TaskSupervisorStatus } from '../../adapters/supervisor-client/index.js';
 import { readEffectiveAgentProfile } from '../../governance/agent-profile/index.js';
 import { revokeSession } from '../../governance/capability/index.js';
+import {
+  composeSystemPrompt,
+  readInstanceInstructions,
+} from '../platform/instance-instructions.js';
 import { getWorkerDefinition } from '../worker/index.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import type { TaskRuntimeDeps } from './runtime.js';
@@ -377,7 +381,7 @@ async function spawnWorkerRunForRetry(
 
   const scope = handleRow.scope as { capabilities: string[]; resources: Record<string, string[]> };
 
-  const { model, skillsInline, definitionName, egressDeny } = await withWorkspace(
+  const { model, skillsInline, definitionName, egressDeny, systemPrompt } = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: onBehalfOf },
     async (client) => {
@@ -395,6 +399,7 @@ async function spawnWorkerRunForRetry(
           skillsInline: [],
           definitionName: task.workerDefinitionId,
           egressDeny: undefined,
+          systemPrompt: undefined,
         };
       }
       const content = readDefinitionContent(definition.definition);
@@ -415,6 +420,12 @@ async function spawnWorkerRunForRetry(
             ? definition.definition.name
             : definition.id,
         egressDeny: content.egressDeny,
+        // P-A2: same composition as `invoke.ts`'s initial spawn — the retry container must carry
+        // the same prompt the first attempt did.
+        systemPrompt: composeSystemPrompt({
+          base: content.systemPrompt,
+          instanceInstructions: await readInstanceInstructions(client),
+        }),
       };
     },
   );
@@ -437,6 +448,7 @@ async function spawnWorkerRunForRetry(
       definitionName,
       skillsInline,
       egressDeny,
+      systemPrompt,
     });
   } catch {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, (client) =>

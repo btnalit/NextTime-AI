@@ -7,10 +7,12 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * temporary-password forced change → account lockout. Opt-in only, same convention as every other
  * spec in this directory.
  *
- * `.github/workflows/e2e.yml` runs every spec alphabetically in one `playwright test` invocation
- * (`workers: 1`), so this file runs *last* — `approvals`/`chat`/`explorer`/`governance` all run
- * first, against a platform whose `admin` user already exists (the kernel pre-creates it on
- * startup, docs/platform-admin-design.md §4) but none of those specs ever logs in as `admin`.
+ * `playwright.config.ts` runs this file *last*, as its own `chromium-login` project that depends on
+ * the `chromium` project holding every other spec (P-A2: alphabetical order alone would put
+ * `workspaces.spec.ts` after this file, whose final test locks `admin` for five minutes). The
+ * `admin` user already exists (the kernel pre-creates it on startup, docs/platform-admin-design.md
+ * §4); `workspaces.spec.ts` logs in as `admin` before this file, so the first test below normally
+ * takes its "password already changed" branch.
  *
  * Requires: `WEB_E2E_BASE_URL`, `WEB_E2E_ADMIN_LOGIN`/`WEB_E2E_ADMIN_INITIAL_PASSWORD` (the
  * pre-created platform administrator's random temporary password, read from

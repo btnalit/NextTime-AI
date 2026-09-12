@@ -26,3 +26,7 @@ providers:
       scheme: Bearer
     models:
       - id: fake-echo
+      # P-A2: a second whitelist entry so the console e2e can show an allowed-model list
+      # *narrowing* the picker in 我的智能体 (one model cannot). deploy/fake-llm answers any model
+      # id the same way; scripts/accept_*.sh pin `fake/fake-echo` explicitly and are unaffected.
+      - id: fake-echo-alt

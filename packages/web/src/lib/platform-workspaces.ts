@@ -10,12 +10,12 @@ export interface WorkspaceOption {
  * the union of every `memberships[].{workspaceId, workspaceName}` across the loaded users, plus
  * the platform default workspace when it is not already among them.
  *
- * There is deliberately no `list_workspaces` call here: that capability lands in **P-A2** with
- * workspace creation / disabling and owner delegation (docs/development-tasks.md "### P-A2"), so
- * until then the only workspaces the platform plane can name are the ones it can already see
- * through the user directory. Every picker built on this list therefore also accepts a typed
- * workspace id — a brand-new workspace nobody is a member of yet is reachable that way, and this
- * whole module collapses into one `list_workspaces` read when P-A2 ships.
+ * There is deliberately no `list_workspaces` call here. P-A2 added that capability (and
+ * `PlatformWorkspacesPage` reads it), but the users page's own pickers still derive their options
+ * from the loaded directory: swapping them onto `list_workspaces` is a behaviour change to a
+ * shipped, tested page rather than part of P-A2's deliverable. Every picker built on this list
+ * therefore still also accepts a typed workspace id — a brand-new workspace nobody is a member of
+ * yet is reachable that way.
  */
 export function deriveWorkspaceOptions(
   users: readonly UserWire[],

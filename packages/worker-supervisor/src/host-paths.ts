@@ -56,13 +56,23 @@ export function localModelsJsonPath(config: SupervisorConfig): string {
   return `${config.localDataDir}/config/models.json`;
 }
 
+/** `deploy/worker-runtime/entrypoint.sh`'s `SYSTEM_PROMPT_FILE` path, relative to whichever
+ *  workspace directory is mounted at `/workspace` — the single definition both modes' helpers
+ *  below build their own local view from (resident mode's per-user workspace, Task mode's
+ *  per-Task one; the file has the same in-container path either way). */
+const SYSTEM_PROMPT_WORKSPACE_RELATIVE_PATH = '.nexttime/system-prompt.md';
+
+function systemPromptPathIn(localWorkspaceDir: string): string {
+  return `${localWorkspaceDir}/${SYSTEM_PROMPT_WORKSPACE_RELATIVE_PATH}`;
+}
+
 /** `deploy/worker-runtime/entrypoint.sh`'s `SYSTEM_PROMPT_FILE` path, workspace-relative
  *  (`/workspace/.nexttime/system-prompt.md`) — this container's own view (`resident-service.ts`
  *  `spawn()` writes here, S2.6, before deciding whether to reuse or (re)create the entry
  *  container, so a workspace's next restart always picks up the current published prompt even
  *  when this particular `spawn()` call only reuses an already-running container). */
 export function localSystemPromptPath(config: SupervisorConfig, principalId: string): string {
-  return `${workspacePaths(config, principalId).localWorkspaceDir}/.nexttime/system-prompt.md`;
+  return systemPromptPathIn(workspacePaths(config, principalId).localWorkspaceDir);
 }
 
 /**
@@ -106,6 +116,15 @@ export function taskWorkspacePaths(config: SupervisorConfig, taskId: string): Ta
     skillsDirInContainer: `${piAgentDirInContainer}/skills`,
     localPiAgentDir: `${localWorkspaceDir}/.pi/agent`,
   };
+}
+
+/** Task-mode analogue of `localSystemPromptPath` (P-A2; docs/platform-admin-design.md §6.6) —
+ *  this container's own view of the same `/workspace/.nexttime/system-prompt.md` the runtime
+ *  image's `entrypoint.sh` reads, inside this Task's own workspace directory. Takes the already-
+ *  resolved `TaskPaths` rather than `(config, taskId)` because every caller (`task-service.ts`'s
+ *  `spawn()`) has them in hand for the bind mounts anyway. */
+export function taskSystemPromptPath(paths: TaskPaths): string {
+  return systemPromptPathIn(paths.localWorkspaceDir);
 }
 
 /** This container's own view of the `workspaces/tasks/` root — used by the retention sweep

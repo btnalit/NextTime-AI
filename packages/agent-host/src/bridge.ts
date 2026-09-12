@@ -189,6 +189,25 @@ export function buildPromptCommand(turnId: string, message: string): Record<stri
   return { type: 'prompt', id: turnId, message };
 }
 
+/** The `switch_session` RPC command (`docs/rpc.md` "switch_session" — "Load a different session
+ *  file. Can be cancelled by a `session_before_switch` extension event handler."):
+ *  `{"type": "switch_session", "sessionPath": "/path/to/session.jsonl"}`, answered with
+ *  `{"type":"response","command":"switch_session","success":true,"data":{"cancelled":false}}`
+ *  (`data.cancelled: true` when an extension vetoed the switch; `success:false` plus `error` when
+ *  it failed outright). A `sessionPath` that does not exist yet starts a new session there, which
+ *  is what makes "one pi session file per chat" a decision `host.ts` can make on its own — see its
+ *  module doc comment. `docs/rpc.md`'s own `switch_session` example omits the optional `id`, but
+ *  every command accepts one and every response echoes it (pi 0.84.4's
+ *  `dist/modes/rpc/rpc-mode.js`: `case "switch_session": ... return success(id, "switch_session",
+ *  result)`, the same `success(id, ...)` helper the documented `prompt` echo goes through) — so
+ *  `host.ts` correlates its own switch the same way it already correlates a `prompt`. */
+export function buildSwitchSessionCommand(
+  id: string,
+  sessionPath: string,
+): Record<string, unknown> {
+  return { type: 'switch_session', id, sessionPath };
+}
+
 /** The `abort` RPC command (`docs/rpc.md` "abort" — "Abort the current agent operation"). */
 export function buildAbortCommand(): Record<string, unknown> {
   return { type: 'abort' };

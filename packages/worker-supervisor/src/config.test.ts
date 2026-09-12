@@ -247,6 +247,7 @@ describe('TaskSpawnRequestSchema', () => {
         ...validTaskSpawnBody,
         image: 'custom-image',
         model: 'anthropic/claude-sonnet-5',
+        systemPrompt: 'You are a Worker.',
         timeoutSec: 120,
         skillsInline: [{ name: 'inventory', files: { 'SKILL.md': '---\nname: x\n---\n\nbody\n' } }],
         egressDeny: ['blocked.example.com'],
@@ -268,6 +269,12 @@ describe('TaskSpawnRequestSchema', () => {
     expect(TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, extra: 'x' }).success).toBe(
       false,
     );
+  });
+
+  it('rejects an empty systemPrompt (P-A2 — optional, but never the empty string)', () => {
+    expect(
+      TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, systemPrompt: '' }).success,
+    ).toBe(false);
   });
 
   it('rejects a non-positive or non-integer timeoutSec', () => {

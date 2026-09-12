@@ -18,6 +18,7 @@ import { PlatformAuditPage } from './components/platform/PlatformAuditPage.js';
 import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage.js';
 import { PlatformSettingsPage } from './components/platform/PlatformSettingsPage.js';
 import { PlatformUsersPage } from './components/platform/PlatformUsersPage.js';
+import { PlatformWorkspacesPage } from './components/platform/PlatformWorkspacesPage.js';
 import { AppShell } from './components/shell/AppShell.js';
 import { EmptyState } from './components/ui/EmptyState.js';
 import { ToastProvider } from './components/ui/Toast.js';
@@ -334,8 +335,12 @@ export function App() {
     }
   }, [session]);
 
+  /** `destination` is where to land *after* the new workspace is authenticated — the Sidebar's own
+   *  switcher takes the default (`#/work/chats`), P-A2's "打开工作区配置" passes `#/govern/members`.
+   *  It has to be navigated here rather than by the caller: the caller's `navigate` would run
+   *  while the old session is still published and this function would then overwrite it. */
   const handleSwitchWorkspace = useCallback(
-    async (workspaceId: string): Promise<void> => {
+    async (workspaceId: string, destination: string = hrefs.chats()): Promise<void> => {
       if (!session || session.authMode !== 'cookie' || !session.user || !session.memberships)
         return;
       if (workspaceId === session.selectedWorkspaceId || switchingWorkspace) return;
@@ -345,7 +350,7 @@ export function App() {
         // new workspace is authenticated (or the switch fails), and a switch that loses to a
         // later attempt never publishes.
         await openCookieSession(session.user, session.memberships, workspaceId, session.ws);
-        navigate(hrefs.chats());
+        navigate(destination);
       } finally {
         setSwitchingWorkspace(false);
       }
@@ -395,7 +400,9 @@ export function App() {
             onLogout={
               session.authMode === 'cookie' ? () => void handleCookieLogout() : handleForgetKey
             }
-            onSwitchWorkspace={(workspaceId) => void handleSwitchWorkspace(workspaceId)}
+            onSwitchWorkspace={(workspaceId, destination) =>
+              void handleSwitchWorkspace(workspaceId, destination)
+            }
             switchingWorkspace={switchingWorkspace}
             onUserChanged={handleUserChanged}
             onKeyBound={handleKeyBound}
@@ -457,7 +464,7 @@ function Routed({
   readonly session: Session;
   readonly route: Route;
   readonly onLogout: () => void;
-  readonly onSwitchWorkspace: (workspaceId: string) => void;
+  readonly onSwitchWorkspace: (workspaceId: string, destination?: string) => void;
   readonly switchingWorkspace: boolean;
   readonly onUserChanged: (user: WireUser) => void;
   readonly onKeyBound: (result: MeResult) => void;
@@ -581,6 +588,20 @@ function Routed({
     case 'platformUsers':
       page = requireAdmin(session, <PlatformUsersPage http={session.http} />);
       break;
+    case 'platformWorkspaces':
+      page = requireAdmin(
+        session,
+        <PlatformWorkspacesPage
+          http={session.http}
+          memberships={session.memberships ?? []}
+          onOpenWorkspaceConfig={(workspaceId) => {
+            // Already in it (the switcher would no-op) — just go to the owner pages.
+            if (workspaceId === session.selectedWorkspaceId) navigate(hrefs.members());
+            else onSwitchWorkspace(workspaceId, hrefs.members());
+          }}
+        />,
+      );
+      break;
     case 'platformSettings':
       page = requireAdmin(session, <PlatformSettingsPage http={session.http} />);
       break;
@@ -618,11 +639,12 @@ function isDefaultLanding(hash: string): boolean {
   return routeFromHash(hash).kind === 'chats' && hash !== hrefs.chats();
 }
 
-/** True for the four `#/platform/*` route kinds — used by `Routed`'s platform-only redirect. */
+/** True for every `#/platform/*` route kind — used by `Routed`'s platform-only redirect. */
 function isPlatformRoute(kind: Route['kind']): boolean {
   return (
     kind === 'platformOverview' ||
     kind === 'platformUsers' ||
+    kind === 'platformWorkspaces' ||
     kind === 'platformSettings' ||
     kind === 'platformAudit'
   );

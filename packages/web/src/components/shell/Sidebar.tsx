@@ -81,6 +81,19 @@ const GOVERN_NAV: readonly NavItem[] = [
   { section: 'audit', label: '审计', sub: 'Audit', icon: 'search', href: hrefs.audit() },
 ];
 
+/** 管理 → 工作区配置 → 工作区 (P-A2, design doc §2 "工作区配置归管理面") — the platform's *list* of
+ *  workspaces (create / disable / entry model / allowed models / owner delegation), as opposed to
+ *  the per-workspace owner pages below it. Platform-admin only and independent of workspace
+ *  role/selection, exactly like 用户/平台设置: an administrator configures a workspace they are not
+ *  a member of, so this item (and its 工作区配置 sub-heading) shows even with zero memberships. */
+const PLATFORM_WORKSPACES_NAV: NavItem = {
+  section: 'platformWorkspaces',
+  label: '工作区',
+  sub: 'Workspaces',
+  icon: 'grid',
+  href: hrefs.platformWorkspaces(),
+};
+
 /** 管理 → 用户 / 平台设置 (design doc §5) — platform-admin only (`platformRole === 'admin'`),
  *  independent of workspace role/selection: a platform admin manages users and platform settings
  *  even with zero workspace memberships. */
@@ -160,8 +173,9 @@ export interface SidebarProps {
 
 /**
  * components/shell/Sidebar: product mark + workspace name/role badge, three nav groups per the
- * platform-admin design doc §5 — 使用 Use (always visible), 管理 Manage (工作区配置 sub-group for a
- * non-member workspace role with a workspace in scope, plus 用户/平台设置 for a platform admin),
+ * platform-admin design doc §5 — 使用 Use (always visible), 管理 Manage (工作区配置 sub-group: the
+ * platform 工作区 list for an admin, the per-workspace owner pages for a non-member workspace role
+ * with a workspace in scope; plus 用户/平台设置 for a platform admin),
  * 维护 Maintain (platform admin only: 概览/平台审计) — with inline icons and the live
  * pending-approvals badge, and at the bottom the WS connection dot and "Forget key". Collapses to
  * an icon rail ≤1100px and a top bar ≤720px (styles/shell.css) — labels/sub-labels/section headers
@@ -245,12 +259,15 @@ export function Sidebar({
 
         {showManage ? (
           <NavSectionGroup titleZh="管理" titleEn="Manage" testId="nav-section-manage">
+            {/* Always has at least one item under it: `showManage` is `showWorkspaceConfig ||
+                isAdmin`, and those are exactly the two branches below. */}
+            <div className="nav-section-title" data-testid="nav-subsection-workspace-config">
+              <span>工作区配置</span>
+              <span className="nav-section-title-sub">Workspace config</span>
+            </div>
+            {isAdmin ? renderNavItem(PLATFORM_WORKSPACES_NAV, active, pendingCount) : null}
             {showWorkspaceConfig ? (
               <>
-                <div className="nav-section-title" data-testid="nav-subsection-workspace-config">
-                  <span>工作区配置</span>
-                  <span className="nav-section-title-sub">Workspace config</span>
-                </div>
                 {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount))}
                 {renderExternalNavItem(EXPLORER_NAV)}
               </>

@@ -35,6 +35,7 @@
 | 模型与配额（`/govern/models`） | `list_models` `get_agent_policy`（S3.13，member 可读）`list_quotas` `list_policies` | `set_agent_policy`（S3.13，owner——非 owner 只看只读摘要，不渲染可编辑表单） | 无 |
 | 审计（`/govern/audit`） | `explain`（已有，member 可用）`reconstruct` `audit_query`（均已有，auditor） | 无 | 无 |
 | 我的智能体（`/me/agent`） | `get_agent_profile{principalId?}` `get_agent_policy` `list_models` `list_skills` `list_gatekeepers` `list_worker_definitions` `list_principals`（owner 切换查看对象用） | `set_agent_profile`（member 改自己且 policy 允许；owner 改任何人） | 无 |
+| 工作区（`/platform/workspaces`，P-A2，仅管理员） | `list_workspaces` `list_platform_models` `list_users`（挑 owner） | `create_workspace` `update_workspace` `set_workspace_status` `set_allowed_models`；委托 owner 用 `add_membership{role:'owner'}` / `set_membership_role` | 无 |
 | 侧栏徽标 | `list_pending`（计数） | — | `action.pending` `action.updated` |
 | 侧栏工作区名 + 角色徽标 | `get_workspace`（S3.11，`caller` 字段是角色的权威来源，S3.13 起启用） | — | 无 |
 
@@ -106,7 +107,7 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 ## CI（Playwright）
 
 `.github/workflows/e2e.yml`（新增工作流，与 `ci.yml` 完全分离，`ci.yml` 本身未改动）在每个 PR 和
-推送到 `main` 时把本节的三个 e2e spec 全部跑一遍——单个 job `web-e2e`：
+推送到 `main` 时把 `packages/web/e2e/` 下全部 spec 跑一遍（P-A2 起含 `workspaces.spec.ts`：管理员建部门工作区 → 委托 owner → owner 只见自己工作区的配置页、模型下拉收窄；`playwright.config.ts` 用两个 project 让 `login.spec.ts` 最后跑，因为它的锁定用例会锁住 `admin`）——单个 job `web-e2e`：
 
 1. checkout（pinned SHA，与 `ci.yml` 同一约定）、`pnpm/setup`（Node 22）、`pnpm install
    --frozen-lockfile`，`pnpm --filter @nexttime/web exec playwright install --with-deps

@@ -8,6 +8,10 @@ import {
 } from '../../governance/agent-profile/index.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { sumTodayCostUsd } from '../../governance/llm-usage/index.js';
+import {
+  composeSystemPrompt,
+  readInstanceInstructions,
+} from '../platform/instance-instructions.js';
 import { requirePublishedWorkerDefinition } from '../worker/index.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import {
@@ -329,30 +333,37 @@ export async function invokeWorkerCreate(
   const definitionName =
     typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
 
-  const { parentAuthority, skillsInline, effectiveModel, agentProfile } = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: caller.principalId },
-    async (client) => ({
-      parentAuthority: await resolveParentAuthority(client, workspaceId, caller),
-      skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
-      // S3.13: only read when the WorkerDefinition itself declares no model — the requesting
-      // principal's own effective.model is the fallback, never a widening of what the
-      // WorkerDefinition author already pinned. `EffectiveAgentProfile.model` is always a
-      // concrete `string` (`''` = "nothing configured anywhere",
-      // `governance/agent-profile/resolve.ts`'s own doc comment) — normalized to `undefined`
-      // here so an unconfigured model never becomes a literal empty-string CMD arg.
-      effectiveModel:
-        content.model === undefined
-          ? (await readEffectiveAgentProfile(client, workspaceId, caller.principalId)).model ||
-            undefined
-          : undefined,
-      // S3.13 runtime consumer (this task): the raw row, not `readEffectiveAgentProfile` — this
-      // field carries no AgentPolicy cap (`resolve.ts`'s own doc comment), so `null`/no-row already
-      // *is* "no restriction" without needing the "available" resolution machinery; see
-      // `InvokeWorkerDefinitionNotEnabledError`'s own doc comment (types.ts) for the full reasoning.
-      agentProfile: await readAgentProfile(client, workspaceId, caller.principalId),
-    }),
-  );
+  const { parentAuthority, skillsInline, effectiveModel, agentProfile, systemPrompt } =
+    await withWorkspace(
+      deps.pool,
+      { workspaceId, principalId: caller.principalId },
+      async (client) => ({
+        parentAuthority: await resolveParentAuthority(client, workspaceId, caller),
+        skillsInline: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+        // P-A2: the Worker's system prompt = its WorkerDefinition's own `systemPrompt` + the
+        // platform's `instanceInstructions` (docs/platform-admin-design.md §6.6), read fresh here.
+        systemPrompt: composeSystemPrompt({
+          base: content.systemPrompt,
+          instanceInstructions: await readInstanceInstructions(client),
+        }),
+        // S3.13: only read when the WorkerDefinition itself declares no model — the requesting
+        // principal's own effective.model is the fallback, never a widening of what the
+        // WorkerDefinition author already pinned. `EffectiveAgentProfile.model` is always a
+        // concrete `string` (`''` = "nothing configured anywhere",
+        // `governance/agent-profile/resolve.ts`'s own doc comment) — normalized to `undefined`
+        // here so an unconfigured model never becomes a literal empty-string CMD arg.
+        effectiveModel:
+          content.model === undefined
+            ? (await readEffectiveAgentProfile(client, workspaceId, caller.principalId)).model ||
+              undefined
+            : undefined,
+        // S3.13 runtime consumer (this task): the raw row, not `readEffectiveAgentProfile` — this
+        // field carries no AgentPolicy cap (`resolve.ts`'s own doc comment), so `null`/no-row already
+        // *is* "no restriction" without needing the "available" resolution machinery; see
+        // `InvokeWorkerDefinitionNotEnabledError`'s own doc comment (types.ts) for the full reasoning.
+        agentProfile: await readAgentProfile(client, workspaceId, caller.principalId),
+      }),
+    );
 
   // S3.13 runtime consumer: narrowing only, checked before anything is created (same "before any
   // Task row exists" placement the quota checks below and the attenuation pre-check just after this
@@ -415,6 +426,7 @@ export async function invokeWorkerCreate(
       definitionName,
       skillsInline,
       egressDeny: content.egressDeny,
+      systemPrompt,
     });
   } catch (err) {
     await withWorkspace(

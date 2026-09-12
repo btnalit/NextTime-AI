@@ -29,6 +29,7 @@ export type NavSection =
   | 'audit'
   | 'platformOverview'
   | 'platformUsers'
+  | 'platformWorkspaces'
   | 'platformSettings'
   | 'platformAudit';
 
@@ -51,6 +52,7 @@ export type Route =
   | { readonly kind: 'audit' }
   | { readonly kind: 'platformOverview' }
   | { readonly kind: 'platformUsers' }
+  | { readonly kind: 'platformWorkspaces' }
   | { readonly kind: 'platformSettings' }
   | { readonly kind: 'platformAudit' };
 
@@ -108,6 +110,7 @@ export function routeFromHash(hash: string): Route {
 
   if (hash === '#/platform/overview') return { kind: 'platformOverview' };
   if (hash === '#/platform/users') return { kind: 'platformUsers' };
+  if (hash === '#/platform/workspaces') return { kind: 'platformWorkspaces' };
   if (hash === '#/platform/settings') return { kind: 'platformSettings' };
   if (hash === '#/platform/audit') return { kind: 'platformAudit' };
 
@@ -147,6 +150,7 @@ export const hrefs = {
   audit: () => '#/govern/audit',
   platformOverview: () => '#/platform/overview',
   platformUsers: () => '#/platform/users',
+  platformWorkspaces: () => '#/platform/workspaces',
   platformSettings: () => '#/platform/settings',
   platformAudit: () => '#/platform/audit',
 } as const;

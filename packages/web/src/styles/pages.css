@@ -608,3 +608,21 @@
 .table-scroll > .data-table {
   min-width: 720px;
 }
+
+/* ---- Platform workspaces (P-A2) ---------------------------------------------------------- */
+/* The whole row opens the configuration drawer; the 配置 Configure button in the last cell is the
+ * keyboard path, so this is cursor + hover affordance only. */
+.row-clickable {
+  cursor: pointer;
+}
+
+.row-clickable:hover td {
+  background: var(--surface-2);
+}
+
+/* The allowed-model checklist is as long as the llm-proxy catalog — it scrolls inside the drawer
+ * rather than pushing the save button below the fold. */
+.model-checklist {
+  max-height: 220px;
+  overflow-y: auto;
+}

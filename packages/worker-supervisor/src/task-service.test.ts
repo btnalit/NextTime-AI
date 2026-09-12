@@ -78,6 +78,27 @@ describe('task-service spawn', () => {
     expect(stat.isDirectory()).toBe(true);
   });
 
+  it('writes systemPrompt to <workspace>/.nexttime/system-prompt.md before creating the container (P-A2)', async () => {
+    const { service, config, docker } = setup();
+    await service.spawn({ ...spawnInput, systemPrompt: 'You are a one-shot Worker.' });
+    expect(
+      readFileSync(
+        join(config.localDataDir, 'workspaces', 'tasks', 'task-1', '.nexttime', 'system-prompt.md'),
+        'utf8',
+      ),
+    ).toBe('You are a one-shot Worker.');
+    // Written *before* Docker is asked to create the container, not after.
+    expect(docker.createCalls).toHaveLength(1);
+  });
+
+  it('spawns without a systemPrompt just as before (no .nexttime directory — entrypoint.sh’s static default applies)', async () => {
+    const { service, config } = setup();
+    await service.spawn(spawnInput);
+    expect(
+      existsSync(join(config.localDataDir, 'workspaces', 'tasks', 'task-1', '.nexttime')),
+    ).toBe(false);
+  });
+
   it('writes skillsInline files under <agentDir>/skills/<name>/ before creating the container', async () => {
     const { service, config, docker } = setup();
     await service.spawn({

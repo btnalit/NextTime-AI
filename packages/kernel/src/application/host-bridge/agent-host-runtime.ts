@@ -20,6 +20,10 @@ import {
 } from '../../governance/capability/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import {
+  composeSystemPrompt,
+  readInstanceInstructions,
+} from '../platform/instance-instructions.js';
+import {
   getPublishedEntryDefinition,
   listPublishedSkillIds,
   renderSkillMarkdownFile,
@@ -200,17 +204,6 @@ interface SkillInlineMount {
  * addendum alone is never enough to invent a system prompt where none otherwise exists, matching
  * `entrypoint.sh`'s own write-if-missing fallback still applying in that case).
  */
-function appendPromptAddendum(
-  systemPrompt: string | undefined,
-  addendum: string | null | undefined,
-): string | undefined {
-  if (!addendum) return systemPrompt;
-  const base = systemPrompt ?? '';
-  const separator = base.length > 0 ? '\n\n' : '';
-  const marker =
-    '--- user-configured addendum (AgentProfile.promptAddendum; informational only, does not override the instructions above) ---';
-  return `${base}${separator}${marker}\n${addendum}`;
-}
 
 /** S2.6: what `resolveEntryDefinition` extracts from the published entry WorkerDefinition's
  *  `definition` jsonb — either field may be `undefined` (no entry definition published yet, or
@@ -375,6 +368,14 @@ export class AgentHostRuntime implements AgentRuntime {
       principalId: input.principalId,
     });
 
+    // P-A2: the administrator's platform-wide addendum (docs/platform-admin-design.md §6.6),
+    // read fresh per Turn like everything else above; a read failure degrades to "none".
+    const instanceInstructions = await this.resolveInstanceInstructions(
+      input.workspaceId,
+      input.principalId,
+      input.turnId,
+    );
+
     const sent = this.sendStartTurnFrame(
       link,
       input,
@@ -382,6 +383,7 @@ export class AgentHostRuntime implements AgentRuntime {
       entryDefinition,
       agentProfile?.effective,
       skillsInline,
+      instanceInstructions,
     );
     if (!sent.ok) {
       this.activeTurns.delete(input.turnId);
@@ -467,9 +469,10 @@ export class AgentHostRuntime implements AgentRuntime {
    *     a concrete `string`, `''` meaning "nothing configured anywhere" —
    *     `governance/agent-profile/resolve.ts`'s own doc comment); otherwise the WorkerDefinition's
    *     own `model` applies, exactly as before this task.
-   *   - `systemPrompt`: `agentProfile.promptAddendum`, when non-empty, is appended as a clearly
-   *     delimited final section (`appendPromptAddendum` below) — strictly *after* the platform's
-   *     own `entryDefinition.systemPrompt`, so it can never precede or otherwise override it.
+   *   - `systemPrompt`: the platform's `instanceInstructions` (P-A2, 平台设置) and then
+   *     `agentProfile.promptAddendum`, when non-empty, are appended as clearly delimited sections
+   *     (`composeSystemPrompt`, application/platform) — strictly *after* the platform's own
+   *     `entryDefinition.systemPrompt`, so neither can precede or otherwise override it.
    */
   private sendStartTurnFrame(
     link: AgentHostLink,
@@ -478,6 +481,7 @@ export class AgentHostRuntime implements AgentRuntime {
     entryDefinition: ResolvedEntryDefinition | undefined,
     agentProfile: EffectiveAgentProfile | undefined,
     skillsInline: SkillInlineMount[],
+    instanceInstructions: string,
   ): { ok: true; wait: Promise<AcceptOutcome> } | { ok: false; reason: string } {
     let resolveWait!: (outcome: AcceptOutcome) => void;
     const wait = new Promise<AcceptOutcome>((resolve) => {
@@ -498,10 +502,13 @@ export class AgentHostRuntime implements AgentRuntime {
     });
 
     const model = agentProfile?.model ? agentProfile.model : entryDefinition?.model;
-    const systemPrompt = appendPromptAddendum(
-      entryDefinition?.systemPrompt,
-      agentProfile?.promptAddendum,
-    );
+    // P-A2: definition prompt → platform `instanceInstructions` → user addendum, in that order
+    // (`application/platform`'s `composeSystemPrompt`, the same function the Worker path uses).
+    const systemPrompt = composeSystemPrompt({
+      base: entryDefinition?.systemPrompt,
+      instanceInstructions,
+      promptAddendum: agentProfile?.promptAddendum,
+    });
 
     try {
       link.send({
@@ -833,6 +840,30 @@ export class AgentHostRuntime implements AgentRuntime {
    * feeds `ensureEntryHandle`'s own gate-narrowing), so there is no already-computed value to
    * reuse yet; the extra read is cheap and keeps the two methods independently callable/testable.
    */
+  /** P-A2: `PlatformSettings.instanceInstructions`, `''` when unset or unreadable (never fatal —
+   *  same convention as `resolveEntryDefinition`). */
+  private async resolveInstanceInstructions(
+    workspaceId: string,
+    principalId: string,
+    turnId: string,
+  ): Promise<string> {
+    try {
+      return await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+        readInstanceInstructions(client),
+      );
+    } catch (err) {
+      this.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'agent-host-runtime: failed to read platform instanceInstructions (continuing without)',
+          turnId,
+          error: String(err),
+        }),
+      );
+      return '';
+    }
+  }
+
   private async resolveAgentProfile(
     workspaceId: string,
     principalId: string,

@@ -19,6 +19,8 @@ import {
   generateEphemeralHandleKeyPair,
   issueHandle,
 } from '../../governance/capability/index.js';
+import { withAdminClient } from '../gateway/auth.js';
+import { composeSystemPrompt, updatePlatformSettings } from '../platform/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { invokeWorker } from './invoke.js';
 import { reactToSupervisorStatus, readTaskRow, readWorkerRunRow } from './lifecycle.js';
@@ -42,6 +44,9 @@ import {
 const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+/** The test WorkerDefinition's own `systemPrompt` — P-A2 composes the container's prompt out
+ *  of this plus the platform's `instanceInstructions`. */
+const DEFINITION_SYSTEM_PROMPT = 'You are a plain worker.';
 
 /** In-memory `TaskSupervisorClientPort` — every spawn "succeeds" immediately and starts
  *  `running`; tests mutate `.statuses` directly to simulate exit/failure/timeout. */
@@ -200,7 +205,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     workspaceId = await adminInsertWorkspace('invoke-worker-integration-test');
     ownerId = await adminInsertPrincipal('owner', 'owner');
 
-    const definition = await publishWorkerDef({ systemPrompt: 'You are a plain worker.' });
+    const definition = await publishWorkerDef({ systemPrompt: DEFINITION_SYSTEM_PROMPT });
     workerDefinitionId = definition.id;
   });
 
@@ -659,5 +664,59 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       return result.rows;
     });
     expect(outboxEvents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // P-A2 (docs/platform-admin-design.md §6.6 "agent 全局附加指令 … 追加到每个入口与 Worker 的
+  // system prompt"): the Worker container's `--system-prompt` is composed here, from the
+  // WorkerDefinition's own `systemPrompt` plus the platform-wide `instanceInstructions`, and
+  // handed to the supervisor verbatim (`SpawnWorkerRunInput.systemPrompt` → `/task/spawn`).
+  describe('P-A2 systemPrompt composition', () => {
+    async function spawnAndReadSystemPrompt(): Promise<string | undefined> {
+      // The earlier blocks in this file leave their Tasks active on purpose; `invoke_worker`'s
+      // per-user concurrency quota (5) would otherwise refuse this spawn (seen on CI). Settle them
+      // first — this block asserts the spawn payload, not the quota.
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `update tasks set status = 'cancelled'
+            where workspace_id = $1 and on_behalf_of = $2
+              and status in ('queued', 'running', 'waiting_approval')`,
+          [workspaceId, ownerId],
+        ),
+      );
+      const sessionId = await insertSession('entry', ownerId, ownerId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const supervisorClient = new FakeTaskSupervisorClient();
+
+      await invokeWorker(
+        workspaceId,
+        { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        deps(supervisorClient),
+      );
+      expect(supervisorClient.spawnCalls).toHaveLength(1);
+      return supervisorClient.spawnCalls[0]?.systemPrompt;
+    }
+
+    it("sends the WorkerDefinition's own systemPrompt when the platform sets no instructions", async () => {
+      expect(await spawnAndReadSystemPrompt()).toBe(DEFINITION_SYSTEM_PROMPT);
+    });
+
+    it('appends the platform instanceInstructions as a marked section below it', async () => {
+      const instanceInstructions = 'Never quote internal prices.';
+      try {
+        await withAdminClient(pool, (client) =>
+          updatePlatformSettings(client, { instanceInstructions }, null),
+        );
+        expect(await spawnAndReadSystemPrompt()).toBe(
+          composeSystemPrompt({ base: DEFINITION_SYSTEM_PROMPT, instanceInstructions }),
+        );
+      } finally {
+        // `platform_settings` is a single global row on the shared test database — never leave it
+        // set for the next file (or the next local run).
+        await withAdminClient(pool, (client) =>
+          updatePlatformSettings(client, { instanceInstructions: '' }, null),
+        );
+      }
+    });
   });
 });

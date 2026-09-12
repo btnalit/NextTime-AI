@@ -257,6 +257,17 @@ export async function dispatchCapability(
     deps.pool,
     { workspaceId, principalId },
     async (client) => {
+      // P-A2 (`set_workspace_status`): a disabled workspace is closed on every channel *per call*,
+      // not only at authentication — a WebSocket authenticated before the disable would otherwise
+      // keep dispatching (and `send_chat_message` would re-mint an entry session the disable just
+      // revoked). One primary-key read; `workspaces` is readable by the application role (0001).
+      const workspaceRow = await client.query<{ status: string }>(
+        'select status from workspaces where id = $1',
+        [workspaceId],
+      );
+      if (workspaceRow.rows[0]?.status !== 'active') {
+        throw new ForbiddenError('workspace_disabled: this workspace is disabled');
+      }
       const result = await handler(client, workspaceId, parsed.data, {
         channel: caller.channel,
         principalId,

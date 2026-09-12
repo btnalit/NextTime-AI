@@ -2163,6 +2163,100 @@ const platformCapabilities: readonly Capability[] = [
     description:
       'The platform audit stream (`workspace_id is null`): who changed what on the platform itself, newest first, filterable by actor, action, target user or target workspace.',
   },
+  // P-A2 (docs/platform-admin-design.md §2 / §5 "工作区配置", development-tasks P-A2 deliverable 1):
+  // workspaces as platform objects. Deeper per-workspace configuration (members, gates, catalog,
+  // quotas) stays on the `scope:'workspace'` capabilities the owner pages already use.
+  {
+    name: 'list_workspaces',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ status: wire.WorkspaceStatusWireSchema.optional() }).strict(),
+    resultSchema: listEnvelope(wire.PlatformWorkspaceWireSchema),
+    description:
+      'Every workspace with its status, entry model, allowed-model list, owners and active member count, oldest first. Disabled workspaces are included (filter with `status`).',
+  },
+  {
+    name: 'list_platform_models',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.ModelCatalogEntryWireSchema),
+    description:
+      'The llm-proxy model catalog (`<provider>/<id>`) as the platform plane reads it — the same list `list_models` gives a workspace member, for the administrator who is configuring a workspace they are not a member of.',
+  },
+  {
+    name: 'create_workspace',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        name: z.string().min(1).max(120),
+        /** The existing platform user who becomes the first `owner`. */
+        ownerUserId: platformUserId,
+        /** `<provider>/<id>`; must be in the catalog. Omit for pi's own default. */
+        entryModel: z.string().min(1).optional(),
+        /** `[]` (default) = every catalog model. When non-empty it must contain `entryModel`. */
+        allowedModels: z.array(z.string().min(1)).max(100).optional(),
+      })
+      .strict(),
+    resultSchema: wire.PlatformWorkspaceWireSchema,
+    description:
+      'Create a workspace — a second shared graph for a department that needs isolation — with its first owner, the platform meta-ontology and the v1 entry WorkerDefinition, then delegate: the owner sees only this workspace under 管理 → 工作区配置. Deleting a workspace stays CLI-only.',
+  },
+  {
+    name: 'update_workspace',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        workspaceId: z.string().min(1),
+        name: z.string().min(1).max(120).optional(),
+        /** Must be in the catalog and, when a non-empty allowed list exists, in that list. Cannot be cleared: the entry WorkerDefinition keeps the model it was created with. */
+        entryModel: z.string().min(1).optional(),
+      })
+      .strict(),
+    resultSchema: wire.PlatformWorkspaceWireSchema,
+    description:
+      'Rename a workspace and/or set its entry model — the model every member’s entry agent uses until they pick their own in 我的智能体. Takes effect on containers started afterwards.',
+  },
+  {
+    name: 'set_workspace_status',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({ workspaceId: z.string().min(1), status: wire.WorkspaceStatusWireSchema })
+      .strict(),
+    resultSchema: wire.PlatformWorkspaceWireSchema,
+    description:
+      'Disable or re-enable a workspace. Disabling revokes every session in it (entry, Worker, service Handles), stops its members’ entry containers, and hides it from every login; data is kept. The platform default workspace cannot be disabled.',
+  },
+  {
+    name: 'set_allowed_models',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        workspaceId: z.string().min(1),
+        /** `[]` = every catalog model. Every entry must be in the catalog; a non-empty list must contain the workspace’s entry model. */
+        allowedModels: z.array(z.string().min(1)).max(100),
+      })
+      .strict(),
+    resultSchema: wire.PlatformWorkspaceWireSchema,
+    description:
+      'Set the models a workspace’s members may pick in 我的智能体 (the AgentPolicy allow-list). A member whose current choice falls outside the list is served the entry model from their next Turn.',
+  },
 ];
 
 /** The complete capability registry (design doc §9.3). */
@@ -2255,6 +2349,12 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'get_platform_settings',
     'update_platform_settings',
     'platform_audit_query',
+    'list_workspaces',
+    'list_platform_models',
+    'create_workspace',
+    'update_workspace',
+    'set_workspace_status',
+    'set_allowed_models',
   ],
 ]);
 

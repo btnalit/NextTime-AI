@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildAbortCommand, buildPromptCommand, translatePiEvent } from './bridge.js';
+import {
+  buildAbortCommand,
+  buildPromptCommand,
+  buildSwitchSessionCommand,
+  translatePiEvent,
+} from './bridge.js';
 
 /**
  * bridge.test: pi 0.84.4 RPC event fixtures (hand-written per `docs/rpc.md`'s own documented
@@ -223,12 +228,22 @@ describe('translatePiEvent — agent_settled and everything else', () => {
   });
 });
 
-describe('buildPromptCommand / buildAbortCommand', () => {
+describe('buildPromptCommand / buildSwitchSessionCommand / buildAbortCommand', () => {
   it('builds a prompt command keyed by the platform turnId, carrying the marked message verbatim', () => {
     expect(buildPromptCommand('turn-1', '<!--nexttime:turn_id=turn-1-->\nhello')).toEqual({
       type: 'prompt',
       id: 'turn-1',
       message: '<!--nexttime:turn_id=turn-1-->\nhello',
+    });
+  });
+
+  it('builds a switch_session command carrying the session path and its own correlation id', () => {
+    expect(
+      buildSwitchSessionCommand('switch:turn-1', '/workspace/.pi/sessions/chat-abc.jsonl'),
+    ).toEqual({
+      type: 'switch_session',
+      id: 'switch:turn-1',
+      sessionPath: '/workspace/.pi/sessions/chat-abc.jsonl',
     });
   });
 
