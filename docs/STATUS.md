@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-11（W8：P-A1 身份、用户与管理面骨架合入 PR #168 并发 v0.7.0；`platform-admin-design.md` v3 是平台管理面的上位设计，S4.2–S4.5 已改为 P-A1 / P-A2 / P-B / P-C / P-D；主机仍在 v0.5.1，v0.6.0 + v0.7.0 待一起应用；当前波次：W8 平台管理 + 稳定期）
+最后更新：2026-09-12（W8：P-A2 使用面收口合入 PR #171 并发 v0.8.0（遗留 33 关闭）；P-A1 合入 PR #168 并发 v0.7.0；`platform-admin-design.md` v3 是平台管理面的上位设计，S4.2–S4.5 已改为 P-A1 / P-A2 / P-B / P-C / P-D；主机仍在 v0.5.1，v0.6.0 + v0.7.0 + v0.8.0 待一起应用；当前波次：W8 平台管理 + 稳定期）
 
 ## 1. 入口指引
 
@@ -32,7 +32,7 @@
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | 达成 | `accept_s3.sh` 29 PASS（2026-09-11，新增 explorer-no-credentials 断言，PR #153，从分支在主机验证） |
 | S3.11–S3.15 | 控制面、接入向导、AgentProfile、web 控制台、pi 漂移 | 达成 | `development-tasks.md` 各节实现说明 |
 | 真实模型验证 | 真实模型跑 S2 / S3 场景，统计工具调用成功率 | 达成 | docker_restart 2/3、api_observe 3/3、ssh_run_approve 3/3、ssh_run_auto 1/1、dependency_chat 2/3（`retrospective-2026-09-11.md` §2） |
-| 发布 | — | v0.7.0（PR #169；含 P-A1，其上 v0.6.0 含 S4.1） | `CHANGELOG.md` |
+| 发布 | — | v0.8.0（PR #172；含 P-A2，其下 v0.7.0 含 P-A1、v0.6.0 含 S4.1） | `CHANGELOG.md` |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 复审曾发现 S3.2 的冲突检测在 Worker 断言主路径上不生效
 > （`code-review-2026-09-10.md` §2.1），当时验收对 Conflict 的唯一断言是「采集器跑两遍后为零」，压制 Conflict 的缺陷
@@ -59,6 +59,7 @@
 | 2026-09-11 | 主机应用 v0.5.0：删除主机 `.env` 的 `EXPLORER_API_KEY`，全部镜像重建，无新迁移；首轮 S1 首次对话被入口容器冷启动打断（遗留 29）、S2 夹具镜像拉包超时（网络），重跑后 S1 22 PASS + 1 SKIP、S2 66 PASS，S3 首轮即 29 PASS；栈回到停栈状态 | `docs/private/` §39 |
 | 2026-09-11 | W8 S4.1 用户目录与登录（PR #164）：迁移 0019 平台级 `users` / `user_sessions` / `platform_setup`、用户名 + 密码登录与控制台会话 cookie、一次性初始化令牌、web 初始化页 / 强制改密 / 工作区切换 / 我的账户、Explorer 改认控制台 cookie；API key 路径不变。两个 reviewer 子代理复查：内核半修正两处（初始化令牌失败计数被回滚、`workspaces` 多余授权），web 半修正会话前状态机的三处竞态（重复切换工作区泄漏 socket、切换时过早关旧 socket、改密在途时登出可复活会话）。主机未应用 | `development-tasks.md` S4.1 实现说明 |
 | 2026-09-11 | W8 P-A1 身份、用户与管理面骨架（PR #168，v0.7.0）：维护者否决 S4.1 的令牌首登并要求先设计——`platform-admin-design.md` v3（使用面 / 管理面 / 维护面，对照本地克隆的 cloudflare-os 源码）经 docs PR #167 合入；随后一个波次交付预置 `admin` + 默认工作区、`scope:'platform'` 通道与 `withPlatform` 事务、15 个平台能力 + `add_member`、迁移 0020 / 0021（`users` RLS、`platform_settings`）、侧栏三组与概览 / 用户 / 平台设置 / 平台审计页、e2e 改为 admin 首登。CI 集成套件首次覆盖平台能力、RLS 与默认工作区；opus reviewer 抓到五处（停用不切断 API key / Handle、改角色不吊销 Handle、env 管理员可被重置、env 管理员未被视为管理员、初始密码文件顺序）均在合入前修正。三个 sonnet builder 中途撞会话限额，剩余工作改由 opus builder 与主会话完成。主机未应用 | `development-tasks.md` P-A1 实现说明 |
+| 2026-09-12 | W8 P-A2 使用面收口（PR #171，v0.8.0）：六个平台工作区能力与工作区页（建区 / 改名 / 入口模型 / 允许的模型 / 停用 / 委托 owner）、迁移 core 0022 + governance 0011、允许的模型改为解析期上限且两个面共用一条一致性规则、禁用工作区按调用关全部通道并停入口容器（顺带补上停用用户停容器）、`instanceInstructions` 进入口与 Worker 的 system prompt（一次性 Worker 首次拿到 WorkerDefinition 的 `systemPrompt`，`/task/spawn` 新增 `systemPrompt`）、遗留 33 由 agent-host 按 chat `switch_session` 关闭。内核核心与四处审查修正由主会话完成，web / 测试 / e2e / agent-host / supervisor 由 opus builder 完成；opus reviewer 抓到四处（已认证 WS 在禁用后仍可调用并重签会话、owner `set_agent_policy` 绕过管理员模型上限、`entryModel:null` 清不掉入口定义模型、`switch_session` 回包 id 未核实）均在合入前修正。主机未应用 | `development-tasks.md` P-A2 实现说明 |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -110,16 +111,16 @@
 |---|---|
 | S4.1 用户目录与登录 | 完成（PR #164，2026-09-11；e2e `login.spec.ts` 进 CI；迁移 0019 待主机 `make migrate`）。其"一次性令牌 + 初始化页"首登路径被否决，由 P-A1 的预置 `admin` 取代；身份模型、登录、cookie 会话、API key 路径沿用 |
 | P-A1 身份、用户与管理面骨架 | 完成（PR #168 → v0.7.0，2026-09-11；CI guards / quality / test（含 Postgres 集成套件）/ web-e2e 全绿，e2e 已在真实栈上跑通 admin 首登 → 改密 → 概览 → 用户页）：预置 `admin` + 默认工作区、`scope:'platform'` 通道与 `withPlatform` 事务、15 个平台能力 + `add_member`、迁移 0020 / 0021（`users` RLS、`platform_settings`）、侧栏三组 + 概览 / 用户 / 平台设置 / 平台审计页、e2e 改为 admin 首登；实现说明见 `development-tasks.md` P-A1。主机未应用 |
-| P-A2 使用面收口 | 实现完成，PR #171 CI 全绿待合并（2026-09-12）：六个平台能力（`list_workspaces` / `list_platform_models` / `create_workspace` / `update_workspace` / `set_workspace_status` / `set_allowed_models`）、迁移 core 0022 + governance 0011、允许的模型改为解析期上限、禁用工作区关 API key / Handle 通道并停入口容器、`instanceInstructions` 进入口与 Worker 的 system prompt（一次性 Worker 首次拿到 WorkerDefinition 的 `systemPrompt`）、遗留 33 按 chat 分 pi 会话（agent-host `switch_session`）、web 工作区页与 e2e（建部门工作区 → 委托 owner → owner 只见自己工作区配置、模型下拉收窄）；实现说明见 `development-tasks.md` P-A2。主机未应用 |
+| P-A2 使用面收口 | 完成（PR #171 → v0.8.0，2026-09-12；CI guards / quality / test（含 Postgres 集成套件）/ web-e2e 全绿，新 e2e 在真实栈上跑通建部门工作区 → 委托 owner → owner 侧栏只见工作区配置、模型下拉收窄）：六个平台能力（`list_workspaces` / `list_platform_models` / `create_workspace` / `update_workspace` / `set_workspace_status` / `set_allowed_models`）、迁移 core 0022 + governance 0011、允许的模型改为解析期上限、禁用工作区关 API key / Handle 通道并停入口容器、`instanceInstructions` 进入口与 Worker 的 system prompt（一次性 Worker 首次拿到 WorkerDefinition 的 `systemPrompt`）、遗留 33 按 chat 分 pi 会话（agent-host `switch_session`）、web 工作区页与 e2e（建部门工作区 → 委托 owner → owner 只见自己工作区配置、模型下拉收窄）；实现说明见 `development-tasks.md` P-A2。主机未应用 |
 | P-B 集成与模块 / P-C 运行层与运行状态 / P-D 模型与供应商 | 待做 |
 
-**主机应用注意**：v0.6.0 **不单独应用**——它的首登路径已作废；直接应用 v0.7.0（含 v0.6.0 的迁移 0019），顺序：① 重跑 `host-env-init.sh`（幂等，补建 `secrets/setup`，否则 Docker 代建目录为 root 所有、kernel 写不出初始密码）；② `make migrate`（0019 回填 + 0020 + P-A1 的迁移）；③ 重建 kernel + caddy + web（P-A2 合入后还要重建 worker-supervisor 与 agent-host：`/task/spawn` 多了 `systemPrompt` 字段、按 chat 切 pi 会话在 agent-host；迁移多 core 0022 + governance 0011）。之后全部在浏览器里：用 `secrets/setup/initial-admin-password` 里的临时密码登录 `admin` → 改密 → 概览页"绑定已有 API key"贴上手里的 owner key → 原工作区归到 `admin`；其他既有成员由管理员在用户页重置临时密码，或自己用 key 登录一次设密码。不需要查表、不需要 CLI。
+**主机应用注意**：v0.6.0 **不单独应用**——它的首登路径已作废；直接应用 v0.8.0（含 v0.6.0 的迁移 0019 与 v0.7.0 / v0.8.0 的全部迁移），顺序：① 重跑 `host-env-init.sh`（幂等，补建 `secrets/setup`，否则 Docker 代建目录为 root 所有、kernel 写不出初始密码）；② `make migrate`（0019 回填 + 0020 + P-A1 的迁移）；③ 重建 kernel + caddy + web（P-A2 合入后还要重建 worker-supervisor 与 agent-host：`/task/spawn` 多了 `systemPrompt` 字段、按 chat 切 pi 会话在 agent-host；迁移多 core 0022 + governance 0011）。之后全部在浏览器里：用 `secrets/setup/initial-admin-password` 里的临时密码登录 `admin` → 改密 → 概览页"绑定已有 API key"贴上手里的 owner key → 原工作区归到 `admin`；其他既有成员由管理员在用户页重置临时密码，或自己用 key 登录一次设密码。不需要查表、不需要 CLI。
 
 **产品决定已做**（2026-09-10，PR #142）：Worker 经结果契约写回的 Fact 默认全工作区可见，会话 JSONL 转录另作 `private` Source 挂在自己的 `worker_session` Activity 上，不再牵连结果 Fact 的可见性。此前带转录的运行其 Fact 只对派发人可见，是实现细节而非产品规则（`development-tasks.md` S2.9 实现说明）。由 CI 的 Postgres 集成测试覆盖，三份验收脚本不断言可见性（加断言属 W6 范围）。
 
-目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29）并于同日应用 v0.5.1（kernel 重建 + `worker-runtime` 重建，无迁移，未复跑验收），主机 `.env` 不再含 Explorer key；v0.6.0 与 v0.7.0（S4.1 + P-A1，迁移 0019–0021）**尚未应用**，应用步骤见 §3 "主机应用注意"；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），建了一个真实使用的工作区并注册两个门；不再在验收后停栈。
+目标主机：2026-09-11 已应用 v0.5.0（S1 22+1 / S2 66 / S3 29）并于同日应用 v0.5.1（kernel 重建 + `worker-runtime` 重建，无迁移，未复跑验收），主机 `.env` 不再含 Explorer key；v0.6.0、v0.7.0 与 v0.8.0（S4.1 + P-A1 + P-A2，迁移 core 0019–0022 + governance 0011）**尚未应用**，直接应用 v0.8.0 即可，应用步骤见 §3 "主机应用注意"；稳定期内整栈常驻（生产 provider 配置，无 fake 覆盖），建了一个真实使用的工作区并注册两个门；不再在验收后停栈。
 
-后续：P-A1 → P-A2（含 33）→ P-B → P-C → P-D → 遗留 30 → 加固批次（23 / 21 / 20 / 22）→ 镜像发布与 P5。
+后续：P-B 集成与模块 → P-C 运行层与运行状态 → P-D 模型与供应商 → 遗留 30 → 加固批次（23 / 21 / 20 / 22）→ 镜像发布与 P5（P-A1 / P-A2 已完成）。
 
 ## 4. 遗留清单
 
