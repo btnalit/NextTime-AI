@@ -203,3 +203,21 @@ export function reclassifiedOperationPayload(
     auto_approvable: overrides.autoApprovable,
   };
 }
+
+/**
+ * `search` returns the list envelope `{items, nextCursor?}` since W5 (docs/wire-contract-conventions.md
+ * §3); before that it returned a bare array, and these pages kept reading it as one — every
+ * registered-systems list on the console has shown "F.map is not a function" since (found by the
+ * P-B1 e2e). Accept both shapes so an older kernel and the test fakes keep working.
+ */
+export function searchItems<T>(result: unknown): readonly T[] {
+  if (Array.isArray(result)) return result as readonly T[];
+  if (
+    result &&
+    typeof result === 'object' &&
+    Array.isArray((result as { items?: unknown }).items)
+  ) {
+    return (result as { items: readonly T[] }).items;
+  }
+  return [];
+}

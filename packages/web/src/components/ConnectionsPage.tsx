@@ -8,6 +8,7 @@ import {
   type GraphObjectRow,
   gatekeeperFromObject,
   operationFromObject,
+  searchItems,
 } from '../lib/connections.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
@@ -90,16 +91,18 @@ export function ConnectionsPage({
   const loadGatekeepers = useCallback(
     () =>
       http
-        .call<readonly GraphObjectRow[]>('search', { query: '', objectType: 'Gatekeeper' })
-        .then((rows) => rows.map(gatekeeperFromObject)),
+        .call<unknown>('search', { query: '', objectType: 'Gatekeeper' })
+        .then((result) => searchItems<GraphObjectRow>(result).map(gatekeeperFromObject)),
     [http],
   );
   const gatekeepers = useResource(loadGatekeepers);
   const loadOperations = useCallback(
     () =>
       http
-        .call<readonly GraphObjectRow[]>('search', { query: '', objectType: 'Operation' })
-        .then((rows) => rows.flatMap((row) => operationFromObject(row) ?? [])),
+        .call<unknown>('search', { query: '', objectType: 'Operation' })
+        .then((result) =>
+          searchItems<GraphObjectRow>(result).flatMap((row) => operationFromObject(row) ?? []),
+        ),
     [http],
   );
   const operations = useResource(loadOperations);

@@ -7,6 +7,7 @@ import {
   type OperationDetailView,
   operationDetailFromObject,
   reclassifiedOperationPayload,
+  searchItems,
 } from '../lib/connections.js';
 import { prettyJson } from '../lib/format.js';
 import { Button } from './ui/Button.js';
@@ -58,14 +59,12 @@ export function OnboardingWizardReview({
 }: OnboardingWizardReviewProps) {
   const loadOperations = useCallback(
     () =>
-      http
-        .call<readonly GraphObjectRow[]>('search', { query: '', objectType: 'Operation' })
-        .then((rows) =>
-          rows
-            .map(operationDetailFromObject)
-            .filter((row): row is OperationDetailView => row !== undefined)
-            .filter((row) => row.gatekeeperId === gatekeeperId),
-        ),
+      http.call<unknown>('search', { query: '', objectType: 'Operation' }).then((result) =>
+        searchItems<GraphObjectRow>(result)
+          .map(operationDetailFromObject)
+          .filter((row): row is OperationDetailView => row !== undefined)
+          .filter((row) => row.gatekeeperId === gatekeeperId),
+      ),
     [http, gatekeeperId],
   );
   const operations = useResource(loadOperations);

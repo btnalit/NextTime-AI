@@ -13,7 +13,8 @@ function scriptedHttp(
   const calls: { name: string; params: unknown }[] = [];
   const base: Record<string, (params: unknown) => unknown> = {
     list_connection_requests: () => ({ items: [] }),
-    search: (params) => ((params as { objectType: string }).objectType === 'Gatekeeper' ? [] : []),
+    // The real `search` returns the W5 list envelope; the page must read `.items`.
+    search: () => ({ items: [] }),
     list_available_gate_instances: () => ({ items: [] }),
     ...handlers,
   };

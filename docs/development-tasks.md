@@ -1677,6 +1677,10 @@
     健康标 `unknown`、日志 warn，`operations` / `target` 仍可更新（新版本门合法地新增 Operation）；
     ④ lost 恢复时无链接就退回 discovered、丢掉管理员的 enabled 决定 → 0023 加 `status_before_lost`，
     恢复到失联前状态；⑤ 并发 `enable_gate_instance` 竞态撞主键 → 与 `invoke.ts` 同款 `pg_advisory_xact_lock`。
+  - **e2e 首次抓出的既有 bug**：控制台"系统接入"页与接入向导仍把 `search` 的结果当裸数组解析，而 `search`
+    自 W5 起返回 `{items, nextCursor?}` 信封——"已注册的系统"一段一直报 "F.map is not a function"（单测的 fake
+    返回数组，从未暴露）。`lib/connections.ts` 加 `searchItems()` 同时接受两种形状，三处调用改用它，
+    fake 改为信封。运行手册"已知缺口"不需要新增：问题已修。
   - **未做 / 留到 P-B2**：通用 `http` / `mcp` 门宿主与页面直达门的凭证录入；`vet_mcp_endpoint` 单独能力
     （P-B1 用 `update_gate_instance{trust}`）；模块页；fake MCP 全链路 e2e。
 - 完成标准（design §9 P-B e2e）：起一个 fake MCP server → 集成页新增门宿主实例 → 测试连接 →
