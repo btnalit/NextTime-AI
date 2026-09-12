@@ -50,6 +50,11 @@ Gatekeeper)`——见该 YAML 文件自己的头注释。不需要 phase 4 的 w
 
 ## 2. 步骤 B：铸造采集器自己的 service Handle
 
+> P-B1 起同一件事可以在控制台完成：工作区 owner 在"管理 → 工作区配置 → 访问"页选一个 service
+> Principal（没有就先用"新建 service 凭证"建）、填能力名与有效期，`issue_service_handle` 返回一次性
+> 显示的 Handle；签出的会话出现在"管理 → 集成 → 外部运行时"里，可在那里吊销。下面的 CLI 仍然可用
+> （无浏览器的主机自动化场景）。
+
 ```bash
 docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js issue-service-handle \
   --workspace <WORKSPACE_ID> --name host-inventory \
