@@ -107,7 +107,7 @@ export function buildAnnounceBody(
   };
 }
 
-function loadInternalToken(env: NodeJS.ProcessEnv): string {
+export function loadInternalToken(env: NodeJS.ProcessEnv): string {
   const file = env.GATE_INTERNAL_TOKEN_FILE ?? DEFAULT_INTERNAL_TOKEN_FILE;
   let raw: string;
   try {
@@ -119,6 +119,67 @@ function loadInternalToken(env: NodeJS.ProcessEnv): string {
     );
   }
   return normalizeInternalToken(raw, file);
+}
+
+/** One `POST /internal/gates/announce`. `true` on 2xx; every failure is a warn line (never the
+ *  token) and `false`. Shared by the single-gate announcer and the gate host (host.ts). */
+export async function postAnnouncement(options: {
+  readonly url: string;
+  readonly token: string;
+  readonly body: AnnounceBody;
+  readonly fetchImpl?: typeof fetch;
+  readonly log?: (line: string) => void;
+  readonly setTimer?: typeof setTimeout;
+  readonly clearTimer?: typeof clearTimeout;
+}): Promise<boolean> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const log = options.log ?? ((line: string) => console.error(line));
+  const setTimer = options.setTimer ?? setTimeout;
+  const clearTimer = options.clearTimer ?? clearTimeout;
+  const announceBody = options.body;
+  const controller = new AbortController();
+  const timeout = setTimer(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(options.url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: internalAuthorizationHeader(options.token),
+      },
+      body: JSON.stringify(announceBody),
+      signal: controller.signal,
+    });
+    if (response.ok) return true;
+    let code: string | undefined;
+    try {
+      const parsed = (await response.json()) as { error?: { code?: string; message?: string } };
+      code = parsed.error?.code ?? parsed.error?.message;
+    } catch {
+      code = undefined;
+    }
+    log(
+      JSON.stringify({
+        level: 'warn',
+        msg: 'announce: kernel refused the announcement',
+        gateId: announceBody.gateId,
+        status: response.status,
+        code,
+      }),
+    );
+    return false;
+  } catch (err) {
+    log(
+      JSON.stringify({
+        level: 'warn',
+        msg: 'announce: kernel unreachable',
+        gateId: announceBody.gateId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    return false;
+  } finally {
+    clearTimer(timeout);
+  }
 }
 
 const NOOP_ANNOUNCER: Announcer = {
@@ -155,49 +216,15 @@ export function createAnnouncer(options: AnnouncerOptions): Announcer {
   let backoffMs = 1_000;
 
   async function announceOnce(): Promise<boolean> {
-    const controller = new AbortController();
-    const timeout = setTimer(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    try {
-      const response = await fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: internalAuthorizationHeader(token),
-        },
-        body: JSON.stringify(announceBody),
-        signal: controller.signal,
-      });
-      if (response.ok) return true;
-      let code: string | undefined;
-      try {
-        const parsed = (await response.json()) as { error?: { code?: string; message?: string } };
-        code = parsed.error?.code ?? parsed.error?.message;
-      } catch {
-        code = undefined;
-      }
-      log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'announce: kernel refused the announcement',
-          gateId: announceBody.gateId,
-          status: response.status,
-          code,
-        }),
-      );
-      return false;
-    } catch (err) {
-      log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'announce: kernel unreachable',
-          gateId: announceBody.gateId,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-      return false;
-    } finally {
-      clearTimer(timeout);
-    }
+    return postAnnouncement({
+      url,
+      token,
+      body: announceBody,
+      fetchImpl,
+      log,
+      setTimer,
+      clearTimer,
+    });
   }
 
   function schedule(delayMs: number): void {

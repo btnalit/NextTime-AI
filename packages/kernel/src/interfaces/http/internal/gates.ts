@@ -1,7 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import type { PoolLike } from '../../../adapters/db/pool.js';
 import { withWorkspace } from '../../../adapters/db/pool.js';
-import { AnnounceBodySchema, upsertAnnouncement } from '../../../application/gates/index.js';
+import {
+  AnnounceBodySchema,
+  listHostedGateDefinitions,
+  upsertAnnouncement,
+} from '../../../application/gates/index.js';
 
 /**
  * interfaces/http/internal/gates: `POST /internal/gates/announce` (P-B1; docs/platform-admin-
@@ -44,6 +48,19 @@ export async function registerGatesRoutes(
       (client) => upsertAnnouncement(client, parsed.data),
       { skipRoleSwitch: true },
     );
+    if (outcome.rejected) {
+      request.log?.warn?.(
+        { gateId: outcome.gateId, announcedConnector: parsed.data.connector },
+        'gates/announce: first announcement for a gate-host instance does not match its definition — refused',
+      );
+      return reply.status(409).send({
+        ok: false,
+        error: {
+          code: 'identity_mismatch',
+          message: 'announced connector / transport kind differ from the instance definition',
+        },
+      });
+    }
     if (outcome.identityMismatch) {
       request.log?.warn?.(
         {
@@ -64,5 +81,18 @@ export async function registerGatesRoutes(
       ok: true,
       result: { gateId: outcome.gateId, status: outcome.status, created: outcome.created },
     });
+  });
+
+  // P-B2a (决定 ⑥): the generic gate host pulls the instances it must serve — the same trust
+  // direction as announce (internal token, gate → kernel), so no kernel → host credential exists.
+  // Definitions only (transport kind, target, credential mode, manifest source); never a credential.
+  app.get('/internal/gate-host/instances', async (_request, reply) => {
+    const items = await withWorkspace(
+      deps.pool,
+      { workspaceId: ADMIN_PLACEHOLDER, principalId: ADMIN_PLACEHOLDER },
+      (client) => listHostedGateDefinitions(client),
+      { skipRoleSwitch: true },
+    );
+    return reply.status(200).send({ ok: true, result: { items } });
   });
 }

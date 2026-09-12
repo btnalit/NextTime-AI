@@ -17,6 +17,7 @@ import { Notice } from '../ui/Notice.js';
 import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { Tabs } from '../ui/Tabs.js';
+import { CreateGateInstanceForm } from './CreateGateInstanceForm.js';
 import { GateInstanceDetailPanel } from './GateInstanceDetailPanel.js';
 import { PlatformError } from './PlatformError.js';
 
@@ -325,11 +326,16 @@ function ConnectorDenyList({
 // 门实例 Gate instances
 // -------------------------------------------------------------------------------------------
 
+type InstancesPanel =
+  | { readonly kind: 'closed' }
+  | { readonly kind: 'create' }
+  | { readonly kind: 'gate'; readonly gateId: string };
+
 function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
-  const [openGateId, setOpenGateId] = useState<string | null>(null);
+  const [panel, setPanel] = useState<InstancesPanel>({ kind: 'closed' });
   const instances = useCapabilityList<GateInstanceWire>(http, 'list_gate_instances', {});
   const rows = instances.state.status === 'ready' ? instances.state.data.items : [];
-  const open = openGateId !== null ? rows.find((row) => row.gateId === openGateId) : undefined;
+  const open = panel.kind === 'gate' ? rows.find((row) => row.gateId === panel.gateId) : undefined;
 
   function replace(updated: GateInstanceWire): void {
     instances.mutate((data) => ({
@@ -338,8 +344,36 @@ function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
     }));
   }
 
+  /** `create_gate_instance` already answers with the full, current row — no reload needed before
+   *  opening its detail drawer (the `PlatformWorkspacesPage`'s own `handleCreated` shape, minus
+   *  the reload it does for a reason specific to that page). */
+  function handleCreated(created: GateInstanceWire): void {
+    instances.mutate((data) => ({ ...data, items: [created, ...data.items] }));
+    setPanel({ kind: 'gate', gateId: created.gateId });
+  }
+
+  function handleDeleted(gateId: string): void {
+    instances.mutate((data) => ({
+      ...data,
+      items: data.items.filter((row) => row.gateId !== gateId),
+    }));
+    setPanel({ kind: 'closed' });
+  }
+
   return (
     <div className="stack" data-testid="integrations-instances">
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <Button
+          variant="primary"
+          size="s"
+          icon="plus"
+          onClick={() => setPanel({ kind: 'create' })}
+          data-testid="new-gate-instance"
+        >
+          新建门宿主实例 Create hosted instance
+        </Button>
+      </div>
+
       {instances.state.status === 'loading' ? (
         <SkeletonRows count={3} label="Loading gate instances" testId="gate-instances-loading" />
       ) : instances.state.status === 'error' ? (
@@ -377,29 +411,42 @@ function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
                   key={row.gateId}
                   className="row-clickable"
                   data-testid={`gate-instance-row-${row.gateId}`}
-                  onClick={() => setOpenGateId(row.gateId)}
+                  onClick={() => setPanel({ kind: 'gate', gateId: row.gateId })}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
-                      setOpenGateId(row.gateId);
+                      setPanel({ kind: 'gate', gateId: row.gateId });
                     }
                   }}
                 >
                   <td>
                     <div className="stack-s" style={{ gap: 0 }}>
-                      <span>{row.displayName}</span>
+                      <span>
+                        {row.displayName}
+                        {row.hosted ? (
+                          <span className="tag" data-testid="gate-hosted-badge">
+                            宿主 hosted
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="mono text-3">{row.gateId}</span>
                     </div>
                   </td>
                   <td className="mono">{row.connector}</td>
                   <td>{row.transportKind}</td>
                   <td>
-                    <span
-                      className={`chip chip-s ${row.status === 'enabled' ? 'chip-ok' : row.status === 'lost' ? 'chip-warn' : 'chip-neutral'}`}
-                      data-testid="gate-instance-status"
-                    >
-                      {GATE_STATUS_LABEL[row.status]}
-                    </span>
+                    {row.hosted && row.lastSeenAt === null ? (
+                      <span className="chip chip-s chip-warn" data-testid="gate-instance-status">
+                        等待宿主接管 waiting for gate host
+                      </span>
+                    ) : (
+                      <span
+                        className={`chip chip-s ${row.status === 'enabled' ? 'chip-ok' : row.status === 'lost' ? 'chip-warn' : 'chip-neutral'}`}
+                        data-testid="gate-instance-status"
+                      >
+                        {GATE_STATUS_LABEL[row.status]}
+                      </span>
+                    )}
                   </td>
                   <td>
                     <span
@@ -434,8 +481,24 @@ function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
       )}
 
       <Drawer
+        open={panel.kind === 'create'}
+        onClose={() => setPanel({ kind: 'closed' })}
+        title="新建门宿主实例 Create hosted instance"
+        subtitle="administrator, http/mcp; the gate host takes it over and imports its Operations."
+        testId="create-gate-instance-drawer"
+      >
+        {panel.kind === 'create' ? (
+          <CreateGateInstanceForm
+            http={http}
+            onCreated={handleCreated}
+            onCancel={() => setPanel({ kind: 'closed' })}
+          />
+        ) : null}
+      </Drawer>
+
+      <Drawer
         open={open !== undefined}
-        onClose={() => setOpenGateId(null)}
+        onClose={() => setPanel({ kind: 'closed' })}
         title={open?.displayName ?? '门实例 Gate instance'}
         subtitle={open ? <span className="mono">{open.gateId}</span> : undefined}
         testId="gate-instance-drawer"
@@ -446,6 +509,7 @@ function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
             http={http}
             instance={open}
             onChanged={replace}
+            onDeleted={handleDeleted}
           />
         ) : null}
       </Drawer>

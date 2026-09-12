@@ -1,3 +1,4 @@
+import { mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   importManifest,
@@ -14,7 +15,9 @@ import {
   listAvailableGateInstances,
   operationsOf,
 } from '../gates/index.js';
+import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { gateHostCredentialUrl } from './platform-gates-handlers.js';
 
 /**
  * application/gateway/gate-instance-handlers: the workspace half of P-B1 (docs/platform-admin-
@@ -31,7 +34,13 @@ import type { CapabilityHandler } from './capability-handler.js';
  */
 
 export class GateInstanceNotAvailableError extends Error {
-  readonly code: 'gate_not_found' | 'gate_not_enabled' | 'connector_not_preset';
+  readonly code:
+    | 'gate_not_found'
+    | 'gate_not_enabled'
+    | 'connector_not_preset'
+    | 'gate_not_ready'
+    | 'gate_not_linked'
+    | 'credential_mode_mismatch';
   constructor(code: GateInstanceNotAvailableError['code'], message: string) {
     super(message);
     this.name = 'GateInstanceNotAvailableError';
@@ -60,8 +69,66 @@ async function requireAvailable(client: PoolClient, gateId: string) {
       `gate instance "${gateId}" is ${instance.status}, not enabled by the administrator`,
     );
   }
+  if (instance.lastSeenAt === null || instance.operationCount === 0) {
+    // P-B2a (决定 ⑨): a gate-host instance the host has not taken over yet (or a gate that announced
+    // no Operations) would publish nothing and leave a useless link behind.
+    throw new GateInstanceNotAvailableError(
+      'gate_not_ready',
+      `gate instance "${gateId}" has not announced any Operations yet — wait for the gate host to take it over`,
+    );
+  }
   return instance;
 }
+
+/** Workspace side of 决定 ⑩: a 5-minute token for the caller's own credential slot on a hosted
+ *  `connected_account` instance this workspace already enabled. The credential goes browser → gate
+ *  host; the kernel never sees it. */
+export const issueGateCredentialTokenHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  if (!ctx?.principal) {
+    throw new Error('issue_gate_credential_token: no resolved human principal in context');
+  }
+  const { gateId } = params as { gateId: string };
+  const instance = await getGateInstance(client, gateId);
+  if (!instance)
+    throw new GateInstanceNotAvailableError('gate_not_found', 'gate instance not found');
+  const link = await findGateLinkByGate(client, workspaceId, gateId);
+  if (!link) {
+    throw new GateInstanceNotAvailableError(
+      'gate_not_linked',
+      `gate instance "${gateId}" is not enabled in this workspace`,
+    );
+  }
+  if (!instance.hosted || instance.definition?.credentialMode !== 'connected_account') {
+    throw new GateInstanceNotAvailableError(
+      'credential_mode_mismatch',
+      'only a gate-host instance in connected_account mode takes a per-member credential',
+    );
+  }
+  const { privateKey } = getConfiguredTaskRuntime();
+  const minted = await mintGateHostToken({
+    privateKey,
+    gateId,
+    onBehalfOf: ctx.principal.id,
+    subject: ctx.principal.id,
+  });
+  return {
+    result: {
+      gateId,
+      token: minted.token,
+      url: gateHostCredentialUrl(gateId),
+      onBehalfOf: ctx.principal.id,
+      credentialMode: 'connected_account',
+      expiresAt: minted.expiresAt.toISOString(),
+    },
+    resourceType: 'gatekeeper',
+    resourceId: link.gatekeeperObjectId,
+  };
+};
 
 export const enableGateInstanceHandler: CapabilityHandler = async (
   client,

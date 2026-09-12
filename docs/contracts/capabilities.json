@@ -1356,6 +1356,270 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "create_gate_instance",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "credentialMode": {
+          "enum": [
+            "shared",
+            "connected_account"
+          ],
+          "type": "string"
+        },
+        "displayName": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "gateId": {
+          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+          "type": "string"
+        },
+        "manifestSource": {
+          "anyOf": [
+            {
+              "format": "uri",
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "format": "uri",
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "transportKind": {
+          "enum": [
+            "http",
+            "mcp"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "transportKind",
+        "target",
+        "credentialMode"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "credentialMode": {
+                  "enum": [
+                    "shared",
+                    "connected_account"
+                  ],
+                  "type": "string"
+                },
+                "manifestSource": {
+                  "anyOf": [
+                    {
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "target": {
+                  "format": "uri",
+                  "type": "string"
+                },
+                "transportKind": {
+                  "enum": [
+                    "http",
+                    "mcp"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "transportKind",
+                "target",
+                "credentialMode",
+                "manifestSource"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "enabledWorkspaceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "gateId": {
+          "type": "string"
+        },
+        "health": {
+          "enum": [
+            "ok",
+            "unreachable",
+            "unauthorized",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "hosted": {
+          "type": "boolean"
+        },
+        "lastCheckedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSeenAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "autoApprovable": {
+                "type": "boolean"
+              },
+              "blastRadius": {
+                "type": "string"
+              },
+              "destructiveHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "idempotentHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "observe",
+                  "execute"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "readOnlyHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "mode",
+              "blastRadius",
+              "autoApprovable",
+              "readOnlyHint",
+              "destructiveHint",
+              "idempotentHint"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "discovered",
+            "enabled",
+            "disabled",
+            "lost"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "transportKind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "trust": {
+          "enum": [
+            "byo",
+            "vetted"
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "connector",
+        "displayName",
+        "transportKind",
+        "target",
+        "endpoint",
+        "status",
+        "trust",
+        "health",
+        "lastSeenAt",
+        "lastCheckedAt",
+        "operationCount",
+        "enabledWorkspaceCount",
+        "operations",
+        "hosted",
+        "definition",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "members",
     "minRole": "owner",
     "mode": "write",
@@ -1956,6 +2220,44 @@
         "facts",
         "actionRequests",
         "taskIds"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "delete_gate_instance",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deleted": {
+          "const": true,
+          "type": "boolean"
+        },
+        "gateId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "deleted"
       ],
       "type": "object"
     }
@@ -3941,6 +4243,54 @@
         "createdAt": {
           "type": "string"
         },
+        "definition": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "credentialMode": {
+                  "enum": [
+                    "shared",
+                    "connected_account"
+                  ],
+                  "type": "string"
+                },
+                "manifestSource": {
+                  "anyOf": [
+                    {
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "target": {
+                  "format": "uri",
+                  "type": "string"
+                },
+                "transportKind": {
+                  "enum": [
+                    "http",
+                    "mcp"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "transportKind",
+                "target",
+                "credentialMode",
+                "manifestSource"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "displayName": {
           "type": "string"
         },
@@ -3962,6 +4312,9 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "hosted": {
+          "type": "boolean"
         },
         "lastCheckedAt": {
           "type": [
@@ -4078,6 +4431,8 @@
         "operationCount",
         "enabledWorkspaceCount",
         "operations",
+        "hosted",
+        "definition",
         "createdAt",
         "updatedAt"
       ],
@@ -5189,6 +5544,121 @@
   },
   {
     "channel": "human",
+    "group": "connection",
+    "minRole": "member",
+    "mode": "write",
+    "name": "issue_gate_credential_token",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "credentialMode": {
+          "enum": [
+            "shared",
+            "connected_account"
+          ],
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "gateId": {
+          "type": "string"
+        },
+        "onBehalfOf": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "token",
+        "url",
+        "onBehalfOf",
+        "credentialMode",
+        "expiresAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "issue_gate_host_token",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "credentialMode": {
+          "enum": [
+            "shared",
+            "connected_account"
+          ],
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "gateId": {
+          "type": "string"
+        },
+        "onBehalfOf": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "token",
+        "url",
+        "onBehalfOf",
+        "credentialMode",
+        "expiresAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "governance",
     "minRole": "owner",
     "mode": "execute",
@@ -5434,7 +5904,7 @@
   {
     "channel": "human",
     "group": "connection",
-    "minRole": "owner",
+    "minRole": "member",
     "mode": "observe",
     "name": "list_available_gate_instances",
     "params": {
@@ -6044,6 +6514,54 @@
               "createdAt": {
                 "type": "string"
               },
+              "definition": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "credentialMode": {
+                        "enum": [
+                          "shared",
+                          "connected_account"
+                        ],
+                        "type": "string"
+                      },
+                      "manifestSource": {
+                        "anyOf": [
+                          {
+                            "format": "uri",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "target": {
+                        "format": "uri",
+                        "type": "string"
+                      },
+                      "transportKind": {
+                        "enum": [
+                          "http",
+                          "mcp"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "transportKind",
+                      "target",
+                      "credentialMode",
+                      "manifestSource"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "displayName": {
                 "type": "string"
               },
@@ -6065,6 +6583,9 @@
                   "unknown"
                 ],
                 "type": "string"
+              },
+              "hosted": {
+                "type": "boolean"
               },
               "lastCheckedAt": {
                 "type": [
@@ -6181,6 +6702,8 @@
               "operationCount",
               "enabledWorkspaceCount",
               "operations",
+              "hosted",
+              "definition",
               "createdAt",
               "updatedAt"
             ],
@@ -13727,6 +14250,54 @@
         "createdAt": {
           "type": "string"
         },
+        "definition": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "credentialMode": {
+                  "enum": [
+                    "shared",
+                    "connected_account"
+                  ],
+                  "type": "string"
+                },
+                "manifestSource": {
+                  "anyOf": [
+                    {
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "target": {
+                  "format": "uri",
+                  "type": "string"
+                },
+                "transportKind": {
+                  "enum": [
+                    "http",
+                    "mcp"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "transportKind",
+                "target",
+                "credentialMode",
+                "manifestSource"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "displayName": {
           "type": "string"
         },
@@ -13748,6 +14319,9 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "hosted": {
+          "type": "boolean"
         },
         "lastCheckedAt": {
           "type": [
@@ -13864,6 +14438,8 @@
         "operationCount",
         "enabledWorkspaceCount",
         "operations",
+        "hosted",
+        "definition",
         "createdAt",
         "updatedAt"
       ],

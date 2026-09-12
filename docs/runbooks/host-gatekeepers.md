@@ -525,3 +525,61 @@ curl -s https://<host>:8443/api/cap/request_action \
 选）"、§4.5）——不在本文件重复，`ragflow` 门本身（本文件 §5/§11）与本体/采集器（
 `host-collector.md`）是两个独立的验收面。
 
+
+## 14. P-B2a：通用门宿主 `gate-host`（`http` / `mcp` 实例不再各起一个容器）
+
+设计与决定：`docs/graph-ai-middle-platform-design.md` §6.3 "通用门宿主"、`docs/development-tasks.md`
+P-B "P-B2 再拆与决定" 决定 ⑥–⑬。一句话：**一个** `gatekeeper-base` 容器以 `GATE_MODE=host` 起来，管理员
+在集成页建的每个通用 `http` / `mcp` 实例都由它承载；实例定义它自己从内核拉，凭证由浏览器直接投递给它，
+内核从头到尾不经手凭证。
+
+### 14.1 主机首次启用（v0.10.0 起，一次性）
+
+```sh
+# 1) 补数据目录、目录属主与新密钥（三个脚本都幂等；host-env-init 把 gate-host/ chown 给 10001——
+#    漏掉这一步宿主首次接管会报 EACCES；gen-handle-keys 只新增 secrets/gate-host-store.key，
+#    既有 handle.key / internal.token / gate.token 不动）
+NEXTTIME_DATA=<data-dir> sh scripts/host-bootstrap.sh
+NEXTTIME_DATA=<data-dir> sh scripts/host-env-init.sh
+NEXTTIME_DATA=<data-dir> sh scripts/gen-handle-keys.sh
+# 2) 构建并起宿主；caddy 也要重建（Caddyfile 新增 /gate-host/* 路由）
+docker compose build gate-host caddy
+docker compose up -d gate-host caddy
+# 3) 看宿主自己的存活路由（无需 token；只报实例 id / 就绪 / Operation 数，不含任何凭证）
+docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').then(r=>r.text()).then(console.log)"
+```
+
+宿主要的三份 secret 与一个只读挂载：`gate_token`（内核 → 门，与打包门同一份）、`internal_token`（门 →
+内核：拉定义 + announce）、`gate_host_store_key`（宿主自己的静态加密密钥，`secrets/gate-host-store.key`）、
+`config/handle.pub`（验浏览器带来的 5 分钟平台 JWT——与 llm-proxy 挂的是同一个文件）。全部在
+`docker-compose.yml` `gate-host` 服务块里，不需要 `.env` 新变量。
+
+### 14.2 全程在浏览器里（不登主机）
+
+1. 管理 → 集成 → 门实例 → **新建门宿主实例**：填稳定 id（就是 `GATE_ID`，也是宿主上的路径 `/i/<id>`）、
+   种类（`http` / `mcp`）、目标地址（compose 内部主机名或内网 URL；例如 fixture MCP 是
+   `http://fixture-mcp:8080/`）、凭证模式（`shared` 一份共用 / `connected_account` 每人一份）、`http` 可填
+   OpenAPI 文档 URL 让宿主导入 Operation（`http` 必填）。实例落库为 `discovered`，显示"等待宿主接管"。
+2. 宿主每 `GATE_ANNOUNCE_INTERVAL_SEC`（默认 60 s，首次立刻）拉一次定义：`mcp` 实例对目标发 `tools/list`
+   导入工具、`http` 实例拉 OpenAPI，成功即 announce（`endpoint = http://gate-host:8083/i/<id>`），页面上
+   出现心跳时间与 Operation 数；目标不可达则**不 announce**，宿主日志一行 warn，下一轮重试。
+3. 需要凭证的实例：详情抽屉 → **录入共享凭证** → "获取 5 分钟令牌"（`issue_gate_host_token`）→ 填 Bearer
+   token 或原始 JSON → 提交。浏览器把凭证 `POST` 到 `/gate-host/i/<id>/gate/connected-accounts`，caddy 转
+   给宿主，宿主验 JWT（`aud` / `typ` / `gate` = 路径 id / 5 分钟）后按 JWT 里的槽位（`__shared__`）落盘。
+   `connected_account` 实例由每个成员在工作区"系统接入"页 **录入我的凭证**（`issue_gate_credential_token`，
+   槽位 = 自己的 Principal）。
+4. 宿主接管后（有心跳、有 Operation 数、端点是 `http://gate-host:8083/i/<id>`）在详情抽屉 **启用** 实例——
+   与打包门同一步，管理员复核过端点再放行；接入包 `mcp` / `http` 设为 **平台预置**（P-B2a 起允许；`cli` / `ssh`
+   仍不能）→ 工作区"系统接入"从平台目录一键启用 → 能力目录出现工具。宿主尚未接管时启用会得到 409 `gate_not_ready`。
+5. 删除：只有宿主实例可删，且要先没有工作区链接（否则 409 `gate_in_use`，先在实例上"禁用"）。宿主下一轮
+   拉定义时把它从内存表摘掉，`/i/<id>/*` 立即 404，并删除 `${NEXTTIME_DATA}/gate-host/<id>/` 里的加密凭证目录
+   （同名新建不会继承旧凭证）。
+
+### 14.3 信任边界对照
+
+- 宿主上除 `POST` / `DELETE /i/<id>/gate/connected-accounts` 外的每条路由只认 `gate_token`——浏览器没有；这两条
+  路由则**只**认平台 JWT——内核（持 `gate_token`）也写不了任何槽位。
+- 平台 JWT 用内核的 Handle 私钥签，但 `typ` 独立、带 `aud`、声明形状与 Handle 互斥：它在内核那边过不了
+  Handle 校验，真 Handle 在宿主这边也过不了（两条都有单测）。
+- 宿主只从 JWT 拿写入槽位，请求体里的 `onBehalfOf` 被忽略；`__shared__` 不是 UUID，撞不上任何 Principal。
+- 内核既不知道宿主地址也没有到宿主的凭证：定义是宿主拉的，心跳是宿主发的，与打包门完全一致。

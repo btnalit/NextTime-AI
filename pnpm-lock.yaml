@@ -124,6 +124,9 @@ importers:
       '@types/jmespath':
         specifier: ^0.15.2
         version: 0.15.2
+      jose:
+        specifier: ^6.2.10
+        version: 6.2.10
 
   packages/kernel:
     dependencies:

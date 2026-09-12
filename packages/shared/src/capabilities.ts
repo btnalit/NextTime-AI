@@ -661,7 +661,9 @@ const connectionCapabilities: readonly Capability[] = [
     group: 'connection',
     mode: 'observe',
     channel: 'human',
-    minRole: 'owner',
+    // P-B2a: member, not owner — a member needs the linked rows to enter their own credential
+    // (`issue_gate_credential_token`); the list is catalog metadata, enabling stays owner-only.
+    minRole: 'member',
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.AvailableGateInstanceWireSchema),
     description:
@@ -677,6 +679,17 @@ const connectionCapabilities: readonly Capability[] = [
     resultSchema: wire.EnableGateInstanceResultWireSchema,
     description:
       'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate).',
+  },
+  {
+    name: 'issue_gate_credential_token',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    resultSchema: wire.GateHostTokenWireSchema,
+    description:
+      'P-B2a (决定 ⑩): a 5-minute token that lets this browser post the caller’s own credential straight to the gate host for a platform-hosted `connected_account` instance this workspace enabled. The kernel never sees the credential.',
   },
   {
     name: 'get_gatekeeper',
@@ -2387,6 +2400,60 @@ const platformCapabilities: readonly Capability[] = [
       'Name, enable / disable, or mark a gate instance `vetted` (MCP: allows auto-approval of non-destructive idempotent tools; read at every decision, revocable any time).',
   },
   {
+    name: 'create_gate_instance',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        /** Stable id, becomes the instance’s `GATE_ID` and its path on the gate host (`/i/<gateId>`). */
+        gateId: z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/),
+        displayName: z.string().min(1).max(120).optional(),
+        transportKind: z.enum(['http', 'mcp']),
+        target: z.string().url().max(2000),
+        credentialMode: z.enum(['shared', 'connected_account']),
+        /** http: the OpenAPI document URL the host imports Operations from (required — without it the instance would have no Operations). mcp: omitted, tools are listed on the target. */
+        manifestSource: z.string().url().max(2000).nullable().optional(),
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.transportKind === 'http' && !value.manifestSource) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['manifestSource'],
+            message:
+              'an http instance needs the OpenAPI document URL to import its Operations from',
+          });
+        }
+      }),
+    resultSchema: wire.GateInstanceWireSchema,
+    description:
+      'P-B2a: create a generic http / mcp gate instance for the platform gate host to serve. Lands `discovered` with no heartbeat; the host pulls the definition, imports the Operations and announces it, then the administrator enables it exactly like a packaged gate. Never takes a credential — enter that via `issue_gate_host_token`.',
+  },
+  {
+    name: 'delete_gate_instance',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    resultSchema: wire.DeleteGateInstanceResultWireSchema,
+    description:
+      'P-B2a: remove a gate-host instance no workspace has enabled (409 `gate_in_use` otherwise — disable it instead). Packaged gates cannot be deleted here.',
+  },
+  {
+    name: 'issue_gate_host_token',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    resultSchema: wire.GateHostTokenWireSchema,
+    description:
+      'P-B2a (决定 ⑩): a 5-minute token that lets the administrator’s browser post the instance-wide (`shared`) credential straight to the gate host. The kernel signs the token and never sees the credential.',
+  },
+  {
     name: 'test_gate_instance',
     group: 'platform',
     mode: 'observe',
@@ -2530,6 +2597,10 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'list_available_gate_instances',
     'enable_gate_instance',
     'issue_service_handle',
+    'create_gate_instance',
+    'delete_gate_instance',
+    'issue_gate_host_token',
+    'issue_gate_credential_token',
   ],
 ]);
 

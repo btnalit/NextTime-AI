@@ -99,6 +99,16 @@ https://:8443 {
 		reverse_proxy kernel:8080
 	}
 
+	# P-B2a (docs/development-tasks.md P-B 决定 ⑩): the ONLY path that bypasses the kernel — the
+	# browser posts a gate instance's credential straight to the generic gate host, authenticated by
+	# a 5-minute platform JWT the kernel signed (the host verifies it with config/handle.pub). The
+	# kernel never sees the credential. `handle_path` strips `/gate-host`, so
+	# `/gate-host/i/<gateId>/gate/connected-accounts` reaches the host as `/i/<gateId>/gate/...`;
+	# every other `/i/*` route there still demands gate_token, which no browser has.
+	handle_path /gate-host/* {
+		reverse_proxy gate-host:8083
+	}
+
 	# Explorer (S3.5) static build — deploy/caddy/explorer-placeholder/, copied into the image at
 	# /srv/explorer by deploy/caddy/Dockerfile (a placeholder page by default; a real built bundle
 	# once a host operator has run `sh explorer/build.sh` — see explorer/README.md and

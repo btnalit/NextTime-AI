@@ -31,7 +31,7 @@ echo "host-bootstrap: target NEXTTIME_DATA=$NEXTTIME_DATA"
 # --- create data root and subdirectories -----------------------------------
 mkdir -p "$NEXTTIME_DATA"
 
-for d in pgdata workspaces workspaces/tasks secrets config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow collectors collectors/host-inventory; do
+for d in pgdata workspaces workspaces/tasks secrets config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow gate-host collectors collectors/host-inventory; do
 	mkdir -p "$NEXTTIME_DATA/$d"
 done
 
@@ -45,7 +45,7 @@ chmod 700 "$NEXTTIME_DATA/secrets"
 # (docker-compose.yml). collectors/host-inventory (S3.3): the host-inventory collector's own
 # local state directory (register_source idempotency cache) — bind-mounted into
 # collector-host-inventory as /data/state (docker-compose.yml).
-for d in pgdata workspaces workspaces/tasks config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow collectors collectors/host-inventory; do
+for d in pgdata workspaces workspaces/tasks config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow gate-host collectors collectors/host-inventory; do
 	chmod 750 "$NEXTTIME_DATA/$d"
 done
 
@@ -81,5 +81,5 @@ echo "host-bootstrap: summary"
 echo "  data root:      $NEXTTIME_DATA"
 echo "  secrets mode:   $(stat -c '%a' "$NEXTTIME_DATA/secrets")"
 echo "  pg_password:    $([ -s "$PG_PASSWORD_FILE" ] && echo present || echo MISSING) (mode $(stat -c '%a' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?'))"
-echo "  subdirectories: pgdata workspaces workspaces/tasks secrets config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow"
+echo "  subdirectories: pgdata workspaces workspaces/tasks secrets config artifacts backups caddy gatekeepers gatekeepers/docker gatekeepers/ragflow gate-host"
 echo "host-bootstrap: done (idempotent — safe to re-run)"

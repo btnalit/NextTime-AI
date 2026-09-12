@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { ConnectedAccountStore } from './credentials/index.js';
 import {
   ApplyRequiresIdempotencyKeyError,
@@ -103,10 +103,31 @@ export interface CreateGatekeeperServerOptions {
   readonly token: string;
 }
 
-export function createGatekeeperServer(options: CreateGatekeeperServerOptions): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? false });
-  registerGateAuthGuard(app, options.token);
-  const gate = options.gate;
+/** What one `/gate/*` request operates on. `forcedOnBehalfOf` (host mode, 决定 ⑩): the credential
+ *  slot a verified platform token allows — the connected-account routes then ignore the body's
+ *  `onBehalfOf` and write exactly that slot. */
+export interface GateRouteContext {
+  readonly gate: GatekeeperBase;
+  readonly connectedAccountStore?: ConnectedAccountStore;
+  readonly forcedOnBehalfOf?: string;
+}
+
+export interface RegisterGateRoutesOptions {
+  /** Route prefix, `''` for a single-gate server, `'/i/:gateId'` for the gate host (决定 ⑫). */
+  readonly prefix: string;
+  /** Picks the gate for a request; `undefined` → 404 `gate_not_found`. */
+  readonly resolve: (request: FastifyRequest) => GateRouteContext | undefined;
+}
+
+/**
+ * The `/gate/*` protocol routes, registered once under `prefix`. `createGatekeeperServer` below
+ * (single gate, `prefix ''`, `resolve` always the one gate) keeps its pre-P-B2a behaviour; the gate
+ * host registers the same routes once under `/i/:gateId` and resolves per request from its
+ * in-memory table — Fastify cannot add routes after `listen`, and the host adds and removes
+ * instances while running.
+ */
+export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRoutesOptions): void {
+  const { prefix, resolve } = options;
 
   function ok(
     reply: { code(status: number): void },
@@ -125,26 +146,37 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
     return { ok: false, error: { code: mapped.code, message: mapped.message } };
   }
 
-  app.get('/gate/describe_operations', async (_request, reply) => {
+  function notFound(reply: { code(status: number): void }) {
+    reply.code(404);
+    return { ok: false, error: { code: 'gate_not_found', message: 'no such gate instance' } };
+  }
+
+  app.get(`${prefix}/gate/describe_operations`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
     const result = DescribeOperationsResponseSchema.parse({
-      operations: gate.describeOperations(),
+      operations: ctx.gate.describeOperations(),
     });
     return ok(reply, result);
   });
 
-  app.get('/gate/health', async (_request, reply) => {
-    const result = await gate.health();
+  app.get(`${prefix}/gate/health`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
+    const result = await ctx.gate.health();
     return ok(reply, result);
   });
 
-  app.post('/gate/observe', async (request, reply) => {
+  app.post(`${prefix}/gate/observe`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
     const parsed = ObserveRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       reply.code(400);
       return { ok: false, error: { code: 'invalid_params', message: 'invalid observe request' } };
     }
     try {
-      const result = await gate.observe(parsed.data.operation, parsed.data.params, {
+      const result = await ctx.gate.observe(parsed.data.operation, parsed.data.params, {
         onBehalfOf: parsed.data.onBehalfOf,
       });
       return ok(reply, { data: result.data, observedFacts: result.observedFacts });
@@ -153,14 +185,16 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
     }
   });
 
-  app.post('/gate/simulate', async (request, reply) => {
+  app.post(`${prefix}/gate/simulate`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
     const parsed = SimulateRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       reply.code(400);
       return { ok: false, error: { code: 'invalid_params', message: 'invalid simulate request' } };
     }
     try {
-      const result = await gate.simulate(parsed.data.operation, parsed.data.params, {
+      const result = await ctx.gate.simulate(parsed.data.operation, parsed.data.params, {
         onBehalfOf: parsed.data.onBehalfOf,
       });
       return ok(reply, result);
@@ -169,14 +203,16 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
     }
   });
 
-  app.post('/gate/apply', async (request, reply) => {
+  app.post(`${prefix}/gate/apply`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
     const parsed = ApplyRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       reply.code(400);
       return { ok: false, error: { code: 'invalid_params', message: 'invalid apply request' } };
     }
     try {
-      const result = await gate.apply(
+      const result = await ctx.gate.apply(
         parsed.data.operation,
         parsed.data.params,
         parsed.data.actionRequestId,
@@ -188,14 +224,16 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
     }
   });
 
-  app.post('/gate/revert', async (request, reply) => {
+  app.post(`${prefix}/gate/revert`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
     const parsed = RevertRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       reply.code(400);
       return { ok: false, error: { code: 'invalid_params', message: 'invalid revert request' } };
     }
     try {
-      const result = await gate.revert(parsed.data.operation, parsed.data.params, {
+      const result = await ctx.gate.revert(parsed.data.operation, parsed.data.params, {
         onBehalfOf: parsed.data.onBehalfOf,
       });
       return ok(reply, result);
@@ -204,9 +242,9 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
     }
   });
 
-  const connectedAccountStore = options.connectedAccountStore;
-
-  app.post('/gate/connected-accounts', async (request, reply) => {
+  app.post(`${prefix}/gate/connected-accounts`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
     const parsed = StoreConnectedAccountRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       reply.code(400);
@@ -216,15 +254,18 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
       };
     }
     try {
-      if (!connectedAccountStore) throw new ConnectedAccountStoreNotConfiguredError();
-      await connectedAccountStore.set(parsed.data.onBehalfOf, parsed.data.credential);
+      if (!ctx.connectedAccountStore) throw new ConnectedAccountStoreNotConfiguredError();
+      const slot = ctx.forcedOnBehalfOf ?? parsed.data.onBehalfOf;
+      await ctx.connectedAccountStore.set(slot, parsed.data.credential);
       return ok(reply, { stored: true });
     } catch (err) {
       return fail(reply, err);
     }
   });
 
-  app.delete('/gate/connected-accounts', async (request, reply) => {
+  app.delete(`${prefix}/gate/connected-accounts`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
     const parsed = DeleteConnectedAccountRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       reply.code(400);
@@ -234,13 +275,23 @@ export function createGatekeeperServer(options: CreateGatekeeperServerOptions): 
       };
     }
     try {
-      if (!connectedAccountStore) throw new ConnectedAccountStoreNotConfiguredError();
-      await connectedAccountStore.delete(parsed.data.onBehalfOf);
+      if (!ctx.connectedAccountStore) throw new ConnectedAccountStoreNotConfiguredError();
+      const slot = ctx.forcedOnBehalfOf ?? parsed.data.onBehalfOf;
+      await ctx.connectedAccountStore.delete(slot);
       return ok(reply, { deleted: true });
     } catch (err) {
       return fail(reply, err);
     }
   });
+}
 
+export function createGatekeeperServer(options: CreateGatekeeperServerOptions): FastifyInstance {
+  const app = Fastify({ logger: options.logger ?? false });
+  registerGateAuthGuard(app, options.token);
+  const context: GateRouteContext = {
+    gate: options.gate,
+    connectedAccountStore: options.connectedAccountStore,
+  };
+  registerGateRoutes(app, { prefix: '', resolve: () => context });
   return app;
 }

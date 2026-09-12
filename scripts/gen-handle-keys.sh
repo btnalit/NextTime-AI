@@ -95,6 +95,7 @@ HANDLE_KEY="$SECRETS_DIR/handle.key"
 HANDLE_PUB="$CONFIG_DIR/handle.pub"
 INTERNAL_TOKEN="$SECRETS_DIR/internal.token"
 GATE_TOKEN="$SECRETS_DIR/gate.token"
+GATE_HOST_STORE_KEY="$SECRETS_DIR/gate-host-store.key"
 
 # --- container gid the private key is chgrp'd to ---------------------------------------------
 # (mirrors host-env-init.sh's CONTAINER_UID/CONTAINER_GID: every packages/*/Dockerfile creates
@@ -164,9 +165,25 @@ chmod 640 "$GATE_TOKEN"
 chgrp "$CONTAINER_GID" "$GATE_TOKEN" 2>/dev/null || echo "gen-handle-keys: WARNING: could not chgrp $GATE_TOKEN to gid $CONTAINER_GID — the kernel and gate containers will not be able to read it" >&2
 
 # --- report -------------------------------------------------------------------------------
+# gate-host-store.key (P-B2a, docs/development-tasks.md P-B 决定 ⑪): the AES key the generic gate
+# host encrypts every hosted instance's credentials with at rest (packages/gatekeeper-base
+# credentials/connected-account.ts, `GATE_STORE_KEY_FILE`). One key per host, compose secret
+# `gate_host_store_key`, 0640 group 10001 like the other three. Never printed.
+if [ ! -s "$GATE_HOST_STORE_KEY" ]; then
+	echo "gen-handle-keys: generating $GATE_HOST_STORE_KEY (32 random bytes, hex)"
+	umask 077
+	openssl rand -hex 32 > "$GATE_HOST_STORE_KEY"
+	GATE_HOST_STORE_KEY_STATUS="generated"
+else
+	echo "gen-handle-keys: $GATE_HOST_STORE_KEY already exists, leaving it unchanged"
+	GATE_HOST_STORE_KEY_STATUS="already existed"
+fi
+chmod 640 "$GATE_HOST_STORE_KEY"
+chgrp "$CONTAINER_GID" "$GATE_HOST_STORE_KEY" 2>/dev/null || echo "gen-handle-keys: WARNING: could not chgrp $GATE_HOST_STORE_KEY to gid $CONTAINER_GID — the gate-host container will not be able to read it" >&2
 echo ""
 echo "gen-handle-keys: secrets/handle.key:    $KEY_STATUS (mode $(stat -c '%a' "$HANDLE_KEY" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$HANDLE_KEY" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: config/handle.pub:     $PUB_STATUS (mode $(stat -c '%a' "$HANDLE_PUB" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: secrets/internal.token: $TOKEN_STATUS (mode $(stat -c '%a' "$INTERNAL_TOKEN" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$INTERNAL_TOKEN" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: secrets/gate.token:     $GATE_TOKEN_STATUS (mode $(stat -c '%a' "$GATE_TOKEN" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$GATE_TOKEN" 2>/dev/null || echo '?'))"
+echo "gen-handle-keys: secrets/gate-host-store.key: $GATE_HOST_STORE_KEY_STATUS (mode $(stat -c '%a' "$GATE_HOST_STORE_KEY" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$GATE_HOST_STORE_KEY" 2>/dev/null || echo '?'))"
 echo "gen-handle-keys: done (idempotent — safe to re-run; private key/token contents never printed)"

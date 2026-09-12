@@ -30,6 +30,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/jmespath": "^0.15.2"
+    "@types/jmespath": "^0.15.2",
+    "jose": "^6.2.10"
   }
 }

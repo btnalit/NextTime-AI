@@ -347,9 +347,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
-      it('refuses platform_preset for a generic connector', async () => {
+      it('refuses platform_preset for a generic connector without a host (cli / ssh)', async () => {
+        // P-B2a lifted this for `http` / `mcp` (the gate host runs platform instances of those).
         await expectPlatformError(
-          () => callAsAdmin('set_connector_mode', { name: 'http', mode: 'platform_preset' }),
+          () => callAsAdmin('set_connector_mode', { name: 'cli', mode: 'platform_preset' }),
           'connector_mode_not_allowed',
         );
       });
