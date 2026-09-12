@@ -18,3 +18,14 @@ services:
     restart: 'no'
   caddy:
     restart: 'no'
+  # P-B2a (docs/development-tasks.md P-B 决定 ⑬ / 决定 ③ moved here): the fake-MCP end-to-end path.
+  # `fixture-mcp` is deploy/accept-s2/mcp (the S2.12 acceptance fixture) without its `accept-s2`
+  # profile — a distinct service name so this override never has to un-profile a base service.
+  # The console e2e creates a hosted mcp instance targeting http://fixture-mcp:8080/ and drives
+  # host take-over → platform enable → workspace enable → catalog → vetted → per-Operation disable.
+  gate-host:
+    restart: 'no'
+  fixture-mcp:
+    build: { context: ., dockerfile: deploy/accept-s2/mcp/Dockerfile }
+    networks: [control]
+    restart: 'no'

@@ -181,7 +181,8 @@ service。"系统接入"页变为从平台集成目录**启用**门实例（管�
   "未启用"；管理员启用 / 命名 / 分配三态；下线的门实例标"失联"。这替代 `register-gatekeeper`
   CLI，也让升级接管时已起好的 docker / ragflow 门自动出现。
 - **通用门宿主（`http` / `mcp`）。**`gatekeeper-base` 增加多实例模式：一个长驻容器承载 N 个 `http` / `mcp`
-  实例，实例定义（目标地址、传输种类、凭证模式、`vetted`）由管理员在集成页创建、内核经内部面推给门宿主，
+  实例，实例定义（目标地址、传输种类、凭证模式、`vetted`）由管理员在集成页创建、门宿主经内部面从内核**拉取**（P-B2a
+  决定 ⑥：推需要一条内核 → 宿主的凭证，今天不存在；拉与门自注册同一信任方向，措辞偏离于此记录），
   **凭证由页面直接 POST 到门宿主**（与 `request_connection` 同一条"凭证直达门、不经内核"的路；浏览器对门宿主
   的鉴权用内核按需签发的 5 分钟平台 JWT，与 `/api/llm-admin/*` 同一机制），门宿主用已有的 ConnectedAccount
   本地加密存储。这样接一个新 MCP server 或一个 REST API 不再需要 compose 服务。
@@ -270,7 +271,7 @@ skills 也是 `SKILL.md` frontmatter。**三家共用 `SKILL.md` 格式**，我�
 - 注册表 `scope: 'workspace' | 'platform'`；gateway 对 `scope:'platform'` 只放行 cookie 会话且
   `platform_role='admin'`，业务 Principal / Handle 一律 403；平台能力事务显式 `set_config('app.platform','on',true)`，
   写目标工作区时再切该工作区 GUC；内核不获得通用 RLS 绕过。
-- 门自注册与门宿主实例推送走内部面 token（同 supervisor），只在 compose 网络内；页面向门宿主 POST 凭证
+- 门自注册与门宿主拉取实例定义走内部面 token（同 supervisor），只在 compose 网络内；页面向门宿主 POST 凭证
   经 caddy 直达门宿主（同 `request_connection`），内核只拿到"已存"回执。
 - 运行层动作只经 supervisor 已有 / 新增的内部端点（`/images`、`/resident/stop`），内核不碰 Docker socket；
   镜像必须在白名单内。
@@ -289,7 +290,7 @@ skills 也是 `SKILL.md` frontmatter。**三家共用 `SKILL.md` 格式**，我�
 | 绑定 / 合并既有 API key | 立即（key 继续有效，归属变了） |
 | 新增 / 修改供应商与 key | `llm-proxy` 热加载，立即；agent 容器：之后启动的 |
 | 门实例启用 / 三态 | 立即；已建立的连接不受三态变更影响 |
-| 通用门宿主新增实例 | 立即（门宿主热加载） |
+| 通用门宿主新增实例 | 下一轮拉取（默认 ≤ 60 s；宿主接管前页面显示“等待宿主接管”） |
 | 安装 / 升级模块到工作区 | 立即产生新 OntologyVersion；运行中 Worker 用旧版直到结束 |
 | 设活动镜像 | 之后启动的 Worker 与入口容器；已运行的入口容器需滚动重建 |
 | 滚动重建 | 空闲容器立即；忙的在其 Turn 结束后 |

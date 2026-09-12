@@ -1,4 +1,4 @@
-import type { GateInstanceWire, GateTrustWire } from '@nexttime/shared';
+import type { GateHostTokenWire, GateInstanceWire, GateTrustWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
@@ -6,6 +6,7 @@ import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
+import { GateCredentialEntry } from './GateCredentialEntry.js';
 import { PlatformError } from './PlatformError.js';
 
 /** `GateInstanceTestResultWireSchema`'s shape (`packages/shared/src/wire/platform.ts`) — no
@@ -24,6 +25,8 @@ export interface GateInstanceDetailPanelProps {
   readonly instance: GateInstanceWire;
   /** A capability answered with a fresh `GateInstanceWire` for this row. */
   readonly onChanged: (instance: GateInstanceWire) => void;
+  /** `delete_gate_instance` succeeded — the caller drops the row and closes this drawer. */
+  readonly onDeleted: (gateId: string) => void;
 }
 
 /**
@@ -42,6 +45,7 @@ export function GateInstanceDetailPanel({
   http,
   instance,
   onChanged,
+  onDeleted,
 }: GateInstanceDetailPanelProps) {
   const [displayName, setDisplayName] = useState(instance.displayName);
   const [savingName, setSavingName] = useState(false);
@@ -56,6 +60,10 @@ export function GateInstanceDetailPanel({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<GateInstanceTestResult | null>(null);
   const [testError, setTestError] = useState<unknown | null>(null);
+
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<unknown | null>(null);
 
   const nameDirty = displayName.trim() !== instance.displayName && displayName.trim().length > 0;
 
@@ -128,6 +136,20 @@ export function GateInstanceDetailPanel({
     }
   }
 
+  async function deleteInstance(): Promise<void> {
+    if (deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await http.call('delete_gate_instance', { gateId: instance.gateId });
+      onDeleted(instance.gateId);
+    } catch (err) {
+      setDeleteError(err);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className="stack" data-testid="gate-instance-detail">
       <dl className="definition-list">
@@ -158,6 +180,79 @@ export function GateInstanceDetailPanel({
         <dt>启用它的工作区数</dt>
         <dd className="mono">{instance.enabledWorkspaceCount}</dd>
       </dl>
+
+      {instance.hosted && instance.definition ? (
+        <>
+          <div className="divider" />
+          <div className="stack-s" data-testid="gate-instance-hosted-definition">
+            <span className="tag" data-testid="gate-instance-hosted-tag">
+              宿主 hosted
+            </span>
+            <dl className="definition-list">
+              <dt>种类 Transport</dt>
+              <dd>{instance.definition.transportKind}</dd>
+              <dt>目标 Target</dt>
+              <dd className="mono">{instance.definition.target}</dd>
+              <dt>凭证模式 Credential mode</dt>
+              <dd>
+                {instance.definition.credentialMode === 'shared'
+                  ? '共享 Shared'
+                  : '按人 Connected account'}
+              </dd>
+              <dt>Manifest source</dt>
+              <dd className="mono">{instance.definition.manifestSource ?? '—'}</dd>
+            </dl>
+
+            {instance.definition.credentialMode === 'shared' ? (
+              <div className="stack-s">
+                <span className="field-label">录入共享凭证 Enter shared credential</span>
+                <GateCredentialEntry
+                  requestToken={() =>
+                    http.call<GateHostTokenWire>('issue_gate_host_token', {
+                      gateId: instance.gateId,
+                    })
+                  }
+                  tokenButtonLabel="获取 5 分钟令牌 Get a 5-minute token"
+                />
+              </div>
+            ) : null}
+
+            <div className="divider" />
+            <PlatformError
+              error={deleteError}
+              title="无法删除 Could not delete this instance"
+              testId="gate-instance-delete-error"
+            />
+            {confirmingDelete ? (
+              <div className="row-wrap" style={{ justifyContent: 'flex-end' }}>
+                <Button variant="ghost" size="s" onClick={() => setConfirmingDelete(false)}>
+                  取消 Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  size="s"
+                  onClick={() => void deleteInstance()}
+                  loading={deleting}
+                  data-testid="gate-instance-delete-confirm"
+                >
+                  确认删除 Confirm delete
+                </Button>
+              </div>
+            ) : (
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <Button
+                  variant="danger"
+                  size="s"
+                  onClick={() => setConfirmingDelete(true)}
+                  data-testid="gate-instance-delete"
+                >
+                  删除 Delete
+                </Button>
+              </div>
+            )}
+          </div>
+        </>
+      ) : null}
 
       <div className="divider" />
 

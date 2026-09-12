@@ -265,7 +265,7 @@ export function ConnectionsPage({
         )}
       </section>
 
-      {canCreate ? <AvailableGateInstancesSection http={http} onEnabled={reloadRegistry} /> : null}
+      <AvailableGateInstancesSection http={http} onEnabled={reloadRegistry} canEnable={canCreate} />
 
       <section className="section" aria-labelledby="registered-systems-title">
         <div className="section-header">

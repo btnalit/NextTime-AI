@@ -1,10 +1,15 @@
-import type { AvailableGateInstanceWire, EnableGateInstanceResultWire } from '@nexttime/shared';
+import type {
+  AvailableGateInstanceWire,
+  EnableGateInstanceResultWire,
+  GateHostTokenWire,
+} from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { hrefs } from '../lib/router.js';
+import { GateCredentialEntry } from './platform/GateCredentialEntry.js';
 import { PlatformError } from './platform/PlatformError.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -17,6 +22,9 @@ export interface AvailableGateInstancesSectionProps {
   /** The Registered systems section below must reload too: `enable_gate_instance` registers a
    *  Gatekeeper object that section reads independently. */
   readonly onEnabled: () => void;
+  /** Owner-only: shows the 启用 button. Members still see the list and, on linked rows, the
+   *  per-member credential entry (P-B2a). */
+  readonly canEnable: boolean;
 }
 
 /**
@@ -29,6 +37,7 @@ export interface AvailableGateInstancesSectionProps {
 export function AvailableGateInstancesSection({
   http,
   onEnabled,
+  canEnable,
 }: AvailableGateInstancesSectionProps) {
   const permissions = usePermissions();
   const available = useCapabilityList<AvailableGateInstanceWire>(
@@ -113,6 +122,7 @@ export function AvailableGateInstancesSection({
                   http={http}
                   row={row}
                   onEnabled={handleEnabled}
+                  canEnable={canEnable}
                 />
               ))}
             </tbody>
@@ -127,10 +137,12 @@ function AvailableGateRow({
   http,
   row,
   onEnabled,
+  canEnable,
 }: {
   readonly http: CapabilityCaller;
   readonly row: AvailableGateInstanceWire;
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
+  readonly canEnable: boolean;
 }) {
   const [enabling, setEnabling] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
@@ -163,8 +175,18 @@ function AvailableGateRow({
       <td className="mono">{row.operationCount}</td>
       <td>
         {row.gatekeeperId ? (
-          <a href={hrefs.gatekeeper(row.gatekeeperId)}>已启用 Enabled</a>
-        ) : (
+          <div className="stack-s">
+            <a href={hrefs.gatekeeper(row.gatekeeperId)}>已启用 Enabled</a>
+            <GateCredentialEntry
+              requestToken={() =>
+                http.call<GateHostTokenWire>('issue_gate_credential_token', {
+                  gateId: row.gateId,
+                })
+              }
+              tokenButtonLabel="录入我的凭证 Enter my credential"
+            />
+          </div>
+        ) : canEnable ? (
           <Button
             variant="primary"
             size="s"
@@ -174,6 +196,8 @@ function AvailableGateRow({
           >
             启用 Enable
           </Button>
+        ) : (
+          <span className="muted">未启用（由 owner 启用） Not enabled (owner enables)</span>
         )}
         <PlatformError error={error} title="无法启用 Could not enable this instance" />
         {publishedCount !== null ? (

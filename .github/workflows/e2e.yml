@@ -87,7 +87,7 @@ jobs:
       - name: Build kernel/caddy/llm-proxy images
         run: |
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
-            build kernel caddy llm-proxy
+            build kernel caddy llm-proxy gate-host fixture-mcp
 
       # One-off `docker compose run` (never `up`) — llm-proxy is otherwise unused by this suite
       # (see this file's header comment); this is the only thing it is built for.
@@ -122,6 +122,14 @@ jobs:
         run: |
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
             up -d --wait kernel caddy
+
+      # P-B2a: the generic gate host and the fixture MCP server the hosted-instance e2e targets
+      # (deploy/ci/docker-compose.ci.yml). gate-host depends on a healthy kernel (it pulls its
+      # instance list from the internal plane), hence after the step above.
+      - name: Start gate-host and fixture-mcp
+        run: |
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            up -d --wait gate-host fixture-mcp
 
       # caddy has no `healthcheck:` in docker-compose.yml, so `up --wait` above only confirms it
       # is running, not that its reverse proxy to kernel (and its own on-demand TLS issuance) is

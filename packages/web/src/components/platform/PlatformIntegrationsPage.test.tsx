@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { HttpError } from '../../lib/http-client.js';
 import { PlatformIntegrationsPage } from './PlatformIntegrationsPage.js';
 
 afterEach(cleanup);
@@ -62,6 +63,8 @@ function gateInstance(overrides: Partial<GateInstanceWire> = {}): GateInstanceWi
     lastCheckedAt: null,
     operationCount: 1,
     enabledWorkspaceCount: 0,
+    hosted: false,
+    definition: null,
     operations: [
       {
         name: 'container_restart',
@@ -77,6 +80,28 @@ function gateInstance(overrides: Partial<GateInstanceWire> = {}): GateInstanceWi
     updatedAt: '2026-09-01T00:00:00.000Z',
     ...overrides,
   };
+}
+
+function hostedGateInstance(overrides: Partial<GateInstanceWire> = {}): GateInstanceWire {
+  return gateInstance({
+    gateId: 'gate-hosted-1',
+    connector: 'http',
+    displayName: 'Billing API',
+    transportKind: 'http',
+    target: 'https://billing.internal',
+    endpoint: 'https://billing.internal',
+    status: 'enabled',
+    lastSeenAt: null,
+    operationCount: 0,
+    hosted: true,
+    definition: {
+      transportKind: 'http',
+      target: 'https://billing.internal',
+      credentialMode: 'shared',
+      manifestSource: 'https://billing.internal/openapi.json',
+    },
+    ...overrides,
+  });
 }
 
 function runtime(overrides: Partial<ExternalRuntimeWire> = {}): ExternalRuntimeWire {
@@ -222,6 +247,126 @@ describe('PlatformIntegrationsPage', () => {
     fireEvent.click(within(detail).getByTestId('gate-instance-test'));
     const result = await within(detail).findByTestId('gate-instance-test-result');
     expect(result.textContent).toContain('4');
+  });
+
+  it('hosted instance with no heartbeat shows the hosted badge and waiting-for-host status', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [hostedGateInstance()] }),
+    });
+    renderPage(http);
+
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    const row = within(table).getByTestId('gate-instance-row-gate-hosted-1');
+    expect(within(row).getByTestId('gate-hosted-badge')).toBeTruthy();
+    expect(within(row).getByTestId('gate-instance-status').textContent).toContain('等待宿主接管');
+  });
+
+  it('creating a hosted instance posts create_gate_instance (http omits manifestSource when blank) and opens its detail', async () => {
+    const created = hostedGateInstance({ gateId: 'gate-new', displayName: 'gate-new' });
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [] }),
+      create_gate_instance: (params) => {
+        expect(params).toEqual({
+          gateId: 'gate-new',
+          transportKind: 'http',
+          target: 'https://target.internal',
+          credentialMode: 'shared',
+        });
+        return created;
+      },
+    });
+    renderPage(http);
+
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    fireEvent.click(await screen.findByTestId('new-gate-instance'));
+
+    const form = await screen.findByTestId('create-gate-instance-form');
+    fireEvent.change(within(form).getByLabelText(/Gate id/), {
+      target: { value: 'gate-new' },
+    });
+    fireEvent.change(within(form).getByLabelText(/目标 Target/), {
+      target: { value: 'https://target.internal' },
+    });
+    fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
+
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'create_gate_instance')).toBe(true),
+    );
+    const detail = await screen.findByTestId('gate-instance-detail');
+    expect(within(detail).getByTestId('gate-instance-hosted-tag')).toBeTruthy();
+  });
+
+  it('hosted instance detail: shared credential mode shows the token button, connected_account does not', async () => {
+    const shared = hostedGateInstance();
+    const perMember = hostedGateInstance({
+      gateId: 'gate-hosted-2',
+      definition: {
+        transportKind: 'http',
+        target: 'https://billing.internal',
+        credentialMode: 'connected_account',
+        manifestSource: null,
+      },
+    });
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [shared, perMember] }),
+    });
+    renderPage(http);
+
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+
+    fireEvent.click(within(table).getByTestId(`gate-instance-row-${shared.gateId}`));
+    const sharedDetail = await screen.findByTestId('gate-instance-detail');
+    expect(within(sharedDetail).getByTestId('gate-credential-token-button')).toBeTruthy();
+
+    fireEvent.click(within(table).getByTestId(`gate-instance-row-${perMember.gateId}`));
+    const perMemberDetail = await screen.findByTestId('gate-instance-detail');
+    expect(within(perMemberDetail).queryByTestId('gate-credential-token-button')).toBeNull();
+  });
+
+  it('hosted instance detail: delete posts delete_gate_instance and removes the row; gate_in_use shows inline', async () => {
+    const instance = hostedGateInstance();
+    let attempt = 0;
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [instance] }),
+      delete_gate_instance: () => {
+        attempt += 1;
+        if (attempt === 1) {
+          throw new HttpError(
+            'capability_error',
+            'a workspace still has it enabled',
+            'gate_in_use',
+          );
+        }
+        return { gateId: instance.gateId, deleted: true };
+      },
+    });
+    renderPage(http);
+
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    fireEvent.click(within(table).getByTestId(`gate-instance-row-${instance.gateId}`));
+    const detail = await screen.findByTestId('gate-instance-detail');
+
+    fireEvent.click(within(detail).getByTestId('gate-instance-delete'));
+    fireEvent.click(within(detail).getByTestId('gate-instance-delete-confirm'));
+    await waitFor(() =>
+      expect(http.calls.filter((call) => call.name === 'delete_gate_instance')).toHaveLength(1),
+    );
+    // The row is still there (delete failed with gate_in_use) — detail stays open, with the
+    // mapped message shown inline.
+    const deleteError = await screen.findByTestId('gate-instance-delete-error');
+    expect(deleteError.textContent).toContain('还有工作区启用着这个实例');
+
+    // Still in the confirm step (the failed attempt leaves it open) — confirm again.
+    fireEvent.click(within(detail).getByTestId('gate-instance-delete-confirm'));
+    await waitFor(() =>
+      expect(http.calls.filter((call) => call.name === 'delete_gate_instance')).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId(`gate-instance-row-${instance.gateId}`)).toBeNull(),
+    );
   });
 
   it('revoking an external runtime posts revoke_external_runtime and removes the row', async () => {

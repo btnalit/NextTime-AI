@@ -2,10 +2,11 @@ import type {
   AvailableGateInstanceWire,
   ConnectorWire,
   ExternalRuntimeWire,
+  GateHostedDefinitionWire,
   GateInstanceWire,
   Operation,
 } from '@nexttime/shared';
-import { OperationSchema } from '@nexttime/shared';
+import { GateHostedDefinitionWireSchema, OperationSchema } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
@@ -77,12 +78,14 @@ interface GateInstanceDbRow {
   created_at: Date;
   updated_at: Date;
   enabled_workspace_count: number;
+  hosted: boolean;
+  definition: unknown;
 }
 
 const GATE_INSTANCE_SELECT = `
   select g.gate_id, g.connector, g.display_name, g.transport_kind, g.target, g.endpoint,
          g.health_endpoint, g.operations, g.status, g.trust, g.health, g.last_seen_at,
-         g.last_checked_at, g.created_at, g.updated_at,
+         g.last_checked_at, g.created_at, g.updated_at, g.hosted, g.definition,
          (select count(*)::int from workspace_gate_links l where l.gate_id = g.gate_id)
            as enabled_workspace_count
     from gate_instances g`;
@@ -114,6 +117,12 @@ export function toWireConnector(row: ConnectorDbRow): ConnectorWire {
   };
 }
 
+export function hostedDefinitionOf(value: unknown): GateHostedDefinitionWire | null {
+  if (value === null || value === undefined) return null;
+  const parsed = GateHostedDefinitionWireSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 export function toWireGateInstance(row: GateInstanceDbRow): GateInstanceWire {
   const operations = operationsOf(row.operations);
   return {
@@ -130,6 +139,8 @@ export function toWireGateInstance(row: GateInstanceDbRow): GateInstanceWire {
     lastCheckedAt: row.last_checked_at ? row.last_checked_at.toISOString() : null,
     operationCount: operations.length,
     enabledWorkspaceCount: row.enabled_workspace_count,
+    hosted: row.hosted,
+    definition: hostedDefinitionOf(row.definition),
     operations: operations.map((op) => ({
       name: op.name,
       mode: op.mode,
@@ -216,6 +227,10 @@ export interface AnnounceOutcome {
    *  `enabled` / `disabled` instance was recorded with — the stored values were kept. */
   readonly identityMismatch: boolean;
   readonly status: GateInstanceStatus;
+  /** P-B2a: a never-seen gate-host instance was announced with a connector / transport kind other
+   *  than its own definition — nothing was written (the host derives both from the definition, so
+   *  this can only be a stray or hostile announcement). */
+  readonly rejected?: boolean;
 }
 
 /**
@@ -245,8 +260,10 @@ export async function upsertAnnouncement(
     connector: string;
     transport_kind: GateTransportKind;
     endpoint: string;
+    hosted: boolean;
+    last_seen_at: Date | null;
   }>(
-    `select status, status_before_lost, connector, transport_kind, endpoint
+    `select status, status_before_lost, connector, transport_kind, endpoint, hosted, last_seen_at
        from gate_instances where gate_id = $1 for update`,
     [body.gateId],
   );
@@ -256,7 +273,26 @@ export async function upsertAnnouncement(
   const restoredStatus =
     before?.status === 'lost' ? (before.status_before_lost ?? 'discovered') : undefined;
   const decidedAfterLost = restoredStatus === 'enabled' || restoredStatus === 'disabled';
-  const frozen = decided || decidedAfterLost;
+  // P-B2a (决定 ⑧): a gate-host instance is created `enabled` by the administrator with an empty
+  // endpoint; its *first* announcement (never seen yet) is what fills the identity in, so the freeze
+  // starts once it has been seen. Every other decided instance is frozen from the decision on (P-B1).
+  const neverSeenHosted = before?.hosted === true && before.last_seen_at === null;
+  if (
+    neverSeenHosted &&
+    before !== undefined &&
+    (before.connector !== body.connector || before.transport_kind !== body.transportKind)
+  ) {
+    // Only the endpoint is unknown until the host speaks; kind and connector come from the
+    // administrator's definition and must match — refuse rather than let the first announce redefine them.
+    return {
+      gateId: body.gateId,
+      created: false,
+      identityMismatch: true,
+      status: before.status,
+      rejected: true,
+    };
+  }
+  const frozen = (decided || decidedAfterLost) && !neverSeenHosted;
   const identityMismatch =
     frozen &&
     before !== undefined &&
@@ -414,6 +450,88 @@ export async function recordGateInstanceCheck(
     'update gate_instances set health = $2, last_checked_at = now() where gate_id = $1',
     [gateId, health],
   );
+}
+
+// -------------------------------------------------------------------------------------------
+// P-B2a gate-host instances (决定 ⑦): rows the administrator creates; the host pulls and announces
+// -------------------------------------------------------------------------------------------
+
+export interface HostedGateDefinition {
+  readonly gateId: string;
+  readonly displayName: string;
+  readonly status: GateInstanceStatus;
+  readonly definition: GateHostedDefinitionWire;
+}
+
+/** Inserts an `enabled`, never-seen instance: `endpoint ''`, `health 'unknown'`, no heartbeat. The
+ *  connector is the generic kind (`http` / `mcp`, seeded by 0023). Returns `false` on an id clash. */
+export async function createHostedGateInstance(
+  client: PoolClient,
+  input: { gateId: string; displayName: string; definition: GateHostedDefinitionWire },
+): Promise<boolean> {
+  const result = await client.query(
+    `insert into gate_instances
+       (gate_id, connector, display_name, transport_kind, target, endpoint, health_endpoint,
+        operations, status, health, hosted, definition, updated_at)
+     values ($1, $2, $3, $2, $4, '', null, '[]'::jsonb, 'enabled', 'unknown', true, $5::jsonb, now())
+     on conflict (gate_id) do nothing`,
+    [
+      input.gateId,
+      input.definition.transportKind,
+      input.displayName,
+      input.definition.target,
+      JSON.stringify(input.definition),
+    ],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
+/** Removes a hosted instance nobody linked. `'in_use'` when a workspace still has a link (an
+ *  administrator disables it instead — design §8: platform changes never tear down links). */
+export async function deleteHostedGateInstance(
+  client: PoolClient,
+  gateId: string,
+): Promise<'deleted' | 'not_found' | 'not_hosted' | 'in_use'> {
+  const row = await client.query<{ hosted: boolean; links: number }>(
+    `select g.hosted,
+            (select count(*)::int from workspace_gate_links l where l.gate_id = g.gate_id) as links
+       from gate_instances g where g.gate_id = $1 for update`,
+    [gateId],
+  );
+  const found = row.rows[0];
+  if (!found) return 'not_found';
+  if (!found.hosted) return 'not_hosted';
+  if (found.links > 0) return 'in_use';
+  await client.query('delete from gate_instances where gate_id = $1', [gateId]);
+  return 'deleted';
+}
+
+/** What the gate host pulls (`GET /internal/gate-host/instances`, 决定 ⑥): every hosted row with its
+ *  definition. Status comes along so the host can log it; enforcement stays in the kernel. */
+export async function listHostedGateDefinitions(
+  client: PoolClient,
+): Promise<HostedGateDefinition[]> {
+  const result = await client.query<{
+    gate_id: string;
+    display_name: string;
+    status: GateInstanceStatus;
+    definition: unknown;
+  }>(
+    `select gate_id, display_name, status, definition
+       from gate_instances where hosted order by created_at, gate_id`,
+  );
+  const items: HostedGateDefinition[] = [];
+  for (const row of result.rows) {
+    const definition = hostedDefinitionOf(row.definition);
+    if (!definition) continue;
+    items.push({
+      gateId: row.gate_id,
+      displayName: row.display_name,
+      status: row.status,
+      definition,
+    });
+  }
+  return items;
 }
 
 // -------------------------------------------------------------------------------------------

@@ -97,6 +97,7 @@ import { exportProvHandler } from './export-prov-handler.js';
 import { assertFactHandler, invalidateFactHandler, supersedeFactHandler } from './fact-handlers.js';
 import {
   enableGateInstanceHandler,
+  issueGateCredentialTokenHandler,
   listAvailableGateInstancesHandler,
 } from './gate-instance-handlers.js';
 import {
@@ -131,7 +132,10 @@ import {
   publishOperationHandler,
 } from './operation-manifest-handlers.js';
 import {
+  createGateInstanceHandler,
+  deleteGateInstanceHandler,
   getGateInstanceHandler,
+  issueGateHostTokenHandler,
   listConnectorsHandler,
   listExternalRuntimesHandler,
   listGateInstancesHandler,
@@ -1136,6 +1140,11 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_available_gate_instances', listAvailableGateInstancesHandler],
   ['enable_gate_instance', enableGateInstanceHandler],
   ['issue_service_handle', issueServiceHandleHandler],
+  // P-B2a gate-host instances
+  ['create_gate_instance', createGateInstanceHandler],
+  ['delete_gate_instance', deleteGateInstanceHandler],
+  ['issue_gate_host_token', issueGateHostTokenHandler],
+  ['issue_gate_credential_token', issueGateCredentialTokenHandler],
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
   ['search', searchHandler],

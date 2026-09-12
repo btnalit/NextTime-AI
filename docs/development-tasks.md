@@ -1717,6 +1717,43 @@
     fake 改为信封。运行手册"已知缺口"不需要新增：问题已修。
   - **未做 / 留到 P-B2**：通用 `http` / `mcp` 门宿主与页面直达门的凭证录入；`vet_mcp_endpoint` 单独能力
     （P-B1 用 `update_gate_instance{trust}`）；模块页；fake MCP 全链路 e2e。
+- 实现说明（P-B2a 门宿主与页面直达凭证，2026-09-12，PR #__PR__ → v__VER__）：
+  - **迁移 core 0024**：`gate_instances` 加 `hosted boolean` 与 `definition jsonb`（check：二者同真同假），
+    `grant delete`。宿主实例由 `create_gate_instance` 落行：connector = 通用种类名（`http` / `mcp`，0023 已预置）、
+    `status 'enabled'`、`health 'unknown'`、`endpoint ''`、`last_seen_at null`——"已启用、等待宿主接管"。
+  - **内核**：`GET /internal/gate-host/instances`（内部面守卫，只回定义，绝无凭证）；`upsertAnnouncement`
+    的身份冻结加一个例外：`hosted ∧ last_seen_at is null` 的行不冻结（决定 ⑧，宿主首次 announce 才填端点），
+    此后照 P-B1 冻结；`enable_gate_instance` 在 `last_seen_at null ∨ operationCount 0` 时 409 `gate_not_ready`
+    （决定 ⑨）；`test_gate_instance` 对空端点直接记 `unknown` 不探测；`set_connector_mode platform_preset`
+    只对 `cli` / `ssh` 409（决定 ⑬）。新平台能力 `create_gate_instance` / `delete_gate_instance`（有链接 409
+    `gate_in_use`，打包门 409 `gate_not_hosted`）/ `issue_gate_host_token`（只对 `shared` 模式的宿主实例，否则
+    409 `credential_mode_mismatch`）；工作区能力 `issue_gate_credential_token`（member；要本工作区已链接该实例且
+    实例为 `connected_account`，槽位 = 调用者 Principal）。四个都是 human-only。
+  - **共享 `gate-host-token.ts`**（决定 ⑩）：`mintGateHostToken` / `verifyGateHostToken`，EdDSA + Handle 私钥，
+    `typ 'nt-gate-host+jwt'`、`aud 'gate-host'`、`gate` / `obo` / `sub`、`exp ≤ 300 s`（超出上限被夹到 300）；
+    `.strict()` 声明形状与 `HandleClaimsSchema` 互斥，单测双向断言（Handle 校验器拒它、它拒 Handle）。
+  - **gatekeeper-base**：`server.ts` 的七条 `/gate/*` 路由抽成 `registerGateRoutes(app, {prefix, resolve})`，
+    `createGatekeeperServer` 用空前缀 + 恒定 resolve，单门行为不变（既有 server 测试原样通过）；`host.ts`
+    `createGateHost` / `startGateHost`（`GATE_MODE=host` 进 `main()`）：拉定义 → reconcile 内存表（定义变了就重建、
+    列表里没了就摘掉）→ 每个已就绪实例 announce 一次；`mcp` 实例 `tools/list` 导入、`http` 实例拉 OpenAPI 导入，
+    目标不可达则不 announce 只记 warn 并在下一轮重试；路由前缀 `/i/:gateId`，`onRequest` 守卫先认 `gate_token`，
+    只在 `POST` / `DELETE …/gate/connected-accounts` 上退而验平台 JWT（`gate` 声明必须等于路径 id），通过则把
+    JWT 的 `obo` 作为强制槽位、忽略请求体的 `onBehalfOf`；`GET /healthz` 无鉴权只报就绪与计数。
+    `credentials/hosted.ts` `HostedCredentialResolver`：`shared` 读 `__shared__` 槽（空则无凭证调用），
+    `connected_account` 读调用者槽（空则拒绝）；一宿主一把 `GATE_STORE_KEY_FILE`，每实例一目录。
+    `announce.ts` 抽出 `postAnnouncement` 与导出 `loadInternalToken` 供宿主复用。
+  - **部署**：compose 新服务 `gate-host`（gatekeeper-base 镜像，`GATE_MODE=host`，secrets `gate_token` /
+    `internal_token` / 新 `gate_host_store_key`，只读挂 `config/handle.pub`，`/healthz` 健康检查，依赖 kernel
+    healthy）；`gen-handle-keys.sh` 多生成 `secrets/gate-host-store.key`，`host-bootstrap.sh` 多建 `gate-host/`；
+    Caddyfile 加 `handle_path /gate-host/* → gate-host:8083`（唯一绕过内核的路径，注释写明原因）。
+    CI：`deploy/ci/docker-compose.ci.yml` 起 `gate-host` 与 `fixture-mcp`（`deploy/accept-s2/mcp` 的镜像、不带
+    profile 的新服务名），e2e 工作流多一步 `up -d --wait gate-host fixture-mcp`。
+  - **web**：__WEB__
+  - **e2e**：__E2E__
+  - **独立审查**：__REVIEW__
+  - **未做 / 留到 P-B2b**：模块页与 `list_modules` / `install_module` / `upgrade_module` / `set_default_modules` /
+    `promote_template`；`vet_mcp_endpoint` 仍用 `update_gate_instance{trust}`；宿主实例删除后的加密凭证目录
+    需手工清理（运行手册 §14.2）。
 - 完成标准（design §9 P-B e2e）：起一个 fake MCP server → 集成页新增门宿主实例 → 测试连接 →
   工作区启用 → 入口 agent 的工具里出现它，非 `vetted` 时写操作走审批；模块页把 `ops-assets-v2`
   装进某工作区的能力目录，运行中的旧 Worker 不受影响；接 RAGFlow、接任意 MCP server、装领域包全程

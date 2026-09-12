@@ -66,7 +66,12 @@ export type PlatformErrorCode =
   | 'connector_mode_not_allowed'
   | 'gate_not_found'
   | 'trust_not_applicable'
-  | 'runtime_not_found';
+  | 'runtime_not_found'
+  // P-B2a (gate-host instances)
+  | 'gate_id_taken'
+  | 'gate_in_use'
+  | 'gate_not_hosted'
+  | 'credential_mode_mismatch';
 
 /** Mapped by interfaces/http/capability-route.ts: `*_not_found` → 404, the rest → 409. */
 export class PlatformAdminError extends Error {

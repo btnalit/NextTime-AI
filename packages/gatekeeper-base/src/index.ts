@@ -11,6 +11,7 @@ import type { CredentialResolver } from './credentials/index.js';
 import { resolveGateDataDir } from './data-dir.js';
 import { loadGateKernelToken } from './gate-auth.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
+import { startGateHost } from './host.js';
 import { JsonFileIdempotencyStore } from './idempotency-store.js';
 import { CliTransport, HttpTransport, McpTransport, SshTransport } from './kinds/index.js';
 import type { SshPolicyRule, SshTarget, Transport } from './kinds/index.js';
@@ -54,8 +55,14 @@ export type {
   SimulateResult,
 } from './gatekeeper-base.js';
 
-export { createGatekeeperServer, mapGatekeeperError } from './server.js';
-export type { CreateGatekeeperServerOptions } from './server.js';
+export { createGatekeeperServer, mapGatekeeperError, registerGateRoutes } from './server.js';
+export type {
+  CreateGatekeeperServerOptions,
+  GateRouteContext,
+  RegisterGateRoutesOptions,
+} from './server.js';
+export { createGateHost, startGateHost, GATE_HOST_DEFAULT_PORT } from './host.js';
+export type { GateHost, GateHostOptions } from './host.js';
 
 export {
   GATE_KERNEL_TOKEN_FILE_ENV,
@@ -119,6 +126,7 @@ export {
 export type { IdempotencyStore } from './idempotency-store.js';
 
 export {
+  HostedCredentialResolver,
   SharedEnvCredentialResolver,
   ConnectedAccountStore,
   ConnectedAccountCredentialResolver,
@@ -315,7 +323,11 @@ export async function startGatekeeperServer(
 }
 
 export function main(): void {
-  startGatekeeperServer().catch((err: unknown) => {
+  // P-B2a: `GATE_MODE=host` runs the generic multi-instance gate host (host.ts) instead of the
+  // single-transport gate; everything else about the container (image, secrets, data dir) is shared.
+  const start: Promise<unknown> =
+    process.env.GATE_MODE === 'host' ? startGateHost() : startGatekeeperServer();
+  start.catch((err: unknown) => {
     console.error(
       JSON.stringify({
         level: 'error',

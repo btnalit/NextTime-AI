@@ -269,6 +269,23 @@ export const GateOperationSummaryWireSchema = z
   .strict();
 export type GateOperationSummaryWire = z.infer<typeof GateOperationSummaryWireSchema>;
 
+/** P-B2a (决定 ⑦): what the administrator typed when creating a gate-host instance — the gate host
+ *  builds the transport and credential resolver from exactly this, nothing more. Never a credential. */
+export const GateHostedDefinitionWireSchema = z
+  .object({
+    transportKind: z.enum(['http', 'mcp']),
+    /** The target system’s base URL (http) or MCP endpoint (mcp). */
+    target: z.string().url(),
+    /** `shared`: one credential for the whole instance, stored under the shared slot by an
+     *  administrator; `connected_account`: one per Principal, entered by each member. Either way the
+     *  credential goes browser → gate host directly (决定 ⑩). */
+    credentialMode: z.enum(['shared', 'connected_account']),
+    /** http: the OpenAPI document URL the host imports Operations from; mcp: `null` (tools/list on the target). */
+    manifestSource: z.string().url().nullable(),
+  })
+  .strict();
+export type GateHostedDefinitionWire = z.infer<typeof GateHostedDefinitionWireSchema>;
+
 export const GateInstanceWireSchema = z
   .object({
     /** `GATE_ID`: the stable identity the gate announces itself with (compose config, not a display
@@ -288,6 +305,10 @@ export const GateInstanceWireSchema = z
     /** Workspaces that enabled this instance (`workspace_gate_links`). */
     enabledWorkspaceCount: z.number().int().nonnegative(),
     operations: z.array(GateOperationSummaryWireSchema),
+    /** P-B2a: created by an administrator and served by the generic gate host (决定 ⑦); `false` for a
+     *  packaged gate that announced itself. */
+    hosted: z.boolean(),
+    definition: GateHostedDefinitionWireSchema.nullable(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -355,3 +376,23 @@ export const EnableGateInstanceResultWireSchema = z
   })
   .strict();
 export type EnableGateInstanceResultWire = z.infer<typeof EnableGateInstanceResultWireSchema>;
+
+/** P-B2a (决定 ⑩): the 5-minute platform JWT the browser presents to the gate host when it posts a
+ *  credential straight there. `url` is same-origin (Caddy `/gate-host/*`); `onBehalfOf` is the slot the
+ *  token may write (`__shared__` or the caller’s Principal id) — the host takes it from the token. */
+export const GateHostTokenWireSchema = z
+  .object({
+    gateId: z.string(),
+    token: z.string(),
+    url: z.string(),
+    onBehalfOf: z.string(),
+    credentialMode: z.enum(['shared', 'connected_account']),
+    expiresAt: z.string(),
+  })
+  .strict();
+export type GateHostTokenWire = z.infer<typeof GateHostTokenWireSchema>;
+
+export const DeleteGateInstanceResultWireSchema = z
+  .object({ gateId: z.string(), deleted: z.literal(true) })
+  .strict();
+export type DeleteGateInstanceResultWire = z.infer<typeof DeleteGateInstanceResultWireSchema>;

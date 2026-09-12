@@ -40,7 +40,7 @@ const PLATFORM_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   // "enable from platform catalog" flow.
   connector_not_found: '找不到该接入包 No such connector',
   connector_mode_not_allowed:
-    '通用类接入包（http/mcp/cli/ssh）不能设为平台预置 A generic connector kind cannot be set to platform preset',
+    '通用类接入包（cli/ssh）不能设为平台预置 A generic cli/ssh connector cannot be set to platform preset',
   gate_not_found: '找不到该门实例 No such gate instance',
   trust_not_applicable:
     '只有 MCP 类型的实例可以设置信任级别 Only an MCP instance can be marked vetted',
@@ -49,6 +49,17 @@ const PLATFORM_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     '该门实例尚未启用，工作区不能启用它 That gate instance is not enabled — a workspace cannot enable it',
   connector_not_preset:
     '该接入包不是平台预置模式，工作区不能从目录启用它 That connector is not in platform-preset mode — a workspace cannot enable it from the catalog',
+  // P-B2a（门宿主 gate host）：管理员建实例、录入凭证的失败码。
+  gate_id_taken: '这个 gate id 已被占用 That gate id is already taken',
+  gate_in_use:
+    '还有工作区启用着这个实例，先禁用它们再删除 A workspace still has this instance enabled — disable it there first',
+  gate_not_hosted:
+    '只有门宿主实例才能这样操作；打包的门由它自己的容器管理 Only a gate-host instance supports this — a packaged gate manages itself',
+  credential_mode_mismatch:
+    '该实例不需要每人的凭证 This instance does not take a per-member credential',
+  gate_not_ready:
+    '门宿主尚未接管该实例，请稍候 The gate host has not taken over this instance yet — wait a moment',
+  gate_not_linked: '这个工作区还没有启用该实例 This workspace has not enabled that instance',
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of
@@ -67,3 +78,7 @@ export const ENV_ADMIN_TITLE = '环境配置的管理员 Administrator by enviro
 /** `create_user`'s login rule, mirrored client-side so the field can say so before the kernel
  *  does (`platform-handlers.ts` `LOGIN_PATTERN`). */
 export const LOGIN_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/;
+
+/** `create_gate_instance`'s `gateId` rule, mirrored client-side (`capabilities.ts`'s own regex on
+ *  that param — becomes the instance's `GATE_ID` and its gate-host path). */
+export const GATE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
