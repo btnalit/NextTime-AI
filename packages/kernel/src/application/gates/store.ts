@@ -8,6 +8,7 @@ import type {
 import { OperationSchema } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
+import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
 import { revokeSession } from '../../governance/capability/index.js';
 
 /**
@@ -603,7 +604,17 @@ export async function revokeExternalRuntime(
   if ((result.rowCount ?? 0) === 0) return false;
   // Handle verification checks `capability_handles.revoked_at` by jti, not `sessions.status`
   // (governance/capability/handles.ts) — revoke the Handles under the session too, the same
-  // primitive `revokeEntrySessionHandles` uses (review finding).
-  await revokeSession(client, sessionId);
+  // primitive `revokeEntrySessionHandles` uses (review finding). `capability_handles` has only
+  // the workspace-isolation policy (governance 0001), so the platform transaction scopes this
+  // one statement to the session's workspace explicitly (`setWorkspaceContext`), then clears it.
+  await setWorkspaceContext(client, workspaceId, PLATFORM_PLACEHOLDER_PRINCIPAL);
+  try {
+    await revokeSession(client, sessionId);
+  } finally {
+    await client.query("select set_config('app.workspace_id', '', true)");
+    await client.query("select set_config('app.principal_id', '', true)");
+  }
   return true;
 }
+
+const PLATFORM_PLACEHOLDER_PRINCIPAL = '00000000-0000-0000-0000-000000000000';
