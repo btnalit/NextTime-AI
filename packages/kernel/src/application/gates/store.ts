@@ -35,7 +35,7 @@ export const AnnounceBodySchema = z
     gateId: z.string().regex(GATE_ID_PATTERN),
     connector: z.string().regex(CONNECTOR_NAME_PATTERN),
     transportKind: z.enum(['http', 'mcp', 'cli', 'ssh']),
-    /** Human-readable target (a RAGFlow base URL, a Docker API address, an MCP server URL). Never
+    /** Human-readable target (the external system's base URL or API address, an MCP server URL). Never
      *  a credential. */
     target: z.string().max(500).optional(),
     /** The gate's own base URL as the kernel must call it (compose service name + port). */
