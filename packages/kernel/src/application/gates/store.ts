@@ -8,6 +8,7 @@ import type {
 import { OperationSchema } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
+import { revokeSession } from '../../governance/capability/index.js';
 
 /**
  * application/gates/store: the P-B1 integration catalog — `connectors`, `gate_instances`,
@@ -210,18 +211,22 @@ export async function readDisabledOperations(
 export interface AnnounceOutcome {
   readonly gateId: string;
   readonly created: boolean;
-  /** The announced endpoint differs from the stored one on an already-enabled instance. */
-  readonly endpointChanged: boolean;
+  /** The announced identity fields (connector / transport kind / endpoint) differ from what an
+   *  `enabled` / `disabled` instance was recorded with — the stored values were kept. */
+  readonly identityMismatch: boolean;
   readonly status: GateInstanceStatus;
 }
 
 /**
- * Upsert from `POST /internal/gates/announce`. A new id lands as `discovered`; an `enabled` or
- * `disabled` instance keeps its status (a heartbeat never flips the administrator's decision);
- * a `lost` instance that reappears goes back to `enabled` if it had been enabled before it was
- * lost — recorded in `operations`? No: `lost` is only ever set from `enabled`/`discovered` by the
- * liveness timer, so on reappearance we restore to `enabled` when it has at least one workspace
- * link, else `discovered`. The connector row is created on first sight (`platform_preset`).
+ * Upsert from `POST /internal/gates/announce`. A new id lands as `discovered`. An instance the
+ * administrator already decided on (`enabled` / `disabled`) keeps that status **and its identity**
+ * — connector, transport kind and endpoint are frozen once decided, so a second container reusing
+ * an enabled `GATE_ID` cannot redirect where later enables point (design §6.3 "防止第二个容器用同名
+ * 顶替已启用的门"; the announcing token is shared by the whole internal plane, not per gate). Such
+ * an announcement still counts as a heartbeat but marks health `unknown` and is reported to the
+ * caller (`identityMismatch`) for the log. The manifest (`operations`) and the human-readable
+ * `target` may change on every announce: a newer gate build legitimately adds Operations. A `lost`
+ * instance that reappears returns to the status it had before it was lost (`status_before_lost`).
  */
 export async function upsertAnnouncement(
   client: PoolClient,
@@ -233,55 +238,102 @@ export async function upsertAnnouncement(
      on conflict (name) do nothing`,
     [body.connector, body.transportKind, !GENERIC_CONNECTOR_NAMES.includes(body.connector)],
   );
-  const existing = await client.query<{ status: GateInstanceStatus; endpoint: string }>(
-    'select status, endpoint from gate_instances where gate_id = $1 for update',
+  const existing = await client.query<{
+    status: GateInstanceStatus;
+    status_before_lost: GateInstanceStatus | null;
+    connector: string;
+    transport_kind: GateTransportKind;
+    endpoint: string;
+  }>(
+    `select status, status_before_lost, connector, transport_kind, endpoint
+       from gate_instances where gate_id = $1 for update`,
     [body.gateId],
   );
   const before = existing.rows[0];
-  const links = await client.query<{ n: string }>(
-    'select count(*)::text as n from workspace_gate_links where gate_id = $1',
-    [body.gateId],
-  );
-  const hasLinks = Number(links.rows[0]?.n ?? '0') > 0;
-  let status: GateInstanceStatus;
-  if (!before) status = 'discovered';
-  else if (before.status === 'lost') status = hasLinks ? 'enabled' : 'discovered';
-  else status = before.status;
+  const decided =
+    before !== undefined && (before.status === 'enabled' || before.status === 'disabled');
+  const restoredStatus =
+    before?.status === 'lost' ? (before.status_before_lost ?? 'discovered') : undefined;
+  const decidedAfterLost = restoredStatus === 'enabled' || restoredStatus === 'disabled';
+  const frozen = decided || decidedAfterLost;
+  const identityMismatch =
+    frozen &&
+    before !== undefined &&
+    (before.connector !== body.connector ||
+      before.transport_kind !== body.transportKind ||
+      before.endpoint !== body.endpoint);
+  const status: GateInstanceStatus = !before
+    ? 'discovered'
+    : before.status === 'lost'
+      ? (restoredStatus ?? 'discovered')
+      : before.status;
   const displayName = body.displayName ?? body.gateId;
-  await client.query(
-    `insert into gate_instances
-       (gate_id, connector, display_name, transport_kind, target, endpoint, health_endpoint,
-        operations, status, health, last_seen_at, updated_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, 'ok', now(), now())
-     on conflict (gate_id) do update set
-       connector = excluded.connector,
-       transport_kind = excluded.transport_kind,
-       target = excluded.target,
-       endpoint = excluded.endpoint,
-       health_endpoint = excluded.health_endpoint,
-       operations = excluded.operations,
-       status = $9,
-       health = 'ok',
-       last_seen_at = now(),
-       updated_at = now()`,
-    [
-      body.gateId,
-      body.connector,
-      displayName,
-      body.transportKind,
-      body.target ?? '',
-      body.endpoint,
-      body.healthEndpoint ?? null,
-      JSON.stringify(body.operations),
-      status,
-    ],
-  );
-  return {
-    gateId: body.gateId,
-    created: !before,
-    endpointChanged: before !== undefined && before.endpoint !== body.endpoint,
-    status,
-  };
+  if (!before) {
+    await client.query(
+      `insert into gate_instances
+         (gate_id, connector, display_name, transport_kind, target, endpoint, health_endpoint,
+          operations, status, health, last_seen_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'discovered', 'ok', now(), now())`,
+      [
+        body.gateId,
+        body.connector,
+        displayName,
+        body.transportKind,
+        body.target ?? '',
+        body.endpoint,
+        body.healthEndpoint ?? null,
+        JSON.stringify(body.operations),
+      ],
+    );
+  } else if (frozen) {
+    await client.query(
+      `update gate_instances
+          set target = $2,
+              operations = $3::jsonb,
+              health_endpoint = case when $4 then health_endpoint else $5 end,
+              status = $6,
+              status_before_lost = null,
+              health = case when $4 then 'unknown' else 'ok' end,
+              last_seen_at = now(),
+              updated_at = now()
+        where gate_id = $1`,
+      [
+        body.gateId,
+        body.target ?? '',
+        JSON.stringify(body.operations),
+        identityMismatch,
+        body.healthEndpoint ?? null,
+        status,
+      ],
+    );
+  } else {
+    await client.query(
+      `update gate_instances
+          set connector = $2,
+              transport_kind = $3,
+              target = $4,
+              endpoint = $5,
+              health_endpoint = $6,
+              operations = $7::jsonb,
+              status = $8,
+              status_before_lost = null,
+              health = 'ok',
+              last_seen_at = now(),
+              updated_at = now()
+        where gate_id = $1`,
+      [
+        body.gateId,
+        body.connector,
+        body.transportKind,
+        body.target ?? '',
+        body.endpoint,
+        body.healthEndpoint ?? null,
+        JSON.stringify(body.operations),
+        status,
+      ],
+    );
+  }
+  return { gateId: body.gateId, created: !before, identityMismatch, status };
 }
 
 /** Liveness (决定 ⑤): instances whose heartbeat is older than `thresholdSeconds` become `lost`
@@ -292,7 +344,7 @@ export async function markLostGateInstances(
 ): Promise<string[]> {
   const result = await client.query<{ gate_id: string }>(
     `update gate_instances
-        set status = 'lost', health = 'unreachable', updated_at = now()
+        set status_before_lost = status, status = 'lost', health = 'unreachable', updated_at = now()
       where status in ('enabled', 'discovered')
         and last_seen_at is not null
         and last_seen_at < now() - make_interval(secs => $1)
@@ -548,5 +600,10 @@ export async function revokeExternalRuntime(
         and s.workspace_id = $1 and s.id = $2 and s.status = 'active'`,
     [workspaceId, sessionId],
   );
-  return (result.rowCount ?? 0) > 0;
+  if ((result.rowCount ?? 0) === 0) return false;
+  // Handle verification checks `capability_handles.revoked_at` by jti, not `sessions.status`
+  // (governance/capability/handles.ts) — revoke the Handles under the session too, the same
+  // primitive `revokeEntrySessionHandles` uses (review finding).
+  await revokeSession(client, sessionId);
+  return true;
 }

@@ -52,6 +52,9 @@ create table if not exists gate_instances (
   operations jsonb not null default '[]'::jsonb,
   status text not null default 'discovered'
     check (status in ('discovered', 'enabled', 'disabled', 'lost')),
+  -- What `status` was when the liveness sweep set it to `lost`, so a reappearing gate returns to
+  -- the administrator's decision instead of silently dropping back to `discovered`.
+  status_before_lost text check (status_before_lost in ('discovered', 'enabled', 'disabled')),
   trust text not null default 'byo' check (trust in ('byo', 'vetted')),
   health text not null default 'unknown'
     check (health in ('ok', 'unreachable', 'unauthorized', 'unknown')),

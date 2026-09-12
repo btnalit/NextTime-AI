@@ -73,6 +73,11 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
     throw new Error('enable_gate_instance: no resolved human principal in context');
   }
   const { gateId } = params as { gateId: string };
+  // Serialize concurrent enables of the same (workspace, gate) so the idempotency check below is
+  // exact — the same advisory-lock shape `application/task/invoke.ts` uses (review finding).
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `enable_gate:${workspaceId}:${gateId}`,
+  ]);
   const existing = await findGateLinkByGate(client, workspaceId, gateId);
   if (existing) {
     return {

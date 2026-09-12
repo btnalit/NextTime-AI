@@ -1668,6 +1668,15 @@
   - **e2e 播种**（决定 ③）：`.github/workflows/e2e.yml` 在 kernel 起来后 `docker compose exec kernel node -e`
     用 `/run/secrets/internal_token` 向 `/internal/gates/announce` 播一个 `ci-fixture-mcp` 实例
     （端点 `http://127.0.0.1:1`，健康如实显示不可达）。
+  - **独立审查（sonnet reviewer）抓到并已修**：① 按 Operation 禁用只在建 ActionRequest 时检查，已批准 /
+    待审批的请求在执行时不再复查 → `action-executor.execute` 执行前重读 `readGateLinkPolicy`，禁用即以
+    `operation_disabled` 失败（"下一次调用就生效"覆盖到已在途的审批）；② `revoke_external_runtime` 只改
+    `sessions.status`，Handle 校验看的是 `capability_handles.revoked_at` → 同时调 `revokeSession`（集成测试
+    断言会话下的 Handle 全部 `revoked_at`）；③ 已 enabled / disabled 的实例被任何持内部 token 者用同名
+    announce 覆盖 connector / transport / endpoint → 身份字段在管理员决定后冻结，不一致的 announce 只算心跳、
+    健康标 `unknown`、日志 warn，`operations` / `target` 仍可更新（新版本门合法地新增 Operation）；
+    ④ lost 恢复时无链接就退回 discovered、丢掉管理员的 enabled 决定 → 0023 加 `status_before_lost`，
+    恢复到失联前状态；⑤ 并发 `enable_gate_instance` 竞态撞主键 → 与 `invoke.ts` 同款 `pg_advisory_xact_lock`。
   - **未做 / 留到 P-B2**：通用 `http` / `mcp` 门宿主与页面直达门的凭证录入；`vet_mcp_endpoint` 单独能力
     （P-B1 用 `update_gate_instance{trust}`）；模块页；fake MCP 全链路 e2e。
 - 完成标准（design §9 P-B e2e）：起一个 fake MCP server → 集成页新增门宿主实例 → 测试连接 →

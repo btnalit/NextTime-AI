@@ -11,8 +11,9 @@ import {
   markActionRequestExecuted,
   markActionRequestFailed,
 } from '../../governance/approval/index.js';
-import { getGatekeeper } from '../../governance/gatekeepers/index.js';
+import { getGatekeeper, isOperationDisabled } from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
+import { readGateLinkPolicy } from '../gates/index.js';
 import { writeObservedFacts } from './observed-facts.js';
 
 /**
@@ -131,15 +132,39 @@ export interface GatekeeperActionExecutorDeps {
 export function createGatekeeperActionExecutor(deps: GatekeeperActionExecutorDeps): ActionExecutor {
   return {
     async execute(actionRequest: ActionRequestRow): Promise<ActionExecutorResult> {
-      const gatekeeper = await deps.withTransaction(
+      const { gatekeeper, disabled } = await deps.withTransaction(
         actionRequest.workspaceId,
         actionRequest.onBehalfOf,
-        (client) => getGatekeeper(client, actionRequest.workspaceId, actionRequest.gatekeeperId),
+        async (client) => {
+          const record = await getGatekeeper(
+            client,
+            actionRequest.workspaceId,
+            actionRequest.gatekeeperId,
+          );
+          // P-B1 (决定 ⑤ "按 Operation 禁用则在下一次调用就生效"): the deny list is re-read at
+          // *execution* time too — an ActionRequest approved (or auto-approved) before the
+          // administrator disabled its Operation must not run it (review finding).
+          const link = record
+            ? await readGateLinkPolicy(client, actionRequest.workspaceId, record.gatekeeperId)
+            : null;
+          return {
+            gatekeeper: record,
+            disabled:
+              link !== null &&
+              isOperationDisabled(link.disabledOperations, actionRequest.actionKind),
+          };
+        },
       );
       if (!gatekeeper) {
         return {
           ok: false,
           reason: `gatekeeper "${actionRequest.gatekeeperId}" is not registered`,
+        };
+      }
+      if (disabled) {
+        return {
+          ok: false,
+          reason: `operation_disabled: "${actionRequest.actionKind}" was disabled by the platform after this request was made`,
         };
       }
 

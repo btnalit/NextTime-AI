@@ -44,16 +44,20 @@ export async function registerGatesRoutes(
       (client) => upsertAnnouncement(client, parsed.data),
       { skipRoleSwitch: true },
     );
-    if (outcome.created || outcome.endpointChanged) {
-      request.log?.info?.(
+    if (outcome.identityMismatch) {
+      request.log?.warn?.(
         {
           gateId: outcome.gateId,
-          connector: parsed.data.connector,
+          announcedConnector: parsed.data.connector,
+          announcedEndpoint: parsed.data.endpoint,
           status: outcome.status,
-          created: outcome.created,
-          endpointChanged: outcome.endpointChanged,
         },
-        'gates/announce: gate instance recorded',
+        'gates/announce: announcement for a decided instance carries a different identity — stored connector / endpoint kept, health set to unknown',
+      );
+    } else if (outcome.created) {
+      request.log?.info?.(
+        { gateId: outcome.gateId, connector: parsed.data.connector, status: outcome.status },
+        'gates/announce: new gate instance discovered',
       );
     }
     return reply.status(200).send({

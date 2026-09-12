@@ -278,6 +278,26 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(generic).toMatchObject({ packaged: false, mode: 'self_serve' });
       });
 
+      it('an announcement with a different identity for an enabled instance keeps the stored endpoint (review finding)', async () => {
+        await callAsAdmin('update_gate_instance', { gateId: GATE_ID, status: 'enabled' });
+        const impostor = await announce({
+          ...announceBody,
+          endpoint: 'http://impostor:9999',
+          connector: 'fixture-mcp',
+        });
+        expect(impostor.statusCode).toBe(200);
+        const after = await callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId: GATE_ID });
+        expect(after.endpoint).toBe(announceBody.endpoint);
+        expect(after.health).toBe('unknown');
+        expect(after.status).toBe('enabled');
+        // A matching heartbeat restores health.
+        await announce(announceBody);
+        const restored = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+          gateId: GATE_ID,
+        });
+        expect(restored.health).toBe('ok');
+      });
+
       it('a heartbeat keeps the administrator’s status and refreshes lastSeenAt', async () => {
         await callAsAdmin('update_gate_instance', { gateId: GATE_ID, status: 'enabled' });
         const before = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
@@ -508,6 +528,16 @@ describe.runIf(DATABASE_URL !== undefined)(
           sessionId: issued.sessionId,
         });
         expect(revoked.revoked).toBe(true);
+        // …and the Handles issued under the session are revoked too (review finding): Handle
+        // verification checks `capability_handles.revoked_at`, not `sessions.status`.
+        const handles = await withAdminClient(pool, (client) =>
+          client.query<{ revoked_at: Date | null }>(
+            'select revoked_at from capability_handles where session_id = $1',
+            [issued.sessionId],
+          ),
+        );
+        expect(handles.rows.length).toBeGreaterThan(0);
+        expect(handles.rows.every((row) => row.revoked_at !== null)).toBe(true);
         const after =
           await callAsAdmin<ListEnvelope<ExternalRuntimeWire>>('list_external_runtimes');
         expect(after.items.find((r) => r.sessionId === issued.sessionId)).toBeUndefined();
@@ -550,6 +580,39 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         expect(instance.status).toBe('lost');
         const back = await announce(announceBody);
+        expect(back.json().result.status).toBe('enabled');
+      });
+
+      it('a lost instance with no links returns to the status it had (enabled), not to discovered (review finding)', async () => {
+        const LONER = 'fixture-loner-gate';
+        await announce({ ...announceBody, gateId: LONER, endpoint: 'http://127.0.0.1:2' });
+        await callAsAdmin('update_gate_instance', { gateId: LONER, status: 'enabled' });
+        const admin0 = {
+          workspaceId: '00000000-0000-0000-0000-000000000000',
+          principalId: '00000000-0000-0000-0000-000000000000',
+        };
+        await withWorkspace(
+          pool,
+          admin0,
+          (client) =>
+            client.query(
+              `update gate_instances set last_seen_at = now() - interval '1 hour' where gate_id = $1`,
+              [LONER],
+            ),
+          { skipRoleSwitch: true },
+        );
+        const { markLostGateInstances } = await import('../gates/index.js');
+        await withWorkspace(pool, admin0, (client) => markLostGateInstances(client, 180), {
+          skipRoleSwitch: true,
+        });
+        expect(
+          (await callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId: LONER })).status,
+        ).toBe('lost');
+        const back = await announce({
+          ...announceBody,
+          gateId: LONER,
+          endpoint: 'http://127.0.0.1:2',
+        });
         expect(back.json().result.status).toBe('enabled');
       });
     });
