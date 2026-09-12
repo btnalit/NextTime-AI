@@ -53,6 +53,7 @@ import {
   MemberUserNotFoundError,
 } from '../../application/gateway/members-handlers.js';
 import { PlatformAdminError } from '../../application/gateway/platform-handlers.js';
+import { ServicePrincipalRequiredError } from '../../application/gateway/service-handle-handler.js';
 import {
   CSRF_HEADER,
   WORKSPACE_COOKIE,
@@ -144,6 +145,9 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof AlreadyMemberError) {
     return { status: 409, code: 'already_member', message: err.message };
+  }
+  if (err instanceof ServicePrincipalRequiredError) {
+    return { status: 409, code: 'service_principal_required', message: err.message };
   }
   // P-B1 (gate-instance-handlers.ts): the workspace-side enable refused by catalog state.
   if (err instanceof GateInstanceNotAvailableError) {

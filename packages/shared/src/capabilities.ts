@@ -145,6 +145,8 @@ export interface Capability {
 const id = z.string().min(1);
 const jsonRecord = z.record(z.string(), z.unknown());
 const noParams = z.object({}).strict();
+/** P-B1 `issue_service_handle`: one year, the CLI's own default and ceiling. */
+const SERVICE_HANDLE_MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
 
 /** The shape `application/gateway/request-action-handler.ts`'s `runObserve` produces —
  *  `observe_operation`'s own result, and (fixed after this task's first CI run caught the
@@ -624,6 +626,35 @@ const connectionCapabilities: readonly Capability[] = [
     resultSchema: listEnvelope(wire.GatekeeperSummaryWireSchema),
     description:
       'List every registered Gatekeeper instance (health/manifest not included — see get_gatekeeper).',
+  },
+  {
+    name: 'issue_service_handle',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({
+        /** An existing `kind:'service'` Principal of this workspace (create one with `create_principal`). */
+        principalId: z.string().min(1),
+        /** Capability names the Handle may call — never a `channel:'human'` capability (refused at issuance). */
+        scope: z.array(z.string().min(1)).min(1).max(100),
+        /** Default one year; the CLI’s `issue-service-handle` default, now on the page. */
+        ttlSeconds: z.number().int().positive().max(SERVICE_HANDLE_MAX_TTL_SECONDS).optional(),
+      })
+      .strict(),
+    resultSchema: z
+      .object({
+        handle: z.string(),
+        principalId: z.string(),
+        sessionId: z.string(),
+        expiresAt: z.string(),
+        scope: CapabilityScopeSchema,
+      })
+      .strict(),
+    redactedParamKeys: [],
+    description:
+      'P-B1 (design §6.3 "外部运行时"): issue a long-lived CapabilityHandle for a service Principal — an external runtime such as Claude Code, a local pi over /mcp or a collector — from the 访问 page instead of the `issue-service-handle` CLI. The token is returned exactly once; the session shows up in the platform’s external-runtime inventory and can be revoked there.',
   },
   {
     name: 'list_available_gate_instances',
@@ -2498,6 +2529,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'revoke_external_runtime',
     'list_available_gate_instances',
     'enable_gate_instance',
+    'issue_service_handle',
   ],
 ]);
 

@@ -173,6 +173,7 @@ import {
   toWirePolicy,
   toWireQuota,
 } from './resource-wire.js';
+import { issueServiceHandleHandler } from './service-handle-handler.js';
 import {
   deprecateProcedureHandler,
   deprecateSkillHandler,
@@ -1134,6 +1135,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['revoke_external_runtime', revokeExternalRuntimeHandler],
   ['list_available_gate_instances', listAvailableGateInstancesHandler],
   ['enable_gate_instance', enableGateInstanceHandler],
+  ['issue_service_handle', issueServiceHandleHandler],
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
   ['search', searchHandler],

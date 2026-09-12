@@ -351,3 +351,4 @@ export const EnableGateInstanceResultWireSchema = z
     skippedOperationNames: z.array(z.string()),
   })
   .strict();
+export type EnableGateInstanceResultWire = z.infer<typeof EnableGateInstanceResultWireSchema>;
