@@ -166,3 +166,47 @@ export const PlatformOverviewWireSchema = z
   })
   .strict();
 export type PlatformOverviewWire = z.infer<typeof PlatformOverviewWireSchema>;
+
+// -------------------------------------------------------------------------------------------
+// P-A2 (docs/platform-admin-design.md §2 "工作区配置归管理面", §5 "工作区配置" row): the platform
+// view of a workspace — the one shape `list_workspaces` / `create_workspace` / `update_workspace`
+// / `set_workspace_status` / `set_allowed_models` all return.
+// -------------------------------------------------------------------------------------------
+
+export const WorkspaceStatusWireSchema = z.enum(['active', 'disabled']);
+export type WorkspaceStatusWire = z.infer<typeof WorkspaceStatusWireSchema>;
+
+/** One `owner` membership of a workspace as the workspace-configuration page shows it. */
+export const WorkspaceOwnerWireSchema = z
+  .object({
+    userId: z.string(),
+    login: z.string(),
+    displayName: z.string(),
+    principalId: z.string(),
+  })
+  .strict();
+export type WorkspaceOwnerWire = z.infer<typeof WorkspaceOwnerWireSchema>;
+
+/**
+ * A workspace as the platform plane sees it (`get_workspace`'s `WorkspaceWire` is the member's
+ * view of the one they are in; this is the administrator's view of any). `entryModel` is the model the workspace's entry
+ * agents take when a user has not picked one in "我的智能体" (`AgentPolicy.defaultModel`, mirrored
+ * in `workspaces.entry_model`); `allowedModels` is the list "我的智能体" narrows to (`[]` = every
+ * model in the llm-proxy catalog). `isDefault` marks the platform default workspace
+ * (`PlatformSettings.defaultWorkspaceId`) — it cannot be disabled.
+ */
+export const PlatformWorkspaceWireSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    status: WorkspaceStatusWireSchema,
+    entryModel: z.string().nullable(),
+    allowedModels: z.array(z.string()),
+    isDefault: z.boolean(),
+    /** Active human memberships (Principals with a user, not disabled). */
+    memberCount: z.number().int().nonnegative(),
+    owners: z.array(WorkspaceOwnerWireSchema),
+    createdAt: z.string(),
+  })
+  .strict();
+export type PlatformWorkspaceWire = z.infer<typeof PlatformWorkspaceWireSchema>;

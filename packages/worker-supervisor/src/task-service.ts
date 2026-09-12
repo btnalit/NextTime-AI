@@ -29,6 +29,12 @@
  * `capabilityHandle` itself by the time it reaches this API (S2.7's `invoke_worker`, not this
  * package) — there is nothing left for the container spec or registry to do with the raw value.
  *
+ * **`systemPrompt` (P-A2; design doc §6.6)**: same mechanism as `skillsInline` below — `spawn()`
+ * writes it to `/workspace/.nexttime/system-prompt.md` inside this Task's own workspace before
+ * `docker.createAndStart`, which is where `deploy/worker-runtime/entrypoint.sh` looks before
+ * falling back to its own static default. Resident mode carries the identical field for entry
+ * containers (`resident-service.ts`'s `writeSystemPromptIfChanged`).
+ *
  * **`skillsInline` (S2.14)**: carries Skill file *content*, not a host path — the kernel has no
  * writable data mount of its own to stage a host path from (I9-adjacent). `spawn()` below writes
  * every entry's files directly under this Task's own `<agentDir>/skills/<name>/` before calling
@@ -48,7 +54,11 @@ import type { TaskSkillInline } from './config.js';
 import type { DockerClient } from './docker-client.js';
 import { taskSourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
-import { localTaskWorkspacesRootDir, taskWorkspacePaths } from './host-paths.js';
+import {
+  localTaskWorkspacesRootDir,
+  taskSystemPromptPath,
+  taskWorkspacePaths,
+} from './host-paths.js';
 import {
   TASK_EGRESS_DENY_LABEL,
   TASK_ID_LABEL,
@@ -90,6 +100,10 @@ export interface TaskSpawnInput {
    *  service does not re-check it. */
   readonly image: string;
   readonly model?: string;
+  /** P-A2: the system prompt this Worker runs with — written to disk by `spawn()` itself before
+   *  the container starts, see this module's own doc comment. Omitted leaves `entrypoint.sh`'s
+   *  static default in place. */
+  readonly systemPrompt?: string;
   /** Skills mounted by content, not a host path (S2.14) — written to disk by `spawn()` itself
    *  before the container starts, see this module's own doc comment's addition below. */
   readonly skillsInline?: readonly TaskSkillInline[];
@@ -300,6 +314,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         capabilityHandle,
         image,
         model,
+        systemPrompt,
         skillsInline,
         timeoutSec,
         egressDeny,
@@ -313,6 +328,19 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       // under it).
       mkdirSync(paths.localWorkspaceDir, { recursive: true });
       mkdirSync(paths.localPiAgentDir, { recursive: true });
+
+      // P-A2: the Task-mode counterpart of resident mode's `writeSystemPromptIfChanged` — put the
+      // caller's prompt at `/workspace/.nexttime/system-prompt.md` (host-paths.ts
+      // `taskSystemPromptPath`) *before* `docker.createAndStart` below, so `entrypoint.sh` reads
+      // it instead of writing its own static default. Written unconditionally, with no
+      // "did it change" comparison: unlike resident mode there is no reuse-a-running-container
+      // branch here to skip the write for — every spawn creates a container, and the prompt this
+      // call carries is the one it must start with.
+      if (systemPrompt !== undefined) {
+        const promptPath = taskSystemPromptPath(paths);
+        mkdirSync(posixPath.dirname(promptPath), { recursive: true });
+        writeFileSync(promptPath, systemPrompt, 'utf8');
+      }
 
       // S2.14: write every `skillsInline[]` entry's files under this container's own local view
       // of `<agentDir>/skills/<name>/` — the whole Task workspace is already bind-mounted at

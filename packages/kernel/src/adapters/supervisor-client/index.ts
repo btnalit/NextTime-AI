@@ -105,6 +105,11 @@ export interface TaskSpawnInput {
    *  (`packages/worker-supervisor`'s `config.ts` `TaskSpawnRequestSchema`) — the invoked
    *  WorkerDefinition's own egress deny list, never re-derived by this client. */
   readonly egressDeny?: readonly string[];
+  /** P-A2: the Worker container's system prompt (the WorkerDefinition's own `systemPrompt` plus
+   *  the platform's `instanceInstructions`), written by worker-supervisor to
+   *  `/workspace/.nexttime/system-prompt.md` in the Task workspace before start. Omitted =
+   *  entrypoint.sh's static default (the pre-P-A2 behaviour). */
+  readonly systemPrompt?: string;
 }
 
 export interface TaskSpawnOutcome {
@@ -190,6 +195,15 @@ export interface TaskSupervisorClientPort {
    *  view. */
   terminate(workerRunId: string): Promise<boolean>;
   status(workerRunId: string): Promise<TaskSupervisorStatus | undefined>;
+  /**
+   * P-A2: `POST /resident/stop {principalId}` — stops one principal's resident entry container
+   * (the same endpoint `packages/agent-host`'s supervisor client already knows). Used by the
+   * platform plane when a workspace or a user is disabled (docs/platform-admin-design.md §8
+   * "停用用户 … 入口容器 stop"). Optional on the port so the existing test fakes (which model the
+   * one-shot Task half only) keep compiling; callers treat a missing method as "nothing to stop".
+   * `true` when a container was stopped, `false` when worker-supervisor knew of none (404).
+   */
+  stopResident?(principalId: string): Promise<boolean>;
 }
 
 export class TaskSupervisorClient implements TaskSupervisorClientPort {
@@ -241,6 +255,24 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       });
     }
     return body as TaskSpawnOutcome;
+  }
+
+  async stopResident(principalId: string): Promise<boolean> {
+    const { status } = await requestJson(
+      this.fetchImpl,
+      this.timeoutMs,
+      `${this.supervisorUrl}/resident/stop`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...this.authHeaders },
+        body: JSON.stringify({ principalId }),
+      },
+    );
+    if (status === 204 || status === 200) return true;
+    if (status === 404) return false;
+    throw new TaskSupervisorError('http_error', `POST /resident/stop returned ${status}`, {
+      status,
+    });
   }
 
   async terminate(workerRunId: string): Promise<boolean> {

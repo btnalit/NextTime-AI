@@ -5,6 +5,7 @@ import type { WorkerDefinitionKind } from '@nexttime/shared';
 import { parse as parseYaml } from 'yaml';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import { setAgentPolicy } from '../../governance/agent-profile/index.js';
 import { resolveOntologyDir, seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
 import { generateApiKey, hashApiKey } from '../gateway/auth.js';
 import { ensureUserForHumanPrincipal } from '../identity/users.js';
@@ -37,9 +38,15 @@ export interface CreateWorkspaceOwner {
 export interface CreateWorkspaceInput {
   readonly name: string;
   readonly owner: CreateWorkspaceOwner;
-  /** `<provider>/<id>` for the seeded entry WorkerDefinition's `model` and `workspaces.entry_model`
-   *  — omitted leaves both unset (pi's own default model selection). */
+  /** `<provider>/<id>` for the seeded entry WorkerDefinition's `model`, `workspaces.entry_model`
+   *  and (P-A2) the workspace AgentPolicy's `defaultModel` — the three stay in step from birth.
+   *  Omitted leaves all unset (pi's own default model selection). */
   readonly entryModel?: string;
+  /** P-A2: the AgentPolicy `allowedModels` cap (`[]` / omitted = unrestricted). */
+  readonly allowedModels?: readonly string[];
+  /** P-A2: let `create_workspace` pre-generate the id so its audit row (written in the platform
+   *  transaction, before this bootstrap runs) can name the workspace. */
+  readonly workspaceId?: string;
   readonly ontologyDir?: string;
 }
 
@@ -63,7 +70,7 @@ export async function createWorkspaceWithOwner(
   pool: PoolLike,
   input: CreateWorkspaceInput,
 ): Promise<CreateWorkspaceOutcome> {
-  const workspaceId = randomUUID();
+  const workspaceId = input.workspaceId ?? randomUUID();
   const ownerPrincipalId = randomUUID();
   const apiKey = input.owner.issueApiKey ? generateApiKey() : undefined;
   const apiKeyHash = apiKey ? hashApiKey(apiKey) : null;
@@ -94,6 +101,17 @@ export async function createWorkspaceWithOwner(
           workspaceId,
           id: ownerPrincipalId,
           displayName: input.owner.displayName,
+        });
+      }
+
+      // P-A2: the AgentPolicy row is what the runtime reads for the entry model
+      // (governance/agent-profile/resolve.ts `resolveModel`) and what "我的智能体" narrows to;
+      // seed it here so `workspaces.entry_model` and `agent_policies.default_model` never
+      // disagree, whichever path created the workspace.
+      if (input.entryModel || (input.allowedModels && input.allowedModels.length > 0)) {
+        await setAgentPolicy(client, workspaceId, ownerPrincipalId, {
+          defaultModel: input.entryModel ?? null,
+          allowedModels: input.allowedModels ?? [],
         });
       }
 

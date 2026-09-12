@@ -88,13 +88,30 @@ function resolveList(
   return base.filter((entry) => allowed.has(entry));
 }
 
+/**
+ * P-A2 (docs/platform-admin-design.md §2 "自己的模型选择 … 可选范围由管理员在工作区配置里限定"):
+ * `AgentPolicy.allowedModels` is a *cap* on the model too, not only a validation-time rule in
+ * `set_agent_profile`. A profile whose `model` was picked before the administrator narrowed the
+ * list (`set_allowed_models`) must not keep running on a model the workspace no longer allows —
+ * it falls back to the entry model (`policy.defaultModel`) when that is itself allowed, else to
+ * `''` ("nothing configured anywhere", the runtime's own "use the entry WorkerDefinition's model /
+ * pi default" signal). `[]` keeps its S3.13 meaning: unrestricted.
+ */
+function resolveModel(explicit: string | null | undefined, policy: AgentPolicyRow): string {
+  const allowed = policy.allowedModels;
+  const isAllowed = (model: string): boolean => allowed.length === 0 || allowed.includes(model);
+  if (explicit && isAllowed(explicit)) return explicit;
+  if (policy.defaultModel && isAllowed(policy.defaultModel)) return policy.defaultModel;
+  return '';
+}
+
 export function resolveEffectiveAgentProfile(
   profile: AgentProfileRow | undefined,
   policy: AgentPolicyRow,
   available: AvailableAgentResources,
 ): EffectiveAgentProfile {
   return {
-    model: profile?.model ?? policy.defaultModel ?? '',
+    model: resolveModel(profile?.model, policy),
     enabledSkills: resolveList(
       profile?.enabledSkills,
       available.publishedSkillIds,

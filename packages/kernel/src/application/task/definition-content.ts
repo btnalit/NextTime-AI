@@ -21,6 +21,12 @@ export interface WorkerDefinitionContentShape {
   readonly capabilities?: readonly string[];
   readonly gates?: readonly string[];
   readonly model?: string;
+  /** P-A2: the WorkerDefinition's own `systemPrompt` (`packages/shared/src/worker-definition.ts`,
+   *  required at publish time) — until P-A2 nothing delivered it to the one-shot container, which
+   *  ran `entrypoint.sh`'s static default; now `invoke.ts` / `lifecycle.ts` compose it with the
+   *  platform's `instanceInstructions` (`application/platform`'s `composeSystemPrompt`) into
+   *  `SpawnWorkerRunInput.systemPrompt`. */
+  readonly systemPrompt?: string;
   /** `WorkerDefinition --uses--> Skill` (design doc §5.1.2; `packages/shared/src/worker-
    *  definition.ts`'s `skills` field, "published Skill names/ids this WorkerDefinition uses") —
    *  resolved to mountable content by `resolveSkillsInline` below (S2.14 deliverable 4). */
@@ -44,6 +50,10 @@ export function readDefinitionContent(definition: unknown): WorkerDefinitionCont
       ? record.gates.filter((g): g is string => typeof g === 'string')
       : undefined,
     model: typeof record.model === 'string' ? record.model : undefined,
+    systemPrompt:
+      typeof record.systemPrompt === 'string' && record.systemPrompt.length > 0
+        ? record.systemPrompt
+        : undefined,
     skills: Array.isArray(record.skills)
       ? record.skills.filter((s): s is string => typeof s === 'string')
       : undefined,

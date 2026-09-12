@@ -45,6 +45,10 @@ export interface SpawnWorkerRunInput {
   readonly declaredGates: readonly string[];
   readonly requestedGates?: readonly string[];
   readonly model?: string;
+  /** P-A2: the composed Worker system prompt (WorkerDefinition `systemPrompt` + platform
+   *  `instanceInstructions`, `application/platform`'s `composeSystemPrompt`) — resolved by the
+   *  callers (`invoke.ts`, `lifecycle.ts`), forwarded verbatim to `/task/spawn`. */
+  readonly systemPrompt?: string;
   /** The WorkerDefinition's own human-readable `definition.name` (packages/shared/src/
    *  worker-definition.ts), or the WorkerDefinition id when it declared none — passed to
    *  `ensureWorkerAgentPrincipal`'s `display_name` (`worker:<definitionName>`) below. Resolved by
@@ -172,6 +176,7 @@ export async function spawnWorkerRun(
       skillsInline: input.skillsInline,
       timeoutSec: durationLimitSec,
       egressDeny: input.egressDeny,
+      systemPrompt: input.systemPrompt,
     });
   } catch (err) {
     await withWorkspace(

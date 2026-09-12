@@ -11,3 +11,10 @@ export {
   toWirePlatformSettings,
   updatePlatformSettings,
 } from './settings.js';
+export type { SystemPromptParts } from './instance-instructions.js';
+export {
+  INSTANCE_INSTRUCTIONS_MARKER,
+  PROMPT_ADDENDUM_MARKER,
+  composeSystemPrompt,
+  readInstanceInstructions,
+} from './instance-instructions.js';

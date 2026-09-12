@@ -1,13 +1,16 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type {
   PlatformAuditRecordWire,
   PlatformOverviewWire,
+  PlatformWorkspaceWire,
   Role,
   UserMembershipWire,
   UserWire,
+  WorkspaceOwnerWire,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
+import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-context.js';
+import type { PoolLike } from '../../adapters/db/pool.js';
 import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
 import { hashPassword } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
@@ -19,6 +22,8 @@ import {
   toWirePlatformSettings,
   updatePlatformSettings,
 } from '../platform/settings.js';
+import { getConfiguredTaskRuntime } from '../task/runtime.js';
+import { createWorkspaceWithOwner } from '../workspace/create.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { readModelCatalog } from './models-catalog-handler.js';
 
@@ -49,7 +54,12 @@ export type PlatformErrorCode =
   | 'protected_admin'
   | 'weak_password'
   | 'invalid_login'
-  | 'workspace_disabled';
+  | 'workspace_disabled'
+  // P-A2 (workspace configuration)
+  | 'user_disabled'
+  | 'default_workspace'
+  | 'unknown_model'
+  | 'entry_model_not_allowed';
 
 /** Mapped by interfaces/http/capability-route.ts: `*_not_found` → 404, the rest → 409. */
 export class PlatformAdminError extends Error {
@@ -451,14 +461,23 @@ export const setUserStatusHandler: CapabilityHandler = async (
     input.userId,
     input.status,
   ]);
+  let principalIds: string[] = [];
   if (input.status === 'disabled') {
     await revokeConsoleSessions(client, input.userId);
     await revokeWorkspaceSessions(client, input.userId);
+    principalIds = await listHumanPrincipalIds(client, { userId: input.userId });
   }
+  const result = await loadUser(client, input.userId);
   return {
-    result: await loadUser(client, input.userId),
+    result,
     resourceType: 'user',
     resourceId: input.userId,
+    // P-A2 (design §8 "停用用户 … 入口容器 stop"; a P-A1 gap): once the sessions are gone, stop
+    // the user's resident entry containers too — best-effort, after commit.
+    afterCommit: async () => {
+      await stopEntryContainers(principalIds);
+      return result;
+    },
   };
 };
 
@@ -686,6 +705,385 @@ export const updatePlatformSettingsHandler: CapabilityHandler = async (
     result: toWirePlatformSettings(row),
     resourceType: 'platform_settings',
     resourceId: undefined,
+  };
+};
+
+// -------------------------------------------------------------------------------------------
+// workspaces (P-A2 — docs/platform-admin-design.md §2 "工作区配置归管理面", §5 "工作区配置",
+// development-tasks.md P-A2 deliverable 1). The platform view of a workspace joins its
+// AgentPolicy (governance 0011 opened `agent_policies` to the platform policy): `default_model`
+// is the entry model the runtime actually resolves (governance/agent-profile/resolve.ts), mirrored
+// in `workspaces.entry_model`; `allowed_models` is what "我的智能体" narrows to.
+// -------------------------------------------------------------------------------------------
+
+interface PlatformWorkspaceDbRow {
+  id: string;
+  name: string;
+  status: 'active' | 'disabled';
+  entry_model: string | null;
+  created_at: Date;
+  default_model: string | null;
+  allowed_models: unknown;
+  member_count: number;
+}
+
+const WORKSPACE_SELECT = `
+  select w.id, w.name, w.status, w.entry_model, w.created_at,
+         ap.default_model, coalesce(ap.allowed_models, '[]'::jsonb) as allowed_models,
+         (select count(*)::int from principals p
+           where p.workspace_id = w.id and p.kind = 'human' and p.user_id is not null
+             and p.disabled_at is null) as member_count
+    from workspaces w
+    left join agent_policies ap on ap.workspace_id = w.id`;
+
+function allowedModelsOf(row: PlatformWorkspaceDbRow): string[] {
+  return Array.isArray(row.allowed_models)
+    ? row.allowed_models.filter((m): m is string => typeof m === 'string')
+    : [];
+}
+
+/** The entry model as the runtime sees it: the AgentPolicy's `defaultModel` first (that is what
+ *  `resolveEffectiveAgentProfile` reads), the bootstrap-time `workspaces.entry_model` otherwise. */
+function entryModelOf(row: PlatformWorkspaceDbRow): string | null {
+  return row.default_model ?? row.entry_model ?? null;
+}
+
+async function loadOwners(
+  client: PoolClient,
+  workspaceIds: readonly string[],
+): Promise<Map<string, WorkspaceOwnerWire[]>> {
+  const owners = new Map<string, WorkspaceOwnerWire[]>();
+  if (workspaceIds.length === 0) return owners;
+  const result = await client.query<{
+    workspace_id: string;
+    principal_id: string;
+    user_id: string;
+    login: string;
+    display_name: string;
+  }>(
+    `select p.workspace_id, p.id as principal_id, u.id as user_id, u.login, u.display_name
+       from principals p
+       join users u on u.id = p.user_id
+      where p.workspace_id = any($1::uuid[]) and p.kind = 'human' and p.role = 'owner'
+        and p.disabled_at is null
+      order by u.login`,
+    [workspaceIds],
+  );
+  for (const row of result.rows) {
+    const list = owners.get(row.workspace_id) ?? [];
+    list.push({
+      userId: row.user_id,
+      login: row.login,
+      displayName: row.display_name,
+      principalId: row.principal_id,
+    });
+    owners.set(row.workspace_id, list);
+  }
+  return owners;
+}
+
+function toWirePlatformWorkspace(
+  row: PlatformWorkspaceDbRow,
+  owners: readonly WorkspaceOwnerWire[],
+  defaultWorkspaceId: string | null,
+): PlatformWorkspaceWire {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    entryModel: entryModelOf(row),
+    allowedModels: allowedModelsOf(row),
+    isDefault: defaultWorkspaceId === row.id,
+    memberCount: row.member_count,
+    owners: [...owners],
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+async function loadPlatformWorkspaceRow(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<PlatformWorkspaceDbRow> {
+  const result = await client.query<PlatformWorkspaceDbRow>(`${WORKSPACE_SELECT} where w.id = $1`, [
+    workspaceId,
+  ]);
+  const row = result.rows[0];
+  if (!row) throw new PlatformAdminError('workspace_not_found', 'workspace not found');
+  return row;
+}
+
+async function loadPlatformWorkspace(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<PlatformWorkspaceWire> {
+  const [row, owners, { settings }] = await Promise.all([
+    loadPlatformWorkspaceRow(client, workspaceId),
+    loadOwners(client, [workspaceId]),
+    readPlatformSettings(client),
+  ]);
+  return toWirePlatformWorkspace(row, owners.get(row.id) ?? [], settings.defaultWorkspaceId);
+}
+
+/** Every model id must be in the llm-proxy catalog (the same rule `set_agent_profile` applies). */
+async function assertModelsInCatalog(models: readonly string[]): Promise<void> {
+  if (models.length === 0) return;
+  const known = new Set((await readModelCatalog()).map((entry) => entry.id));
+  const unknown = models.filter((model) => !known.has(model));
+  if (unknown.length > 0) {
+    throw new PlatformAdminError(
+      'unknown_model',
+      `model(s) not in the llm-proxy catalog: ${unknown.join(', ')}`,
+    );
+  }
+}
+
+/**
+ * A non-empty allow-list must contain the entry model, and there must be one: otherwise
+ * `resolveEffectiveAgentProfile` (which caps by the list) resolves to `''` and the runtime falls
+ * through to the entry WorkerDefinition's own `model` / pi's default — a model the administrator
+ * just said the workspace may not use.
+ */
+function assertEntryModelAllowed(
+  entryModel: string | null,
+  allowedModels: readonly string[],
+): void {
+  if (allowedModels.length === 0) return;
+  if (!entryModel) {
+    throw new PlatformAdminError(
+      'entry_model_not_allowed',
+      'set an entry model that is in the allowed list before restricting the list',
+    );
+  }
+  if (!allowedModels.includes(entryModel)) {
+    throw new PlatformAdminError(
+      'entry_model_not_allowed',
+      `the entry model "${entryModel}" must be in the allowed list`,
+    );
+  }
+}
+
+/** Upserts the AgentPolicy's `default_model` / `allowed_models` from the platform plane (governance
+ *  0011 policy). `updated_by` is a Principal FK and the platform plane has none, so it is cleared;
+ *  the platform audit row carries the acting administrator. */
+async function writeWorkspaceModelPolicy(
+  client: PoolClient,
+  workspaceId: string,
+  patch: { defaultModel?: string | null; allowedModels?: readonly string[] },
+): Promise<void> {
+  await client.query(
+    `insert into agent_policies (workspace_id, default_model, allowed_models, updated_by, updated_at)
+     values ($1, $2, coalesce($3::jsonb, '[]'::jsonb), null, now())
+     on conflict (workspace_id) do update set
+       default_model = case when $4 then excluded.default_model else agent_policies.default_model end,
+       allowed_models = coalesce($3::jsonb, agent_policies.allowed_models),
+       updated_by = null,
+       updated_at = now()`,
+    [
+      workspaceId,
+      patch.defaultModel ?? null,
+      patch.allowedModels === undefined ? null : JSON.stringify(patch.allowedModels),
+      patch.defaultModel !== undefined,
+    ],
+  );
+}
+
+async function listHumanPrincipalIds(
+  client: PoolClient,
+  filter: { workspaceId: string } | { userId: string },
+): Promise<string[]> {
+  const result =
+    'workspaceId' in filter
+      ? await client.query<{ id: string }>(
+          `select id from principals where workspace_id = $1 and kind = 'human' and disabled_at is null`,
+          [filter.workspaceId],
+        )
+      : await client.query<{ id: string }>(
+          `select id from principals where user_id = $1 and kind = 'human' and disabled_at is null`,
+          [filter.userId],
+        );
+  return result.rows.map((row) => row.id);
+}
+
+/**
+ * Best-effort, after commit: ask worker-supervisor to stop each principal's resident entry
+ * container (`POST /resident/stop`; design §8). Sessions were already revoked in the transaction,
+ * so a container that survives (supervisor unreachable, runtime not configured in a unit test)
+ * can no longer act — the stop only reclaims resources sooner. Never throws.
+ */
+async function stopEntryContainers(principalIds: readonly string[]): Promise<void> {
+  if (principalIds.length === 0) return;
+  let stop: ((principalId: string) => Promise<boolean>) | undefined;
+  try {
+    const client = getConfiguredTaskRuntime().supervisorClient;
+    stop = client.stopResident?.bind(client);
+  } catch {
+    return; // no task runtime configured (unit tests / CLI) — nothing to stop
+  }
+  if (!stop) return;
+  for (const principalId of principalIds) {
+    try {
+      await stop(principalId);
+    } catch {
+      // Logged nowhere on purpose: the failure carries no state the platform relies on.
+    }
+  }
+}
+
+export const listWorkspacesHandler: CapabilityHandler = async (client, _workspaceId, params) => {
+  const input = params as { status?: 'active' | 'disabled' };
+  const result = await client.query<PlatformWorkspaceDbRow>(
+    `${WORKSPACE_SELECT}${input.status ? ' where w.status = $1' : ''} order by w.created_at, w.id`,
+    input.status ? [input.status] : [],
+  );
+  const owners = await loadOwners(
+    client,
+    result.rows.map((row) => row.id),
+  );
+  const { settings } = await readPlatformSettings(client);
+  return {
+    result: {
+      items: result.rows.map((row) =>
+        toWirePlatformWorkspace(row, owners.get(row.id) ?? [], settings.defaultWorkspaceId),
+      ),
+    },
+  };
+};
+
+export const listPlatformModelsHandler: CapabilityHandler = async () => {
+  return { result: { items: await readModelCatalog() } };
+};
+
+export const createWorkspaceHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  context,
+) => {
+  const input = params as {
+    name: string;
+    ownerUserId: string;
+    entryModel?: string;
+    allowedModels?: string[];
+  };
+  const acting = actingUser(context);
+  const owner = await loadUser(client, input.ownerUserId);
+  if (owner.status !== 'active') {
+    throw new PlatformAdminError('user_disabled', 'the owner must be an active user');
+  }
+  const allowedModels = input.allowedModels ?? [];
+  await assertModelsInCatalog([...(input.entryModel ? [input.entryModel] : []), ...allowedModels]);
+  assertEntryModelAllowed(input.entryModel ?? null, allowedModels);
+
+  // The workspace itself is created after this platform transaction commits: bootstrap needs the
+  // superuser path (`workspaces` insert, meta-ontology seed, entry WorkerDefinition —
+  // application/workspace/create.ts), which a platform transaction deliberately does not have.
+  // The id is fixed here so the audit row written with this phase names the workspace; if the
+  // bootstrap then fails, the caller sees the error and the audit row records an attempt with no
+  // matching workspace (see development-tasks.md P-A2 实现说明).
+  const workspaceId = randomUUID();
+  return {
+    result: { workspaceId },
+    resourceType: 'workspace',
+    resourceId: workspaceId,
+    afterCommit: async (pool: PoolLike) => {
+      await createWorkspaceWithOwner(pool, {
+        workspaceId,
+        name: input.name,
+        owner: { userId: owner.id, displayName: owner.displayName },
+        entryModel: input.entryModel,
+        allowedModels,
+      });
+      return withPlatform(pool, { userId: acting.id }, (platformClient) =>
+        loadPlatformWorkspace(platformClient, workspaceId),
+      );
+    },
+  };
+};
+
+export const updateWorkspaceHandler: CapabilityHandler = async (client, _workspaceId, params) => {
+  const input = params as { workspaceId: string; name?: string; entryModel?: string | null };
+  const before = await loadPlatformWorkspaceRow(client, input.workspaceId);
+  if (input.entryModel !== undefined) {
+    if (input.entryModel !== null) await assertModelsInCatalog([input.entryModel]);
+    assertEntryModelAllowed(input.entryModel, allowedModelsOf(before));
+  }
+  if (input.name !== undefined) {
+    await client.query('update workspaces set name = $2 where id = $1', [
+      input.workspaceId,
+      input.name,
+    ]);
+  }
+  if (input.entryModel !== undefined) {
+    await client.query('update workspaces set entry_model = $2 where id = $1', [
+      input.workspaceId,
+      input.entryModel,
+    ]);
+    await writeWorkspaceModelPolicy(client, input.workspaceId, { defaultModel: input.entryModel });
+  }
+  return {
+    result: await loadPlatformWorkspace(client, input.workspaceId),
+    resourceType: 'workspace',
+    resourceId: input.workspaceId,
+  };
+};
+
+export const setWorkspaceStatusHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+) => {
+  const input = params as { workspaceId: string; status: 'active' | 'disabled' };
+  await loadPlatformWorkspaceRow(client, input.workspaceId);
+  let principalIds: string[] = [];
+  if (input.status === 'disabled') {
+    const { settings } = await readPlatformSettings(client);
+    if (settings.defaultWorkspaceId === input.workspaceId) {
+      throw new PlatformAdminError(
+        'default_workspace',
+        'the platform default workspace cannot be disabled — pick another default first',
+      );
+    }
+    // Every session in the workspace — entry, Worker, MCP, service — under `sessions_platform_admin`.
+    await client.query(
+      `update sessions set status = 'revoked', expires_at = now()
+        where workspace_id = $1 and status = 'active'`,
+      [input.workspaceId],
+    );
+    principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });
+  }
+  await client.query('update workspaces set status = $2 where id = $1', [
+    input.workspaceId,
+    input.status,
+  ]);
+  const result = await loadPlatformWorkspace(client, input.workspaceId);
+  return {
+    result,
+    resourceType: 'workspace',
+    resourceId: input.workspaceId,
+    afterCommit: async () => {
+      await stopEntryContainers(principalIds);
+      return result;
+    },
+  };
+};
+
+export const setAllowedModelsHandler: CapabilityHandler = async (client, _workspaceId, params) => {
+  const input = params as { workspaceId: string; allowedModels: string[] };
+  const before = await loadPlatformWorkspaceRow(client, input.workspaceId);
+  await assertModelsInCatalog(input.allowedModels);
+  assertEntryModelAllowed(entryModelOf(before), input.allowedModels);
+  await writeWorkspaceModelPolicy(client, input.workspaceId, {
+    allowedModels: input.allowedModels,
+    // Keep the runtime's source of truth aligned with the record when the bootstrap-time value
+    // never reached the policy row (a workspace created before P-A2).
+    ...(before.default_model === null && before.entry_model !== null
+      ? { defaultModel: before.entry_model }
+      : {}),
+  });
+  return {
+    result: await loadPlatformWorkspace(client, input.workspaceId),
+    resourceType: 'workspace',
+    resourceId: input.workspaceId,
   };
 };
 

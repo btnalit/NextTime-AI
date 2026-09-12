@@ -148,10 +148,15 @@ export async function lookupPrincipalByApiKeyHash(
     const result = await client.query<PrincipalDbRow>(
       // P-A1: a disabled platform user (`users.status`) is out on every channel, not only the
       // console cookie — the API key of any of their membership Principals stops authenticating.
+      // P-A2: a disabled workspace (`workspaces.status`, `set_workspace_status`) is closed on
+      // every channel too — the console path already filters memberships by it
+      // (identity/users.ts `authenticateUserInWorkspace`); this is the API-key channel's half.
       `select p.workspace_id, p.id, p.kind, p.role, p.display_name
          from principals p
+         join workspaces w on w.id = p.workspace_id
          left join users u on u.id = p.user_id
         where p.api_key_hash = $1 and p.disabled_at is null
+          and w.status = 'active'
           and (u.id is null or u.status = 'active')`,
       [apiKeyHash],
     );

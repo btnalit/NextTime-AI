@@ -406,6 +406,13 @@ export const TaskSpawnRequestSchema = z
     capabilityHandle: z.string().min(1),
     image: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    /** P-A2 (docs/platform-admin-design.md §6.6 "instanceInstructions ... 追加到每个入口与 Worker
+     *  的 system prompt"): the Task-mode counterpart of `SpawnRequestSchema.systemPrompt` above —
+     *  written to `/workspace/.nexttime/system-prompt.md` in this Task's *own* workspace
+     *  (`host-paths.ts` `taskSystemPromptPath`) before the container starts, so
+     *  `deploy/worker-runtime/entrypoint.sh` picks it up instead of its own static default.
+     *  Omitted leaves that default in place, exactly as before this field existed. */
+    systemPrompt: z.string().min(1).optional(),
     skillsInline: z.array(TaskSkillInlineSchema).optional(),
     timeoutSec: z.number().int().positive().optional(),
     /** feat/egress-definition-lists: the invoked WorkerDefinition's own `egressDeny`
