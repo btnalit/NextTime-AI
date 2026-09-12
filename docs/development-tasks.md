@@ -1538,6 +1538,13 @@
     `turnRejected`（内核尚未收到 `turnAccepted`）。容器换了或 stdio 关了则 `currentChatId` 归零、下次必切。
     `chatId` 先按 `/^[A-Za-z0-9_-]+$/` 校验，不可能拼出路径。`session_start` 在切换时重触发、
     platform-extension 同名 `registerTool` 覆盖——STATUS 行 33 已核实。跨对话记忆仍靠 `context` 注入。
+  - **web**：`#/platform/workspaces`（"管理 → 工作区配置"子标题下第一项"工作区"，仅管理员；该子标题现在
+    对任何能见管理组的人渲染，逐工作区页仍按原规则显隐）——`PlatformWorkspacesPage`（`list_workspaces` +
+    `list_platform_models`）、`CreateWorkspaceForm`、`WorkspaceDetailPanel`（改名、入口模型下拉——名单非空时
+    只列名单内、允许的模型勾选清单、停用需二次确认且默认工作区按钮禁用并说明、owner 委托 =
+    `add_membership{role:'owner'}`，409 `already_member` 时改调 `set_membership_role`）、`UserPicker`
+    （懒加载 `list_users`，建区与委托共用）、`WorkspaceModelControls`。"打开工作区配置"只在管理员自己
+    是该工作区成员时切换过去，否则提示先把自己加为 owner。`handleSwitchWorkspace` 增加可选目标路由。
   - **`config/llm-providers.fake.example.yaml` 多了 `fake-echo-alt`**：只为让 e2e 能观察到"允许的模型"
     收窄"我的智能体"下拉（一个模型看不出差别）；fake-llm 不校验请求里的 model，验收脚本显式钉
     `fake/fake-echo`，不受影响。
