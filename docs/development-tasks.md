@@ -1576,6 +1576,32 @@
 > design §6.3 取代：门实例改为打包门启动时向内核 `POST /internal/gates/announce` 自注册（稳定
 > `GATE_ID`），通用 `http` / `mcp` 门改由门宿主承载多实例、凭证页面直达门宿主，按 Operation 逐个开关。
 
+- **拆分与决定（2026-09-12，开工前）**：P-B 按 design §9 一行的内容有 P-A2 的两到三倍，拆成两个 PR 波次，
+  各自独立审查、合入、可回滚：
+  - **P-B1 门与集成目录**：门自注册（`POST /internal/gates/announce` + 心跳）、接入包三态与按 Operation 禁用、
+    门实例（发现 / 启用 / 禁用 / 失联 / `vetted`）、工作区侧"从平台目录一键启用"、MCP 提示位入 Operation 与
+    决策期信任规则、外部运行时盘点与吊销 + "访问"页签发 service Handle（复用既有 `issue_handle`）、
+    web 集成页。
+  - **P-B2 门宿主与模块**：gatekeeper-base 多实例宿主（`http` / `mcp`）、页面直达门宿主录凭证（5 分钟平台
+    JWT）、`vet_mcp_endpoint`、模块页（`list_modules` / `install_module` / `upgrade_module` /
+    `set_default_modules` / `promote_template`）、CI compose 加 fake MCP + 门容器跑 design §9 的 e2e。
+  - 决定 ①：**启用门实例与安装模块都是 `scope:'workspace'`、owner 动作**。`ontology_versions.proposed_by`
+    与 `registerGatekeeper` 的 `registeredBy` / `activityId` 都要真实 Principal，平台面没有；管理员不在某工作区
+    时先委托（P-A2 已记录的同一限制），不造"系统 Principal"。平台页只展示与配置。
+  - 决定 ②：**MCP 三个提示位存进 Operation、信任在决策时读**。`OperationSchema` 加可选
+    `read_only_hint` / `destructive_hint` / `idempotent_hint`，`importMcpTools` 从 `annotations` 填；
+    自动批准规则在 `request_action` 决策处：门为 `mcp` 时，需工作区门链接行指向 `trust='vetted'` 的实例
+    ∧ `!destructive_hint` ∧ `idempotent_hint`；自连（无链接行）的 MCP 永不自动批准；非 MCP 门维持 I8 双信号。
+  - 决定 ③：**P-B1 的 e2e 不起门容器**，在 CI 里经 `docker compose exec kernel` 用内部 token 调
+    `/internal/gates/announce` 播种一个"发现的门实例"（健康显示不可达，如实），页面走启用 / 三态 / 外部运行时；
+    design §9 的 fake MCP 全链路 e2e 归 P-B2（CI compose 加 `deploy/accept-s2/mcp` + gatekeeper-base 容器）。
+  - 决定 ④：**模块版本用仓库内索引 `ontology/modules.yaml`**（名、版本列表 `{file, version, notes, breaking}`），
+    "已安装版本" = 已发布 `definition` 的哈希匹配到的索引项，否则"已定制"；不加新列。P-B2 实现，
+    P-B1 的 0023 不为此留列。
+  - 决定 ⑤：**存活只用一种机制**：门每 `GATE_ANNOUNCE_INTERVAL_SEC`（默认 60）重新 announce 当心跳，内核定时器
+    把 `last_seen_at` 超过 3 倍间隔的实例标 `lost`；`probeGatekeeperHealth` 只在 `test_gate_instance` 里用。
+    已启用实例再次 announce 保持状态；端点变化写平台审计。三态变更不拆已有链接，只管新启用与目录可见；
+    按 Operation 禁用则在下一次调用就生效（与工作区禁用同一"按调用卡口"原则）。
 - 交付物：
   1. kernel：`POST /internal/gates/announce`（内部面 token，同 supervisor；带 `GATE_ID`、种类、
      `describe_operations`、健康端点，未启用的实例落"发现的门实例"、状态"未启用"；下线标"失联"）；
