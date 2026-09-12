@@ -536,9 +536,11 @@ P-B "P-B2 再拆与决定" 决定 ⑥–⑬。一句话：**一个** `gatekeeper
 ### 14.1 主机首次启用（v0.10.0 起，一次性）
 
 ```sh
-# 1) 补数据目录与新密钥（两个脚本都幂等；gen-handle-keys 只新增 secrets/gate-host-store.key，
+# 1) 补数据目录、目录属主与新密钥（三个脚本都幂等；host-env-init 把 gate-host/ chown 给 10001——
+#    漏掉这一步宿主首次接管会报 EACCES；gen-handle-keys 只新增 secrets/gate-host-store.key，
 #    既有 handle.key / internal.token / gate.token 不动）
 NEXTTIME_DATA=<data-dir> sh scripts/host-bootstrap.sh
+NEXTTIME_DATA=<data-dir> sh scripts/host-env-init.sh
 NEXTTIME_DATA=<data-dir> sh scripts/gen-handle-keys.sh
 # 2) 构建并起宿主；caddy 也要重建（Caddyfile 新增 /gate-host/* 路由）
 docker compose build gate-host caddy

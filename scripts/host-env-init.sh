@@ -241,7 +241,12 @@ chmod 0700 "$SECRETS_DIR/setup"
 # gatekeepers/{docker,ragflow} are not `mkdir -p`'d here (unlike collectors/host-inventory just
 # above) — scripts/host-bootstrap.sh (E2) has created all four of those since before this script
 # existed, with no equivalent drift ever reported for them.
-for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow collectors/host-inventory; do
+# gate-host/ (P-B2a): the generic gate host's GATE_DATA_DIR (per-instance credential stores +
+# idempotency files) — mkdir -p'd here too because a v0.9.0 host that upgrades never ran the newer
+# host-bootstrap.sh, and a root-owned bind mount makes the host log EACCES on its first take-over.
+mkdir -p "$NEXTTIME_DATA/gate-host"
+chmod 750 "$NEXTTIME_DATA/gate-host"
+for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow gate-host collectors/host-inventory; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
 
@@ -292,7 +297,7 @@ echo "host-env-init: config/ (mode, owner:group, path):"
 find "$CONFIG_DIR" -maxdepth 1 -printf '  %M %U:%G %p\n'
 echo ""
 echo "host-env-init: ownership fix-up (uid:gid ${CONTAINER_UID}:${CONTAINER_GID}) applied to:"
-for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow; do
+for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow gate-host; do
 	echo "  $NEXTTIME_DATA/$d -> $(stat -c '%U:%G' "$NEXTTIME_DATA/$d")"
 done
 echo "host-env-init: backups/ kept root-owned (0:0, mode $(stat -c '%a' "$NEXTTIME_DATA/backups")) — the backup service is root with only DAC_READ_SEARCH and cannot write into a directory it does not own"

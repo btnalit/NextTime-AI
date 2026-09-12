@@ -415,6 +415,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         target: 'http://mcp.internal.test/',
         credentialMode: 'connected_account',
       });
+      await callAsAdmin('update_gate_instance', { gateId: 'hosted-mcp-ca', status: 'enabled' });
       await expectPlatformError(
         () => callAsAdmin('issue_gate_host_token', { gateId: 'hosted-mcp-ca' }),
         'credential_mode_mismatch',

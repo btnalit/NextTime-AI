@@ -2422,7 +2422,8 @@ const platformCapabilities: readonly Capability[] = [
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['manifestSource'],
-            message: 'an http instance needs the OpenAPI document URL to import its Operations from',
+            message:
+              'an http instance needs the OpenAPI document URL to import its Operations from',
           });
         }
       }),
