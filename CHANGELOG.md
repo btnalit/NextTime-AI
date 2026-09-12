@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/btnalit/NextTime-AI/compare/v0.8.0...v0.9.0) (2026-09-12)
+
+
+### Features
+
+* **platform:** P-B1 门与集成目录 — gate self-announce, connectors three-state, gate instances, per-Operation disable, MCP trust, external runtimes ([#175](https://github.com/btnalit/NextTime-AI/issues/175)) ([bab44d8](https://github.com/btnalit/NextTime-AI/commit/bab44d83a21761da81bac14fefaf8b92541c76b0))
+
 ## [0.8.0](https://github.com/btnalit/NextTime-AI/compare/v0.7.0...v0.8.0) (2026-09-12)
 
 
