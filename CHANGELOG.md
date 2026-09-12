@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/btnalit/NextTime-AI/compare/v0.9.0...v0.10.0) (2026-09-12)
+
+
+### Features
+
+* **gates:** generic gate host with page-direct credential entry (P-B2a) ([#179](https://github.com/btnalit/NextTime-AI/issues/179)) ([b22b8df](https://github.com/btnalit/NextTime-AI/commit/b22b8dfc9a55250f0564d1a1b7ab85a119e94396))
+
 ## [0.9.0](https://github.com/btnalit/NextTime-AI/compare/v0.8.0...v0.9.0) (2026-09-12)
 
 
