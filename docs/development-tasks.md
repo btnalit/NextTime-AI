@@ -1610,9 +1610,11 @@
     内核 → 宿主的凭证，今天不存在；拉（`GET /internal/gate-host/instances`，内部 token，启动时与每
     `GATE_ANNOUNCE_INTERVAL_SEC` 一次）与 P-B1 announce 是同一个信任方向，不新增任何密钥。效果相同，记为措辞偏离。
   - 决定 ⑦：**宿主实例就是 `gate_instances` 的一行**，不另建表：core 0024 加 `hosted boolean` 与 `definition jsonb`
-    （传输种类、目标地址、凭证模式、manifest 来源），`create_gate_instance` 直接落 `status='enabled'`、
-    `health='unknown'`、`last_seen_at null`、`endpoint ''`；宿主接管后每个实例各自走 P-B1 的 announce 路——存活、
-    接入包、链接、禁用名单全部复用，内核不需要知道宿主地址。
+    （传输种类、目标地址、凭证模式、manifest 来源），`create_gate_instance` 落 `status='discovered'`、
+    `health='unknown'`、`last_seen_at null`、`endpoint ''`（审查后改：原定直接 `enabled`，但持内部 token 者可在宿主
+    首次 announce 前抢填一个活端点、无人复核就进工作区；改为与打包门同路——宿主接管、端点与 Operation 可见后
+    管理员再启用）；宿主接管后每个实例各自走 P-B1 的 announce 路——存活、接入包、链接、禁用名单全部复用，
+    内核不需要知道宿主地址。
   - 决定 ⑧：**身份冻结从"管理员决定后"改为"首次被看见后"**（`last_seen_at is not null`）：管理员建的宿主行首次
     announce 不能算 `identityMismatch`；一旦 seen，connector / transport / endpoint 照旧冻结。
   - 决定 ⑨：**宿主尚未接管的实例拒绝工作区启用**（`last_seen_at null` 或 `operations` 为空 → 409 `gate_not_ready`），
@@ -1717,10 +1719,11 @@
     fake 改为信封。运行手册"已知缺口"不需要新增：问题已修。
   - **未做 / 留到 P-B2**：通用 `http` / `mcp` 门宿主与页面直达门的凭证录入；`vet_mcp_endpoint` 单独能力
     （P-B1 用 `update_gate_instance{trust}`）；模块页；fake MCP 全链路 e2e。
-- 实现说明（P-B2a 门宿主与页面直达凭证，2026-09-12，PR #__PR__ → v__VER__）：
+- 实现说明（P-B2a 门宿主与页面直达凭证，2026-09-12，PR #179 → v0.10.0）：
   - **迁移 core 0024**：`gate_instances` 加 `hosted boolean` 与 `definition jsonb`（check：二者同真同假），
     `grant delete`。宿主实例由 `create_gate_instance` 落行：connector = 通用种类名（`http` / `mcp`，0023 已预置）、
-    `status 'enabled'`、`health 'unknown'`、`endpoint ''`、`last_seen_at null`——"已启用、等待宿主接管"。
+    `status 'discovered'`、`health 'unknown'`、`endpoint ''`、`last_seen_at null`——"等待宿主接管"，接管后管理员启用。
+    `http` 实例的 `manifestSource` 必填（契约 `superRefine` + 表单 required；否则宿主导入零 Operation、永远 `gate_not_ready`）。
   - **内核**：`GET /internal/gate-host/instances`（内部面守卫，只回定义，绝无凭证）；`upsertAnnouncement`
     的身份冻结加一个例外：`hosted ∧ last_seen_at is null` 的行不冻结（决定 ⑧，宿主首次 announce 才填端点），
     此后照 P-B1 冻结；`enable_gate_instance` 在 `last_seen_at null ∨ operationCount 0` 时 409 `gate_not_ready`
@@ -1737,8 +1740,11 @@
     `createGateHost` / `startGateHost`（`GATE_MODE=host` 进 `main()`）：拉定义 → reconcile 内存表（定义变了就重建、
     列表里没了就摘掉）→ 每个已就绪实例 announce 一次；`mcp` 实例 `tools/list` 导入、`http` 实例拉 OpenAPI 导入，
     目标不可达则不 announce 只记 warn 并在下一轮重试；路由前缀 `/i/:gateId`，`onRequest` 守卫先认 `gate_token`，
-    只在 `POST` / `DELETE …/gate/connected-accounts` 上退而验平台 JWT（`gate` 声明必须等于路径 id），通过则把
-    JWT 的 `obo` 作为强制槽位、忽略请求体的 `onBehalfOf`；`GET /healthz` 无鉴权只报就绪与计数。
+    `POST` / `DELETE …/gate/connected-accounts` **只**认平台 JWT（`gate` 声明必须等于路径 id；审查后改：
+    这两条路由不再接受 `gate_token`——它是内核对每个门都带的同一把共享密钥，`create_connection` 又允许 owner 指向
+    任意 URL，接受它就等于任何工作区都能经内核改写任何宿主实例的任何槽位），通过则把 JWT 的 `obo` 作为强制槽位、
+    忽略请求体的 `onBehalfOf`；实例被移除或定义变更时宿主 `rm -rf` 它的凭证目录（改名不算变更；审查后加：否则删掉再
+    同名新建指向别的系统，旧凭证会跟着 id 发给新系统）；`GET /healthz` 无鉴权只报就绪与计数。
     `credentials/hosted.ts` `HostedCredentialResolver`：`shared` 读 `__shared__` 槽（空则无凭证调用），
     `connected_account` 读调用者槽（空则拒绝）；一宿主一把 `GATE_STORE_KEY_FILE`，每实例一目录。
     `announce.ts` 抽出 `postAnnouncement` 与导出 `loadInternalToken` 供宿主复用。
@@ -1748,12 +1754,26 @@
     Caddyfile 加 `handle_path /gate-host/* → gate-host:8083`（唯一绕过内核的路径，注释写明原因）。
     CI：`deploy/ci/docker-compose.ci.yml` 起 `gate-host` 与 `fixture-mcp`（`deploy/accept-s2/mcp` 的镜像、不带
     profile 的新服务名），e2e 工作流多一步 `up -d --wait gate-host fixture-mcp`。
-  - **web**：__WEB__
-  - **e2e**：__E2E__
-  - **独立审查**：__REVIEW__
+  - **web**（sonnet builder）：集成页门实例标签新增"新建门宿主实例"抽屉（`CreateGateInstanceForm`：id / 名称 / 种类 /
+    目标 / 凭证模式 / `http` 的 OpenAPI URL）、列表行 "宿主" 徽标与 "等待宿主接管" 状态、详情抽屉显示定义、删除（二次确认，
+    `gate_in_use` 原样显示）、`shared` 模式的 "录入共享凭证" 段；`GateCredentialEntry` 组件两处复用（`requestToken` 注入）：
+    取 5 分钟令牌 → Bearer token 或原始 JSON → `lib/gate-host.ts` `postGateCredential` 直接 `fetch(url)` 到宿主，成功清空
+    输入、从不持久化令牌与凭证；工作区"系统接入"的平台目录段对每条已链接实例给 "录入我的凭证"（`issue_gate_credential_token`，
+    非 `connected_account` 实例回 409 就地显示）。顺带：`list_available_gate_instances` 从 owner 放宽到 member（目录元数据，
+    启用按钮仍只 owner 可见），否则成员没有入口录自己的凭证；`platform-errors.ts` 补六个错误码文案。
+  - **e2e**（`packages/web/e2e/gate-host.spec.ts`，sonnet builder；决定 ③ 的 fake MCP 全链路）：管理员新建 `e2e-hosted-mcp`
+    （目标 `http://fixture-mcp:8080/`）→ 轮询至宿主接管（心跳 + 2 个 Operation，≤ 90 s）→ 录入共享凭证经 JWT 直达路存入
+    → 测试连接 ok → 启用实例 → 接入包 `mcp` 设平台预置 → owner 在系统接入一键启用、目录出现两个工具 → vetted →
+    接入包禁用其一、目录隐藏、再恢复。CI 工作流多起 `gate-host` 与 `fixture-mcp` 两个服务。
+  - **独立审查（sonnet reviewer）抓到并已修**：① P1 宿主凭证路由同时接受 `gate_token`，请求体的 `onBehalfOf` 就成了
+    槽位——任何工作区 owner 用 `create_connection{endpoint: 'http://gate-host:8083/i/<id>', onBehalfOf:'__shared__'}`
+    就能让内核替他把凭证写进平台预置实例的共享槽 → 这两条路由只认平台 JWT；② 删除再同名新建的实例复用旧凭证目录
+    → 移除 / 定义变更时宿主清目录；③ 宿主实例建即 `enabled`，内部 token 持有者可抢填端点且无人复核 → 建为
+    `discovered`，接管后管理员启用；④ `http` 实例不填 `manifestSource` 永远 `gate_not_ready` → 契约与表单必填，
+    宿主对零 Operation 的实例每轮重试。测试 builder 另抓到：宿主行首次 announce 可改 connector / 种类 → 与定义不符
+    直接 409 `identity_mismatch`、不写任何字段。
   - **未做 / 留到 P-B2b**：模块页与 `list_modules` / `install_module` / `upgrade_module` / `set_default_modules` /
-    `promote_template`；`vet_mcp_endpoint` 仍用 `update_gate_instance{trust}`；宿主实例删除后的加密凭证目录
-    需手工清理（运行手册 §14.2）。
+    `promote_template`；`vet_mcp_endpoint` 仍用 `update_gate_instance{trust}`。
 - 完成标准（design §9 P-B e2e）：起一个 fake MCP server → 集成页新增门宿主实例 → 测试连接 →
   工作区启用 → 入口 agent 的工具里出现它，非 `vetted` 时写操作走审批；模块页把 `ops-assets-v2`
   装进某工作区的能力目录，运行中的旧 Worker 不受影响；接 RAGFlow、接任意 MCP server、装领域包全程

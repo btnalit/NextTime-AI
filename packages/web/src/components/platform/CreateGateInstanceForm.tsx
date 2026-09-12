@@ -29,7 +29,7 @@ function isValidUrl(value: string): boolean {
  * administrator half of the generic门宿主 flow. Never takes a credential (design's own line: "the
  * kernel is never in that path") — a shared credential is entered afterwards from
  * `GateInstanceDetailPanel` (`issue_gate_host_token` + `GateCredentialEntry`), a per-member one
- * from the workspace's 系统接入 page. `manifestSource` only makes sense for `http` (mcp lists tools
+ * from the workspace's 系统接入 page. `manifestSource` is required for `http` (mcp lists tools
  * on the target itself, `capabilities.ts`'s own doc comment) — hidden, not just disabled, for mcp
  * so a stale value from switching kinds can never be submitted.
  */
@@ -184,7 +184,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         <Field
           id="cgi-manifest-source"
           label="Manifest source"
-          hint="可选：OpenAPI 文档 URL，留空则沿用门宿主已配置的清单。 Optional — the OpenAPI document URL to import from."
+          hint="必填：OpenAPI 文档 URL，门宿主从这里导入 Operation。 Required — the OpenAPI document URL the host imports Operations from."
         >
           <Input
             id="cgi-manifest-source"
@@ -192,6 +192,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
             onChange={(event) => setManifestSource(event.target.value)}
             disabled={submitting}
             mono
+            required
             placeholder="https://…/openapi.json"
           />
         </Field>

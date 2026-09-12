@@ -2413,13 +2413,22 @@ const platformCapabilities: readonly Capability[] = [
         transportKind: z.enum(['http', 'mcp']),
         target: z.string().url().max(2000),
         credentialMode: z.enum(['shared', 'connected_account']),
-        /** http only: OpenAPI document URL the host imports Operations from. mcp lists tools on the target. */
+        /** http: the OpenAPI document URL the host imports Operations from (required — without it the instance would have no Operations). mcp: omitted, tools are listed on the target. */
         manifestSource: z.string().url().max(2000).nullable().optional(),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.transportKind === 'http' && !value.manifestSource) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['manifestSource'],
+            message: 'an http instance needs the OpenAPI document URL to import its Operations from',
+          });
+        }
+      }),
     resultSchema: wire.GateInstanceWireSchema,
     description:
-      'P-B2a: create a generic http / mcp gate instance for the platform gate host to serve. Lands `enabled` with no heartbeat yet; the host pulls the definition, imports the Operations and announces it like a packaged gate. Never takes a credential — enter that via `issue_gate_host_token`.',
+      'P-B2a: create a generic http / mcp gate instance for the platform gate host to serve. Lands `discovered` with no heartbeat; the host pulls the definition, imports the Operations and announces it, then the administrator enables it exactly like a packaged gate. Never takes a credential — enter that via `issue_gate_host_token`.',
   },
   {
     name: 'delete_gate_instance',

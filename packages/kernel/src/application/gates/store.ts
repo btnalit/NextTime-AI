@@ -273,9 +273,10 @@ export async function upsertAnnouncement(
   const restoredStatus =
     before?.status === 'lost' ? (before.status_before_lost ?? 'discovered') : undefined;
   const decidedAfterLost = restoredStatus === 'enabled' || restoredStatus === 'disabled';
-  // P-B2a (决定 ⑧): a gate-host instance is created `enabled` by the administrator with an empty
-  // endpoint; its *first* announcement (never seen yet) is what fills the identity in, so the freeze
-  // starts once it has been seen. Every other decided instance is frozen from the decision on (P-B1).
+  // P-B2a (决定 ⑧): a gate-host instance is created by the administrator with an empty endpoint; its
+  // *first* announcement (never seen yet) fills the identity in, so the freeze starts once it has
+  // been seen (relevant when the administrator enabled / disabled it before the host spoke). Every
+  // other decided instance is frozen from the decision on (P-B1).
   const neverSeenHosted = before?.hosted === true && before.last_seen_at === null;
   if (
     neverSeenHosted &&
@@ -463,8 +464,12 @@ export interface HostedGateDefinition {
   readonly definition: GateHostedDefinitionWire;
 }
 
-/** Inserts an `enabled`, never-seen instance: `endpoint ''`, `health 'unknown'`, no heartbeat. The
- *  connector is the generic kind (`http` / `mcp`, seeded by 0023). Returns `false` on an id clash. */
+/** Inserts a never-seen instance: `discovered`, `endpoint ''`, `health 'unknown'`, no heartbeat. It
+ *  lands `discovered` — not `enabled` — on purpose (review finding): the administrator enables it
+ *  after the host has taken it over and the endpoint / Operations are visible, exactly the packaged-
+ *  gate path, so an internal-token holder racing the host's first announce cannot hand workspaces a
+ *  live endpoint nobody reviewed. The connector is the generic kind (`http` / `mcp`, seeded by
+ *  0023). Returns `false` on an id clash. */
 export async function createHostedGateInstance(
   client: PoolClient,
   input: { gateId: string; displayName: string; definition: GateHostedDefinitionWire },
@@ -473,7 +478,7 @@ export async function createHostedGateInstance(
     `insert into gate_instances
        (gate_id, connector, display_name, transport_kind, target, endpoint, health_endpoint,
         operations, status, health, hosted, definition, updated_at)
-     values ($1, $2, $3, $2, $4, '', null, '[]'::jsonb, 'enabled', 'unknown', true, $5::jsonb, now())
+     values ($1, $2, $3, $2, $4, '', null, '[]'::jsonb, 'discovered', 'unknown', true, $5::jsonb, now())
      on conflict (gate_id) do nothing`,
     [
       input.gateId,

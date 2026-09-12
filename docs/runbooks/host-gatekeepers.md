@@ -557,7 +557,7 @@ docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').th
 1. 管理 → 集成 → 门实例 → **新建门宿主实例**：填稳定 id（就是 `GATE_ID`，也是宿主上的路径 `/i/<id>`）、
    种类（`http` / `mcp`）、目标地址（compose 内部主机名或内网 URL；例如 fixture MCP 是
    `http://fixture-mcp:8080/`）、凭证模式（`shared` 一份共用 / `connected_account` 每人一份）、`http` 可填
-   OpenAPI 文档 URL 让宿主导入 Operation。实例落库即 `enabled`，但显示"等待宿主接管"。
+   OpenAPI 文档 URL 让宿主导入 Operation（`http` 必填）。实例落库为 `discovered`，显示"等待宿主接管"。
 2. 宿主每 `GATE_ANNOUNCE_INTERVAL_SEC`（默认 60 s，首次立刻）拉一次定义：`mcp` 实例对目标发 `tools/list`
    导入工具、`http` 实例拉 OpenAPI，成功即 announce（`endpoint = http://gate-host:8083/i/<id>`），页面上
    出现心跳时间与 Operation 数；目标不可达则**不 announce**，宿主日志一行 warn，下一轮重试。
@@ -566,15 +566,17 @@ docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').th
    给宿主，宿主验 JWT（`aud` / `typ` / `gate` = 路径 id / 5 分钟）后按 JWT 里的槽位（`__shared__`）落盘。
    `connected_account` 实例由每个成员在工作区"系统接入"页 **录入我的凭证**（`issue_gate_credential_token`，
    槽位 = 自己的 Principal）。
-4. 接入包 `mcp` / `http` 设为 **平台预置**（P-B2a 起允许；`cli` / `ssh` 仍不能）→ 工作区"系统接入"从平台
-   目录一键启用 → 能力目录出现工具。宿主尚未接管时启用会得到 409 `gate_not_ready`。
+4. 宿主接管后（有心跳、有 Operation 数、端点是 `http://gate-host:8083/i/<id>`）在详情抽屉 **启用** 实例——
+   与打包门同一步，管理员复核过端点再放行；接入包 `mcp` / `http` 设为 **平台预置**（P-B2a 起允许；`cli` / `ssh`
+   仍不能）→ 工作区"系统接入"从平台目录一键启用 → 能力目录出现工具。宿主尚未接管时启用会得到 409 `gate_not_ready`。
 5. 删除：只有宿主实例可删，且要先没有工作区链接（否则 409 `gate_in_use`，先在实例上"禁用"）。宿主下一轮
-   拉定义时把它从内存表摘掉，`/i/<id>/*` 立即 404；`${NEXTTIME_DATA}/gate-host/<id>/` 里的加密凭证文件不会
-   自动删，需要时由维护者手工清理。
+   拉定义时把它从内存表摘掉，`/i/<id>/*` 立即 404，并删除 `${NEXTTIME_DATA}/gate-host/<id>/` 里的加密凭证目录
+   （同名新建不会继承旧凭证）。
 
 ### 14.3 信任边界对照
 
-- 宿主上除 `POST` / `DELETE /i/<id>/gate/connected-accounts` 外的每条路由仍只认 `gate_token`——浏览器没有。
+- 宿主上除 `POST` / `DELETE /i/<id>/gate/connected-accounts` 外的每条路由只认 `gate_token`——浏览器没有；这两条
+  路由则**只**认平台 JWT——内核（持 `gate_token`）也写不了任何槽位。
 - 平台 JWT 用内核的 Handle 私钥签，但 `typ` 独立、带 `aud`、声明形状与 Handle 互斥：它在内核那边过不了
   Handle 校验，真 Handle 在宿主这边也过不了（两条都有单测）。
 - 宿主只从 JWT 拿写入槽位，请求体里的 `onBehalfOf` 被忽略；`__shared__` 不是 UUID，撞不上任何 Principal。

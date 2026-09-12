@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import type { GateHostedDefinitionWire, Operation } from '@nexttime/shared';
@@ -109,8 +109,10 @@ export interface GateHost {
   }>;
 }
 
+/** Identity of what the instance is built from — the definition only. A rename keeps the built
+ *  gate and its credentials; any change to kind / target / mode / manifest rebuilds AND wipes them. */
 function definitionKey(item: HostedInstanceListItem): string {
-  return JSON.stringify([item.displayName, item.definition]);
+  return JSON.stringify(item.definition);
 }
 
 async function fetchJsonWithTimeout(
@@ -179,11 +181,16 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
   app.addHook('onRequest', async (request, reply) => {
     const route = request.routeOptions.url;
     if (typeof route !== 'string' || !route.startsWith('/i/')) return;
-    if (guard.evaluate(request)) return;
     const gateId = (request.params as { gateId?: string } | undefined)?.gateId;
     const isCredentialRoute =
       route.endsWith('/gate/connected-accounts') &&
       (request.method === 'POST' || request.method === 'DELETE');
+    // The credential routes take the platform JWT and nothing else: `gate_token` is one shared
+    // secret every kernel → gate call carries (also on the kernel's own `create_connection` path,
+    // which a workspace owner can aim at any URL), so accepting it here would let any workspace
+    // write any slot of any hosted instance through the kernel (review finding). Everything else
+    // under `/i/*` is kernel-only and keeps the `gate_token` guard.
+    if (!isCredentialRoute && guard.evaluate(request)) return;
     if (isCredentialRoute && gateId) {
       const presented = request.headers.authorization;
       const bearer =
@@ -273,13 +280,36 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     instance.buildError = undefined;
   }
 
-  function reconcile(items: readonly HostedInstanceListItem[]): void {
+  /** Credentials belong to one definition (决定 ⑪): when an instance is removed, or re-created with
+   *  another target, whatever was stored for it must not follow the id to the new system. */
+  async function wipeInstanceData(gateId: string): Promise<void> {
+    try {
+      await rm(join(dataDir, gateId), { recursive: true, force: true });
+    } catch (err) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'gate host: could not remove instance data directory',
+          gateId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  }
+
+  async function reconcile(items: readonly HostedInstanceListItem[]): Promise<void> {
     const seen = new Set<string>();
     for (const item of items) {
       seen.add(item.gateId);
       const key = definitionKey(item);
       const existing = table.get(item.gateId);
-      if (existing && existing.definitionKey === key) continue;
+      if (existing && existing.definitionKey === key) {
+        if (existing.displayName !== item.displayName) {
+          table.set(item.gateId, { ...existing, displayName: item.displayName });
+        }
+        continue;
+      }
+      if (existing) await wipeInstanceData(item.gateId);
       table.set(item.gateId, {
         gateId: item.gateId,
         displayName: item.displayName,
@@ -303,6 +333,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     for (const gateId of [...table.keys()]) {
       if (!seen.has(gateId)) {
         table.delete(gateId);
+        await wipeInstanceData(gateId);
         log(JSON.stringify({ level: 'info', msg: 'gate host: instance removed', gateId }));
       }
     }
@@ -359,13 +390,11 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
   async function tick(): Promise<boolean> {
     const items = await pull();
     if (!items) return false;
-    reconcile(items);
+    await reconcile(items);
     for (const instance of table.values()) {
-      // Rebuild while not ready (target was unreachable) or when an MCP instance has no tools yet.
-      if (
-        !instance.gate ||
-        (instance.definition.transportKind === 'mcp' && instance.operations.length === 0)
-      ) {
+      // Rebuild while not ready (target was unreachable) or while it still has no Operations (an
+      // MCP server that listed nothing yet, an OpenAPI document that was empty) — retried every tick.
+      if (!instance.gate || instance.operations.length === 0) {
         try {
           await buildInstance(instance);
         } catch (err) {

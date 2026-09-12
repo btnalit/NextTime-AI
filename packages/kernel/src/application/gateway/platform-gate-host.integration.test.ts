@@ -268,11 +268,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(created).toMatchObject({
         gateId: 'hosted-mcp',
         hosted: true,
-        status: 'enabled',
+        status: 'discovered',
         health: 'unknown',
         lastSeenAt: null,
         endpoint: '',
       });
+      // Review finding: the administrator enables after the host has spoken (parity with packaged
+      // gates); enabling early is allowed and keeps the freeze exemption meaningful.
+      const enabledEarly = await callAsAdmin<GateInstanceWire>('update_gate_instance', {
+        gateId: 'hosted-mcp',
+        status: 'enabled',
+      });
+      expect(enabledEarly.status).toBe('enabled');
       expect(created.definition).toMatchObject({
         transportKind: 'mcp',
         target: 'http://mcp.internal.test/',

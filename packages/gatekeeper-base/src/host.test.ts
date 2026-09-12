@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -298,6 +298,18 @@ describe('createGateHost (P-B2a)', () => {
     });
     expect(onObserve.statusCode).toBe(401);
 
+    // Review finding: the shared gate_token (which the kernel presents on every call, including a
+    // workspace-driven `create_connection` aimed at this host) must NOT open the credential routes.
+    for (const method of ['POST', 'DELETE'] as const) {
+      const withGateToken = await host.app.inject({
+        method,
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${GATE_TOKEN}` },
+        payload: { onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT, credential: { token: 'poison' } },
+      });
+      expect(withGateToken.statusCode).toBe(401);
+    }
+
     const { token: otherGateToken } = await mintGateHostToken({
       privateKey,
       gateId: 'other-gate',
@@ -368,9 +380,27 @@ describe('createGateHost (P-B2a)', () => {
     await host.tick();
     expect(host.instances()).toEqual([{ gateId: 'demo-mcp', ready: true, operationCount: 2 }]);
 
+    // Store a credential first so removal has something to wipe (review finding: a re-created
+    // instance must not inherit the old credential).
+    const { token: slotToken } = await mintGateHostToken({
+      privateKey,
+      gateId: 'demo-mcp',
+      onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT,
+      subject: 'admin-1',
+    });
+    const stored = await host.app.inject({
+      method: 'POST',
+      url: '/i/demo-mcp/gate/connected-accounts',
+      headers: { authorization: `Bearer ${slotToken}` },
+      payload: { onBehalfOf: 'ignored', credential: { token: 'old-secret' } },
+    });
+    expect(stored.statusCode).toBe(200);
+    await expect(access(join(dir, 'data', 'demo-mcp'))).resolves.toBeUndefined();
+
     state.items = [];
     expect(await host.tick()).toBe(true);
     expect(host.instances()).toEqual([]);
+    await expect(access(join(dir, 'data', 'demo-mcp'))).rejects.toThrow();
     const goneHealth = await host.app.inject({
       method: 'GET',
       url: '/i/demo-mcp/gate/health',
