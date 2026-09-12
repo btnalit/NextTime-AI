@@ -27,11 +27,15 @@ import {
   getGatekeeper,
   getOrCreateGatekeeperServicePrincipal,
   getPublishedOperation,
+  isOperationDisabled,
+  mcpAutoApproveAllowed,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
+import type { GateLinkPolicyView } from '../gates/index.js';
+import { readGateLinkPolicy } from '../gates/index.js';
 import type { WithTransactionFn } from './action-executor.js';
 import {
   createAdminWithTransaction,
@@ -515,6 +519,9 @@ interface RunGovernedRequestArgs {
   readonly requesterScope: CapabilityScope;
   readonly blastRadius: 'low' | 'medium' | 'high';
   readonly autoApprovable: boolean;
+  /** P-B1: `true` when an MCP tool's auto-approval was refused by the trust rule — surfaced as its
+   *  own policy reason so the audit row says why (`mcp_gate_not_vetted`). */
+  readonly mcpTrustBlocked?: boolean;
   readonly awaitDecision: boolean;
   /** P1-1 fix — always populated by the caller (`requestActionHandler`, explicit or derived
    *  default), threaded straight through to `requestAction()`. */
@@ -571,6 +578,7 @@ async function runGovernedRequest(
     resourceScope: args.gatekeeper.gatekeeperId,
     blastRadius: args.blastRadius,
     operationAutoApprovable: args.autoApprovable,
+    mcpTrustBlocked: args.mcpTrustBlocked,
     awaitDecision: args.awaitDecision,
     onBehalfOf: args.onBehalfOf,
     actorRuntime: args.actorRuntime,
@@ -880,6 +888,11 @@ export const observeOperationHandler: CapabilityHandler = async (
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
 
+  assertOperationEnabled(
+    await readGateLinkPolicy(client, workspaceId, gatekeeperId),
+    gatekeeperId,
+    operationName,
+  );
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
   if (!published) throw new OperationNotFoundError(gatekeeperId, operationName);
   if (published.operation.mode !== 'observe') {
@@ -968,6 +981,11 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId);
 
+  // P-B1 (design §6.3): a connector-disabled Operation is refused per call, whatever Handle or
+  // catalog view the caller holds; the platform link also carries the MCP trust read below.
+  const gateLink = await readGateLinkPolicy(client, workspaceId, gatekeeperId);
+  assertOperationEnabled(gateLink, gatekeeperId, operationName);
+
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
 
   if (published && published.operation.mode === 'observe') {
@@ -1014,6 +1032,16 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   }
 
   const operation = published.operation;
+  // P-B1 决定 ② (cloudflare-os `classifyTool`): an execute-class MCP tool auto-approves only when
+  // the linked platform instance is `vetted` ∧ `!destructiveHint` ∧ `idempotentHint`, read now — a
+  // BYO MCP endpoint (no link) never does. Non-MCP gates keep I8's double signal untouched.
+  const mcpTrustBlocked =
+    gatekeeper.transportKind === 'mcp' &&
+    !mcpAutoApproveAllowed({
+      trust: gateLink?.trust,
+      destructiveHint: operation.destructive_hint,
+      idempotentHint: operation.idempotent_hint,
+    });
   return runGovernedRequest(client, workspaceId, {
     gatekeeper,
     operationName,
@@ -1023,9 +1051,24 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     principalAutoApproveLowEnabled,
     requesterScope,
     blastRadius: operation.blast_radius,
-    autoApprovable: operation.auto_approvable,
+    autoApprovable: operation.auto_approvable && !mcpTrustBlocked,
+    mcpTrustBlocked,
     awaitDecision: operation.await_decision,
     idempotencyKey,
     parentWorkerRunId,
   });
 };
+
+/** P-B1: the per-call half of "按 Operation 开关" — `null` link = a gate this workspace connected
+ *  itself, no platform deny list applies. */
+function assertOperationEnabled(
+  gateLink: GateLinkPolicyView | null,
+  gatekeeperId: string,
+  operationName: string,
+): void {
+  if (gateLink && isOperationDisabled(gateLink.disabledOperations, operationName)) {
+    throw new ForbiddenError(
+      `operation_disabled: "${operationName}" on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${gateLink.connector}"`,
+    );
+  }
+}

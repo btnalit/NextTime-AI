@@ -1576,6 +1576,32 @@
 > design §6.3 取代：门实例改为打包门启动时向内核 `POST /internal/gates/announce` 自注册（稳定
 > `GATE_ID`），通用 `http` / `mcp` 门改由门宿主承载多实例、凭证页面直达门宿主，按 Operation 逐个开关。
 
+- **拆分与决定（2026-09-12，开工前）**：P-B 按 design §9 一行的内容有 P-A2 的两到三倍，拆成两个 PR 波次，
+  各自独立审查、合入、可回滚：
+  - **P-B1 门与集成目录**：门自注册（`POST /internal/gates/announce` + 心跳）、接入包三态与按 Operation 禁用、
+    门实例（发现 / 启用 / 禁用 / 失联 / `vetted`）、工作区侧"从平台目录一键启用"、MCP 提示位入 Operation 与
+    决策期信任规则、外部运行时盘点与吊销 + "访问"页签发 service Handle（复用既有 `issue_handle`）、
+    web 集成页。
+  - **P-B2 门宿主与模块**：gatekeeper-base 多实例宿主（`http` / `mcp`）、页面直达门宿主录凭证（5 分钟平台
+    JWT）、`vet_mcp_endpoint`、模块页（`list_modules` / `install_module` / `upgrade_module` /
+    `set_default_modules` / `promote_template`）、CI compose 加 fake MCP + 门容器跑 design §9 的 e2e。
+  - 决定 ①：**启用门实例与安装模块都是 `scope:'workspace'`、owner 动作**。`ontology_versions.proposed_by`
+    与 `registerGatekeeper` 的 `registeredBy` / `activityId` 都要真实 Principal，平台面没有；管理员不在某工作区
+    时先委托（P-A2 已记录的同一限制），不造"系统 Principal"。平台页只展示与配置。
+  - 决定 ②：**MCP 三个提示位存进 Operation、信任在决策时读**。`OperationSchema` 加可选
+    `read_only_hint` / `destructive_hint` / `idempotent_hint`，`importMcpTools` 从 `annotations` 填；
+    自动批准规则在 `request_action` 决策处：门为 `mcp` 时，需工作区门链接行指向 `trust='vetted'` 的实例
+    ∧ `!destructive_hint` ∧ `idempotent_hint`；自连（无链接行）的 MCP 永不自动批准；非 MCP 门维持 I8 双信号。
+  - 决定 ③：**P-B1 的 e2e 不起门容器**，在 CI 里经 `docker compose exec kernel` 用内部 token 调
+    `/internal/gates/announce` 播种一个"发现的门实例"（健康显示不可达，如实），页面走启用 / 三态 / 外部运行时；
+    design §9 的 fake MCP 全链路 e2e 归 P-B2（CI compose 加 `deploy/accept-s2/mcp` + gatekeeper-base 容器）。
+  - 决定 ④：**模块版本用仓库内索引 `ontology/modules.yaml`**（名、版本列表 `{file, version, notes, breaking}`），
+    "已安装版本" = 已发布 `definition` 的哈希匹配到的索引项，否则"已定制"；不加新列。P-B2 实现，
+    P-B1 的 0023 不为此留列。
+  - 决定 ⑤：**存活只用一种机制**：门每 `GATE_ANNOUNCE_INTERVAL_SEC`（默认 60）重新 announce 当心跳，内核定时器
+    把 `last_seen_at` 超过 3 倍间隔的实例标 `lost`；`probeGatekeeperHealth` 只在 `test_gate_instance` 里用。
+    已启用实例再次 announce 保持状态；端点变化写平台审计。三态变更不拆已有链接，只管新启用与目录可见；
+    按 Operation 禁用则在下一次调用就生效（与工作区禁用同一"按调用卡口"原则）。
 - 交付物：
   1. kernel：`POST /internal/gates/announce`（内部面 token，同 supervisor；带 `GATE_ID`、种类、
      `describe_operations`、健康端点，未启用的实例落"发现的门实例"、状态"未启用"；下线标"失联"）；
@@ -1594,6 +1620,69 @@
      "外部运行时"标签（跨工作区盘点 + 吊销，替代 `issue-service-handle` CLI）；工作区"访问"页签发
      service Handle；模块页（列表、安装/升级到工作区、默认模块、"推荐到平台"）；owner 的能力目录里
      同样的安装/升级入口。
+- 实现说明（P-B1，2026-09-12，PR #TBD）：
+  - **迁移 core 0023**：`connectors`（三态 `mode` + `disabled_operations`；四个通用种类预置为
+    `self_serve`，打包门首次 announce 时以 `platform_preset` 建行）、`gate_instances`（主键 = `GATE_ID`，
+    存 announce 来的 manifest、状态 discovered / enabled / disabled / lost、`trust` byo / vetted、健康、
+    最近心跳）、`workspace_gate_links`（工作区 ↔ 实例 ↔ 该工作区的 Gatekeeper 对象）。前两张是平台级配置：
+    任何工作区事务可读（`*_read_all`），只有平台事务可写；链接表同时挂工作区隔离与平台两条策略。
+  - **`POST /internal/gates/announce`**（`interfaces/http/internal/gates.ts`，既有内部面守卫）：
+    `.strict()` 体，无凭证字段；跑超级用户 client（门既不是用户也不是 Principal），不写审计行（0019 的
+    actor 形状约束要求平台行有用户），以实例行的 `last_seen_at` / `updated_at` 与日志为记录。首见 →
+    discovered；已 enabled / disabled 的心跳保持状态；lost 的实例再出现 → 有链接则 enabled 否则 discovered。
+    存活只用一种机制（决定 ⑤）：kernel 每 60 s 把 `last_seen_at` 超过 `GATE_LOST_AFTER_SEC`（默认 180）的
+    enabled / discovered 实例标 lost；`probeGatekeeperHealth` 只在 `test_gate_instance` 里用。
+  - **gatekeeper-base `announce.ts`**：`GATE_ID` / `GATE_CONNECTOR` / `KERNEL_URL` 三者齐全才开（否则
+    no-op 并记一行 info，验收夹具与 P-B2 宿主模式不受影响）；首次成功前 1 s → 30 s 指数退避，之后按
+    `GATE_ANNOUNCE_INTERVAL_SEC`（默认 60）心跳，任何失败只记 warn、永不 crash、永不打印 token；端点默认
+    `http://<GATE_SERVICE_NAME|hostname>:<GATE_PORT>`，target 取 `GATE_TARGET` → `RAGFLOW_BASE_URL` →
+    `DOCKER_HOST`（都是地址不是密钥）。`startGatekeeperServer` 与 docker / ragflow 两个打包门的
+    `start*Gate` 都接了；compose 给两个门服务加 `internal_token` secret 与 `GATE_*` / `KERNEL_URL` 环境。
+  - **平台能力**（`platform-gates-handlers.ts`）：`list_connectors` / `set_connector_mode`（通用种类不能设
+    `platform_preset`：P-B2 出门宿主前没有平台跑的实例，409 `connector_mode_not_allowed`）/
+    `list_gate_instances` / `get_gate_instance` / `update_gate_instance`（`vetted` 只对 mcp，409
+    `trust_not_applicable`）/ `test_gate_instance` / `list_external_runtimes` / `revoke_external_runtime`。
+  - **工作区侧**（`gate-instance-handlers.ts`，owner）：`list_available_gate_instances` 只列
+    `platform_preset` 且 enabled 的实例（本工作区已链接的即使实例后来 disabled 也保留显示）；
+    `enable_gate_instance` 按 CLI `register-gatekeeper --publish` 逐步：Activity → `registerGatekeeper` →
+    `importManifest`（origin import）→ 全部 `publishOperation` → `ConnectionCreated` → 写链接行；按
+    (工作区, gate) 幂等。决定 ①：这一步需要真实 Principal，所以留在工作区面。
+  - **按 Operation 禁用两半**：读投影（`list_operations` / `get_gatekeeper`）按链接行的 connector 隐藏；
+    `request_action` / `observe_operation` 每次调用读 `readGateLinkPolicy` 后拒绝（`ForbiddenError`
+    `operation_disabled`）。工作区自连的门没有链接行，不受平台禁用名单影响（记录在能力描述里）。
+  - **MCP 信任**（决定 ②）：`OperationSchema` 增 `read_only_hint` / `destructive_hint` / `idempotent_hint`
+    （词表守卫例外表随之加三项），`importMcpTools` 原样保留 annotations；`request_action` 对
+    `transportKind === 'mcp'` 的门按 `mcpAutoApproveAllowed`（vetted ∧ !destructive ∧ idempotent）决定
+    是否允许自动批准，不允许时策略引擎给出独立原因 `mcp_gate_not_vetted`（新 `PolicyEvaluationInput.
+    mcpTrustBlocked`），审计能区分"未受信"与"Operation 本身不可自动批准"。
+  - **外部运行时**：`issue_service_handle`（workspace，owner）取代 `issue-service-handle` CLI 的页面路径——
+    给一个活跃的 service Principal 开 `service` 会话并按能力名列表签 Handle（`assertValidScope` 仍拒绝
+    human-only 能力），token 只返回一次；平台 `list_external_runtimes` 跨工作区列 service Principal 的活跃
+    会话，`revoke_external_runtime` 吊销。CLI 保留（无浏览器场景，`docs/runbooks/host-collector.md`）。
+  - **web**：`#/platform/integrations`（"管理 → 集成"，仅管理员；`PlatformIntegrationsPage` 三个标签：接入包——
+    三态下拉 + 展开后按 Operation 的禁用勾选清单；门实例——列表 + 抽屉（改名、启用 / 禁用、只对 mcp 显示
+    的 `vetted` 开关、"测试连接"、公告的 Operation 表）；外部运行时——跨工作区列表 + 二次确认吊销）；
+    工作区"系统接入"页新增"从平台目录启用"段（`AvailableGateInstancesSection`：已启用则链到门详情）；
+    "访问"页新增"签发外部运行时凭证"段（`IssueServiceHandleSection`：选 service Principal、能力名、
+    有效期，token 只显示一次）。
+  - **e2e 播种**（决定 ③）：`.github/workflows/e2e.yml` 在 kernel 起来后 `docker compose exec kernel node -e`
+    用 `/run/secrets/internal_token` 向 `/internal/gates/announce` 播一个 `ci-fixture-mcp` 实例
+    （端点 `http://127.0.0.1:1`，健康如实显示不可达）。
+  - **独立审查（sonnet reviewer）抓到并已修**：① 按 Operation 禁用只在建 ActionRequest 时检查，已批准 /
+    待审批的请求在执行时不再复查 → `action-executor.execute` 执行前重读 `readGateLinkPolicy`，禁用即以
+    `operation_disabled` 失败（"下一次调用就生效"覆盖到已在途的审批）；② `revoke_external_runtime` 只改
+    `sessions.status`，Handle 校验看的是 `capability_handles.revoked_at` → 同时调 `revokeSession`（集成测试
+    断言会话下的 Handle 全部 `revoked_at`）；③ 已 enabled / disabled 的实例被任何持内部 token 者用同名
+    announce 覆盖 connector / transport / endpoint → 身份字段在管理员决定后冻结，不一致的 announce 只算心跳、
+    健康标 `unknown`、日志 warn，`operations` / `target` 仍可更新（新版本门合法地新增 Operation）；
+    ④ lost 恢复时无链接就退回 discovered、丢掉管理员的 enabled 决定 → 0023 加 `status_before_lost`，
+    恢复到失联前状态；⑤ 并发 `enable_gate_instance` 竞态撞主键 → 与 `invoke.ts` 同款 `pg_advisory_xact_lock`。
+  - **e2e 首次抓出的既有 bug**：控制台"系统接入"页与接入向导仍把 `search` 的结果当裸数组解析，而 `search`
+    自 W5 起返回 `{items, nextCursor?}` 信封——"已注册的系统"一段一直报 "F.map is not a function"（单测的 fake
+    返回数组，从未暴露）。`lib/connections.ts` 加 `searchItems()` 同时接受两种形状，三处调用改用它，
+    fake 改为信封。运行手册"已知缺口"不需要新增：问题已修。
+  - **未做 / 留到 P-B2**：通用 `http` / `mcp` 门宿主与页面直达门的凭证录入；`vet_mcp_endpoint` 单独能力
+    （P-B1 用 `update_gate_instance{trust}`）；模块页；fake MCP 全链路 e2e。
 - 完成标准（design §9 P-B e2e）：起一个 fake MCP server → 集成页新增门宿主实例 → 测试连接 →
   工作区启用 → 入口 agent 的工具里出现它，非 `vetted` 时写操作走审批；模块页把 `ops-assets-v2`
   装进某工作区的能力目录，运行中的旧 Worker 不受影响；接 RAGFlow、接任意 MCP server、装领域包全程

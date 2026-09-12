@@ -118,5 +118,12 @@ export const OperationSchema = z.object({
   reads: z.array(z.string()),
   writes: z.array(z.string()),
   result_mapping: ResultMappingSchema.optional(),
+  /** P-B1 (design §6.3 "MCP 信任分级", cloudflare-os `classifyTool`): the MCP tool annotations an
+   *  imported Operation came with, kept verbatim so the approval decision can apply the rule
+   *  "auto-approve only when the gate instance is `vetted` ∧ `!destructive_hint` ∧
+   *  `idempotent_hint`" at decision time. Absent for Operations that did not come from `tools/list`. */
+  read_only_hint: z.boolean().optional(),
+  destructive_hint: z.boolean().optional(),
+  idempotent_hint: z.boolean().optional(),
 });
 export type Operation = z.infer<typeof OperationSchema>;

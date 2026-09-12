@@ -157,7 +157,11 @@ function credentialHeaders(credential: unknown): Record<string, string> {
 export interface McpToolLike {
   readonly name: string;
   readonly inputSchema?: Record<string, unknown>;
-  readonly annotations?: { readonly readOnlyHint?: boolean };
+  readonly annotations?: {
+    readonly readOnlyHint?: boolean;
+    readonly destructiveHint?: boolean;
+    readonly idempotentHint?: boolean;
+  };
 }
 
 export interface McpToolsListResult {
@@ -178,6 +182,17 @@ export function importMcpTools(toolsList: McpToolsListResult): Operation[] {
       await_decision: mode === 'execute',
       reads: [],
       writes: [],
+      // P-B1 (design §6.3, cloudflare-os `classifyTool`): keep the three hints verbatim so the
+      // kernel's approval decision can apply "vetted ∧ !destructive ∧ idempotent" at decision time.
+      ...(tool.annotations?.readOnlyHint !== undefined
+        ? { read_only_hint: tool.annotations.readOnlyHint }
+        : {}),
+      ...(tool.annotations?.destructiveHint !== undefined
+        ? { destructive_hint: tool.annotations.destructiveHint }
+        : {}),
+      ...(tool.annotations?.idempotentHint !== undefined
+        ? { idempotent_hint: tool.annotations.idempotentHint }
+        : {}),
     };
   });
 }

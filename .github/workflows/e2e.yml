@@ -152,6 +152,29 @@ jobs:
       # relative to /api/health, so poll briefly; the file is only ever removed on a *later* kernel
       # start once an administrator already exists, so reading it here (kernel started, nothing
       # below restarts it) is safe regardless of what the bootstrap steps below do.
+      # P-B1 (docs/development-tasks.md P-B 决定 ③): the console e2e needs one "discovered" gate
+      # instance without running a gate container. Seed it exactly the way a gate does — a POST to
+      # the internal plane with the compose secret — from inside the kernel container (loopback is
+      # outside the Worker subnet, so the guard admits it). Health will read "unreachable", which is
+      # the truth about an endpoint nothing listens on; the fake-MCP end-to-end path is P-B2.
+      - name: Seed a discovered gate instance (announce)
+        run: |
+          set -euo pipefail
+          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml exec -T kernel node -e '
+            const fs = require("node:fs");
+            const token = fs.readFileSync("/run/secrets/internal_token", "utf8").trim();
+            const op = (name, mode, extra) => ({ name, binding: { kind: "mcp", tool_name: name },
+              params_schema: { type: "object", properties: {} }, mode, blast_radius: mode === "observe" ? "low" : "medium",
+              reversibility: false, auto_approvable: mode === "observe", await_decision: mode === "execute", reads: [], writes: [], ...extra });
+            const body = { gateId: "ci-fixture-mcp", connector: "fixture-mcp", transportKind: "mcp",
+              target: "http://fixture-mcp.invalid:9000", endpoint: "http://127.0.0.1:1", displayName: "CI fixture MCP",
+              operations: [op("list_things", "observe", { read_only_hint: true }), op("restart_thing", "execute", { destructive_hint: false, idempotent_hint: true })] };
+            fetch("http://127.0.0.1:8080/internal/gates/announce", { method: "POST",
+              headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: JSON.stringify(body) })
+              .then(async (r) => { const text = await r.text(); console.log(r.status, text); if (!r.ok) process.exit(1); })
+              .catch((err) => { console.error(String(err)); process.exit(1); });
+          '
+
       - name: Read the initial admin password
         run: |
           set -euo pipefail

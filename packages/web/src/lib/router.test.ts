@@ -29,6 +29,7 @@ describe('routeFromHash', () => {
     expect(routeFromHash('#/platform/overview')).toEqual({ kind: 'platformOverview' });
     expect(routeFromHash('#/platform/users')).toEqual({ kind: 'platformUsers' });
     expect(routeFromHash('#/platform/workspaces')).toEqual({ kind: 'platformWorkspaces' });
+    expect(routeFromHash('#/platform/integrations')).toEqual({ kind: 'platformIntegrations' });
     expect(routeFromHash('#/platform/settings')).toEqual({ kind: 'platformSettings' });
     expect(routeFromHash('#/platform/audit')).toEqual({ kind: 'platformAudit' });
   });
@@ -94,6 +95,7 @@ describe('hrefs', () => {
       { kind: 'platformOverview' },
       { kind: 'platformUsers' },
       { kind: 'platformWorkspaces' },
+      { kind: 'platformIntegrations' },
       { kind: 'platformSettings' },
       { kind: 'platformAudit' },
     ];
@@ -138,6 +140,8 @@ function hrefFor(route: Route): string {
       return hrefs.platformUsers();
     case 'platformWorkspaces':
       return hrefs.platformWorkspaces();
+    case 'platformIntegrations':
+      return hrefs.platformIntegrations();
     case 'platformSettings':
       return hrefs.platformSettings();
     case 'platformAudit':

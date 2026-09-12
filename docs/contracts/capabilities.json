@@ -2272,6 +2272,58 @@
     }
   },
   {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "enable_gate_instance",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "publishedOperationNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skippedOperationNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "gateId",
+        "gatekeeperId",
+        "publishedOperationNames",
+        "skippedOperationNames"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "handle",
     "group": "epistemic",
     "minRole": "member",
@@ -3862,6 +3914,178 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "get_gate_instance",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "enabledWorkspaceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "gateId": {
+          "type": "string"
+        },
+        "health": {
+          "enum": [
+            "ok",
+            "unreachable",
+            "unauthorized",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "lastCheckedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSeenAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "autoApprovable": {
+                "type": "boolean"
+              },
+              "blastRadius": {
+                "type": "string"
+              },
+              "destructiveHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "idempotentHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "observe",
+                  "execute"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "readOnlyHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "mode",
+              "blastRadius",
+              "autoApprovable",
+              "readOnlyHint",
+              "destructiveHint",
+              "idempotentHint"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "discovered",
+            "enabled",
+            "disabled",
+            "lost"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "transportKind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "trust": {
+          "enum": [
+            "byo",
+            "vetted"
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "connector",
+        "displayName",
+        "transportKind",
+        "target",
+        "endpoint",
+        "status",
+        "trust",
+        "health",
+        "lastSeenAt",
+        "lastCheckedAt",
+        "operationCount",
+        "enabledWorkspaceCount",
+        "operations",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "connection",
     "minRole": "member",
     "mode": "observe",
@@ -5066,6 +5290,94 @@
     }
   },
   {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "issue_service_handle",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "principalId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "scope": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+        },
+        "ttlSeconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 31536000,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "principalId",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string"
+        },
+        "principalId": {
+          "type": "string"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resources": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "capabilities",
+            "resources"
+          ],
+          "type": "object"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "handle",
+        "principalId",
+        "sessionId",
+        "expiresAt",
+        "scope"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "handle",
     "group": "task",
     "mode": "observe",
@@ -5100,6 +5412,113 @@
               "gatekeeperId",
               "gateName",
               "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "observe",
+    "name": "list_available_gate_instances",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "connector": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "gateId": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "health": {
+                "enum": [
+                  "ok",
+                  "unreachable",
+                  "unauthorized",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              "operationCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "enum": [
+                  "discovered",
+                  "enabled",
+                  "disabled",
+                  "lost"
+                ],
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "transportKind": {
+                "enum": [
+                  "http",
+                  "mcp",
+                  "cli",
+                  "ssh"
+                ],
+                "type": "string"
+              },
+              "trust": {
+                "enum": [
+                  "byo",
+                  "vetted"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "gateId",
+              "connector",
+              "displayName",
+              "transportKind",
+              "target",
+              "status",
+              "trust",
+              "health",
+              "operationCount",
+              "gatekeeperId"
             ],
             "type": "object"
           },
@@ -5389,6 +5808,381 @@
               "completedBy",
               "requestedAt",
               "completedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_connectors",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "disabledOperations": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "instanceCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "http",
+                  "mcp",
+                  "cli",
+                  "ssh"
+                ],
+                "type": "string"
+              },
+              "mode": {
+                "enum": [
+                  "disabled",
+                  "self_serve",
+                  "platform_preset"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "operationCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "packaged": {
+                "type": "boolean"
+              },
+              "updatedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "packaged",
+              "mode",
+              "disabledOperations",
+              "operationCount",
+              "instanceCount",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_external_runtimes",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expiresAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "principalId": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "sessionKind": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "workspaceName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "workspaceName",
+              "principalId",
+              "displayName",
+              "sessionId",
+              "sessionKind",
+              "status",
+              "createdAt",
+              "expiresAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_gate_instances",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "discovered",
+            "enabled",
+            "disabled",
+            "lost"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "connector": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "enabledWorkspaceCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "gateId": {
+                "type": "string"
+              },
+              "health": {
+                "enum": [
+                  "ok",
+                  "unreachable",
+                  "unauthorized",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              "lastCheckedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastSeenAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "operationCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "autoApprovable": {
+                      "type": "boolean"
+                    },
+                    "blastRadius": {
+                      "type": "string"
+                    },
+                    "destructiveHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "idempotentHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "readOnlyHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "mode",
+                    "blastRadius",
+                    "autoApprovable",
+                    "readOnlyHint",
+                    "destructiveHint",
+                    "idempotentHint"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "enum": [
+                  "discovered",
+                  "enabled",
+                  "disabled",
+                  "lost"
+                ],
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "transportKind": {
+                "enum": [
+                  "http",
+                  "mcp",
+                  "cli",
+                  "ssh"
+                ],
+                "type": "string"
+              },
+              "trust": {
+                "enum": [
+                  "byo",
+                  "vetted"
+                ],
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gateId",
+              "connector",
+              "displayName",
+              "transportKind",
+              "target",
+              "endpoint",
+              "status",
+              "trust",
+              "health",
+              "lastSeenAt",
+              "lastCheckedAt",
+              "operationCount",
+              "enabledWorkspaceCount",
+              "operations",
+              "createdAt",
+              "updatedAt"
             ],
             "type": "object"
           },
@@ -8508,6 +9302,12 @@
               ],
               "type": "string"
             },
+            "destructive_hint": {
+              "type": "boolean"
+            },
+            "idempotent_hint": {
+              "type": "boolean"
+            },
             "mode": {
               "enum": [
                 "observe",
@@ -8521,6 +9321,9 @@
             "params_schema": {
               "additionalProperties": {},
               "type": "object"
+            },
+            "read_only_hint": {
+              "type": "boolean"
             },
             "reads": {
               "items": {
@@ -9809,6 +10612,12 @@
                     ],
                     "type": "string"
                   },
+                  "destructive_hint": {
+                    "type": "boolean"
+                  },
+                  "idempotent_hint": {
+                    "type": "boolean"
+                  },
                   "mode": {
                     "enum": [
                       "observe",
@@ -9822,6 +10631,9 @@
                   "params_schema": {
                     "additionalProperties": {},
                     "type": "object"
+                  },
+                  "read_only_hint": {
+                    "type": "boolean"
                   },
                   "reads": {
                     "items": {
@@ -10569,6 +11381,52 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "revoke_external_runtime",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "revoked": {
+          "type": "boolean"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId",
+        "revoked"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "members",
     "minRole": "member",
     "mode": "write",
@@ -11263,6 +12121,103 @@
         "requesterCanApprove",
         "setBy",
         "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "set_connector_mode",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "disabledOperations": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 500,
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "disabled",
+            "self_serve",
+            "platform_preset"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "disabledOperations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instanceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "disabled",
+            "self_serve",
+            "platform_preset"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "operationCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "packaged": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "packaged",
+        "mode",
+        "disabledOperations",
+        "operationCount",
+        "instanceCount",
         "updatedAt"
       ],
       "type": "object"
@@ -12588,6 +13543,65 @@
     }
   },
   {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "test_gate_instance",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "checkedAt": {
+          "type": "string"
+        },
+        "describedOperationCount": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gateId": {
+          "type": "string"
+        },
+        "health": {
+          "enum": [
+            "ok",
+            "unreachable",
+            "unauthorized",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "health",
+        "describedOperationCount",
+        "checkedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "handle",
     "group": "graph",
     "minRole": "member",
@@ -12661,6 +13675,197 @@
       "required": [
         "nodes",
         "edges"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "update_gate_instance",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "displayName": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "enabled",
+            "disabled"
+          ],
+          "type": "string"
+        },
+        "trust": {
+          "enum": [
+            "byo",
+            "vetted"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "enabledWorkspaceCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "gateId": {
+          "type": "string"
+        },
+        "health": {
+          "enum": [
+            "ok",
+            "unreachable",
+            "unauthorized",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "lastCheckedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSeenAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "autoApprovable": {
+                "type": "boolean"
+              },
+              "blastRadius": {
+                "type": "string"
+              },
+              "destructiveHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "idempotentHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "observe",
+                  "execute"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "readOnlyHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "mode",
+              "blastRadius",
+              "autoApprovable",
+              "readOnlyHint",
+              "destructiveHint",
+              "idempotentHint"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "discovered",
+            "enabled",
+            "disabled",
+            "lost"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "transportKind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "trust": {
+          "enum": [
+            "byo",
+            "vetted"
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId",
+        "connector",
+        "displayName",
+        "transportKind",
+        "target",
+        "endpoint",
+        "status",
+        "trust",
+        "health",
+        "lastSeenAt",
+        "lastCheckedAt",
+        "operationCount",
+        "enabledWorkspaceCount",
+        "operations",
+        "createdAt",
+        "updatedAt"
       ],
       "type": "object"
     }

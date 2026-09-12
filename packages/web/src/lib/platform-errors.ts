@@ -36,6 +36,19 @@ const PLATFORM_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   unknown_model: '模型不在目录里 No such model in the catalog',
   entry_model_not_allowed:
     '允许的模型列表必须包含入口模型；限制模型前要先设置入口模型 A non-empty allowed list must contain the entry model, and an entry model must be set before restricting',
+  // P-B1 (集成 Integrations): connectors, gate instances, external runtimes, and the workspace
+  // "enable from platform catalog" flow.
+  connector_not_found: '找不到该接入包 No such connector',
+  connector_mode_not_allowed:
+    '通用类接入包（http/mcp/cli/ssh）不能设为平台预置 A generic connector kind cannot be set to platform preset',
+  gate_not_found: '找不到该门实例 No such gate instance',
+  trust_not_applicable:
+    '只有 MCP 类型的实例可以设置信任级别 Only an MCP instance can be marked vetted',
+  runtime_not_found: '找不到该外部运行时会话 No such external runtime session',
+  gate_not_enabled:
+    '该门实例尚未启用，工作区不能启用它 That gate instance is not enabled — a workspace cannot enable it',
+  connector_not_preset:
+    '该接入包不是平台预置模式，工作区不能从目录启用它 That connector is not in platform-preset mode — a workspace cannot enable it from the catalog',
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of

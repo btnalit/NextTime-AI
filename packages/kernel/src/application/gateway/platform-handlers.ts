@@ -60,7 +60,13 @@ export type PlatformErrorCode =
   | 'user_disabled'
   | 'default_workspace'
   | 'unknown_model'
-  | 'entry_model_not_allowed';
+  | 'entry_model_not_allowed'
+  // P-B1 (platform-gates-handlers.ts)
+  | 'connector_not_found'
+  | 'connector_mode_not_allowed'
+  | 'gate_not_found'
+  | 'trust_not_applicable'
+  | 'runtime_not_found';
 
 /** Mapped by interfaces/http/capability-route.ts: `*_not_found` → 404, the rest → 409. */
 export class PlatformAdminError extends Error {

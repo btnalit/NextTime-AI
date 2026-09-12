@@ -210,3 +210,148 @@ export const PlatformWorkspaceWireSchema = z
   })
   .strict();
 export type PlatformWorkspaceWire = z.infer<typeof PlatformWorkspaceWireSchema>;
+
+// -------------------------------------------------------------------------------------------
+// P-B1 (docs/platform-admin-design.md §6.3 集成): connectors (接入包), gate instances (门实例) and
+// external runtimes as the platform plane sees them; the workspace-side "enable from the platform
+// catalog" shapes live here too so the two planes share one vocabulary.
+// -------------------------------------------------------------------------------------------
+
+/** design §6.3 three-state, borrowed from cloudflare-os `ambientGatekeeperModes`: `disabled` (no new
+ *  connections or enables), `self_serve` (a workspace owner may connect their own instance),
+ *  `platform_preset` (the administrator runs the instances; workspaces enable them one-click). */
+export const ConnectorModeWireSchema = z.enum(['disabled', 'self_serve', 'platform_preset']);
+export type ConnectorModeWire = z.infer<typeof ConnectorModeWireSchema>;
+
+export const GateTransportKindWireSchema = z.enum(['http', 'mcp', 'cli', 'ssh']);
+
+export const ConnectorWireSchema = z
+  .object({
+    /** Stable connector name: a packaged gate's `GATE_CONNECTOR` (`docker`, `ragflow`) or one of
+     *  the generic kinds (`http`, `mcp`, `cli`, `ssh`). */
+    name: z.string(),
+    kind: GateTransportKindWireSchema,
+    /** `true` for a gate this deployment ships as its own image (announced with a connector name
+     *  other than the four generic kinds). */
+    packaged: z.boolean(),
+    mode: ConnectorModeWireSchema,
+    /** Operation names refused on the next call for every instance of this connector. */
+    disabledOperations: z.array(z.string()),
+    /** Distinct Operation names across this connector's announced instances. */
+    operationCount: z.number().int().nonnegative(),
+    instanceCount: z.number().int().nonnegative(),
+    updatedAt: z.string().nullable(),
+  })
+  .strict();
+export type ConnectorWire = z.infer<typeof ConnectorWireSchema>;
+
+export const GateInstanceStatusWireSchema = z.enum(['discovered', 'enabled', 'disabled', 'lost']);
+export type GateInstanceStatusWire = z.infer<typeof GateInstanceStatusWireSchema>;
+
+/** `vetted` is the administrator's mark on a platform-run MCP instance (design §6.3 "MCP 信任分级");
+ *  read at every approval decision, never frozen onto a connection. */
+export const GateTrustWireSchema = z.enum(['byo', 'vetted']);
+export type GateTrustWire = z.infer<typeof GateTrustWireSchema>;
+
+export const GateHealthWireSchema = z.enum(['ok', 'unreachable', 'unauthorized', 'unknown']);
+
+/** One announced Operation, as the gate described it (a subset of `OperationSchema`). */
+export const GateOperationSummaryWireSchema = z
+  .object({
+    name: z.string(),
+    mode: z.enum(['observe', 'execute']),
+    blastRadius: z.string(),
+    autoApprovable: z.boolean(),
+    readOnlyHint: z.boolean().nullable(),
+    destructiveHint: z.boolean().nullable(),
+    idempotentHint: z.boolean().nullable(),
+  })
+  .strict();
+export type GateOperationSummaryWire = z.infer<typeof GateOperationSummaryWireSchema>;
+
+export const GateInstanceWireSchema = z
+  .object({
+    /** `GATE_ID`: the stable identity the gate announces itself with (compose config, not a display
+     *  name — a second container cannot take over an enabled gate by reusing its name). */
+    gateId: z.string(),
+    connector: z.string(),
+    displayName: z.string(),
+    transportKind: GateTransportKindWireSchema,
+    target: z.string(),
+    endpoint: z.string(),
+    status: GateInstanceStatusWireSchema,
+    trust: GateTrustWireSchema,
+    health: GateHealthWireSchema,
+    lastSeenAt: z.string().nullable(),
+    lastCheckedAt: z.string().nullable(),
+    operationCount: z.number().int().nonnegative(),
+    /** Workspaces that enabled this instance (`workspace_gate_links`). */
+    enabledWorkspaceCount: z.number().int().nonnegative(),
+    operations: z.array(GateOperationSummaryWireSchema),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .strict();
+export type GateInstanceWire = z.infer<typeof GateInstanceWireSchema>;
+
+export const GateInstanceTestResultWireSchema = z
+  .object({
+    gateId: z.string(),
+    health: GateHealthWireSchema,
+    /** Operations the gate described just now; `null` when it could not be reached. */
+    describedOperationCount: z.number().int().nonnegative().nullable(),
+    checkedAt: z.string(),
+  })
+  .strict();
+export type GateInstanceTestResultWire = z.infer<typeof GateInstanceTestResultWireSchema>;
+
+/** One external runtime = a `service` Principal's live session (Claude Code, a local pi over
+ *  `/mcp`, a collector) — listed across workspaces for inventory and revocation (design §6.3). */
+export const ExternalRuntimeWireSchema = z
+  .object({
+    workspaceId: z.string(),
+    workspaceName: z.string(),
+    principalId: z.string(),
+    displayName: z.string().nullable(),
+    sessionId: z.string(),
+    sessionKind: z.string(),
+    status: z.string(),
+    createdAt: z.string(),
+    expiresAt: z.string().nullable(),
+  })
+  .strict();
+export type ExternalRuntimeWire = z.infer<typeof ExternalRuntimeWireSchema>;
+
+export const RevokeExternalRuntimeResultWireSchema = z
+  .object({ workspaceId: z.string(), sessionId: z.string(), revoked: z.boolean() })
+  .strict();
+export type RevokeExternalRuntimeResultWire = z.infer<typeof RevokeExternalRuntimeResultWireSchema>;
+
+/** Workspace side (`list_available_gate_instances`): a platform gate instance an owner may enable
+ *  here, with whether this workspace already did. */
+export const AvailableGateInstanceWireSchema = z
+  .object({
+    gateId: z.string(),
+    connector: z.string(),
+    displayName: z.string(),
+    transportKind: GateTransportKindWireSchema,
+    target: z.string(),
+    status: GateInstanceStatusWireSchema,
+    trust: GateTrustWireSchema,
+    health: GateHealthWireSchema,
+    operationCount: z.number().int().nonnegative(),
+    /** Set when this workspace already enabled it: the workspace's Gatekeeper object id. */
+    gatekeeperId: z.string().nullable(),
+  })
+  .strict();
+export type AvailableGateInstanceWire = z.infer<typeof AvailableGateInstanceWireSchema>;
+
+export const EnableGateInstanceResultWireSchema = z
+  .object({
+    gateId: z.string(),
+    gatekeeperId: z.string(),
+    publishedOperationNames: z.array(z.string()),
+    skippedOperationNames: z.array(z.string()),
+  })
+  .strict();
+export type EnableGateInstanceResultWire = z.infer<typeof EnableGateInstanceResultWireSchema>;

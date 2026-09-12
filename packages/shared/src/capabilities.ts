@@ -145,6 +145,8 @@ export interface Capability {
 const id = z.string().min(1);
 const jsonRecord = z.record(z.string(), z.unknown());
 const noParams = z.object({}).strict();
+/** P-B1 `issue_service_handle`: one year, the CLI's own default and ceiling. */
+const SERVICE_HANDLE_MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
 
 /** The shape `application/gateway/request-action-handler.ts`'s `runObserve` produces —
  *  `observe_operation`'s own result, and (fixed after this task's first CI run caught the
@@ -624,6 +626,57 @@ const connectionCapabilities: readonly Capability[] = [
     resultSchema: listEnvelope(wire.GatekeeperSummaryWireSchema),
     description:
       'List every registered Gatekeeper instance (health/manifest not included — see get_gatekeeper).',
+  },
+  {
+    name: 'issue_service_handle',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({
+        /** An existing `kind:'service'` Principal of this workspace (create one with `create_principal`). */
+        principalId: z.string().min(1),
+        /** Capability names the Handle may call — never a `channel:'human'` capability (refused at issuance). */
+        scope: z.array(z.string().min(1)).min(1).max(100),
+        /** Default one year; the CLI’s `issue-service-handle` default, now on the page. */
+        ttlSeconds: z.number().int().positive().max(SERVICE_HANDLE_MAX_TTL_SECONDS).optional(),
+      })
+      .strict(),
+    resultSchema: z
+      .object({
+        handle: z.string(),
+        principalId: z.string(),
+        sessionId: z.string(),
+        expiresAt: z.string(),
+        scope: CapabilityScopeSchema,
+      })
+      .strict(),
+    redactedParamKeys: [],
+    description:
+      'P-B1 (design §6.3 "外部运行时"): issue a long-lived CapabilityHandle for a service Principal — an external runtime such as Claude Code, a local pi over /mcp or a collector — from the 访问 page instead of the `issue-service-handle` CLI. The token is returned exactly once; the session shows up in the platform’s external-runtime inventory and can be revoked there.',
+  },
+  {
+    name: 'list_available_gate_instances',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.AvailableGateInstanceWireSchema),
+    description:
+      'P-B1: the platform’s enabled gate instances whose connector is in platform-preset mode, with whether this workspace already enabled each (its Gatekeeper id).',
+  },
+  {
+    name: 'enable_gate_instance',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    resultSchema: wire.EnableGateInstanceResultWireSchema,
+    description:
+      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate).',
   },
   {
     name: 'get_gatekeeper',
@@ -2256,6 +2309,117 @@ const platformCapabilities: readonly Capability[] = [
     resultSchema: wire.PlatformWorkspaceWireSchema,
     description:
       'Set the models a workspace’s members may pick in 我的智能体 (the AgentPolicy allow-list). A member whose current choice falls outside the list is served the entry model from their next Turn.',
+  }, // P-B1 (docs/platform-admin-design.md §6.3 集成; development-tasks P-B "拆分与决定"): connectors,
+  // gate instances and external runtimes as platform objects. Enabling an instance *in* a workspace
+  // stays on the workspace plane (`enable_gate_instance`, connection group) — it needs a Principal.
+  {
+    name: 'list_connectors',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.ConnectorWireSchema),
+    description:
+      'The integration catalog: every connector this deployment knows (packaged gates that announced themselves, plus the generic http / mcp / cli / ssh kinds) with its three-state mode, disabled Operations and instance count.',
+  },
+  {
+    name: 'set_connector_mode',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        name: z.string().min(1).max(64),
+        mode: wire.ConnectorModeWireSchema.optional(),
+        /** Operation names every instance of this connector refuses from the next call on. */
+        disabledOperations: z.array(z.string().min(1)).max(500).optional(),
+      })
+      .strict(),
+    resultSchema: wire.ConnectorWireSchema,
+    description:
+      'Set a connector’s mode (disabled / self-serve / platform preset) and/or the Operations it may never run. A mode change never tears down existing workspace links; a disabled Operation is refused on its next call everywhere.',
+  },
+  {
+    name: 'list_gate_instances',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        status: wire.GateInstanceStatusWireSchema.optional(),
+        connector: z.string().min(1).optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.GateInstanceWireSchema),
+    description:
+      'Every gate instance that announced itself (`POST /internal/gates/announce`) with status, trust, last heartbeat, Operation count and how many workspaces enabled it.',
+  },
+  {
+    name: 'get_gate_instance',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    resultSchema: wire.GateInstanceWireSchema,
+    description: 'One gate instance with its announced Operations.',
+  },
+  {
+    name: 'update_gate_instance',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        gateId: z.string().min(1),
+        displayName: z.string().min(1).max(120).optional(),
+        /** `enabled` lets workspaces enable it; `disabled` hides it from the workspace catalog (existing links keep working until their Operations are disabled). */
+        status: z.enum(['enabled', 'disabled']).optional(),
+        trust: wire.GateTrustWireSchema.optional(),
+      })
+      .strict(),
+    resultSchema: wire.GateInstanceWireSchema,
+    description:
+      'Name, enable / disable, or mark a gate instance `vetted` (MCP: allows auto-approval of non-destructive idempotent tools; read at every decision, revocable any time).',
+  },
+  {
+    name: 'test_gate_instance',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    resultSchema: wire.GateInstanceTestResultWireSchema,
+    description:
+      'Probe the instance’s health endpoint and ask it to describe its Operations now; records the check time, changes nothing else.',
+  },
+  {
+    name: 'list_external_runtimes',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ workspaceId: z.string().min(1).optional() }).strict(),
+    resultSchema: listEnvelope(wire.ExternalRuntimeWireSchema),
+    description:
+      'Every live session held by a `service` Principal across workspaces — external runtimes such as Claude Code, a local pi over /mcp, or a collector — for inventory and revocation.',
+  },
+  {
+    name: 'revoke_external_runtime',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({ workspaceId: z.string().min(1), sessionId: z.string().min(1) })
+      .strict(),
+    resultSchema: wire.RevokeExternalRuntimeResultWireSchema,
+    description:
+      'Revoke one external runtime’s session (and every Handle issued under it) immediately.',
   },
 ];
 
@@ -2355,6 +2519,17 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'update_workspace',
     'set_workspace_status',
     'set_allowed_models',
+    'list_connectors',
+    'set_connector_mode',
+    'list_gate_instances',
+    'get_gate_instance',
+    'update_gate_instance',
+    'test_gate_instance',
+    'list_external_runtimes',
+    'revoke_external_runtime',
+    'list_available_gate_instances',
+    'enable_gate_instance',
+    'issue_service_handle',
   ],
 ]);
 

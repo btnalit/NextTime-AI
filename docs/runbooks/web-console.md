@@ -28,14 +28,15 @@
 | Chats / Chat | `list_chats` `get_chat_history` `subscribe_chat`（WS） | `new_chat` `send_chat_message` `stop_agent`（WS）；卡片内 `approve` `reject` `set_auto_approved_action_kind`（HTTP） | `chat.message` `chat.stream` `chat.metadata` `action.updated` |
 | Approvals | `list_pending` `get_action` | `approve` `reject` `set_auto_approved_action_kind` | `action.pending` `action.updated` |
 | Tasks | `list_tasks` `get_task` `list_worker_definitions`（名字）`list_pending`（关联审批） | `cancel_task` | `task.updated` `action.pending/updated` |
-| 系统接入（`/govern/systems`） | `list_connection_requests` `search{objectType:Gatekeeper}` `search{objectType:Operation}` `get_gatekeeper`（S3.11，健康与 Operation 详情） | `request_connection` `create_connection` `publish_manifest` `connect_gatekeeper`；接入向导（S3.12，`OnboardingWizard`）额外用 `propose_operation`+`publish_operation`（逐条 Operation 提议重分类，两步，不提供直接改的捷径） | 无 |
+| 系统接入（`/govern/systems`） | `list_connection_requests` `search{objectType:Gatekeeper}` `search{objectType:Operation}` `get_gatekeeper`（S3.11，健康与 Operation 详情）`list_available_gate_instances`（P-B1，owner） | `request_connection` `create_connection` `publish_manifest` `connect_gatekeeper` `enable_gate_instance`（P-B1，owner：从平台目录一键启用）；接入向导（S3.12，`OnboardingWizard`）额外用 `propose_operation`+`publish_operation`（逐条 Operation 提议重分类，两步，不提供直接改的捷径） | 无 |
 | 成员与授权（`/govern/members`） | `list_principals` | `create_principal` `set_principal_role` `rotate_api_key` `disable_principal` | 无 |
-| 访问（`/govern/access`） | `list_grants` `list_principals`（填充成员下拉，无则退化为手填 id） | `grant_capability`（已有）`revoke_capability`（已有） | 无 |
+| 访问（`/govern/access`） | `list_grants` `list_principals`（填充成员下拉，无则退化为手填 id） | `grant_capability`（已有）`revoke_capability`（已有）`issue_service_handle`（P-B1，owner：给 service Principal 签外部运行时 Handle，token 只显示一次） | 无 |
 | 能力目录（`/govern/catalog`） | `list_operations`（S3.11 新增）`list_skills` `list_procedures` `list_worker_definitions`（均已有） | `publish_operation`/`deprecate_operation`、`publish_skill`/`deprecate_skill`、`publish_procedure`/`deprecate_procedure`、`deprecate_worker_definition`（均已有——两步 propose/publish，控制台不提供"直接改分类"捷径） | 无 |
 | 模型与配额（`/govern/models`） | `list_models` `get_agent_policy`（S3.13，member 可读）`list_quotas` `list_policies` | `set_agent_policy`（S3.13，owner——非 owner 只看只读摘要，不渲染可编辑表单） | 无 |
 | 审计（`/govern/audit`） | `explain`（已有，member 可用）`reconstruct` `audit_query`（均已有，auditor） | 无 | 无 |
 | 我的智能体（`/me/agent`） | `get_agent_profile{principalId?}` `get_agent_policy` `list_models` `list_skills` `list_gatekeepers` `list_worker_definitions` `list_principals`（owner 切换查看对象用） | `set_agent_profile`（member 改自己且 policy 允许；owner 改任何人） | 无 |
 | 工作区（`/platform/workspaces`，P-A2，仅管理员） | `list_workspaces` `list_platform_models` `list_users`（挑 owner） | `create_workspace` `update_workspace` `set_workspace_status` `set_allowed_models`；委托 owner 用 `add_membership{role:'owner'}` / `set_membership_role` | 无 |
+| 集成（`/platform/integrations`，P-B1，仅管理员） | `list_connectors` `list_gate_instances` `get_gate_instance` `list_external_runtimes` | `set_connector_mode`（三态 + 按 Operation 禁用）`update_gate_instance`（改名 / 启用 / 禁用 / `vetted`）`test_gate_instance` `revoke_external_runtime` | 无 |
 | 侧栏徽标 | `list_pending`（计数） | — | `action.pending` `action.updated` |
 | 侧栏工作区名 + 角色徽标 | `get_workspace`（S3.11，`caller` 字段是角色的权威来源，S3.13 起启用） | — | 无 |
 
