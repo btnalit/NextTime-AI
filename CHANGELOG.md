@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/btnalit/NextTime-AI/compare/v0.7.0...v0.8.0) (2026-09-12)
+
+
+### Features
+
+* **platform:** P-A2 使用面收口 — workspace configuration, allowed-model cap, instanceInstructions, per-chat pi session ([#171](https://github.com/btnalit/NextTime-AI/issues/171)) ([7f7223a](https://github.com/btnalit/NextTime-AI/commit/7f7223ad8ccd45f2f79ffb4b303285cfebf6d706))
+
 ## [0.7.0](https://github.com/btnalit/NextTime-AI/compare/v0.6.0...v0.7.0) (2026-09-11)
 
 
