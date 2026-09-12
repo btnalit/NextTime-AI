@@ -106,4 +106,52 @@ describe('AccessPage', () => {
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
     );
   });
+
+  it('issuing a service Handle posts issue_service_handle and shows the token once', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [
+          {
+            id: 'p-svc',
+            kind: 'service',
+            role: 'member',
+            displayName: 'CI runner',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: true,
+          },
+        ],
+      }),
+      list_grants: () => ({ items: [] }),
+      issue_service_handle: (params) => {
+        expect(params).toEqual({
+          principalId: 'p-svc',
+          scope: ['list_gatekeepers', 'get_gatekeeper'],
+          ttlSeconds: 365 * 86400,
+        });
+        return {
+          handle: 'svc_handle_abc123',
+          principalId: 'p-svc',
+          sessionId: 'sess-1',
+          expiresAt: '2027-09-11T00:00:00.000Z',
+          scope: ['list_gatekeepers', 'get_gatekeeper'],
+        };
+      },
+    });
+    renderPage(http);
+
+    const form = await screen.findByTestId('issue-service-handle-form');
+    fireEvent.change(within(form).getByLabelText(/Service principal/), {
+      target: { value: 'p-svc' },
+    });
+    fireEvent.change(within(form).getByLabelText(/能力 Capabilities/), {
+      target: { value: 'list_gatekeepers get_gatekeeper' },
+    });
+    fireEvent.click(within(form).getByRole('button', { name: '签发 Issue' }));
+
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'issue_service_handle')).toBe(true),
+    );
+    const dialog = await screen.findByTestId('issued-handle-dialog');
+    expect(within(dialog).getByTestId('issued-handle-token').textContent).toBe('svc_handle_abc123');
+  });
 });

@@ -15,6 +15,7 @@ import { ModelsPage } from './components/ModelsPage.js';
 import { NoWorkspacePage } from './components/NoWorkspacePage.js';
 import { TasksPage } from './components/TasksPage.js';
 import { PlatformAuditPage } from './components/platform/PlatformAuditPage.js';
+import { PlatformIntegrationsPage } from './components/platform/PlatformIntegrationsPage.js';
 import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage.js';
 import { PlatformSettingsPage } from './components/platform/PlatformSettingsPage.js';
 import { PlatformUsersPage } from './components/platform/PlatformUsersPage.js';
@@ -602,6 +603,9 @@ function Routed({
         />,
       );
       break;
+    case 'platformIntegrations':
+      page = requireAdmin(session, <PlatformIntegrationsPage http={session.http} />);
+      break;
     case 'platformSettings':
       page = requireAdmin(session, <PlatformSettingsPage http={session.http} />);
       break;
@@ -645,6 +649,7 @@ function isPlatformRoute(kind: Route['kind']): boolean {
     kind === 'platformOverview' ||
     kind === 'platformUsers' ||
     kind === 'platformWorkspaces' ||
+    kind === 'platformIntegrations' ||
     kind === 'platformSettings' ||
     kind === 'platformAudit'
   );

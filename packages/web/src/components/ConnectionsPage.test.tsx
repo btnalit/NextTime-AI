@@ -14,6 +14,7 @@ function scriptedHttp(
   const base: Record<string, (params: unknown) => unknown> = {
     list_connection_requests: () => ({ items: [] }),
     search: (params) => ((params as { objectType: string }).objectType === 'Gatekeeper' ? [] : []),
+    list_available_gate_instances: () => ({ items: [] }),
     ...handlers,
   };
   return {
@@ -83,5 +84,53 @@ describe('ConnectionsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Connect a system' }));
     const drawer = await screen.findByTestId('complete-connection-drawer');
     expect(within(drawer).getByTestId('complete-connection-form')).toBeTruthy();
+  });
+
+  it('enabling a gate instance from the platform catalog posts enable_gate_instance and refreshes', async () => {
+    let searchGatekeeperCalls = 0;
+    const http = scriptedHttp({
+      list_available_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-1',
+            connector: 'docker',
+            displayName: 'Docker prod',
+            transportKind: 'mcp',
+            target: 'docker://prod',
+            status: 'enabled',
+            trust: 'byo',
+            health: 'ok',
+            operationCount: 3,
+            gatekeeperId: null,
+          },
+        ],
+      }),
+      search: (params) => {
+        if ((params as { objectType: string }).objectType === 'Gatekeeper') {
+          searchGatekeeperCalls += 1;
+        }
+        return [];
+      },
+      enable_gate_instance: (params) => {
+        expect(params).toEqual({ gateId: 'gate-1' });
+        return {
+          gateId: 'gate-1',
+          gatekeeperId: 'gk-9',
+          publishedOperationNames: ['container_restart'],
+          skippedOperationNames: [],
+        };
+      },
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('available-gates-table');
+    fireEvent.click(within(table).getByTestId('enable-gate-gate-1'));
+
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'enable_gate_instance')).toBe(true),
+    );
+    // Registered systems is re-read (a new Gatekeeper was just registered underneath it).
+    await waitFor(() => expect(searchGatekeeperCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(within(table).getByText(/已发布 1 个 Operation/)).toBeTruthy());
   });
 });

@@ -12,6 +12,7 @@ import {
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import { statusValues } from '../lib/status-tone.js';
+import { AvailableGateInstancesSection } from './AvailableGateInstancesSection.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
 import { GatekeeperDetailDrawer } from './GatekeeperDetailDrawer.js';
 import { OnboardingWizard } from './OnboardingWizard.js';
@@ -260,6 +261,8 @@ export function ConnectionsPage({
           </DataList>
         )}
       </section>
+
+      {canCreate ? <AvailableGateInstancesSection http={http} onEnabled={reloadRegistry} /> : null}
 
       <section className="section" aria-labelledby="registered-systems-title">
         <div className="section-header">

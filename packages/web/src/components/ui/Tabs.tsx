@@ -2,6 +2,7 @@ export interface TabOption<V extends string> {
   readonly value: V;
   readonly label: string;
   readonly count?: number;
+  readonly testId?: string;
 }
 
 export interface TabsProps<V extends string> {
@@ -34,6 +35,7 @@ export function Tabs<V extends string>({ ariaLabel, value, options, onChange }: 
               if (next) onChange(next.value);
             }}
             data-value={option.value}
+            data-testid={option.testId}
           >
             {option.label}
             {option.count !== undefined ? <span className="tab-count">{option.count}</span> : null}

@@ -106,6 +106,13 @@ const PLATFORM_MANAGE_NAV: readonly NavItem[] = [
     href: hrefs.platformUsers(),
   },
   {
+    section: 'platformIntegrations',
+    label: '集成',
+    sub: 'Integrations',
+    icon: 'connections',
+    href: hrefs.platformIntegrations(),
+  },
+  {
     section: 'platformSettings',
     label: '平台设置',
     sub: 'Platform settings',

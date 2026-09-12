@@ -6,6 +6,7 @@ import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, prettyJson, shortId } from '../lib/format.js';
 import type { GrantRow, PrincipalRow } from '../lib/governance.js';
 import { GrantCapabilityForm } from './GrantCapabilityForm.js';
+import { IssueServiceHandleSection } from './IssueServiceHandleSection.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
@@ -206,6 +207,8 @@ export function AccessPage({ http }: AccessPageProps) {
           ))}
         </DataList>
       )}
+
+      {canManage ? <IssueServiceHandleSection http={http} principals={principals} /> : null}
 
       <Drawer
         open={grantOpen}

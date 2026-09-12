@@ -106,6 +106,9 @@ describe('Sidebar', () => {
     );
     // ...and the rest of the platform-admin items.
     expect(screen.getByTestId('nav-platformUsers')).toBeTruthy();
+    expect(screen.getByTestId('nav-platformIntegrations').getAttribute('href')).toBe(
+      '#/platform/integrations',
+    );
     expect(screen.getByTestId('nav-platformSettings')).toBeTruthy();
     expect(screen.getByTestId('nav-platformOverview')).toBeTruthy();
     expect(screen.getByTestId('nav-platformAudit')).toBeTruthy();
@@ -126,6 +129,7 @@ describe('Sidebar', () => {
         />,
       );
       expect(screen.queryByTestId('nav-platformUsers')).toBeNull();
+      expect(screen.queryByTestId('nav-platformIntegrations')).toBeNull();
       expect(screen.queryByTestId('nav-platformSettings')).toBeNull();
       expect(screen.queryByTestId('nav-section-maintain')).toBeNull();
       // P-A2's platform 工作区 list is admin-only too — the owner pages below it are not.
