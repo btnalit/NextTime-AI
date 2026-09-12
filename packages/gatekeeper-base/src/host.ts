@@ -9,7 +9,7 @@ import {
   internalAuthorizationHeader,
   verifyGateHostToken,
 } from '@nexttime/shared';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   type AnnounceBody,
@@ -52,6 +52,30 @@ import { assertTlsNotDisabled, buildTlsFetch, gateTlsOptionsFromEnv } from './tl
  */
 
 export const GATE_HOST_DEFAULT_PORT = 8083;
+const HOST_ROUTE_PREFIX = '/i/:gateId';
+/** Per client IP, per minute, on the one route a browser reaches (the credential POST / DELETE). */
+const CREDENTIAL_ROUTE_LIMIT_PER_MINUTE = 30;
+
+/** Fixed-window counter, in-process (one gate host, no shared state needed). */
+function createFixedWindowLimiter(
+  limit: number,
+  windowMs: number,
+): { allow(key: string): boolean } {
+  const windows = new Map<string, { start: number; count: number }>();
+  return {
+    allow(key) {
+      const now = Date.now();
+      const entry = windows.get(key);
+      if (!entry || now - entry.start >= windowMs) {
+        if (windows.size > 10_000) windows.clear();
+        windows.set(key, { start: now, count: 1 });
+        return true;
+      }
+      entry.count += 1;
+      return entry.count <= limit;
+    },
+  };
+}
 const DEFAULT_INTERVAL_SEC = 60;
 const PULL_TIMEOUT_MS = 5_000;
 const BUILD_TIMEOUT_MS = 10_000;
@@ -178,42 +202,64 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
   const app = Fastify({ logger: false });
   const forcedSlot = new WeakMap<FastifyRequest, string>();
 
-  app.addHook('onRequest', async (request, reply) => {
-    const route = request.routeOptions.url;
-    if (typeof route !== 'string' || !route.startsWith('/i/')) return;
+  // Route classes are decided by the *registered* route pattern (`routeOptions.url`, fixed at
+  // registration), never by anything the request carries. Two classes, two credentials:
+  //   - `CREDENTIAL_ROUTE` (POST / DELETE …/gate/connected-accounts): the platform JWT and nothing
+  //     else — `gate_token` is one shared secret every kernel → gate call carries (also on the
+  //     kernel's own `create_connection` path, which a workspace owner can aim at any URL), so
+  //     accepting it here would let any workspace write any slot of any hosted instance through
+  //     the kernel (review finding).
+  //   - every other `/i/*` route: `gate_token`, kernel-only.
+  const CREDENTIAL_ROUTE = `${HOST_ROUTE_PREFIX}/gate/connected-accounts`;
+  const credentialRateLimit = createFixedWindowLimiter(CREDENTIAL_ROUTE_LIMIT_PER_MINUTE, 60_000);
+
+  async function platformSlotFor(request: FastifyRequest): Promise<string | undefined> {
     const gateId = (request.params as { gateId?: string } | undefined)?.gateId;
-    const isCredentialRoute =
-      route.endsWith('/gate/connected-accounts') &&
-      (request.method === 'POST' || request.method === 'DELETE');
-    // The credential routes take the platform JWT and nothing else: `gate_token` is one shared
-    // secret every kernel → gate call carries (also on the kernel's own `create_connection` path,
-    // which a workspace owner can aim at any URL), so accepting it here would let any workspace
-    // write any slot of any hosted instance through the kernel (review finding). Everything else
-    // under `/i/*` is kernel-only and keeps the `gate_token` guard.
-    if (!isCredentialRoute && guard.evaluate(request)) return;
-    if (isCredentialRoute && gateId) {
-      const presented = request.headers.authorization;
-      const bearer =
-        typeof presented === 'string' && /^Bearer\s+/i.test(presented)
-          ? presented.replace(/^Bearer\s+/i, '').trim()
-          : undefined;
-      if (bearer) {
-        try {
-          const claims = await verifyGateHostToken(bearer, publicKey, { expectedGateId: gateId });
-          forcedSlot.set(request, claims.obo);
-          return;
-        } catch {
-          // fall through to 401 — never log the token or the reason detail
-        }
-      }
+    if (!gateId) return undefined;
+    const presented = request.headers.authorization;
+    const bearer =
+      typeof presented === 'string' && /^Bearer\s+/i.test(presented)
+        ? presented.replace(/^Bearer\s+/i, '').trim()
+        : undefined;
+    if (!bearer) return undefined;
+    try {
+      const claims = await verifyGateHostToken(bearer, publicKey, { expectedGateId: gateId });
+      return claims.obo;
+    } catch {
+      // 401 below — never log the token or the reason detail
+      return undefined;
     }
+  }
+
+  function unauthorized(reply: FastifyReply) {
     reply.code(401);
     reply.header('www-authenticate', 'Bearer');
     return reply.send({ ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
+  }
+
+  app.addHook('onRequest', async (request, reply) => {
+    const route = request.routeOptions.url;
+    if (typeof route !== 'string' || !route.startsWith(`${HOST_ROUTE_PREFIX}/`)) return;
+    if (route === CREDENTIAL_ROUTE) {
+      // The only route a browser reaches: bound the rate at which signatures can be tried per
+      // client, then verify the platform JWT.
+      if (!credentialRateLimit.allow(request.ip)) {
+        reply.code(429);
+        return reply.send({
+          ok: false,
+          error: { code: 'rate_limited', message: 'too many requests' },
+        });
+      }
+      const slot = await platformSlotFor(request);
+      if (slot === undefined) return unauthorized(reply);
+      forcedSlot.set(request, slot);
+      return;
+    }
+    if (!guard.evaluate(request)) return unauthorized(reply);
   });
 
   registerGateRoutes(app, {
-    prefix: '/i/:gateId',
+    prefix: HOST_ROUTE_PREFIX,
     resolve: (request): GateRouteContext | undefined => {
       const gateId = (request.params as { gateId?: string } | undefined)?.gateId;
       const instance = gateId ? table.get(gateId) : undefined;
