@@ -1492,6 +1492,59 @@
   管理员为一个部门新建工作区 W2、设入口模型与允许的模型、把它委托给某用户 owner；该 owner 登录只在
   "管理 → 工作区配置"看到 W2，看不到其他工作区配置；W2 的成员在"我的智能体"只能选到允许的模型。
 - 不做：删除工作区（暂否，留 CLI `--yes`，见 §11）；工作区间数据迁移。
+- 实现说明（2026-09-11，PR #TBD）：
+  - **六个 `scope:'platform'` 能力**（`platform-handlers.ts` "workspaces" 段）：`list_workspaces`、
+    `list_platform_models`（管理员不是某工作区成员时也要看到模型目录——平台 caller 调不了工作区能力
+    `list_models`）、`create_workspace`、`update_workspace`、`set_workspace_status`、`set_allowed_models`，
+    统一返回 `PlatformWorkspaceWire`（`wire/platform.ts`；与 `get_workspace` 的成员视角 `WorkspaceWire`
+    是两个形状）。迁移 core 0022 给应用角色列级 `update (name, status, entry_model)`（0019 预留的那一步；
+    仍不能 insert / delete），governance 0011 给 `agent_policies` 加 `app_platform()` 策略（模块按名字顺序
+    应用，core 先于 governance，所以放不进 core 0022）。
+  - **入口模型只有一个真相**：运行时读的是 `agent_policies.default_model`（`resolveEffectiveAgentProfile`），
+    `workspaces.entry_model` 只是建区时的记录。`createWorkspaceWithOwner` 现在同时写三处（入口
+    WorkerDefinition 的 `model`、`entry_model`、AgentPolicy 的 `defaultModel` / `allowedModels`），
+    `update_workspace(entryModel)` 同步写 `entry_model` 与 `default_model`；`set_allowed_models` 顺带把
+    P-A2 之前建的工作区的 `entry_model` 补进 `default_model`。`updated_by` 是 Principal 外键、平台面
+    没有 Principal，因此清空，动作由平台审计行记账。
+  - **允许的模型是上限而非仅校验**：`resolve.ts` 新增 `resolveModel`——profile 里的模型不在非空
+    `allowedModels` 内时回退到（同样必须在名单内的）入口模型，否则 `''`；因此管理员收窄名单后，已选了
+    名单外模型的用户从下一个 Turn 起用入口模型，不需要逐人改 profile。相应地，非空名单**必须包含入口
+    模型、且入口模型必须已设置**（409 `entry_model_not_allowed`），否则运行时会落到入口 WorkerDefinition
+    自己的 `model` / pi 默认——一个管理员刚说不许用的模型。
+  - **`create_workspace` 是两阶段**：平台事务里校验 owner（须活跃，409 `user_disabled`）与模型
+    （409 `unknown_model`）、预生成工作区 id 写进审计行，`afterCommit` 再走 `createWorkspaceWithOwner`
+    （超级用户路径：`workspaces` 插入、元本体种子、入口 WorkerDefinition）。因此若第二步失败，调用方
+    收到错误、审计里留下一条没有对应工作区的 `create_workspace`——接受这一点，换来平台事务不持有超级
+    用户权限。
+  - **禁用工作区**：不许禁用默认工作区（409 `default_workspace`）；禁用即吊销该工作区全部活跃
+    `sessions`（entry / worker_run / mcp_session / service，`sessions_platform_admin` 策略），API key 查找
+    与 Handle 校验（`lookupPrincipalByApiKeyHash` / `isPrincipalDisabled`）新增 join `workspaces.status`
+    ——控制台路径 `authenticateUserInWorkspace` 本已过滤；`afterCommit` 经 worker-supervisor
+    `POST /resident/stop` 停成员的入口容器（`TaskSupervisorClientPort.stopResident`，可选方法，测试
+    fake 不必实现；未配置任务运行时则跳过）。**顺带补上 P-A1 的缺口**：`set_user_status` 停用用户也停
+    其入口容器（design §8 一直这么写，P-A1 只吊销了会话）。
+  - **`instanceInstructions` 进 system prompt**：`application/platform/instance-instructions.ts` 的
+    `composeSystemPrompt`——固定顺序 WorkerDefinition `systemPrompt` → 平台附加指令（带标记行）→ 用户
+    `promptAddendum`（S3.13 原标记行不变）。入口：`agent-host-runtime.startTurn` 每 Turn 读一次
+    `platform_settings`（工作区事务内一行 select；读失败降级为空）。Worker：`invoke.ts` / `lifecycle.ts`
+    （重试）组合 `content.systemPrompt` 后经 `SpawnWorkerRunInput.systemPrompt` → `TaskSpawnInput.systemPrompt`
+    → worker-supervisor `/task/spawn`（`TaskSpawnRequestSchema` 新增可选字段，`task-service` 在
+    `createAndStart` 前写 `<task workspace>/.nexttime/system-prompt.md`）。**这是一个附带的行为变更**：
+    P-A2 之前一次性 Worker 容器从未收到过 WorkerDefinition 的 `systemPrompt`，一直跑 `entrypoint.sh`
+    的静态默认；现在收到了。生效时机按 design §8：之后启动的容器。
+  - **遗留 33（按 chat 分 pi 会话）只改 agent-host**：`AttachmentRecord.currentChatId`；`startTurn` 时
+    chat 变了就先发 `switch_session {id:'switch:<turnId>', sessionPath:'/workspace/.pi/sessions/chat-<chatId>.jsonl'}`
+    （不存在即新建），等到 `response` 成功且未被扩展取消才发 `prompt`；失败 / 取消 / 期间 stopTurn →
+    `turnRejected`（内核尚未收到 `turnAccepted`）。容器换了或 stdio 关了则 `currentChatId` 归零、下次必切。
+    `chatId` 先按 `/^[A-Za-z0-9_-]+$/` 校验，不可能拼出路径。`session_start` 在切换时重触发、
+    platform-extension 同名 `registerTool` 覆盖——STATUS 行 33 已核实。跨对话记忆仍靠 `context` 注入。
+  - **`config/llm-providers.fake.example.yaml` 多了 `fake-echo-alt`**：只为让 e2e 能观察到"允许的模型"
+    收窄"我的智能体"下拉（一个模型看不出差别）；fake-llm 不校验请求里的 model，验收脚本显式钉
+    `fake/fake-echo`，不受影响。
+  - **未做 / 留到后面**：管理员**不在**某工作区时不能进入它的深层配置页（成员 / 门 / 目录 / 配额）——
+    `resolveRequestCaller` 仍要求活跃成员资格，design §5 的"经 `X-Workspace-Id` 切换"未实现，页面提示
+    先把自己加为 owner；禁用工作区不切断成员在**其他**工作区仍有效的控制台 cookie（它是按用户发的），
+    只切断该工作区的会话与可见性；`platform_settings_history` 仍只写不读。
 
 ### P-B 集成与模块
 
