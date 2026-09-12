@@ -96,6 +96,10 @@ import {
 import { exportProvHandler } from './export-prov-handler.js';
 import { assertFactHandler, invalidateFactHandler, supersedeFactHandler } from './fact-handlers.js';
 import {
+  enableGateInstanceHandler,
+  listAvailableGateInstancesHandler,
+} from './gate-instance-handlers.js';
+import {
   getGatekeeperHandler,
   getOperationStatsHandler,
   listGatekeepersHandler,
@@ -126,6 +130,16 @@ import {
   publishManifestHandler,
   publishOperationHandler,
 } from './operation-manifest-handlers.js';
+import {
+  getGateInstanceHandler,
+  listConnectorsHandler,
+  listExternalRuntimesHandler,
+  listGateInstancesHandler,
+  revokeExternalRuntimeHandler,
+  setConnectorModeHandler,
+  testGateInstanceHandler,
+  updateGateInstanceHandler,
+} from './platform-gates-handlers.js';
 import {
   addMembershipHandler,
   createUserHandler,
@@ -1108,6 +1122,18 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['update_workspace', updateWorkspaceHandler],
   ['set_workspace_status', setWorkspaceStatusHandler],
   ['set_allowed_models', setAllowedModelsHandler],
+  // P-B1: integrations (platform-gates-handlers.ts) and the workspace-side enable
+  // (gate-instance-handlers.ts).
+  ['list_connectors', listConnectorsHandler],
+  ['set_connector_mode', setConnectorModeHandler],
+  ['list_gate_instances', listGateInstancesHandler],
+  ['get_gate_instance', getGateInstanceHandler],
+  ['update_gate_instance', updateGateInstanceHandler],
+  ['test_gate_instance', testGateInstanceHandler],
+  ['list_external_runtimes', listExternalRuntimesHandler],
+  ['revoke_external_runtime', revokeExternalRuntimeHandler],
+  ['list_available_gate_instances', listAvailableGateInstancesHandler],
+  ['enable_gate_instance', enableGateInstanceHandler],
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
   ['search', searchHandler],

@@ -5,6 +5,7 @@ import {
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
 // application/gateway/index.ts's curated public surface (adding them there is a one-line change
 // inside application/gateway/**, outside this task's file ownership — see this PR's own report)
@@ -143,6 +144,14 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof AlreadyMemberError) {
     return { status: 409, code: 'already_member', message: err.message };
+  }
+  // P-B1 (gate-instance-handlers.ts): the workspace-side enable refused by catalog state.
+  if (err instanceof GateInstanceNotAvailableError) {
+    return {
+      status: err.code === 'gate_not_found' ? 404 : 409,
+      code: err.code,
+      message: err.message,
+    };
   }
   // S4.1 console-session channel (resolve-caller.ts): three `ForbiddenError` subclasses with
   // their own codes so the web client can act on them (pick a workspace / add the CSRF header /

@@ -13,6 +13,7 @@ import {
   createChatEventSink,
   interruptStaleRunningTurns,
 } from './application/chat/index.js';
+import { markLostGateInstances } from './application/gates/index.js';
 import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
 import {
   createAdminWithTransaction,
@@ -311,6 +312,9 @@ export interface CreateBackgroundServicesOptions {
   /** How often the S2.3 approval-expiry reaper polls. Default `DEFAULT_APPROVAL_REAPER_INTERVAL_MS`
    *  (5 minutes) — `main()` reads this from `APPROVAL_REAPER_INTERVAL_MS`. */
   readonly approvalReaperIntervalMs?: number;
+  /** P-B1 gate liveness sweep (tests shorten it). */
+  readonly gateLivenessIntervalMs?: number;
+  readonly gateLostAfterSeconds?: number;
   /** Called whenever a reaper tick's `expireOverduePendingApprovals` call throws, so it never
    *  becomes an unhandled promise rejection — same shape as `OutboxDispatcher`'s own `onError`.
    *  Defaults to a no-op; `main()` passes `app.log.error`. */
@@ -480,6 +484,10 @@ function buildDefaultRuntime(options: CreateBackgroundServicesOptions): AgentRun
  *  dispatcher's 200ms: an ActionRequest overdue by `approvalTimeoutMs` (default 24h) does not
  *  need sub-second expiry latency. */
 export const DEFAULT_APPROVAL_REAPER_INTERVAL_MS = 5 * 60 * 1000;
+/** P-B1: how often the kernel sweeps `gate_instances` for missed heartbeats, and how old a
+ *  heartbeat may be before the instance is `lost` (3× gatekeeper-base's default announce interval). */
+export const DEFAULT_GATE_LIVENESS_INTERVAL_MS = 60 * 1000;
+export const DEFAULT_GATE_LOST_AFTER_SECONDS = 180;
 
 /** Default S2.4 Gatekeeper-queue periodic drain tick interval — 1 minute. */
 export const DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS = 60 * 1000;
@@ -622,6 +630,7 @@ export function createBackgroundServices(
 
   const onApprovalReaperError = options.onApprovalReaperError ?? (() => {});
   let approvalReaperTimer: NodeJS.Timeout | undefined;
+  let gateLivenessTimer: NodeJS.Timeout | undefined;
   const onGatekeeperDrainError = options.onGatekeeperDrainError ?? (() => {});
   let gatekeeperDrainTimer: NodeJS.Timeout | undefined;
   const onActionRequestReaperError = options.onActionRequestReaperError ?? (() => {});
@@ -687,6 +696,48 @@ export function createBackgroundServices(
         options.approvalReaperIntervalMs ?? DEFAULT_APPROVAL_REAPER_INTERVAL_MS,
       );
       approvalReaperTimer.unref?.();
+
+      // P-B1 (development-tasks.md P-B 决定 ⑤): gate instances heartbeat by re-announcing
+      // (`GATE_ANNOUNCE_INTERVAL_SEC`, default 60 s in gatekeeper-base); one whose last heartbeat is
+      // older than `GATE_LOST_AFTER_SEC` (default 3× that) is marked `lost`. The only liveness
+      // sweep — `probeGatekeeperHealth` runs on demand from `test_gate_instance`, never here.
+      const gateLivenessTick = (): void => {
+        withWorkspace(
+          options.pool,
+          { workspaceId: SYSTEM_ACTOR_PLACEHOLDER, principalId: SYSTEM_ACTOR_PLACEHOLDER },
+          (client) =>
+            markLostGateInstances(
+              client,
+              options.gateLostAfterSeconds ?? DEFAULT_GATE_LOST_AFTER_SECONDS,
+            ),
+          { skipRoleSwitch: true },
+        )
+          .then((lost) => {
+            if (lost.length > 0) {
+              console.error(
+                JSON.stringify({
+                  level: 'warn',
+                  msg: 'gates: instances marked lost (no heartbeat)',
+                  gateIds: lost,
+                }),
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            console.error(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'gates: liveness sweep failed',
+                error: String(err),
+              }),
+            );
+          });
+      };
+      gateLivenessTimer = setInterval(
+        gateLivenessTick,
+        options.gateLivenessIntervalMs ?? DEFAULT_GATE_LIVENESS_INTERVAL_MS,
+      );
+      gateLivenessTimer.unref?.();
 
       const drainTick = async (): Promise<void> => {
         const drainable = await listDistinctExecutableGatekeepers(options.pool);
@@ -792,6 +843,10 @@ export function createBackgroundServices(
       unsubscribeLinkage();
       unsubscribeActionRequestDrain();
       unsubscribeActionRequestRouting?.();
+      if (gateLivenessTimer) {
+        clearInterval(gateLivenessTimer);
+        gateLivenessTimer = undefined;
+      }
       if (approvalReaperTimer) {
         clearInterval(approvalReaperTimer);
         approvalReaperTimer = undefined;

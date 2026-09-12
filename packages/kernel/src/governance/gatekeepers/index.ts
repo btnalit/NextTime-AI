@@ -57,3 +57,5 @@ export type { OperationOrigin } from '../../substrate/ontology/index.js';
 export { getOrCreateGatekeeperServicePrincipal } from './service-principal.js';
 
 export { SYSTEM_ACTOR_PLACEHOLDER } from './system-actor.js';
+export type { McpTrustInput } from './trust.js';
+export { isOperationDisabled, mcpAutoApproveAllowed } from './trust.js';

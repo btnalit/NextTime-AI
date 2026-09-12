@@ -56,6 +56,8 @@ export interface RequestActionInput {
    *  caller (S2.4's Gatekeeper client, once it exists); `false` also represents "unclassified" per
    *  I17 (see `governance/policy/engine.ts`'s own doc comment). */
   readonly operationAutoApprovable: boolean;
+  /** P-B1: see `PolicyEvaluationInput.mcpTrustBlocked`. */
+  readonly mcpTrustBlocked?: boolean;
   readonly awaitDecision: boolean;
   readonly onBehalfOf: string;
   readonly actorRuntime: string;
@@ -155,6 +157,7 @@ export async function requestAction(
     gatekeeperId: input.gatekeeperId,
     blastRadius: input.blastRadius,
     operationAutoApprovable: input.operationAutoApprovable,
+    mcpTrustBlocked: input.mcpTrustBlocked,
     workspacePolicy: workspacePolicyRow
       ? {
           autoApprove: workspacePolicyRow.autoApprove,

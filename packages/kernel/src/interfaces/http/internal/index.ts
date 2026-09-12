@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { type EgressRoutesDeps, registerEgressRoutes } from './egress.js';
+import { type GatesRoutesDeps, registerGatesRoutes } from './gates.js';
 import {
   type HandleRevocationsRoutesDeps,
   registerHandleRevocationRoutes,
@@ -29,7 +30,8 @@ export interface InternalRoutesDeps
   extends LlmUsageRoutesDeps,
     HandleRevocationsRoutesDeps,
     EgressRoutesDeps,
-    MetricsRoutesDeps {}
+    MetricsRoutesDeps,
+    GatesRoutesDeps {}
 
 export async function registerInternalRoutes(
   app: FastifyInstance,
@@ -39,9 +41,11 @@ export async function registerInternalRoutes(
   await registerHandleRevocationRoutes(app, deps);
   await registerEgressRoutes(app, deps);
   await registerMetricsRoute(app, deps);
+  await registerGatesRoutes(app, deps);
 }
 
 export type { LlmUsageRoutesDeps } from './llm-usage.js';
 export type { HandleRevocationsRoutesDeps, RevokedHandleRow } from './handle-revocations.js';
 export type { EgressRoutesDeps } from './egress.js';
 export type { MetricsRoutesDeps } from './metrics.js';
+export type { GatesRoutesDeps } from './gates.js';

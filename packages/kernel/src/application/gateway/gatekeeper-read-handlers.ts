@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import {
   GatekeeperClientError,
   HttpGatekeeperClient,
@@ -14,6 +15,8 @@ import {
   listGatekeepers,
   listOperations,
 } from '../../governance/gatekeepers/index.js';
+import { isOperationDisabled } from '../../governance/gatekeepers/index.js';
+import { readGateLinkPolicy } from '../gates/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 
 /**
@@ -77,6 +80,23 @@ function resolveClient(): GatekeeperClient {
  * console actually distinguishes them). A 401 from the gate's own auth layer is `unauthorized`;
  * any other failure (timeout, network error, non-401 gate error) is `unreachable`. Never throws.
  */
+/** P-B1 `test_gate_instance`: the gate's live `describe_operations`, through the same client. */
+export async function describeGateOperations(endpoint: string) {
+  return resolveClient().describeOperations(endpoint);
+}
+
+/** P-B1 (design §6.3 "按 Operation 开关"): the connector deny list that applies to a workspace
+ *  Gatekeeper — empty for a gate the workspace connected itself (no platform link). Read
+ *  projections hide these; `request_action` / `observe_operation` refuse them per call. */
+async function disabledOperationsFor(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+): Promise<ReadonlySet<string>> {
+  const link = await readGateLinkPolicy(client, workspaceId, gatekeeperId);
+  return new Set(link?.disabledOperations ?? []);
+}
+
 export async function probeGatekeeperHealth(endpoint: string): Promise<GatekeeperHealth> {
   try {
     const response = await resolveClient().health(endpoint);
@@ -158,10 +178,12 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const record = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!record) throw new GatekeeperNotFoundError(gatekeeperId);
 
-  const [operations, health] = await Promise.all([
+  const [allOperations, health, disabled] = await Promise.all([
     listOperations(client, workspaceId, { gatekeeperId }),
     probeGatekeeperHealth(record.endpoint),
+    disabledOperationsFor(client, workspaceId, gatekeeperId),
   ]);
+  const operations = allOperations.filter((op) => !isOperationDisabled([...disabled], op.name));
 
   const summary = toWireGatekeeperSummary(
     {
@@ -188,7 +210,18 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
 export const listOperationsHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { gatekeeperId } = params as { gatekeeperId?: string };
   const records = await listOperations(client, workspaceId, { gatekeeperId });
-  return { result: { items: records.map(toWireOperationSummary) } };
+  // P-B1: hide connector-disabled Operations, per gatekeeper (one deny-list read each).
+  const disabledByGatekeeper = new Map<string, ReadonlySet<string>>();
+  const visible = [];
+  for (const record of records) {
+    let disabled = disabledByGatekeeper.get(record.gatekeeperId);
+    if (!disabled) {
+      disabled = await disabledOperationsFor(client, workspaceId, record.gatekeeperId);
+      disabledByGatekeeper.set(record.gatekeeperId, disabled);
+    }
+    if (!isOperationDisabled([...disabled], record.name)) visible.push(record);
+  }
+  return { result: { items: visible.map(toWireOperationSummary) } };
 };
 
 /** `get_operation_stats` (S3.12 catalog-usage follow-up) — no existence check on `gatekeeperId`,

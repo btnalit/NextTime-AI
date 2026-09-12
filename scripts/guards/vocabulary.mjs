@@ -227,6 +227,11 @@ export const OPERATION_MANIFEST_SNAKE_CASE_FIELDS = new Set([
   'jmes_path',
   'object_type',
   'identity_keys',
+  // P-B1 (design §6.3 "MCP 信任分级"): the MCP tool annotations an imported Operation carries,
+  // same manifest shape, same snake_case convention as the fields above.
+  'read_only_hint',
+  'destructive_hint',
+  'idempotent_hint',
 ]);
 
 export const SNAKE_CASE_PATTERN = /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/;

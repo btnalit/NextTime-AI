@@ -65,6 +65,11 @@ export interface PolicyEvaluationInput {
    *  caller passing `false` here — this module does not distinguish "declared not auto-approvable"
    *  from "no declaration exists at all", both must resolve to `require_approval` identically. */
   readonly operationAutoApprovable: boolean;
+  /** P-B1 (design §6.3 "MCP 信任分级"): the caller already applied the MCP trust rule
+   *  (`governance/gatekeepers/trust.ts`) and it refused auto-approval — reported as its own reason
+   *  so the audit trail distinguishes "not vetted" from "the Operation never declared itself
+   *  auto-approvable". */
+  readonly mcpTrustBlocked?: boolean | undefined;
   /** The workspace's policy row for this `action_kind`, or `undefined` if none exists. */
   readonly workspacePolicy?: WorkspacePolicyInput | undefined;
   /** The requesting Handle's scope (design doc §5.1.4 CapabilityHandle; `@nexttime/shared`
@@ -123,6 +128,7 @@ export type PolicyEvaluationReason =
   | 'auto_approved_by_operation_and_low_blast_radius_default'
   | 'blast_radius_high_requires_approval'
   | 'operation_not_auto_approvable'
+  | 'mcp_gate_not_vetted'
   | 'workspace_policy_disables_auto_approve'
   | 'no_workspace_policy_and_not_low_blast_radius'
   // S3.13: the requester's own AgentProfile.autoApproveLow (resolved false, whether by explicit
@@ -188,6 +194,10 @@ export function evaluate(input: PolicyEvaluationInput): PolicyEvaluationResult {
       reason: 'blast_radius_high_requires_approval',
       requesterCanApprove,
     };
+  }
+
+  if (input.mcpTrustBlocked) {
+    return { decision: 'require_approval', reason: 'mcp_gate_not_vetted', requesterCanApprove };
   }
 
   if (!input.operationAutoApprovable) {
