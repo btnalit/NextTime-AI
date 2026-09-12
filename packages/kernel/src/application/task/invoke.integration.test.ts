@@ -672,6 +672,17 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   // handed to the supervisor verbatim (`SpawnWorkerRunInput.systemPrompt` → `/task/spawn`).
   describe('P-A2 systemPrompt composition', () => {
     async function spawnAndReadSystemPrompt(): Promise<string | undefined> {
+      // The earlier blocks in this file leave their Tasks active on purpose; `invoke_worker`'s
+      // per-user concurrency quota (5) would otherwise refuse this spawn (seen on CI). Settle them
+      // first — this block asserts the spawn payload, not the quota.
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `update tasks set status = 'cancelled'
+            where workspace_id = $1 and on_behalf_of = $2
+              and status in ('queued', 'running', 'waiting_approval')`,
+          [workspaceId, ownerId],
+        ),
+      );
       const sessionId = await insertSession('entry', ownerId, ownerId);
       const issued = await issueTestHandle(sessionId, entryScope());
       const supervisorClient = new FakeTaskSupervisorClient();
