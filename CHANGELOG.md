@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/btnalit/NextTime-AI/compare/v0.10.0...v0.10.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **kernel:** idle pool-client errors never crash the process; deterministic isolated-db teardown ([#183](https://github.com/btnalit/NextTime-AI/issues/183)) ([322a882](https://github.com/btnalit/NextTime-AI/commit/322a8824fffc13bf207889dcd155e6eaff0c6e35))
+
 ## [0.10.0](https://github.com/btnalit/NextTime-AI/compare/v0.9.0...v0.10.0) (2026-09-12)
 
 
