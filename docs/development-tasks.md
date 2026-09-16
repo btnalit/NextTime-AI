@@ -40,6 +40,7 @@
 | S1 | 登录 → 对话 → 自己的 pi 回答 → Turn 入图 | G3 部分、G4 部分 |
 | S2 | 说需求 → find_workers → invoke_worker → 门动作 → 审批卡片 → 执行 → 写回 | G1、G2、G4 |
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | G3、G5、G6 |
+| S5 | 基座打磨：I2 写入点强制、新鲜度与失效、数据与代码分离、prompt 契约守卫、加固批次、稳定性、真实模型回归（§5b） | G2、G3、G5 加固 |
 
 ---
 
@@ -1827,6 +1828,221 @@
   重启后配置仍在；预算超限的用户发消息被 100% 拒绝。
 - 不做：模型路由 / 回退；BYOK（已否决，见 §11，产品定位不同）。
 
+## 5b. S5 — 基座打磨（2026-09-16 立项）
+
+背景：维护者 2026-09-16 决定暂不做场景层（RouterOS 门、网络领域包等推后），先把基座打磨好。立项前对
+main（v0.10.0）逐项核实：2026-09-09 回顾 §5 列的 12 个非最优点里，`explain` 收窄（#132）、`search` 分页
+（#132）、`create_task` 下架（#131）、driver 合一（#145）、fake provider 走 compose override（#146）、
+Explorer 按调用者鉴权（#153）、真实模型验证模式（#156）七项已经关闭。仍然开放且属于基座的，按"系统机制
+持有而不是靠 prompt 与约定"这条线归为 S5：
+
+1. **I2 只是能力，不是不变量**：`substrate/ontology/registry.ts` 的 `validateLink` 只被 `validate` 能力的
+   handler 调用；`SqlGraphStore.assertFact` / `supersedeFact` 与 `submit_observations` 的 link 写入既不校验
+   LinkType 是否被已发布 OntologyVersion 声明，也不校验 domain / range（ingest 只校验 ObjectType 存在与
+   identityKey 完整）。设计 §5.4 写的是"内核写入校验 + 触发器"（`code-review-2026-09-10.md` §4 第 1 项）。
+2. **溯源有起源没有新鲜度，也没有失效**：0018 给 Fact 加了起源 `observation_id`，但同源同内容再断言的幂等
+   no-op（#120）不记录"再次确认"；`links` / `objects` 没有 `last_observed_at`；采集器只断言看到的对象，消失的
+   对象永不失效——遗留 28 的幻影 Container 就是这个缺口的直接表现。
+3. **数据与代码没分开**：领域包烤在 kernel 镜像里、采集器把 Source id 缓存在本地文件、`register_source` 是裸
+   insert（遗留 9）；验收工作区靠名字正则清理（遗留 11 的一部分）。
+4. **prompt 与契约的漂移没有机制拦**：2026-09-09 审计的 15 条里，Worker prompt 的结果契约键名
+   （`facts_to_assert` vs schema 的 `factsToAssert`）、不存在的 `describe_operations`、静态"尚未加载
+   Skills"段等仍在 main 上；没有任何守卫在 CI 里对 prompt 引用的工具名与契约键做校验。
+5. **加固批次与稳定性缺陷已编号但未排期**：遗留 20 / 21 / 22 / 23 / 24 / 31 / 34 / 36 与 30；`invoke_worker`
+   在插入 `queued` 与 `spawnWorkerRun` 之间若内核崩溃会留下永久 `queued`（`create_task` 下架后 `queued`
+   没有任何消费者或清扫者）。
+
+S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W8 剩余项（P-B2b / P-C / P-D）的先后由维护者定，
+见"需要维护者决定的四项"；文件所有权上 S5 的前两波与 P-B2b 互斥，可并行。
+
+### S5 本体修正（增量）
+
+- World Model：不变。
+- Epistemic Model：Fact 在起源 Observation（0018 已有）之外，新增 `last_confirmed_by` Observation（0..1，
+  最近一次同内容再观察）；Object 新增 `last_observed_at`。新增失效原因 `not_reobserved`：同一 Source 在一次
+  声明为"完整"的观察窗口里未再观察到的 Fact 被失效（`invalidated_at`），Object 不删除（身份仍存在），
+  只是 `last_observed_at` 停止前进。
+- Governance Model：LinkType 写入受调用者可见的已发布 OntologyVersion 约束（I2 从"可校验"变为
+  "必满足"）；Task 的 `queued` 有清扫者（`create_task` 已下架，只剩崩溃恢复一种来源）。
+- 已知且推后的不对称：Object 属性（`objects.properties` jsonb）仍是 Activity 级溯源，没有逐属性
+  Observation；S5 不处理。
+
+### S5 新增不变量（进 `substrate/audit/invariant-checks.ts` 与 `/internal/metrics`）
+
+- I-S5-1：不存在 Fact 的 `link_type` 未被调用者可见的已发布 OntologyVersion 声明，或其 source / target
+  ObjectType 不满足该 LinkType 的 domain / range（只对 S5.1 落地后写入的行计数）。
+- I-S5-2：`epistemic_status='observed'` 且 `recorded_at` 晚于 S5.2 迁移时刻的 Fact 必有 `observation_id`。
+- I-S5-3：不存在 `status='queued'` 且 `updated_at < now() - 5min` 的 Task。
+- I-S5-4：`explain` / `traverse` / `search` 响应体大小分布（直方图，告警阈 256KB；有界性指标，不硬失败）。
+
+### S5.1 本体约束在写入点强制（I2 落地）
+
+- 背景：见上第 1 点。写入点三处：`SqlGraphStore.assertFact` / `supersedeFact`（承接 `assert_fact` 能力、
+  Worker 结果契约的 `factsToAssert`、MCP `add_relationship` 别名）与 `submit_observations` 的 link 写入。
+- 设计：写入前调用 `validateLink`（按调用者可见的已发布版本；一次请求内按 workspace 缓存类型表）。结果
+  三态：`declared_and_valid` 放行；`undeclared_link_type` 与 `domain_range_violation` 按工作区策略处理——
+  `reject`（默认：400 `ontology_violation`，错误体带 `linkType / sourceType / targetType / expected`，让 agent
+  能自纠，不需要 prompt 教它先调 `validate`）或 `warn`（写入 + 审计 `ontology_violation` + 计数）。策略是
+  工作区配置项 `workspaces.ontology_enforcement`（迁移 `core/0025`，与 P-A2 的 `entry_model` / `status`
+  同表同风格；环境变量 `ONTOLOGY_ENFORCEMENT` 作新建工作区缺省）。不做 DB 触发器：本体是按版本与可见性
+  解析的数据，触发器里无法正确解析"调用者可见"，应用层强制 + I-S5-1 计数即是设计 §5.4 的落地形式，
+  设计文档该行同步改写。
+- 迁移：目标主机先以 `warn` 跑一轮采集与 S2 / S3 场景，`/internal/metrics` 违规计数为 0 后切 `reject`；
+  测试与 CI 一律 `reject`。历史行不回溯。
+- 交付物：写入点校验、错误类型、审计、指标；`assert_fact` / `submit_observations` 描述写明该约束；
+  `ontology/ops-assets-v2.yaml` 中缺 domain / range 声明的 LinkType 补齐；单测 + DB-gated 集成测试；
+  `accept_s3.sh` 增一步"故意违规 `assert_fact` → 400 `ontology_violation`"；`graph-ai-middle-platform-
+  design.md` §5.4 I2 行改为"内核写入校验（应用层，按调用者可见版本）+ 不变量计数"。
+- 验收：采集器首跑 / 二跑违规计数 0；违规 assert 返回 400 且审计有记录；`warn` 模式写入成功且计数 +1。
+  依赖：S3.1、S3.3。关闭：`code-review-2026-09-10.md` §4 第 1 项。
+
+### S5.2 新鲜度与失效（Epistemic 闭环，关闭遗留 28）
+
+- 背景：见上第 2 点。
+- 设计：
+  - 迁移 `core/0026_fact_freshness.sql`：`links.last_observation_id uuid null`（FK 到 `observations`）、
+    `links.last_observed_at timestamptz null`、`objects.last_observed_at timestamptz null`。
+  - `submit_observations`：幂等 no-op 路径（`factContentEquals`）改为**更新** `last_observation_id /
+    last_observed_at`（仍不产生新 Fact，`AssertFactResult.unchanged` 语义不变）；Object 更新
+    `last_observed_at`。`assert_fact`（agent / 人）不带 Observation，两列不动，溯源停在 Activity +
+    Principal——有意的区别，不是缺口。
+  - 观察窗口（绝对语义）：`submit_observations` 新增可选参数 `window: { complete: true, objectTypes:
+    string[] }`，语义是"本次提交是该 Source 对这些 ObjectType 的完整视图"。内核在同一事务里把同一
+    Source、以这些 ObjectType 为端点、且本次未被观察到的有效 Fact 置 `invalidated_at = now()`，
+    `properties.invalidation_reason = 'not_reobserved'`，写审计并计数。采集器只在整轮采集与脱敏都成功后才
+    声明 `complete: true`（`run.ts` 现有"先采集后提交"顺序已保证），三阶段各自声明自己的 ObjectType 集合。
+  - `explain` Fact 分支加 `lastObservation`；`get_object` 结果加 `lastObservedAt`；wire 变更 →
+    `pnpm contract:snapshot`；Explorer provenance 端点同步。
+- 不变量：I-S5-2。
+- 交付物：迁移、store、ingest、wire 与快照、Explorer 端点、`collectors/host-inventory` 声明 `window`、
+  DB-gated 集成测试（消失的容器 → 其 Facts 被失效；再出现 → 新 Fact，旧 Fact 保持失效）。
+- 验收：`accept_s3.sh` 增两步——停掉一个测试容器再跑采集，`traverse` 不再返回其 `runs_on`，`explain`
+  该 Fact 显示 `invalidated_at` 与 reason；二跑后所有仍存在容器的 Fact `last_observed_at` 前进。
+  依赖：S3.3、S5.1（同一写入点，同一所有者，S5.1 先合入）。
+
+### S5.3 数据与代码分离（关闭遗留 9，部分关闭 11）
+
+- 领域包：compose 把 `${NEXTTIME_DATA}/config/ontology` 只读挂到 kernel `/data/config/ontology`；
+  `seed-domain-pack` 缺省 `--dir` 指向它（参数已存在），镜像内 `ontology/` 只作缺省示例；
+  `runbooks/add-domain-pack.md` 改为"放文件 → seed"，不再重建 kernel。
+- Source 身份：`sources` 增 `name text` 列（从 `metadata.name` 回填），唯一索引
+  `(workspace_id, kind, name) where name is not null`；`register_source` 改为幂等：同 (kind, name) 已存在
+  且 owner / visibility 一致 → 返回既有行（结果加 `created: boolean`），不一致 → 409
+  `source_identity_conflict`。采集器删除状态文件与 `sourceStateFile` 配置；`accept_s3.sh` 删除"删缓存文件"
+  那步与头部的共享状态警告。
+- 工作区属性：`workspaces.purpose text check in ('standard','ephemeral') default 'standard'`、
+  `workspaces.expires_at timestamptz null`（迁移 `core/0027`，与 P-A2 的列同表）；`create-workspace
+  --purpose ephemeral --ttl 24h`；`delete-workspaces-matching.sh` 增 `--expired`（按 `expires_at < now()`
+  选择，仍走既有 delete-workspace 的主机侧清理）；验收脚本全部改用 `--purpose ephemeral`；平台"工作区"页
+  显示 purpose 与到期时间（只读）。
+- 验收：不重建 kernel 即可 seed 新版本领域包；采集器换工作区不需重置任何本地状态；`--expired` 只删过期的
+  ephemeral 工作区。依赖：S3.1、S3.3、P-A2。
+
+### S5.4 prompt 契约修复与守卫
+
+- 背景：见上第 4 点；`retrospective-2026-09-11.md` §3.1 的教训（fake 侧不校验工具定义形状，S2 66 PASS 了几周
+  而真实供应商一直 400）属于同一类。
+- 设计：
+  - 修复 2026-09-09 审计仍开放的项（执行前按 main 重核；已知仍在：`ontology/ops-runner.yaml` 结果契约键名
+    与 `describe_operations`、`platform-extension/src/modes/worker.ts` 静态 Skills 段、
+    `deploy/worker-runtime/entrypoint.sh` 兜底 prompt 的开发者注记、`ontology/entry-agent.yaml` 对
+    `invoke_worker` 语义的描述与唯一的"金句"示例、注册表里 `search` / `traverse` / `explain` /
+    `record_decision` / `get_entry_context` / `report_turn` 的描述、MCP 五个别名描述）。
+  - prompt 契约守卫 `scripts/guards/prompt-contract.mjs`（进 `ci:guards`）：从 `ontology/*.yaml` 的
+    `systemPrompt` 抽取反引号标识符——工具名必须 ∈ 注册表 ∩ 该模式实际注册的工具（entry：
+    `ENTRY_TOOL_CAPABILITY_NAMES` + `<gate>.<op>`；worker：`report_result` + `<gate>.<op>`），结果契约键
+    必须 ∈ `WorkerResultContractSchema` 的键；允许名单放守卫文件里。
+  - 门工具描述：`gate-tools.ts` 与 `mcp/tool-projection.ts` 统一附加 mode 与 blast radius 一句，Worker
+    prompt 的"读描述判断 observe / execute"因此成立。
+  - fake-llm 校验工具定义形状：每个投影给模型的工具 `parameters` 必须是 `type: "object"` schema，否则
+    fake-llm 像真实供应商一样拒绝整个请求（把 §3.1 的失败模式搬进验收）。
+- 验收：`pnpm ci:guards` 能抓住一次故意写错的工具名；fake 模式 S2 在一个 `params_schema: null` 的 Operation
+  存在时失败（与真实供应商同一表现）。依赖：S3.9。
+
+### S5.5 加固批次（现有遗留 36 / 22 / 20 / 23 / 24 / 34 / 31 / 21）
+
+按风险排序，前三项先做、单独 PR：
+
+1. **遗留 36（P1）**：`create_connection` 的 `endpoint` 拒绝命中任何 `gate_instances.endpoint`（或宿主
+   `/i/` 路径）的地址；集成测试覆盖"owner 自连门指向宿主实例被拒"。按 STATUS 既定拟修，不再改形状。
+2. **遗留 22**：worker-supervisor `reconcile()` 恢复时以"标签值 ∪ 该 WorkerDefinition 当前已发布的
+   `egressDeny`"为准，复用分支检测到 `egressDeny` 变化时并入既有重建判定；补 reuse-then-reconcile 测试。
+3. **遗留 20**：两个门容器、caddy、postgres 补 `read_only` / `cap_drop: [ALL]` / `no-new-privileges`
+   （门是唯一持外部凭证的进程）；主机验收三份全跑。
+4. **遗留 23**：`query_decisions` / `list_conflicts` 的 keyset cursor 改用 `date_trunc('milliseconds', …)`
+   作排序键（与 #132 的 `search` 修法相同）；补同毫秒两行翻页测试。
+5. **遗留 24**：`find_active_fact_for_identity` 在 advisory lock 内重读时沿 `supersedes_id` 链取当前活跃行，
+   而不是按 `superseded_at is null` 过滤后返回 0 行；**不能**用唯一索引封住——异源同身份的 Fact 是 Conflict
+   语义下合法并存的两行。补三事务交错的集成测试。
+6. **遗留 34**：定位在 `withWorkspace` 的 client 上不等待就发第二条语句的路径（pg `DeprecationWarning`），
+   修复后在测试里把 pg warning 提升为失败（`process.on('warning')`），pg@9 前必须关闭。
+7. **遗留 31**：核实 Explorer 会话是否已由控制台会话取代（S4.1 起 `/api/explorer/session` 退役）；是则改写为
+   "logout / 禁用即时失效，rotate 不影响"并关闭，否则让 `rotate_api_key` 撤销该 principal 的 Explorer 会话。
+8. **遗留 21**：能力 `list_action_requests`（`status` 过滤、cursor 分页、human 通道）+ 控制台"审批历史"
+   只读列表（页面归 P-C 的运行状态页或工作区页，由 P-C 所有者定位置）。
+
+### S5.6 稳定性缺陷（遗留 30 与 Task 崩溃缺口）
+
+- **遗留 30**：真实模型下 docker_restart 一次 ActionRequest `executed`、容器已重启但 Task `failed` 且
+  result 为空。按 B6 先建复现回路：用 `accept_s2.sh --real` 的同一场景加 `--runs 10`，抓 Task / WorkerRun /
+  ActionRequest 三张表的状态时间线与 supervisor 日志；排序假设——(a) Worker 在 `await_decision=true` 超时后
+  结束 turn 没有再报结果，(b) `report_result` 在容器被 reaper 判超时之后到达，(c) approval 播报与
+  `report_task_result` 的 outbox 顺序颠倒。修复以"ActionRequest 已 executed 的 Task 不得以空 result 失败"
+  为验收。
+- **`queued` 崩溃缺口**：reaper 的周期清扫加一条——`status='queued'` 且 `updated_at < now() - 60s` 的 Task
+  置 `failed`，`failure_reason='spawn_lost'`（`create_task` 已下架，`queued` 只剩这一种来源，不重新 spawn）。
+  不变量 I-S5-3；chaos 脚本 `chaos-kill-kernel-mid-invoke.sh` 验证。
+- **遗留 26**：`accept_s2.sh` 的 cleanup 只 `rm -sf` 五个夹具服务，不 `down` 基础栈，S1→S2→S3 可连跑。
+- **遗留 25**：`interfaces/ws/server.test.ts` 的 WS 端到端用例给单独 `testTimeout`，复现三次以上再查根因。
+
+### S5.7 真实模型回归常态化
+
+- 背景：W7 每场景只跑 3 次、一个供应商一个模型（STATUS §2.2 盲区）。
+- 设计：`accept_s2.sh --real` / `accept_s3.sh --real` 五个场景各 `--runs 10`，每次发版后在目标主机跑一轮，
+  数字（成功率、平均轮数、平均 token / 成本，按 `llm_usage` 的 jti → Handle → Task / Turn 汇总，
+  `scripts/report-usage.sh`）写 `docs/private/real-model-<date>.md`，摘要进 STATUS §2.2 的表；任一场景低于
+  8/10 记为该版本的已知问题。不做主机定时器（E7 类运维项排最后）。依赖：S5.4（fake 侧形状校验先于真实回归）。
+
+### S5 明确不做（保持现状，记录理由）
+
+- 三个 `docker-socket-proxy` 实例收敛为一个运行时服务：三个消费者（supervisor 的 spawn / stop / start、
+  docker 门对客户任意容器的受治理操作、采集器只读）是三套不同的特权集与信任边界，三实例是正确的最小权限。
+  只把 allowlist 与消费者代码调用面的对应关系写进 `runbooks/operations.md`（遗留 11 的这一部分改为"记债"→
+  "决定保持"）。
+- 备份容器 root + `DAC_READ_SEARCH`：数据库已是 `pg_dump` 逻辑备份，root 仅用于跨 uid 读 `workspaces/`
+  等目录做 tar；改统一 gid 需要所有容器改 umask，收益小于风险。保持。
+- Object 属性的逐属性溯源：推后。
+- 场景层（RouterOS 门、网络领域包、Procedure）：2026-09-16 维护者决定推后。
+- P5（Trigger、`extension_ui_request`、CLI 清单解析）与 E7：不动。
+
+### S5 需要维护者决定的四项
+
+1. **与 W8 剩余项的先后**：推荐 S5 的 W9 三条并行车道（S5.1→S5.2、S5.4、S5.5 前三项）立即开工，与 P-B2b
+   文件互斥可并行；P-C / P-D 之后接 W10 / W11。或按 STATUS 原顺序先做完 P-B2b → P-C → P-D 再进 S5。
+2. **S5.1 推出方式**：目标主机先 `warn` 一轮再切 `reject`（推荐），还是直接 `reject`。
+3. **S5.2 失效语义放哪**：内核观察窗口 `window.complete`（推荐：采集器无状态、所有采集器共用一套机制）还是
+   采集器自己算 delta 调 `invalidate_fact`。
+4. **遗留 36 的修法**：按 STATUS 已记的拟修（拒绝命中宿主实例端点）做，还是改为每门独立 `gate_token`
+   （更彻底但改动面大，P-B1 的门自注册也要跟着变）。
+
+### S5 实施波次（2026-09-16 排定，待决定 1 确认后开工）
+
+| 波次 | 项 | 范围（文件所有权） | 交付 |
+|---|---|---|---|
+| W9-A | **S5.1 → S5.2** 本体写入点强制；新鲜度与失效 | `substrate/graph/**`、`substrate/ontology/registry.ts`、`substrate/epistemic/explain.ts`、`gateway/ingest-handlers.ts`（校验与 window）、`shared/wire/graph.ts`、`docs/contracts`、`collectors/host-inventory`（`window` 声明）、迁移 core 0025 / 0026 | 违规 400 + 指标；幻影 Fact 失效；关闭 28 与复审 §4-1 |
+| W9-B | **S5.4** prompt 契约修复 + 守卫 + 门工具描述 + fake 形状校验 | `ontology/*.yaml`、`deploy/worker-runtime/entrypoint.sh`、`platform-extension/src/modes/**`、`mcp/reference-tool-aliases.ts`、`mcp/tool-projection.ts`、`shared/capabilities.ts`（描述）、`scripts/guards/prompt-contract.mjs`、`deploy/fake-llm/**` | 修复与守卫同 PR |
+| W9-C | **S5.5 前三项** 36 → 22 → 20（各自单独 PR） | `gateway/connection-handlers.ts`、`worker-supervisor/src/**`（reconcile）、`docker-compose.yml` | 安全项先落 |
+| W10-A | **S5.3** 数据与代码分离 | `cli/bootstrap.ts`、`docker-compose.yml`（挂载）、`gateway/ingest-handlers.ts`（`register_source`，W9-A 合入后）、`collectors/host-inventory`、`scripts/delete-workspaces-matching.sh`、迁移 core 0027、runbooks、web 工作区页只读字段 | 关闭 9；11 部分 |
+| W10-B | **S5.5 后五项** 23 / 24 / 34 / 31 / 21 | `substrate/epistemic/**`（cursor）、`substrate/graph/sql-store.ts`（重读）、pg 并发路径、`gateway/approval*`、web 审批历史 | 关闭 23 / 24 / 34 / 31 / 21 |
+| W10-C | **S5.6** 稳定性 | `application/task/reaper.ts`、`application/task/**`（30 根因）、`scripts/accept_s2.sh` cleanup、WS 测试超时、chaos 脚本 | 关闭 30 / 26 / 25；I-S5-3 |
+| W11 | **S5.7** 真实模型回归 + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md` | 五场景 10 次数字进 STATUS |
+
+W9 三车道文件互斥可并行，也与 P-B2b（平台面：`application/platform/**`、`packages/web` 平台页）互斥；
+W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工、W10-B 的 24 先合入；W11 依赖 W9-B。
+每波结束：主机应用、验收、`docs/STATUS.md` 更新。
+
+---
+
 ## 6. 验收矩阵
 
 | 设计目标 | 脚本 | 关键断言 |
@@ -1837,6 +2053,8 @@
 | G4 用户隔离 | `accept_s1.sh`、`accept_s2.sh` | B 看不到 A 的 Chat、卡片、私有 Source；B 批不了 A 范围的动作；I15 |
 | G5 图有内容看得见 | `accept_s3.sh` | 采集入图；Explorer 三工作区 |
 | G6 多运行时接入 | `accept_s3.sh` | Claude Code 经 MCP 观察同一图 |
+| S5 本体与溯源由机制持有（§5b） | `accept_s3.sh` | 违规 `assert_fact` → 400 `ontology_violation`；停掉的容器其 `runs_on` Fact 被 `not_reobserved` 失效且 `explain` 可见；二跑后仍在容器的 Fact `last_observed_at` 前进 |
+| S5 契约守卫与稳定性（§5b） | CI `guards`、`accept_s2.sh --real --runs 10` | prompt 引用的工具名 / 契约键错一个即 CI 失败；五场景成功率进 STATUS §2.2；`queued` 超 60s 的 Task 被清扫为 `failed` |
 
 ---
 
@@ -1870,6 +2088,10 @@ flowchart LR
   E4 --> S1.12
   S3.4 & S3.5 & S3.6 --> S3.9
   S3.9 & S1.12 --> S3.10
+  S3.1 & S3.3 --> S5.1 --> S5.2
+  S3.1 & S3.3 --> S5.3
+  S3.9 --> S5.4 --> S5.7
+  S2.8 & S3.8 --> S5.6
 ```
 
 可并行起点：R1 后 R2 / R3 / R4；E1 / E2 与 R 无关；S1.6、S1.7、S1.9 可与 S1.4 并行；S2.8、S2.9 不依赖 S2 其他任务。
@@ -1894,3 +2116,6 @@ flowchart LR
 | 各厂商 OpenAI 兼容差异 | pi-ai `compat`；内核不做协议 |
 | pi 的 `extension_ui_request` 子协议（对话内即时提问）尚无任务承接 | 未决：归入 S2.10 或 P5，实现前定 |
 | Explorer 契约的服务端 facade（游标分页、分析端点）工作量未估 | S3.5 开工前先估 |
+| S5.1 写入点强制切 `reject` 后拒掉真实采集器 / Worker 的合法写入 | 主机先 `warn` 一轮，违规计数为 0 再切；错误体带 expected 让 agent 自纠 |
+| S5.2 观察窗口把采集器一次不完整的采集当成"消失"而误失效 | 只有整轮采集与脱敏都成功才声明 `complete: true`；失效可由下一轮重新观察为新 Fact，旧 Fact 留作历史 |
+| S5.5 遗留 24 若用唯一索引封住会破坏异源 Conflict 语义 | 明确不用唯一索引，改重读沿 `supersedes_id` 链取活跃行 |

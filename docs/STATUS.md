@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-12（W8：P-B1 门与集成目录合入 PR #175 并发 v0.9.0；P-A2 使用面收口合入 PR #171 并发 v0.8.0（遗留 33 关闭）；P-A1 合入 PR #168 并发 v0.7.0；`platform-admin-design.md` v3 是平台管理面的上位设计，S4.2–S4.5 已改为 P-A1 / P-A2 / P-B / P-C / P-D；主机已于 2026-09-12 应用 v0.8.0（迁移 0019–0022 + governance 0011，`admin` 首登改密并接管 `stability` 工作区为默认）；当前波次：W8 平台管理 + 稳定期）
+最后更新：2026-09-16（S5 基座打磨立项：`development-tasks.md` §5b 七项、W9–W11 波次、四项待维护者决定；新增遗留 37 / 38，遗留 9 / 11 / 20–24 / 28 / 30 / 31 / 34 / 36 归属改为 S5 车道。上一版 2026-09-12：W8 P-B2a 合入 PR #179 并发 v0.10.0，P-B1 #175 v0.9.0，P-A2 #171 v0.8.0，P-A1 #168 v0.7.0）
 
 ## 1. 入口指引
 
@@ -32,6 +32,7 @@
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | 达成 | `accept_s3.sh` 29 PASS（2026-09-11，新增 explorer-no-credentials 断言，PR #153，从分支在主机验证） |
 | S3.11–S3.15 | 控制面、接入向导、AgentProfile、web 控制台、pi 漂移 | 达成 | `development-tasks.md` 各节实现说明 |
 | 真实模型验证 | 真实模型跑 S2 / S3 场景，统计工具调用成功率 | 达成 | docker_restart 2/3、api_observe 3/3、ssh_run_approve 3/3、ssh_run_auto 1/1、dependency_chat 2/3（`retrospective-2026-09-11.md` §2） |
+| S5 | 基座打磨：I2 写入点强制、新鲜度与失效、数据与代码分离、prompt 契约守卫、加固批次、稳定性、真实模型回归 | 立项（2026-09-16，待排入波次） | `development-tasks.md` §5b |
 | 发布 | — | v0.9.0（含 P-B1，其下 v0.8.0 含 P-A2、v0.7.0 含 P-A1、v0.6.0 含 S4.1） | `CHANGELOG.md` |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 复审曾发现 S3.2 的冲突检测在 Worker 断言主路径上不生效
@@ -62,6 +63,7 @@
 | 2026-09-12 | W8 P-A2 使用面收口（PR #171，v0.8.0）：六个平台工作区能力与工作区页（建区 / 改名 / 入口模型 / 允许的模型 / 停用 / 委托 owner）、迁移 core 0022 + governance 0011、允许的模型改为解析期上限且两个面共用一条一致性规则、禁用工作区按调用关全部通道并停入口容器（顺带补上停用用户停容器）、`instanceInstructions` 进入口与 Worker 的 system prompt（一次性 Worker 首次拿到 WorkerDefinition 的 `systemPrompt`，`/task/spawn` 新增 `systemPrompt`）、遗留 33 由 agent-host 按 chat `switch_session` 关闭。内核核心与四处审查修正由主会话完成，web / 测试 / e2e / agent-host / supervisor 由 opus builder 完成；opus reviewer 抓到四处（已认证 WS 在禁用后仍可调用并重签会话、owner `set_agent_policy` 绕过管理员模型上限、`entryModel:null` 清不掉入口定义模型、`switch_session` 回包 id 未核实）均在合入前修正。主机未应用 | `development-tasks.md` P-A2 实现说明 |
 | 2026-09-12 | W8 P-B1 门与集成目录（PR #175，v0.9.0）：P-B 按 design §9 一行拆成 P-B1 / P-B2 两个波次并记录五条开工前决定；门自注册（`/internal/gates/announce` + 心跳 + 失联扫描）、接入包三态与按 Operation 禁用（建请求与执行两处卡口）、门实例（发现 / 启用 / 禁用 / 失联 / vetted）、工作区一键启用、MCP 信任规则、外部运行时盘点 + 页面签发 service Handle、集成页。内核核心、gatekeeper-base 自注册与审查修正由主会话完成（两个 opus builder 开工即撞会话限额，web 改由 sonnet builder 完成，e2e / reviewer 亦为 sonnet）；e2e 抓出并修掉一个既有 bug（系统接入页 `search` 信封）。主机未应用 | `development-tasks.md` P-B 实现说明（P-B1） |
 | 2026-09-12 | W8 P-B2a 门宿主与页面直达凭证（PR #179，v0.10.0）：P-B2 再拆为 P-B2a / P-B2b 并记录决定 ⑥–⑬；通用门宿主（一个容器承载 N 个 http / mcp 实例，定义由宿主从内核拉、逐个 announce 复用 P-B1 全部机制）、凭证由浏览器经 5 分钟平台 JWT 直达宿主（内核第一次做到不经手门凭证）、集成页新建 / 录入凭证 / 删除、成员录入自己的凭证、fake MCP 全链路 e2e 进 CI。内核 / 共享契约 / 宿主模式 / 部署接线由主会话完成，测试 / web / e2e 各一个 sonnet builder，sonnet reviewer 抓到一条 P1（凭证路由接受共享 gate_token）与两条 P2，CodeQL 抓到两条 high，均合入前修正。主机同日应用（迁移 core 0024，`gate-host` healthy、每 60 s 拉定义，caddy `/gate-host/*` 路由通；尚无真实宿主实例） | `development-tasks.md` P-B 实现说明（P-B2a） |
+| 2026-09-16 | 维护者决定先打磨基座、场景层推后；对 main 核实后立项 S5 基座打磨（七项、W9–W11、四项待决），新增遗留 37 / 38 | `development-tasks.md` §5b |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -126,6 +128,10 @@
 
 后续：P-B2b 模块 → P-C 运行层与运行状态 → P-D 模型与供应商 → 遗留 30 → 加固批次（23 / 21 / 20 / 22）→ 镜像发布与 P5（P-A1 / P-A2 / P-B1 / P-B2a 已完成）。
 
+**下一阶段候选：S5 基座打磨（2026-09-16 立项，`development-tasks.md` §5b；与 W8 剩余项的先后待维护者决定）**。
+维护者 2026-09-16 决定暂不做场景层、先打磨基座。对 main（v0.10.0）逐项核实后，2026-09-09 回顾 §5 的 12 个非最优点已关闭 7 个；仍开放且属基座的归为 S5 七项：S5.1 本体约束在写入点强制（I2 目前只是 `validate` 能力，复审 §4-1）→ S5.2 新鲜度与失效（`last_observed_at`、`not_reobserved` 观察窗口，关闭 28）→ S5.3 数据与代码分离（关闭 9、11 部分）→ S5.4 prompt 契约修复与守卫（09-09 审计 15 条 + `prompt-contract` 守卫 + fake 侧工具形状校验）→ S5.5 加固批次（36 / 22 / 20 先做，再 23 / 24 / 34 / 31 / 21）→ S5.6 稳定性（30、`queued` 崩溃缺口、26、25）→ S5.7 真实模型回归常态化（五场景各 10 次）。
+波次 W9-A / W9-B / W9-C 文件互斥、与 P-B2b 互斥，可立即并行；W10 三车道随后；W11 收口。四项待决：与 W8 的先后、S5.1 先 `warn` 再 `reject`、失效语义放内核还是采集器、遗留 36 的修法。明确不做：socket-proxy 收敛（三套特权集，保持）、备份 root+cap（保持）、Object 逐属性溯源（推后）、场景层与 P5（推后）。
+
 ## 4. 遗留清单
 
 每条要么链接到关闭它的 PR，要么标明归属波次。关闭遗留的 PR 必须同时改本表。
@@ -141,9 +147,9 @@
 | 6 | E7 主机备份定时器"S3 后重评" | — | 运维，最后 | 待决定（2026-09-10 维护者：运维项排在开发波次之后） |
 | 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4） | P2 | W6 | 关闭（W6：#145 driver 抽成一份、#146 provider 改 compose override、#148 S1 精简版进 CI、#149 场景参数按注册表校验） |
 | 8 | Explorer 由 caddy 注入 key 的信任边界（§5.8） | P2 | W7 | 关闭（PR #153：改为按调用者身份的内核签发会话 cookie，caddy 不再持有 key） |
-| 9 | 领域包烤进 kernel 镜像（§5.7）；采集器 Source 状态按文件缓存（§5.9） | P3 | 待排 | 开放 |
+| 9 | 领域包烤进 kernel 镜像（§5.7）；采集器 Source 状态按文件缓存（§5.9） | P3 | S5.3（W10-A） | 开放 |
 | 10 | `extension_ui_request` 子协议；Trigger；CLI help 清单解析 | 功能缺口 | P5 | 开放 |
-| 11 | 容器运行时访问面收敛（§5.10）；备份 root + capability（§5.11）；清理靠名字正则（§5.12） | P2 | 长期 | 记债 |
+| 11 | 容器运行时访问面收敛（§5.10）；备份 root + capability（§5.11）；清理靠名字正则（§5.12） | P2 | S5.3 关名字正则；socket-proxy 与备份决定保持（§5b"不做"） | 记债 |
 | 12 | bot PR 的 CI 需人工批准 run（决定：暂维持人工） | — | 决定 | 关闭 |
 | 13 | 容器镜像不发布到 GitHub（决定：稳定后再做） | — | 决定 | 关闭 |
 | 14 | 主机验收记录断档：09-09 的 S3 验收与 v0.2.0 / v0.3.0 发版都没有 `docs/private/` 记录（主机上也没有该目录），最新一份记录停在 09-04；§2 的 22 / 66 / 24 目前只有 retrospective 与 PR 正文为据 | P2 | W5 / 流程 | 关闭（2026-09-10：v0.4.2 主机应用与三份验收记录写入 `docs/private/` §34，§2 的 22 / 66 / 28 有据） |
@@ -151,24 +157,26 @@
 | 16 | **Worker 断言的 Fact 永远按 principal 判定来源**：`postWorkerResult` 先断言后记 Observation，`resolveFactOrigin` 因此拿不到 Source；叠加 agent principal 每 WorkerDefinition 一个，同一定义两次运行的矛盾断言被静默 supersede 而非开 Conflict —— S3.2 的核心场景（`code-review-2026-09-10.md` §2.1） | **P1** | W5.5 | 关闭（PR #137：`postWorkerResult` 先注册私有 `worker_session` Source/Observation 再断言，`assertFact` 异源同内容视为佐证、异源异内容开 Conflict，见 `development-tasks.md` S2.9 W5.5 实现说明） |
 | 17 | 并发首次断言同一身份不开 Conflict：`FOR UPDATE` 锁不住不存在的行，`links` 上也无 `(link_type, source, target)` 唯一约束（`code-review-2026-09-10.md` §2.2） | **P1** | W5.5 | 关闭（PR #140：`assertFact` 在无既有 Fact 时按身份取事务级 advisory lock 并重读，`substrate/epistemic/conflicts.test.ts` 加两条并发正向用例） |
 | 18 | Handle 通道不校验 `minRole`，`member` 的入口 Handle 结构性携带 5 个 `minRole:'builder'` 的 `propose_*` 并可调用；不构成越权发布（草稿私有 + I16），但 `minRole` 在该通道事实失效（`code-review-2026-09-10.md` §2.3；代码已自认并写明修法） | **P1** | W5.5 | 关闭（PR #138：`entryScope({role})` 按 on_behalf_of 角色收窄入口 Handle 的 ceiling，`roleSatisfiesMinRole` 下沉到 `governance/capability`，`set_principal_role` 变更角色时吊销入口会话 Handle） |
-| 19 | `llm-proxy` 无任何预算代码，设计 §5.4 I18 的「100% 时代理返回预算耗尽错误」未实现，超支只能由内核事后止损（`code-review-2026-09-10.md` §3.1） | P2 | 待排 | 开放 |
-| 20 | 两个门容器与 caddy / postgres 无 `read_only` / `cap_drop:[ALL]` / `no-new-privileges`，其余服务均有；门是唯一持外部凭证的进程（`code-review-2026-09-10.md` §3.3） | P2 | 待排 | 开放 |
-| 21 | 控制台看不到审批历史：注册表只有 `list_pending` 与 `get_action`，无列出已决 ActionRequest 的能力（`code-review-2026-09-10.md` §3.4） | P2 | 待排 | 开放 |
-| 22 | 出网拒绝表在 `reconcile()` 后回退到容器创建时的旧值：标签只在创建时打，复用分支刷新 source map 却回写不了标签，而 `reconcile()` 每次 docker-events 重连都跑；与 `EGRESS_DENY_LABEL` 自称的「永不放宽，哪怕暂时」冲突（`code-review-2026-09-10.md` §3.5；平台级拒绝不受影响） | P2 | 待排 | 开放 |
-| 23 | `query_decisions` / `list_conflicts` 的 keyset cursor 与 `search` 修复前同一模式：`created_at` 经 JS `Date` 只剩毫秒，回传后与微秒精度的列做 `<` 比较，同一毫秒内（同事务写入）的行会在翻页边界被漏掉；`search` 在 PR #132 里改为 `date_trunc('milliseconds', …)` 作排序键，这两处未改 | P2 | 待排 | 开放 |
-| 24 | `find_active_fact_for_identity`（0017）的 `for update` 在被阻塞期间若持锁方 supersede 了该行，重查按 `superseded_at is null` 过滤后返回 0 行而非后继行；PR 17 的 advisory lock + 重读封住了两事务形态，三事务交错（第二个等锁者的重读又阻塞在第三个事务的 supersede 上）仍可能插入一条多余的活跃 Fact。0017 既有机制的局限，复审 17 时发现 | P3 | 待排 | 开放 |
+| 19 | `llm-proxy` 无任何预算代码，设计 §5.4 I18 的「100% 时代理返回预算耗尽错误」未实现，超支只能由内核事后止损（`code-review-2026-09-10.md` §3.1） | P2 | P-D | 开放 |
+| 20 | 两个门容器与 caddy / postgres 无 `read_only` / `cap_drop:[ALL]` / `no-new-privileges`，其余服务均有；门是唯一持外部凭证的进程（`code-review-2026-09-10.md` §3.3） | P2 | S5.5（W9-C） | 开放 |
+| 21 | 控制台看不到审批历史：注册表只有 `list_pending` 与 `get_action`，无列出已决 ActionRequest 的能力（`code-review-2026-09-10.md` §3.4） | P2 | S5.5（W10-B） | 开放 |
+| 22 | 出网拒绝表在 `reconcile()` 后回退到容器创建时的旧值：标签只在创建时打，复用分支刷新 source map 却回写不了标签，而 `reconcile()` 每次 docker-events 重连都跑；与 `EGRESS_DENY_LABEL` 自称的「永不放宽，哪怕暂时」冲突（`code-review-2026-09-10.md` §3.5；平台级拒绝不受影响） | P2 | S5.5（W9-C） | 开放 |
+| 23 | `query_decisions` / `list_conflicts` 的 keyset cursor 与 `search` 修复前同一模式：`created_at` 经 JS `Date` 只剩毫秒，回传后与微秒精度的列做 `<` 比较，同一毫秒内（同事务写入）的行会在翻页边界被漏掉；`search` 在 PR #132 里改为 `date_trunc('milliseconds', …)` 作排序键，这两处未改 | P2 | S5.5（W10-B） | 开放 |
+| 24 | `find_active_fact_for_identity`（0017）的 `for update` 在被阻塞期间若持锁方 supersede 了该行，重查按 `superseded_at is null` 过滤后返回 0 行而非后继行；PR 17 的 advisory lock + 重读封住了两事务形态，三事务交错（第二个等锁者的重读又阻塞在第三个事务的 supersede 上）仍可能插入一条多余的活跃 Fact。0017 既有机制的局限，复审 17 时发现 | P3 | S5.5（W10-B） | 开放 |
 | 25 | CI 偶发：`interfaces/ws/server.test.ts` 的 WS 端到端用例在 PR #140 首跑时 5 秒超时，重跑通过（其余 1100 用例均过）；疑为 runner 争用，若复现需给该用例单独 `testTimeout` 或查 listener 启动时序 | P3 | 待排 | 开放 |
 | 26 | `accept_s2.sh` 的 cleanup 对 accept-s2 profile 做 `down` 时连基础栈一起停掉，S1→S2→S3 无法一次连跑；应改为只 `rm -sf` 五个夹具服务，或由统一 driver 在 S3 前重新拉起（2026-09-10 主机实测） | P2 | W6 | 关闭（PR #145：cleanup 改为只 `rm -sf` 六个夹具容器，主机 S1→S2→S3 连跑通过） |
 | 27 | outbox dispatcher 构造时未传 `onError`，消费者异常被静默吞掉（#152 的根因之所以晚发现） | P2 | W8 | 关闭（PR #159：`createBackgroundServices` 加 `onOutboxError`，`main()` 传 `app.log.error`；投递失败以 `OutboxDeliveryError` 带 outbox id / 事件类型 / 次数 / 是否 dead-letter 记日志） |
-| 28 | 已有图里 `depends_on` 指向的幻影 Container（`<service>:service_healthy:false`）要等采集器下一轮 supersede；旧对象留作历史 | P3 | 稳定期 | 开放 |
+| 28 | 已有图里 `depends_on` 指向的幻影 Container（`<service>:service_healthy:false`）要等采集器下一轮 supersede；旧对象留作历史 | P3 | S5.2（W9-A） | 开放 |
 | 29 | 新工作区首轮 Turn `interrupted`、0 次工具调用（S3 real 1/3 与 v0.5.0 应用时 fake S1 各一次；后者有容器日志实证，前者容器已重建、只有 egress-proxy 的同型 CONNECT 记录为据）。根因不是冷启动 / Handle 竞态：入口容器启动自检的"经代理公网通"探测（5 秒）在弱网下超时且致命退出，容器 spawn 后 5 秒死亡；30 秒后内核 accept 超时再记一次 `failed` | P2 | W8 | 关闭（PR #160：探测改 `result=warn` 不退出，I9 / I10 仍致命；`AgentHostRuntime` 在 `turnEnded` 先到时结清 accept 等待。`development-tasks.md` S2.9 W8 修订） |
-| 30 | 真实模型下 docker_restart 一次 ActionRequest executed、容器已重启但 Task failed 且 result 为空（S2 real 1/3 的失败） | P2 | 稳定期 | 开放 |
-| 31 | Explorer 会话 cookie 不随 `rotate_api_key` 失效（8 小时 TTL 为界；`disable_principal` 即时生效） | P3 | 记债 | 开放 |
+| 30 | 真实模型下 docker_restart 一次 ActionRequest executed、容器已重启但 Task failed 且 result 为空（S2 real 1/3 的失败） | P2 | S5.6（W10-C） | 开放 |
+| 31 | Explorer 会话 cookie 不随 `rotate_api_key` 失效（8 小时 TTL 为界；`disable_principal` 即时生效） | P3 | S5.5（W10-B，先核实是否已被控制台会话取代） | 开放 |
 | 32 | CodeQL 预存告警：`hashApiKey` 用 sha256（32 字节随机 key，判定为合理）需维护者 dismiss；`e2e / web-e2e` 需维护者加为必需检查 | — | 决定 | 关闭（2026-09-11 维护者已把 `e2e / web-e2e` 加为必需检查并 dismiss 告警 57） |
 | 33 | 入口容器的 pi 会话跨 chat 延续（真实模型第三轮回复"这已经是你第三次问同一个问题"）——是否应按 chat 隔离上下文是产品问题 | P3 | W8 | **已关（PR #171，P-A2）**：agent-host 在 chat 变化时先发 `switch_session`（路径按 `chatId` 派生、不存在即新建）再发 `prompt`，容器重建后必切；跨对话记忆仍靠 `context` 注入。原决定（2026-09-11 维护者）：按 chat 隔离——每个 Chat 一份 pi 会话（pi RPC `new_session` / `switch_session`），跨对话记忆靠 `context` 注入而非 pi 会话文件。已核实 pi 0.84.4 源码：`switch_session` 对不存在的路径会新建、`new_session` 后 `get_state` 立即有 `sessionFile`、`session_start` 在切换时重触发且 `registerTool` 同名覆盖——因此可以由 agent-host 单方面按 `chatId` 派生会话文件路径实现，不需要内核新列或新帧 |
-| 34 | kernel 日志有 pg `DeprecationWarning: Calling client.query() when the client is already executing a query`（2026-09-11 主机 v0.5.0 首轮对话时出现）——同一 client 上并发 query，pg@9 将不再允许；需定位是哪条路径在 `withWorkspace` 的 client 上不等待就发第二条语句 | P2 | 待排 | 开放 |
+| 34 | kernel 日志有 pg `DeprecationWarning: Calling client.query() when the client is already executing a query`（2026-09-11 主机 v0.5.0 首轮对话时出现）——同一 client 上并发 query，pg@9 将不再允许；需定位是哪条路径在 `withWorkspace` 的 client 上不等待就发第二条语句 | P2 | S5.5（W10-B） | 开放 |
 | 35 | 用 API key 登录控制台的会话没有控制台 cookie，浏览器里打不开 Explorer（S4.1 起 Explorer 只认 `X-API-Key` 或控制台 cookie）；API key 是给自动化与过渡期的，人用密码登录即可——记为已知行为，随"验收 harness 迁到 service Principal"一起看 | P3 | 记债 | 开放 |
-| 36 | `create_connection` 的 `endpoint` 由调用者给出且无白名单，内核对每个门调用都带同一把 `gate_token`：工作区 owner 可把自连的 http 门指向 `http://gate-host:8083/i/<id>`，在本工作区得到一个绕过 `workspace_gate_links`（禁用名单、`vetted`）的 Gatekeeper，并用管理员录入的共享凭证驱动宿主实例（P-B2a 审查提出前提、只封住了写凭证一半；打包门此前同样暴露，宿主的共享凭证使之实质变重）。拟修：`create_connection` 拒绝命中任何 `gate_instances.endpoint`（或宿主 `/i/` 路径）的端点 + 集成测试；单独 PR / 审查 / 发版 | P1 | P-B2b 前 | 开放 |
+| 36 | `create_connection` 的 `endpoint` 由调用者给出且无白名单，内核对每个门调用都带同一把 `gate_token`：工作区 owner 可把自连的 http 门指向 `http://gate-host:8083/i/<id>`，在本工作区得到一个绕过 `workspace_gate_links`（禁用名单、`vetted`）的 Gatekeeper，并用管理员录入的共享凭证驱动宿主实例（P-B2a 审查提出前提、只封住了写凭证一半；打包门此前同样暴露，宿主的共享凭证使之实质变重）。拟修：`create_connection` 拒绝命中任何 `gate_instances.endpoint`（或宿主 `/i/` 路径）的端点 + 集成测试；单独 PR / 审查 / 发版 | P1 | S5.5（W9-C，单独 PR，P-B2b 前） | 开放 |
+| 37 | I2 只是能力不是不变量：`validateLink` 只被 `validate` 能力调用，`assertFact` / `supersedeFact` / `submit_observations` 的 link 写入不校验 LinkType 声明与 domain / range（`code-review-2026-09-10.md` §4-1；设计 §5.4 写"内核写入校验 + 触发器"） | P2 | S5.1（W9-A） | 开放 |
+| 38 | Fact 有起源 Observation（0018）但无新鲜度与失效：幂等 no-op 不记录再次确认，`links` / `objects` 无 `last_observed_at`，采集器对消失对象无失效语义（遗留 28 的根因） | P2 | S5.2（W9-A） | 开放 |
 
 ## 5. 更新规则
 
