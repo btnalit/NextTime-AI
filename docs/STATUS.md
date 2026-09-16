@@ -33,7 +33,7 @@
 | S3.11–S3.15 | 控制面、接入向导、AgentProfile、web 控制台、pi 漂移 | 达成 | `development-tasks.md` 各节实现说明 |
 | 真实模型验证 | 真实模型跑 S2 / S3 场景，统计工具调用成功率 | 达成 | docker_restart 2/3、api_observe 3/3、ssh_run_approve 3/3、ssh_run_auto 1/1、dependency_chat 2/3（`retrospective-2026-09-11.md` §2） |
 | S5 | 基座打磨：I2 写入点强制、新鲜度与失效、数据与代码分离、prompt 契约守卫、加固批次、稳定性、真实模型回归、交付与演示闭环（S5.8，W11 最后） | 立项（2026-09-16，待排入波次） | `development-tasks.md` §5b |
-| 发布 | — | v0.9.0（含 P-B1，其下 v0.8.0 含 P-A2、v0.7.0 含 P-A1、v0.6.0 含 S4.1） | `CHANGELOG.md` |
+| 发布 | — | v0.10.1（#183 pg Pool error 监听 + 隔离库测试 teardown；其下 v0.10.0 含 P-B2a、v0.9.0 含 P-B1、v0.8.0 含 P-A2、v0.7.0 含 P-A1、v0.6.0 含 S4.1）。主机仍在 v0.10.0，v0.10.1 待应用（仅 kernel 镜像重建，无迁移） | `CHANGELOG.md` |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 复审曾发现 S3.2 的冲突检测在 Worker 断言主路径上不生效
 > （`code-review-2026-09-10.md` §2.1），当时验收对 Conflict 的唯一断言是「采集器跑两遍后为零」，压制 Conflict 的缺陷
