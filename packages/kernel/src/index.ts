@@ -3,7 +3,7 @@ import { IllegalTransition, internalAuthorizationHeader } from '@nexttime/shared
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
-import { createPool, withWorkspace } from './adapters/db/pool.js';
+import { createPool, logIdleClientErrorToStderr, withWorkspace } from './adapters/db/pool.js';
 import type { PoolLike } from './adapters/db/pool.js';
 import { HttpGatekeeperClient } from './adapters/gatekeeper-client/index.js';
 import { TaskSupervisorClient } from './adapters/supervisor-client/index.js';
@@ -980,7 +980,13 @@ export function main(): void {
     workersSubnet: workersSubnet ? workersSubnet : undefined,
   };
 
-  const pool = createPool();
+  // adapters/db/pool: `pg` raises idle-client failures (a Postgres restart / failover, a network
+  // partition) on the Pool's 'error' event; `createPool` installs the listener so they can never
+  // become an uncaught exception. The sink starts as the default stderr line and is redirected to
+  // the Fastify logger as soon as `app` exists below — the pool has to be built first because
+  // `createServer` takes it as a dependency.
+  let onPoolIdleClientError: (err: Error) => void = logIdleClientErrorToStderr;
+  const pool = createPool({ onIdleClientError: (err) => onPoolIdleClientError(err) });
   const requestActionAwaitDecisionTimeoutMs = parsePositiveIntEnvVar(
     'REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS',
     process.env.REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS,
@@ -1004,6 +1010,7 @@ export function main(): void {
       isBackgroundReady: () => backgroundReady,
     },
   );
+  onPoolIdleClientError = (err) => app.log.error({ err }, 'adapters/db/pool: idle client error');
 
   const port = Number(process.env.KERNEL_PORT ?? 8080);
   const host = process.env.KERNEL_BIND_ADDR ?? '0.0.0.0';

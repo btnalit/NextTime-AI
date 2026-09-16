@@ -70,6 +70,23 @@ const HOSTED_EXECUTE_OP: Operation = {
   idempotent_hint: true,
 };
 
+/** Polls `pg_stat_activity` until no backend is connected to `name` (bounded to ~1s). `pool.end()`
+ *  resolves once pg-pool has *scheduled* each idle client's `end()`, not once the sockets are
+ *  closed, so without this wait the `drop database … with (force)` below can terminate a backend
+ *  of this file's own mid-shutdown; the resulting FATAL 57P01 then surfaces on the pool's 'error'
+ *  event (CI run 35079054627 on main). Falls through to the caller's `with (force)` if a
+ *  connection really did outlive the pool. */
+async function waitForNoConnections(cluster: Pool, name: string): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const { rows } = await cluster.query<{ n: string }>(
+      'select count(*)::text as n from pg_stat_activity where datname = $1',
+      [name],
+    );
+    if (rows[0]?.n === '0') return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 async function createIsolatedDatabase(): Promise<{ pool: Pool; drop: () => Promise<void> }> {
   if (DATABASE_URL === undefined) throw new Error('createIsolatedDatabase needs DATABASE_URL');
   const cluster = createPool();
@@ -87,6 +104,7 @@ async function createIsolatedDatabase(): Promise<{ pool: Pool; drop: () => Promi
     pool,
     drop: async () => {
       await pool.end();
+      await waitForNoConnections(cluster, name);
       await cluster.query(`drop database if exists "${name}" with (force)`);
       await cluster.end();
     },

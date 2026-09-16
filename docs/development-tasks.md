@@ -40,7 +40,7 @@
 | S1 | 登录 → 对话 → 自己的 pi 回答 → Turn 入图 | G3 部分、G4 部分 |
 | S2 | 说需求 → find_workers → invoke_worker → 门动作 → 审批卡片 → 执行 → 写回 | G1、G2、G4 |
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | G3、G5、G6 |
-| S5 | 基座打磨：I2 写入点强制、新鲜度与失效、数据与代码分离、prompt 契约守卫、加固批次、稳定性、真实模型回归（§5b） | G2、G3、G5 加固 |
+| S5 | 基座打磨：I2 写入点强制、新鲜度与失效、数据与代码分离、prompt 契约守卫、加固批次、稳定性、真实模型回归、交付与演示闭环（§5b） | G2、G3、G5 加固 |
 
 ---
 
@@ -2003,6 +2003,32 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
   `scripts/report-usage.sh`）写 `docs/private/real-model-<date>.md`，摘要进 STATUS §2.2 的表；任一场景低于
   8/10 记为该版本的已知问题。不做主机定时器（E7 类运维项排最后）。依赖：S5.4（fake 侧形状校验先于真实回归）。
 
+### S5.8 交付与演示闭环（W11 最后一项，不扩大基座边界）
+
+- 背景（2026-09-16 维护者确认设计目标是"稳定、可演示、可复用、可交付"的闭环）：S5.1–S5.7 覆盖稳定与
+  可复用，可演示顺带受益，可交付最薄。闭环拆开——安装 → 接入 → 采集入图 → 对话 → 审批执行 → 溯源 →
+  升级 / 备份 / 恢复——其中接入到溯源由 S1 / S2 / S3 验收与 `--real` 证明，备份 / 恢复有 `drill-restore.sh`；
+  **安装到一台陌生主机**只有 runbook 没有验收，**内核 + 数据库迁移的升级 / 回滚**没有演练脚本（P-C 只覆盖
+  worker 运行时镜像的滚动重建），镜像发布推后意味着客户现场从源码构建、耗时未计。本项只给这些环各加一个
+  验收它的脚本，不新增任何能力或概念。
+- 交付物：
+  1. `scripts/drill-install.sh`：在一台只有 Docker 的干净主机上按 `runbooks/host-preflight.md` →
+     `host-bootstrap.md` → `host-checkout.md` 的顺序走到三份验收通过；脚本只做编排与计时，每一步失败即停并
+     指出对应 runbook 小节；记录总耗时（含源码构建）。跑不通的地方即交付缺口，回填 runbook。
+  2. `scripts/drill-upgrade.sh`：用上一发布版的数据目录 + `backup.sh` 产物 → 检出新版 → `make migrate` →
+     三份验收 → 用 `restore.sh` 回滚到备份并再跑 S1 验收；`runbooks/release.md` 增加"迁移是否可逆"一列，
+     不可逆的迁移必须在 CHANGELOG 里标注。
+  3. `make demo`（`scripts/demo.sh`）：`create-workspace --purpose ephemeral` → 采集器跑当前主机 → 三句预置
+     提问（谁依赖谁；这条边从哪来、最近何时确认；重启某个测试容器并走审批）→ 输出一页 Markdown 结果
+     （对象数、事实数、依赖链回答、审批卡片与执行状态、`explain` 的溯源链）。要求 15 分钟内完成；它同时是
+     S5.7 真实模型回归的场景之一，一份脚本两用。
+  4. 镜像发布决定的重评点：S5.7 五场景 10 次的数字出来后，若均 ≥ 8/10，把"构建 / 发布容器镜像到 GitHub"
+     从"稳定后再做"改为排期；源码构建路径保留作备选并在 `drill-install.sh` 里持续计时。
+- 验收：干净主机上 `drill-install.sh` 全绿并给出耗时；`drill-upgrade.sh` 从 v(n-1) 升到 v(n) 三份验收通过、
+  回滚后 S1 通过；`make demo` 15 分钟内产出结果页。依赖：S5.7；E7（备份定时器）仍按维护者决定排在最后，
+  不并入本项。
+- 不做：安装器 / 图形化安装、SaaS 多租户、面向具体客户的场景包（RouterOS 门等仍推后）。
+
 ### S5 明确不做（保持现状，记录理由）
 
 - 三个 `docker-socket-proxy` 实例收敛为一个运行时服务：三个消费者（supervisor 的 spawn / stop / start、
@@ -2035,7 +2061,7 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
 | W10-A | **S5.3** 数据与代码分离 | `cli/bootstrap.ts`、`docker-compose.yml`（挂载）、`gateway/ingest-handlers.ts`（`register_source`，W9-A 合入后）、`collectors/host-inventory`、`scripts/delete-workspaces-matching.sh`、迁移 core 0027、runbooks、web 工作区页只读字段 | 关闭 9；11 部分 |
 | W10-B | **S5.5 后五项** 23 / 24 / 34 / 31 / 21 | `substrate/epistemic/**`（cursor）、`substrate/graph/sql-store.ts`（重读）、pg 并发路径、`gateway/approval*`、web 审批历史 | 关闭 23 / 24 / 34 / 31 / 21 |
 | W10-C | **S5.6** 稳定性 | `application/task/reaper.ts`、`application/task/**`（30 根因）、`scripts/accept_s2.sh` cleanup、WS 测试超时、chaos 脚本 | 关闭 30 / 26 / 25；I-S5-3 |
-| W11 | **S5.7** 真实模型回归 + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md` | 五场景 10 次数字进 STATUS |
+| W11 | **S5.7** 真实模型回归 + **S5.8** 交付与演示闭环（最后一项） + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md`、`scripts/drill-install.sh`、`scripts/drill-upgrade.sh`、`scripts/demo.sh`、`runbooks/release.md` | 五场景 10 次数字进 STATUS；干净主机安装 / 升级回滚 / 15 分钟演示三个演练脚本全绿 |
 
 W9 三车道文件互斥可并行，也与 P-B2b（平台面：`application/platform/**`、`packages/web` 平台页）互斥；
 W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工、W10-B 的 24 先合入；W11 依赖 W9-B。

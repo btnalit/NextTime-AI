@@ -70,6 +70,23 @@ const CSRF_HEADERS = { 'x-requested-with': 'nexttime', 'content-type': 'applicat
 
 /** Creates and migrates a database of this file's own (see the module doc comment), plus the
  *  `drop` that ends the pool and removes it again. */
+/** Polls `pg_stat_activity` until no backend is connected to `name` (bounded to ~1s). `pool.end()`
+ *  resolves once pg-pool has *scheduled* each idle client's `end()`, not once the sockets are
+ *  closed, so without this wait the `drop database … with (force)` below can terminate a backend
+ *  of this file's own mid-shutdown; the resulting FATAL 57P01 then surfaces on the pool's 'error'
+ *  event (CI run 35079054627 on main). Falls through to the caller's `with (force)` if a
+ *  connection really did outlive the pool. */
+async function waitForNoConnections(cluster: Pool, name: string): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const { rows } = await cluster.query<{ n: string }>(
+      'select count(*)::text as n from pg_stat_activity where datname = $1',
+      [name],
+    );
+    if (rows[0]?.n === '0') return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 async function createIsolatedDatabase(): Promise<{
   readonly pool: Pool;
   readonly drop: () => Promise<void>;
@@ -93,6 +110,7 @@ async function createIsolatedDatabase(): Promise<{
     pool,
     drop: async () => {
       await pool.end();
+      await waitForNoConnections(cluster, name);
       // `with (force)` (Postgres 13+): never leave the database behind because a connection of
       // this file's own outlived the pool.
       await cluster.query(`drop database if exists "${name}" with (force)`);
