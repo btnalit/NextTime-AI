@@ -73,6 +73,35 @@ describe('createPool', () => {
       else process.env.DATABASE_URL = original;
     }
   });
+
+  it('routes idle-client errors to onIdleClientError instead of an uncaught exception', () => {
+    const onIdleClientError = vi.fn();
+    const pool = createPool({ connectionString: 'postgres://explicit/example', onIdleClientError });
+    try {
+      // `pg` re-emits an idle client's failure (FATAL 57P01 after a Postgres restart or a
+      // `drop database … with (force)`) on the Pool itself; with no listener Node would throw here.
+      const err = new Error('terminating connection due to administrator command');
+      expect(() => pool.emit('error', err)).not.toThrow();
+      expect(onIdleClientError).toHaveBeenCalledTimes(1);
+      expect(onIdleClientError).toHaveBeenCalledWith(err);
+    } finally {
+      void pool.end();
+    }
+  });
+
+  it('always installs a default error listener, so the pool never throws on an idle-client error', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const pool = createPool({ connectionString: 'postgres://explicit/example' });
+    try {
+      expect(pool.listenerCount('error')).toBe(1);
+      expect(() => pool.emit('error', new Error('boom'))).not.toThrow();
+      expect(stderr).toHaveBeenCalledTimes(1);
+      expect(String(stderr.mock.calls[0]?.[0])).toContain('idle client error: boom');
+    } finally {
+      stderr.mockRestore();
+      void pool.end();
+    }
+  });
 });
 
 describe('withWorkspace — validation', () => {

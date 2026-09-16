@@ -28,12 +28,28 @@ export interface CreatePoolOptions {
   connectionString?: string;
   /** Extra `pg` Pool options merged in on top of the connection string. */
   poolConfig?: Omit<PoolConfig, 'connectionString'>;
+  /**
+   * Receives the errors `pg` raises on behalf of an *idle* pooled client — a backend terminated
+   * (`FATAL 57P01`, e.g. a Postgres restart or `drop database … with (force)`), a network
+   * partition. `pg` emits them on the Pool's own 'error' event, and an EventEmitter 'error' with
+   * no listener is an uncaught exception that kills the process — so `createPool` always installs
+   * one. Defaults to `logIdleClientErrorToStderr`; `main()` (index.ts) redirects it to the kernel
+   * logger once that exists.
+   */
+  onIdleClientError?: (err: Error) => void;
+}
+
+/** The default `onIdleClientError`: one stderr line, deliberately not a silent no-op — an idle
+ *  client dying is how a Postgres restart or failover first shows up. */
+export function logIdleClientErrorToStderr(err: Error): void {
+  process.stderr.write(`adapters/db/pool: idle client error: ${err.message}\n`);
 }
 
 /**
  * Builds a `pg` Pool from `DATABASE_URL` (or `options.connectionString`). Throws
  * `DatabaseConfigError` synchronously instead of letting `pg` fall back to its own
- * PG*-env-var defaults, so a missing configuration fails fast and loudly.
+ * PG*-env-var defaults, so a missing configuration fails fast and loudly. Always attaches an
+ * 'error' listener (see `CreatePoolOptions.onIdleClientError`).
  */
 export function createPool(options: CreatePoolOptions = {}): Pool {
   const connectionString = options.connectionString ?? process.env.DATABASE_URL;
@@ -42,7 +58,9 @@ export function createPool(options: CreatePoolOptions = {}): Pool {
       'DATABASE_URL is not set and no connectionString was provided to createPool()',
     );
   }
-  return new Pool({ ...options.poolConfig, connectionString });
+  const pool = new Pool({ ...options.poolConfig, connectionString });
+  pool.on('error', options.onIdleClientError ?? logIdleClientErrorToStderr);
+  return pool;
 }
 
 export interface WorkspaceContext {
