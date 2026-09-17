@@ -14,10 +14,21 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=/path/to/data sh -s' < scripts/host-bootstrap.s
 可重复执行：已存在的目录与 `secrets/pg_password` 不会被覆盖或重新生成，权限位每次都会
 被重新设置为期望值，第二次执行应无实质性变更。
 
+## 加固（遗留20/S5.5）：pgdata/ 与 secrets/pg_password 的属主
+
+`postgres` 服务现在以 `user: postgres`（uid/gid 999，pgvector/pgvector:pg17 即
+`postgres:17-bookworm` 官方镜像自带的固定 uid）启动，不再走镜像默认的 root→gosu 入口路径——那条
+路径自己的 chown 步骤根本不会执行。`scripts/host-env-init.sh`（E3，紧随本脚本之后、`docker
+compose up` 之前跑）因此负责把 `pgdata/` `chown` 给 999:999、把 `secrets/pg_password` `chgrp`
+给 999（`chmod 640`，只改组不改主，与 `gen-handle-keys.sh` 对
+`handle.key`/`internal.token`/`gate.token` 的既有约定一致）。幂等、best-effort（chgrp 失败只警告
+不中止）。已初始化过的 `pgdata/` 早就是 999:999（历史上镜像自己的 root 入口 chown 出来的），重跑对
+既有主机是空操作。
+
 ## 目录 → 挂载服务（对应 design §10.2 的 docker-compose 骨架）
 | 目录 | 挂载到 |
 |------|--------|
-| `pgdata/` | `postgres`（数据卷） |
+| `pgdata/` | `postgres`（数据卷，属主 uid:gid 999:999，见上） |
 | `workspaces/` | `worker-supervisor`（读写；子目录挂载规则见下）、`backup`（只读，`workspaces/` 只读子挂载） |
 | `secrets/` | `postgres`（Docker secret `pg_password`） |
 | `config/` | `kernel`、`worker-supervisor`（均只读）、`llm-proxy`（只读）、`egress-proxy`（只读）、`backup`（只读子挂载） |
@@ -37,11 +48,14 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=/path/to/data sh -s' < scripts/host-bootstrap.s
 stat -c '%a %n' ${NEXTTIME_DATA}/secrets
 find ${NEXTTIME_DATA} -maxdepth 2 -printf '%M %u %p\n'
 ```
-期望：`secrets` 为 `700`；十三个目录路径齐全（九个一级子目录 `pgdata workspaces secrets
-config artifacts backups caddy gatekeepers collectors` + 四个二级子目录 `workspaces/tasks
-gatekeepers/docker gatekeepers/ragflow collectors/host-inventory`，S3.3 新增 `collectors`/
-`collectors/host-inventory` 两条），另有 `config/.keep`（占位文件，非目录）一并列出；
-`secrets/pg_password` 为 `600` 且非空；其余目录为 `750`。
+期望（本脚本单独跑完，`host-env-init.sh` 尚未跑）：`secrets` 为 `700`；十三个目录路径齐全（九个
+一级子目录 `pgdata workspaces secrets config artifacts backups caddy gatekeepers collectors` +
+四个二级子目录 `workspaces/tasks gatekeepers/docker gatekeepers/ragflow
+collectors/host-inventory`，S3.3 新增 `collectors`/`collectors/host-inventory` 两条），另有
+`config/.keep`（占位文件，非目录）一并列出；`secrets/pg_password` 为 `600` 且非空、`pgdata/`
+仍是运行本脚本那个用户（通常 root）；其余目录为 `750`。`host-env-init.sh`（E3）跑完之后
+`secrets/pg_password` 变为 `640`（组 `999`）、`pgdata/` 属主变为 `999:999`——见上面"加固
+（遗留20/S5.5）"一节。
 
 ## 首次登录：预置管理员（P-A1，design §4）
 
