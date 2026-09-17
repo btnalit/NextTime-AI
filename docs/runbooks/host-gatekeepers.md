@@ -355,14 +355,28 @@ MEMBER_KEY=<member-api-key>
 
 以下全部经 `POST /api/cap/<name>`（human 通道，`Authorization: Bearer <api-key>`）。`request_
 connection` 与 `create_connection` 都可以用 owner 自己的 key 发起（owner 对 Handle 通道 capability
-同样放行，见 §6 的既有说明）——这里演示更贴近真实场景的两步：owner 用**已经在跑的** `gatekeeper-
-docker` 门容器地址完成连接，而不是像 §5 那样走 CLI：
+同样放行，见 §6 的既有说明）。
+
+**打包门（`gatekeeper-docker` / `gatekeeper-ragflow`）不再走这条路**（v0.10.1 后，STATUS 遗留 36 /
+S5.5）：它们启动即向内核自注册进平台目录（P-B1，`gate_instances`），而内核对每个门都用同一把
+`gate_token`，所以 owner 若把自连的门指向目录里实例的地址，得到的是一个绕过目录规则（接入包禁用名单、
+`vetted`、启用 / 禁用）的 Gatekeeper——`create_connection` 现在对命中任何 `gate_instances.endpoint`
+的地址（按解析后的 host 比对，宿主 `gate-host:8083` 下整个 `/i/*` 一并覆盖）直接返回
+`400 endpoint_is_platform_gate`，不发起任何网络调用。打包门的工作区接入路径是目录路径：管理员在集成
+页把实例设为启用，owner 在工作区"系统接入"页一键启用（`enable_gate_instance`，同时发布其
+Operation，不需要 `publish_manifest`），之后照常 `connect_gatekeeper`。`accept_s2.sh` 的 docker 门
+就是这样接的（先断言旧自连被拒，再走目录路径；管理员那一步在脚本里以 SQL 只做 `discovered` →
+`enabled`，`disabled` 与非 `platform_preset` 接入包按管理员决定原样失败）。
+
+下面用一个**不在目录里**的门演示 S2.13 的四步（例如 §5 之外、你自己按 `add-gatekeeper.md` 起的一个
+`http` 门，或验收夹具 `deploy/accept-s2/` 里的 openapi 门；把 `<gate-endpoint>` 换成它在 `control`
+网络上的地址）：
 
 ```bash
 # 1. request_connection —— 产生一张连接请求卡片
 curl -s http://kernel:8080/api/cap/request_connection \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d '{"kind":"cli","target":"docker"}'
+  -d '{"kind":"http","target":"my-system"}'
 # {"ok":true,"result":{"connectionRequestId":"<cr-uuid>","status":"requested"}}
 CONNECTION_REQUEST_ID=<cr-uuid>
 
@@ -372,12 +386,13 @@ curl -s http://kernel:8080/api/cap/list_connection_requests \
   -d '{"status":"requested"}'
 
 # 3. create_connection（本仓库对派发文字 complete_connection 的实现，见 governance/connections/
-#    service.ts 头注释的命名对照表）—— 用 docker 门容器自己的地址完成这张请求；docker 门只用共享
-#    env 凭证（S2.5 既有配置），credentialKind 传 'shared'，不经过 ConnectedAccount 存储
+#    service.ts 头注释的命名对照表）—— 用门自己的地址完成这张请求；门只用共享 env 凭证时
+#    credentialKind 传 'shared'，不经过 ConnectedAccount 存储。地址若命中平台目录里的实例 → 400
+#    endpoint_is_platform_gate（见上）。
 curl -s http://kernel:8080/api/cap/create_connection \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d "{\"connectionRequestId\":\"${CONNECTION_REQUEST_ID}\",\"kind\":\"cli\",\"target\":\"docker\",\"endpoint\":\"http://gatekeeper-docker:8083\",\"credentialKind\":\"shared\"}"
-# {"ok":true,"result":{"gatekeeperId":"<gk-uuid>","importedOperationNames":[...7 个...],"connectionRequestId":"<cr-uuid>"}}
+  -d "{\"connectionRequestId\":\"${CONNECTION_REQUEST_ID}\",\"kind\":\"http\",\"target\":\"my-system\",\"endpoint\":\"<gate-endpoint>\",\"credentialKind\":\"shared\"}"
+# {"ok":true,"result":{"gatekeeperId":"<gk-uuid>","importedOperationNames":[...],"connectionRequestId":"<cr-uuid>"}}
 GATEKEEPER_ID_2=<gk-uuid>
 
 # 4. publish_manifest —— 一次性发布这份新导入的整份草稿清单（§5 的 register-gatekeeper --publish
@@ -392,7 +407,7 @@ curl -s http://kernel:8080/api/cap/connect_gatekeeper \
   -d "{\"gatekeeperId\":\"${GATEKEEPER_ID_2}\",\"principalId\":\"${MEMBER_ID}\"}"
 ```
 
-期望：第 3 步 `importedOperationNames` 与 §5 注册 `docker` 门时看到的 7 个 Operation 名字一致；
+期望：第 3 步 `importedOperationNames` 与该门 `describe_operations` 报的 Operation 名字一致；
 `docker compose exec -T kernel psql ...` 查 `capability_grants` 表能在第 5 步之后看到
 `capability='gatekeeper'`、`scope->>'resourceScope'` 等于 `GATEKEEPER_ID_2` 的一行。
 

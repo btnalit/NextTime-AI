@@ -18,6 +18,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import { evaluate } from '../../governance/policy/index.js';
 import { createServer } from '../../index.js';
@@ -27,6 +28,10 @@ import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
+import {
+  ConnectionEndpointIsPlatformGateError,
+  setConnectionHandlerDeps,
+} from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
@@ -489,6 +494,100 @@ describe.runIf(DATABASE_URL !== undefined)(
           gatekeeperId,
         });
         expect(restored.items.map((o) => o.name).sort()).toEqual(['list_things', 'restart_thing']);
+      });
+    });
+
+    // STATUS leftover 36 (S5.5; connection-handlers.ts "Endpoint guard"): a workspace owner must
+    // not be able to reach a platform-catalog instance through a self-connected gate — that would
+    // hand them a Gatekeeper the catalog's deny list / trust / enabled-state never govern, driven
+    // by the kernel's shared gate token (and, for gate-host, by the administrator's shared
+    // credentials). The gate client below throws on first contact, so every "let through" case
+    // proves the guard passed and every "refused" case proves nothing was contacted.
+    describe('create_connection endpoint guard (owner self-connect to a catalog address)', () => {
+      const HOSTED_ID = 'hosted-http-guard';
+      const reached = new Error('reached the gate: the guard let this endpoint through');
+      const unreachableGate: GatekeeperClient = {
+        describeOperations: async () => {
+          throw reached;
+        },
+        observe: async () => {
+          throw reached;
+        },
+        simulate: async () => {
+          throw reached;
+        },
+        apply: async () => {
+          throw reached;
+        },
+        revert: async () => {
+          throw reached;
+        },
+        health: async () => {
+          throw reached;
+        },
+        storeConnectedAccount: async () => {
+          throw reached;
+        },
+        deleteConnectedAccount: async () => {
+          throw reached;
+        },
+      };
+
+      function selfConnect(endpoint: string) {
+        return callAsOwner('create_connection', {
+          kind: 'http',
+          target: 'a-system-of-my-own',
+          endpoint,
+          credentialKind: 'shared',
+        });
+      }
+
+      beforeAll(() => {
+        setConnectionHandlerDeps({ gatekeeperClient: unreachableGate });
+      });
+
+      it("refuses the packaged instance's announced address however it is spelled", async () => {
+        for (const spelling of [
+          announceBody.endpoint,
+          'HTTP://127.0.0.1:1/',
+          'http://127.0.0.1:1/i/anything/gate/describe_operations',
+        ]) {
+          const thrown = await selfConnect(spelling).then(
+            () => {
+              throw new Error(`expected "${spelling}" to be refused, but the call resolved`);
+            },
+            (err: unknown) => err,
+          );
+          expect(thrown).toBeInstanceOf(ConnectionEndpointIsPlatformGateError);
+          expect(thrown).toMatchObject({ code: 'endpoint_is_platform_gate', gateId: GATE_ID });
+        }
+      });
+
+      it("refuses gate-host's /i/ prefix once one hosted instance has announced — for ids the host has not announced too", async () => {
+        await callAsAdmin('create_gate_instance', {
+          gateId: HOSTED_ID,
+          transportKind: 'http',
+          target: 'http://system.internal.test/',
+          credentialMode: 'shared',
+        });
+        const announced = await announce({
+          gateId: HOSTED_ID,
+          connector: 'http',
+          transportKind: 'http',
+          target: 'http://system.internal.test/',
+          endpoint: `http://gate-host:8083/i/${HOSTED_ID}`,
+          displayName: 'Hosted HTTP',
+          operations: [OBSERVE_OP],
+        });
+        expect(announced.statusCode).toBe(200);
+
+        await expect(
+          selfConnect('http://gate-host:8083/i/an-id-the-host-never-announced'),
+        ).rejects.toMatchObject({ code: 'endpoint_is_platform_gate', gateId: HOSTED_ID });
+      });
+
+      it('lets an address outside the catalog through to the gate', async () => {
+        await expect(selfConnect('http://byo-gate.internal.test:9999')).rejects.toBe(reached);
       });
     });
 

@@ -574,7 +574,7 @@ const connectionCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.CreateConnectionResultWireSchema,
     description:
-      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp.',
+      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance.',
     redactedParamKeys: ['credentials'],
   },
   {
