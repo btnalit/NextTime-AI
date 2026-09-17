@@ -235,9 +235,10 @@ describe.runIf(DATABASE_URL !== undefined)(
             [workspaceId],
           ),
         );
-        expect(audit.rows[0]?.resource_id).toBe('runs_on');
+        expect(audit.rows[0]?.resource_id).toBe(hostId);
         expect(audit.rows[0]?.payload).toMatchObject({
           reason: 'domain_range_violation',
+          linkType: 'runs_on',
           enforcement: 'warn',
           sourceObjectId: hostId,
           targetObjectId: containerId,

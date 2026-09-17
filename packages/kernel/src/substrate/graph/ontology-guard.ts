@@ -137,8 +137,10 @@ export async function enforceOntologyOnLinkWrite(
     workspaceId,
     actorPrincipalId: caller.id,
     action: 'ontology_violation',
-    resourceType: 'link_type',
-    resourceId: link.linkType,
+    // `resource_id` is a uuid column: the Link's source Object is the addressable resource; the
+    // LinkType itself travels in the payload.
+    resourceType: 'object',
+    resourceId: link.sourceObjectId,
     payload: {
       ...details,
       enforcement,

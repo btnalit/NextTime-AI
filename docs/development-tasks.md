@@ -1913,7 +1913,8 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
   `undeclared_link_type` / `domain_range_violation`；违规时读 `workspaces.ontology_enforcement`——
   `reject` 抛 `OntologyViolationError`（HTTP 400 `ontology_violation`，`error.details` 带
   `reason / linkType / sourceType / targetType / expected`，WS 归 `invalid_params` 带同样文本），
-  `warn` 写入并在同一事务写 `ontology_violation` 审计（`resource_type='link_type'`，payload 含四字段与两端 id）。
+  `warn` 写入并在同一事务写 `ontology_violation` 审计（`resource_type='object'`、`resource_id` 为源对象 id——
+  该列是 uuid；LinkType 与四字段、两端 id 都在 payload）。
 - **迁移 `core/0025`**：列 `ontology_enforcement text not null check in ('reject','warn')`，
   **既有行回填 `warn`、之后新建缺省 `reject`**（先 `default 'warn'` 加列再 `set default 'reject'`）——
   应用发布不会让主机上采集器的下一轮开始被拒；`createWorkspaceWithOwner` 在调用者未指定时取

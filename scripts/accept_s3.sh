@@ -355,7 +355,7 @@ ontology_guard_step() {
     200)
       guard_mode=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc "select ontology_enforcement from workspaces where id='$WORKSPACE_ID'" </dev/null 2>/dev/null)
       [ "$guard_mode" = "warn" ] || fail "ontology-guard-reject" "the violating assert_fact was accepted (200) but the workspace's ontology_enforcement is '$guard_mode', not warn: $body"
-      guard_audit=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='ontology_violation' and resource_id='runs_on'" </dev/null 2>/dev/null)
+      guard_audit=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='ontology_violation' and payload->>'linkType'='runs_on'" </dev/null 2>/dev/null)
       [ "$guard_audit" -gt 0 ] 2>/dev/null || fail "ontology-guard-reject" "warn mode: the violating write was accepted but no ontology_violation audit row records it"
       pass "ontology-guard-reject" "workspace is in warn mode (rollout): the violating runs_on was written and audited as ontology_violation ($guard_audit row(s))" ;;
     *) fail "ontology-guard-reject" "assert_fact HTTP $status: $body" ;;
