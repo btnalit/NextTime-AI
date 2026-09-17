@@ -15,7 +15,7 @@ import { internalAuthorizationHeader } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
@@ -542,7 +542,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       }
 
-      beforeAll(() => {
+      // Before *each* case, not once: `announce()` builds a server through `createServer`, and the
+      // composition root wires the real `HttpGatekeeperClient` into the connection handler on
+      // every build — the hosted case below would otherwise leave the real client in place for
+      // the "let through" case after it (CI run 35246480966).
+      beforeEach(() => {
         setConnectionHandlerDeps({ gatekeeperClient: unreachableGate });
       });
 
