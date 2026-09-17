@@ -681,6 +681,66 @@ describe('resident-service reconcile', () => {
     );
   });
 
+  it('spawn() also converges a legitimate loosening — reconcile()’s own union alone never would (遗留22, symmetric drift)', async () => {
+    const { service, docker, egressMap } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      egressDeny: ['a.example.com', 'b.example.com'],
+    });
+    expect(first.created).toBe(true);
+    expect(docker.createCalls[0]?.labels['nexttime.egress-deny']).toBe(
+      'a.example.com,b.example.com',
+    );
+
+    // A legitimate loosening: the definition drops 'b.example.com'. Applies live, no restart —
+    // the same "refreshes egressDeny on every reuse spawn" guarantee a tightening gets.
+    const second = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      egressDeny: ['a.example.com'],
+    });
+    expect(second.created).toBe(false);
+    expect(egressMap.read()[first.ip as string]).toEqual({
+      sourceId: 'entry:ws-1:alice',
+      deny: ['a.example.com'],
+    });
+
+    // A docker-events reconnect lands in between: reconcile()'s own union (label ∪ file) is
+    // safety-biased toward denial, so on its own it re-adds 'b.example.com' back — the documented
+    // trade-off (reconcile() can only ever add, never converge a loosening by itself).
+    await service.reconcile();
+    expect(egressMap.read()[first.ip as string]).toEqual({
+      sourceId: 'entry:ws-1:alice',
+      deny: ['a.example.com', 'b.example.com'],
+    });
+
+    // Republishing the same loosened list again: this reuse's own drift check compares against
+    // what the *previous reuse* actually applied ('a.example.com' only — RegistryEntry, not
+    // SOURCE_MAP_FILE, so reconcile()'s intervening write above never touched it), which the
+    // label ('a.example.com,b.example.com') still disagrees with — folds into the recreate
+    // decision, re-stamping the label with the currently published (loosened) list.
+    const third = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      egressDeny: ['a.example.com'],
+    });
+    expect(third.created).toBe(true);
+    expect(third.containerId).not.toBe(second.containerId);
+    expect(docker.createCalls).toHaveLength(2);
+    expect(docker.createCalls[1]?.labels['nexttime.egress-deny']).toBe('a.example.com');
+
+    // The label now matches reality — a further reconnect no longer resurrects 'b.example.com'.
+    await service.reconcile();
+    expect(egressMap.read()[third.ip as string]).toEqual({
+      sourceId: 'entry:ws-1:alice',
+      deny: ['a.example.com'],
+    });
+  });
+
   it('does not reset an already-known principal’s idle clock on a repeated reconcile (feat/egress-docker-events)', async () => {
     // docker-events.ts re-runs reconcile() after every reconnect — a flapping proxy connection
     // must not keep resetting lastTouchedAt to "now", which would silently disable sweepIdle for
