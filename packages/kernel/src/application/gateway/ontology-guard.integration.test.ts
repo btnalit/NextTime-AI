@@ -7,6 +7,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { runInvariantChecks } from '../../substrate/audit/index.js';
 import { OntologyViolationError, SqlGraphStore } from '../../substrate/graph/index.js';
+import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -16,7 +17,8 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * DATABASE_URL) coverage of S5.1 — I2 enforced at the write point (substrate/graph/
  * ontology-guard.ts; docs/development-tasks.md §5b S5.1; STATUS leftover 37) — driven through the
  * capabilities a real writer uses, on a workspace created the way the platform creates one
- * (`createWorkspaceWithOwner`: platform-meta + the ops-assets-v1 domain pack published at birth).
+ * (`createWorkspaceWithOwner`: platform-meta at birth) with the ops-assets-v1 domain pack
+ * published the way `seed-domain-pack` does on a host.
  *
  *   - `runs_on` Container -> Host is declared: written.
  *   - `runs_on` Host -> Container is not a declared signature: `domain_range_violation`, with the
@@ -101,6 +103,17 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       workspaceId = created.workspaceId;
       ownerId = created.ownerPrincipalId;
+      // `createWorkspaceWithOwner` seeds platform-meta only; the ops-assets domain pack
+      // (Container / Host / runs_on / uses_image …) is what `seed-domain-pack` publishes on a host
+      // (accept_s3.sh's seed step) — published here the same way, through the loader.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        publishOntologyDomainPack(client, workspaceId, {
+          packName: 'ops-assets',
+          fileName: 'ops-assets-v1.yaml',
+          dir: ONTOLOGY_DIR,
+          principalId: ownerId,
+        }),
+      );
       containerId = await makeObject('Container', { containerId: randomUUID() });
       hostId = await makeObject('Host', { hostname: `guard-${randomUUID().slice(0, 8)}` });
     }, 120_000);

@@ -112,6 +112,7 @@ describe('loadOntologyDefinitionFile', () => {
         'can_act_on',
         'connects_to',
         'exposes',
+        'observed',
         'reads',
         'requires',
         'steps',
