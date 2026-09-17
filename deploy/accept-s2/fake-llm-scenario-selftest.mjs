@@ -12,6 +12,9 @@
 //      Schema in docs/contracts/capabilities.json — a contract drift (e.g. a new required field)
 //      fails here instead of surfacing on the host. Non-registry names (gate operations, worker
 //      report_result) are skipped, not failed.
+//   5. S5.4 (docs/retrospective-2026-09-11.md §3.1): a request whose `tools[].function.parameters`
+//      is not a `type: "object"` schema is rejected with 400 `invalid_function_parameters`, like a
+//      real OpenAI-compatible upstream — and a well-formed `tools` array never false-positives.
 //
 // Not part of `pnpm test` — this directory is not a pnpm workspace package (same reason
 // deploy/fake-llm/server.mjs itself is plain ESM, see its own header comment). Run directly:
@@ -599,6 +602,42 @@ async function main() {
         'no-scenario-fallback',
         json.choices[0].message.content === 'echo: what is the weather',
         JSON.stringify(json.choices[0]),
+      );
+    }
+
+    // 9. S5.4 tool-schema validation (docs/retrospective-2026-09-11.md §3.1): a request whose
+    //    tool's `parameters` is not a `type: "object"` schema is rejected wholesale, like a real
+    //    OpenAI-compatible upstream would — this is the exact failure mode §3.1 documents.
+    {
+      const tools = [{ type: 'function', function: { name: 'bad_tool', parameters: null } }];
+      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, { tools });
+      check(
+        'invalid-tool-schema-null-rejected',
+        status === 400 && json.error?.code === 'invalid_function_parameters' && json.error.message.includes('bad_tool'),
+        JSON.stringify({ status, json }),
+      );
+    }
+    // 9a. Same rejection for a non-object top-level schema (e.g. a Gatekeeper Operation whose
+    //     params_schema never got normalized to `type: "object"` — the exact §3.1 shape).
+    {
+      const tools = [{ type: 'function', function: { name: 'other_tool', parameters: { type: 'string' } } }];
+      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, { tools });
+      check(
+        'invalid-tool-schema-non-object-rejected',
+        status === 400 && json.error?.code === 'invalid_function_parameters',
+        JSON.stringify({ status, json }),
+      );
+    }
+    // 9b. A well-formed `tools` array never trips the check — plain echo still goes through.
+    {
+      const tools = [
+        { type: 'function', function: { name: 'good_tool', parameters: { type: 'object', properties: {} } } },
+      ];
+      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, { tools });
+      check(
+        'valid-tool-schema-not-rejected',
+        status === 200 && json.choices[0].message.content === 'echo: hello there',
+        JSON.stringify({ status, json }),
       );
     }
   } finally {

@@ -74,6 +74,10 @@ interface AllowedOperationWire {
     readonly mode?: string;
     readonly description?: string;
     readonly params_schema?: JsonSchemaObject;
+    // Present on every real Operation (`@nexttime/shared`'s `OperationSchema` requires it) but
+    // typed loosely (via the index signature) rather than as its own required field — same
+    // "wire row, read defensively" posture `mode`/`description` above already take.
+    readonly blast_radius?: string;
     readonly [key: string]: unknown;
   };
 }
@@ -86,10 +90,26 @@ function gateToolName(op: AllowedOperationWire, usedNames: Set<string>): string 
   return name;
 }
 
+/**
+ * S5.4 (docs/development-tasks.md S5.4) — same mode/blast-radius suffix
+ * `platform-extension/modes/gate-tools.ts`'s own `gateToolDescription` applies to the pi-tool
+ * projection; independently re-implemented here rather than imported (this file's own module doc
+ * comment explains why: `.dependency-cruiser.cjs`'s `no-cross-package-internal-import` rule).
+ */
 function gateToolDescription(op: AllowedOperationWire, name: string): string {
-  return typeof op.operation.description === 'string'
-    ? op.operation.description
-    : `Gatekeeper Operation "${name}" (design doc §7.4/§9.3 gate projection).`;
+  const base =
+    typeof op.operation.description === 'string' && op.operation.description.trim().length > 0
+      ? op.operation.description.trim()
+      : `Gatekeeper Operation "${name}".`;
+  const modeSentence =
+    op.operation.mode === 'execute'
+      ? 'Execute-class: a governed write — calling it creates an ActionRequest that a human approves before anything happens.'
+      : 'Observe-class: read-only, returns data directly.';
+  const blastSentence =
+    typeof op.operation.blast_radius === 'string'
+      ? ` Blast radius: ${op.operation.blast_radius}.`
+      : '';
+  return `${base} ${modeSentence}${blastSentence}`;
 }
 
 const EMPTY_INPUT_SCHEMA: JsonSchemaObject = { type: 'object', properties: {} };

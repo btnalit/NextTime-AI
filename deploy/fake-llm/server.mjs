@@ -44,6 +44,13 @@
 // not match a scenario — `handleChatCompletions` tries `matchScenario()` first and only falls
 // through to the original search/echo logic when nothing matches, so accept_s1.sh (and every
 // existing test) keeps working against this same file untouched.
+//
+// S5.4 tool-schema validation (docs/development-tasks.md S5.4; docs/retrospective-2026-09-11.md
+// §3.1): before any of the above, every request's `tools[].function.parameters` is checked for
+// `type: "object"` — the one shape every OpenAI-compatible provider requires — and the whole
+// request is rejected with a 400 `invalid_function_parameters` if any entry fails, matching a real
+// provider's own behavior (this is what let §3.1's regression pass this double for weeks; see
+// `findInvalidToolSchema` below).
 
 import { createServer } from 'node:http';
 
@@ -94,6 +101,61 @@ function lastUserMessageText(messages) {
  *  shape and presence of `usage` matters to `llm-proxy`'s own parsing). */
 function estimateTokens(text) {
   return Math.max(1, Math.ceil(text.length / 4));
+}
+
+// -------------------------------------------------------------------------------------------
+// S5.4 (docs/development-tasks.md S5.4; docs/retrospective-2026-09-11.md §3.1 "教训"): a real
+// OpenAI-compatible upstream rejects the *entire* chat-completions request when any function
+// tool's `parameters` is not a `type: "object"` JSON Schema — the exact failure mode §3.1
+// documents (a Gatekeeper Operation imported with a `null` `params_schema` took the whole entry
+// agent down with a 400 on the real provider, for weeks, because this double never validated
+// anything and S2 kept passing). Mirrors that rejection here so the same class of regression fails
+// fast against this double too, instead of only being caught by a real-model run.
+// -------------------------------------------------------------------------------------------
+
+/** `true` when `schema` is a well-formed function-parameters JSON Schema object — the one shape
+ *  every OpenAI-compatible provider requires (`type: "object"`, `undefined`/`null`/any other
+ *  top-level `type` is rejected). Deliberately narrow: this double is not a general JSON Schema
+ *  validator, only a gate for the one property class §3.1's regression turned on. */
+function isObjectToolParameters(schema) {
+  return (
+    schema !== null &&
+    typeof schema === 'object' &&
+    !Array.isArray(schema) &&
+    schema.type === 'object'
+  );
+}
+
+/** Scans a request's `tools` array (OpenAI's `{type:'function', function:{name, parameters}}[]`
+ *  shape) for the first entry whose `function.parameters` is not an object schema. Returns
+ *  `undefined` when `tools` is absent/empty or every entry is well-formed — the common case, and
+ *  every case before this task, so every existing behavior stays byte-for-byte unchanged. */
+function findInvalidToolSchema(tools) {
+  if (!Array.isArray(tools)) return undefined;
+  for (let index = 0; index < tools.length; index += 1) {
+    const fn = tools[index]?.function;
+    if (!fn || typeof fn !== 'object') continue;
+    if (!isObjectToolParameters(fn.parameters)) {
+      return { index, name: typeof fn.name === 'string' ? fn.name : 'unknown' };
+    }
+  }
+  return undefined;
+}
+
+/** Same error shape a real OpenAI-compatible upstream returns for this failure
+ *  (`invalid_request_error` / `invalid_function_parameters`) — llm-proxy and pi both read
+ *  `error.message`, so this double reproducing the real `type`/`code`/`param` fields costs
+ *  nothing and lets a caller that already branches on them (a real provider integration) be
+ *  tested against this double too. */
+function sendInvalidToolSchemaError(res, invalid) {
+  sendJson(res, 400, {
+    error: {
+      message: `Invalid schema for function '${invalid.name}': the 'parameters' field must be a JSON Schema of 'type: "object"'.`,
+      type: 'invalid_request_error',
+      param: `tools[${invalid.index}].function.parameters`,
+      code: 'invalid_function_parameters',
+    },
+  });
 }
 
 function chunkText(text, size) {
@@ -603,6 +665,14 @@ async function handleChatCompletions(req, res) {
     parsed = JSON.parse(await readBody(req));
   } catch (err) {
     sendJson(res, 400, { error: { message: `invalid JSON body: ${String(err)}` } });
+    return;
+  }
+
+  // S5.4: reject the whole request, like a real OpenAI-compatible upstream does, when any tool's
+  // schema is malformed — before scenario matching, so no scripted scenario can mask this.
+  const invalidTool = findInvalidToolSchema(parsed.tools);
+  if (invalidTool) {
+    sendInvalidToolSchemaError(res, invalidTool);
     return;
   }
 
