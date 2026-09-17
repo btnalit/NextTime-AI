@@ -320,6 +320,48 @@ collector_first_run_step() {
   pass "collector-runs-on-host" "Container $container_id runs_on Host — $edge_count edge(s)"
 }
 
+# S5.1 (docs/development-tasks.md §5b S5.1; design §5.4 I2): the kernel refuses a Link the
+# workspace's published ontology does not license. A deliberate violation — `runs_on` with the
+# endpoints the wrong way round (Host -> Container; ops-assets declares Container -> Host) — must
+# come back 400 `ontology_violation` with the allowed signatures in `details`. This workspace was
+# created by this script (`ontology_enforcement` = the kernel's default, `reject`); a host that
+# runs the rollout period with `ONTOLOGY_ENFORCEMENT=warn` in the kernel's environment gets a
+# 200 instead, and then the step checks that the write was audited as a violation, which is
+# what `warn` promises (migration core 0025).
+ontology_guard_step() {
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Container"}' "d.result.items[0]&&d.result.items[0].id||''")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "ontology-guard-container" "search HTTP $status: $(parse_kv "$out" BODY)"
+  guard_container_id=$(parse_kv "$out" EXTRACTED)
+  [ -n "$guard_container_id" ] || fail "ontology-guard-container" "no Container Object: $(parse_kv "$out" BODY)"
+  out=$(cap "$OWNER_KEY" search '{"query":"","objectType":"Host"}' "d.result.items[0]&&d.result.items[0].id||''")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "ontology-guard-host" "search HTTP $status: $(parse_kv "$out" BODY)"
+  guard_host_id=$(parse_kv "$out" EXTRACTED)
+  [ -n "$guard_host_id" ] || fail "ontology-guard-host" "no Host Object: $(parse_kv "$out" BODY)"
+
+  out=$(cap "$OWNER_KEY" assert_fact \
+    "{\"sourceObjectId\":\"$guard_host_id\",\"targetObjectId\":\"$guard_container_id\",\"linkType\":\"runs_on\",\"properties\":{\"accept_s3\":\"deliberate violation\"}}" \
+    "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  body=$(parse_kv "$out" BODY)
+  case "$status" in
+    400)
+      case "$body" in
+        *ontology_violation*'Container -> Host'*) pass "ontology-guard-reject" "runs_on Host -> Container refused with ontology_violation; details name the allowed signature Container -> Host" ;;
+        *ontology_violation*) fail "ontology-guard-reject" "400 ontology_violation but the allowed signatures are missing from the body: $body" ;;
+        *) fail "ontology-guard-reject" "400 but not ontology_violation: $body" ;;
+      esac ;;
+    200)
+      guard_mode=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc "select ontology_enforcement from workspaces where id='$WORKSPACE_ID'" </dev/null 2>/dev/null)
+      [ "$guard_mode" = "warn" ] || fail "ontology-guard-reject" "the violating assert_fact was accepted (200) but the workspace's ontology_enforcement is '$guard_mode', not warn: $body"
+      guard_audit=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and action='ontology_violation' and resource_id='runs_on'" </dev/null 2>/dev/null)
+      [ "$guard_audit" -gt 0 ] 2>/dev/null || fail "ontology-guard-reject" "warn mode: the violating write was accepted but no ontology_violation audit row records it"
+      pass "ontology-guard-reject" "workspace is in warn mode (rollout): the violating runs_on was written and audited as ontology_violation ($guard_audit row(s))" ;;
+    *) fail "ontology-guard-reject" "assert_fact HTTP $status: $body" ;;
+  esac
+}
+
 # S3.9 (b), second half: run again, assert idempotency (docs/runbooks/host-collector.md §4.4's own
 # acceptance: "第二次 factsAsserted 应为 0"). The task brief's own wording is "factsUnchanged>0,
 # factsSuperseded=0" — `submit_observations`' real wire result does carry a `factsUnchanged` field
@@ -594,6 +636,7 @@ bootstrap_step
 seed_domain_pack_step
 collector_fixtures_step
 collector_first_run_step
+ontology_guard_step
 collector_second_run_step
 collector_conflict_positive_step
 if [ "$REAL" -eq 1 ]; then

@@ -7,6 +7,7 @@ import {
 import type { PoolClient } from 'pg';
 import { openConflict, resolveFactOrigin, sameFactOrigin } from '../epistemic/index.js';
 import { enqueue } from '../outbox/index.js';
+import { enforceOntologyOnLinkWrite } from './ontology-guard.js';
 import {
   buildFindActiveFactByIdentityQuery,
   buildGetFactForUpdateQuery,
@@ -263,6 +264,9 @@ export class SqlGraphStore implements GraphStore {
     input: AssertFactInput,
   ): Promise<AssertFactResult> {
     assertNoCallerSuppliedEpistemicStatus(input);
+    // S5.1 (ontology-guard.ts): I2 at the write point, before the identity lookup below takes
+    // any lock and before any of the three write paths this method can end in.
+    await enforceOntologyOnLinkWrite(client, workspaceId, caller, input);
 
     const priorQuery = buildFindActiveFactByIdentityQuery(workspaceId, {
       linkType: input.linkType,
@@ -308,7 +312,12 @@ export class SqlGraphStore implements GraphStore {
         if (factContentEquals(priorFact, input)) {
           return { ...priorFact, unchanged: true };
         }
-        return this.supersedeFact(client, workspaceId, caller, { ...input, factId: priorRow.id });
+        // Already ontology-checked above (same identity) — the guarded public `supersedeFact`
+        // would only repeat the same three queries.
+        return this.supersedeValidatedFact(client, workspaceId, caller, {
+          ...input,
+          factId: priorRow.id,
+        });
       }
 
       // Different origin, identical content: corroboration, not disagreement (W5.5, STATUS
@@ -418,7 +427,21 @@ export class SqlGraphStore implements GraphStore {
     input: SupersedeFactInput,
   ): Promise<Fact> {
     assertNoCallerSuppliedEpistemicStatus(input);
+    // S5.1 (ontology-guard.ts): the replacement Fact's LinkType / endpoints are checked exactly
+    // like a fresh assertion's — a supersede keeps the identity, so this is the same check the
+    // prior Fact passed (or, for a row written before S5.1, never had).
+    await enforceOntologyOnLinkWrite(client, workspaceId, caller, input);
+    return this.supersedeValidatedFact(client, workspaceId, caller, input);
+  }
 
+  /** `supersedeFact` after the ontology guard — `assertFact`'s same-origin delegation enters
+   *  here directly, having already run the guard on the same identity. */
+  private async supersedeValidatedFact(
+    client: PoolClient,
+    workspaceId: string,
+    caller: CallerPrincipal,
+    input: SupersedeFactInput,
+  ): Promise<Fact> {
     const currentQuery = buildGetFactForUpdateQuery(workspaceId, input.factId);
     const currentResult = await client.query<FactRow>(
       currentQuery.text,

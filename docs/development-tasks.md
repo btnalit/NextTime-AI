@@ -1896,6 +1896,52 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
 - 验收：采集器首跑 / 二跑违规计数 0；违规 assert 返回 400 且审计有记录；`warn` 模式写入成功且计数 +1。
   依赖：S3.1、S3.3。关闭：`code-review-2026-09-10.md` §4 第 1 项。
 
+#### S5.1 实现说明（2026-09-17，PR #191）
+
+- **强制点在 store 层，不在 handler**：`substrate/graph/ontology-guard.ts` 的 `enforceOntologyOnLinkWrite`
+  由 `SqlGraphStore.assertFact` 与 `supersedeFact` 在任何写入前调用，一处覆盖全部八个写入者
+  （`assert_fact` / `supersede_fact` 能力、`submit_observations`、Worker 结果契约的 `factsToAssert`、
+  `request_action` 的 observed Fact、`registerGatekeeperObject` 的 `connects_to` / `exposes`、Skill 的
+  `uses`、Procedure 的 `steps`）。`assertFact` 同源变更委托 supersede 时不再重复校验（私有
+  `supersedeValidatedFact`）。
+- **只认已发布版本**：`loadPublishedLinkTypes` 取每个本体族最新 `published` 版本合并；与 `validate`
+  能力用的 `loadVisibleOntology`（含调用者自己的草稿）不同——草稿是提议，不授权写入。这是唯一可感知的行为
+  变化：只在草稿里声明的 LinkType 要发布后才能写。
+- **端点类型解析**：一条查询取两端 `objects.object_type`；任一不存在则跳过校验（`objects` 只有工作区隔离
+  策略，没有可见性策略，"不存在"即 id 错或跨工作区，随后 `links` 的外键照旧失败）。
+- **三态结果与策略**：`evaluateLink`（纯函数，与 `validateLink` 共用）给 `declared_and_valid` /
+  `undeclared_link_type` / `domain_range_violation`；违规时读 `workspaces.ontology_enforcement`——
+  `reject` 抛 `OntologyViolationError`（HTTP 400 `ontology_violation`，`error.details` 带
+  `reason / linkType / sourceType / targetType / expected`，WS 归 `invalid_params` 带同样文本），
+  `warn` 写入并在同一事务写 `ontology_violation` 审计（`resource_type='link_type'`，payload 含四字段与两端 id）。
+- **迁移 `core/0025`**：列 `ontology_enforcement text not null check in ('reject','warn')`，
+  **既有行回填 `warn`、之后新建缺省 `reject`**（先 `default 'warn'` 加列再 `set default 'reject'`）——
+  应用发布不会让主机上采集器的下一轮开始被拒；`createWorkspaceWithOwner` 在调用者未指定时取
+  `ONTOLOGY_ENFORCEMENT` 环境变量（缺省 `reject`；测试与 CI 从不设置）。`update_workspace` /
+  `create_workspace` 新增可选 `ontologyEnforcement`，`PlatformWorkspaceWire` 多一字段（快照已重生成）。
+  平台"工作区"页的开关是后续小 PR。
+- **`platform-meta.yaml` 补声明 `observed`**（Gatekeeper → `*`）：`observed-facts.ts` 一直在写这个
+  LinkType，但从未声明——reject 模式下 S2 的门执行会全部被拒，正是本项要抓的漂移。
+- **已知边界——没有任何已发布本体的工作区不强制**：I2 是相对于工作区声明的 LinkType 的约束，什么都没声明
+  的工作区无从约束。产品路径创建的每个工作区出生即播种 `platform-meta`（`createWorkspaceWithOwner`），
+  运行中的内核不存在这种工作区；只有本包 22 个用裸 SQL 插 `workspaces` 的 DB 测试夹具处于该状态（它们
+  故意断言临时 LinkType）。若将来出现不经播种的创建路径，这条边界就是漏洞，届时应改夹具并收紧。
+- **验收脚本**：`accept_s2.sh` 新增 `ontology_step`（`propose_ontology_change` + `publish_ontology_version`
+  发布 `AcceptS2Container` / `AcceptS2Observation` / `accept_s2_restarted`，identityKey 与 fake 场景一致）；
+  `accept_s3.sh` 新增 `ontology_guard_step`（`runs_on` Host → Container 故意违规 → 400 且 `details` 含
+  `Container -> Host`；主机 `ONTOLOGY_ENFORCEMENT=warn` 时接受 200 但要求审计有记录）。
+- **代价**：每次 Link 写多三条小查询，不做跨请求缓存——CLI `seed-domain-pack` 另起进程发布的新版本，下一次
+  写入即生效。
+- **模块环**：`ontology-guard.ts` 直接引 `audit/writer.js` 与 `ontology/registry.js`，不经两边的 index——
+  `audit/index` 经 `reconstruct.ts`、`ontology/index` 经 `meta-objects.ts`（模块顶层 `new SqlGraphStore()`）
+  都回到 graph，经 index 会在模块求值期形成环（`dispatch.test` 首跑即 `SqlGraphStore is not a constructor`）。
+- **主机推出**：应用后所有既有工作区为 `warn`；跑一轮采集与 S2 / S3，看 `/internal/metrics` 的
+  `nexttime_invariant_violations{invariant="I-S5-1"}`（见下一 commit）为 0 后，逐个 `update_workspace
+  ontologyEnforcement=reject`。
+- **测试**：`ontology-guard.integration.test.ts`（六例：出生即 reject 且声明签名可写、domain/range 违规带
+  `expected`、未声明 LinkType、warn 下写入 + 审计、warn 下写入的行在 reject 下不能被 supersede、裸工作区不强制）；
+  `capability-route.test` 的映射断言。
+
 ### S5.2 新鲜度与失效（Epistemic 闭环，关闭遗留 28）
 
 - 背景：见上第 2 点。

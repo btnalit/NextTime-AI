@@ -27,6 +27,7 @@ import {
   ObservationIdentityError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyViolationError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
   SourceNotFoundError,
@@ -292,6 +293,12 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // validation: model whitelist, unpublished Skill, ungranted Gatekeeper, addendum length cap,
   // autoApproveLow policy gate).
   if (err instanceof AgentProfileValidationError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // S5.1 (substrate/graph/ontology-guard.ts) — capability-route.ts gives this its own HTTP code
+  // plus `details`; JSON-RPC has no per-code namespace here, so the caller's-mistake bucket with
+  // the full message (which carries the same linkType / endpoints / allowed signatures).
+  if (err instanceof OntologyViolationError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.

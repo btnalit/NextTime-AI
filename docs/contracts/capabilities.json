@@ -1946,6 +1946,13 @@
           "minLength": 1,
           "type": "string"
         },
+        "ontologyEnforcement": {
+          "enum": [
+            "reject",
+            "warn"
+          ],
+          "type": "string"
+        },
         "ownerUserId": {
           "minLength": 1,
           "type": "string"
@@ -1989,6 +1996,13 @@
         "name": {
           "type": "string"
         },
+        "ontologyEnforcement": {
+          "enum": [
+            "reject",
+            "warn"
+          ],
+          "type": "string"
+        },
         "owners": {
           "items": {
             "additionalProperties": false,
@@ -2030,6 +2044,7 @@
         "status",
         "entryModel",
         "allowedModels",
+        "ontologyEnforcement",
         "isDefault",
         "memberCount",
         "owners",
@@ -8514,6 +8529,13 @@
               "name": {
                 "type": "string"
               },
+              "ontologyEnforcement": {
+                "enum": [
+                  "reject",
+                  "warn"
+                ],
+                "type": "string"
+              },
               "owners": {
                 "items": {
                   "additionalProperties": false,
@@ -8555,6 +8577,7 @@
               "status",
               "entryModel",
               "allowedModels",
+              "ontologyEnforcement",
               "isDefault",
               "memberCount",
               "owners",
@@ -12524,6 +12547,13 @@
         "name": {
           "type": "string"
         },
+        "ontologyEnforcement": {
+          "enum": [
+            "reject",
+            "warn"
+          ],
+          "type": "string"
+        },
         "owners": {
           "items": {
             "additionalProperties": false,
@@ -12565,6 +12595,7 @@
         "status",
         "entryModel",
         "allowedModels",
+        "ontologyEnforcement",
         "isDefault",
         "memberCount",
         "owners",
@@ -13425,6 +13456,13 @@
         "name": {
           "type": "string"
         },
+        "ontologyEnforcement": {
+          "enum": [
+            "reject",
+            "warn"
+          ],
+          "type": "string"
+        },
         "owners": {
           "items": {
             "additionalProperties": false,
@@ -13466,6 +13504,7 @@
         "status",
         "entryModel",
         "allowedModels",
+        "ontologyEnforcement",
         "isDefault",
         "memberCount",
         "owners",
@@ -14797,6 +14836,13 @@
           "minLength": 1,
           "type": "string"
         },
+        "ontologyEnforcement": {
+          "enum": [
+            "reject",
+            "warn"
+          ],
+          "type": "string"
+        },
         "workspaceId": {
           "minLength": 1,
           "type": "string"
@@ -14837,6 +14883,13 @@
           "type": "integer"
         },
         "name": {
+          "type": "string"
+        },
+        "ontologyEnforcement": {
+          "enum": [
+            "reject",
+            "warn"
+          ],
           "type": "string"
         },
         "owners": {
@@ -14880,6 +14933,7 @@
         "status",
         "entryModel",
         "allowedModels",
+        "ontologyEnforcement",
         "isDefault",
         "memberCount",
         "owners",

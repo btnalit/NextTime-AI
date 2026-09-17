@@ -13,6 +13,7 @@ import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-co
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
 import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
+import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { hashPassword } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
 import {
@@ -733,6 +734,7 @@ interface PlatformWorkspaceDbRow {
   name: string;
   status: 'active' | 'disabled';
   entry_model: string | null;
+  ontology_enforcement: OntologyEnforcement;
   created_at: Date;
   default_model: string | null;
   allowed_models: unknown;
@@ -740,7 +742,7 @@ interface PlatformWorkspaceDbRow {
 }
 
 const WORKSPACE_SELECT = `
-  select w.id, w.name, w.status, w.entry_model, w.created_at,
+  select w.id, w.name, w.status, w.entry_model, w.ontology_enforcement, w.created_at,
          ap.default_model, coalesce(ap.allowed_models, '[]'::jsonb) as allowed_models,
          (select count(*)::int from principals p
            where p.workspace_id = w.id and p.kind = 'human' and p.user_id is not null
@@ -805,6 +807,7 @@ function toWirePlatformWorkspace(
     status: row.status,
     entryModel: entryModelOf(row),
     allowedModels: allowedModelsOf(row),
+    ontologyEnforcement: row.ontology_enforcement,
     isDefault: defaultWorkspaceId === row.id,
     memberCount: row.member_count,
     owners: [...owners],
@@ -966,6 +969,7 @@ export const createWorkspaceHandler: CapabilityHandler = async (
     ownerUserId: string;
     entryModel?: string;
     allowedModels?: string[];
+    ontologyEnforcement?: OntologyEnforcement;
   };
   const acting = actingUser(context);
   const owner = await loadUser(client, input.ownerUserId);
@@ -994,6 +998,7 @@ export const createWorkspaceHandler: CapabilityHandler = async (
         owner: { userId: owner.id, displayName: owner.displayName },
         entryModel: input.entryModel,
         allowedModels,
+        ontologyEnforcement: input.ontologyEnforcement,
       });
       return withPlatform(pool, { userId: acting.id }, (platformClient) =>
         loadPlatformWorkspace(platformClient, workspaceId),
@@ -1006,7 +1011,12 @@ export const updateWorkspaceHandler: CapabilityHandler = async (client, _workspa
   // `entryModel` cannot be cleared here (the wire keeps it non-nullable): the entry
   // WorkerDefinition pins the bootstrap model in its own published content, so "null" would only
   // hide that model from `list_workspaces` while containers kept running it (review finding).
-  const input = params as { workspaceId: string; name?: string; entryModel?: string };
+  const input = params as {
+    workspaceId: string;
+    name?: string;
+    entryModel?: string;
+    ontologyEnforcement?: OntologyEnforcement;
+  };
   const before = await loadPlatformWorkspaceRow(client, input.workspaceId);
   if (input.entryModel !== undefined) {
     await assertModelsInCatalog([input.entryModel]);
@@ -1016,6 +1026,14 @@ export const updateWorkspaceHandler: CapabilityHandler = async (client, _workspa
     await client.query('update workspaces set name = $2 where id = $1', [
       input.workspaceId,
       input.name,
+    ]);
+  }
+  // S5.1 (migration core 0025): the administrator's rollout switch — `warn` while a host's
+  // writers are being checked against the ontology, `reject` once I-S5-1 reads 0.
+  if (input.ontologyEnforcement !== undefined) {
+    await client.query('update workspaces set ontology_enforcement = $2 where id = $1', [
+      input.workspaceId,
+      input.ontologyEnforcement,
     ]);
   }
   if (input.entryModel !== undefined) {

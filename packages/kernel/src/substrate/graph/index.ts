@@ -61,6 +61,19 @@ export type {
 
 export { SqlGraphStore } from './sql-store.js';
 
+// S5.1 (docs/development-tasks.md §5b) — I2 at the write point; see ontology-guard.ts.
+export {
+  ONTOLOGY_ENFORCEMENT_VALUES,
+  OntologyViolationError,
+  enforceOntologyOnLinkWrite,
+} from './ontology-guard.js';
+export type {
+  LinkWriteIdentity,
+  OntologyEnforcement,
+  OntologyViolationDetails,
+  OntologyViolationReason,
+} from './ontology-guard.js';
+
 export type { SqlQuery } from './queries.js';
 
 export {

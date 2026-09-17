@@ -195,6 +195,12 @@ export type WorkspaceOwnerWire = z.infer<typeof WorkspaceOwnerWireSchema>;
  * model in the llm-proxy catalog). `isDefault` marks the platform default workspace
  * (`PlatformSettings.defaultWorkspaceId`) — it cannot be disabled.
  */
+/** S5.1 (`workspaces.ontology_enforcement`, migration core 0025): what a Link write that the
+ *  workspace's published ontology does not license does — `reject` (400 `ontology_violation`) or
+ *  `warn` (written, audited, counted by invariant I-S5-1). New workspaces default to `reject`. */
+export const OntologyEnforcementWireSchema = z.enum(['reject', 'warn']);
+export type OntologyEnforcementWire = z.infer<typeof OntologyEnforcementWireSchema>;
+
 export const PlatformWorkspaceWireSchema = z
   .object({
     id: z.string(),
@@ -202,6 +208,7 @@ export const PlatformWorkspaceWireSchema = z
     status: WorkspaceStatusWireSchema,
     entryModel: z.string().nullable(),
     allowedModels: z.array(z.string()),
+    ontologyEnforcement: OntologyEnforcementWireSchema,
     isDefault: z.boolean(),
     /** Active human memberships (Principals with a user, not disabled). */
     memberCount: z.number().int().nonnegative(),

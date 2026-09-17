@@ -193,7 +193,7 @@ graph LR
 | # | 不变量 | 机制 |
 |---|--------|------|
 | I1 | 每行业务表非空 `workspace_id`，查询带 workspace 谓词 | NOT NULL + 复合外键 + RLS |
-| I2 | Link 符合 LinkType 的 domain / range | 内核写入校验 + 触发器 |
+| I2 | Link 符合 LinkType 的 domain / range | 内核写入校验（应用层，`SqlGraphStore.assertFact` / `supersedeFact` 按工作区**已发布**本体版本校验，覆盖全部写入者；工作区策略 `reject` / `warn`）+ 不变量 I-S5-1 计数。不用触发器：本体是按版本解析的数据，触发器里表达不了"最新已发布版本"与两种策略（S5.1） |
 | I3 | Fact 必有 `activity_id`、`asserted_by`、`recorded_at` | NOT NULL |
 | I4 | Fact 只追加不覆盖 | 只有 assert / supersede / invalidate；触发器禁改内容列 |
 | I5 | 异源不一致 → Conflict；同源变化 → supersede | 写入路径按 `source_id` 判定 |

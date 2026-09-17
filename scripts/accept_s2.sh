@@ -460,6 +460,34 @@ connections_step() {
   pass "connect-docker-grant" "docker gatekeeper granted to alice"
 }
 
+# S5.1 (docs/development-tasks.md §5b S5.1): the kernel now refuses a Link whose LinkType the
+# workspace's *published* ontology does not declare (400 `ontology_violation`, or written +
+# audited when the workspace's ontology enforcement is `warn`). The docker-restart Worker's
+# result contract (deploy/fake-llm/server.mjs `dockerRestartScenario`) asserts
+# `AcceptS2Container --accept_s2_restarted--> AcceptS2Observation` — types no domain pack
+# declares — so this workspace publishes them first, the way any workspace adopts a new domain:
+# `propose_ontology_change` (a draft, private to the proposer) then `publish_ontology_version`.
+# `identityKey`s match the identities the scenario submits (`containerId`; `containerId` + `kind`)
+# — S5.2's identity validation reads them too. The guard itself is asserted by accept_s3.sh's
+# `ontology_guard_step` (a deliberate violation → 400), not repeated here.
+ontology_step() {
+  out=$(cap "$ALICE_KEY" propose_ontology_change \
+    '{"change":{"objectTypes":[{"name":"AcceptS2Container","description":"accept_s2: a container the docker-restart Worker acted on","identityKey":["containerId"]},{"name":"AcceptS2Observation","description":"accept_s2: one observation the Worker reported about a container","identityKey":["containerId","kind"]}],"linkTypes":[{"name":"accept_s2_restarted","domain":"AcceptS2Container","range":"AcceptS2Observation","description":"accept_s2: the Worker requested a restart of this container and reported it"}]}}' \
+    "d.result.id+':'+d.result.version")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "ontology-propose" "propose_ontology_change HTTP $status: $(parse_kv "$out" BODY)"
+  ONTOLOGY_REF=$(parse_kv "$out" EXTRACTED)
+  ONTOLOGY_ID=${ONTOLOGY_REF%%:*}
+  ONTOLOGY_VERSION=${ONTOLOGY_REF##*:}
+  [ -n "$ONTOLOGY_ID" ] && [ -n "$ONTOLOGY_VERSION" ] || fail "ontology-propose" "no id/version in response: $(parse_kv "$out" BODY)"
+  pass "ontology-propose" "accept-s2 ontology drafted: $ONTOLOGY_ID v$ONTOLOGY_VERSION"
+
+  out=$(cap "$ALICE_KEY" publish_ontology_version "{\"id\":\"$ONTOLOGY_ID\",\"version\":$ONTOLOGY_VERSION}" "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "ontology-publish" "publish_ontology_version HTTP $status: $(parse_kv "$out" BODY)"
+  pass "ontology-publish" "accept-s2 ontology published (AcceptS2Container, AcceptS2Observation, accept_s2_restarted)"
+}
+
 # Proposes + publishes the general-purpose `ops-runner` WorkerDefinition (ontology/ops-runner.yaml
 # — not seeded by create-workspace, unlike entry-agent.yaml) with `capabilities`/`gates` extended
 # to what this script's Workers need: `request_action` (execute-class — omitted defaults to the
@@ -1229,6 +1257,7 @@ bootstrap_step
 fixtures_secrets_step
 fixtures_up_step
 connections_step
+ontology_step
 ops_runner_step
 if [ "$REAL" -eq 1 ]; then
   real_scenarios_step

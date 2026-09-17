@@ -36,6 +36,7 @@ import {
   ObservationIdentityError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyViolationError,
   PasswordChangeRequiredError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
@@ -123,6 +124,10 @@ interface ErrorMapping {
   readonly status: number;
   readonly code: string;
   readonly message: string;
+  /** Structured, machine-readable half of the error, when the code has one (S5.1
+   *  `ontology_violation`: `{reason, linkType, sourceType, targetType, expected}`) — additive to
+   *  the `{code, message}` envelope docs/wire-contract-conventions.md §2 describes. */
+  readonly details?: Record<string, unknown>;
 }
 
 /**
@@ -218,6 +223,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // semantic-validation error in this file (WorkerResultValidationError, AgentProfileValidationError, …).
   if (err instanceof ObservationIdentityError) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // S5.1 (substrate/graph/ontology-guard.ts): a Link write the workspace's published ontology
+  // does not license, in `reject` mode — its own code plus `details`, so an agent can correct
+  // the LinkType or endpoints from the body instead of being told to call `validate` first.
+  if (err instanceof OntologyViolationError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500"): S3.1
   // `propose_ontology_change` (ontology-handlers.ts → substrate/ontology/registry.ts's
@@ -453,7 +464,11 @@ export async function handleCapabilityRoute(
   reply: FastifyReply,
   deps: CapabilityRouteDeps,
 ): Promise<
-  { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } }
+  | { ok: true; result: unknown }
+  | {
+      ok: false;
+      error: { code: string; message: string; details?: Record<string, unknown> };
+    }
 > {
   // Extracted before the try block — available regardless of how far the request gets (even a
   // resolveCaller/401 failure knows which capability was named), and needed by the lane-4 P2
@@ -541,7 +556,13 @@ export async function handleCapabilityRoute(
       code: mapped.code,
       status: mapped.status,
     });
-    return { ok: false, error: { code: mapped.code, message: mapped.message } };
+    return {
+      ok: false,
+      error:
+        mapped.details === undefined
+          ? { code: mapped.code, message: mapped.message }
+          : { code: mapped.code, message: mapped.message, details: mapped.details },
+    };
   } finally {
     // Structured log fields (design doc §12, S1.3 subset) — never the Authorization header or
     // request/response body.

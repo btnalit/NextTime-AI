@@ -25,6 +25,7 @@ import {
   FactNotFoundError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyViolationError,
   SupersedeIdentityMismatchError,
   WorkerResultValidationError,
   hashApiKey,
@@ -90,6 +91,25 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     expect(
       mapCapabilityError(new ConnectionManifestFetchError('http://example.invalid/openapi.json')),
     ).toMatchObject({ status: 502, code: 'manifest_fetch_failed' });
+    // S5.1: a Link write the published ontology does not license — its own code, and the
+    // structured details an agent corrects itself from.
+    const violation = mapCapabilityError(
+      new OntologyViolationError({
+        reason: 'domain_range_violation',
+        linkType: 'runs_on',
+        sourceType: 'Host',
+        targetType: 'Container',
+        expected: ['Container -> Host'],
+      }),
+    );
+    expect(violation).toMatchObject({ status: 400, code: 'ontology_violation' });
+    expect(violation.details).toEqual({
+      reason: 'domain_range_violation',
+      linkType: 'runs_on',
+      sourceType: 'Host',
+      targetType: 'Container',
+      expected: ['Container -> Host'],
+    });
     // STATUS leftover 36: a platform-catalog address is the caller's mistake to fix (use
     // enable_gate_instance), so 400 with its own code — not a 5xx, nothing was contacted.
     expect(
