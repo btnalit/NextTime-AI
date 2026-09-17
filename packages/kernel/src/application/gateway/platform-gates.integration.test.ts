@@ -569,6 +569,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           transportKind: 'http',
           target: 'http://system.internal.test/',
           credentialMode: 'shared',
+          // An http instance must name the OpenAPI document the host imports from
+          // (`create_gate_instance`'s own superRefine) — never fetched here: nothing takes the
+          // instance over, the announce below stands in for the host.
+          manifestSource: 'http://system.internal.test/openapi.json',
         });
         const announced = await announce({
           gateId: HOSTED_ID,
