@@ -1,4 +1,8 @@
-import type { PlatformWorkspaceWire, UserMembershipWire } from '@nexttime/shared';
+import type {
+  OntologyEnforcementWire,
+  PlatformWorkspaceWire,
+  UserMembershipWire,
+} from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
@@ -6,7 +10,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
-import { Field, Input } from '../ui/Field.js';
+import { Field, Input, Select } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { PlatformError } from './PlatformError.js';
 import { UserPicker } from './UserPicker.js';
@@ -36,9 +40,15 @@ export interface WorkspaceDetailPanelProps {
 
 /**
  * components/platform/WorkspaceDetailPanel: one workspace's drawer body (P-A2, design §2
- * "工作区配置归管理面" / §5 "工作区配置" row) — `update_workspace` (rename + entry model),
- * `set_allowed_models`, `set_workspace_status`, and owner delegation through the platform's own
- * `add_membership` / `set_membership_role`.
+ * "工作区配置归管理面" / §5 "工作区配置" row) — `update_workspace` (rename + entry model +
+ * ontology enforcement), `set_allowed_models`, `set_workspace_status`, and owner delegation
+ * through the platform's own `add_membership` / `set_membership_role`.
+ *
+ * The 本体强制 select is S5.1's rollout switch (`workspaces.ontology_enforcement`,
+ * `ontology-guard.ts`): `reject` (default) fails a Link write the workspace's published ontology
+ * does not license; `warn` writes it anyway, audits it, and counts it in the I-S5-1 invariant —
+ * for a host whose writers were never validated against the ontology yet. Saved on change like
+ * the entry-model select below, for the same one-control-no-batch reason.
  *
  * Disabling gets a same-drawer confirm step (the shape `UserDetailPanel` established for
  * `set_user_status`) because it is the most destructive thing on this page: every session in the
@@ -65,6 +75,9 @@ export function WorkspaceDetailPanel({
 
   const [savingEntryModel, setSavingEntryModel] = useState(false);
   const [entryModelError, setEntryModelError] = useState<unknown | null>(null);
+
+  const [savingOntologyEnforcement, setSavingOntologyEnforcement] = useState(false);
+  const [ontologyEnforcementError, setOntologyEnforcementError] = useState<unknown | null>(null);
 
   const [allowedModels, setAllowedModels] = useState<readonly string[]>(workspace.allowedModels);
   const [savingAllowed, setSavingAllowed] = useState(false);
@@ -120,6 +133,28 @@ export function WorkspaceDetailPanel({
       setEntryModelError(err);
     } finally {
       setSavingEntryModel(false);
+    }
+  }
+
+  /** Saved as it is picked, the same one-control shape as `saveEntryModel` above — there is no
+   *  other field on this row to batch it with. */
+  async function saveOntologyEnforcement(
+    ontologyEnforcement: OntologyEnforcementWire,
+  ): Promise<void> {
+    if (savingOntologyEnforcement || ontologyEnforcement === workspace.ontologyEnforcement) return;
+    setSavingOntologyEnforcement(true);
+    setOntologyEnforcementError(null);
+    try {
+      onChanged(
+        await http.call<PlatformWorkspaceWire>('update_workspace', {
+          workspaceId: workspace.id,
+          ontologyEnforcement,
+        }),
+      );
+    } catch (err) {
+      setOntologyEnforcementError(err);
+    } finally {
+      setSavingOntologyEnforcement(false);
     }
   }
 
@@ -297,6 +332,32 @@ export function WorkspaceDetailPanel({
           保存允许的模型 Save allowed models
         </Button>
       </div>
+
+      <div className="divider" />
+
+      <Field
+        id="wd-ontology-enforcement"
+        label="本体强制 Ontology enforcement"
+        hint="写入的关系必须符合已发布本体；warn 只审计不拒绝，用于新主机推出期，看 /internal/metrics 的 I-S5-1 归零后再切回 reject。 warn only audits and lets the write through, for a new host's rollout window until I-S5-1 reads 0."
+      >
+        <Select
+          id="wd-ontology-enforcement"
+          value={workspace.ontologyEnforcement}
+          onChange={(event) =>
+            void saveOntologyEnforcement(event.target.value as OntologyEnforcementWire)
+          }
+          disabled={savingOntologyEnforcement}
+          data-testid="workspace-ontology-enforcement"
+        >
+          <option value="reject">拒绝 reject</option>
+          <option value="warn">记录并放行 warn</option>
+        </Select>
+      </Field>
+      <PlatformError
+        error={ontologyEnforcementError}
+        title="无法设置本体强制 Could not set the ontology enforcement"
+        testId="workspace-ontology-enforcement-error"
+      />
 
       <div className="divider" />
 
