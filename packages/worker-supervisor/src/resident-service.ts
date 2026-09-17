@@ -41,7 +41,7 @@ import { posix as posixPath } from 'node:path';
 import type { SpawnRequest, SupervisorConfig, TaskSkillInline } from './config.js';
 import type { DockerClient } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
-import type { EgressMapStore } from './egress-map.js';
+import type { EgressMapStore, SourceMapFile } from './egress-map.js';
 import { decodeHandleJtiUnsafe } from './handle-jti.js';
 import { localSystemPromptPath, workspacePaths } from './host-paths.js';
 import {
@@ -67,6 +67,23 @@ function splitEgressDenyLabel(value: string | undefined): string[] {
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+}
+
+/** The `deny` list currently registered in SOURCE_MAP_FILE for `ip`, but only when its own
+ *  `sourceId` still matches `sourceId` — Docker can reassign a released IP to an unrelated
+ *  container, and a stale leftover entry from that IP's previous occupant must never be
+ *  attributed to this principal. Shared by `spawn()`'s reuse-drift check and `reconcile()`'s
+ *  union below (遗留22 / code-review-2026-09-10.md §3.5: EGRESS_DENY_LABEL only reflects the
+ *  list a container was (re)created with, but a reuse call can tighten SOURCE_MAP_FILE past it
+ *  without ever being able to update the label). */
+function registeredDenyFor(
+  map: SourceMapFile,
+  ip: string | undefined,
+  sourceId: string,
+): readonly string[] {
+  if (!ip) return [];
+  const entry = map[ip];
+  return entry && entry.sourceId === sourceId ? (entry.deny ?? []) : [];
 }
 
 const STOP_TIMEOUT_SECONDS = 10;
@@ -207,6 +224,26 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     }
   }
 
+  // 遗留22 / code-review-2026-09-10.md §3.5: best-effort, same convention as
+  // registerEgress/unregisterEgress above — reading SOURCE_MAP_FILE to find an egressDeny
+  // tightening an earlier reuse already applied (registeredDenyFor's own doc comment) must never
+  // fail a spawn/reconcile. A read failure falls back to `{}`, i.e. both callers below behave as
+  // if nothing had been registered yet — the same as before this fix existed.
+  function readEgressMap(): SourceMapFile {
+    try {
+      return egressMap.read();
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'egress source-map read failed (egressDeny reconciliation best-effort skipped)',
+          error: String(err),
+        }),
+      );
+      return {};
+    }
+  }
+
   // S2.6: writes/overwrites `/workspace/.nexttime/system-prompt.md` (host-paths.ts
   // `localSystemPromptPath`) before every spawn — both the create and the reuse-a-running-
   // container paths, so a workspace's *next* restart always picks up the current published entry
@@ -336,7 +373,32 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       const existingSkillsHash = existing?.labels[SKILLS_HASH_LABEL] ?? '';
       const skillsChanged = Boolean(existing && existingSkillsHash !== incomingSkillsHash);
 
-      const rotated = handleRotated || skillsChanged;
+      // 遗留22 / code-review-2026-09-10.md §3.5: EGRESS_DENY_LABEL only ever reflects the list
+      // this container was (re)created with — an *earlier* reuse call's own `registerEgress`
+      // below (unconditional on every reuse, so a newly published tighter list takes effect
+      // without waiting for a restart) may already have written a `deny` list into
+      // SOURCE_MAP_FILE the label itself could never catch up to (Docker can't relabel a running
+      // container). Left alone, that gap would linger until some unrelated recreate happened to
+      // close it, and `reconcile()`'s own label-only restore would be the only thing standing
+      // between the already-applied tightening and a widen on every docker-events reconnect in
+      // between. This repeats that earlier reuse's own SOURCE_MAP_FILE write against the label
+      // *before* this call's own write below, so a tightening that already outran the label gets
+      // folded into the existing recreate decision and the label re-stamped with whatever is
+      // currently published — same shape as `skillsChanged`/`handleRotated` above. Checked
+      // against the *previous* SOURCE_MAP_FILE entry, not this call's own incoming `egressDeny` —
+      // a list first published in *this* request still applies live on reuse with no restart,
+      // exactly as before this fix (see "refreshes egressDeny on every reuse spawn" test below);
+      // only a gap an earlier reuse already opened forces the resync. `reconcile()`'s own union
+      // (see that method below) is the safety net for the window before that resync happens.
+      const priorEgressDeny = registeredDenyFor(
+        readEgressMap(),
+        existing?.ip,
+        entrySourceId(workspaceId, principalId),
+      );
+      const existingEgressDenySet = new Set(splitEgressDenyLabel(existing?.labels[EGRESS_DENY_LABEL]));
+      const egressDenyDrifted = priorEgressDeny.some((entry) => !existingEgressDenySet.has(entry));
+
+      const rotated = handleRotated || skillsChanged || egressDenyDrifted;
 
       if (existing?.running && !rotated) {
         registry.set(principalId, {
@@ -473,6 +535,16 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
     async reconcile(): Promise<void> {
       const containers = await docker.listByLabel(ENTRY_ROLE_LABEL, ENTRY_ROLE_VALUE);
+      // 遗留22 / code-review-2026-09-10.md §3.5: read once, outside the loop below.
+      // EGRESS_DENY_LABEL alone is only what a container was (re)created with; a reuse call since
+      // then may already have tightened SOURCE_MAP_FILE past it (spawn()'s own reuse-branch
+      // registerEgress runs on every reuse, unconditionally) without ever being able to update
+      // the label. Unioning the two here — instead of restoring from the label alone — means a
+      // docker-events reconnect (this method's other caller; see this module's own doc comment)
+      // never re-widens a deny list a reuse already narrowed. spawn()'s own drift check
+      // (`egressDenyDrifted` above) is what eventually re-stamps the label itself; this union is
+      // the safety net for the window before that resync happens.
+      const currentMap = readEgressMap();
       for (const state of containers) {
         const principalId = state.labels[PRINCIPAL_LABEL];
         const workspaceId = state.labels[WORKSPACE_LABEL];
@@ -494,16 +566,23 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
             // branch behaves exactly as before in that case.
             lastTouchedAt: registry.get(principalId)?.lastTouchedAt ?? now(),
           });
-          // Restores the egress deny list this container was (re)created with (EGRESS_DENY_LABEL)
-          // — without this, a supervisor restart would re-register every still-running entry
-          // container's source-map entry with no deny list at all, silently widening its egress
-          // until its next startTurn (see EGRESS_DENY_LABEL's own doc comment).
-          registerEgress(
-            workspaceId,
-            principalId,
-            state.ip,
-            splitEgressDenyLabel(state.labels[EGRESS_DENY_LABEL]),
+          // Restores the egress deny list this container was (re)created with (EGRESS_DENY_LABEL),
+          // unioned with whatever SOURCE_MAP_FILE already has registered for it (see this
+          // function's own doc comment above, and 遗留22 / code-review-2026-09-10.md §3.5). The
+          // label half covers a supervisor restart where SOURCE_MAP_FILE itself was lost/reset —
+          // without it, every still-running entry container's source-map entry would be
+          // re-registered with no deny list at all, silently widening its egress until its next
+          // startTurn (see EGRESS_DENY_LABEL's own doc comment). The union half covers a
+          // reuse-applied tightening the label never learned about — without it, that tightening
+          // would revert on every docker-events reconnect in between.
+          const sourceId = entrySourceId(workspaceId, principalId);
+          const effectiveDeny = Array.from(
+            new Set([
+              ...splitEgressDenyLabel(state.labels[EGRESS_DENY_LABEL]),
+              ...registeredDenyFor(currentMap, state.ip, sourceId),
+            ]),
           );
+          registerEgress(workspaceId, principalId, state.ip, effectiveDeny);
         }
       }
     },
