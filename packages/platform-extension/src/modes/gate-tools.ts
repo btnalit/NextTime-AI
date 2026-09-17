@@ -16,6 +16,10 @@ export interface AllowedOperationWire {
   readonly operation: {
     readonly mode?: string;
     readonly params_schema?: Record<string, unknown>;
+    // Present on every real Operation (`@nexttime/shared`'s `OperationSchema` requires it) but
+    // typed loosely (via the index signature) rather than as its own required field — same
+    // "wire row, read defensively" posture `mode` above already takes.
+    readonly blast_radius?: string;
     readonly [key: string]: unknown;
   };
 }
@@ -49,8 +53,26 @@ export function gateToolName(
   return { name, label };
 }
 
+/**
+ * S5.4 (docs/development-tasks.md S5.4; ops-runner.yaml's own "the tool's own description says
+ * which" instruction depends on this): every gate-projected tool's description ends with one
+ * sentence naming its mode (observe vs. execute, and what execute-class means — an ActionRequest,
+ * not an immediate effect) and, when the Operation carries one, its `blast_radius`. Applied to the
+ * manifest description when present, and to the placeholder fallback the same way — a Worker or
+ * entry agent reading a tool's description should never have to guess whether calling it is safe.
+ */
 export function gateToolDescription(op: AllowedOperationWire, label: string): string {
-  return typeof op.operation.description === 'string'
-    ? op.operation.description
-    : `Gatekeeper Operation "${label}" (§7.4/§9.3 gate projection).`;
+  const base =
+    typeof op.operation.description === 'string' && op.operation.description.trim().length > 0
+      ? op.operation.description.trim()
+      : `Gatekeeper Operation "${label}".`;
+  const modeSentence =
+    op.operation.mode === 'execute'
+      ? 'Execute-class: a governed write — calling it creates an ActionRequest that a human approves before anything happens.'
+      : 'Observe-class: read-only, returns data directly.';
+  const blastSentence =
+    typeof op.operation.blast_radius === 'string'
+      ? ` Blast radius: ${op.operation.blast_radius}.`
+      : '';
+  return `${base} ${modeSentence}${blastSentence}`;
 }

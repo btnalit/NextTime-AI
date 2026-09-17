@@ -57,6 +57,12 @@ jobs:
       - name: Vocabulary guard detector unit tests (S3.7)
         run: node --test scripts/guards/vocabulary.test.mjs
 
+      - name: Prompt-contract guard detector unit tests (S5.4)
+        run: node --test scripts/guards/prompt-contract.test.mjs
+
+      - name: Prompt-contract guard (S5.4, docs/development-tasks.md S5.4)
+        run: node scripts/guards/prompt-contract.mjs
+
       - name: Vocabulary guard (S3.7, docs/wire-contract-conventions.md §5)
         run: node scripts/guards/vocabulary.mjs
 

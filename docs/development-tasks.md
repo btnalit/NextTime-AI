@@ -1959,6 +1959,94 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
 - 验收：`pnpm ci:guards` 能抓住一次故意写错的工具名；fake 模式 S2 在一个 `params_schema: null` 的 Operation
   存在时失败（与真实供应商同一表现）。依赖：S3.9。
 
+#### S5.4 实现说明（2026-09-17）
+
+- **执行前逐条重核 2026-09-09 审计**（`prompt-audit-2026-09-09.md` H1–H6、M1–M10、L1–L4）：main 上已关闭
+  的直接跳过，未再改动：
+  - H6（`search` 描述声称返回 Facts、缺分页契约）：PR #132 已把描述改为"substring over
+    properties/identity...keyset-paginated (limit, cursor → nextCursor)"，与当前实现一致。
+  - M6 的 `search_graph` 别名（`reference-tool-aliases.ts`）：同一次改动已把描述改成"keyset-paginated,
+    the result carries nextCursor"，不再是"no counterpart here"。
+  - M2（`explain` 窄化到 Fact 自己的 Observation）：PR #132 已实现（`explain.ts` 的 `onlyObservationId`
+    参数），描述改写时按这个真实行为写（见下）。
+  仍开放、本次修的：H1、H2、H3、H4、H5、M2（`traverse`）、M3（`explain`）、M4（`record_decision`）、
+  M5（`get_entry_context`/`report_turn`）、M6 的其余四个别名（`get_provenance`/`get_causal_chain`/
+  `analyze_decision_impact`/`add_relationship`）、M7、M8、M9。**发现审计未覆盖的同类问题一并修**：
+  `ops-runner.yaml` 第 3 条里把 `propose_skill`/`propose_operation`/`record_decision` 当作 Worker
+  能直接调用的工具引用——`worker.ts` 只注册 `report_result` 与 `<gate>.<op>`，Worker 并无这三个能力；
+  改为只讲 `report_result` 的 `proposedSkill`/`proposedOperations` 字段与"Worker 没有 record_decision"。
+  `causal_chain`/`decision_impact` 的别名描述发现设计已变（`causal_chain` 现接受调用者可传的 `depth`
+  参数，审计写的"no counterpart"已过时）——按当前 `decisions.ts` 的 `causalChain`/`decisionImpact`
+  实现重写，并注明该别名本身不透传 `depth`。M10（entry-agent.yaml 里纯粹镜像工具表的清单）按审计本身
+  "可拒绝"的低置信度评估跳过，未改。
+- **prompt 与描述修复**：`ontology/ops-runner.yaml`（结果契约键改 camelCase、去 `describe_operations`
+  改为"读 `<gate>.<op>` 工具描述判断 mode"、去 I17/I3 编号）；`ontology/entry-agent.yaml`（重写
+  "asynchronous model" 一节，按 `entry.ts` 的 `resolveInvokeWorkerCallPlan` 真实语义——默认
+  `wait:false` 立即返回 `{taskId,status}`，仅 `wait:true` 才等最多 `timeout`/90 秒——只留一个准确示例；
+  "When you're done" 一节去掉不存在的 "Fact-asserting tools" 说法）；`worker.ts` 删除静态
+  "No Skills are loaded yet" 段落（Skill 早经 S2.14/S3.13 挂到 pi 默认 skills 目录），同步改
+  `worker.test.ts` 与模块头注释；`entrypoint.sh` 兜底 prompt 去掉 "stopgap (S1.5)"/"approval flow not
+  available" 等开发者注记，改写为准确的"未发布入口定义时的默认配置"说明；`capabilities.ts` 里
+  `traverse`/`explain`/`record_decision`/`get_entry_context`/`report_turn`/`invoke_worker` 六条描述
+  按各自实现重写（`search` 已是准确的，未改）；`packages/kernel/src/interfaces/mcp/
+  reference-tool-aliases.ts`（**注意**：任务简报写的路径是
+  `packages/platform-extension/src/mcp/reference-tool-aliases.ts`，但该文件与
+  `tool-projection.ts` 实际都在 `packages/kernel/src/interfaces/mcp/` 下——按代码实际路径改的）里
+  `get_provenance`/`get_causal_chain`/`analyze_decision_impact`/`add_relationship` 四条描述重写，
+  `search_graph` 未改（已准确）。改完跑 `pnpm contract:check` 通过，未触发 `pnpm contract:snapshot`
+  ——`docs/contracts/capabilities.json` 不含 `description` 字段，描述改动不影响该快照。
+- **`ontology/entry-agent.yaml` 发布机制**核实：`create-workspace`（`packages/kernel/src/cli/
+  bootstrap.ts`）只在**新建**工作区时把这份 yaml 播种为 v1 并发布；已存在的工作区要让这次修的 prompt
+  生效，owner 需要走 `propose_worker_definition` + `publish_worker_definition` 发一个新版本（`kind:
+  entry` 的 WorkerDefinition），这不是自动生效的——不在本任务范围内。
+- **守卫 `scripts/guards/prompt-contract.mjs`**（进 `ci:guards`，接在 `vocabulary.mjs` 之后）：从
+  `ontology/*.yaml` 的 `systemPrompt` 抽取反引号标识符（只认"裸标识符"或"裸标识符紧跟 `(`的调用示例"，
+  忽略含空格/连字符/冒号等的散文片段——`facts_to_assert`、`describe_operations` 这类真实漂移都是裸
+  标识符，这个窄范围抓得住）。entry 模式的工具集来自 `entry.ts` 的 `ENTRY_TOOL_CAPABILITY_NAMES`
+  常量（静态文本解析，按注释行过滤后正则抽取字符串字面量，不依赖 TS loader）与
+  `docs/contracts/capabilities.json` 的交集，加 `<gate>.<op>`；worker 模式的工具集是
+  `report_result`（`worker.ts` 的静态工具，不在注册表里）加 `<gate>.<op>`；ops-runner.yaml 额外接受
+  `WorkerResultContractSchema`（`@nexttime/shared` built dist）的键。非工具的反引号词（如
+  `timeout`/`taskId`/`context`/`executed`/`pending_approval`）在
+  `scripts/guards/prompt-contract.mjs` 的 `ALLOWED_NON_TOOL_WORDS` 常量里逐条带一行理由允许，不放宽
+  规则本身。自检 `scripts/guards/prompt-contract.test.mjs`（`node --test` 跑，21 个用例）用内存构造的
+  坏样本证明能抓住 H2 形状（虚构工具名）与 H1 形状（snake_case 契约键），从未改动真实 yaml；另外手动在
+  `ontology/ops-runner.yaml` 里临时改回 `describe_operations` 验证守卫确实拦截、随后还原，确认与
+  单测结论一致。
+- **门工具描述**：`gate-tools.ts`（entry/worker 共用）与 `interfaces/mcp/tool-projection.ts`
+  （各自独立实现，`.dependency-cruiser.cjs` 的 `no-cross-package-internal-import` 规则不让互相
+  import，两处保持同一逻辑）的 `gateToolDescription` 统一在描述末尾附加一句 mode（observe-class /
+  execute-class，并说明 execute 会先变成 ActionRequest 而非立即生效）与 `blast_radius`（有值才附加）。
+  新增 `packages/platform-extension/src/modes/gate-tools.test.ts`（8 个用例，纯函数测试，覆盖
+  observe/execute 两种 mode、有/无 blast_radius、有/无/空白 manifest 描述五种分支）；
+  `interfaces/mcp/tool-projection.ts` 自己的 `gateToolDescription` 是私有函数（未导出），其门投影
+  路径要走真实 DB 的 `dispatchCapability`，本任务未新增覆盖它的测试——与 `gate-tools.ts` 的实现逐字
+  对照过，是同一段逻辑；剩余风险见下。
+- **fake-llm 校验工具定义形状**：`deploy/fake-llm/server.mjs` 在 `handleChatCompletions` 解析完
+  JSON body、场景匹配之前，新增 `findInvalidToolSchema`——检查请求体 `tools[].function.parameters`
+  是否为 `type: "object"` 的 JSON Schema，不是就整请求 400（`invalid_request_error` /
+  `invalid_function_parameters`，仿真实 OpenAI 兼容供应商的错误体形状）。PR #129 的自检是
+  `deploy/accept-s2/fake-llm-scenario-selftest.mjs`（接入 CI `quality` job），补了三个用例：
+  `parameters: null` 拒绝、非 object 顶层 schema（`{type:'string'}`）拒绝、合法 schema 不受影响。
+  **核实结论**：`packages/platform-extension/src/tool-schema.ts` 的 `gateToolParameters`（W7/#156
+  已修）已经把三种 pi 模式（entry/worker/interactive）投影给模型的门工具 schema 统一归一成
+  object——这条校验不会让现有 CI 的 S1-lite / e2e 变红。**范围外发现，未改**：
+  `interfaces/mcp/tool-projection.ts` 的门投影路径（`buildToolCatalog`）对
+  `op.operation.params_schema` 只在其为 `undefined`/`null` 时才换成 `EMPTY_INPUT_SCHEMA`，一个
+  `params_schema: {}`（无 `type` 字段，`OperationSchema` 允许这个形状）会原样进入 MCP `tools/list`
+  的 `inputSchema`，不像 pi 模式那样经过 `gateToolParameters` 归一化——MCP 客户端（Claude Code 等）
+  是否会像 OpenAI 兼容供应商一样拒绝这种 schema 未验证；这条不在本任务允许改的范围（只允许改这两个
+  文件里的 `gateToolDescription`），留给后续任务。
+- **CI 接线**：`.github/workflows/ci.yml` 并不直接跑 `pnpm ci:guards`——它把各条守卫拆成独立 step
+  （`vocabulary.mjs`/`vocabulary.test.mjs`/`fake-llm-scenario-selftest.mjs` 在 `quality` job，
+  `check-kernel-purity.sh` 等在 `guards` job）。已在 `quality` job 里、紧跟"Vocabulary guard detector
+  unit tests (S3.7)"之后加两个 step——"Prompt-contract guard detector unit tests (S5.4)"
+  （`node --test scripts/guards/prompt-contract.test.mjs`）与"Prompt-contract guard (S5.4,
+  docs/development-tasks.md S5.4)"（`node scripts/guards/prompt-contract.mjs`），命名与位置照抄
+  vocabulary 那两步的写法；两者都跑在 `pnpm -r build`（同 job 更早的 "Build" step）之后，
+  `packages/shared/dist` 已存在，与 vocabulary 守卫共享同一前置条件。至此 CI 与 `pnpm ci:guards`
+  本地都会跑到 `prompt-contract.mjs`。
+
 ### S5.5 加固批次（现有遗留 36 / 22 / 20 / 23 / 24 / 34 / 31 / 21）
 
 按风险排序，前三项先做、单独 PR：

@@ -81,8 +81,9 @@ export const MCP_TOOL_ALIASES: readonly ReferenceToolAlias[] = [
       required: ['entity_id'],
     },
     description:
-      'Fact/Decision/Turn → Observation → Activity → Source + Principal provenance chain ' +
-      '(Semantica get_provenance; our capability: explain).',
+      'Explain where a node came from: for a Fact, Decision, or Activity id, returns the ' +
+      'producing Activity (kind, status, who started it and on whose behalf) and its ' +
+      'Observations with their Sources. Same result as `explain`.',
     translate: (args) => renamed(args, { entity_id: 'nodeId' }),
   },
   {
@@ -96,8 +97,10 @@ export const MCP_TOOL_ALIASES: readonly ReferenceToolAlias[] = [
       required: ['decision_id'],
     },
     description:
-      'Causal chain leading to a Decision (Semantica get_causal_chain; our capability: ' +
-      'causal_chain — Semantica\u2019s optional direction/max_depth have no counterpart here).',
+      'The chain leading to `decision_id`: the Decision itself plus one step per Fact its ' +
+      'own rationale names, walked backwards up to the native `causal_chain` capability’s ' +
+      'default depth (3 hops, 5 at most) — this alias does not expose `depth` itself. ' +
+      'The result says whether the walk was truncated.',
     translate: (args) => renamed(args, { decision_id: 'decisionId' }),
   },
   {
@@ -111,8 +114,9 @@ export const MCP_TOOL_ALIASES: readonly ReferenceToolAlias[] = [
       required: ['decision_id'],
     },
     description:
-      'Downstream impact of a Decision (Semantica analyze_decision_impact; our capability: ' +
-      'decision_impact).',
+      'What followed from `decision_id`: the Facts produced by the same Activity as the ' +
+      'Decision (or named in its own rationale), the ActionRequests it approved, and the ids ' +
+      'of Tasks linked to it. Same result as `decision_impact`.',
     translate: (args) => renamed(args, { decision_id: 'decisionId' }),
   },
   {
@@ -149,10 +153,10 @@ export const MCP_TOOL_ALIASES: readonly ReferenceToolAlias[] = [
       required: ['source', 'target'],
     },
     description:
-      'Add a relationship between two Objects (Semantica add_relationship; our capability: ' +
-      'assert_fact — a LinkType-typed Fact on the source Object whose value is the target\u2019s ' +
-      'identity key. Our assert_fact requires linkType; Semantica\u2019s type is optional there — ' +
-      'omitting it fails the underlying assert_fact call, it is never defaulted.)',
+      'Assert a Link Fact of LinkType `type` on Object `source` whose value is `target` (the ' +
+      'target Object’s identity key). `type` is required — the call fails without it. The ' +
+      'Fact gets the epistemic status your principal kind allows and appears in ' +
+      'traverse/explain like any other Fact.',
     translate: (args) => renamed(args, { source: 'objectId', target: 'value', type: 'linkType' }),
   },
 ];

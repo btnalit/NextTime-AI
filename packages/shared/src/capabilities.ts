@@ -366,7 +366,12 @@ const graphCapabilities: readonly Capability[] = [
         ),
       })
       .strict(),
-    description: 'Walk Links from an Object, bounded to depth ≤ 3 (I18-adjacent traversal cap).',
+    description:
+      'Walk Links outward from `fromId` in both directions (or filtered to one `linkType`), up ' +
+      'to `depth` hops (1–3, default 1). Returns `{nodes, edges}`: the reached Object ids and ' +
+      'each traversed Link (linkId, linkType, sourceObjectId, targetObjectId, depth). Use it to ' +
+      'see what an Object is connected to; use `get_object` for an Object’s own properties, ' +
+      '`explain` for a Link’s provenance.',
   },
   {
     name: 'search',
@@ -981,7 +986,12 @@ const epistemicCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ nodeId: id }).strict(),
     resultSchema: wire.ExplainResultWireSchema,
     description:
-      'Fact/Decision/Turn → Observation → Activity → Source + Principal provenance chain (Semantica get_provenance).',
+      'Explain where a node came from. `nodeId` may be a Fact, Decision, or Activity id. Returns ' +
+      'the producing Activity (kind, status, who started it and on whose behalf) with its ' +
+      'Observations and their Sources — narrowed to just the Fact’s own Observation when it ' +
+      'recorded one (e.g. `submit_observations`), otherwise every Observation the Activity ' +
+      'recorded (a bulk collector run or an ad-hoc `assert_fact`/Worker result can mean hundreds ' +
+      'of entries).',
   },
   {
     name: 'record_decision',
@@ -997,7 +1007,12 @@ const epistemicCapabilities: readonly Capability[] = [
       })
       .strict(),
     resultSchema: z.object({ id, status: z.string(), turnId: z.string() }).strict(),
-    description: 'Record a Decision (starts in `proposed`, see transitions.ts).',
+    description:
+      'Record a Decision the caller has made or is reporting: `summary` (what was decided and ' +
+      'why), optional `relatedFactIds` (the Facts it rests on) and `relatedTaskId`. Automatically ' +
+      'attributed to your own currently-running Turn — fails if none is running. Starts in ' +
+      'status `proposed`; `explain`, `query_decisions`, and `find_precedents` can find it later. ' +
+      'Not for routine observations — only for real choices worth tracing.',
   },
   {
     // S3.2: `substrate/epistemic/decisions.ts`'s `queryDecisions` — name starts with `query_`
@@ -1449,9 +1464,10 @@ const taskCapabilities: readonly Capability[] = [
       })
       .strict(),
     description:
-      'Entry-mode context bootstrap (§7.4 `context` injection, S1 scope): the calling principal’s ' +
-      'pending approvals, running Tasks and their results, relevant Facts (with epistemic_status), ' +
-      'and precedents. Called once per LLM call from the entry agent’s pi `context` event handler.',
+      'The calling principal’s current situation: pending approvals, running and recently ' +
+      'finished Tasks with their results, relevant Facts (with epistemic_status), and precedents. ' +
+      'Entry agents receive this automatically before every model call; call it yourself only ' +
+      'from an interactive session, which has no such injection.',
   },
   {
     name: 'report_turn',
@@ -1468,8 +1484,9 @@ const taskCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: z.object({ turnId: id, status: z.string() }).strict(),
     description:
-      'Report a completed Turn’s outcome back to the kernel (§7.2 "每轮回传 Turn 与决策"); called ' +
-      'from the entry agent’s pi `agent_end` handler.',
+      'Record the outcome of a finished Turn (`turnId`, `summary`, optional `decisions`). The ' +
+      'entry runtime calls this once per Turn on its own; interactive sessions have no Turn to ' +
+      'report.',
   },
   {
     name: 'invoke_worker',
@@ -1498,10 +1515,15 @@ const taskCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.InvokeWorkerResultWireSchema,
     description:
-      'invoke_worker(definition@version, input, wait, timeout, gates?) — §8.2; wait defaults to ' +
-      'false — returns { taskId, status } immediately and the caller polls get_task for the ' +
-      'result; wait:true blocks (up to timeout seconds, default/max 90) for a terminal result ' +
-      'instead. A decayed child Handle inherits on_behalf_of.',
+      'Create a Task from a published WorkerDefinition (`definition@version`) with `input`, spawn ' +
+      'a Worker for it, and return `{taskId, status}`. With `wait` omitted or false the call ' +
+      'returns as soon as the Task exists; with `wait: true` it holds for up to `timeout` ' +
+      'seconds (90 at most) and returns the terminal result if the Worker finishes in time, ' +
+      'otherwise the same `{taskId, status}`. `gates` narrows the Worker’s Handle to those ' +
+      'Gatekeepers (it can only narrow, never widen). The outcome — completion, failure, or an ' +
+      'approval that landed — is delivered later: entry agents receive it in a later turn’s ' +
+      'context; other callers read it with `get_task`. The Worker acts on behalf of the calling ' +
+      'principal.',
   },
   {
     name: 'get_task',

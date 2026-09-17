@@ -234,7 +234,7 @@ describe('registerWorkerMode', () => {
     expect(message.display).toBe(false);
     expect(message.content).toContain('restart the flaky pod');
     expect(message.content).toContain('Relevant facts');
-    expect(message.content).toContain('No Skills are loaded yet');
+    expect(message.content).not.toContain('### Skills');
 
     const getTaskCall = kernel.requests.find((r) => r.capability === 'get_task');
     expect(getTaskCall?.params).toEqual({ taskId: 'task-1' });

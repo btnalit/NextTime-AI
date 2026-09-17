@@ -16,10 +16,11 @@ import { type AllowedOperationWire, gateToolDescription, gateToolName } from './
  * only spawns the container and watches its exit status) — this mode drives its own single turn:
  * on `session_start`, it fetches the Handle's allowed Operations (`list_allowed_operations`) and
  * registers one pi tool per Operation, then calls `pi.sendUserMessage(...)` itself to kick the
- * turn off. `context` injects the Task's input, related Facts, and a Skills placeholder (S2.14).
- * When the turn settles (explicit `report_result` tool call, or none at all), the Worker posts its
- * result contract to the kernel (`report_task_result`) and exits the process — a Worker container
- * runs exactly one Task and then is done, there is no second prompt to wait for.
+ * turn off. `context` injects the Task's input and related Facts — published Skills reach pi
+ * through its own default skills directory (S2.14/S3.13 mount them straight there), not through
+ * this injection. When the turn settles (explicit `report_result` tool call, or none at all), the
+ * Worker posts its result contract to the kernel (`report_task_result`) and exits the process — a
+ * Worker container runs exactly one Task and then is done, there is no second prompt to wait for.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -111,9 +112,6 @@ function renderWorkerContext(ctx: WorkerTaskContext): string {
     ctx.facts.length > 0
       ? `### Relevant facts\n${ctx.facts.map((fact) => `- ${JSON.stringify(fact)}`).join('\n')}`
       : undefined,
-    // S2.14 seam (task brief: "the loaded Skills placeholder") — no Skill-mounting mechanism
-    // exists yet; this line is deliberately static, not a kernel round trip.
-    '### Skills\nNo Skills are loaded yet for this container (S2.14 will mount published Skills here).',
   ].filter((section): section is string => section !== undefined);
   return ['## NextTime worker context', ...sections].join('\n\n');
 }
