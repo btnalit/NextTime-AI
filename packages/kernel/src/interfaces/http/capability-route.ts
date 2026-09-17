@@ -19,6 +19,7 @@ import {
   CapabilityNotImplementedError,
   ConflictNotFoundError,
   ConnectionCredentialRequiredError,
+  ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   CsrfHeaderRequiredError,
   DecisionNotFoundError,
@@ -315,6 +316,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // `connected_account_store_not_configured` → "use credentialKind: 'shared'").
   if (err instanceof ConnectionCredentialRequiredError) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // STATUS leftover 36 (connection-handlers.ts "Endpoint guard"): the address belongs to a
+  // platform-catalog gate instance; the caller's route to it is `enable_gate_instance`.
+  if (err instanceof ConnectionEndpointIsPlatformGateError) {
+    return { status: 400, code: err.code, message: err.message };
   }
   if (err instanceof ConnectionManifestFetchError) {
     return { status: 502, code: 'manifest_fetch_failed', message: err.message };

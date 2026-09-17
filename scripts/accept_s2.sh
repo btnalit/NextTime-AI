@@ -303,9 +303,10 @@ fixtures_up_step() {
 # already configured out-of-band via the compose volume — S2.5's docker/ragflow precedent);
 # (b) the http-kind gate onto the openapi fixture, credentialKind='connected_account' (the bearer
 # token goes straight to the gate's own ConnectedAccount store, never through the kernel);
-# (c) the already-deployed gatekeeper-docker service (docs/runbooks/host-gatekeepers.md §10's own
-# `target: "docker"` convention), needed by step 2 below. All three via the S2.13 capability flow
-# (request_connection -> create_connection -> publish_manifest -> connect_gatekeeper), not
+# (c) the already-deployed gatekeeper-docker service, needed by step 2 below — since STATUS
+# leftover 36 (S5.5) through the P-B1 catalog path (`enable_gate_instance`, see the docker block
+# below), no longer by `create_connection` to its address. (a) and (b) via the S2.13 capability
+# flow (request_connection -> create_connection -> publish_manifest -> connect_gatekeeper), not
 # bootstrap.js's operator-only register-gatekeeper subcommand.
 connections_step() {
   # --- ssh ---
@@ -400,24 +401,58 @@ connections_step() {
   pass "s213-no-token-leak" "bearer token appears in 0 rows across all $(printf '%s\n' "$tables" | wc -l | tr -d ' ') public tables"
 
   # --- docker (already-deployed gatekeeper-docker; docs/runbooks/host-gatekeepers.md §10) ---
-  out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"cli\",\"target\":\"docker\"}" "d.result.id")
-  status=$(parse_kv "$out" HTTP_STATUS)
-  [ "$status" = "200" ] || fail "connect-docker-request" "request_connection(docker) HTTP $status: $(parse_kv "$out" BODY)"
-  CR_ID_DOCKER=$(parse_kv "$out" EXTRACTED)
-  pass "connect-docker-request" "connectionRequestId=$CR_ID_DOCKER"
-
+  # STATUS leftover 36 (S5.5): gatekeeper-docker announces itself to the platform catalog (P-B1,
+  # `gate_instances`), and a workspace may no longer `create_connection` to a catalog address —
+  # the kernel calls every gate with one shared gate token, so a self-connected copy would escape
+  # the catalog's deny list / trust / enabled state. First assert the guard itself (the old
+  # self-connect is now 400 `endpoint_is_platform_gate`, nothing contacted), then take the
+  # catalog path: the administrator enables the instance, the owner enables it in the workspace
+  # (`enable_gate_instance` also publishes its Operations — no `publish_manifest`). This script
+  # has no administrator login, so the administrator's one click is the SQL below (same way this
+  # file's own leak check and CI's e2e seeding talk to Postgres), and only ever `discovered` →
+  # `enabled`: a `disabled` instance or a non-preset connector is an administrator's decision this
+  # script respects by failing loudly instead of overriding it.
   out=$(cap "$ALICE_KEY" create_connection \
-    "{\"connectionRequestId\":\"$CR_ID_DOCKER\",\"kind\":\"cli\",\"target\":\"docker\",\"endpoint\":\"http://gatekeeper-docker:8083\",\"credentialKind\":\"shared\"}" \
-    "d.result.gatekeeperId")
+    "{\"kind\":\"cli\",\"target\":\"docker\",\"endpoint\":\"http://gatekeeper-docker:8083\",\"credentialKind\":\"shared\"}" \
+    "")
   status=$(parse_kv "$out" HTTP_STATUS)
-  [ "$status" = "200" ] || fail "connect-docker-create" "create_connection(docker) HTTP $status: $(parse_kv "$out" BODY)"
-  GATEKEEPER_ID_DOCKER=$(parse_kv "$out" EXTRACTED)
-  pass "connect-docker-create" "gatekeeperId=$GATEKEEPER_ID_DOCKER"
+  [ "$status" = "400" ] || fail "connect-docker-guard" "create_connection to the catalog gate's address must be refused (400), got HTTP $status: $(parse_kv "$out" BODY)"
+  case "$(parse_kv "$out" BODY)" in
+    *endpoint_is_platform_gate*) pass "connect-docker-guard" "self-connect to http://gatekeeper-docker:8083 refused with endpoint_is_platform_gate" ;;
+    *) fail "connect-docker-guard" "400 but not endpoint_is_platform_gate: $(parse_kv "$out" BODY)" ;;
+  esac
 
-  out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_DOCKER\"}" "")
+  docker_gate_status=$(psql_ws "select status from gate_instances where gate_id='gatekeeper-docker'")
+  case "$docker_gate_status" in
+    enabled) pass "connect-docker-platform-enable" "gate instance gatekeeper-docker already enabled by the administrator" ;;
+    discovered)
+      psql_ws "update gate_instances set status='enabled', updated_at=now() where gate_id='gatekeeper-docker' and status='discovered'" >/dev/null
+      pass "connect-docker-platform-enable" "gate instance gatekeeper-docker: discovered -> enabled (administrator step done as SQL)" ;;
+    "") fail "connect-docker-platform-enable" "gatekeeper-docker has not announced itself to the kernel (no gate_instances row) — is the gatekeeper-docker service up with internal_token mounted?" ;;
+    *) fail "connect-docker-platform-enable" "gate instance gatekeeper-docker is '$docker_gate_status' — an administrator's decision; re-enable it on the integrations page before running S2" ;;
+  esac
+  docker_connector_mode=$(psql_ws "select mode from connectors where name='docker'")
+  [ "$docker_connector_mode" = "platform_preset" ] || fail "connect-docker-platform-enable" "connector 'docker' is in mode '$docker_connector_mode', not platform_preset — an administrator's decision; set it on the integrations page before running S2"
+
+  # `enable_gate_instance` refuses an instance that has not announced any Operations yet
+  # (`gate_not_ready`); a gate that has just started needs a moment.
+  docker_gate_ready=""
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    docker_gate_ready=$(psql_ws "select (last_seen_at is not null and jsonb_array_length(operations) > 0)::text from gate_instances where gate_id='gatekeeper-docker'")
+    [ "$docker_gate_ready" = "true" ] && break
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  [ "$docker_gate_ready" = "true" ] || fail "connect-docker-ready" "gatekeeper-docker announced no Operations within 60s (last_seen_at / operations on its gate_instances row)"
+  pass "connect-docker-ready" "gatekeeper-docker has announced its Operations"
+
+  out=$(cap "$ALICE_KEY" enable_gate_instance "{\"gateId\":\"gatekeeper-docker\"}" "d.result.gatekeeperId")
   status=$(parse_kv "$out" HTTP_STATUS)
-  [ "$status" = "200" ] || fail "connect-docker-publish" "publish_manifest(docker) HTTP $status: $(parse_kv "$out" BODY)"
-  pass "connect-docker-publish" "docker manifest published"
+  [ "$status" = "200" ] || fail "connect-docker-enable" "enable_gate_instance(gatekeeper-docker) HTTP $status: $(parse_kv "$out" BODY)"
+  GATEKEEPER_ID_DOCKER=$(parse_kv "$out" EXTRACTED)
+  [ -n "$GATEKEEPER_ID_DOCKER" ] || fail "connect-docker-enable" "no gatekeeperId in response: $(parse_kv "$out" BODY)"
+  pass "connect-docker-enable" "gatekeeperId=$GATEKEEPER_ID_DOCKER (Operations published by enable_gate_instance)"
 
   out=$(cap "$ALICE_KEY" connect_gatekeeper "{\"gatekeeperId\":\"$GATEKEEPER_ID_DOCKER\",\"principalId\":\"$ALICE_PRINCIPAL_ID\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)

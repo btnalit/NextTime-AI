@@ -17,6 +17,7 @@ import {
   CapabilityNotImplementedError,
   ConflictNotFoundError,
   ConnectionCredentialRequiredError,
+  ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   DecisionNotFoundError,
   ExplainNodeNotFoundError,
@@ -89,6 +90,13 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     expect(
       mapCapabilityError(new ConnectionManifestFetchError('http://example.invalid/openapi.json')),
     ).toMatchObject({ status: 502, code: 'manifest_fetch_failed' });
+    // STATUS leftover 36: a platform-catalog address is the caller's mistake to fix (use
+    // enable_gate_instance), so 400 with its own code — not a 5xx, nothing was contacted.
+    expect(
+      mapCapabilityError(
+        new ConnectionEndpointIsPlatformGateError('http://gate-host:8083/i/x', 'hosted-x'),
+      ),
+    ).toMatchObject({ status: 400, code: 'endpoint_is_platform_gate' });
     expect(mapCapabilityError(new GatekeeperTimeoutError('gate timed out'))).toMatchObject({
       status: 504,
       code: 'gatekeeper_timeout',

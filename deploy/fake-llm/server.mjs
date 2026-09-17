@@ -207,15 +207,31 @@ function findToolResult(messages, toolName) {
  *  accept_s2.sh's own direct fallback call — see docs/runbooks/host-accept-s2.md "已知偏离"). The
  *  Worker calls the docker gate's `container.restart` tool (registered by
  *  packages/platform-extension/src/modes/worker.ts from `list_allowed_operations`; tool name
- *  sanitized from `docker.container_restart`, see that file's `sanitizeToolName`), then reports a
- *  result contract with one `factsToAssert` entry — S2.12 step 7 asserts this Fact lands
- *  `epistemic_status='inferred'`.
+ *  sanitized from `<gateName>.container_restart`, see modes/gate-tools.ts's `sanitizeToolName`),
+ *  then reports a result contract with one `factsToAssert` entry — S2.12 step 7 asserts this
+ *  Fact lands `epistemic_status='inferred'`.
+ *
+ *  The gate's name is whatever the workspace's Gatekeeper object is called — `docker` when it was
+ *  connected with `target: "docker"`, the catalog instance's display name (`gatekeeper-docker` by
+ *  default) once accept_s2.sh enables the packaged gate through `enable_gate_instance` (STATUS
+ *  leftover 36: a workspace can no longer `create_connection` to a platform-catalog address). So
+ *  the restart tool is picked from the request's own `tools` list, the way a real model picks it
+ *  from the tool definitions it is shown; the literal `docker_container_restart` is only the
+ *  fallback for a request that carries no tools (the selftest's direct POSTs).
  */
-function dockerRestartScenario(messages) {
+function restartToolName(tools) {
+  for (const tool of Array.isArray(tools) ? tools : []) {
+    const name = tool?.function?.name ?? tool?.name;
+    if (typeof name === 'string' && name.endsWith('_container_restart')) return name;
+  }
+  return 'docker_container_restart';
+}
+
+function dockerRestartScenario(messages, tools) {
   const blob = JSON.stringify(messages);
   const containerId = extractMarker(blob, 'CONTAINER_ID') ?? 'unknown';
   return [
-    { tool: { name: 'docker_container_restart', args: { id: containerId } } },
+    { tool: { name: restartToolName(tools), args: { id: containerId } } },
     {
       tool: {
         name: 'report_result',
@@ -462,12 +478,14 @@ function pickScenario(blob) {
 
 /** Returns the scripted step for this request, or `undefined` if no scenario marker matched
  *  (the caller falls through to the original search/echo logic unchanged). */
-function matchScenarioStep(messages) {
+function matchScenarioStep(messages, tools) {
   const list = messages ?? [];
   const blob = JSON.stringify(list);
   const scenario = pickScenario(blob);
   if (!scenario) return undefined;
-  const steps = scenario.build(list);
+  // `tools`: the request's tool definitions, for scenarios whose tool name depends on how the
+  // gate was connected (`dockerRestartScenario`); the other builders ignore the second argument.
+  const steps = scenario.build(list, tools);
   // Which step: for a chat scenario, count assistant messages *since the newest message carrying
   // its marker* (the user's question) — the entry agent's pi session is resident, so the history
   // already holds every earlier turn's assistant messages (tenth host run: the observe scenario
@@ -590,7 +608,7 @@ async function handleChatCompletions(req, res) {
 
   // S2.12: a scripted scenario, if one matches, fully owns this response — everything below is
   // the original, untouched search/echo behavior for every other request.
-  const scenarioStep = matchScenarioStep(parsed.messages);
+  const scenarioStep = matchScenarioStep(parsed.messages, parsed.tools);
   if (scenarioStep) {
     sendScenarioStep(res, scenarioStep, parsed.stream === true);
     return;

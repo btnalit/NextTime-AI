@@ -1,6 +1,7 @@
 import { McpTransport, importMcpTools, importOpenApi } from '@nexttime/gatekeeper-base';
 import type { McpToolsListResult, OpenApiDocumentLike } from '@nexttime/gatekeeper-base';
 import type { Operation, PrincipalKind } from '@nexttime/shared';
+import type { PoolClient } from 'pg';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import type { ConnectionRequestKind } from '../../governance/connections/index.js';
 import {
@@ -37,6 +38,14 @@ import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
  * `audit_records` (`packages/shared/src/capabilities.ts`'s `create_connection.redactedParamKeys`,
  * applied generically by `dispatch.ts`) and this handler's own returned `result` never echoes it
  * back either.
+ *
+ * **Endpoint guard (STATUS leftover 36, S5.5)**: the kernel calls every gate with the same
+ * `gate_token`, so a workspace owner who pointed a self-connected gate at a *platform-catalog*
+ * instance (`gate_instances.endpoint` — a packaged gate, or `gate-host`'s `/i/<id>` prefix with the
+ * administrator's shared credentials behind it) would get a Gatekeeper in their own workspace that
+ * the catalog's `workspace_gate_links` rules (connector deny list, `vetted`, `enabled` /
+ * `disabled`) never see. `assertEndpointIsNotAPlatformGate` refuses that before any network I/O —
+ * the only door to a catalog instance is `enable_gate_instance` (gate-instance-handlers.ts).
  */
 
 /** Upper bound on the `manifestSource` OpenAPI-document fetch — it runs inside the dispatch
@@ -83,6 +92,62 @@ export class ConnectionCredentialRequiredError extends Error {
         'gate already configured with a shared/env credential out-of-band',
     );
     this.name = 'ConnectionCredentialRequiredError';
+  }
+}
+
+/** The endpoint is the address of a platform-catalog gate instance (module doc comment, "Endpoint
+ *  guard"). `gateId` names the catalog row it collided with — the caller's remedy is
+ *  `enable_gate_instance` on that id (or asking the administrator), never a different spelling of
+ *  the same address. Mapped to 400 `endpoint_is_platform_gate` by interfaces/http/capability-route. */
+export class ConnectionEndpointIsPlatformGateError extends Error {
+  readonly code = 'endpoint_is_platform_gate' as const;
+  readonly gateId: string;
+  constructor(endpoint: string, gateId: string) {
+    const remedy =
+      'a workspace cannot connect a platform-catalog gate itself; enable it from the catalog ' +
+      '(enable_gate_instance) or ask the administrator';
+    super(
+      `create_connection: endpoint "${endpoint}" is the address of platform gate instance "${gateId}" — ${remedy}`,
+    );
+    this.name = 'ConnectionEndpointIsPlatformGateError';
+    this.gateId = gateId;
+  }
+}
+
+/** `host` (hostname plus a non-default port) of a URL, lower-cased; `null` when the string is not
+ *  a URL at all — such an endpoint is left to `HttpGatekeeperClient` to fail on downstream. */
+function urlHost(value: string): string | null {
+  try {
+    return new URL(value).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refuses an endpoint whose `host` matches any catalog instance's (`gate_instances.endpoint`, every
+ * status — a `disabled` instance is exactly one the administrator does not want reached). Matching
+ * on the parsed host rather than the string closes trailing slashes and path variants: for
+ * `gate-host` one announced instance (`http://gate-host:8083/i/<id>`) covers every `/i/*` under
+ * that host, including hosted rows the host has not announced yet (their own `endpoint` is still
+ * `''`, which the query skips). `gate_instances` has a `*_read_all` policy (migration core 0023),
+ * so the workspace transaction can read it. Residual: an address that reaches the same container
+ * by another name (an IP, a network alias) is not detected — the kernel does not resolve names
+ * inside a transaction; the compose networks are the remaining boundary for that case.
+ */
+async function assertEndpointIsNotAPlatformGate(
+  client: PoolClient,
+  endpoint: string,
+): Promise<void> {
+  const host = urlHost(endpoint);
+  if (host === null) return;
+  const catalog = await client.query<{ gate_id: string; endpoint: string }>(
+    "select gate_id, endpoint from gate_instances where endpoint <> ''",
+  );
+  for (const row of catalog.rows) {
+    if (urlHost(row.endpoint) === host) {
+      throw new ConnectionEndpointIsPlatformGateError(endpoint, row.gate_id);
+    }
   }
 }
 
@@ -195,6 +260,10 @@ export const createConnectionHandler: CapabilityHandler = async (
   if (effectiveCredentialKind === 'connected_account' && params.credentials === undefined) {
     throw new ConnectionCredentialRequiredError();
   }
+
+  // Before the manifest resolution below: that is the first call the kernel would make *to* the
+  // endpoint with its gate token (`describeOperations`), and the whole point is never to make it.
+  await assertEndpointIsNotAPlatformGate(client, params.endpoint);
 
   const operations = await resolveManifestOperations(params, gatekeeperClient, fetchImpl ?? fetch);
 

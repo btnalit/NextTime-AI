@@ -111,11 +111,11 @@ function checkToolCallAgainstRegistry(label, call) {
   check(`${label}-params-vs-registry`, problems.length === 0, problems.join('; '));
 }
 
-async function post(messages, stream = false) {
+async function post(messages, stream = false, extra = {}) {
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'fake-echo', stream, messages }),
+    body: JSON.stringify({ model: 'fake-echo', stream, messages, ...extra }),
   });
   if (stream) {
     const text = await res.text();
@@ -194,6 +194,34 @@ async function main() {
         JSON.stringify(json.choices[0]),
       );
       checkToolCallAgainstRegistry('docker-restart-turn1', call);
+    }
+
+    // 3b. Same turn 1, but the request carries tool definitions (as pi's real requests do): the
+    //     restart tool is picked from them, whatever the gate is named — the packaged docker gate
+    //     enabled through the platform catalog (`enable_gate_instance`, STATUS leftover 36) is
+    //     `gatekeeper-docker`, not `docker`, so `docker_container_restart` is only the no-tools
+    //     fallback case 3 above exercises.
+    {
+      const messages = [
+        {
+          role: 'custom',
+          content:
+            '## NextTime worker context\n\n### Task input\nACCEPT_S2_SCENARIO=docker_restart CONTAINER_ID=abc123',
+        },
+        { role: 'user', content: 'Begin working on your assigned Task now' },
+      ];
+      const tools = [
+        { type: 'function', function: { name: 'report_result', parameters: { type: 'object' } } },
+        { type: 'function', function: { name: 'gatekeeper-docker_containers_list', parameters: { type: 'object' } } },
+        { type: 'function', function: { name: 'gatekeeper-docker_container_restart', parameters: { type: 'object' } } },
+      ];
+      const { json } = await post(messages, false, { tools });
+      const call = toolCallOf(json);
+      check(
+        'docker-restart-turn1-catalog-gate-name',
+        call?.name === 'gatekeeper-docker_container_restart' && call.args.id === 'abc123',
+        JSON.stringify(json.choices[0]),
+      );
     }
 
     // 4. docker_restart scenario, turn 2 (one prior assistant message): report_result call.

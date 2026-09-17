@@ -173,6 +173,7 @@ export {
 
 export {
   ConnectionCredentialRequiredError,
+  ConnectionEndpointIsPlatformGateError,
   ConnectionManifestFetchError,
   connectGatekeeperHandler,
   createConnectionHandler,
