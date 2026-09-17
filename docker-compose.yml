@@ -824,13 +824,24 @@ services:
     # (re)load (`XDG_CONFIG_HOME=/config` → `/config/caddy/autosave.json`); under `read_only` that
     # write silently fails without its own tmpfs. Losing autosave state across a container
     # recreation is harmless — the bind-mounted Caddyfile above, not the autosave file, is the real
-    # source of truth caddy reloads from. No `cap_add`: this service listens on :8443 (Caddyfile),
-    # not a port <1024, so CAP_NET_BIND_SERVICE (what upstream's own `setcap` on the caddy binary
-    # is for) is not needed regardless of root/non-root. /tmp: no write path found; kept for parity
-    # with every other hardened service in this file.
+    # source of truth caddy reloads from. `cap_add: [NET_BIND_SERVICE]` IS needed here — not because
+    # of the port number (:8443 is >1024; the earlier belief in this comment that the port number
+    # settled it was wrong), but because the image's own `2.10/alpine/Dockerfile` runs `setcap
+    # cap_net_bind_service=+ep /usr/bin/caddy` on the binary itself (verified against the exact
+    # v2.10.2 build this tag resolves to via `gh api repos/caddyserver/caddy-docker/contents/
+    # 2.10/alpine/Dockerfile`) — a FILE capability. `cap_drop: [ALL]` empties the container's
+    # capability bounding set, and execve() of a binary whose file capabilities would raise its
+    # permitted set beyond that bounding set fails outright with EPERM (not a silent downgrade to
+    # "no capability") — reproduced on the target host/CI as `exec /usr/bin/caddy: operation not
+    # permitted`, container exit 255, before caddy's own code ever runs. Re-adding just this one
+    # capability to the bounding set lets the exec-time file-capability grant succeed again; caddy
+    # never actually needs to bind <1024 in this deployment (:8443 only), it is the exec step
+    # itself that needs the capability present. /tmp: no write path found; kept for parity with
+    # every other hardened service in this file.
     read_only: true
     tmpfs: ["/config", "/tmp"]
     cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
     security_opt: ["no-new-privileges:true"]
 
   llm-proxy:
