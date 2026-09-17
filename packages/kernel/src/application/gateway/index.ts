@@ -68,6 +68,11 @@ export {
   FactNotFoundError,
   SupersedeIdentityMismatchError,
 } from '../../substrate/graph/index.js';
+// S5.1 (docs/development-tasks.md §5b) — every Link write now runs substrate/graph's ontology
+// guard; the `reject` outcome reaches every writer's capability (`assert_fact`,
+// `supersede_fact`, `submit_observations`, `report_task_result`, `request_action`'s observed
+// Facts, …), so it is mapped once here like the sibling substrate errors above.
+export { OntologyViolationError } from '../../substrate/graph/index.js';
 // S3.1 (docs/development-tasks.md S3.1) — `propose_ontology_change`/`publish_ontology_version`
 // (`ontology-handlers.ts`) pass caller input straight into `substrate/ontology/registry.ts`'s
 // `proposeOntologyChange`/`publishOntologyDraft`.

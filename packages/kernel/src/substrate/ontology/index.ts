@@ -65,14 +65,17 @@ export type {
 export {
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  evaluateLink,
   getType,
   listTypes,
+  loadPublishedLinkTypes,
   loadVisibleOntology,
   proposeOntologyChange,
   publishOntologyDraft,
   validateLink,
 } from './registry.js';
 export type {
+  LinkEvaluation,
   LinkTypeSignature,
   OntologyTypeEntry,
   ProposeOntologyChangeInput,

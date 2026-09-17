@@ -103,6 +103,17 @@ linkTypes:
     description: >-
       The platform Capabilities a WorkerDefinition needs granted before it can run.
 
+  - name: observed
+    domain: Gatekeeper
+    range: "*"
+    description: >-
+      What a Gatekeeper's observe / apply result reported (design doc §5.1.4 / §7.5 "门返回时内核
+      写为 observed Fact") — one edge per `observedFacts` candidate an Operation's `result_mapping`
+      produced, asserted by the shared Gatekeeper service Principal. Range is "*": the observed
+      Object's type belongs to whatever domain ontology the gate's target system is modelled in.
+      Written by `application/gateway/observed-facts.ts`; declared here since S5.1 (the store now
+      refuses undeclared LinkTypes).
+
   - name: connects_to
     domain: Gatekeeper
     range: "*"

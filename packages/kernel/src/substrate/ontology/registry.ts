@@ -301,10 +301,80 @@ export async function listTypes(
   return items;
 }
 
+/**
+ * S5.1 (docs/development-tasks.md §5b S5.1; design §5.4 I2): the LinkType namespace a Link
+ * *write* is checked against — every family's latest **published** version only. Deliberately
+ * narrower than `loadVisibleOntology` above (which also admits the caller's own pending drafts,
+ * I16's read half, so `validate` / `get_type` can answer about a draft): a draft is a proposal,
+ * and letting its proposer write Facts against types nobody has published would make the
+ * invariant depend on who is asking. Same "latest version per family" rule otherwise.
+ */
+export async function loadPublishedLinkTypes(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReadonlyMap<string, readonly LinkTypeSignature[]>> {
+  const result = await client.query<{
+    id: string;
+    version: number;
+    status: string;
+    definition: OntologyDefinition;
+  }>(
+    `select t.id, t.version, t.status, t.definition
+     from ontology_versions t
+     where t.workspace_id = $1
+       and t.status = 'published'
+       and t.version = (
+         select max(t2.version)
+         from ontology_versions t2
+         where t2.workspace_id = t.workspace_id
+           and t2.id = t.id
+           and t2.status = 'published'
+       )
+     order by t.id`,
+    [workspaceId],
+  );
+  return mergeVisibleOntology(result.rows).linkTypes;
+}
+
 export interface ValidateLinkInput {
   readonly linkType: string;
   readonly sourceType: string;
   readonly targetType: string;
+}
+
+/** The outcome `evaluateLink` (and, through it, the S5.1 write guard) reports — three-valued on
+ *  purpose so the guard's error body can tell an agent *which* of the two things to fix. */
+export type LinkEvaluation =
+  | { readonly kind: 'declared_and_valid' }
+  | { readonly kind: 'undeclared_link_type' }
+  | {
+      readonly kind: 'domain_range_violation';
+      /** Every `domain -> range` signature the LinkType does declare. */
+      readonly expected: readonly string[];
+    };
+
+const matchesTypeName = (value: string, expected: string): boolean =>
+  expected === '*' || expected === value;
+
+/** Pure half of `validateLink`, shared with the S5.1 write guard: does some signature of
+ *  `input.linkType` in `linkTypes` accept `input.sourceType -> input.targetType` (`"*"` matches
+ *  any type on either side)? */
+export function evaluateLink(
+  linkTypes: ReadonlyMap<string, readonly LinkTypeSignature[]>,
+  input: ValidateLinkInput,
+): LinkEvaluation {
+  const signatures = linkTypes.get(input.linkType);
+  if (!signatures || signatures.length === 0) return { kind: 'undeclared_link_type' };
+  const accepted = signatures.some(
+    (signature) =>
+      matchesTypeName(input.sourceType, signature.domain) &&
+      matchesTypeName(input.targetType, signature.range),
+  );
+  if (accepted) return { kind: 'declared_and_valid' };
+  return {
+    kind: 'domain_range_violation',
+    expected: signatures.map((s) => `${s.domain} -> ${s.range}`),
+  };
 }
 
 export interface ValidateLinkResult {
@@ -325,23 +395,15 @@ export async function validateLink(
   const families = await loadVisibleOntology(client, workspaceId, callerPrincipalId);
   const { linkTypes } = mergeVisibleOntology(families);
 
-  const signatures = linkTypes.get(input.linkType);
-  if (!signatures || signatures.length === 0) {
+  const evaluation = evaluateLink(linkTypes, input);
+  if (evaluation.kind === 'declared_and_valid') return { valid: true };
+  if (evaluation.kind === 'undeclared_link_type') {
     return { valid: false, errors: [`unknown LinkType "${input.linkType}"`] };
   }
-
-  const matches = (value: string, expected: string) => expected === '*' || expected === value;
-  const accepted = signatures.some(
-    (signature) =>
-      matches(input.sourceType, signature.domain) && matches(input.targetType, signature.range),
-  );
-  if (accepted) return { valid: true };
-
-  const allowed = signatures.map((s) => `${s.domain} -> ${s.range}`).join(', ');
   return {
     valid: false,
     errors: [
-      `LinkType "${input.linkType}" does not permit ${input.sourceType} -> ${input.targetType} (allowed: ${allowed})`,
+      `LinkType "${input.linkType}" does not permit ${input.sourceType} -> ${input.targetType} (allowed: ${evaluation.expected.join(', ')})`,
     ],
   };
 }

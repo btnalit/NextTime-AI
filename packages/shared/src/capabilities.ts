@@ -926,7 +926,7 @@ const metaCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.FactWireSchema,
     description:
-      'Assert a Fact; resulting epistemic_status depends on the caller’s principal kind (§5.5).',
+      'Assert a Fact; resulting epistemic_status depends on the caller’s principal kind (§5.5). linkType must be declared by the workspace’s published ontology and accept the two Objects’ types as domain -> range (I2), else 400 ontology_violation with the allowed signatures in details — see get_type / list_types.',
   },
   {
     // S3.3: real handler (`supersedeFactHandler`) — same params-shape reasoning as `assert_fact`
@@ -953,7 +953,8 @@ const metaCapabilities: readonly Capability[] = [
       })
       .strict(),
     resultSchema: wire.FactWireSchema,
-    description: 'Supersede a Fact from the same Source with a newer value.',
+    description:
+      'Supersede a Fact from the same Source with a newer value. Same identity (linkType, sourceObjectId, targetObjectId) as the Fact superseded, and the same published-ontology check as assert_fact (I2; 400 ontology_violation).',
   },
   {
     // S3.3: real handler (`invalidateFactHandler`) — this capability's params/result shape was
@@ -1748,7 +1749,8 @@ const ingestCapabilities: readonly Capability[] = [
       })
       .strict(),
     resultSchema: wire.SubmitObservationsResultWireSchema,
-    description: 'Submit a batch of Observations from one Activity (collectors, §7.8).',
+    description:
+      'Submit a batch of Observations from one Activity (collectors, §7.8). Every objectType must be declared by the published ontology with its identityKey fields present; every link’s linkType must be declared and accept source -> target (I2) — a violation fails the whole batch with 400 ontology_violation (or is written and audited when the workspace’s ontology enforcement is warn).',
   },
 ];
 
@@ -2291,6 +2293,8 @@ const platformCapabilities: readonly Capability[] = [
         entryModel: z.string().min(1).optional(),
         /** `[]` (default) = every catalog model. When non-empty it must contain `entryModel`. */
         allowedModels: z.array(z.string().min(1)).max(100).optional(),
+        /** S5.1: what a Link write the published ontology does not license does. Omitted → the kernel's `ONTOLOGY_ENFORCEMENT` default (`reject`). */
+        ontologyEnforcement: wire.OntologyEnforcementWireSchema.optional(),
       })
       .strict(),
     resultSchema: wire.PlatformWorkspaceWireSchema,
@@ -2309,11 +2313,13 @@ const platformCapabilities: readonly Capability[] = [
         name: z.string().min(1).max(120).optional(),
         /** Must be in the catalog and, when a non-empty allowed list exists, in that list. Cannot be cleared: the entry WorkerDefinition keeps the model it was created with. */
         entryModel: z.string().min(1).optional(),
+        /** S5.1: `reject` (a Link write the published ontology does not license fails with 400 ontology_violation) or `warn` (written, audited, counted by invariant I-S5-1 — the rollout mode). */
+        ontologyEnforcement: wire.OntologyEnforcementWireSchema.optional(),
       })
       .strict(),
     resultSchema: wire.PlatformWorkspaceWireSchema,
     description:
-      'Rename a workspace and/or set its entry model — the model every member’s entry agent uses until they pick their own in 我的智能体. Takes effect on containers started afterwards.',
+      'Rename a workspace, set its entry model — the model every member’s entry agent uses until they pick their own in 我的智能体 (takes effect on containers started afterwards) — and/or set its ontology enforcement (reject / warn) for Link writes the published ontology does not license.',
   },
   {
     name: 'set_workspace_status',

@@ -6,6 +6,8 @@ import { parse as parseYaml } from 'yaml';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { setAgentPolicy } from '../../governance/agent-profile/index.js';
+import { ONTOLOGY_ENFORCEMENT_VALUES } from '../../substrate/graph/index.js';
+import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { resolveOntologyDir, seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
 import { generateApiKey, hashApiKey } from '../gateway/auth.js';
 import { ensureUserForHumanPrincipal } from '../identity/users.js';
@@ -48,6 +50,29 @@ export interface CreateWorkspaceInput {
    *  transaction, before this bootstrap runs) can name the workspace. */
   readonly workspaceId?: string;
   readonly ontologyDir?: string;
+  /** S5.1 (`workspaces.ontology_enforcement`, migration core 0025): what a Link write the
+   *  published ontology does not license does. Omitted → `defaultOntologyEnforcement()`. */
+  readonly ontologyEnforcement?: OntologyEnforcement;
+}
+
+/**
+ * The enforcement a new workspace is born with when its creator names none: the kernel's
+ * `ONTOLOGY_ENFORCEMENT` environment variable, else `reject`. The variable exists for a host
+ * mid-rollout (S5.1 迁移: run `warn` for a round, switch to `reject` once I-S5-1 reads 0) that
+ * creates workspaces during that round; tests and CI never set it. An unrecognised value fails
+ * loudly here rather than silently meaning "reject".
+ */
+export function defaultOntologyEnforcement(
+  env: NodeJS.ProcessEnv = process.env,
+): OntologyEnforcement {
+  const raw = env.ONTOLOGY_ENFORCEMENT;
+  if (raw === undefined || raw === '') return 'reject';
+  if ((ONTOLOGY_ENFORCEMENT_VALUES as readonly string[]).includes(raw)) {
+    return raw as OntologyEnforcement;
+  }
+  throw new Error(
+    `ONTOLOGY_ENFORCEMENT must be one of ${ONTOLOGY_ENFORCEMENT_VALUES.join(' / ')}, got "${raw}"`,
+  );
 }
 
 export interface CreateWorkspaceOutcome {
@@ -80,11 +105,15 @@ export async function createWorkspaceWithOwner(
     pool,
     { workspaceId, principalId: ownerPrincipalId },
     async (client) => {
-      await client.query('insert into workspaces (id, name, entry_model) values ($1, $2, $3)', [
-        workspaceId,
-        input.name,
-        input.entryModel ?? null,
-      ]);
+      await client.query(
+        'insert into workspaces (id, name, entry_model, ontology_enforcement) values ($1, $2, $3, $4)',
+        [
+          workspaceId,
+          input.name,
+          input.entryModel ?? null,
+          input.ontologyEnforcement ?? defaultOntologyEnforcement(),
+        ],
+      );
       await client.query(
         `insert into principals (workspace_id, id, kind, role, display_name, api_key_hash, user_id)
          values ($1, $2, 'human', 'owner', $3, $4, $5)`,
