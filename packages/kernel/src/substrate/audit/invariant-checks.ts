@@ -338,6 +338,77 @@ async function checkI16(client: PoolClient): Promise<InvariantCheckResult> {
 }
 
 // -------------------------------------------------------------------------------------------
+// I-S5-1 — no Link written since S5.1 violates the workspace's published ontology (I2 at rest).
+// -------------------------------------------------------------------------------------------
+
+/**
+ * S5.1 (docs/development-tasks.md §5b "S5 新增不变量"; substrate/graph/ontology-guard.ts): the
+ * at-rest half of I2. The write-time guard makes a violation impossible in `reject` mode; in
+ * `warn` mode (the rollout mode every pre-S5.1 workspace is backfilled into) the violating row is
+ * written and this is the count a host watches on `/internal/metrics` before switching the
+ * workspace to `reject`. Scope, all deliberate:
+ *   - rows `recorded_at` after migration core 0025 was applied (`schema_migrations.applied_at`) —
+ *     history is not backfilled (S5.1 迁移: "历史行不回溯"), so a pre-S5.1 row is never counted;
+ *   - only workspaces with at least one published ontology version (the guard's own "adopted no
+ *     ontology → not enforced" rule; a bare workspace has no declarations to violate);
+ *   - checked against the *current* latest published version per family, the same set the guard
+ *     reads — a LinkType removed in a later version therefore starts counting its rows, which is
+ *     the right signal (the ontology moved, the data has not).
+ * `objects` join on both endpoints; `"*"` in `domain` / `range` matches any type (registry.ts's
+ * `evaluateLink`, restated in SQL).
+ */
+async function checkIS51(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{
+    workspace_id: string;
+    id: string;
+    link_type: string;
+    source_type: string;
+    target_type: string;
+  }>(
+    `with since as (
+       select min(applied_at) as at from schema_migrations where module = 'core' and version = 25
+     ),
+     published as (
+       select t.workspace_id, t.definition
+       from ontology_versions t
+       where t.status = 'published'
+         and t.version = (
+           select max(t2.version) from ontology_versions t2
+           where t2.workspace_id = t.workspace_id and t2.id = t.id and t2.status = 'published'
+         )
+     ),
+     declared as (
+       select p.workspace_id, e ->> 'name' as name, e ->> 'domain' as domain, e ->> 'range' as range
+       from published p, jsonb_array_elements(p.definition -> 'linkTypes') e
+     ),
+     adopted as (select distinct workspace_id from published)
+     select l.workspace_id, l.id, l.link_type, s.object_type as source_type, t.object_type as target_type
+     from links l
+     join adopted a on a.workspace_id = l.workspace_id
+     join objects s on s.workspace_id = l.workspace_id and s.id = l.source_object_id
+     join objects t on t.workspace_id = l.workspace_id and t.id = l.target_object_id
+     where l.recorded_at > (select at from since)
+       and not exists (
+         select 1 from declared d
+         where d.workspace_id = l.workspace_id
+           and d.name = l.link_type
+           and (d.domain = '*' or d.domain = s.object_type)
+           and (d.range = '*' or d.range = t.object_type)
+       )`,
+  );
+  return {
+    invariant: 'I-S5-1',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map(
+        (row) =>
+          `${row.workspace_id}:${row.id} (${row.link_type}: ${row.source_type} -> ${row.target_type})`,
+      ),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // Beyond I1–I16 — operational-health checks (see module doc comment).
 // -------------------------------------------------------------------------------------------
 
@@ -393,6 +464,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I13',
   'I14',
   'I16',
+  'I-S5-1',
   'ops.one_running_turn',
   'ops.outbox_stuck',
 ];
@@ -420,6 +492,7 @@ export async function runInvariantChecks(
       await checkI13(client),
       await checkI14(client),
       await checkI16(client),
+      await checkIS51(client),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
     ];

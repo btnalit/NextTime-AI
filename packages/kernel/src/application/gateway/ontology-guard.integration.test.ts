@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { runInvariantChecks } from '../../substrate/audit/index.js';
 import { OntologyViolationError, SqlGraphStore } from '../../substrate/graph/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -231,6 +232,25 @@ describe.runIf(DATABASE_URL !== undefined)(
       } finally {
         await setEnforcement('reject');
       }
+    });
+
+    it('I-S5-1 counts the rows warn let through, naming the LinkType and the endpoint types', async () => {
+      // The two `warn` writes above (runs_on Host -> Container, uses_image Host -> Container) are
+      // the only violating rows this workspace holds; the check runs across the whole database,
+      // so assert on this workspace's own sample rather than on the total.
+      const results = await runInvariantChecks(pool);
+      const check = results.find((result) => result.invariant === 'I-S5-1');
+      expect(check).toBeDefined();
+      expect(check?.violations).toBeGreaterThanOrEqual(2);
+      const ours = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ n: string }>(
+          `select count(*)::text as n from links
+            where workspace_id = $1 and link_type in ('runs_on', 'uses_image')
+              and source_object_id = $2 and target_object_id = $3`,
+          [workspaceId, hostId, containerId],
+        ),
+      );
+      expect(ours.rows[0]?.n).toBe('2');
     });
 
     it('a hand-inserted workspace with no published ontology is not enforced', async () => {

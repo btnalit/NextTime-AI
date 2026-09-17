@@ -1935,8 +1935,13 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
 - **模块环**：`ontology-guard.ts` 直接引 `audit/writer.js` 与 `ontology/registry.js`，不经两边的 index——
   `audit/index` 经 `reconstruct.ts`、`ontology/index` 经 `meta-objects.ts`（模块顶层 `new SqlGraphStore()`）
   都回到 graph，经 index 会在模块求值期形成环（`dispatch.test` 首跑即 `SqlGraphStore is not a constructor`）。
+- **I-S5-1**（`substrate/audit/invariant-checks.ts` `checkIS51`，进 `INVARIANT_CHECK_IDS` 与
+  `/internal/metrics`）：`recorded_at` 晚于迁移 0025 应用时刻、所在工作区至少有一个已发布本体版本、且按
+  当前各族最新已发布版本不合法的 `links` 行数（SQL 里重述 `evaluateLink`，`"*"` 通配）。reject 模式下
+  恒为 0；warn 模式下就是主机切 reject 前要看到归零的那个数。历史行不回溯；被后续版本删掉的 LinkType 的行
+  会开始计数——本体动了、数据没跟上，正该报。
 - **主机推出**：应用后所有既有工作区为 `warn`；跑一轮采集与 S2 / S3，看 `/internal/metrics` 的
-  `nexttime_invariant_violations{invariant="I-S5-1"}`（见下一 commit）为 0 后，逐个 `update_workspace
+  `nexttime_invariant_violations{invariant="I-S5-1"}` 为 0 后，逐个 `update_workspace
   ontologyEnforcement=reject`。
 - **测试**：`ontology-guard.integration.test.ts`（六例：出生即 reject 且声明签名可写、domain/range 违规带
   `expected`、未声明 LinkType、warn 下写入 + 审计、warn 下写入的行在 reject 下不能被 supersede、裸工作区不强制）；
