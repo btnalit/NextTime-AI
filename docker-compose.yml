@@ -6,6 +6,23 @@
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    # user: postgres (uid/gid 999) — 遗留20/S5.5 加固. pgvector/pgvector:pg17 is `FROM
+    # postgres:17-bookworm` plus only the pgvector extension build — its own Dockerfile does no
+    # useradd/groupadd/chown (verified by reading it at its current tag), so this 'postgres' system
+    # user is exactly docker-library/postgres's own `groupadd -r postgres --gid=999; useradd -r -g
+    # postgres --uid=999 ... postgres` (verified by reading that Dockerfile too). The container is
+    # this uid from the moment it starts, bypassing the image's default root-then-gosu entrypoint
+    # path entirely — docker-entrypoint.sh's own `if [ "$(id -u)" = '0' ]; then exec gosu postgres
+    # ...` branch, and every chown inside it, never runs (not skipped by a capability — the
+    # container simply never is root). No `cap_add` alongside `cap_drop: [ALL]` below as a result:
+    # initdb and `docker_create_db_directories`'s own mkdir/chmod of $PGDATA and
+    # /var/run/postgresql (see the hardening comment below) need no capability once both are already
+    # owned by uid 999. This is this task's own "CI 与主机都不需要新增手工步骤" option (a):
+    # scripts/host-env-init.sh (E3, always run after host-bootstrap.sh/E2 and before the first
+    # `docker compose up`) now chowns pgdata/ and chgrp's secrets/pg_password to this same 999 on
+    # every (idempotent) run — see that script's own comment — and CI (.github/workflows/e2e.yml)
+    # runs it too, so it picks this up for free.
+    user: postgres
     environment: { POSTGRES_DB: nexttime, POSTGRES_USER: nexttime, POSTGRES_PASSWORD_FILE: /run/secrets/pg_password }
     # ${NEXTTIME_DATA:?}: an unset/empty NEXTTIME_DATA would otherwise interpolate to an empty
     # string, mounting the host's own filesystem root's /pgdata — fail the whole `docker compose
@@ -16,6 +33,19 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U nexttime"], interval: 10s, retries: 5 }
     restart: unless-stopped
     networks: [control]
+    # Hardening (遗留20/S5.5): $PGDATA (the bind mount above, pre-chowned to uid 999 by
+    # scripts/host-env-init.sh) is the only path this service needs to persist writes to —
+    # unaffected by `read_only`. /var/run/postgresql is docker-entrypoint.sh's own Unix-socket
+    # directory (`mkdir -p /var/run/postgresql || :; chmod 03775 /var/run/postgresql || :`, both
+    # best-effort) — the healthcheck's own `pg_isready` above (no `-h` given) also connects through
+    # this same socket by default; mounted here as a tmpfs with the right owner/mode up front
+    # instead of relying on that best-effort chmod succeeding against a root-owned tmpfs default.
+    # /tmp: no write path found in this image; kept for parity with every other hardened service in
+    # this file.
+    read_only: true
+    tmpfs: ["/var/run/postgresql:mode=1777,uid=999,gid=999", "/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   kernel:
     build: { context: ., dockerfile: packages/kernel/Dockerfile }
@@ -511,6 +541,19 @@ services:
     # `worker-supervisor` already apply against `docker-socket-proxy` above).
     depends_on: { docker-socket-proxy-gate: { condition: service_healthy } }
     restart: unless-stopped
+    # Hardening (遗留20/S5.5 — this gate is one of the platform's two credential-holding processes,
+    # code-review-2026-09-10.md §3.3): runs as non-root `nexttime` (gatekeepers/docker/Dockerfile,
+    # uid 10001; host-env-init.sh already chowns ${NEXTTIME_DATA}/gatekeepers/docker to that uid).
+    # /data/gate above is its only write target — the idempotency store's own atomic write
+    # (packages/gatekeeper-base/src/idempotency-store.ts `flush()`) writes its tmp file inside that
+    # same bind-mounted directory (`${filePath}.<uuid>.tmp` then rename), never system /tmp; this
+    # gate uses no ConnectedAccount store (see its own service comment above). No ssh/docker-CLI
+    # subprocess (dockerode talks to docker-socket-proxy-gate over plain TCP) and no port <1024 —
+    # no `cap_add`. /tmp: no write path found; kept for parity with every other hardened service.
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # gatekeeper-ragflow: http-kind gate for a RAGFlow instance's REST API (gatekeepers/ragflow).
   # RAGFLOW_BASE_URL / GATE_CREDENTIAL_RAGFLOW_API_KEY come from the env_file below — never
@@ -530,6 +573,18 @@ services:
     volumes: ["${NEXTTIME_DATA}/gatekeepers/ragflow:/data/gate"]
     networks: [control]
     restart: unless-stopped
+    # Hardening (遗留20/S5.5 — this gate is one of the platform's two credential-holding processes,
+    # code-review-2026-09-10.md §3.3): runs as non-root `nexttime` (gatekeepers/ragflow/Dockerfile,
+    # uid 10001; host-env-init.sh already chowns ${NEXTTIME_DATA}/gatekeepers/ragflow to that uid).
+    # /data/gate above is its only write target (same atomic-write-in-place idempotency store as
+    # `gatekeeper-docker` above; this gate also uses no ConnectedAccount store — see its own service
+    # comment above, `SharedEnvCredentialResolver`). Outbound only, over plain HTTPS to
+    # RAGFLOW_BASE_URL — no `cap_add`. /tmp: no write path found; kept for parity with every other
+    # hardened service.
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # gate-host (P-B2a, docs/development-tasks.md P-B 决定 ⑥–⑬; design §6.3 "通用门宿主"): ONE
   # gatekeeper-base container in `GATE_MODE=host`, serving every generic http / mcp gate instance an
@@ -569,6 +624,26 @@ services:
       start_period: 10s
     depends_on: { kernel: { condition: service_healthy } }
     restart: unless-stopped
+    # Hardening (遗留20/S5.5 — this gate host is one of the platform's two credential-holding
+    # processes, code-review-2026-09-10.md §3.3, and this task's own brief adds it explicitly: it
+    # holds every hosted instance's credential at rest, P-B2a, same reasoning as the two packaged
+    # gates above): runs as non-root `nexttime` (packages/gatekeeper-base/Dockerfile, uid 10001;
+    # host-env-init.sh already chowns ${NEXTTIME_DATA}/gate-host to that uid). /data/gate above is
+    # its only write target — every hosted instance's credential store and idempotency store live
+    # under it (this file's own host.ts module doc comment: "Credentials live in
+    # /data/gate/<gateId>/"), and both stores' atomic writes stay inside that same directory (same
+    # `${filePath}.<uuid>.tmp` + rename pattern as the two packaged gates above), never system /tmp.
+    # /data/config/handle.pub above is a separate `:ro` bind mount, unaffected either way. GATE_MODE
+    # =host only builds `http`/`mcp` transports (packages/gatekeeper-base/src/host.ts's own imports
+    # — no `SshTransport`), so the ssh-client binary this base image's own Dockerfile installs for
+    # the generic single-transport case is never invoked here — no ssh identity/known_hosts temp
+    # file to account for. No `cap_add`: outbound only (kernel + each hosted instance's own target,
+    # all plain HTTP(S)) and its own listener is :8083, not <1024. /tmp: no write path found; kept
+    # for parity with every other hardened service.
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # docker-socket-proxy-collector (S3.3, docs/development-tasks.md S3.3): a THIRD
   # tecnativa/docker-socket-proxy instance, dedicated to collector-host-inventory alone — same
@@ -732,13 +807,31 @@ services:
     depends_on: { kernel: { condition: service_healthy } }
     networks: [control]
     restart: unless-stopped
-    # Runs as the image's default root user: the official caddy:2.10 image declares /config as
-    # a second VOLUME (autosave state) that isn't bind-mounted here, and it is root-owned inside
-    # the image — a non-root `user:` override here would need that path pre-chowned too (or
-    # redirected via XDG_CONFIG_HOME), which needs a custom Dockerfile out of E8's scope. Only
-    # /data (TLS private keys) is security-sensitive here, and it is already the pre-chowned,
-    # bind-mounted, persisted volume regardless of which user writes to it. Raised in the PR
-    # body as a follow-up candidate, not decided unilaterally here.
+    # Runs as the image's default root user: switching to a non-root `user:` override needs a
+    # custom Dockerfile out of E8's scope. Only /data (TLS private keys) is security-sensitive
+    # here, and it is already the pre-chowned, bind-mounted, persisted volume regardless of which
+    # user writes to it. Raised in the PR body as a follow-up candidate, not decided unilaterally
+    # here.
+    # Hardening (遗留20/S5.5): /data (TLS private keys, on-demand certs) is the bind mount above,
+    # unaffected by `read_only`. /config/caddy is NOT a bind mount and, verified by reading
+    # caddyserver/caddy-docker's own Dockerfile.tmpl and its git history, is NOT a declared VOLUME
+    # either (VOLUME instructions were removed from this image entirely in caddy-docker@d9ac403,
+    # 2022 — correcting this service's own older belief above, which predated that verification);
+    # it is a plain build-time directory (`chmod 1777 /config/caddy /data/caddy`, both root-owned
+    # but world-writable — caddy-docker#441, 2026-02-04, backported to the already-published 2.10
+    # branch too, not just 2.11: that commit's own diff touches both `2.10/alpine/Dockerfile` and
+    # `2.11/alpine/Dockerfile`). Caddy writes its config autosave there on every successful
+    # (re)load (`XDG_CONFIG_HOME=/config` → `/config/caddy/autosave.json`); under `read_only` that
+    # write silently fails without its own tmpfs. Losing autosave state across a container
+    # recreation is harmless — the bind-mounted Caddyfile above, not the autosave file, is the real
+    # source of truth caddy reloads from. No `cap_add`: this service listens on :8443 (Caddyfile),
+    # not a port <1024, so CAP_NET_BIND_SERVICE (what upstream's own `setcap` on the caddy binary
+    # is for) is not needed regardless of root/non-root. /tmp: no write path found; kept for parity
+    # with every other hardened service in this file.
+    read_only: true
+    tmpfs: ["/config", "/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   llm-proxy:
     build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }

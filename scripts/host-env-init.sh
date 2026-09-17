@@ -23,9 +23,10 @@
 # overwrite; gatekeeper-ragflow.env's real shape is S2.5's, see below).
 # Then creates collectors/host-inventory/ if missing (S3.3) and chowns workspaces/ artifacts/
 # gatekeepers/{docker,ragflow}/ collectors/host-inventory/ to the non-root uid:gid (backups/ is
-# forced back to root-owned — see its own step), and the platform's containers run as, makes
-# config/ world-readable (it holds no secrets), and chmod -R o+rX's caddy/ (root-owned — chown
-# doesn't help there, see that step's own comment).
+# forced back to root-owned — see its own step), and the platform's containers run as, chowns
+# pgdata/ and chgrp's secrets/pg_password to the postgres image's own uid:gid (遗留20/S5.5
+# hardening — see that step's own comment), makes config/ world-readable (it holds no secrets),
+# and chmod -R o+rX's caddy/ (root-owned — chown doesn't help there, see that step's own comment).
 # Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
 
 set -eu
@@ -64,6 +65,17 @@ echo "host-env-init: target NEXTTIME_DATA=$NEXTTIME_DATA"
 # Keep these two constants in sync with those Dockerfiles if that ever changes.
 CONTAINER_UID=10001
 CONTAINER_GID=10001
+
+# --- uid:gid the postgres image's own 'postgres' user runs as (遗留20/S5.5 hardening) -----------
+# docker-compose.yml now runs the `postgres` service as `user: postgres` from container start
+# instead of the image's default root-then-gosu entrypoint path. pgvector/pgvector:pg17 is `FROM
+# postgres:17-bookworm` with no useradd/groupadd/chown of its own (verified by reading its
+# Dockerfile at its current tag), so this is exactly docker-library/postgres's own fixed
+# `groupadd -r postgres --gid=999; useradd -r -g postgres --uid=999 ... postgres` (verified reading
+# that Dockerfile too) — a different, fixed pair from CONTAINER_UID/CONTAINER_GID above, not this
+# platform's own convention.
+POSTGRES_UID=999
+POSTGRES_GID=999
 
 # --- urlencode: percent-encode everything outside RFC 3986 unreserved [A-Za-z0-9.~_-] --------
 # POSIX-only (no bash-isms): `${s%"${s#?}"}` takes the first character of $s, `${s#?}` strips
@@ -234,13 +246,15 @@ chmod 0700 "$SECRETS_DIR/setup"
 # --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/ ---
 # must be usable by the platform's non-root containers (uid:gid 10001:10001 — gatekeepers/*/
 # Dockerfile and collectors/host-inventory/Dockerfile all create the same `nexttime` uid:gid as
-# every other @nexttime/* image, S2.5/S3.3). pgdata/ (the postgres image manages its own
-# ownership) and secrets/ (root-owned, 0700 — compose passes its contents via env_file / Docker
-# secrets, not a bind-mounted directory read by a container process) are left untouched, per task
-# scope. `caddy/` is deliberately NOT in this loop — see its own step below. workspaces/artifacts/
-# gatekeepers/{docker,ragflow} are not `mkdir -p`'d here (unlike collectors/host-inventory just
-# above) — scripts/host-bootstrap.sh (E2) has created all four of those since before this script
-# existed, with no equivalent drift ever reported for them.
+# every other @nexttime/* image, S2.5/S3.3). pgdata/ needs a DIFFERENT uid:gid (999:999, see
+# POSTGRES_UID/POSTGRES_GID above, and its own step just below) — not this platform's own
+# CONTAINER_UID/CONTAINER_GID convention. secrets/ (root-owned, 0700 — compose passes its contents
+# via env_file / Docker secrets, not a bind-mounted directory read by a container process) is left
+# untouched here, per task scope, EXCEPT secrets/pg_password (its own step just below, same
+# 遗留20/S5.5 hardening). `caddy/` is deliberately NOT in this loop — see its own step below.
+# workspaces/artifacts/gatekeepers/{docker,ragflow} are not `mkdir -p`'d here (unlike
+# collectors/host-inventory just above) — scripts/host-bootstrap.sh (E2) has created all four of
+# those since before this script existed, with no equivalent drift ever reported for them.
 # gate-host/ (P-B2a): the generic gate host's GATE_DATA_DIR (per-instance credential stores +
 # idempotency files) — mkdir -p'd here too because a v0.9.0 host that upgrades never ran the newer
 # host-bootstrap.sh, and a root-owned bind mount makes the host log EACCES on its first take-over.
@@ -249,6 +263,30 @@ chmod 750 "$NEXTTIME_DATA/gate-host"
 for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow gate-host collectors/host-inventory; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
+
+# --- pgdata/ and secrets/pg_password: owned/grouped for the postgres image's own uid:gid ---------
+# (遗留20/S5.5 hardening). docker-compose.yml's `postgres` service now runs as `user: postgres`
+# from container start instead of the image's default root-then-gosu entrypoint path — that path's
+# own chown-to-postgres steps (docker-entrypoint.sh's `if [ "$(id -u)" = '0' ]; then exec gosu
+# postgres ...` branch) never run, so both paths below must already be right before the next
+# `docker compose up`, or a fresh initdb has nothing writable to initialize into and an existing
+# server can't read its own password file.
+# pgdata/: full chown (not just group) — docker-entrypoint.sh's own `chmod 00700 "$PGDATA" || :`
+# needs the process uid (999) to match the directory's OWNER uid, group membership is not enough
+# for chmod. Non-recursive: initdb itself (running as uid 999) creates everything underneath
+# already owned by 999; an already-initialized pgdata/ on an existing host was already left owned
+# 999:999 by that same image's prior root-based entrypoint runs, so this is a no-op there.
+chown "${POSTGRES_UID}:${POSTGRES_GID}" "$NEXTTIME_DATA/pgdata"
+# secrets/pg_password: chgrp only (never chown the uid) — same convention
+# scripts/gen-handle-keys.sh already uses for handle.key/internal.token/gate.token: `docker
+# compose`'s file-based `secrets:` (non-swarm) bind-mounts this file as-is, so its host-side
+# mode/group is what actually gates the postgres service's own non-root read of
+# POSTGRES_PASSWORD_FILE. Owner stays whoever ran scripts/host-bootstrap.sh (typically root, E2);
+# only the group changes here, so `backup`'s own root+DAC_READ_SEARCH read of the same secret
+# (docker-compose.yml's backup service comment) is unaffected either way. Best-effort: a denied
+# chgrp is reported, not fatal — same as gen-handle-keys.sh's own CONTAINER_GID chgrps.
+chmod 640 "$PG_PASSWORD_FILE"
+chgrp "$POSTGRES_GID" "$PG_PASSWORD_FILE" 2>/dev/null || echo "host-env-init: WARNING: could not chgrp $PG_PASSWORD_FILE to gid $POSTGRES_GID — the postgres container will not be able to read it" >&2
 
 # --- backups/: must stay ROOT-owned (0:0, mode 750). The `backup` service runs as root with -----
 # `cap_drop: [ALL]` + only `DAC_READ_SEARCH` (docker-compose.yml, 2026-09-08 correction): without
@@ -300,11 +338,13 @@ echo "host-env-init: ownership fix-up (uid:gid ${CONTAINER_UID}:${CONTAINER_GID}
 for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow gate-host; do
 	echo "  $NEXTTIME_DATA/$d -> $(stat -c '%U:%G' "$NEXTTIME_DATA/$d")"
 done
+echo "host-env-init: pgdata/ owner -> $(stat -c '%u:%g' "$NEXTTIME_DATA/pgdata" 2>/dev/null || echo '?') (expect ${POSTGRES_UID}:${POSTGRES_GID})"
+echo "host-env-init: secrets/pg_password -> mode $(stat -c '%a' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?'), owner:group $(stat -c '%u:%g' "$PG_PASSWORD_FILE" 2>/dev/null || echo '?') (expect 640, group ${POSTGRES_GID})"
 echo "host-env-init: backups/ kept root-owned (0:0, mode $(stat -c '%a' "$NEXTTIME_DATA/backups")) — the backup service is root with only DAC_READ_SEARCH and cannot write into a directory it does not own"
 echo ""
 echo "host-env-init: caddy/ left root-owned; \`chmod -R o+rX\` applied instead (mode now: $(stat -c '%a' "$NEXTTIME_DATA/caddy")) — see docs/runbooks/backup-restore.md for why this is only a baseline, not the real fix"
 echo ""
-echo "host-env-init: left untouched: pgdata/ secrets/ (dir itself)"
+echo "host-env-init: left untouched: secrets/ (dir itself, and every secrets/*.token /*.key)"
 echo "host-env-init: done (idempotent — safe to re-run)"
 echo ""
 echo "platform admin: after the first \`docker compose up\`, the kernel creates the user 'admin' and"
