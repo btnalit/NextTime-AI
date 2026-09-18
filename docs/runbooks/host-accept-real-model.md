@@ -57,6 +57,15 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s3.sh --real <provider/mod
 恢复或重新配置任何东西（`--real` 模式下两个脚本都完全跳过 fake-provider 的 up/restore 那一步，
 `${NEXTTIME_DATA}/config/llm-providers.yaml`/`models.json` 全程不被触碰）。
 
+**`--runs 3` 与 `--runs 10` 两种用法（S5.7）：** `--runs 3` 是开发期/单次改动后的快速冒烟——验证
+某个具体修复没有让某个场景整体失效，不追求统计意义上的成功率。**`--runs 10` 是每次发版后的例行
+回归**（见 §8），每个场景独立看 `ok=k/10`：**`k < 8`（低于 8/10）记为该版本的一条已知问题**——写进
+`docs/private/real-model-<date>.md` 的已知问题小节，并把计数（不带供应商/模型名、不带原因分析，
+只有次数）粘贴进 `STATUS.md` §2.2 对应行。`k=0`（全军覆没）本就是 `real-summary`/`real-chat-
+dependency` 判定脚本本身失败的条件（§5）；`1 ≤ k < 8` 不会让脚本非 0 退出，只能靠人工读这一行记账
+——**验收脚本的退出码永远不是"发现已知问题"的信号来源，§8 的例行回归必须人工读完整的 `REAL`
+汇总行**。
+
 ## 4. 每个场景判定什么
 
 每个场景重复 `--runs` 次；单次运行失败只是一个数据点，只有**一个场景在全部 runs 里都失败**才会
@@ -112,3 +121,131 @@ REAL scenario=<key> ok=<k>/<n> turn_tool_calls=<sum> turn_tool_errors=<sum> work
 | `restarted=0` 但 `action=executed` | 门确实执行了，但 fixture 容器 id 传错/过期 | 核对本次调用里实际传给门的 `CONTAINER_ID` 与 `docker inspect` 里 fixture 容器的真实 id 是否一致 |
 | `TURN_STATUS` 为空 | Turn 在脚本给的超时窗口内没有结算——真实模型比 fake provider 慢，或者卡在某次工具调用上 | 调大调用侧的超时预期，或者查 `llm-proxy` 日志确认是不是这次调用本身卡住/被限流 |
 | `worker_tools=?/?` | Worker 自己的 pi 会话 transcript 还没落盘，或者当前用户读不到 | 检查 `${NEXTTIME_DATA}/workspaces/tasks/<taskId>/.pi/sessions/` 下有没有对应文件、文件权限是否允许挂载进驱动容器读取（`chmod a+r`，参照 `scripts/lib/accept-common.sh` 的 `require_world_readable`） |
+
+## 8. 每次发版后的例行回归（S5.7）
+
+`docs/development-tasks.md`§"S5.7 真实模型回归常态化"的设计：每次发版后在目标主机跑一轮
+`--runs 10`，把成功率、平均轮数、平均 token / 成本写进 `docs/private/real-model-<date>.md`
+（模板见 §9），摘要（只有次数）进 `STATUS.md` §2.2。步骤如下，均在 `<CODE_DIR>` 下执行；经 SSH
+时按其余 accept 脚本的约定加 `</dev/null`。
+
+**(1) 在主机上应用这次发版**——按 `docs/runbooks/release.md` §3 检出新版 tag，按
+`docs/runbooks/operations.md` §4.1 跑容器化迁移（主机没有 Node，不能用 `make migrate`）、重建
+镜像；这一步不属于本 runbook 范围，只是例行回归的前置条件。
+
+**(2) 用 `--real --runs 10 --keep` 各跑一遍 S2 / S3**，`--keep` 是关键——不加它 `cleanup_step`
+会把这次跑出来的 workspace 之外的 fixture 拆掉（workspace 行本身两个脚本无论加不加 `--keep` 都
+保留，见 §6/`host-accept-s2.md`/`host-accept-s3.md` 各自的 cleanup 说明），但不传 `--keep` 时
+S2 还会把 alice/bob 入口容器一并停掉、S3 会停 owner 的常驻入口容器——例行回归要紧接着用
+`report-usage.sh` 查同一批 Turn 的用量，加 `--keep` 更省心，也不影响判定结果：
+
+```
+sh scripts/accept_s2.sh --real <provider/model> --runs 10 --keep 2>&1 | tee /tmp/accept-s2-real.log
+sh scripts/accept_s3.sh --real <provider/model> --runs 10 --keep 2>&1 | tee /tmp/accept-s3-real.log
+```
+
+从各自的日志里取出这次跑出来的 workspace id——两个脚本都在 `bootstrap-workspace` 这一步打印
+`workspace=<uuid>`（`accept_s2.sh`/`accept_s3.sh` 源码同一行）：
+
+```
+WS_S2=$(grep -m1 '^PASS bootstrap-workspace' /tmp/accept-s2-real.log | sed -n 's/.*workspace=\([0-9a-fA-F-]*\).*/\1/p')
+WS_S3=$(grep -m1 '^PASS bootstrap-workspace' /tmp/accept-s3-real.log | sed -n 's/.*workspace=\([0-9a-fA-F-]*\).*/\1/p')
+echo "S2 workspace: $WS_S2"
+echo "S3 workspace: $WS_S3"
+```
+
+**(3) 对每个 workspace 跑 `report-usage.sh`**，`--markdown --summary` 给整份 workspace 的
+token / 成本总量（进 §9 模板的"report-usage 输出"小节）；再用 `--by turn --markdown` 拿到按
+Turn 排序的明细，用来倒推每个场景的 avg tokens/turn、avg cost/turn（见下方"怎么把两份输出拼进
+一条记录"）：
+
+```
+sh scripts/report-usage.sh --workspace "$WS_S2" --markdown --summary
+sh scripts/report-usage.sh --workspace "$WS_S2" --by turn --markdown
+sh scripts/report-usage.sh --workspace "$WS_S3" --markdown --summary
+sh scripts/report-usage.sh --workspace "$WS_S3" --by turn --markdown
+```
+
+**怎么把两份输出拼进一条记录**——`report-usage.sh` 完全不知道"哪一行属于哪个场景"（`llm_usage`
+表里没有场景这个概念，见 `scripts/report-usage.sh` 自己的头注释）；场景边界只存在于 accept 脚本
+自己的执行顺序里。两个真实场景批次都是**逐场景顺序跑完 `--runs` 次再进下一个场景**（S2：
+`docker_restart` → `api_observe` → `ssh_run_approve` → `ssh_run_auto`，各 10 次；S3：
+`dependency_chat` 单独 10 次），所以 `--by turn --markdown` 按 `first_started_at` 排序的输出，
+天然分成与场景顺序一一对应的连续区块：S2 的前 10 行 Turn 属于 `docker_restart`、接下来 10 行属于
+`api_observe`，以此类推；S3 的 10 行全属于 `dependency_chat`。按场景取出对应区块，对
+`total_tokens`/`cost_usd` 两列取平均，填进 §9 模板每个场景那一行的 avg tokens/turn、avg
+cost/turn。**核对边界**：每个区块的行数应等于该场景自己 `REAL scenario=<key> ok=<k>/<n> ...`
+行里的 `<n>`；如果某个区块行数少于 `<n>`，说明该场景至少有一次 run 没有产生带 `turn_id` 的
+`llm_usage` 行（典型原因：那次 Turn 在拿到任何工具调用之前就 `interrupted`，`retrospective-
+2026-09-11.md` §2 记录过这个模式）——这本身就是一条诊断线索，照实记进 §9 模板的备注列，不要
+硬凑平均。avg turn tool calls 这一列不经过 `report-usage.sh`：直接取该场景 `REAL` 行里的
+`turn_tool_calls=<sum>` 除以 `<n>`。
+
+**(4) 把 (2)/(3) 的原始输出填进 `docs/private/real-model-<date>.md`**（模板见 §9；文件已在
+`.gitignore` 里，不进任何入库文件）。
+
+**(5) 把计数摘要粘进 `STATUS.md` §2.2 的表**——只有次数，不带供应商/模型名、不带 token/成本
+数字，格式照抄 §6 那一行的例子（`docker_restart 8/10、api_observe 10/10、...`），任一场景
+`k<8` 额外注明"（已知问题，见 §4/遗留清单）"。**这一步不在本 runbook 的可改动文件范围内**——
+`docs/STATUS.md` 由发起本轮回归的会话自己去改，本 runbook 只规定粘贴的格式与来源。
+
+**(6) 清理 `--keep` 留下的 fixture / workspace**——两个脚本各自的 cleanup 手续见
+`docs/runbooks/host-accept-s2.md` §"清理"与 `docs/runbooks/host-accept-s3.md` 对应小节（停掉
+`--keep` 保留的 alice/bob 或 owner 入口容器、`docker compose --profile accept-s2 down` 等）。
+workspace 行本身按设计文档 §12 的审计留痕原则不必立即删——两个脚本从 S5.3 起都以
+`--purpose ephemeral --ttl 7d` 建 workspace，到期后批量清：
+
+```
+sh scripts/delete-workspaces-matching.sh --expired --yes
+```
+
+**(7) `make demo`（`scripts/demo.sh`，S5.8 交付物，由另一条车道添加）算第六个场景**——它同样是
+一次真实模型跑一轮固定问题的验收，产出可以按同样的方式计入 `docs/private/real-model-<date>.md`
+与 STATUS 摘要行的第六项；`demo.sh` 自己的内部实现、判定标准不属于本 runbook 范围，见
+`docs/development-tasks.md`§S5.8 与 `scripts/demo.sh` 自己的头注释。
+
+## 9. `docs/private/real-model-<date>.md` 记录模板
+
+````markdown
+# 真实模型回归记录 — <date>
+
+- 版本：<version tag>（例如 v0.13.0）
+- Provider/Model：<provider/model>
+- 主机：<TARGET_HOST>（仅本文件，不进入库文件）
+- 跑法：`accept_s2.sh --real <provider/model> --runs 10 --keep`、
+  `accept_s3.sh --real <provider/model> --runs 10 --keep`、`make demo`
+- workspace：S2=<uuid> S3=<uuid>
+
+## 场景数字
+
+| 场景 | ok/n | avg turn tool calls | avg tokens/turn | avg cost/turn | 备注 |
+|---|---|---|---|---|---|
+| docker_restart | k/10 | | | | |
+| api_observe | k/10 | | | | |
+| ssh_run_approve | k/10 | | | | |
+| ssh_run_auto | k/10 | | | | |
+| dependency_chat | k/10 | | | | |
+| make demo（第六场景） | k/1 | | | | |
+
+## 原始 RUN / REAL 行
+
+```
+（粘贴 accept_s2.sh / accept_s3.sh 完整的 RUN scenario=... / REAL scenario=... 输出）
+```
+
+## report-usage.sh 输出
+
+```
+（粘贴 --workspace <S2> --markdown --summary、--by turn --markdown 与
+  --workspace <S3> --markdown --summary、--by turn --markdown 四段输出）
+```
+
+## 已知问题（本版本）
+
+- <场景> ok=k/10（k<8）：<simple 描述，不下结论，留给 §4/遗留清单跟进>
+
+## 进 STATUS §2.2 的摘要行（只有次数）
+
+docker_restart k/10、api_observe k/10、ssh_run_approve k/10、ssh_run_auto k/10、
+dependency_chat k/10、make demo k/1（`docs/private/real-model-<date>.md`）
+````
