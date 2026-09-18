@@ -2350,6 +2350,95 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
 - **遗留 26**：`accept_s2.sh` 的 cleanup 只 `rm -sf` 五个夹具服务，不 `down` 基础栈，S1→S2→S3 可连跑。
 - **遗留 25**：`interfaces/ws/server.test.ts` 的 WS 端到端用例给单独 `testTimeout`，复现三次以上再查根因。
 
+#### S5.6 实现说明（2026-09-18，PR #TBD）
+
+- **`queued` 崩溃缺口 + I-S5-3**：`application/task/reaper.ts` 新增 `reapLostQueuedTasks`——
+  `runTaskReaper`（沿用既有 30 秒 tick）每次额外扫一遍 `status='queued' and updated_at < now() - 60s`
+  （跨工作区，与既有时长超限扫描同一姿势：一条原生 `SELECT`，不经 `withWorkspace`），逐条经
+  `lifecycle.ts` 既有的 `failTaskRow` 置 `failed` / `failure_reason='spawn_lost'`——与其它清扫走同一条
+  受治理路径（转移表跳转 `queued→running→failed` 的合法多跳、`task.fail` 审计行、`TaskUpdated` outbox
+  事件），不是裸 `UPDATE`；不重新 spawn。`updated_at` 在一行还是 `queued` 期间从不被任何 UPDATE 语句
+  改写（核实过全部 `update tasks set ...` 调用点）——是"这行卡了多久"的精确代理，不是启发式。
+  `failure_reason` 列本身是自由文本（`migrations/task/0003` 自己的头注释），不是 enum/CHECK 约束，所以
+  **未加新迁移**（任务简报里"仅当是 enum 式 check 才加迁移"的条件不成立）。不变量 `I-S5-3`
+  （`substrate/audit/invariant-checks.ts`）进 `INVARIANT_CHECK_IDS`（`I-S5-2` 之后）与
+  `runInvariantChecks`：`status='queued' and updated_at < now() - 5min`，5 分钟阈值远宽于清扫自己的
+  60 秒，非零即说明清扫本身退化（同 I4/I7/I12 的"扫机制退化，不扫业务违规本身"姿势）。测试：
+  `reaper.integration.test.ts` 新增两例（DB-gated：陈旧 queued Task 被置 `spawn_lost` 并留审计行；新鲜
+  queued Task 不受影响）；`invariant-checks.integration.test.ts` 新增 I-S5-3 的 delta 式一例（陈旧行计
+  违规、新鲜行不计，仿 I6 既有例的"baseline + 按 id 归因"写法）。chaos 脚本
+  `scripts/chaos-kill-kernel-mid-invoke.sh`：结构上完全照抄 `chaos-kill-worker.sh`/`chaos-kill-entry.sh`
+  （POSIX sh、本地 `pass`/`fail`/`redact`，curl 经 caddy 打 `/api/cap/*`——两个既有脚本实际都没有走
+  `scripts/lib/accept-common.sh`/`run_driver`，按代码实际结构抄而非按任务简报字面描述）；场景：自建一次性
+  worker 定义（`propose_worker_definition` + `publish_worker_definition`，`create_task` 已下架后没有更轻的
+  办法造一个 `queued` Task）、后台起 `invoke_worker` 不等它返回就 `docker compose kill kernel`、
+  `docker compose up -d kernel`、`list_tasks` 找最新 Task 后 `get_task` 轮询到 `completed` 或
+  `failed`/`spawn_lost`——两种结果都算 PASS（崩溃窗口只有毫秒级，从容器外部去踩是概率性的），脚本打印
+  命中了哪一种；`chmod +x` 且 `git ls-files -s` 确认 `100755`（Windows 检出 `core.fileMode=false`，光
+  `chmod` 不会体现在 git 对象上，额外跑了 `git update-index --chmod=+x`）、`bash -n` 通过、无 CRLF。
+  `docs/runbooks/host-chaos.md` 补第三个脚本的目的、前置条件、跑法、期望输出、清理、常见问题。
+- **遗留 25 / 40（CI 偶发超时，均判定为 flaky-timeout，非产品缺陷）**：`interfaces/ws/server.test.ts`
+  的 WS 端到端用例（`'FakeAgentRuntime end-to-end: send → stream → message → turnEnded → history shows
+  both messages'`）单独给 `testTimeout: 15000`（vitest 默认 5s，该用例自己的 `waitUntil` 内部就有 5s
+  超时，几乎没有余量），一行注释引用遗留 25，未改测试语义。`packages/llm-proxy` 的 "kernel down then up"
+  用例同样给 `testTimeout: 15000`（引用遗留 40）；顺带定位到一处真实可改的时机问题——验证"kernel down
+  期间已有排队用量"那一步原来是固定 `sleep(150)` 赌"已经攒了一次失败 flush"，在 CI runner 争用下这个赌注
+  会输；改成轮询 `reporter.pending > 0`（新增局部 `waitUntil` helper，同 ws 测试文件里那个的写法）而不是
+  猜一个固定延迟，语义不变（仍然先断言 `receivedBatches` 为空、再走 `kernelUp=true` + `reporter.flush()`
+  的既有恢复路径），实测反而更快（本地全量 15 例 161ms 内跑完）。
+- **遗留 26 核实**：读了 `scripts/accept_s2.sh` 的 `cleanup_step`（当前实现，未改）——只对
+  `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/
+  `accept-s2-restart-target` 六个夹具容器做 `docker compose --profile accept-s2 rm -sf`，从未调用
+  `down`，基础栈（postgres/kernel/caddy/…）不受影响，S1→S2→S3 可连跑——**#145 关闭无回归，未改动**
+  （STATUS 遗留 26 描述"五个夹具服务"，实际数的是六个，纯文档计数笔误，非代码问题，未改 STATUS 该行
+  措辞，按任务范围"row 26 untouched"）。
+- **遗留 30 — 根因（代码分析确认，非猜测）**：任务简报给的三个假设都不是字面成立的直接根因，但共同指向
+  同一个真实缺口：
+  - **(a) "Worker 在 await_decision=true 超时后结束 turn 没有再报结果"——不成立**：
+    `platform-extension/src/modes/worker.ts` 的 `agent_settled` 处理器**总是**调用 `report_task_result`
+    ——显式 `report_result` 工具调用给的契约，或者（模型压根没调用）一个兜底契约（"the Worker finished
+    with no report_result call..."）。`await_decision=true` 超时（`request-action-handler.ts` 的
+    `pollAndExecute`，25 秒预算）只是给门工具一个正常（不抛错）的 `{status:'pending_approval'|
+    'approved'}` 返回，不会让 turn "结束又不报"。
+  - **(b) "report_result 在容器被 reaper 判超时之后到达"——不是字面的根因，但方向对**：真正的触发不是
+    reaper 判超时了一个还活着的 WorkerRun，而是下面 (a)+(b) 的组合根因——Worker 自己**按时**发出的
+    report 因为 Task 状态不对被拒。
+  - **(c) "approval 播报与 report_task_result 的 outbox 顺序颠倒"——不成立**：`report_task_result` 是
+    单阶段能力（`worker-result-handler.ts` 自己的文档注释："deliberately single-phase (no
+    afterCommit)"），从不经 outbox——它和 `ActionRequestPending`/`ActionRequestUpdated` 之间没有任何
+    投递顺序关系可言。
+  - **真实根因**：`gatekeepers/docker/src/manifest.test.ts` 确认 `container.restart`（docker_restart
+    场景实际调用的 Operation）是 `blast_radius:medium, await_decision:false`。`request-action-handler.ts`
+    的 `runGovernedRequest` 对 `pending_approval && !awaitDecision` 直接返回（无 `afterCommit`）——门工具
+    `execute()`（`worker.ts`）看到非阻塞的 `pending_approval` 结果，"the agent loop is not blocked
+    waiting on a human decision"（工具自己的文档注释）。与此同时，`requestAction` 写行时只要
+    `resultingStatus==='pending_approval'` 就发 `ActionRequestPending`（`governance/approval/
+    transition-log.ts`，不看 `awaitDecision`），`reaper.ts` 的路由消费者收到后**不论
+    `awaitDecision`** 一律把 Task 挂 `waiting_approval`。真实模型看到"pending approval, actionRequestId
+    X"、没有工具可以轮询批准状态，合理地认为自己这一步做完了，随即（或 turn 自然结束触发兜底契约）调用
+    `report_task_result`——此时 Task 还是 `waiting_approval`，`completeTaskWithResult` 的
+    `transition(TASK_TRANSITIONS, 'waiting_approval', 'complete')` 在共享转移表（`@nexttime/shared` 的
+    `TASK_EDGES`）里没有这条边，直接抛 `IllegalTransition`——整个 `report_task_result` 事务（Facts /
+    evidence / Activity 全部）回滚，`worker.ts` 只记 `result=fail` 日志、`process.exit(0)`。稍后
+    ActionRequest 被批准并异步执行（`executed`，容器真的重启了），`ActionRequestUpdated` 把 Task 从
+    `waiting_approval` 无条件恢复到 `running`（`resumeTaskFromWaitingApproval`）——但它的 WorkerRun 早已
+    退出，下个 reaper tick 里 `reactToSupervisorStatus` 看到容器 `exited` 且 `task.status==='running'`，
+    判 `failed:'no_result'`。**正是**"ActionRequest 已 executed、容器已重启、Task failed 且 result 为
+    空"。这条链每一步都在代码里可查证，不依赖主机日志猜测。
+  - **修法**（`application/task/reaper.ts`，属允许改动的 `application/task/**`）：`ActionRequestPending`
+    路由消费者新增 `if (!actionRequest.awaitDecision) return;`——只在 Worker 自己的调用真的同步阻塞在
+    这个决定上（`awaitDecision:true`）时才把 Task 挂 `waiting_approval`，与 S2.3 自己的原始验收标准一致
+    （`governance/approval/await-decision.ts` 模块文档原文："await_decision=true 时 Task 进
+    waiting_approval"——这里此前一直没读这个字段，对 `false` 的行为从一开始就偏了文档）。`
+    ActionRequestUpdated` 一侧不用改：`resumeTaskFromWaitingApproval` 本就守着
+    `task.status==='waiting_approval'`，Task 从未进入该状态时天然是安全的空操作。测试：
+    `reaper.integration.test.ts` 既有例测的是真正阻塞的场景，但夹具此前写的是 `await_decision: false`
+    （路由从不读该字段，所以也过）——改为 `true`，挂起语义保持；新增一例（`await_decision: false`，仿
+    `container.restart` 的真实形状）断言 `ActionRequestPending` 之后 Task 仍是 `running`——回归了这条
+    修复；夹具抽成共享的 `seedPendingChildRequest(awaitDecision)`。**主机验证**（S5.7 的范围，未在本任务做）：
+    `accept_s2.sh --real --runs 10` 复跑 docker_restart 场景，确认失败率不再出现这个模式；本任务只能
+    证明代码路径，无法在这个环境里跑真实模型。
+
 ### S5.7 真实模型回归常态化
 
 - 背景：W7 每场景只跑 3 次、一个供应商一个模型（STATUS §2.2 盲区）。
