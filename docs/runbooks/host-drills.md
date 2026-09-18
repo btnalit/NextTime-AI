@@ -222,10 +222,37 @@ v(n) 而数据库仍是 v(n) 的 schema（因为回滚阶段还没跑到）—�
 
 ---
 
+## 首次实跑记录（2026-09-18，目标主机，v0.10.0 → v0.13.0）
+
+按"首次使用"的方式从 tag 取出脚本跑（`git show v0.13.0:scripts/drill-upgrade.sh > /tmp/… && sh
+/tmp/drill-upgrade.sh --to v0.13.0 --ack-live-restore`），从 `/tmp` 起跑与从检出起跑等价这一点已实证。
+
+- **第一次在 `build-to` 失败**：`docker compose --profile test build` 里 `gatekeeper-ragflow` 的
+  `pnpm deploy` 拉 `registry.npmjs.org` 元数据超时（单个请求 70 s 以上，最后 `ERR_PNPM_META_FETCH_FAIL`），
+  与当时操作员切换网络同时发生。这一步在迁移之前，数据库与运行中的容器都没动，检出停在 v(n)
+  （detached）；处理就是 `git checkout <原分支>` 后原样重跑（升级前 dump 会再做一份，5 MB 级）。
+  **交付缺口**：源码构建依赖 npm registry 的实时可达性，客户现场一次网络抖动就让升级演练失败——这是
+  S5.8 第 4 项"发布容器镜像"最直接的现实依据。
+- **第二次全绿**，分阶段耗时：preflight 2 s、升级前 dump 2 s、构建 v(n) 174 s、迁移 2 s（core
+  0025–0029 五条）、`up` 37 s、S1 / S2 / S3 共 304 s、PROBE 646 s（含重建 v(n-1) 镜像与 S1）、回滚 +
+  S1 87 s；总计约 21 分钟。`PROBE old-code-on-new-schema ok`——v0.10.0 代码在 v0.13.0 schema 上 S1
+  全过，实证 `release.md` §6 对 core 0025–0029 "全部可逆"的判断。结束态：`main` 分支、v0.10.0、数据库
+  自升级前 dump 还原，16 个服务在跑。
+- 随后按脚本末尾的命令真实升级到 v0.13.0（构建走缓存，秒级；迁移 5 条；`up` 后 16 个服务全在），并补
+  做版本专属手动步骤：`host-env-init.sh`（新建 `config/ontology/`）、放入两个领域包、给生产工作区重新
+  铸造采集器 Handle 并用 `seed-domain-pack` 发布 ops-assets v1（见 `docs/STATUS.md` §4 遗留 41 的
+  背景）。升级后 S1 冒烟 22 PASS / 0 FAIL；`chaos-kill-kernel-mid-invoke.sh` 命中窗口、Task
+  `failed / spawn_lost`；`/internal/metrics` 全部不变量为 0（含 I-S5-1 / 2 / 3；本部署的 caddy 不反代
+  `/internal/*`，从 kernel 容器内经 control 网络读取，`host-chaos.md` 已有该回退方式）。
+- `drill-install.sh` 本轮没有干净主机可用，未实跑。
+
 ## 常见问题
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
+| `drill-upgrade.sh` 在 `build-to` 一步 `FAIL`，日志里是 `registry.npmjs.org` 超时 / `ERR_PNPM_META_FETCH_FAIL` | 源码构建要实时拉 npm 元数据，主机到 registry 的网络抖动 | 这一步在迁移之前，什么都还没改：`git checkout <原分支或原 commit>`（脚本 preflight 打印过）后原样重跑即可；反复出现就是 S5.8 第 4 项"发布容器镜像"的排期理由 |
+| 当前检出里还没有 `drill-upgrade.sh`（例如从 v0.10.0 首次升级） | 脚本随 v0.13.0 才进仓库 | 从目标 tag 取出来跑：`git show <tag>:scripts/drill-upgrade.sh > /tmp/drill-upgrade.sh && sh /tmp/drill-upgrade.sh …`（见 §二 前置条件"首次使用"） |
+| 演练结束后 `fake-llm` 在生产栈里跑着 | 三份验收要求 `docker compose --profile test up -d`，演练照此起栈 | 无害（验收脚本自己切换 / 恢复 provider 接线，生产 `llm-providers.yaml` 不被碰）；不想留就 `docker compose stop fake-llm` |
 | `drill-install.sh` 在 `write-env` 一步 `FAIL` | `KERNEL_BIND_ADDR`/`NEXTTIME_SUBNET_CONTROL`/`NEXTTIME_SUBNET_WORKERS` 没给 | 这是刻意设计，不是 bug——脚本不替你猜一个可能已经和主机现有 Docker 网段冲突的子网，也不替你猜一个能被外部访问的地址；看 `preflight` 步骤打印出的 `docker-network-subnets` 那一行，挑不冲突的值，按脚本头注释传入 |
 | `drill-install.sh` 在 `guard-target` 一步 `FAIL` | 目标主机上 `$CODE_DIR/.env` 已存在，或 `$NEXTTIME_DATA/pgdata` 非空 | 刻意的、没有绕过开关的安全阀——绝不能把这个脚本指向一台已经有真实部署/真实数据的主机；换一台真正干净的主机，或者确认这台主机上的旧内容确实可以丢弃后手动清理 |
 | 浏览器打开 `https://<地址>:8443/` 提示证书不受信任 | `docs/runbooks/host-caddy.md` §E8.2 的内网 CA 信任是客户端/操作员浏览器自己的信任库设置，两个演练脚本都不碰它（也碰不到——那是每个人自己机器上的操作） | 三份验收脚本内部用 `curl -sk` 跳过校验，不受影响；真的要在浏览器里打开控制台/Explorer，按 host-caddy.md §E8.2 手动导入一次 |
