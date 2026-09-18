@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/btnalit/NextTime-AI/compare/v0.13.1...v0.13.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **kernel:** report_task_result records and skips pre-write refusals per entry (leftover 30, remaining no_result class) ([#211](https://github.com/btnalit/NextTime-AI/issues/211)) ([32700f4](https://github.com/btnalit/NextTime-AI/commit/32700f45bab326c045285ee5a528c8f781408405))
+
 ## [0.13.1](https://github.com/btnalit/NextTime-AI/compare/v0.13.0...v0.13.1) (2026-09-18)
 
 
