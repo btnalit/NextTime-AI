@@ -2293,6 +2293,30 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
   状态过滤变更重新请求、403 走 forbidden 空态、Load more 追加下一页）。均通过（本地 vitest；
   DB 集成测试本地无 Postgres/Docker，只标注了 gate，CI 才真正跑）。
 
+#### S5.5 遗留 24 实现说明（2026-09-18，PR #TBD）
+
+- **缺陷形态**：`assertFact` 无既有行时取身份级 advisory lock 再读一次（PR #140），封住的是两事务：T2 的首次
+  `for update` 查找阻塞在 T1 正在 supersede 的行上，T1 提交后被阻塞的**那条语句**只按 EvalPlanQual 重检
+  被锁的那一行（已 superseded → 过滤掉），T1 插入的后继行不在该语句的快照里；但重读是新语句、新快照，看得到
+  后继。三事务：重读本身也是 `for update`，可以再阻塞在第三个事务对后继行的 supersede 上，醒来同样 0 行，
+  于是插入一条多余的活跃 Fact。
+- **修法**（S5.5 第 5 项"沿 supersedes_id 链取当前活跃行"的等价实现）：迁移 `core/0029`
+  `latest_fact_invalidated_for_identity(ws, link_type, source, target) → boolean | null`
+  （`security definer`，同 0017 的理由——最新行可能属于调用者看不见的私有 Source；只答一个布尔，不泄露行）。
+  `assertFact` 在 advisory lock 重读仍为空时进入有界循环：最新行存在且**未失效**（`recorded` 或
+  `superseded`）→ 再读一次 `find_active_fact_for_identity`；最新行已失效或根本没有行 → 新插入本来就正确，停；
+  上限 `MAX_ACTIVE_FACT_REREAD_ATTEMPTS = 5`，超限回落到修复前的"插入新行"（不破坏状态，只是可能多一条）。
+  **判 `invalidated_at` 而不是 `superseded_at`**：连续两次 supersede（T4 又 supersede 了 T3 的后继）时，
+  等调用者去问，最新行就是 T4 的新行——它自己没被 supersede，用 `superseded_at` 判会误读为"没有后继"、少读
+  一次；`recorded → superseded | invalidated` 互斥且终态，只有失效会让链真正终止。
+- **不用唯一索引封**：异源同身份的两条活跃 Fact 是 Conflict 语义下的合法并存（S5.5 原文）。
+- **测试**：`sql-store.active-fact-reread.test.ts`（假 client 六例：已找到行不问 / 无行停 / 已失效停 /
+  最新行 recorded 再读即得 / 最新行 superseded 再读得后继 / 到上限回落新插入）；
+  `substrate/epistemic/conflicts.test.ts` 新增四事务确定性集成测试：TX 占住 advisory lock 当"别的首次断言者"，
+  T3 supersede F0→F1 并挂起，T2 首查阻塞在 F0；T3 提交后 T2 0 行、等 advisory lock；T4 supersede F1→F2 并
+  挂起；TX 提交，T2 重读阻塞在 F1；T4 提交，T2 重读 0 行——修复前此处多插一条，修复后再读一次拿到 F2 并
+  supersede 成 F3，断言活跃行恰好 [F3]、无 Conflict。每一步都用 `settledWithin300ms` 证实 T2 确实在阻塞。
+
 ### S5.6 稳定性缺陷（遗留 30 与 Task 崩溃缺口）
 
 - **遗留 30**：真实模型下 docker_restart 一次 ActionRequest `executed`、容器已重启但 Task `failed` 且

@@ -354,6 +354,33 @@ export function buildFindActiveFactByIdentityQuery(
 }
 
 /**
+ * S5.5 (leftover 24, migrations/core/0029): the diagnostic read `assertFact`'s bounded re-read loop
+ * uses to decide whether to retry `buildFindActiveFactByIdentityQuery` after it has come back empty
+ * even after the advisory-lock re-read — "is the identity's newest row, any lifecycle state,
+ * `invalidated`?" `true` (or no row at all, read back as SQL null) means retrying is pointless: a
+ * fresh insert is correct. `false` means the newest row is `recorded` or `superseded` — either way a
+ * fresh `find_active_fact_for_identity` read is worth one more try (see sql-store.ts's `assertFact`
+ * comment on the loop, and this migration's own comment, for why the check is "not invalidated"
+ * rather than "superseded": a *second* concurrent supersede can make the newest row itself the
+ * un-superseded successor of the row this statement was blocked on, not "superseded" at all).
+ * `security definer`, same reasoning as the query above — the newest row can belong to a private
+ * Source this caller cannot otherwise see.
+ */
+export function buildLatestFactInvalidatedForIdentityQuery(
+  workspaceId: string,
+  identity: {
+    readonly linkType: string;
+    readonly sourceObjectId: string;
+    readonly targetObjectId: string;
+  },
+): SqlQuery {
+  return {
+    text: 'select latest_fact_invalidated_for_identity($1, $2, $3, $4) as invalidated',
+    values: [workspaceId, identity.linkType, identity.sourceObjectId, identity.targetObjectId],
+  };
+}
+
+/**
  * `verifyFact` (S3.2 `verify_fact` capability): promotes `epistemic_status` to `verified` and
  * stamps `verified_by`. The I4 content-immutability trigger (`links_block_content_update`,
  * migrations/core/0002_substrate.sql) explicitly excludes `epistemic_status`/`verified_by` from
