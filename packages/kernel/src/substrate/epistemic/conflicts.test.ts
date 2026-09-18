@@ -663,5 +663,132 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(matching).toHaveLength(0);
       });
     });
+
+    it('S5.5 leftover 24: a re-read that blocks on a second supersede still lands on the chain tip — never an extra active Fact', async () => {
+      // The interleaving STATUS leftover 24 describes, made deterministic with four transactions:
+      //   F0 committed.
+      //   TX  holds the identity's advisory lock (a stand-in for any other first-time asserter).
+      //   T3  supersedes F0 → F1 and holds (F0's row lock, F1 uncommitted).
+      //   T2  asserts: its first lookup blocks on F0 (T3's lock). T3 commits → the blocked
+      //       statement rechecks F0 alone, now superseded → 0 rows → T2 goes for the advisory
+      //       lock → blocks on TX.
+      //   T4  supersedes F1 → F2 and holds (T4 found F1 on its first lookup, so it never touches
+      //       the advisory lock).
+      //   TX  commits → T2 takes the advisory lock → its re-read blocks on F1 (T4's lock).
+      //   T4  commits → the re-read rechecks F1 alone, now superseded → 0 rows again, F2 outside
+      //       that statement's snapshot. Before migration 0029 T2 inserted a fresh row here (two
+      //       active Facts for one identity); now it sees F2 is the un-invalidated newest row,
+      //       re-reads once more, finds F2 and supersedes it.
+      const { objectAId, objectBId, sourceS1 } = await asPrincipal(ownerId, async (client) => {
+        const objectA = await store.upsertObject(client, workspaceId, { objectType: 'test.host' });
+        const objectB = await store.upsertObject(client, workspaceId, {
+          objectType: 'test.service',
+        });
+        const sourceS1 = await registerPrivateSource(client, workspaceId, {
+          kind: 'test.collector',
+          ownerPrincipalId: ownerId,
+        });
+        return { objectAId: objectA.id, objectBId: objectB.id, sourceS1 };
+      });
+      const identity = {
+        linkType: 'test.runs_on',
+        sourceObjectId: objectBId,
+        targetObjectId: objectAId,
+      };
+      const advisoryKey = `${workspaceId}:fact:${identity.linkType}:${identity.sourceObjectId}:${identity.targetObjectId}`;
+
+      async function assertAs(client: PoolClient, port: number) {
+        const activity = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        await recordSourceObservation(client, workspaceId, {
+          sourceId: sourceS1.id,
+          activityId: activity.id,
+        });
+        return store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          { ...identity, activityId: activity.id, properties: { port } },
+        );
+      }
+
+      const fact0 = await asPrincipal(ownerId, (client) => assertAs(client, 80));
+
+      // TX: holds the identity's advisory lock until released.
+      const txLocked = deferred<void>();
+      const releaseTx = deferred<void>();
+      const tx = withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [advisoryKey]);
+        txLocked.resolve();
+        await releaseTx.promise;
+      });
+      await txLocked.promise;
+
+      // T3: supersedes F0 → F1 and holds.
+      const t3Asserted = deferred<Awaited<ReturnType<typeof store.assertFact>>>();
+      const releaseT3 = deferred<void>();
+      const t3 = withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        t3Asserted.resolve(await assertAs(client, 81));
+        await releaseT3.promise;
+      });
+      const fact1 = await t3Asserted.promise;
+      expect(fact1.supersedesId).toBe(fact0.id);
+
+      // T2: blocks on F0's row lock inside its first lookup.
+      const t2 = withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        assertAs(client, 82),
+      );
+
+      let fact2: Awaited<ReturnType<typeof store.assertFact>> | undefined;
+      const releaseT4 = deferred<void>();
+      let t4: Promise<void> | undefined;
+      try {
+        expect(await settledWithin300ms(t2)).toBe(false);
+        releaseT3.resolve();
+        await t3;
+        // T2 woke up with 0 rows and is now waiting for the advisory lock TX holds.
+        expect(await settledWithin300ms(t2)).toBe(false);
+
+        // T4: supersedes F1 → F2 and holds F1's row lock.
+        const t4Asserted = deferred<Awaited<ReturnType<typeof store.assertFact>>>();
+        t4 = withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          t4Asserted.resolve(await assertAs(client, 83));
+          await releaseT4.promise;
+        });
+        fact2 = await t4Asserted.promise;
+        expect(fact2.supersedesId).toBe(fact1.id);
+
+        // TX commits: T2 takes the advisory lock, re-reads, and blocks on F1 under T4.
+        releaseTx.resolve();
+        await tx;
+        expect(await settledWithin300ms(t2)).toBe(false);
+      } finally {
+        releaseT3.resolve();
+        releaseTx.resolve();
+        releaseT4.resolve();
+      }
+      await t4;
+      const fact3 = await t2;
+
+      // The chain tip, not a duplicate: T2 built on F2 (same origin, changed content → supersede).
+      expect(fact3.supersedesId).toBe(fact2?.id);
+      expect(fact3.unchanged).toBeUndefined();
+
+      await asPrincipal(ownerId, async (client) => {
+        const activeRows = await client.query<{ id: string }>(
+          `select id from links
+           where workspace_id = $1 and link_type = $2
+             and source_object_id = $3 and target_object_id = $4
+             and superseded_at is null and invalidated_at is null`,
+          [workspaceId, identity.linkType, identity.sourceObjectId, identity.targetObjectId],
+        );
+        expect(activeRows.rows.map((row) => row.id)).toEqual([fact3.id]);
+
+        const page = await listConflicts(client, workspaceId, { status: 'open' });
+        const involved = new Set([fact0.id, fact1.id, fact2?.id, fact3.id]);
+        expect(
+          page.items.filter((item) => involved.has(item.factAId) || involved.has(item.factBId)),
+        ).toHaveLength(0);
+      });
+    });
   },
 );

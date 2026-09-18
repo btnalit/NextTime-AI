@@ -15,6 +15,7 @@ import {
   buildGetObjectQuery,
   buildInsertFactQuery,
   buildInvalidateUnobservedFactsQuery,
+  buildLatestFactInvalidatedForIdentityQuery,
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
   buildNeighborsQuery,
@@ -105,6 +106,16 @@ interface FactRow {
   last_observation_id: string | null;
   last_observed_at: Date | null;
 }
+
+/**
+ * S5.5 (leftover 24): bound on the extra re-reads `assertFact` performs, past the advisory-lock
+ * re-read, when the identity's newest row is `superseded` but its successor is not yet visible to
+ * this statement's snapshot (see the `assertFact` comment on the loop for the race this closes).
+ * Each attempt is one more short-lived Postgres round trip only on the already-rare "blocked on a
+ * row someone else is superseding" path — 5 gives real interleavings several chances to resolve
+ * without risking an unbounded wait if something is genuinely stuck.
+ */
+const MAX_ACTIVE_FACT_REREAD_ATTEMPTS = 5;
 
 interface TraverseRow {
   link_id: string;
@@ -303,6 +314,50 @@ export class SqlGraphStore implements GraphStore {
         `${workspaceId}:fact:${input.linkType}:${input.sourceObjectId}:${input.targetObjectId}`,
       ]);
       priorResult = await client.query<FactRow>(priorQuery.text, priorQuery.values as unknown[]);
+
+      // S5.5 (migrations/core/0029, STATUS leftover 24): the re-read above is itself a `for update`
+      // lookup and can block on a THIRD transaction superseding the row it locks. Under READ
+      // COMMITTED, an unblocked `for update` statement (EvalPlanQual) rechecks only the specific row
+      // it was blocked on against its now-committed version — it never rescans for a sibling row
+      // (the successor) that same blocking transaction also inserted, because that row is outside
+      // this statement's own snapshot, taken when the statement started, before the blocking
+      // transaction committed. So this re-read can *also* come back with 0 rows even though a
+      // successor now exists — three-transaction interleaving, not covered by the single re-read
+      // above (which only closes the two-transaction race).
+      //
+      // Bounded retry, gated on whether the identity's *newest* row (any lifecycle state, not only
+      // still-active — `latest_fact_invalidated_for_identity`) is `invalidated` rather than on
+      // whether it is `superseded`: a *second* concurrent supersede (a fourth transaction superseding
+      // the very successor the third one just created, or deeper) keeps making the newest row the
+      // latest un-superseded link in the chain — checking `superseded_at` on it would wrongly read
+      // "no successor" and stop one re-read short of ever finding that chain's current tip. Checking
+      // `invalidated_at` does not have this gap: `recorded → superseded | invalidated` is mutually
+      // exclusive and terminal, so a chain only ever *ends* (no further successor to wait for) by
+      // invalidation, never by supersession. Re-read again whenever the newest row exists and is not
+      // invalidated (it is `recorded` — a fresh read finds it directly — or `superseded` — its own
+      // successor may or may not be visible yet, worth another look). Stops the moment the lookup
+      // finds rows, or the newest row is invalidated / there is no row at all (a fresh insert is
+      // genuinely correct); also stops after MAX_ACTIVE_FACT_REREAD_ATTEMPTS so a genuinely stuck
+      // interleaving cannot wedge this call forever — at that point `assertFact` falls through to the
+      // same "insert fresh" behavior it had before this fix, which is safe (never corrupts state)
+      // even if imperfect (an avoidable extra active Fact).
+      for (
+        let attempt = 0;
+        priorResult.rows.length === 0 && attempt < MAX_ACTIVE_FACT_REREAD_ATTEMPTS;
+        attempt++
+      ) {
+        const latestQuery = buildLatestFactInvalidatedForIdentityQuery(workspaceId, {
+          linkType: input.linkType,
+          sourceObjectId: input.sourceObjectId,
+          targetObjectId: input.targetObjectId,
+        });
+        const latestResult = await client.query<{ invalidated: boolean | null }>(
+          latestQuery.text,
+          latestQuery.values as unknown[],
+        );
+        if (latestResult.rows[0]?.invalidated !== false) break;
+        priorResult = await client.query<FactRow>(priorQuery.text, priorQuery.values as unknown[]);
+      }
     }
     const newestRow = priorResult.rows[0];
 
