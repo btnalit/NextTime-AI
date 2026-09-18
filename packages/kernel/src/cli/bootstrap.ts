@@ -142,8 +142,8 @@ export function parseTtl(raw: string): number {
 const DEFAULT_EPHEMERAL_TTL = '24h';
 
 /** The directory `seed-domain-pack` reads packs from when `--dir` is not given (S5.3 "放文件 →
- *  seed"): `DOMAIN_PACK_DIR` when set and present (docker-compose.yml points it at the host's
- *  `${NEXTTIME_DATA}/config/ontology`, mounted read-only under `/data/config`), else the image's
+ *  seed"): `DOMAIN_PACK_DIR` when set and present (the deployment points it at the host data
+ *  directory's `config/ontology`, mounted read-only under `/data/config`), else the image's
  *  bundled `ontology/` (`resolveOntologyDir`) — which stays the platform's own default examples,
  *  never something an operator edits in place. */
 export function resolveDomainPackDir(env: NodeJS.ProcessEnv = process.env): string {

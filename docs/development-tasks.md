@@ -2084,6 +2084,18 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
   另一 visibility → 409；另一 principal 抢可见的名字 → 409；另一 principal 的私有同名 → 唯一索引 409）；
   `bootstrap.test.ts` 加 `parseTtl` / `resolveDomainPackDir`；采集器 `run.test.ts` 改为"每轮注册、同 id"；
   web 页面测试加 ephemeral 只读显示一例。
+- **主机过渡——采集器 Source 谱系必须先核对**：S5.3 之前每次跑 `accept_s3.sh` 都删掉采集器的状态文件、并把
+  token 覆盖成验收工作区的，真实采集器在重新铸 token 后会在生产工作区**再注册一个**同名 Source——生产工作区里
+  很可能有多行 `kind='host-inventory-collector'`、`metadata.name='host-inventory'`。0028 的回填遇到重名一律
+  不填 `name`，升级后的采集器 `register_source` 就会查不到、再建第三个 Source：既有 Fact 全变成"别的 Source
+  的"（同内容只算佐证、时钟不前进），S5.2 的窗口按新 Source 键控，遗留 28 的幻影边永远退不掉。
+  **应用步骤**：① 升级前记下 `${NEXTTIME_DATA}/collectors/host-inventory/host-inventory-source.json` 里的
+  `sourceId`；② `make migrate` 后在生产工作区查 `select id, name, created_at from sources where kind =
+  'host-inventory-collector' and metadata ->> 'name' = 'host-inventory'`；③ 若记下的那行 `name` 为空（说明有
+  重名），`update sources set name = 'host-inventory' where id = '<记下的 id>'`——采集器下一轮就接回自己的
+  谱系，窗口也按它键控；只有一行且已回填则什么都不用做。
+- **已知代价**：`register_source` 是 write 模式能力，`created: false` 的返回照样走 dispatch 的审计——采集器
+  每轮多一条 `register_source` 审计行（15 分钟一次），不是 bug。
 - **未做 / 边界**：`create_workspace` 平台能力不接受 `purpose`——ephemeral 是脚本 / 演示的东西，控制台建的都是
   standard；`--expired` 仍走既有 `delete-workspace.sh` 的主机侧清理，不新增清理逻辑。
 
