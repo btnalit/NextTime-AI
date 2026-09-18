@@ -2317,7 +2317,7 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
   挂起；TX 提交，T2 重读阻塞在 F1；T4 提交，T2 重读 0 行——修复前此处多插一条，修复后再读一次拿到 F2 并
   supersede 成 F3，断言活跃行恰好 [F3]、无 Conflict。每一步都用 `settledWithin300ms` 证实 T2 确实在阻塞。
 
-#### S5.5 遗留 23 / 34 实现说明（2026-09-18，PR #TBD）
+#### S5.5 遗留 23 / 34 实现说明（2026-09-18，PR #199）
 
 - **遗留 23**：`substrate/epistemic/decisions.ts` `queryDecisions` 与 `conflicts.ts` `listConflicts` 的
   keyset 查询改为 `order by date_trunc('milliseconds', <created_at|opened_at>) desc, id desc` 并按同一
