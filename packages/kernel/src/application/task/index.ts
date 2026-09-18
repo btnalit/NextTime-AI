@@ -50,9 +50,13 @@ export {
 } from './service.js';
 
 export {
+  type ContractPreRejections,
   type PostWorkerResultInput,
   type PostWorkerResultOutcome,
   postWorkerResult,
+  type RejectedResultFact,
+  type RejectedResultProposal,
+  type ResultFactRejectionReason,
 } from './result.js';
 
 export { ensureWorkerAgentPrincipal } from './agent-principal.js';
