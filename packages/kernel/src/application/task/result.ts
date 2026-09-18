@@ -1,6 +1,7 @@
 import type { WorkerResultCapabilityParams, WorkerResultObjectRef } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { proposeOperation } from '../../governance/gatekeepers/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import {
   attachEvidence,
   endActivity,
@@ -9,8 +10,8 @@ import {
   registerSource,
   startActivity,
 } from '../../substrate/epistemic/index.js';
-import type { Fact } from '../../substrate/graph/index.js';
-import { SqlGraphStore } from '../../substrate/graph/index.js';
+import type { Fact, OntologyViolationDetails } from '../../substrate/graph/index.js';
+import { OntologyViolationError, SqlGraphStore } from '../../substrate/graph/index.js';
 import { proposeSkill } from '../worker/index.js';
 import { completeTaskWithResult } from './lifecycle.js';
 import type { TaskRow } from './types.js';
@@ -71,7 +72,23 @@ import type { TaskRow } from './types.js';
  * the capability boundary, `packages/shared/src/worker-result.ts`'s `WorkerResultContractSchema`)
  * is treated the same as every other write this function performs: it is not caught here, so it
  * propagates and rolls back the whole contract — a Worker's result is either written completely or
- * not at all, never partially.
+ * not at all, never partially — with exactly one exception, below.
+ *
+ * **The one partial outcome: an ontology refusal of a single `factsToAssert[]` entry (S5.1).**
+ * Since `substrate/graph/ontology-guard.ts`, a workspace in `reject` mode refuses a Link its
+ * published ontology does not license (`OntologyViolationError`). A Worker's facts are
+ * model-generated claims, so this is an ordinary *governance outcome on a knowledge write*, not a
+ * failure of the Task — the Task's own work (a gate action already executed, say) is done, and
+ * losing the whole contract to it turned into the real-model container-restart regression of
+ * 2026-09-18 (Task `failed / no_result` while the container had in fact restarted; STATUS §4
+ * leftover 30's second root cause). Each fact is therefore written under its own savepoint
+ * (covering the endpoint `resolveObjectRef` upserts too, so no Object of an undeclared type is
+ * left behind): on `OntologyViolationError` — and *only* that error — the savepoint is rolled
+ * back, the refusal is recorded as its own `task.result_fact_rejected` audit row (the guard's own
+ * `ontology_violation` row only exists in `warn` mode) and in `tasks.result.factsRejected[]`, and
+ * the contract goes on. Every other error keeps the all-or-nothing rule above. I2 is untouched:
+ * the violating Link never exists; I-S5-1 counts Links, so a refusal that wrote nothing does not
+ * inflate it.
  */
 
 const graphStore = new SqlGraphStore();
@@ -93,10 +110,17 @@ export interface PostWorkerResultInput {
   readonly contract: WorkerResultCapabilityParams;
 }
 
+/** One `factsToAssert[]` entry the workspace's ontology refused in `reject` mode (module doc
+ *  comment, "the one partial outcome"). `index` is the entry's position in the contract. */
+export interface RejectedResultFact extends OntologyViolationDetails {
+  readonly index: number;
+}
+
 export interface PostWorkerResultOutcome {
   readonly task: TaskRow;
   readonly activityId: string;
   readonly factIds: readonly string[];
+  readonly factsRejected: readonly RejectedResultFact[];
 }
 
 /** Resolves one `WorkerResultObjectRef` to a concrete Object id — upserting a new/existing Object
@@ -221,33 +245,67 @@ export async function postWorkerResult(
     // downgrade flag needed (replaces PR #84's `CallerPrincipal.viaAgent`, see this module's own
     // doc comment). `observationId` (migrations/core/0018) points every Fact at this run's
     // Observation so `explain(factId)` narrows to it.
-    const writtenFacts: Fact[] = [];
-    for (const factInput of contract.factsToAssert ?? []) {
-      const sourceObjectId = await resolveObjectRef(client, workspaceId, factInput.source);
-      const targetObjectId = await resolveObjectRef(client, workspaceId, factInput.target);
-      const fact = await graphStore.assertFact(
-        client,
-        workspaceId,
-        { id: agentPrincipalId },
-        {
-          linkType: factInput.linkType,
-          sourceObjectId,
-          targetObjectId,
-          activityId: activity.id,
-          properties: factInput.properties,
-          confidence: factInput.confidence,
-          observationId: runObservation.id,
-        },
-      );
-      writtenFacts.push(fact);
+    // `factsByIndex` stays aligned with `contract.factsToAssert` (a refused entry is `undefined`)
+    // so `evidence[].factIndex` below still names the entry the Worker meant. Each entry runs under
+    // its own savepoint — see the module doc comment ("the one partial outcome") for why only an
+    // `OntologyViolationError` is absorbed and everything else still rolls the contract back.
+    const factsByIndex: (Fact | undefined)[] = [];
+    const factsRejected: RejectedResultFact[] = [];
+    for (const [index, factInput] of (contract.factsToAssert ?? []).entries()) {
+      await client.query('savepoint result_fact');
+      try {
+        const sourceObjectId = await resolveObjectRef(client, workspaceId, factInput.source);
+        const targetObjectId = await resolveObjectRef(client, workspaceId, factInput.target);
+        const fact = await graphStore.assertFact(
+          client,
+          workspaceId,
+          { id: agentPrincipalId },
+          {
+            linkType: factInput.linkType,
+            sourceObjectId,
+            targetObjectId,
+            activityId: activity.id,
+            properties: factInput.properties,
+            confidence: factInput.confidence,
+            observationId: runObservation.id,
+          },
+        );
+        await client.query('release savepoint result_fact');
+        factsByIndex.push(fact);
+      } catch (err) {
+        if (!(err instanceof OntologyViolationError)) throw err;
+        // Undo this entry only — the endpoint upserts included — and record the refusal outside
+        // the savepoint so it survives (the guard's own audit row exists only in `warn` mode).
+        await client.query('rollback to savepoint result_fact');
+        await client.query('release savepoint result_fact');
+        factsByIndex.push(undefined);
+        factsRejected.push({ index, ...err.details });
+        await writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: agentPrincipalId,
+          action: 'task.result_fact_rejected',
+          resourceType: 'task',
+          resourceId: input.taskId,
+          payload: {
+            ...err.details,
+            enforcement: 'reject',
+            factIndex: index,
+            workerRunId: input.workerRunId,
+            activityId: activity.id,
+            onBehalfOf: actorPrincipalId,
+          },
+        });
+      }
     }
+    const writtenFacts = factsByIndex.filter((fact): fact is Fact => fact !== undefined);
 
     // evidence[] -> a real `evidence` row per targeted Fact (already carried on the Activity's own
-    // metadata above regardless of whether there is any Fact to attach to).
+    // metadata above regardless of whether there is any Fact to attach to). Evidence aimed at a
+    // refused entry has no Fact to attach to and stays on the Activity metadata only.
     for (const evidenceInput of contract.evidence ?? []) {
       const targets =
         evidenceInput.factIndex !== undefined
-          ? [writtenFacts[evidenceInput.factIndex]].filter(
+          ? [factsByIndex[evidenceInput.factIndex]].filter(
               (fact): fact is Fact => fact !== undefined,
             )
           : writtenFacts;
@@ -291,6 +349,7 @@ export async function postWorkerResult(
       summary: contract.summary,
       findings: contract.findings ?? [],
       factIds: writtenFacts.map((fact) => fact.id),
+      factsRejected,
       artifacts: contract.artifacts ?? [],
       proposedSkill: contract.proposedSkill,
       proposedSkillId: proposedSkillRecord?.id,
@@ -307,7 +366,12 @@ export async function postWorkerResult(
       storedResult,
     );
 
-    return { task, activityId: activity.id, factIds: writtenFacts.map((fact) => fact.id) };
+    return {
+      task,
+      activityId: activity.id,
+      factIds: writtenFacts.map((fact) => fact.id),
+      factsRejected,
+    };
   } catch (err) {
     await endActivity(client, workspaceId, activity.id, 'failed').catch(() => {
       // Best-effort — the outer error is the one that matters; a failed endActivity here must
