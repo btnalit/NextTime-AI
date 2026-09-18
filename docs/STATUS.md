@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-09-18（W10 完成：S5.3 #195、S5.5 后五项 #197 / #198 / #199、S5.6 #200，遗留 9 / 21 / 23 / 24 / 25 / 30 / 31 / 34 / 40 关闭、11 部分关闭；发布 v0.12.0，主机未应用（v0.10.1 + v0.11.0 + v0.12.0 一起）。上一版同日 W9 完成：S5.1 #191 / #192、S5.2 #193、S5.4 #190、S5.5 前三项 #186 / #187 / #188，遗留 20 / 22 / 28 / 36 / 37 / 38 关闭，新增遗留 40；四项待决按推荐缺省取定（见 §3 与 `development-tasks.md` §5b 波次表头）；发布 v0.11.0，主机未应用。上一版 2026-09-16：S5 基座打磨立项：`development-tasks.md` §5b 八项（S5.8 交付与演示闭环同日补入）、W9–W11 波次、四项待维护者决定；新增遗留 37 / 38，遗留 9 / 11 / 20–24 / 28 / 30 / 31 / 34 / 36 归属改为 S5 车道。上一版 2026-09-12：W8 P-B2a 合入 PR #179 并发 v0.10.0，P-B1 #175 v0.9.0，P-A2 #171 v0.8.0，P-A1 #168 v0.7.0）
+最后更新：2026-09-18（W11 本地部分完成：S5.7 `report-usage.sh` + 例行回归流程 #202、S5.8 `make demo` #204、`drill-install.sh` / `drill-upgrade.sh` + release.md 迁移可逆性 #205，回顾 `retrospective-2026-09-18.md`；主机侧——三版应用、`--runs 10` 数字、三个演练实跑——待做。同日 W10 完成：S5.3 #195、S5.5 后五项 #197 / #198 / #199、S5.6 #200，遗留 9 / 21 / 23 / 24 / 25 / 30 / 31 / 34 / 40 关闭、11 部分关闭；发布 v0.12.0，主机未应用（v0.10.1 + v0.11.0 + v0.12.0 一起）。上一版同日 W9 完成：S5.1 #191 / #192、S5.2 #193、S5.4 #190、S5.5 前三项 #186 / #187 / #188，遗留 20 / 22 / 28 / 36 / 37 / 38 关闭，新增遗留 40；四项待决按推荐缺省取定（见 §3 与 `development-tasks.md` §5b 波次表头）；发布 v0.11.0，主机未应用。上一版 2026-09-16：S5 基座打磨立项：`development-tasks.md` §5b 八项（S5.8 交付与演示闭环同日补入）、W9–W11 波次、四项待维护者决定；新增遗留 37 / 38，遗留 9 / 11 / 20–24 / 28 / 30 / 31 / 34 / 36 归属改为 S5 车道。上一版 2026-09-12：W8 P-B2a 合入 PR #179 并发 v0.10.0，P-B1 #175 v0.9.0，P-A2 #171 v0.8.0，P-A1 #168 v0.7.0）
 
 ## 1. 入口指引
 
@@ -32,7 +32,7 @@
 | S3 | 本体 v1 + 采集器 + Explorer + MCP gateway | 达成 | `accept_s3.sh` 29 PASS（2026-09-11，新增 explorer-no-credentials 断言，PR #153，从分支在主机验证） |
 | S3.11–S3.15 | 控制面、接入向导、AgentProfile、web 控制台、pi 漂移 | 达成 | `development-tasks.md` 各节实现说明 |
 | 真实模型验证 | 真实模型跑 S2 / S3 场景，统计工具调用成功率 | 达成 | docker_restart 2/3、api_observe 3/3、ssh_run_approve 3/3、ssh_run_auto 1/1、dependency_chat 2/3（`retrospective-2026-09-11.md` §2） |
-| S5 | 基座打磨：I2 写入点强制、新鲜度与失效、数据与代码分离、prompt 契约守卫、加固批次、稳定性、真实模型回归、交付与演示闭环（S5.8，W11 最后） | W9 + W10 完成（2026-09-18：S5.1–S5.6；W11 S5.7 / S5.8 待开工）；主机未应用 | `development-tasks.md` §5b 各节实现说明；CI guards / quality / test（含 Postgres 集成套件）/ e2e 全绿 |
+| S5 | 基座打磨：I2 写入点强制、新鲜度与失效、数据与代码分离、prompt 契约守卫、加固批次、稳定性、真实模型回归、交付与演示闭环（S5.8，W11 最后） | W9 + W10 完成（2026-09-18：S5.1–S5.6）；W11 本地部分完成（S5.7 工具与流程 #202、S5.8 `make demo` #204、两个演练脚本 + 迁移可逆性表 #205），主机侧待做；主机未应用 | `development-tasks.md` §5b 各节实现说明；CI guards / quality / test（含 Postgres 集成套件）/ e2e 全绿 |
 | 发布 | — | v0.12.0（W10：#195 / #197 / #198 / #199 / #200；其下 v0.11.0 含 W9 #186 / #187 / #188 / #190 / #191 / #192 / #193、v0.10.1 含 #183、v0.10.0 含 P-B2a、v0.9.0 含 P-B1、v0.8.0 含 P-A2、v0.7.0 含 P-A1、v0.6.0 含 S4.1）。主机仍在 v0.10.0，v0.10.1 + v0.11.0 + v0.12.0 一起应用（迁移 core 0025–0029，全部镜像重建，见 §3 W9 / W10 主机应用注意） | `CHANGELOG.md` |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 复审曾发现 S3.2 的冲突检测在 Worker 断言主路径上不生效
@@ -66,6 +66,7 @@
 | 2026-09-16 | 维护者决定先打磨基座、场景层推后；对 main 核实后立项 S5 基座打磨（八项含 S5.8 交付与演示闭环、W9–W11、四项待决），新增遗留 37 / 38；#182 合入后 main 的 CI 因 pg Pool 无 `error` 监听而失败，PR #183 修复并关闭遗留 39 | `development-tasks.md` §5b、PR #182 / #183 |
 | 2026-09-17 → 18 | W9 三车道并行完成（v0.11.0）：**W9-C** 遗留 36 `create_connection` 拒绝命中平台门端点 + S2 脚本改走目录路径（#186）、遗留 22 supervisor `reconcile()` 出网拒绝表回退（#187，agent 抓到的真 bug）、遗留 20 五个服务补 `read_only` / `cap_drop` / `no-new-privileges`（#188，caddy 文件 capability 一并修）；**W9-B** S5.4 prompt 契约修复 + `prompt-contract` 守卫 + fake-llm 工具形状校验（#190）；**W9-A** S5.1 I2 在写入点强制、工作区 `reject` / `warn`、I-S5-1（#191）+ 平台工作区页开关（#192），S5.2 新鲜度与失效：迁移 0026 / 0027、观察窗口 `not_reobserved`、门观察带 Source（I-S5-2）、`assertFact` 同源优先（#193，关闭 28 / 38）。四项待决按推荐缺省取定。内核核心（S5.1 / S5.2 / 遗留 36）由主会话完成，其余三条车道各一个 sonnet 子代理；S5.2 的 0027 是实现窗口时暴露的 S3.2 边界。主机未应用 | `development-tasks.md` §5b 各节实现说明、`CHANGELOG.md` |
 | 2026-09-18 | W10 三车道完成（v0.12.0）：**W10-A** S5.3 数据与代码分离（#195：迁移 core 0028 `sources.name` + 唯一索引、`register_source` 按 (kind, name) 幂等、采集器无本地状态、领域包放主机 `config/ontology/` 即 seed、ephemeral 工作区 + `--expired` 清理；关闭 9、11 部分）；**W10-B** S5.5 后五项（#197 `list_action_requests` + 控制台审批历史、遗留 31 核实关闭；#198 遗留 24 `assertFact` 有界重读到链尾 + core 0029；#199 遗留 23 cursor 毫秒截断、遗留 34 十五处同 client 并发 query 顺序化 + pg 警告变测试失败）；**W10-C** S5.6（#200：`queued` 崩溃缺口清扫 `spawn_lost` + I-S5-3 + chaos 脚本，遗留 25 / 40 testTimeout，**遗留 30 根因**：`ActionRequestPending` 路由不读 `await_decision`、把不阻塞的 Worker 的 Task 挂成 `waiting_approval`，其 `report_result` 撞无边转移被整体回滚——修为只在 `await_decision: true` 时挂起，主机 `--real` 复跑留 S5.7）。过程：三个 sonnet 车道同时撞会话限额，主会话先把三条车道收尾都揽了下来（B2 验证开 PR、B1 补集成测试与 23 / 34、C 的遗留 30 修复），维护者指出违背"智能分配任务与模型"的约定；之后 C 代理恢复自己收尾，教训记 memory。顾问在 S5.3 完成审查里抓到主机过渡风险（生产工作区重名采集器 Source 回填不命名 → 采集器另起谱系）——已写成应用前三步核对。主机未应用 | `development-tasks.md` §5b 各节实现说明、`CHANGELOG.md` |
+| 2026-09-18 | W11 本地部分（三条 sonnet 车道并行，主会话审 diff 后各补一处；本机无 Docker / 主机，脚本只做 `bash -n` / shellcheck / guards 静态验证）：**E** S5.7 `scripts/report-usage.sh`（`llm_usage` 按 turn / handle / task 聚合，`--by task` 走 `worker_runs.session_id` 的真实 join，参数先正则再进 SQL）+ `host-accept-real-model.md` 例行回归七步与私有记录模板（#202）；**D2** S5.8 `make demo`（ephemeral 工作区 + 采集 + 三问 + Markdown 结果页；审出 demo 覆盖生产采集器 token 的问题 → 改为 demo 私有 token 文件 + `NEXTTIME_HANDLE_TOKEN_FILE`）（#204）；**D1** S5.8 `drill-install.sh`（操作机经 SSH 编排、拒绝已部署主机、发现 runbook 顺序不自洽的交付缺口）+ `drill-upgrade.sh`（升级 → 三份验收 → 可逆性 PROBE → 先回代码再活库 restore → S1；审后加自我复制 `exec` 与回到原分支）+ `release.md` §6 迁移可逆性表（core 0025–0029 全部可逆，0027 经核实旧调用方只取首行）（#205）。W9–W10 回顾写成 `retrospective-2026-09-18.md`。主机侧待做，见 §3 | `development-tasks.md` §5b S5.7 / S5.8 实现说明、`retrospective-2026-09-18.md` |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -76,7 +77,9 @@
   真实模型各场景跑 3 次，证明了「模型自己选对工具」在 docker_restart 2/3、api_observe 3/3、
   ssh_run_approve 3/3、ssh_run_auto 1/1、dependency_chat 2/3 上成立，且失败都不是选错工具
   （`retrospective-2026-09-11.md` §2）。盲区：每场景只跑 3 次、只用了一个真实供应商和一个模型，
-  样本量和覆盖面都远不足以下"稳定可用"的结论。
+  样本量和覆盖面都远不足以下"稳定可用"的结论。**S5.7（#202）把它变成例行**：每次发版后
+  `--runs 10`、`report-usage.sh` 汇总 token / 费用、`make demo` 作第六场景，任一场景 `<8/10` 记为该
+  版本已知问题（`host-accept-real-model.md` §8 / §9）；首轮数字待主机（表在此处补）。
 - **对 Conflict 的唯一断言是「采集器跑两遍后为零」**，因此任何**压制** Conflict 的缺陷，
   存在与否验收都表现为通过（§4 第 16 项即属此类）。缺一条「异源矛盾断言 → 恰好一个 open Conflict」
   的正向用例。**PR #136**：`accept_s3.sh` 已加入 `collector_conflict_positive_step`，把这条正向用例
@@ -154,7 +157,17 @@
 
 **W10 主机应用注意**（与 W9 的注意一起做，v0.10.1 + v0.11.0 + v0.12.0 一次应用；新增迁移 core 0028 / 0029）：① **先按 S5.3 实现说明核对采集器 Source 谱系**——记下状态文件里的 `sourceId`，`make migrate` 后若生产工作区有重名 `host-inventory-collector` Source、记下的那行 `name` 为空，手动 `update sources set name = 'host-inventory' where id = <记下的 id>`，否则采集器另起谱系、S5.2 窗口接不上旧 Fact；② 重跑 `host-env-init.sh`（建 `config/ontology/`），把 `ontology/ops-assets-v1.yaml` / `v2.yaml` 放进去；③ 重建 kernel / web / collector-host-inventory（采集器不再挂 `/data/state`）；④ 应用后 `/internal/metrics` 看 `I-S5-2` / `I-S5-3` 为 0，`delete-workspaces-matching.sh --expired` 先 dry-run 一次；⑤ 跑一次 `scripts/chaos-kill-kernel-mid-invoke.sh`（两种 PASS 都算）；⑥ S1 → S2 → S3 复跑（工作区现在是 ephemeral、7 天到期）；⑦ 遗留 30 的主机验证归 S5.7（`accept_s2.sh --real --runs 10` 复跑 docker_restart 场景）。
 
-**下一波：W11**（`development-tasks.md` §5b 波次表）：S5.7 真实模型回归常态化（五场景各 10 次，数字进本文 §2.2）+ S5.8 交付与演示闭环（`drill-install.sh` / `drill-upgrade.sh` / `make demo`）+ 主机应用 + 回顾；之后 P-B2b → P-C → P-D。
+**S5 W11：本地部分完成，主机侧待做**（2026-09-18；三条 sonnet 车道并行，主会话审 diff；回顾见 `retrospective-2026-09-18.md`）。
+
+| 车道 | 项 | 状态 |
+|---|---|---|
+| W11-E | S5.7 `scripts/report-usage.sh`（`--workspace` / `--since` / `--until`、`--by turn\|handle\|task`、`--markdown`、`--summary`）+ `runbooks/host-accept-real-model.md` §3 阈值（`--runs 10` 例行、任一场景 `<8/10` 记已知问题）、§8 例行回归七步、§9 `docs/private/real-model-<date>.md` 模板 | 完成（PR #202）；五场景各 10 次的数字待主机 |
+| W11-D2 | S5.8 item 3 `make demo` / `scripts/demo.sh` + `runbooks/demo.md`：不碰生产采集器密钥，Q3 复用 `accept-s2-restart-target` fixture | 完成（PR #204）；15 分钟预算待主机实测 |
+| W11-D1 | S5.8 item 1 / 2 `scripts/drill-install.sh`、`scripts/drill-upgrade.sh`、`runbooks/host-drills.md`、`runbooks/release.md` §6 迁移可逆性 | 完成（PR #205）；干净主机安装 / 升级回滚演练待主机实跑 |
+
+**W11 主机侧待办**（按序）：① 在主机检出根目录跑 `sh scripts/drill-upgrade.sh --to v0.12.0 --ack-live-restore`（从 v0.10.0 演练升级 → 三份验收 → PROBE → 回滚，结束回到 v0.10.0，升级前 dump 保留）——注意先做 W10 注意 ① 的 Source 谱系核对，演练的 restore 会撤销手动步骤；② 按脚本末尾打印的命令真实升级到 v0.12.0，再补做 W9 / W10 主机应用注意里的手动步骤（`host-env-init.sh`、`config/ontology/`、Source `name`、S5.1 先 `warn` 后 `reject`）；③ S1 → S2 → S3 复跑、chaos 脚本、`/internal/metrics` 看 I-S5-1 / 2 / 3；④ S5.7：`accept_s2.sh` / `accept_s3.sh --real <provider/model> --runs 10 --keep` + `DEMO_MODEL=<provider/model> make demo` + `report-usage.sh`，按 `host-accept-real-model.md` §8 / §9 写 `docs/private/real-model-<date>.md`，纯计数进本文 §2.2 与 §2 "真实模型验证"行，遗留 30 的 docker_restart 复跑在此验证；⑤ 有干净主机时跑 `drill-install.sh`（`REF=v0.12.0`），耗时与交付缺口回填 `host-drills.md`；⑥ 数字齐后补 `retrospective-2026-09-18.md` §6，并按 S5.8 item 4 重评镜像发布（五场景均 ≥ 8/10 则排期）。
+
+**下一波**：W11 主机侧完成后按原顺序 P-B2b → P-C → P-D。
 
 **S5 立项记录（2026-09-16，`development-tasks.md` §5b）**。
 维护者 2026-09-16 决定暂不做场景层、先打磨基座。对 main（v0.10.0）逐项核实后，2026-09-09 回顾 §5 的 12 个非最优点已关闭 7 个；仍开放且属基座的归为 S5 七项：S5.1 本体约束在写入点强制（I2 目前只是 `validate` 能力，复审 §4-1）→ S5.2 新鲜度与失效（`last_observed_at`、`not_reobserved` 观察窗口，关闭 28）→ S5.3 数据与代码分离（关闭 9、11 部分）→ S5.4 prompt 契约修复与守卫（09-09 审计 15 条 + `prompt-contract` 守卫 + fake 侧工具形状校验）→ S5.5 加固批次（36 / 22 / 20 先做，再 23 / 24 / 34 / 31 / 21）→ S5.6 稳定性（30、`queued` 崩溃缺口、26、25）→ S5.7 真实模型回归常态化（五场景各 10 次）→ S5.8 交付与演示闭环（W11 最后一项，2026-09-16 维护者确认：陌生主机安装演练、升级 / 回滚演练、15 分钟 `make demo`、镜像发布重评；不扩大基座边界）。
