@@ -450,6 +450,40 @@ async function checkIS52(client: PoolClient): Promise<InvariantCheckResult> {
 }
 
 // -------------------------------------------------------------------------------------------
+// I-S5-3 — no Task stuck `queued` past the reaper's own spawn-lost sweep window.
+// -------------------------------------------------------------------------------------------
+
+/**
+ * S5.6 (docs/development-tasks.md §5b "S5 新增不变量" I-S5-3; application/task/reaper.ts's
+ * `reapLostQueuedTasks`). `create_task` is retired (W5, 遗留 3) — `invoke_worker` is the only path
+ * that ever inserts a Task at `queued`, and it always either spawns a WorkerRun and flips the row
+ * to `running`, or fails it synchronously in its own catch block on a caught spawn error
+ * (`invoke.ts`'s `insertQueuedTaskWithQuotaCheck` / `invokeWorkerCreate`); a row observed `queued`
+ * is therefore either mid-flight (milliseconds) or the kernel crashed between the INSERT and one
+ * of those two outcomes ever running. The reaper's own sweep resolves such a row after 60 seconds
+ * (`reaper.ts`'s `QUEUED_SPAWN_LOST_THRESHOLD_MS`) — this check's 5-minute threshold is
+ * deliberately much wider, so a violation here means that sweep itself regressed (not scheduled,
+ * throwing before reaching this workspace's row, or the whole reaper timer disabled), not that a
+ * legitimate in-flight spawn is merely slow. Same "defense in depth on the enforcement mechanism,
+ * not the invariant itself" posture I4/I7/I12 already establish in this module's own doc comment
+ * table. `updated_at` is written once at INSERT and never again before a `queued` row transitions
+ * away (no trigger, no UPDATE statement touches it while `status='queued'`) — an exact proxy for
+ * "how long has this row been stuck", not a heuristic.
+ */
+async function checkIS53(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{ workspace_id: string; id: string }>(
+    `select workspace_id, id
+     from tasks
+     where status = 'queued' and updated_at < now() - interval '5 minutes'`,
+  );
+  return {
+    invariant: 'I-S5-3',
+    violations: result.rows.length,
+    sample: result.rows.slice(0, SAMPLE_LIMIT).map((row) => `${row.workspace_id}:${row.id}`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // Beyond I1–I16 — operational-health checks (see module doc comment).
 // -------------------------------------------------------------------------------------------
 
@@ -507,6 +541,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I16',
   'I-S5-1',
   'I-S5-2',
+  'I-S5-3',
   'ops.one_running_turn',
   'ops.outbox_stuck',
 ];
@@ -536,6 +571,7 @@ export async function runInvariantChecks(
       await checkI16(client),
       await checkIS51(client),
       await checkIS52(client),
+      await checkIS53(client),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
     ];

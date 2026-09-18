@@ -15,6 +15,7 @@ import {
   type ActionRequestEventMeta,
   type ActionRequestEventSource,
   registerActionRequestRoutingConsumer,
+  runTaskReaper,
 } from './reaper.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { findWorkers } from './service.js';
@@ -127,6 +128,91 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('ActionRequest -> Task waiting_approval routing', () => {
+      /** The fixture every case below shares: a published worker definition, a `running` Task with
+       *  one `running` WorkerRun, a Gatekeeper Object, and one `pending_approval` ActionRequest
+       *  raised by that WorkerRun with the given `await_decision` (S5.6 leftover 30: the router
+       *  reads it now). */
+      async function seedPendingChildRequest(awaitDecision: boolean) {
+        const definitionId = await inTx(ownerId, async (client) => {
+          const proposed = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+            kind: 'worker',
+            definition: { systemPrompt: 'ops-runner' },
+          });
+          await publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: proposed.id,
+            version: proposed.version,
+          });
+          return proposed.id;
+        });
+
+        const { taskId, workerRunId } = await inTx(ownerId, async (client) => {
+          const taskResult = await client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+           values ($1, 'running', $2, $3, 1) returning id`,
+            [workspaceId, ownerId, definitionId],
+          );
+          const insertedTaskId = taskResult.rows[0]?.id as string;
+          const workerRunResult = await client.query<{ id: string }>(
+            `insert into worker_runs (workspace_id, status, task_id, depth, attempt)
+           values ($1, 'running', $2, 0, 1) returning id`,
+            [workspaceId, insertedTaskId],
+          );
+          return { taskId: insertedTaskId, workerRunId: workerRunResult.rows[0]?.id as string };
+        });
+
+        const gatekeeperObjectId = await inTx(ownerId, async (client) => {
+          const object = await graphStore.upsertObject(client, workspaceId, {
+            objectType: 'Gatekeeper',
+            properties: { transportKind: 'ssh' },
+          });
+          return object.id;
+        });
+
+        const actionRequestId = await inTx(ownerId, async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into action_requests (
+             workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+             await_decision, on_behalf_of, parent_worker_run_id, actor_runtime
+           ) values ($1, 'pending_approval', $2, 'test.restart', 'medium', 'require_approval',
+             $5, $3, $4, 'worker')
+           returning id`,
+            [workspaceId, gatekeeperObjectId, ownerId, workerRunId, awaitDecision],
+          );
+          return result.rows[0]?.id as string;
+        });
+
+        return { taskId, gatekeeperObjectId, actionRequestId };
+      }
+
+      it('S5.6 leftover 30: an ActionRequest the Worker does not await (await_decision=false, the docker_restart shape) leaves the Task running', async () => {
+        const { taskId, gatekeeperObjectId, actionRequestId } =
+          await seedPendingChildRequest(false);
+        const supervisorClient = {} as TaskSupervisorClientPort;
+        const { privateKey } = await generateEphemeralHandleKeyPair();
+        const dispatcher = new FakeActionRequestEventSource();
+        const unsubscribe = registerActionRequestRoutingConsumer(dispatcher, {
+          pool,
+          privateKey,
+          supervisorClient,
+        });
+        try {
+          await dispatcher.emit('ActionRequestPending', {
+            type: 'ActionRequestPending',
+            workspaceId,
+            actionRequestId,
+            gatekeeperId: gatekeeperObjectId,
+            actionKindTag: 'test.restart',
+            holderPrincipalIds: [ownerId],
+          });
+          const task = await inTx(ownerId, (client) => readTaskRow(client, workspaceId, taskId));
+          // Still `running`: the Worker was not blocked, so its own `report_task_result` must keep
+          // finding a Task it can complete.
+          expect(task?.status).toBe('running');
+        } finally {
+          unsubscribe();
+        }
+      });
+
       it("routes a pending child WorkerRun's ActionRequest back to the parent Task, and resumes on resolution", async () => {
         const definitionId = await inTx(ownerId, async (client) => {
           const proposed = await proposeWorkerDefinition(client, workspaceId, ownerId, {
@@ -169,12 +255,15 @@ describe.runIf(DATABASE_URL !== undefined)(
              workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
              await_decision, on_behalf_of, parent_worker_run_id, actor_runtime
            ) values ($1, 'pending_approval', $2, 'test.restart', 'medium', 'require_approval',
-             false, $3, $4, 'worker')
+             true, $3, $4, 'worker')
            returning id`,
             [workspaceId, gatekeeperObjectId, ownerId, workerRunId],
           );
           return result.rows[0]?.id as string;
         });
+        // `await_decision: true` (S5.6 leftover 30): this is the case where the Worker really is
+        // blocked on the decision, the one the router parks. It used to seed `false` and still
+        // expected `waiting_approval`, because the router never read the field.
 
         const supervisorClient = {} as TaskSupervisorClientPort; // never called by the router itself.
         const { privateKey } = await generateEphemeralHandleKeyPair();
@@ -291,6 +380,74 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
 
         expect(matches.some((m) => m.name === 'gate-execute-worker-unique-xyz')).toBe(false);
+      });
+    });
+
+    describe('runTaskReaper — queued crash-gap sweep (S5.6, I-S5-3)', () => {
+      /** Inserts a `queued` Task row directly (raw SQL, no `invoke_worker`) — `create_task` is
+       *  retired, so the only way this suite can put a row at `queued` and hold it there is to
+       *  fabricate one, the same way it stands in for the kernel dying between the INSERT and its
+       *  own follow-up spawn. No WorkerDefinition FK exists on `tasks` at this migration ordering
+       *  (0001_tasks.sql's own header comment) — an arbitrary uuid is a legal `worker_definition_id`
+       *  here, exactly as `invoke.integration.test.ts`'s own fixtures rely on. */
+      async function insertQueuedTask(updatedAt: Date): Promise<string> {
+        const taskId = randomUUID();
+        await inTx(ownerId, (client) =>
+          client.query(
+            `insert into tasks (
+               workspace_id, id, status, on_behalf_of, worker_definition_id,
+               worker_definition_version, created_at, updated_at
+             ) values ($1, $2, 'queued', $3, $4, 1, $5, $5)`,
+            [workspaceId, taskId, ownerId, randomUUID(), updatedAt],
+          ),
+        );
+        return taskId;
+      }
+
+      it("fails a Task stuck `queued` past the sweep's own threshold, through the governed path (failure_reason='spawn_lost', audited)", async () => {
+        const staleTaskId = await insertQueuedTask(new Date(Date.now() - 90 * 1000)); // 90s ago
+
+        const supervisorClient = {} as TaskSupervisorClientPort; // no worker_runs row exists for
+        // this Task — the duration-timeout scan's own SELECT (worker_runs join tasks) never
+        // matches it, so the supervisor client is never actually called for this fixture.
+        const { privateKey } = await generateEphemeralHandleKeyPair();
+        const taskDeps: TaskRuntimeDeps = { pool, privateKey, supervisorClient };
+
+        const result = await runTaskReaper(taskDeps);
+        expect(result.spawnLost).toBeGreaterThanOrEqual(1);
+
+        const failed = await inTx(ownerId, (client) =>
+          readTaskRow(client, workspaceId, staleTaskId),
+        );
+        expect(failed?.status).toBe('failed');
+        expect(failed?.failureReason).toBe('spawn_lost');
+
+        // "governed path, not a bare UPDATE" — the same `task.fail` audit row every other
+        // `failTaskRow` caller in this module produces (`transition-log.ts`'s `recordTaskTransition`).
+        const audit = await inTx(ownerId, (client) =>
+          client.query<{ action: string }>(
+            `select action from audit_records
+             where workspace_id = $1 and resource_type = 'task' and resource_id = $2
+               and action = 'task.fail'`,
+            [workspaceId, staleTaskId],
+          ),
+        );
+        expect(audit.rows.length).toBeGreaterThanOrEqual(1);
+      });
+
+      it('leaves a freshly `queued` Task alone — the sweep only fires past its own threshold', async () => {
+        const freshTaskId = await insertQueuedTask(new Date());
+
+        const supervisorClient = {} as TaskSupervisorClientPort;
+        const { privateKey } = await generateEphemeralHandleKeyPair();
+        const taskDeps: TaskRuntimeDeps = { pool, privateKey, supervisorClient };
+
+        await runTaskReaper(taskDeps);
+
+        const stillQueued = await inTx(ownerId, (client) =>
+          readTaskRow(client, workspaceId, freshTaskId),
+        );
+        expect(stillQueued?.status).toBe('queued');
       });
     });
   },
