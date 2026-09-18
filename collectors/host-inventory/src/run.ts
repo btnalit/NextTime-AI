@@ -141,6 +141,8 @@ export interface RunSummary {
   readonly objectsUpserted: number;
   readonly factsAsserted: number;
   readonly factsSuperseded: number;
+  /** S5.2: Facts this run's observation windows retired (`not_reobserved`). */
+  readonly factsInvalidated: number;
 }
 
 /**
@@ -246,24 +248,53 @@ export async function runOnce(options: RunOptions): Promise<RunSummary> {
       .map((o) => [String(o.identity.projectName), o.id] as const),
   );
 
-  // Phase 3: Container — needs each ComposeProject's resolved id.
+  // Phase 3: Container — needs each ComposeProject's resolved id. Always submitted, even with no
+  // compose-managed container at all: it carries this run's observation window (S5.2, docs/
+  // development-tasks.md §5b S5.2) — "this run is this Source's complete view of these
+  // ObjectTypes" — and the kernel retires every Fact of this Source at such an Object that no
+  // phase of this run re-observed (`invalidation_reason = 'not_reobserved'`; leftover 28's phantom
+  // Containers are exactly those). One window on the last phase, not one per phase: the three
+  // phases share one Activity and phases 2 and 3 both write Container edges, so a per-phase window
+  // would retire what an earlier phase of the same run just wrote. The window's types are only
+  // what this run *actually* collected: the Docker-backed types are unconditional (a Docker
+  // failure threw before any submission), the optional scans join only when they ran — a skipped
+  // process tree must never declare every Process on the host absent.
+  const windowObjectTypes = [
+    'Host',
+    'Image',
+    'ComposeProject',
+    'Container',
+    'Volume',
+    'Network',
+    'Endpoint',
+    ...(config.repositoryPaths.length > 0 ? ['Repository'] : []),
+    ...(systemdResult.skipped ? [] : ['SystemdService']),
+    ...(processTreeResult.skipped ? [] : ['Process']),
+  ];
   const phase3 = buildPhase3Observations({
     hostname: hostInfo.hostname,
     hostId,
     composeProjectIds,
     composeProjects,
   });
-  const phase3Result =
-    phase3.length > 0
-      ? await kernelClient.submitObservations({ sourceId, activityId, observations: phase3 })
-      : { objectsUpserted: 0, factsAsserted: 0, factsSuperseded: 0 };
+  const phase3Result = await kernelClient.submitObservations({
+    sourceId,
+    activityId,
+    observations: phase3,
+    window: { complete: true, objectTypes: windowObjectTypes },
+  });
 
   // Phase 4 (S3.4, optional, non-fatal): KnowledgeBase/Document, only when a RAGFlow Gatekeeper is
   // configured — independent of Host/Container, needs no previously-resolved id. Any failure here
   // (gate unreachable, kb.list erroring, a kernel/network error) is logged and skipped, never
   // thrown — see this module's own doc comment for why RAGFlow's own optionality does not follow
   // Docker's hard-required contract.
-  let phase4Result = { objectsUpserted: 0, factsAsserted: 0, factsSuperseded: 0 };
+  let phase4Result: {
+    objectsUpserted: number;
+    factsAsserted: number;
+    factsSuperseded: number;
+    factsInvalidated?: number;
+  } = { objectsUpserted: 0, factsAsserted: 0, factsSuperseded: 0 };
   if (config.ragflowGatekeeperId) {
     try {
       const phase4 = await collectRagflowObservations({
@@ -271,13 +302,15 @@ export async function runOnce(options: RunOptions): Promise<RunSummary> {
         gatekeeperId: config.ragflowGatekeeperId,
         logger,
       });
-      if (phase4.length > 0) {
-        phase4Result = await kernelClient.submitObservations({
-          sourceId,
-          activityId,
-          observations: phase4,
-        });
-      }
+      // S5.2: submitted even when empty — an empty batch with a window is how a knowledge base
+      // that lost every Document gets its Facts retired. A collection failure above throws past
+      // this call, so a gate that could not be read never declares anything absent.
+      phase4Result = await kernelClient.submitObservations({
+        sourceId,
+        activityId,
+        observations: phase4,
+        window: { complete: true, objectTypes: ['KnowledgeBase', 'Document'] },
+      });
     } catch (err) {
       logger.warn('ragflow observation phase failed — skipped, rest of this run still succeeds', {
         gatekeeperId: config.ragflowGatekeeperId,
@@ -303,6 +336,7 @@ export async function runOnce(options: RunOptions): Promise<RunSummary> {
       phase2Result.factsSuperseded +
       phase3Result.factsSuperseded +
       phase4Result.factsSuperseded,
+    factsInvalidated: (phase3Result.factsInvalidated ?? 0) + (phase4Result.factsInvalidated ?? 0),
   };
   logger.info('run complete', { ...summary });
   return summary;

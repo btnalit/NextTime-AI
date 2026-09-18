@@ -318,13 +318,23 @@ describe('runOnce', () => {
     expect(calls.submitObservations).toHaveLength(0);
   });
 
-  it('skips phase 3 entirely (no submitObservations call) when there are no compose-managed containers', async () => {
+  it('S5.2: phase 3 is still submitted with no compose-managed container — empty, carrying the observation window', async () => {
     const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
     const dockerClient = fakeDockerClient({ listContainers: async () => [] });
 
     await run({ config: baseConfig(stateFile), dockerClient, kernelClient });
-    expect(calls.submitObservations).toHaveLength(2); // phase 1 + phase 2 only.
+    expect(calls.submitObservations).toHaveLength(3);
+    const phase3 = calls.submitObservations[2];
+    expect(phase3?.observations).toEqual([]);
+    expect(phase3?.window?.complete).toBe(true);
+    // Docker-backed types are always in the window; the optional scans only when they ran (this
+    // fixture's process tree is `skipped` and no repository path is configured).
+    expect(phase3?.window?.objectTypes).toEqual(
+      expect.arrayContaining(['Host', 'Container', 'ComposeProject', 'Image']),
+    );
+    expect(phase3?.window?.objectTypes).not.toContain('Process');
+    expect(phase3?.window?.objectTypes).not.toContain('Repository');
   });
 
   describe('phase 4 (S3.4, ragflow — optional, non-fatal)', () => {
@@ -373,6 +383,10 @@ describe('runOnce', () => {
       const phase4 = calls.submitObservations[3];
       expect(phase4?.activityId).toBe('act-1');
       expect(phase4?.observations.map((o) => o.objectType)).toEqual(['KnowledgeBase', 'Document']);
+      expect(phase4?.window).toEqual({
+        complete: true,
+        objectTypes: ['KnowledgeBase', 'Document'],
+      });
       // 3 phases * 1 observation (Host) + phase 2/3's own counts + phase 4's own 2 — just confirm
       // phase 4's own contribution shows up (exact totals for phases 1-3 covered by other tests).
       expect(summary.factsAsserted).toBeGreaterThanOrEqual(2);
@@ -408,7 +422,7 @@ describe('runOnce', () => {
       expect(summary.activityId).toBe('act-1');
     });
 
-    it('submits no fourth phase when kb.list returns zero KnowledgeBases', async () => {
+    it('S5.2: an empty KnowledgeBase list still submits phase 4 — empty, with its own window', async () => {
       const stateFile = path.join(dir, 'source.json');
       const { client: kernelClient, calls } = fakeKernelClient({
         observeOperation: async () => ({
@@ -425,7 +439,13 @@ describe('runOnce', () => {
       });
 
       expect(calls.observeOperation.map((p) => p.operation)).toEqual(['kb.list']);
-      expect(calls.submitObservations).toHaveLength(3); // no phase 4 submit for an empty batch.
+      expect(calls.submitObservations).toHaveLength(4);
+      const phase4 = calls.submitObservations[3];
+      expect(phase4?.observations).toEqual([]);
+      expect(phase4?.window).toEqual({
+        complete: true,
+        objectTypes: ['KnowledgeBase', 'Document'],
+      });
     });
   });
 });

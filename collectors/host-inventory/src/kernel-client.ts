@@ -26,10 +26,21 @@ export interface RegisterSourceResult {
   readonly visibility: 'workspace' | 'private';
 }
 
+/** S5.2 observation window (kernel `submit_observations` `window` param): "this submission is
+ *  this Source's complete view of `objectTypes` within its Activity" — every still-active Fact of
+ *  the Source starting at an Object of those types that the run did not re-observe is invalidated
+ *  `not_reobserved`. Declared once per run, on its last submission (`run.ts`). */
+export interface ObservationWindow {
+  readonly complete: true;
+  readonly objectTypes: readonly string[];
+}
+
 export interface SubmitObservationsParams {
   readonly sourceId: string;
   readonly activityId?: string;
+  /** May be empty only together with `window` — closing a run whose last phase had nothing. */
   readonly observations: readonly IngestObservation[];
+  readonly window?: ObservationWindow;
 }
 
 export interface SubmitObservationsResult {
@@ -37,6 +48,8 @@ export interface SubmitObservationsResult {
   readonly objectsUpserted: number;
   readonly factsAsserted: number;
   readonly factsSuperseded: number;
+  /** S5.2: Facts the `window` retired; absent from a pre-S5.2 kernel's answer. */
+  readonly factsInvalidated?: number;
   readonly objects: readonly {
     objectType: string;
     identity: Record<string, unknown>;
