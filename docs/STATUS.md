@@ -163,9 +163,9 @@
 | 6 | E7 主机备份定时器"S3 后重评" | — | 运维，最后 | 待决定（2026-09-10 维护者：运维项排在开发波次之后） |
 | 7 | 验收 harness：四份 heredoc driver、验收改生产 provider 配置、fake-llm 硬编码场景（§5.2–5.4） | P2 | W6 | 关闭（W6：#145 driver 抽成一份、#146 provider 改 compose override、#148 S1 精简版进 CI、#149 场景参数按注册表校验） |
 | 8 | Explorer 由 caddy 注入 key 的信任边界（§5.8） | P2 | W7 | 关闭（PR #153：改为按调用者身份的内核签发会话 cookie，caddy 不再持有 key） |
-| 9 | 领域包烤进 kernel 镜像（§5.7）；采集器 Source 状态按文件缓存（§5.9） | P3 | S5.3（W10-A） | 开放 |
+| 9 | 领域包烤进 kernel 镜像（§5.7）；采集器 Source 状态按文件缓存（§5.9） | P3 | S5.3（W10-A） | 关闭（PR #195：`seed-domain-pack` 缺省从主机 `config/ontology/`（kernel `DOMAIN_PACK_DIR`，经既有只读 `config/` 挂载）读，放文件即 seed、不重建 kernel；`register_source` 按 (kind, name) 幂等（迁移 core 0028 `sources.name` + 唯一索引），采集器每轮注册、无本地状态。**主机应用前先按 S5.3 实现说明核对采集器 Source 谱系**——生产工作区若有重名 Source，回填不填 `name`，要手动把状态文件里记的那行命名，否则 S5.2 窗口接不上旧 Fact） |
 | 10 | `extension_ui_request` 子协议；Trigger；CLI help 清单解析 | 功能缺口 | P5 | 开放 |
-| 11 | 容器运行时访问面收敛（§5.10）；备份 root + capability（§5.11）；清理靠名字正则（§5.12） | P2 | S5.3 关名字正则；socket-proxy 与备份决定保持（§5b"不做"） | 记债 |
+| 11 | 容器运行时访问面收敛（§5.10）；备份 root + capability（§5.11）；清理靠名字正则（§5.12） | P2 | S5.3 关名字正则；socket-proxy 与备份决定保持（§5b"不做"） | 部分关闭（PR #195：`workspaces.purpose` / `expires_at`（迁移 core 0028），`create-workspace --purpose ephemeral --ttl`，验收 / 演练脚本全部改用，`delete-workspaces-matching.sh --expired` 按到期清理；§5.10 / §5.11 按 §5b"不做"决定保持，本行余下部分记债） |
 | 12 | bot PR 的 CI 需人工批准 run（决定：暂维持人工） | — | 决定 | 关闭 |
 | 13 | 容器镜像不发布到 GitHub（决定：稳定后再做） | — | 决定 | 关闭 |
 | 14 | 主机验收记录断档：09-09 的 S3 验收与 v0.2.0 / v0.3.0 发版都没有 `docs/private/` 记录（主机上也没有该目录），最新一份记录停在 09-04；§2 的 22 / 66 / 24 目前只有 retrospective 与 PR 正文为据 | P2 | W5 / 流程 | 关闭（2026-09-10：v0.4.2 主机应用与三份验收记录写入 `docs/private/` §34，§2 的 22 / 66 / 28 有据） |

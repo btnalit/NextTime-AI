@@ -28,6 +28,12 @@ import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/inde
  * `withAdminClient` documents.
  */
 
+/** S5.3 (`workspaces.purpose`, migration core 0028): `ephemeral` — an acceptance run, a demo —
+ *  carries `expires_at` and is retired by `scripts/delete-workspaces-matching.sh --expired`;
+ *  `standard` never expires. Decided at creation; the console shows it read-only. */
+export const WORKSPACE_PURPOSE_VALUES = ['standard', 'ephemeral'] as const;
+export type WorkspacePurpose = (typeof WORKSPACE_PURPOSE_VALUES)[number];
+
 export interface CreateWorkspaceOwner {
   /** An existing platform user who becomes the owner. Omit to create a passwordless user with a
    *  derived login (the pre-S4.1 CLI shape — `ensureUserForHumanPrincipal`). */
@@ -53,6 +59,10 @@ export interface CreateWorkspaceInput {
   /** S5.1 (`workspaces.ontology_enforcement`, migration core 0025): what a Link write the
    *  published ontology does not license does. Omitted → `defaultOntologyEnforcement()`. */
   readonly ontologyEnforcement?: OntologyEnforcement;
+  /** S5.3: omitted → `standard`. */
+  readonly purpose?: WorkspacePurpose;
+  /** S5.3: when the workspace may be retired; only meaningful with `purpose: 'ephemeral'`. */
+  readonly expiresAt?: Date | null;
 }
 
 /**
@@ -106,12 +116,15 @@ export async function createWorkspaceWithOwner(
     { workspaceId, principalId: ownerPrincipalId },
     async (client) => {
       await client.query(
-        'insert into workspaces (id, name, entry_model, ontology_enforcement) values ($1, $2, $3, $4)',
+        `insert into workspaces (id, name, entry_model, ontology_enforcement, purpose, expires_at)
+         values ($1, $2, $3, $4, $5, $6)`,
         [
           workspaceId,
           input.name,
           input.entryModel ?? null,
           input.ontologyEnforcement ?? defaultOntologyEnforcement(),
+          input.purpose ?? 'standard',
+          input.expiresAt ?? null,
         ],
       );
       await client.query(

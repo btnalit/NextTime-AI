@@ -53,6 +53,8 @@ function workspace(overrides: Partial<PlatformWorkspaceWire> = {}): PlatformWork
     entryModel: null,
     allowedModels: [],
     ontologyEnforcement: 'reject',
+    purpose: 'standard',
+    expiresAt: null,
     isDefault: true,
     memberCount: 3,
     owners: [{ userId: 'u-1', login: 'alice', displayName: 'Alice', principalId: 'p-1' }],
@@ -257,6 +259,27 @@ describe('PlatformWorkspacesPage', () => {
 
     await waitFor(() => expect(select.value).toBe('reject'));
     expect(http.calls.some((call) => call.name === 'update_workspace')).toBe(true);
+  });
+
+  it('S5.3: shows the purpose read-only, with the expiry for an ephemeral workspace', async () => {
+    const demo = workspace({
+      id: 'ws-2',
+      name: 'demo',
+      isDefault: false,
+      purpose: 'ephemeral',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    });
+    const http = scriptedHttp(baseHandlers([workspace(), demo]));
+    renderPage(http);
+    await screen.findByTestId('platform-workspaces-table');
+
+    fireEvent.click(screen.getByTestId('workspace-row-ws-2'));
+    const detail = await screen.findByTestId('workspace-detail');
+    expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toContain(
+      'ephemeral',
+    );
+    expect(within(detail).getByTestId('workspace-detail-expires')).toBeTruthy();
+    expect(within(detail).queryByTestId('workspace-purpose-select')).toBeNull();
   });
 
   it('a failed ontology-enforcement switch rolls back to the saved value and shows the error', async () => {

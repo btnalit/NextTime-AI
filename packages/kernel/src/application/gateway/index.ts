@@ -210,4 +210,8 @@ export type { ModelCatalogEntry } from './models-catalog-handler.js';
 export { AgentProfileValidationError } from './agent-profile-handlers.js';
 
 // S3.3 (docs/development-tasks.md S3.3) — ingest-handlers.ts.
-export { ObservationIdentityError, SourceNotFoundError } from './ingest-handlers.js';
+export {
+  ObservationIdentityError,
+  SourceIdentityConflictError,
+  SourceNotFoundError,
+} from './ingest-handlers.js';

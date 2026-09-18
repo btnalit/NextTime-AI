@@ -24,6 +24,9 @@ export interface RegisterSourceResult {
   readonly name: string | null;
   readonly ownerPrincipalId: string;
   readonly visibility: 'workspace' | 'private';
+  /** S5.3: `false` when the kernel returned the Source this collector had already registered
+   *  (idempotent on (kind, name)); absent from a pre-S5.3 kernel's answer. */
+  readonly created?: boolean;
 }
 
 /** S5.2 observation window (kernel `submit_observations` `window` param): "this submission is

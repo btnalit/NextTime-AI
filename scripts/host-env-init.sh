@@ -224,15 +224,13 @@ else
 	SKIPPED="$SKIPPED config/egress-sources.json"
 fi
 
-# --- collectors/host-inventory/: S3.3's directory, created here defensively -------------------
-# docker-compose.yml bind-mounts ${NEXTTIME_DATA}/collectors/host-inventory as collector-host-
-# inventory's own /data/state (docker-compose.yml). scripts/host-bootstrap.sh (E2) also creates it
-# today, but a host whose directory tree was bootstrapped before S3.3 added this line to that
-# script never got it — found on the host as an EACCES on /data/state (Compose auto-creates a
-# *root-owned* directory for a missing bind-mount source, which the non-root `nexttime` container
-# user then cannot write into), fixed by hand until now. `mkdir -p` is idempotent — a no-op on a
-# host where it already exists (freshly bootstrapped, or a second run of this script).
-mkdir -p "$NEXTTIME_DATA/collectors/host-inventory"
+# --- config/ontology/: domain packs the operator drops in (S5.3, docs/runbooks/add-domain-pack.md)
+# `bootstrap.js seed-domain-pack` reads from here by default (kernel env DOMAIN_PACK_DIR, visible
+# through the read-only config/ mount) — a new or updated pack is "put the yaml here, run seed",
+# no kernel rebuild. Read-only for the containers like the rest of config/. The pre-S5.3
+# collectors/host-inventory/ state directory is no longer mounted or written (register_source is
+# idempotent since S5.3); an existing one is left alone.
+mkdir -p "$CONFIG_DIR/ontology"
 
 # --- secrets/setup/: initial administrator password directory (S4.1, docker-compose.yml's own
 # kernel service comment) — the kernel writes admin's temporary password here (mode 0600) when no

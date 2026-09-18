@@ -86,6 +86,11 @@ services:
         NEXTTIME_PLATFORM_ADMINS: "${NEXTTIME_PLATFORM_ADMINS:-}",
         # Shown on the platform overview page; set by the release/build pipeline when known.
         KERNEL_VERSION: "${KERNEL_VERSION:-dev}",
+        # S5.3 (docs/runbooks/add-domain-pack.md): where `bootstrap.js seed-domain-pack` reads a
+        # domain pack from when `--dir` is not given — the host's `${NEXTTIME_DATA}/config/ontology`,
+        # visible through the read-only /data/config mount below. Put the yaml there, run seed;
+        # no kernel rebuild. The image's own /app/ontology stays the bundled examples.
+        DOMAIN_PACK_DIR: /data/config/ontology,
       }
     # sessions/ 顶层挂载已在 main 移除（PR #29：worker-supervisor 侧从未用到它，S1.5a 已记录这个
     # 偏离——见 docs/development-tasks.md S1.5a 实现说明"sessions/ 顶层目录本次未使用"）；
@@ -762,11 +767,9 @@ services:
         HOST_INVENTORY_INTERVAL_MS: "${HOST_INVENTORY_INTERVAL_MS:-900000}",
         RAGFLOW_GATEKEEPER_ID: "${RAGFLOW_GATEKEEPER_ID:-}",
       }
-    volumes:
-      [
-        "${NEXTTIME_DATA}/collectors/host-inventory:/data/state",
-        "/run/systemd:/run/systemd:ro",
-      ]
+    # S5.3: no state directory any more — `register_source` is idempotent on (kind, name), so the
+    # collector re-registers on every run and keeps nothing on disk.
+    volumes: ["/run/systemd:/run/systemd:ro"]
     networks: [control, dockerapi-collector]
     depends_on:
       {

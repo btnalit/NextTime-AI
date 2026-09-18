@@ -24,15 +24,12 @@ Handle）、`docs/runbooks/host-explorer.md`（Explorer 九个端点里本脚本
 - 主机上有 `docker`、`docker compose`；**没有** `node`/`corepack`——脚本把每一次 kernel/Explorer/MCP
   交互都放进一次性 kernel 镜像容器里跑（见脚本头注释）。
 
-**先读：共享状态警告。** 本脚本会 (a) 覆盖 `${NEXTTIME_DATA}/secrets/collector-host-inventory.token`
+**先读：共享状态警告。** 本脚本会覆盖 `${NEXTTIME_DATA}/secrets/collector-host-inventory.token`
 ——docker-compose.yml 里 `collector-host-inventory` 服务用的**同一个** Docker file secret 路径，
-Docker secret 没有按次调用覆盖的机制；(b) 删除
-`${NEXTTIME_DATA}/collectors/host-inventory/host-inventory-source.json`（采集器自己缓存的 Source
-id——`collectors/host-inventory/src/run.ts` 的 `resolveSourceId` 读到缓存就直接用、**不校验它是否
-还能解析**，留着上一次跑的 id 会让本次全新 workspace 下的每一次 `submit_observations` 都
-404/403，删除是本脚本能被重复运行的必要条件，不是可选清理）。两者都是真实的运维副作用，不是写进
-scratch 目录的 fixture——只在专用验收环境跑，或者接受它会重新指派主机上真实采集器部署的 Source
-谱系。
+Docker secret 没有按次调用覆盖的机制。这是真实的运维副作用，不是写进 scratch 目录的 fixture——
+只在专用验收环境跑，或者接受主机上真实采集器的下一轮会用这把 token 认证进本次的验收工作区，直到按
+`docs/runbooks/host-collector.md` §2 重新铸造。（S5.3 之前采集器还在磁盘缓存 Source id、本脚本要
+先删它；`register_source` 现在按 (kind, name) 幂等，采集器不再有任何本地状态。）
 
 ## 2. 怎么跑
 
@@ -156,7 +153,8 @@ workspace/principal/chat/activity/graph 行按设计文档 §12 的审计留痕�
 sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
 ```
 
-`${NEXTTIME_DATA}/secrets/collector-host-inventory.token`、
-`${NEXTTIME_DATA}/collectors/host-inventory/host-inventory-source.json` **不会**被这次清理删除或
-恢复——见 §1 的"共享状态警告"；需要把主机恢复到一个真实采集器部署应有的状态时，重新走一遍
-`docs/runbooks/host-collector.md` §2（铸造一个新的、非验收用的 service Handle 覆盖回同一个文件）。
+验收工作区自 S5.3 起以 `--purpose ephemeral --ttl 7d` 创建，到期后 `sh scripts/delete-workspaces-matching.sh
+--expired --yes` 也能按策略清掉，不必再靠名字正则。`${NEXTTIME_DATA}/secrets/collector-host-inventory.token`
+**不会**被这次清理恢复——见 §1 的"共享状态警告"；需要把主机恢复到一个真实采集器部署应有的状态时，
+重新走一遍 `docs/runbooks/host-collector.md` §2（铸造一个新的、非验收用的 service Handle 覆盖回同一个
+文件）。

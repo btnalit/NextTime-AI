@@ -34,6 +34,14 @@ export const SourceWireSchema = z
   .strict();
 export type SourceWire = z.infer<typeof SourceWireSchema>;
 
+/** S5.3: `register_source`'s result — the Source plus whether this call created it. `created:
+ *  false` means the caller had already registered this (kind, name) with the same visibility and
+ *  got its existing row back (the capability is idempotent on that identity, migration core 0028). */
+export const RegisterSourceResultWireSchema = SourceWireSchema.extend({
+  created: z.boolean(),
+}).strict();
+export type RegisterSourceResultWire = z.infer<typeof RegisterSourceResultWireSchema>;
+
 /**
  * `submit_observations`'s result — a batch summary, not a single created resource (same shape
  * family as `wire/connection.ts`'s `PublishManifestResultWireSchema`: a bulk-write capability

@@ -94,6 +94,7 @@ export async function getOrCreateGatekeeperSource(
   if (raced) return raced;
   const source = await registerSource(client, workspaceId, {
     kind: GATEKEEPER_SOURCE_KIND,
+    name: gatekeeperObjectId,
     ownerPrincipalId,
     visibility: 'workspace',
     metadata: { name: gatekeeperObjectId, gatekeeperId: gatekeeperObjectId },

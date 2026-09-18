@@ -2108,6 +2108,12 @@
             "null"
           ]
         },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -2155,6 +2161,13 @@
           },
           "type": "array"
         },
+        "purpose": {
+          "enum": [
+            "standard",
+            "ephemeral"
+          ],
+          "type": "string"
+        },
         "status": {
           "enum": [
             "active",
@@ -2170,6 +2183,8 @@
         "entryModel",
         "allowedModels",
         "ontologyEnforcement",
+        "purpose",
+        "expiresAt",
         "isDefault",
         "memberCount",
         "owners",
@@ -8808,6 +8823,12 @@
                   "null"
                 ]
               },
+              "expiresAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -8855,6 +8876,13 @@
                 },
                 "type": "array"
               },
+              "purpose": {
+                "enum": [
+                  "standard",
+                  "ephemeral"
+                ],
+                "type": "string"
+              },
               "status": {
                 "enum": [
                   "active",
@@ -8870,6 +8898,8 @@
               "entryModel",
               "allowedModels",
               "ontologyEnforcement",
+              "purpose",
+              "expiresAt",
               "isDefault",
               "memberCount",
               "owners",
@@ -10950,6 +10980,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "created": {
+          "type": "boolean"
+        },
         "createdAt": {
           "type": "string"
         },
@@ -10994,7 +11027,8 @@
         "visibility",
         "uri",
         "metadata",
-        "createdAt"
+        "createdAt",
+        "created"
       ],
       "type": "object"
     }
@@ -12854,6 +12888,12 @@
             "null"
           ]
         },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -12901,6 +12941,13 @@
           },
           "type": "array"
         },
+        "purpose": {
+          "enum": [
+            "standard",
+            "ephemeral"
+          ],
+          "type": "string"
+        },
         "status": {
           "enum": [
             "active",
@@ -12916,6 +12963,8 @@
         "entryModel",
         "allowedModels",
         "ontologyEnforcement",
+        "purpose",
+        "expiresAt",
         "isDefault",
         "memberCount",
         "owners",
@@ -13763,6 +13812,12 @@
             "null"
           ]
         },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -13810,6 +13865,13 @@
           },
           "type": "array"
         },
+        "purpose": {
+          "enum": [
+            "standard",
+            "ephemeral"
+          ],
+          "type": "string"
+        },
         "status": {
           "enum": [
             "active",
@@ -13825,6 +13887,8 @@
         "entryModel",
         "allowedModels",
         "ontologyEnforcement",
+        "purpose",
+        "expiresAt",
         "isDefault",
         "memberCount",
         "owners",
@@ -15254,6 +15318,12 @@
             "null"
           ]
         },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -15301,6 +15371,13 @@
           },
           "type": "array"
         },
+        "purpose": {
+          "enum": [
+            "standard",
+            "ephemeral"
+          ],
+          "type": "string"
+        },
         "status": {
           "enum": [
             "active",
@@ -15316,6 +15393,8 @@
         "entryModel",
         "allowedModels",
         "ontologyEnforcement",
+        "purpose",
+        "expiresAt",
         "isDefault",
         "memberCount",
         "owners",

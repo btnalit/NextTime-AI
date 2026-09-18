@@ -30,6 +30,7 @@ import {
   OntologyViolationError,
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
+  SourceIdentityConflictError,
   SourceNotFoundError,
   SupersedeIdentityMismatchError,
   UnauthorizedError,
@@ -272,6 +273,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // mirrors HTTP 409 `conflict` (capability-route.ts), the same state-conflict code as
   // IllegalTransition / WorkerDefinitionNotPublishedError below.
   if (err instanceof OperationIdentityConflictError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S5.3 `register_source`: mirrors HTTP 409 `source_identity_conflict` (capability-route.ts).
+  if (err instanceof SourceIdentityConflictError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S3.11 (docs/development-tasks.md "中台控制面") — same additions as capability-route.ts's

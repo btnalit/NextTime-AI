@@ -1728,8 +1728,9 @@ const ingestCapabilities: readonly Capability[] = [
         metadata: jsonRecord.optional(),
       })
       .strict(),
-    resultSchema: wire.SourceWireSchema,
-    description: 'Register a Source (document/DB/API/person/agent session).',
+    resultSchema: wire.RegisterSourceResultWireSchema,
+    description:
+      'Register a Source (document/DB/API/person/agent session). Idempotent on (kind, name): registering a name you already own with the same visibility returns the existing Source with created: false; a name held by another owner, or registered with the other visibility, is 409 source_identity_conflict.',
   },
   {
     // S3.3: real handler (`submitObservationsHandler`). `activityId` optional — see this file's

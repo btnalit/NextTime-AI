@@ -114,7 +114,7 @@ bootstrap_step() {
   ts=$(date +%s)
   ws_name="drill-add-gatekeeper-$ts"
 
-  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name "$ws_name" --owner owner </dev/null 2>&1)
+  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name "$ws_name" --owner owner --purpose ephemeral --ttl 7d </dev/null 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     fail "bootstrap-workspace" "create-workspace exited $rc: $(printf '%s' "$out" | tail -5)"

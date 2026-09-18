@@ -76,7 +76,6 @@ describe('loadConfig', () => {
         DOCKER_HOST: 'tcp://docker-socket-proxy-collector:2375',
         HOST_INVENTORY_RUN_SYSTEMD_PATH: '/custom/run-systemd',
         HOST_INVENTORY_INTERVAL_MS: '5000',
-        HOST_INVENTORY_SOURCE_STATE_FILE: '/custom/state.json',
         HOST_INVENTORY_SOURCE_NAME: 'custom-name',
         HOST_INVENTORY_SOURCE_KIND: 'custom-kind',
       },
@@ -87,7 +86,6 @@ describe('loadConfig', () => {
       dockerHost: 'tcp://docker-socket-proxy-collector:2375',
       runSystemdPath: '/custom/run-systemd',
       intervalMs: 5000,
-      sourceStateFile: '/custom/state.json',
       sourceName: 'custom-name',
       sourceKind: 'custom-kind',
     });

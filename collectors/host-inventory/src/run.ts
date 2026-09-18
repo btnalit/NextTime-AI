@@ -1,5 +1,4 @@
-import { mkdir, readFile, readlink, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { readlink } from 'node:fs/promises';
 import type { CollectorConfig } from './config.js';
 import { createDockerClient, parseDockerConnection } from './docker-client.js';
 import type { DockerClient } from './docker-client.js';
@@ -30,14 +29,15 @@ import { collectSystemdServices } from './systemd.js';
  *      makes its first kernel call of any kind** (including `register_source`) — this process then
  *      exits non-zero (S3.3 acceptance: "脱敏失败整批不提交").
  *   3. Only once collection and sanitization have both succeeded, resolve this run's `sourceId` —
- *      `register_source` only on the very first-ever run (its own handler always inserts a fresh
- *      row, matching its literal name — see `ingest-handlers.ts`'s own doc comment); every later
- *      run reads the id back from `config.sourceStateFile`, a small local JSON cache this file
- *      writes once and never rewrites. Reusing the *same* `sourceId` across runs is not a cosmetic
- *      choice — it is what makes `resolveFactOrigin` (S3.2, `substrate/epistemic/conflicts.ts`)
- *      resolve every run's Facts to the *same* origin, which is the entire mechanism behind this
- *      collector's own "两遍无重复无 Conflict" acceptance criterion (see `ingest-handlers.ts`'s
- *      module doc comment for the full chain).
+ *      `register_source` on every run: since S5.3 the kernel is idempotent on (kind, name)
+ *      (`ingest-handlers.ts`'s own doc comment; migration core 0028), so the same
+ *      `config.sourceKind` / `config.sourceName` always resolves to the same Source and this
+ *      process keeps nothing on disk (the pre-S5.3 state file is gone — a stale cached id from
+ *      another workspace was what the S3 acceptance script had to delete between runs). Reusing
+ *      the *same* Source across runs is not cosmetic — it is what makes `resolveFactOrigin`
+ *      (S3.2, `substrate/epistemic/conflicts.ts`) resolve every run's Facts to the *same* origin,
+ *      the entire mechanism behind this collector's own "两遍无重复无 Conflict" acceptance
+ *      criterion and the S5.2 observation window's "this Source's Facts".
  *   4. Submit three dependency-ordered `submit_observations` phases sharing one `activityId`
  *      (`observation-builder.ts`'s own module doc comment has the full phase rationale) — Host/
  *      Repository/Image/Process; then ComposeProject/Volume/Network/SystemdService (needs Host's
@@ -59,40 +59,19 @@ export class RunFailedError extends Error {
   }
 }
 
-interface SourceState {
-  readonly sourceId: string;
-}
-
-async function readSourceState(stateFile: string): Promise<SourceState | null> {
-  try {
-    const raw = await readFile(stateFile, 'utf8');
-    const parsed = JSON.parse(raw) as Partial<SourceState>;
-    return typeof parsed.sourceId === 'string' ? { sourceId: parsed.sourceId } : null;
-  } catch {
-    return null;
-  }
-}
-
-async function writeSourceState(stateFile: string, state: SourceState): Promise<void> {
-  await mkdir(path.dirname(stateFile), { recursive: true });
-  await writeFile(stateFile, JSON.stringify(state, null, 2), 'utf8');
-}
-
-/** Registers this collector's Source on the very first-ever run, or reads the cached id back —
- *  never re-registers on a later run (see this module's own doc comment for why that matters). */
+/** Registers (or, on every run after the first, re-resolves) this collector's Source — the kernel
+ *  answers the same id for the same (kind, name) (see this module's own doc comment for why the
+ *  identity must be stable). A 409 `source_identity_conflict` here means the name is taken by
+ *  another owner in this workspace: pick another `HOST_INVENTORY_SOURCE_NAME`. */
 async function resolveSourceId(
   config: CollectorConfig,
   kernelClient: KernelClient,
 ): Promise<string> {
-  const cached = await readSourceState(config.sourceStateFile);
-  if (cached) return cached.sourceId;
-
   const source = await kernelClient.registerSource({
     kind: config.sourceKind,
     name: config.sourceName,
     visibility: 'workspace',
   });
-  await writeSourceState(config.sourceStateFile, { sourceId: source.id });
   return source.id;
 }
 

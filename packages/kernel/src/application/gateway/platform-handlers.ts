@@ -26,6 +26,7 @@ import {
 } from '../platform/settings.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import { createWorkspaceWithOwner } from '../workspace/create.js';
+import type { WorkspacePurpose } from '../workspace/create.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { readModelCatalog } from './models-catalog-handler.js';
 
@@ -735,6 +736,8 @@ interface PlatformWorkspaceDbRow {
   status: 'active' | 'disabled';
   entry_model: string | null;
   ontology_enforcement: OntologyEnforcement;
+  purpose: WorkspacePurpose;
+  expires_at: Date | null;
   created_at: Date;
   default_model: string | null;
   allowed_models: unknown;
@@ -742,7 +745,8 @@ interface PlatformWorkspaceDbRow {
 }
 
 const WORKSPACE_SELECT = `
-  select w.id, w.name, w.status, w.entry_model, w.ontology_enforcement, w.created_at,
+  select w.id, w.name, w.status, w.entry_model, w.ontology_enforcement, w.purpose, w.expires_at,
+         w.created_at,
          ap.default_model, coalesce(ap.allowed_models, '[]'::jsonb) as allowed_models,
          (select count(*)::int from principals p
            where p.workspace_id = w.id and p.kind = 'human' and p.user_id is not null
@@ -808,6 +812,8 @@ function toWirePlatformWorkspace(
     entryModel: entryModelOf(row),
     allowedModels: allowedModelsOf(row),
     ontologyEnforcement: row.ontology_enforcement,
+    purpose: row.purpose,
+    expiresAt: row.expires_at?.toISOString() ?? null,
     isDefault: defaultWorkspaceId === row.id,
     memberCount: row.member_count,
     owners: [...owners],

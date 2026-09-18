@@ -1,10 +1,12 @@
 #!/bin/sh
-# delete-workspaces-matching.sh - lists every Workspace whose name matches a regex (via the
-# kernel bootstrap CLI's `list-workspaces` subcommand), prints the matches, and - only with
-# --yes - loops scripts/delete-workspace.sh over every one of them.
+# delete-workspaces-matching.sh - lists every Workspace whose name matches a regex, OR (S5.3)
+# every ephemeral Workspace whose expiry has passed (via the kernel bootstrap CLI's
+# `list-workspaces` subcommand), prints the matches, and - only with --yes - loops
+# scripts/delete-workspace.sh over every one of them.
 #
 # Usage (from the compose project directory):
 #   sh scripts/delete-workspaces-matching.sh '<regex>' [--yes]
+#   sh scripts/delete-workspaces-matching.sh --expired [--yes]
 #
 # Without --yes: lists matches only, deletes nothing (a safe dry run - review the printed list
 # before re-running the identical command with --yes appended).
@@ -12,6 +14,11 @@
 # The regex is a POSIX extended regular expression (awk), matched against the workspace NAME
 # column only, unanchored unless the pattern itself anchors (e.g. a leading ^) - the same
 # convention the kernel bootstrap CLI's own delete-workspace --allow-name-pattern flag uses.
+#
+# --expired selects on `purpose` / `expires_at` (columns 6 / 7 of `list-workspaces`, migration
+# core 0028): only `ephemeral` workspaces whose `expires_at` is in the past - a `standard`
+# workspace is never selected, whatever its name. `create-workspace --purpose ephemeral --ttl <n>h`
+# is what the acceptance scripts and `make demo` create.
 #
 # Safety: this is a bulk, irreversible operation across every matching workspace. Double-check
 # the regex does not match the operator's own long-lived workspace (e.g. a web-console smoke
@@ -22,9 +29,14 @@ set -u
 PATTERN="${1:-}"
 if [ -z "$PATTERN" ]; then
 	echo "delete-workspaces-matching: usage: sh scripts/delete-workspaces-matching.sh '<regex>' [--yes]" >&2
+	echo "                                   sh scripts/delete-workspaces-matching.sh --expired [--yes]" >&2
 	exit 1
 fi
 shift
+EXPIRED=0
+if [ "$PATTERN" = "--expired" ]; then
+	EXPIRED=1
+fi
 
 CONFIRM=0
 if [ "${1:-}" = "--yes" ]; then
@@ -50,14 +62,23 @@ if [ "$RC" -ne 0 ]; then
 	exit "$RC"
 fi
 
-MATCHES=$(printf '%s\n' "$LIST" | tail -n +2 | awk -F '\t' -v pat="$PATTERN" '$2 ~ pat { print $1 "\t" $2 }')
+if [ "$EXPIRED" -eq 1 ]; then
+	# ISO-8601 UTC timestamps compare correctly as strings; `-` (never expires) never sorts below
+	# a real timestamp's leading digit.
+	NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	MATCHES=$(printf '%s\n' "$LIST" | tail -n +2 | awk -F '\t' -v now="$NOW" '$6 == "ephemeral" && $7 != "-" && $7 < now { print $1 "\t" $2 }')
+	SELECTION="expired ephemeral workspaces (expires_at < $NOW)"
+else
+	MATCHES=$(printf '%s\n' "$LIST" | tail -n +2 | awk -F '\t' -v pat="$PATTERN" '$2 ~ pat { print $1 "\t" $2 }')
+	SELECTION="workspaces matching '$PATTERN'"
+fi
 
 if [ -z "$MATCHES" ]; then
-	echo "delete-workspaces-matching: no workspace name matches '$PATTERN'"
+	echo "delete-workspaces-matching: no $SELECTION"
 	exit 0
 fi
 
-echo "delete-workspaces-matching: workspaces matching '$PATTERN':"
+echo "delete-workspaces-matching: $SELECTION:"
 printf '%s\n' "$MATCHES" | awk -F '\t' '{ printf "  %s  %s\n", $1, $2 }'
 MATCH_COUNT=$(printf '%s\n' "$MATCHES" | wc -l | tr -d ' ')
 echo "delete-workspaces-matching: $MATCH_COUNT workspace(s) matched"

@@ -2,7 +2,9 @@ import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   endActivity,
+  findSourceByName,
   recordSourceObservation,
+  registerSource,
   startActivity,
 } from '../../substrate/epistemic/index.js';
 import type { SourceRow } from '../../substrate/epistemic/index.js';
@@ -18,33 +20,19 @@ import { toWireSource } from './resource-wire.js';
  * -group capabilities a service-principal collector calls (design doc §7.8 采集器, §5.1.3
  * Source/Observation/Fact; docs/development-tasks.md S3.3).
  *
- * **`register_source` writes directly to `sources`, bypassing `substrate/epistemic/sources.ts`'s
- * `registerPrivateSource`** (a deliberate, narrow deviation, same shape as `substrate/epistemic/
- * explain.ts`'s own documented one — see that module's doc comment: "a direct... SELECT... rather
- * than going through GraphStore's public interface, because [it] has no method today, and this
- * task's explicit file ownership excludes adding one there... the narrowest deviation from the
- * module-boundary convention that still satisfies the dispatch"). This task's own dispatch
- * excludes touching `substrate/epistemic/**` at all (S3.2 owns that directory in this wave), but
- * `registerPrivateSource` only ever writes `visibility: 'private'` — unusable for a collector's
- * Source, which must be `workspace`-visible for `docs/runbooks/host-collector.md`'s own
- * verification step ("`explain`/`find_*` see `Container runs_on Host`") to work at all: Fact
- * visibility inherits from the Source that fed the Activity producing it
- * (`migrations/core/0010_link_visibility.sql`), so a `private` Source owned by the collector's own
- * service Principal would make every Fact this collector writes invisible to the human operator
- * running that verification. The insert below is the same 6-line statement `registerPrivateSource`
- * already runs, parametrized over `visibility` instead of hardcoding it — not a second, drifting
- * implementation of Source lifecycle (there is none; a Source is never updated or deleted after
- * creation anywhere in this codebase).
- *
- * `sources` has no `name` column (migrations/core/0002_substrate.sql) — `name` is folded into
- * `metadata.name` on write and projected back out by `resource-wire.ts`'s `toWireSource` on read
- * (see that function's own doc comment). `register_source` always inserts a fresh row (matching its
- * literal name — "register" is a create) — a collector that must keep asserting under the *same*
- * origin across independent runs (see the next paragraph) is expected to persist the returned `id`
- * itself and call `register_source` only once ever (`collectors/host-inventory`'s own README
- * documents this — a small local `${NEXTTIME_DATA}/state/host-inventory-source.json` cache), not
- * to make this handler guess at idempotency-by-name for a capability every kind of Source caller
- * (documents, DBs, APIs, people, agent sessions — this capability's own description) shares.
+ * **`register_source` is idempotent on (kind, name)** (S5.3, migration core 0028 `sources.name` +
+ * `sources_kind_name_uidx`; docs/development-tasks.md §5b S5.3). A collector's Source must be
+ * `workspace`-visible (Fact visibility inherits from the Source that fed the Activity —
+ * `migrations/core/0010_link_visibility.sql` — so a `private` one would hide every Fact the
+ * collector writes from the operator running `docs/runbooks/host-collector.md`'s verification),
+ * which is why this handler goes through `substrate/epistemic`'s `registerSource` (explicit
+ * visibility) rather than `registerPrivateSource`. Registering a name the caller already owns
+ * with the same visibility returns the existing row (`created: false`) — the collector calls
+ * `register_source` on every run and keeps its origin without any local state, which is what
+ * `resolveFactOrigin` (next paragraph) needs; a name held by another owner, or already registered
+ * with the other visibility, is a 409 `source_identity_conflict` (`SourceIdentityConflictError`),
+ * never a silent second row. Before 0028 the name lived only in `metadata.name` (still written,
+ * for readers of the bag) and the collector cached the id in a state file.
  *
  * **`submit_observations` writes every Link purely through `GraphStore.assertFact` — the "seam"
  * this task's own dispatch names.** S3.2 (merged to `main` while this task was in flight,
@@ -86,27 +74,40 @@ interface RegisterSourceParams {
   readonly metadata?: Record<string, unknown>;
 }
 
-interface SourceDbRow {
-  workspace_id: string;
-  id: string;
-  kind: string;
-  owner_principal_id: string;
-  visibility: 'private' | 'workspace';
-  uri: string | null;
-  metadata: Record<string, unknown>;
-  created_at: Date;
+/** S5.3: the (kind, name) is already a Source the caller cannot take over — another owner's, the
+ *  other visibility, or one RLS hides from the caller (a same-named private Source). HTTP 409
+ *  `source_identity_conflict`; the caller picks another name or uses the row it already owns. */
+export class SourceIdentityConflictError extends Error {
+  readonly code = 'source_identity_conflict';
+  constructor(kind: string, name: string, detail: string) {
+    super(`register_source: a "${kind}" Source named "${name}" already exists ${detail}`);
+    this.name = 'SourceIdentityConflictError';
+  }
 }
 
-function mapSourceDbRow(row: SourceDbRow): SourceRow {
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505';
+}
+
+function existingSourceResult(
+  existing: SourceRow,
+  params: RegisterSourceParams,
+  ownerPrincipalId: string,
+) {
+  if (existing.ownerPrincipalId !== ownerPrincipalId) {
+    throw new SourceIdentityConflictError(params.kind, params.name, 'with a different owner');
+  }
+  if (existing.visibility !== params.visibility) {
+    throw new SourceIdentityConflictError(
+      params.kind,
+      params.name,
+      `with visibility "${existing.visibility}"`,
+    );
+  }
   return {
-    workspaceId: row.workspace_id,
-    id: row.id,
-    kind: row.kind,
-    ownerPrincipalId: row.owner_principal_id,
-    visibility: row.visibility,
-    uri: row.uri,
-    metadata: row.metadata,
-    createdAt: row.created_at,
+    result: { ...toWireSource(existing), created: false },
+    resourceType: 'source',
+    resourceId: existing.id,
   };
 }
 
@@ -119,25 +120,47 @@ export const registerSourceHandler: CapabilityHandler = async (
   const params = rawParams as RegisterSourceParams;
   const ownerPrincipalId = ctx?.principalId ?? (await currentPrincipalId(client));
   const metadata = { ...(params.metadata ?? {}), name: params.name };
+  const identity = { kind: params.kind, name: params.name };
 
-  const result = await client.query<SourceDbRow>(
-    `insert into sources (workspace_id, kind, owner_principal_id, visibility, uri, metadata)
-     values ($1, $2, $3, $4, $5, $6::jsonb)
-     returning workspace_id, id, kind, owner_principal_id, visibility, uri, metadata, created_at`,
-    [
-      workspaceId,
-      params.kind,
+  const existing = await findSourceByName(client, workspaceId, identity);
+  if (existing) return existingSourceResult(existing, params, ownerPrincipalId);
+
+  // First registration of this (kind, name): same select → transaction-scoped advisory lock →
+  // re-select → insert shape as `SqlGraphStore.assertFact`'s first-time identity path, so two
+  // concurrent first runs of one collector register one Source instead of one of them failing.
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `${workspaceId}:source:${params.kind}:${params.name}`,
+  ]);
+  const raced = await findSourceByName(client, workspaceId, identity);
+  if (raced) return existingSourceResult(raced, params, ownerPrincipalId);
+
+  let source: SourceRow;
+  try {
+    source = await registerSource(client, workspaceId, {
+      kind: params.kind,
+      name: params.name,
       ownerPrincipalId,
-      params.visibility,
-      params.uri ?? null,
-      JSON.stringify(metadata),
-    ],
-  );
-  const row = result.rows[0];
-  if (!row) throw new Error('register_source: INSERT ... RETURNING produced no row');
-
-  const source = mapSourceDbRow(row);
-  return { result: toWireSource(source), resourceType: 'source', resourceId: source.id };
+      visibility: params.visibility,
+      uri: params.uri,
+      metadata,
+    });
+  } catch (err) {
+    // The unique index found a row the lookups above could not see: someone else's private
+    // Source of this (kind, name). The transaction is aborted either way; surface it as the 409.
+    if (isUniqueViolation(err)) {
+      throw new SourceIdentityConflictError(
+        params.kind,
+        params.name,
+        'but is not visible to this caller',
+      );
+    }
+    throw err;
+  }
+  return {
+    result: { ...toWireSource(source), created: true },
+    resourceType: 'source',
+    resourceId: source.id,
+  };
 };
 
 // -------------------------------------------------------------------------------------------
