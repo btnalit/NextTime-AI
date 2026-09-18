@@ -93,8 +93,8 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 
 1. ~~没有"当前 principal 是谁 / 什么角色"的直接读取能力~~——S3.11 协调追加的 `get_workspace.caller` 填了这个缺口，`hooks/useWorkspaceIdentity.ts` 把它当权威来源；403/200 双向推断（见"角色与可见性"）现在只是该字段尚未 ready/未部署时的 fallback，不再是唯一来源。
 2. ~~没有 principal 目录~~——S3.11 的 `list_principals` 填了这个缺口；`connect_gatekeeper`/`GrantCapabilityForm` 的成员下拉在该 capability 部署前仍退化为手填 id。
-3. 没有列出已决定 ActionRequest 的能力（`list_pending` 只回 pending，`get_action` 按 id）——"All" 标签只包含本会话观察到的决定。
-4. `search` 固定 50 条上限、无分页、无排序参数（Gatekeeper/Operation 的 `search` 路径——`get_gatekeeper`/`list_gatekeepers` 走另一条无此限制的路径，但同样要等 S3.11 内核 PR 部署）。
+3. ~~没有列出已决定 ActionRequest 的能力（`list_pending` 只回 pending，`get_action` 按 id）——"All" 标签只包含本会话观察到的决定~~——S5.5（遗留 21）的 `list_action_requests` 填了这个缺口：全部状态、与 `list_pending` 同一 I14 可见性、keyset 分页；审批页"历史"tab 已接（`ApprovalQueuePage.tsx`）。仍缺的是按 Task / WorkerRun 过滤（见第 6 条）。
+4. ~~`search` 固定 50 条上限、无分页、无排序参数~~——内核侧已由 W5（STATUS 遗留 2）补上 `limit` / `cursor` keyset 分页与 `truncated` 标记；**控制台侧**"Registered systems"等治理页列表仍按旧的 50 条一次取（`console-completion-plan.md` B5），排在 S6-A。
 5. `approve` 没有 `reason` 参数（`reject` 有）——理由只随 Reject 提交。
 6. 没有 Task → ActionRequest 的读取——"Linked approvals" 只能从 `list_pending` 按 `parentWorkerRunId` 反查 pending 的。
 7. `action.pending` 推送的 `title`/`description` 仍由 `actionKind` 拼出（S2.11 已知偏离），`simulated` 恒为空。
