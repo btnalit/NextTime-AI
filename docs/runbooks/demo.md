@@ -104,15 +104,19 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && DEMO_MODEL=<provider/model> make demo' </dev
    --once`；本次运行的 `objectsUpserted`/`factsAsserted` 成为结果页的对象数/事实数（内核没有专门
    的计数能力，`search`/`list_*` 都是 keyset 分页信封，没有总数字段——采集器自己那行
    `run complete` 摘要是权威来源）。
-6. **q1-dependency**——中文提问"哪个服务依赖哪个"，真实入口 agent 自主决定调哪些工具作答。
-7. **q2-provenance**——中文提问"kernel 依赖 postgres 这条边，它的来源是什么？最近一次确认是
+6. **worker-setup**——Q3 的准备工作，不是提问本身，但**必须在第一句提问之前**：在 catalog 里
+   enable 已部署的 `gatekeeper-docker`（同 `scripts/accept_s2.sh` 的"管理员点一下"= SQL 的既有
+   先例）、把它 `connect_gatekeeper` 授权给 owner、发布一个只声明 `request_action` + 这一个 gate
+   的临时 `demo-ops-runner` WorkerDefinition（`model` 同样锁定 `<provider/model>`）。放在对话之前
+   的原因：常驻入口容器在首轮对话时按工作区当时的门集合生成，之后再连接一个门，supervisor 会在
+   下一轮 Turn 的 `/resident/spawn` 时重建容器——正好压在那一轮 Turn 上（2026-09-18 首次主机实跑
+   Q3 `interrupted`；平台侧的竞争见 `docs/STATUS.md` §4 遗留 44）。接入 → 采集 → 对话本来也是
+   交付闭环的顺序。
+7. **q1-dependency**——中文提问"哪个服务依赖哪个"，真实入口 agent 自主决定调哪些工具作答。
+8. **q2-provenance**——中文提问"kernel 依赖 postgres 这条边，它的来源是什么？最近一次确认是
    什么时候？"，随后脚本独立（不解析聊天记录）重新走 `search`→`traverse` 找到同一条
    `depends_on` Fact，直接调 `explain` 取溯源链（来源 kind/uri、起源观测时间、
    `lastObservation.createdAt`——这正是"最近一次确认"在 wire 层的字段）。
-8. **worker-setup**——Q3 的准备工作，不是第三句提问本身：在 catalog 里 enable 已部署的
-   `gatekeeper-docker`（同 `scripts/accept_s2.sh` 的"管理员点一下"= SQL 的既有先例）、把它
-   `connect_gatekeeper` 授权给 owner、发布一个只声明 `request_action` + 这一个 gate 的临时
-   `demo-ops-runner` WorkerDefinition（`model` 同样锁定 `<provider/model>`）。
 9. **q3-restart**——中文提问"重启测试容器 CONTAINER_ID=<fixture 容器 id>"，
    `send-and-wait ... auto-approve=<gatekeeperId>`（脚本自己在 Turn 进行期间监听
    `action.pending` 并当场批准，同 `scripts/accept_s2.sh` 的 `real_docker_restart_run` 机制）；
@@ -170,6 +174,7 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && DEMO_MODEL=<provider/model> make demo' </dev
 | `FAIL worker-setup ...gate instance gatekeeper-docker is '<status>'...` | `gatekeeper-docker` 在目录里被管理员标记为 disabled，或连接器不是 `platform_preset` | 按 `docs/runbooks/host-gatekeepers.md` 检查目录状态，这是管理员的决定，脚本不会覆盖 |
 | `FAIL q1-dependency ...turn status=...` 或 Q2/Q3 同类失败 | 真实模型这一轮没有在超时窗口内把 Turn 带到 `completed`——模型慢、被限流，或没找到正确工具 | 加大预期、检查 `llm-proxy` 日志确认没有被限流；参考 `docs/runbooks/host-accept-real-model.md` §7 同类排障表（`TURN_STATUS` 为空一行） |
 | `FAIL q3-restart ...no ActionRequest appeared...` | 入口 agent 这一轮没有真的派工（没调 `find_workers`/`invoke_worker`），或调了但没创建 Task | 用 `get-history` 读这条 chat 的完整历史看模型这一轮实际调了什么；参考 `host-accept-real-model.md` §7 的 `task=none` 一行 |
+| 某一句提问 `FAIL ... turn status=interrupted`，agent-host 日志有 "entry container stdio closed mid-turn" | 这一轮 Turn 开始时内核 `POST /resident/spawn`，supervisor 发现常驻入口容器的规格（门集合 / egress）已变而重建了它，旧容器被 `docker stop`、Turn 中断——典型触发是"对话之后才 `connect_gatekeeper`"（脚本已把 worker-setup 挪到 Q1 之前；真实用户中途接入门也会撞上，`docs/STATUS.md` §4 遗留 44） | 重跑即可（新容器已按新规格起来）；不要在对话进行中连接 / 断开门 |
 | `FAIL q3-restart ...StartedAt did not change...` | ActionRequest 执行了，但 fixture 容器 id 传错/过期 | 核对本次调用里实际传给门的 `CONTAINER_ID` 与 `docker inspect accept-s2-restart-target` 的真实 id 是否一致 |
 | `TOTAL <N>s BUDGET exceeded` | 真实模型三句提问加起来比预期慢，不是脚本缺陷 | 参考结果页里每一步的耗时表定位慢在哪一步；必要时换一个更快的模型重跑 |
 | `demo: --out must not resolve under the checkout root` | 传了一个落在仓库检出目录内的 `--out` 路径 | 换一个 `${NEXTTIME_DATA}` 下的路径，或不传 `--out` 用默认路径 |
