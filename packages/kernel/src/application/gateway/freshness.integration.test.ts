@@ -152,6 +152,16 @@ describe.runIf(DATABASE_URL !== undefined)(
         .map(([, fact]) => fact);
     }
 
+    async function openConflictCount(): Promise<number> {
+      const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ n: string }>(
+          "select count(*)::text as n from conflicts where workspace_id = $1 and status = 'open'",
+          [workspaceId],
+        ),
+      );
+      return Number(rows.rows[0]?.n ?? '0');
+    }
+
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
@@ -324,7 +334,69 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(b.filter((f) => f.invalidationReason === 'not_reobserved')).toHaveLength(1);
     });
 
-    it('run 4: an empty submission with a window closes the run — everything of the type is retired', async () => {
+    let collectorFactA: string | undefined;
+    let foreignFactA: string | undefined;
+
+    it('a second Source contradicts fresh-a (Conflict) — the collector still builds on its own Fact: unchanged, nothing retired, no second Conflict', async () => {
+      const own = factsOf(await activeRunsOnFacts(), 'fresh-a').find(
+        (f) => f.invalidatedAt === null,
+      );
+      collectorFactA = own?.id;
+      expect(collectorFactA).toBeDefined();
+
+      const second = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        registerSource(client, workspaceId, {
+          kind: 'collector',
+          ownerPrincipalId: ownerId,
+          visibility: 'workspace',
+          metadata: { name: 'freshness-second-source' },
+        }),
+      );
+      const contradiction = await call<SubmitResult>('submit_observations', {
+        sourceId: second.id,
+        observations: [
+          {
+            ...containerItem('fresh-a'),
+            links: [
+              {
+                linkType: 'runs_on',
+                target: { objectType: 'Host', identity: { hostname } },
+                properties: { marker: 'contradiction' },
+              },
+            ],
+          },
+        ],
+      });
+      expect(contradiction.factsAsserted).toBe(1);
+      expect(await openConflictCount()).toBe(1);
+      const active = factsOf(await activeRunsOnFacts(), 'fresh-a').filter(
+        (f) => f.invalidatedAt === null,
+      );
+      expect(active).toHaveLength(2);
+      foreignFactA = active.find((f) => f.id !== collectorFactA)?.id;
+      expect(foreignFactA).toBeDefined();
+
+      // Before 0027 the lookup returned only the newest active row — the second Source's — so
+      // this run opened a second Conflict, inserted a third Fact, and its window then retired
+      // the collector's own row as not_reobserved.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const result = await call<SubmitResult>('submit_observations', {
+        sourceId,
+        observations: [containerItem('fresh-a'), containerItem('fresh-b')],
+        window: { complete: true, objectTypes: ['Container'] },
+      });
+      expect(result.factsAsserted).toBe(0);
+      expect(result.factsUnchanged).toBe(2);
+      expect(result.factsInvalidated).toBe(0);
+      expect(await openConflictCount()).toBe(1);
+      const after = factsOf(await activeRunsOnFacts(), 'fresh-a');
+      const ownAfter = after.find((f) => f.id === collectorFactA);
+      expect(ownAfter?.invalidatedAt).toBeNull();
+      expect(ownAfter?.lastObservedAt).not.toBe(own?.lastObservedAt);
+      expect(after.find((f) => f.id === foreignFactA)?.invalidatedAt).toBeNull();
+    });
+
+    it('run 4: an empty submission with a window closes the run — everything of the type is retired, another Source’s Fact is not', async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       const result = await call<SubmitResult>('submit_observations', {
         sourceId,
@@ -332,8 +404,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         window: { complete: true, objectTypes: ['Container'] },
       });
       expect(result.factsInvalidated).toBe(2);
-      const facts = await activeRunsOnFacts();
-      expect([...facts.values()].filter((f) => f.invalidatedAt === null)).toHaveLength(0);
+      const facts = [...(await activeRunsOnFacts()).values()];
+      const stillActive = facts.filter((f) => f.invalidatedAt === null);
+      expect(stillActive.map((f) => f.id)).toEqual([foreignFactA]);
     });
   },
 );

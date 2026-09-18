@@ -250,11 +250,13 @@ export class SqlGraphStore implements GraphStore {
    * for the rest of this transaction, serializing a concurrent assertion against the same
    * identity). None found → the ordinary insert-only path below, unchanged.
    *
-   * A prior Fact *is* found → `resolveFactOrigin` (substrate/epistemic) resolves "who/what asserted
-   * this" for both sides (the epistemic Source feeding each side's Activity when there is exactly
-   * one, else the asserting principal — see `conflicts.ts`'s own module doc comment for why this is
-   * the generalization I5's "按 source_id 判定" needs to be correct for every writer in this
-   * codebase, not only the one that happens to attach an Observation). Same origin, content
+   * Prior Fact(s) *are* found (several after a Conflict — 0027) → `resolveFactOrigin`
+   * (substrate/epistemic) resolves "who/what asserted this" for the new assertion and each prior
+   * row (the epistemic Source feeding each side's Activity when there is exactly one, else the
+   * asserting principal — see `conflicts.ts`'s own module doc comment for why this is the
+   * generalization I5's "按 source_id 判定" needs to be correct for every writer in this codebase,
+   * not only the one that happens to attach an Observation); the writer builds on its *own* row
+   * when it has one, else on the newest. Same origin, content
    * *unchanged* (`factContentEquals`, store.ts — docs/development-tasks.md S3.2 followup
    * "idempotent re-assertion") → a true no-op: returns the existing Fact as-is (`unchanged: true`),
    * writes nothing, and enqueues no `FactAsserted` — a collector re-submitting the same structural
@@ -302,22 +304,34 @@ export class SqlGraphStore implements GraphStore {
       ]);
       priorResult = await client.query<FactRow>(priorQuery.text, priorQuery.values as unknown[]);
     }
-    const priorRow = priorResult.rows[0];
+    const newestRow = priorResult.rows[0];
 
-    if (priorRow) {
-      const [priorOrigin, newOrigin] = await Promise.all([
-        resolveFactOrigin(client, workspaceId, {
-          activityId: priorRow.activity_id,
-          assertedBy: priorRow.asserted_by,
-        }),
-        resolveFactOrigin(client, workspaceId, {
-          activityId: input.activityId,
-          assertedBy: caller.id,
-        }),
-      ]);
-
+    if (newestRow) {
+      // S5.2 (migrations/core/0027): the lookup returns every still-active row of the identity —
+      // after a Conflict, several. The row this writer builds on is its *own* (the first with the
+      // same origin, newest first): unchanged / touch / supersede below. Only when none is its own
+      // is the newest the counterpart for the corroboration / Conflict branch — 0017's behaviour
+      // whenever a single row exists. Building on the latest row regardless was wrong once the
+      // observation window existed: a collector re-observing an identity another Source had
+      // contradicted would open a second Conflict and then retire its own untouched row.
+      const newOrigin = await resolveFactOrigin(client, workspaceId, {
+        activityId: input.activityId,
+        assertedBy: caller.id,
+      });
+      let ownRow: FactRow | undefined;
+      for (const row of priorResult.rows) {
+        const origin = await resolveFactOrigin(client, workspaceId, {
+          activityId: row.activity_id,
+          assertedBy: row.asserted_by,
+        });
+        if (sameFactOrigin(origin, newOrigin)) {
+          ownRow = row;
+          break;
+        }
+      }
+      const priorRow = ownRow ?? newestRow;
       const priorFact = mapFactRow(priorRow);
-      if (sameFactOrigin(priorOrigin, newOrigin)) {
+      if (ownRow) {
         if (factContentEquals(priorFact, input)) {
           // S5.2 (migrations/core/0026): the same Source saw the same Fact again — no new row,
           // `unchanged` semantics intact, but the freshness clock advances when the writer names

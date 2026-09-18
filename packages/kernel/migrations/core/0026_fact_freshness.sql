@@ -25,7 +25,7 @@
 -- The invalidation half (`invalidation_reason = 'not_reobserved'`) needs no new column: 0007's
 -- `invalidation_reason` carries it, and I4's content trigger (0002) never named `invalidated_at` /
 -- `invalidation_reason`, nor these three columns.
-select pg_advisory_xact_lock(7241000102);
+select pg_advisory_xact_lock(7241000101);
 
 alter table links add column if not exists last_observation_id uuid;
 alter table links add column if not exists last_observed_at timestamptz;

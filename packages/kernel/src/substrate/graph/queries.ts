@@ -332,12 +332,12 @@ export function buildGetFactForUpdateQuery(workspaceId: string, factId: string):
  * reasoning). The function's own `for update` (same convention as `buildGetFactForUpdateQuery`)
  * locks the row for the rest of `assertFact`'s transaction, so two concurrent assertions against
  * the same identity serialize rather than both reading "no prior Fact" and both inserting
- * independently. Only the *most recently recorded* still-active Fact is considered (the function's
- * own `order by recorded_at desc limit 1`) — after a Conflict has been opened once, more than one
- * Fact can be simultaneously `recorded` for the same identity (that is the whole point of "keep
- * both"); a third assertion is compared against the latest of those, not exhaustively against
- * every open side (see `conflicts.ts`'s own module comment for why this scope boundary is
- * acceptable for S3.2).
+ * independently. Returns *every* still-active Fact of the identity, newest first (migrations/core/
+ * 0027; 0017 returned only the newest) — after a Conflict has been opened once, more than one Fact
+ * can be simultaneously `recorded` for the same identity (that is the whole point of "keep both"),
+ * and `assertFact` must build on the row that is the caller's *own* (same origin) rather than on
+ * whichever happens to be latest: the S5.2 observation window retires what a Source did not touch,
+ * so landing on another Source's row would retire a Fact the run just re-observed.
  */
 export function buildFindActiveFactByIdentityQuery(
   workspaceId: string,
