@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.1](https://github.com/btnalit/NextTime-AI/compare/v0.13.0...v0.13.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **kernel:** report_task_result keeps the contract when the ontology refuses one fact (leftover 30, second root cause) ([#208](https://github.com/btnalit/NextTime-AI/issues/208)) ([990fecb](https://github.com/btnalit/NextTime-AI/commit/990fecb6dcd95b30692371b39f90d1a138d50a49))
+* **scripts:** demo.sh connects the gate and publishes the Worker before the first chat turn ([#210](https://github.com/btnalit/NextTime-AI/issues/210)) ([0e3af12](https://github.com/btnalit/NextTime-AI/commit/0e3af1292b75ad323bafb208c466726562f67130))
+
 ## [0.13.0](https://github.com/btnalit/NextTime-AI/compare/v0.12.0...v0.13.0) (2026-09-18)
 
 
