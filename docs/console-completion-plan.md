@@ -25,7 +25,7 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 |---|---|---|---|---|
 | W1 | 对话历史没有删除键，只能不断新增 | 内核只有 `list_chats` / `new_chat` / `send_chat_message` / `get_chat_history` / `subscribe_chat`，没有归档或删除能力；`chat.title` 字段存在但从未写入，所以全是 "Untitled chat" | 内核缺能力 + 页面 | §5.1 |
 | W2 | 对话里看不到当前模式 / 模型，也不能在管理区授予的模型里切换 | 模型由 AgentProfile（`/me/agent`）决定，对话页头部不显示生效模型；切换只能去"我的智能体"页；"管理区授予的范围" = 工作区 AgentPolicy 的 `allowedModels`（已有） | 页面未做 | §5.1 |
-| W3 | 流式输出时右侧不自动跟随到最新 | `ChatPage.tsx` 的跟随逻辑（`atBottom` 初值 true、贴底时 `scrollTop = scrollHeight`）本身没错；待复核的假设：实际滚动的是页面 `main` 而不是 `scrollRef` 容器，写 `scrollTop` 落空 | bug 待复核 | §5.1 |
+| W3 | 流式输出时右侧不自动跟随到最新 | 第二轮核对（§2b）**推翻**了"滚动容器写错"的假设：`.chat-scroll`（`pages.css:108-113`，`flex:1; min-height:0; overflow-y:auto`）就是真正滚动的元素，`scrollTop` 写入有效。新的假设：程序写 `scrollTop` 触发的 `scroll` 事件是**异步**的，若在它到达前又提交了一段流式文本 / 一行工具调用，`onScroll`（`ChatPage.tsx:183-190`）量到的"距底距离"就是这段新增高度，一旦超过 `AT_BOTTOM_THRESHOLD_PX = 48`（`:45`）便把 `atBottom` 翻成 false，跟随从此停止——快模型一帧内多行换行即可触发 | bug 待复现 | §5.1 |
 | A1 | 工作区没有删除键，测试的、临时的删不掉 | 内核只有 `set_workspace_status`（禁用 / 启用）；"行不删"是 P-A1 的审计留痕取舍；一次性工作区靠 `delete-workspaces-matching.sh --expired` 操作员脚本 | 内核缺能力（受治理的清除） | §5.2 |
 | A2 | 能力目录连 Skill 新增 / 编辑都没有 | `propose_skill` / `publish_skill` / `deprecate_skill`（Procedure、WorkerDefinition 同）都已有，页面只做了 Publish / Deprecate；草稿只能由 Worker 结果契约的 `proposedSkill` 或 CLI 产生 | 页面未做 | §5.3 |
 | A3 | 模型与配额"硬编码了现有供应商"，没有供应商增删改查，至少要兼容 OpenAI 通用、Gemini、Claude、自定义兼容格式 | 没有硬编码：模型清单来自主机上的 `llm-providers.yaml`（`make gen-models` → `models.json`），页面是它的只读投影。平台级供应商管理是设计 §6.2（web → caddy `/api/llm-admin/*` → llm-proxy 管理端点，密钥只在 llm-proxy），属 P-D，未开工。llm-proxy 今天已支持 `openai-completions` / `openai-responses` / `anthropic-messages` 三种 API 与 `authorization` / `x-api-key` 两种鉴权头——OpenAI、Claude、DeepSeek、任何 OpenAI 兼容端点、Gemini 的 OpenAI 兼容端点都覆盖；Gemini 原生 API 需要新增一个适配器 | 路线图 P-D | §5.4 |
@@ -38,8 +38,49 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 | B3 | 访问 / 目录 / 系统接入 / 我的智能体显示裸 id（`principal 短id`、`gate 741e…`、Worker 定义 uuid） | `list_principals` / `list_gatekeepers` / `list_worker_definitions` 已在同页表单当下拉，没反过来把展示处的 id 换成名字 | 页面未做 | §5.8 |
 | B4 | `work/*` 全英文，`govern/*` / `platform/*` 中英双语；时间戳美式英文 | 两批页面两套文案基线 | 页面未做 | §5.8 |
 | B5 | 治理层列表硬顶 50 无分页，平台层已是 keyset "加载更多" | 两套列表成熟度 | 页面未做 | §5.8 |
-| B6 | 13 处"该能力尚未上线"分支已是死代码；任务 / 访问 / 目录 / 模型 / 审计 / 平台设置 / 平台审计 / 我的智能体保存无 e2e | 代码卫生与覆盖 | 页面未做 | §5.8、§9 |
+| B6 | 11 处"该能力尚未上线"分支已是死代码（`ModelsPage` 4、`AgentProfilePage` 2、`lib/errors.ts` 1 等）；任务 / 访问 / 目录 / 模型 / 审计 / 平台设置 / 平台审计 / 我的智能体保存无 e2e（完整覆盖矩阵见 C22） | 代码卫生与覆盖 | 页面未做 | §5.8、§9 |
 | B7 | 系统接入页已 `enabled · ok` 的门仍显示"启用"按钮；签发服务 Handle 的 TTL 默认 = 上限、能力名手填 | 页面未做 | §5.6、§5.8 |
+
+### 2b. 第二轮核对（2026-09-18，代码级；维护者七条之外）
+
+> 方法：对 `packages/web/src` 全量（工作区侧 + 治理侧 + 平台侧 + UI kit + libs + hooks）做只读代码审计，
+> 每条都以 `file:line` 为证据、与 `packages/shared/src/capabilities.ts` 和内核 handler 交叉核对；同时核对
+> `runbooks/web-console.md`"已知缺口"清单在当前代码里的真伪（第 3、4 条已闭合，runbook 已随本次改正）。
+> 基线事实：web `tsc` 通过、46 个测试文件 268 个用例全绿；三态（加载 / 空 / 错误）覆盖完整；凭证与一次性密钥
+> 的显示、清除、不落盘均正确；`X-Requested-With` CSRF 头在所有写调用上；无 `innerHTML` / `dangerouslySetInnerHTML`。
+> 严重度：P1 = 功能不可达或数据错误；P2 = 明确缺陷、误导或必 403；P3 = 卫生、一致性、可达性。
+
+| # | 严重度 | 缺陷 | 证据 | 类别 | 方案 |
+|---|---|---|---|---|---|
+| C1 | **P1** | 我的账户页两处渲染都没传 `apiKey` / `onClaimed` / `onBound`：API key 登录后"设置密码"按钮永远禁用（`canSubmit` 要求 `apiKey`），cookie 登录后"绑定已有 API key"卡片永不出现（仅平台概览页在有待激活用户时才接了 `onKeyBound`）——登录页折叠项自己承诺的"用 key 登录后可在「我的账户」设置密码"是断的 | `App.tsx:436-452`、`:544-552`；`AccountPage.tsx`（`ClaimPasswordCard` / `BindApiKeyForm` 条件渲染）；`Session` 类型无 `apiKey` 字段 | bug | §5.8 |
+| C2 | P2 | `useCapabilityList.loadMore` 把后续页 `mutate` 进缓存，但 `useCapability.run()`（任何 `reloadOn` 推送、`reload()`、`key` 变化都会触发）总是只取第一页并整体覆盖：用户翻过页后一次后台重载就把列表悄悄截回第一页 | `hooks/useCapability.ts:118-145` vs `:200-217` | bug（分页） | §5.8 |
+| C3 | P2 | 审批页在 `pending.mutate(rows => …)` 的函数式更新器内部调用另一个 `setDecided(...)`，违反 React 更新器纯函数约定（StrictMode 下双次执行）；今天幂等所以不可见，但是隐患 | `ApprovalQueuePage.tsx:104-121`；`hooks/useResource.ts:72-74` | 代码卫生 | §5.8 |
+| C4 | P3 | `AccountPage` 自定义 `LOGIN_PATTERN = /^[a-z0-9._-]{3,64}$/`，比内核 `normalizeLogin`（首字符须字母数字）宽松；`CreateUserForm` 正确引用了共享常量，此处没有；`invalid_login` 也没映射成友好文案 | `AccountPage.tsx:91` vs `lib/platform-errors.ts:80` vs `kernel/.../identity/users.ts:119` | 契约 | §5.8 |
+| C5 | P3 | WS JSON-RPC 单次调用没有超时：内核收下请求但不回该 `id` 时，Approve / Reject / Send / Stop 的 `await` 永久挂起，只能刷新页面 | `lib/ws-client.ts:337-351` | ws | §5.8 |
+| C6 | P3 | `ActiveSubscription.seenSequences` 每条消息加一项、从不修剪，长开的对话内存无界增长 | `lib/ws-client.ts:240-242`、`:401-408` | 性能 | §5.8 |
+| C7 | P3 | 每次 `action.updated` / `task.updated` 推送同时触发单行刷新与全列表重载，同一事件两倍请求 | `ApprovalQueuePage.tsx:104-122`、`TasksPage.tsx:102-110` | 性能 | §5.8 |
+| C8 | P3 | 对话内审批卡"总是允许"分支找不到对应 `system.action_pending` 消息时仍调用 `set_auto_approved_action_kind`，`actionKindTag` 为 `undefined`（推送先到、持久化消息未到时可触发） | `ChatPage.tsx:212-217` | bug（疑似） | §5.1 |
+| C9 | P2 | 成员与授权、访问两页的 owner-only 写按钮（添加成员 / 服务凭证 / 授予能力 / 签发服务 Handle）对 **operator** 会话可见且可点，点了必 403：`canManage` 从 `create_principal` / `grant_capability` 是否被拒推断，而该拒绝只会在 `list_principals` / `list_grants`（minRole operator）403 时学到——operator 的读成功，闭包永不标记 | `MembersPage.tsx:54`、`AccessPage.tsx:50`；`capabilities.ts:1901/1318` vs `:1890/1423` | 权限（客户端） | §5.8 |
+| C10 | P2 | 管理员停用**自己**时看到"最后一位活跃管理员不能停用"：内核对"不能停用自己"和"最后一位管理员"复用同一错误码 `last_admin`，客户端丢掉内核 `message` 只渲染固定文案 | `lib/platform-errors.ts:23-24`、`platform/PlatformError.tsx:21-22`；`kernel/.../gateway/platform-handlers.ts:408-409, 470` | bug（内核码 + 页面） | §5.8 |
+| C11 | P2 | AgentPolicy 表单取消勾选当前默认模型后 `defaultModel` 不重置：`<select>` 绑定到一个已不在选项里的值并照样提交；同库 `CreateWorkspaceForm` 已有正确的回退守卫 | `AgentPolicyForm.tsx:126-178` vs `platform/CreateWorkspaceForm.tsx:44-49` | bug（校验） | §5.4 |
+| C12 | P2 | 新建门宿主实例：http 类型的 "Manifest source" 标了必填、内核 `superRefine` 也真要求，但客户端 `ready` 不检查它，留空可点 Create，必 400 | `platform/CreateGateInstanceForm.tsx:46-48, 183-198` vs `capabilities.ts:2490-2503` | 校验 | §5.6 |
+| C13 | P2 | 集成页门实例表格行 `onClick` / `onKeyDown` 却无 `tabIndex`、行内也没有按钮：键盘用户打不开任何门实例详情；同库 `WorkspaceRow` 明确提供了"配置"按钮作为键盘路径 | `platform/PlatformIntegrationsPage.tsx:410-477` vs `platform/PlatformWorkspacesPage.tsx:210-273` | 可达性 | §5.9 |
+| C14 | P2 | 能力目录四个 tab 的发布 / 弃用失败只给通用 toast（`Could not update <name>`），内核真实错误被丢弃；同库其它写路径都用 `ErrorBanner` 显示原文 | `CatalogPage.tsx:162-165, 280-283, 364-367, 451-454` | 吞错 | §5.3 |
+| C15 | P3 | 完成连接表单的 "Gatekeeper endpoint" 接受任意非空字串，不校验 URL；同表单 "Manifest source" 有正则校验 | `CompleteConnectionForm.tsx:198-214` vs `:96-98` | 校验 | §5.6 |
+| C16 | P3 | `aria-describedby` 悬空：`describedBy(id, true, hasError)` 把 `hasHint` 写死为 true，而 `Field` 有错误时不渲染 hint，指向的 `-hint` id 不在 DOM | `CompleteConnectionForm.tsx:191, 210, 303`；`ui/Field.tsx:42-46` | 可达性 | §5.9 |
+| C17 | P3 | `components/platform/` 下 6 个文件的状态 / 健康 / 模式芯片全部手拼 `chip chip-ok` 类名，零处引用 `ui/StatusChip`；`lib/status-tone.ts` 的机器联合体从未扩展到平台面枚举（用户状态、门实例状态、接入包模式、健康） | `PlatformUsersPage.tsx`、`UserDetailPanel.tsx`、`WorkspaceDetailPanel.tsx`、`GateInstanceDetailPanel.tsx`、`PlatformIntegrationsPage.tsx`、`lib/status-tone.ts` | 一致性 | §5.9 |
+| C18 | P3 | `GatekeeperCard` 重写了 `isForbidden(err)` 而不引用 `lib/errors.ts` 的 `isForbiddenError`；今天靠 `session.http` 永远是 `HttpClient`（code 为字串）才成立，喂 WS 调用方（`RpcError.code` 是数字）即失效 | `RegisteredSystemsSection.tsx:239-246`；`lib/ws-client.ts:144` | 一致性 | §5.8 |
+| C19 | P3 | 授予能力表单的 Scope 字段接受任何合法 JSON（`"foo"`、`42`）并原样提交，而 `GrantRow.scope` 处处按对象处理 | `GrantCapabilityForm.tsx:46-54` | 校验 | §5.8 |
+| C20 | P3 | 访问页 principal 筛选在 `list_principals` 首次加载完成时从 `<Input>` 换成 `<Select>`，用户已输入的内容被丢弃 | `AccessPage.tsx:96-119` | UX | §5.8 |
+| C21 | P2 | caddy 只发 `X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy`，无 `Content-Security-Policy`、无 `Permissions-Policy`（HSTS 的缺席有注释说明是内部 CA 的有意取舍，不算缺陷）。SPA 今天没有任何外部加载，严格 CSP 可立即上；**设计含义**：§5.9 的字体必须随包自托管，不能走外部字体服务 | `deploy/caddy/Caddyfile:61-69`；`packages/web/index.html` | 安全加固 | §5.9、§7 |
+| C22 | P3 | 单测缺失：`ChatPage`、`ChatListPage`、`TasksPage`、`TaskDetail`、`AuditPage`、`ActionRequestDetail`、`AppShell`、`WorkspaceDetailPanel`、`UserDetailPanel`、`GateInstanceDetailPanel`；e2e 在 B6 之外还缺我的账户、改密码、接入向导、侧栏 | `packages/web/src/components/**`（无对应 `*.test.tsx`）；`packages/web/e2e/*.spec.ts` | 覆盖 | §9 |
+| C23 | P3 | `App.tsx` 673 行（路由 + 会话 + 连接状态机一体）、`ws-client.ts` 604 行；`index.ts` 残留 `console.log` | `packages/web/src/App.tsx`、`lib/ws-client.ts`、`index.ts` | 代码卫生 | §5.8 |
+| C24 | P3 | `tokens.css` 没有字号 / 行高刻度令牌（只有字族），68 处手写 `px` 字号散在 `ui.css`（25）/ `pages.css`（22）/ `shell.css`（12）/ `base.css`（9）；1 处硬编码颜色 `#fff`（`ui.css:92`）。对比度实测达标（`--text-3` 对各面 ≥ 5.0:1） | `packages/web/src/styles/*.css` | 设计系统 | §5.9 |
+| C25 | P2 | `approve` 没有 `reason` 参数（`reject` 有）：批准高影响动作时无法留下"为什么可以"，审计只有 actor 没有依据 | `capabilities.ts:1225-1231` vs `:1236-1242` | 内核缺能力 | §5.8、§6 |
+| C26 | P3 | `cancel_connection_request` 不存在（S2.13 已知偏离仍开放），系统接入页的连接申请没有取消按钮 | `capabilities.ts`（无此名）；runbook 已知缺口 8 | 内核缺能力 | §5.6、§6 |
+| C27 | P3 | `export_prov` 能力已注册，审计页只在注释里提到、从未接入 | `capabilities.ts:1849`；`AuditPage.tsx:29` | 页面未做 | §5.5 |
+| C28 | P3 | `list_action_requests` 只按 `status` / `gatekeeperId` 过滤，没有 `taskId` / `parentWorkerRunId`：任务详情的"关联审批"仍只能从 `list_pending` 反查 pending 的，已决定的看不到（runbook 缺口 6 仍开放） | `kernel/.../gateway/handlers.ts:768-796`；`capabilities.ts:1272` | 内核缺参数 | §5.5、§6 |
+| C29 | P3 | `list_quotas` / `list_policies` 没有公开行结构，模型与配额页只能把 Quota 渲成 key/value、Policy 渲成脱敏 JSON 折叠块（runbook 缺口 9 仍开放）；与 §5.4 的供应商页一起定型 | `ModelsPage.tsx`；runbook 已知缺口 9 | 契约 | §5.4 |
 
 ## 3. 现状与约束
 
@@ -177,7 +218,91 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 - **语言与格式**：`work/*` 与 `govern/*`、`platform/*` 统一为中英双语文案；时间戳统一走 `formatRelative` +
   `formatDateTime`（已有）并用浏览器区域设置。
 - **分页**：访问 / 系统接入 / 目录三页改为 keyset "加载更多"（平台层已有的 `useCapabilityList`）。
-- **代码卫生**：删除"该能力尚未上线"死分支与过时注释。
+- **代码卫生**：删除"该能力尚未上线"死分支与过时注释；`App.tsx` 拆出路由表与会话状态机（C23）；去掉
+  `index.ts` 的 `console.log`。
+- **第二轮核对的修法（C 系列，按文件归组，一个文件一个 PR）**：
+  - `App.tsx` + `Session` 类型：`Session` 加 `apiKey`（`connectApiKey` 时捕获），两处 `<AccountPage>` 传
+    `apiKey` / `onClaimed`（复用 `proceedAfterCookieAuth`）/ `onBound={handleKeyBound}`（C1，P1，先修）。
+  - `hooks/useCapability.ts`：`run()` 重载时按"用户已加载的条数"重取或合并保留后续页，不再截回第一页（C2）。
+  - `ApprovalQueuePage.tsx` / `TasksPage.tsx`：`setDecided` 移出 `mutate` 更新器（C3）；推送后只做单行刷新，
+    去掉冗余的全列表重载（C7）。
+  - `AccountPage.tsx`：引用 `lib/platform-errors.ts` 的 `LOGIN_PATTERN`，映射 `invalid_login`（C4）。
+  - `lib/ws-client.ts`：`rpc()` 加可配置的单次调用超时（默认 30s，超时即 reject 并记录）（C5）；
+    `seenSequences` 在 `onCaughtUp` 后退化为 `sequence > lastSeenSequence` 判断或定期修剪（C6）。
+  - `ChatPage.tsx`：`alwaysAllow` 找不到卡片时跳过调用并 toast（C8）。
+  - `MembersPage.tsx` / `AccessPage.tsx`：`canManage` 改用 `useWorkspaceIdentity` 的权威角色（`get_workspace.caller.role`），
+    403 推断只作 fallback（C9，与 runbook"角色与可见性"的既定方向一致）。
+  - 内核 `platform-handlers.ts` 把"不能停用自己"拆成独立错误码 `self_disable`；`platform-errors.ts` /
+    `PlatformError.tsx` 对已映射码也保留内核 `message` 作为副文案（C10）。
+  - `AgentPolicyForm.tsx` 镜像 `CreateWorkspaceForm` 的默认模型回退守卫（C11）。
+  - `CreateGateInstanceForm.tsx` 的 `ready` 加 http 必填 manifestSource（C12）；`CompleteConnectionForm.tsx` 的
+    endpoint 复用 URL 正则（C15）、`describedBy` 的 `hasHint` 按是否真的渲染 hint 传（C16）。
+  - `CatalogPage.tsx` 四处 toast 带 `describeError(err).message` 或改 `ErrorBanner`（C14）。
+  - `RegisteredSystemsSection.tsx` 引用 `isForbiddenError`（C18）；`GrantCapabilityForm.tsx` 拒绝非对象 JSON（C19）；
+    `AccessPage.tsx` 的筛选控件不再中途换类型（C20）。
+
+### 5.9 视觉与交互体系（设计基线，已定稿）
+
+维护者 2026-09-18 审阅重设计 v1 原型后定稿："起码要这样的水准"。原型（十块画板 + 设计系统板，链接在
+`docs/private/console-redesign-2026-09-18.md`）是本节的**验收基线**：S6 之后的每个页面改动都对照它，不对照
+现状。本节把原型翻译成可实现的规则；实现细节随 S6-A0 落到 `packages/web/src/styles/tokens.css` 与 `ui/*`。
+
+**对现状的批评（定稿依据）**：页面没有主次，卡片、表格、按钮同一层灰，主次操作同色同重；治理语义没有颜色系统，
+待审批 / 已执行 / 拒绝 / 归档靠读字区分；裸 uuid 到处出现；破坏性操作与普通按钮长得一样、不分级；系统字体加低对比
+深色，中英与等宽混排没有节奏；导航把使用 / 治理 / 平台混排，看不出"我在哪一层"。做对的：三层信息架构与 hash 路由
+本身正确；`tokens.css` 已有语义命名与浅色主题（`prefers-color-scheme: light`），只是没被用来表达层级；三态覆盖完整；
+`Drawer` 的焦点陷阱 / Escape / 焦点回归正确。
+
+**原则**（每条都可检查）：
+1. 中性底面只承载内容；**蓝色只用于"可以点"**（链接、选中、提交）；每页只有一个 ink 主按钮。
+2. **治理语义色固定映射、一色一义、不得借作装饰**：观察 observe（青）/ 执行 · 待审批 · warn 模式 · 中影响（琥珀）/
+   高影响 · 不可逆 · reject 模式 · 冲突 · 失败 · 清除（红）/ 已执行 · 已发布 · 健康（绿）/ 系统 · 提案 · 生产 · 默认标记
+   （蓝）/ 归档 · 被替代 · 验收残留 · 未测试（灰）。色点与图标必须配文字，不能只靠颜色。
+3. **id 永不裸露**：名称 + 类型 + 截断 id + 复制；点击进入对象页；找不到名称才回退灰色裸 id（即 B3 的组件）。
+4. **确认按影响分级**（同一模式用于 ActionRequest 审批、工作区 / 用户清除、Handle 吊销、供应商密钥覆盖）：
+   低 · 可逆 → 直接执行 + Toast 撤销；中 · 可逆 → 对话内审批卡一键批准，显示目标 / 参数 / 代表者；高 · 可逆 → 进审批页，
+   列影响范围，确认对话框；**不可逆 → 键入目标名称 + 勾选知情项，危险实心按钮在此之前禁用，写平台审计**。
+5. 层级用 1px 边框，不用阴影（抽屉除外）；圆角 6（chip）/ 8（控件）/ 12（卡片）；间距 4 / 8 / 12 / 16 / 24 / 32。
+6. 最小点击高 36px，触屏 44px；文字对比 ≥ 4.5:1；所有行级操作有键盘路径（C13 的反例不再出现）。
+
+**令牌（映射到现有 `tokens.css`，不改名、只改值与补缺）**：
+- 浅色成为默认，深色改为 `prefers-color-scheme: dark` 覆盖（今天相反）；两套沿同一令牌名，不新增语义。
+- 中性：`--bg #f4f5f7`、`--surface-1 #ffffff`、`--surface-2 #f8f9fb`、`--border #e3e6ea`、`--border-strong #cfd4da`、
+  `--text #12161c`、`--text-2 #4b5563`、`--text-3 #6b7280`（对白底 4.7:1）。
+- 强调：`--accent #1f4fd6`（对白底 6.3:1）、`--accent-soft #e8eefc`；主按钮用 `--text`（ink），不用强调色。
+- 语义：`--ok #157347 / --ok-soft #e3f5ea`、`--warn #b45309 / --warn-soft #fdf1e3`、`--danger #b42318 / --danger-soft #fde8e6`、
+  `--info #1f4fd6 / --info-soft #e8eefc`；**新增** `--observe #0f766e / --observe-soft #e0f2f1`、`--muted #6b7280 / --muted-soft #f0f1f3`。
+- **新增字号 / 行高刻度**（C24 的修法）：`--fs-11 --fs-12 --fs-13 --fs-14 --fs-16 --fs-19 --fs-24`，`--lh-tight 1.3`、
+  `--lh-body 1.6`；`ui.css` / `pages.css` / `shell.css` / `base.css` 的 68 处手写字号全部换令牌，`ui.css:92` 的 `#fff` 换
+  `--text-on-accent`。
+- 字体：`--font-sans: "IBM Plex Sans", "Noto Sans SC", system-ui, …`、`--font-mono: "IBM Plex Mono", ui-monospace, …`；
+  **随包自托管**（`packages/web/public/fonts/*.woff2` + `@font-face`，Noto Sans SC 只带常用字子集），不引用外部字体服务——
+  这是 C21 严格 CSP 与无外网主机的共同要求。
+
+**组件（`ui/*` 的增补；现有组件不改 API 只改样式）**：
+- `RefChip`（= §5.8 的 id → 名称组件）：Principal / Gatekeeper / WorkerDefinition / Object / ActionRequest 五种引用，
+  名称 + 类型 + 截断 id + `CopyId`。
+- `StatusChip` 扩到平台面枚举（用户状态、门实例状态、接入包模式、健康、Publishable 已有）——即 C17 的修法；
+  `lib/status-tone.ts` 的机器联合体加这些机器，`components/platform/` 的手拼 chip 全部替换。
+- `ConfirmTier`：分级确认的统一实现（tier = low / medium / high / irreversible），不可逆档内含"键入名称 + 知情勾选"，
+  取代 B2 提到的散落两步确认。
+- `ApprovalCard`：对话内与审批页共用同一张卡（能力、目标、代表者、策略、影响面、批准 / 拒绝 / 总是允许、"在审批页打开"）。
+- `ProvenanceChain`：Fact → Activity → Source 三段时间线 + 原始证据折叠（§5.5 的结构化渲染）。
+- `Launcher`：四步接入启动器（选类型 → 连接与凭证 → 能力与策略 → 握手验证），§5.6 两页共用。
+- `FollowPill`："跟随最新输出 · N 条新消息"（W3 修法的可见部分）。
+
+**壳与导航**：侧栏三组带分组标签（使用 / 治理 / 平台，成员可见性沿 runbook"角色与可见性"），顶部工作区切换器，
+底部连接状态 + **真实版本号**（B1）+ 当前用户；页头统一"面包屑小字 + 标题 + 一句话说明 + 右侧主操作"。
+
+**页面对照原型**：控制塔（平台概览：待处理 / 运行中 / 图谱新鲜度 / 费用四指标、需要人处理列表、服务健康、最近发生、
+首次运行清单、验收残留横幅）；对话（列表带归档筛选与状态副标题、头部模式 + 模型下拉、消息流内审批卡、FollowPill、
+执行类动作提示）；待我审批（队列 + 详情、影响范围来自图谱、不可逆确认）；工作区（默认隐藏残留、用途 / 来源列、清除抽屉
+含级联计数与 Handle 警告）；系统接入（已接入系统卡片 + Launcher）；审计（对象 / 关系筛选芯片、ProvenanceChain、冲突复核、
+结构化审计流）；模型与供应商（供应商表 + 添加抽屉 + 工作区可选模型矩阵）；能力目录（Skill 编辑器：frontmatter 表单 +
+正文 + 生命周期）。用户页复用工作区页的筛选与清除模式；图页按 §5.7 处理。
+
+**验收**：对照原型逐页走查；`tokens.css` 之外零硬编码颜色与字号（lint 规则：biome 自定义或 stylelint 只拦 `styles/`）；
+键盘可达每个行级操作；axe 无严重项；严格 CSP 下页面无违规（C21）。
 
 ## 6. 能力 / API 设计（全部为目标，标"已有"者除外）
 
@@ -192,6 +317,11 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 | `issue_llm_admin_token` | platform · human · admin | 签发 5 分钟平台 JWT 给 `/api/llm-admin/*` | `platform.llm_admin_token_issued` | 仅管理员；短期；只用于 llm-proxy 管理端点 |
 | llm-proxy `/api/llm-admin/providers` CRUD、`/providers/:id/test`、`/providers/:id/secret`（只写） | llm-proxy 内部，经 caddy | 供应商增删改查、测试、密钥写入、热加载 | llm-proxy 自己的审计日志 + 内核平台审计一行（不含密钥） | 密钥不进内核 / 数据库 |
 | `explain` / `reconstruct` / `audit_query`（已有） | workspace · human · member / auditor | 审计页上下文入口复用 | 已有 | `audit_query` 加 keyset 分页 |
+| `export_prov`（已有，未接） | workspace · human · auditor | 审计页"导出"按钮 | 已有 | 只导出当前筛选范围（C27） |
+| `approve{actionRequestId, reason?}` | workspace · human · operator | `approve` 加可选 `reason`；`blast_radius = high` 时前端要求必填 | 已有动作，审计行加 `reason` | 与 `reject` 对称（C25） |
+| `list_action_requests{…, taskId?, parentWorkerRunId?}` | workspace · human · operator | 加两个过滤参数，任务详情"关联审批"改用它 | 已有 | I14 可见性不变（C28） |
+| `cancel_connection_request` | workspace · human · member（本人）/ owner | ConnectionRequest `requested → cancelled` | `connection.request_cancelled` | 仅 `requested` 状态可取消（C26） |
+| 平台错误码 `self_disable` | platform · human · admin | 从 `last_admin` 拆出"不能停用自己" | 无新增审计 | 客户端保留内核 `message`（C10） |
 
 线上契约：每个新能力进 `packages/shared/src/capabilities.ts` 与 wire schema，`pnpm contract:check` 快照
 随之更新；`tasks.result` 类已有 `unknown` 字段不动。
@@ -202,6 +332,11 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 - 清除类能力只在 platform scope、管理员、两步确认、平台审计保留；工作区 owner 没有清除权（只能禁用）。
 - 归档不改变可见性策略以外的任何东西；溯源链不被切断。
 - 对话页的模型切换受 AgentPolicy 约束，与"我的智能体"页同一条路径，不新开口子。
+- **传输层加固（C21）**：caddy 加 `Content-Security-Policy`（`default-src 'self'; connect-src 'self' wss:; img-src 'self'
+  data:; font-src 'self'; style-src 'self' 'unsafe-inline'`——内联样式仅因 UI kit 现状，S6-A0 后收紧为 `'self'`）与
+  `Permissions-Policy`（关闭摄像头 / 麦克风 / 地理位置等）；HSTS 维持现状与现有注释。Explorer 占位与 `/api/*`
+  反代不受影响。
+- 客户端角色判断只做展示收窄，权限由内核 `minRole` 与 I14 决定不变；C9 的修法是让展示与权威角色一致，不是放宽。
 
 ## 8. 观测与审计
 
@@ -216,21 +351,34 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 - 验收脚本改造后：一轮 S1–S3 不新增 User；`purge_workspace --expired` 后只剩生产工作区。
 - 主机验收：按 §5 各节的验收句逐条做，结果记 `docs/private/`，纯计数进 STATUS。
 - 供应商页：新增一个 OpenAI 兼容供应商 → 工作区勾选 → 对话切换 → `report-usage.sh` 按 provider 汇总。
+- **第二轮核对项**：C1 用 API key 登录后在我的账户页设密码成功、cookie 登录后能绑定 API key（e2e）；C2 翻两页后触发
+  一次推送，行数不减（`useCapability.test.tsx`）；C9 以 operator 登录，成员 / 访问页不出现 owner 按钮（e2e）；C10 非唯一
+  管理员停用自己看到"不能停用自己"（集成测试 + e2e）；C12 / C15 / C19 客户端拦住并给出字段级说明；C5 用不回包的
+  `WebSocketLike` 桩验证超时 reject；W3 用 Playwright 以每 10ms 一段、每段两行的假流式复现后再修。
+- **覆盖补齐（C22）**：`ChatPage` / `ChatListPage` / `TasksPage` / `TaskDetail` / `AuditPage` / `ActionRequestDetail` /
+  `AppShell` / 三个平台详情面板补单测；我的账户 / 改密码 / 接入向导 / 侧栏补 e2e。
+- **设计基线（§5.9）**：每个改动页面对照原型走查并截图入 `docs/private/`；`styles/` 令牌 lint 零违规；axe 无严重项；
+  严格 CSP 下 e2e 全绿。
 
 ## 10. 路线图与波次
 
 | 波次 | 内容 | 关闭 | 依赖 |
 |---|---|---|---|
-| **S6-A 控制台闭环** | §5.8 全部；§5.1（归档 / 改名 / 自动标题 / 头部显示 + 范围内切换、W3 修复）；§5.2（`purge_workspace` / `purge_user` / 默认过滤 / 验收脚本不造用户）；§5.3 编辑器；§5.5 审计上下文 | B1–B7、W1–W3、A1 / A2 / A4 / A6、遗留 41 的前半 | 遗留 44 先修（对话中途切换依赖它），否则切换只在 Turn 间 |
-| **S6-B 模型与供应商** | §5.4：llm-proxy 管理端点 + `issue_llm_admin_token` + 平台页；工作区只选不配 | A3 | 无（可与 S6-A 并行，文件互斥） |
-| **S6-C 接入与图** | §5.6 启动器与状态一致性；§5.7 主机构建 Explorer + 隐藏入口；原生图谱页由维护者决定 | A7、B7、A5 | S6-A 的 id → 名称组件 |
+| **S6-A0 视觉体系落地 + 紧急修复** | §5.9 令牌（浅色默认、字号刻度、语义色补缺、字体自托管）与 `ui/*` 增补（`RefChip` / `StatusChip` 平台机器 / `ConfirmTier` / `ApprovalCard` / `ProvenanceChain` / `FollowPill`）、壳与导航、真实版本号；caddy CSP / Permissions-Policy；C1（P1）与 C2 / C3 / C9 / C10 / C11 / C12 / C14 六条 P2 的文件级修复；W3 复现 | B1、B2（模式）、B3（组件）、C1–C3、C9–C14、C16–C21、C24 | 无。**先于一切页面改动**：后续波次的页面都在新令牌与新组件上写，避免改两遍 |
+| **S6-A 控制台闭环** | §5.8 全部；§5.1（归档 / 改名 / 自动标题 / 头部显示 + 范围内切换、W3 修复、C8）；§5.2（`purge_workspace` / `purge_user` / 默认过滤 / 验收脚本不造用户）；§5.3 编辑器；§5.5 审计上下文 + `export_prov` + `list_action_requests` 任务过滤；`approve.reason`；C4–C7、C15、C18–C20、C22、C23、C25、C27、C28 | B4–B7、W1–W3、A1 / A2 / A4 / A6、遗留 41 的前半、C 系列剩余 | S6-A0；遗留 44 先修（对话中途切换依赖它），否则切换只在 Turn 间 |
+| **S6-B 模型与供应商** | §5.4：llm-proxy 管理端点 + `issue_llm_admin_token` + 平台页；工作区只选不配；C29 定型 Quota / Policy 行结构 | A3、C29 | S6-A0（可与 S6-A 并行，文件互斥） |
+| **S6-C 接入与图** | §5.6 启动器与状态一致性 + `cancel_connection_request`；§5.7 主机构建 Explorer + 隐藏入口；原生图谱页由维护者决定 | A7、B7、A5、C26 | S6-A0 的 `RefChip` / `Launcher` |
 | 之后 | P-B2b → P-C（运行层、运行状态）→ P-D（模块、供应商剩余项）按 STATUS 原顺序 | 设计 §6.4 / §6.5 / §6.7 | — |
 
-优先级判断：S6-A 里 B2（确认态）与 B1（版本）是 P1；A6 / A1（残留治理）是维护者每天都会看到的，排第二；
-其余 P2。S6-B 是维护者最在意的能力缺口，但它是新的服务面（llm-proxy 管理端点 + JWT），单独成波次更稳。
+优先级判断：C1 是唯一的 P1（两条登录后流程不可达），单独一个小 PR 先修，不等波次。S6-A0 放在最前是因为维护者已把
+视觉水准定为验收基线，页面若先在旧令牌上改会全部重做一遍。S6-A 里 B2（确认态）与 B1（版本）随 S6-A0 的组件落地；
+A6 / A1（残留治理）是维护者每天都会看到的，排 S6-A 第一；其余 P2。S6-B 是维护者最在意的能力缺口，但它是新的服务面
+（llm-proxy 管理端点 + JWT），单独成波次更稳。
 
-## 11. 最小当前版本（S6-A 第一波要交付的闭环）
+## 11. 最小当前版本（S6-A0 + S6-A 第一波要交付的闭环）
 
+0. C1 修复合入（我的账户页两条流程可用）；新令牌 + `RefChip` / `StatusChip` / `ConfirmTier` 上线，侧栏三组 +
+   真实版本号，caddy 严格 CSP 通过 e2e。
 1. 概览显示真实版本；审批 / 撤销 / 接入包切换有确认；四处 id 换名字。
 2. 对话：归档 + 自动标题 + 头部显示模式与模型 + 在授予范围内切换（Turn 间）；W3 复现并修。
 3. 工作区页 / 用户页默认过滤 + `purge_workspace` / `purge_user` + 验收脚本不再造用户；主机上把 30 个
@@ -246,3 +394,8 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 3. `purge_workspace` 对 `disabled` 工作区的保留期：立即可清，还是禁用满 N 天才可清（建议 7 天）。
 4. S6-A 与 S6-B 并行还是串行；S6 插在 P-B2b 之前还是之后。
 5. 验收脚本改造范围：只改"不造用户"，还是连同把验收工作区统一收进一个长期"验收工作区"复用。
+6. `approve.reason`：高影响（`blast_radius = high`）时是否**必填**（建议必填，理由进审计），中低影响可选。
+7. 字体自托管的体积：Noto Sans SC 全字重约 10 MB，建议只带常用 3500 字子集 + 按需回退系统字体；是否接受
+   首屏多约 600 KB（一次缓存）。
+
+已定稿（不再征求）：视觉基线按 v1 原型（§5.9），浅色默认、深色覆盖；治理语义色六类固定映射；确认按影响四档分级。
