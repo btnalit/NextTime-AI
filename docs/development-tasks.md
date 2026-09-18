@@ -2350,7 +2350,7 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
 - **遗留 26**：`accept_s2.sh` 的 cleanup 只 `rm -sf` 五个夹具服务，不 `down` 基础栈，S1→S2→S3 可连跑。
 - **遗留 25**：`interfaces/ws/server.test.ts` 的 WS 端到端用例给单独 `testTimeout`，复现三次以上再查根因。
 
-#### S5.6 实现说明（2026-09-18，PR #TBD）
+#### S5.6 实现说明（2026-09-18，PR #200）
 
 - **`queued` 崩溃缺口 + I-S5-3**：`application/task/reaper.ts` 新增 `reapLostQueuedTasks`——
   `runTaskReaper`（沿用既有 30 秒 tick）每次额外扫一遍 `status='queued' and updated_at < now() - 60s`
