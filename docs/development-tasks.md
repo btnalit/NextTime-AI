@@ -1972,6 +1972,66 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
   该 Fact 显示 `invalidated_at` 与 reason；二跑后所有仍存在容器的 Fact `last_observed_at` 前进。
   依赖：S3.3、S5.1（同一写入点，同一所有者，S5.1 先合入）。
 
+#### S5.2 实现说明（2026-09-17，PR #193）
+
+- **迁移 `core/0026`**：`links.last_observation_id`（FK 到 `observations`）、`links.last_observed_at`、
+  `objects.last_observed_at`，以及观察窗口用的部分索引 `links_source_object_active_idx`。
+  `invalidation_reason` 是 0007 已有的**列**，不是设计草案写的 `properties.invalidation_reason`——
+  I4 触发器从不禁改 `invalidated_at` / `invalidation_reason`，也不涉及这三列。
+- **新鲜度只属于同源再观察**：`assertFact` 的幂等 no-op 路径在调用者带 `observationId` 时把两列推进
+  （`unchanged` 语义不变，无新行、无 outbox 事件）；异源同内容仍是佐证（返回既有 Fact、不动它的时钟）——
+  佐证不是再观察，窗口正是按 Fact 自己的 Source 判定的。`assert_fact`（人 / agent）不带 Observation，
+  两列不动，是有意的区别。插入时 `last_observation_id = observation_id`（新 Fact 的最近确认就是起源）。
+- **观察窗口的三处与草案不同，都是有意的**：（1）一轮只在**最后一次**提交上声明一个窗口，不是每阶段一个——
+  采集器四个阶段共用一个 Activity，阶段 2 与阶段 3 都写 Container 边，逐阶段窗口会把同一轮早一阶段刚写的
+  边判为"未再观察"；窗口起点取 Activity 的 `created_at`，因此一个窗口覆盖整轮。（2）`objectTypes` 只列本轮
+  **真正枚举过**的类型：固定的 Host / Image / ComposeProject / Container / Volume / Network / Endpoint，
+  配置了仓库路径时加 Repository，systemd / 进程树未 `skipped` 时各加一类；被跳过的子采集永远不会
+  让它的 Fact 失效。RAGFlow 阶段单独声明 `['KnowledgeBase','Document']`。（3）`observations` 允许为空——
+  但只能与 `window` 同时出现（zod `superRefine`），这是"最后一阶段什么都没采到也要关窗"的方式；
+  阶段 3 / 4 即使为空也照提交。
+- **失效 SQL**（`buildInvalidateUnobservedFactsQuery`）：同一工作区、`superseded_at` 与 `invalidated_at`
+  皆空、源对象类型在 `objectTypes` 内、`coalesce(last_observed_at, recorded_at)` **严格早于**窗口起点、
+  且 Fact 的 `coalesce(last_observation_id, observation_id)` 属于该 Source 的 Observation——两者都为空的
+  0018 之前的行按 `observations.activity_id = links.activity_id` 回退到 Activity 的 Source，所以遗留 28
+  的幻影 Container 边在首个带窗口的运行里一起退休。每个窗口一条 `facts_not_reobserved` 审计
+  （`resource_type='activity'`，payload 带 `sourceId / objectTypes / count / sample`），结果里 `factsInvalidated`
+  计数；不发 outbox 事件（与 `invalidate_fact` 一致）。Object 永不因缺席失效，只是 `last_observed_at`
+  停止前进。
+- **`core/0027` 同源优先（本项暴露的 S3.2 边界）**：0017 的 `find_active_fact_for_identity` 只返回最新的
+  一条活跃行，S3.2 文档写明"第三次断言只与最新那条比较"。窗口出现后这就是错的：采集器再观察一个已被
+  别的 Source 反驳过的身份（`accept_s3.sh` 冲突正向步骤留下的状态）会落在对方更新的那行上——异源异内容
+  → 再插一条 Fact、再开一个 Conflict，而自己那条没被碰的旧行随后被自己的窗口判为 `not_reobserved`。
+  0027 去掉 `limit 1`（`for update` 锁住该身份全部活跃行，只多不少）；`assertFact` 先解析本次断言的
+  origin，再逐行解析既有行，**建立在自己那一行上**（unchanged / touch / supersede），没有自己的行才以最新
+  行作佐证 / Conflict 的对手——单行时行为与 0017 完全一致。origin 逐行顺序解析、不再 `Promise.all`
+  （遗留 34 的同 client 并发 query）。S5.3 计划的 `core/0027` 顺延为 `core/0028`。
+- **门的观察有了 Source（I-S5-2）**：`observed-facts.ts` 为每个 Gatekeeper 惰性注册一个 `kind='gatekeeper'`
+  的 Source（owner 是共享的门 service Principal、`workspace` 可见、`metadata.gatekeeperId`；事务级
+  advisory lock 防并发重复），每次 `observe` / `apply` 结果在调用者的 Activity 上记一条 Observation 并作为
+  `observationId` 传给 `assertFact`；被观察 Object 的 `last_observed_at` 同步推进。门不声明窗口——一次
+  `observe` 是一个 Operation 的答复，不是某类对象的完整视图。`observed` 边的身份本就从 Gatekeeper Object
+  出发，两个门永远不共享身份，冲突语义无可见变化。**主机过渡**：S5.2 之前写入的门 Fact（无 Observation、
+  origin 是共享 Principal）与同一门的下一次观察是异源同内容 → 佐证，返回 `unchanged` 且不动——它保留旧溯源、
+  永远不会有 `lastObservedAt`；要迁移就 `invalidate_fact` 它，下一次观察写出带 Source 的新 Fact。
+- **I-S5-2**（`checkIS52`，进 `INVARIANT_CHECK_IDS` 与 `/internal/metrics`）：`epistemic_status='observed'`、
+  `recorded_at` 晚于迁移 0026 应用时刻、`observation_id` 为空的行。service 类 Handle 直接调 `assert_fact`
+  是唯一合法的产生方式，正该被计到——不是要修的 bug。历史行不回溯。
+- **wire**：`FactWire` 加 `lastObservationId / lastObservedAt`，`ObjectWire` 加 `lastObservedAt`，`explain`
+  的 Fact 分支加 `invalidatedAt / invalidationReason / lastObservation`（可空的 Observation 引用），
+  `submit_observations` 结果加 `factsInvalidated`、参数加 `window`（快照已重生成）。
+- **采集器**：`run.ts` 的 `RunSummary.factsInvalidated`（对旧内核的答复缺省 0）进 `run complete` 日志行。
+- **验收**：`accept_s3.sh` 新增 `collector_freshness_step`，放在冲突正向步骤**之后**（故意——run 2 就是
+  0027 的现场检查），用新的 compose 夹具 `accept-s3-ephemeral`（profile `accept-s3`）：起夹具 → 采集
+  （其 `runs_on` Fact 出现，起源即最近确认）→ 再采集（`factsAsserted=0`、`lastObservation` 前进、仍只有
+  一个 open Conflict）→ `docker compose rm -sf`（采集器连停止的容器也列，`stop` 不够）→ 再采集
+  （`factsInvalidated>=1`、`traverse` 无 `runs_on` 边、`explain` 显示 `not_reobserved`、`get_object` 仍 200）。
+- **测试**：`freshness.integration.test.ts`（六例：起源即最近确认、再观察推进时钟并退休缺席者、异源 Fact
+  在窗口之外、再出现是新 Fact、异源反驳后采集器仍建立在自己的行上、空窗口只退休本 Source 的 Fact）；
+  `observed-facts.integration.test.ts`（三例：首次观察注册 Source 并串起 Observation、同门再观察
+  unchanged 且最近确认前进、S5.2 前形态的 Fact 被佐证不动且正是 I-S5-2 计的行）；
+  `sql-store.same-origin.test.ts`（假 client 三例）；`queries.test.ts` / collector `run.test.ts` 相应用例。
+
 ### S5.3 数据与代码分离（关闭遗留 9，部分关闭 11）
 
 - 领域包：compose 把 `${NEXTTIME_DATA}/config/ontology` 只读挂到 kernel `/data/config/ontology`；
