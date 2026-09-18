@@ -137,8 +137,8 @@ export function registerActionRequestRoutingConsumer(
     // at once and the Worker carries on — it may legitimately `report_task_result` while the
     // ActionRequest is still pending, and a Task parked here would reject that report
     // (`waiting_approval` has no `complete` edge), roll the whole result back, and end up
-    // `failed: no_result` once the Worker exits: exactly the docker_restart failure the real-model
-    // run produced. `governance/approval/await-decision.ts`: "await_decision=true 时 Task 进
+    // `failed: no_result` once the Worker exits: exactly the container-restart failure the
+    // real-model run produced (STATUS leftover 30). `governance/approval/await-decision.ts`: "await_decision=true 时 Task 进
     // waiting_approval" — the field was never read here before.
     if (!actionRequest.awaitDecision) return;
 
