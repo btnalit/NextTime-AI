@@ -15,11 +15,13 @@ import { taskForWorkerRun } from './service.js';
 import { recordTaskTransition } from './transition-log.js';
 
 /**
- * application/task/reaper: the interval-driven duration/status sweep, and the event-driven
- * ActionRequest → Task `waiting_approval` router (design doc §5.5 Task state machine "running ⇄
- * waiting_approval", §7.10 outbox; docs/development-tasks.md S2.7 "an ActionRequest created by a
- * child WorkerRun ... must route back to the parent Task ... consume ActionRequestPending/
- * ActionRequestUpdated outbox events — never import governance/approval internals for this").
+ * application/task/reaper: the interval-driven duration/status sweep, the S5.6 `queued`
+ * crash-gap sweep (`reapLostQueuedTasks`, I-S5-3), and the event-driven ActionRequest → Task
+ * `waiting_approval` router (design doc §5.5 Task state machine "running ⇄ waiting_approval",
+ * §7.10 outbox; docs/development-tasks.md S2.7 "an ActionRequest created by a child WorkerRun
+ * ... must route back to the parent Task ... consume ActionRequestPending/ActionRequestUpdated
+ * outbox events — never import governance/approval internals for this"; S5.6 "`queued` 崩溃缺口:
+ * reaper 的周期清扫加一条 ... 置 failed, failure_reason='spawn_lost' ... 不重新 spawn").
  *
  * **Why this consumes events instead of importing `governance/approval` internals:** it doesn't
  * need to — `getActionRequest` is that module's own *public* read (`governance/approval/index.ts`,
@@ -129,6 +131,16 @@ export function registerActionRequestRoutingConsumer(
       (client) => getActionRequest(client, event.workspaceId, event.actionRequestId),
     );
     if (!actionRequest?.parentWorkerRunId) return;
+    // S5.6 leftover 30: only a Worker that is itself blocked on this decision (`await_decision:
+    // true`, the gate tool polling inside `request-action-handler.ts`) parks its Task at
+    // `waiting_approval`. With `await_decision: false` the gate tool returns `pending_approval`
+    // at once and the Worker carries on — it may legitimately `report_task_result` while the
+    // ActionRequest is still pending, and a Task parked here would reject that report
+    // (`waiting_approval` has no `complete` edge), roll the whole result back, and end up
+    // `failed: no_result` once the Worker exits: exactly the container-restart failure the
+    // real-model run produced (STATUS leftover 30). `governance/approval/await-decision.ts`: "await_decision=true 时 Task 进
+    // waiting_approval" — the field was never read here before.
+    if (!actionRequest.awaitDecision) return;
 
     await withWorkspace(
       deps.pool,
@@ -206,9 +218,85 @@ interface ReapCandidateRow {
 export interface RunTaskReaperResult {
   readonly scanned: number;
   readonly timedOut: number;
+  readonly spawnLost: number;
 }
 
 const DEFAULT_DURATION_LIMIT_SEC = 3600;
+
+// -------------------------------------------------------------------------------------------
+// queued spawn-lost sweep (S5.6 "崩溃缺口"; I-S5-3): `create_task` is retired (W5, 遗留 3) —
+// `invoke_worker`'s own `insertQueuedTaskWithQuotaCheck` (invoke.ts) is the only INSERT that ever
+// puts a Task at `queued`, and the very next thing that same call does is either spawn a
+// WorkerRun and flip the row to `running`, or — on a caught spawn error — fail it synchronously
+// in its own catch block. A Task genuinely observed `queued` is therefore either mid-flight
+// (milliseconds) or the kernel process died between the INSERT committing and either of those two
+// outcomes ever running — there is no third way for a `queued` row to persist. `updated_at`
+// (defaulted `now()` at INSERT, never written again by any code path before the row leaves
+// `queued` — same "never touched until the transition that matters" property `created_at` has)
+// is therefore an exact proxy for "how long has this row been stuck", not merely a heuristic.
+// -------------------------------------------------------------------------------------------
+
+/** How stale a `queued` Task must be before this sweep gives up waiting for the crashed kernel's
+ *  own in-flight spawn to ever resume — five times the reaper's own tick interval
+ *  (`DEFAULT_TASK_REAPER_INTERVAL_MS`, packages/kernel/src/index.ts), comfortably past any
+ *  legitimate insert→spawn gap and well under I-S5-3's own 5-minute alarm threshold
+ *  (`substrate/audit/invariant-checks.ts`'s `checkIS53`) so this sweep is expected to resolve
+ *  every such row long before that invariant would ever flag one. */
+const QUEUED_SPAWN_LOST_THRESHOLD_MS = 60 * 1000;
+
+interface LostQueuedTaskRow {
+  workspace_id: string;
+  id: string;
+  on_behalf_of: string;
+}
+
+/**
+ * Sweeps every workspace for a Task stuck `queued` past {@link QUEUED_SPAWN_LOST_THRESHOLD_MS}
+ * and fails it — `failure_reason='spawn_lost'` — through the same governed path every other
+ * sweep in this file uses (`failTaskRow`: the shared/transition-table hop, the `task.fail` audit
+ * row, the `TaskUpdated` outbox event), never a bare `UPDATE`. Deliberately does **not** attempt
+ * to re-spawn: whatever the crashed kernel was about to do (mint a Handle, call the supervisor)
+ * is unrecoverable from here — the caller that originally invoked `invoke_worker` already got no
+ * response and must decide on its own whether to retry, the same way any other `worker_failed`/
+ * `timeout` Task failure is surfaced to it. Cross-workspace, one raw `SELECT` — same shape as the
+ * duration-limit scan above (`runTaskReaper`'s own doc comment: "exactly one kernel process, not
+ * one per workspace").
+ */
+async function reapLostQueuedTasks(deps: TaskRuntimeDeps): Promise<number> {
+  const now = deps.now ?? (() => new Date());
+  const cutoff = new Date(now().getTime() - QUEUED_SPAWN_LOST_THRESHOLD_MS);
+
+  const scanClient = await (deps.pool as PoolLike).connect();
+  let candidates: readonly LostQueuedTaskRow[];
+  try {
+    const result = await scanClient.query<LostQueuedTaskRow>(
+      `select workspace_id, id, on_behalf_of
+       from tasks
+       where status = 'queued' and updated_at < $1::timestamptz`,
+      [cutoff.toISOString()],
+    );
+    candidates = result.rows;
+  } finally {
+    scanClient.release();
+  }
+
+  for (const candidate of candidates) {
+    await withWorkspace(
+      deps.pool,
+      { workspaceId: candidate.workspace_id, principalId: candidate.on_behalf_of },
+      (client) =>
+        failTaskRow(
+          client,
+          candidate.workspace_id,
+          candidate.on_behalf_of,
+          candidate.id,
+          'spawn_lost',
+        ),
+    );
+  }
+
+  return candidates.length;
+}
 
 /**
  * Scans every workspace for WorkerRuns not yet `terminated` (mirrors `governance/approval/
@@ -274,5 +362,7 @@ export async function runTaskReaper(deps: TaskRuntimeDeps): Promise<RunTaskReape
     );
   }
 
-  return { scanned: candidates.length, timedOut };
+  const spawnLost = await reapLostQueuedTasks(deps);
+
+  return { scanned: candidates.length, timedOut, spawnLost };
 }

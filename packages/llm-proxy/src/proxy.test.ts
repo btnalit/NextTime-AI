@@ -41,6 +41,17 @@ async function closeServer(server: http.Server): Promise<void> {
   });
 }
 
+/** Polls `predicate` instead of assuming a fixed delay is enough (STATUS.md 遗留 40) — used by the
+ *  "kernel down then up" test below to wait for `LlmUsageReporter.record()` to have queued its
+ *  entry, rather than a hard-coded sleep that can race under CI runner contention. */
+async function waitUntil(predicate: () => boolean, timeoutMs = 2000, stepMs = 10): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('waitUntil timed out');
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+}
+
 const OPENAI_SSE_BODY = [
   'data: {"id":"c1","choices":[{"delta":{"content":"Hello"}}]}\n\n',
   'data: {"id":"c1","choices":[{"delta":{"content":" world"}}]}\n\n',
@@ -638,6 +649,7 @@ describe('createProxyServer — GET /healthz', () => {
 });
 
 describe('createProxyServer + LlmUsageReporter — kernel down then up', () => {
+  // Own testTimeout (STATUS.md 遗留 40): flaky under runner contention at vitest's 5s default.
   it('keeps forwarding while the kernel is unreachable, then delivers the queued usage once it is back', async () => {
     const upstream = startFakeUpstream({
       sseBody: OPENAI_SSE_BODY,
@@ -705,10 +717,12 @@ describe('createProxyServer + LlmUsageReporter — kernel down then up', () => {
     expect(res.status).toBe(200);
     expect(res.body.toString('utf8')).toBe(OPENAI_SSE_BODY);
 
-    // Give the reporter a couple of failed-flush cycles against the down kernel.
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    // Poll for the record to land in the reporter's queue (STATUS.md 遗留 40: a fixed sleep here
+    // raced record()/the first failed-flush cycle under CI runner contention) instead of assuming
+    // a fixed delay is enough — `record()` only enqueues and schedules a flush, it does not itself
+    // resolve `rawRequest()`.
+    await waitUntil(() => reporter.pending > 0);
     expect(receivedBatches).toHaveLength(0);
-    expect(reporter.pending).toBeGreaterThan(0);
 
     // "Kernel comes back" at the same URL — force one more flush attempt (rather than waiting on
     // the backoff timer) and it should now succeed.
@@ -717,5 +731,5 @@ describe('createProxyServer + LlmUsageReporter — kernel down then up', () => {
 
     expect(receivedBatches).toHaveLength(1);
     expect(receivedBatches[0]?.[0]).toMatchObject({ provider: 'openai', model: 'gpt-example' });
-  });
+  }, 15000);
 });

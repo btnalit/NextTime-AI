@@ -244,6 +244,54 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(/expires_at cannot exceed its parent/);
     });
 
+    it('I-S5-3: a Task stuck `queued` past 5 minutes is counted as a violation; a fresh `queued` Task is not (S5.6, docs/development-tasks.md §5b)', async () => {
+      const staleTaskId = randomUUID();
+      const freshTaskId = randomUUID();
+      const staleUpdatedAt = new Date(Date.now() - 6 * 60 * 1000); // 6 min ago — past the 5-min threshold
+
+      const baseline = await runInvariantChecks(pool);
+      const baselineIS53 = baseline.find((result) => result.invariant === 'I-S5-3');
+      expect(baselineIS53).toBeDefined();
+      expect(baselineIS53?.sample).not.toContain(`${workspaceId}:${staleTaskId}`);
+
+      // No WorkerDefinition FK on `tasks` at this migration ordering (0001_tasks.sql's own header
+      // comment: `worker` sorts after `task`) — an arbitrary uuid is a legal `worker_definition_id`.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query(
+          `insert into tasks (
+             workspace_id, id, status, on_behalf_of, worker_definition_id, worker_definition_version,
+             created_at, updated_at
+           ) values ($1, $2, 'queued', $3, $4, 1, $5, $5)`,
+          [workspaceId, staleTaskId, ownerId, randomUUID(), staleUpdatedAt],
+        ),
+      );
+
+      // A fresh `queued` Task (updated_at defaults to `now()`, well inside both the reaper's own
+      // 60s sweep window and this check's 5-minute alarm threshold) must never be flagged — this
+      // check watches for a *stuck* row, not `queued` itself.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query(
+          `insert into tasks (
+             workspace_id, id, status, on_behalf_of, worker_definition_id, worker_definition_version
+           ) values ($1, $2, 'queued', $3, $4, 1)`,
+          [workspaceId, freshTaskId, ownerId, randomUUID()],
+        ),
+      );
+
+      const withViolation = await runInvariantChecks(pool);
+      const isS53 = withViolation.find((result) => result.invariant === 'I-S5-3');
+      expect(isS53?.sample).toContain(`${workspaceId}:${staleTaskId}`);
+      expect(isS53?.sample).not.toContain(`${workspaceId}:${freshTaskId}`);
+      expect(isS53?.violations ?? 0).toBeGreaterThanOrEqual((baselineIS53?.violations ?? 0) + 1);
+
+      // Every other check's count is unaffected by these two raw `tasks` INSERTs.
+      for (const result of withViolation) {
+        if (result.invariant === 'I-S5-3') continue;
+        const before = baseline.find((b) => b.invariant === result.invariant);
+        expect(result.violations).toBe(before?.violations ?? 0);
+      }
+    });
+
     it('I4/I12: the append-only and publish-immutability triggers are present and enabled (unconditional — pg_trigger presence, not data)', async () => {
       const results = await runInvariantChecks(pool);
       expect(results.find((r) => r.invariant === 'I4')?.violations).toBe(0);
