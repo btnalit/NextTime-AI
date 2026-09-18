@@ -9,12 +9,18 @@
 
 ## 1. 目的
 
-两个操作员脚本，各自主动杀掉一类容器并验证内核按设计文档 §13 的预期状态恢复：
+三个操作员脚本，各自主动杀掉一类容器并验证内核按设计文档 §13 / S5.6 的预期状态恢复：
 
 - `scripts/chaos-kill-worker.sh` — 杀一个正在跑的 Worker 容器，验证 Task 回到 `queued`
   （attempt 计数增加，任务 reaper 重试）或 `failed`（重试耗尽）。
 - `scripts/chaos-kill-entry.sh` — 杀某个 principal 的常驻入口容器，验证下一轮对话触发
   worker-supervisor 重新拉起同名容器（restarts 计数增加），对话本身可续。
+- `scripts/chaos-kill-kernel-mid-invoke.sh` — S5.6"`queued` 崩溃缺口"（I-S5-3）：在
+  `invoke_worker` 调用还未返回时杀掉内核进程本身，验证被孤儿化在 `queued` 的 Task 被任务 reaper 的
+  崩溃缺口清扫（`application/task/reaper.ts` 的 `reapLostQueuedTasks`，60 秒陈旧阈值）置
+  `failed`/`failure_reason=spawn_lost`（不重新 spawn），或者——若这次没踩中那个毫秒级窗口——Task
+  正常 `completed`（内核死掉不影响已经起来的 Worker 容器）。两种结果都算 PASS，脚本会打印命中了
+  哪一种；命中的是概率性的时机竞争，不是每次都能稳定复现同一个结果。
 
 以及一个定时不变量监控器：`packages/kernel/src/substrate/audit/invariant-checks.ts`
 （设计文档 §5.4 的 I1–I16），随内核进程常驻运行，不是一次性脚本——本文档 §5 覆盖它的运维面
@@ -28,12 +34,17 @@
 - 有 `docker`、`docker compose`（v2）、`curl`；**没有** `node`/`corepack` 假设成立
   （worker-supervisor 内部状态探测走一次性 kernel 镜像容器，同 `scripts/accept_s1.sh` 的
   `resident_status()` 助手）。
-- 一个 human 通道 API key，角色至少 `member`（`send_chat_message`/`get_task`/`list_tasks` 各自的
-  `minRole`）——两个脚本都只用这一种凭证，不需要单独铸造 Handle。
+- 一个 human 通道 API key。`chaos-kill-worker.sh`/`chaos-kill-entry.sh` 角色至少 `member`
+  （`send_chat_message`/`get_task`/`list_tasks` 各自的 `minRole`）即可，不需要单独铸造 Handle；
+  `chaos-kill-kernel-mid-invoke.sh` 需要至少 `builder`（见下）。
 - `chaos-kill-worker.sh` 需要一个已知的、当前正在跑的 `taskId`（例如从 web 控制台的 Task 视图，或
   `scripts/accept_s2.sh` 跑出来的一个 `invoke_worker` 调用）。
 - `chaos-kill-entry.sh` 需要一个已知的 `principalId`（其入口容器必须已经在跑——先跟这个 principal
   的账号对过一次话）；`chatId` 可省略，省略时脚本会用 `new_chat` 现造一个。
+- `chaos-kill-kernel-mid-invoke.sh` 会 `docker compose kill kernel`，因此目标主机 `docker
+  compose.yml` 里 `kernel` 必须是 compose 服务本身（不像另外两个脚本杀的是 worker-supervisor 动态
+  起的容器）；给的 `apiKey` 角色至少 `builder`（脚本自己 `propose_worker_definition` +
+  `publish_worker_definition` 造一个一次性 WorkerDefinition，再 `invoke_worker`）。
 
 ## 3. 怎么跑
 
@@ -61,6 +72,19 @@ sh scripts/chaos-kill-entry.sh <principalId> <apiKey>
 
 ```
 sh scripts/chaos-kill-entry.sh <principalId> <apiKey> <chatId> 90
+```
+
+杀内核（`queued` 崩溃缺口）：
+
+```
+sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKey>
+```
+
+带自定义超时（默认 150 秒——崩溃缺口清扫自己的 60 秒陈旧阈值 + 最多一轮任务 reaper 周期 30 秒 +
+余量）：
+
+```
+sh scripts/chaos-kill-kernel-mid-invoke.sh <apiKey> 200
 ```
 
 经 SSH 跑（同 `scripts/accept_s1.sh` 的既有约定，管道场景必须带 `</dev/null`）：
@@ -101,6 +125,25 @@ PASS new-chat created chat <uuid>
 PASS send-chat-message sent — turnId=<uuid> (this is the §13 'next turn' that should trigger a respawn)
 PASS entry-recovered restarts=<N+1> (was <N>), running=true — design doc §13: 入口容器崩溃 -> supervisor 以同一工作目录重拉
 PASS chat-continues get_chat_history on <chatId> still answers after the kill (对话可续)
+```
+
+`chaos-kill-kernel-mid-invoke.sh` 成功时（S5.6 "`queued` 崩溃缺口"，命中崩溃窗口——`failed`
+`spawn_lost`）：
+
+```
+PASS propose-worker-definition definitionId=<uuid> version=1
+PASS publish-worker-definition published <uuid>@1
+PASS kill-kernel invoke_worker fired in the background (pid=<pid>), kernel killed
+PASS restart-kernel kernel restarting
+PASS kernel-recovered kernel answering again after <N>s
+PASS find-new-task found taskId=<uuid>
+PASS task-recovered task <taskId> failed failure_reason=spawn_lost — the queued crash-gap sweep (reapLostQueuedTasks, I-S5-3) caught and failed it, without re-spawning
+```
+
+没命中崩溃窗口（kill 落在 spawn 已经完成之后）时最后一行换成：
+
+```
+PASS task-recovered task <taskId> completed — the spawn had already finished before the kill landed this run (the crash window was missed); nothing for the reaper to recover
 ```
 
 ## 5. 定时不变量监控（运维面）
@@ -153,6 +196,9 @@ I1–I16 逐条映射到具体查询、还是"设计上不可数据库检查"（
   不需要它了可以直接在 web 控制台里忽略（Chat 没有删除能力，同其它设计上只追加的资源）。
 - 两个脚本杀掉的容器都会被各自的既有机制自动重建（Worker 由 reaper 重新排队后新起，入口容器由
   下一次 `ensureEntryHandle` 重建）——不需要手动 `docker compose up` 或 `docker start`。
+- `chaos-kill-kernel-mid-invoke.sh` 自己 `docker compose up -d kernel` 把内核带回来，脚本本身
+  不需要额外清理；它每次都会造一个新的 WorkerDefinition 草稿 + 发布版本（无删除能力，同 Chat/
+  WorkerDefinition 一贯的只追加设计）与一个 Task，跑几次就留几份历史，忽略即可。
 
 ## 7. 常见问题
 
@@ -173,6 +219,12 @@ I1–I16 逐条映射到具体查询、还是"设计上不可数据库检查"（
 - **`chaos-kill-entry.sh` 超时未见 restarts 增加**：确认 agent-host 与 worker-supervisor 都在跑
   （同上，服务依赖图）；`send-chat-message` 这一步本身若已经 `FAIL`，说明触发"下一轮"这一步都没
   成功，先排查那一步的错误信息，不是重建机制本身的问题。
+- **`chaos-kill-kernel-mid-invoke.sh` 报 `FAIL find-new-task ... list_tasks 返回没有新 Task`**：
+  这次内核死得比预期更早——连 `invoke_worker` 自己的 Task INSERT 都没提交上——比已经很窄的崩溃
+  窗口还要窄一截；这是时机竞争的一部分，直接重跑脚本即可，不代表脚本或内核有 bug。
+- **`chaos-kill-kernel-mid-invoke.sh` 报 `FAIL task-recovered ... failure_reason=<非 spawn_lost>`**：
+  说明 Task 确实失败了但不是走的崩溃缺口清扫这条路径（比如撞上了别的既有失败原因）——按
+  `docs/runbooks/troubleshoot-task.md` 走失败诊断流程，不是重跑就能解决的。
 - **`GET /internal/metrics` 里看不到某条 `nexttime_invariant_violations{invariant="..."}`**：
   内核刚重启，第一次 tick 还没跑（`INVARIANT_CHECK_INITIAL_DELAY_MS`，10 秒，比其它 reaper 的
   "等一整个 interval 才跑第一次"更短，但仍需要那几秒）；`nexttime_invariant_check_last_run_
