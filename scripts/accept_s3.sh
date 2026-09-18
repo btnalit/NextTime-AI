@@ -28,22 +28,18 @@
 #     (docs/runbooks/host-bootstrap.md) — this script does not generate them.
 #
 # Shared-state warning (read before running against a host that also runs a *real* host-inventory
-# collector deployment): this script (a) overwrites
+# collector deployment): this script overwrites
 # ${NEXTTIME_DATA}/secrets/collector-host-inventory.token — the *same* Docker secret file path a
 # real `collector-host-inventory` deployment on this host would use (docker-compose.yml's own
 # `collector_host_inventory_token` secret definition; there is no per-invocation override for a
 # Docker file-based secret) — with a freshly-minted service Handle scoped to this run's own
-# throwaway workspace; and (b) deletes
-# ${NEXTTIME_DATA}/collectors/host-inventory/host-inventory-source.json (the collector's own
-# cached Source id — collectors/host-inventory/src/run.ts's `resolveSourceId` reads this file
-# *without validating the cached id still resolves*, so a stale id from a previous run's now-
-# unrelated workspace would otherwise make every `submit_observations` call in *this* run 404/403
-# against the fresh workspace this script just created — the delete is required for this script to
-# be safely re-runnable, not optional cleanup). Both are real operational side effects, not fixture
-# writes under a scratch directory — same class of caveat docs/runbooks/host-explorer.md's own
-# "信任边界" section documents for a different secret. Run this only in a dedicated
-# verification environment, or accept that it will reassign the real collector's own Source
-# lineage on its very next scheduled run.
+# throwaway workspace. A real operational side effect, not a fixture write under a scratch
+# directory — same class of caveat docs/runbooks/host-explorer.md's own "信任边界" section documents
+# for a different secret. Run this only in a dedicated verification environment, or accept that the
+# real collector's next scheduled run authenticates into this run's workspace until the token is
+# re-minted (docs/runbooks/host-collector.md §2). (Before S5.3 the collector also kept a cached
+# Source id on disk that this script had to delete; `register_source` is idempotent now and the
+# collector keeps no local state — docs/development-tasks.md S5.3.)
 #
 # Toolset: identical rationale to accept_s1.sh/accept_s2.sh's own header comments — every kernel
 # capability call and every Explorer/MCP HTTP call runs through the shared driver,
@@ -217,7 +213,7 @@ bootstrap_step() {
   # --entry-model pins the entry agent to the fake provider (same reasoning as accept_s2.sh's own
   # bootstrap_step comment: without it, the seeded entry WorkerDefinition has no `model` and the
   # runtime falls back to the host's default provider, which fake-llm never sees).
-  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name "$ws_name" --owner owner --entry-model "${ACCEPT_S3_MODEL:-fake/fake-echo}" </dev/null 2>&1)
+  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name "$ws_name" --owner owner --entry-model "${ACCEPT_S3_MODEL:-fake/fake-echo}" --purpose ephemeral --ttl 7d </dev/null 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     fail "bootstrap-workspace" "create-workspace exited $rc: $(printf '%s' "$out" | tail -5)"
@@ -253,9 +249,6 @@ seed_domain_pack_step() {
 # Source-id state file so this run's `register_source` targets *this* fresh workspace — see this
 # script's own header comment ("Shared-state warning") for why the reset is required, not optional.
 collector_fixtures_step() {
-  rm -f "${NEXTTIME_DATA}/collectors/host-inventory/host-inventory-source.json"
-  mkdir -p "${NEXTTIME_DATA}/collectors/host-inventory"
-
   out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js issue-service-handle \
     --workspace "$WORKSPACE_ID" --name host-inventory --scope register_source,submit_observations \
     </dev/null 2>&1)

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +19,11 @@ import {
   setUserPassword,
 } from '../application/identity/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../application/worker/index.js';
-import { createWorkspaceWithOwner } from '../application/workspace/index.js';
+import {
+  WORKSPACE_PURPOSE_VALUES,
+  createWorkspaceWithOwner,
+} from '../application/workspace/index.js';
+import type { WorkspacePurpose } from '../application/workspace/index.js';
 import { issueHandle, loadHandleKeyPair } from '../governance/capability/index.js';
 import {
   importManifest,
@@ -37,7 +42,7 @@ import {
  * `create-workspace`). Wired to the kernel package.json `bootstrap` script.
  *
  * Usage:
- *   node dist/cli/bootstrap.js create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>]
+ *   node dist/cli/bootstrap.js create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>] [--purpose standard|ephemeral] [--ttl <n>h]
  *   node dist/cli/bootstrap.js add-principal --workspace <id> --name <display-name> [--role <role>]
  *   node dist/cli/bootstrap.js list-workspaces
  *   node dist/cli/bootstrap.js delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]
@@ -114,6 +119,37 @@ export interface CreateWorkspaceOptions {
   /** `<provider>/<id>` for the seeded entry WorkerDefinition's `model` field — omitted leaves it
    *  unset (pi's own default model selection, same as the checked-in template). */
   readonly entryModel?: string;
+  /** S5.3: `--purpose ephemeral` (an acceptance run / demo workspace, retired by
+   *  `delete-workspaces-matching.sh --expired` once `expiresAt` passes). Omitted → `standard`. */
+  readonly purpose?: WorkspacePurpose;
+  readonly expiresAt?: Date | null;
+}
+
+const TTL_PATTERN = /^(\d+)([mhd])$/;
+const TTL_UNIT_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/** `--ttl <n>m | <n>h | <n>d` → milliseconds (S5.3 `create-workspace --purpose ephemeral`). */
+export function parseTtl(raw: string): number {
+  const match = TTL_PATTERN.exec(raw.trim());
+  const amount = match ? Number(match[1]) : Number.NaN;
+  const unit = match?.[2];
+  if (!match || !Number.isFinite(amount) || amount <= 0 || unit === undefined) {
+    throw new BootstrapUsageError(`--ttl must be <n>m, <n>h or <n>d with n > 0 (got "${raw}")`);
+  }
+  return amount * (TTL_UNIT_MS[unit] ?? 0);
+}
+
+const DEFAULT_EPHEMERAL_TTL = '24h';
+
+/** The directory `seed-domain-pack` reads packs from when `--dir` is not given (S5.3 "放文件 →
+ *  seed"): `DOMAIN_PACK_DIR` when set and present (docker-compose.yml points it at the host's
+ *  `${NEXTTIME_DATA}/config/ontology`, mounted read-only under `/data/config`), else the image's
+ *  bundled `ontology/` (`resolveOntologyDir`) — which stays the platform's own default examples,
+ *  never something an operator edits in place. */
+export function resolveDomainPackDir(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.DOMAIN_PACK_DIR;
+  if (configured && existsSync(configured)) return configured;
+  return resolveOntologyDir(env);
 }
 
 export interface CreateWorkspaceResult {
@@ -142,6 +178,8 @@ export async function createWorkspace(
     owner: { displayName: ownerDisplayName, issueApiKey: true },
     entryModel: options.entryModel,
     ontologyDir: resolveOntologyDir(),
+    purpose: options.purpose,
+    expiresAt: options.expiresAt,
   });
   if (!outcome.apiKey) throw new Error('createWorkspace: no API key was issued');
   return {
@@ -670,6 +708,9 @@ export interface WorkspaceListEntry {
   readonly createdAt: Date;
   readonly principalCount: number;
   readonly taskCount: number;
+  /** S5.3: `scripts/delete-workspaces-matching.sh --expired` selects on these two. */
+  readonly purpose: WorkspacePurpose;
+  readonly expiresAt: Date | null;
 }
 
 /** Every Workspace, oldest first, with its Principal/Task counts — `list-workspaces`' own
@@ -686,13 +727,17 @@ export async function listWorkspaces(pool: PoolLike): Promise<WorkspaceListEntry
         created_at: Date;
         principal_count: string;
         task_count: string;
+        purpose: WorkspacePurpose;
+        expires_at: Date | null;
       }>(
         `select
            w.id,
            w.name,
            w.created_at,
            (select count(*) from principals p where p.workspace_id = w.id)::bigint as principal_count,
-           (select count(*) from tasks t where t.workspace_id = w.id)::bigint as task_count
+           (select count(*) from tasks t where t.workspace_id = w.id)::bigint as task_count,
+           w.purpose,
+           w.expires_at
          from workspaces w
          order by w.created_at asc`,
       );
@@ -702,6 +747,8 @@ export async function listWorkspaces(pool: PoolLike): Promise<WorkspaceListEntry
         createdAt: row.created_at,
         principalCount: Number(row.principal_count),
         taskCount: Number(row.task_count),
+        purpose: row.purpose,
+        expiresAt: row.expires_at,
       }));
     },
     { skipRoleSwitch: true },
@@ -866,7 +913,7 @@ function parseFlags(argv: readonly string[]): ParsedFlags {
   return flags;
 }
 
-class BootstrapUsageError extends Error {}
+export class BootstrapUsageError extends Error {}
 
 export interface DeleteWorkspaceCliArgs {
   readonly workspaceId: string;
@@ -954,18 +1001,38 @@ async function runCreateWorkspace(argv: readonly string[]): Promise<void> {
   const flags = parseFlags(argv);
   const name = flags.name;
   const owner = flags.owner;
+  const usage = `usage: bootstrap create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>] [--purpose standard|ephemeral] [--ttl <n>m|<n>h|<n>d, ephemeral only, default ${DEFAULT_EPHEMERAL_TTL}]`;
   if (!name || !owner) {
+    throw new BootstrapUsageError(usage);
+  }
+  const purposeFlag = flags.purpose ?? 'standard';
+  if (!(WORKSPACE_PURPOSE_VALUES as readonly string[]).includes(purposeFlag)) {
     throw new BootstrapUsageError(
-      'usage: bootstrap create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>]',
+      `${usage}\n--purpose must be standard or ephemeral (got "${purposeFlag}")`,
     );
   }
+  const purpose = purposeFlag as WorkspacePurpose;
+  if (flags.ttl !== undefined && purpose !== 'ephemeral') {
+    throw new BootstrapUsageError(`${usage}\n--ttl is only valid with --purpose ephemeral`);
+  }
+  const expiresAt =
+    purpose === 'ephemeral'
+      ? new Date(Date.now() + parseTtl(flags.ttl ?? DEFAULT_EPHEMERAL_TTL))
+      : null;
 
   const pool = createPool();
   try {
-    const result = await createWorkspace(pool, name, owner, { entryModel: flags['entry-model'] });
+    const result = await createWorkspace(pool, name, owner, {
+      entryModel: flags['entry-model'],
+      purpose,
+      expiresAt,
+    });
     console.log(`workspace created: ${result.workspaceId}`);
     console.log(`owner principal:   ${result.ownerPrincipalId}`);
     console.log(`owner login:       ${result.ownerLogin}`);
+    console.log(
+      `purpose:           ${purpose}${expiresAt ? ` (expires ${expiresAt.toISOString()})` : ''}`,
+    );
     console.log('');
     console.log('API key (shown once — store it securely, only its hash is kept):');
     console.log(result.apiKey);
@@ -1067,6 +1134,7 @@ async function runSeedDomainPack(argv: readonly string[]): Promise<void> {
     );
   }
 
+  const dir = flags.dir ?? resolveDomainPackDir();
   const pool = createPool();
   try {
     const result = await seedDomainPackFromCli(pool, {
@@ -1074,9 +1142,11 @@ async function runSeedDomainPack(argv: readonly string[]): Promise<void> {
       principalId,
       packName,
       fileName: flags['file-name'],
-      dir: flags.dir,
+      dir,
     });
-    console.log(`domain pack published: ${packName} (id=${result.id}, version=${result.version})`);
+    console.log(
+      `domain pack published: ${packName} (id=${result.id}, version=${result.version}, from ${dir})`,
+    );
   } finally {
     await pool.end();
   }
@@ -1292,10 +1362,13 @@ async function runListWorkspaces(): Promise<void> {
   const pool = createPool();
   try {
     const workspaces = await listWorkspaces(pool);
-    console.log('id\tname\tcreated_at\tprincipals\ttasks');
+    // Columns are appended, never reordered: scripts/delete-workspaces-matching.sh reads $1 / $2
+    // for the regex mode and $6 / $7 for `--expired` (S5.3).
+    console.log('id\tname\tcreated_at\tprincipals\ttasks\tpurpose\texpires_at');
     for (const ws of workspaces) {
       console.log(
-        `${ws.id}\t${ws.name}\t${ws.createdAt.toISOString()}\t${ws.principalCount}\t${ws.taskCount}`,
+        `${ws.id}\t${ws.name}\t${ws.createdAt.toISOString()}\t${ws.principalCount}\t${ws.taskCount}` +
+          `\t${ws.purpose}\t${ws.expiresAt ? ws.expiresAt.toISOString() : '-'}`,
       );
     }
   } finally {
@@ -1342,7 +1415,8 @@ async function run(): Promise<void> {
     return;
   }
   throw new BootstrapUsageError(
-    'usage: bootstrap create-workspace --name <ws> --owner <display-name>\n' +
+    'usage: bootstrap create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>] ' +
+      '[--purpose standard|ephemeral] [--ttl <n>m|<n>h|<n>d]\n' +
       '   or: bootstrap add-principal --workspace <id> --name <display-name> [--role <role>]\n' +
       '   or: bootstrap register-gatekeeper --workspace <id> --principal <id> --name <name> ' +
       '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]\n' +

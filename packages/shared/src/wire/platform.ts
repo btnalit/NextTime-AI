@@ -201,6 +201,13 @@ export type WorkspaceOwnerWire = z.infer<typeof WorkspaceOwnerWireSchema>;
 export const OntologyEnforcementWireSchema = z.enum(['reject', 'warn']);
 export type OntologyEnforcementWire = z.infer<typeof OntologyEnforcementWireSchema>;
 
+/** S5.3 (`workspaces.purpose`, migration core 0028): why the workspace exists. `ephemeral` — an
+ *  acceptance run or a demo — carries `expiresAt` and is retired by
+ *  `scripts/delete-workspaces-matching.sh --expired`; `standard` never expires. Set at creation
+ *  (`create-workspace --purpose ephemeral --ttl <n>h`), read-only on the console. */
+export const WorkspacePurposeWireSchema = z.enum(['standard', 'ephemeral']);
+export type WorkspacePurposeWire = z.infer<typeof WorkspacePurposeWireSchema>;
+
 export const PlatformWorkspaceWireSchema = z
   .object({
     id: z.string(),
@@ -209,6 +216,9 @@ export const PlatformWorkspaceWireSchema = z
     entryModel: z.string().nullable(),
     allowedModels: z.array(z.string()),
     ontologyEnforcement: OntologyEnforcementWireSchema,
+    purpose: WorkspacePurposeWireSchema,
+    /** ISO timestamp; `null` unless `purpose` is `ephemeral`. */
+    expiresAt: z.string().nullable(),
     isDefault: z.boolean(),
     /** Active human memberships (Principals with a user, not disabled). */
     memberCount: z.number().int().nonnegative(),

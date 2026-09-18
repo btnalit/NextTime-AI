@@ -62,16 +62,17 @@ exits non-zero (`run.ts`'s own ordering: sanitization happens before `register_s
 first kernel call this collector ever makes). `environ` (`/proc/<pid>/environ`) is never read
 anywhere in this package.
 
-## Identity persistence across runs
+## Identity across runs
 
-`register_source` always inserts a fresh Source row (it never de-duplicates by name — see
-`ingest-handlers.ts`'s own doc comment for why that is the right default for a general-purpose
-capability). This collector calls it only on its very first-ever run and caches the returned id in
-a local state file (`HOST_INVENTORY_SOURCE_STATE_FILE`, default `/data/state/host-inventory-
-source.json`) — every later run reads the cached id instead. This is not just an optimization: it
+`register_source` is idempotent on (kind, name) since S5.3 (kernel migration core 0028): this
+collector calls it on every run with `HOST_INVENTORY_SOURCE_KIND` / `HOST_INVENTORY_SOURCE_NAME`
+and gets the same Source back (`created: false`), so it keeps no local state at all — the pre-S5.3
+state file and `HOST_INVENTORY_SOURCE_STATE_FILE` are gone. A stable Source is not cosmetic: it
 is what keeps every run's Facts resolving to the *same* origin (`resolveFactOrigin`, S3.2's
-`substrate/epistemic/conflicts.ts`), which is the actual mechanism behind the acceptance criterion
-"两遍无重复无 Conflict — a second identical run never opens a Conflict, only supersedes".
+`substrate/epistemic/conflicts.ts`) — the mechanism behind the acceptance criterion "两遍无重复无
+Conflict" — and what the S5.2 observation window means by "this Source's Facts". A 409
+`source_identity_conflict` on start means the name is already another owner's Source in this
+workspace: choose another `HOST_INVENTORY_SOURCE_NAME`.
 
 ## Configuration
 
@@ -85,8 +86,7 @@ See `src/config.ts` for the authoritative list; summary:
 | `HOST_INVENTORY_RUN_SYSTEMD_PATH` | no | `/run/systemd` | Presence check gating `systemctl` calls. |
 | `HOST_INVENTORY_REPOSITORY_PATHS` | no | (none) | `:`-separated list of git repo paths to observe `git remote` for. |
 | `HOST_INVENTORY_INTERVAL_MS` | no | `900000` (15 min) | Loop interval when not run with `--once`. |
-| `HOST_INVENTORY_SOURCE_STATE_FILE` | no | `/data/state/host-inventory-source.json` | Local Source-id cache (see above). |
-| `HOST_INVENTORY_SOURCE_NAME` / `HOST_INVENTORY_SOURCE_KIND` | no | `host-inventory` / `host-inventory-collector` | `register_source`'s own `name`/`kind`. |
+| `HOST_INVENTORY_SOURCE_NAME` / `HOST_INVENTORY_SOURCE_KIND` | no | `host-inventory` / `host-inventory-collector` | `register_source`'s own `name`/`kind` — this collector's identity across runs (see above). |
 | `RAGFLOW_GATEKEEPER_ID` | no | (unset — phase 4 skipped) | S3.4: the RAGFlow Gatekeeper instance's own graph object id (`docs/runbooks/host-gatekeepers.md`). Requires this collector's own Handle to also hold `observe_operation` in its capability scope (`docs/runbooks/host-collector.md`). |
 
 CLI: `--once` runs a single cycle and exits with that cycle's own exit code (for a host cron/

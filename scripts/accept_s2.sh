@@ -192,7 +192,7 @@ bootstrap_step() {
   # `fake/fake-echo`): without it the seeded entry WorkerDefinition has no `model` and the runtime
   # falls back to the host's default provider — on the first host run that was the real DeepSeek,
   # fake-llm never saw a request and every chat reply came back empty.
-  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name "$ws_name" --owner alice --entry-model "${ACCEPT_S2_MODEL:-fake/fake-echo}" </dev/null 2>&1)
+  out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace --name "$ws_name" --owner alice --entry-model "${ACCEPT_S2_MODEL:-fake/fake-echo}" --purpose ephemeral --ttl 7d </dev/null 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     fail "bootstrap-workspace" "create-workspace exited $rc: $(printf '%s' "$out" | tail -5)"

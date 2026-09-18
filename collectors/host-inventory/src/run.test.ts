@@ -1,7 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CollectorConfig } from './config.js';
 import type { ContainerSummary, DockerClient, HostInfo } from './docker-client.js';
 import type {
@@ -33,7 +30,7 @@ async function run(options: RunOptions): Promise<RunSummary> {
   return runOnce({ processTreeOverride: { skipped: true, processes: [] }, ...options });
 }
 
-function baseConfig(stateFile: string, overrides: Partial<CollectorConfig> = {}): CollectorConfig {
+function baseConfig(overrides: Partial<CollectorConfig> = {}): CollectorConfig {
   return {
     kernelUrl: 'http://kernel:8080',
     handleTokenFile: '/does/not/matter',
@@ -42,7 +39,6 @@ function baseConfig(stateFile: string, overrides: Partial<CollectorConfig> = {})
     repositoryPaths: [],
     once: true,
     intervalMs: 1000,
-    sourceStateFile: stateFile,
     sourceName: 'host-inventory',
     sourceKind: 'host-inventory-collector',
     ragflowGatekeeperId: undefined,
@@ -173,22 +169,11 @@ function fakeKernelClient(
 }
 
 describe('runOnce', () => {
-  let dir: string;
-
-  beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'nexttime-collector-run-test-'));
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
-
   it('submits three dependency-ordered phases sharing one activityId', async () => {
-    const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
 
     const summary = await run({
-      config: baseConfig(stateFile),
+      config: baseConfig(),
       dockerClient: fakeDockerClient(),
       kernelClient,
       logger: { info: vi.fn(), warn: vi.fn() },
@@ -226,36 +211,40 @@ describe('runOnce', () => {
     expect(summary.activityId).toBe('act-1');
   });
 
-  it('registers a Source only on the first-ever run; a second run reuses the cached sourceId', async () => {
-    const stateFile = path.join(dir, 'source.json');
-    const { client: kernelClient, calls } = fakeKernelClient();
-
-    await run({
-      config: baseConfig(stateFile),
-      dockerClient: fakeDockerClient(),
-      kernelClient,
+  it('S5.3: registers its Source on every run with the same (kind, name) and keeps no local state — the kernel is idempotent', async () => {
+    const { client: kernelClient, calls } = fakeKernelClient({
+      registerSource: async (params) => {
+        expect(params).toEqual({
+          kind: 'host-inventory-collector',
+          name: 'host-inventory',
+          visibility: 'workspace',
+        });
+        return {
+          id: 'src-1',
+          kind: params.kind,
+          name: params.name,
+          ownerPrincipalId: 'svc-1',
+          visibility: 'workspace',
+          created: calls.registerSource === 1,
+        };
+      },
     });
-    expect(calls.registerSource).toBe(1);
 
-    const cached = JSON.parse(await readFile(stateFile, 'utf8'));
-    expect(cached.sourceId).toBe('src-1');
-
-    await run({
-      config: baseConfig(stateFile),
-      dockerClient: fakeDockerClient(),
-      kernelClient,
-    });
-    expect(calls.registerSource).toBe(1); // still 1 — not called again.
+    await run({ config: baseConfig(), dockerClient: fakeDockerClient(), kernelClient });
+    await run({ config: baseConfig(), dockerClient: fakeDockerClient(), kernelClient });
+    expect(calls.registerSource).toBe(2);
+    for (const submission of calls.submitObservations) {
+      expect(submission.sourceId).toBe('src-1');
+    }
   });
 
   it('aborts before any kernel call when a process command line resists sanitization (S3.3 acceptance)', async () => {
-    const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
     const opaqueToken = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'; // gitleaks:allow (synthetic fixture)
 
     await expect(
       run({
-        config: baseConfig(stateFile),
+        config: baseConfig(),
         dockerClient: fakeDockerClient(),
         kernelClient,
         processTreeOverride: {
@@ -279,11 +268,10 @@ describe('runOnce', () => {
   });
 
   it('a batch with only clean command lines is redacted and submitted normally', async () => {
-    const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
 
     await run({
-      config: baseConfig(stateFile),
+      config: baseConfig(),
       dockerClient: fakeDockerClient(),
       kernelClient,
       processTreeOverride: {
@@ -303,7 +291,6 @@ describe('runOnce', () => {
   });
 
   it('throws RunFailedError (not a raw error) when the Docker Engine API is unreachable, and calls no kernel API', async () => {
-    const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
     const dockerClient = fakeDockerClient({
       info: async () => {
@@ -311,19 +298,18 @@ describe('runOnce', () => {
       },
     });
 
-    await expect(
-      run({ config: baseConfig(stateFile), dockerClient, kernelClient }),
-    ).rejects.toThrow(RunFailedError);
+    await expect(run({ config: baseConfig(), dockerClient, kernelClient })).rejects.toThrow(
+      RunFailedError,
+    );
     expect(calls.registerSource).toBe(0);
     expect(calls.submitObservations).toHaveLength(0);
   });
 
   it('S5.2: phase 3 is still submitted with no compose-managed container — empty, carrying the observation window', async () => {
-    const stateFile = path.join(dir, 'source.json');
     const { client: kernelClient, calls } = fakeKernelClient();
     const dockerClient = fakeDockerClient({ listContainers: async () => [] });
 
-    await run({ config: baseConfig(stateFile), dockerClient, kernelClient });
+    await run({ config: baseConfig(), dockerClient, kernelClient });
     expect(calls.submitObservations).toHaveLength(3);
     const phase3 = calls.submitObservations[2];
     expect(phase3?.observations).toEqual([]);
@@ -339,11 +325,10 @@ describe('runOnce', () => {
 
   describe('phase 4 (S3.4, ragflow — optional, non-fatal)', () => {
     it('never calls observe_operation when ragflowGatekeeperId is unset (default)', async () => {
-      const stateFile = path.join(dir, 'source.json');
       const { client: kernelClient, calls } = fakeKernelClient();
 
       const summary = await run({
-        config: baseConfig(stateFile),
+        config: baseConfig(),
         dockerClient: fakeDockerClient(),
         kernelClient,
       });
@@ -354,7 +339,6 @@ describe('runOnce', () => {
     });
 
     it('when set, calls kb.list/kb.documents and submits a fourth phase under the same activityId, folded into the summary', async () => {
-      const stateFile = path.join(dir, 'source.json');
       const { client: kernelClient, calls } = fakeKernelClient({
         observeOperation: async (params) => {
           if (params.operation === 'kb.list') {
@@ -373,7 +357,7 @@ describe('runOnce', () => {
       });
 
       const summary = await run({
-        config: baseConfig(stateFile, { ragflowGatekeeperId: 'gk-1' }),
+        config: baseConfig({ ragflowGatekeeperId: 'gk-1' }),
         dockerClient: fakeDockerClient(),
         kernelClient,
       });
@@ -394,7 +378,6 @@ describe('runOnce', () => {
     });
 
     it('logs a warning and completes the run normally when kb.list throws (RAGFlow being down is not fatal)', async () => {
-      const stateFile = path.join(dir, 'source.json');
       const { client: kernelClient, calls } = fakeKernelClient({
         observeOperation: async () => {
           throw new KernelClientError(
@@ -408,7 +391,7 @@ describe('runOnce', () => {
       const warn = vi.fn();
 
       const summary = await run({
-        config: baseConfig(stateFile, { ragflowGatekeeperId: 'gk-1' }),
+        config: baseConfig({ ragflowGatekeeperId: 'gk-1' }),
         dockerClient: fakeDockerClient(),
         kernelClient,
         logger: { info: vi.fn(), warn },
@@ -423,7 +406,6 @@ describe('runOnce', () => {
     });
 
     it('S5.2: an empty KnowledgeBase list still submits phase 4 — empty, with its own window', async () => {
-      const stateFile = path.join(dir, 'source.json');
       const { client: kernelClient, calls } = fakeKernelClient({
         observeOperation: async () => ({
           status: 'ok',
@@ -433,7 +415,7 @@ describe('runOnce', () => {
       });
 
       await run({
-        config: baseConfig(stateFile, { ragflowGatekeeperId: 'gk-1' }),
+        config: baseConfig({ ragflowGatekeeperId: 'gk-1' }),
         dockerClient: fakeDockerClient(),
         kernelClient,
       });

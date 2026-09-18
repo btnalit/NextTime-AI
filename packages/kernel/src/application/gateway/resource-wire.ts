@@ -130,13 +130,13 @@ export function toWireQuota(row: QuotaRow) {
 }
 
 /**
- * S3.3 addition: `register_source`'s result projection. `SourceRow.metadata.name` (folded in by
- * `application/gateway/ingest-handlers.ts`'s `registerSourceHandler` — `sources` has no `name`
- * column of its own) is surfaced as a top-level `name` field here; `null` when a Source's metadata
- * was never written with one (e.g. a hypothetical future caller that skips this convention).
+ * S3.3 addition: `register_source`'s result projection. `name` is the `sources.name` column since
+ * S5.3 (migration core 0028); a pre-0028 row whose name was left null by the backfill (a duplicate
+ * within its kind) still projects the `metadata.name` it was written with, so nothing a caller
+ * could read before disappears; `null` only when neither exists.
  */
 export function toWireSource(row: SourceRow) {
-  const name = typeof row.metadata.name === 'string' ? row.metadata.name : null;
+  const name = row.name ?? (typeof row.metadata.name === 'string' ? row.metadata.name : null);
   return {
     id: row.id,
     kind: row.kind,

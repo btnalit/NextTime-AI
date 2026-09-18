@@ -41,6 +41,7 @@ import {
   PrincipalNotFoundError,
   PrincipalOperationRefusedError,
   type ResolveCallerDeps,
+  SourceIdentityConflictError,
   SourceNotFoundError,
   SupersedeIdentityMismatchError,
   UnauthorizedError,
@@ -287,6 +288,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // IllegalTransition / not_published: well-formed request, the row's *state* forbids it.
   if (err instanceof OperationIdentityConflictError) {
     return { status: 409, code: 'conflict', message: err.message };
+  }
+  // S5.3 `register_source` (ingest-handlers.ts): the (kind, name) is another owner's Source, has
+  // the other visibility, or is a private Source the caller cannot see — its own code so a
+  // collector can tell "pick another name" from a generic state conflict.
+  if (err instanceof SourceIdentityConflictError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   // S3.11 (docs/development-tasks.md "中台控制面"): member-management invariant refusals — same
   // 409 "well-formed request, the row's current state forbids it" family as

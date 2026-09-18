@@ -34,7 +34,8 @@ compose up` 之前跑）因此负责把 `pgdata/` `chown` 给 999:999、把 `sec
 | `config/` | `kernel`、`worker-supervisor`（均只读）、`llm-proxy`（只读）、`egress-proxy`（只读）、`backup`（只读子挂载） |
 | `caddy/` | `caddy`（TLS 状态数据）、`backup`（只读子挂载，CA 私钥备份） |
 | `gatekeepers/`（含 `docker/`、`ragflow/` 两个子目录） | `gatekeeper-docker`、`gatekeeper-ragflow`（各自的幂等存储；只读子挂载给 `backup`） |
-| `collectors/`（含 `host-inventory/` 子目录，S3.3） | `collector-host-inventory`（`register_source` 幂等缓存——`host-inventory-source.json`，见 `collectors/host-inventory/README.md`） |
+| `config/ontology/`（S5.3） | `kernel`（只读，经 `config/` 挂载）：操作员放入的领域包 yaml，`seed-domain-pack` 缺省从这里读，见 `runbooks/add-domain-pack.md` |
+| `collectors/`（含 `host-inventory/` 子目录，S3.3） | S5.3 起不再挂载：`register_source` 按 (kind, name) 幂等，采集器无本地状态；旧目录留着无害 |
 | `backups/` | `backup` 容器（唯一可写挂载——`backup.sh` 的 `pg_dump`/tar.gz 输出落地处） |
 | `artifacts/` | 预留：当前 compose 骨架未显式挂载任何服务 |
 

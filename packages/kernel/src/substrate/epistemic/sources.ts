@@ -14,6 +14,10 @@ import type { PoolClient } from 'pg';
 export interface RegisterPrivateSourceInput {
   readonly kind: string;
   readonly ownerPrincipalId: string;
+  /** S5.3 (`sources.name`, migration core 0028): the Source's identity within its `kind` —
+   *  unique per workspace when set (`sources_kind_name_uidx`). A caller that has no stable
+   *  identity for its Source (a WorkerRun, a session transcript) leaves it unset. */
+  readonly name?: string;
   readonly uri?: string;
   readonly metadata?: Record<string, unknown>;
 }
@@ -27,6 +31,9 @@ export interface SourceRow {
   readonly workspaceId: string;
   readonly id: string;
   readonly kind: string;
+  /** See `RegisterPrivateSourceInput.name`; `null` for a Source registered without one (every
+   *  pre-0028 row whose `metadata.name` was not unique in its kind is left null too). */
+  readonly name: string | null;
   readonly ownerPrincipalId: string;
   readonly visibility: 'private' | 'workspace';
   readonly uri: string | null;
@@ -38,6 +45,7 @@ interface SourceDbRow {
   workspace_id: string;
   id: string;
   kind: string;
+  name: string | null;
   owner_principal_id: string;
   visibility: 'private' | 'workspace';
   uri: string | null;
@@ -45,17 +53,38 @@ interface SourceDbRow {
   created_at: Date;
 }
 
+const SOURCE_COLUMNS =
+  'workspace_id, id, kind, name, owner_principal_id, visibility, uri, metadata, created_at';
+
 function mapSourceRow(row: SourceDbRow): SourceRow {
   return {
     workspaceId: row.workspace_id,
     id: row.id,
     kind: row.kind,
+    name: row.name,
     ownerPrincipalId: row.owner_principal_id,
     visibility: row.visibility,
     uri: row.uri,
     metadata: row.metadata,
     createdAt: row.created_at,
   };
+}
+
+/** S5.3: the Source of this (kind, name) the caller can see, or `undefined`. RLS-scoped like
+ *  every read here — a *private* Source of the same name owned by someone else is invisible, and
+ *  `register_source` then learns of it only through the unique index on insert. */
+export async function findSourceByName(
+  client: PoolClient,
+  workspaceId: string,
+  input: { readonly kind: string; readonly name: string },
+): Promise<SourceRow | undefined> {
+  const result = await client.query<SourceDbRow>(
+    `select ${SOURCE_COLUMNS} from sources
+      where workspace_id = $1 and kind = $2 and name = $3`,
+    [workspaceId, input.kind, input.name],
+  );
+  const row = result.rows[0];
+  return row === undefined ? undefined : mapSourceRow(row);
 }
 
 /** Registers a `visibility='private'` Source owned by `input.ownerPrincipalId` (§5.6:会话派生内容
@@ -81,9 +110,9 @@ export async function registerSource(
   input: RegisterSourceInput,
 ): Promise<SourceRow> {
   const result = await client.query<SourceDbRow>(
-    `insert into sources (workspace_id, kind, owner_principal_id, visibility, uri, metadata)
-     values ($1, $2, $3, $4, $5, $6::jsonb)
-     returning workspace_id, id, kind, owner_principal_id, visibility, uri, metadata, created_at`,
+    `insert into sources (workspace_id, kind, owner_principal_id, visibility, uri, metadata, name)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7)
+     returning ${SOURCE_COLUMNS}`,
     [
       workspaceId,
       input.kind,
@@ -91,6 +120,7 @@ export async function registerSource(
       input.visibility,
       input.uri ?? null,
       JSON.stringify(input.metadata ?? {}),
+      input.name ?? null,
     ],
   );
   const row = result.rows[0];

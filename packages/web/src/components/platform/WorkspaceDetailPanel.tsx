@@ -50,6 +50,10 @@ export interface WorkspaceDetailPanelProps {
  * for a host whose writers were never validated against the ontology yet. Saved on change like
  * the entry-model select below, for the same one-control-no-batch reason.
  *
+ * 用途 (S5.3 `workspaces.purpose` / `expires_at`) is read-only here: it is decided at creation
+ * (`create-workspace --purpose ephemeral --ttl <n>h`) and an expired ephemeral workspace is retired
+ * by `scripts/delete-workspaces-matching.sh --expired`, never from the console.
+ *
  * Disabling gets a same-drawer confirm step (the shape `UserDetailPanel` established for
  * `set_user_status`) because it is the most destructive thing on this page: every session in the
  * workspace dies at once. The platform default workspace cannot be disabled at all — the kernel
@@ -248,6 +252,23 @@ export function WorkspaceDetailPanel({
           <time title={formatDateTime(workspace.createdAt)}>
             {formatRelative(workspace.createdAt)}
           </time>
+        </dd>
+        <dt>用途 Purpose</dt>
+        <dd>
+          <span className="chip chip-s chip-neutral" data-testid="workspace-detail-purpose">
+            {workspace.purpose === 'ephemeral' ? '临时 ephemeral' : '常规 standard'}
+          </span>
+          {workspace.expiresAt ? (
+            <>
+              {' '}
+              <time
+                title={formatDateTime(workspace.expiresAt)}
+                data-testid="workspace-detail-expires"
+              >
+                到期 expires {formatRelative(workspace.expiresAt)}
+              </time>
+            </>
+          ) : null}
         </dd>
       </dl>
 

@@ -21,10 +21,8 @@ export interface CollectorConfig {
   readonly once: boolean;
   /** Loop interval in milliseconds when `once` is false. */
   readonly intervalMs: number;
-  /** Source registration is idempotent across restarts via this local cache file — see
-   *  `run.ts`'s own doc comment ("register_source always inserts... a collector that must keep
-   *  asserting under the same origin across independent runs persists the returned id itself"). */
-  readonly sourceStateFile: string;
+  /** `register_source`'s (kind, name) — the kernel is idempotent on it since S5.3, so this pair
+   *  *is* the collector's identity across runs; no local state (see `run.ts`'s doc comment). */
   readonly sourceName: string;
   readonly sourceKind: string;
   /** S3.4: the RAGFlow Gatekeeper instance's own graph object id (`platform-meta.yaml`'s
@@ -40,7 +38,6 @@ export interface CollectorConfig {
 
 const DEFAULT_RUN_SYSTEMD_PATH = '/run/systemd';
 const DEFAULT_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-const DEFAULT_SOURCE_STATE_FILE = '/data/state/host-inventory-source.json';
 const DEFAULT_SOURCE_NAME = 'host-inventory';
 const DEFAULT_SOURCE_KIND = 'host-inventory-collector';
 const DEFAULT_HANDLE_TOKEN_FILE = '/run/secrets/collector_host_inventory_token';
@@ -96,7 +93,6 @@ export function loadConfig(options: LoadConfigOptions = {}): CollectorConfig {
     repositoryPaths: parseRepositoryPaths(env.HOST_INVENTORY_REPOSITORY_PATHS),
     once: argv.includes('--once'),
     intervalMs: parseIntervalMs(env.HOST_INVENTORY_INTERVAL_MS),
-    sourceStateFile: env.HOST_INVENTORY_SOURCE_STATE_FILE ?? DEFAULT_SOURCE_STATE_FILE,
     sourceName: env.HOST_INVENTORY_SOURCE_NAME ?? DEFAULT_SOURCE_NAME,
     sourceKind: env.HOST_INVENTORY_SOURCE_KIND ?? DEFAULT_SOURCE_KIND,
     ragflowGatekeeperId: env.RAGFLOW_GATEKEEPER_ID || undefined,

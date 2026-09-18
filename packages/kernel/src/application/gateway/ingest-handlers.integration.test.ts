@@ -7,6 +7,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { dispatchCapability, isResultValidationEnabled } from './dispatch.js';
+import { SourceIdentityConflictError } from './ingest-handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -156,6 +157,75 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.name).toBe('host-inventory (test)');
       expect(result.ownerPrincipalId).toBe(servicePrincipalId);
       expect(result.visibility).toBe('workspace');
+    });
+
+    describe('S5.3: register_source is idempotent on (kind, name)', () => {
+      const params = {
+        kind: 'host-inventory-collector',
+        name: 'idempotent-collector',
+        visibility: 'workspace' as const,
+      };
+
+      it('the same caller registering the same (kind, name) twice gets one Source: created true, then false', async () => {
+        const caller = handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES);
+        const first = (await dispatchCapability({ pool }, caller, 'register_source', params)) as {
+          id: string;
+          created: boolean;
+        };
+        const second = (await dispatchCapability({ pool }, caller, 'register_source', params)) as {
+          id: string;
+          created: boolean;
+        };
+        expect(first.created).toBe(true);
+        expect(second.created).toBe(false);
+        expect(second.id).toBe(first.id);
+        const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            "select id from sources where workspace_id = $1 and kind = $2 and name = 'idempotent-collector'",
+            [workspaceId, params.kind],
+          ),
+        );
+        expect(rows.rows).toHaveLength(1);
+      });
+
+      it('the same name with the other visibility is 409 source_identity_conflict', async () => {
+        const caller = handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES);
+        await expect(
+          dispatchCapability({ pool }, caller, 'register_source', {
+            ...params,
+            visibility: 'private',
+          }),
+        ).rejects.toBeInstanceOf(SourceIdentityConflictError);
+      });
+
+      it('another principal cannot take over a workspace-visible name it can see — 409, no second row', async () => {
+        const other = handleCaller(workspaceId, memberId, INGEST_CAPABILITIES);
+        await expect(
+          dispatchCapability({ pool }, other, 'register_source', params),
+        ).rejects.toBeInstanceOf(SourceIdentityConflictError);
+      });
+
+      it("another principal's *private* Source of the same (kind, name) is invisible to the lookup — the unique index still makes it a 409", async () => {
+        const secret = {
+          kind: 'test.private-kind',
+          name: 'secret',
+          visibility: 'private' as const,
+        };
+        await dispatchCapability(
+          { pool },
+          handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES),
+          'register_source',
+          secret,
+        );
+        await expect(
+          dispatchCapability(
+            { pool },
+            handleCaller(workspaceId, memberId, INGEST_CAPABILITIES),
+            'register_source',
+            secret,
+          ),
+        ).rejects.toBeInstanceOf(SourceIdentityConflictError);
+      });
     });
 
     it('register_source never trusts a caller-supplied owner — always the calling principal', async () => {

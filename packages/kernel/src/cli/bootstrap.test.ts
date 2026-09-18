@@ -24,7 +24,9 @@ import {
   verifyHandle,
 } from '../governance/capability/index.js';
 import { getOperation, getPublishedOperation } from '../governance/gatekeepers/index.js';
+import { resolveOntologyDir } from '../substrate/ontology/index.js';
 import {
+  BootstrapUsageError,
   WorkspaceDeletionOrderCycleError,
   addPrincipal,
   checkDeleteWorkspaceGuards,
@@ -32,7 +34,9 @@ import {
   createWorkspace,
   issueServiceHandleFromCli,
   parseDeleteWorkspaceArgs,
+  parseTtl,
   registerGatekeeperFromCli,
+  resolveDomainPackDir,
   seedDomainPackFromCli,
 } from './bootstrap.js';
 import type { WorkspaceScopedSchema } from './bootstrap.js';
@@ -194,6 +198,27 @@ describe('parseDeleteWorkspaceArgs (pure, no DB)', () => {
     expect(() =>
       parseDeleteWorkspaceArgs(['ws-1', '--yes', '--allow-name-pattern', '[unterminated']),
     ).toThrow(/not a valid regular expression/);
+  });
+});
+
+describe('S5.3 create-workspace --purpose ephemeral --ttl (pure, no DB)', () => {
+  it('parseTtl accepts <n>m / <n>h / <n>d', () => {
+    expect(parseTtl('30m')).toBe(30 * 60_000);
+    expect(parseTtl('24h')).toBe(24 * 3_600_000);
+    expect(parseTtl('7d')).toBe(7 * 86_400_000);
+  });
+
+  it('parseTtl rejects a zero, a negative, a unitless or a fractional value', () => {
+    for (const bad of ['0h', '-1h', '24', '1.5h', 'h', '']) {
+      expect(() => parseTtl(bad)).toThrow(BootstrapUsageError);
+    }
+  });
+
+  it('resolveDomainPackDir prefers DOMAIN_PACK_DIR only when it exists, else the bundled ontology dir', () => {
+    const missing = path.join(tmpdir(), `nexttime-domain-pack-${randomUUID()}`);
+    expect(resolveDomainPackDir({ DOMAIN_PACK_DIR: missing })).toBe(resolveOntologyDir({}));
+    expect(resolveDomainPackDir({ DOMAIN_PACK_DIR: tmpdir() })).toBe(tmpdir());
+    expect(resolveDomainPackDir({})).toBe(resolveOntologyDir({}));
   });
 });
 

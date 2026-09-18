@@ -2050,6 +2050,43 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
 - 验收：不重建 kernel 即可 seed 新版本领域包；采集器换工作区不需重置任何本地状态；`--expired` 只删过期的
   ephemeral 工作区。依赖：S3.1、S3.3、P-A2。
 
+#### S5.3 实现说明（2026-09-18，PR #195）
+
+- **迁移 `core/0028`**（草案写的 0027 已被 S5.2 用掉）：`sources.name text` + 部分唯一索引
+  `sources_kind_name_uidx (workspace_id, kind, name) where name is not null`；从 `metadata.name` 回填，
+  **只回填在同 (workspace, kind) 内不重名的行**，重名的一组保持 `name` 为空（仍按 id 可达，行为与从前一致），
+  所以有 S5.3 之前历史的主机上迁移不会失败。`workspaces.purpose text not null default 'standard'
+  check in ('standard','ephemeral')`、`workspaces.expires_at timestamptz null`；平台面 `WORKSPACE_SELECT`
+  本就有表级 select，写只在 bootstrap 路径（超级用户），无新 grant。
+- **`register_source` 幂等**（`ingest-handlers.ts`）：先按 (kind, name) 查（RLS 可见范围）→ 同 owner 同
+  visibility 返回既有行 `created: false`；owner 不同或 visibility 不同 → 409 `source_identity_conflict`
+  （`SourceIdentityConflictError`，WS 归 `ILLEGAL_TRANSITION`）；查不到则按 `assertFact` 首次断言的同一形状
+  取事务级 advisory lock、重查、经 `substrate/epistemic` 的 `registerSource` 插入（`name` 列 + `metadata.name`
+  照写，给读 bag 的人）；插入撞唯一索引（别人的**私有**同名 Source，查询看不见）也归 409。结果 schema
+  `RegisterSourceResultWireSchema = SourceWire + created`，快照已重生成。`toWireSource` 的 `name` 改读列、
+  回落 `metadata.name`。门的 Source（S5.2）也写 `name = gatekeeperObjectId`，唯一索引成了它的第二道保险。
+- **采集器无状态**：`run.ts` 每轮都调 `register_source`（拿到同一个 id），删除 `sourceStateFile` /
+  `HOST_INVENTORY_SOURCE_STATE_FILE` 与状态文件读写；compose 去掉 `/data/state` 挂载；`host-env-init.sh`
+  不再建 `collectors/host-inventory/`（旧目录留着无害）；`accept_s3.sh` 删除"删缓存文件"那步与头部警告 (b)。
+  409 在采集器侧的含义写进 README：名字被本工作区别的 owner 占了，换 `HOST_INVENTORY_SOURCE_NAME`。
+- **领域包目录**：kernel 已只读挂 `/data/config`，不需要新挂载——compose 给 kernel 加 `DOMAIN_PACK_DIR=
+  /data/config/ontology`，`host-env-init.sh` 建 `config/ontology/`；`seed-domain-pack` 缺省 `--dir` 取
+  `resolveDomainPackDir()`（`DOMAIN_PACK_DIR` 存在则用，否则回落镜像自带 `ontology/`），输出行带 `from <dir>`。
+  `create-workspace` 播种 `platform-meta` / `entry-agent.yaml` 仍读镜像目录——那是平台资产，不是领域包。
+  `runbooks/add-domain-pack.md` 按现状重写（原文是 S3.1 之前写的"没有发布路径"）。
+- **ephemeral 工作区**：`create-workspace --purpose standard|ephemeral [--ttl <n>m|<n>h|<n>d]`（`--ttl` 只
+  对 ephemeral 合法，缺省 24h；`parseTtl` 纯函数有单测）；`list-workspaces` **追加**两列 `purpose`、
+  `expires_at`（`-` 表示不过期），`delete-workspaces-matching.sh --expired [--yes]` 按第 6 / 7 列选
+  `ephemeral && expires_at < now`（ISO UTC 字符串比较），regex 模式不变；四个验收 / 演练脚本改用
+  `--purpose ephemeral --ttl 7d`（7 天而不是草案例子的 24h：失败的一次验收第二天还看得到工作区）。
+  `PlatformWorkspaceWire` 加 `purpose` / `expiresAt`，工作区抽屉只读显示（用途 + 到期）。
+- **测试**：`ingest-handlers.integration.test.ts` 新增四例（同 caller 两次 → 一行、`created` true / false；
+  另一 visibility → 409；另一 principal 抢可见的名字 → 409；另一 principal 的私有同名 → 唯一索引 409）；
+  `bootstrap.test.ts` 加 `parseTtl` / `resolveDomainPackDir`；采集器 `run.test.ts` 改为"每轮注册、同 id"；
+  web 页面测试加 ephemeral 只读显示一例。
+- **未做 / 边界**：`create_workspace` 平台能力不接受 `purpose`——ephemeral 是脚本 / 演示的东西，控制台建的都是
+  standard；`--expired` 仍走既有 `delete-workspace.sh` 的主机侧清理，不新增清理逻辑。
+
 ### S5.4 prompt 契约修复与守卫
 
 - 背景：见上第 4 点；`retrospective-2026-09-11.md` §3.1 的教训（fake 侧不校验工具定义形状，S2 66 PASS 了几周
