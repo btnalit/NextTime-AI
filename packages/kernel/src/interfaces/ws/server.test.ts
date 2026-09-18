@@ -547,6 +547,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       client.close();
     });
 
+    // Own testTimeout (STATUS.md 遗留 25): flaky under runner contention at vitest's 5s default —
+    // this case's own `waitUntil` already waits up to 5s internally, leaving no margin.
     it('FakeAgentRuntime end-to-end: send → stream → message → turnEnded → history shows both messages', async () => {
       const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
       const chatId = await newChat(client);
@@ -622,7 +624,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(history.items.map((m) => m.kind)).toEqual([undefined, undefined]);
 
       client.close();
-    });
+    }, 15000);
 
     it('subscribe_chat before paging: concurrent injection + paging cover every message, no gaps (§9.4)', async () => {
       const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
