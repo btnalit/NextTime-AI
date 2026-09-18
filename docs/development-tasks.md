@@ -2460,6 +2460,11 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
   `--runs 3` 冒烟 / `--runs 10` 例行与 `<8/10` 已知问题阈值（脚本退出码不是信号源，必须人工读 `REAL` 行）；
   §9 给 `docs/private/real-model-<date>.md` 模板（`make demo` 作第六场景）。SQL 未在真库执行（本机无
   Docker），按迁移逐列核对，首次实跑在主机例行回归。
+- **主机首轮（2026-09-18，v0.13.0 → v0.13.1）**：`--runs 10` 各场景数字进 `STATUS.md` §2.2，供应商 /
+  模型 / 费用只在 `docs/private/real-model-2026-09-18.md`。`report-usage.sh` 在主机上首次实跑通过
+  （`--summary` 与 `--by turn` 的 SQL 均正确执行；`--by turn` 的时间序分块与场景一一对应，ssh 两场景
+  的 Worker 会话落在 `(none)` 一行——runbook §8 的拼接方法成立）。一轮就逼出两条 fake 路径测不到的
+  平台缺陷（遗留 30 第二根因 #208、遗留 44 / #210），见 `retrospective-2026-09-18.md` §6。
 
 ### S5.8 交付与演示闭环（W11 最后一项，不扩大基座边界）
 
@@ -2518,6 +2523,12 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
      与 `accept_s3.sh` 覆盖共享文件的取舍不同）。不重构 accept 脚本，只复用 `driver.mjs` 子命令。
   4. 镜像发布重评点：等 S5.7 主机数字。三条车道均不写 STATUS / development-tasks / runbooks 索引，由主会话收口
      统一写（W10 的锚点冲突教训）；回顾见 `retrospective-2026-09-18.md`。
+  5. **主机首次实跑（2026-09-18）**：`drill-upgrade.sh --to v0.13.0` 从 tag 取出首跑——第一次在
+     `build-to` 因 npm registry 瞬断失败（迁移前、无副作用，切回分支重跑），第二次全绿、约 21 分钟、
+     `PROBE old-code-on-new-schema ok`；分阶段耗时与交付缺口回填 `runbooks/host-drills.md`"首次实跑
+     记录"。`make demo` 首跑到 Q3 `interrupted`：门在 Q1 / Q2 之后才连接，Q3 开始时 supervisor 重建
+     常驻入口容器撞上 Turn——#210 把 `worker_setup_step` 挪到首轮对话前（接入 → 采集 → 对话），平台
+     侧竞争记 STATUS 遗留 44；复跑结果见 STATUS §2.2。`drill-install.sh` 无干净主机，未实跑。
 
 ### S5 明确不做（保持现状，记录理由）
 
@@ -2551,7 +2562,7 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
 | W10-A | **S5.3** 数据与代码分离 | `cli/bootstrap.ts`、`docker-compose.yml`（挂载）、`gateway/ingest-handlers.ts`（`register_source`，W9-A 合入后）、`collectors/host-inventory`、`scripts/delete-workspaces-matching.sh`、迁移 core 0028（0027 已被 S5.2 用掉）、runbooks、web 工作区页只读字段 | 关闭 9；11 部分。**完成**（2026-09-18：#195） |
 | W10-B | **S5.5 后五项** 23 / 24 / 34 / 31 / 21 | `substrate/epistemic/**`（cursor）、`substrate/graph/sql-store.ts`（重读）、pg 并发路径、`gateway/approval*`、web 审批历史 | 关闭 23 / 24 / 34 / 31 / 21。**完成**（2026-09-18：#197 遗留 21 / 31、#198 遗留 24 + core 0029、#199 遗留 23 / 34） |
 | W10-C | **S5.6** 稳定性 | `application/task/reaper.ts`、`application/task/**`（30 根因）、`scripts/accept_s2.sh` cleanup、WS 测试超时、chaos 脚本 | 关闭 30 / 26 / 25；I-S5-3。**完成**（2026-09-18：#200；26 已由 #145 关闭、核实无回归；遗留 40 一并关闭；30 的主机 `--real` 复跑归 W11 S5.7） |
-| W11 | **S5.7** 真实模型回归 + **S5.8** 交付与演示闭环（最后一项） + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md`、`scripts/drill-install.sh`、`scripts/drill-upgrade.sh`、`scripts/demo.sh`、`runbooks/release.md` | 五场景 10 次数字进 STATUS；干净主机安装 / 升级回滚 / 15 分钟演示三个演练脚本全绿。**本地部分完成**（2026-09-18：#202 S5.7 工具与流程、#204 `make demo`、#205 两个演练 + release.md §6；回顾 `retrospective-2026-09-18.md`）；主机侧（三版应用、`--runs 10` 数字、三个演练实跑、镜像发布重评）待做，顺序见 STATUS §3 |
+| W11 | **S5.7** 真实模型回归 + **S5.8** 交付与演示闭环（最后一项） + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md`、`scripts/drill-install.sh`、`scripts/drill-upgrade.sh`、`scripts/demo.sh`、`runbooks/release.md` | 五场景 10 次数字进 STATUS；干净主机安装 / 升级回滚 / 15 分钟演示三个演练脚本全绿。**本地部分完成**（2026-09-18：#202 S5.7 工具与流程、#204 `make demo`、#205 两个演练 + release.md §6；回顾 `retrospective-2026-09-18.md`）。**主机侧完成**（同日：`drill-upgrade.sh` 全绿、真实升级到 v0.13.2、chaos / 指标 / S1、三轮 `--real --runs 10` 与 `make demo` 全绿，数字见 STATUS §2.2；`drill-install.sh` 无干净主机未跑；镜像发布重评见 STATUS §3）。**W11 完成，S5 收口** |
 
 W9 三车道文件互斥可并行，也与 P-B2b（平台面：`application/platform/**`、`packages/web` 平台页）互斥；
 W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工、W10-B 的 24 先合入；W11 依赖 W9-B。

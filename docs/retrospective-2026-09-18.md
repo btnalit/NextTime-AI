@@ -101,8 +101,48 @@ complete` 在转移表里没有边，整个结果事务回滚、Worker 退出；
   从"稳定后再做"改为排期。
 - 之后按 `STATUS.md` 顺序：P-B2b → P-C → P-D。
 
-## 6. 待补（主机侧）
+## 6. 主机侧（2026-09-18 下午，目标主机，v0.10.0 → v0.13.0 → v0.13.1）
 
-- 三个版本应用后的 I-S5-1 / I-S5-2 / I-S5-3 首轮读数与 S1 → S2 → S3 复跑结果。
-- S5.7 五场景各 10 次的数字与 `make demo` 一次的耗时。
-- 三个演练脚本在主机上的首次运行结果与发现的交付缺口。
+### 6.1 升级演练与真实升级
+
+- `drill-upgrade.sh --to v0.13.0` 从 tag 取出脚本首跑。第一次在 `build-to` 因 npm registry 瞬断失败
+  （迁移前、无副作用），第二次全绿：三份验收在 v0.13.0 上通过、`PROBE old-code-on-new-schema ok`
+  （v0.10.0 代码在 v0.13.0 schema 上 S1 全过，实证 core 0025–0029 可逆）、回滚后 S1 通过；约 21
+  分钟（构建 174 s、三份验收 304 s、探针 646 s）。**交付缺口**：源码构建依赖 registry 实时可达，
+  是 S5.8 第 4 项"发布镜像"的现实依据。
+- 真实升级：`main` = v0.13.0，迁移 5 条，16 服务；手动步骤 `host-env-init.sh`、`config/ontology/`
+  放入领域包、给生产工作区重铸采集器 Handle + 发布 ops-assets v1。**发现遗留 41**：生产采集器自
+  09-11 最后一次 S3 验收覆盖了 token 后一直 401，生产工作区一周没有采集数据、没人发现——采集器
+  错误率没有进指标。首轮采集 578 对象 / 181 事实。
+- 升级后 S1 冒烟 22 PASS；chaos 脚本命中窗口（`spawn_lost`）；`/internal/metrics` 全部不变量 0
+  （含 I-S5-1 / 2 / 3；caddy 不反代 `/internal/*`，走 control 网络读）。
+
+### 6.2 真实模型一轮找出的两条平台缺陷
+
+| 场景 | v0.13.0 | 根因 | 修复 |
+|---|---|---|---|
+| docker_restart | 0/10 | 动作已执行、Task `no_result`。Task 未被挂起（#200 生效），但 Worker 结果契约附带越界 Fact，S5.1 `reject` 在写入点拒绝 → `report_task_result` 400 → 整份契约回滚 → 扩展以 0 退出（避免触发重跑）→ reaper `no_result`。16 次上报 15 次如此 | #208：本体拒绝改为单条 savepoint 回滚 + 独立审计 + `factsRejected[]`，Task 照常完成；其它错误仍整单回滚 |
+| ssh_run_approve | 3/10 | 同上（7 次） | 同上 |
+| api_observe / dependency_chat / ssh_run_auto | 10/10、10/10、1/1 | — | — |
+| make demo | 0/1，Q3 `interrupted` | demo 在 Q1 / Q2 之后才 `connect_gatekeeper`，Q3 开始时内核 `POST /resident/spawn`，supervisor（#187 reconcile）发现规格已变而 `docker stop` 旧容器——那一轮 Turn 已派给旧容器 | #210 把门连接挪到首轮对话前；平台侧竞争记遗留 44 |
+
+教训：**fake 路径永远测不到这两条**——fake-llm 的脚本化 Worker 从不附带越界断言、fake 场景的门都在
+首轮对话前接好。S5.7 常态化的价值就在这里。两条修复都是当天定根因、当天合入，`--real` 复跑是
+唯一的验收方式。另记遗留 42（扩展让模型看不到内核拒绝）、43（Worker 摘要在动作落地前就写"未执
+行"，prompt 契约）。
+
+### 6.3 v0.13.1 复跑与费用
+
+- 复跑数字：见 `STATUS.md` §2.2 的表（本节不复制）。v0.13.1 复跑把同一家族的另一半逼了出来：
+  handler 预校验（I16 元本体引用、模型编的 `gatekeeperId`）仍整单拒绝，ssh 两场景 6 次 `no_result`
+  皆此——#211 把预校验也改为单条记录 + 跳过（被拒条目从不写入，I16 不变）。教训：**同一原则要在
+  每一层落地**——写入点改了、预校验没改，结果就是"修好了一半"；`--real` 复跑是发现这一半的唯一方式。
+  v0.13.2 第三轮：ssh_run_approve 10/10、ssh_run_auto 1/1、docker_restart 7/10（派工的 7/7 完成，
+  3 次是入口 agent 没派工——模型选工具的波动，归 S5.4 prompt 契约），`accept_s2.sh` 自身 `S2 OK`。
+  遗留 30 从 W7 的一次现象到今天的两半根因，全部在主机上实证关闭。
+- `make demo` 在 v0.13.1 上首次全绿：402 s（其中 267 s 是镜像构建——发版改了根 `package.json` 版本号，
+  `pnpm install` 层缓存失效、每次发版都要重新拉 registry；前两次尝试正是在这一步撞上 registry
+  ECONNRESET）。这是 S5.8 第 4 项"发布镜像"的第二条现实依据。
+- 费用量级（供应商 / 模型 id 只在 `docs/private/real-model-2026-09-18.md`）：S2 四场景 31 次约
+  6.1M token、不到 1 美元；S3 十次约 1.5M token、约 0.36 美元；单轮平均 0.03–0.05 美元。
+- `drill-install.sh` 无干净主机，未实跑。
