@@ -74,21 +74,26 @@ import type { TaskRow } from './types.js';
  * propagates and rolls back the whole contract — a Worker's result is either written completely or
  * not at all, never partially — with exactly one exception, below.
  *
- * **The one partial outcome: an ontology refusal of a single `factsToAssert[]` entry (S5.1).**
- * Since `substrate/graph/ontology-guard.ts`, a workspace in `reject` mode refuses a Link its
- * published ontology does not license (`OntologyViolationError`). A Worker's facts are
- * model-generated claims, so this is an ordinary *governance outcome on a knowledge write*, not a
- * failure of the Task — the Task's own work (a gate action already executed, say) is done, and
- * losing the whole contract to it turned into the real-model container-restart regression of
- * 2026-09-18 (Task `failed / no_result` while the container had in fact restarted; STATUS §4
- * leftover 30's second root cause). Each fact is therefore written under its own savepoint
- * (covering the endpoint `resolveObjectRef` upserts too, so no Object of an undeclared type is
- * left behind): on `OntologyViolationError` — and *only* that error — the savepoint is rolled
- * back, the refusal is recorded as its own `task.result_fact_rejected` audit row (the guard's own
- * `ontology_violation` row only exists in `warn` mode) and in `tasks.result.factsRejected[]`, and
- * the contract goes on. Every other error keeps the all-or-nothing rule above. I2 is untouched:
- * the violating Link never exists; I-S5-1 counts Links, so a refusal that wrote nothing does not
- * inflate it.
+ * **Per-entry refusals are partial outcomes, not a lost result (S5.1 × S2.9, 2026-09-18).** A
+ * Worker's `factsToAssert[]` / `proposedOperations[]` are model-generated; one entry the platform
+ * refuses is an ordinary *governance outcome on a knowledge write*, not a failure of the Task —
+ * the Task's own work (a gate action already executed, say) is done, and losing the whole
+ * contract to it was the real-model container-restart regression of 2026-09-18 (Task
+ * `failed / no_result` while the container had in fact restarted; STATUS §4 leftover 30's second
+ * root cause). Refusals that are absorbed per entry, each recorded as its own audit row
+ * (`task.result_fact_rejected` / `task.result_proposal_rejected`) and in `tasks.result`
+ * (`factsRejected[]` / `proposedOperationsRejected[]` / `evidenceDropped[]`):
+ *   - the ontology guard's `OntologyViolationError` in `reject` mode (S5.1) — each fact runs under
+ *     its own savepoint, covering the endpoint `resolveObjectRef` upserts, so no Object of an
+ *     undeclared type is left behind; the guard's own `ontology_violation` audit row only exists
+ *     in `warn` mode, hence the separate row here;
+ *   - the gateway handler's pre-write findings (`worker-result-handler.ts`, passed in as
+ *     `preRejected`): a ref naming a protected meta-ontology type (I16 — the entry is never
+ *     attempted, so the invariant holds exactly as before), an `{objectId}` that does not exist, a
+ *     `proposedOperations[].gatekeeperId` naming no Gatekeeper, an `evidence[].factIndex` out of
+ *     range.
+ * Every other error keeps the all-or-nothing rule above. I2 is untouched: a refused Link never
+ * exists; I-S5-1 counts Links, so a refusal that wrote nothing does not inflate it.
  */
 
 const graphStore = new SqlGraphStore();
@@ -108,12 +113,47 @@ export interface PostWorkerResultInput {
   readonly taskId: string;
   readonly workerRunId: string;
   readonly contract: WorkerResultCapabilityParams;
+  /** Entries the gateway handler already refused before this write (see
+   *  `ContractPreRejections`); absent means "nothing pre-refused". */
+  readonly preRejected?: ContractPreRejections;
 }
 
-/** One `factsToAssert[]` entry the workspace's ontology refused in `reject` mode (module doc
- *  comment, "the one partial outcome"). `index` is the entry's position in the contract. */
-export interface RejectedResultFact extends OntologyViolationDetails {
+/** Why one `factsToAssert[]` entry was refused (module doc comment, "per-entry refusals"):
+ *  the ontology guard's own reasons (`reject` mode, at the write point), or the gateway
+ *  handler's pre-write refusals — a ref naming a protected meta-ontology type (I16), or an
+ *  `{objectId}` ref that does not exist. */
+export type ResultFactRejectionReason =
+  | OntologyViolationDetails['reason']
+  | 'meta_ontology_type'
+  | 'object_not_found';
+
+/** One refused `factsToAssert[]` entry. `index` is the entry's position in the contract; the
+ *  ontology fields are present for the guard's reasons, `detail` for the pre-write ones. */
+export interface RejectedResultFact {
   readonly index: number;
+  readonly linkType: string;
+  readonly reason: ResultFactRejectionReason;
+  readonly sourceType?: string;
+  readonly targetType?: string;
+  readonly expected?: readonly string[];
+  readonly detail?: string;
+}
+
+/** One refused `proposedOperations[]` entry — its `gatekeeperId` names no Gatekeeper of this
+ *  workspace (a model-generated id that was never real). */
+export interface RejectedResultProposal {
+  readonly index: number;
+  readonly gatekeeperId: string;
+  readonly reason: 'gatekeeper_not_found';
+}
+
+/** The gateway handler's pre-write findings (`worker-result-handler.ts`'s `validateContract`):
+ *  entries to skip and record rather than write. `evidenceDropped` lists `evidence[]` indices
+ *  whose `factIndex` is out of range — they stay on the Activity metadata only. */
+export interface ContractPreRejections {
+  readonly facts: readonly RejectedResultFact[];
+  readonly proposals: readonly RejectedResultProposal[];
+  readonly evidenceDropped: readonly number[];
 }
 
 export interface PostWorkerResultOutcome {
@@ -121,6 +161,7 @@ export interface PostWorkerResultOutcome {
   readonly activityId: string;
   readonly factIds: readonly string[];
   readonly factsRejected: readonly RejectedResultFact[];
+  readonly proposedOperationsRejected: readonly RejectedResultProposal[];
 }
 
 /** Resolves one `WorkerResultObjectRef` to a concrete Object id — upserting a new/existing Object
@@ -251,7 +292,35 @@ export async function postWorkerResult(
     // `OntologyViolationError` is absorbed and everything else still rolls the contract back.
     const factsByIndex: (Fact | undefined)[] = [];
     const factsRejected: RejectedResultFact[] = [];
+    const preRejectedFacts = new Map(
+      (input.preRejected?.facts ?? []).map((rejection) => [rejection.index, rejection]),
+    );
+    const recordFactRejection = async (rejection: RejectedResultFact): Promise<void> => {
+      factsRejected.push(rejection);
+      await writeAudit(client, {
+        workspaceId,
+        actorPrincipalId: agentPrincipalId,
+        action: 'task.result_fact_rejected',
+        resourceType: 'task',
+        resourceId: input.taskId,
+        payload: {
+          ...rejection,
+          factIndex: rejection.index,
+          workerRunId: input.workerRunId,
+          activityId: activity.id,
+          onBehalfOf: actorPrincipalId,
+        },
+      });
+    };
     for (const [index, factInput] of (contract.factsToAssert ?? []).entries()) {
+      // Refused by the handler's pre-write pass (I16 meta-ontology type, missing objectId):
+      // never attempted, recorded the same way as a guard refusal below.
+      const preRejected = preRejectedFacts.get(index);
+      if (preRejected) {
+        factsByIndex.push(undefined);
+        await recordFactRejection(preRejected);
+        continue;
+      }
       await client.query('savepoint result_fact');
       try {
         const sourceObjectId = await resolveObjectRef(client, workspaceId, factInput.source);
@@ -279,30 +348,18 @@ export async function postWorkerResult(
         await client.query('rollback to savepoint result_fact');
         await client.query('release savepoint result_fact');
         factsByIndex.push(undefined);
-        factsRejected.push({ index, ...err.details });
-        await writeAudit(client, {
-          workspaceId,
-          actorPrincipalId: agentPrincipalId,
-          action: 'task.result_fact_rejected',
-          resourceType: 'task',
-          resourceId: input.taskId,
-          payload: {
-            ...err.details,
-            enforcement: 'reject',
-            factIndex: index,
-            workerRunId: input.workerRunId,
-            activityId: activity.id,
-            onBehalfOf: actorPrincipalId,
-          },
-        });
+        await recordFactRejection({ index, ...err.details });
       }
     }
     const writtenFacts = factsByIndex.filter((fact): fact is Fact => fact !== undefined);
 
     // evidence[] -> a real `evidence` row per targeted Fact (already carried on the Activity's own
     // metadata above regardless of whether there is any Fact to attach to). Evidence aimed at a
-    // refused entry has no Fact to attach to and stays on the Activity metadata only.
-    for (const evidenceInput of contract.evidence ?? []) {
+    // refused entry has no Fact to attach to, and evidence whose `factIndex` is out of range
+    // (`evidenceDropped`) is skipped here — both stay on the Activity metadata only.
+    const evidenceDropped = new Set(input.preRejected?.evidenceDropped ?? []);
+    for (const [evidenceIndex, evidenceInput] of (contract.evidence ?? []).entries()) {
+      if (evidenceDropped.has(evidenceIndex)) continue;
       const targets =
         evidenceInput.factIndex !== undefined
           ? [factsByIndex[evidenceInput.factIndex]].filter(
@@ -319,8 +376,34 @@ export async function postWorkerResult(
       }
     }
 
-    // proposed_operations -> the existing propose_operation service (S2.4), draft-only (I16).
-    for (const proposal of contract.proposedOperations ?? []) {
+    // proposed_operations -> the existing propose_operation service (S2.4), draft-only (I16). An
+    // entry whose gatekeeperId the handler found to name no Gatekeeper (a model-generated id) is
+    // skipped and recorded, same as a refused fact — the rest of the contract still lands.
+    const proposedOperationsRejected: RejectedResultProposal[] = [];
+    const preRejectedProposals = new Map(
+      (input.preRejected?.proposals ?? []).map((rejection) => [rejection.index, rejection]),
+    );
+    for (const [proposalIndex, proposal] of (contract.proposedOperations ?? []).entries()) {
+      const rejected = preRejectedProposals.get(proposalIndex);
+      if (rejected) {
+        proposedOperationsRejected.push(rejected);
+        await writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: agentPrincipalId,
+          action: 'task.result_proposal_rejected',
+          resourceType: 'task',
+          resourceId: input.taskId,
+          payload: {
+            ...rejected,
+            proposalIndex,
+            operation: proposal.operation.name,
+            workerRunId: input.workerRunId,
+            activityId: activity.id,
+            onBehalfOf: actorPrincipalId,
+          },
+        });
+        continue;
+      }
       const proposalActivity = await startActivity(client, workspaceId, {
         kind: 'operation_proposal',
         principalId: actorPrincipalId,
@@ -354,6 +437,8 @@ export async function postWorkerResult(
       proposedSkill: contract.proposedSkill,
       proposedSkillId: proposedSkillRecord?.id,
       proposedOperations: contract.proposedOperations ?? [],
+      proposedOperationsRejected,
+      evidenceDropped: [...evidenceDropped],
       activityId: activity.id,
     };
 
@@ -371,6 +456,7 @@ export async function postWorkerResult(
       activityId: activity.id,
       factIds: writtenFacts.map((fact) => fact.id),
       factsRejected,
+      proposedOperationsRejected,
     };
   } catch (err) {
     await endActivity(client, workspaceId, activity.id, 'failed').catch(() => {

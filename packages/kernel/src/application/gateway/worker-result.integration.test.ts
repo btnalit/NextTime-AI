@@ -31,7 +31,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * DATABASE_URL) end-to-end tests for `report_task_result` (docs/development-tasks.md S2.9
  * deliverable C acceptance): a posted contract creates Facts under a `worker_result` Activity,
  * completes the Task with the stored result, and `explain(fact)` reaches the WorkerRun; a contract
- * from a session that is not the Task's own WorkerRun → 403; a malformed contract → 400.
+ * from a session that is not the Task's own WorkerRun → 403; a refused entry (ontology `reject`,
+ * I16 meta-ontology ref, missing objectId, bogus gatekeeperId, out-of-range evidence) is recorded
+ * and skipped while the Task still completes (the 2026-09-18 real-model rounds).
  *
  * epistemic_status: `inferred`. `SqlGraphStore.assertFact` derives the status from the caller's
  * real `principals.kind` row (lane-1 P2 fix — a caller-supplied `kind` is ignored, closing the
@@ -376,22 +378,35 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(/not bound|not a WorkerRun/i);
     });
 
-    it('rejects a malformed contract (a factsToAssert objectId that does not exist) with a 400-class error', async () => {
-      const { claims } = await spawnWorkerRun();
+    it('a factsToAssert objectId that does not exist costs that entry, not the result (object_not_found recorded)', async () => {
+      const { taskId, claims } = await spawnWorkerRun();
       const caller: ResolvedCaller = { channel: 'handle', claims };
 
-      await expect(
-        dispatchCapability({ pool }, caller, 'report_task_result', {
-          summary: 'bad ref',
-          factsToAssert: [
-            {
-              linkType: 'observed_state',
-              source: { objectId: randomUUID() },
-              target: { objectId: randomUUID() },
-            },
-          ],
-        }),
-      ).rejects.toThrow(/does not exist/);
+      const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+        summary: 'bad ref',
+        factsToAssert: [
+          {
+            linkType: 'observed_state',
+            source: { objectId: randomUUID() },
+            target: { objectId: randomUUID() },
+          },
+        ],
+      })) as { status: string; factIds: string[] };
+      expect(result.status).toBe('completed');
+      expect(result.factIds).toEqual([]);
+
+      const stored = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{
+          result: { factsRejected: { index: number; reason: string; detail?: string }[] };
+        }>('select result from tasks where workspace_id = $1 and id = $2', [workspaceId, taskId]);
+        return rows.rows[0];
+      });
+      expect(stored?.result.factsRejected).toHaveLength(1);
+      expect(stored?.result.factsRejected[0]).toMatchObject({
+        index: 0,
+        reason: 'object_not_found',
+      });
+      expect(stored?.result.factsRejected[0]?.detail).toMatch(/does not exist/);
     });
 
     it('two runs of the same WorkerDefinition asserting contradicting facts open exactly one Conflict', async () => {
@@ -1039,6 +1054,91 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         expect(stored.task?.result.factsRejected).toEqual([]);
         expect(Number(stored.warned)).toBeGreaterThanOrEqual(1);
+      });
+
+      // The handler's pre-write refusals (2026-09-18 second round: a model-invented `Gatekeeper`
+      // ref → I16 403, a model-invented gatekeeperId in proposedOperations → 400; six Tasks lost
+      // their result to them): each costs its own entry only, and I16 still never writes.
+      it('pre-write refusals — meta-ontology ref, bogus gatekeeperId, out-of-range evidence — are recorded per entry and the Task completes', async () => {
+        const { taskId, claims } = await spawnWorkerRun();
+        const caller: ResolvedCaller = { channel: 'handle', claims };
+        const bogusGatekeeperId = randomUUID();
+        const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+          summary: 'command ran',
+          factsToAssert: [
+            validFact(),
+            {
+              linkType: 'requested_execution_on',
+              source: { objectType: 'Task', identity: { description: 'run uptime' } },
+              target: { objectType: 'Gatekeeper', identity: { name: 'ssh' } },
+            },
+          ],
+          evidence: [
+            { kind: 'note', content: { text: 'valid target' }, factIndex: 0 },
+            { kind: 'note', content: { text: 'nowhere to attach' }, factIndex: 7 },
+          ],
+          proposedOperations: [
+            {
+              gatekeeperId: bogusGatekeeperId,
+              operation: {
+                name: `demo.op.${randomUUID().slice(0, 8)}`,
+                binding: { kind: 'http', method: 'GET', path: '/uptime' },
+                params_schema: {},
+                mode: 'observe',
+                blast_radius: 'low',
+                reversibility: false,
+                auto_approvable: true,
+                await_decision: false,
+                reads: [],
+                writes: [],
+              },
+            },
+          ],
+        })) as { status: string; factIds: string[] };
+        expect(result.status).toBe('completed');
+        expect(result.factIds).toHaveLength(1);
+
+        const stored = await inTx(ownerId, async (client) => {
+          const task = await client.query<{
+            result: {
+              factsRejected: { index: number; reason: string }[];
+              proposedOperationsRejected: { index: number; gatekeeperId: string; reason: string }[];
+              evidenceDropped: number[];
+            };
+          }>('select result from tasks where workspace_id = $1 and id = $2', [workspaceId, taskId]);
+          const metaObjects = await client.query<{ n: string }>(
+            "select count(*)::text as n from objects where workspace_id = $1 and object_type in ('Task', 'Gatekeeper')",
+            [workspaceId],
+          );
+          const audit = await client.query<{ action: string }>(
+            "select action from audit_records where workspace_id = $1 and resource_id = $2 and action in ('task.result_fact_rejected', 'task.result_proposal_rejected') order by action",
+            [workspaceId, taskId],
+          );
+          const evidenceRows = await client.query<{ n: string }>(
+            'select count(*)::text as n from evidence where workspace_id = $1 and link_id = any($2::uuid[])',
+            [workspaceId, result.factIds],
+          );
+          return {
+            task: task.rows[0],
+            metaObjects: metaObjects.rows[0]?.n,
+            audit: audit.rows.map((row) => row.action),
+            evidenceRows: evidenceRows.rows[0]?.n,
+          };
+        });
+        expect(stored.task?.result.factsRejected).toEqual([
+          expect.objectContaining({ index: 1, reason: 'meta_ontology_type' }),
+        ]);
+        expect(stored.task?.result.proposedOperationsRejected).toEqual([
+          { index: 0, gatekeeperId: bogusGatekeeperId, reason: 'gatekeeper_not_found' },
+        ]);
+        expect(stored.task?.result.evidenceDropped).toEqual([1]);
+        // I16: the meta-ontology-typed endpoints were never upserted.
+        expect(stored.metaObjects).toBe('0');
+        expect(stored.audit).toEqual([
+          'task.result_fact_rejected',
+          'task.result_proposal_rejected',
+        ]);
+        expect(stored.evidenceRows).toBe('1');
       });
     });
   },

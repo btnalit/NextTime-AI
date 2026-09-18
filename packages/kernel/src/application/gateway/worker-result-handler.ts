@@ -1,5 +1,10 @@
 import type { WorkerResultCapabilityParams, WorkerResultObjectRef } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import type {
+  ContractPreRejections,
+  RejectedResultFact,
+  RejectedResultProposal,
+} from '../../application/task/index.js';
 import { findWorkerRunBySessionId, postWorkerResult } from '../../application/task/index.js';
 import {
   getGatekeeper,
@@ -8,7 +13,10 @@ import {
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
-import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
+import {
+  MetaOntologyWriteForbiddenError,
+  assertMetaOntologyHandleWriteAllowed,
+} from './meta-ontology-guard.js';
 
 /**
  * application/gateway/worker-result-handler: `report_task_result` and `list_allowed_operations`
@@ -30,14 +38,17 @@ import { assertMetaOntologyHandleWriteAllowed } from './meta-ontology-guard.js';
  * no Handle at all) is rejected with the same generic `ForbiddenError` regardless of *why* it
  * doesn't match — the caller learns nothing about whether the session almost-matched.
  *
- * **I16 on every referenced Object, run *before* any write** (`validateFactRefs` below): a
- * `{objectId}` ref must already exist (else a 400, not the FK-violation 500 a raw `assertFact`
- * call would otherwise surface — `application/task/result.ts`'s own doc comment); either ref form
- * naming a protected meta-ontology ObjectType (`WorkerDefinition`/`Gatekeeper`/`Operation`/
- * `Capability`/`Skill`/`Procedure`) is rejected by the same `assertMetaOntologyHandleWriteAllowed`
- * guard `assertFactHandler` (handlers.ts) already uses — this is the one place besides that handler
- * where a Handle-channel caller can name an arbitrary Object via `objectId`/`objectType`, so it gets
- * the identical check.
+ * **I16 on every referenced Object, checked *before* any write** (`validateContract` below): a
+ * `{objectId}` ref must already exist (else the FK-violation 500 a raw `assertFact` call would
+ * otherwise surface — `application/task/result.ts`'s own doc comment); either ref form naming a
+ * protected meta-ontology ObjectType (`WorkerDefinition`/`Gatekeeper`/`Operation`/`Capability`/
+ * `Skill`/`Procedure`) is refused by the same `assertMetaOntologyHandleWriteAllowed` guard
+ * `assertFactHandler` (handlers.ts) already uses — this is the one place besides that handler where
+ * a Handle-channel caller can name an arbitrary Object via `objectId`/`objectType`, so it gets the
+ * identical check. Since 2026-09-18 a refused entry is *recorded and skipped* rather than failing
+ * the whole call (`postWorkerResult`'s `preRejected`): the entry is never written, so I16 holds
+ * exactly as before, and the Task keeps its result — a real-model Worker inventing a `Gatekeeper`
+ * ref or a `gatekeeperId` must not turn an executed action into `failed / no_result`.
  */
 
 const graphStore = new SqlGraphStore();
@@ -50,57 +61,87 @@ export class WorkerResultValidationError extends Error {
 }
 
 /** Resolves one ref's ObjectType for the I16 guard (and, for a `{objectId}` ref, confirms the
- *  Object actually exists) — never writes anything. */
-async function validateObjectRef(
+ *  Object actually exists) — never writes anything. Returns the refusal instead of throwing: a
+ *  refused ref makes *its* fact a recorded per-entry rejection, never a lost contract (see
+ *  application/task/result.ts's module doc comment, "per-entry refusals"; the 2026-09-18
+ *  real-model round lost whole results to a single model-invented `Gatekeeper`/`Task` ref). */
+async function checkObjectRef(
   client: PoolClient,
   workspaceId: string,
   ref: WorkerResultObjectRef,
-  label: string,
-): Promise<void> {
+): Promise<{ reason: 'object_not_found' | 'meta_ontology_type'; detail: string } | undefined> {
+  let objectType: string;
   if ('objectId' in ref) {
     const object = await graphStore.getObject(client, workspaceId, ref.objectId);
     if (!object) {
-      throw new WorkerResultValidationError(
-        `report_task_result: ${label} objectId "${ref.objectId}" does not exist`,
-      );
+      return { reason: 'object_not_found', detail: `objectId "${ref.objectId}" does not exist` };
     }
-    assertMetaOntologyHandleWriteAllowed('handle', object.objectType);
-    return;
+    objectType = object.objectType;
+  } else {
+    objectType = ref.objectType;
   }
-  assertMetaOntologyHandleWriteAllowed('handle', ref.objectType);
+  try {
+    assertMetaOntologyHandleWriteAllowed('handle', objectType);
+  } catch (err) {
+    if (err instanceof MetaOntologyWriteForbiddenError) {
+      return {
+        reason: 'meta_ontology_type',
+        detail: `ObjectType "${objectType}" is platform meta-ontology (I16)`,
+      };
+    }
+    throw err;
+  }
+  return undefined;
 }
 
-/** Validates every `factsToAssert[]`/`evidence[]` entry's shape-level cross-references before any
- *  write runs (§ module doc comment). Throws `WorkerResultValidationError` (400) or
- *  `MetaOntologyWriteForbiddenError` (403, via `assertMetaOntologyHandleWriteAllowed`). */
+/** Checks every `factsToAssert[]`/`evidence[]`/`proposedOperations[]` entry's cross-references
+ *  before any write runs (§ module doc comment) and returns the per-entry refusals for
+ *  `postWorkerResult` to skip and record — a model-generated entry that names a meta-ontology
+ *  type (I16), a missing `objectId`, a `gatekeeperId` that is no Gatekeeper, or an
+ *  `evidence[].factIndex` out of range costs that entry, not the Task's result. Nothing here
+ *  throws for a per-entry problem; contract-level shape errors are already the capability
+ *  boundary's Zod validation. */
 async function validateContract(
   client: PoolClient,
   workspaceId: string,
   contract: WorkerResultCapabilityParams,
-): Promise<void> {
-  const facts = contract.factsToAssert ?? [];
-  for (const [index, fact] of facts.entries()) {
-    await validateObjectRef(client, workspaceId, fact.source, `factsToAssert[${index}].source`);
-    await validateObjectRef(client, workspaceId, fact.target, `factsToAssert[${index}].target`);
-  }
-
-  for (const [index, evidenceItem] of (contract.evidence ?? []).entries()) {
-    if (evidenceItem.factIndex !== undefined && evidenceItem.factIndex >= facts.length) {
-      throw new WorkerResultValidationError(
-        `report_task_result: evidence[${index}].factIndex (${evidenceItem.factIndex}) is out of ` +
-          `range for factsToAssert (length ${facts.length})`,
-      );
+): Promise<ContractPreRejections> {
+  const contractFacts = contract.factsToAssert ?? [];
+  const facts: RejectedResultFact[] = [];
+  for (const [index, fact] of contractFacts.entries()) {
+    const refusal =
+      (await checkObjectRef(client, workspaceId, fact.source)) ??
+      (await checkObjectRef(client, workspaceId, fact.target));
+    if (refusal) {
+      facts.push({
+        index,
+        linkType: fact.linkType,
+        reason: refusal.reason,
+        detail: refusal.detail,
+      });
     }
   }
 
+  const evidenceDropped: number[] = [];
+  for (const [index, evidenceItem] of (contract.evidence ?? []).entries()) {
+    if (evidenceItem.factIndex !== undefined && evidenceItem.factIndex >= contractFacts.length) {
+      evidenceDropped.push(index);
+    }
+  }
+
+  const proposals: RejectedResultProposal[] = [];
   for (const [index, proposal] of (contract.proposedOperations ?? []).entries()) {
     const gatekeeper = await getGatekeeper(client, workspaceId, proposal.gatekeeperId);
     if (!gatekeeper) {
-      throw new WorkerResultValidationError(
-        `report_task_result: proposedOperations[${index}].gatekeeperId "${proposal.gatekeeperId}" does not exist`,
-      );
+      proposals.push({
+        index,
+        gatekeeperId: proposal.gatekeeperId,
+        reason: 'gatekeeper_not_found',
+      });
     }
   }
+
+  return { facts, proposals, evidenceDropped };
 }
 
 export const reportTaskResultHandler: CapabilityHandler = async (
@@ -124,7 +165,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
   }
 
   const contract = params as WorkerResultCapabilityParams;
-  await validateContract(client, workspaceId, contract);
+  const preRejected = await validateContract(client, workspaceId, contract);
 
   const onBehalfOf = ctx?.principalId;
   if (!onBehalfOf) {
@@ -147,6 +188,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
     taskId: workerRun.taskId,
     workerRunId: workerRun.id,
     contract,
+    preRejected,
   });
 
   return {
