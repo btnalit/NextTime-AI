@@ -2255,10 +2255,10 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
 
 | 波次 | 项 | 范围（文件所有权） | 交付 |
 |---|---|---|---|
-| W9-A | **S5.1 → S5.2** 本体写入点强制；新鲜度与失效 | `substrate/graph/**`、`substrate/ontology/registry.ts`、`substrate/epistemic/explain.ts`、`gateway/ingest-handlers.ts`（校验与 window）、`shared/wire/graph.ts`、`docs/contracts`、`collectors/host-inventory`（`window` 声明）、迁移 core 0025 / 0026 | 违规 400 + 指标；幻影 Fact 失效；关闭 28 与复审 §4-1 |
-| W9-B | **S5.4** prompt 契约修复 + 守卫 + 门工具描述 + fake 形状校验 | `ontology/*.yaml`、`deploy/worker-runtime/entrypoint.sh`、`platform-extension/src/modes/**`、`mcp/reference-tool-aliases.ts`、`mcp/tool-projection.ts`、`shared/capabilities.ts`（描述）、`scripts/guards/prompt-contract.mjs`、`deploy/fake-llm/**` | 修复与守卫同 PR |
-| W9-C | **S5.5 前三项** 36 → 22 → 20（各自单独 PR） | `gateway/connection-handlers.ts`、`worker-supervisor/src/**`（reconcile）、`docker-compose.yml` | 安全项先落 |
-| W10-A | **S5.3** 数据与代码分离 | `cli/bootstrap.ts`、`docker-compose.yml`（挂载）、`gateway/ingest-handlers.ts`（`register_source`，W9-A 合入后）、`collectors/host-inventory`、`scripts/delete-workspaces-matching.sh`、迁移 core 0027、runbooks、web 工作区页只读字段 | 关闭 9；11 部分 |
+| W9-A | **S5.1 → S5.2** 本体写入点强制；新鲜度与失效 | `substrate/graph/**`、`substrate/ontology/registry.ts`、`substrate/epistemic/explain.ts`、`gateway/ingest-handlers.ts`（校验与 window）、`shared/wire/graph.ts`、`docs/contracts`、`collectors/host-inventory`（`window` 声明）、迁移 core 0025 / 0026 | 违规 400 + 指标；幻影 Fact 失效；关闭 28 与复审 §4-1。**完成**（2026-09-18：#191 + #192、#193；多出迁移 core 0027，见 S5.2 实现说明） |
+| W9-B | **S5.4** prompt 契约修复 + 守卫 + 门工具描述 + fake 形状校验 | `ontology/*.yaml`、`deploy/worker-runtime/entrypoint.sh`、`platform-extension/src/modes/**`、`mcp/reference-tool-aliases.ts`、`mcp/tool-projection.ts`、`shared/capabilities.ts`（描述）、`scripts/guards/prompt-contract.mjs`、`deploy/fake-llm/**` | 修复与守卫同 PR。**完成**（2026-09-17：#190） |
+| W9-C | **S5.5 前三项** 36 → 22 → 20（各自单独 PR） | `gateway/connection-handlers.ts`、`worker-supervisor/src/**`（reconcile）、`docker-compose.yml` | 安全项先落。**完成**（2026-09-17：#186 / #187 / #188） |
+| W10-A | **S5.3** 数据与代码分离 | `cli/bootstrap.ts`、`docker-compose.yml`（挂载）、`gateway/ingest-handlers.ts`（`register_source`，W9-A 合入后）、`collectors/host-inventory`、`scripts/delete-workspaces-matching.sh`、迁移 core 0028（0027 已被 S5.2 用掉）、runbooks、web 工作区页只读字段 | 关闭 9；11 部分 |
 | W10-B | **S5.5 后五项** 23 / 24 / 34 / 31 / 21 | `substrate/epistemic/**`（cursor）、`substrate/graph/sql-store.ts`（重读）、pg 并发路径、`gateway/approval*`、web 审批历史 | 关闭 23 / 24 / 34 / 31 / 21 |
 | W10-C | **S5.6** 稳定性 | `application/task/reaper.ts`、`application/task/**`（30 根因）、`scripts/accept_s2.sh` cleanup、WS 测试超时、chaos 脚本 | 关闭 30 / 26 / 25；I-S5-3 |
 | W11 | **S5.7** 真实模型回归 + **S5.8** 交付与演示闭环（最后一项） + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md`、`scripts/drill-install.sh`、`scripts/drill-upgrade.sh`、`scripts/demo.sh`、`runbooks/release.md` | 五场景 10 次数字进 STATUS；干净主机安装 / 升级回滚 / 15 分钟演示三个演练脚本全绿 |
