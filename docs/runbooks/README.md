@@ -39,7 +39,9 @@
 | [`backup-restore.md`](./backup-restore.md) | 每日备份内容、`backup` 容器的 root+单一 capability 权限模型、`scripts/restore.sh` 恢复演练（`scripts/drill-restore.sh` 自动化版本） |
 | [`pi-upgrade.md`](./pi-upgrade.md) | pi 版本升级契约：耦合面清单、单一版本源、升级步骤、漂移检测（`pi-drift.yml`）、回滚 |
 | [`web-console.md`](./web-console.md) | web 控制台每个页面依赖哪些 capability、角色可见性、排障表 |
-| [`release.md`](./release.md) | release-please 发布契约：单一根版本、release PR 合并前手动踢一次 CI、主机怎么跟随 tag、hotfix 流程 |
+| [`release.md`](./release.md) | release-please 发布契约：单一根版本、release PR 合并前手动踢一次 CI、主机怎么跟随 tag、hotfix 流程、迁移可逆性表（§6，逐迁移读 SQL 与旧调用方判定，不可逆需标注 CHANGELOG） |
+| [`host-drills.md`](./host-drills.md) | S5.8 两个演练：`scripts/drill-install.sh`（操作机经 SSH 把只有 Docker 的干净主机走到三份验收通过，记耗时与交付缺口、拒绝已部署主机）、`scripts/drill-upgrade.sh`（升级到指定 tag → 三份验收 → 可逆性探针 → 回滚代码 + 活库 → S1，`--ack-live-restore` 必填） |
+| [`demo.md`](./demo.md) | `DEMO_MODEL=<provider/model> make demo`：ephemeral 工作区 + 采集器 + 三句预置提问（依赖、溯源、审批重启）+ Markdown 结果页，15 分钟预算；不碰生产采集器密钥；同时是 S5.7 的第六场景 |
 | [`automation.md`](./automation.md) | GitHub 自动化一览：每个 bot/workflow 的用途、触发时机、开出东西之后该做什么 |
 
 ## ③ 扩展平台
@@ -57,6 +59,7 @@
 | [`accept-s1.md`](./accept-s1.md) | S1 验收脚本 `scripts/accept_s1.sh`：一轮对话、隔离、崩溃恢复、出网代理端到端验证 |
 | [`host-accept-s2.md`](./host-accept-s2.md) | S2 验收脚本 `scripts/accept_s2.sh`：卡片审批全链路、SSH/HTTP/Docker/MCP 四类连接、Worker 结果契约 |
 | [`host-accept-s3.md`](./host-accept-s3.md) | S3 验收脚本 `scripts/accept_s3.sh`：采集器 `host-inventory` 端到端、聊天驱动的依赖问答 + `explain` 溯源、Explorer 端点、MCP `tools/list`/`traverse` |
+| [`host-accept-real-model.md`](./host-accept-real-model.md) | `accept_s2.sh` / `accept_s3.sh --real <provider/model> --runs N`：真实模型自己选工具、按结果判定的五个场景与数字怎么读；每次发版后 `--runs 10` 例行回归七步、`scripts/report-usage.sh` 汇总 token / 费用、`docs/private/real-model-<date>.md` 模板 |
 | [`host-chaos.md`](./host-chaos.md) | 不变量监控（I1–I16 定时校验、`/internal/metrics`）与混沌演练脚本：杀 Worker 容器验证 Task 重试、杀入口容器验证自愈重建 |
 
 三份验收脚本 runbook 既是"怎么跑验收"的操作手册，也是理解"平台在这一层应该长什么样"的参照——

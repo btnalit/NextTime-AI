@@ -2446,6 +2446,20 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
   数字（成功率、平均轮数、平均 token / 成本，按 `llm_usage` 的 jti → Handle → Task / Turn 汇总，
   `scripts/report-usage.sh`）写 `docs/private/real-model-<date>.md`，摘要进 STATUS §2.2 的表；任一场景低于
   8/10 记为该版本的已知问题。不做主机定时器（E7 类运维项排最后）。依赖：S5.4（fake 侧形状校验先于真实回归）。
+- **实现说明（2026-09-18，PR #202，W11-E；主机数字待首轮）**：`scripts/report-usage.sh`（POSIX sh，主机执行）
+  对 `llm_usage` 做窗口 / 分组聚合：`--workspace <uuid>`（不带 `--since` 时必填）、`--since` / `--until`
+  （`started_at` 上下界，`--until` 开区间）、`--by turn|handle|task`（默认 `turn`）、`--markdown`、
+  `--summary`（整窗口一行：calls / input / output / cache / total tokens、cost_usd、distinct turns、avg
+  tokens/turn、avg cost/turn；`total_tokens` 口径与内核 `sumTodayTokens` 一致）。三种 join 逐列对照迁移：
+  `--by turn` 按 `llm_usage.turn_id`；`--by handle` 左连 `capability_handles(workspace_id, jti)` 带出
+  `parent_jti` / `on_behalf_of`；`--by task` 用 `llm_usage.session_id = worker_runs.session_id` 再连
+  `tasks`——WorkerRun 自己的 session 正是它上报用量的 session，不必退化到 Handle 谱系；LEFT JOIN 让入口
+  agent 自身会话的用量以 `task_id=NULL` 报出。所有参数先过正则（uuid / ISO-8601 UTC）再拼 SQL。脚本不知道
+  场景标签（`llm_usage` 无此概念），场景边界只在 accept 脚本的 `RUN` / `REAL` 行：`host-accept-real-model.md`
+  §8 规定用"逐场景顺序跑完 `--runs` 次"把 `--by turn` 的时间序输出按场景分块、核对块大小与 `<n>`；§3 定
+  `--runs 3` 冒烟 / `--runs 10` 例行与 `<8/10` 已知问题阈值（脚本退出码不是信号源，必须人工读 `REAL` 行）；
+  §9 给 `docs/private/real-model-<date>.md` 模板（`make demo` 作第六场景）。SQL 未在真库执行（本机无
+  Docker），按迁移逐列核对，首次实跑在主机例行回归。
 
 ### S5.8 交付与演示闭环（W11 最后一项，不扩大基座边界）
 
@@ -2472,6 +2486,38 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
   回滚后 S1 通过；`make demo` 15 分钟内产出结果页。依赖：S5.7；E7（备份定时器）仍按维护者决定排在最后，
   不并入本项。
 - 不做：安装器 / 图形化安装、SaaS 多租户、面向具体客户的场景包（RouterOS 门等仍推后）。
+- **实现说明（2026-09-18，PR #204 item 3、PR #205 item 1 / 2；主机实跑待做，本机无 Docker，只做
+  `bash -n` / shellcheck / `ci:guards` 静态验证）**：
+  1. `scripts/drill-install.sh`（操作机执行，经 SSH 编排目标主机，同各 `host-*.md` 的 `ssh … 'sh -s' <`
+     方式）：`ssh-connectivity → guard-target → preflight → checkout → bootstrap → env-init → handle-keys →
+     write-env → compose-config → build（单独计时）→ postgres-up → migrate（容器化）→ stack-up → caddy-health →
+     accept-s1 / s2 / s3`（默认 fake provider）。GUARD：目标已有 `$CODE_DIR/.env` 或非空 `pgdata` 即拒绝、无绕过。
+     需要真实网络知识的 `KERNEL_BIND_ADDR` 与两个子网 CIDR 是必填输入，不猜；`REF` 支持分支或发布 tag。
+     **发现的交付缺口**：任务原文顺序（preflight → bootstrap → checkout）与 `runbooks/README.md` ① 矛盾，README
+     自身也不自洽（`host-checkout.md` §E3.3 依赖 `host-bootstrap.md` §E2 的 `secrets/pg_password`），脚本按唯一
+     满足依赖的交错顺序执行并记进 `host-drills.md`；CA 信任导入是客户端动作、Explorer 静态包可选、真实 provider
+     key 三份验收不需要（`accept_provider_up()` 自建 `accept/models.json`）——列为已知手动项。
+  2. `scripts/drill-upgrade.sh`（主机检出根目录执行；`--to <vX.Y.Z> --ack-live-restore` 缺一即拒）：preflight
+     → `BACKUP_NOW=1` 升级前 dump（永不删除）→ checkout v(n) → build → 迁移 `--dry-run` 再 apply → up → 三份
+     验收（gate）→ PROBE（切回 v(n-1) 代码在 v(n) schema 上跑 `accept_s1.sh`，非致命，作为可逆性证据）→ 回滚：
+     先 checkout / build / up v(n-1) 代码，**再** `restore.sh --target-db nexttime --i-know`（restore 的 trap 只
+     `start` 既有容器）→ S1 复跑（gate）。脚本先把自己复制到检出外再 `exec`（它要 `git checkout` 自己所在的
+     检出）；开始时在分支上就回到该分支。已知遗留：S3 临时工作区目录在 DB 回滚后成磁盘孤儿；版本专属手动步骤
+     会被 restore 撤销、真实升级需按发布说明补做。`runbooks/release.md` §6 迁移可逆性：定义（可逆 = v(n-1)
+     代码能在 v(n) schema 上跑、回退只回代码）、判定读 SQL 与 v(n-1) 调用方、回填 v0.10.1 / v0.11.0 / v0.12.0
+     （core 0025–0029 全部可逆；0027 经核实旧调用方只取 `rows[0]` / 判 `length === 0`）、不可逆需在合并 release
+     PR 前手工标注 CHANGELOG。
+  3. `make demo` / `scripts/demo.sh --model <provider/model> [--keep] [--out]`（`DEMO_MODEL` 必填、永不默认）：
+     preflight → `create-workspace --purpose ephemeral --ttl 1d` → `seed-domain-pack ops-assets-v1` →
+     `issue-service-handle` → 采集器 `--once`（`objectsUpserted` / `factsAsserted` 作对象数 / 事实数）→ Q1 依赖
+     问答 → Q2 kernel → postgres 边的来源与最近确认（另独立 `search → traverse → explain` 取溯源链）→ 一次性启用
+     `gatekeeper-docker` + 发布 `demo-ops-runner` → Q3 重启 `accept-s2-restart-target`（`send-and-wait
+     auto-approve` + 兜底轮询审批；判据同 `real_docker_restart_run`）→ Markdown 到 `${NEXTTIME_DATA}/demo/`
+     （每步耗时、`BUDGET ok|exceeded` 900s）→ 清理。**不碰生产采集器密钥**：Handle 写到 demo 私有文件、用
+     `docker compose run -e NEXTTIME_HANDLE_TOKEN_FILE -v …:ro` 只对这一次生效、清理无条件删除（主会话审出，
+     与 `accept_s3.sh` 覆盖共享文件的取舍不同）。不重构 accept 脚本，只复用 `driver.mjs` 子命令。
+  4. 镜像发布重评点：等 S5.7 主机数字。三条车道均不写 STATUS / development-tasks / runbooks 索引，由主会话收口
+     统一写（W10 的锚点冲突教训）；回顾见 `retrospective-2026-09-18.md`。
 
 ### S5 明确不做（保持现状，记录理由）
 
@@ -2505,7 +2551,7 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
 | W10-A | **S5.3** 数据与代码分离 | `cli/bootstrap.ts`、`docker-compose.yml`（挂载）、`gateway/ingest-handlers.ts`（`register_source`，W9-A 合入后）、`collectors/host-inventory`、`scripts/delete-workspaces-matching.sh`、迁移 core 0028（0027 已被 S5.2 用掉）、runbooks、web 工作区页只读字段 | 关闭 9；11 部分。**完成**（2026-09-18：#195） |
 | W10-B | **S5.5 后五项** 23 / 24 / 34 / 31 / 21 | `substrate/epistemic/**`（cursor）、`substrate/graph/sql-store.ts`（重读）、pg 并发路径、`gateway/approval*`、web 审批历史 | 关闭 23 / 24 / 34 / 31 / 21。**完成**（2026-09-18：#197 遗留 21 / 31、#198 遗留 24 + core 0029、#199 遗留 23 / 34） |
 | W10-C | **S5.6** 稳定性 | `application/task/reaper.ts`、`application/task/**`（30 根因）、`scripts/accept_s2.sh` cleanup、WS 测试超时、chaos 脚本 | 关闭 30 / 26 / 25；I-S5-3。**完成**（2026-09-18：#200；26 已由 #145 关闭、核实无回归；遗留 40 一并关闭；30 的主机 `--real` 复跑归 W11 S5.7） |
-| W11 | **S5.7** 真实模型回归 + **S5.8** 交付与演示闭环（最后一项） + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md`、`scripts/drill-install.sh`、`scripts/drill-upgrade.sh`、`scripts/demo.sh`、`runbooks/release.md` | 五场景 10 次数字进 STATUS；干净主机安装 / 升级回滚 / 15 分钟演示三个演练脚本全绿 |
+| W11 | **S5.7** 真实模型回归 + **S5.8** 交付与演示闭环（最后一项） + 主机应用 + 回顾 | `scripts/accept_s*.sh --real --runs 10`、`scripts/report-usage.sh`、`docs/private/real-model-*.md`、`retrospective-2026-09-*.md`、`scripts/drill-install.sh`、`scripts/drill-upgrade.sh`、`scripts/demo.sh`、`runbooks/release.md` | 五场景 10 次数字进 STATUS；干净主机安装 / 升级回滚 / 15 分钟演示三个演练脚本全绿。**本地部分完成**（2026-09-18：#202 S5.7 工具与流程、#204 `make demo`、#205 两个演练 + release.md §6；回顾 `retrospective-2026-09-18.md`）；主机侧（三版应用、`--runs 10` 数字、三个演练实跑、镜像发布重评）待做，顺序见 STATUS §3 |
 
 W9 三车道文件互斥可并行，也与 P-B2b（平台面：`application/platform/**`、`packages/web` 平台页）互斥；
 W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工、W10-B 的 24 先合入；W11 依赖 W9-B。
