@@ -52,6 +52,15 @@ function scriptedHttp(
   };
 }
 
+/** `list_action_requests` always answers with the given rows as one page (`nextCursor`
+ *  undefined) — good enough for the History-tab assertions in this file, which do not exercise
+ *  pagination itself (that is `ApprovalHistory load more` below, scripted separately). */
+function historyOf(
+  rows: readonly ActionRequestRowLike[],
+): (params: unknown) => Promise<{ items: readonly ActionRequestRowLike[] }> {
+  return () => Promise.resolve({ items: rows });
+}
+
 function pushSourceWithUpdated(): PushSource & { emitUpdated: (event: ActionUpdatedPush) => void } {
   const listeners = new Set<(event: ActionUpdatedPush) => void>();
   return {
@@ -121,9 +130,12 @@ describe('ApprovalQueuePage state machine', () => {
     expect(screen.queryByTestId('approvals-error')).toBeNull();
   });
 
-  it('approving from the drawer is optimistic: the row leaves Pending, appears under All as approved, and reverts on failure', async () => {
+  it('approving from the drawer is optimistic: the row leaves Pending, appears in History (server-backed) as approved, and reverts on failure', async () => {
     const approve = vi.fn(async () => ({ id: 'ar-1', status: 'approved' }));
-    const http = scriptedHttp([() => Promise.resolve([row()])], { approve });
+    const http = scriptedHttp([() => Promise.resolve([row()])], {
+      approve,
+      list_action_requests: historyOf([row({ status: 'approved' })]),
+    });
     const onSelect = vi.fn();
     const view = render(
       <ApprovalQueuePage
@@ -142,9 +154,9 @@ describe('ApprovalQueuePage state machine', () => {
     await waitFor(() => expect(screen.queryByTestId('approval-row')).toBeNull());
     expect(screen.getByTestId('approvals-empty')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('tab', { name: /All/ }));
-    const decidedRow = await screen.findByTestId('approval-row');
-    expect(decidedRow.querySelector('.chip')?.getAttribute('data-status')).toBe('approved');
+    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    const historyRow = await screen.findByTestId('approval-history-row');
+    expect(historyRow.querySelector('.chip')?.getAttribute('data-status')).toBe('approved');
     view.unmount();
 
     // failure path: the kernel rejects (409 illegal_transition) → the row comes back, error shown
@@ -173,14 +185,75 @@ describe('ApprovalQueuePage state machine', () => {
     const pushes = pushSourceWithUpdated();
     const http = scriptedHttp([() => Promise.resolve([row()]), () => Promise.resolve([])], {
       get_action: () => Promise.resolve(row({ status: 'rejected' })),
+      list_action_requests: historyOf([row({ status: 'rejected' })]),
     });
     render(<ApprovalQueuePage http={http} pushes={pushes} onSelect={vi.fn()} />);
     await screen.findByTestId('approval-row');
 
     act(() => pushes.emitUpdated({ id: 'ar-1', status: 'rejected' }));
     await waitFor(() => expect(screen.queryByTestId('approval-row')).toBeNull());
-    fireEvent.click(screen.getByRole('tab', { name: /All/ }));
-    const decided = await screen.findByTestId('approval-row');
-    expect(decided.querySelector('.chip')?.getAttribute('data-status')).toBe('rejected');
+    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    const historyRow = await screen.findByTestId('approval-history-row');
+    expect(historyRow.querySelector('.chip')?.getAttribute('data-status')).toBe('rejected');
+  });
+});
+
+describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
+  it('loads on first switch to History, shows rows, and re-fetches with the selected status on filter change', async () => {
+    const calls: Array<Record<string, unknown> | undefined> = [];
+    const http = scriptedHttp([() => Promise.resolve([])], {
+      list_action_requests: (params) => {
+        calls.push(params as Record<string, unknown> | undefined);
+        return Promise.resolve({ items: [row({ status: 'approved' })] });
+      },
+    });
+    render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
+    await screen.findByTestId('approvals-empty');
+    expect(calls).toHaveLength(0); // History's own capability never fires while on Pending
+
+    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    await screen.findByTestId('approval-history-row');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ limit: 50 });
+    expect(calls[0]).not.toHaveProperty('status');
+
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'approved' } });
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]).toMatchObject({ limit: 50, status: 'approved' });
+  });
+
+  it('shows an operator-role explanation on 403, and "Load more" appends the next page via cursor', async () => {
+    const forbiddenHttp = scriptedHttp([() => Promise.resolve([])], {
+      list_action_requests: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'role "member" does not satisfy', 'forbidden'),
+        ),
+    });
+    const forbiddenView = render(
+      <ApprovalQueuePage http={forbiddenHttp} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />,
+    );
+    await screen.findByTestId('approvals-empty');
+    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    await screen.findByTestId('approval-history-forbidden');
+    forbiddenView.unmount();
+
+    let page = 0;
+    const pagedHttp = scriptedHttp([() => Promise.resolve([])], {
+      list_action_requests: () => {
+        page += 1;
+        return page === 1
+          ? Promise.resolve({ items: [row({ id: 'ar-1' })], nextCursor: 'cursor-1' })
+          : Promise.resolve({ items: [row({ id: 'ar-2' })] });
+      },
+    });
+    render(<ApprovalQueuePage http={pagedHttp} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
+    await screen.findByTestId('approvals-empty');
+    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    await screen.findByTestId('approval-history-row');
+    expect(screen.getAllByTestId('approval-history-row')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(screen.getAllByTestId('approval-history-row')).toHaveLength(2));
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 });

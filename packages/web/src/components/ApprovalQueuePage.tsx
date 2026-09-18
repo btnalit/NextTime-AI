@@ -1,4 +1,7 @@
+import { ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
+import type { ActionRequestStatus } from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useResource } from '../hooks/useResource.js';
 import { type ActionRequestRowLike, actionCardFromRow } from '../lib/action-card.js';
@@ -11,8 +14,8 @@ import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
+import { Field, Select } from './ui/Field.js';
 import { Icon } from './ui/Icon.js';
-import { Notice } from './ui/Notice.js';
 import { PageHeader } from './ui/PageHeader.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -27,7 +30,10 @@ export interface ApprovalQueuePageProps {
   readonly onSelect: (actionRequestId: string | null) => void;
 }
 
-type Filter = 'pending' | 'all';
+type Filter = 'pending' | 'history';
+type HistoryStatusFilter = 'all' | ActionRequestStatus;
+
+const HISTORY_PAGE_SIZE = 50;
 
 interface DecisionState {
   readonly busy: boolean;
@@ -48,9 +54,17 @@ function byNewest(a: ActionRequestRowLike, b: ActionRequestRowLike): number {
  * with a reload. Decisions are optimistic — the row leaves Pending on click and comes back with
  * the kernel's error if the call fails.
  *
- * "All" is bounded by what the kernel exposes: `list_pending` only returns `pending_approval` rows
- * and there is no list capability for decided ActionRequests (`get_action` is by id) — so "All"
- * is pending ∪ the requests this session watched get decided (kernel gap, see the PR report).
+ * "History" (S5.5 leftover 21, docs/STATUS.md row 21) replaces the earlier session-only "All" tab
+ * — `list_action_requests` (same I14 visibility as `list_pending`, every status, keyset-paginated)
+ * is a real server-backed read, not a client-side cache of requests this session happened to
+ * observe. Split into its own `ApprovalHistoryTab` component, mounted only while that tab is
+ * selected — same "one tab, one child component, one `useCapabilityList`" convention
+ * `CatalogPage.tsx`'s `OperationsTab`/`SkillsTab`/etc. already use, so History's own capability
+ * call never fires while the caller is only looking at Pending. `decided` (below) is unrelated to
+ * that tab; it only keeps the drawer's subject resolvable for the brief window between an
+ * optimistic decision and the next `list_pending` reload picking it up — a selection that belongs
+ * to neither `pendingRows` nor `decided` (e.g. a row opened from the History tab) falls through to
+ * the plain `get_action` fetch below, which is workspace-scoped and not I14-narrowed (§9.3).
  */
 export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: ApprovalQueuePageProps) {
   const permissions = usePermissions();
@@ -113,14 +127,10 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   }, [pushes, pending.reload, pending.mutate, refreshRow]);
 
   const pendingRows = pending.state.status === 'ready' ? pending.state.data : [];
-  const rows = useMemo(() => {
-    const pendingIds = new Set(pendingRows.map((row) => row.id));
-    const decidedRows = Object.values(decided).filter((row) => !pendingIds.has(row.id));
-    const all = filter === 'pending' ? [...pendingRows] : [...pendingRows, ...decidedRows];
-    return all.sort(byNewest);
-  }, [pendingRows, decided, filter]);
+  const rows = useMemo(() => [...pendingRows].sort(byNewest), [pendingRows]);
 
-  // Deep link (`#/approvals/<id>`) to a request that is not in the list: fetch it by id.
+  // Deep link (`#/approvals/<id>`) to a request that is not in the Pending list: fetch it by id
+  // (covers a History-tab selection too — `get_action` is workspace-scoped, not I14-narrowed).
   const selectedFromList =
     selectedId === undefined
       ? undefined
@@ -226,14 +236,16 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
         title="Approvals"
         description="Execute-class actions Workers proposed within your scope. Approving lets the Gatekeeper run them."
         actions={
-          <Button
-            variant="ghost"
-            icon="refresh"
-            onClick={() => void pending.reload()}
-            loading={pending.state.status === 'ready' && pending.state.refreshing}
-          >
-            Refresh
-          </Button>
+          filter === 'pending' ? (
+            <Button
+              variant="ghost"
+              icon="refresh"
+              onClick={() => void pending.reload()}
+              loading={pending.state.status === 'ready' && pending.state.refreshing}
+            >
+              Refresh
+            </Button>
+          ) : undefined
         }
       />
 
@@ -244,105 +256,102 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           onChange={setFilter}
           options={[
             { value: 'pending', label: 'Pending', count: pendingCount },
-            { value: 'all', label: 'All', count: pendingCount + Object.keys(decided).length },
+            { value: 'history', label: 'History' },
           ]}
         />
       </div>
 
-      {pending.state.status === 'loading' ? (
-        <SkeletonRows count={4} label="Loading approvals" testId="approvals-loading" />
-      ) : pending.state.status === 'error' ? (
-        forbidden ? (
+      {filter === 'pending' ? (
+        pending.state.status === 'loading' ? (
+          <SkeletonRows count={4} label="Loading approvals" testId="approvals-loading" />
+        ) : pending.state.status === 'error' ? (
+          forbidden ? (
+            <EmptyState
+              icon="shield"
+              title="Approvals need the operator role"
+              body="Your API key's principal cannot call list_pending. Ask the workspace owner for an operator-role principal to approve actions."
+              testId="approvals-forbidden"
+            />
+          ) : (
+            <ErrorBanner
+              error={pending.state.error}
+              title="Could not load approvals"
+              onRetry={() => void pending.reload()}
+              testId="approvals-error"
+            />
+          )
+        ) : rows.length === 0 ? (
           <EmptyState
-            icon="shield"
-            title="Approvals need the operator role"
-            body="Your API key's principal cannot call list_pending. Ask the workspace owner for an operator-role principal to approve actions."
-            testId="approvals-forbidden"
+            icon="approvals"
+            title="Nothing pending your approval"
+            body="Requests appear here the moment a Worker proposes an execute-class action that policy routes to you."
+            testId="approvals-empty"
           />
         ) : (
-          <ErrorBanner
-            error={pending.state.error}
-            title="Could not load approvals"
-            onRetry={() => void pending.reload()}
-            testId="approvals-error"
-          />
-        )
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon="approvals"
-          title={
-            filter === 'pending'
-              ? 'Nothing pending your approval'
-              : 'No approvals seen this session'
-          }
-          body="Requests appear here the moment a Worker proposes an execute-class action that policy routes to you."
-          testId="approvals-empty"
-        />
-      ) : (
-        <>
-          {pending.state.refreshError ? (
-            <ErrorBanner error={pending.state.refreshError} onRetry={() => void pending.reload()} />
-          ) : null}
-          <DataList ariaLabel="Approval requests" testId="approvals-list">
-            {rows.map((row) => (
-              <DataRow
-                key={row.id}
-                testId="approval-row"
-                selected={row.id === selectedId}
-                onSelect={() => onSelect(row.id)}
-                leading={<StatusChip machine="actionRequest" status={row.status} size="s" />}
-                title={
-                  <>
-                    <span className="truncate">{humanizeKind(row.actionKindTag)}</span>
-                    <span className="tag">{row.actionKindTag}</span>
-                  </>
-                }
-                meta={
-                  <>
-                    {row.actorRuntime ? <span>{row.actorRuntime}</span> : null}
-                    {row.onBehalfOf ? (
-                      <>
-                        <span className="meta-sep" />
-                        <span title={row.onBehalfOf}>for {shortId(row.onBehalfOf)}</span>
-                      </>
-                    ) : null}
-                    {row.resourceScope ? (
-                      <>
-                        <span className="meta-sep" />
-                        <span className="mono truncate">{row.resourceScope}</span>
-                      </>
-                    ) : null}
-                    <span className="meta-sep" />
-                    <time title={formatDateTime(row.requestedAt)}>
-                      {formatRelative(row.requestedAt)}
-                    </time>
-                    {row.blastRadius !== 'low' ? (
-                      <>
-                        <span className="meta-sep" />
-                        <span className={row.blastRadius === 'high' ? 'text-danger' : ''}>
-                          {row.blastRadius} blast radius
-                        </span>
-                      </>
-                    ) : null}
-                    {row.awaitDecision && row.status === 'pending_approval' ? (
-                      <>
-                        <span className="meta-sep" />
-                        <span>blocking a Worker</span>
-                      </>
-                    ) : null}
-                  </>
-                }
-                trailing={<Icon name="chevron-right" />}
+          <>
+            {pending.state.refreshError ? (
+              <ErrorBanner
+                error={pending.state.refreshError}
+                onRetry={() => void pending.reload()}
               />
-            ))}
-          </DataList>
-          {filter === 'all' ? (
-            <Notice>
-              The kernel lists pending requests only; decided requests shown here are the ones this
-              session observed. A history view needs a list capability for decided ActionRequests.
-            </Notice>
-          ) : null}
-        </>
+            ) : null}
+            <DataList ariaLabel="Approval requests" testId="approvals-list">
+              {rows.map((row) => (
+                <DataRow
+                  key={row.id}
+                  testId="approval-row"
+                  selected={row.id === selectedId}
+                  onSelect={() => onSelect(row.id)}
+                  leading={<StatusChip machine="actionRequest" status={row.status} size="s" />}
+                  title={
+                    <>
+                      <span className="truncate">{humanizeKind(row.actionKindTag)}</span>
+                      <span className="tag">{row.actionKindTag}</span>
+                    </>
+                  }
+                  meta={
+                    <>
+                      {row.actorRuntime ? <span>{row.actorRuntime}</span> : null}
+                      {row.onBehalfOf ? (
+                        <>
+                          <span className="meta-sep" />
+                          <span title={row.onBehalfOf}>for {shortId(row.onBehalfOf)}</span>
+                        </>
+                      ) : null}
+                      {row.resourceScope ? (
+                        <>
+                          <span className="meta-sep" />
+                          <span className="mono truncate">{row.resourceScope}</span>
+                        </>
+                      ) : null}
+                      <span className="meta-sep" />
+                      <time title={formatDateTime(row.requestedAt)}>
+                        {formatRelative(row.requestedAt)}
+                      </time>
+                      {row.blastRadius !== 'low' ? (
+                        <>
+                          <span className="meta-sep" />
+                          <span className={row.blastRadius === 'high' ? 'text-danger' : ''}>
+                            {row.blastRadius} blast radius
+                          </span>
+                        </>
+                      ) : null}
+                      {row.awaitDecision && row.status === 'pending_approval' ? (
+                        <>
+                          <span className="meta-sep" />
+                          <span>blocking a Worker</span>
+                        </>
+                      ) : null}
+                    </>
+                  }
+                  trailing={<Icon name="chevron-right" />}
+                />
+              ))}
+            </DataList>
+          </>
+        )
+      ) : (
+        <ApprovalHistoryTab http={http} selectedId={selectedId} onSelect={onSelect} />
       )}
 
       <Drawer
@@ -368,6 +377,178 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           <SkeletonRows count={2} label="Loading request" />
         )}
       </Drawer>
+    </div>
+  );
+}
+
+interface ApprovalHistoryTabProps {
+  readonly http: CapabilityCaller;
+  readonly selectedId?: string;
+  readonly onSelect: (actionRequestId: string | null) => void;
+}
+
+/**
+ * `list_action_requests` (S5.5 leftover 21) — every ActionRequest regardless of status, same I14
+ * visibility as `list_pending`/Pending above, status-filterable, keyset-paginated via
+ * `useCapabilityList`'s `loadMore` (the same "加载更多" pattern `PlatformAuditPage.tsx`/
+ * `PlatformUsersPage.tsx` already use for their own cursor-paged governance lists). Its own
+ * component (not inlined in `ApprovalQueuePage` above) so the capability call only fires while
+ * this tab is actually selected — same convention `CatalogPage.tsx`'s per-tab components use.
+ *
+ * `decidedBy` (the approving/rejecting principal) is not shown: `ActionRequestWireSchema`
+ * (packages/shared/src/wire/governance.ts) carries `approvalDecisionId` — an opaque reference into
+ * `decisions`, not the decider's identity — and this task's own scope keeps `list_action_requests`
+ * returning that exact existing wire shape rather than inventing a richer one (dispatch: "reuse
+ * the existing ActionRequest wire schema ... do not invent a new shape"). Requester
+ * (`onBehalfOf`), gatekeeper, and every timestamp the wire shape does carry are shown instead.
+ */
+function ApprovalHistoryTab({ http, selectedId, onSelect }: ApprovalHistoryTabProps) {
+  const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>('all');
+  const params = useMemo(() => {
+    const next: Record<string, unknown> = { limit: HISTORY_PAGE_SIZE };
+    if (statusFilter !== 'all') next.status = statusFilter;
+    return next;
+  }, [statusFilter]);
+  // `useCapabilityList` marks `list_action_requests` allowed/denied on `usePermissions` itself
+  // (hooks/useCapability.ts) — no manual `markDenied` effect needed here.
+  const history = useCapabilityList<ActionRequestRowLike>(http, 'list_action_requests', params);
+  const forbidden = history.state.status === 'error' && isForbiddenError(history.state.error);
+  const rows = history.state.status === 'ready' ? history.state.data.items : [];
+  const nextCursor = history.state.status === 'ready' ? history.state.data.nextCursor : undefined;
+
+  return (
+    <div className="stack">
+      <div className="page-toolbar">
+        <Field id="approval-history-status" label="Status">
+          <Select
+            id="approval-history-status"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}
+          >
+            <option value="all">All statuses</option>
+            {ACTION_REQUEST_STATUS_VALUES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Button
+          variant="ghost"
+          icon="refresh"
+          onClick={() => void history.reload()}
+          loading={history.state.status === 'ready' && history.state.refreshing}
+        >
+          Refresh
+        </Button>
+      </div>
+
+      {history.state.status === 'loading' ? (
+        <SkeletonRows
+          count={4}
+          label="Loading approval history"
+          testId="approval-history-loading"
+        />
+      ) : history.state.status === 'error' ? (
+        forbidden ? (
+          <EmptyState
+            icon="shield"
+            title="Approval history needs the operator role"
+            body="Your API key's principal cannot call list_action_requests. Ask the workspace owner for an operator-role principal."
+            testId="approval-history-forbidden"
+          />
+        ) : (
+          <ErrorBanner
+            error={history.state.error}
+            title="Could not load approval history"
+            onRetry={() => void history.reload()}
+            testId="approval-history-error"
+          />
+        )
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon="approvals"
+          title="No approval history yet"
+          body="Decided and executed ActionRequests will appear here."
+          testId="approval-history-empty"
+        />
+      ) : (
+        <>
+          {history.state.refreshError ? (
+            <ErrorBanner error={history.state.refreshError} onRetry={() => void history.reload()} />
+          ) : null}
+          <DataList ariaLabel="Approval history" testId="approval-history-list">
+            {rows.map((row) => (
+              <DataRow
+                key={row.id}
+                testId="approval-history-row"
+                selected={row.id === selectedId}
+                onSelect={() => onSelect(row.id)}
+                leading={<StatusChip machine="actionRequest" status={row.status} size="s" />}
+                title={
+                  <>
+                    <span className="truncate">{humanizeKind(row.actionKindTag)}</span>
+                    <span className="tag">{row.actionKindTag}</span>
+                  </>
+                }
+                meta={
+                  <>
+                    {row.gatekeeperId ? (
+                      <span className="mono truncate" title={row.gatekeeperId}>
+                        {shortId(row.gatekeeperId)}
+                      </span>
+                    ) : null}
+                    {row.onBehalfOf ? (
+                      <>
+                        <span className="meta-sep" />
+                        <span title={row.onBehalfOf}>for {shortId(row.onBehalfOf)}</span>
+                      </>
+                    ) : null}
+                    <span className="meta-sep" />
+                    <time title={formatDateTime(row.requestedAt)}>
+                      requested {formatRelative(row.requestedAt)}
+                    </time>
+                    {row.executedAt ? (
+                      <>
+                        <span className="meta-sep" />
+                        <time title={formatDateTime(row.executedAt)}>
+                          executed {formatRelative(row.executedAt)}
+                        </time>
+                      </>
+                    ) : row.failedAt ? (
+                      <>
+                        <span className="meta-sep" />
+                        <time className="text-danger" title={formatDateTime(row.failedAt)}>
+                          failed {formatRelative(row.failedAt)}
+                        </time>
+                      </>
+                    ) : null}
+                  </>
+                }
+                trailing={<Icon name="chevron-right" />}
+              />
+            ))}
+          </DataList>
+          {nextCursor !== undefined ? (
+            <div className="row" style={{ justifyContent: 'center' }}>
+              <Button
+                variant="secondary"
+                loading={history.loadingMore}
+                onClick={() => void history.loadMore()}
+              >
+                Load more
+              </Button>
+            </div>
+          ) : null}
+          {history.loadMoreError !== null ? (
+            <ErrorBanner
+              error={history.loadMoreError}
+              title="Could not load more approval history"
+              testId="approval-history-load-more-error"
+            />
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

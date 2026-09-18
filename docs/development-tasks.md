@@ -2230,6 +2230,69 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
 8. **遗留 21**：能力 `list_action_requests`（`status` 过滤、cursor 分页、human 通道）+ 控制台"审批历史"
    只读列表（页面归 P-C 的运行状态页或工作区页，由 P-C 所有者定位置）。
 
+#### S5.5 遗留 31 实现说明（2026-09-18，PR #197）
+
+核实结论：Explorer 专属会话已在 S4.1 退役，遗留 31 的前提不成立，未改代码，按 STATUS 既定拟修关闭。
+证据：`packages/kernel/src/interfaces/explorer-contract/index.ts` 自身模块注释与 `registerExplorerRoutes`
+函数体注释均写明"W7's POST/DELETE /api/explorer/session were retired in S4.1: the console session
+cookie ... now authenticates these routes"；`authenticateExplorerCaller` 现只认两种凭证——
+`X-API-Key`（走 `resolveCaller`）或控制台会话 cookie（走 `resolveRequestCaller`，
+`application/gateway/resolve-caller.ts`）——没有第二套"Explorer 自己签发的会话"可供
+`rotate_api_key` 撤销。控制台会话（`nexttime_console_session`）按**用户**（`user_sessions` 表）而非按
+Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`，标记该行
+`revoked_at`）与 `disable_principal`（`application/gateway/auth.ts` 的 `lookupMembershipPrincipal`
+每次请求都重查 `principals.disabled_at is null`，非缓存值）都即时生效；`rotate_api_key`
+（`application/gateway/members-handlers.ts`）只更新 `principals.api_key_hash` 一列，不触碰
+`user_sessions` 或任何 Handle 会话，因此确实"rotate 不影响控制台会话"。
+
+#### S5.5 遗留 21 实现说明（2026-09-18，PR #197）
+
+- **能力 `list_action_requests`**（`packages/shared/src/capabilities.ts`，governance
+  组，`mode:'observe'`、`channel:'human'`、`minRole:'operator'`，与 `list_pending`/`get_action`
+  同组同权限）：`paramsSchema` `{status?: ActionRequestStatus | ActionRequestStatus[], gatekeeperId?:
+  string, limit?: number, cursor?: string}`，`.strict()`；`resultSchema`
+  `listEnvelope(wire.ActionRequestWireSchema)`——items 复用现有 `ActionRequestWireSchema` 原形（未新增
+  字段），未按任务简报字面的 `{items, nextCursor: string | null}` 实现，而是照 `nextCursor?: string`
+  （省略即无下一页）——这是 `docs/wire-contract-conventions.md` §3 与 `scripts/guards/vocabulary.mjs`
+  check (e) 对每个 `list_*` 能力的强制约定（`listEnvelope` 结构性检测 `{items: array}`），`list_pending`/
+  `search` 等全部同款；字面 `| null` 是不一致的形状，按既有约定实现更正。
+- **内核读**：`governance/approval/reads.ts` 新增 `listActionRequestsForApprover`——不限
+  `status`（`listPendingForApprover` 硬编码 `pending_approval`），可选 `status`/`gatekeeperId` 过滤，
+  keyset 游标排序键 `(date_trunc('milliseconds', requested_at), id)`（`action_requests` 表没有
+  `updated_at`/`created_at` 列，只有 `requested_at`——用它顶替 `search` 游标里 `updated_at` 的角色，同一套
+  "JS Date 只剩毫秒、Postgres 存微秒"截断手法，PR #132 `buildSearchQuery` 同款，非遗留 23 要修的
+  `query_decisions`/`list_conflicts` 那种未截断的旧模式）；可见性与 `listPendingForApprover`
+  完全一致（同一段 `capability_grants` `exists` 子句照抄，owner 见全部、其他角色只见命中自己
+  active grant 的行）——调用方看不见的 ActionRequest 即使已决也不出现，这条在已决行上同样成立（DB 集成
+  测试覆盖，见下）。cursor 编解码 `encodeActionRequestCursor`/`decodeActionRequestCursor` 是
+  `substrate/graph/queries.ts` `encodeSearchCursor`/`decodeSearchCursor` 的又一份私有拷贝（那个文件自己
+  的注释："a fourth private copy, deliberately — no shared helper refactor"，此为第五份，同款不共享）。
+  `DEFAULT_ACTION_REQUEST_LIST_LIMIT=50`/`MAX_ACTION_REQUEST_LIST_LIMIT=200`，与 `search` 的
+  `DEFAULT_SEARCH_LIMIT`/`MAX_SEARCH_LIMIT` 相同。Handler `listActionRequestsHandler`
+  （`application/gateway/handlers.ts`，紧邻 `listPendingHandler`/`getActionHandler`）超限 `limit`
+  截断并标 `truncated: true`，与 `searchHandler` 同款。
+- **Web**：控制台侧只读页放在**现有工作区页** `packages/web/src/components/ApprovalQueuePage.tsx`
+  （`/work/approvals`），不是 P-C 的"运行状态"页——核实 `platform-admin-design.md` §5 控制台信息架构表：
+  "待我审批"在"使用"组（人人可见的工作区级页），"运行状态"在"维护"组（`platform_status`，讲的是服务健康/
+  队列积压/备份时效，与 ActionRequest 审批历史无关）；审批历史是工作区级、I14 范围可见性数据，不是平台面
+  概念，理应跟审批队列同页。原"All"标签（会话级、client-side 缓存本会话见过的已决请求，代码里自带"kernel
+  gap"说明）替换为"History"标签，拆成独立子组件 `ApprovalHistoryTab`（同 `CatalogPage.tsx` 的
+  `OperationsTab`/`SkillsTab` 每标签一个组件、各自持有自己的 `useCapabilityList` 的写法）——只在切到
+  History 标签时才挂载、才发起 `list_action_requests` 调用，切回 Pending 不产生多余请求。History 标签有
+  状态下拉（`ACTION_REQUEST_STATUS_VALUES` 驱动）与游标"Load more"（`useCapabilityList` 的
+  `loadMore`/`loadingMore`/`loadMoreError`，`PlatformAuditPage.tsx`/`PlatformUsersPage.tsx`
+  同款"加载更多"）。已知限制：`ActionRequestWireSchema` 只带 `approvalDecisionId`（指向 `decisions`
+  表的不透明引用），不带审批人身份——按任务说明"复用既有 wire shape、不发明新形状"的约束，History
+  行不显示"谁批的"，只显示状态、动作种类、门、发起人（`onBehalfOf`）与时间戳
+  （requested/executed/failed）；要显示审批人需要新的 join 或新字段，超出本任务范围。
+- **测试**：kernel 单测 `governance/approval/reads.test.ts`（cursor 编解码往返/畸形输入）；DB
+  集成测试 `governance/approval/reads.integration.test.ts` 新增一个独立 `describe.runIf` 块——
+  status 过滤（单值/数组）、I14 可见性（owner 见全部含已决行；命中 grant 的 operator 只见匹配
+  action_kind 的行，含已决；不命中的 operator 一条也看不到）、同毫秒两行的 keyset 分页（`limit:1`
+  翻两页不漏不重）；web 组件测试扩到 `ApprovalQueuePage.test.tsx`（History 标签首次挂载才发起调用、
+  状态过滤变更重新请求、403 走 forbidden 空态、Load more 追加下一页）。均通过（本地 vitest；
+  DB 集成测试本地无 Postgres/Docker，只标注了 gate，CI 才真正跑）。
+
 ### S5.6 稳定性缺陷（遗留 30 与 Task 崩溃缺口）
 
 - **遗留 30**：真实模型下 docker_restart 一次 ActionRequest `executed`、容器已重启但 Task `failed` 且

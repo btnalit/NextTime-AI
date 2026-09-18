@@ -1263,6 +1263,34 @@ const governanceCapabilities: readonly Capability[] = [
     description: 'Read one ActionRequest.',
   },
   {
+    // S5.5 leftover 21 (docs/STATUS.md row 21, docs/development-tasks.md §5b S5.5 item 8): the
+    // console's "审批历史" read — every ActionRequest regardless of status, unlike `list_pending`'s
+    // hardcoded `pending_approval` filter. Same I14 visibility as `list_pending`/`get_action`
+    // (`governance/approval/reads.ts`'s `listActionRequestsForApprover` doc comment): the owner
+    // sees every row, any other role only rows matching one of their own active `capability_grants`
+    // — a row a caller may not see must not appear here even once it is no longer pending.
+    name: 'list_action_requests',
+    group: 'governance',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'operator',
+    paramsSchema: z
+      .object({
+        status: z.union([ActionRequestStatusSchema, z.array(ActionRequestStatusSchema)]).optional(),
+        gatekeeperId: id.optional(),
+        // Same default/max as `search` (docs/wire-contract-conventions.md §3;
+        // substrate/graph/store.ts `DEFAULT_SEARCH_LIMIT`/`MAX_SEARCH_LIMIT`).
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.ActionRequestWireSchema),
+    description:
+      'List ActionRequests regardless of status (the approval history), optionally filtered by ' +
+      'status or gatekeeperId; keyset-paginated (limit, cursor → nextCursor). Same I14 visibility ' +
+      'as list_pending.',
+  },
+  {
     name: 'set_auto_approved_action_kind',
     group: 'governance',
     mode: 'execute',
@@ -2574,6 +2602,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   'reject',
   'list_pending',
   'get_action',
+  // S5.5 leftover 21 — same human-only defense-in-depth as its two siblings right above.
+  'list_action_requests',
   'set_auto_approved_action_kind',
   'grant_capability',
   'revoke_capability',
