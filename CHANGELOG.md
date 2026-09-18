@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.0](https://github.com/btnalit/NextTime-AI/compare/v0.12.0...v0.13.0) (2026-09-18)
+
+
+### Features
+
+* **scripts:** S5.7 report-usage.sh + post-release real-model regression routine ([#202](https://github.com/btnalit/NextTime-AI/issues/202)) ([d41478e](https://github.com/btnalit/NextTime-AI/commit/d41478e384f2ac94c061c74350d7d1b35d078e8a))
+* **scripts:** S5.8 drill-install / drill-upgrade + release.md migration reversibility ([#205](https://github.com/btnalit/NextTime-AI/issues/205)) ([53ed124](https://github.com/btnalit/NextTime-AI/commit/53ed1249a923758e986197f72c2a6535831142b6))
+* **scripts:** S5.8 make demo — ephemeral workspace, collector, three questions, Markdown result ([#204](https://github.com/btnalit/NextTime-AI/issues/204)) ([3fc8ebf](https://github.com/btnalit/NextTime-AI/commit/3fc8ebf726467fd0a6af9b8173e4ca011b13c673))
+
+
+### Bug Fixes
+
+* **kernel:** widen the FakeAgentRuntime ws test's metadata wait to 12s (leftover 25 recurrence) ([#206](https://github.com/btnalit/NextTime-AI/issues/206)) ([503308f](https://github.com/btnalit/NextTime-AI/commit/503308fc6a91baf6a471ffcedec54e9e349075c5))
+
 ## [0.12.0](https://github.com/btnalit/NextTime-AI/compare/v0.11.0...v0.12.0) (2026-09-18)
 
 
