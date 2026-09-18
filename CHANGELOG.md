@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.11.0](https://github.com/btnalit/NextTime-AI/compare/v0.10.1...v0.11.0) (2026-09-18)
+
+
+### Features
+
+* **kernel:** S5.1 — I2 enforced at the Link write point (ontology_violation), workspace reject / warn policy ([#191](https://github.com/btnalit/NextTime-AI/issues/191)) ([07bdf29](https://github.com/btnalit/NextTime-AI/commit/07bdf2900bb5126ffb70b54699a8da45bf452d17))
+* **kernel:** S5.2 — Fact freshness, not_reobserved observation window, gate observations name their Source ([#193](https://github.com/btnalit/NextTime-AI/issues/193)) ([b00ddb7](https://github.com/btnalit/NextTime-AI/commit/b00ddb71b309ffc031ea2887ca445e2a1449de74))
+* **web:** S5.1 — ontology-enforcement switch (reject / warn) in the platform workspace drawer ([#192](https://github.com/btnalit/NextTime-AI/issues/192)) ([211bd2f](https://github.com/btnalit/NextTime-AI/commit/211bd2f7f2411a8ef269db7d56b654ef9bad4619))
+
+
+### Bug Fixes
+
+* **compose:** read_only + cap_drop + no-new-privileges for postgres, both packaged gates, gate-host and caddy (leftover 20) ([#188](https://github.com/btnalit/NextTime-AI/issues/188)) ([ea94444](https://github.com/btnalit/NextTime-AI/commit/ea944440402603888700f585e7a8372f091db065))
+* **kernel:** create_connection refuses platform-catalog gate addresses (leftover 36) ([#186](https://github.com/btnalit/NextTime-AI/issues/186)) ([4d19a1b](https://github.com/btnalit/NextTime-AI/commit/4d19a1b11906c49213e1485146f034adc56b3010))
+* **prompts:** S5.4 — prompts and tool descriptions match their contracts; prompt-contract guard; fake-llm rejects non-object tool schemas ([#190](https://github.com/btnalit/NextTime-AI/issues/190)) ([57d6388](https://github.com/btnalit/NextTime-AI/commit/57d6388c62c6c64988cc0a01050787b07b24320e))
+* **worker-supervisor:** reconcile() unions the egress deny label with the registered list; drift folds into recreate (leftover 22) ([#187](https://github.com/btnalit/NextTime-AI/issues/187)) ([7c9d7d9](https://github.com/btnalit/NextTime-AI/commit/7c9d7d964917acdf80bf3838bc8d9ee24d9c2b28))
+
 ## [0.10.1](https://github.com/btnalit/NextTime-AI/compare/v0.10.0...v0.10.1) (2026-09-16)
 
 
