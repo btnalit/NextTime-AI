@@ -14,12 +14,14 @@ import {
   buildGetObjectByIdentityQuery,
   buildGetObjectQuery,
   buildInsertFactQuery,
+  buildInvalidateUnobservedFactsQuery,
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
   buildNeighborsQuery,
   buildRecentFactsQuery,
   buildSearchQuery,
   buildStateAtFactsQuery,
+  buildTouchFactObservationQuery,
   buildTraverseQuery,
   buildUpsertObjectQuery,
   buildVerifyFactQuery,
@@ -35,6 +37,7 @@ import {
   type GraphObject,
   type GraphStore,
   type InvalidateFactInput,
+  type InvalidateUnobservedFactsInput,
   MAX_SEARCH_LIMIT,
   type NeighborsInput,
   type SearchInput,
@@ -76,6 +79,7 @@ interface ObjectRow {
   properties: Record<string, unknown>;
   created_at: Date;
   updated_at: Date;
+  last_observed_at: Date | null;
 }
 
 interface FactRow {
@@ -98,6 +102,8 @@ interface FactRow {
   asserted_by: string;
   verified_by: string | null;
   observation_id: string | null;
+  last_observation_id: string | null;
+  last_observed_at: Date | null;
 }
 
 interface TraverseRow {
@@ -118,6 +124,7 @@ function mapObjectRow(row: ObjectRow): GraphObject {
     properties: row.properties,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lastObservedAt: row.last_observed_at,
   };
 }
 
@@ -142,6 +149,8 @@ function mapFactRow(row: FactRow): Fact {
     assertedBy: row.asserted_by,
     verifiedBy: row.verified_by,
     observationId: row.observation_id,
+    lastObservationId: row.last_observation_id,
+    lastObservedAt: row.last_observed_at,
   };
 }
 
@@ -310,6 +319,20 @@ export class SqlGraphStore implements GraphStore {
       const priorFact = mapFactRow(priorRow);
       if (sameFactOrigin(priorOrigin, newOrigin)) {
         if (factContentEquals(priorFact, input)) {
+          // S5.2 (migrations/core/0026): the same Source saw the same Fact again — no new row,
+          // `unchanged` semantics intact, but the freshness clock advances when the writer names
+          // its Observation. The observation window (`invalidateUnobservedFacts`) reads exactly
+          // this clock to tell "seen this run" from "gone".
+          if (input.observationId) {
+            const touch = buildTouchFactObservationQuery(
+              workspaceId,
+              priorRow.id,
+              input.observationId,
+            );
+            const touched = await client.query<FactRow>(touch.text, touch.values as unknown[]);
+            const touchedRow = touched.rows[0];
+            if (touchedRow) return { ...mapFactRow(touchedRow), unchanged: true };
+          }
           return { ...priorFact, unchanged: true };
         }
         // Already ontology-checked above (same identity) — the guarded public `supersedeFact`
@@ -540,6 +563,21 @@ export class SqlGraphStore implements GraphStore {
     return mapFactRow(
       firstRowOrThrow(markResult.rows, () => new FactNotFoundError(workspaceId, input.factId)),
     );
+  }
+
+  /** S5.2 observation window — see `GraphStore.invalidateUnobservedFacts` (store.ts) and
+   *  `buildInvalidateUnobservedFactsQuery` (queries.ts) for the predicate. RLS applies as for any
+   *  other update on the workspace client: only Facts the observing Principal can see are touched,
+   *  which for a collector's own Source is every Fact it ever fed. */
+  async invalidateUnobservedFacts(
+    client: PoolClient,
+    workspaceId: string,
+    input: InvalidateUnobservedFactsInput,
+  ): Promise<readonly string[]> {
+    if (input.objectTypes.length === 0) return [];
+    const query = buildInvalidateUnobservedFactsQuery(workspaceId, input);
+    const result = await client.query<{ id: string }>(query.text, query.values as unknown[]);
+    return result.rows.map((row) => row.id);
   }
 
   /** S3.2 `verify_fact` — see `VerifyFactInput`'s own doc comment in store.ts for why the Evidence

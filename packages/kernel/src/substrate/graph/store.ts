@@ -31,6 +31,10 @@ export interface GraphObject {
   readonly properties: Record<string, unknown>;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+  /** S5.2 (migrations/core/0026): when a Source last observed this Object (`submit_observations`
+   *  advances it on every upsert); `null` for Objects no observing writer has touched. Absence
+   *  never invalidates an Object — its clock simply stops. */
+  readonly lastObservedAt: Date | null;
 }
 
 /** A Link (= Fact) — design doc §5.1.2, §5.4 I3/I4, §5.5, §5.6. */
@@ -62,6 +66,12 @@ export interface Fact {
    *  and every pre-0018 row. `explain(factId)` narrows to it when set (§5.1.3 provenance one
    *  level below the Activity), and falls back to the Activity's whole Observation list otherwise. */
   readonly observationId: string | null;
+  /** S5.2 (migrations/core/0026): the most recent same-origin Observation that re-confirmed this
+   *  Fact with identical content, and when — the origin itself on insert, advanced by
+   *  `assertFact`'s no-op path. A different Source agreeing never advances it (corroboration is not
+   *  re-observation). `null` whenever `observationId` is. */
+  readonly lastObservationId: string | null;
+  readonly lastObservedAt: Date | null;
 }
 
 /** The derived lifecycle state of a Fact row (§5.5) — not a stored column, computed from timestamps. */
@@ -112,6 +122,17 @@ export interface UpsertObjectInput {
   /** Object identity: object_type (above) + these key/value pairs (design doc §16). Upserts by
    *  this key when non-empty; otherwise always inserts a new Object. */
   readonly identity?: Record<string, unknown>;
+  /** S5.2: set by an observing writer (`submit_observations`) to advance `GraphObject.lastObservedAt`;
+   *  omitted by every other writer, which leaves the stored value as it is. */
+  readonly observedAt?: Date;
+}
+
+/** S5.2 observation window — see `GraphStore.invalidateUnobservedFacts`. */
+export interface InvalidateUnobservedFactsInput {
+  readonly sourceId: string;
+  readonly objectTypes: readonly string[];
+  /** The run's Activity start: a Fact last observed strictly before it was not seen in this run. */
+  readonly before: Date;
 }
 
 /**
@@ -465,6 +486,18 @@ export interface GraphStore {
     caller: CallerPrincipal,
     input: InvalidateFactInput,
   ): Promise<Fact>;
+
+  /** S5.2 (docs/development-tasks.md §5b S5.2): the absence half of observation — after a Source
+   *  declared one submission its *complete* view of some ObjectTypes, every still-active Fact of
+   *  that Source starting at an Object of those types that the run did not re-observe is
+   *  invalidated with `invalidation_reason = 'not_reobserved'` (`queries.ts`'s
+   *  `buildInvalidateUnobservedFactsQuery` has the exact predicate). Returns the invalidated Fact
+   *  ids. No outbox event, matching `invalidateFact` (which enqueues none either). */
+  invalidateUnobservedFacts(
+    client: PoolClient,
+    workspaceId: string,
+    input: InvalidateUnobservedFactsInput,
+  ): Promise<readonly string[]>;
 
   verifyFact(
     client: PoolClient,

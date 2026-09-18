@@ -31,7 +31,21 @@ describe('buildUpsertObjectQuery', () => {
     const q = buildUpsertObjectQuery('ws1', { objectType: 'test.thing', properties: { a: 1 } });
     expect(q.text).toContain('insert into objects');
     expect(q.text).not.toContain('on conflict');
-    expect(q.values).toEqual(['ws1', 'test.thing', JSON.stringify({ a: 1 })]);
+    // S5.2: the trailing `last_observed_at` is `null` for every writer that is not an observation.
+    expect(q.values).toEqual(['ws1', 'test.thing', JSON.stringify({ a: 1 }), null]);
+  });
+
+  it('S5.2: an observing writer binds last_observed_at, kept on conflict through coalesce', () => {
+    const observedAt = new Date('2026-09-17T00:00:00Z');
+    const q = buildUpsertObjectQuery('ws1', {
+      objectType: 'test.thing',
+      identity: { k: 'v' },
+      observedAt,
+    });
+    expect(q.text).toContain(
+      'last_observed_at = coalesce(excluded.last_observed_at, objects.last_observed_at)',
+    );
+    expect(q.values.at(-1)).toBe(observedAt);
   });
 
   it('inserts without ON CONFLICT when identity is an empty object', () => {
@@ -55,12 +69,13 @@ describe('buildUpsertObjectQuery', () => {
       'test.thing',
       JSON.stringify({ org: 'example', repo: 'widgets' }),
       JSON.stringify({ stars: 3 }),
+      null,
     ]);
   });
 
   it('defaults properties to {} when omitted', () => {
     const q = buildUpsertObjectQuery('ws1', { objectType: 'test.thing' });
-    expect(q.values.at(-1)).toBe('{}');
+    expect(q.values.at(-2)).toBe('{}');
   });
 });
 

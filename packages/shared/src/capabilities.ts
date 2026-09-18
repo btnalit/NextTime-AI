@@ -1745,12 +1745,31 @@ const ingestCapabilities: readonly Capability[] = [
       .object({
         sourceId: id,
         activityId: id.optional(),
-        observations: z.array(ingestObservationSchema).min(1),
+        observations: z.array(ingestObservationSchema),
+        /** S5.2 observation window: "this submission is this Source's complete view of these ObjectTypes (within this Activity)". Every still-active Fact of this Source that starts at an Object of one of these types and was not re-observed in this Activity is invalidated with reason `not_reobserved`. Declare it on the last submission of a run, only after every collection step succeeded. */
+        window: z
+          .object({
+            complete: z.literal(true),
+            objectTypes: z.array(z.string().min(1)).min(1).max(100),
+          })
+          .strict()
+          .optional(),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, ctx) => {
+        // A submission with nothing to say is only meaningful as a window close — the way a run
+        // whose last phase produced no items still declares its complete view.
+        if (value.observations.length === 0 && value.window === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['observations'],
+            message: 'observations must not be empty unless a window is declared',
+          });
+        }
+      }),
     resultSchema: wire.SubmitObservationsResultWireSchema,
     description:
-      'Submit a batch of Observations from one Activity (collectors, §7.8). Every objectType must be declared by the published ontology with its identityKey fields present; every link’s linkType must be declared and accept source -> target (I2) — a violation fails the whole batch with 400 ontology_violation (or is written and audited when the workspace’s ontology enforcement is warn).',
+      'Submit a batch of Observations from one Activity (collectors, §7.8). Every objectType must be declared by the published ontology with its identityKey fields present; every link’s linkType must be declared and accept source -> target (I2) — a violation fails the whole batch with 400 ontology_violation (or is written and audited when the workspace’s ontology enforcement is warn). Re-observing an unchanged Fact advances its lastObservedAt; `window: {complete: true, objectTypes}` declares this submission the Source’s complete view of those ObjectTypes within the Activity and invalidates (not_reobserved) every Fact of this Source starting at such an Object that the Activity did not re-observe — pass it on a run’s last submission (observations may then be empty).',
   },
 ];
 

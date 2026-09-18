@@ -43,6 +43,7 @@ export type {
   Fact,
   FactLifecycleState,
   GraphObject,
+  InvalidateUnobservedFactsInput,
   GraphStore,
   InvalidateFactInput,
   NeighborsInput,

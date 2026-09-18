@@ -62,7 +62,7 @@ export interface FindMeansInput {
 export const DEFAULT_FIND_MEANS_LIMIT = 20;
 
 const OBJECT_COLUMNS =
-  'workspace_id, id, object_type, identity_key, properties, created_at, updated_at';
+  'workspace_id, id, object_type, identity_key, properties, created_at, updated_at, last_observed_at';
 
 interface ObjectRow {
   workspace_id: string;
@@ -72,6 +72,7 @@ interface ObjectRow {
   properties: Record<string, unknown>;
   created_at: Date;
   updated_at: Date;
+  last_observed_at: Date | null;
 }
 
 function mapObjectRow(row: ObjectRow): GraphObject {
@@ -83,6 +84,7 @@ function mapObjectRow(row: ObjectRow): GraphObject {
     properties: row.properties,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lastObservedAt: row.last_observed_at,
   };
 }
 

@@ -91,6 +91,14 @@ export interface ExplainFactRef {
    * Activity-level list exactly as before.
    */
   readonly observationId: string | null;
+  /** S5.2 (migrations/core/0026, docs/development-tasks.md §5b S5.2): the Fact's lifecycle end
+   *  when it has one — `invalidationReason` is `'not_reobserved'` for a Fact the observation
+   *  window retired (its Source declared a complete view it was not part of). */
+  readonly invalidatedAt: string | null;
+  readonly invalidationReason: string | null;
+  /** S5.2: the latest same-origin Observation that re-confirmed this Fact — "最近何时确认" — or
+   *  `null` for a Fact whose writer named no Observation. Its `source` is the Fact's own Source. */
+  readonly lastObservation: ExplainObservationRef | null;
 }
 
 export interface ExplainDecisionRef {
@@ -166,6 +174,9 @@ interface FactDbRow {
   asserted_by: string;
   verified_by: string | null;
   observation_id: string | null;
+  invalidated_at: Date | null;
+  invalidation_reason: string | null;
+  last_observation_id: string | null;
 }
 
 interface DecisionDbRow {
@@ -280,23 +291,45 @@ async function fetchActivityRef(
 // explain
 // -------------------------------------------------------------------------------------------
 
+/** S5.2: one Observation by id, for `ExplainFactRef.lastObservation` — same RLS reading as
+ *  `fetchObservationRefs`: a Source the caller cannot see reads back as no row → `null`. */
+async function fetchObservationRef(
+  client: PoolClient,
+  workspaceId: string,
+  observationId: string | null,
+): Promise<ExplainObservationRef | null> {
+  if (observationId === null) return null;
+  const result = await client.query<ObservationDbRow>(
+    'select id, source_id, created_at from observations where workspace_id = $1 and id = $2',
+    [workspaceId, observationId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const source = await fetchSourceRef(client, workspaceId, row.source_id);
+  return { id: row.id, createdAt: row.created_at.toISOString(), source };
+}
+
 async function explainFact(
   client: PoolClient,
   workspaceId: string,
   factId: string,
 ): Promise<ExplainResult> {
   const result = await client.query<FactDbRow>(
-    'select id, link_type, epistemic_status, activity_id, asserted_by, verified_by, observation_id from links where workspace_id = $1 and id = $2',
+    `select id, link_type, epistemic_status, activity_id, asserted_by, verified_by, observation_id,
+            invalidated_at, invalidation_reason, last_observation_id
+       from links where workspace_id = $1 and id = $2`,
     [workspaceId, factId],
   );
   const row = result.rows[0];
   if (!row) throw new ExplainNodeNotFoundError('fact', workspaceId, factId);
 
-  const [assertedByPrincipal, verifiedByPrincipal, activity] = await Promise.all([
+  const [assertedByPrincipal, verifiedByPrincipal, activity, lastObservation] = await Promise.all([
     fetchPrincipalRef(client, workspaceId, row.asserted_by),
     fetchPrincipalRef(client, workspaceId, row.verified_by),
     // W5: narrow to the Fact's own Observation when it has one (see `ExplainFactRef.observationId`).
     fetchActivityRef(client, workspaceId, row.activity_id, row.observation_id),
+    // S5.2: the latest same-origin re-confirmation (see `ExplainFactRef.lastObservation`).
+    fetchObservationRef(client, workspaceId, row.last_observation_id),
   ]);
 
   return {
@@ -308,6 +341,9 @@ async function explainFact(
       assertedByPrincipal,
       verifiedByPrincipal,
       observationId: row.observation_id,
+      invalidatedAt: row.invalidated_at ? row.invalidated_at.toISOString() : null,
+      invalidationReason: row.invalidation_reason,
+      lastObservation,
     },
     activity,
   };

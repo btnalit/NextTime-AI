@@ -65,6 +65,9 @@ export const SubmitObservationsResultWireSchema = z
     factsAsserted: z.number().int().nonnegative(),
     factsSuperseded: z.number().int().nonnegative(),
     factsUnchanged: z.number().int().nonnegative(),
+    /** S5.2: Facts of this Source the `window` declared absent — invalidated with
+     *  `invalidation_reason = 'not_reobserved'`; `0` without a `window`. */
+    factsInvalidated: z.number().int().nonnegative(),
     objects: z.array(
       z
         .object({

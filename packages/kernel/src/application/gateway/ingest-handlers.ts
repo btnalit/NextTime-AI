@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { writeAudit } from '../../substrate/audit/index.js';
 import {
   endActivity,
   recordSourceObservation,
@@ -161,10 +162,19 @@ interface IngestObservation {
   readonly links?: readonly IngestLink[];
 }
 
+/** S5.2 observation window — `submit_observations`'s `window` param (packages/shared/src/
+ *  capabilities.ts has the caller-facing wording): this submission is `sourceId`'s *complete*
+ *  view of `objectTypes` within its Activity. */
+interface ObservationWindow {
+  readonly complete: true;
+  readonly objectTypes: readonly string[];
+}
+
 interface SubmitObservationsParams {
   readonly sourceId: string;
   readonly activityId?: string;
   readonly observations: readonly IngestObservation[];
+  readonly window?: ObservationWindow;
 }
 
 /** Thrown when the caller supplies an unknown Source id, or one this caller cannot see (I5.6
@@ -287,6 +297,8 @@ interface SubmitObservationsState {
    *  unchanged inventory sees `factsSuperseded: 0` on its second run, not a number that grows
    *  `links` forever. */
   factsUnchanged: number;
+  /** S5.2: Facts the `window` declared absent, invalidated `not_reobserved` — `0` without a window. */
+  factsInvalidated: number;
   /** One entry per distinct `(objectType, identity)` touched — surfaced back to the caller as
    *  `objects` (`SubmitObservationsResultWireSchema`'s own doc comment,
    *  `packages/shared/src/wire/ingest.ts`, explains why: a dependency-ordered multi-phase
@@ -319,6 +331,8 @@ async function upsertCounted(
     objectType,
     identity,
     properties: properties ?? {},
+    // S5.2 (migrations/core/0026): an ingest is an observation of the Object — advance its clock.
+    observedAt: new Date(),
   });
   const key = identityCacheKey(objectType, identity);
   if (!state.touchedObjects.has(key)) {
@@ -414,6 +428,7 @@ export const submitObservationsHandler: CapabilityHandler = async (
     factsAsserted: 0,
     factsSuperseded: 0,
     factsUnchanged: 0,
+    factsInvalidated: 0,
     touchedObjects: new Map(),
   };
 
@@ -462,6 +477,45 @@ export const submitObservationsHandler: CapabilityHandler = async (
       }
     }
 
+    // S5.2 observation window (docs/development-tasks.md §5b S5.2): after this submission's own
+    // writes have advanced every re-observed Fact's `last_observed_at` to now, everything of this
+    // Source that starts at an Object of the declared types and was last observed *before this
+    // Activity began* is what the run did not see. The Activity's start is the window's start on
+    // purpose — a collector's phases share one Activity, so one window on the last phase covers
+    // the whole run (per-phase windows would invalidate what an earlier phase of the same run
+    // wrote, since phases 2 and 3 both emit Container edges). Strictly `<`: phase 1's own writes
+    // carry the Activity's `now()`, which is "seen in this run". One audit row per window, not per
+    // Fact — a host's first windowed run may retire hundreds of leftover-28 phantoms at once.
+    if (params.window) {
+      const started = await client.query<{ created_at: Date }>(
+        'select created_at from activities where workspace_id = $1 and id = $2',
+        [workspaceId, activityId],
+      );
+      const before = started.rows[0]?.created_at;
+      if (!before) throw new Error(`submit_observations: Activity ${activityId} has no row`);
+      const invalidated = await graphStore.invalidateUnobservedFacts(client, workspaceId, {
+        sourceId: params.sourceId,
+        objectTypes: params.window.objectTypes,
+        before,
+      });
+      state.factsInvalidated = invalidated.length;
+      if (invalidated.length > 0) {
+        await writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: principalId,
+          action: 'facts_not_reobserved',
+          resourceType: 'activity',
+          resourceId: activityId,
+          payload: {
+            sourceId: params.sourceId,
+            objectTypes: [...params.window.objectTypes],
+            count: invalidated.length,
+            sample: invalidated.slice(0, 5),
+          },
+        });
+      }
+    }
+
     if (ownActivityId) await endActivity(client, workspaceId, activityId, 'completed');
   } catch (err) {
     if (ownActivityId) await endActivity(client, workspaceId, activityId, 'failed').catch(() => {});
@@ -475,6 +529,7 @@ export const submitObservationsHandler: CapabilityHandler = async (
       factsAsserted: state.factsAsserted,
       factsSuperseded: state.factsSuperseded,
       factsUnchanged: state.factsUnchanged,
+      factsInvalidated: state.factsInvalidated,
       objects: [...state.touchedObjects.values()],
     },
     resourceType: 'activity',
