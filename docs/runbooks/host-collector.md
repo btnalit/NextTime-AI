@@ -117,7 +117,8 @@ docker compose run --rm --no-deps collector-host-inventory node dist/index.js --
 docker compose logs --tail 20 collector-host-inventory
 ```
 期望看到一行 `"message":"run complete"`，附带 `objectsUpserted`/`factsAsserted`/
-`factsSuperseded` 的非零计数（第一次运行）。
+`factsSuperseded` 的非零计数（第一次运行）；`factsInvalidated`（S5.2）是本轮观察窗口退休的 Fact 数——
+第一次运行为 0，之后每轮等于上一轮以来消失的容器 / 镜像 / 卷 / 网络等对象所带的边数（见 §4.6）。
 
 ### 4.2 图里能看到 `Container runs_on Host`（S3.3 验收原句）
 
@@ -192,6 +193,35 @@ curl -s https://<host>:8443/api/cap/explain \
 # 期望 result.activity.observations[] 里 source.kind 为 host-inventory-collector，
 # 与 4.3 是同一个 Source——phase 4 与 phase 1-3 共用同一个 sourceId/activityId。
 ```
+
+### 4.6（S5.2）新鲜度与缺席：消失的容器的边被退休，对象保留
+
+每轮采集的最后一次 `submit_observations` 带 `window: {complete: true, objectTypes: [...]}`——"本轮是本
+Source 对这些 ObjectType 的完整视图"。内核把同一 Source、以这些类型的对象为起点、本轮没再观察到的活跃
+Fact 置 `invalidatedAt` / `invalidationReason = 'not_reobserved'`；Object 本身不删（身份仍存在），只是
+`lastObservedAt` 不再前进。主机上等价验证（`scripts/accept_s3.sh` 的 `collector_freshness_step` 就是这三步）：
+
+```bash
+# 1. 起一个一次性容器，跑一次采集，找到它的 Container Object 与 runs_on Fact（search 按 properties 文本匹配，
+#    properties.containerId 是完整容器 id）
+docker compose --profile accept-s3 up -d accept-s3-ephemeral
+docker compose run --rm --no-deps collector-host-inventory node dist/index.js --once
+curl -s https://<host>:8443/api/cap/search -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d "{\"query\":\"$(docker compose --profile accept-s3 ps -q accept-s3-ephemeral)\",\"objectType\":\"Container\"}"
+curl -s https://<host>:8443/api/cap/traverse ... -d '{"fromId":"<ephemeral-object-id>","linkType":"runs_on","depth":1}'
+# 2. 删掉它（rm，不是 stop——采集器连停止的容器也列出来），再采集一次
+docker compose --profile accept-s3 rm -sf accept-s3-ephemeral
+docker compose run --rm --no-deps collector-host-inventory node dist/index.js --once
+# 期望 run complete 的 factsInvalidated >= 1
+# 3. 同一个 traverse 不再返回 runs_on 边；explain 该 Fact：invalidatedAt 非空、invalidationReason = not_reobserved；
+#    get_object 该 Container 仍 200
+curl -s https://<host>:8443/api/cap/explain ... -d '{"nodeId":"<fact-id>"}'
+```
+
+仍存在的容器：连续两轮之间 `explain` 其 `runs_on` Fact 的 `result.fact.lastObservation.id` 会变（最近一次同源
+确认），`observationId`（起源）不变。哪些类型进窗口：Host / Image / ComposeProject / Container / Volume /
+Network / Endpoint 固定；Repository 只在配置了仓库路径时；SystemdService / Process 只在对应子采集没有
+`skipped` 时——被跳过的数据源永远不会让它的 Fact 失效。RAGFlow 阶段单独声明 `KnowledgeBase` / `Document`。
 
 **这不是 `kb.list`/`kb.documents` 唯一产生的 KnowledgeBase/Document 写入**——门自己每次
 `observe_operation` 调用也会各自独立写一份低保真的 `{id}`-only KnowledgeBase/Document（经

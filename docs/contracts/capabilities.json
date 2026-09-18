@@ -452,6 +452,18 @@
             "null"
           ]
         },
+        "lastObservationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "linkType": {
           "type": "string"
         },
@@ -520,7 +532,9 @@
         "activityId",
         "assertedBy",
         "verifiedBy",
-        "observationId"
+        "observationId",
+        "lastObservationId",
+        "lastObservedAt"
       ],
       "type": "object"
     }
@@ -1079,6 +1093,114 @@
                   "id": {
                     "type": "string"
                   },
+                  "invalidatedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "invalidationReason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lastObservation": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "type": "string"
+                                  },
+                                  "ownerPrincipal": {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "displayName": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "type": "string"
+                                          },
+                                          "role": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "kind",
+                                          "role",
+                                          "displayName"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "uri": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "visibility": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "kind",
+                                  "uri",
+                                  "visibility",
+                                  "ownerPrincipal"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "createdAt",
+                          "source"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "linkType": {
                     "type": "string"
                   },
@@ -1132,7 +1254,10 @@
                   "epistemicStatus",
                   "assertedByPrincipal",
                   "verifiedByPrincipal",
-                  "observationId"
+                  "observationId",
+                  "invalidatedAt",
+                  "invalidationReason",
+                  "lastObservation"
                 ],
                 "type": "object"
               },
@@ -2149,6 +2274,18 @@
                   "null"
                 ]
               },
+              "lastObservationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastObservedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "linkType": {
                 "type": "string"
               },
@@ -2217,7 +2354,9 @@
               "activityId",
               "assertedBy",
               "verifiedBy",
-              "observationId"
+              "observationId",
+              "lastObservationId",
+              "lastObservedAt"
             ],
             "type": "object"
           },
@@ -3056,6 +3195,114 @@
             "id": {
               "type": "string"
             },
+            "invalidatedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "invalidationReason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lastObservation": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "ownerPrincipal": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "displayName": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "role": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "kind",
+                                    "role",
+                                    "displayName"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "uri": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "visibility": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "uri",
+                            "visibility",
+                            "ownerPrincipal"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "createdAt",
+                    "source"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "linkType": {
               "type": "string"
             },
@@ -3109,7 +3356,10 @@
             "epistemicStatus",
             "assertedByPrincipal",
             "verifiedByPrincipal",
-            "observationId"
+            "observationId",
+            "invalidatedAt",
+            "invalidationReason",
+            "lastObservation"
           ],
           "type": "object"
         },
@@ -3314,6 +3564,12 @@
                   }
                 ]
               },
+              "lastObservedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "objectType": {
                 "type": "string"
               },
@@ -3331,7 +3587,8 @@
               "identityKey",
               "properties",
               "createdAt",
-              "updatedAt"
+              "updatedAt",
+              "lastObservedAt"
             ],
             "type": "object"
           },
@@ -4127,6 +4384,18 @@
                   "null"
                 ]
               },
+              "lastObservationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastObservedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "linkType": {
                 "type": "string"
               },
@@ -4195,7 +4464,9 @@
               "activityId",
               "assertedBy",
               "verifiedBy",
-              "observationId"
+              "observationId",
+              "lastObservationId",
+              "lastObservedAt"
             ],
             "type": "object"
           },
@@ -4617,6 +4888,12 @@
                 }
               ]
             },
+            "lastObservedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "objectType": {
               "type": "string"
             },
@@ -4634,7 +4911,8 @@
             "identityKey",
             "properties",
             "createdAt",
-            "updatedAt"
+            "updatedAt",
+            "lastObservedAt"
           ],
           "type": "object"
         },
@@ -5405,6 +5683,18 @@
             "null"
           ]
         },
+        "lastObservationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "linkType": {
           "type": "string"
         },
@@ -5473,7 +5763,9 @@
         "activityId",
         "assertedBy",
         "verifiedBy",
-        "observationId"
+        "observationId",
+        "lastObservationId",
+        "lastObservedAt"
       ],
       "type": "object"
     }
@@ -10410,6 +10702,18 @@
                   "null"
                 ]
               },
+              "lastObservationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastObservedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "linkType": {
                 "type": "string"
               },
@@ -10478,7 +10782,9 @@
               "activityId",
               "assertedBy",
               "verifiedBy",
-              "observationId"
+              "observationId",
+              "lastObservationId",
+              "lastObservedAt"
             ],
             "type": "object"
           },
@@ -10506,6 +10812,12 @@
                     }
                   ]
                 },
+                "lastObservedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "objectType": {
                   "type": "string"
                 },
@@ -10523,7 +10835,8 @@
                 "identityKey",
                 "properties",
                 "createdAt",
-                "updatedAt"
+                "updatedAt",
+                "lastObservedAt"
               ],
               "type": "object"
             },
@@ -12063,6 +12376,12 @@
                   }
                 ]
               },
+              "lastObservedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "objectType": {
                 "type": "string"
               },
@@ -12080,7 +12399,8 @@
               "identityKey",
               "properties",
               "createdAt",
-              "updatedAt"
+              "updatedAt",
+              "lastObservedAt"
             ],
             "type": "object"
           },
@@ -13583,6 +13903,18 @@
                   "null"
                 ]
               },
+              "lastObservationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastObservedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "linkType": {
                 "type": "string"
               },
@@ -13651,7 +13983,9 @@
               "activityId",
               "assertedBy",
               "verifiedBy",
-              "observationId"
+              "observationId",
+              "lastObservationId",
+              "lastObservedAt"
             ],
             "type": "object"
           },
@@ -13679,6 +14013,12 @@
                     }
                   ]
                 },
+                "lastObservedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "objectType": {
                   "type": "string"
                 },
@@ -13696,7 +14036,8 @@
                 "identityKey",
                 "properties",
                 "createdAt",
-                "updatedAt"
+                "updatedAt",
+                "lastObservedAt"
               ],
               "type": "object"
             },
@@ -13822,12 +14163,34 @@
             ],
             "type": "object"
           },
-          "minItems": 1,
           "type": "array"
         },
         "sourceId": {
           "minLength": 1,
           "type": "string"
+        },
+        "window": {
+          "additionalProperties": false,
+          "properties": {
+            "complete": {
+              "const": true,
+              "type": "boolean"
+            },
+            "objectTypes": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "complete",
+            "objectTypes"
+          ],
+          "type": "object"
         }
       },
       "required": [
@@ -13844,6 +14207,10 @@
           "type": "string"
         },
         "factsAsserted": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "factsInvalidated": {
           "minimum": 0,
           "type": "integer"
         },
@@ -13890,6 +14257,7 @@
         "factsAsserted",
         "factsSuperseded",
         "factsUnchanged",
+        "factsInvalidated",
         "objects"
       ],
       "type": "object"
@@ -14031,6 +14399,18 @@
             "null"
           ]
         },
+        "lastObservationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "linkType": {
           "type": "string"
         },
@@ -14099,7 +14479,9 @@
         "activityId",
         "assertedBy",
         "verifiedBy",
-        "observationId"
+        "observationId",
+        "lastObservationId",
+        "lastObservedAt"
       ],
       "type": "object"
     }
@@ -15062,6 +15444,18 @@
             "null"
           ]
         },
+        "lastObservationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "linkType": {
           "type": "string"
         },
@@ -15130,7 +15524,9 @@
         "activityId",
         "assertedBy",
         "verifiedBy",
-        "observationId"
+        "observationId",
+        "lastObservationId",
+        "lastObservedAt"
       ],
       "type": "object"
     }

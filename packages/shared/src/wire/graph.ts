@@ -18,6 +18,8 @@ export const ObjectWireSchema = z
     properties: z.record(z.string(), z.unknown()),
     createdAt: z.string(),
     updatedAt: z.string(),
+    /** S5.2: when a Source last observed this Object (kernel migration 0026), or `null`. */
+    lastObservedAt: z.string().nullable(),
   })
   .strict();
 export type ObjectWire = z.infer<typeof ObjectWireSchema>;
@@ -43,6 +45,10 @@ export const FactWireSchema = z
     verifiedBy: z.string().nullable(),
     /** W5: the single Observation that fed this Fact, or `null` (see kernel migration 0018). */
     observationId: z.string().nullable(),
+    /** S5.2 (kernel migration 0026): the latest same-origin Observation that re-confirmed this
+     *  Fact and when — the origin itself on a fresh Fact; `null` whenever `observationId` is. */
+    lastObservationId: z.string().nullable(),
+    lastObservedAt: z.string().nullable(),
   })
   .strict();
 export type FactWire = z.infer<typeof FactWireSchema>;
@@ -122,6 +128,13 @@ const ExplainFactRefSchema = z
     verifiedByPrincipal: ExplainPrincipalRefSchema,
     /** W5: when non-null, `activity.observations` is narrowed to exactly this Observation. */
     observationId: z.string().nullable(),
+    /** S5.2: the Fact's lifecycle end, when it has one — `not_reobserved` is the observation
+     *  window's reason (the Source declared a complete view and this Fact was not in it). */
+    invalidatedAt: z.string().nullable(),
+    invalidationReason: z.string().nullable(),
+    /** S5.2: the latest same-origin Observation that re-confirmed this Fact (its own Source and
+     *  time), or `null` — "最近何时确认" for a Fact an agent is about to rely on. */
+    lastObservation: ExplainObservationRefSchema.nullable(),
   })
   .strict();
 

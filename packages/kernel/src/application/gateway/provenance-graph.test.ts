@@ -18,6 +18,9 @@ function factStep(overrides: Partial<NonNullable<ExplainResult['fact']>> = {}): 
       assertedByPrincipal: { id: 'human-1', kind: 'human', role: 'owner', displayName: 'Alice' },
       verifiedByPrincipal: null,
       observationId: null,
+      invalidatedAt: null,
+      invalidationReason: null,
+      lastObservation: null,
       ...overrides,
     },
     activity: {

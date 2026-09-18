@@ -1034,6 +1034,18 @@ services:
     networks: [control]
     restart: "no"
 
+  # accept-s3 (S5.2 acceptance-only fixture; profiles: ["accept-s3"] — never started by plain
+  # `docker compose up`). scripts/accept_s3.sh's `collector_freshness_step` starts it, lets the
+  # collector observe it twice, then `rm -sf`s it and runs the collector once more: its `runs_on`
+  # Fact must be retired `not_reobserved` (migrations/core/0026, STATUS leftover 28) while its
+  # Container Object stays. `rm`, not `stop`: the collector lists stopped containers too.
+  accept-s3-ephemeral:
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+    profiles: ["accept-s3"]
+    networks: [control]
+    restart: "no"
+
   backup:
     image: postgres:17-alpine # 与 postgres 同大版本
     entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config/gatekeepers/caddy tar.gz，保留 N 份（S1.12）

@@ -276,13 +276,14 @@ collector_fixtures_step() {
 # Runs `collector-host-inventory --once`, returning its combined stdout+stderr — callers parse
 # the "run complete" JSON line out of it (collectors/host-inventory/src/run.ts's own
 # `consoleLogger`: one `console.log(JSON.stringify({level:'info', message:'run complete',
-# objectsUpserted, factsAsserted, factsSuperseded}))` line per run).
+# objectsUpserted, factsAsserted, factsSuperseded, factsInvalidated}))` line per run —
+# `factsInvalidated` since S5.2, what the run's observation window retired).
 run_collector_once() {
   docker compose run --rm --no-deps -T collector-host-inventory node dist/index.js --once </dev/null 2>&1
 }
 
 collector_run_complete_field() {
-  # $1 = combined collector output, $2 = field name (objectsUpserted|factsAsserted|factsSuperseded)
+  # $1 = combined collector output, $2 = field name (objectsUpserted|factsAsserted|factsSuperseded|factsInvalidated)
   printf '%s\n' "$1" | grep '"message":"run complete"' | tail -1 | sed -n "s/.*\"$2\":\([0-9]*\).*/\1/p"
 }
 
@@ -454,6 +455,104 @@ collector_conflict_positive_step() {
     *) fail "collector-conflict-positive-open-count" "expected exactly 1 open Conflict after the contradicting cross-Source assertion, got: $conflict_summary ($(parse_kv "$out" BODY))" ;;
   esac
   pass "collector-conflict-positive-open-count" "1 open Conflict: $conflict_summary"
+}
+
+# S5.2 (docs/development-tasks.md §5b S5.2; migrations core 0026 / 0027; STATUS leftovers 28 / 38):
+# freshness and absence, on a throwaway container (`accept-s3-ephemeral`, profile accept-s3 —
+# never part of the ordinary stack). Three collector runs:
+#   run 1 — the fixture's Container Object and its `runs_on` Fact appear; the Fact's last
+#           confirmation is its origin Observation;
+#   run 2 — `factsAsserted=0` and the Fact's `lastObservation` moved to a newer Observation. This
+#           run is also the live check for core 0027: `collector_conflict_positive_step` above left
+#           `$container_id`'s `runs_on` identity with an open Conflict (the second Source's newer
+#           row), and before 0027 the collector landed on that row instead of its own —
+#           factsAsserted=1, a second Conflict, and its own row retired by its own window;
+#   run 3 — the fixture is gone (`docker compose rm -sf`; the collector lists stopped containers
+#           too, so `stop` would not do): `factsInvalidated>=1`, `traverse` from the fixture's
+#           Object has no `runs_on` edge, `explain` on the Fact shows `invalidatedAt` and
+#           `invalidationReason=not_reobserved`, and the Object itself is still there (absence never
+#           deletes an Object). Starts with an idempotent `rm -sf` so an aborted earlier run cannot
+#           poison it; `factsInvalidated` is not asserted on runs 1–2 (whatever else on the host came
+#           and went between runs is not this step's business).
+collector_freshness_step() {
+  docker compose --profile accept-s3 rm -sf accept-s3-ephemeral >/dev/null 2>&1 || true
+  up_out=$(docker compose --profile accept-s3 up -d accept-s3-ephemeral 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "freshness-fixture-up" "docker compose up failed: $(printf '%s' "$up_out" | tail -20)"
+  ephemeral_id=$(docker compose --profile accept-s3 ps -q accept-s3-ephemeral)
+  [ -n "$ephemeral_id" ] || fail "freshness-fixture-up" "docker compose ps -q accept-s3-ephemeral returned nothing"
+  pass "freshness-fixture-up" "accept-s3-ephemeral container=$ephemeral_id"
+
+  out=$(run_collector_once)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "freshness-run-1" "collector-host-inventory --once exited $rc: $(printf '%s' "$out" | tail -20)"
+  # `search` matches `properties::text ilike '%<query>%'`; the collector writes the full container
+  # id into `properties.containerId`.
+  out=$(cap "$OWNER_KEY" search "{\"query\":\"$ephemeral_id\",\"objectType\":\"Container\"}" "d.result.items[0]&&d.result.items[0].id||''")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "freshness-run-1" "search HTTP $status: $(parse_kv "$out" BODY)"
+  ephemeral_object_id=$(parse_kv "$out" EXTRACTED)
+  [ -n "$ephemeral_object_id" ] || fail "freshness-run-1" "no Container Object for $ephemeral_id after run 1: $(parse_kv "$out" BODY)"
+  out=$(cap "$OWNER_KEY" traverse "{\"fromId\":\"$ephemeral_object_id\",\"linkType\":\"runs_on\",\"depth\":1}" "d.result.edges[0]&&d.result.edges[0].linkId||''")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "freshness-run-1" "traverse HTTP $status: $(parse_kv "$out" BODY)"
+  ephemeral_fact_id=$(parse_kv "$out" EXTRACTED)
+  [ -n "$ephemeral_fact_id" ] || fail "freshness-run-1" "no runs_on edge from the fixture's Container $ephemeral_object_id: $(parse_kv "$out" BODY)"
+  out=$(cap "$OWNER_KEY" explain "{\"nodeId\":\"$ephemeral_fact_id\"}" "JSON.stringify({origin: d.result.fact&&d.result.fact.observationId, last: d.result.fact&&d.result.fact.lastObservation&&d.result.fact.lastObservation.id})")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "freshness-run-1" "explain HTTP $status: $(parse_kv "$out" BODY)"
+  observation_1=$(parse_kv "$out" EXTRACTED)
+  case "$observation_1" in
+    *'"origin":null'* | *'"last":null'*) fail "freshness-run-1" "explain(fact $ephemeral_fact_id): expected the origin Observation to also be the last one, got $observation_1" ;;
+  esac
+  pass "freshness-run-1" "fixture Container=$ephemeral_object_id runs_on Fact=$ephemeral_fact_id $observation_1"
+
+  sleep 1
+  out=$(run_collector_once)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "freshness-run-2" "collector-host-inventory --once exited $rc: $(printf '%s' "$out" | tail -20)"
+  facts_asserted=$(collector_run_complete_field "$out" factsAsserted)
+  [ "$facts_asserted" = "0" ] || fail "freshness-run-2" "factsAsserted=$facts_asserted on a re-observation (expected 0 — every Fact, including the one under an open Conflict, must resolve on the collector's own row, core 0027): $(printf '%s' "$out" | tail -20)"
+  out=$(cap "$OWNER_KEY" explain "{\"nodeId\":\"$ephemeral_fact_id\"}" "JSON.stringify({origin: d.result.fact&&d.result.fact.observationId, last: d.result.fact&&d.result.fact.lastObservation&&d.result.fact.lastObservation.id})")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "freshness-run-2" "explain HTTP $status: $(parse_kv "$out" BODY)"
+  observation_2=$(parse_kv "$out" EXTRACTED)
+  [ "$observation_2" != "$observation_1" ] || fail "freshness-run-2" "explain(fact $ephemeral_fact_id): lastObservation did not advance on re-observation: $observation_2"
+  out=$(cap "$OWNER_KEY" list_conflicts '{"status":"open"}' "d.result.items.length")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "freshness-run-2" "list_conflicts HTTP $status: $(parse_kv "$out" BODY)"
+  open_count=$(parse_kv "$out" EXTRACTED)
+  [ "$open_count" = "1" ] || fail "freshness-run-2" "$open_count open Conflict(s) after the collector re-observed the contradicted identity (expected still exactly 1 — core 0027): $(parse_kv "$out" BODY)"
+  pass "freshness-run-2" "factsAsserted=0, lastObservation advanced ($observation_2), still 1 open Conflict"
+
+  rm_out=$(docker compose --profile accept-s3 rm -sf accept-s3-ephemeral 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "freshness-fixture-rm" "docker compose rm -sf failed: $(printf '%s' "$rm_out" | tail -20)"
+  out=$(run_collector_once)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "freshness-run-3" "collector-host-inventory --once exited $rc: $(printf '%s' "$out" | tail -20)"
+  facts_invalidated=$(collector_run_complete_field "$out" factsInvalidated)
+  [ -n "$facts_invalidated" ] && [ "$facts_invalidated" -ge 1 ] 2>/dev/null || fail "freshness-run-3" "factsInvalidated=$facts_invalidated after removing the fixture (expected >= 1): $(printf '%s' "$out" | tail -20)"
+  out=$(cap "$OWNER_KEY" traverse "{\"fromId\":\"$ephemeral_object_id\",\"linkType\":\"runs_on\",\"depth\":1}" "d.result.edges.length")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "freshness-run-3" "traverse HTTP $status: $(parse_kv "$out" BODY)"
+  edge_count=$(parse_kv "$out" EXTRACTED)
+  [ "$edge_count" = "0" ] || fail "freshness-run-3" "traverse(runs_on) from the removed fixture's Container still returns $edge_count edge(s) (expected 0): $(parse_kv "$out" BODY)"
+  out=$(cap "$OWNER_KEY" explain "{\"nodeId\":\"$ephemeral_fact_id\"}" "JSON.stringify({invalidatedAt: d.result.fact&&d.result.fact.invalidatedAt, reason: d.result.fact&&d.result.fact.invalidationReason})")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "freshness-run-3" "explain HTTP $status: $(parse_kv "$out" BODY)"
+  ended=$(parse_kv "$out" EXTRACTED)
+  case "$ended" in
+    *'"reason":"not_reobserved"'*) : ;;
+    *) fail "freshness-run-3" "explain(fact $ephemeral_fact_id): expected invalidationReason=not_reobserved, got $ended" ;;
+  esac
+  case "$ended" in
+    *'"invalidatedAt":null'*) fail "freshness-run-3" "explain(fact $ephemeral_fact_id): invalidatedAt is null: $ended" ;;
+  esac
+  out=$(cap "$OWNER_KEY" get_object "{\"objectId\":\"$ephemeral_object_id\"}" "d.result&&d.result.objectType||''")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "freshness-run-3" "get_object(removed fixture's Container $ephemeral_object_id) HTTP $status — absence must never delete an Object: $(parse_kv "$out" BODY)"
+  pass "freshness-run-3" "factsInvalidated=$facts_invalidated, no runs_on edge, Fact $ended, Object retained"
 }
 
 # S3.9 (c): "哪个服务依赖哪个" — the entry agent's chat reply (deploy/fake-llm/server.mjs's
@@ -639,6 +738,7 @@ collector_first_run_step
 ontology_guard_step
 collector_second_run_step
 collector_conflict_positive_step
+collector_freshness_step
 if [ "$REAL" -eq 1 ]; then
   real_chat_dependency_step
 else

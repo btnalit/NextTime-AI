@@ -32,6 +32,7 @@ describe('toNodeResponse', () => {
       properties: { hostname: 'db-1', ip: '192.0.2.10' },
       createdAt: new Date('2026-01-01T00:00:00Z'),
       updatedAt: new Date('2026-01-02T00:00:00Z'),
+      lastObservedAt: null,
     };
     const response = toNodeResponse(object);
     expect(response).toMatchObject({
@@ -68,6 +69,8 @@ describe('toEdgeResponse', () => {
       assertedBy: 'human-1',
       verifiedBy: null,
       observationId: null,
+      lastObservationId: null,
+      lastObservedAt: null,
     };
     const response = toEdgeResponse(fact);
     expect(response).toMatchObject({

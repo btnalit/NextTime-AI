@@ -41,6 +41,7 @@ export function toWireObject(object: GraphObject) {
     properties: object.properties,
     createdAt: object.createdAt.toISOString(),
     updatedAt: object.updatedAt.toISOString(),
+    lastObservedAt: object.lastObservedAt ? object.lastObservedAt.toISOString() : null,
   };
 }
 
@@ -64,6 +65,8 @@ export function toWireFact(fact: Fact) {
     assertedBy: fact.assertedBy,
     verifiedBy: fact.verifiedBy,
     observationId: fact.observationId,
+    lastObservationId: fact.lastObservationId,
+    lastObservedAt: fact.lastObservedAt ? fact.lastObservedAt.toISOString() : null,
   };
 }
 

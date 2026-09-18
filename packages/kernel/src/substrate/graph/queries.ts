@@ -26,10 +26,10 @@ export interface SqlQuery {
 const FACT_COLUMNS = `workspace_id, id, link_type, source_object_id, target_object_id, properties,
   valid_from, valid_until, recorded_at, superseded_at, invalidated_at, invalidation_reason,
   supersedes_id, epistemic_status, confidence, activity_id, asserted_by, verified_by,
-  observation_id`;
+  observation_id, last_observation_id, last_observed_at`;
 
 const OBJECT_COLUMNS =
-  'workspace_id, id, object_type, identity_key, properties, created_at, updated_at';
+  'workspace_id, id, object_type, identity_key, properties, created_at, updated_at, last_observed_at';
 
 function hasOwnKeys(value: Record<string, unknown> | undefined): value is Record<string, unknown> {
   return value !== undefined && Object.keys(value).length > 0;
@@ -64,14 +64,18 @@ const LINK_VISIBLE_PREDICATE = 'link_visible_to_caller(l.workspace_id, l.activit
  */
 export function buildUpsertObjectQuery(workspaceId: string, input: UpsertObjectInput): SqlQuery {
   const properties = input.properties ?? {};
+  // S5.2 (migrations/core/0026): an observing writer advances the Object's freshness clock; every
+  // other writer leaves it alone (`coalesce` keeps the stored value when none is given).
+  const observedAt = input.observedAt ?? null;
 
   if (hasOwnKeys(input.identity)) {
     return {
       text: `
-        insert into objects (workspace_id, object_type, identity_key, properties)
-        values ($1, $2, $3::jsonb, $4::jsonb)
+        insert into objects (workspace_id, object_type, identity_key, properties, last_observed_at)
+        values ($1, $2, $3::jsonb, $4::jsonb, $5::timestamptz)
         on conflict (workspace_id, object_type, identity_key) where identity_key is not null
-        do update set properties = objects.properties || excluded.properties, updated_at = now()
+        do update set properties = objects.properties || excluded.properties, updated_at = now(),
+                      last_observed_at = coalesce(excluded.last_observed_at, objects.last_observed_at)
         returning ${OBJECT_COLUMNS}
       `,
       values: [
@@ -79,17 +83,18 @@ export function buildUpsertObjectQuery(workspaceId: string, input: UpsertObjectI
         input.objectType,
         JSON.stringify(input.identity),
         JSON.stringify(properties),
+        observedAt,
       ],
     };
   }
 
   return {
     text: `
-      insert into objects (workspace_id, object_type, properties)
-      values ($1, $2, $3::jsonb)
+      insert into objects (workspace_id, object_type, properties, last_observed_at)
+      values ($1, $2, $3::jsonb, $4::timestamptz)
       returning ${OBJECT_COLUMNS}
     `,
-    values: [workspaceId, input.objectType, JSON.stringify(properties)],
+    values: [workspaceId, input.objectType, JSON.stringify(properties), observedAt],
   };
 }
 
@@ -221,8 +226,9 @@ export function buildInsertFactQuery(workspaceId: string, params: InsertFactPara
       insert into links
         (workspace_id, link_type, source_object_id, target_object_id, properties, valid_from,
          valid_until, epistemic_status, confidence, activity_id, asserted_by, supersedes_id,
-         observation_id)
-      values ($1, $2, $3, $4, $5::jsonb, coalesce($6::timestamptz, now()), $7::timestamptz, $8, $9, $10, $11, $12, $13)
+         observation_id, last_observation_id, last_observed_at)
+      values ($1, $2, $3, $4, $5::jsonb, coalesce($6::timestamptz, now()), $7::timestamptz, $8, $9, $10, $11, $12,
+              $13::uuid, $13::uuid, case when $13::uuid is null then null else now() end)
       returning ${FACT_COLUMNS}
     `,
     values: [
@@ -240,6 +246,71 @@ export function buildInsertFactQuery(workspaceId: string, params: InsertFactPara
       params.supersedesId,
       params.observationId,
     ],
+  };
+}
+
+/** S5.2 (migrations/core/0026): `assertFact`'s idempotent no-op path — the same Source saw the
+ *  same Fact again with identical content — advances the Fact's freshness clock instead of
+ *  writing nothing. Content columns stay untouched (I4's trigger never names these two). */
+export function buildTouchFactObservationQuery(
+  workspaceId: string,
+  factId: string,
+  observationId: string,
+): SqlQuery {
+  return {
+    text: `
+      update links set last_observation_id = $3, last_observed_at = now()
+      where workspace_id = $1 and id = $2
+      returning ${FACT_COLUMNS}
+    `,
+    values: [workspaceId, factId, observationId],
+  };
+}
+
+/**
+ * S5.2 observation window (`submit_observations` `window.complete`; docs/development-tasks.md
+ * §5b S5.2): invalidates every still-active Fact that (a) belongs to `sourceId` — through its
+ * latest / origin Observation, or, for a row that names no Observation at all (pre-0018, or any
+ * row never re-observed since 0026 — exactly leftover 28's phantoms), through its Activity's
+ * Observations, the same fallback `resolveFactOrigin` uses; (b) starts at an Object of one of
+ * `objectTypes` — a submitted item is an Object plus its outgoing Links, so an item's absence is
+ * the absence of its source Object; (c) was last observed strictly before `before` (the run's
+ * Activity start — everything this run re-observed got `last_observed_at = now()`, at or after
+ * that instant, so `<` is "not seen in this run"). Returns the invalidated ids.
+ */
+export function buildInvalidateUnobservedFactsQuery(
+  workspaceId: string,
+  input: {
+    readonly sourceId: string;
+    readonly objectTypes: readonly string[];
+    readonly before: Date;
+  },
+): SqlQuery {
+  return {
+    text: `
+      update links l
+        set invalidated_at = now(), invalidation_reason = 'not_reobserved'
+      from objects s
+      where l.workspace_id = $1
+        and l.superseded_at is null
+        and l.invalidated_at is null
+        and s.workspace_id = l.workspace_id
+        and s.id = l.source_object_id
+        and s.object_type = any($3::text[])
+        and coalesce(l.last_observed_at, l.recorded_at) < $4::timestamptz
+        and exists (
+          select 1 from observations o
+          where o.workspace_id = l.workspace_id
+            and o.source_id = $2
+            and (
+              o.id = coalesce(l.last_observation_id, l.observation_id)
+              or (l.last_observation_id is null and l.observation_id is null
+                  and o.activity_id = l.activity_id)
+            )
+        )
+      returning l.id
+    `,
+    values: [workspaceId, input.sourceId, [...input.objectTypes], input.before],
   };
 }
 
@@ -261,12 +332,12 @@ export function buildGetFactForUpdateQuery(workspaceId: string, factId: string):
  * reasoning). The function's own `for update` (same convention as `buildGetFactForUpdateQuery`)
  * locks the row for the rest of `assertFact`'s transaction, so two concurrent assertions against
  * the same identity serialize rather than both reading "no prior Fact" and both inserting
- * independently. Only the *most recently recorded* still-active Fact is considered (the function's
- * own `order by recorded_at desc limit 1`) — after a Conflict has been opened once, more than one
- * Fact can be simultaneously `recorded` for the same identity (that is the whole point of "keep
- * both"); a third assertion is compared against the latest of those, not exhaustively against
- * every open side (see `conflicts.ts`'s own module comment for why this scope boundary is
- * acceptable for S3.2).
+ * independently. Returns *every* still-active Fact of the identity, newest first (migrations/core/
+ * 0027; 0017 returned only the newest) — after a Conflict has been opened once, more than one Fact
+ * can be simultaneously `recorded` for the same identity (that is the whole point of "keep both"),
+ * and `assertFact` must build on the row that is the caller's *own* (same origin) rather than on
+ * whichever happens to be latest: the S5.2 observation window retires what a Source did not touch,
+ * so landing on another Source's row would retire a Fact the run just re-observed.
  */
 export function buildFindActiveFactByIdentityQuery(
   workspaceId: string,
