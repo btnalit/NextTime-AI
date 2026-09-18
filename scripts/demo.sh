@@ -36,12 +36,17 @@
 #     scripts/accept_s2.sh's own connections_step) but does not create the catalog row itself.
 #   - `${NEXTTIME_DATA}/secrets/gate_token` and the other host-bootstrap secrets already exist.
 #
-# Shared-state warning (identical to scripts/accept_s3.sh's own header comment): this script
-# overwrites ${NEXTTIME_DATA}/secrets/collector-host-inventory.token — the same Docker secret file
-# path a real `collector-host-inventory` deployment on this host would use — with a freshly-minted
-# service Handle scoped to this run's own throwaway workspace. Run this only in a dedicated
-# verification environment, or accept that the real collector's next scheduled run authenticates
-# into this run's workspace until the token is re-minted.
+# Unlike scripts/accept_s3.sh, this script never touches the production collector's secret:
+# `make demo` is meant to be run casually on a delivered host with a real model, and a single run
+# silently redirecting the host's real `collector-host-inventory` deployment into a throwaway demo
+# workspace (accept_s3.sh's own trade-off, acceptable only in a dedicated verification environment)
+# is not acceptable here. collector_handle_mint_step instead mints this run's collector Handle into
+# a demo-private file under ${NEXTTIME_DATA}/demo/ and collector_run_step points the collector at
+# it for this one `--once` invocation via `NEXTTIME_HANDLE_TOKEN_FILE`
+# (collectors/host-inventory/src/config.ts reads that env var fresh on every run, falling back to
+# `/run/secrets/collector_host_inventory_token` only when it is unset — the production path is
+# never read or written by this script). cleanup_step deletes that demo-private token file
+# unconditionally (even with --keep — it is a credential, nothing about it is kept).
 #
 # Duplication note: this script deliberately duplicates small pieces of scripts/accept_s2.sh and
 # scripts/accept_s3.sh (bootstrap-workspace parsing, the gatekeeper-docker catalog-enable SQL, the
@@ -173,9 +178,24 @@ fetch('http://worker-supervisor:8081/resident/stop', {
 " </dev/null 2>&1
 }
 
-# Duplicated from scripts/accept_s3.sh's own run_collector_once / collector_run_complete_field.
+# Unlike scripts/accept_s3.sh's own run_collector_once, this run is pointed at the demo-private
+# token file (DEMO_COLLECTOR_TOKEN_FILE, set by collector_handle_mint_step) via
+# NEXTTIME_HANDLE_TOKEN_FILE, never at the production ${NEXTTIME_DATA}/secrets/
+# collector-host-inventory.token / /run/secrets/collector_host_inventory_token path the compose
+# service's own `environment:`/`secrets:` blocks declare (collectors/host-inventory/src/config.ts's
+# `loadConfig`: `env.NEXTTIME_HANDLE_TOKEN_FILE ?? DEFAULT_HANDLE_TOKEN_FILE`, read fresh on every
+# run — a `docker compose run -e` override for one invocation is enough, no compose-file edit
+# needed; scripts/drill-restore.sh's own `docker compose run --rm -e BACKUP_NOW=1 backup` is the
+# same established pattern). The bind-mount target `/run/demo-collector-token` is a fresh path
+# under `/run` — the service's own `secrets: [collector_host_inventory_token]` already proves a
+# `/run/...` bind target works under this service's `read_only: true` (Docker sets up bind/secret
+# mounts before the container's root filesystem's read-only flag applies to the container process;
+# it never blocks mount *setup*, only in-container writes afterward).
 run_collector_once() {
-  docker compose run --rm --no-deps -T collector-host-inventory node dist/index.js --once </dev/null 2>&1
+  docker compose run --rm --no-deps -T \
+    -e NEXTTIME_HANDLE_TOKEN_FILE=/run/demo-collector-token \
+    -v "${DEMO_COLLECTOR_TOKEN_FILE}:/run/demo-collector-token:ro" \
+    collector-host-inventory node dist/index.js --once </dev/null 2>&1
 }
 
 collector_run_complete_field() {
@@ -257,9 +277,24 @@ domain_pack_seed_step() {
   step_ok domain-pack-seed "$(printf '%s' "$out" | tail -1)"
 }
 
-# S3.9(b) equivalent: mint the collector's own service Handle — verbatim mechanics of
-# scripts/accept_s3.sh's own collector_fixtures_step (minus its Source-id state reset, unneeded
-# since the collector keeps no local state as of S5.3).
+# S3.9(b) equivalent, WITHOUT scripts/accept_s3.sh's own collector_fixtures_step's shared-state
+# trade-off: mints the collector's own service Handle the same way (bootstrap.js
+# issue-service-handle), but writes it to a demo-private file under ${NEXTTIME_DATA}/demo/ instead
+# of the production ${NEXTTIME_DATA}/secrets/collector-host-inventory.token path — see this file's
+# own header comment ("Unlike scripts/accept_s3.sh, ..."). Deleted unconditionally in cleanup_step.
+#
+# File mode: this is a plain bind mount (`-v host:container:ro` in run_collector_once), not a
+# docker-compose `secrets:` entry — a `secrets:` entry is re-exposed inside the container as a
+# root-owned 0444 file regardless of the host file's own mode (why the production token file can
+# stay 640 on the host), but a plain bind mount preserves the host file's own permission bits
+# as-is. collectors/host-inventory/Dockerfile runs the collector as uid 10001 (`USER nexttime`, a
+# uid unrelated to whoever runs this script) — the same reasoning scripts/lib/accept-common.sh's
+# `require_world_readable` already documents for the driver/transcript files it bind-mounts. The
+# token file therefore needs an explicit "other" read bit; 644 (not narrower) is used rather than
+# `chmod a+r` since this is a freshly-created file this step fully controls. The directory itself
+# is 0750 — the container never traverses the host directory tree for a bind-mounted file (only the
+# mounted file's own inode/mode is visible inside the container's mount namespace), so narrowing the
+# directory costs nothing and keeps it out of casual `ls` by other host users.
 collector_handle_mint_step() {
   step_begin
   out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js issue-service-handle \
@@ -269,10 +304,12 @@ collector_handle_mint_step() {
   [ "$rc" -eq 0 ] || step_fail collector-handle-mint "issue-service-handle exited $rc: $(printf '%s' "$out" | tail -10)"
   collector_token=$(printf '%s\n' "$out" | tail -n 1)
   [ -n "$collector_token" ] || step_fail collector-handle-mint "could not parse a Handle token from output: $(printf '%s' "$out" | tail -10)"
-  mkdir -p "${NEXTTIME_DATA}/secrets"
-  printf '%s' "$collector_token" >"${NEXTTIME_DATA}/secrets/collector-host-inventory.token"
-  chmod 640 "${NEXTTIME_DATA}/secrets/collector-host-inventory.token"
-  step_ok collector-handle-mint "token minted: $(redact "$collector_token")"
+  mkdir -p "${NEXTTIME_DATA}/demo"
+  chmod 0750 "${NEXTTIME_DATA}/demo"
+  DEMO_COLLECTOR_TOKEN_FILE="${NEXTTIME_DATA}/demo/collector-$(date -u +%Y%m%dT%H%M%SZ).token"
+  printf '%s' "$collector_token" >"$DEMO_COLLECTOR_TOKEN_FILE"
+  chmod 644 "$DEMO_COLLECTOR_TOKEN_FILE"
+  step_ok collector-handle-mint "token minted into a demo-private file (never ${NEXTTIME_DATA}/secrets/collector-host-inventory.token): $(redact "$collector_token")"
 }
 
 # Runs the collector once against the current host; objectsUpserted/factsAsserted from its own
@@ -537,6 +574,15 @@ MDEOF
 # — see this file's own header comment and scripts/accept_s3.sh's cleanup_step precedent): its
 # graph/chat/audit rows are the audit trail, and it expires on its own TTL.
 cleanup_step() {
+  # The demo-private collector token is a credential, not a fixture — deleted regardless of
+  # --keep (see this file's own header comment). The production
+  # ${NEXTTIME_DATA}/secrets/collector-host-inventory.token file was never read or written by this
+  # run.
+  if [ -n "${DEMO_COLLECTOR_TOKEN_FILE:-}" ]; then
+    rm -f "$DEMO_COLLECTOR_TOKEN_FILE"
+    echo "cleanup: deleted the demo-private collector token ($DEMO_COLLECTOR_TOKEN_FILE) — the production collector's own secret was never touched"
+  fi
+
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving the accept-s2-restart-target fixture and the owner's entry container running"
     return

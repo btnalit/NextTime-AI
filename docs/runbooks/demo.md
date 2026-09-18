@@ -43,11 +43,16 @@ agent 问三句预置问题（谁依赖谁；一条边从哪来、最近何时�
 本仓库任何入库文件、commit message、PR 描述——本文档正文自始至终只用 `<provider/model>`
 占位符。**
 
-**共享状态提醒**：脚本会覆写 `${NEXTTIME_DATA}/secrets/collector-host-inventory.token`——与主机
-上一个**真实**的 `collector-host-inventory` 部署使用的是**同一个** Docker 文件型密钥路径（没有
-按次调用的覆盖方式）。只在专用验证环境跑本脚本，或接受"真实采集器下一次定时运行会认证进这次
-演示的一次性 workspace，直到重新铸造那个 Handle 为止"（同 `docs/runbooks/host-collector.md` §2
-的既有提醒）。
+**不会动到生产采集器的密钥**：与 `scripts/accept_s3.sh` 不同（那个脚本会直接覆写
+`${NEXTTIME_DATA}/secrets/collector-host-inventory.token`——主机上一个真实
+`collector-host-inventory` 部署使用的同一个 Docker 文件型密钥路径），本脚本把这次演示铸造的
+采集器 Handle 写进一个演示专用文件（`${NEXTTIME_DATA}/demo/collector-<UTC 时间戳>.token`，
+`collector_handle_mint_step` 铸造，`cleanup_step` 结束时无条件删除——它是凭证，`--keep` 也不
+保留），用 `NEXTTIME_HANDLE_TOKEN_FILE` 环境变量让 `collector-host-inventory --once` 这一次运行
+读它（`collectors/host-inventory/src/config.ts` 每次运行都重新读这个环境变量，未设置时才回落到
+生产路径）。`make demo` 是给交付主机上随手跑的命令，不是专用验证环境的脚本——如果它像
+`accept_s3.sh` 那样悄悄把生产采集器重定向到一次性 workspace，直到人工重新铸造密钥为止，这在
+交付场景下不可接受；因此本脚本自始至终不读、不写生产密钥路径。
 
 ## 3. 步骤
 
@@ -85,11 +90,20 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && DEMO_MODEL=<provider/model> make demo' </dev
    --entry-model <provider/model>`。
 3. **domain-pack-seed**——发布 `ops-assets` v1 域包（采集器写入前必须存在，否则
    `unknown_object_type`）。
-4. **collector-handle-mint**——铸造采集器自己的 service Handle，写入
-   `${NEXTTIME_DATA}/secrets/collector-host-inventory.token`（见 §2 共享状态提醒）。
-5. **collector-run**——`collector-host-inventory --once`；本次运行的 `objectsUpserted`/
-   `factsAsserted` 成为结果页的对象数/事实数（内核没有专门的计数能力，`search`/`list_*` 都是
-   keyset 分页信封，没有总数字段——采集器自己那行 `run complete` 摘要是权威来源）。
+4. **collector-handle-mint**——铸造采集器自己的 service Handle，写入演示专用文件
+   `${NEXTTIME_DATA}/demo/collector-<UTC 时间戳>.token`（**不是**生产的
+   `${NEXTTIME_DATA}/secrets/collector-host-inventory.token`，见 §2）。文件权限 644（目录
+   0750）——这是一次 `-v` bind mount 而非 compose 的 `secrets:` 条目，容器内运行采集器的是
+   uid 10001（`collectors/host-inventory/Dockerfile` 的 `USER nexttime`），bind mount 直接照搬
+   宿主机文件自己的权限位，所以必须显式给 "other" 读权限——同
+   `scripts/lib/accept-common.sh` 的 `require_world_readable` 对 driver 脚本的既有处理方式一样
+   的原因；目录本身收紧到 0750 不影响容器读取（容器只看到被挂载文件自己的 inode，不遍历宿主机
+   目录树）。
+5. **collector-run**——`docker compose run ... -e NEXTTIME_HANDLE_TOKEN_FILE=/run/demo-collector-token
+   -v <演示专用 token 文件>:/run/demo-collector-token:ro collector-host-inventory node dist/index.js
+   --once`；本次运行的 `objectsUpserted`/`factsAsserted` 成为结果页的对象数/事实数（内核没有专门
+   的计数能力，`search`/`list_*` 都是 keyset 分页信封，没有总数字段——采集器自己那行
+   `run complete` 摘要是权威来源）。
 6. **q1-dependency**——中文提问"哪个服务依赖哪个"，真实入口 agent 自主决定调哪些工具作答。
 7. **q2-provenance**——中文提问"kernel 依赖 postgres 这条边，它的来源是什么？最近一次确认是
    什么时候？"，随后脚本独立（不解析聊天记录）重新走 `search`→`traverse` 找到同一条
@@ -136,17 +150,17 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && DEMO_MODEL=<provider/model> make demo' </dev
   ```bash
   sh scripts/delete-workspaces-matching.sh '^demo-' --yes
   ```
-- 不带 `--keep` 时，脚本自己已经：停掉 owner 的常驻入口容器
-  （`worker-supervisor` 的 `/resident/stop`）、`docker compose rm -sf accept-s2-restart-target`。
-- 带了 `--keep`：手动收尾用上面两条命令，或直接：
+- 演示专用的采集器 token 文件（`${NEXTTIME_DATA}/demo/collector-*.token`）——**无论是否传
+  `--keep`**——脚本自己都会在 `cleanup_step` 删除：它是凭证，不是可保留检查的 fixture。标准输出
+  会打印一行确认：`cleanup: deleted the demo-private collector token (...) — the production
+  collector's own secret was never touched`。不需要、也不应该手动撤销或重新铸造生产采集器的
+  Handle——本脚本从未读写过那个路径。
+- 不带 `--keep` 时，脚本自己还会：停掉 owner 的常驻入口容器（`worker-supervisor` 的
+  `/resident/stop`）、`docker compose rm -sf accept-s2-restart-target`。
+- 带了 `--keep`：上面两条手动收尾，或直接：
   ```bash
   docker compose --profile accept-s2 rm -sf accept-s2-restart-target
   ```
-- 撤销演示专用的采集器 Handle（不影响它已经写入的历史 Fact）：删除/失效
-  `${NEXTTIME_DATA}/secrets/collector-host-inventory.token` 并重启
-  `collector-host-inventory`——同 `docs/runbooks/host-collector.md` §6 的既有做法；一台主机上
-  只要还打算跑真实的 `collector-host-inventory` 部署，跑完本演示后应尽快重新铸造那个 Handle
-  （见 §2 共享状态提醒）。
 
 ## 6. 常见问题
 
@@ -159,3 +173,4 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && DEMO_MODEL=<provider/model> make demo' </dev
 | `FAIL q3-restart ...StartedAt did not change...` | ActionRequest 执行了，但 fixture 容器 id 传错/过期 | 核对本次调用里实际传给门的 `CONTAINER_ID` 与 `docker inspect accept-s2-restart-target` 的真实 id 是否一致 |
 | `TOTAL <N>s BUDGET exceeded` | 真实模型三句提问加起来比预期慢，不是脚本缺陷 | 参考结果页里每一步的耗时表定位慢在哪一步；必要时换一个更快的模型重跑 |
 | `demo: --out must not resolve under the checkout root` | 传了一个落在仓库检出目录内的 `--out` 路径 | 换一个 `${NEXTTIME_DATA}` 下的路径，或不传 `--out` 用默认路径 |
+| `FAIL collector-run ...` 且日志里能看到 401/token 读取失败 | 演示专用 token 文件权限不对（不是 644）或路径被外部删掉——容器内运行采集器的是 uid 10001，bind mount 需要 "other" 读权限 | 检查 `${NEXTTIME_DATA}/demo/collector-*.token` 是否存在、`ls -l` 确认权限含 `r` 给 other；不要手动 `chmod` 收紧它，让脚本重新跑一遍铸造新文件 |
