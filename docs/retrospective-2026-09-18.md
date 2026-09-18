@@ -137,6 +137,9 @@ complete` 在转移表里没有边，整个结果事务回滚、Worker 退出；
   handler 预校验（I16 元本体引用、模型编的 `gatekeeperId`）仍整单拒绝，ssh 两场景 6 次 `no_result`
   皆此——#211 把预校验也改为单条记录 + 跳过（被拒条目从不写入，I16 不变）。教训：**同一原则要在
   每一层落地**——写入点改了、预校验没改，结果就是"修好了一半"；`--real` 复跑是发现这一半的唯一方式。
+  v0.13.2 第三轮：ssh_run_approve 10/10、ssh_run_auto 1/1、docker_restart 7/10（派工的 7/7 完成，
+  3 次是入口 agent 没派工——模型选工具的波动，归 S5.4 prompt 契约），`accept_s2.sh` 自身 `S2 OK`。
+  遗留 30 从 W7 的一次现象到今天的两半根因，全部在主机上实证关闭。
 - `make demo` 在 v0.13.1 上首次全绿：402 s（其中 267 s 是镜像构建——发版改了根 `package.json` 版本号，
   `pnpm install` 层缓存失效、每次发版都要重新拉 registry；前两次尝试正是在这一步撞上 registry
   ECONNRESET）。这是 S5.8 第 4 项"发布镜像"的第二条现实依据。
