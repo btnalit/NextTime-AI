@@ -250,7 +250,7 @@ v(n) 而数据库仍是 v(n) 的 schema（因为回滚阶段还没跑到）—�
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `drill-upgrade.sh` 在 `build-to` 一步 `FAIL`，日志里是 `registry.npmjs.org` 超时 / `ERR_PNPM_META_FETCH_FAIL` | 源码构建要实时拉 npm 元数据，主机到 registry 的网络抖动 | 这一步在迁移之前，什么都还没改：`git checkout <原分支或原 commit>`（脚本 preflight 打印过）后原样重跑即可；反复出现就是 S5.8 第 4 项"发布容器镜像"的排期理由 |
+| `drill-upgrade.sh` 在 `build-to` 一步 `FAIL`（或 `demo.sh` 在 `preflight` 构建 collector 镜像时 `FAIL`），日志里是 `registry.npmjs.org` 超时 / `ERR_PNPM_META_FETCH_FAIL` / `ECONNRESET` | 源码构建要实时拉 npm 元数据，主机到 registry 的网络抖动；而且每次发版 release-please 都改根 `package.json` 的版本号，各镜像 `pnpm install` 那一层的缓存随之失效——**每个新 tag 的第一次构建必然全量拉 registry**，不是缓存能挡住的 | 这一步在迁移之前，什么都还没改：`git checkout <原分支或原 commit>`（脚本 preflight 打印过）后原样重跑即可；反复出现就是 S5.8 第 4 项"发布容器镜像"的排期理由 |
 | 当前检出里还没有 `drill-upgrade.sh`（例如从 v0.10.0 首次升级） | 脚本随 v0.13.0 才进仓库 | 从目标 tag 取出来跑：`git show <tag>:scripts/drill-upgrade.sh > /tmp/drill-upgrade.sh && sh /tmp/drill-upgrade.sh …`（见 §二 前置条件"首次使用"） |
 | 演练结束后 `fake-llm` 在生产栈里跑着 | 三份验收要求 `docker compose --profile test up -d`，演练照此起栈 | 无害（验收脚本自己切换 / 恢复 provider 接线，生产 `llm-providers.yaml` 不被碰）；不想留就 `docker compose stop fake-llm` |
 | `drill-install.sh` 在 `write-env` 一步 `FAIL` | `KERNEL_BIND_ADDR`/`NEXTTIME_SUBNET_CONTROL`/`NEXTTIME_SUBNET_WORKERS` 没给 | 这是刻意设计，不是 bug——脚本不替你猜一个可能已经和主机现有 Docker 网段冲突的子网，也不替你猜一个能被外部访问的地址；看 `preflight` 步骤打印出的 `docker-network-subnets` 那一行，挑不冲突的值，按脚本头注释传入 |
