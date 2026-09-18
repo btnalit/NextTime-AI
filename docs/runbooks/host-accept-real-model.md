@@ -129,8 +129,9 @@ REAL scenario=<key> ok=<k>/<n> turn_tool_calls=<sum> turn_tool_errors=<sum> work
 （模板见 §9），摘要（只有次数）进 `STATUS.md` §2.2。步骤如下，均在 `<CODE_DIR>` 下执行；经 SSH
 时按其余 accept 脚本的约定加 `</dev/null`。
 
-**(1) 在主机上应用这次发版**——按 `docs/runbooks/release.md` 走完检出新版、`make migrate`、镜像
-重建；这一步不属于本 runbook 范围，只是例行回归的前置条件。
+**(1) 在主机上应用这次发版**——按 `docs/runbooks/release.md` §3 检出新版 tag，按
+`docs/runbooks/operations.md` §4.1 跑容器化迁移（主机没有 Node，不能用 `make migrate`）、重建
+镜像；这一步不属于本 runbook 范围，只是例行回归的前置条件。
 
 **(2) 用 `--real --runs 10 --keep` 各跑一遍 S2 / S3**，`--keep` 是关键——不加它 `cleanup_step`
 会把这次跑出来的 workspace 之外的 fixture 拆掉（workspace 行本身两个脚本无论加不加 `--keep` 都
