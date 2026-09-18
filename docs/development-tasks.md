@@ -1920,7 +1920,7 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
   应用发布不会让主机上采集器的下一轮开始被拒；`createWorkspaceWithOwner` 在调用者未指定时取
   `ONTOLOGY_ENFORCEMENT` 环境变量（缺省 `reject`；测试与 CI 从不设置）。`update_workspace` /
   `create_workspace` 新增可选 `ontologyEnforcement`，`PlatformWorkspaceWire` 多一字段（快照已重生成）。
-  平台"工作区"页的开关是后续小 PR。
+  平台"工作区"页的开关已在 PR #192（web）落地。
 - **`platform-meta.yaml` 补声明 `observed`**（Gatekeeper → `*`）：`observed-facts.ts` 一直在写这个
   LinkType，但从未声明——reject 模式下 S2 的门执行会全部被拒，正是本项要抓的漂移。
 - **已知边界——没有任何已发布本体的工作区不强制**：I2 是相对于工作区声明的 LinkType 的约束，什么都没声明

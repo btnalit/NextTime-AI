@@ -217,6 +217,15 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     await expect(
       drawer.getByTestId('workspace-allowed-models').getByRole('checkbox', { checked: true }),
     ).toHaveCount(1);
+
+    // S5.1 rollout switch: new workspaces default to reject; warn and back, same drawer.
+    const ontologyEnforcement = drawer.getByTestId('workspace-ontology-enforcement');
+    await expect(ontologyEnforcement).toHaveValue('reject');
+    await ontologyEnforcement.selectOption('warn');
+    await expect(ontologyEnforcement).toHaveValue('warn');
+    await ontologyEnforcement.selectOption('reject');
+    await expect(ontologyEnforcement).toHaveValue('reject');
+
     await expect(
       drawer.getByTestId('workspace-owners').getByTestId('workspace-owner-chip'),
     ).toHaveText(ownerLogin);

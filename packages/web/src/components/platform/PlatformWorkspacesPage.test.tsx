@@ -233,6 +233,57 @@ describe('PlatformWorkspacesPage', () => {
     expect(error.getAttribute('data-error-code')).toBe('entry_model_not_allowed');
   });
 
+  it('shows the saved ontology enforcement and switching it posts update_workspace', async () => {
+    const acme = workspace({ ontologyEnforcement: 'warn' });
+    const http = scriptedHttp({
+      ...baseHandlers([acme]),
+      update_workspace: (params) => {
+        expect(params).toEqual({ workspaceId: 'ws-1', ontologyEnforcement: 'reject' });
+        return { ...acme, ontologyEnforcement: 'reject' };
+      },
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-workspaces-table');
+
+    fireEvent.click(screen.getByTestId('workspace-row-ws-1'));
+    const detail = await screen.findByTestId('workspace-detail');
+
+    const select = within(detail).getByTestId(
+      'workspace-ontology-enforcement',
+    ) as HTMLSelectElement;
+    expect(select.value).toBe('warn');
+
+    fireEvent.change(select, { target: { value: 'reject' } });
+
+    await waitFor(() => expect(select.value).toBe('reject'));
+    expect(http.calls.some((call) => call.name === 'update_workspace')).toBe(true);
+  });
+
+  it('a failed ontology-enforcement switch rolls back to the saved value and shows the error', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers([workspace()]),
+      update_workspace: () =>
+        Promise.reject(new HttpError('capability_error', 'workspace not found', 'not_found')),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-workspaces-table');
+
+    fireEvent.click(screen.getByTestId('workspace-row-ws-1'));
+    const detail = await screen.findByTestId('workspace-detail');
+
+    const select = within(detail).getByTestId(
+      'workspace-ontology-enforcement',
+    ) as HTMLSelectElement;
+    expect(select.value).toBe('reject');
+
+    fireEvent.change(select, { target: { value: 'warn' } });
+
+    await within(detail).findByTestId('workspace-ontology-enforcement-error');
+    // Not echoed through local state — the select is bound to the saved `workspace` prop, so a
+    // failed write leaves it showing what is actually saved, no separate rollback step needed.
+    expect(select.value).toBe('reject');
+  });
+
   it('the platform default workspace cannot be disabled from the page at all', async () => {
     const http = scriptedHttp(baseHandlers([workspace()]));
     renderPage(http);
