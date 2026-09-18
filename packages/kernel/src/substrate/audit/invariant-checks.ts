@@ -409,6 +409,47 @@ async function checkIS51(client: PoolClient): Promise<InvariantCheckResult> {
 }
 
 // -------------------------------------------------------------------------------------------
+// I-S5-2 — an `observed` Fact written since S5.2 names the Observation it came from.
+// -------------------------------------------------------------------------------------------
+
+/**
+ * S5.2 (docs/development-tasks.md §5b "S5 新增不变量" I-S5-2): `epistemic_status = 'observed'`
+ * means "a system API / collector saw this" (§5.6) — since S5.2 every such writer names its
+ * Observation (`submit_observations` since 0018; a Gatekeeper's `observe`/`apply` result since
+ * S5.2, application/gateway/observed-facts.ts), which is what `explain`'s provenance and the
+ * freshness clock (0026) hang off. A row that claims `observed` with no `observation_id` is a
+ * writer that bypassed both — a `service`-kind Handle calling `assert_fact` directly is the one
+ * legitimate way to produce it, and such rows are meant to show up here. Scoped to rows
+ * `recorded_at` after migration core 0026 (history is not backfilled — pre-S5.2 gate Facts have
+ * no Observation by construction); the `epistemic_status` column is written once at insert, so
+ * later `verify_fact` promotion cannot hide a row from this check.
+ */
+async function checkIS52(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{
+    workspace_id: string;
+    id: string;
+    link_type: string;
+    asserted_by: string;
+  }>(
+    `with since as (
+       select min(applied_at) as at from schema_migrations where module = 'core' and version = 26
+     )
+     select workspace_id, id, link_type, asserted_by
+     from links
+     where epistemic_status = 'observed'
+       and observation_id is null
+       and recorded_at > (select at from since)`,
+  );
+  return {
+    invariant: 'I-S5-2',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map((row) => `${row.workspace_id}:${row.id} (${row.link_type} by ${row.asserted_by})`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // Beyond I1–I16 — operational-health checks (see module doc comment).
 // -------------------------------------------------------------------------------------------
 
@@ -465,6 +506,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I14',
   'I16',
   'I-S5-1',
+  'I-S5-2',
   'ops.one_running_turn',
   'ops.outbox_stuck',
 ];
@@ -493,6 +535,7 @@ export async function runInvariantChecks(
       await checkI14(client),
       await checkI16(client),
       await checkIS51(client),
+      await checkIS52(client),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
     ];

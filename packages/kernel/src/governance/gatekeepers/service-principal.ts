@@ -13,7 +13,9 @@ import type { PoolClient } from 'pg';
  * matters for `epistemic_status` is "this came from a system API, not agent inference" — which is
  * uniform across every Gatekeeper — not which specific Gatekeeper produced it (`explain()` already
  * traces that through the Fact's `activity_id`/`Gatekeeper --exposes--> Operation` edges, not
- * through `asserted_by`). Looked up by a fixed `display_name` and lazily created on first use
+ * through `asserted_by`; since S5.2 also through the per-Gatekeeper Source `application/gateway/
+ * observed-facts.ts` records an Observation of — the *origin* identity lives in that Source, the
+ * Principal stays shared). Looked up by a fixed `display_name` and lazily created on first use
  * (idempotent: a concurrent race creates at most a small number of harmless duplicate rows — no
  * unique constraint exists on `display_name`, and correctness does not depend on there being only
  * one — but a fresh workspace only calls this rarely enough that it's a non-issue in practice).
