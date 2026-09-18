@@ -35,12 +35,11 @@ export async function computeActionRequestHolders(
   workspaceId: string,
   query: HolderQuery,
 ): Promise<readonly string[]> {
-  const [owners, grantHolders] = await Promise.all([
-    listWorkspaceOwnerPrincipalIds(client, workspaceId),
-    listGrantHolderPrincipalIds(client, workspaceId, {
-      resourceType: query.actionKind,
-      resourceId: query.resourceScope,
-    }),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const owners = await listWorkspaceOwnerPrincipalIds(client, workspaceId);
+  const grantHolders = await listGrantHolderPrincipalIds(client, workspaceId, {
+    resourceType: query.actionKind,
+    resourceId: query.resourceScope,
+  });
   return [...new Set([...owners, ...grantHolders])];
 }

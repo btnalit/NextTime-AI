@@ -870,15 +870,14 @@ export class AgentHostRuntime implements AgentRuntime {
   ): Promise<ResolvedAgentProfile | undefined> {
     try {
       return await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
-        const [profile, policy, publishedSkillIds, grantedGatekeeperIds] = await Promise.all([
-          readAgentProfile(client, workspaceId, principalId),
-          readAgentPolicy(client, workspaceId),
-          listPublishedSkillIds(client, workspaceId),
-          listActiveGrantResourceScopes(client, workspaceId, {
-            principalId,
-            resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
-          }),
-        ]);
+        // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries).
+        const profile = await readAgentProfile(client, workspaceId, principalId);
+        const policy = await readAgentPolicy(client, workspaceId);
+        const publishedSkillIds = await listPublishedSkillIds(client, workspaceId);
+        const grantedGatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
+          principalId,
+          resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
+        });
         return {
           effective: resolveEffectiveAgentProfile(profile, policy, {
             publishedSkillIds,

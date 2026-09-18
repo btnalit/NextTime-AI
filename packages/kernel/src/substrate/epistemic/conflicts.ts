@@ -220,12 +220,19 @@ export interface ConflictsPage {
   readonly nextCursor?: string;
 }
 
+/** S5.5 leftover 23: the cursor carries a JS `Date` — millisecond precision — while `opened_at`
+ *  is stored to the microsecond, so `listConflicts` orders and compares on
+ *  `date_trunc('milliseconds', opened_at)` (the same fix PR #132 made for `search`); two rows in
+ *  one millisecond are then split by `id`, never skipped at a page boundary. */
 function encodeKeysetCursor(at: Date, id: string): string {
   return Buffer.from(`${at.toISOString()}|${id}`, 'utf8').toString('base64url');
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Never throws on a malformed cursor — degrades to "start over" (`null`), same convention
- *  `application/chat/service.ts`'s `parseCursor` documents for its own cursor. */
+ *  `application/chat/service.ts`'s `parseCursor` documents for its own cursor; the id half is
+ *  validated too, since it is bound as `$4::uuid`. */
 function decodeKeysetCursor(cursor: string | undefined): { at: string; id: string } | null {
   if (!cursor) return null;
   try {
@@ -234,7 +241,7 @@ function decodeKeysetCursor(cursor: string | undefined): { at: string; id: strin
     if (sepIndex < 0) return null;
     const at = decoded.slice(0, sepIndex);
     const id = decoded.slice(sepIndex + 1);
-    if (!at || !id || Number.isNaN(Date.parse(at))) return null;
+    if (!at || Number.isNaN(Date.parse(at)) || !UUID_PATTERN.test(id)) return null;
     return { at, id };
   } catch {
     return null;
@@ -253,8 +260,11 @@ export async function listConflicts(
     `select ${CONFLICT_COLUMNS} from conflicts
      where workspace_id = $1
        and ($2::text is null or status = $2)
-       and ($3::timestamptz is null or (opened_at, id) < ($3::timestamptz, $4::uuid))
-     order by opened_at desc, id desc
+       and (
+         $3::timestamptz is null
+         or (date_trunc('milliseconds', opened_at), id) < ($3::timestamptz, $4::uuid)
+       )
+     order by date_trunc('milliseconds', opened_at) desc, id desc
      limit $5`,
     [workspaceId, input.status ?? null, cursor?.at ?? null, cursor?.id ?? null, limit],
   );

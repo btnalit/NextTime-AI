@@ -837,11 +837,10 @@ async function loadPlatformWorkspace(
   client: PoolClient,
   workspaceId: string,
 ): Promise<PlatformWorkspaceWire> {
-  const [row, owners, { settings }] = await Promise.all([
-    loadPlatformWorkspaceRow(client, workspaceId),
-    loadOwners(client, [workspaceId]),
-    readPlatformSettings(client),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const row = await loadPlatformWorkspaceRow(client, workspaceId);
+  const owners = await loadOwners(client, [workspaceId]);
+  const { settings } = await readPlatformSettings(client);
   return toWirePlatformWorkspace(row, owners.get(row.id) ?? [], settings.defaultWorkspaceId);
 }
 

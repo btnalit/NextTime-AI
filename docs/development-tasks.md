@@ -2317,6 +2317,25 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
   挂起；TX 提交，T2 重读阻塞在 F1；T4 提交，T2 重读 0 行——修复前此处多插一条，修复后再读一次拿到 F2 并
   supersede 成 F3，断言活跃行恰好 [F3]、无 Conflict。每一步都用 `settledWithin300ms` 证实 T2 确实在阻塞。
 
+#### S5.5 遗留 23 / 34 实现说明（2026-09-18，PR #199）
+
+- **遗留 23**：`substrate/epistemic/decisions.ts` `queryDecisions` 与 `conflicts.ts` `listConflicts` 的
+  keyset 查询改为 `order by date_trunc('milliseconds', <created_at|opened_at>) desc, id desc` 并按同一
+  截断值比较 cursor（PR #132 `buildSearchQuery` 同款）；cursor 解码顺带校验 id 半段是 uuid（它被绑定为
+  `::uuid`，手工构造的 cursor 不该变成 500）。`find_precedents` 的排序不分页、未改。集成测试
+  （`conflicts.test.ts`）直接插两条 `opened_at` / `created_at` 只差微秒的行，`limit: 1` 翻页两者都要出现。
+- **遗留 34**：不是"一条路径"——grep `Promise.all(` 得到十五处在同一个 `client` 上并发发查询的调用点：
+  `explain.ts` 三处（Activity / Fact / Decision 分支各取 principal / observation 引用）、`decisions.ts`
+  两处（`causalChain` 逐 Fact `explain`、`decisionImpact` 四条查询）、`agent-host-runtime.ts` 的入口
+  profile 解析、`governance/approval/routing.ts`、`reads.ts` 的 `getOperationStats`、
+  `agent-profile-handlers.ts` 两处、`governance/agent-profile/store.ts`、`platform-handlers.ts` 的
+  `loadPlatformWorkspace`、`explorer-read-service.ts` 两处、`gatekeeper-read-handlers.ts` 两处、
+  `handlers.ts` 的 `get_entry_context`。全部改为顺序 `await`；`get_gatekeeper` 的健康探测是 HTTP 调用，
+  先发起、两条 DB 读顺序跑、最后 await 探测。pg 内部把同 client 的并发 query 排队，所以之前只是一条
+  `util.deprecate` 的一次性警告，pg@9 会直接抛错。`packages/kernel/vitest.setup.ts`（`vitest.config.ts`
+  `setupFiles`）用 `process.on('warning')` 把这条 DeprecationWarning 变成抛错 → 测试运行失败，任何回归
+  在 CI 里立刻可见。主机日志里 2026-09-11 那次的具体路径无法回溯（警告只发一次、不带栈），十五处一并改。
+
 ### S5.6 稳定性缺陷（遗留 30 与 Task 崩溃缺口）
 
 - **遗留 30**：真实模型下 docker_restart 一次 ActionRequest `executed`、容器已重启但 Task `failed` 且

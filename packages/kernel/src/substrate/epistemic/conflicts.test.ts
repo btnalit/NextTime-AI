@@ -8,6 +8,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { SqlGraphStore } from '../graph/index.js';
 import { startActivity } from './activities.js';
 import { listConflicts } from './conflicts.js';
+import { queryDecisions } from './decisions.js';
 import { recordSourceObservation, registerPrivateSource } from './sources.js';
 
 /**
@@ -788,6 +789,97 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(
           page.items.filter((item) => involved.has(item.factAId) || involved.has(item.factBId)),
         ).toHaveLength(0);
+      });
+    });
+
+    it('S5.5 leftover 23: two Conflicts / two Decisions in the same millisecond are not skipped at a page boundary', async () => {
+      // The cursor carries a JS Date (milliseconds); the columns hold microseconds. Two rows at
+      // 12:00:00.000456 and 12:00:00.000789 both encode as 12:00:00.000Z — with the old
+      // `(opened_at, id) < (cursor)` comparison the second page never returned the other row.
+      const { factAId, factBId, activityId } = await asPrincipal(ownerId, async (client) => {
+        const objectA = await store.upsertObject(client, workspaceId, { objectType: 'test.host' });
+        const objectB = await store.upsertObject(client, workspaceId, {
+          objectType: 'test.service',
+        });
+        const activity = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+        const factA = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.paging_a',
+            sourceObjectId: objectB.id,
+            targetObjectId: objectA.id,
+            activityId: activity.id,
+          },
+        );
+        const factB = await store.assertFact(
+          client,
+          workspaceId,
+          { id: ownerId, kind: 'human' },
+          {
+            linkType: 'test.paging_b',
+            sourceObjectId: objectB.id,
+            targetObjectId: objectA.id,
+            activityId: activity.id,
+          },
+        );
+        return { factAId: factA.id, factBId: factB.id, activityId: activity.id };
+      });
+
+      // Far in the past so nothing else in the shared database sorts between the pair, and two
+      // distinct microsecond values inside one millisecond.
+      const conflictIds: string[] = [randomUUID(), randomUUID()].sort();
+      const decisionIds: string[] = [randomUUID(), randomUUID()].sort();
+      await asPrincipal(ownerId, async (client) => {
+        // `dismissed` so the paging below is isolated from the open Conflicts other cases leave
+        // behind; a resolved status must carry `resolved_by` / `resolved_at` (0017's
+        // `conflicts_resolved_fields_check`).
+        await client.query(
+          `insert into conflicts (workspace_id, id, conflict_type, status, link_a_id, link_b_id, activity_id, opened_at, resolved_by, resolved_at)
+           values ($1, $2, 'value', 'dismissed', $4, $5, $6, '2001-01-01T00:00:00.000456Z', $7, '2001-01-01T00:00:01Z'),
+                  ($1, $3, 'value', 'dismissed', $4, $5, $6, '2001-01-01T00:00:00.000789Z', $7, '2001-01-01T00:00:01Z')`,
+          [workspaceId, conflictIds[0], conflictIds[1], factAId, factBId, activityId, ownerId],
+        );
+        await client.query(
+          `insert into decisions (workspace_id, id, status, activity_id, summary, created_at)
+           values ($1, $2, 'proposed', $4, 'paging a', '2001-01-01T00:00:00.000456Z'),
+                  ($1, $3, 'proposed', $4, 'paging b', '2001-01-01T00:00:00.000789Z')`,
+          [workspaceId, decisionIds[0], decisionIds[1], activityId],
+        );
+      });
+
+      await asPrincipal(ownerId, async (client) => {
+        const seenConflicts = new Set<string>();
+        let cursor: string | undefined;
+        for (let page = 0; page < 50 && seenConflicts.size < 2; page++) {
+          const result = await listConflicts(client, workspaceId, {
+            status: 'dismissed',
+            limit: 1,
+            ...(cursor ? { cursor } : {}),
+          });
+          for (const item of result.items) {
+            if (conflictIds.includes(item.id)) seenConflicts.add(item.id);
+          }
+          if (!result.nextCursor) break;
+          cursor = result.nextCursor;
+        }
+        expect([...seenConflicts].sort()).toEqual(conflictIds);
+
+        const seenDecisions = new Set<string>();
+        cursor = undefined;
+        for (let page = 0; page < 50 && seenDecisions.size < 2; page++) {
+          const result = await queryDecisions(client, workspaceId, {
+            limit: 1,
+            ...(cursor ? { cursor } : {}),
+          });
+          for (const item of result.items) {
+            if (decisionIds.includes(item.id)) seenDecisions.add(item.id);
+          }
+          if (!result.nextCursor) break;
+          cursor = result.nextCursor;
+        }
+        expect([...seenDecisions].sort()).toEqual(decisionIds);
       });
     });
   },

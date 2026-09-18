@@ -22,6 +22,8 @@ export default mergeConfig(
       // contract "for free" — CI's `quality` job sets the same var for the same reason
       // (docs/development-tasks.md S3.7).
       env: { KERNEL_VALIDATE_RESULTS: '1' },
+      // S5.5 leftover 34: pg's concurrent-query DeprecationWarning fails the run (vitest.setup.ts).
+      setupFiles: ['./vitest.setup.ts'],
     },
   }),
 );

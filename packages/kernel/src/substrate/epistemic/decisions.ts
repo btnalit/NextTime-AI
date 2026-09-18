@@ -242,12 +242,19 @@ export interface DecisionsPage {
   readonly nextCursor?: string;
 }
 
+/** S5.5 leftover 23: the cursor carries a JS `Date` — millisecond precision — while `created_at`
+ *  is stored to the microsecond, so the query orders and compares on
+ *  `date_trunc('milliseconds', created_at)` (the same fix PR #132 made for `search`); two rows in
+ *  one millisecond are then split by `id`, never skipped at a page boundary. */
 function encodeKeysetCursor(at: Date, id: string): string {
   return Buffer.from(`${at.toISOString()}|${id}`, 'utf8').toString('base64url');
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Same "never throws on a malformed cursor" convention as `conflicts.ts`'s own decoder /
- *  `application/chat/service.ts`'s `parseCursor`. */
+ *  `application/chat/service.ts`'s `parseCursor`; the id half is validated too, since it is
+ *  bound as `$5::uuid`. */
 function decodeKeysetCursor(cursor: string | undefined): { at: string; id: string } | null {
   if (!cursor) return null;
   try {
@@ -256,7 +263,7 @@ function decodeKeysetCursor(cursor: string | undefined): { at: string; id: strin
     if (sepIndex < 0) return null;
     const at = decoded.slice(0, sepIndex);
     const id = decoded.slice(sepIndex + 1);
-    if (!at || !id || Number.isNaN(Date.parse(at))) return null;
+    if (!at || Number.isNaN(Date.parse(at)) || !UUID_PATTERN.test(id)) return null;
     return { at, id };
   } catch {
     return null;
@@ -285,8 +292,11 @@ export async function queryDecisions(
            where l.source_object_id = $3 or l.target_object_id = $3
          )
        )
-       and ($4::timestamptz is null or (d.created_at, d.id) < ($4::timestamptz, $5::uuid))
-     order by d.created_at desc, d.id desc
+       and (
+         $4::timestamptz is null
+         or (date_trunc('milliseconds', d.created_at), d.id) < ($4::timestamptz, $5::uuid)
+       )
+     order by date_trunc('milliseconds', d.created_at) desc, d.id desc
      limit $6`,
     [workspaceId, since, input.objectId ?? null, cursor?.at ?? null, cursor?.id ?? null, limit],
   );
@@ -435,9 +445,11 @@ export async function causalChain(
   const budget = Math.max(0, depth - 1);
   const includedFactIds = relatedFactIds.slice(0, budget);
 
-  const factSteps = await Promise.all(
-    includedFactIds.map((factId) => explain(client, workspaceId, { factId })),
-  );
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const factSteps: Awaited<ReturnType<typeof explain>>[] = [];
+  for (const factId of includedFactIds) {
+    factSteps.push(await explain(client, workspaceId, { factId }));
+  }
 
   return {
     rootType: 'decision',
@@ -491,28 +503,27 @@ export async function decisionImpact(
   const decisionRow = await getDecisionRow(client, workspaceId, input.decisionId);
   const rationaleFactIds = extractFactIdsFromRationale(decisionRow.rationale);
 
-  const [byActivityResult, byIdResult, actionRequestsResult, tasksByActivityResult] =
-    await Promise.all([
-      client.query<FactDbRow>(
-        `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and activity_id = $2`,
-        [workspaceId, decisionRow.activityId],
-      ),
-      rationaleFactIds.length > 0
-        ? client.query<FactDbRow>(
-            `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and id = any($2::uuid[])`,
-            [workspaceId, rationaleFactIds],
-          )
-        : Promise.resolve({ rows: [] as FactDbRow[] }),
-      client.query<ActionRequestDbRow>(
-        `select id, status, action_kind, gatekeeper_id from action_requests
-         where workspace_id = $1 and approval_decision_id = $2`,
-        [workspaceId, input.decisionId],
-      ),
-      client.query<{ id: string }>(
-        'select id from tasks where workspace_id = $1 and created_by_activity_id = $2',
-        [workspaceId, decisionRow.activityId],
-      ),
-    ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const byActivityResult = await client.query<FactDbRow>(
+    `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and activity_id = $2`,
+    [workspaceId, decisionRow.activityId],
+  );
+  const byIdResult =
+    rationaleFactIds.length > 0
+      ? await client.query<FactDbRow>(
+          `select ${FACT_REF_COLUMNS} from links where workspace_id = $1 and id = any($2::uuid[])`,
+          [workspaceId, rationaleFactIds],
+        )
+      : { rows: [] as FactDbRow[] };
+  const actionRequestsResult = await client.query<ActionRequestDbRow>(
+    `select id, status, action_kind, gatekeeper_id from action_requests
+     where workspace_id = $1 and approval_decision_id = $2`,
+    [workspaceId, input.decisionId],
+  );
+  const tasksByActivityResult = await client.query<{ id: string }>(
+    'select id from tasks where workspace_id = $1 and created_by_activity_id = $2',
+    [workspaceId, decisionRow.activityId],
+  );
 
   const factsById = new Map<string, FactRef>();
   for (const row of [...byActivityResult.rows, ...byIdResult.rows]) {
