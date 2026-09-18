@@ -25,7 +25,7 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 |---|---|---|---|---|
 | W1 | 对话历史没有删除键，只能不断新增 | 内核只有 `list_chats` / `new_chat` / `send_chat_message` / `get_chat_history` / `subscribe_chat`，没有归档或删除能力；`chat.title` 字段存在但从未写入，所以全是 "Untitled chat" | 内核缺能力 + 页面 | §5.1 |
 | W2 | 对话里看不到当前模式 / 模型，也不能在管理区授予的模型里切换 | 模型由 AgentProfile（`/me/agent`）决定，对话页头部不显示生效模型；切换只能去"我的智能体"页；"管理区授予的范围" = 工作区 AgentPolicy 的 `allowedModels`（已有） | 页面未做 | §5.1 |
-| W3 | 流式输出时右侧不自动跟随到最新 | 第二轮核对（§2b）**推翻**了"滚动容器写错"的假设：`.chat-scroll`（`pages.css:108-113`，`flex:1; min-height:0; overflow-y:auto`）就是真正滚动的元素，`scrollTop` 写入有效。新的假设：程序写 `scrollTop` 触发的 `scroll` 事件是**异步**的，若在它到达前又提交了一段流式文本 / 一行工具调用，`onScroll`（`ChatPage.tsx:183-190`）量到的"距底距离"就是这段新增高度，一旦超过 `AT_BOTTOM_THRESHOLD_PX = 48`（`:45`）便把 `atBottom` 翻成 false，跟随从此停止——快模型一帧内多行换行即可触发 | bug 待复现 | §5.1 |
+| W3 | 流式输出时右侧不自动跟随到最新 | 第二轮核对（§2b）**推翻**了"滚动容器写错"的假设：`.chat-scroll`（`pages.css:108-113`，`flex:1; min-height:0; overflow-y:auto`）就是真正滚动的元素，`scrollTop` 写入有效。新的假设：程序写 `scrollTop` 触发的 `scroll` 事件是**异步**的，若在它到达前又提交了一段流式文本 / 一行工具调用，`onScroll`（`ChatPage.tsx:183-190`）量到的"距底距离"就是这段新增高度，一旦超过 `AT_BOTTOM_THRESHOLD_PX = 48`（`:45`）便把 `atBottom` 翻成 false，跟随从此停止——快模型一帧内多行换行即可触发。第二个候选：滚动写入只由 `contentVersion`（`messages.length` / `streamingText.length` / `toolCalls.length`，`:168`）触发，**原地增长**的内容（工具调用行已存在、其结果文本后到，`toolCalls.length` 不变）根本不触发写入，同样表现为"不跟随"，无需竞争。两个候选的修法相同（底部哨兵 + `IntersectionObserver`，或忽略自己触发的 scroll 事件），复现要分别验证 | bug 待复现 | §5.1 |
 | A1 | 工作区没有删除键，测试的、临时的删不掉 | 内核只有 `set_workspace_status`（禁用 / 启用）；"行不删"是 P-A1 的审计留痕取舍；一次性工作区靠 `delete-workspaces-matching.sh --expired` 操作员脚本 | 内核缺能力（受治理的清除） | §5.2 |
 | A2 | 能力目录连 Skill 新增 / 编辑都没有 | `propose_skill` / `publish_skill` / `deprecate_skill`（Procedure、WorkerDefinition 同）都已有，页面只做了 Publish / Deprecate；草稿只能由 Worker 结果契约的 `proposedSkill` 或 CLI 产生 | 页面未做 | §5.3 |
 | A3 | 模型与配额"硬编码了现有供应商"，没有供应商增删改查，至少要兼容 OpenAI 通用、Gemini、Claude、自定义兼容格式 | 没有硬编码：模型清单来自主机上的 `llm-providers.yaml`（`make gen-models` → `models.json`），页面是它的只读投影。平台级供应商管理是设计 §6.2（web → caddy `/api/llm-admin/*` → llm-proxy 管理端点，密钥只在 llm-proxy），属 P-D，未开工。llm-proxy 今天已支持 `openai-completions` / `openai-responses` / `anthropic-messages` 三种 API 与 `authorization` / `x-api-key` 两种鉴权头——OpenAI、Claude、DeepSeek、任何 OpenAI 兼容端点、Gemini 的 OpenAI 兼容端点都覆盖；Gemini 原生 API 需要新增一个适配器 | 路线图 P-D | §5.4 |
@@ -49,6 +49,8 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 > 基线事实：web `tsc` 通过、46 个测试文件 268 个用例全绿；三态（加载 / 空 / 错误）覆盖完整；凭证与一次性密钥
 > 的显示、清除、不落盘均正确；`X-Requested-With` CSRF 头在所有写调用上；无 `innerHTML` / `dangerouslySetInnerHTML`。
 > 严重度：P1 = 功能不可达或数据错误；P2 = 明确缺陷、误导或必 403；P3 = 卫生、一致性、可达性。
+> 复核层级：C1、C2、C9、C10、C21、C25–C29 与 W3 由主会话对照源码二次复核；其余各条为审计线"verified-in-code"
+> 且引用了具体行号，开工前由实现者按行号再确认一次即可。
 
 | # | 严重度 | 缺陷 | 证据 | 类别 | 方案 |
 |---|---|---|---|---|---|
@@ -354,7 +356,7 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 - **第二轮核对项**：C1 用 API key 登录后在我的账户页设密码成功、cookie 登录后能绑定 API key（e2e）；C2 翻两页后触发
   一次推送，行数不减（`useCapability.test.tsx`）；C9 以 operator 登录，成员 / 访问页不出现 owner 按钮（e2e）；C10 非唯一
   管理员停用自己看到"不能停用自己"（集成测试 + e2e）；C12 / C15 / C19 客户端拦住并给出字段级说明；C5 用不回包的
-  `WebSocketLike` 桩验证超时 reject；W3 用 Playwright 以每 10ms 一段、每段两行的假流式复现后再修。
+  `WebSocketLike` 桩验证超时 reject；W3 用 Playwright 复现两种情形后再修：(a) 每 10ms 一段、每段两行的假流式（异步 scroll 事件竞争）；(b) 一条工具调用行先出现、其结果文本随后原地增长且 `toolCalls.length` 不变（不触发滚动写入）。
 - **覆盖补齐（C22）**：`ChatPage` / `ChatListPage` / `TasksPage` / `TaskDetail` / `AuditPage` / `ActionRequestDetail` /
   `AppShell` / 三个平台详情面板补单测；我的账户 / 改密码 / 接入向导 / 侧栏补 e2e。
 - **设计基线（§5.9）**：每个改动页面对照原型走查并截图入 `docs/private/`；`styles/` 令牌 lint 零违规；axe 无严重项；
