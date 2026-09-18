@@ -18,9 +18,11 @@ import {
   issueHandle,
 } from '../../governance/capability/index.js';
 import { explain } from '../../substrate/epistemic/index.js';
+import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { invokeWorker, readWorkerRunRow } from '../task/index.js';
 import type { TaskRuntimeDeps } from '../task/runtime.js';
 import { listSkills, proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -57,6 +59,7 @@ import type { ResolvedCaller } from './resolve-caller.js';
 const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+const ONTOLOGY_DIR = path.join(path.resolve(KERNEL_ROOT, '..', '..'), 'ontology');
 
 class FakeTaskSupervisorClient implements TaskSupervisorClientPort {
   readonly statuses = new Map<string, TaskSupervisorStatus>();
@@ -886,6 +889,157 @@ describe.runIf(DATABASE_URL !== undefined)(
         return rows.rows;
       });
       expect(seenByB).toHaveLength(1);
+    });
+
+    // S5.1 × S2.9 (2026-09-18 real-model docker_restart regression, STATUS §4 leftover 30's
+    // second root cause): in `reject` mode an ontology refusal of ONE factsToAssert entry must not
+    // take the whole contract down — see application/task/result.ts's module doc comment ("the one
+    // partial outcome"). The suite's own hand-inserted workspace has no published ontology and is
+    // therefore never enforced, so this block re-points the suite's shared variables at a
+    // bootstrap-born workspace (reject mode, platform-meta seeded) with ops-assets v1 published —
+    // every helper above closes over those three variables. Last in the file on purpose.
+    describe('S5.1 reject mode: one refused fact is a partial outcome, not a lost result', () => {
+      beforeAll(async () => {
+        const created = await createWorkspaceWithOwner(pool, {
+          name: `worker-result-reject-${randomUUID().slice(0, 8)}`,
+          owner: { displayName: 'Reject Owner' },
+          ontologyDir: ONTOLOGY_DIR,
+        });
+        workspaceId = created.workspaceId;
+        ownerId = created.ownerPrincipalId;
+        await inTx(ownerId, (client) =>
+          publishOntologyDomainPack(client, workspaceId, {
+            packName: 'ops-assets',
+            fileName: 'ops-assets-v1.yaml',
+            dir: ONTOLOGY_DIR,
+            principalId: ownerId,
+          }),
+        );
+        const proposed = await inTx(ownerId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, ownerId, {
+            kind: 'worker',
+            definition: { systemPrompt: 'You are a plain worker.' },
+          }),
+        );
+        await inTx(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: proposed.id,
+            version: proposed.version,
+          }),
+        );
+        workerDefinitionId = proposed.id;
+      }, 120_000);
+
+      // ops-assets v1 declares `runs_on` Container -> Host.
+      const validFact = () => ({
+        linkType: 'runs_on',
+        source: { objectType: 'Container', identity: { containerId: randomUUID() } },
+        target: { objectType: 'Host', identity: { hostname: `h-${randomUUID().slice(0, 8)}` } },
+      });
+      // The incident's shape: an undeclared LinkType from an undeclared endpoint type — the
+      // endpoint upsert must roll back together with the refused Link.
+      const refusedFact = (marker: string) => ({
+        linkType: 'observed_state_of',
+        source: { objectType: 'DocContainer', identity: { marker } },
+        target: { objectType: 'Host', identity: { hostname: `h-${marker}` } },
+      });
+
+      it('reject: the refused entry is dropped and recorded, the rest lands, the Task completes', async () => {
+        const { taskId, claims } = await spawnWorkerRun();
+        const marker = randomUUID().slice(0, 8);
+        const caller: ResolvedCaller = { channel: 'handle', claims };
+        const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+          summary: 'restart requested',
+          factsToAssert: [validFact(), refusedFact(marker)],
+          evidence: [
+            { kind: 'note', content: { text: 'for the valid one' }, factIndex: 0 },
+            { kind: 'note', content: { text: 'for the refused one' }, factIndex: 1 },
+          ],
+        })) as { id: string; status: string; factIds: string[] };
+        expect(result.id).toBe(taskId);
+        expect(result.status).toBe('completed');
+        expect(result.factIds).toHaveLength(1);
+
+        const stored = await inTx(ownerId, async (client) => {
+          const task = await client.query<{
+            status: string;
+            result: {
+              factIds: string[];
+              factsRejected: { index: number; reason: string; linkType: string }[];
+            };
+          }>('select status, result from tasks where workspace_id = $1 and id = $2', [
+            workspaceId,
+            taskId,
+          ]);
+          const orphans = await client.query<{ n: string }>(
+            "select count(*)::text as n from objects where workspace_id = $1 and object_type = 'DocContainer'",
+            [workspaceId],
+          );
+          const audit = await client.query<{ payload: { factIndex: number; reason: string } }>(
+            "select payload from audit_records where workspace_id = $1 and action = 'task.result_fact_rejected' and resource_id = $2",
+            [workspaceId, taskId],
+          );
+          const evidenceRows = await client.query<{ link_id: string }>(
+            'select link_id from evidence where workspace_id = $1 and link_id = any($2::uuid[])',
+            [workspaceId, result.factIds],
+          );
+          return {
+            task: task.rows[0],
+            orphans: orphans.rows[0]?.n,
+            audit: audit.rows,
+            evidenceRows: evidenceRows.rows,
+          };
+        });
+        expect(stored.task?.status).toBe('completed');
+        expect(stored.task?.result.factIds).toEqual(result.factIds);
+        expect(stored.task?.result.factsRejected).toHaveLength(1);
+        expect(stored.task?.result.factsRejected[0]).toMatchObject({
+          index: 1,
+          reason: 'undeclared_link_type',
+          linkType: 'observed_state_of',
+        });
+        // The savepoint took the undeclared-type endpoint upsert with it.
+        expect(stored.orphans).toBe('0');
+        expect(stored.audit).toHaveLength(1);
+        expect(stored.audit[0]?.payload).toMatchObject({
+          factIndex: 1,
+          reason: 'undeclared_link_type',
+        });
+        // Evidence aimed at the refused entry has nothing to attach to; the valid one keeps its row.
+        expect(stored.evidenceRows).toHaveLength(1);
+      });
+
+      it('warn: both entries are written and the guard’s own ontology_violation row records the second', async () => {
+        await inTx(ownerId, (client) =>
+          client.query('update workspaces set ontology_enforcement = $2 where id = $1', [
+            workspaceId,
+            'warn',
+          ]),
+        );
+        const { taskId, claims } = await spawnWorkerRun();
+        const marker = randomUUID().slice(0, 8);
+        const caller: ResolvedCaller = { channel: 'handle', claims };
+        const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+          summary: 'warn mode',
+          factsToAssert: [validFact(), refusedFact(marker)],
+        })) as { status: string; factIds: string[] };
+        expect(result.status).toBe('completed');
+        expect(result.factIds).toHaveLength(2);
+
+        const stored = await inTx(ownerId, async (client) => {
+          const task = await client.query<{ result: { factsRejected: unknown[] } }>(
+            'select result from tasks where workspace_id = $1 and id = $2',
+            [workspaceId, taskId],
+          );
+          const warned = await client.query<{ n: string }>(
+            "select count(*)::text as n from audit_records where workspace_id = $1 and action = 'ontology_violation' and payload->>'linkType' = 'observed_state_of'",
+            [workspaceId],
+          );
+          return { task: task.rows[0], warned: warned.rows[0]?.n };
+        });
+        expect(stored.task?.result.factsRejected).toEqual([]);
+        expect(Number(stored.warned)).toBeGreaterThanOrEqual(1);
+      });
     });
   },
 );
