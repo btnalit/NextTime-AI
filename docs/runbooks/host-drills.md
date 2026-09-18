@@ -187,8 +187,8 @@ to re-apply this upgrade for real (not a drill), from the checkout root:
 ### 验证
 
 `DRILL-UPGRADE OK` 且退出码 0 = 升级到 v(n) 三份验收通过、回滚（代码 + 数据库）后 S1 验收通过。
-脚本结束状态：代码检出停在 v(n-1)，数据库已还原成升级前的内容——**这就是最终状态，不需要再手动
-做什么**才算"演练完成"；真的要升级，按脚本末尾打印的"to re-apply this upgrade for real"那几行
+脚本结束状态：代码检出停在 v(n-1)（开始时在分支上就回到那个分支，开始时钉在 tag 上就回到那个
+commit），数据库已还原成升级前的内容——**这就是最终状态，不需要再手动做什么**才算"演练完成"；真的要升级，按脚本末尾打印的"to re-apply this upgrade for real"那几行
 命令做。
 
 ### 回滚

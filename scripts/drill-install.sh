@@ -206,12 +206,28 @@ step_ok
 # --------------------------------------------------------------------------------------------
 
 step_start "checkout"
-CHECKOUT_CMD="CODE_DIR='$CODE_DIR' BRANCH='$REF'"
+# host-checkout.sh only knows branches (fetch + reset to origin/$BRANCH). A release tag as REF
+# is the customer-facing case (docs/runbooks/release.md §3): clone main first, then pin the tag
+# the way that runbook documents.
+REF_IS_TAG=0
+if git ls-remote --tags origin "refs/tags/$REF" 2>/dev/null | grep -q "refs/tags/$REF\$"; then
+  REF_IS_TAG=1
+fi
+CHECKOUT_BRANCH="$REF"
+if [ "$REF_IS_TAG" -eq 1 ]; then
+  CHECKOUT_BRANCH="main"
+fi
+CHECKOUT_CMD="CODE_DIR='$CODE_DIR' BRANCH='$CHECKOUT_BRANCH'"
 if [ -n "$REPO_URL" ]; then
   CHECKOUT_CMD="$CHECKOUT_CMD REPO_URL='$REPO_URL'"
 fi
 if ! $SSH "$TARGET_HOST" "$CHECKOUT_CMD sh -s" < scripts/host-checkout.sh; then
   step_fail "docs/runbooks/host-checkout.md §E3.1"
+fi
+if [ "$REF_IS_TAG" -eq 1 ]; then
+  if ! remote "git fetch origin --tags && git checkout \"$REF\" && git rev-parse HEAD"; then
+    step_fail "docs/runbooks/release.md §3 (pinning the checkout to tag $REF)"
+  fi
 fi
 step_ok
 

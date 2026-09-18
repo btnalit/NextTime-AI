@@ -30,19 +30,20 @@
 # Additionally: the working tree must be clean (this script moves HEAD around with `git checkout`
 # and refuses to risk losing uncommitted work) and the target tag must already exist on origin.
 #
-# KNOWN RISK (self-modifying script, not solved here): this script does `git checkout` on the very
-# checkout it is itself running from, three times (to v(n), back to v(n-1) for the PROBE, back to
-# v(n-1) again for rollback). Every function body used after a checkout (build_step, migrate_step,
-# up_step, accept_step, probe_step, rollback_step, …) is already fully defined before the first
-# checkout runs, so calling them is safe — but if a future release ever changes this file's own
-# bytes between v(n-1) and v(n), some POSIX `sh` implementations read a running script from disk in
-# buffered chunks rather than loading it whole up front, and could read corrupted/mixed content for
-# any *top-level* statement executed after the checkout that overwrites this file (the final
-# `echo`-only summary at the bottom is the only top-level code that runs after the last checkout,
-# so the practical blast radius is small, but this is not a formal guarantee). Mitigation left to
-# the operator until this is worth solving properly: run this script with an explicit interpreter
-# known to read scripts fully into memory up front, or copy it outside the checkout
-# (`cp scripts/drill-upgrade.sh /tmp/ && sh /tmp/drill-upgrade.sh ...`) before invoking it.
+# Self-protection: this script does `git checkout` on the very checkout it is itself running from,
+# three times (to v(n), back to v(n-1) for the PROBE, back to v(n-1) again for rollback). A POSIX
+# `sh` reads a running script from disk in buffered chunks, so if a release ever changes this
+# file's own bytes between v(n-1) and v(n) the shell could read mixed content. The first thing the
+# script does is therefore copy itself to a temp file outside the checkout and `exec` that copy
+# (DRILL_UPGRADE_SELF_COPY marks the copy so it does not recurse); the copy removes itself in the
+# EXIT trap. The accept_*.sh scripts it calls are deliberately NOT copied — running each version's
+# own acceptance scripts is the point.
+#
+# Branch handling: the host normally sits on a branch (docs/runbooks/host-checkout.md resets to
+# origin/main) or on a pinned tag (docs/runbooks/release.md §3). The drill records both the exact
+# commit and, when on a branch, the branch name, and rolls back to the branch (verified to still
+# resolve to the recorded commit) so the checkout ends where it started — not detached at the same
+# commit.
 #
 # What this drills (docs/development-tasks.md's own deliverable-2 text): "用上一发布版的数据目录 +
 # backup.sh 产物 → 检出新版 → make migrate → 三份验收 → 用 restore.sh 回滚到备份并再跑 S1 验收".
@@ -95,6 +96,23 @@
 # attempt to replay them.
 
 set -u
+
+# Re-exec from a copy outside the checkout before anything else (see the header comment). Done
+# before argument parsing so "$@" is still intact.
+if [ -z "${DRILL_UPGRADE_SELF_COPY:-}" ]; then
+  self_copy=$(mktemp /tmp/nt-drill-upgrade-self.XXXXXX) || {
+    echo "drill-upgrade: mktemp failed" >&2
+    exit 1
+  }
+  if ! cat "$0" >"$self_copy"; then
+    rm -f "$self_copy"
+    echo "drill-upgrade: could not copy $0 to $self_copy" >&2
+    exit 1
+  fi
+  DRILL_UPGRADE_SELF_COPY="$self_copy"
+  export DRILL_UPGRADE_SELF_COPY
+  exec sh "$self_copy" "$@"
+fi
 
 TO_TAG=""
 ACK_LIVE_RESTORE=0
@@ -171,11 +189,14 @@ DRILL_LOG=$(mktemp /tmp/nt-drill-upgrade-log.XXXXXX) || {
 }
 cleanup_tmp() {
   rm -f "$DRILL_LOG"
+  rm -f "$DRILL_UPGRADE_SELF_COPY"
 }
 trap cleanup_tmp EXIT INT TERM
 
 FROM_COMMIT=""
 FROM_TAG=""
+FROM_BRANCH=""
+FROM_REF=""
 DUMP_PATH=""
 PROBE_RESULT="not run"
 
@@ -226,10 +247,30 @@ preflight_step() {
 
   FROM_COMMIT=$(git rev-parse HEAD)
   FROM_TAG=$(git describe --tags --exact-match HEAD 2>/dev/null)
-  if [ -n "$FROM_TAG" ]; then
-    pass "preflight-from-version" "currently at ${FROM_TAG} (${FROM_COMMIT})"
+  FROM_BRANCH=$(git symbolic-ref --short -q HEAD 2>/dev/null)
+  if [ -n "$FROM_BRANCH" ]; then
+    FROM_REF="$FROM_BRANCH"
   else
-    pass "preflight-from-version" "currently at ${FROM_COMMIT} (not exactly on a tag — docs/runbooks/release.md §3's tag-pinning convention was not in use on this checkout; rollback will still check out this exact commit)"
+    FROM_REF="$FROM_COMMIT"
+  fi
+  if [ -n "$FROM_TAG" ]; then
+    pass "preflight-from-version" "currently at ${FROM_TAG} (${FROM_COMMIT}${FROM_BRANCH:+, branch $FROM_BRANCH})"
+  elif [ -n "$FROM_BRANCH" ]; then
+    pass "preflight-from-version" "currently on branch ${FROM_BRANCH} at ${FROM_COMMIT} (not on a tag — docs/runbooks/release.md §3's tag-pinning convention was not in use on this checkout; rollback returns to this branch at this commit)"
+  else
+    pass "preflight-from-version" "currently detached at ${FROM_COMMIT} (not on a tag or branch; rollback will check out this exact commit)"
+  fi
+}
+
+# checkout_from_step <label>: back to where the drill started — the original branch when there
+# was one (so the checkout does not end up detached), verified to still resolve to the recorded
+# commit, else the recorded commit itself.
+checkout_from_step() {
+  label="$1"
+  checkout_ref_step "$label" "$FROM_REF"
+  now_at=$(git rev-parse HEAD)
+  if [ "$now_at" != "$FROM_COMMIT" ]; then
+    fail "checkout-$label" "$FROM_REF now resolves to $now_at, not the recorded pre-upgrade commit $FROM_COMMIT — the branch moved during the drill; check out $FROM_COMMIT by hand"
   fi
 }
 
@@ -331,7 +372,7 @@ accept_step_required() {
 
 # PROBE — non-fatal by construction: never calls fail(), only records PROBE_RESULT.
 probe_step() {
-  checkout_ref_step "probe-from" "$FROM_COMMIT"
+  checkout_from_step "probe-from"
   if ! docker compose --profile test build >"$DRILL_LOG" 2>&1; then
     echo "PROBE old-code-on-new-schema failed (build: $(tail -10 "$DRILL_LOG"))"
     PROBE_RESULT="failed (build)"
@@ -362,7 +403,7 @@ probe_step() {
 # rollback proper — re-affirms v(n-1) is checked out/built/up (idempotent, correct even if
 # probe_step above bailed out early), then the live restore.
 rollback_step() {
-  checkout_ref_step "rollback-from" "$FROM_COMMIT"
+  checkout_from_step "rollback-from"
   if ! docker compose --profile test build >"$DRILL_LOG" 2>&1; then
     fail "rollback-build" "docker compose --profile test build failed: $(tail -30 "$DRILL_LOG")"
   fi
@@ -430,7 +471,7 @@ PHASE_ROLLBACK=$(( $(date +%s) - T_ROLLBACK0 ))
 
 echo ""
 echo "DRILL-UPGRADE OK"
-echo "from: ${FROM_TAG:-$FROM_COMMIT} -> to: ${TO_TAG} -> rolled back to: ${FROM_TAG:-$FROM_COMMIT}"
+echo "from: ${FROM_TAG:-$FROM_COMMIT} -> to: ${TO_TAG} -> rolled back to: ${FROM_TAG:-$FROM_COMMIT}${FROM_BRANCH:+ (branch $FROM_BRANCH)}"
 echo "pre-upgrade dump (kept): $DUMP_PATH"
 echo "reversibility probe: $PROBE_RESULT (this is the evidence for docs/runbooks/release.md's 迁移可逆性 table — see that file)"
 echo ""
