@@ -2230,7 +2230,7 @@ S5 不新增一等概念，只补关系、不变量、消费者与守卫。与 W
 8. **遗留 21**：能力 `list_action_requests`（`status` 过滤、cursor 分页、human 通道）+ 控制台"审批历史"
    只读列表（页面归 P-C 的运行状态页或工作区页，由 P-C 所有者定位置）。
 
-#### S5.5 遗留 31 实现说明（2026-09-18，PR #TBD）
+#### S5.5 遗留 31 实现说明（2026-09-18，PR #197）
 
 核实结论：Explorer 专属会话已在 S4.1 退役，遗留 31 的前提不成立，未改代码，按 STATUS 既定拟修关闭。
 证据：`packages/kernel/src/interfaces/explorer-contract/index.ts` 自身模块注释与 `registerExplorerRoutes`
@@ -2245,7 +2245,7 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
 （`application/gateway/members-handlers.ts`）只更新 `principals.api_key_hash` 一列，不触碰
 `user_sessions` 或任何 Handle 会话，因此确实"rotate 不影响控制台会话"。
 
-#### S5.5 遗留 21 实现说明（2026-09-18，PR #TBD）
+#### S5.5 遗留 21 实现说明（2026-09-18，PR #197）
 
 - **能力 `list_action_requests`**（`packages/shared/src/capabilities.ts`，governance
   组，`mode:'observe'`、`channel:'human'`、`minRole:'operator'`，与 `list_pending`/`get_action`
