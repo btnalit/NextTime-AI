@@ -93,11 +93,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       ) as Promise<T>;
     }
 
-    function containerItem(containerId: string) {
+    // ops-assets-v1 declares Container's identity as [composeProjectId, serviceName] — the
+    // ingest handler rejects an incomplete identity — so the "container" under test is a service
+    // of one per-run compose project, named fresh-a / fresh-b like the collector would.
+    const composeProjectId = `fresh-project-${hostname}`;
+
+    function containerItem(serviceName: string) {
       return {
         objectType: 'Container',
-        identity: { containerId },
-        properties: { name: containerId },
+        identity: { composeProjectId, serviceName },
+        properties: { name: serviceName },
         links: [{ linkType: 'runs_on', target: { objectType: 'Host', identity: { hostname } } }],
       };
     }
@@ -105,12 +110,12 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function activeRunsOnFacts(): Promise<Map<string, FactLike>> {
       const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         client.query<{ id: string; container_id: string; invalidated_at: Date | null }>(
-          `select l.id, s.identity_key ->> 'containerId' as container_id, l.invalidated_at
+          `select l.id, s.identity_key ->> 'serviceName' as container_id, l.invalidated_at
              from links l join objects s on s.workspace_id = l.workspace_id and s.id = l.source_object_id
             where l.workspace_id = $1 and l.link_type = 'runs_on' and s.object_type = 'Container'
-              and s.identity_key ->> 'containerId' like 'fresh-%'
+              and s.identity_key ->> 'composeProjectId' = $2
             order by l.recorded_at`,
-          [workspaceId],
+          [workspaceId, composeProjectId],
         ),
       );
       const byContainer = new Map<string, FactLike>();
@@ -246,9 +251,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(b?.invalidationReason).toBe('not_reobserved');
 
       // The Object is never invalidated by absence — its clock just stopped.
-      const objectB = result.objects.find((o) => o.identity.containerId === 'fresh-b');
+      const objectB = result.objects.find((o) => o.identity.serviceName === 'fresh-b');
       expect(objectB).toBeUndefined(); // not touched by this run
-      const containerA = result.objects.find((o) => o.identity.containerId === 'fresh-a')?.id;
+      const containerA = result.objects.find((o) => o.identity.serviceName === 'fresh-a')?.id;
       const traversed = await call<{ edges: readonly { linkId: string }[] }>('traverse', {
         fromId: containerA,
         linkType: 'runs_on',
@@ -278,30 +283,28 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it("another Source's Fact at a Container is outside this Source's window", async () => {
-      const hostId = (
-        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-          client.query<{ id: string }>(
-            `select id from objects where workspace_id = $1 and object_type = 'Host'
-               and identity_key ->> 'hostname' = $2`,
-            [workspaceId, hostname],
+      const containers = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query<{ id: string; service_name: string }>(
+            `select id, identity_key ->> 'serviceName' as service_name
+             from objects where workspace_id = $1 and object_type = 'Container'
+              and identity_key ->> 'composeProjectId' = $2`,
+            [workspaceId, composeProjectId],
           ),
-        )
-      ).rows[0]?.id;
-      const containerA = (
-        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-          client.query<{ id: string }>(
-            `select id from objects where workspace_id = $1 and object_type = 'Container'
-               and identity_key ->> 'containerId' = 'fresh-a'`,
-            [workspaceId],
-          ),
-        )
-      ).rows[0]?.id;
+      );
+      const containerA = containers.rows.find((row) => row.service_name === 'fresh-a')?.id;
+      const containerB = containers.rows.find((row) => row.service_name === 'fresh-b')?.id;
+      expect(containerA).toBeDefined();
+      expect(containerB).toBeDefined(); // the Object outlived its retired Fact
       // A human's own assertion (no Observation, a different origin) on the same identity would
-      // be a Conflict; use a different LinkType so it is simply another Fact at this Container.
+      // be a Conflict; use a different LinkType so it is simply another Fact at this Container —
+      // `depends_on` (Container -> Container) is what ops-assets-v1 licenses here.
       const foreign = await call<{ id: string }>('assert_fact', {
         sourceObjectId: containerA,
-        targetObjectId: hostId,
-        linkType: 'part_of',
+        targetObjectId: containerB,
+        linkType: 'depends_on',
         properties: { note: 'asserted by the owner, not observed' },
       });
 
