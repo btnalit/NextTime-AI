@@ -548,7 +548,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     // Own testTimeout (STATUS.md 遗留 25): flaky under runner contention at vitest's 5s default —
-    // this case's own `waitUntil` already waits up to 5s internally, leaving no margin.
+    // this case's own `waitUntil` already waits up to 5s internally, leaving no margin. The
+    // testTimeout alone was not enough (recurred 2026-09-18 as `waitUntil timed out` at 5.2s),
+    // so the metadata wait below gets its own 12s budget inside the 15s testTimeout.
     it('FakeAgentRuntime end-to-end: send → stream → message → turnEnded → history shows both messages', async () => {
       const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
       const chatId = await newChat(client);
@@ -563,12 +565,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(sendResult.sequence).toBe(1);
 
-      await waitUntil(() =>
-        client.notifications.some(
-          (n) =>
-            n.method === 'chat.metadata' &&
-            (n.params as { metadata?: { turnId?: string } }).metadata?.turnId === sendResult.turnId,
-        ),
+      await waitUntil(
+        () =>
+          client.notifications.some(
+            (n) =>
+              n.method === 'chat.metadata' &&
+              (n.params as { metadata?: { turnId?: string } }).metadata?.turnId ===
+                sendResult.turnId,
+          ),
+        12_000,
       );
 
       const streamDeltas = client.notifications.filter((n) => n.method === 'chat.stream');
