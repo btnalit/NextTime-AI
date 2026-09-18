@@ -2293,7 +2293,7 @@ Principal：`logout`（`interfaces/http/auth-routes.ts` 调 `revokeUserSession`�
   状态过滤变更重新请求、403 走 forbidden 空态、Load more 追加下一页）。均通过（本地 vitest；
   DB 集成测试本地无 Postgres/Docker，只标注了 gate，CI 才真正跑）。
 
-#### S5.5 遗留 24 实现说明（2026-09-18，PR #TBD）
+#### S5.5 遗留 24 实现说明（2026-09-18，PR #198）
 
 - **缺陷形态**：`assertFact` 无既有行时取身份级 advisory lock 再读一次（PR #140），封住的是两事务：T2 的首次
   `for update` 查找阻塞在 T1 正在 supersede 的行上，T1 提交后被阻塞的**那条语句**只按 EvalPlanQual 重检
