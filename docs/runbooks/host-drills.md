@@ -126,6 +126,11 @@ host-bootstrap.md"是走不通的。`drill-install.sh` 采用唯一真正满足�
   `git checkout` 切换版本，不允许带着未提交的改动跑）。
 - 要升级到的 tag 已经存在于 `origin`（先在本机 `git fetch origin --tags` 确认，或者刚合并的
   release PR 已经打过 tag）。
+- **首次使用**（当前检出的版本里还没有这个脚本，例如从 v0.10.0 升到第一个带它的 tag）：直接从目标
+  tag 取脚本本身出来跑，其余都不用动——`git fetch origin --tags && git show <vX.Y.Z>:scripts/drill-upgrade.sh
+  > /tmp/drill-upgrade.sh && sh /tmp/drill-upgrade.sh --to <vX.Y.Z> --ack-live-restore`。脚本本来就把
+  自己复制到检出外再运行（它要 `git checkout` 自己所在的检出），从 `/tmp` 起跑与从检出起跑等价；它调用
+  的 `scripts/restore.sh` / `accept_s*.sh` 仍取自检出里"当时那个版本"的文件，这正是设计意图。
 
 ### 步骤
 
