@@ -79,7 +79,7 @@ import type { TaskRow } from './types.js';
  * published ontology does not license (`OntologyViolationError`). A Worker's facts are
  * model-generated claims, so this is an ordinary *governance outcome on a knowledge write*, not a
  * failure of the Task — the Task's own work (a gate action already executed, say) is done, and
- * losing the whole contract to it turned into the real-model `docker_restart` regression of
+ * losing the whole contract to it turned into the real-model container-restart regression of
  * 2026-09-18 (Task `failed / no_result` while the container had in fact restarted; STATUS §4
  * leftover 30's second root cause). Each fact is therefore written under its own savepoint
  * (covering the endpoint `resolveObjectRef` upserts too, so no Object of an undeclared type is
