@@ -269,11 +269,10 @@ async function fetchActivityRef(
   if (!row) return null;
   const metadata = row.metadata ?? {};
   const onBehalfOfId = typeof metadata.onBehalfOf === 'string' ? metadata.onBehalfOf : null;
-  const [startedByPrincipal, onBehalfOfPrincipal, observations] = await Promise.all([
-    fetchPrincipalRef(client, workspaceId, row.started_by),
-    fetchPrincipalRef(client, workspaceId, onBehalfOfId),
-    fetchObservationRefs(client, workspaceId, row.id, onlyObservationId),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const startedByPrincipal = await fetchPrincipalRef(client, workspaceId, row.started_by);
+  const onBehalfOfPrincipal = await fetchPrincipalRef(client, workspaceId, onBehalfOfId);
+  const observations = await fetchObservationRefs(client, workspaceId, row.id, onlyObservationId);
   return {
     id: row.id,
     kind: row.kind,
@@ -323,14 +322,12 @@ async function explainFact(
   const row = result.rows[0];
   if (!row) throw new ExplainNodeNotFoundError('fact', workspaceId, factId);
 
-  const [assertedByPrincipal, verifiedByPrincipal, activity, lastObservation] = await Promise.all([
-    fetchPrincipalRef(client, workspaceId, row.asserted_by),
-    fetchPrincipalRef(client, workspaceId, row.verified_by),
-    // W5: narrow to the Fact's own Observation when it has one (see `ExplainFactRef.observationId`).
-    fetchActivityRef(client, workspaceId, row.activity_id, row.observation_id),
-    // S5.2: the latest same-origin re-confirmation (see `ExplainFactRef.lastObservation`).
-    fetchObservationRef(client, workspaceId, row.last_observation_id),
-  ]);
+  const assertedByPrincipal = await fetchPrincipalRef(client, workspaceId, row.asserted_by);
+  const verifiedByPrincipal = await fetchPrincipalRef(client, workspaceId, row.verified_by);
+  // W5: narrow to the Fact's own Observation when it has one (see `ExplainFactRef.observationId`).
+  const activity = await fetchActivityRef(client, workspaceId, row.activity_id, row.observation_id);
+  // S5.2: the latest same-origin re-confirmation (see `ExplainFactRef.lastObservation`).
+  const lastObservation = await fetchObservationRef(client, workspaceId, row.last_observation_id);
 
   return {
     nodeType: 'fact',
@@ -371,11 +368,9 @@ async function explainDecision(
   const row = result.rows[0];
   if (!row) throw new ExplainNodeNotFoundError('decision', workspaceId, decisionId);
 
-  const [decidedByPrincipal, source, activity] = await Promise.all([
-    fetchPrincipalRef(client, workspaceId, row.decided_by),
-    fetchSourceRef(client, workspaceId, row.source_id),
-    fetchActivityRef(client, workspaceId, row.activity_id),
-  ]);
+  const decidedByPrincipal = await fetchPrincipalRef(client, workspaceId, row.decided_by);
+  const source = await fetchSourceRef(client, workspaceId, row.source_id);
+  const activity = await fetchActivityRef(client, workspaceId, row.activity_id);
 
   return {
     nodeType: 'decision',

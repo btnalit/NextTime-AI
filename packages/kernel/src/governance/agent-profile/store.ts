@@ -312,9 +312,8 @@ export async function readEffectiveAgentProfile(
   principalId: string,
   available: AvailableAgentResources = NO_AVAILABLE_AGENT_RESOURCES,
 ): Promise<EffectiveAgentProfile> {
-  const [profile, policy] = await Promise.all([
-    readAgentProfile(client, workspaceId, principalId),
-    readAgentPolicy(client, workspaceId),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const profile = await readAgentProfile(client, workspaceId, principalId);
+  const policy = await readAgentPolicy(client, workspaceId);
   return resolveEffectiveAgentProfile(profile, policy, available);
 }

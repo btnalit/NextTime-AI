@@ -160,10 +160,9 @@ function toWireOperationSummary(record: OperationRecord) {
 // -------------------------------------------------------------------------------------------
 
 export const listGatekeepersHandler: CapabilityHandler = async (client, workspaceId) => {
-  const [entries, operationCounts] = await Promise.all([
-    listGatekeepers(client, workspaceId),
-    countOperationsByGatekeeper(client, workspaceId),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const entries = await listGatekeepers(client, workspaceId);
+  const operationCounts = await countOperationsByGatekeeper(client, workspaceId);
   return {
     result: {
       items: entries.map((entry) =>
@@ -178,11 +177,12 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const record = await getGatekeeper(client, workspaceId, gatekeeperId);
   if (!record) throw new GatekeeperNotFoundError(gatekeeperId);
 
-  const [allOperations, health, disabled] = await Promise.all([
-    listOperations(client, workspaceId, { gatekeeperId }),
-    probeGatekeeperHealth(record.endpoint),
-    disabledOperationsFor(client, workspaceId, gatekeeperId),
-  ]);
+  // The health probe is a network call, so it may overlap the reads; the two reads share one
+  // client and run one after the other (S5.5 leftover 34).
+  const healthProbe = probeGatekeeperHealth(record.endpoint);
+  const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
+  const disabled = await disabledOperationsFor(client, workspaceId, gatekeeperId);
+  const health = await healthProbe;
   const operations = allOperations.filter((op) => !isOperationDisabled([...disabled], op.name));
 
   const summary = toWireGatekeeperSummary(

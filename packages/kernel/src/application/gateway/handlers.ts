@@ -468,10 +468,9 @@ const subscribeChatHandler: CapabilityHandler = async (client, workspaceId, para
  */
 const getEntryContextHandler: CapabilityHandler = async (client, workspaceId) => {
   const principalId = await currentPrincipalId(client);
-  const [facts, drained] = await Promise.all([
-    graphStore.listRecentFacts(client, workspaceId),
-    drainPendingContextItems(client, workspaceId, principalId),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const facts = await graphStore.listRecentFacts(client, workspaceId);
+  const drained = await drainPendingContextItems(client, workspaceId, principalId);
   return {
     result: {
       pendingApprovals: drained.pendingApprovals,

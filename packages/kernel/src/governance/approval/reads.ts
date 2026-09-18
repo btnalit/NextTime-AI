@@ -407,29 +407,28 @@ export async function getOperationStats(
   workspaceId: string,
   filter: GetOperationStatsFilter,
 ): Promise<readonly OperationStatsRow[]> {
-  const [executeResult, observeRows] = await Promise.all([
-    client.query<OperationStatsDbRow>(
-      `select gatekeeper_id, action_kind,
-              count(*)::bigint as calls,
-              count(*) filter (where status = 'approved')::bigint as approved,
-              count(*) filter (where status = 'rejected')::bigint as rejected,
-              count(*) filter (where status = 'auto_approved')::bigint as auto_approved,
-              count(*) filter (where status = 'failed')::bigint as failed,
-              max(requested_at) as last_called_at
-       from action_requests
-       where workspace_id = $1
-         and requested_at >= now() - make_interval(days => $2::int)
-         and ($3::uuid is null or gatekeeper_id = $3)
-       group by gatekeeper_id, action_kind
-       order by gatekeeper_id, action_kind`,
-      [workspaceId, filter.days, filter.gatekeeperId ?? null],
-    ),
-    queryAuditActionOperationStats(client, workspaceId, {
-      actions: [OBSERVE_OPERATION_AUDIT_ACTION],
-      sinceDays: filter.days,
-      gatekeeperId: filter.gatekeeperId,
-    }),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const executeResult = await client.query<OperationStatsDbRow>(
+    `select gatekeeper_id, action_kind,
+            count(*)::bigint as calls,
+            count(*) filter (where status = 'approved')::bigint as approved,
+            count(*) filter (where status = 'rejected')::bigint as rejected,
+            count(*) filter (where status = 'auto_approved')::bigint as auto_approved,
+            count(*) filter (where status = 'failed')::bigint as failed,
+            max(requested_at) as last_called_at
+     from action_requests
+     where workspace_id = $1
+       and requested_at >= now() - make_interval(days => $2::int)
+       and ($3::uuid is null or gatekeeper_id = $3)
+     group by gatekeeper_id, action_kind
+     order by gatekeeper_id, action_kind`,
+    [workspaceId, filter.days, filter.gatekeeperId ?? null],
+  );
+  const observeRows = await queryAuditActionOperationStats(client, workspaceId, {
+    actions: [OBSERVE_OPERATION_AUDIT_ACTION],
+    sinceDays: filter.days,
+    gatekeeperId: filter.gatekeeperId,
+  });
 
   const merged = new Map<string, OperationStatsRow>();
   for (const row of executeResult.rows) {

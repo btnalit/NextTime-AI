@@ -105,14 +105,13 @@ async function resolveAvailableResources(
   workspaceId: string,
   targetPrincipalId: string,
 ): Promise<AvailableAgentResources> {
-  const [publishedSkillIds, grantedGatekeeperIds, publishedWorkerDefinitions] = await Promise.all([
-    listPublishedSkillIds(client, workspaceId),
-    listActiveGrantResourceScopes(client, workspaceId, {
-      principalId: targetPrincipalId,
-      resourceType: GATEKEEPER_GRANT_CAPABILITY,
-    }),
-    listWorkerDefinitions(client, workspaceId),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const publishedSkillIds = await listPublishedSkillIds(client, workspaceId);
+  const grantedGatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
+    principalId: targetPrincipalId,
+    resourceType: GATEKEEPER_GRANT_CAPABILITY,
+  });
+  const publishedWorkerDefinitions = await listWorkerDefinitions(client, workspaceId);
   return {
     publishedSkillIds,
     grantedGatekeeperIds,
@@ -269,11 +268,9 @@ export const getAgentProfileHandler: CapabilityHandler = async (
   }
   await assertPrincipalExists(client, workspaceId, target);
 
-  const [profile, policy, available] = await Promise.all([
-    readAgentProfile(client, workspaceId, target),
-    readAgentPolicy(client, workspaceId),
-    resolveAvailableResources(client, workspaceId, target),
-  ]);
+  const profile = await readAgentProfile(client, workspaceId, target);
+  const policy = await readAgentPolicy(client, workspaceId);
+  const available = await resolveAvailableResources(client, workspaceId, target);
   const effective = resolveEffectiveAgentProfile(profile, policy, available);
 
   return {

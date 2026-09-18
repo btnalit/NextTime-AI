@@ -97,10 +97,9 @@ const PLATFORM_META_OBJECT_TYPES = new Set([
  *  (module doc comment above). Shared by every temporal/edge read below so the exclusion can never
  *  drift between them. */
 async function fetchDomainFacts(client: PoolClient, workspaceId: string): Promise<readonly Fact[]> {
-  const [facts, metaObjectIds] = await Promise.all([
-    graphStore.listRecentFacts(client, workspaceId, EXPLORER_MAX_FETCH),
-    fetchPlatformMetaObjectIds(client, workspaceId),
-  ]);
+  // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
+  const facts = await graphStore.listRecentFacts(client, workspaceId, EXPLORER_MAX_FETCH);
+  const metaObjectIds = await fetchPlatformMetaObjectIds(client, workspaceId);
   if (metaObjectIds.size === 0) return facts;
   return facts.filter(
     (fact) => !metaObjectIds.has(fact.sourceObjectId) && !metaObjectIds.has(fact.targetObjectId),
@@ -111,12 +110,16 @@ async function fetchPlatformMetaObjectIds(
   client: PoolClient,
   workspaceId: string,
 ): Promise<ReadonlySet<string>> {
-  const batches = await Promise.all(
-    [...PLATFORM_META_OBJECT_TYPES].map((objectType) =>
-      graphStore.search(client, workspaceId, { query: '', objectType, limit: EXPLORER_MAX_FETCH }),
-    ),
-  );
-  return new Set(batches.flat().map((object) => object.id));
+  const ids = new Set<string>();
+  for (const objectType of PLATFORM_META_OBJECT_TYPES) {
+    const batch = await graphStore.search(client, workspaceId, {
+      query: '',
+      objectType,
+      limit: EXPLORER_MAX_FETCH,
+    });
+    for (const object of batch) ids.add(object.id);
+  }
+  return ids;
 }
 
 function clamp(value: number, min: number, max: number): number {
