@@ -1,4 +1,4 @@
-.PHONY: lint test build typecheck depcruise ci migrate up down gen-models
+.PHONY: lint test build typecheck depcruise ci migrate up down gen-models demo
 
 lint:
 	corepack pnpm -r lint
@@ -62,3 +62,15 @@ gen-models:
 	docker compose run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js > "$${NEXTTIME_DATA}/config/models.json.tmp" \
 		&& mv "$${NEXTTIME_DATA}/config/models.json.tmp" "$${NEXTTIME_DATA}/config/models.json" \
 		|| { rm -f "$${NEXTTIME_DATA}/config/models.json.tmp"; exit 1; }
+
+# S5.8 交付与演示闭环 item 3 (docs/development-tasks.md §S5.8): a 15-minute, single-command demo —
+# ephemeral workspace → host-inventory collector run → three preset questions through the real
+# entry agent → one-page Markdown result under ${NEXTTIME_DATA}/demo/. Doubles as an S5.7
+# real-model scenario, so DEMO_MODEL is a real `<provider/model>` id and is never defaulted (same
+# rule as scripts/accept_s2.sh/accept_s3.sh's own --real). See docs/runbooks/demo.md.
+demo:
+	@if [ -z "$(DEMO_MODEL)" ]; then \
+		echo "make demo: DEMO_MODEL is required, e.g. DEMO_MODEL=<provider/model> make demo (see docs/runbooks/demo.md)" >&2; \
+		exit 1; \
+	fi
+	sh scripts/demo.sh --model "$(DEMO_MODEL)"
