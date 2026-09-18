@@ -393,6 +393,12 @@ q2_provenance_step() {
 
 # Prep for Q3 (not a preset question itself): enable the already-deployed gatekeeper-docker in this
 # ephemeral workspace and publish a throwaway ops-runner-shaped WorkerDefinition pinned to $MODEL.
+# Runs BEFORE q1 on purpose: connecting a gate changes the resident entry container's spec (the
+# gate tools / egress set it is spawned with), and the supervisor's reconcile recreates that
+# container at the next `/resident/spawn` — which the kernel issues when the next Turn starts. Doing
+# this after Q1/Q2 therefore killed the container out from under Q3 (`turn status=interrupted`,
+# first host run 2026-09-18; STATUS §4 leftover 44 for the platform-side race). Connect first,
+# then talk — the delivery loop's own order (接入 → 采集 → 对话) anyway.
 # Duplicated mechanics: scripts/accept_s2.sh's own connections_step (the "--- docker ---" block:
 # catalog enable-as-SQL, same "administrator's one click" precedent) and ops_runner_step (the
 # ontology/ops-runner.yaml template read). No ontology publish step here (unlike accept_s2.sh's own
@@ -605,9 +611,13 @@ workspace_create_step
 domain_pack_seed_step
 collector_handle_mint_step
 collector_run_step
+# Gate connection + Worker publish BEFORE the first chat turn (see worker_setup_step's own comment):
+# the resident entry container is spawned on the first turn with the workspace's gate set baked
+# in, and a later connect_gatekeeper makes the supervisor recreate it at the next turn's spawn —
+# on top of the Turn that just started (2026-09-18 first host run: Q3 `interrupted`).
+worker_setup_step
 q1_dependency_step
 q2_provenance_step
-worker_setup_step
 q3_restart_step
 report_write_step
 cleanup_step
