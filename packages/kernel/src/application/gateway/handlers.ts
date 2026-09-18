@@ -1,4 +1,9 @@
-import type { HandleClaims, Role, WorkerDefinitionKind } from '@nexttime/shared';
+import type {
+  ActionRequestStatus,
+  HandleClaims,
+  Role,
+  WorkerDefinitionKind,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ChatMessageRow,
@@ -45,8 +50,10 @@ import {
 import { readAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ActionRequestNotFoundError,
+  MAX_ACTION_REQUEST_LIST_LIMIT,
   approveActionRequest,
   getActionRequest,
+  listActionRequestsForApprover,
   listPendingForApprover,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
@@ -759,6 +766,36 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
   };
 };
 
+/** `list_action_requests` (S5.5 leftover 21, docs/STATUS.md row 21): the console's "审批历史" read —
+ *  every ActionRequest regardless of status, I14-scoped the same way `list_pending` is
+ *  (`governance/approval/reads.ts`'s own doc comment on `listActionRequestsForApprover`). A
+ *  requested `limit` above `MAX_ACTION_REQUEST_LIST_LIMIT` is clamped and reported `truncated: true`
+ *  (docs/wire-contract-conventions.md §3), the same convention `search`'s own handler
+ *  (`searchHandler` above) follows. §3 envelope — `{items, nextCursor?}`, never a bare array. */
+const listActionRequestsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { status, gatekeeperId, limit, cursor } = params as {
+    status?: ActionRequestStatus | ActionRequestStatus[];
+    gatekeeperId?: string;
+    limit?: number;
+    cursor?: string;
+  };
+  const caller = await currentPrincipalRole(client, workspaceId);
+  const page = await listActionRequestsForApprover(
+    client,
+    workspaceId,
+    { principalId: caller.id, role: caller.role },
+    { status, gatekeeperId, limit, cursor },
+  );
+  const truncated = limit !== undefined && limit > MAX_ACTION_REQUEST_LIST_LIMIT;
+  return {
+    result: {
+      items: page.items.map(toWireActionRequest),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(truncated ? { truncated: true as const } : {}),
+    },
+  };
+};
+
 /** "总是批准此类" — writes/upserts a workspace auto-approval rule for one action_kind (§9.3,
  *  design doc S2.10 card action). See `governance/policy/policies.ts`'s own doc comment for why
  *  the I8 high-blast-radius guard can only fire here when a prior `set_policy` call already
@@ -1179,6 +1216,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['reject', rejectHandler],
   ['list_pending', listPendingHandler],
   ['get_action', getActionHandler],
+  ['list_action_requests', listActionRequestsHandler],
   ['set_auto_approved_action_kind', setAutoApprovedActionKindHandler],
   ['set_policy', setPolicyHandler],
   ['grant_capability', grantCapabilityHandler],

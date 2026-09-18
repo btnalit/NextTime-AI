@@ -1,4 +1,4 @@
-import type { Role } from '@nexttime/shared';
+import type { ActionRequestStatus, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { queryAuditActionOperationStats } from '../../substrate/audit/index.js';
 import { GATEKEEPER_GRANT_CAPABILITY, hasActiveGrant } from '../capability/index.js';
@@ -12,8 +12,9 @@ import {
 
 /**
  * governance/approval/reads: every read-only query `service.ts`/`drainer.ts` need (design doc §9.3
- * `list_pending`/`get_action`, §5.4 I14, S2.3 drain-queue ordering). Split out per the design doc's
- * file-size guidance.
+ * `list_pending`/`get_action`, §5.4 I14, S2.3 drain-queue ordering; S5.5 leftover 21 —
+ * `listActionRequestsForApprover`, the `list_action_requests` "审批历史" read). Split out per the
+ * design doc's file-size guidance.
  */
 
 export async function getActionRequest(
@@ -90,6 +91,155 @@ export async function listPendingForApprover(
     [workspaceId, approver.principalId],
   );
   return result.rows.map(mapActionRequestRow);
+}
+
+/**
+ * `list_action_requests` keyset cursor (S5.5 leftover 21): the page boundary is the last row's
+ * `(requestedAt, id)` — `action_requests` (migrations/governance/0003_action_requests.sql) has no
+ * `updated_at`/`created_at` column, only `requested_at`, so that is this list's creation-order
+ * column, the same role `updated_at` plays for `search`'s own cursor
+ * (`substrate/graph/queries.ts`'s `encodeSearchCursor`/`buildSearchQuery`, PR #132). Opaque on the
+ * wire (base64url of `<iso>|<uuid>`) — same encoding, deliberately another private copy rather
+ * than a shared helper (that file's own doc comment: "a fourth private copy, deliberately — no
+ * shared helper refactor").
+ */
+const ACTION_REQUEST_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function encodeActionRequestCursor(requestedAt: Date, id: string): string {
+  return Buffer.from(`${requestedAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+/** Same "never throws on a malformed cursor" convention as `search`/`query_decisions`/
+ *  `list_conflicts` — an unparseable cursor reads as "no cursor" (first page), never a 500. */
+export function decodeActionRequestCursor(
+  cursor: string | undefined,
+): { readonly requestedAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const requestedAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (
+      !requestedAt ||
+      Number.isNaN(Date.parse(requestedAt)) ||
+      !ACTION_REQUEST_UUID_PATTERN.test(id)
+    ) {
+      return null;
+    }
+    return { requestedAt, id };
+  } catch {
+    return null;
+  }
+}
+
+/** Same defaults as `search` (`substrate/graph/store.ts` `DEFAULT_SEARCH_LIMIT`/
+ *  `MAX_SEARCH_LIMIT`) — the `list_action_requests` registry entry's own doc comment
+ *  (packages/shared/src/capabilities.ts) says explicitly to match them. */
+export const DEFAULT_ACTION_REQUEST_LIST_LIMIT = 50;
+export const MAX_ACTION_REQUEST_LIST_LIMIT = 200;
+
+export interface ListActionRequestsFilter {
+  readonly status?: ActionRequestStatus | readonly ActionRequestStatus[];
+  readonly gatekeeperId?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface ActionRequestListPage {
+  readonly items: readonly ActionRequestRow[];
+  readonly nextCursor?: string;
+}
+
+/**
+ * `list_action_requests` (S5.5 leftover 21, docs/STATUS.md row 21): the console's "审批历史" read —
+ * every ActionRequest regardless of status (unlike `listPendingForApprover` above, hardcoded to
+ * `status = 'pending_approval'`), optionally narrowed by `status`/`gatekeeperId`, keyset-paginated
+ * on `(requested_at, id)` the same way `search` paginates on `(updated_at, id)` (see this file's
+ * own cursor doc comment above; `truncated`-on-clamp is the caller's concern, same as `search`'s
+ * own handler).
+ *
+ * Visibility mirrors `listPendingForApprover` exactly (I14, design doc §8.5 "用户 B 看不到也批不了"):
+ * the workspace owner sees every row; any other role sees only rows whose `action_kind`/
+ * `resource_scope` matches one of their own active `capability_grants` (the same `exists` clause
+ * `listPendingForApprover` uses, copied rather than factored into a shared SQL fragment — this
+ * module has no query-builder layer, unlike `substrate/graph/queries.ts`). An ActionRequest a
+ * caller may not see must not appear here even once it is no longer pending — this list is a
+ * superset of `list_pending` by status, not by visibility.
+ */
+export async function listActionRequestsForApprover(
+  client: PoolClient,
+  workspaceId: string,
+  approver: { readonly principalId: string; readonly role: Role },
+  filter: ListActionRequestsFilter,
+): Promise<ActionRequestListPage> {
+  const limit = Math.min(
+    Math.max(filter.limit ?? DEFAULT_ACTION_REQUEST_LIST_LIMIT, 1),
+    MAX_ACTION_REQUEST_LIST_LIMIT,
+  );
+  const statuses =
+    filter.status === undefined
+      ? null
+      : Array.isArray(filter.status)
+        ? [...filter.status]
+        : [filter.status];
+  const cursor = decodeActionRequestCursor(filter.cursor);
+  const isOwner = approver.role === 'owner';
+
+  // Over-fetch by one: a (limit + 1)th row proves there is a next page without a second query
+  // (same convention `SqlGraphStore.searchPage` uses for `search`).
+  const result = await client.query<ActionRequestDbRow>(
+    `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests ar
+     where ar.workspace_id = $1
+       and ($2::text[] is null or ar.status = any($2::text[]))
+       and ($3::uuid is null or ar.gatekeeper_id = $3::uuid)
+       and (
+         $5::timestamptz is null
+         or (date_trunc('milliseconds', ar.requested_at), ar.id) < ($5::timestamptz, $6::uuid)
+       )
+       and (
+         $7::boolean
+         or exists (
+           select 1 from capability_grants cg
+           where cg.workspace_id = ar.workspace_id
+             and cg.principal_id = $8
+             and cg.status = 'active'
+             and (cg.expires_at is null or cg.expires_at > now())
+             and (
+               (cg.resource_type = ar.action_kind
+                and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope))
+               or (
+                 ar.resource_scope is not null
+                 and cg.resource_type = '${GATEKEEPER_GRANT_CAPABILITY}'
+                 and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope)
+               )
+             )
+         )
+       )
+     order by date_trunc('milliseconds', ar.requested_at) desc, ar.id desc
+     limit $4`,
+    [
+      workspaceId,
+      statuses,
+      filter.gatekeeperId ?? null,
+      limit + 1,
+      cursor?.requestedAt ?? null,
+      cursor?.id ?? null,
+      isOwner,
+      approver.principalId,
+    ],
+  );
+
+  const rows = result.rows.slice(0, limit);
+  const items = rows.map(mapActionRequestRow);
+  const last = items[items.length - 1];
+  const nextCursor =
+    result.rows.length > limit && last
+      ? encodeActionRequestCursor(last.requestedAt, last.id)
+      : undefined;
+  return nextCursor === undefined ? { items } : { items, nextCursor };
 }
 
 /**

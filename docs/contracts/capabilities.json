@@ -6170,6 +6170,228 @@
     }
   },
   {
+    "channel": "human",
+    "group": "governance",
+    "minRole": "operator",
+    "mode": "observe",
+    "name": "list_action_requests",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "enum": [
+                "proposed",
+                "policy_evaluated",
+                "auto_approved",
+                "pending_approval",
+                "approved",
+                "rejected",
+                "expired",
+                "denied",
+                "executing",
+                "executed",
+                "failed",
+                "verified",
+                "compensated"
+              ],
+              "type": "string"
+            },
+            {
+              "items": {
+                "enum": [
+                  "proposed",
+                  "policy_evaluated",
+                  "auto_approved",
+                  "pending_approval",
+                  "approved",
+                  "rejected",
+                  "expired",
+                  "denied",
+                  "executing",
+                  "executed",
+                  "failed",
+                  "verified",
+                  "compensated"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "actionKindTag": {
+                "type": "string"
+              },
+              "actorRuntime": {
+                "type": "string"
+              },
+              "approvalDecisionId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "awaitDecision": {
+                "type": "boolean"
+              },
+              "blastRadius": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              "executedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "executingAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "failedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "onBehalfOf": {
+                "type": "string"
+              },
+              "params": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "parentWorkerRunId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "policyDecision": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "allow",
+                      "require_approval",
+                      "deny"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "requestedAt": {
+                "type": "string"
+              },
+              "requesterCanApprove": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "resourceScope": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "policy_evaluated",
+                  "auto_approved",
+                  "pending_approval",
+                  "approved",
+                  "rejected",
+                  "expired",
+                  "denied",
+                  "executing",
+                  "executed",
+                  "failed",
+                  "verified",
+                  "compensated"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "gatekeeperId",
+              "actionKindTag",
+              "resourceScope",
+              "blastRadius",
+              "policyDecision",
+              "approvalDecisionId",
+              "awaitDecision",
+              "onBehalfOf",
+              "parentWorkerRunId",
+              "actorRuntime",
+              "params",
+              "requestedAt",
+              "executingAt",
+              "executedAt",
+              "failedAt",
+              "requesterCanApprove"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "handle",
     "group": "task",
     "mode": "observe",

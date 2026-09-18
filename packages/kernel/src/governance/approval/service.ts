@@ -11,10 +11,12 @@
  *   - `reads.ts`       — `getActionRequest`/`getActionRequestOrThrow` (lock-free),
  *                        `getActionRequestForUpdate`/`getActionRequestForUpdateOrThrow`
  *                        (`SELECT ... FOR UPDATE` — every governed mutator uses these, never the
- *                        lock-free pair), `listPendingForApprover` (I14), `listExecutableQueue`
- *                        (drainer.ts's lock-free queue read), `approverHasScope` (I14 precheck),
- *                        `getOperationStats` (S3.12 catalog-usage follow-up — the `get_operation_stats`
- *                        capability's own read, `application/gateway/gatekeeper-read-handlers.ts`).
+ *                        lock-free pair), `listPendingForApprover` (I14), `listActionRequestsForApprover`
+ *                        (S5.5 leftover 21 — the `list_action_requests` "审批历史" read, every status,
+ *                        same I14 visibility, keyset-paginated), `listExecutableQueue` (drainer.ts's
+ *                        lock-free queue read), `approverHasScope` (I14 precheck), `getOperationStats`
+ *                        (S3.12 catalog-usage follow-up — the `get_operation_stats` capability's own
+ *                        read, `application/gateway/gatekeeper-read-handlers.ts`).
  *   - `status-transition.ts` — `updateActionRequestStatusConditional`: the one conditional
  *                        `UPDATE ... WHERE status = $expected` every governed mutator uses to
  *                        actually change `status` — the correctness guarantee behind the locking
@@ -49,15 +51,22 @@ export {
 } from './types.js';
 
 export {
+  type ActionRequestListPage,
   approverHasScope,
+  DEFAULT_ACTION_REQUEST_LIST_LIMIT,
+  decodeActionRequestCursor,
+  encodeActionRequestCursor,
   type GetOperationStatsFilter,
   getActionRequest,
   getActionRequestForUpdate,
   getActionRequestForUpdateOrThrow,
   getActionRequestOrThrow,
   getOperationStats,
+  type ListActionRequestsFilter,
+  listActionRequestsForApprover,
   listExecutableQueue,
   listPendingForApprover,
+  MAX_ACTION_REQUEST_LIST_LIMIT,
   type OperationStatsRow,
 } from './reads.js';
 
