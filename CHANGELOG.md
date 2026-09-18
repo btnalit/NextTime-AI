@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.12.0](https://github.com/btnalit/NextTime-AI/compare/v0.11.0...v0.12.0) (2026-09-18)
+
+
+### Features
+
+* **kernel:** S5.3 — data and code separated: idempotent register_source, ephemeral workspaces, domain packs from the host config dir ([#195](https://github.com/btnalit/NextTime-AI/issues/195)) ([70cfc0a](https://github.com/btnalit/NextTime-AI/commit/70cfc0a1c301053052a40e71ef5639b68751b28e))
+* **kernel:** S5.5 — list_action_requests + console approval history (leftover 21); Explorer session leftover 31 verified closed ([#197](https://github.com/btnalit/NextTime-AI/issues/197)) ([98ab4d7](https://github.com/btnalit/NextTime-AI/commit/98ab4d7447cbaac2c39f7bd11a6d6e3b40cc3e75))
+
+
+### Bug Fixes
+
+* **kernel:** assertFact re-reads until the identity's chain tip is visible (leftover 24, core 0029) ([#198](https://github.com/btnalit/NextTime-AI/issues/198)) ([af05598](https://github.com/btnalit/NextTime-AI/commit/af05598e78c0dc1c1908cc4086fdc79ab684edd0))
+* **kernel:** millisecond-truncated keyset cursors for query_decisions / list_conflicts; no concurrent queries on one pg client (leftovers 23, 34) ([#199](https://github.com/btnalit/NextTime-AI/issues/199)) ([c1e8558](https://github.com/btnalit/NextTime-AI/commit/c1e85581a18afa413ff43b882e4f25f110396082))
+* **kernel:** S5.6 — queued spawn_lost sweep + I-S5-3, await_decision routing (leftover 30), chaos script, flaky-test timeouts (leftovers 25, 40) ([#200](https://github.com/btnalit/NextTime-AI/issues/200)) ([1015904](https://github.com/btnalit/NextTime-AI/commit/10159046035996d627e41b16e899f913b72cb8c6))
+
 ## [0.11.0](https://github.com/btnalit/NextTime-AI/compare/v0.10.1...v0.11.0) (2026-09-18)
 
 
