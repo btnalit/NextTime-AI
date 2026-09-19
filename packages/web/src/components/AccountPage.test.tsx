@@ -110,6 +110,43 @@ describe('AccountPage: API-key mode (no user)', () => {
       expect(screen.getByText(/该身份已经有密码了；请登出后用密码登录/)).toBeTruthy(),
     );
   });
+
+  it('C4: rejects a login whose first character is not alphanumeric (shared LOGIN_PATTERN), and maps invalid_login', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(400, {
+        ok: false,
+        error: { code: 'invalid_login', message: 'login must match ...' },
+      }),
+    );
+    render(
+      <AccountPage
+        user={null}
+        memberships={[]}
+        onUserChanged={vi.fn()}
+        apiKey="sk-claim"
+        onClaimed={vi.fn()}
+        fetchImpl={fetchImpl as unknown as typeof fetch}
+      />,
+    );
+    const submit = screen.getByRole('button', {
+      name: '设置密码 Set password',
+    }) as HTMLButtonElement;
+    fireEvent.change(screen.getByLabelText(/显示名 Display name/), { target: { value: 'Dot' } });
+    fireEvent.change(screen.getByLabelText(/^密码 Password/), { target: { value: 'password123' } });
+    fireEvent.change(screen.getByLabelText(/确认密码 Confirm password/), {
+      target: { value: 'password123' },
+    });
+
+    // `.dot` passed the page's old local pattern but the kernel's `normalizeLogin` refuses it.
+    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: '.dot' } });
+    expect(screen.getByText('登录名格式不正确 Invalid login format')).toBeTruthy();
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: 'dot' } });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() => expect(screen.getByText(/登录名格式不正确：3–64 位/)).toBeTruthy());
+  });
 });
 
 describe('AccountPage: cookie mode', () => {
