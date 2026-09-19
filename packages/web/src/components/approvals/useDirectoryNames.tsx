@@ -25,22 +25,43 @@ import { useRefNames } from '../ui/RefChip.js';
  */
 const NONE: ReadonlyMap<string, string> = new Map();
 
-export function usePrincipalNames(http: CapabilityCaller): ReadonlyMap<string, string> {
+export interface PrincipalDirectory {
+  /** The rows, once loaded; `undefined` while loading. Empty when the read was refused or
+   *  failed (`failed` tells the two apart from a genuinely empty workspace). */
+  readonly rows: readonly PrincipalRow[] | undefined;
+  readonly names: ReadonlyMap<string, string>;
+  readonly failed: boolean;
+}
+
+interface PrincipalLoad {
+  readonly items: readonly PrincipalRow[];
+  readonly failed: boolean;
+}
+
+/** `list_principals` as rows + names — for a page that also needs the rows (the audit page's
+ *  actor selector). See the module doc for why this read is guarded. */
+export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirectory {
   const permissions = usePermissions();
   const denied = permissions.isDenied('list_principals');
   const markDenied = permissions.markDenied;
-  const load = useCallback(async (): Promise<readonly PrincipalRow[]> => {
-    if (denied) return [];
+  const load = useCallback(async (): Promise<PrincipalLoad> => {
+    if (denied) return { items: [], failed: true };
     try {
       const page = await http.call<{ items: readonly PrincipalRow[] }>('list_principals');
-      return page.items;
+      return { items: page.items, failed: false };
     } catch (err) {
       if (isForbiddenError(err)) markDenied('list_principals');
-      return [];
+      return { items: [], failed: true };
     }
   }, [http, denied, markDenied]);
   const principals = useResource(load);
-  return useRefNames(principals.state.status === 'ready' ? principals.state.data : undefined);
+  const loaded = principals.state.status === 'ready' ? principals.state.data : undefined;
+  const names = useRefNames(loaded?.items);
+  return { rows: loaded?.items, names, failed: loaded?.failed ?? false };
+}
+
+export function usePrincipalNames(http: CapabilityCaller): ReadonlyMap<string, string> {
+  return usePrincipalDirectory(http).names;
 }
 
 export function useGatekeeperNames(http: CapabilityCaller): ReadonlyMap<string, string> {
