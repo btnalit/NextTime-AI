@@ -65,6 +65,18 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 
 芯片（StatusChip）的颜色与文字来自 `@nexttime/shared` 的枚举（`enums.ts`）与转移表（`transitions.ts`）：ActionRequest 13 态、Task、WorkerRun、ConnectionRequest（`requested|completed|cancelled`）、Publishable（`draft|published|deprecated`）、Grant（`active|revoked|expired`，S3.14 新增）、Role（`owner|builder|operator|member|auditor`，S3.14 新增，非真正状态机，复用同一套色调以保持视觉一致）。内核新增一个状态而 web 没有配色时 `tsc` 与 `StatusChip.test.tsx` 都会失败；线上若出现未知值，芯片以虚线边框 + 原始字符串显示，不会被误染成别的语义。Tasks 页的"Cancel task"只在 `TASK_TRANSITIONS` 有 `cancel` 出边的状态（`running`）下出现。
 
+## 视觉体系 / 令牌（S6-A0）
+
+设计基线是 `docs/console-completion-plan.md` §5.9（已定稿）。实现落点：
+
+- **令牌**：`packages/web/src/styles/tokens.css` 是唯一允许出现颜色字面量与 px 字号的样式表。浅色是默认，深色是 `prefers-color-scheme: dark` 覆盖，两套沿同一令牌名。语义色六类固定映射（observe 青 / 待审批·warn·中影响 琥珀 / 高影响·不可逆·reject·冲突·失败·清除 红 / 已执行·已发布·健康 绿 / 系统·提案·生产·默认 蓝 / 归档·被替代·残留·未测试 灰），对应 `--observe` `--warn` `--danger` `--ok` `--info` `--muted`（各带 `-soft` 底色）。字号刻度 `--fs-11 … --fs-24`，行高 `--lh-tight` / `--lh-body`。主按钮是 ink（`--text`），蓝色 `--accent` 只用于"可以点"。
+- **守卫**：`node scripts/guards/css-tokens.mjs`（`pnpm ci:guards` 的一环）扫描 `styles/` 下除 `tokens.css` / `fonts.css` 之外的每个样式表，遇到 `#hex`、`rgb()`/`hsl()`、`font-size: <n>px` 即按 `file:line` 报错。新样式一律写 `var(--…)`。
+- **字体**：随包自托管——`styles/fonts.css` 通过 `@fontsource/ibm-plex-sans`（latin 400/500/600）、`@fontsource/ibm-plex-mono`（latin 400/500）、`@fontsource/noto-sans-sc`（unicode-range 切片，400/500）引入，Vite 把 woff2 打进 `dist/assets/`，页面只拉它实际渲染到的中文切片；没有任何外部字体服务（caddy 的 `font-src` 不放行外域）。换字重只改 `fonts.css` 的 `@import` 行。
+- **状态芯片**：`lib/status-tone.ts` 是状态 → 色调的唯一映射，S6-A0 起覆盖平台面（用户状态、工作区状态 / 用途、门实例状态 / 健康 / 信任、接入包模式、服务健康、平台角色）与 ActionRequest 的两个治理标量（Operation 模式、影响范围）。`components/platform/` 不再手拼 `chip chip-*`；派生态（`待激活`、`等待宿主接管`）由 `deriveUserStatus` / `deriveGateInstanceStatus` 得出。
+- **UI kit**：`ui/RefChip`（id → 名称，配 `useRefNames`）、`ui/ConfirmTier`（低 / 中 / 高 / 不可逆四档确认）、`ui/ApprovalCard`、`ui/ProvenanceChain`、`ui/FollowPill`、`ui/Launcher`（四步接入启动器壳）。`PageHeader` 新增 `breadcrumb` 与 `primaryAction`。
+- **壳**：侧栏三组 使用 / 治理 / 平台（可见性规则见上文"角色与可见性"，未变），底部连接状态 + 内核版本（`platform_overview.version.kernel`，仅管理员会话读取）+ 当前用户。
+- **CSP**（C21）：`deploy/caddy/Caddyfile` 对 SPA 下发严格 `Content-Security-Policy`（`default-src 'self'`；`style-src` 暂含 `'unsafe-inline'`，待内联 `style={{…}}` 清理后收紧；`font-src 'self' data:` 因 Vite 会把 < 4 KB 的字体切片内联成 data URI）与 `Permissions-Policy`；`/explorer/*` 单独一块略宽的策略。改动后用 `caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile` 校验。
+
 ## 排障
 
 | 现象 | 先查 | 说明 |

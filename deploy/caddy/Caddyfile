@@ -61,11 +61,40 @@ https://:8443 {
 	# Baseline security headers reasonable for an internal tool. No Strict-Transport-Security:
 	# this deployment's TLS is an internal/self-signed CA (see runbook), and HSTS pinning could
 	# strand a client across a future CA rotation.
+	#
+	# S6-A0 / C21 (docs/console-completion-plan.md §7 "传输层加固"): Permissions-Policy turns off
+	# every powerful browser feature the console never uses (it is a text UI over HTTP + WS). Set
+	# here, unscoped, so the Explorer bundle and every proxied response carry it too.
 	header {
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), midi=(), magnetometer=(), gyroscope=(), accelerometer=(), display-capture=(), screen-wake-lock=(), xr-spatial-tracking=(), browsing-topics=(), interest-cohort=()"
 		-Server
+	}
+
+	# S6-A0 / C21: strict Content-Security-Policy for the SPA (and, harmlessly, for the JSON the
+	# `/api/*` proxy returns). Everything the console needs ships in its own bundle
+	# (packages/web/dist — scripts, styles, the self-hosted @fontsource woff2 files), so every
+	# source is `'self'`:
+	#   - `connect-src 'self' wss:` — capability calls are same-origin `/api/*`; the WS is the
+	#     same-origin `/ws`. Per CSP3 `'self'` already matches a same-host `wss:` upgrade in every
+	#     current browser; the bare `wss:` scheme is kept for older engines that did not (it admits
+	#     any wss host, but a script that could open one would already have needed `script-src`
+	#     to let it in). No `ws:` — this site is https only, a plaintext socket never occurs.
+	#   - `font-src 'self' data:` — Vite inlines assets under its 4 KB `assetsInlineLimit` as
+	#     `data:` URIs, which today catches three rare Noto Sans SC unicode-range slices (IPA /
+	#     flag-emoji ranges); `data:` fonts are not a script vector. Set `build.assetsInlineLimit`
+	#     to exclude fonts in packages/web/vite.config.ts and this can drop to `'self'`.
+	#   - `style-src 'self' 'unsafe-inline'` — the UI kit still sets a few `style={{…}}` props;
+	#     S6-A0 follow-up (§7): move them to classes and tighten this to `'self'`.
+	#   - `img-src 'self' data:` — inline SVG icons need nothing; `data:` covers any future
+	#     generated image (QR for a one-time token, a chart export) without a policy change.
+	# The Explorer bundle (below) is a third-party build this repository does not vendor, so it is
+	# excluded from this matcher and gets its own, slightly looser block on its handler.
+	@app not path /explorer/*
+	header @app {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 	}
 
 	# S3.5 / W7 (docs/development-tasks.md §S3.5; design doc §9.5) — the nine Explorer endpoints
@@ -115,6 +144,13 @@ https://:8443 {
 	# docs/runbooks/host-explorer.md). `handle_path` strips the `/explorer` prefix before serving,
 	# matching the `--base=/explorer/` the build script passes to `vite build`.
 	handle_path /explorer/* {
+		# S6-A0 / C21: the Explorer is an unmodified upstream Vite build (or the placeholder page,
+		# which carries an inline <style>). It is scoped to the same origin — it only talks to
+		# the nine `/api/*` Explorer endpoints — but as a third-party bundle it may use inline
+		# styles, blob: workers and data: images its graph libraries generate, so this block is
+		# deliberately looser than the SPA's above and applies only under /explorer/. S6-C (host
+		# build of the bundle) verifies the built bundle against it and tightens what it can.
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 		root * /srv/explorer
 		file_server
 		try_files {path} /index.html
