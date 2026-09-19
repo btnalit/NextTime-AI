@@ -169,7 +169,7 @@ describe('AccessPage', () => {
     );
   });
 
-  it('C20: the principal filter keeps what was typed while list_principals is still loading, then offers suggestions', async () => {
+  it('C20: the principal filter keeps what was typed while list_principals is still loading, then offers suggestions; the query fires on commit, not per keystroke', async () => {
     let resolvePrincipals: (value: unknown) => void = () => undefined;
     const http = scriptedHttp({
       list_principals: () =>
@@ -180,8 +180,15 @@ describe('AccessPage', () => {
     });
     renderPage(http);
     const filter = (await screen.findByLabelText(/Filter by principal/)) as HTMLInputElement;
-    fireEvent.change(filter, { target: { value: 'p-typed' } });
+    const grantsCalls = () => http.calls.filter((call) => call.name === 'list_grants');
+    await waitFor(() => expect(grantsCalls()).toHaveLength(1));
+
+    for (const partial of ['p', 'p-', 'p-ty', 'p-typed']) {
+      fireEvent.change(filter, { target: { value: partial } });
+    }
     expect(filter.value).toBe('p-typed');
+    // Nothing committed yet — typing never queries.
+    expect(grantsCalls()).toHaveLength(1);
 
     act(() => resolvePrincipals({ items: [{ id: 'p-1', displayName: 'Bob', role: 'member' }] }));
     await waitFor(() =>
@@ -192,9 +199,21 @@ describe('AccessPage', () => {
       'p-typed',
     );
     expect(screen.getByLabelText(/Filter by principal/)).toBe(filter);
-    expect(http.calls.filter((call) => call.name === 'list_grants').at(-1)?.params).toEqual({
-      principalId: 'p-typed',
-    });
+
+    fireEvent.keyDown(filter, { key: 'Enter' });
+    await waitFor(() => expect(grantsCalls()).toHaveLength(2));
+    expect(grantsCalls().at(-1)?.params).toEqual({ principalId: 'p-typed' });
+
+    // A picked suggestion (the text equals a directory id) applies at once.
+    fireEvent.change(filter, { target: { value: 'p-1' } });
+    await waitFor(() => expect(grantsCalls().at(-1)?.params).toEqual({ principalId: 'p-1' }));
+    expect(grantsCalls()).toHaveLength(3);
+
+    // Blur commits too.
+    fireEvent.change(filter, { target: { value: 'p-other' } });
+    expect(grantsCalls()).toHaveLength(3);
+    fireEvent.blur(filter);
+    await waitFor(() => expect(grantsCalls().at(-1)?.params).toEqual({ principalId: 'p-other' }));
   });
 
   it('issuing a service Handle posts issue_service_handle and shows the token once', async () => {

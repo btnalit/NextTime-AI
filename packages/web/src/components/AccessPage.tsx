@@ -36,7 +36,12 @@ export function AccessPage({ http }: AccessPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
   const { role } = useWorkspaceIdentity(http);
+  // C20: `principalFilter` is what the input shows; `committedFilter` is what `list_grants` is
+  // asked for. They diverge only while an id is being typed — committed on blur / Enter, or at
+  // once when the text matches a member from the directory — so a half-typed id never fires a
+  // query per keystroke (each one a `list_grants{principalId}` that flashes "No grants yet").
   const [principalFilter, setPrincipalFilter] = useState('');
+  const [committedFilter, setCommittedFilter] = useState('');
   const [grantOpen, setGrantOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<unknown | null>(null);
@@ -47,8 +52,19 @@ export function AccessPage({ http }: AccessPageProps) {
   const grants = useCapabilityList<GrantRow>(
     http,
     'list_grants',
-    principalFilter ? { principalId: principalFilter } : {},
+    committedFilter ? { principalId: committedFilter } : {},
   );
+
+  function commitFilter(value: string = principalFilter): void {
+    setCommittedFilter(value.trim());
+  }
+
+  function handleFilterChange(value: string): void {
+    setPrincipalFilter(value);
+    // An exact directory match (a picked suggestion, or a pasted id) and an emptied field both
+    // apply immediately — nothing more will be typed for them.
+    if (value === '' || principals.some((row) => row.id === value)) commitFilter(value);
+  }
 
   const canManage =
     role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('grant_capability');
@@ -99,20 +115,27 @@ export function AccessPage({ http }: AccessPageProps) {
         {/* C20: one control from first paint — an id input with the member directory as a
             `<datalist>` once `list_principals` lands — rather than an `<Input>` that turned into
             a `<Select>` mid-typing and dropped whatever had been typed. Picking a suggestion
-            fills the id; an empty value is "all members". */}
+            fills (and commits) the id; an empty value is "all members". */}
         <Field
           id="access-principal-filter"
           label="Filter by principal"
           hint={
             principals.length > 0
-              ? 'Pick a member from the suggestions, or paste a principal id. Empty = all members.'
-              : 'Principal id (optional). Empty = all members.'
+              ? 'Pick a member from the suggestions, or type a principal id and press Enter. Empty = all members.'
+              : 'Principal id (optional) — press Enter to apply. Empty = all members.'
           }
         >
           <Input
             id="access-principal-filter"
             value={principalFilter}
-            onChange={(event) => setPrincipalFilter(event.target.value)}
+            onChange={(event) => handleFilterChange(event.target.value)}
+            onBlur={() => commitFilter()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitFilter();
+              }
+            }}
             placeholder="All members"
             list="access-principal-suggestions"
             mono
@@ -222,7 +245,7 @@ export function AccessPage({ http }: AccessPageProps) {
           <GrantCapabilityForm
             http={http}
             principals={principals}
-            defaultPrincipalId={principalFilter || undefined}
+            defaultPrincipalId={committedFilter || undefined}
             onCancel={() => setGrantOpen(false)}
             onDone={() => {
               setGrantOpen(false);
