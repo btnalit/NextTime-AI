@@ -71,7 +71,7 @@ export function ChatRenameForm({ client, chat, onSaved, onCancel }: ChatRenameFo
   }
 
   return (
-    <div className="stack-s" data-testid="chat-rename-form">
+    <div className="stack-s grow" data-testid="chat-rename-form">
       <div className="row">
         <Input
           ref={inputRef}
