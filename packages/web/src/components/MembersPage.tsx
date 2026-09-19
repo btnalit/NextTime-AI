@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
+import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { type PrincipalRow, principalDisplayRole } from '../lib/governance.js';
 import { AddMemberForm } from './AddMemberForm.js';
@@ -36,7 +37,12 @@ type DrawerState =
  * `rotate_api_key` ("owner 或本人" — a non-owner rotating their own key would need a `principalId`
  * they cannot discover from this page anyway, since a member never sees `/govern/*` once role is
  * proven — see `Sidebar`), so this page's write affordances hide behind a single `canManage`
- * 403-derived flag.
+ * flag. C9 (console-completion-plan §2b): that flag reads the *authoritative* role first —
+ * `get_workspace.caller.role` via `useWorkspaceIdentity`, owner only, the same read the Sidebar
+ * badge already makes — and falls back to the 403 inference only while that read is not ready.
+ * The inference alone never hid these buttons from an operator: `list_principals` is
+ * operator-readable, so an operator's session never learned a denial and could click straight
+ * into a guaranteed 403.
  *
  * P-A1 splits the two things "add a member" used to mean (design doc §5): a **person** joins by
  * their platform login (`add_member` — a membership Principal with no API key, they sign in with
@@ -48,10 +54,12 @@ type DrawerState =
 export function MembersPage({ http }: MembersPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
+  const { role } = useWorkspaceIdentity(http);
   const principals = useCapabilityList<PrincipalRow>(http, 'list_principals');
   const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
 
-  const canManage = !permissions.isDenied('create_principal');
+  const canManage =
+    role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('create_principal');
 
   function refreshList(): void {
     invalidateCapability(http, 'list_principals');
@@ -68,8 +76,6 @@ export function MembersPage({ http }: MembersPageProps) {
 
   const rows = principals.state.status === 'ready' ? principals.state.data.items : [];
   const forbidden = principals.state.status === 'error' && isForbiddenError(principals.state.error);
-  const unavailable =
-    principals.state.status === 'error' && isNotFoundError(principals.state.error);
 
   return (
     <div className="page">
@@ -97,14 +103,7 @@ export function MembersPage({ http }: MembersPageProps) {
       {principals.state.status === 'loading' ? (
         <SkeletonRows count={4} label="Loading members" testId="members-loading" />
       ) : principals.state.status === 'error' ? (
-        unavailable ? (
-          <EmptyState
-            icon="users"
-            title="该能力尚未上线 Not live yet"
-            body="list_principals is part of S3.11, still landing on the kernel side."
-            testId="members-unavailable"
-          />
-        ) : forbidden ? (
+        forbidden ? (
           <EmptyState
             icon="shield"
             title="需要 owner 权限"

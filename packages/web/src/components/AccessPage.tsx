@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
+import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, prettyJson, shortId } from '../lib/format.js';
 import type { GrantRow, PrincipalRow } from '../lib/governance.js';
 import { GrantCapabilityForm } from './GrantCapabilityForm.js';
@@ -26,13 +27,15 @@ export interface AccessPageProps {
  * components/AccessPage: 访问 Access (`/govern/access`, S3.11) — the CapabilityGrant matrix.
  * `list_grants{principalId?}` / `grant_capability` (existing) / `revoke_capability` (existing).
  * All owner-only per the design doc's minRole table ("成员/授权/策略 = owner") — this page's write
- * affordances (Grant / Revoke) hide behind the same `create_principal`-derived `canManage` signal
- * `MembersPage` uses (same closure — `grant_capability` and `create_principal` share `minRole:
- * 'owner'`, so a 403 on either denies both, per `hooks/usePermissions.tsx`'s `deniedClosure`).
+ * affordances (Grant / Revoke / issue a service Handle) hide behind the same `canManage` rule
+ * `MembersPage` uses: the authoritative `get_workspace.caller.role` (owner only) once it is
+ * known, the `grant_capability` 403 inference only as fallback (C9 — `list_grants` is
+ * operator-readable, so an operator never learned that denial and saw owner-only buttons).
  */
 export function AccessPage({ http }: AccessPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
+  const { role } = useWorkspaceIdentity(http);
   const [principalFilter, setPrincipalFilter] = useState('');
   const [grantOpen, setGrantOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -47,7 +50,8 @@ export function AccessPage({ http }: AccessPageProps) {
     principalFilter ? { principalId: principalFilter } : {},
   );
 
-  const canManage = !permissions.isDenied('grant_capability');
+  const canManage =
+    role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('grant_capability');
 
   function refreshGrants(): void {
     invalidateCapability(http, 'list_grants');
@@ -76,7 +80,6 @@ export function AccessPage({ http }: AccessPageProps) {
 
   const rows = grants.state.status === 'ready' ? grants.state.data.items : [];
   const forbidden = grants.state.status === 'error' && isForbiddenError(grants.state.error);
-  const unavailable = grants.state.status === 'error' && isNotFoundError(grants.state.error);
 
   return (
     <div className="page">
@@ -126,14 +129,7 @@ export function AccessPage({ http }: AccessPageProps) {
       {grants.state.status === 'loading' ? (
         <SkeletonRows count={4} label="Loading grants" testId="grants-loading" />
       ) : grants.state.status === 'error' ? (
-        unavailable ? (
-          <EmptyState
-            icon="key"
-            title="该能力尚未上线 Not live yet"
-            body="list_grants is part of S3.11, still landing on the kernel side."
-            testId="grants-unavailable"
-          />
-        ) : forbidden ? (
+        forbidden ? (
           <EmptyState
             icon="shield"
             title="需要 owner 权限"

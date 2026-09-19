@@ -8,15 +8,32 @@ import { AccessPage } from './AccessPage.js';
 
 afterEach(cleanup);
 
+function workspace(role: string) {
+  return {
+    id: 'ws-1',
+    name: 'Acme',
+    createdAt: '2026-01-01T00:00:00Z',
+    principalCount: 2,
+    gatekeeperCount: 1,
+    caller: { id: 'p-owner', role, displayName: 'Alice', kind: 'human' },
+  };
+}
+
+/** `get_workspace` answers as an owner unless a test overrides it (C9: `canManage` reads the
+ *  authoritative `caller.role` from it). */
 function scriptedHttp(
   handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,
 ): CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] } {
   const calls: { name: string; params: unknown }[] = [];
+  const base: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
+    get_workspace: () => workspace('owner'),
+    ...handlers,
+  };
   return {
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push({ name, params });
-      const handler = handlers[name];
+      const handler = base[name];
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
     }) as CapabilityCaller['call'],
@@ -45,7 +62,7 @@ function grant(overrides: Record<string, unknown> = {}) {
 }
 
 describe('AccessPage', () => {
-  it('shows "该能力尚未上线" when list_grants is not deployed yet', async () => {
+  it('renders a list_grants not_found as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
     const http = scriptedHttp({
       list_principals: () =>
         Promise.reject(new HttpError('capability_error', 'no handler', 'not_found')),
@@ -53,7 +70,24 @@ describe('AccessPage', () => {
         Promise.reject(new HttpError('capability_error', 'no handler', 'not_found')),
     });
     renderPage(http);
-    await screen.findByTestId('grants-unavailable');
+    await screen.findByTestId('grants-error');
+  });
+
+  it('C9: an operator session (authoritative get_workspace.caller.role) sees no Grant / Revoke / issue-Handle affordances', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => workspace('operator'),
+      // Both operator-readable, so the 403 inference alone would never have hidden the buttons.
+      list_principals: () => ({ items: [] }),
+      list_grants: () => ({ items: [grant()] }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('grant-row');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Grant capability' })).toBeNull(),
+    );
+    expect(within(row).queryByRole('button', { name: 'Revoke' })).toBeNull();
+    expect(screen.queryByTestId('issue-service-handle-form')).toBeNull();
   });
 
   it('lists grants with a status chip, and revoking calls revoke_capability then updates the row', async () => {
