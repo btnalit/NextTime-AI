@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -16,6 +17,7 @@ import { Select } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
+import { StatusChip } from '../ui/StatusChip.js';
 import { Tabs } from '../ui/Tabs.js';
 import { CreateGateInstanceForm } from './CreateGateInstanceForm.js';
 import { GateInstanceDetailPanel } from './GateInstanceDetailPanel.js';
@@ -26,13 +28,6 @@ const CONNECTOR_MODE_VALUES: readonly ConnectorModeWire[] = [
   'self_serve',
   'platform_preset',
 ];
-
-const GATE_STATUS_LABEL: Readonly<Record<GateInstanceWire['status'], string>> = {
-  discovered: '未启用 Discovered',
-  enabled: '已启用 Enabled',
-  disabled: '已禁用 Disabled',
-  lost: '失联 Lost',
-};
 
 type Tab = 'connectors' | 'instances' | 'runtimes';
 
@@ -403,16 +398,25 @@ function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
                 <th>Operation 数</th>
                 <th>启用它的工作区数</th>
                 <th aria-label="Trust" />
+                <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => (
+                // The whole row opens the detail drawer for pointer users; the 详情 Details button
+                // in the last cell is the keyboard path (S6-A0 / C13 — a `<tr>` with only
+                // `onClick`/`onKeyDown` and no focusable child was unreachable by keyboard; same
+                // pattern as `PlatformWorkspacesPage`'s `WorkspaceRow`). `setPanel` is idempotent,
+                // so the button's click bubbling up to the row costs nothing. The row's own key
+                // handler only answers keys aimed at the row itself (never at the button, which
+                // handles Enter/Space natively) — it exists for the lint pairing, not as the path.
                 <tr
                   key={row.gateId}
                   className="row-clickable"
                   data-testid={`gate-instance-row-${row.gateId}`}
                   onClick={() => setPanel({ kind: 'gate', gateId: row.gateId })}
                   onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
                       setPanel({ kind: 'gate', gateId: row.gateId });
@@ -435,25 +439,20 @@ function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
                   <td className="mono">{row.connector}</td>
                   <td>{row.transportKind}</td>
                   <td>
-                    {row.hosted && row.lastSeenAt === null ? (
-                      <span className="chip chip-s chip-warn" data-testid="gate-instance-status">
-                        等待宿主接管 waiting for gate host
-                      </span>
-                    ) : (
-                      <span
-                        className={`chip chip-s ${row.status === 'enabled' ? 'chip-ok' : row.status === 'lost' ? 'chip-warn' : 'chip-neutral'}`}
-                        data-testid="gate-instance-status"
-                      >
-                        {GATE_STATUS_LABEL[row.status]}
-                      </span>
-                    )}
+                    <StatusChip
+                      machine="gateInstance"
+                      status={deriveGateInstanceStatus(row)}
+                      size="s"
+                      testId="gate-instance-status"
+                    />
                   </td>
                   <td>
-                    <span
-                      className={`chip chip-s ${row.health === 'ok' ? 'chip-ok' : row.health === 'unknown' ? 'chip-neutral' : 'chip-warn'}`}
-                    >
-                      {row.health}
-                    </span>
+                    <StatusChip
+                      machine="gateHealth"
+                      status={row.health}
+                      size="s"
+                      testId="gate-instance-health"
+                    />
                   </td>
                   <td>
                     {row.lastSeenAt === null ? (
@@ -472,6 +471,16 @@ function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
                         vetted
                       </span>
                     ) : null}
+                  </td>
+                  <td>
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      onClick={() => setPanel({ kind: 'gate', gateId: row.gateId })}
+                      data-testid={`gate-instance-open-${row.gateId}`}
+                    >
+                      详情 Details
+                    </Button>
                   </td>
                 </tr>
               ))}

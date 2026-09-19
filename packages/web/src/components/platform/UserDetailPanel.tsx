@@ -3,10 +3,12 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
+import { deriveUserStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input, Select } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
+import { StatusChip } from '../ui/StatusChip.js';
 import { PlatformError } from './PlatformError.js';
 
 export interface UserDetailPanelProps {
@@ -192,16 +194,12 @@ export function UserDetailPanel({
         </dd>
         <dt>状态 Status</dt>
         <dd>
-          <span
-            className={`chip chip-s ${user.status === 'disabled' ? 'chip-neutral' : user.hasPassword ? 'chip-ok' : 'chip-warn'}`}
-            data-testid="user-detail-status"
-          >
-            {user.status === 'disabled'
-              ? 'disabled'
-              : user.hasPassword
-                ? 'active'
-                : '待激活 Pending activation'}
-          </span>
+          <StatusChip
+            machine="userStatus"
+            status={deriveUserStatus(user)}
+            size="s"
+            testId="user-detail-status"
+          />
         </dd>
         <dt>最近登录 Last login</dt>
         <dd>

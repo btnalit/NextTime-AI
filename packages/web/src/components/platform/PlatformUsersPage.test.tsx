@@ -115,7 +115,8 @@ describe('PlatformUsersPage', () => {
     expect(rows).toHaveLength(2);
 
     const statuses = within(table).getAllByTestId('platform-user-status');
-    expect(statuses[0]?.textContent).toBe('active');
+    // S6-A0 / C17: rendered through the shared userStatus StatusChip (bilingual labels).
+    expect(statuses[0]?.textContent).toBe('活跃 Active');
     expect(statuses[1]?.textContent).toBe('待激活 Pending activation');
 
     const chips = within(table).getAllByTestId('platform-user-workspace-chip');
@@ -245,7 +246,7 @@ describe('PlatformUsersPage', () => {
 
     fireEvent.click(within(drawer).getByRole('button', { name: '确认停用 Confirm disable' }));
     await waitFor(() =>
-      expect(within(drawer).getByTestId('user-detail-status').textContent).toBe('disabled'),
+      expect(within(drawer).getByTestId('user-detail-status').textContent).toBe('已停用 Disabled'),
     );
   });
 

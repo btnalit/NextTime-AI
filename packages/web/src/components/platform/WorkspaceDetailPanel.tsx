@@ -12,6 +12,7 @@ import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input, Select } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
+import { StatusChip } from '../ui/StatusChip.js';
 import { PlatformError } from './PlatformError.js';
 import { UserPicker } from './UserPicker.js';
 import { AllowedModelsChecklist, EntryModelSelect } from './WorkspaceModelControls.js';
@@ -233,12 +234,12 @@ export function WorkspaceDetailPanel({
         </dd>
         <dt>状态 Status</dt>
         <dd>
-          <span
-            className={`chip chip-s ${workspace.status === 'disabled' ? 'chip-neutral' : 'chip-ok'}`}
-            data-testid="workspace-detail-status"
-          >
-            {workspace.status}
-          </span>
+          <StatusChip
+            machine="workspaceStatus"
+            status={workspace.status}
+            size="s"
+            testId="workspace-detail-status"
+          />
           {workspace.isDefault ? (
             <span className="tag" data-testid="workspace-detail-default">
               默认 Default
@@ -255,9 +256,12 @@ export function WorkspaceDetailPanel({
         </dd>
         <dt>用途 Purpose</dt>
         <dd>
-          <span className="chip chip-s chip-neutral" data-testid="workspace-detail-purpose">
-            {workspace.purpose === 'ephemeral' ? '临时 ephemeral' : '常规 standard'}
-          </span>
+          <StatusChip
+            machine="workspacePurpose"
+            status={workspace.purpose}
+            size="s"
+            testId="workspace-detail-purpose"
+          />
           {workspace.expiresAt ? (
             <>
               {' '}

@@ -195,7 +195,8 @@ describe('PlatformWorkspacesPage', () => {
 
     // The created row is on screen and its drawer opened on top of it.
     const detail = await screen.findByTestId('workspace-detail');
-    expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('active');
+    // S6-A0 / C17: the detail panel renders status through the shared workspaceStatus StatusChip.
+    expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('活跃 Active');
     await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
     expect(screen.getByTestId('workspace-row-ws-2')).toBeTruthy();
   });
@@ -347,7 +348,9 @@ describe('PlatformWorkspacesPage', () => {
 
     fireEvent.click(within(detail).getByRole('button', { name: '确认停用 Confirm disable' }));
     await waitFor(() =>
-      expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('disabled'),
+      expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe(
+        '已停用 Disabled',
+      ),
     );
   });
 

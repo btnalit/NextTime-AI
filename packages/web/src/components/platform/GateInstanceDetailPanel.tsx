@@ -2,10 +2,12 @@ import type { GateHostTokenWire, GateInstanceWire, GateTrustWire } from '@nextti
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
+import { StatusChip } from '../ui/StatusChip.js';
 import { GateCredentialEntry } from './GateCredentialEntry.js';
 import { PlatformError } from './PlatformError.js';
 
@@ -280,11 +282,12 @@ export function GateInstanceDetailPanel({
 
       <PlatformError error={statusError} title="无法修改状态 Could not change the status" />
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span
-          className={`chip chip-s ${instance.status === 'enabled' ? 'chip-ok' : instance.status === 'lost' ? 'chip-warn' : 'chip-neutral'}`}
-        >
-          {instance.status}
-        </span>
+        <StatusChip
+          machine="gateInstance"
+          status={deriveGateInstanceStatus(instance)}
+          size="s"
+          testId="gate-instance-detail-status"
+        />
         <Button
           variant={instance.status === 'enabled' ? 'danger' : 'secondary'}
           onClick={() => void setStatus(instance.status === 'enabled' ? 'disabled' : 'enabled')}
@@ -310,11 +313,12 @@ export function GateInstanceDetailPanel({
             title="无法设置信任级别 Could not set the trust level"
           />
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <span
-              className={`chip chip-s ${instance.trust === 'vetted' ? 'chip-ok' : 'chip-neutral'}`}
-            >
-              {instance.trust}
-            </span>
+            <StatusChip
+              machine="gateTrust"
+              status={instance.trust}
+              size="s"
+              testId="gate-instance-detail-trust"
+            />
             <Button
               variant="secondary"
               onClick={() => void setTrust(instance.trust === 'vetted' ? 'byo' : 'vetted')}

@@ -14,6 +14,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
 import { deriveWorkspaceOptions } from '../../lib/platform-workspaces.js';
+import { deriveUserStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -21,6 +22,7 @@ import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select } from '../ui/Field.js';
 import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
+import { StatusChip } from '../ui/StatusChip.js';
 import { CreateUserForm } from './CreateUserForm.js';
 import { TemporaryPasswordDialog } from './TemporaryPasswordDialog.js';
 import { UserDetailPanel } from './UserDetailPanel.js';
@@ -391,25 +393,16 @@ function UserRow({
 /** `status` first (an explicitly disabled account is disabled whatever else is true of it), then
  *  `hasPassword: false` — the "待激活" state a backfilled or password-less user sits in
  *  (`wire/platform.ts` `UserWireSchema`). `待激活` is a *derived* display value, never a filter
- *  value: `list_users`'s own `status` param is only `active | disabled`. */
+ *  value: `list_users`'s own `status` param is only `active | disabled`. S6-A0 (C17): the
+ *  derivation lives in `lib/status-tone.ts` (`deriveUserStatus`) and renders through the shared
+ *  `StatusChip` — one colour vocabulary with every other status in the console. */
 function UserStatusCell({ user }: { readonly user: UserWire }) {
-  if (user.status === 'disabled') {
-    return (
-      <span className="chip chip-s chip-neutral" data-testid="platform-user-status">
-        disabled
-      </span>
-    );
-  }
-  if (!user.hasPassword) {
-    return (
-      <span className="chip chip-s chip-warn" data-testid="platform-user-status">
-        待激活 Pending activation
-      </span>
-    );
-  }
   return (
-    <span className="chip chip-s chip-ok" data-testid="platform-user-status">
-      active
-    </span>
+    <StatusChip
+      machine="userStatus"
+      status={deriveUserStatus(user)}
+      size="s"
+      testId="platform-user-status"
+    />
   );
 }
