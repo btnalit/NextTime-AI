@@ -1,0 +1,18 @@
+/* styles/fonts.css — the console's self-hosted web fonts (S6-A0, docs/console-completion-plan.md
+ * §5.9 "字体", §12 第 7 项; C21). Every face below is an `@fontsource/*` package bundled by Vite:
+ * the woff2 files land in `dist/assets/` and nothing loads from an external origin, which is what
+ * the strict `font-src 'self'` in deploy/caddy/Caddyfile and the no-internet host both require.
+ *
+ * Weights: IBM Plex Sans 400 / 500 / 600 (body, labels, headings), IBM Plex Mono 400 / 500
+ * (ids, code), Noto Sans SC 400 / 500 (CJK). Plex is imported as its latin subset only (~100 KB
+ * for the five files); Noto Sans SC is the unicode-range-sliced build (102 slices per weight,
+ * ~35 KB each) — the browser fetches only the slices whose characters a page renders, which is
+ * how the ≤ ~600 KB first-paint budget of §12 item 7 is met without hand-subsetting. A 600-weight
+ * CJK heading falls back to the 500 face (no synthetic bold is needed for Han glyphs). */
+@import "@fontsource/ibm-plex-sans/latin-400.css";
+@import "@fontsource/ibm-plex-sans/latin-500.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+@import "@fontsource/noto-sans-sc/400.css";
+@import "@fontsource/noto-sans-sc/500.css";
