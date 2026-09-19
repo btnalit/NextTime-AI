@@ -11,6 +11,7 @@ import { ConnectionsPage } from './components/ConnectionsPage.js';
 import { MembersPage } from './components/MembersPage.js';
 import { ModelsPage } from './components/ModelsPage.js';
 import { TasksPage } from './components/TasksPage.js';
+import { GraphPage } from './components/graph/GraphPage.js';
 import { PlatformAuditPage } from './components/platform/PlatformAuditPage.js';
 import { PlatformIntegrationsPage } from './components/platform/PlatformIntegrationsPage.js';
 import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage.js';
@@ -190,6 +191,11 @@ export function Routed({
       break;
     case 'audit':
       page = <AuditPage http={session.http} />;
+      break;
+    // S6-D: no `key` on purpose — the focus trail and the frozen `sessionAt` are component state a
+    // hash-keyed element would reset on every 展开 (GraphPage's own doc comment).
+    case 'graph':
+      page = <GraphPage http={session.http} />;
       break;
     case 'platformOverview':
       page = requireAdmin(

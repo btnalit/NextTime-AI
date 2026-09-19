@@ -7,9 +7,11 @@
  *   shell.css  — sidebar/topbar layout, page header, responsive breakpoints
  *   ui.css     — the primitives under components/ui/ (one class family each)
  *   pages.css  — page-specific layout (login, chat, approvals, tasks, connections)
+ *   graph.css  — the S6-D 图谱 page (two-pane object browser, fact rows, SVG neighbourhood)
  */
 @import "./styles/tokens.css";
 @import "./styles/base.css";
 @import "./styles/shell.css";
 @import "./styles/ui.css";
 @import "./styles/pages.css";
+@import "./styles/graph.css";

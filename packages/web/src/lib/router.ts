@@ -27,6 +27,7 @@ export type NavSection =
   | 'catalog'
   | 'models'
   | 'audit'
+  | 'graph'
   | 'platformOverview'
   | 'platformUsers'
   | 'platformWorkspaces'
@@ -39,6 +40,7 @@ export type CatalogTab = (typeof CATALOG_TAB_VALUES)[number];
 
 export type Route =
   | { readonly kind: 'login' }
+  | { readonly kind: 'graph' }
   | { readonly kind: 'chats' }
   | { readonly kind: 'chat'; readonly chatId: string }
   | { readonly kind: 'approvals'; readonly actionRequestId?: string }
@@ -69,8 +71,14 @@ function isCatalogTab(value: string | undefined): value is CatalogTab {
  *  see this module's doc comment. */
 const DEFAULT_ROUTE: Route = { kind: 'chats' };
 
-export function routeFromHash(hash: string): Route {
+export function routeFromHash(fullHash: string): Route {
+  // S6-A / S6-D: a `?query` after the path belongs to the page (`#/platform/workspaces?residue=1`
+  // read by PlatformWorkspacesPage, `#/govern/audit?nodeId=…` by AuditPage, `#/work/graph?objectId=…`
+  // by GraphPage); routing matches the path part only.
+  const query = fullHash.indexOf('?');
+  const hash = query === -1 ? fullHash : fullHash.slice(0, query);
   if (hash === '#/login') return { kind: 'login' };
+  if (hash === '#/work/graph') return { kind: 'graph' };
 
   const chat = /^#\/work\/chats\/(.+)$/.exec(hash);
   if (chat?.[1]) return { kind: 'chat', chatId: decodeURIComponent(chat[1]) };
@@ -151,6 +159,7 @@ export const hrefs = {
   catalog: (tab: CatalogTab = 'operations') => `#/govern/catalog/${tab}`,
   models: () => '#/govern/models',
   audit: () => '#/govern/audit',
+  graph: () => '#/work/graph',
   platformOverview: () => '#/platform/overview',
   platformUsers: () => '#/platform/users',
   platformWorkspaces: () => '#/platform/workspaces',

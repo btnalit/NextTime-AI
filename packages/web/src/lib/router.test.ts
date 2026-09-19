@@ -48,6 +48,15 @@ describe('routeFromHash', () => {
     });
   });
 
+  it('S6: a page-owned ?query after the path never changes the route', () => {
+    expect(routeFromHash('#/platform/workspaces?residue=1')).toEqual({
+      kind: 'platformWorkspaces',
+    });
+    expect(routeFromHash('#/govern/audit?nodeId=fact-1')).toEqual({ kind: 'audit' });
+    expect(routeFromHash('#/work/graph')).toEqual({ kind: 'graph' });
+    expect(routeFromHash('#/work/graph?objectId=o-1&q=host')).toEqual({ kind: 'graph' });
+  });
+
   it('an unknown or empty hash falls back to /work/chats (the default work view)', () => {
     expect(routeFromHash('')).toEqual({ kind: 'chats' });
     expect(routeFromHash('#/')).toEqual({ kind: 'chats' });
@@ -92,6 +101,7 @@ describe('hrefs', () => {
       { kind: 'catalog', tab: 'workers' },
       { kind: 'models' },
       { kind: 'audit' },
+      { kind: 'graph' },
       { kind: 'platformOverview' },
       { kind: 'platformUsers' },
       { kind: 'platformWorkspaces' },
@@ -134,6 +144,8 @@ function hrefFor(route: Route): string {
       return hrefs.models();
     case 'audit':
       return hrefs.audit();
+    case 'graph':
+      return hrefs.graph();
     case 'platformOverview':
       return hrefs.platformOverview();
     case 'platformUsers':
