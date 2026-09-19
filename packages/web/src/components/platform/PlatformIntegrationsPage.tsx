@@ -475,7 +475,6 @@ function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
                   <td>
                     <Button
                       variant="ghost"
-                      size="s"
                       onClick={() => setPanel({ kind: 'gate', gateId: row.gateId })}
                       data-testid={`gate-instance-open-${row.gateId}`}
                     >

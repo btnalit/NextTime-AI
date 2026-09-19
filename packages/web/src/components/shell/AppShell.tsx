@@ -52,9 +52,11 @@ export function AppShell({
   const wsStatus = useWsStatus(pushes);
   const { workspaceName, role } = useWorkspaceIdentity(http);
   const kernelVersion = useKernelVersion(http, platformRole === 'admin');
-  // Same cache key as `useWorkspaceIdentity`'s own `get_workspace` read (hooks/useCapability
-  // caches per caller + name + params), so this costs one refresh, not a second cold load; the
-  // `caller` field is the apiKey session's only source of "who am I".
+  // A second read of the same key as `useWorkspaceIdentity`'s `get_workspace` — served warm from
+  // hooks/useCapability's per-caller cache while it refreshes, so the footer never flashes, but
+  // still one extra request per shell mount. `caller.displayName` is the apiKey session's only
+  // source of "who am I"; exposing it from `useWorkspaceIdentity` (hooks/, another lane) would
+  // remove this read.
   const workspace = useCapability<WorkspaceInfo>(http, 'get_workspace');
   const currentUser = user
     ? { displayName: user.displayName, login: user.login }

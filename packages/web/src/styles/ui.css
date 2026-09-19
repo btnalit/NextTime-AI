@@ -1139,7 +1139,6 @@ a.ref-chip-name {
   font-size: var(--fs-13);
   font-weight: 500;
   white-space: nowrap;
-  box-shadow: var(--shadow-1);
 }
 
 .follow-pill:hover {

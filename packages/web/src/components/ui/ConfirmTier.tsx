@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Button } from './Button.js';
 import { Drawer } from './Drawer.js';
 import { ErrorBanner } from './ErrorBanner.js';
@@ -228,6 +228,14 @@ function DrawerTier({
   const typedId = useId();
   const nameMatches = target === undefined ? true : typed.trim() === target;
   const ready = !irreversible || (nameMatches && acknowledged);
+  // Stable identity while `busy` flips: `Drawer` keys its focus-trap effect on `onClose`, so a
+  // fresh closure per render would bounce focus (cleanup → opener, setup → first control) on
+  // every busy re-render. Reads `busy` through a ref instead.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const closeUnlessBusy = useCallback(() => {
+    if (!busyRef.current) onClose();
+  }, [onClose]);
   return (
     <Drawer
       open={open}
@@ -237,7 +245,7 @@ function DrawerTier({
           ? '不可逆 Irreversible — 请键入目标名称并确认知情'
           : '高影响 High impact — 请核对影响范围'
       }
-      onClose={busy ? () => undefined : onClose}
+      onClose={closeUnlessBusy}
       testId={testId}
       footer={
         <>

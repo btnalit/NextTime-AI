@@ -71,8 +71,8 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  /* Hierarchy is 1px borders, not shadows (§5.9 principle 5) — `--shadow-1` exists for the
-   * drawer and the toast stack only. */
+  /* Hierarchy is 1px borders, not shadows (§5.9 principle 5) — `--shadow-1` exists for floating
+   * overlays only (drawer, toast stack, the chat's jump-to-latest control). */
   --shadow-1: 0 1px 2px rgba(18, 22, 28, 0.08), 0 8px 24px rgba(18, 22, 28, 0.12);
   --overlay: rgba(18, 22, 28, 0.35);
   --skeleton-a: var(--surface-2);
