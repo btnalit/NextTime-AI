@@ -1,6 +1,11 @@
 import type { ExportProvDocument } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { type ExplainResult, causalChain, explain } from '../../substrate/epistemic/index.js';
+import {
+  type ExplainResult,
+  causalChain,
+  explain,
+  explainByNodeId,
+} from '../../substrate/epistemic/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { type ProvGraph, buildProvenanceGraph } from './provenance-graph.js';
 
@@ -17,7 +22,7 @@ import { type ProvGraph, buildProvenanceGraph } from './provenance-graph.js';
 
 export class ExportProvInputError extends Error {
   constructor() {
-    super('export_prov: exactly one of factId/decisionId/activityId is required');
+    super('export_prov: exactly one of nodeId/factId/decisionId/activityId is required');
     this.name = 'ExportProvInputError';
   }
 }
@@ -95,6 +100,9 @@ function toProvJsonDocument(graph: ProvGraph): ExportProvDocument {
 }
 
 interface ExportProvParams {
+  /** S6-A C27: an untyped root, resolved to one of the three below exactly the way
+   *  `explain{nodeId}` resolves it (`explainByNodeId`: Fact, then Activity, then Decision). */
+  readonly nodeId?: string;
   readonly factId?: string;
   readonly decisionId?: string;
   readonly activityId?: string;
@@ -119,10 +127,24 @@ async function resolveChain(
   rootType: 'fact' | 'decision' | 'activity';
   rootId: string;
 }> {
-  const given = [params.factId, params.decisionId, params.activityId].filter(
+  const given = [params.nodeId, params.factId, params.decisionId, params.activityId].filter(
     (value) => value !== undefined,
   );
   if (given.length !== 1) throw new ExportProvInputError();
+
+  if (params.nodeId) {
+    // One extra `explain` round trip to learn the node's type (throws `ExplainNodeNotFoundError`,
+    // 404, when nothing matches — the same answer a typed id that does not resolve gets below),
+    // then the ordinary typed path so `depth` and the chain walk behave identically either way.
+    const resolved = await explainByNodeId(client, workspaceId, params.nodeId);
+    const typed: ExportProvParams =
+      resolved.nodeType === 'fact'
+        ? { factId: params.nodeId, depth: params.depth }
+        : resolved.nodeType === 'decision'
+          ? { decisionId: params.nodeId, depth: params.depth }
+          : { activityId: params.nodeId, depth: params.depth };
+    return resolveChain(client, workspaceId, typed);
+  }
 
   if (params.factId) {
     const result = await causalChain(client, workspaceId, {

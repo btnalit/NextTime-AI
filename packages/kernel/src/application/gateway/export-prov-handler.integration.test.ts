@@ -12,6 +12,7 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { hashApiKey } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
+import { ExportProvInputError } from './export-prov-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -160,6 +161,35 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.format).toBe('prov-json');
       expect(Object.keys(result.document.activity)).toContain(activityId);
       expect(Object.keys(result.document.wasGeneratedBy)).toHaveLength(0);
+    });
+
+    // S6-A C27 (docs/console-completion-plan.md §5.5 / §6): the audit page's explain view holds an
+    // untyped `nodeId` — `export_prov{nodeId}` must export exactly what `explain{nodeId}` showed.
+    it('export_prov({nodeId}) resolves the node type like explain and matches the typed call for each of Fact / Decision / Activity', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      for (const [typedParams, nodeId] of [
+        [{ factId }, factId],
+        [{ decisionId }, decisionId],
+        [{ activityId }, activityId],
+      ] as const) {
+        const typed = (await dispatchCapability({ pool }, caller, 'export_prov', {
+          ...typedParams,
+        })) as ExportProvResult;
+        const untyped = (await dispatchCapability({ pool }, caller, 'export_prov', {
+          nodeId,
+        })) as ExportProvResult;
+        expect(untyped).toEqual(typed);
+      }
+    });
+
+    it('export_prov({nodeId}) with an id that is none of the three → ExplainNodeNotFoundError; nodeId plus a typed id → rejects (more than one root)', async () => {
+      const caller = humanCaller(workspaceId, ownerId);
+      await expect(
+        dispatchCapability({ pool }, caller, 'export_prov', { nodeId: randomUUID() }),
+      ).rejects.toMatchObject({ name: 'ExplainNodeNotFoundError' });
+      await expect(
+        dispatchCapability({ pool }, caller, 'export_prov', { nodeId: factId, factId }),
+      ).rejects.toBeInstanceOf(ExportProvInputError);
     });
 
     it('member calling export_prov (minRole:auditor) → ForbiddenError, before the handler ever runs', async () => {

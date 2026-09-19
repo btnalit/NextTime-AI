@@ -1943,6 +1943,10 @@ const auditCapabilities: readonly Capability[] = [
     // does for its own `factId`/`decisionId` pair. `depth` only affects a `factId`/`decisionId`
     // root (walked the same way `causal_chain` does); ignored for an `activityId` root, which has
     // no further "chain" to walk beyond itself — see the handler's own doc comment.
+    // S6-A C27 (docs/console-completion-plan.md §5.5, §6 "只导出当前筛选范围"): `nodeId` — the same
+    // untyped id `explain{nodeId}` takes (Fact, Decision or Activity, resolved the same way) — so
+    // the audit page can export exactly the explain view it is showing without first knowing which
+    // of the three the id is. Counts as one of the "exactly one root" alternatives.
     name: 'export_prov',
     group: 'audit',
     mode: 'observe',
@@ -1950,6 +1954,7 @@ const auditCapabilities: readonly Capability[] = [
     minRole: 'auditor',
     paramsSchema: z
       .object({
+        nodeId: id.optional(),
         factId: id.optional(),
         decisionId: id.optional(),
         activityId: id.optional(),
@@ -1958,7 +1963,7 @@ const auditCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.ExportProvResultSchema,
     description:
-      'Export a PROV-JSON-style provenance graph around a Fact, Decision, or Activity, built from explain().',
+      'Export a PROV-JSON-style provenance graph around one root — exactly one of nodeId (any of the three, resolved like explain), factId, decisionId or activityId — built from explain(); depth (1-5) bounds the causal walk for a Fact/Decision root.',
   },
 ];
 
