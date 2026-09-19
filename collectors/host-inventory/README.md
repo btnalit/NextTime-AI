@@ -86,6 +86,7 @@ See `src/config.ts` for the authoritative list; summary:
 | `HOST_INVENTORY_RUN_SYSTEMD_PATH` | no | `/run/systemd` | Presence check gating `systemctl` calls. |
 | `HOST_INVENTORY_REPOSITORY_PATHS` | no | (none) | `:`-separated list of git repo paths to observe `git remote` for. |
 | `HOST_INVENTORY_INTERVAL_MS` | no | `900000` (15 min) | Loop interval when not run with `--once`. |
+| `HOST_INVENTORY_FAILURE_STREAK_ALERT` | no | `3` | Interval mode (S6, leftover 41): after this many consecutive failed cycles the per-cycle log line becomes `level: "error", message: "collector failing repeatedly"` (every failed cycle already carries `consecutiveFailures` and, for a refused kernel call, `kernelStatus` / `kernelErrorCode` — a string of `401 unauthorized` means the Handle no longer works: re-mint it). The process keeps looping; the kernel-side twin is `ops.collector_silent` in `GET /internal/metrics`. |
 | `HOST_INVENTORY_SOURCE_NAME` / `HOST_INVENTORY_SOURCE_KIND` | no | `host-inventory` / `host-inventory-collector` | `register_source`'s own `name`/`kind` — this collector's identity across runs (see above). |
 | `RAGFLOW_GATEKEEPER_ID` | no | (unset — phase 4 skipped) | S3.4: the RAGFlow Gatekeeper instance's own graph object id (`docs/runbooks/host-gatekeepers.md`). Requires this collector's own Handle to also hold `observe_operation` in its capability scope (`docs/runbooks/host-collector.md`). |
 

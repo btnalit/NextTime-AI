@@ -1,4 +1,11 @@
 import { loadConfig } from './config.js';
+import {
+  INITIAL_FAILURE_STREAK,
+  describeFailure,
+  parseFailureStreakAlert,
+  recordFailure,
+  recordSuccess,
+} from './failure-streak.js';
 import { runOnce } from './run.js';
 
 /**
@@ -10,6 +17,13 @@ import { runOnce } from './run.js';
  * kernel-network hiccup should not kill a long-running collector; `--once` mode, by contrast, is
  * meant for a host cron/systemd-timer-driven invocation, where "this run failed" must be this
  * process's own exit code).
+ *
+ * S6 (leftover 41 後半): interval mode keeps a consecutive-failure streak (`failure-streak.ts`) —
+ * every failed cycle's line carries `consecutiveFailures` and, for a refused kernel call, the
+ * HTTP status and error code; at `HOST_INVENTORY_FAILURE_STREAK_ALERT` (default 3) failures in a
+ * row the line becomes `level: 'error', message: 'collector failing repeatedly'`. The process
+ * still does not exit — the documented contract above — the streak is what makes a week of 401s
+ * look different from one hiccup in `docker compose logs`.
  */
 
 async function main(): Promise<void> {
@@ -20,13 +34,16 @@ async function main(): Promise<void> {
     return;
   }
 
+  const alertAt = parseFailureStreakAlert(process.env.HOST_INVENTORY_FAILURE_STREAK_ALERT);
   console.log(
     JSON.stringify({
       level: 'info',
       message: 'collector started (interval mode)',
       intervalMs: config.intervalMs,
+      failureStreakAlertAt: alertAt,
     }),
   );
+  let streak = INITIAL_FAILURE_STREAK;
   let stopped = false;
   const stop = () => {
     stopped = true;
@@ -37,14 +54,10 @@ async function main(): Promise<void> {
   while (!stopped) {
     try {
       await runOnce({ config });
+      streak = recordSuccess(streak);
     } catch (err) {
-      console.error(
-        JSON.stringify({
-          level: 'error',
-          message: 'collection cycle failed',
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
+      streak = recordFailure(streak);
+      console.error(JSON.stringify(describeFailure(err, streak, alertAt)));
     }
     if (stopped) break;
     await new Promise((resolve) => setTimeout(resolve, config.intervalMs));

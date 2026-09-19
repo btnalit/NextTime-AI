@@ -39,6 +39,7 @@ export { reconstruct } from './reconstruct.js';
 export type { ReconstructInput, ReconstructResult } from './reconstruct.js';
 
 export {
+  DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS,
   DEFAULT_OUTBOX_STUCK_THRESHOLD_MS,
   INVARIANT_CHECK_IDS,
   renderInvariantMetricsPrometheus,
