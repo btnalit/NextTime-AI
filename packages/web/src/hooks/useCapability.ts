@@ -71,22 +71,39 @@ export function invalidateCapability(caller: CapabilityCaller, name: string): vo
   }
 }
 
-export interface UseCapabilityOptions {
+/** What a custom `load` (below) is handed for one (re)load of `key`. */
+export interface CapabilityLoadContext<T> {
+  readonly caller: CapabilityCaller;
+  readonly name: string;
+  readonly params: unknown;
+  /** The data currently cached for this exact (name, params) — what the reader is looking at —
+   *  or `undefined` on a cold first load. */
+  readonly previous: T | undefined;
+}
+
+export interface UseCapabilityOptions<T = unknown> {
   readonly pushes?: PushSource;
   /** Reload in the background (keeping current data visible, `refreshing: true`) whenever one of
    *  these principal-scoped pushes fires. Requires `pushes`. */
   readonly reloadOn?: readonly PushKind[];
+  /** Replaces the default `caller.call(name, params)` for every load and reload of a key (C2:
+   *  `useCapabilityList` uses it to re-walk as many pages as the reader had already loaded, so a
+   *  push-triggered reload never truncates a paged list back to page one). Read through a ref at
+   *  call time — its identity never re-triggers a load. */
+  readonly load?: (context: CapabilityLoadContext<T>) => Promise<T>;
 }
 
 export function useCapability<T = unknown>(
   caller: CapabilityCaller,
   name: string,
   params?: unknown,
-  options: UseCapabilityOptions = {},
+  options: UseCapabilityOptions<T> = {},
 ): Resource<T> {
   const permissions = usePermissions();
-  const { pushes, reloadOn } = options;
+  const { pushes, reloadOn, load } = options;
   const reloadOnKey = (reloadOn ?? []).join(',');
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   // Recomputed every render (a caller typically passes a fresh params object literal) but cheap
   // for the small param shapes every governance capability takes; `key` is what actually gates a
@@ -124,7 +141,15 @@ export function useCapability<T = unknown>(
     // exactly as before, since a prior successful `run` for this same `key` already wrote it.
     setState(pendingStateFor<T>(caller, key));
     try {
-      const data = await caller.call<T>(name, paramsRef.current);
+      const context: CapabilityLoadContext<T> = {
+        caller,
+        name,
+        params: paramsRef.current,
+        previous: readCache<T>(caller, key),
+      };
+      const data = await (loadRef.current
+        ? loadRef.current(context)
+        : caller.call<T>(name, paramsRef.current));
       permissionsRef.current.markAllowed(name);
       if (!mounted.current || mySeq !== seq.current) return;
       writeCache(caller, key, data);
@@ -184,16 +209,51 @@ export interface CapabilityListResult<T> extends Resource<ListEnvelope<T>> {
   readonly loadMore: () => Promise<void>;
 }
 
+/**
+ * Reloads a keyset-paged list to at least the number of rows the reader had already loaded (C2,
+ * console-completion-plan §2b): page one first, then follow `nextCursor` until the row count
+ * reaches `previous.items.length` or the list is exhausted. A cold load (no `previous`) is a
+ * plain first page. Rows the kernel removed since may make this walk one page further than the
+ * reader had — bounded by the previous count, and strictly better than silently truncating a
+ * list the reader had paged through back to page one. A cursor that does not advance (a server
+ * bug, not a documented state) stops the walk rather than spinning.
+ */
+async function reloadLoadedPages<T>(
+  context: CapabilityLoadContext<ListEnvelope<T>>,
+): Promise<ListEnvelope<T>> {
+  const { caller, name, previous } = context;
+  const params = (context.params ?? {}) as Readonly<Record<string, unknown>>;
+  const target = previous?.items.length ?? 0;
+  let page = await caller.call<ListEnvelope<T>>(name, params);
+  let items = page.items;
+  let cursor = page.nextCursor;
+  while (cursor !== undefined && items.length < target) {
+    page = await caller.call<ListEnvelope<T>>(name, { ...params, cursor });
+    items = [...items, ...page.items];
+    if (page.nextCursor === cursor || page.items.length === 0) {
+      cursor = undefined;
+      break;
+    }
+    cursor = page.nextCursor;
+  }
+  return cursor === undefined ? { items } : { items, nextCursor: cursor };
+}
+
 /** `useCapability` specialized for the `{items, nextCursor?}` list envelope every `list_*`
  *  capability returns (docs/wire-contract-conventions.md §3). `params` is spread with `cursor` for
- *  `loadMore` — pass the same params object shape `caller.call(name, params)` already expects. */
+ *  `loadMore` — pass the same params object shape `caller.call(name, params)` already expects.
+ *  Reloads (a "Refresh" click, a `reloadOn` push, `reload()`) re-walk every page the reader had
+ *  loaded (`reloadLoadedPages`) instead of resetting to page one. */
 export function useCapabilityList<T = unknown>(
   caller: CapabilityCaller,
   name: string,
   params: Readonly<Record<string, unknown>> = {},
-  options: UseCapabilityOptions = {},
+  options: UseCapabilityOptions<ListEnvelope<T>> = {},
 ): CapabilityListResult<T> {
-  const base = useCapability<ListEnvelope<T>>(caller, name, params, options);
+  const base = useCapability<ListEnvelope<T>>(caller, name, params, {
+    ...options,
+    load: options.load ?? reloadLoadedPages,
+  });
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<unknown | null>(null);
 
