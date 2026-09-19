@@ -221,3 +221,30 @@ export function searchItems<T>(result: unknown): readonly T[] {
   }
   return [];
 }
+
+// -------------------------------------------------------------------------------------------
+// S6-C / C26 (docs/console-completion-plan.md §5.6, §6): `cancel_connection_request` — the
+// `requested → cancelled` edge the kernel finally wired (S2.13's own "known deviation", runbook
+// web-console.md 已知缺口 8). Its two expected refusals map to bilingual copy here rather than
+// in `lib/platform-errors.ts` (a platform-plane table, another lane's file); anything else falls
+// through to `ErrorBanner` with the kernel's own message.
+// -------------------------------------------------------------------------------------------
+
+/** The kernel's answer: the same row with `status: 'cancelled'` (0005 has no `cancelled_at`
+ *  column — who / when is on the `connection.request_cancelled` audit row). */
+export type CancelConnectionRequestResult = ConnectionRequestRow;
+
+const CONNECTION_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  forbidden:
+    '只能取消自己发起的申请；工作区 owner 可以取消任何申请 Only your own request can be cancelled — the workspace owner may cancel any',
+  illegal_transition:
+    '该申请已不在「已申请」状态，刷新后再看 This request is no longer in the requested state — refresh to see its current status',
+  not_found: '找不到该连接申请 No such connection request',
+};
+
+/** The bilingual one-liner for a `cancel_connection_request` failure, or `null` when the code is
+ *  not one of the three it can raise (callers then fall back to `ErrorBanner`). Takes the already
+ *  normalized code so it stays transport-agnostic (`describeError(err).code`, HTTP or WS). */
+export function cancelConnectionRequestMessage(code: string): string | null {
+  return CONNECTION_ERROR_MESSAGES[code] ?? null;
+}
