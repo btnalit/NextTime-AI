@@ -574,6 +574,26 @@ describe('PlatformWorkspacesPage', () => {
     );
   });
 
+  it('A1: the residue preset also applies on a hashchange while the page is mounted', async () => {
+    const disabled = workspace({ id: 'ws-2', name: 'Old', status: 'disabled', isDefault: false });
+    const http = scriptedHttp({
+      ...baseHandlers([]),
+      list_workspaces: (params) =>
+        Object.keys(params as object).length === 0
+          ? { items: [workspace(), disabled] }
+          : { items: [workspace()] },
+    });
+    renderPage(http);
+    await screen.findByTestId('workspace-row-ws-1');
+    expect(screen.queryByTestId('workspace-row-ws-2')).toBeNull();
+
+    window.location.hash = '#/platform/workspaces?residue=1';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    await screen.findByTestId('workspace-row-ws-2');
+    expect(screen.queryByTestId('workspace-row-ws-1')).toBeNull();
+    window.location.hash = '';
+  });
+
   it('A1: a disabled workspace inside retention shows the days left and no purge entry', async () => {
     const recent = workspace({
       id: 'ws-2',

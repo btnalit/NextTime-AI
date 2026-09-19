@@ -4,7 +4,7 @@ import type {
   WorkspacePurposeWire,
   WorkspaceStatusWire,
 } from '@nexttime/shared';
-import { type MouseEvent, type ReactNode, useMemo, useState } from 'react';
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -125,6 +125,16 @@ export function PlatformWorkspacesPage({
   const [filters, setFilters] = useState<Filters>(() =>
     readResiduePreset(initialHash ?? window.location.hash) ? RESIDUE_FILTERS : DEFAULT_FILTERS,
   );
+
+  // The banner link can also land while this page is already mounted (same route kind — no
+  // remount), so the preset is applied on `hashchange` too; the plain route never resets it.
+  useEffect(() => {
+    function onHashChange(): void {
+      if (readResiduePreset(window.location.hash)) setFilters(RESIDUE_FILTERS);
+    }
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   const params = useMemo(() => listParams(filters), [filters]);
   const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces', params);
