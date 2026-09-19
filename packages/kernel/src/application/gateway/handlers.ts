@@ -169,6 +169,8 @@ import {
   mergeUserHandler,
   platformAuditQueryHandler,
   platformOverviewHandler,
+  purgeUserHandler,
+  purgeWorkspaceHandler,
   removeMembershipHandler,
   resetUserPasswordHandler,
   setAllowedModelsHandler,
@@ -1348,6 +1350,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['create_workspace', createWorkspaceHandler],
   ['update_workspace', updateWorkspaceHandler],
   ['set_workspace_status', setWorkspaceStatusHandler],
+  // S6 A1 / A6: the purge plane (platform-handlers.ts "purge").
+  ['purge_workspace', purgeWorkspaceHandler],
+  ['purge_user', purgeUserHandler],
   ['set_allowed_models', setAllowedModelsHandler],
   // P-B1: integrations (platform-gates-handlers.ts) and the workspace-side enable
   // (gate-instance-handlers.ts).

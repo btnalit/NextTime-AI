@@ -177,20 +177,39 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     expect(await countFor(target.workspaceId, 'ontology_versions')).toBeGreaterThan(0);
     expect(await countFor(target.workspaceId, 'worker_definitions')).toBeGreaterThan(0);
 
+    const ownerUserId = await withWorkspace(
+      pool,
+      targetCtx,
+      async (client) =>
+        (
+          await client.query<{ user_id: string }>(
+            'select user_id from principals where workspace_id = $1 and id = $2',
+            [target.workspaceId, target.ownerPrincipalId],
+          )
+        ).rows[0]?.user_id,
+      { skipRoleSwitch: true },
+    );
+
     const result = await deleteWorkspace(pool, target.workspaceId);
 
     expect(result.workspaceId).toBe(target.workspaceId);
     expect(result.name).toBe(`delete-workspace-target-${ts}`);
     expect(result.principalIds).toEqual([target.ownerPrincipalId]);
     expect(result.taskIds).toEqual([taskId]);
-    expect(result.deletedCounts.get('chat_messages')).toBe(2);
-    expect(result.deletedCounts.get('capability_handles')).toBe(1);
-    expect(result.deletedCounts.get('audit_records')).toBe(1);
+    // S6: `deletedCounts` is keyed by the wire (camel-cased) table name, the same `counts` the
+    // `purge_workspace` capability returns (application/platform/purge-workspace.ts).
+    expect(result.deletedCounts.get('chatMessages')).toBe(2);
+    expect(result.deletedCounts.get('capabilityHandles')).toBe(1);
+    expect(result.deletedCounts.get('auditRecords')).toBe(1);
     expect(result.deletedCounts.get('tasks')).toBe(1);
-    expect(result.deletedCounts.get('worker_runs')).toBe(1);
+    expect(result.deletedCounts.get('workerRuns')).toBe(1);
     expect(result.deletedCounts.get('chats')).toBe(1);
     expect(result.deletedCounts.get('sessions')).toBe(1);
     expect(result.deletedCounts.get('principals')).toBe(1);
+    // S6 §4 edge (b): the CLI-created owner never activated (derived login, no password) and had
+    // no other membership — it goes with its workspace.
+    expect(result.purgedUsers.map((u) => u.id)).toEqual([ownerUserId]);
+    expect(result.deletedCounts.get('users')).toBe(1);
 
     // Every workspace-scoped table — not just the ones seeded above — has zero rows left for the
     // deleted workspace. Uses the exact same table discovery `deleteWorkspace` itself relied on,

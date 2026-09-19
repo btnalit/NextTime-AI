@@ -11,6 +11,27 @@ export {
   toWirePlatformSettings,
   updatePlatformSettings,
 } from './settings.js';
+export type {
+  ForeignKeyEdge,
+  PurgeEligibility,
+  PurgeEligibilityRow,
+  PurgeRefusalCode,
+  PurgeWorkspaceInput,
+  UserReference,
+  WorkspaceScopedSchema,
+} from './purge-workspace.js';
+export {
+  PURGE_RETENTION_DAYS,
+  PURGE_TABLE_PRIORITY,
+  PurgeWorkspaceRefusedError,
+  WorkspaceDeletionOrderCycleError,
+  assessPurgeEligibility,
+  computeWorkspaceTableDeletionOrder,
+  discoverWorkspaceScopedSchema,
+  findUserReferences,
+  purgeWorkspace,
+  wireTableKey,
+} from './purge-workspace.js';
 export type { SystemPromptParts } from './instance-instructions.js';
 export {
   INSTANCE_INSTRUCTIONS_MARKER,

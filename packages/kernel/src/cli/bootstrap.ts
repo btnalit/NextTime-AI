@@ -3,7 +3,12 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type Role, RoleSchema, type WorkerDefinitionKind } from '@nexttime/shared';
+import {
+  type PurgeWorkspaceResultWire,
+  type Role,
+  RoleSchema,
+  type WorkerDefinitionKind,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
@@ -18,6 +23,13 @@ import {
   findUserByLogin,
   setUserPassword,
 } from '../application/identity/index.js';
+import {
+  PurgeWorkspaceRefusedError,
+  assessPurgeEligibility,
+  envAdminLogins,
+  purgeWorkspace,
+  readPlatformSettings,
+} from '../application/platform/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../application/worker/index.js';
 import {
   WORKSPACE_PURPOSE_VALUES,
@@ -45,7 +57,9 @@ import {
  *   node dist/cli/bootstrap.js create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>] [--purpose standard|ephemeral] [--ttl <n>h]
  *   node dist/cli/bootstrap.js add-principal --workspace <id> --name <display-name> [--role <role>]
  *   node dist/cli/bootstrap.js list-workspaces
- *   node dist/cli/bootstrap.js delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]
+ *   node dist/cli/bootstrap.js purge-workspace <workspaceId> [--yes | --dry-run] [--name <expected name>] [--actor <login>]
+ *   node dist/cli/bootstrap.js purge-expired-workspaces [--yes] [--include-disabled] [--actor <login>]
+ *   node dist/cli/bootstrap.js delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>] [--actor <login>]
  *   node dist/cli/bootstrap.js seed-domain-pack --workspace <id> --principal <id> --pack-name <name> [--file-name <file>] [--dir <dir>]
  *   node dist/cli/bootstrap.js issue-service-handle --workspace <id> --name <name> --scope <cap1,cap2,...> [--ttl-days <n>]
  *
@@ -86,20 +100,24 @@ import {
  * precedent elsewhere in the codebase (that precedent is for a *runtime* best-effort integration,
  * not a one-time setup step whose whole point is to leave the workspace correctly seeded).
  *
- * `delete-workspace`/`list-workspaces` (operator-only, destructive workspace teardown — see the
- * doc comment above `discoverWorkspaceScopedSchema` below for the full deletion-order/append-only
- * -trigger rationale): the host-operator cleanup path for the throwaway workspaces acceptance/
- * smoke runs accumulate. Deliberately CLI-only — this is never registered as a capability, so no
- * Handle/agent path can ever reach it, regardless of what it is granted. `list-workspaces` prints
- * every Workspace (id, name, created_at, principal/task counts) so an operator can pick a target
- * — or a `--allow-name-pattern` — with real numbers in front of them, not guesswork.
- * `delete-workspace` refuses without `--yes`, optionally cross-checks `--name` against the
- * workspace's actual stored name (guards against a pasted-wrong-id mistake) and/or
- * `--allow-name-pattern` against it (a bulk-run safety net), always prints what it found *before*
- * checking any of that, and — once every guard passes — deletes the Workspace and every row any
- * workspace-scoped table holds for it in one transaction, then prints machine-readable
- * `PRINCIPAL=<id>`/`TASK=<id>` lines so `scripts/delete-workspace.sh` can remove the matching
- * host-side container and data directory (docs/runbooks/host-bootstrap.md "Deleting a workspace").
+ * `purge-workspace` / `purge-expired-workspaces` / `delete-workspace` / `list-workspaces`
+ * (operator-only, destructive workspace teardown — see the section doc comment below and
+ * application/platform/purge-workspace.ts for the cascade, deletion-order and append-only-trigger
+ * rationale): the host-operator cleanup path for the throwaway workspaces acceptance / smoke runs
+ * accumulate. S6 (docs/console-completion-plan.md §5.2): `purge-workspace` is the governed
+ * `purge_workspace` capability's operator twin — same preconditions (disabled ≥ 7 days or expired
+ * ephemeral, never the default workspace), same cascade, same audit row — and
+ * `purge-expired-workspaces` its bulk form; `delete-workspace` is the legacy override that skips
+ * the preconditions, never registered as a capability, so no Handle/agent path can ever reach it.
+ * `list-workspaces` prints every Workspace (id, name, created_at, principal/task counts, purpose,
+ * expiry, status, disabled_at) so an operator can pick a target — or a `--allow-name-pattern` —
+ * with real numbers in front of them, not guesswork. Every destructive subcommand refuses without
+ * `--yes`, optionally cross-checks `--name` against the workspace's actual stored name (guards
+ * against a pasted-wrong-id mistake), always prints what it found *before* checking any of that,
+ * and — once every guard passes — purges the Workspace and every row any workspace-scoped table
+ * holds for it in one transaction, then prints machine-readable `PRINCIPAL=<id>`/`TASK=<id>`
+ * lines so `scripts/delete-workspace.sh` can remove the matching host-side container and data
+ * directory (docs/runbooks/host-bootstrap.md "Deleting a workspace", docs/runbooks/operations.md).
  */
 
 /** `ontology/entry-agent.yaml`'s (and, in principle, any future `kind=worker` template's) shape:
@@ -500,145 +518,42 @@ export async function issueServiceHandleFromCli(
 }
 
 // -------------------------------------------------------------------------------------------
-// delete-workspace / list-workspaces — operator-only, destructive workspace teardown. CLI-only
-// by design (task brief: "CLI only, never a capability an agent can call"): the only entry point
-// is this file's `run()` dispatch table below, driven by a human operator — directly, or via the
-// host wrapper script that runs this file's compiled output inside the compose project's
-// `kernel` service (scripts/delete-workspace.sh) — nothing in the governed Handle/capability
-// system (`packages/shared/src/capabilities.ts`) ever names this operation, so no Worker or
-// entry agent can reach it no matter what it is granted.
+// delete-workspace / list-workspaces / purge-workspace / purge-expired-workspaces — operator-only,
+// destructive workspace teardown. The only entry points are this file's `run()` dispatch table
+// below, driven by a human operator — directly, or via the host wrapper scripts that run this
+// file's compiled output inside the compose project's `kernel` service
+// (scripts/delete-workspace.sh, scripts/delete-workspaces-matching.sh).
+//
+// S6 (docs/console-completion-plan.md §5.2 "脚本与页面同一条路径"): the cascade itself —
+// live-schema discovery, the dependency-ordered per-table delete, the append-only-trigger
+// override, the §4 edges (service-Handle warning, never-activated users cascading) and the
+// `platform.workspace_purged` audit row — lives in application/platform/purge-workspace.ts and is
+// shared with the governed `purge_workspace` platform capability. `purge-workspace` here is that
+// capability's operator twin (same preconditions: disabled ≥ 7 days or expired ephemeral, never
+// the default workspace); `delete-workspace` is the legacy override that skips the preconditions
+// (`purgeWorkspace(..., {force: true})`) — kept for the one case an operator must remove a
+// workspace the retention rule would still refuse, and never registered as a capability.
 //
 // Host-side cleanup (the workspace's stopped resident entry container,
 // `${NEXTTIME_DATA}/workspaces/<principalId>` and `.../workspaces/tasks/<taskId>` data dirs) is
 // deliberately NOT done here: this file lives under `packages/kernel/src`, which
 // `scripts/check-kernel-purity.sh` scans for concrete system/vendor names — the kernel is
 // mechanism, not content (design doc §7.10). That cleanup is `scripts/delete-workspace.sh`'s job,
-// driven by this subcommand's own `PRINCIPAL=`/`TASK=` output lines (see `runDeleteWorkspace`).
+// driven by these subcommands' own `PRINCIPAL=`/`TASK=` output lines (see `printHostCleanupLines`).
 //
-// Deletion order (task brief): every table that carries a `workspace_id` column has a composite
-// `(workspace_id, id[, version])` primary key and, wherever it references another such table, a
-// matching composite foreign key — always the Postgres default `no action`, never `on delete
-// cascade` (verified against every migrations/**/*.sql file: no `on delete` clause exists
-// anywhere in this schema). So a bare `delete from workspaces where id = $1` fails on the first
-// principal still referencing it, and a bare per-table sweep in the wrong order fails the same
-// way one level down. `discoverWorkspaceScopedSchema` reads the *live* schema (information_schema
-// + pg_constraint) rather than hardcoding a table list, so a future migration that adds a new
-// workspace-scoped table is picked up automatically; `computeWorkspaceTableDeletionOrder`
-// topologically sorts it into a safe order (children — the referencing side — before parents).
+// The audit row: `audit_records_actor_shape` (0019) needs an acting user on a platform row. A
+// CLI run names one with `--actor <login>` or, failing that, takes the first login in
+// `NEXTTIME_PLATFORM_ADMINS` (the anti-lockout administrator every host sets); when neither
+// resolves to a user, no audit row is written and the structured `workspace_purged` event line on
+// stderr is the only trail — the same replacement `delete-workspace` always used.
 // -------------------------------------------------------------------------------------------
 
-export interface ForeignKeyEdge {
-  readonly childTable: string;
-  readonly parentTable: string;
-}
-
-export interface WorkspaceScopedSchema {
-  readonly tables: readonly string[];
-  readonly foreignKeys: readonly ForeignKeyEdge[];
-}
-
-/**
- * Reads every `public` table with a `workspace_id` column, and every foreign key constraint
- * between two such tables, from the live schema — the raw input
- * `computeWorkspaceTableDeletionOrder` turns into a safe per-table delete order. Runtime
- * discovery, not a table list maintained by hand in this file, so it never drifts from whatever
- * `packages/kernel/migrations/**\/*.sql` actually declares.
- */
-export async function discoverWorkspaceScopedSchema(
-  client: PoolClient,
-): Promise<WorkspaceScopedSchema> {
-  const tablesResult = await client.query<{ table_name: string }>(
-    `select distinct table_name
-     from information_schema.columns
-     where table_schema = 'public' and column_name = 'workspace_id'`,
-  );
-  const tables = tablesResult.rows.map((row) => row.table_name).sort();
-
-  const foreignKeysResult = await client.query<{ child_table: string; parent_table: string }>(
-    `select child.relname as child_table, parent.relname as parent_table
-     from pg_constraint c
-     join pg_class child on child.oid = c.conrelid
-     join pg_class parent on parent.oid = c.confrelid
-     join pg_namespace ns on ns.oid = child.relnamespace
-     where c.contype = 'f' and ns.nspname = 'public'`,
-  );
-  const foreignKeys = foreignKeysResult.rows.map((row) => ({
-    childTable: row.child_table,
-    parentTable: row.parent_table,
-  }));
-
-  return { tables, foreignKeys };
-}
-
-export class WorkspaceDeletionOrderCycleError extends Error {
-  constructor(remainingTables: readonly string[]) {
-    super(
-      `delete-workspace: cannot compute a safe deletion order — cyclic foreign keys among: ${remainingTables.join(', ')}`,
-    );
-    this.name = 'WorkspaceDeletionOrderCycleError';
-  }
-}
-
-/**
- * Topologically sorts `schema.tables` so that every table is deleted before every other table it
- * holds a foreign key to (Kahn's algorithm: a table becomes eligible once nothing still in the
- * graph references it) — exactly the order a bare `delete from <table> where workspace_id = $1`
- * per table needs to never hit a "no action" FK violation.
- *
- * Self-referencing foreign keys (`links.supersedes_id`, `capability_handles.parent_jti`,
- * `worker_runs.parent_worker_run_id`) need no ordering at all — a single `delete ... where
- * workspace_id = $1` statement removes every row of that table together, satisfying its own
- * self-FK regardless of which row the constraint machinery happens to check first — so an edge
- * from a table to itself is dropped before building the graph, not treated as a 1-node cycle.
- *
- * Pure — no DB access — so the topology (including the self-reference and multi-level-chain
- * cases) is unit-testable against a fabricated `WorkspaceScopedSchema`, independent of the live
- * schema `discoverWorkspaceScopedSchema` reads. Throws `WorkspaceDeletionOrderCycleError` if a
- * genuine (non-self) cycle makes no valid order possible — not expected against this codebase's
- * actual schema, but a real possibility for a fabricated/future one, so left as a hard failure
- * rather than a silently-wrong partial order.
- */
-export function computeWorkspaceTableDeletionOrder(schema: WorkspaceScopedSchema): string[] {
-  const tables = new Set(schema.tables);
-  const inDegree = new Map<string, number>();
-  // childTable -> the parentTables it must be deleted before (its own outgoing foreign keys).
-  const mustPrecede = new Map<string, string[]>();
-
-  for (const table of tables) {
-    inDegree.set(table, 0);
-    mustPrecede.set(table, []);
-  }
-
-  for (const edge of schema.foreignKeys) {
-    if (edge.childTable === edge.parentTable) continue;
-    if (!tables.has(edge.childTable) || !tables.has(edge.parentTable)) continue;
-    mustPrecede.get(edge.childTable)?.push(edge.parentTable);
-    inDegree.set(edge.parentTable, (inDegree.get(edge.parentTable) ?? 0) + 1);
-  }
-
-  // Nothing (still in the graph) references a zero-in-degree table — it is safe to delete first.
-  const ready = [...tables].filter((table) => inDegree.get(table) === 0).sort();
-  const order: string[] = [];
-
-  while (ready.length > 0) {
-    ready.sort();
-    const table = ready.shift();
-    if (table === undefined) break;
-    order.push(table);
-    for (const parent of mustPrecede.get(table) ?? []) {
-      const remaining = (inDegree.get(parent) ?? 0) - 1;
-      inDegree.set(parent, remaining);
-      if (remaining === 0) ready.push(parent);
-    }
-  }
-
-  if (order.length !== tables.size) {
-    const remaining = [...tables].filter((table) => !order.includes(table));
-    throw new WorkspaceDeletionOrderCycleError(remaining);
-  }
-
-  return order;
-}
+export type { ForeignKeyEdge, WorkspaceScopedSchema } from '../application/platform/index.js';
+export {
+  WorkspaceDeletionOrderCycleError,
+  computeWorkspaceTableDeletionOrder,
+  discoverWorkspaceScopedSchema,
+} from '../application/platform/index.js';
 
 export interface WorkspaceInspection {
   readonly workspaceId: string;
@@ -711,6 +626,9 @@ export interface WorkspaceListEntry {
   /** S5.3: `scripts/delete-workspaces-matching.sh --expired` selects on these two. */
   readonly purpose: WorkspacePurpose;
   readonly expiresAt: Date | null;
+  /** S6: what `purge-expired-workspaces` assesses eligibility from (with the two above). */
+  readonly status: 'active' | 'disabled';
+  readonly disabledAt: Date | null;
 }
 
 /** Every Workspace, oldest first, with its Principal/Task counts — `list-workspaces`' own
@@ -729,6 +647,8 @@ export async function listWorkspaces(pool: PoolLike): Promise<WorkspaceListEntry
         task_count: string;
         purpose: WorkspacePurpose;
         expires_at: Date | null;
+        status: 'active' | 'disabled';
+        disabled_at: Date | null;
       }>(
         `select
            w.id,
@@ -737,7 +657,9 @@ export async function listWorkspaces(pool: PoolLike): Promise<WorkspaceListEntry
            (select count(*) from principals p where p.workspace_id = w.id)::bigint as principal_count,
            (select count(*) from tasks t where t.workspace_id = w.id)::bigint as task_count,
            w.purpose,
-           w.expires_at
+           w.expires_at,
+           w.status,
+           w.disabled_at
          from workspaces w
          order by w.created_at asc`,
       );
@@ -749,139 +671,98 @@ export async function listWorkspaces(pool: PoolLike): Promise<WorkspaceListEntry
         taskCount: Number(row.task_count),
         purpose: row.purpose,
         expiresAt: row.expires_at,
+        status: row.status,
+        disabledAt: row.disabled_at,
       }));
     },
     { skipRoleSwitch: true },
   );
 }
 
-/** Thrown for `delete-workspace` refusals that depend on runtime state (workspace not found, a
- *  guard in `checkDeleteWorkspaceGuards` failed) — distinct from `BootstrapUsageError`, which
- *  this file reserves for a malformed invocation (bad flags/missing required args, independent of
- *  what is actually in the database). */
+/** Thrown for `delete-workspace` / `purge-workspace` refusals that depend on runtime state
+ *  (workspace not found, a guard in `checkDeleteWorkspaceGuards` failed, the purge preconditions
+ *  not met) — distinct from `BootstrapUsageError`, which this file reserves for a malformed
+ *  invocation (bad flags/missing required args, independent of what is actually in the
+ *  database). */
 export class DeleteWorkspaceRefusedError extends Error {}
-
-const LINKS_DELETE_TRIGGER = 'links_immutable_delete';
-const AUDIT_RECORDS_DELETE_TRIGGER = 'audit_records_no_delete';
-
-/** Matches a bare lowercase Postgres identifier. Every table name `deleteWorkspace` ever builds
- *  a dynamic `delete from "<table>"` statement for comes from `discoverWorkspaceScopedSchema`
- *  (information_schema/pg_constraint — real catalog data, never CLI input), so this is cheap
- *  defense-in-depth against building a malformed statement, not a real injection concern. */
-const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
 export interface DeleteWorkspaceResult {
   readonly workspaceId: string;
   readonly name: string;
   /** Every `principals.id` that belonged to this workspace, read back before any row was
-   *  deleted — `runDeleteWorkspace` prints these as `PRINCIPAL=<id>` lines so
-   *  `scripts/delete-workspace.sh` can remove the matching `nexttime-entry-<id>` container and
-   *  `${NEXTTIME_DATA}/workspaces/<id>` data dir (host-side; see this section's own doc comment
-   *  for why that cleanup does not live here). */
+   *  deleted — printed as `PRINCIPAL=<id>` lines so `scripts/delete-workspace.sh` can remove the
+   *  matching `nexttime-entry-<id>` container and `${NEXTTIME_DATA}/workspaces/<id>` data dir
+   *  (host-side; see this section's own doc comment for why that cleanup does not live here). */
   readonly principalIds: readonly string[];
   /** Every `tasks.id` that belonged to this workspace, read back the same way — printed as
    *  `TASK=<id>` lines for the matching `${NEXTTIME_DATA}/workspaces/tasks/<id>` data dir. */
   readonly taskIds: readonly string[];
-  /** Rows actually deleted from each workspace-scoped table, in the order they were deleted
-   *  (children before parents — see `computeWorkspaceTableDeletionOrder`). */
+  /** Rows actually deleted from each workspace-scoped table, keyed by the wire (camel-cased)
+   *  table name in the order they were deleted (children before parents —
+   *  `computeWorkspaceTableDeletionOrder`); only tables that held rows. */
   readonly deletedCounts: ReadonlyMap<string, number>;
+  /** S6 §4 edge (b): the never-activated users deleted with the workspace. */
+  readonly purgedUsers: readonly { readonly id: string; readonly login: string }[];
 }
 
 /**
- * Deletes a Workspace and every row any workspace-scoped table holds for it, in one transaction,
- * over the admin/skip-role-switch path `createWorkspace` above already establishes (bypasses RLS
- * the same way). No guard (`--yes`/`--name`/`--allow-name-pattern`) is checked here — this
- * function is the mechanism; `checkDeleteWorkspaceGuards` is the policy, already applied by
- * `runDeleteWorkspace` before this is ever called. Kept separate so an integration test can drive
- * the mechanism directly, exactly like `createWorkspace`/`addPrincipal` above.
- *
- * `links` (I4) and `audit_records` (I11) are append-only — each has a `before delete` trigger
- * (`links_immutable_delete` / `audit_records_no_delete`, migrations/core/0002_substrate.sql and
- * 0004_audit.sql) that unconditionally raises, regardless of role, so even this RLS-bypassing
- * admin connection cannot delete a row in either table without first disabling that trigger. This
- * is the one deliberate, audited override of those two invariants anywhere in this codebase: full
- * workspace teardown is an operator-only, machine-logged action (`runDeleteWorkspace`'s stderr
- * `workspace_deleted` line), never something application code can trigger — nothing else in
- * `packages/kernel/src` ever runs this statement. Both triggers are re-enabled before COMMIT
- * (`alter table ... enable trigger` is DDL, so it must happen inside the same transaction that
- * disabled them — leaving either disabled past COMMIT would silently and permanently remove that
- * invariant for every future write, not just this one).
+ * The legacy operator override: deletes a Workspace and every row any workspace-scoped table
+ * holds for it, in one transaction, *without* the `purge_workspace` preconditions — the
+ * application/platform `purgeWorkspace` cascade with `force: true`. No guard
+ * (`--yes`/`--name`/`--allow-name-pattern`) is checked here — this function is the mechanism;
+ * `checkDeleteWorkspaceGuards` is the policy, already applied by `runDeleteWorkspace` before this
+ * is ever called. Kept separate so an integration test can drive the mechanism directly, exactly
+ * like `createWorkspace`/`addPrincipal` above. `actorUserId` (when the CLI could resolve one)
+ * makes the cascade leave its `platform.workspace_purged` audit row, `forced: true` in the payload.
  */
 export async function deleteWorkspace(
   pool: PoolLike,
   workspaceId: string,
+  options: { readonly actorUserId?: string } = {},
 ): Promise<DeleteWorkspaceResult> {
-  return withWorkspace(
-    pool,
-    { workspaceId, principalId: randomUUID() },
-    async (client) => {
-      const name = (
-        await client.query<{ name: string }>('select name from workspaces where id = $1', [
-          workspaceId,
-        ])
-      ).rows[0]?.name;
-      if (name === undefined) {
-        throw new DeleteWorkspaceRefusedError(`workspace not found: ${workspaceId}`);
-      }
+  let purged: PurgeWorkspaceResultWire;
+  try {
+    purged = await purgeWorkspace(pool, {
+      workspaceId,
+      confirm: true,
+      force: true,
+      ...(options.actorUserId !== undefined ? { actorUserId: options.actorUserId } : {}),
+    });
+  } catch (err) {
+    if (err instanceof PurgeWorkspaceRefusedError) {
+      throw new DeleteWorkspaceRefusedError(err.message);
+    }
+    throw err;
+  }
+  return {
+    workspaceId: purged.workspaceId,
+    name: purged.name,
+    principalIds: purged.principalIds,
+    taskIds: purged.taskIds,
+    deletedCounts: new Map(Object.entries(purged.counts)),
+    purgedUsers: purged.purgedUsers,
+  };
+}
 
-      const principalIds = (
-        await client.query<{ id: string }>('select id from principals where workspace_id = $1', [
-          workspaceId,
-        ])
-      ).rows.map((row) => row.id);
-      const taskIds = (
-        await client.query<{ id: string }>('select id from tasks where workspace_id = $1', [
-          workspaceId,
-        ])
-      ).rows.map((row) => row.id);
-
-      const schema = await discoverWorkspaceScopedSchema(client);
-      const order = computeWorkspaceTableDeletionOrder(schema);
-
-      if (order.includes('links')) {
-        await client.query(`alter table links disable trigger ${LINKS_DELETE_TRIGGER}`);
-      }
-      if (order.includes('audit_records')) {
-        await client.query(
-          `alter table audit_records disable trigger ${AUDIT_RECORDS_DELETE_TRIGGER}`,
-        );
-      }
-
-      const deletedCounts = new Map<string, number>();
-      for (const table of order) {
-        if (!SAFE_IDENTIFIER.test(table)) {
-          throw new Error(
-            `delete-workspace: refusing to delete from unexpected table name "${table}"`,
-          );
-        }
-        const result = await client.query(`delete from "${table}" where workspace_id = $1`, [
-          workspaceId,
-        ]);
-        deletedCounts.set(table, result.rowCount ?? 0);
-      }
-
-      if (order.includes('audit_records')) {
-        await client.query(
-          `alter table audit_records enable trigger ${AUDIT_RECORDS_DELETE_TRIGGER}`,
-        );
-      }
-      if (order.includes('links')) {
-        await client.query(`alter table links enable trigger ${LINKS_DELETE_TRIGGER}`);
-      }
-
-      const deletedWorkspace = await client.query('delete from workspaces where id = $1', [
-        workspaceId,
-      ]);
-      if ((deletedWorkspace.rowCount ?? 0) !== 1) {
-        throw new DeleteWorkspaceRefusedError(
-          `workspace row vanished during its own deletion: ${workspaceId}`,
-        );
-      }
-
-      return { workspaceId, name, principalIds, taskIds, deletedCounts };
-    },
-    { skipRoleSwitch: true },
-  );
+/**
+ * Resolves the acting administrator for a CLI-driven purge's audit row: `--actor <login>` when
+ * given (must exist — a typo must not silently drop the audit row), else the first login of
+ * `NEXTTIME_PLATFORM_ADMINS` if that user exists, else `undefined` (no audit row; the caller
+ * prints the structured stderr event and says so).
+ */
+async function resolveCliActor(
+  pool: PoolLike,
+  actorLogin: string | undefined,
+): Promise<{ readonly id: string; readonly login: string } | undefined> {
+  if (actorLogin !== undefined) {
+    const user = await findUserByLogin(pool, actorLogin);
+    if (!user) throw new BootstrapUsageError(`--actor: no user with login "${actorLogin}"`);
+    return { id: user.id, login: user.login };
+  }
+  const [envAdmin] = envAdminLogins();
+  if (envAdmin === undefined) return undefined;
+  const user = await findUserByLogin(pool, envAdmin);
+  return user ? { id: user.id, login: user.login } : undefined;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -1287,21 +1168,103 @@ async function runSetPassword(argv: readonly string[]): Promise<void> {
   }
 }
 
+/** The `PRINCIPAL=<id>` / `TASK=<id>` stdout contract `scripts/delete-workspace.sh` reads: the
+ *  last thing written to **stdout**, nothing after it, so a caller that captures only stdout gets
+ *  a clean, trailing, greppable id list. `PURGED_USER=<login>` lines are informational (no
+ *  host-side state belongs to a user). */
+function printHostCleanupLines(result: {
+  readonly principalIds: readonly string[];
+  readonly taskIds: readonly string[];
+  readonly purgedUsers: readonly { readonly login: string }[];
+}): void {
+  for (const user of result.purgedUsers) {
+    console.log(`PURGED_USER=${user.login}`);
+  }
+  for (const principalId of result.principalIds) {
+    console.log(`PRINCIPAL=${principalId}`);
+  }
+  for (const taskId of result.taskIds) {
+    console.log(`TASK=${taskId}`);
+  }
+}
+
+function printInspection(info: WorkspaceInspection): void {
+  console.log(`workspace:  ${info.workspaceId}`);
+  console.log(`name:       ${info.name}`);
+  console.log(`created_at: ${info.createdAt.toISOString()}`);
+  console.log(`principals: ${info.principalCount}`);
+  console.log(`tasks:      ${info.taskCount}`);
+}
+
+function printPurgeSummary(purged: PurgeWorkspaceResultWire, verb: string): void {
+  console.log('');
+  console.log(`${verb} rows per table:`);
+  for (const [table, count] of Object.entries(purged.counts)) {
+    console.log(`  ${table}: ${count}`);
+  }
+  console.log(`  total: ${purged.totalRows}`);
+  if (purged.activeHandles > 0) {
+    console.log(`  live CapabilityHandles revoked: ${purged.activeHandles}`);
+  }
+  for (const warning of purged.warnings) {
+    console.log(
+      `WARNING ${warning.kind}: service Principal ${warning.principalId} (${warning.name ?? '-'}) ` +
+        `has ${warning.activeHandles} live Handle(s) — a collector or external runtime presenting one starts failing with 401 now`,
+    );
+  }
+  if (purged.purgedUsers.length > 0) {
+    console.log(
+      `${verb} never-activated users: ${purged.purgedUsers.map((u) => u.login).join(', ')}`,
+    );
+  }
+}
+
+/** The structured stderr event — the trail a CLI purge always leaves, whether or not it could
+ *  also write the `platform.workspace_purged` audit row (see the section doc comment). */
+function printPurgeEvent(
+  purged: PurgeWorkspaceResultWire,
+  actor: { readonly login: string } | undefined,
+  forced: boolean,
+): void {
+  console.error(
+    JSON.stringify({
+      event: 'workspace_purged',
+      workspaceId: purged.workspaceId,
+      workspaceName: purged.name,
+      purpose: purged.purpose,
+      reason: purged.reason,
+      forced,
+      purgedAt: new Date().toISOString(),
+      actorLogin: actor?.login ?? null,
+      auditRowWritten: actor !== undefined,
+      principalCount: purged.principalIds.length,
+      taskCount: purged.taskIds.length,
+      purgedUsers: purged.purgedUsers.map((u) => u.login),
+      counts: purged.counts,
+    }),
+  );
+  if (actor === undefined) {
+    console.error(
+      'purge: no acting administrator resolved (pass --actor <login> or set NEXTTIME_PLATFORM_ADMINS) — no platform audit row was written; the event line above is the only trail',
+    );
+  }
+}
+
 /**
- * `delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]`.
- * Always reads and prints the workspace's info first (name/created_at/principal count/task
- * count — task brief: "before acting"), *then* checks every guard, *then* — only if every guard
- * passes — calls `deleteWorkspace`. A guard failure (including "not found") throws
+ * `delete-workspace <workspaceId> --yes [--name <expected name>] [--allow-name-pattern <regex>]
+ * [--actor <login>]` — the legacy operator override (no purge preconditions). Always reads and
+ * prints the workspace's info first (name/created_at/principal count/task count — "before
+ * acting"), *then* checks every guard, *then* — only if every guard passes — calls
+ * `deleteWorkspace`. A guard failure (including "not found") throws
  * `DeleteWorkspaceRefusedError` after the info is printed but before anything is deleted.
  *
- * Output contract for `scripts/delete-workspace.sh`: the structured `workspace_deleted` audit
- * line (task brief: "log a structured line to stdout/stderr" in place of an `audit_records` row,
- * since that table is itself being deleted) goes to **stderr**, and the `PRINCIPAL=<id>` /
- * `TASK=<id>` lines are the last thing written to **stdout** — so a caller that captures only
- * stdout gets a clean, trailing, greppable id list with nothing after it.
+ * Output contract for `scripts/delete-workspace.sh`: the structured `workspace_purged` event
+ * line goes to **stderr**; the `PRINCIPAL=<id>` / `TASK=<id>` lines are the last thing written
+ * to **stdout** (`printHostCleanupLines`).
  */
 async function runDeleteWorkspace(argv: readonly string[]): Promise<void> {
   const args = parseDeleteWorkspaceArgs(argv);
+  const flags = parseFlags(argv.slice(1));
 
   const pool = createPool();
   try {
@@ -1309,50 +1272,223 @@ async function runDeleteWorkspace(argv: readonly string[]): Promise<void> {
     if (!info) {
       throw new DeleteWorkspaceRefusedError(`workspace not found: ${args.workspaceId}`);
     }
-
-    console.log(`workspace:  ${info.workspaceId}`);
-    console.log(`name:       ${info.name}`);
-    console.log(`created_at: ${info.createdAt.toISOString()}`);
-    console.log(`principals: ${info.principalCount}`);
-    console.log(`tasks:      ${info.taskCount}`);
+    printInspection(info);
 
     const guard = checkDeleteWorkspaceGuards(args, info.name);
     if (!guard.ok) {
       throw new DeleteWorkspaceRefusedError(`delete-workspace refused: ${guard.reason}`);
     }
 
-    const result = await deleteWorkspace(pool, args.workspaceId);
-
+    const actor = await resolveCliActor(pool, flags.actor);
     console.log('');
-    console.log('deleted rows per table:');
-    for (const [table, count] of result.deletedCounts) {
-      console.log(`  ${table}: ${count}`);
-    }
-    console.log('');
-    console.log(`workspace deleted: ${result.workspaceId} (${result.name})`);
-
-    // Audit trail replacement for the audit_records row this action cannot itself write (its own
-    // table is one of the ones just deleted) — see this file's delete-workspace section doc
-    // comment. Deliberately stderr, not stdout — see this function's own doc comment above.
-    console.error(
-      JSON.stringify({
-        event: 'workspace_deleted',
-        workspaceId: result.workspaceId,
-        workspaceName: result.name,
-        deletedAt: new Date().toISOString(),
-        principalCount: result.principalIds.length,
-        taskCount: result.taskIds.length,
-        deletedCounts: Object.fromEntries(result.deletedCounts),
-      }),
+    console.log(
+      'delete-workspace: operator override — the purge preconditions (disabled >= 7 days, or expired ephemeral) are NOT checked',
     );
+    let purged: PurgeWorkspaceResultWire;
+    try {
+      purged = await purgeWorkspace(pool, {
+        workspaceId: args.workspaceId,
+        confirm: true,
+        force: true,
+        ...(actor ? { actorUserId: actor.id } : {}),
+      });
+    } catch (err) {
+      if (err instanceof PurgeWorkspaceRefusedError) {
+        throw new DeleteWorkspaceRefusedError(err.message);
+      }
+      throw err;
+    }
 
+    printPurgeSummary(purged, 'deleted');
     console.log('');
-    for (const principalId of result.principalIds) {
-      console.log(`PRINCIPAL=${principalId}`);
+    console.log(`workspace deleted: ${purged.workspaceId} (${purged.name})`);
+    printPurgeEvent(purged, actor, true);
+    console.log('');
+    printHostCleanupLines(purged);
+  } finally {
+    await pool.end();
+  }
+}
+
+export interface PurgeWorkspaceCliArgs {
+  readonly workspaceId: string;
+  readonly yes: boolean;
+  readonly dryRun: boolean;
+  readonly expectedName?: string;
+  readonly actorLogin?: string;
+}
+
+/**
+ * Parses `purge-workspace <workspaceId> [--yes | --dry-run] [--name <expected name>]
+ * [--actor <login>]`. Neither `--yes` nor `--dry-run` is the same as `--dry-run` (the safe
+ * default — nothing deleted); `--yes` executes. Exported for the same reason
+ * `parseDeleteWorkspaceArgs` is (destructive, operator-only: unit-tested without a database).
+ */
+export function parsePurgeWorkspaceArgs(argv: readonly string[]): PurgeWorkspaceCliArgs {
+  const workspaceId = argv[0];
+  if (workspaceId === undefined || workspaceId.startsWith('--')) {
+    throw new BootstrapUsageError(
+      'usage: bootstrap purge-workspace <workspaceId> [--yes | --dry-run] [--name <expected name>] [--actor <login>]',
+    );
+  }
+  const flags = parseFlags(argv.slice(1));
+  const yes = argv.includes('--yes');
+  const dryRun = argv.includes('--dry-run');
+  if (yes && dryRun) {
+    throw new BootstrapUsageError(
+      'usage: bootstrap purge-workspace: --yes and --dry-run are exclusive',
+    );
+  }
+  return {
+    workspaceId,
+    yes,
+    dryRun: !yes,
+    ...(flags.name !== undefined ? { expectedName: flags.name } : {}),
+    ...(flags.actor !== undefined ? { actorLogin: flags.actor } : {}),
+  };
+}
+
+/**
+ * `purge-workspace <workspaceId> [--yes | --dry-run] [--name <expected name>] [--actor <login>]`
+ * — the governed `purge_workspace` capability's operator twin (S6 §5.2): same preconditions,
+ * same cascade, same `platform.workspace_purged` audit row (when an actor resolves). Without
+ * `--yes` it is the capability's preview — the counts, warnings and users a purge would remove,
+ * nothing written — printed and exit 0; a precondition failure prints the refusal and exits 1
+ * either way. Same stdout / stderr contract as `delete-workspace` above.
+ */
+async function runPurgeWorkspace(argv: readonly string[]): Promise<void> {
+  const args = parsePurgeWorkspaceArgs(argv);
+  const pool = createPool();
+  try {
+    const info = await inspectWorkspace(pool, args.workspaceId);
+    if (!info) {
+      throw new DeleteWorkspaceRefusedError(`workspace not found: ${args.workspaceId}`);
     }
-    for (const taskId of result.taskIds) {
-      console.log(`TASK=${taskId}`);
+    printInspection(info);
+    if (args.expectedName !== undefined && args.expectedName !== info.name) {
+      throw new DeleteWorkspaceRefusedError(
+        `purge-workspace refused: --name "${args.expectedName}" does not match this workspace's stored name "${info.name}" — refusing in case the wrong id was pasted`,
+      );
     }
+    const actor = args.yes ? await resolveCliActor(pool, args.actorLogin) : undefined;
+
+    let purged: PurgeWorkspaceResultWire;
+    try {
+      purged = await purgeWorkspace(pool, {
+        workspaceId: args.workspaceId,
+        confirm: args.yes,
+        ...(actor ? { actorUserId: actor.id } : {}),
+      });
+    } catch (err) {
+      if (err instanceof PurgeWorkspaceRefusedError) {
+        throw new DeleteWorkspaceRefusedError(
+          `purge-workspace refused (${err.code}): ${err.message}`,
+        );
+      }
+      throw err;
+    }
+
+    console.log(`eligible:   ${purged.reason}`);
+    if (!purged.executed) {
+      printPurgeSummary(purged, 'would delete');
+      console.log('');
+      console.log(
+        `dry run — nothing deleted. Re-run with --yes to purge workspace ${purged.workspaceId} (${purged.name}).`,
+      );
+      return;
+    }
+    printPurgeSummary(purged, 'deleted');
+    console.log('');
+    console.log(`workspace purged: ${purged.workspaceId} (${purged.name})`);
+    printPurgeEvent(purged, actor, false);
+    console.log('');
+    printHostCleanupLines(purged);
+  } finally {
+    await pool.end();
+  }
+}
+
+/**
+ * `purge-expired-workspaces [--yes] [--include-disabled] [--actor <login>]` — the bulk form
+ * `scripts/delete-workspaces-matching.sh --expired` drives. Selects every `ephemeral` workspace
+ * whose `expires_at` has passed (the S5.3 `--expired` rule, unchanged) and, with
+ * `--include-disabled`, every workspace `purge_workspace` would accept for having been disabled
+ * for 7 days (or before migration 0030); never the platform default workspace — the same
+ * `assessPurgeEligibility` the capability uses, on the database's own clock.
+ *
+ * Without `--yes`: prints one `WORKSPACE=<id>\t<name>\t<reason>` line per candidate to stdout and
+ * exits 0 — the wrapper script reads these and drives `scripts/delete-workspace.sh` per row (so
+ * each purge gets the `--name` guard and its own host-side cleanup). With `--yes`: purges them
+ * one by one, continuing past a refusal, and prints every purged workspace's `PRINCIPAL=` /
+ * `TASK=` lines; exits 1 if any purge failed.
+ */
+async function runPurgeExpiredWorkspaces(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const yes = argv.includes('--yes');
+  const includeDisabled = argv.includes('--include-disabled');
+  const pool = createPool();
+  try {
+    const workspaces = await listWorkspaces(pool);
+    const defaultWorkspaceId = await withWorkspace(
+      pool,
+      { workspaceId: randomUUID(), principalId: randomUUID() },
+      async (client) => (await readPlatformSettings(client)).settings.defaultWorkspaceId,
+      { skipRoleSwitch: true },
+    );
+    const candidates = workspaces.flatMap((ws) => {
+      if (ws.id === defaultWorkspaceId) return [];
+      const eligibility = assessPurgeEligibility({
+        status: ws.status,
+        purpose: ws.purpose,
+        expiresAt: ws.expiresAt,
+        disabledAt: ws.disabledAt,
+      });
+      if (!eligibility.eligible) return [];
+      if (eligibility.reason === 'disabled_retention_elapsed' && !includeDisabled) return [];
+      return [{ ws, reason: eligibility.reason }];
+    });
+
+    if (candidates.length === 0) {
+      console.error('purge-expired-workspaces: no purgeable workspace');
+      return;
+    }
+    if (!yes) {
+      for (const { ws, reason } of candidates) {
+        console.log(`WORKSPACE=${ws.id}\t${ws.name}\t${reason}`);
+      }
+      console.error(
+        `purge-expired-workspaces: ${candidates.length} purgeable workspace(s) listed — dry run, nothing deleted (re-run with --yes)`,
+      );
+      return;
+    }
+
+    const actor = await resolveCliActor(pool, flags.actor);
+    let failed = 0;
+    for (const { ws } of candidates) {
+      try {
+        const purged = await purgeWorkspace(pool, {
+          workspaceId: ws.id,
+          confirm: true,
+          ...(actor ? { actorUserId: actor.id } : {}),
+        });
+        console.error(
+          `purge-expired-workspaces: purged ${ws.id} (${ws.name}) — ${purged.totalRows} row(s)`,
+        );
+        printPurgeEvent(purged, actor, false);
+        printHostCleanupLines(purged);
+      } catch (err) {
+        failed += 1;
+        console.error(
+          `purge-expired-workspaces: failed to purge ${ws.id} (${ws.name}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (failed > 0) {
+      throw new DeleteWorkspaceRefusedError(
+        `purge-expired-workspaces: ${failed}/${candidates.length} purge(s) failed — see above`,
+      );
+    }
+    console.error(`purge-expired-workspaces: done — ${candidates.length} workspace(s) purged`);
   } finally {
     await pool.end();
   }
@@ -1363,12 +1499,16 @@ async function runListWorkspaces(): Promise<void> {
   try {
     const workspaces = await listWorkspaces(pool);
     // Columns are appended, never reordered: scripts/delete-workspaces-matching.sh reads $1 / $2
-    // for the regex mode and $6 / $7 for `--expired` (S5.3).
-    console.log('id\tname\tcreated_at\tprincipals\ttasks\tpurpose\texpires_at');
+    // for the regex mode; $6 / $7 (`--expired`, S5.3) are kept for anyone still selecting on them,
+    // and S6 appends $8 / $9 (`status`, `disabled_at`).
+    console.log(
+      'id\tname\tcreated_at\tprincipals\ttasks\tpurpose\texpires_at\tstatus\tdisabled_at',
+    );
     for (const ws of workspaces) {
       console.log(
         `${ws.id}\t${ws.name}\t${ws.createdAt.toISOString()}\t${ws.principalCount}\t${ws.taskCount}` +
-          `\t${ws.purpose}\t${ws.expiresAt ? ws.expiresAt.toISOString() : '-'}`,
+          `\t${ws.purpose}\t${ws.expiresAt ? ws.expiresAt.toISOString() : '-'}` +
+          `\t${ws.status}\t${ws.disabledAt ? ws.disabledAt.toISOString() : '-'}`,
       );
     }
   } finally {
@@ -1398,6 +1538,14 @@ async function run(): Promise<void> {
     await runListWorkspaces();
     return;
   }
+  if (command === 'purge-workspace') {
+    await runPurgeWorkspace(rest);
+    return;
+  }
+  if (command === 'purge-expired-workspaces') {
+    await runPurgeExpiredWorkspaces(rest);
+    return;
+  }
   if (command === 'seed-domain-pack') {
     await runSeedDomainPack(rest);
     return;
@@ -1421,8 +1569,11 @@ async function run(): Promise<void> {
       '   or: bootstrap register-gatekeeper --workspace <id> --principal <id> --name <name> ' +
       '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]\n' +
       '   or: bootstrap delete-workspace <workspaceId> --yes [--name <expected name>] ' +
-      '[--allow-name-pattern <regex>]\n' +
+      '[--allow-name-pattern <regex>] [--actor <login>]\n' +
       '   or: bootstrap list-workspaces\n' +
+      '   or: bootstrap purge-workspace <workspaceId> [--yes | --dry-run] [--name <expected name>] ' +
+      '[--actor <login>]\n' +
+      '   or: bootstrap purge-expired-workspaces [--yes] [--include-disabled] [--actor <login>]\n' +
       '   or: bootstrap seed-domain-pack --workspace <id> --principal <id> --pack-name <name> ' +
       '[--file-name <file>] [--dir <dir>]\n' +
       '   or: bootstrap issue-service-handle --workspace <id> --name <name> ' +

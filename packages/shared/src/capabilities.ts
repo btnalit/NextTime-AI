@@ -2199,12 +2199,20 @@ const platformCapabilities: readonly Capability[] = [
         status: wire.UserStatusWireSchema.optional(),
         /** Case-insensitive substring over login and display name. */
         query: z.string().min(1).max(100).optional(),
+        /** S6 A6: only users awaiting activation (`hasPassword: false`) — the "清理待激活用户"
+         *  batch entry lists these and hands the selection to `purge_user`. */
+        pendingOnly: z.boolean().optional(),
+        /** S6 A6: hide *residual* users — awaiting activation, holding at least one membership,
+         *  and none of their non-disabled memberships in an active `standard` workspace (every
+         *  one is in a disabled or an `ephemeral` workspace: acceptance-run residue that
+         *  `purge_workspace` removes with the workspace, §4 edge (b)). Omitted = shown, as before. */
+        hideResidual: z.boolean().optional(),
         ...platformCursorParams,
       })
       .strict(),
     resultSchema: listEnvelope(wire.UserWireSchema),
     description:
-      'The platform user directory with each user’s memberships. `hasPassword: false` marks a user awaiting activation (backfilled from a pre-S4.1 Principal, or created without a password).',
+      'The platform user directory with each user’s memberships. `hasPassword: false` marks a user awaiting activation (backfilled from a pre-S4.1 Principal, or created without a password). No filter lists everyone; `pendingOnly` keeps only users awaiting activation, `hideResidual` drops the awaiting-activation users whose memberships are all in disabled or ephemeral workspaces (the users page’s default view).',
   },
   {
     name: 'create_user',
@@ -2412,10 +2420,19 @@ const platformCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     scope: 'platform',
-    paramsSchema: z.object({ status: wire.WorkspaceStatusWireSchema.optional() }).strict(),
+    paramsSchema: z
+      .object({
+        status: wire.WorkspaceStatusWireSchema.optional(),
+        /** S6 A1: `standard` or `ephemeral` only. */
+        purpose: wire.WorkspacePurposeWireSchema.optional(),
+        /** S6 A1: `false` drops ephemeral workspaces whose `expiresAt` has passed (they are
+         *  purgeable and only clutter the page). Omitted or `true` = included, as before. */
+        includeExpired: z.boolean().optional(),
+      })
+      .strict(),
     resultSchema: listEnvelope(wire.PlatformWorkspaceWireSchema),
     description:
-      'Every workspace with its status, entry model, allowed-model list, owners and active member count, oldest first. Disabled workspaces are included (filter with `status`).',
+      'Every workspace with its status, entry model, allowed-model list, owners, active member count, purpose / expiry / disabled-at and whether it is purgeable right now, oldest first. No filter lists everything (disabled and expired included); `status` / `purpose` narrow, `includeExpired: false` hides expired ephemeral workspaces — the workspaces page’s default view is `{status: "active", includeExpired: false}`.',
   },
   {
     name: 'list_platform_models',
@@ -2500,7 +2517,42 @@ const platformCapabilities: readonly Capability[] = [
     resultSchema: wire.PlatformWorkspaceWireSchema,
     description:
       'Set the models a workspace’s members may pick in 我的智能体 (the AgentPolicy allow-list). A member whose current choice falls outside the list is served the entry model from their next Turn.',
-  }, // P-B1 (docs/platform-admin-design.md §6.3 集成; development-tasks P-B "拆分与决定"): connectors,
+  },
+  // S6 A1 / A6 (docs/console-completion-plan.md §4 "Workspace 生命周期", §5.2, §6, §7): the purge
+  // plane. Governed, administrator-only, two-step on the console, platform audit kept
+  // (`platform.workspace_purged` / `platform.user_purged` carry what was removed). The cascade
+  // itself runs on the kernel's bootstrap (superuser) path after the platform transaction commits
+  // — the application role never gains DELETE on audit rows or workspaces (audit only grows).
+  {
+    name: 'purge_workspace',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        workspaceId: z.string().min(1),
+        /** Omitted / `false`: preview only — counts, warnings and the users that would go, nothing
+         *  deleted. `true`: execute. The console shows the preview, then sends `true`. */
+        confirm: z.boolean().optional(),
+      })
+      .strict(),
+    resultSchema: wire.PurgeWorkspaceResultWireSchema,
+    description:
+      'Purge a workspace — the terminal state after disable: revoke and delete every CapabilityHandle, then Tasks, Chats / Turns / Activities / Decisions / Conflicts / Facts / Objects / Sources / Observations / Evidence, the workspace’s own audit rows, its Principals and the row itself, in one transaction; users whose memberships were all here and who never activated go with it. Accepted only for a workspace disabled ≥ 7 days (or disabled before migration 0030) or an ephemeral workspace past its expiry (409 workspace_active / retention_not_elapsed); never the platform default (409 default_workspace). Without `confirm: true` it is a dry run. A `service_handle_in_use` warning names each service Principal (collector, external runtime) whose Handle a process may still be using. The platform audit row `platform.workspace_purged` records the counts; host-side task / principal directories are listed for scripts/delete-workspace.sh.',
+  },
+  {
+    name: 'purge_user',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ userIds: z.array(platformUserId).min(1).max(200) }).strict(),
+    resultSchema: wire.PurgeUsersResultWireSchema,
+    description:
+      'Delete users awaiting activation that hold no active membership — the leftovers after their workspaces were purged or their memberships removed. Batch: each id gets its own outcome (`purged`, or `skipped` with a reason: a password, a console login, a platform administrator, a non-disabled membership, or an audit / settings reference); a skipped user never fails the call. Disabled membership Principals are detached (their `userId` cleared, rows kept for audit lineage). One `platform.user_purged` audit row per purged user.',
+  },
+  // P-B1 (docs/platform-admin-design.md §6.3 集成; development-tasks P-B "拆分与决定"): connectors,
   // gate instances and external runtimes as platform objects. Enabling an instance *in* a workspace
   // stays on the workspace plane (`enable_gate_instance`, connection group) — it needs a Principal.
   {
