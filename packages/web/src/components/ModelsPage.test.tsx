@@ -90,7 +90,7 @@ describe('ModelsPage', () => {
     expect(policies.textContent).toContain('require_approval');
   });
 
-  it('each section degrades to "该能力尚未上线" independently on 404 not_found', async () => {
+  it('each section degrades to its own error banner independently on 404 not_found (B6: no "not live yet" branch)', async () => {
     const http = scriptedHttp({
       list_models: () => ({ items: [] }),
       list_quotas: () =>
@@ -101,9 +101,9 @@ describe('ModelsPage', () => {
     });
     renderPage(http);
     await screen.findByTestId('models-empty');
-    await screen.findByTestId('quotas-unavailable');
+    await screen.findByTestId('quotas-error');
     await screen.findByTestId('policies-empty');
-    await screen.findByTestId('agent-policy-unavailable');
+    await screen.findByTestId('agent-policy-error');
   });
 
   it('shows a role explanation on 403 for the owner-only quotas/policies sections', async () => {

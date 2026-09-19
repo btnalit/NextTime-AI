@@ -2,7 +2,7 @@ import { useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
+import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../lib/format.js';
 import type {
   GatekeeperListRow,
@@ -39,8 +39,9 @@ export interface ModelsPageProps {
  * owner-only) — everyone else sees a read-only summary instead of a form that can only 403 on
  * submit. `list_quotas`/`list_policies` have no fixed row shape anywhere in the registry (`Policy`
  * is an opaque `jsonRecord` on the write side, `set_policy{policy}`) — both render as generic
- * key/value or JSON-dump tables rather than assuming columns this PR cannot verify against a
- * kernel implementation that does not exist on `main` yet.
+ * key/value or JSON-dump tables rather than assuming columns (`console-completion-plan.md` C29
+ * is where a public row structure gets decided). B6: the S3.11 / S3.13 "该能力尚未上线" branches
+ * are gone — every capability this page reads has shipped, so a `not_found` is an ordinary error.
  */
 export function ModelsPage({ http }: ModelsPageProps) {
   const toast = useToast();
@@ -68,21 +69,12 @@ export function ModelsPage({ http }: ModelsPageProps) {
         {models.state.status === 'loading' ? (
           <SkeletonRows count={3} label="Loading models" testId="models-loading" />
         ) : models.state.status === 'error' ? (
-          isNotFoundError(models.state.error) ? (
-            <EmptyState
-              icon="cpu"
-              title="该能力尚未上线 Not live yet"
-              body="list_models is part of S3.11, still landing on the kernel side."
-              testId="models-unavailable"
-            />
-          ) : (
-            <ErrorBanner
-              error={models.state.error}
-              title="Could not load models"
-              onRetry={() => void models.reload()}
-              testId="models-error"
-            />
-          )
+          <ErrorBanner
+            error={models.state.error}
+            title="Could not load models"
+            onRetry={() => void models.reload()}
+            testId="models-error"
+          />
         ) : (
           <ModelsTable models={models.state.data.items} />
         )}
@@ -95,14 +87,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
         {agentPolicy.state.status === 'loading' ? (
           <SkeletonRows count={3} label="Loading AgentPolicy" testId="agent-policy-loading" />
         ) : agentPolicy.state.status === 'error' ? (
-          isNotFoundError(agentPolicy.state.error) ? (
-            <EmptyState
-              icon="cpu"
-              title="该能力尚未上线 Not live yet"
-              body="get_agent_policy is part of S3.13, still landing on the kernel side."
-              testId="agent-policy-unavailable"
-            />
-          ) : isForbiddenError(agentPolicy.state.error) ? (
+          isForbiddenError(agentPolicy.state.error) ? (
             <EmptyState icon="shield" title="需要成员权限" testId="agent-policy-forbidden" />
           ) : (
             <ErrorBanner
@@ -150,14 +135,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
         {quotas.state.status === 'loading' ? (
           <SkeletonRows count={2} label="Loading quotas" testId="quotas-loading" />
         ) : quotas.state.status === 'error' ? (
-          isNotFoundError(quotas.state.error) ? (
-            <EmptyState
-              icon="cpu"
-              title="该能力尚未上线 Not live yet"
-              body="list_quotas is part of S3.11, still landing on the kernel side."
-              testId="quotas-unavailable"
-            />
-          ) : isForbiddenError(quotas.state.error) ? (
+          isForbiddenError(quotas.state.error) ? (
             <EmptyState
               icon="shield"
               title="需要 owner/operator 权限"
@@ -201,14 +179,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
         {policies.state.status === 'loading' ? (
           <SkeletonRows count={2} label="Loading policies" testId="policies-loading" />
         ) : policies.state.status === 'error' ? (
-          isNotFoundError(policies.state.error) ? (
-            <EmptyState
-              icon="cpu"
-              title="该能力尚未上线 Not live yet"
-              body="list_policies is part of S3.11, still landing on the kernel side."
-              testId="policies-unavailable"
-            />
-          ) : isForbiddenError(policies.state.error) ? (
+          isForbiddenError(policies.state.error) ? (
             <EmptyState
               icon="shield"
               title="需要 owner 权限"

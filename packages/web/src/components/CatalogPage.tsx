@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
+import { isForbiddenError } from '../lib/errors.js';
 import { formatRelative } from '../lib/format.js';
 import {
   type OperationCatalogRow,
@@ -104,16 +104,6 @@ function DegradedList({
 }) {
   if (status === 'loading') {
     return <SkeletonRows count={4} label={`Loading ${capabilityLabel}`} />;
-  }
-  if (isNotFoundError(error)) {
-    return (
-      <EmptyState
-        icon={emptyIcon}
-        title="该能力尚未上线 Not live yet"
-        body={`${capabilityLabel} is still landing on the kernel side.`}
-        testId="catalog-unavailable"
-      />
-    );
   }
   return (
     <ErrorBanner

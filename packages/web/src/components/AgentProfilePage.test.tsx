@@ -106,13 +106,13 @@ describe('AgentProfilePage', () => {
     expect(within(form).getByLabelText(/模型 Model/)).toHaveProperty('value', 'anthropic/claude');
   });
 
-  it('shows "该能力尚未上线" for the self view when get_agent_profile 404s', async () => {
+  it('renders a get_agent_profile not_found as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
     const http = scriptedHttp({
       get_agent_profile: () =>
         Promise.reject(new HttpError('capability_error', 'no handler', 'not_found')),
     });
     renderPage(http);
-    await screen.findByTestId('agent-profile-unavailable');
+    await screen.findByTestId('agent-profile-error');
   });
 
   it('save sends the full six-field state, using null for inherited/empty fields', async () => {

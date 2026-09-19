@@ -62,13 +62,13 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('tab', { name: 'Skills' }).getAttribute('aria-selected')).toBe('true');
   });
 
-  it('shows "该能力尚未上线" for a tab whose capability is not deployed yet (404 not_found)', async () => {
+  it('renders a not_found from a tab capability as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
     const http = scriptedHttp({
       list_operations: () =>
         Promise.reject(new HttpError('capability_error', 'no handler', 'not_found')),
     });
     renderPage(http);
-    await screen.findByTestId('catalog-unavailable');
+    await screen.findByTestId('catalog-error');
   });
 
   it('Operations: Publish and Deprecate call the right capability and refresh the list', async () => {

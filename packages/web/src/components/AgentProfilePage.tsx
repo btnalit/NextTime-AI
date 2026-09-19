@@ -3,7 +3,7 @@ import { invalidateCapability, useCapability, useCapabilityList } from '../hooks
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
+import { isForbiddenError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { AgentProfileForm } from './AgentProfileForm.js';
@@ -23,16 +23,13 @@ export interface AgentProfilePageProps {
  * components/AgentProfilePage: 我的智能体 My Agent (`/me/agent`, S3.13) — per-user model, Skills,
  * connected systems, Worker definitions, prompt addendum, and low-risk auto-approve, all a
  * subset-only projection of the caller's own Grants and the workspace's AgentPolicy (never wider —
- * §S3.13 "Profile 是 Grant 的子集投影，永不扩权"). None of `get_agent_profile`/`set_agent_profile`/
- * `get_agent_policy` exist in `@nexttime/shared`'s registry yet on `main` as of this PR — the
- * kernel half is landing in a parallel PR against the same contract (`lib/agent-profile.ts`'s own
- * doc comment); every read here treats a `not_found` on the *self* view as "该能力尚未上线", same
- * convention every other S3.11/S3.13 page uses.
+ * §S3.13 "Profile 是 Grant 的子集投影，永不扩权"). `get_agent_profile` / `set_agent_profile` /
+ * `get_agent_policy` shipped with the S3.13 kernel half; B6 (console-completion-plan §2) removed
+ * the "该能力尚未上线" branches this page carried through the parallel rollout, so a `not_found`
+ * renders as an ordinary error banner (for the owner's principal picker it genuinely means "no
+ * such principal").
  *
- * An owner may switch the target principal via a dropdown seeded from `list_principals` (S3.11,
- * already on `main`) — `get_agent_profile{principalId}`'s own `not_found` is genuinely ambiguous
- * for that case (capability not deployed vs. no such principal), so it renders a plain error there
- * instead of the same "not live yet" messaging the parameterless self-view is confident about.
+ * An owner may switch the target principal via a dropdown seeded from `list_principals`.
  */
 export function AgentProfilePage({ http }: AgentProfilePageProps) {
   const toast = useToast();
@@ -101,14 +98,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
       {profile.state.status === 'loading' ? (
         <SkeletonRows count={4} label="Loading Agent profile" testId="agent-profile-loading" />
       ) : profile.state.status === 'error' ? (
-        selectedPrincipalId === undefined && isNotFoundError(profile.state.error) ? (
-          <EmptyState
-            icon="cpu"
-            title="该能力尚未上线 Not live yet"
-            body="get_agent_profile is part of S3.13, still landing on the kernel side."
-            testId="agent-profile-unavailable"
-          />
-        ) : isForbiddenError(profile.state.error) ? (
+        isForbiddenError(profile.state.error) ? (
           <EmptyState
             icon="shield"
             title="无权查看该智能体配置"
@@ -125,7 +115,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
         )
       ) : (
         <>
-          {policy.state.status === 'error' && !isNotFoundError(policy.state.error) ? (
+          {policy.state.status === 'error' ? (
             <Notice tone="warn" testId="agent-policy-load-warning">
               Could not load workspace AgentPolicy — options below are shown unnarrowed.
             </Notice>
