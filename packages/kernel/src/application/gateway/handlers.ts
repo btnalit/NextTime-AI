@@ -15,8 +15,10 @@ import {
   getChatHistory,
   listChats,
   newChat,
+  renameChat,
   requireChatAccess,
   sendChatMessage,
+  setChatArchived,
 } from '../../application/chat/index.js';
 import type { AgentRuntime } from '../../application/host-bridge/index.js';
 import { findAttributableTurn } from '../../application/host-bridge/index.js';
@@ -340,9 +342,10 @@ export function setAgentRuntimeForHandlers(runtime: AgentRuntime): void {
   agentRuntime = runtime;
 }
 
-const listChatsHandler: CapabilityHandler = async (client, workspaceId) => {
+const listChatsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { includeArchived } = params as { includeArchived?: boolean };
   const principalId = await currentPrincipalId(client);
-  const rows = await listChats(client, workspaceId, principalId);
+  const rows = await listChats(client, workspaceId, principalId, { includeArchived });
   return { result: { items: rows.map(toWireChat) } };
 };
 
@@ -441,6 +444,84 @@ const subscribeChatHandler: CapabilityHandler = async (client, workspaceId, para
   const { chatId } = params as { chatId: string };
   await requireChatAccess(client, workspaceId, chatId);
   return { result: { subscribed: true }, resourceType: 'chat', resourceId: chatId };
+};
+
+// -------------------------------------------------------------------------------------------
+// S6-A chat lifecycle (docs/console-completion-plan.md §5.1, §6): `archive_chat` /
+// `unarchive_chat` / `rename_chat`. Ownership rule (§6 "本人的 Chat；owner 可归档他人"):
+//   - `requireChatAccess` first — RLS (`chats_visibility`, migrations/core/0003) decides what the
+//     caller can see at all; another member's *private* chat is invisible and answers 404, the
+//     same "existence is never leaked" contract every other chat handler here relies on. This
+//     lane deliberately does not add an RLS bypass for the owner (isolation only ever tightens).
+//   - then the caller must be the Chat's owner, or — for archive/unarchive only — hold the
+//     workspace `owner` role (`ctx.principal.role`, the resolved human Principal dispatch.ts
+//     threads through; `currentPrincipalRole` below is the fallback for a call with no ctx, e.g. a
+//     unit test). Anything else is 403 `forbidden`.
+// The service functions (application/chat/service.ts) write the domain audit row and push
+// `chat.metadata`; the returned row goes through the same `toWireChat` projection `list_chats`
+// uses, so the console can splice the result straight into its list.
+// -------------------------------------------------------------------------------------------
+
+async function requireChatOwnership(
+  client: PoolClient,
+  workspaceId: string,
+  chatId: string,
+  ctx: Parameters<CapabilityHandler>[3],
+  options: { readonly allowWorkspaceOwner: boolean },
+): Promise<{ readonly principalId: string }> {
+  const chat = await requireChatAccess(client, workspaceId, chatId);
+  const caller = ctx?.principal
+    ? { id: ctx.principal.id, role: ctx.principal.role }
+    : await currentPrincipalRole(client, workspaceId);
+  const isChatOwner = chat.ownerPrincipalId === caller.id;
+  const isWorkspaceOwner = options.allowWorkspaceOwner && caller.role === 'owner';
+  if (!isChatOwner && !isWorkspaceOwner) {
+    throw new ForbiddenError(
+      options.allowWorkspaceOwner
+        ? `chat ${chatId} belongs to another principal; only its owner or the workspace owner may change it`
+        : `chat ${chatId} belongs to another principal; only its owner may rename it`,
+    );
+  }
+  return { principalId: caller.id };
+}
+
+const archiveChatHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { chatId } = params as { chatId: string };
+  const { principalId } = await requireChatOwnership(client, workspaceId, chatId, ctx, {
+    allowWorkspaceOwner: true,
+  });
+  const chat = await setChatArchived(client, workspaceId, {
+    chatId,
+    archived: true,
+    actorPrincipalId: principalId,
+  });
+  return { result: toWireChat(chat), resourceType: 'chat', resourceId: chat.id };
+};
+
+const unarchiveChatHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { chatId } = params as { chatId: string };
+  const { principalId } = await requireChatOwnership(client, workspaceId, chatId, ctx, {
+    allowWorkspaceOwner: true,
+  });
+  const chat = await setChatArchived(client, workspaceId, {
+    chatId,
+    archived: false,
+    actorPrincipalId: principalId,
+  });
+  return { result: toWireChat(chat), resourceType: 'chat', resourceId: chat.id };
+};
+
+const renameChatHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { chatId, title } = params as { chatId: string; title: string };
+  const { principalId } = await requireChatOwnership(client, workspaceId, chatId, ctx, {
+    allowWorkspaceOwner: false,
+  });
+  const chat = await renameChat(client, workspaceId, {
+    chatId,
+    title,
+    actorPrincipalId: principalId,
+  });
+  return { result: toWireChat(chat), resourceType: 'chat', resourceId: chat.id };
 };
 
 // -------------------------------------------------------------------------------------------
@@ -1194,6 +1275,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['stop_agent', stopAgentHandler],
   ['get_chat_history', getChatHistoryHandler],
   ['subscribe_chat', subscribeChatHandler],
+  ['archive_chat', archiveChatHandler],
+  ['unarchive_chat', unarchiveChatHandler],
+  ['rename_chat', renameChatHandler],
   ['get_entry_context', getEntryContextHandler],
   ['report_turn', reportTurnHandler],
   ['record_decision', recordDecisionHandler],

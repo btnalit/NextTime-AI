@@ -172,9 +172,12 @@ const chatCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: noParams,
+    // S6-A (docs/console-completion-plan.md §5.1): archived chats are hidden by default — the
+    // console's "已归档" filter passes `includeArchived: true` to see them alongside active ones.
+    paramsSchema: z.object({ includeArchived: z.boolean().optional() }).strict(),
     resultSchema: listEnvelope(wire.ChatWireSchema),
-    description: 'List the chats owned by the calling principal.',
+    description:
+      'List the chats owned by the calling principal, newest first. Archived chats (archivedAt set) are omitted unless includeArchived is true.',
   },
   {
     name: 'new_chat',
@@ -234,6 +237,54 @@ const chatCapabilities: readonly Capability[] = [
     resultSchema: z.object({ subscribed: z.boolean() }).strict(),
     description:
       'Subscribe to a Chat’s push events before paging history, so no event is missed (§9.4).',
+  },
+  // -----------------------------------------------------------------------------------------
+  // S6-A chat lifecycle (docs/console-completion-plan.md §4 "Chat 生命周期", §5.1, §6 rows
+  // `archive_chat` / `unarchive_chat` / `rename_chat`): `active ↔ archived` is a visibility-only
+  // change (`chats.archived_at`, migrations/core/0031); the Chat's Turns/Decisions/Facts stay
+  // fully resolvable (`explain`) either way. All three are `mode: 'write'` — an immediate,
+  // audited, in-platform state change with no external system behind it (docs/wire-contract-
+  // conventions.md §1). Ownership is enforced by the handler (application/gateway/handlers.ts):
+  // the calling principal's own Chat, plus — for archive/unarchive only — any Chat the workspace
+  // owner can already see (RLS `chats_visibility`, migrations/core/0003, never widened here).
+  // Each writes its own domain audit row (`chat.archive` / `chat.unarchive` / `chat.rename`) in
+  // addition to dispatch.ts's per-capability row, the same two-row discipline
+  // `governance/approval`'s transition log follows.
+  // -----------------------------------------------------------------------------------------
+  {
+    name: 'archive_chat',
+    group: 'chat',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ chatId: id }).strict(),
+    resultSchema: wire.ChatWireSchema,
+    description:
+      'Archive a Chat (sets archivedAt; hidden from list_chats unless includeArchived). Own Chat, or any visible Chat for the workspace owner; 403 otherwise. Idempotent on an already-archived Chat. Audit: chat.archive.',
+  },
+  {
+    name: 'unarchive_chat',
+    group: 'chat',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ chatId: id }).strict(),
+    resultSchema: wire.ChatWireSchema,
+    description:
+      'Restore an archived Chat (clears archivedAt). Own Chat, or any visible Chat for the workspace owner; 403 otherwise. Idempotent on an active Chat. Audit: chat.unarchive.',
+  },
+  {
+    name: 'rename_chat',
+    group: 'chat',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    // At least one non-whitespace character; the handler trims and collapses inner whitespace to
+    // one line before writing, so the stored title is never blank.
+    paramsSchema: z.object({ chatId: id, title: z.string().min(1).max(200).regex(/\S/) }).strict(),
+    resultSchema: wire.ChatWireSchema,
+    description:
+      'Set a Chat’s title (trimmed, single line, at most 200 characters). Own Chat only; 403 otherwise. A renamed title is never overwritten by the auto-title later messages would produce. Audit: chat.rename.',
   },
 ];
 
