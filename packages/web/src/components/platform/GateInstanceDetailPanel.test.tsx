@@ -88,13 +88,13 @@ function renderPanel(http: CapabilityCaller, instance: GateInstanceWire) {
 
 describe('GateInstanceDetailPanel', () => {
   // B7 (§4 "接入三层"): 启用 only in `discovered`; the button's meaning follows the machine.
-  it('B7: the status button reads 启用 for discovered, 禁用 for enabled, 重新启用 for disabled, 禁用 for lost, and a disabled 启用 while awaiting the host', () => {
+  it('B7: the status button reads 启用 for discovered and lost, 禁用 for enabled, 重新启用 for disabled, and a disabled 启用 while awaiting the host', () => {
     const http = scriptedHttp({});
     const cases: readonly [Partial<GateInstanceWire>, string, boolean][] = [
       [{ status: 'discovered' }, '启用 Enable', false],
       [{ status: 'enabled' }, '禁用 Disable', false],
       [{ status: 'disabled' }, '重新启用 Re-enable', false],
-      [{ status: 'lost' }, '禁用 Disable', false],
+      [{ status: 'lost' }, '启用 Enable', false],
       [{ status: 'discovered', hosted: true, lastSeenAt: null }, '启用 Enable', true],
     ];
     for (const [overrides, label, disabled] of cases) {

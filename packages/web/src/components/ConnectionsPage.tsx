@@ -16,6 +16,7 @@ import {
 } from '../lib/connections.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
+import { HttpError } from '../lib/http-client.js';
 import { statusValues } from '../lib/status-tone.js';
 import { AvailableGateInstancesSection } from './AvailableGateInstancesSection.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
@@ -179,7 +180,8 @@ export function ConnectionsPage({
       const described = describeError(err);
       const mapped = cancelConnectionRequestMessage(described.code);
       if (described.code === 'illegal_transition') void requests.reload();
-      throw mapped ? new Error(mapped) : err;
+      // Keep the wire code on the rethrow so `ErrorBanner` still titles it (`CODE_TITLES`).
+      throw mapped ? new HttpError('capability_error', mapped, described.code) : err;
     }
   }
 

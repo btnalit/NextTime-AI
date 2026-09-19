@@ -675,7 +675,7 @@ function PolicyStep({
   );
 }
 
-/** Platform half of step 3: the administrator's 启用 (B7: only while `discovered`; `disabled` →
+/** Platform half of step 3: the administrator's 启用 (B7: while `discovered` or `lost`; `disabled` →
  *  re-enable; `enabled` → nothing to press) and the connector's 平台预置 mode — the two kernel
  *  preconditions of `enable_gate_instance` (`requireAvailable`: `gate_not_enabled` /
  *  `connector_not_preset`). */
@@ -748,7 +748,7 @@ function PlatformEnableSection({
           />
           <StatusChip machine="gateHealth" status={gate.health} size="s" />
         </span>
-        {gate.status === 'discovered' ? (
+        {gate.status === 'discovered' || gate.status === 'lost' ? (
           <Button
             variant="secondary"
             onClick={() => void setStatus('enabled')}

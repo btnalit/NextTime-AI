@@ -8,7 +8,7 @@ import {
 } from '../lib/connections.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
-import { platformGateInstanceHref } from '../lib/gate-instances.js';
+import { hrefs } from '../lib/router.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { CopyId } from './ui/CopyId.js';
@@ -186,12 +186,13 @@ export function GatekeeperCard({
               <dt>平台实例 Platform instance</dt>
               <dd className="row-wrap" data-testid="gatekeeper-platform-instance">
                 {platformAdmin ? (
-                  // `#/platform/integrations/<gateId>` is the deep link `PlatformIntegrationsPage`
-                  // opens the instance drawer for; until `lib/router.ts` parses that segment the
-                  // page still lands on 集成 (see `platformGateInstanceHref`).
+                  // Lands on 集成 (the 门实例 tab is one click away). The instance deep link
+                  // `platformGateInstanceHref(gateId)` (`lib/gate-instances.ts`) replaces this href
+                  // once `lib/router.ts` parses `#/platform/integrations/<gateId>` — until then
+                  // that hash would fall back to the default route (S6-C report, route lines).
                   <a
                     className="mono"
-                    href={platformGateInstanceHref(platformInstance.gateId)}
+                    href={hrefs.platformIntegrations()}
                     data-testid="gatekeeper-platform-instance-link"
                   >
                     {platformInstance.gateId}

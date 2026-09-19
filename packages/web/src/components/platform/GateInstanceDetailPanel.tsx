@@ -53,8 +53,9 @@ export interface GateInstanceDetailPanelProps {
  *
  * S6-C: B7 (docs/console-completion-plan.md §4 "接入三层": 启用 only appears in `discovered`) —
  * the status control is one button whose meaning follows the machine: `discovered` → 启用,
- * `enabled` → 禁用, `disabled` → 重新启用, `lost` → 禁用 (retire it; a lost gate that reappears
- * returns to the status it had), derived `awaiting_host` → 启用 disabled with a hint. And §5.6's
+ * `enabled` → 禁用, `disabled` → 重新启用, `lost` → 启用 (the kernel accepts it — a gate that
+ * announced once and fell silent is enabled on its return; the CI seed is exactly that), derived
+ * `awaiting_host` → 启用 disabled with a hint. And §5.6's
  * instance ↔ connection links: the workspaces using this instance (`enabledWorkspaceCount` — the
  * wire carries the count, not the list) plus, when this session has a workspace in scope, that
  * workspace's own Gatekeeper for it (`list_available_gate_instances`, a workspace-plane read that
@@ -457,7 +458,7 @@ function StatusToggle({
       </Button>
     );
   }
-  if (display === 'discovered') {
+  if (display === 'discovered' || display === 'lost') {
     return (
       <Button
         variant="secondary"
