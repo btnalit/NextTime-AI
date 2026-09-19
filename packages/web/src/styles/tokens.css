@@ -43,7 +43,9 @@
   --info-soft: #e8eefc;
   --observe: #0f766e;
   --observe-soft: #e0f2f1;
-  --muted: #6b7280;
+  /* §5.9 lists `--muted #6b7280`; that is 4.28:1 on `--muted-soft`, under principle 6's 4.5:1
+   * floor for the chip text it colours, so the grey is one step darker here (4.75:1). */
+  --muted: #626b7b;
   --muted-soft: #f0f1f3;
 
   /* Type scale (C24): every font-size in the console is one of these seven stops. */
