@@ -81,7 +81,7 @@ export function MembersPage({ http }: MembersPageProps) {
     <div className="page">
       <PageHeader
         title="成员与授权 Members"
-        description="Who can sign in, what role they hold, and their API key lifecycle."
+        description="谁能进入这个工作区、持有什么角色、API key 的生命周期。 Who can sign in, what role they hold, and their API key lifecycle."
         actions={
           canManage ? (
             <>
@@ -106,14 +106,14 @@ export function MembersPage({ http }: MembersPageProps) {
         forbidden ? (
           <EmptyState
             icon="shield"
-            title="需要 owner 权限"
-            body="list_principals is restricted to the workspace owner."
+            title="需要 owner 权限 Owner role required"
+            body="list_principals 仅工作区 owner 可读。 list_principals is restricted to the workspace owner."
             testId="members-forbidden"
           />
         ) : (
           <ErrorBanner
             error={principals.state.error}
-            title="Could not load members"
+            title="无法加载成员 Could not load members"
             onRetry={() => void principals.reload()}
             testId="members-error"
           />
@@ -121,8 +121,8 @@ export function MembersPage({ http }: MembersPageProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="users"
-          title="No members yet"
-          body="Create the first member to hand out an API key."
+          title="还没有成员 No members yet"
+          body="先添加一个成员，或创建一个服务凭证。 Add the first member, or create a service credential."
           testId="members-empty"
         />
       ) : (
@@ -137,7 +137,7 @@ export function MembersPage({ http }: MembersPageProps) {
                 <>
                   <span className="truncate">{row.displayName}</span>
                   {row.kind !== 'human' ? <span className="tag">{row.kind}</span> : null}
-                  {row.disabledAt ? <span className="tag text-danger">disabled</span> : null}
+                  {row.disabledAt ? <span className="tag text-danger">已停用 disabled</span> : null}
                 </>
               }
               meta={
@@ -148,7 +148,7 @@ export function MembersPage({ http }: MembersPageProps) {
                   {row.hasApiKey ? (
                     <>
                       <span className="meta-sep" />
-                      <span>API key issued</span>
+                      <span>已签发 API key issued</span>
                     </>
                   ) : null}
                 </>
@@ -163,7 +163,7 @@ export function MembersPage({ http }: MembersPageProps) {
         open={drawer.kind === 'addMember'}
         onClose={() => setDrawer({ kind: 'closed' })}
         title="添加成员 Add member"
-        subtitle="By platform login — no account is created here and no API key is issued."
+        subtitle="按平台登录名添加；这里不创建账户、不签发 API key。 By platform login — no account is created here and no API key is issued."
         testId="add-member-drawer"
       >
         {drawer.kind === 'addMember' ? (
@@ -172,7 +172,7 @@ export function MembersPage({ http }: MembersPageProps) {
             onCancel={() => setDrawer({ kind: 'closed' })}
             onDone={(principal) => {
               setDrawer({ kind: 'closed' });
-              toast.push({ tone: 'ok', title: `${principal.displayName} added` });
+              toast.push({ tone: 'ok', title: `已添加 ${principal.displayName} added` });
               refreshList();
             }}
           />
@@ -183,7 +183,7 @@ export function MembersPage({ http }: MembersPageProps) {
         open={drawer.kind === 'create'}
         onClose={() => setDrawer({ kind: 'closed' })}
         title="服务凭证 Service credential (API key)"
-        subtitle="Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person."
+        subtitle="创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。 Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person."
         testId="create-principal-drawer"
       >
         {drawer.kind === 'create' ? (
@@ -192,7 +192,7 @@ export function MembersPage({ http }: MembersPageProps) {
             onCancel={() => setDrawer({ kind: 'closed' })}
             onDone={(principal) => {
               setDrawer({ kind: 'closed' });
-              toast.push({ tone: 'ok', title: `${principal.displayName} created` });
+              toast.push({ tone: 'ok', title: `已创建 ${principal.displayName} created` });
               refreshList();
             }}
           />
@@ -202,7 +202,7 @@ export function MembersPage({ http }: MembersPageProps) {
       <Drawer
         open={drawer.kind === 'detail'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title={drawer.kind === 'detail' ? drawer.principal.displayName : 'Member'}
+        title={drawer.kind === 'detail' ? drawer.principal.displayName : '成员 Member'}
         subtitle={
           drawer.kind === 'detail' ? <span className="mono">{drawer.principal.id}</span> : undefined
         }

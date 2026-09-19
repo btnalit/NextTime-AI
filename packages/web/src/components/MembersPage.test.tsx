@@ -124,8 +124,8 @@ describe('MembersPage', () => {
     fireEvent.change(within(form).getByLabelText(/Display name/), {
       target: { value: 'Carol' },
     });
-    fireEvent.change(within(form).getByLabelText(/^Role/), { target: { value: 'operator' } });
-    fireEvent.click(within(form).getByRole('button', { name: 'Create' }));
+    fireEvent.change(within(form).getByLabelText(/角色 Role/), { target: { value: 'operator' } });
+    fireEvent.click(within(form).getByRole('button', { name: '创建 Create' }));
 
     const keyBox = await screen.findByTestId('create-principal-key');
     expect(within(keyBox).getByTestId('created-api-key').textContent).toBe('sk-once-fixture-value');
@@ -151,8 +151,8 @@ describe('MembersPage', () => {
     fireEvent.click(row);
 
     const drawer = await screen.findByTestId('principal-detail');
-    fireEvent.change(within(drawer).getByLabelText(/^Role/), { target: { value: 'operator' } });
-    fireEvent.click(within(drawer).getByRole('button', { name: 'Save' }));
+    fireEvent.change(within(drawer).getByLabelText(/角色 Role/), { target: { value: 'operator' } });
+    fireEvent.click(within(drawer).getByRole('button', { name: '保存 Save' }));
 
     await waitFor(() =>
       expect(within(drawer).getByText('Operator', { exact: false })).toBeTruthy(),
@@ -218,11 +218,11 @@ describe('MembersPage', () => {
     fireEvent.click(await screen.findByTestId('member-row'));
     const drawer = await screen.findByTestId('principal-detail');
 
-    fireEvent.click(within(drawer).getByRole('button', { name: 'Disable member' }));
-    fireEvent.click(within(drawer).getByRole('button', { name: 'Confirm disable' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '停用成员 Disable member' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '确认停用 Confirm disable' }));
 
     await waitFor(() =>
-      expect(within(drawer).getByTestId('principal-status').textContent).toBe('Disabled'),
+      expect(within(drawer).getByTestId('principal-status').textContent).toBe('已停用 Disabled'),
     );
     expect(http.calls.some((call) => call.name === 'disable_principal')).toBe(true);
   });

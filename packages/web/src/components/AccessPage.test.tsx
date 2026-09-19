@@ -5,6 +5,10 @@ import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import { AccessPage } from './AccessPage.js';
+import {
+  handleScopeCapabilities,
+  serviceHandleMaxTtlSeconds,
+} from './IssueServiceHandleSection.js';
 
 afterEach(cleanup);
 
@@ -27,6 +31,8 @@ function scriptedHttp(
   const calls: { name: string; params: unknown }[] = [];
   const base: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
     get_workspace: () => workspace('owner'),
+    // B3: read for the gatekeeper RefChip names; a test that cares scripts its own.
+    list_gatekeepers: () => ({ items: [] }),
     ...handlers,
   };
   return {
@@ -84,9 +90,9 @@ describe('AccessPage', () => {
     const row = await screen.findByTestId('grant-row');
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Grant capability' })).toBeNull(),
+      expect(screen.queryByRole('button', { name: '授予能力 Grant capability' })).toBeNull(),
     );
-    expect(within(row).queryByRole('button', { name: 'Revoke' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: '撤销 Revoke' })).toBeNull();
     expect(screen.queryByTestId('issue-service-handle-form')).toBeNull();
   });
 
@@ -105,11 +111,13 @@ describe('AccessPage', () => {
     const row = await screen.findByTestId('grant-row');
     expect(within(row).getByText('gatekeeper')).toBeTruthy();
 
-    fireEvent.click(within(row).getByRole('button', { name: 'Revoke' }));
+    fireEvent.click(within(row).getByRole('button', { name: '撤销 Revoke' }));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'revoke_capability')).toBe(true),
     );
-    await waitFor(() => expect(within(row).queryByRole('button', { name: 'Revoke' })).toBeNull());
+    await waitFor(() =>
+      expect(within(row).queryByRole('button', { name: '撤销 Revoke' })).toBeNull(),
+    );
   });
 
   it('granting a capability calls grant_capability with the free-text fallback fields', async () => {
@@ -130,11 +138,11 @@ describe('AccessPage', () => {
     renderPage(http);
     await screen.findByTestId('grants-empty');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Grant capability' }));
+    fireEvent.click(screen.getByRole('button', { name: '授予能力 Grant capability' }));
     const form = await screen.findByTestId('grant-capability-form');
     fireEvent.change(within(form).getByLabelText(/Principal/), { target: { value: 'p-2' } });
     fireEvent.change(within(form).getByLabelText(/Resource id/), { target: { value: 'gk-2' } });
-    fireEvent.click(within(form).getByRole('button', { name: 'Grant' }));
+    fireEvent.click(within(form).getByRole('button', { name: '授予 Grant' }));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
@@ -149,13 +157,13 @@ describe('AccessPage', () => {
     });
     renderPage(http);
     await screen.findByTestId('grants-empty');
-    fireEvent.click(screen.getByRole('button', { name: 'Grant capability' }));
+    fireEvent.click(screen.getByRole('button', { name: '授予能力 Grant capability' }));
     const form = await screen.findByTestId('grant-capability-form');
     fireEvent.change(within(form).getByLabelText(/Principal/), { target: { value: 'p-2' } });
 
     for (const bad of ['"foo"', '42', 'null', '[1,2]']) {
       fireEvent.change(within(form).getByLabelText(/Scope/), { target: { value: bad } });
-      fireEvent.click(within(form).getByRole('button', { name: 'Grant' }));
+      fireEvent.click(within(form).getByRole('button', { name: '授予 Grant' }));
       expect(await within(form).findByText(/Scope must be a JSON object/)).toBeTruthy();
     }
     expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(false);
@@ -163,7 +171,7 @@ describe('AccessPage', () => {
     fireEvent.change(within(form).getByLabelText(/Scope/), {
       target: { value: '{"actionKindTag":"docker.container_restart"}' },
     });
-    fireEvent.click(within(form).getByRole('button', { name: 'Grant' }));
+    fireEvent.click(within(form).getByRole('button', { name: '授予 Grant' }));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
     );
@@ -216,7 +224,7 @@ describe('AccessPage', () => {
     await waitFor(() => expect(grantsCalls().at(-1)?.params).toEqual({ principalId: 'p-other' }));
   });
 
-  it('issuing a service Handle posts issue_service_handle and shows the token once', async () => {
+  it('B7: issuing a service Handle — capabilities from the registry checklist / paste box, TTL default 30 days — shows the token once', async () => {
     const http = scriptedHttp({
       list_principals: () => ({
         items: [
@@ -234,15 +242,15 @@ describe('AccessPage', () => {
       issue_service_handle: (params) => {
         expect(params).toEqual({
           principalId: 'p-svc',
-          scope: ['list_gatekeepers', 'get_gatekeeper'],
-          ttlSeconds: 365 * 86400,
+          scope: ['search', 'get_task'],
+          ttlSeconds: 30 * 86400,
         });
         return {
           handle: 'svc_handle_abc123',
           principalId: 'p-svc',
           sessionId: 'sess-1',
-          expiresAt: '2027-09-11T00:00:00.000Z',
-          scope: ['list_gatekeepers', 'get_gatekeeper'],
+          expiresAt: '2026-10-11T00:00:00.000Z',
+          scope: ['search', 'get_task'],
         };
       },
     });
@@ -252,15 +260,112 @@ describe('AccessPage', () => {
     fireEvent.change(within(form).getByLabelText(/Service principal/), {
       target: { value: 'p-svc' },
     });
-    fireEvent.change(within(form).getByLabelText(/能力 Capabilities/), {
-      target: { value: 'list_gatekeepers get_gatekeeper' },
-    });
-    fireEvent.click(within(form).getByRole('button', { name: '签发 Issue' }));
+    expect((within(form).getByLabelText(/TTL \(days\)/) as HTMLInputElement).value).toBe('30');
 
+    // Only handle-channel names are offered: a member-management capability is not a checkbox
+    // here, and pasting it is refused with the reason before any call.
+    const checklist = within(form).getByTestId('ish-scope-checklist');
+    expect(checklist.querySelector('input[data-capability="search"]')).toBeTruthy();
+    expect(checklist.querySelector('input[data-capability="list_gatekeepers"]')).toBeNull();
+    expect(checklist.querySelector('input[data-capability="list_users"]')).toBeNull();
+    fireEvent.click(checklist.querySelector('input[data-capability="search"]') as HTMLElement);
+
+    const paste = within(form).getByLabelText(/粘贴能力名 Paste names/);
+    fireEvent.change(paste, { target: { value: 'get_task list_gatekeepers' } });
+    expect(within(form).getByText(/不是可签发的能力名/).textContent).toContain('list_gatekeepers');
+    expect(within(form).getByRole('button', { name: '签发 Issue' }).hasAttribute('disabled')).toBe(
+      true,
+    );
+    fireEvent.change(paste, { target: { value: 'get_task' } });
+    expect(within(form).getByTestId('ish-scope-summary').textContent).toContain('2');
+
+    fireEvent.click(within(form).getByRole('button', { name: '签发 Issue' }));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'issue_service_handle')).toBe(true),
     );
     const dialog = await screen.findByTestId('issued-handle-dialog');
     expect(within(dialog).getByTestId('issued-handle-token').textContent).toBe('svc_handle_abc123');
+  });
+
+  it('B7: the TTL cap is read from the registry (one year) and enforced client-side', async () => {
+    expect(serviceHandleMaxTtlSeconds()).toBe(365 * 86400);
+    expect(handleScopeCapabilities().every((c) => c.channel === 'handle')).toBe(true);
+    expect(handleScopeCapabilities().some((c) => c.name.includes('<'))).toBe(false);
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [
+          {
+            id: 'p-svc',
+            kind: 'service',
+            role: 'member',
+            displayName: 'CI runner',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: true,
+          },
+        ],
+      }),
+      list_grants: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('issue-service-handle-form');
+    fireEvent.change(within(form).getByLabelText(/TTL \(days\)/), { target: { value: '366' } });
+    expect(within(form).getByText(/必须是 1 到 365 的整数/)).toBeTruthy();
+  });
+
+  it('B3: grant rows name their principal, grantor and gatekeeper through RefChips, bare when unknown', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [
+          {
+            id: 'p-1',
+            kind: 'human',
+            role: 'member',
+            displayName: 'Bob',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: false,
+          },
+          {
+            id: 'p-owner',
+            kind: 'human',
+            role: 'owner',
+            displayName: 'Alice',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: false,
+          },
+        ],
+      }),
+      list_gatekeepers: () => ({
+        items: [
+          {
+            id: 'gk-1',
+            name: 'docker-gate',
+            kind: 'cli',
+            status: 'active',
+            operationCount: 3,
+            createdAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      list_grants: () => ({
+        items: [grant(), grant({ id: 'grant-2', principalId: 'p-gone', resourceId: 'gk-9' })],
+      }),
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('grant-row');
+    await waitFor(() =>
+      expect(within(rows[0] as HTMLElement).getByTestId('grant-principal').textContent).toContain(
+        'Bob',
+      ),
+    );
+    const first = rows[0] as HTMLElement;
+    expect(within(first).getByTestId('grant-granted-by').textContent).toContain('Alice');
+    const resource = within(first).getByTestId('grant-resource');
+    expect(resource.textContent).toContain('docker-gate');
+    expect(resource.querySelector('a')?.getAttribute('href')).toBe('#/govern/systems/gk-1');
+
+    // Unknown ids degrade to the bare chip (visible fallback), never a crash.
+    const second = rows[1] as HTMLElement;
+    expect(within(second).getByTestId('grant-principal').className).toContain('ref-chip-bare');
+    expect(within(second).getByTestId('grant-resource').className).toContain('ref-chip-bare');
   });
 });
