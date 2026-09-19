@@ -20,6 +20,7 @@ export {
   getConnectionRequest,
   listConnectionRequests,
   completeConnection,
+  cancelConnectionRequest,
   connectGatekeeper,
   GatekeeperNotFoundError,
 } from './service.js';
@@ -28,6 +29,7 @@ export type {
   ListConnectionRequestsInput,
   CompleteConnectionInput,
   CompleteConnectionResult,
+  CancelConnectionRequestInput,
   ConnectGatekeeperInput,
 } from './service.js';
 

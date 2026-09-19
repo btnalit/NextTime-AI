@@ -10,12 +10,14 @@ import { getGrant } from '../capability/index.js';
 import { getGatekeeper, getOperation } from '../gatekeepers/index.js';
 import {
   GatekeeperNotFoundError,
+  cancelConnectionRequest,
   completeConnection,
   connectGatekeeper,
   getConnectionRequest,
   listConnectionRequests,
   requestConnection,
 } from './service.js';
+import { ConnectionRequestNotFoundError } from './types.js';
 
 /**
  * governance/connections/service integration tests (real Postgres; auto-skip without
@@ -247,6 +249,87 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
 
     const reread = await inTx((client) => getGrant(client, workspaceId, grant.id));
     expect(reread).toEqual(grant);
+  });
+
+  // S6-A C26 (docs/console-completion-plan.md §5.6, §6): the `requested → cancelled` edge.
+  it('cancelConnectionRequest: requested → cancelled (I6), audited as connection.request_cancelled; a second cancel and a cancel of a completed row are IllegalTransition; unknown id is not found', async () => {
+    const row = await inTx((client) =>
+      requestConnection(client, workspaceId, {
+        kind: 'http',
+        target: 'to-be-cancelled',
+        requestedBy: { id: memberId, kind: 'human' },
+      }),
+    );
+    const cancelled = await inTx((client) =>
+      cancelConnectionRequest(client, workspaceId, {
+        connectionRequestId: row.id,
+        cancelledBy: memberId,
+      }),
+    );
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.gatekeeperId).toBeNull();
+    expect(cancelled.completedAt).toBeNull();
+    expect(cancelled.completedBy).toBeNull();
+
+    const reread = await inTx((client) => getConnectionRequest(client, workspaceId, row.id));
+    expect(reread?.status).toBe('cancelled');
+    const cancelledOnly = await inTx((client) =>
+      listConnectionRequests(client, workspaceId, { status: 'cancelled' }),
+    );
+    expect(cancelledOnly.some((r) => r.id === row.id)).toBe(true);
+
+    const audit = await inTx((client) =>
+      client.query<{ actor_principal_id: string; payload: Record<string, unknown> }>(
+        `select actor_principal_id, payload from audit_records
+         where workspace_id = $1 and action = 'connection.request_cancelled'
+           and resource_type = 'connection_request' and resource_id = $2`,
+        [workspaceId, row.id],
+      ),
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]?.actor_principal_id).toBe(memberId);
+    expect(audit.rows[0]?.payload).toMatchObject({
+      resultingStatus: 'cancelled',
+      kind: 'http',
+      target: 'to-be-cancelled',
+      requestedBy: memberId,
+    });
+
+    // Already cancelled → no legal `cancel` edge.
+    await expect(
+      inTx((client) =>
+        cancelConnectionRequest(client, workspaceId, {
+          connectionRequestId: row.id,
+          cancelledBy: ownerId,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(IllegalTransition);
+
+    // Completed → cannot be cancelled either (a Gatekeeper is already registered behind it).
+    const completedRow = await inTx((client) =>
+      listConnectionRequests(client, workspaceId, { status: 'completed' }),
+    );
+    const completedId = completedRow[0]?.id;
+    expect(completedId).toBeDefined();
+    await expect(
+      inTx((client) =>
+        cancelConnectionRequest(client, workspaceId, {
+          connectionRequestId: completedId as string,
+          cancelledBy: ownerId,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(IllegalTransition);
+
+    // A completed row cannot be completed again either — unchanged, and a cancel of a row that
+    // never existed is not found.
+    await expect(
+      inTx((client) =>
+        cancelConnectionRequest(client, workspaceId, {
+          connectionRequestId: randomUUID(),
+          cancelledBy: ownerId,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ConnectionRequestNotFoundError);
   });
 
   it('connectGatekeeper throws GatekeeperNotFoundError for an unregistered id', async () => {

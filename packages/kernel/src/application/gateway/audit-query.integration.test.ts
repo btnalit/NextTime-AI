@@ -94,7 +94,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(first.items.every((row) => row.action === 'new_chat')).toBe(true);
       expect(typeof first.nextCursor).toBe('string');
       expect(first.truncated).toBeUndefined();
-      expect(first.items[0]?.createdAt >= (first.items[1]?.createdAt ?? '')).toBe(true);
+      expect((first.items[0]?.createdAt ?? '') >= (first.items[1]?.createdAt ?? '')).toBe(true);
 
       const second = (await dispatchCapability({ pool }, owner, 'audit_query', {
         filter: { action: 'new_chat', actorPrincipalId: ownerId },

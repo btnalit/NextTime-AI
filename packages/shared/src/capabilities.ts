@@ -665,6 +665,24 @@ const connectionCapabilities: readonly Capability[] = [
     resultSchema: listEnvelope(wire.ConnectionRequestWireSchema),
     description: 'List ConnectionRequests, optionally filtered by status.',
   },
+  {
+    // S6-A C26 (docs/console-completion-plan.md §5.6, §6; S2.13's own "known deviation", runbook
+    // web-console.md 已知缺口 8): the `requested → cancelled` edge `CONNECTION_REQUEST_TRANSITIONS`
+    // (transitions.ts) and migrations/governance/0005 have carried since S2.13, finally wired.
+    // `mode: 'write'` — an immediate, audited, in-platform state change (docs/wire-contract-
+    // conventions.md §1); the vocabulary guard reserves `propose` for `propose_*`/`request_*`
+    // names. Ownership (own request; the workspace owner may cancel any) is the handler's check
+    // (application/gateway/connection-handlers.ts). Audit: `connection.request_cancelled`.
+    name: 'cancel_connection_request',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ connectionRequestId: id }).strict(),
+    resultSchema: wire.ConnectionRequestWireSchema,
+    description:
+      'Cancel a ConnectionRequest that is still `requested` (→ `cancelled`; any other status is 409 illegal_transition). The requester may cancel their own request; the workspace owner may cancel any. Audit: connection.request_cancelled.',
+  },
   // -----------------------------------------------------------------------------------------
   // S3.11 read-side additions (docs/development-tasks.md, 2026-09-08 "中台控制面" decision): the
   // console's "系统接入" (system connections) directory — every Gatekeeper instance and its

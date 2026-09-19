@@ -89,6 +89,7 @@ import {
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
+  cancelConnectionRequestHandler,
   connectGatekeeperHandler,
   createConnectionHandler,
   listConnectionRequestsHandler,
@@ -1446,6 +1447,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['create_connection', createConnectionHandler],
   ['connect_gatekeeper', connectGatekeeperHandler],
   ['list_connection_requests', listConnectionRequestsHandler],
+  ['cancel_connection_request', cancelConnectionRequestHandler],
   ['publish_manifest', publishManifestHandler],
   // S3.11 (docs/development-tasks.md "中台控制面") — gatekeeper-read-handlers.ts.
   ['list_gatekeepers', listGatekeepersHandler],
