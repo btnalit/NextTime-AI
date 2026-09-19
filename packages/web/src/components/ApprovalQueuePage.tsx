@@ -1,6 +1,6 @@
 import { ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
 import type { ActionRequestStatus } from '@nexttime/shared';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useResource } from '../hooks/useResource.js';
@@ -51,8 +51,10 @@ function byNewest(a: ActionRequestRowLike, b: ActionRequestRowLike): number {
  * §7.6/§8.5; S2.10 deliverable 3) with a detail drawer per request. States: skeleton → error
  * (code + Retry) → empty → list. Live: `action.pending` reloads the queue; `action.updated`
  * moves the row out of Pending into the session-local "decided" set immediately and reconciles
- * with a reload. Decisions are optimistic — the row leaves Pending on click and comes back with
- * the kernel's error if the call fails.
+ * that one row with `get_action` (C7: no full `list_pending` reload on top — the push already
+ * names the row, and the queue itself only ever loses rows on `action.updated`). Decisions are
+ * optimistic — the row leaves Pending on click and comes back with the kernel's error if the
+ * call fails.
  *
  * "History" (S5.5 leftover 21, docs/STATUS.md row 21) replaces the earlier session-only "All" tab
  * — `list_action_requests` (same I14 visibility as `list_pending`, every status, keyset-paginated)
@@ -99,26 +101,34 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
     [http],
   );
 
+  const pendingRows = pending.state.status === 'ready' ? pending.state.data : [];
+  // Mirror of the current Pending rows for the push handler below (C3): the handler reads the
+  // row it is moving from here rather than from inside `pending.mutate`'s updater, which must
+  // stay a pure function of its argument (React runs updaters twice under StrictMode, and a
+  // `setDecided` inside one is a side effect even when it happens to be idempotent).
+  const pendingRowsRef = useRef(pendingRows);
+  pendingRowsRef.current = pendingRows;
+
   useEffect(() => {
     const unsubPending = pushes.onActionPending(() => void pending.reload());
     const unsubUpdated = pushes.onActionUpdated((event) => {
-      pending.mutate((rows) => {
-        const row = rows.find((candidate) => candidate.id === event.id);
-        if (row) {
-          setDecided((prev) => ({ ...prev, [row.id]: { ...row, status: event.status } }));
+      const row = pendingRowsRef.current.find((candidate) => candidate.id === event.id);
+      if (row) {
+        setDecided((prev) => ({ ...prev, [row.id]: { ...row, status: event.status } }));
+        pending.mutate((rows) => rows.filter((candidate) => candidate.id !== event.id));
+      } else {
+        setDecided((prev) => {
+          const existing = prev[event.id];
+          return existing ? { ...prev, [event.id]: { ...existing, status: event.status } } : prev;
+        });
+      }
+      // C7: one `get_action` for the row the push named is the whole reconciliation — the
+      // former unconditional `pending.reload()` doubled every push into a full list fetch.
+      void refreshRow(event.id).then((fresh) => {
+        if (fresh && fresh.status !== 'pending_approval') {
+          setDecided((prev) => ({ ...prev, [fresh.id]: fresh }));
         }
-        return rows.filter((candidate) => candidate.id !== event.id);
       });
-      setDecided((prev) => {
-        const existing = prev[event.id];
-        return existing ? { ...prev, [event.id]: { ...existing, status: event.status } } : prev;
-      });
-      void refreshRow(event.id).then((row) => {
-        if (row && row.status !== 'pending_approval') {
-          setDecided((prev) => ({ ...prev, [row.id]: row }));
-        }
-      });
-      void pending.reload();
     });
     return () => {
       unsubPending();
@@ -126,7 +136,6 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
     };
   }, [pushes, pending.reload, pending.mutate, refreshRow]);
 
-  const pendingRows = pending.state.status === 'ready' ? pending.state.data : [];
   const rows = useMemo(() => [...pendingRows].sort(byNewest), [pendingRows]);
 
   // Deep link (`#/approvals/<id>`) to a request that is not in the Pending list: fetch it by id

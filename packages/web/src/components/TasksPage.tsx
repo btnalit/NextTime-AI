@@ -41,7 +41,10 @@ type Filter = 'active' | 'all' | 'done';
  * drawer. Live: `task.updated` re-reads that one Task (`get_task`) and swaps it into the list.
  * Worker definition names come from `list_worker_definitions` (best effort — ids when it fails);
  * linked approvals from `list_pending` rows whose `parentWorkerRunId` is one of the Task's runs
- * (best effort — skipped for non-operators).
+ * (best effort — skipped for non-operators). The approval pushes are reconciled per row too (C7):
+ * `action.updated` drops the named row locally once it leaves `pending_approval` (the push
+ * carries the status — no request at all), `action.pending` fetches just that row with
+ * `get_action`; the full `list_pending` reload is the fallback when a single-row read fails.
  */
 export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
   const permissions = usePermissions();
@@ -101,13 +104,28 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
 
   useEffect(() => pushes.onTaskUpdated((event) => void refreshOne(event.id)), [pushes, refreshOne]);
   useEffect(() => {
-    const unsubPending = pushes.onActionPending(() => void pendingApprovals.reload());
-    const unsubUpdated = pushes.onActionUpdated(() => void pendingApprovals.reload());
+    const unsubPending = pushes.onActionPending((event) => {
+      if (pendingDenied) return;
+      http
+        .call<ActionRequestRowLike>('get_action', { actionRequestId: event.actionRequestId })
+        .then((row) => {
+          pendingApprovals.mutate((rows) =>
+            rows.some((candidate) => candidate.id === row.id)
+              ? rows.map((candidate) => (candidate.id === row.id ? row : candidate))
+              : [row, ...rows],
+          );
+        })
+        .catch(() => void pendingApprovals.reload());
+    });
+    const unsubUpdated = pushes.onActionUpdated((event) => {
+      if (event.status === 'pending_approval') return;
+      pendingApprovals.mutate((rows) => rows.filter((candidate) => candidate.id !== event.id));
+    });
     return () => {
       unsubPending();
       unsubUpdated();
     };
-  }, [pushes, pendingApprovals.reload]);
+  }, [pushes, http, pendingDenied, pendingApprovals.reload, pendingApprovals.mutate]);
 
   const allRows = tasks.state.status === 'ready' ? tasks.state.data : [];
   const rows = useMemo(() => {

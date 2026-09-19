@@ -196,6 +196,27 @@ describe('ApprovalQueuePage state machine', () => {
     const historyRow = await screen.findByTestId('approval-history-row');
     expect(historyRow.querySelector('.chip')?.getAttribute('data-status')).toBe('rejected');
   });
+
+  it('C7: an action.updated push costs exactly one get_action — no full list_pending reload — and the drawer keeps the decided row (C3)', async () => {
+    const pushes = pushSourceWithUpdated();
+    const http = scriptedHttp([() => Promise.resolve([row()])], {
+      get_action: () => Promise.resolve(row({ status: 'approved' })),
+    });
+    render(<ApprovalQueuePage http={http} pushes={pushes} selectedId="ar-1" onSelect={vi.fn()} />);
+    await screen.findByTestId('approval-row');
+    expect(http.calls.filter((name) => name === 'list_pending')).toHaveLength(1);
+
+    act(() => pushes.emitUpdated({ id: 'ar-1', status: 'approved' }));
+    await waitFor(() => expect(screen.queryByTestId('approval-row')).toBeNull());
+    await waitFor(() => expect(http.calls.filter((name) => name === 'get_action')).toHaveLength(1));
+    // The row left Pending into `decided` (C3: outside the `mutate` updater), so the open drawer
+    // still resolves its subject instead of falling back to a `get_action` deep-link fetch.
+    const detail = await screen.findByTestId('action-request-detail');
+    await waitFor(() =>
+      expect(detail.querySelector('[data-status]')?.getAttribute('data-status')).toBe('approved'),
+    );
+    expect(http.calls.filter((name) => name === 'list_pending')).toHaveLength(1);
+  });
 });
 
 describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
