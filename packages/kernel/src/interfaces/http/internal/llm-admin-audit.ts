@@ -1,8 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { withPlatform } from '../../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../../adapters/db/pool.js';
-import { writeAudit } from '../../../substrate/audit/index.js';
+import { recordLlmAdminAudit } from '../../../application/platform/index.js';
 
 /**
  * interfaces/http/internal/llm-admin-audit: `POST /internal/llm-admin-audit` (S6-B, docs/console-
@@ -49,34 +48,6 @@ export interface LlmAdminAuditRoutesDeps {
   readonly writeLlmAdminAudit?: (event: LlmAdminAuditEvent) => Promise<{ auditId: string }>;
 }
 
-async function defaultWriteLlmAdminAudit(
-  pool: PoolLike,
-  event: LlmAdminAuditEvent,
-): Promise<{ auditId: string }> {
-  return withPlatform(pool, { userId: event.actorUserId }, async (client) => {
-    // `audit_records.resource_id` is a uuid column and a provider id is a slug — same choice
-    // `application/gateway/dispatch.ts`'s `auditResourceRef` makes for every non-uuid resource:
-    // `resource_id = null`, the reference lives in the payload (`resourceRef`), and
-    // `platform_audit_query {resourceType: 'llm_provider'}` still finds the row.
-    const row = await writeAudit(client, {
-      workspaceId: null,
-      actorPrincipalId: null,
-      actorUserId: event.actorUserId,
-      action: `platform.llm_${event.action}`,
-      resourceType: 'llm_provider',
-      payload: {
-        channel: 'platform',
-        via: 'llm_admin_token',
-        tokenJti: event.tokenJti,
-        resourceRef: event.providerId,
-        providerId: event.providerId,
-        ...event.details,
-      },
-    });
-    return { auditId: row.id };
-  });
-}
-
 function isForeignKeyViolation(err: unknown): boolean {
   return (err as { code?: string } | undefined)?.code === '23503';
 }
@@ -87,7 +58,7 @@ export async function registerLlmAdminAuditRoutes(
 ): Promise<void> {
   const write =
     deps.writeLlmAdminAudit ??
-    ((event: LlmAdminAuditEvent) => defaultWriteLlmAdminAudit(deps.pool, event));
+    ((event: LlmAdminAuditEvent) => recordLlmAdminAudit(deps.pool, event));
 
   app.post('/internal/llm-admin-audit', async (request, reply) => {
     const parsed = LlmAdminAuditEventSchema.safeParse(request.body);

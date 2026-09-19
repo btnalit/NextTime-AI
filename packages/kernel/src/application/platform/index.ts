@@ -39,3 +39,5 @@ export {
   composeSystemPrompt,
   readInstanceInstructions,
 } from './instance-instructions.js';
+export type { LlmAdminAuditEventInput } from './llm-admin-audit.js';
+export { recordLlmAdminAudit } from './llm-admin-audit.js';
