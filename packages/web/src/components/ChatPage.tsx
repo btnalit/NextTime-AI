@@ -52,8 +52,8 @@ const AT_BOTTOM_THRESHOLD_PX = 48;
  * lib/streaming-reducer.ts). `subscribeChat` is always called with `startAfter=0` — a fresh mount
  * walks complete history ("刷新后历史完整"); the client's own reconnect logic resumes separately.
  *
- * Inline approval cards (`system.action_pending`) reuse `ActionRequestDetail`; their status is
- * kept current by two converging signals — a live `action.updated` push (`actionStatusOverrides`)
+ * Inline approval cards (`system.action_pending`) are `ActionRequestCard` on the shared
+ * `ui/ApprovalCard` (S6-A); their status is kept current by two converging signals — a live `action.updated` push (`actionStatusOverrides`)
  * and any later `system.action_update` message already in this chat (`latestActionStatus`).
  * `system.action_update`/`system.task_update` render as compact notices that open the matching
  * Approvals/Tasks drawer.
