@@ -6,6 +6,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
+import { ToastProvider } from '../ui/Toast.js';
 import { PlatformUsersPage } from './PlatformUsersPage.js';
 
 afterEach(cleanup);
@@ -30,7 +31,9 @@ function scriptedHttp(
 function renderPage(http: CapabilityCaller) {
   return render(
     <PermissionsProvider>
-      <PlatformUsersPage http={http} />
+      <ToastProvider>
+        <PlatformUsersPage http={http} />
+      </ToastProvider>
     </PermissionsProvider>,
   );
 }
@@ -130,7 +133,34 @@ describe('PlatformUsersPage', () => {
     expect(rows[1]?.textContent).toContain('20');
     expect(rows[1]?.textContent).toContain('从未 Never');
 
-    expect(http.calls[0]).toEqual({ name: 'list_users', params: { limit: 50 } });
+    // A6: the default view hides acceptance residue.
+    expect(http.calls[0]).toEqual({
+      name: 'list_users',
+      params: { limit: 50, hideResidual: true },
+    });
+  });
+
+  it('A6: the residual toggle re-queries without hideResidual', async () => {
+    const http = scriptedHttp({
+      list_users: () => ({ items: [user()] }),
+      get_platform_settings: () => settings(),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-users-table');
+
+    fireEvent.click(screen.getByTestId('platform-users-hide-residual'));
+    await waitFor(() =>
+      expect(http.calls.filter((call) => call.name === 'list_users').at(-1)?.params).toEqual({
+        limit: 50,
+      }),
+    );
+    fireEvent.click(screen.getByTestId('platform-users-hide-residual'));
+    await waitFor(() =>
+      expect(http.calls.filter((call) => call.name === 'list_users').at(-1)?.params).toEqual({
+        limit: 50,
+        hideResidual: true,
+      }),
+    );
   });
 
   it('re-queries list_users when the status filter and the search box change', async () => {
@@ -147,7 +177,8 @@ describe('PlatformUsersPage', () => {
         http.calls.some(
           (call) =>
             call.name === 'list_users' &&
-            (call.params as Record<string, unknown>).status === 'disabled',
+            (call.params as Record<string, unknown>).status === 'disabled' &&
+            (call.params as Record<string, unknown>).hideResidual === true,
         ),
       ).toBe(true),
     );
@@ -354,5 +385,156 @@ describe('PlatformUsersPage', () => {
     // The drawer survives the re-read: the row is re-derived from the refreshed list, never from
     // a snapshot, and the re-read keeps the cached page on screen while it is in flight.
     expect(screen.getByTestId('user-memberships')).toBeTruthy();
+  });
+
+  it('C10: disabling yourself surfaces the mapped self_disable copy', async () => {
+    const me = user({ platformRole: 'admin' });
+    const http = scriptedHttp({
+      list_users: () => ({ items: [me] }),
+      get_platform_settings: () => settings(),
+      set_user_status: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'you cannot disable your own account', 'self_disable'),
+        ),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-users-table');
+
+    fireEvent.click(screen.getByRole('button', { name: '管理 Manage' }));
+    const drawer = await screen.findByTestId('user-detail');
+    fireEvent.click(within(drawer).getByRole('button', { name: '停用 Disable' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '确认停用 Confirm disable' }));
+
+    const error = await within(drawer).findByText(/不能停用自己/);
+    expect(error.closest('[data-error-code]')?.getAttribute('data-error-code')).toBe(
+      'self_disable',
+    );
+    expect(within(drawer).getByTestId('user-detail-status').textContent).toBe('活跃 Active');
+  });
+
+  it('A6: 清理待激活用户 lists pendingOnly candidates, confirms as tier high, posts purge_user and renders per-user outcomes', async () => {
+    const pendingA = user({
+      id: 'u-a',
+      login: 'alice-s3',
+      displayName: 'alice',
+      hasPassword: false,
+      lastLoginAt: null,
+      memberships: [],
+    });
+    const pendingB = user({
+      id: 'u-b',
+      login: 'bob-s3',
+      displayName: 'bob',
+      hasPassword: false,
+      lastLoginAt: null,
+      memberships: [
+        {
+          workspaceId: 'ws-9',
+          workspaceName: 'accept-s3',
+          workspaceStatus: 'active',
+          principalId: 'p-b',
+          role: 'operator',
+          disabled: false,
+        },
+      ],
+    });
+    const listCalls: unknown[] = [];
+    const http = scriptedHttp({
+      list_users: (params) => {
+        listCalls.push(params);
+        const p = params as Record<string, unknown>;
+        if (p.pendingOnly === true) return { items: [pendingA, pendingB] };
+        return { items: [user()] };
+      },
+      get_platform_settings: () => settings(),
+      purge_user: (params) => {
+        expect(params).toEqual({ userIds: ['u-a', 'u-b'] });
+        return {
+          outcomes: [
+            { userId: 'u-a', login: 'alice-s3', status: 'purged' },
+            {
+              userId: 'u-b',
+              login: 'bob-s3',
+              status: 'skipped',
+              reason: 'active_membership',
+              detail: 'accept-s3',
+            },
+          ],
+          purgedCount: 1,
+        };
+      },
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-users-table');
+
+    fireEvent.click(screen.getByTestId('purge-users-open'));
+    const dialog = await screen.findByTestId('purge-users-dialog');
+    const candidates = await within(dialog).findAllByTestId('purge-user-candidate');
+    expect(candidates).toHaveLength(2);
+    expect(listCalls.at(-1)).toEqual({ pendingOnly: true, limit: 200 });
+    expect(candidates[1]?.textContent).toContain('accept-s3@operator');
+
+    // Nothing chosen → the batch button is disabled; select all → "清理 2 个".
+    const next = within(dialog).getByTestId('purge-users-continue');
+    expect(next.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(within(dialog).getByTestId('purge-users-select-all'));
+    expect(next.textContent).toContain('2');
+    fireEvent.click(next);
+
+    // Tier high: the logins are listed; the list drawer is gone while the tier is open.
+    const confirm = await screen.findByTestId('purge-users-confirm');
+    expect(screen.queryByTestId('purge-users-dialog')).toBeNull();
+    const impact = within(confirm).getByTestId('confirm-impact');
+    expect(impact.textContent).toContain('alice-s3');
+    expect(impact.textContent).toContain('bob-s3');
+    expect(http.calls.some((call) => call.name === 'purge_user')).toBe(false);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    // Outcomes per user, bilingual reason for the skipped one; the directory is re-read.
+    const results = await screen.findByTestId('purge-users-results');
+    const outcomes = within(results).getAllByTestId('purge-user-outcome');
+    expect(outcomes[0]?.getAttribute('data-outcome')).toBe('purged');
+    expect(outcomes[1]?.getAttribute('data-outcome')).toBe('skipped');
+    expect(outcomes[1]?.textContent).toContain('仍有未停用的成员资格');
+    expect(outcomes[1]?.textContent).toContain('accept-s3');
+    expect(results.textContent).toContain('已清理 1 / 2');
+    await waitFor(() =>
+      expect(
+        listCalls.filter((p) => (p as Record<string, unknown>).hideResidual === true),
+      ).toHaveLength(2),
+    );
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('已清理 1 个用户');
+
+    fireEvent.click(within(results).getByTestId('purge-users-done'));
+    await waitFor(() => expect(screen.queryByTestId('purge-users-results')).toBeNull());
+  });
+
+  it('A6: cancelling the confirm returns to the candidate list with the selection kept', async () => {
+    const pending = user({ id: 'u-a', login: 'alice-s3', hasPassword: false, memberships: [] });
+    const http = scriptedHttp({
+      list_users: (params) =>
+        (params as Record<string, unknown>).pendingOnly === true
+          ? { items: [pending] }
+          : { items: [user()] },
+      get_platform_settings: () => settings(),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-users-table');
+    fireEvent.click(screen.getByTestId('purge-users-open'));
+    const dialog = await screen.findByTestId('purge-users-dialog');
+    const box = (await within(dialog).findByTestId('purge-user-candidate')).querySelector(
+      'input',
+    ) as HTMLInputElement;
+    fireEvent.click(box);
+    fireEvent.click(within(dialog).getByTestId('purge-users-continue'));
+    const confirm = await screen.findByTestId('purge-users-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+    const back = await screen.findByTestId('purge-users-dialog');
+    expect(
+      (within(back).getByTestId('purge-user-candidate').querySelector('input') as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(http.calls.some((call) => call.name === 'purge_user')).toBe(false);
   });
 });
