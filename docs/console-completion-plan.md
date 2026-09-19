@@ -93,7 +93,7 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
   本文不改它们的语义，只排序与补验收标准。
 - **主机现状**：v0.13.2；一个生产工作区加 30 个验收残留工作区；Explorer 未构建；`KERNEL_VERSION` 过时；
   遗留 41–44 开放（`STATUS.md` §4）。
-- **路线图**：STATUS §3 的顺序是 P-B2b → P-C → P-D。本文的 S6 波次插在 P-B2b 之前或与之并行，由维护者定。
+- **路线图**：STATUS §3 的顺序是 P-B2b → P-C → P-D。S6 插在 P-B2b 之前（维护者 2026-09-19 决定，§12 第 4 项）。
 - **不做**：不引入新的前端框架或组件库；不做工作区级供应商配置（供应商永远是平台级）；不开放第三方
   pi extension；不做 SaaS 多租户。
 
@@ -137,8 +137,10 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 
 ### 5.2 工作区与用户治理（A1 / A6）
 
-- **`purge_workspace`**（scope platform，管理员，目标）：前置条件 `status = disabled` 或 `purpose = ephemeral
-  且 expires_at < now()`；默认工作区拒绝（已有 `default_workspace` 护栏）；两步确认（复用抽屉确认模式），
+- **`purge_workspace`**（scope platform，管理员，目标）：前置条件 `status = disabled 且 disabled_at <
+  now() - 7 天` 或 `purpose = ephemeral 且 expires_at < now()`（保留期与 ephemeral TTL 同一个 7 天；
+  `workspaces` 今天只有 `status`、无 `disabled_at`，需一条迁移：`disable_workspace` 落时间戳，既有 `disabled`
+  行回填 null 并视为立即可清——§12 第 3 项）；默认工作区拒绝（已有 `default_workspace` 护栏）；两步确认（复用抽屉确认模式），
   确认文案列出将删除的对象计数与"仍在使用的 service Handle"警告；执行 §4 的级联；写平台审计
   `platform.workspace_purged`（含计数）。`delete-workspaces-matching.sh` 改为调用这个能力而不是直接
   SQL，脚本与页面同一条路径。
@@ -147,9 +149,14 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 - **列表默认过滤**：工作区页默认隐藏 `disabled` 与到期 `ephemeral`，加状态 / 用途筛选与排序，列表显示
   `purpose` / `expires_at`；用户页默认隐藏"待激活且成员资格全在禁用 / 一次性工作区"的用户，加"清理待
   激活用户"批量入口。
-- **验收脚本不再污染平台**：`accept_s1/s2/s3.sh`、`demo.sh`、chaos 脚本创建的 Principal 带 `ephemeral`
-  标记，不回填 User；工作区本就是 `ephemeral` + TTL，到期由 `purge_workspace` 清。验收：跑一轮 S1–S3
-  后用户页不新增行；`purge_workspace --expired` 后工作区页只剩生产工作区。
+- **验收脚本不再污染平台**：`accept_s1/s2/s3.sh`、`demo.sh`、chaos 脚本只改"不造 User"，不做长期验收
+  工作区（§12 第 5 项）。0019 的不变量不打破（human Principal 仍对应一个 User，`bootstrap.ts` 的
+  `ensureUserForHumanPrincipal` 不动）：ephemeral 工作区里造出的 User 随工作区生灭——从未激活（无密码、无会话）
+  且成员资格全在该工作区的 User 由 `purge_workspace` 级联删除，此前由用户页默认过滤藏起来。`audit_records.actor_user_id`、
+  `user_sessions.user_id` 与 0021 的 `updated_by` 都引用 `users(id)` 且无 `on delete` 规则——这是护栏而不是障碍：
+  从未激活的验收 User 没有这三类引用，可删；任何有引用的 User 内核拒删、留在默认过滤之外（审计只增不减），不需要
+  新迁移。工作区本就是 `ephemeral` + TTL，到期由 `purge_workspace` 清。验收：跑一轮 S1–S3 后用户页默认视图不新增行；
+  `purge_workspace --expired` 后 `users` 表回到基线、工作区页只剩生产工作区。
 
 ### 5.3 能力目录：Skill / Procedure / Worker 编辑器（A2）
 
@@ -170,10 +177,11 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
   `models.json`；密钥落在 llm-proxy 自己的加密存储 / 密钥文件，**内核与数据库不存密钥**。
 - **工作区侧只选不配**（已有）：AgentPolicy `allowedModels` 从平台投影里勾选；`set_allowed_models` 已有；
   对话页的切换（§5.1）只在这个范围内。
-- **Gemini**：先用其 OpenAI 兼容端点接入（零改动）；原生 `generateContent` 适配器作为 llm-proxy 的
-  可选项单列（估算与排期见 §10）。
-- 验收：在页面新增一个 OpenAI 兼容供应商并测试调用成功 → 工作区"模型与配额"里能勾选它的模型 →
-  对话页头部能切到它 → `report-usage.sh` 里能按 provider / model 汇总。
+- **Gemini**：先用其 OpenAI 兼容端点接入（零改动）；原生 `generateContent` 适配器**不排期**（§12 第 2 项），
+  触发条件是出现兼容端点表达不了的具体能力（原生 thinking 预算、上下文缓存之类），不是日期。
+- 验收：在页面新增一个 OpenAI 兼容供应商并测试调用成功（"测试调用"含**一次工具调用往返**，不只补全——Worker
+  与门工具都依赖它，"兼容零改动"要验过才算）→ 工作区"模型与配额"里能勾选它的模型 → 对话页头部能切到它 →
+  `report-usage.sh` 里能按 provider / model 汇总。
 
 ### 5.5 审计：上下文关联（A4）
 
@@ -205,16 +213,21 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 - **立即可做（主机）**：`EXPLORER_BUILD=1 docker compose build caddy && docker compose up -d caddy`
   （构建时要拉外网，与今天源码构建撞 registry 的脆弱性相同）。
 - **界面**：bundle 未构建时隐藏侧栏"图"入口（caddy 返回占位页可探测），而不是让用户点进去看占位说明。
-- **待维护者决定**：原生"图谱"页——基于已有 `search` / `traverse` / `explain` 做对象浏览、邻居展开、
-  Fact 溯源与新鲜度（`last_observed_at`）着色，替代第三方 bundle。收益是与控制台同一套鉴权与设计语言，
-  代价是一个中等规模的前端项目；本文只列，不承诺。
+- **已决定立项（2026-09-19，§12 第 1 项）**：原生"图谱"页——基于已有 `search` / `traverse` / `explain` 做
+  对象浏览、邻居展开、Fact 溯源与新鲜度（`last_observed_at`）着色，替代第三方 bundle。鉴权其实已统一（W7
+  #153 同源 cookie），收益是设计语言一致 + 去掉构建时拉外网；代价是一个中等规模的前端项目。维护者日常看图，
+  值得做：S6-C 先构建 bundle 过渡，原生页单独成波次 S6-D（§10）。
 
 ### 5.8 横切（B1–B7）
 
 - **版本号**：构建时把 git tag + commit 注入镜像（构建参数 → 环境变量），概览显示 `v0.13.2 (0fa5a1e)`；
   `.env` 里不再手工维护 `KERNEL_VERSION`。
 - **确认态**：Approve（`blast_radius = high`）、Reject、Revoke、接入包三态切换、Cancel task 一律复用抽屉
-  两步确认；Approve 高影响时确认文案列出目标资源。
+  两步确认；Approve 高影响时确认文案列出目标资源。`approve.reason`：`blast_radius = high` **必填**、中低可选，
+  理由进审计（§12 第 6 项）；在**内核**强制（`approve` 今天只收 `actionRequestId`，加 `reason?` 参数，高影响缺省
+  400），只做前端校验会被 API 调用者绕过。今天的 S2 / S3 不受影响：包装门的 `high` 只来自 http 门 `delete`
+  动词默认值与 ssh 分类规则，accept-s2 的两个 manifest 都是 low / medium，S3 不走审批；新接带 `delete` 的
+  http 门时验收 driver 要传 reason。
 - **id → 名称**：统一一个 `<PrincipalName>` / `<GatekeeperName>` / `<WorkerDefinitionName>` 展示组件
   （名字 + `CopyId`），用已有的 list 能力做客户端映射；访问、系统接入、目录、我的智能体全部替换。
 - **语言与格式**：`work/*` 与 `govern/*`、`platform/*` 统一为中英双语文案；时间戳统一走 `formatRelative` +
@@ -369,8 +382,12 @@ S5 收口后主机在 v0.13.2，内核 / 门 / 采集 / 审批的链路经三轮
 | **S6-A0 视觉体系落地 + 紧急修复** | §5.9 令牌（浅色默认、字号刻度、语义色补缺、字体自托管）与 `ui/*` 增补（`RefChip` / `StatusChip` 平台机器 / `ConfirmTier` / `ApprovalCard` / `ProvenanceChain` / `FollowPill`）、壳与导航、真实版本号；caddy CSP / Permissions-Policy；C1（P1）与 C2 / C3 / C9 / C10 / C11 / C12 / C14 六条 P2 的文件级修复；W3 复现 | B1、B2（模式）、B3（组件）、C1–C3、C9–C14、C16–C21、C24 | 无。**先于一切页面改动**：后续波次的页面都在新令牌与新组件上写，避免改两遍 |
 | **S6-A 控制台闭环** | §5.8 全部；§5.1（归档 / 改名 / 自动标题 / 头部显示 + 范围内切换、W3 修复、C8）；§5.2（`purge_workspace` / `purge_user` / 默认过滤 / 验收脚本不造用户）；§5.3 编辑器；§5.5 审计上下文 + `export_prov` + `list_action_requests` 任务过滤；`approve.reason`；C4–C7、C15、C18–C20、C22、C23、C25、C27、C28 | B4–B7、W1–W3、A1 / A2 / A4 / A6、遗留 41 的前半、C 系列剩余 | S6-A0；遗留 44 先修（对话中途切换依赖它），否则切换只在 Turn 间 |
 | **S6-B 模型与供应商** | §5.4：llm-proxy 管理端点 + `issue_llm_admin_token` + 平台页；工作区只选不配；C29 定型 Quota / Policy 行结构 | A3、C29 | S6-A0（可与 S6-A 并行，文件互斥） |
-| **S6-C 接入与图** | §5.6 启动器与状态一致性 + `cancel_connection_request`；§5.7 主机构建 Explorer + 隐藏入口；原生图谱页由维护者决定 | A7、B7、A5、C26 | S6-A0 的 `RefChip` / `Launcher` |
+| **S6-C 接入与图** | §5.6 启动器与状态一致性 + `cancel_connection_request`；§5.7 主机构建 Explorer bundle（过渡）+ 隐藏入口 | A7、B7、C26、A5（过渡） | S6-A0 的 `RefChip` / `Launcher` |
+| **S6-D 原生图谱页** | §5.7：基于 `search` / `traverse` / `explain` 的对象浏览、邻居展开、Fact 溯源与新鲜度着色，替代第三方 bundle；中等规模前端项目 | A5（收尾） | S6-A0 的 `RefChip` / `ProvenanceChain`；S6-C 的 bundle 先行 |
 | 之后 | P-B2b → P-C（运行层、运行状态）→ P-D（模块、供应商剩余项）按 STATUS 原顺序 | 设计 §6.4 / §6.5 / §6.7 | — |
+
+波次顺序（维护者 2026-09-19 取定，§12 第 4 项）：S6-A0 → 遗留 44（内核 / supervisor 侧，独立 PR，S6-A 的对话中途
+切换依赖它）→ S6-A ∥ S6-B（文件互斥车道，与 W9–W11 同一模式）→ S6-C → S6-D；整个 S6 在 P-B2b 之前。
 
 优先级判断：C1 是唯一的 P1（两条登录后流程不可达），单独一个小 PR 先修，不等波次。S6-A0 放在最前是因为维护者已把
 视觉水准定为验收基线，页面若先在旧令牌上改会全部重做一遍。S6-A 里 B2（确认态）与 B1（版本）随 S6-A0 的组件落地；
@@ -389,15 +406,31 @@ A6 / A1（残留治理）是维护者每天都会看到的，排 S6-A 第一；�
 5. 审计页从 Task / 审批 / Fact 一键进入。
 验收标准：维护者在主机控制台走一遍 §5 各节的验收句全部成立；e2e 覆盖到每个改动页面。
 
-## 12. 请维护者决定
+## 12. 维护者决定（2026-09-19 取定）
 
-1. Explorer：主机构建第三方 bundle 就够，还是立项原生图谱页（中等规模）。
-2. Gemini：先走 OpenAI 兼容端点，原生适配器是否排期。
-3. `purge_workspace` 对 `disabled` 工作区的保留期：立即可清，还是禁用满 N 天才可清（建议 7 天）。
-4. S6-A 与 S6-B 并行还是串行；S6 插在 P-B2b 之前还是之后。
-5. 验收脚本改造范围：只改"不造用户"，还是连同把验收工作区统一收进一个长期"验收工作区"复用。
-6. `approve.reason`：高影响（`blast_radius = high`）时是否**必填**（建议必填，理由进审计），中低影响可选。
-7. 字体自托管的体积：Noto Sans SC 全字重约 10 MB，建议只带常用 3500 字子集 + 按需回退系统字体；是否接受
-   首屏多约 600 KB（一次缓存）。
+七项于 2026-09-19 全部取定：1 / 3 / 4 / 7 由维护者拍板，2 / 5 / 6 按建议缺省取定。每项的落点已回写到 §3 / §5 / §10
+对应位置，这里只记结论与理由。三处是记录者按维护者答复推断的落点、维护者可在 PR 里否决：1 的"立项 + S6-D 单独波次"
+（维护者只答了"日常看图"）、5 的实现路径（保持 0019 不变量而不是"不回填 User"）、7 的实现形状留给 S6-A0。
+
+1. **Explorer：立项原生图谱页。** 维护者日常看图；S6-C 先构建第三方 bundle 过渡，原生页作为 S6-D 单独成波次。
+   bundle 未构建时隐藏侧栏入口，与此决定无关、无论如何都做。（§5.7、§10）
+2. **Gemini：原生适配器不排期。** 先走 OpenAI 兼容端点；触发条件是出现兼容端点表达不了的具体能力，不是日期。
+   S6-B 的"测试调用"验收含一次工具调用往返。（§5.4）
+3. **`purge_workspace` 保留期：禁用满 7 天可清**（与 ephemeral TTL 同一个 7 天）。需一条迁移加 `workspaces.disabled_at`；
+   **既有 `disabled` 行回填 null、视为立即可清**——主机上的 30 个验收残留工作区不再等一周。（§5.2、§11 第 3 条）
+4. **顺序：S6-A0 → 遗留 44 → S6-A ∥ S6-B → S6-C → S6-D；S6 在 P-B2b 之前。** 理由：控制台是维护者每天要用的面；
+   遗留 44 是 S6-A 对话中途切换的硬前置。（§3、§10）
+5. **验收脚本：只改"不造 User"，不做长期验收工作区。** 遗留 41 正是跨运行共享状态的事故，S5.3 把工作区改成
+   ephemeral + TTL 就是为了杜绝它；S2 / S3 的新鲜度与异源 Conflict 断言也假设图是新的。实现上**不打破 0019 不变量**
+   （human Principal 仍对应 User），而是让 ephemeral 工作区的 User 随工作区被 `purge_workspace` 级联清除。（§5.2）
+6. **`approve.reason`：高影响必填、中低可选，内核强制，理由进审计。** `blast_radius` 在 ActionRequest 上总有值
+   （`request-action-handler` 非空）；accept-s2 的两个 manifest 是 low / medium、S3 不走审批，验收 driver 暂不用改。（§5.8）
+7. **字体：接受方案缺省——常用 3500 字子集 + 按需回退系统字体，首屏约 600 KB（一次缓存）。** 内网控制台，体积
+   不是问题。实施者注：子集外字符会在同一行里换字形，S6-A0 若觉得明显，可在同一预算内改用 unicode-range 切片，
+   字重数一并在实施时定，不另行征求。（§5.9）
+
+**仍待维护者确认（09-19 未答，影响 S6-B 范围）**：管理员在控制台写供应商密钥（§5.4，web → caddy → llm-proxy
+管理端点，管理员角色 + 5 分钟 JWT + 平台审计）是否属于底线"触及有凭证系统的动作必经审批"。并行方案隐含"不过审批、
+走角色 + JWT + 审计"；若答"要过审批"，S6-B 加审批流、范围重估，与 S6-A 并行与否也要重看。
 
 已定稿（不再征求）：视觉基线按 v1 原型（§5.9），浅色默认、深色覆盖；治理语义色六类固定映射；确认按影响四档分级。
