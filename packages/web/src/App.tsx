@@ -27,6 +27,7 @@ import { PermissionsProvider } from './hooks/usePermissions.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import {
   type MeResult,
+  type SessionResult,
   type WireMembership,
   type WireUser,
   logout as apiLogout,
@@ -51,6 +52,12 @@ interface Session {
   /** Increments per sign-in/workspace-switch so per-session state (permissions, toasts) remounts. */
   readonly generation: number;
   readonly authMode: 'apiKey' | 'cookie';
+  /** API-key mode only (C1, console-completion-plan §2b): the key this session authenticated
+   *  with, captured in `connectApiKey` so `AccountPage`'s claim form (`POST /api/auth/claim`
+   *  proves identity with the key itself) can actually submit — without it `canSubmit` is
+   *  permanently false and the login page's own promise ("用 key 登录后可在「我的账户」设置密码")
+   *  is broken. Never read anywhere else; `lib/session.ts` remains the persisted copy. */
+  readonly apiKey?: string;
   // Cookie mode only (S4.1) — undefined for an apiKey session, which has no platform user.
   readonly user?: WireUser;
   readonly memberships?: readonly WireMembership[];
@@ -150,6 +157,7 @@ export function App() {
         http: new HttpClient({ auth: { kind: 'apiKey', apiKey } }),
         generation: generation.current,
         authMode: 'apiKey',
+        apiKey,
       });
     } catch (err) {
       ws.close();
@@ -249,8 +257,20 @@ export function App() {
       memberships: readonly WireMembership[],
       replacing?: WsClient,
     ): Promise<void> => {
+      // Landing on a pre-session state while a session is still published (C1: the claim form
+      // runs inside a live API-key session, and the claimed user may have no membership yet, or
+      // a temporary password) must tear that session down, or `App`'s render switch — which
+      // prefers `session` — would keep showing the old shell over the new state.
+      const landPreSession = (state: PreSessionState): void => {
+        if (replacing) {
+          attempt.current += 1;
+          replacing.close();
+          setSession(null);
+        }
+        setPreSession(state);
+      };
       if (user.mustChangePassword) {
-        setPreSession({ kind: 'changePassword', user, memberships });
+        landPreSession({ kind: 'changePassword', user, memberships });
         return;
       }
       // Administrators land on the platform plane, everyone else on chats (design doc §6.7:
@@ -270,13 +290,13 @@ export function App() {
           openPlatformOnlySession(user, memberships, replacing);
           return;
         }
-        setPreSession({ kind: 'noWorkspace', user, memberships });
+        landPreSession({ kind: 'noWorkspace', user, memberships });
         return;
       }
       const stored = loadSelectedWorkspaceId();
       const firstMembership = memberships[0];
       if (!firstMembership) {
-        setPreSession({ kind: 'noWorkspace', user, memberships });
+        landPreSession({ kind: 'noWorkspace', user, memberships });
         return;
       }
       const chosen =
@@ -379,6 +399,21 @@ export function App() {
     [proceedAfterCookieAuth, session],
   );
 
+  /** `ClaimPasswordCard` (`AccountPage`, API-key mode) just set a login + password on this key's
+   *  own identity and the kernel installed the console session cookie (`POST /api/auth/claim`,
+   *  C1). Swap the API-key session for that cookie session through the same
+   *  `proceedAfterCookieAuth` every other cookie entry uses, handing over the current socket. The
+   *  stored key is cleared first: the holder now signs in by password, and leaving it in
+   *  `sessionStorage` would let a later cookie logout + reload silently re-sign them in over the
+   *  key channel (`bootUnauthenticated`'s auto-connect). */
+  const handleClaimed = useCallback(
+    (result: SessionResult): void => {
+      clearApiKey();
+      void proceedAfterCookieAuth(result.user, result.memberships, session?.ws);
+    },
+    [proceedAfterCookieAuth, session],
+  );
+
   const handlePasswordChanged = useCallback(
     (user: WireUser): void => {
       // Read the *current* state, not the render this callback was created in: a "Sign out"
@@ -407,6 +442,7 @@ export function App() {
             switchingWorkspace={switchingWorkspace}
             onUserChanged={handleUserChanged}
             onKeyBound={handleKeyBound}
+            onClaimed={handleClaimed}
           />
         </ToastProvider>
       </PermissionsProvider>
@@ -440,6 +476,7 @@ export function App() {
             user={preSession.user}
             memberships={preSession.memberships}
             onUserChanged={handleUserChanged}
+            onBound={handleKeyBound}
           />
         );
       }
@@ -461,6 +498,7 @@ function Routed({
   switchingWorkspace,
   onUserChanged,
   onKeyBound,
+  onClaimed,
 }: {
   readonly session: Session;
   readonly route: Route;
@@ -469,6 +507,7 @@ function Routed({
   readonly switchingWorkspace: boolean;
   readonly onUserChanged: (user: WireUser) => void;
   readonly onKeyBound: (result: MeResult) => void;
+  readonly onClaimed: (result: SessionResult) => void;
 }) {
   const active = sectionOf(route);
   usePushToasts(session.ws, active);
@@ -542,11 +581,17 @@ function Routed({
       page = <AgentProfilePage http={session.http} />;
       break;
     case 'account':
+      // C1: an API-key session needs its key for the claim form; a cookie session needs the bind
+      // handler for the "bind another API key" card — neither was wired before, so both flows
+      // the login page advertises were unreachable (console-completion-plan §2b C1).
       page = (
         <AccountPage
           user={session.user ?? null}
           memberships={session.memberships ?? []}
           onUserChanged={onUserChanged}
+          apiKey={session.apiKey}
+          onClaimed={onClaimed}
+          onBound={onKeyBound}
         />
       );
       break;
