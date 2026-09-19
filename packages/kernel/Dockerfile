@@ -1,10 +1,17 @@
 # syntax=docker/dockerfile:1.7
 #
 # Multi-stage build for @nexttime/kernel (design doc §7.1, §10.1, §10.2).
-# NOTE (R1): image build is unverified on this machine — Docker is not installed here. It must
-# be built and smoke-tested on the target host before E3 sign-off.
 #
 # Build context is the repo root: docker build -f packages/kernel/Dockerfile .
+#
+# KERNEL_VERSION (docs/console-completion-plan.md §5.8 "版本号", B1): the version string the
+# platform overview shows (`application/gateway/platform-handlers.ts` reads `process.env.
+# KERNEL_VERSION`) is baked into the image at build time as a build arg → ENV, never hand-
+# maintained in the host's `.env` (that is exactly how the overview drifted to "0.10.0" while the
+# host ran v0.13.2). docker-compose.yml passes `${KERNEL_VERSION:-dev}` from the *build* shell's
+# environment; `.git/` is excluded from the build context (.dockerignore), so the Dockerfile cannot
+# derive it from `git describe` itself — docs/runbooks/release.md §3 has the one-line export to
+# run before `docker compose build`. Unset → "dev", which is what a local/CI build should show.
 
 FROM node:24-bookworm-slim AS build
 RUN corepack enable
@@ -32,5 +39,11 @@ COPY --from=build --chown=nexttime:nexttime /workspace/ontology ./ontology
 USER nexttime
 ENV NODE_ENV=production
 ENV ONTOLOGY_DIR=/app/ontology
+# Declared in this (runtime) stage, not at the top of the file: an ARG only lives in the stage
+# that declares it, and placing it after every COPY keeps a version bump from invalidating any
+# cached layer above — only this metadata-only ENV layer changes between two builds of the same
+# tree. See the header comment for where the value comes from.
+ARG KERNEL_VERSION=dev
+ENV KERNEL_VERSION=${KERNEL_VERSION}
 EXPOSE 8080
 CMD ["node", "dist/index.js"]

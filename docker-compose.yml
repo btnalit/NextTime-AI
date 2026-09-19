@@ -48,7 +48,20 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   kernel:
-    build: { context: ., dockerfile: packages/kernel/Dockerfile }
+    # KERNEL_VERSION (docs/console-completion-plan.md §5.8 "版本号", B1): a *build* arg, baked into
+    # the image as ENV by packages/kernel/Dockerfile — deliberately not a runtime `environment:`
+    # entry any more (a compose `environment:` value overrides the image's own ENV at `up` time,
+    # which is how the overview kept showing whatever stale value the host shell / `.env` had).
+    # Taken from the shell that runs `docker compose build`; unset → "dev". Set it with the
+    # one-liner in docs/runbooks/release.md §3 (`export KERNEL_VERSION="$(git describe --tags
+    # --abbrev=0) ($(git rev-parse --short HEAD))"`) before building, so the overview renders
+    # `v0.13.2 (0fa5a1e)`-style.
+    build:
+      {
+        context: .,
+        dockerfile: packages/kernel/Dockerfile,
+        args: { KERNEL_VERSION: "${KERNEL_VERSION:-dev}" },
+      }
     env_file: ${NEXTTIME_DATA:?}/secrets/kernel.env # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
     # handle_key：Handle 签名私钥，只进这一个容器：/run/secrets/handle_key。internal_token
     # （fix/internal-plane-auth）：内核整个 internal plane（/internal/* + /internal/agent-host）的
@@ -84,8 +97,6 @@ services:
         # the console cannot disable or demote them. Optional, comma-separated. Kept in env on
         # purpose (a hijacked admin session must not be able to lock the operator out).
         NEXTTIME_PLATFORM_ADMINS: "${NEXTTIME_PLATFORM_ADMINS:-}",
-        # Shown on the platform overview page; set by the release/build pipeline when known.
-        KERNEL_VERSION: "${KERNEL_VERSION:-dev}",
         # S5.3 (docs/runbooks/add-domain-pack.md): where `bootstrap.js seed-domain-pack` reads a
         # domain pack from when `--dir` is not given — the host's `${NEXTTIME_DATA}/config/ontology`,
         # visible through the read-only /data/config mount below. Put the yaml there, run seed;

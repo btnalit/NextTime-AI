@@ -122,6 +122,7 @@ docker compose up -d --force-recreate <service>
 | `config/llm-providers.yaml`（换 provider，随后必须 `make gen-models` 重生成 `models.json`——见 §6 常见问题） | `worker-supervisor` 消费的是重新生成的 `models.json` 文件本身（bind mount 内容变了，不需要重建容器），但换 provider 后新拉起的入口/Worker 容器才会用上新值 | 见 `docs/runbooks/host-worker-runtime.md` §3（验收脚本 `accept_s1/s2/s3.sh` 不走这条路径——它们经 `deploy/accept/docker-compose.fake.yml` 自行切到 fake provider，不改这份生产文件，见 `docs/runbooks/accept-s1.md` §1） |
 | `deploy/caddy/Caddyfile` | `caddy` | 普通 `docker compose restart caddy` 即可（bind mount，不需要重建镜像） |
 | `packages/web` 代码改动 | `caddy`（静态产物随镜像走，见 `docs/runbooks/host-caddy.md` §E8.5） | `docker compose build caddy && docker compose up -d caddy` |
+| 发版 / 切 tag 后重建 `kernel`（概览的版本号随镜像走，B1） | `kernel` | 先 `export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"`，再 `docker compose build kernel && docker compose up -d kernel`——版本是**构建参数**烙进镜像的 ENV，不是 `.env` 里的值（`.env` 里的 `KERNEL_VERSION` 已不被读取，可删）；漏了 export 概览会显示 `dev`。见 `docs/runbooks/release.md` §3.1 |
 | `secrets/handle.key` / `secrets/internal.token` / `secrets/gate.token` | 见 `docs/runbooks/key-rotation.md`（涉及多个服务协同重启，不是单服务局部重启） | — |
 
 ### 4.3 恢复顺序（主机崩溃/意外重启后）
