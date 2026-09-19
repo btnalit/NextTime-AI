@@ -5,6 +5,8 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatRelative } from '../lib/format.js';
 import {
+  type GatekeeperListRow,
+  type ModelRow,
   type OperationCatalogRow,
   type OperationStatsRow,
   type ProcedureRow,
@@ -13,12 +15,19 @@ import {
   operationStatsKey,
 } from '../lib/governance.js';
 import type { CatalogTab } from '../lib/router.js';
+import { hrefs } from '../lib/router.js';
 import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
+import { nameOf, useGatekeeperNames } from './approvals/useDirectoryNames.js';
+import { ProcedureEditor } from './catalog/ProcedureEditor.js';
+import { SkillEditor } from './catalog/SkillEditor.js';
+import { WorkerDefinitionEditor } from './catalog/WorkerDefinitionEditor.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
+import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { PageHeader } from './ui/PageHeader.js';
+import { RefChip } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { Tabs } from './ui/Tabs.js';
@@ -40,30 +49,45 @@ const TAB_LABEL: Readonly<Record<CatalogTab, string>> = {
 /**
  * components/CatalogPage: 能力目录 Catalog (`/govern/catalog`, S3.11 "目录" group — `minRole:
  * 'member'`, open to everyone). Four tabs over the platform's publishable content: Operations
- * (`list_operations`, new), Skills/Procedures (`list_skills`/`list_procedures`, existing —
- * verified wire shape, `lib/governance.ts`'s own doc comment), Workers (`list_worker_definitions`,
- * existing, reuses `lib/tasks.ts`'s `WorkerDefinitionSummary` rather than a second type for the
- * same row). Publish/deprecate stay the two-step `propose → publish` capabilities already in the
- * registry (docs/wire-contract-conventions.md: "UI 不得提供'直接改分类'的捷径") — this page never
- * offers a shortcut, only the two existing write calls, each still `channel: 'human'`-gated on its
- * own (no fixed `minRole`, so a 403 denies only that one capability — `hooks/usePermissions.tsx`).
+ * (`list_operations`), Skills/Procedures (`list_skills`/`list_procedures` — verified wire shape,
+ * `lib/governance.ts`'s own doc comment), Workers (`list_worker_definitions`, reuses
+ * `lib/tasks.ts`'s `WorkerDefinitionSummary`). Publish/deprecate stay the two-step `propose →
+ * publish` capabilities already in the registry (docs/wire-contract-conventions.md: "UI 不得提供
+ * '直接改分类'的捷径") — never a shortcut, each write still `channel: 'human'`-gated on its own
+ * (no fixed `minRole`, so a 403 denies only that one capability — `hooks/usePermissions.tsx`).
+ *
+ * S6-A A2 (docs/console-completion-plan.md §5.3 "编辑器"): the Skills / Procedures / Workers
+ * tabs gain "新建草稿 New draft" and, per row, "编辑为新草稿 Edit as new draft" — the editors in
+ * `components/catalog/*` call `propose_skill` / `propose_procedure` /
+ * `propose_worker_definition` (drafts are private to the proposer, I16) and then offer the
+ * matching `publish_*`. Two kernel facts the page states rather than hides: `propose_skill` /
+ * `propose_procedure` address no family, so "edit" of those two is a copy into a *new* draft
+ * (new id, v1; a Skill copy re-enters the body — `list_skills` has no `markdown`), whereas
+ * `propose_worker_definition{definitionId}` is a real next version. `list_skills` /
+ * `list_procedures` are `noParams` and `list_worker_definitions` takes `{kind?}` only (both
+ * `.strict()`): no `limit` / `cursor` exists, so the lists stay single-page (B5 does not apply).
  *
  * `list_worker_definitions` only ever returns *published* rows (its own kernel-side doc comment,
  * `lib/tasks.ts`), so unlike Skills/Procedures (which also show the caller's own drafts) the
- * Workers tab has nothing to Publish — Deprecate only.
+ * Workers tab has nothing to Publish — Deprecate only; a freshly proposed Worker draft is
+ * published from the editor's success state instead.
  *
  * Operations rows also carry a usage summary (调用/批准/拒绝/最近, S3.12 catalog-usage follow-up)
  * fed by its own `get_operation_stats` capability call, joined client-side by `{gatekeeperId,
  * name}` (`lib/governance.ts`'s `operationStatsKey`) — a separate `useCapabilityList` from
- * `list_operations`'s own, so a stats failure (not deployed, transient error, or simply no calls
- * in the window) degrades one row's usage span to "—" rather than the whole tab.
+ * `list_operations`'s own, so a stats failure degrades one row's usage span to "—" rather than
+ * the whole tab.
  */
 export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={[
+          { label: '治理 Governance', href: hrefs.members() },
+          { label: '能力目录 Catalog' },
+        ]}
         title="能力目录 Catalog"
-        description="Published Operations, Skills, Procedures, and Worker definitions across the workspace."
+        description="工作区里已发布的 Operation、Skill、Procedure 与 Worker 定义，以及你自己的草稿。 Published Operations, Skills, Procedures and Worker definitions across the workspace, plus your own drafts."
       />
       <div className="page-toolbar">
         <Tabs<CatalogTab>
@@ -93,13 +117,11 @@ function DegradedList({
   status,
   error,
   reload,
-  emptyIcon,
   capabilityLabel,
 }: {
   readonly status: 'loading' | 'error';
   readonly error?: unknown;
   readonly reload: () => void;
-  readonly emptyIcon: 'grid';
   readonly capabilityLabel: string;
 }) {
   if (status === 'loading') {
@@ -108,10 +130,39 @@ function DegradedList({
   return (
     <ErrorBanner
       error={error}
-      title={`Could not load ${capabilityLabel}`}
+      title={`无法加载 Could not load ${capabilityLabel}`}
       onRetry={reload}
       testId="catalog-error"
     />
+  );
+}
+
+/** The per-tab toolbar: the one primary action of the page ("新建草稿", §5.9 principle 1) plus
+ *  the refresh — hidden entirely when the session has learned it may not propose. */
+function DraftToolbar({
+  canPropose,
+  onNewDraft,
+  onRefresh,
+  refreshing,
+  testId,
+}: {
+  readonly canPropose: boolean;
+  readonly onNewDraft: () => void;
+  readonly onRefresh: () => void;
+  readonly refreshing: boolean;
+  readonly testId: string;
+}) {
+  return (
+    <div className="page-toolbar">
+      {canPropose ? (
+        <Button variant="primary" icon="plus" onClick={onNewDraft} data-testid={testId}>
+          新建草稿 New draft
+        </Button>
+      ) : null}
+      <Button variant="ghost" icon="refresh" onClick={onRefresh} loading={refreshing}>
+        刷新 Refresh
+      </Button>
+    </div>
   );
 }
 
@@ -123,6 +174,7 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   // transient error, whatever) never blocks the Operations list itself; a row simply renders "—"
   // for its usage columns when no matching stats entry comes back (see `statsFor` below).
   const stats = useCapabilityList<OperationStatsRow>(http, 'get_operation_stats');
+  const gatekeeperNames = useGatekeeperNames(http);
   const [busy, setBusy] = useState<string | null>(null);
 
   function refresh(): void {
@@ -146,7 +198,7 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
       await http.call(action, { gatekeeperId: row.gatekeeperId, name: row.name });
       toast.push({
         tone: 'ok',
-        title: `${row.name} ${action === 'publish_operation' ? 'published' : 'deprecated'}`,
+        title: `${row.name} ${action === 'publish_operation' ? '已发布 published' : '已弃用 deprecated'}`,
       });
       refresh();
     } catch (err) {
@@ -168,14 +220,20 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
         status={operations.state.status === 'loading' ? 'loading' : 'error'}
         error={operations.state.status === 'error' ? operations.state.error : undefined}
         reload={() => void operations.reload()}
-        emptyIcon="grid"
         capabilityLabel="list_operations"
       />
     );
   }
   const rows = operations.state.data.items;
   if (rows.length === 0) {
-    return <EmptyState icon="grid" title="No operations imported yet" testId="catalog-empty" />;
+    return (
+      <EmptyState
+        icon="grid"
+        title="还没有导入任何 Operation No operations imported yet"
+        body="Operation 来自系统接入的清单（publish_manifest）或接入向导的提议。 Operations come from a connected system's manifest or the onboarding wizard's proposals."
+        testId="catalog-empty"
+      />
+    );
   }
   return (
     <>
@@ -191,21 +249,25 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
               title={
                 <>
                   <span className="mono truncate">{row.name}</span>
-                  {row.mode ? <span className="tag">{row.mode}</span> : null}
+                  {row.mode ? (
+                    <StatusChip machine="operationMode" status={row.mode} size="s" />
+                  ) : null}
                   {row.autoApprovable ? <span className="tag">auto-approvable</span> : null}
                 </>
               }
               meta={
                 <>
-                  <span title={row.gatekeeperId} className="mono">
-                    gate {row.gatekeeperId.slice(0, 8)}
-                  </span>
+                  <RefChip
+                    kind="gatekeeper"
+                    id={row.gatekeeperId}
+                    name={nameOf(gatekeeperNames, row.gatekeeperId)}
+                    href={hrefs.gatekeeper(row.gatekeeperId)}
+                    size="s"
+                  />
                   {row.blastRadius && row.blastRadius !== 'low' ? (
                     <>
                       <span className="meta-sep" />
-                      <span className={row.blastRadius === 'high' ? 'text-danger' : ''}>
-                        {row.blastRadius} blast radius
-                      </span>
+                      <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />
                     </>
                   ) : null}
                   <span className="meta-sep" />
@@ -231,7 +293,7 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
                     loading={busy === key}
                     onClick={() => void act(row, 'publish_operation')}
                   >
-                    Publish
+                    发布 Publish
                   </Button>
                 ) : !permissions.isDenied('deprecate_operation') && row.status === 'published' ? (
                   <Button
@@ -240,7 +302,7 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
                     loading={busy === key}
                     onClick={() => void act(row, 'deprecate_operation')}
                   >
-                    Deprecate
+                    弃用 Deprecate
                   </Button>
                 ) : undefined
               }
@@ -252,11 +314,17 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
   );
 }
 
+type EditorState<Row> =
+  | { readonly kind: 'new' }
+  | { readonly kind: 'copy'; readonly row: Row }
+  | null;
+
 function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
   const permissions = usePermissions();
   const toast = useToast();
   const skills = useCapabilityList<SkillRow>(http, 'list_skills');
   const [busy, setBusy] = useState<string | null>(null);
+  const [editor, setEditor] = useState<EditorState<SkillRow>>(null);
 
   function refresh(): void {
     invalidateCapability(http, 'list_skills');
@@ -269,7 +337,7 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
       await http.call(action, { skillId: row.id });
       toast.push({
         tone: 'ok',
-        title: `${row.name} ${action === 'publish_skill' ? 'published' : 'deprecated'}`,
+        title: `${row.name} ${action === 'publish_skill' ? '已发布 published' : '已弃用 deprecated'}`,
       });
       refresh();
     } catch (err) {
@@ -285,59 +353,119 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
+  const editorDrawer = (
+    <Drawer
+      open={editor !== null}
+      onClose={() => setEditor(null)}
+      title={
+        editor?.kind === 'copy'
+          ? '编辑为新草稿 Edit as new draft'
+          : '新建 Skill 草稿 New Skill draft'
+      }
+      subtitle="SKILL.md：frontmatter 字段 + Markdown 正文 frontmatter fields + Markdown body"
+      wide
+      testId="skill-editor-drawer"
+    >
+      {editor ? (
+        <SkillEditor
+          key={editor.kind === 'copy' ? editor.row.id : 'new'}
+          http={http}
+          copyOf={editor.kind === 'copy' ? editor.row : undefined}
+          onProposed={() => void skills.reload()}
+          onDone={() => {
+            setEditor(null);
+            refresh();
+          }}
+        />
+      ) : null}
+    </Drawer>
+  );
+
+  // The editor drawer is rendered in every state (below) so a reload that passes through
+  // `loading` never unmounts an editor mid-flight and loses its "draft proposed" state.
   if (skills.state.status !== 'ready') {
     return (
-      <DegradedList
-        status={skills.state.status === 'loading' ? 'loading' : 'error'}
-        error={skills.state.status === 'error' ? skills.state.error : undefined}
-        reload={() => void skills.reload()}
-        emptyIcon="grid"
-        capabilityLabel="list_skills"
-      />
+      <>
+        <DegradedList
+          status={skills.state.status === 'loading' ? 'loading' : 'error'}
+          error={skills.state.status === 'error' ? skills.state.error : undefined}
+          reload={() => void skills.reload()}
+          capabilityLabel="list_skills"
+        />
+        {editorDrawer}
+      </>
     );
   }
   const rows = skills.state.data.items;
-  if (rows.length === 0) {
-    return <EmptyState icon="grid" title="No skills proposed yet" testId="catalog-empty" />;
-  }
   return (
-    <DataList ariaLabel="Skills" testId="catalog-list">
-      {rows.map((row) => (
-        <DataRow
-          key={row.id}
-          testId="catalog-row"
-          leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-          title={
-            <>
-              <span className="truncate">{row.name}</span>
-              <span className="text-3 text-small">v{row.version}</span>
-            </>
-          }
-          meta={<span className="truncate">{row.description}</span>}
-          trailing={
-            !permissions.isDenied('publish_skill') && row.status === 'draft' ? (
-              <Button
-                variant="primary"
-                size="s"
-                loading={busy === row.id}
-                onClick={() => void act(row, 'publish_skill')}
-              >
-                Publish
-              </Button>
-            ) : !permissions.isDenied('deprecate_skill') && row.status === 'published' ? (
-              <Button
-                variant="ghost"
-                size="s"
-                loading={busy === row.id}
-                onClick={() => void act(row, 'deprecate_skill')}
-              >
-                Deprecate
-              </Button>
-            ) : undefined
-          }
+    <>
+      <DraftToolbar
+        canPropose={!permissions.isDenied('propose_skill')}
+        onNewDraft={() => setEditor({ kind: 'new' })}
+        onRefresh={refresh}
+        refreshing={skills.state.refreshing}
+        testId="skills-new-draft"
+      />
+      {rows.length === 0 ? (
+        <EmptyState
+          icon="grid"
+          title="还没有 Skill No skills proposed yet"
+          body="用「新建草稿」写第一个 SKILL.md，或让 Worker 在结果里提议。 Write the first SKILL.md with New draft, or let a Worker propose one in its result."
+          testId="catalog-empty"
         />
-      ))}
-    </DataList>
+      ) : (
+        <DataList ariaLabel="Skills" testId="catalog-list">
+          {rows.map((row) => (
+            <DataRow
+              key={row.id}
+              testId="catalog-row"
+              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
+              title={
+                <>
+                  <span className="truncate">{row.name}</span>
+                  <span className="text-3 text-small">v{row.version}</span>
+                </>
+              }
+              meta={<span className="truncate">{row.description}</span>}
+              trailing={
+                <span className="row">
+                  {!permissions.isDenied('propose_skill') ? (
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      onClick={() => setEditor({ kind: 'copy', row })}
+                      data-testid="catalog-edit-as-draft"
+                    >
+                      编辑为新草稿 Edit as new draft
+                    </Button>
+                  ) : null}
+                  {!permissions.isDenied('publish_skill') && row.status === 'draft' ? (
+                    <Button
+                      variant="primary"
+                      size="s"
+                      loading={busy === row.id}
+                      onClick={() => void act(row, 'publish_skill')}
+                    >
+                      发布 Publish
+                    </Button>
+                  ) : !permissions.isDenied('deprecate_skill') && row.status === 'published' ? (
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      loading={busy === row.id}
+                      onClick={() => void act(row, 'deprecate_skill')}
+                    >
+                      弃用 Deprecate
+                    </Button>
+                  ) : null}
+                </span>
+              }
+            />
+          ))}
+        </DataList>
+      )}
+      {editorDrawer}
+    </>
   );
 }
 
@@ -346,6 +474,7 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
   const toast = useToast();
   const procedures = useCapabilityList<ProcedureRow>(http, 'list_procedures');
   const [busy, setBusy] = useState<string | null>(null);
+  const [editor, setEditor] = useState<EditorState<ProcedureRow>>(null);
 
   function refresh(): void {
     invalidateCapability(http, 'list_procedures');
@@ -358,7 +487,7 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
       await http.call(action, { procedureId: row.id });
       toast.push({
         tone: 'ok',
-        title: `${row.name} ${action === 'publish_procedure' ? 'published' : 'deprecated'}`,
+        title: `${row.name} ${action === 'publish_procedure' ? '已发布 published' : '已弃用 deprecated'}`,
       });
       refresh();
     } catch (err) {
@@ -374,59 +503,151 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
+  const editorDrawer = (
+    <Drawer
+      open={editor !== null}
+      onClose={() => setEditor(null)}
+      title={
+        editor?.kind === 'copy'
+          ? '编辑为新草稿 Edit as new draft'
+          : '新建 Procedure 草稿 New Procedure draft'
+      }
+      subtitle="名称、描述与有序步骤 name, description and ordered steps"
+      wide
+      testId="procedure-editor-drawer"
+    >
+      {editor ? (
+        <ProcedureEditorHost
+          key={editor.kind === 'copy' ? editor.row.id : 'new'}
+          http={http}
+          copyOf={editor.kind === 'copy' ? editor.row : undefined}
+          onProposed={() => void procedures.reload()}
+          onDone={() => {
+            setEditor(null);
+            refresh();
+          }}
+        />
+      ) : null}
+    </Drawer>
+  );
+
   if (procedures.state.status !== 'ready') {
     return (
-      <DegradedList
-        status={procedures.state.status === 'loading' ? 'loading' : 'error'}
-        error={procedures.state.status === 'error' ? procedures.state.error : undefined}
-        reload={() => void procedures.reload()}
-        emptyIcon="grid"
-        capabilityLabel="list_procedures"
-      />
+      <>
+        <DegradedList
+          status={procedures.state.status === 'loading' ? 'loading' : 'error'}
+          error={procedures.state.status === 'error' ? procedures.state.error : undefined}
+          reload={() => void procedures.reload()}
+          capabilityLabel="list_procedures"
+        />
+        {editorDrawer}
+      </>
     );
   }
   const rows = procedures.state.data.items;
-  if (rows.length === 0) {
-    return <EmptyState icon="grid" title="No procedures proposed yet" testId="catalog-empty" />;
-  }
   return (
-    <DataList ariaLabel="Procedures" testId="catalog-list">
-      {rows.map((row) => (
-        <DataRow
-          key={row.id}
-          testId="catalog-row"
-          leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-          title={
-            <>
-              <span className="truncate">{row.name}</span>
-              <span className="text-3 text-small">v{row.version}</span>
-            </>
-          }
-          meta={<span className="truncate">{row.description}</span>}
-          trailing={
-            !permissions.isDenied('publish_procedure') && row.status === 'draft' ? (
-              <Button
-                variant="primary"
-                size="s"
-                loading={busy === row.id}
-                onClick={() => void act(row, 'publish_procedure')}
-              >
-                Publish
-              </Button>
-            ) : !permissions.isDenied('deprecate_procedure') && row.status === 'published' ? (
-              <Button
-                variant="ghost"
-                size="s"
-                loading={busy === row.id}
-                onClick={() => void act(row, 'deprecate_procedure')}
-              >
-                Deprecate
-              </Button>
-            ) : undefined
-          }
+    <>
+      <DraftToolbar
+        canPropose={!permissions.isDenied('propose_procedure')}
+        onNewDraft={() => setEditor({ kind: 'new' })}
+        onRefresh={refresh}
+        refreshing={procedures.state.refreshing}
+        testId="procedures-new-draft"
+      />
+      {rows.length === 0 ? (
+        <EmptyState
+          icon="grid"
+          title="还没有 Procedure No procedures proposed yet"
+          body="用「新建草稿」写第一条有序步骤，或让 Worker 从成功的任务里蒸馏。 Write the first one with New draft, or let a Worker distil one from a successful Task."
+          testId="catalog-empty"
         />
-      ))}
-    </DataList>
+      ) : (
+        <DataList ariaLabel="Procedures" testId="catalog-list">
+          {rows.map((row) => (
+            <DataRow
+              key={row.id}
+              testId="catalog-row"
+              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
+              title={
+                <>
+                  <span className="truncate">{row.name}</span>
+                  <span className="text-3 text-small">v{row.version}</span>
+                  {row.steps ? <span className="tag">{row.steps.length} 步 steps</span> : null}
+                </>
+              }
+              meta={<span className="truncate">{row.description}</span>}
+              trailing={
+                <span className="row">
+                  {!permissions.isDenied('propose_procedure') ? (
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      onClick={() => setEditor({ kind: 'copy', row })}
+                      data-testid="catalog-edit-as-draft"
+                    >
+                      编辑为新草稿 Edit as new draft
+                    </Button>
+                  ) : null}
+                  {!permissions.isDenied('publish_procedure') && row.status === 'draft' ? (
+                    <Button
+                      variant="primary"
+                      size="s"
+                      loading={busy === row.id}
+                      onClick={() => void act(row, 'publish_procedure')}
+                    >
+                      发布 Publish
+                    </Button>
+                  ) : !permissions.isDenied('deprecate_procedure') && row.status === 'published' ? (
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      loading={busy === row.id}
+                      onClick={() => void act(row, 'deprecate_procedure')}
+                    >
+                      弃用 Deprecate
+                    </Button>
+                  ) : null}
+                </span>
+              }
+            />
+          ))}
+        </DataList>
+      )}
+      {editorDrawer}
+    </>
+  );
+}
+
+/** Loads the pickers' directories only while the Procedure editor is open (member-level reads,
+ *  cached per session by `useCapabilityList`); the editor degrades to typed ids without them. */
+function ProcedureEditorHost({
+  http,
+  copyOf,
+  onProposed,
+  onDone,
+}: {
+  readonly http: CapabilityCaller;
+  readonly copyOf?: ProcedureRow;
+  readonly onProposed: () => void;
+  readonly onDone: () => void;
+}) {
+  const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
+  const definitions = useCapabilityList<WorkerDefinitionSummary>(
+    http,
+    'list_worker_definitions',
+    {},
+  );
+  return (
+    <ProcedureEditor
+      http={http}
+      copyOf={copyOf}
+      gatekeepers={gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : undefined}
+      workerDefinitions={
+        definitions.state.status === 'ready' ? definitions.state.data.items : undefined
+      }
+      onProposed={onProposed}
+      onDone={onDone}
+    />
   );
 }
 
@@ -435,6 +656,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   const toast = useToast();
   const workers = useCapabilityList<WorkerDefinitionSummary>(http, 'list_worker_definitions', {});
   const [busy, setBusy] = useState<string | null>(null);
+  const [editor, setEditor] = useState<EditorState<WorkerDefinitionSummary>>(null);
 
   function refresh(): void {
     invalidateCapability(http, 'list_worker_definitions');
@@ -450,14 +672,14 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       });
       toast.push({
         tone: 'ok',
-        title: `${definitionName([row], row.id, row.version) ?? row.id} deprecated`,
+        title: `${definitionName([row], row.id, row.version) ?? row.id} 已弃用 deprecated`,
       });
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('deprecate_worker_definition');
       toast.push({
         tone: 'danger',
-        title: 'Could not deprecate this definition',
+        title: '无法弃用该定义 Could not deprecate this definition',
         description: describeError(err).message,
       });
     } finally {
@@ -465,53 +687,142 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
+  const editorDrawer = (
+    <Drawer
+      open={editor !== null}
+      onClose={() => setEditor(null)}
+      title={
+        editor?.kind === 'copy'
+          ? '提议新版本 Propose a new version'
+          : '新建 Worker 定义草稿 New Worker definition draft'
+      }
+      subtitle="kind + definition（systemPrompt、model、capabilities…）"
+      wide
+      testId="worker-editor-drawer"
+    >
+      {editor ? (
+        <WorkerEditorHost
+          key={editor.kind === 'copy' ? `${editor.row.id}@${editor.row.version}` : 'new'}
+          http={http}
+          newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
+          onProposed={() => void workers.reload()}
+          onDone={() => {
+            setEditor(null);
+            refresh();
+          }}
+        />
+      ) : null}
+    </Drawer>
+  );
+
   if (workers.state.status !== 'ready') {
     return (
-      <DegradedList
-        status={workers.state.status === 'loading' ? 'loading' : 'error'}
-        error={workers.state.status === 'error' ? workers.state.error : undefined}
-        reload={() => void workers.reload()}
-        emptyIcon="grid"
-        capabilityLabel="list_worker_definitions"
-      />
+      <>
+        <DegradedList
+          status={workers.state.status === 'loading' ? 'loading' : 'error'}
+          error={workers.state.status === 'error' ? workers.state.error : undefined}
+          reload={() => void workers.reload()}
+          capabilityLabel="list_worker_definitions"
+        />
+        {editorDrawer}
+      </>
     );
   }
   const rows = workers.state.data.items;
-  if (rows.length === 0) {
-    return (
-      <EmptyState icon="grid" title="No published worker definitions" testId="catalog-empty" />
-    );
-  }
   return (
-    <DataList ariaLabel="Worker definitions" testId="catalog-list">
-      {rows.map((row) => (
-        <DataRow
-          key={`${row.id}@${row.version}`}
-          testId="catalog-row"
-          leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-          title={
-            <>
-              <span className="truncate">
-                {definitionName([row], row.id, row.version) ?? row.id}
-              </span>
-              <span className="text-3 text-small">v{row.version}</span>
-              <span className="tag">{row.kind}</span>
-            </>
-          }
-          trailing={
-            !permissions.isDenied('deprecate_worker_definition') && row.status === 'published' ? (
-              <Button
-                variant="ghost"
-                size="s"
-                loading={busy === row.id}
-                onClick={() => void deprecate(row)}
-              >
-                Deprecate
-              </Button>
-            ) : undefined
-          }
+    <>
+      <DraftToolbar
+        canPropose={!permissions.isDenied('propose_worker_definition')}
+        onNewDraft={() => setEditor({ kind: 'new' })}
+        onRefresh={refresh}
+        refreshing={workers.state.refreshing}
+        testId="workers-new-draft"
+      />
+      {rows.length === 0 ? (
+        <EmptyState
+          icon="grid"
+          title="没有已发布的 Worker 定义 No published worker definitions"
+          body="这里只列已发布的版本；草稿在编辑器里发布。 Only published versions are listed; a draft is published from the editor."
+          testId="catalog-empty"
         />
-      ))}
-    </DataList>
+      ) : (
+        <DataList ariaLabel="Worker definitions" testId="catalog-list">
+          {rows.map((row) => (
+            <DataRow
+              key={`${row.id}@${row.version}`}
+              testId="catalog-row"
+              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
+              title={
+                <>
+                  <RefChip
+                    kind="workerDefinition"
+                    id={row.id}
+                    name={definitionName([row], row.id, row.version)}
+                    size="s"
+                  />
+                  <span className="text-3 text-small">v{row.version}</span>
+                  <span className="tag">{row.kind}</span>
+                </>
+              }
+              meta={
+                typeof row.definition.description === 'string' ? (
+                  <span className="truncate">{row.definition.description}</span>
+                ) : undefined
+              }
+              trailing={
+                <span className="row">
+                  {!permissions.isDenied('propose_worker_definition') ? (
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      onClick={() => setEditor({ kind: 'copy', row })}
+                      data-testid="catalog-edit-as-draft"
+                    >
+                      编辑（新版本草稿） Edit as new draft version
+                    </Button>
+                  ) : null}
+                  {!permissions.isDenied('deprecate_worker_definition') &&
+                  row.status === 'published' ? (
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      loading={busy === row.id}
+                      onClick={() => void deprecate(row)}
+                    >
+                      弃用 Deprecate
+                    </Button>
+                  ) : null}
+                </span>
+              }
+            />
+          ))}
+        </DataList>
+      )}
+      {editorDrawer}
+    </>
+  );
+}
+
+/** Loads `list_models` for the model suggestions only while the Worker editor is open. */
+function WorkerEditorHost({
+  http,
+  newVersionOf,
+  onProposed,
+  onDone,
+}: {
+  readonly http: CapabilityCaller;
+  readonly newVersionOf?: WorkerDefinitionSummary;
+  readonly onProposed: () => void;
+  readonly onDone: () => void;
+}) {
+  const models = useCapabilityList<ModelRow>(http, 'list_models');
+  return (
+    <WorkerDefinitionEditor
+      http={http}
+      newVersionOf={newVersionOf}
+      models={models.state.status === 'ready' ? models.state.data.items : undefined}
+      onProposed={onProposed}
+      onDone={onDone}
+    />
   );
 }
