@@ -26,6 +26,7 @@ import { drainPendingContextItems } from '../../application/linkage/index.js';
 import {
   type InvokeWorkerInput,
   type InvokeWorkerResult,
+  TaskNotFoundError,
   type TaskRow,
   type WorkerRunRow,
   findOperations,
@@ -52,11 +53,13 @@ import {
 import { readAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ActionRequestNotFoundError,
+  type ActionRequestRow,
   MAX_ACTION_REQUEST_LIST_LIMIT,
   approveActionRequest,
   getActionRequest,
   listActionRequestsForApprover,
   listPendingForApprover,
+  readApprovalDecisions,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
 import {
@@ -791,16 +794,59 @@ async function currentPrincipalRole(
   return { id: principalId, role };
 }
 
+/**
+ * S6-A C25 (docs/console-completion-plan.md §5.8, §6 `approve{reason?}`; wire/governance.ts
+ * `ActionRequestWireSchema.decisionReason` / `decidedBy` / `decidedAt`): decorates
+ * `toWireActionRequest`'s projection with the human decision behind `approvalDecisionId`, read in
+ * one keyed query per handler call (`governance/approval/reads.ts`'s `readApprovalDecisions`).
+ * `null` for a row with no human decision (pending, auto-approved, denied, expired) — and for
+ * `decisionReason` when the decision carried no reason. Used by every handler in this file that
+ * returns ActionRequest rows a human may have decided; `request_action`'s own projections
+ * (request-action-handler.ts) are request-time and untouched, which is why the wire fields are
+ * optional rather than required.
+ */
+async function withApprovalDecision(
+  client: PoolClient,
+  workspaceId: string,
+  rows: readonly ActionRequestRow[],
+): Promise<ReturnType<typeof toWireActionRequest>[]> {
+  const decisions = await readApprovalDecisions(
+    client,
+    workspaceId,
+    rows.flatMap((row) => (row.approvalDecisionId ? [row.approvalDecisionId] : [])),
+  );
+  return rows.map((row) => {
+    const decision = row.approvalDecisionId ? decisions.get(row.approvalDecisionId) : undefined;
+    return {
+      ...toWireActionRequest(row),
+      decisionReason: decision?.reason ?? null,
+      decidedBy: decision?.decidedBy ?? null,
+      decidedAt: decision ? decision.decidedAt.toISOString() : null,
+    };
+  });
+}
+
+async function oneWithApprovalDecision(
+  client: PoolClient,
+  workspaceId: string,
+  row: ActionRequestRow,
+): Promise<ReturnType<typeof toWireActionRequest>> {
+  const [wire] = await withApprovalDecision(client, workspaceId, [row]);
+  if (!wire) throw new Error('withApprovalDecision: one row in, no row out');
+  return wire;
+}
+
 const approveHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { actionRequestId } = params as { actionRequestId: string };
+  const { actionRequestId, reason } = params as { actionRequestId: string; reason?: string };
   const caller = await currentPrincipalRole(client, workspaceId);
   const result = await approveActionRequest(client, workspaceId, {
     actionRequestId,
     approverPrincipalId: caller.id,
     approverRole: caller.role,
+    reason,
   });
   return {
-    result: toWireActionRequest(result),
+    result: await oneWithApprovalDecision(client, workspaceId, result),
     resourceType: 'action_request',
     resourceId: result.id,
   };
@@ -816,7 +862,7 @@ const rejectHandler: CapabilityHandler = async (client, workspaceId, params) => 
     reason,
   });
   return {
-    result: toWireActionRequest(result),
+    result: await oneWithApprovalDecision(client, workspaceId, result),
     resourceType: 'action_request',
     resourceId: result.id,
   };
@@ -830,7 +876,7 @@ const listPendingHandler: CapabilityHandler = async (client, workspaceId) => {
     principalId: caller.id,
     role: caller.role,
   });
-  return { result: { items: rows.map(toWireActionRequest) } };
+  return { result: { items: await withApprovalDecision(client, workspaceId, rows) } };
 };
 
 /** `get_action`: workspace-scoped read, not I14-narrowed (§9.3 "get_action returns one
@@ -840,11 +886,42 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
   const result = await getActionRequest(client, workspaceId, actionRequestId);
   if (!result) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
   return {
-    result: toWireActionRequest(result),
+    result: await oneWithApprovalDecision(client, workspaceId, result),
     resourceType: 'action_request',
     resourceId: actionRequestId,
   };
 };
+
+/**
+ * S6-A C28 (docs/console-completion-plan.md §5.5, §6): `list_action_requests`'s `taskId` /
+ * `parentWorkerRunId` filters, folded into one `parent_worker_run_id in (...)` set for
+ * `governance/approval` (which must not read `application/task`'s `worker_runs` table itself).
+ * `taskId` → every WorkerRun of that Task (`getTaskWithWorkerRuns`, the same read `get_task`
+ * uses — workspace-scoped, so I14 visibility is still decided by the list query, unchanged);
+ * an unknown Task, or one with no WorkerRuns, yields `[]` (matches nothing — empty page, not
+ * 404, the same way an unknown `gatekeeperId` behaves). Both given → intersection. Neither
+ * given → `undefined` (no narrowing).
+ */
+async function resolveParentWorkerRunFilter(
+  client: PoolClient,
+  workspaceId: string,
+  input: { readonly taskId?: string; readonly parentWorkerRunId?: string },
+): Promise<readonly string[] | undefined> {
+  if (input.taskId === undefined) {
+    return input.parentWorkerRunId === undefined ? undefined : [input.parentWorkerRunId];
+  }
+  let taskWorkerRunIds: string[];
+  try {
+    const { workerRuns } = await getTaskWithWorkerRuns(client, workspaceId, input.taskId);
+    taskWorkerRunIds = workerRuns.map((run) => run.id);
+  } catch (err) {
+    if (err instanceof TaskNotFoundError) return [];
+    throw err;
+  }
+  return input.parentWorkerRunId === undefined
+    ? taskWorkerRunIds
+    : taskWorkerRunIds.filter((id) => id === input.parentWorkerRunId);
+}
 
 /** `list_action_requests` (S5.5 leftover 21, docs/STATUS.md row 21): the console's "审批历史" read —
  *  every ActionRequest regardless of status, I14-scoped the same way `list_pending` is
@@ -853,23 +930,29 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
  *  (docs/wire-contract-conventions.md §3), the same convention `search`'s own handler
  *  (`searchHandler` above) follows. §3 envelope — `{items, nextCursor?}`, never a bare array. */
 const listActionRequestsHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { status, gatekeeperId, limit, cursor } = params as {
+  const { status, gatekeeperId, taskId, parentWorkerRunId, limit, cursor } = params as {
     status?: ActionRequestStatus | ActionRequestStatus[];
     gatekeeperId?: string;
+    taskId?: string;
+    parentWorkerRunId?: string;
     limit?: number;
     cursor?: string;
   };
   const caller = await currentPrincipalRole(client, workspaceId);
+  const parentWorkerRunIds = await resolveParentWorkerRunFilter(client, workspaceId, {
+    taskId,
+    parentWorkerRunId,
+  });
   const page = await listActionRequestsForApprover(
     client,
     workspaceId,
     { principalId: caller.id, role: caller.role },
-    { status, gatekeeperId, limit, cursor },
+    { status, gatekeeperId, parentWorkerRunIds, limit, cursor },
   );
   const truncated = limit !== undefined && limit > MAX_ACTION_REQUEST_LIST_LIMIT;
   return {
     result: {
-      items: page.items.map(toWireActionRequest),
+      items: await withApprovalDecision(client, workspaceId, page.items),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(truncated ? { truncated: true as const } : {}),
     },

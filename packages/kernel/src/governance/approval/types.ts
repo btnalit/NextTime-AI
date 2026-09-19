@@ -122,6 +122,26 @@ export class ApprovalScopeError extends Error {
   }
 }
 
+/**
+ * S6-A C25 (docs/console-completion-plan.md §5.8 "确认态", §12 item 6 "高影响必填、中低可选，内核强制"):
+ * `approve` on a `blast_radius = 'high'` ActionRequest without a non-blank `reason`. Enforced in
+ * `decide.ts`'s `approveActionRequest` — the one place the row's blast radius is read under the
+ * row lock — never only in the console, which any API caller could bypass. Maps to HTTP 400 /
+ * WS invalid-params with `code = 'reason_required'` (`interfaces/http/capability-route.ts`'s
+ * `mapCapabilityError`, `interfaces/ws/rpc.ts`'s `mapDispatchError`).
+ */
+export class ApprovalReasonRequiredError extends Error {
+  readonly code = 'reason_required' as const;
+  readonly actionRequestId: string;
+  constructor(actionRequestId: string) {
+    super(
+      `approve: ActionRequest ${actionRequestId} has blast_radius "high" — a non-blank \`reason\` is required`,
+    );
+    this.name = 'ApprovalReasonRequiredError';
+    this.actionRequestId = actionRequestId;
+  }
+}
+
 /** I8/§5.8 (authority-tightening fix, review job 652a4abc item 3): the approver is the same
  *  principal the ActionRequest was made `on_behalf_of`, and `requesterCanApprove` is `false` for
  *  this row (defaults `false` for `blast_radius='high'`, workspace-overridable either way —

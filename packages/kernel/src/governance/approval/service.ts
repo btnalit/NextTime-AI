@@ -46,6 +46,7 @@
 export {
   ActionRequestConcurrentTransitionError,
   ActionRequestNotFoundError,
+  ApprovalReasonRequiredError,
   ApprovalScopeError,
   type ActionRequestRow,
 } from './types.js';
@@ -56,6 +57,7 @@ export {
   DEFAULT_ACTION_REQUEST_LIST_LIMIT,
   decodeActionRequestCursor,
   encodeActionRequestCursor,
+  type ApprovalDecisionSummary,
   type GetOperationStatsFilter,
   getActionRequest,
   getActionRequestForUpdate,
@@ -68,6 +70,7 @@ export {
   listPendingForApprover,
   MAX_ACTION_REQUEST_LIST_LIMIT,
   type OperationStatsRow,
+  readApprovalDecisions,
 } from './reads.js';
 
 export {

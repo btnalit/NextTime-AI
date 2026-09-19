@@ -1273,15 +1273,20 @@ const governanceCapabilities: readonly Capability[] = [
       'A Worker’s only execute-mode entry point onto a Gatekeeper; creates an ActionRequest.',
   },
   {
+    // S6-A C25 (docs/console-completion-plan.md §5.8 "确认态", §6, §12 item 6): `reason` is
+    // symmetric with `reject`'s and *kernel-enforced* — `governance/approval/decide.ts` refuses
+    // (400 `reason_required`) a `blastRadius === 'high'` ActionRequest approved without a
+    // non-blank reason; low/medium keep it optional. Stored in the Approval Decision's rationale
+    // and the `action_request.approve` audit row, read back as `decisionReason` on the wire row.
     name: 'approve',
     group: 'governance',
     mode: 'execute',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: z.object({ actionRequestId: id }).strict(),
+    paramsSchema: z.object({ actionRequestId: id, reason: z.string().optional() }).strict(),
     resultSchema: wire.ActionRequestWireSchema,
     description:
-      'Approve a pending ActionRequest (I14: the approver must hold the requested scope).',
+      'Approve a pending ActionRequest (I14: the approver must hold the requested scope). `reason` is optional for low/medium blast radius and required (non-blank) for high — 400 reason_required otherwise; it is written to the decision rationale and the audit row and exposed as decisionReason.',
   },
   {
     name: 'reject',
@@ -1291,7 +1296,8 @@ const governanceCapabilities: readonly Capability[] = [
     minRole: 'operator',
     paramsSchema: z.object({ actionRequestId: id, reason: z.string().optional() }).strict(),
     resultSchema: wire.ActionRequestWireSchema,
-    description: 'Reject a pending ActionRequest.',
+    description:
+      'Reject a pending ActionRequest. `reason` (optional) is written to the decision rationale and the audit row and exposed as decisionReason.',
   },
   {
     name: 'list_pending',
@@ -1329,6 +1335,14 @@ const governanceCapabilities: readonly Capability[] = [
       .object({
         status: z.union([ActionRequestStatusSchema, z.array(ActionRequestStatusSchema)]).optional(),
         gatekeeperId: id.optional(),
+        // S6-A C28 (docs/console-completion-plan.md §5.5, §6; runbook web-console.md 已知缺口 6):
+        // the task detail's "关联审批" — every ActionRequest a Task's WorkerRuns raised, decided
+        // ones included (`list_pending` could only reverse-look-up pending ones). `taskId` is
+        // resolved by the handler to the Task's WorkerRun ids (`parent_worker_run_id`); an
+        // unknown `taskId` matches nothing (empty page, not 404 — same as an unknown
+        // `gatekeeperId`). Both given → intersection.
+        taskId: id.optional(),
+        parentWorkerRunId: id.optional(),
         // Same default/max as `search` (docs/wire-contract-conventions.md §3;
         // substrate/graph/store.ts `DEFAULT_SEARCH_LIMIT`/`MAX_SEARCH_LIMIT`).
         limit: z.number().int().positive().optional(),
@@ -1338,8 +1352,9 @@ const governanceCapabilities: readonly Capability[] = [
     resultSchema: listEnvelope(wire.ActionRequestWireSchema),
     description:
       'List ActionRequests regardless of status (the approval history), optionally filtered by ' +
-      'status or gatekeeperId; keyset-paginated (limit, cursor → nextCursor). Same I14 visibility ' +
-      'as list_pending.',
+      'status, gatekeeperId, taskId (every WorkerRun of that Task) or parentWorkerRunId; ' +
+      'keyset-paginated (limit, cursor → nextCursor). Same I14 visibility as list_pending. Decided ' +
+      'rows carry decisionReason / decidedBy / decidedAt.',
   },
   {
     name: 'set_auto_approved_action_kind',

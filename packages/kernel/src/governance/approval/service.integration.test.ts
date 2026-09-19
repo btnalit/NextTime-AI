@@ -9,9 +9,9 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { grantCapability } from '../capability/index.js';
 import { approveActionRequest, rejectActionRequest } from './decide.js';
-import { listPendingForApprover } from './reads.js';
+import { listPendingForApprover, readApprovalDecisions } from './reads.js';
 import { requestAction } from './request-action.js';
-import { ApprovalScopeError } from './types.js';
+import { ApprovalReasonRequiredError, ApprovalScopeError } from './types.js';
 
 /**
  * governance/approval/service.integration: DB-backed tests for `request_action`/`approve`/
@@ -522,7 +522,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           ).rejects.toThrow(ApprovalScopeError);
         });
 
-        it('a different approver (including the owner) may still approve it', async () => {
+        it('a different approver (including the owner) may still approve it — with a reason (S6-A C25, high blast radius)', async () => {
           const row = await highBlastPendingActionRequest(operatorId);
           const updated = await withWorkspace(
             pool,
@@ -532,9 +532,165 @@ describe.runIf(DATABASE_URL !== undefined)(
                 actionRequestId: row.id,
                 approverPrincipalId: ownerId,
                 approverRole: 'owner',
+                reason: 'verified the target with the requester',
               }),
           );
           expect(updated.status).toBe('approved');
+        });
+
+        // S6-A C25 (docs/console-completion-plan.md §5.8 "确认态", §12 item 6): `approve.reason` is
+        // required for `blast_radius = 'high'`, optional below — enforced here in the kernel.
+        describe('approve.reason (S6-A C25, kernel-enforced)', () => {
+          it('refuses a high-blast approve with no reason, and with a whitespace-only reason, leaving the row pending', async () => {
+            const row = await highBlastPendingActionRequest(operatorId);
+            for (const reason of [undefined, '', '   \n ']) {
+              await expect(
+                withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+                  approveActionRequest(client, workspaceId, {
+                    actionRequestId: row.id,
+                    approverPrincipalId: ownerId,
+                    approverRole: 'owner',
+                    reason,
+                  }),
+                ),
+              ).rejects.toMatchObject({
+                name: 'ApprovalReasonRequiredError',
+                code: 'reason_required',
+                actionRequestId: row.id,
+              });
+            }
+            const pending = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) =>
+                listPendingForApprover(client, workspaceId, {
+                  principalId: ownerId,
+                  role: 'owner',
+                }),
+            );
+            expect(pending.some((r) => r.id === row.id)).toBe(true);
+          });
+
+          it('the scope gate fires before the reason gate (a caller who may not approve learns nothing about reasons)', async () => {
+            const row = await highBlastPendingActionRequest(ownerId);
+            await expect(
+              withWorkspace(pool, { workspaceId, principalId: otherOperatorId }, (client) =>
+                approveActionRequest(client, workspaceId, {
+                  actionRequestId: row.id,
+                  approverPrincipalId: otherOperatorId,
+                  approverRole: 'operator',
+                }),
+              ),
+            ).rejects.toThrow(ApprovalScopeError);
+          });
+
+          it('stores the trimmed reason in the decision rationale and the action_request.approve audit row; readApprovalDecisions reads it back with decidedBy/decidedAt', async () => {
+            const row = await highBlastPendingActionRequest(operatorId);
+            const updated = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) =>
+                approveActionRequest(client, workspaceId, {
+                  actionRequestId: row.id,
+                  approverPrincipalId: ownerId,
+                  approverRole: 'owner',
+                  reason: '  change window confirmed with ops  ',
+                }),
+            );
+            expect(updated.status).toBe('approved');
+            expect(updated.approvalDecisionId).toEqual(expect.any(String));
+            const decisionId = updated.approvalDecisionId as string;
+
+            const decisions = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) => readApprovalDecisions(client, workspaceId, [decisionId]),
+            );
+            expect(decisions.get(decisionId)).toMatchObject({
+              decisionId,
+              reason: 'change window confirmed with ops',
+              decidedBy: ownerId,
+              decidedAt: expect.any(Date),
+            });
+
+            const audit = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) =>
+                client.query<{ payload: Record<string, unknown>; actor_principal_id: string }>(
+                  `select payload, actor_principal_id from audit_records
+                   where workspace_id = $1 and action = 'action_request.approve' and resource_id = $2`,
+                  [workspaceId, row.id],
+                ),
+            );
+            expect(audit.rows).toHaveLength(1);
+            expect(audit.rows[0]?.actor_principal_id).toBe(ownerId);
+            expect(audit.rows[0]?.payload).toMatchObject({
+              resultingStatus: 'approved',
+              reason: 'change window confirmed with ops',
+            });
+          });
+
+          it('a medium-blast approve needs no reason; a reason-less decision reads back reason: null', async () => {
+            const row = await pendingActionRequest();
+            const updated = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) =>
+                approveActionRequest(client, workspaceId, {
+                  actionRequestId: row.id,
+                  approverPrincipalId: ownerId,
+                  approverRole: 'owner',
+                }),
+            );
+            expect(updated.status).toBe('approved');
+            const decisionId = updated.approvalDecisionId as string;
+            const decisions = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) => readApprovalDecisions(client, workspaceId, [decisionId]),
+            );
+            expect(decisions.get(decisionId)?.reason).toBeNull();
+            expect(decisions.get(decisionId)?.decidedBy).toBe(ownerId);
+          });
+
+          it('reject keeps its optional reason and the same rationale/audit shape (symmetry)', async () => {
+            const row = await pendingActionRequest();
+            const updated = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) =>
+                rejectActionRequest(client, workspaceId, {
+                  actionRequestId: row.id,
+                  approverPrincipalId: ownerId,
+                  approverRole: 'owner',
+                  reason: ' not now ',
+                }),
+            );
+            expect(updated.status).toBe('rejected');
+            const decisionId = updated.approvalDecisionId as string;
+            const decisions = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) => readApprovalDecisions(client, workspaceId, [decisionId]),
+            );
+            expect(decisions.get(decisionId)?.reason).toBe('not now');
+          });
+
+          it('readApprovalDecisions: empty input → empty map, no round trip; unknown ids are absent', async () => {
+            const empty = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) => readApprovalDecisions(client, workspaceId, []),
+            );
+            expect(empty.size).toBe(0);
+            const unknown = await withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              (client) => readApprovalDecisions(client, workspaceId, [randomUUID()]),
+            );
+            expect(unknown.size).toBe(0);
+          });
         });
 
         it('does not block self-approval for a medium-blast request (requester_can_approve defaults true)', async () => {

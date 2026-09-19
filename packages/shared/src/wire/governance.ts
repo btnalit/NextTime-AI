@@ -38,6 +38,18 @@ export const ActionRequestWireSchema = z
     // Nullable: rows written before migrations/governance/0007 have no value on file
     // (governance/approval/types.ts's own `ActionRequestRow.requesterCanApprove` doc comment).
     requesterCanApprove: z.boolean().nullable(),
+    // S6-A C25 (docs/console-completion-plan.md §5.8, §6 `approve{reason?}`): the human decision
+    // behind `approvalDecisionId`, read from the Approval Decision row (`decisions.rationale.reason`
+    // / `decided_by` / `decided_at`) by the handlers that return decided rows (`approve`, `reject`,
+    // `get_action`, `list_pending`, `list_action_requests` — application/gateway/handlers.ts's
+    // `withApprovalDecision`). `null` = no human decision (pending, auto-approved, denied, expired,
+    // or a reason-less decision for `decisionReason`). *Optional* because `request_action`'s own
+    // result projections (request-action-handler.ts) are produced at request time, where no
+    // decision can exist yet, and are not touched by this change — a consumer treats absence
+    // exactly like `null`.
+    decisionReason: z.string().nullable().optional(),
+    decidedBy: z.string().nullable().optional(),
+    decidedAt: z.string().nullable().optional(),
   })
   .strict();
 export type ActionRequestWire = z.infer<typeof ActionRequestWireSchema>;
