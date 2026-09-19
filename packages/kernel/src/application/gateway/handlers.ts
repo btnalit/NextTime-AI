@@ -121,6 +121,7 @@ import {
 } from './gatekeeper-read-handlers.js';
 import { registerSourceHandler, submitObservationsHandler } from './ingest-handlers.js';
 import { issueHandleHandler } from './issue-handle-handler.js';
+import { issueLlmAdminTokenHandler } from './llm-admin-handlers.js';
 import {
   addMemberHandler,
   createPrincipalHandler,
@@ -1353,6 +1354,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S6 A1 / A6: the purge plane (platform-handlers.ts "purge").
   ['purge_workspace', purgeWorkspaceHandler],
   ['purge_user', purgeUserHandler],
+  ['issue_llm_admin_token', issueLlmAdminTokenHandler],
   ['set_allowed_models', setAllowedModelsHandler],
   // P-B1: integrations (platform-gates-handlers.ts) and the workspace-side enable
   // (gate-instance-handlers.ts).
