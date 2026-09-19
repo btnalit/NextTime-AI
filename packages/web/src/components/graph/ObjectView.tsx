@@ -78,8 +78,10 @@ export function ObjectView({
   useEffect(() => {
     if (data?.object) prime([data.object]);
   }, [data, prime]);
-  // Trail chips need names for every Object on the trail (the current one is primed above).
-  useResolvedObjects(trail);
+  // Earlier crumbs need names; the current Object is primed from `state_at` above, so it is
+  // excluded here rather than fetched a second time on a deep link.
+  const previousCrumbs = useMemo(() => trail.slice(0, -1), [trail]);
+  useResolvedObjects(previousCrumbs);
 
   const groups = useMemo(() => (data ? groupFacts(data.facts, objectId) : []), [data, objectId]);
 
