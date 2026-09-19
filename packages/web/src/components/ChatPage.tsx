@@ -213,11 +213,23 @@ export function ChatPage({
         const card = messages
           .map((m) => (m.content ? actionCardFromPendingContent(m.content) : undefined))
           .find((c) => c?.actionRequestId === id);
+        // C8 (console-completion-plan §2b): the persisted `system.action_pending` message is the
+        // only source of the kind tag here. Without it — a push that outran persistence, a card
+        // this closure no longer sees — there is nothing to write a rule for; say so instead of
+        // calling `set_auto_approved_action_kind` with `actionKindTag: undefined`.
+        if (!card) {
+          toast.push({
+            tone: 'warn',
+            title: 'Approved, but the auto-approval rule was not written',
+            description: 'The action kind of this request is not known to this chat yet.',
+          });
+          return;
+        }
         try {
-          await http.call('set_auto_approved_action_kind', { actionKindTag: card?.actionKindTag });
+          await http.call('set_auto_approved_action_kind', { actionKindTag: card.actionKindTag });
           toast.push({
             tone: 'info',
-            title: `${card?.actionKindTag ?? 'This kind'} will be auto-approved from now on`,
+            title: `${card.actionKindTag} will be auto-approved from now on`,
           });
         } catch (err) {
           if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');
