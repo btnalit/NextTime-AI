@@ -66,7 +66,11 @@ export function objectDisplayName(
 
 /** `list_types{kind:'object'}` → `typeName → identityKey[]`, for `objectDisplayName`. */
 export function identityKeysByType(
-  types: readonly { readonly kind: string; readonly name: string; readonly identityKey?: readonly string[] }[],
+  types: readonly {
+    readonly kind: string;
+    readonly name: string;
+    readonly identityKey?: readonly string[];
+  }[],
 ): ReadonlyMap<string, readonly string[]> {
   const map = new Map<string, readonly string[]>();
   for (const type of types) {
@@ -129,7 +133,10 @@ const DIRECTION_ORDER: Readonly<Record<FactDirection, number>> = { out: 0, in: 1
  * ids only; see the page's doc comment).
  */
 export function groupFacts(facts: readonly FactWire[], objectId: string): readonly FactGroup[] {
-  const groups = new Map<string, { linkType: string; direction: FactDirection; facts: FactWire[] }>();
+  const groups = new Map<
+    string,
+    { linkType: string; direction: FactDirection; facts: FactWire[] }
+  >();
   for (const fact of facts) {
     const direction = factDirection(fact, objectId);
     const key = `${fact.linkType}:${direction}`;
