@@ -64,13 +64,15 @@ describe('CreateGateInstanceForm', () => {
     expect(within(form).queryByLabelText(/Manifest source/)).toBeNull();
   });
 
-  it('submits gateId/transportKind/target/credentialMode, omitting a blank displayName and manifestSource', async () => {
+  it('submits gateId/transportKind/target/credentialMode for mcp, omitting a blank displayName and the (hidden) manifestSource', async () => {
+    // Was an http submission with a blank manifest source before C12 — exactly the 400 the kernel
+    // `superRefine` guarantees; mcp is the transport that legitimately omits `manifestSource`.
     const result = created();
     const http = scriptedHttp({
       create_gate_instance: (params) => {
         expect(params).toEqual({
           gateId: 'billing-api',
-          transportKind: 'http',
+          transportKind: 'mcp',
           target: 'https://billing.internal',
           credentialMode: 'connected_account',
         });
@@ -84,6 +86,7 @@ describe('CreateGateInstanceForm', () => {
     fireEvent.change(within(form).getByLabelText(/Gate id/), {
       target: { value: 'billing-api' },
     });
+    fireEvent.click(within(form).getByLabelText(/mcp/));
     fireEvent.change(within(form).getByLabelText(/目标 Target/), {
       target: { value: 'https://billing.internal' },
     });
@@ -129,7 +132,7 @@ describe('CreateGateInstanceForm', () => {
     );
   });
 
-  it('disables submit until gateId and target are both valid', () => {
+  it('disables submit until gateId, target and (for http, C12) manifestSource are all valid', () => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
 
@@ -144,6 +147,24 @@ describe('CreateGateInstanceForm', () => {
     expect(submit.disabled).toBe(true);
 
     fireEvent.change(within(form).getByLabelText(/Gate id/), { target: { value: 'valid-id' } });
+    // http with a blank manifest source: the kernel would 400 — still disabled.
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.change(within(form).getByLabelText(/Manifest source/), {
+      target: { value: 'not a url' },
+    });
+    expect(submit.disabled).toBe(true);
+    expect(within(form).getByText('不是合法的 URL Not a valid URL')).toBeTruthy();
+
+    fireEvent.change(within(form).getByLabelText(/Manifest source/), {
+      target: { value: 'https://target.internal/openapi.json' },
+    });
+    expect(submit.disabled).toBe(false);
+
+    // Switching to mcp hides the field and stops requiring it.
+    fireEvent.change(within(form).getByLabelText(/Manifest source/), { target: { value: '' } });
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(within(form).getByLabelText(/mcp/));
     expect(submit.disabled).toBe(false);
   });
 });
