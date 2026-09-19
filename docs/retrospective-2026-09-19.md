@@ -44,7 +44,9 @@
   （基线 8 / 74）；agent-host 6 / 81（78）；platform-extension 10 / 95（87）；shared 17 / 275（266）；worker-supervisor
   11 / 227；egress-proxy 7 / 127；gatekeeper-base 17 / 138；两个打包门 29 + 28；collector 10 / 98。
 - 已知负载敏感文件（`interfaces/ws/server.test.ts`、`application/outbox/dispatcher.integration.test.ts`）在并行
-  车道跑测试时会超时，隔离重跑全过；`reaper.integration.test.ts` 的 crash-gap 用例在复用的测试库上会撞上其它
+  车道跑测试时会超时，隔离重跑全过；最终 SHA 上再跑一次全量 kernel（机器空闲、全新库）这两个文件仍各超时两例
+  （131 文件里 129 过、1396 / 1400），隔离 26 / 26——说明它们对"全套串行跑到后段"本身敏感，不只是负载，遗留 25 的
+  "再复现则查 listener / outbox 派发时序"应当兑现（STATUS 行 25 已注）；`reaper.integration.test.ts` 的 crash-gap 用例在复用的测试库上会撞上其它
   文件遗留的 `running` Task（遗留 51），全新库通过。
 - **Playwright e2e 在本机 compose 栈上跑了全套**（`.github/workflows/e2e.yml` 的步骤原样搬到本机：`.env` 取
   `deploy/ci/env.ci.template`，`host-bootstrap.sh` / `host-env-init.sh` / `gen-handle-keys.sh` 在 root 辅助容器里跑
