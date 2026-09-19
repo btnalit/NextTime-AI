@@ -5,13 +5,16 @@ import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
+import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { AgentProfileForm } from './AgentProfileForm.js';
+import { nameOf } from './approvals/useDirectoryNames.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Select } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
 import { PageHeader } from './ui/PageHeader.js';
+import { RefChip, useRefNames } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { useToast } from './ui/Toast.js';
 
@@ -50,6 +53,16 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     http,
     'get_agent_profile',
     selectedPrincipalId ? { principalId: selectedPrincipalId } : undefined,
+  );
+
+  // B3 (§5.8 "id → 名称"): the effective panel's ids resolve against the lists this page already
+  // loads for the form — the same rows, no extra read.
+  const skillNames = useRefNames(skills.state.status === 'ready' ? skills.state.data : undefined);
+  const gatekeeperNames = useRefNames(
+    gatekeepers.state.status === 'ready' ? gatekeepers.state.data : undefined,
+  );
+  const workerDefinitionNames = useRefNames(
+    workerDefinitions.state.status === 'ready' ? workerDefinitions.state.data : undefined,
   );
 
   const canPickPrincipal = principals.state.status === 'ready';
@@ -121,7 +134,12 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
             </Notice>
           ) : null}
 
-          <EffectivePanel profile={profile.state.data} />
+          <EffectivePanel
+            profile={profile.state.data}
+            skillNames={skillNames}
+            gatekeeperNames={gatekeeperNames}
+            workerDefinitionNames={workerDefinitionNames}
+          />
 
           <AgentProfileForm
             key={profile.state.data.principalId}
@@ -144,7 +162,17 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
   );
 }
 
-function EffectivePanel({ profile }: { readonly profile: AgentProfile }) {
+function EffectivePanel({
+  profile,
+  skillNames,
+  gatekeeperNames,
+  workerDefinitionNames,
+}: {
+  readonly profile: AgentProfile;
+  readonly skillNames: ReadonlyMap<string, string>;
+  readonly gatekeeperNames: ReadonlyMap<string, string>;
+  readonly workerDefinitionNames: ReadonlyMap<string, string>;
+}) {
   const effective = profile.effective;
   return (
     <section
@@ -159,20 +187,55 @@ function EffectivePanel({ profile }: { readonly profile: AgentProfile }) {
         <dt>模型 Model</dt>
         <dd className="mono">{effective.model}</dd>
         <dt>Skills</dt>
-        <dd>{effective.enabledSkills.length > 0 ? effective.enabledSkills.join(', ') : '—'}</dd>
-        <dt>系统接入 Systems</dt>
-        <dd>
-          {effective.enabledGatekeepers.length > 0 ? effective.enabledGatekeepers.join(', ') : '—'}
-        </dd>
-        <dt>Worker 定义</dt>
-        <dd>
-          {effective.enabledWorkerDefinitions.length > 0
-            ? effective.enabledWorkerDefinitions.join(', ')
+        <dd className="row-wrap">
+          {effective.enabledSkills.length > 0
+            ? effective.enabledSkills.map((id) => (
+                <RefChip
+                  key={id}
+                  kind="object"
+                  id={id}
+                  name={nameOf(skillNames, id)}
+                  href={hrefs.catalog('skills')}
+                  size="s"
+                />
+              ))
             : '—'}
         </dd>
-        <dt>提示词附加</dt>
-        <dd>{effective.promptAddendum.length > 0 ? effective.promptAddendum : '—'}</dd>
-        <dt>自动批准低风险</dt>
+        <dt>系统接入 Systems</dt>
+        <dd className="row-wrap">
+          {effective.enabledGatekeepers.length > 0
+            ? effective.enabledGatekeepers.map((id) => (
+                <RefChip
+                  key={id}
+                  kind="gatekeeper"
+                  id={id}
+                  name={nameOf(gatekeeperNames, id)}
+                  href={hrefs.gatekeeper(id)}
+                  size="s"
+                />
+              ))
+            : '—'}
+        </dd>
+        <dt>Worker 定义 Worker definitions</dt>
+        <dd className="row-wrap">
+          {effective.enabledWorkerDefinitions.length > 0
+            ? effective.enabledWorkerDefinitions.map((id) => (
+                <RefChip
+                  key={id}
+                  kind="workerDefinition"
+                  id={id}
+                  name={nameOf(workerDefinitionNames, id)}
+                  href={hrefs.catalog('workers')}
+                  size="s"
+                />
+              ))
+            : '—'}
+        </dd>
+        <dt>提示词附加 Prompt addendum</dt>
+        <dd className="pre-wrap">
+          {effective.promptAddendum.length > 0 ? effective.promptAddendum : '—'}
+        </dd>
+        <dt>自动批准低风险 Auto-approve low risk</dt>
         <dd>{effective.autoApproveLow ? '是 Yes' : '否 No'}</dd>
       </dl>
     </section>

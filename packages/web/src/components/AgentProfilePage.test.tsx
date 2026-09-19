@@ -93,6 +93,46 @@ function renderPage(http: CapabilityCaller) {
 }
 
 describe('AgentProfilePage', () => {
+  it('B3: the effective panel renders gatekeeper / worker-definition ids as named RefChips from the lists it already loads', async () => {
+    const http = scriptedHttp({
+      get_agent_profile: () =>
+        profile({
+          effective: {
+            model: 'anthropic/claude',
+            enabledSkills: [],
+            enabledGatekeepers: ['gk-1'],
+            enabledWorkerDefinitions: ['wd-1'],
+            promptAddendum: '',
+            autoApproveLow: false,
+          },
+        }),
+      list_gatekeepers: () => ({
+        items: [{ id: 'gk-1', name: 'docker-prod', kind: 'http', status: 'active' }],
+      }),
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const effective = await screen.findByTestId('agent-profile-effective');
+    const gate = effective.querySelector('[data-ref-kind="gatekeeper"]');
+    expect(gate?.getAttribute('data-ref-id')).toBe('gk-1');
+    await waitFor(() => expect(gate?.textContent).toContain('docker-prod'));
+    await waitFor(() =>
+      expect(effective.querySelector('[data-ref-kind="workerDefinition"]')?.textContent).toContain(
+        'Fixer',
+      ),
+    );
+  });
+
   it('renders the effective panel and a form pre-filled from the profile', async () => {
     const http = scriptedHttp({
       get_agent_profile: () => profile({ model: 'anthropic/claude' }),
