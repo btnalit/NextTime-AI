@@ -18,14 +18,28 @@ import { type AllowedOperationWire, gateToolDescription, gateToolName } from './
  * registers one pi tool per Operation, then calls `pi.sendUserMessage(...)` itself to kick the
  * turn off. `context` injects the Task's input and related Facts — published Skills reach pi
  * through its own default skills directory (S2.14/S3.13 mount them straight there), not through
- * this injection. When the turn settles (explicit `report_result` tool call, or none at all), the
- * Worker posts its result contract to the kernel (`report_task_result`) and exits the process — a
- * Worker container runs exactly one Task and then is done, there is no second prompt to wait for.
+ * this injection. An explicit `report_result` tool call posts the result contract to the kernel
+ * (`report_task_result`) *synchronously*, so the model sees the kernel's answer (leftover 42,
+ * docs/STATUS.md §4 row 42 — see `REPORT_RESULT_TOOL_NAME`'s `execute` below); when the turn
+ * settles, the Worker posts whatever is still unposted (a contract the kernel could not be
+ * reached for, or a synthesized fallback when the model never called the tool) and exits the
+ * process — a Worker container runs exactly one Task and then is done, there is no second prompt
+ * to wait for.
  */
 
 // -------------------------------------------------------------------------------------------
 // Gate tool registration (`list_allowed_operations` → one pi tool per Operation, `<gate>.<op>`).
 // -------------------------------------------------------------------------------------------
+
+/** Appended to every `pending_approval` gate-tool result — the point-of-use half of
+ *  ontology/ops-runner.yaml's "结果以 ActionRequest 状态为准" contract (leftover 43, see the
+ *  `pending_approval` branch in `buildGateTool` below for why). */
+const PENDING_APPROVAL_GUIDANCE =
+  'not executed yet (the simulated effect above is not the real one). If approved, the ' +
+  'platform executes it later without you, and you have no tool that reads its final status. ' +
+  'When you call report_result, cite this actionRequestId and state that its outcome is ' +
+  'determined by the ActionRequest\u2019s status — never report it as failed or not done, and ' +
+  'do not re-request it.';
 
 // Naming/sanitization lives in gate-tools.ts (shared with entry mode since the S2.12 fix).
 function buildGateTool(
@@ -58,6 +72,12 @@ function buildGateTool(
       if (result.status === 'pending_approval') {
         // S2.9 acceptance: "fake kernel 返回 pending_approval 时工具结果带 simulate 且循环不阻塞" —
         // returned (never thrown), so the agent loop is not blocked waiting on a human decision.
+        // Leftover 43 (docs/STATUS.md §4 row 43): the sentence after the id is the point-of-use
+        // half of ontology/ops-runner.yaml's "结果以 ActionRequest 状态为准" contract — a real-model
+        // Worker that re-observed right after this and saw "unchanged" reported the action as not
+        // executed while the approval landed seconds later. A Worker Handle has no tool to read an
+        // ActionRequest's later status (`get_action` is human-only, operator role), so the only
+        // truthful summary cites the id and defers to the ActionRequest.
         const simulateText =
           result.simulate !== undefined
             ? JSON.stringify(result.simulate, null, 2)
@@ -67,7 +87,7 @@ function buildGateTool(
           content: [
             {
               type: 'text',
-              text: `${simulateText}\n\npending approval, actionRequestId ${actionRequestId}`,
+              text: `${simulateText}\n\npending approval, actionRequestId ${actionRequestId} — ${PENDING_APPROVAL_GUIDANCE}`,
             },
           ],
           details: result,
@@ -149,6 +169,109 @@ function latestAssistantSummary(messages: readonly unknown[]): string {
   return '';
 }
 
+/** What `report_task_result` answers on success (`ReportTaskResultWireSchema`, packages/shared/
+ *  src/wire/task.ts) — only the fields this mode reads back; the wire shape is strict but this
+ *  side stays tolerant, the kernel is the authority. */
+interface ReportTaskResultOutcome {
+  readonly id?: string;
+  readonly status?: string;
+  readonly factIds?: readonly string[];
+}
+
+/** The per-entry refusals `application/task/result.ts` records in `tasks.result` (S5.6 #208 /
+ *  #211: `factsRejected[]` / `proposedOperationsRejected[]` / `evidenceDropped[]`) — read back
+ *  through `get_task` (a Worker-infrastructure capability every Worker Handle carries) because
+ *  `report_task_result`'s own wire result does not carry them. Shapes are loose on purpose: an
+ *  unexpected field never breaks the echo, it just is not rendered. */
+interface StoredResultRejections {
+  readonly factsRejected: readonly Record<string, unknown>[];
+  readonly proposedOperationsRejected: readonly Record<string, unknown>[];
+  readonly evidenceDropped: readonly number[];
+}
+
+function recordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null,
+  );
+}
+
+function extractStoredRejections(taskResult: unknown): StoredResultRejections | undefined {
+  if (typeof taskResult !== 'object' || taskResult === null) return undefined;
+  const record = taskResult as Record<string, unknown>;
+  return {
+    factsRejected: recordArray(record.factsRejected),
+    proposedOperationsRejected: recordArray(record.proposedOperationsRejected),
+    evidenceDropped: Array.isArray(record.evidenceDropped)
+      ? record.evidenceDropped.filter((entry): entry is number => typeof entry === 'number')
+      : [],
+  };
+}
+
+/** One line per refused entry, in the contract's own index space so the model can match them
+ *  to what it sent. `reason` is the kernel's own enum (`ResultFactRejectionReason` — the S5.1
+ *  ontology guard's reasons, `meta_ontology_type` for I16, `object_not_found`;
+ *  `gatekeeper_not_found` for proposals); `detail` is its free-text explanation when present. */
+function renderRejections(rejections: StoredResultRejections): string[] {
+  const lines: string[] = [];
+  for (const fact of rejections.factsRejected) {
+    const where = `factsToAssert[${String(fact.index)}]`;
+    const linkType = typeof fact.linkType === 'string' ? ` (${fact.linkType})` : '';
+    const detail = typeof fact.detail === 'string' ? ` — ${fact.detail}` : '';
+    const expected = Array.isArray(fact.expected)
+      ? ` — expected ${JSON.stringify(fact.expected)}`
+      : '';
+    lines.push(`- ${where}${linkType}: ${String(fact.reason)}${detail}${expected}`);
+  }
+  for (const proposal of rejections.proposedOperationsRejected) {
+    const gatekeeperId =
+      typeof proposal.gatekeeperId === 'string' ? ` (gatekeeperId ${proposal.gatekeeperId})` : '';
+    lines.push(
+      `- proposedOperations[${String(proposal.index)}]${gatekeeperId}: ${String(proposal.reason)}`,
+    );
+  }
+  for (const index of rejections.evidenceDropped) {
+    lines.push(`- evidence[${index}]: dropped (its factIndex points outside factsToAssert)`);
+  }
+  return lines;
+}
+
+function renderAccepted(
+  contract: WorkerResultContract,
+  outcome: ReportTaskResultOutcome,
+  rejections: StoredResultRejections | undefined,
+): string {
+  const taskLabel = outcome.id ? `Task ${outcome.id}` : 'the Task';
+  const status = outcome.status ? ` is ${outcome.status}` : ' accepted the result';
+  const attempted = contract.factsToAssert?.length ?? 0;
+  const written = outcome.factIds?.length;
+  const factsLine =
+    attempted > 0 && written !== undefined
+      ? ` ${written} of ${attempted} factsToAssert written as Facts.`
+      : '';
+  const rejectionLines = rejections ? renderRejections(rejections) : [];
+  const rejectionText =
+    rejectionLines.length > 0
+      ? `\n\nRefused by the platform (recorded on the Task, never written — the Task still completed):\n${rejectionLines.join('\n')}`
+      : '';
+  return `Result contract accepted — ${taskLabel}${status}.${factsLine}${rejectionText}`;
+}
+
+/** The message a kernel `{ok:false}` on `report_task_result` becomes for the model (thrown, so
+ *  pi maps it to `isError:true`). `invalid_params` (400) is the one class the model can fix by
+ *  re-sending a corrected contract; `forbidden` (403 — the Handle's session is not this Task's
+ *  WorkerRun) and `illegal_transition` (409 — the Task is not in a state that accepts a result)
+ *  are not fixable from inside the Worker, and re-sending the same contract would only repeat
+ *  them. Never interpolates the Handle — `KernelError.message` never carries it. */
+function describeKernelRejection(error: KernelError): string {
+  const code = error.code ?? error.kind;
+  const head = `report_result: the platform rejected this result contract — ${code}: ${error.message}.`;
+  if (code === 'invalid_params') {
+    return `${head} Correct the contract and call report_result again.`;
+  }
+  return `${head} This cannot be fixed from inside this Worker (do not re-send the same contract); state it in your final message and end your turn.`;
+}
+
 export interface WorkerModeOptions {
   readonly kernelClient: KernelClient;
   readonly workspaceId: string;
@@ -163,9 +286,57 @@ const KICKOFF_MESSAGE =
 
 export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions): void {
   let taskContext: WorkerTaskContext | undefined;
+  /** The last contract the model gave `report_result` — what `agent_settled` re-sends if no
+   *  post has succeeded by then (the kernel was unreachable, or it rejected it and the model
+   *  never sent a corrected one). */
   let pendingResultContract: WorkerResultContract | undefined;
   let latestTurnSummary = '';
-  let resultAlreadyPosted = false;
+  /** A `report_task_result` call succeeded (from the tool or from `agent_settled`) — the Task is
+   *  complete, nothing may be posted again. Distinct from `settled` below on purpose (leftover
+   *  42): the tool now sets this, and `agent_settled` must still run its exit exactly once. */
+  let resultPosted = false;
+  /** `agent_settled` has run (the process exit is scheduled) — guards a double fire. */
+  let settled = false;
+
+  async function postResultContract(
+    contract: WorkerResultContract,
+    sessionJsonlPath: string | undefined,
+  ): Promise<ReportTaskResultOutcome> {
+    const payload: WorkerResultCapabilityParams = {
+      ...contract,
+      ...(sessionJsonlPath ? { sessionJsonlPath } : {}),
+    };
+    const outcome = await options.kernelClient.call<ReportTaskResultOutcome>(
+      'report_task_result',
+      payload,
+    );
+    resultPosted = true;
+    console.log('nexttime-worker check=report_task_result result=ok');
+    return outcome ?? {};
+  }
+
+  /** Best-effort read-back of the per-entry refusals the kernel recorded for this Task (see
+   *  `StoredResultRejections`) — only worth a round trip when the contract carried anything the
+   *  kernel could refuse per entry; never throws (the post already succeeded, a failed echo must
+   *  not turn into a tool error the model would answer by re-posting into a 409). */
+  async function readStoredRejections(
+    contract: WorkerResultContract,
+  ): Promise<StoredResultRejections | undefined> {
+    const refusable =
+      (contract.factsToAssert?.length ?? 0) +
+      (contract.proposedOperations?.length ?? 0) +
+      (contract.evidence?.length ?? 0);
+    if (refusable === 0) return undefined;
+    try {
+      const task = await options.kernelClient.call<{ result?: unknown }>('get_task', {
+        taskId: options.taskId,
+      });
+      return extractStoredRejections(task?.result);
+    } catch (error) {
+      logKernelError(error, 'get_task');
+      return undefined;
+    }
+  }
 
   // report_result is static (its schema does not depend on any kernel round trip) — registered
   // eagerly, unlike the gate tools below (session_start, after list_allowed_operations resolves).
@@ -175,10 +346,11 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
     description:
       'Report this Task’s final result contract back to the platform ' +
       '({summary, findings?, factsToAssert?, evidence?, artifacts?, proposedSkill?, ' +
-      'proposedOperations?}). Call this once, when you are done — the agent loop ends ' +
-      'immediately after a valid call.',
+      'proposedOperations?}). Call this once, when you are done — the platform answers ' +
+      'immediately (accepted, or why it was rejected) and the agent loop ends after an ' +
+      'accepted call.',
     parameters: toToolParameters(WorkerResultContractSchema),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parsed = WorkerResultContractSchema.safeParse(params);
       if (!parsed.success) {
         // Thrown (not returned) so pi maps it to isError:true and the model can retry with
@@ -188,11 +360,65 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
         );
       }
       pendingResultContract = parsed.data;
+
+      if (resultPosted) {
+        // A second call after an accepted one: the Task is already complete and the kernel would
+        // answer 409 — say so rather than re-posting.
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Result contract already accepted by the platform — nothing more to report.',
+            },
+          ],
+          details: parsed.data,
+          terminate: true,
+        };
+      }
+
+      // Leftover 42 (docs/STATUS.md §4 row 42): post *now*, inside the tool call, so a kernel
+      // rejection reaches the model as this tool's own error instead of a log line it can never
+      // see. Before this, the tool answered "recorded" and the real POST only happened in
+      // agent_settled below — the 2026-09-18 real-model rounds lost whole results to 400s the
+      // Worker had already exited on. `sessionJsonlPath` comes from this call's own ctx, the same
+      // `getSessionFile()` agent_settled reads.
+      const sessionJsonlPath = ctx?.sessionManager?.getSessionFile?.();
+      let outcome: ReportTaskResultOutcome;
+      try {
+        outcome = await postResultContract(parsed.data, sessionJsonlPath);
+      } catch (error) {
+        logKernelError(error, 'report_task_result');
+        if (error instanceof KernelError && error.kind === 'capability_error') {
+          // The kernel's own `{ok:false}` (400 invalid_params / 403 forbidden / 409
+          // illegal_transition …): thrown, so pi maps it to isError:true and the model reads the
+          // code + message and acts (a corrected contract, or ending its turn — see
+          // describeKernelRejection). This never changes the S2.7 property "a kernel 4xx must
+          // not trigger a requeue": pi catches a tool's throw into the tool *result* (the process
+          // keeps running), and agent_settled below still exits 0 unconditionally — the only exit
+          // code worker-supervisor ever sees from this path is 0.
+          throw new Error(describeKernelRejection(error));
+        }
+        // network / timeout / malformed response: nothing the model can act on. Keep the contract
+        // recorded and let agent_settled re-send it once the turn ends (the pre-leftover-42
+        // behaviour, now only for this class).
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Result contract recorded; the platform could not be reached right now — it will be re-sent when this turn ends.',
+            },
+          ],
+          details: parsed.data,
+          terminate: true,
+        };
+      }
+
+      const rejections = await readStoredRejections(parsed.data);
       return {
-        content: [{ type: 'text', text: 'Result contract recorded.' }],
-        details: parsed.data,
+        content: [{ type: 'text', text: renderAccepted(parsed.data, outcome, rejections) }],
+        details: { ...outcome, ...(rejections ?? {}) },
         // Stops the agent loop after this tool batch (structured-output.ts's own pattern) —
-        // agent_settled below does the actual kernel POST + process exit.
+        // agent_settled below only exits the process now that the POST already happened here.
         terminate: true,
       };
     },
@@ -269,41 +495,41 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
   });
 
   pi.on('agent_settled', async (_event, ctx: ExtensionContext) => {
-    if (resultAlreadyPosted) return;
-    resultAlreadyPosted = true;
+    if (settled) return;
+    settled = true;
 
-    const contract: WorkerResultContract = pendingResultContract ?? {
-      summary:
-        latestTurnSummary ||
-        '(the Worker finished with no report_result call and no final message)',
-      findings: [],
-      factsToAssert: [],
-      evidence: [],
-      artifacts: [],
-    };
-
-    const sessionJsonlPath = ctx.sessionManager?.getSessionFile?.();
-    const payload: WorkerResultCapabilityParams = {
-      ...contract,
-      ...(sessionJsonlPath ? { sessionJsonlPath } : {}),
-    };
-
-    try {
-      await options.kernelClient.call('report_task_result', payload);
-      console.log('nexttime-worker check=report_task_result result=ok');
-    } catch (error) {
-      // Never let a failed report turn into a non-zero exit — that would trigger the S2.7
-      // requeue-once path (a fresh WorkerRun re-running whatever this one already did, including
-      // any already-committed gate actions). The reaper's own `failed: no_result` path already
-      // handles "exited 0 but the Task was never completed" cleanly.
-      logKernelError(error, 'report_task_result');
-      console.log('nexttime-worker check=report_task_result result=fail');
+    // Fallback post — only when nothing has been accepted yet: the model never called
+    // report_result (synthesized contract from its final message), the kernel could not be
+    // reached from the tool, or the kernel rejected the tool's contract and the model ended its
+    // turn without a corrected one (re-sent as-is: a transient cause may have cleared; a
+    // repeated rejection is logged and the reaper's `no_result` path handles the Task).
+    if (!resultPosted) {
+      const contract: WorkerResultContract = pendingResultContract ?? {
+        summary:
+          latestTurnSummary ||
+          '(the Worker finished with no report_result call and no final message)',
+        findings: [],
+        factsToAssert: [],
+        evidence: [],
+        artifacts: [],
+      };
+      try {
+        await postResultContract(contract, ctx.sessionManager?.getSessionFile?.());
+      } catch (error) {
+        // Never let a failed report turn into a non-zero exit — that would trigger the S2.7
+        // requeue-once path (a fresh WorkerRun re-running whatever this one already did,
+        // including any already-committed gate actions). The reaper's own `failed: no_result`
+        // path already handles "exited 0 but the Task was never completed" cleanly.
+        logKernelError(error, 'report_task_result');
+        console.log('nexttime-worker check=report_task_result result=fail');
+      }
     }
 
     // A Worker container runs exactly one Task, then exits — nothing else will ever drive a
     // second prompt over this session's (non-existent) stdin driver. setImmediate gives any
     // already-queued stdout writes (this session's own agent_settled RPC notification included) a
-    // turn to flush before the process ends.
+    // turn to flush before the process ends. Always reached, whichever path posted the result —
+    // an accepted post from the tool must not leave the container waiting for a timeout.
     setImmediate(() => process.exit(0));
   });
 }

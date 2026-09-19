@@ -9,6 +9,7 @@ import {
   registerFauxProvider,
 } from '@earendil-works/pi-ai/compat';
 import {
+  type AgentSession,
   type AgentSessionEvent,
   DefaultResourceLoader,
   ModelRuntime,
@@ -37,6 +38,10 @@ const EXTENSION_PATH = join(import.meta.dirname, 'index.ts');
  * an explicit `await session.prompt(...)` call, this test cannot assume the turn has finished the
  * instant `createAgentSession` resolves — it polls for the one reliable, timing-independent
  * completion signal instead: the fake kernel actually receiving `report_task_result`.
+ *
+ * The second case is leftover 42's own proof (docs/STATUS.md §4 row 42): `report_result` now posts
+ * inside the tool call, so a kernel `{ok:false}` must reach the model as that tool's own
+ * `isError:true` result through pi's real wiring — and the model's corrected second call must land.
  */
 
 const REQUIRED_WORKER_ENV = {
@@ -55,6 +60,70 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
     if (Date.now() >= deadline) throw new Error('waitFor: timed out');
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+}
+
+/** Boots a real `AgentSession` with the faux provider and the real extension in worker mode,
+ *  and binds extensions so `session_start` fires — the whole turn is self-driven from there. */
+async function startWorkerSession(
+  fauxProvider: ReturnType<typeof registerFauxProvider>,
+  tmpDir: string,
+): Promise<{ session: AgentSession; events: AgentSessionEvent[] }> {
+  const model = fauxProvider.getModel();
+  const modelRuntime = await ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(),
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerProvider(model.provider, {
+    baseUrl: model.baseUrl,
+    apiKey: 'faux-key',
+    api: fauxProvider.api,
+    models: fauxProvider.models.map((registeredModel) => ({
+      id: registeredModel.id,
+      name: registeredModel.name,
+      api: registeredModel.api,
+      reasoning: registeredModel.reasoning,
+      input: registeredModel.input,
+      cost: registeredModel.cost,
+      contextWindow: registeredModel.contextWindow,
+      maxTokens: registeredModel.maxTokens,
+      baseUrl: registeredModel.baseUrl,
+    })),
+  });
+
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: tmpDir,
+    agentDir: tmpDir,
+    settingsManager: SettingsManager.inMemory(),
+    noExtensions: true,
+    additionalExtensionPaths: [EXTENSION_PATH],
+  });
+  await resourceLoader.reload();
+  expect(resourceLoader.getExtensions().errors).toEqual([]);
+  expect(resourceLoader.getExtensions().extensions).toHaveLength(1);
+
+  const { session } = await createAgentSession({
+    cwd: tmpDir,
+    agentDir: tmpDir,
+    model,
+    modelRuntime,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(tmpDir),
+    settingsManager: SettingsManager.inMemory(),
+    noTools: 'builtin',
+  });
+
+  const events: AgentSessionEvent[] = [];
+  session.subscribe((event) => events.push(event));
+
+  // `createAgentSession()` alone does not emit `session_start` — that only happens inside
+  // `AgentSession.bindExtensions()` (agent-session.js), which the CLI/RPC mode layer calls as
+  // part of its own startup (`entrypoint.sh`'s real `pi --mode rpc` goes through it); a bare SDK
+  // caller must call it explicitly. `entry.sdk.test.ts` never needed this because entry mode
+  // subscribes to no `session_start`-dependent behavior at all — worker mode's whole self-drive
+  // mechanism (session_start -> pi.sendUserMessage()) does.
+  await session.bindExtensions({ mode: 'rpc' });
+  return { session, events };
 }
 
 describe('platform-extension loaded through the real pi SDK (worker mode)', () => {
@@ -117,7 +186,6 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
       }));
 
       const fauxProvider = registerFauxProvider();
-      const model = fauxProvider.getModel();
       const capturedContexts: Context[] = [];
       fauxProvider.setResponses([
         (context) => {
@@ -135,60 +203,7 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
         },
       ]);
 
-      const modelRuntime = await ModelRuntime.create({
-        credentials: new InMemoryCredentialStore(),
-        modelsPath: null,
-        refreshOnCreate: false,
-      });
-      modelRuntime.registerProvider(model.provider, {
-        baseUrl: model.baseUrl,
-        apiKey: 'faux-key',
-        api: fauxProvider.api,
-        models: fauxProvider.models.map((registeredModel) => ({
-          id: registeredModel.id,
-          name: registeredModel.name,
-          api: registeredModel.api,
-          reasoning: registeredModel.reasoning,
-          input: registeredModel.input,
-          cost: registeredModel.cost,
-          contextWindow: registeredModel.contextWindow,
-          maxTokens: registeredModel.maxTokens,
-          baseUrl: registeredModel.baseUrl,
-        })),
-      });
-
-      const resourceLoader = new DefaultResourceLoader({
-        cwd: tmpDir,
-        agentDir: tmpDir,
-        settingsManager: SettingsManager.inMemory(),
-        noExtensions: true,
-        additionalExtensionPaths: [EXTENSION_PATH],
-      });
-      await resourceLoader.reload();
-      expect(resourceLoader.getExtensions().errors).toEqual([]);
-      expect(resourceLoader.getExtensions().extensions).toHaveLength(1);
-
-      const { session } = await createAgentSession({
-        cwd: tmpDir,
-        agentDir: tmpDir,
-        model,
-        modelRuntime,
-        resourceLoader,
-        sessionManager: SessionManager.inMemory(tmpDir),
-        settingsManager: SettingsManager.inMemory(),
-        noTools: 'builtin',
-      });
-
-      const events: AgentSessionEvent[] = [];
-      session.subscribe((event) => events.push(event));
-
-      // `createAgentSession()` alone does not emit `session_start` — that only happens inside
-      // `AgentSession.bindExtensions()` (agent-session.js), which the CLI/RPC mode layer calls as
-      // part of its own startup (`entrypoint.sh`'s real `pi --mode rpc` goes through it); a bare SDK
-      // caller must call it explicitly. `entry.sdk.test.ts` never needed this because entry mode
-      // subscribes to no `session_start`-dependent behavior at all — worker mode's whole self-drive
-      // mechanism (session_start -> pi.sendUserMessage()) does.
-      await session.bindExtensions({ mode: 'rpc' });
+      const { session, events } = await startWorkerSession(fauxProvider, tmpDir);
 
       // No test-initiated session.prompt() anywhere in this test — the whole turn below is driven
       // by the real extension's own session_start -> pi.sendUserMessage() call.
@@ -216,8 +231,8 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
       expect(gateToolEnd?.isError).toBe(true);
       expect(JSON.stringify(gateToolEnd?.result)).toContain('no such gatekeeper');
 
-      // report_result's terminate:true stopped the loop; agent_settled posted the contract exactly
-      // once and (mocked) exited the process.
+      // report_result posted the contract itself (leftover 42) and its terminate:true stopped the
+      // loop; agent_settled posted nothing more and (mocked) exited the process.
       const reportCalls = kernel.requests.filter(
         (request) => request.capability === 'report_task_result',
       );
@@ -226,6 +241,83 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
       await waitFor(() => exitSpy.mock.calls.length > 0);
       expect(exitSpy).toHaveBeenCalledWith(0);
 
+      session.dispose();
+      fauxProvider.unregister();
+    },
+  );
+
+  it(
+    'a kernel rejection of report_result reaches the model as isError:true through pi’s real wiring, the corrected call lands, and the process still exits 0 (leftover 42)',
+    { timeout: 10000 },
+    async () => {
+      kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+      kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'check stock levels' } }));
+      kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+      let reportAttempts = 0;
+      kernel.setHandler('report_task_result', () => {
+        reportAttempts += 1;
+        if (reportAttempts === 1) {
+          return {
+            ok: false,
+            error: { code: 'invalid_params', message: 'summary must not be empty' },
+          };
+        }
+        return {
+          ok: true,
+          result: { id: 'task-sdk-test', status: 'completed', activityId: 'a', factIds: [] },
+        };
+      });
+
+      const fauxProvider = registerFauxProvider();
+      const capturedContexts: Context[] = [];
+      fauxProvider.setResponses([
+        (context) => {
+          capturedContexts.push(context);
+          return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'first try' }), {
+            stopReason: 'toolUse',
+          });
+        },
+        (context) => {
+          capturedContexts.push(context);
+          return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'second try' }), {
+            stopReason: 'toolUse',
+          });
+        },
+      ]);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const { session, events } = await startWorkerSession(fauxProvider, tmpDir);
+
+      await waitFor(() => reportAttempts >= 2);
+      await waitFor(() => exitSpy.mock.calls.length > 0);
+
+      // The first report_result's kernel 400 became isError:true on that tool call (pi's own
+      // wiring, not just a rejected promise), carrying the kernel's code + message for the model.
+      const toolEnds = events.filter(
+        (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
+          event.type === 'tool_execution_end' && event.toolName === 'report_result',
+      );
+      expect(toolEnds.map((event) => event.isError)).toEqual([true, false]);
+      expect(JSON.stringify(toolEnds[0]?.result)).toContain('invalid_params');
+      expect(JSON.stringify(toolEnds[0]?.result)).toContain('summary must not be empty');
+      expect(JSON.stringify(toolEnds[1]?.result)).toContain('Result contract accepted');
+
+      // The model's second call saw the error as a tool result in its own context.
+      expect(JSON.stringify(capturedContexts[1]?.messages)).toContain('invalid_params');
+
+      // Exactly two posts (the rejected one and the corrected one) — agent_settled added none —
+      // and the exit code is still 0: a kernel 4xx never turns into an S2.7 requeue.
+      const reportCalls = kernel.requests.filter(
+        (request) => request.capability === 'report_task_result',
+      );
+      expect(reportCalls.map((r) => (r.params as { summary: string }).summary)).toEqual([
+        'first try',
+        'second try',
+      ]);
+      expect(exitSpy).toHaveBeenCalledTimes(1);
+      expect(exitSpy).toHaveBeenCalledWith(0);
+
+      errorSpy.mockRestore();
       session.dispose();
       fauxProvider.unregister();
     },
