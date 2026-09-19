@@ -122,6 +122,25 @@ https://:8443 {
 	# NOTE raised in the PR, not decided here: design doc §7.7 / §10.2 describe a separate
 	# `llm-proxy` service for provider traffic. Routing /llm/* to `kernel` instead of
 	# `llm-proxy` may be a documentation gap in §E8 — kept as the task doc states.
+	# S6-B (docs/console-completion-plan.md §5.4 / §6; docs/platform-admin-design.md §6.2): the
+	# second and last path that bypasses the kernel — the administrator's browser manages LLM
+	# providers straight at llm-proxy's admin endpoints, authenticated by a 5-minute platform JWT
+	# the kernel signed (`issue_llm_admin_token`; llm-proxy verifies it with config/handle.pub,
+	# packages/llm-proxy/src/admin-auth.ts). Provider keys never travel this path (the secret-write
+	# route is a 501 stub pending the maintainer decision in plan §12 末); the kernel never sees a
+	# provider record. `handle_path` strips `/api/llm-admin`, the `rewrite` re-mounts the remainder
+	# under llm-proxy's reserved `/admin` segment (`/api/llm-admin/providers` → `/admin/providers`).
+	# Placed before `@backend` and — independently of textual order — winning by Caddy's own
+	# longest-path-first route sorting over `/api/*` (verified with `caddy adapt`, see the runbook).
+	# The same `X-Requested-With: nexttime` the kernel demands on `/api/*` (§7.11 CSRF) is required
+	# here too, once at the edge and again inside llm-proxy.
+	handle_path /api/llm-admin/* {
+		@llm_admin_no_csrf not header X-Requested-With nexttime
+		respond @llm_admin_no_csrf 403
+		rewrite * /admin{uri}
+		reverse_proxy llm-proxy:8082
+	}
+
 	@backend path /api/* /ws /mcp /mcp/* /llm/*
 	handle @backend {
 		reverse_proxy kernel:8080
