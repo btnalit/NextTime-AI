@@ -43,6 +43,37 @@ import type { SpawnInput, SupervisorClientPort } from './supervisor-client.js';
  * kernel's job through injected `context`, not pi's session files ("跨对话记忆靠 context 注入而非
  * pi 会话文件"). The switch is a round trip, so the `prompt` is written only once pi's own
  * `{"type":"response","command":"switch_session",...}` confirms it — `handleLine` below.
+ *
+ * **A Turn is bound to exactly one container, and only that container's stream may move it**
+ * (docs/STATUS.md leftover 44 — "常驻入口容器重建撞上 Turn"). `handleStartTurn` reserves the
+ * principal's `activeTurns` slot *before* `ensureAttachment` (the P2-6 race guard below), but
+ * `ensureAttachment`'s `/resident/spawn` can legitimately replace the container underneath it:
+ * worker-supervisor's `resident-service.ts` stops and recreates a running entry container when
+ * the spec it was created with no longer matches (a Handle rotated because a gate was connected
+ * — `connect_gatekeeper` → new Grant → the kernel's `ensureEntryHandle` reissues → a new `jti` —
+ * a Skill-set change, or an egress-deny drift), and it does so *inside* that spawn call, before
+ * returning the new container id. The old container's attach stream therefore closes while this
+ * Turn is reserved but has been handed to no container at all; attributing that close to the
+ * Turn (which is what an unqualified "the container closed mid-turn" lookup did) reported it
+ * `interrupted` to the kernel and dropped it, so the `switch_session` later written to the *new*
+ * container answered into a void — the Turn never reached pi. The same goes for a stray stdout
+ * line the dying process emits during its SIGTERM window (an `agent_settled` from the old pi
+ * would have "completed" a Turn that never started). Hence `ActiveTurn.containerId`: `undefined`
+ * while the spawn is in flight, set the moment `ensureAttachment` resolves (before any command is
+ * written), and every `onLine`/`onClose` listener is registered with the container id it belongs
+ * to — `handleLine`/`handleContainerClosed` ignore anything from a container the active Turn is
+ * not bound to, and drop the cached attachment only when it is the one that closed. The
+ * supervisor's side already completes the recreate before it returns, so "recreate first, then
+ * deliver" holds by construction once the stale stream can no longer end the Turn.
+ *
+ * Mid-Turn spec changes (a gate connected while a Turn is running) never touch the running
+ * container: `/resident/spawn` is only ever called from `handleStartTurn`, and this module rejects
+ * a second Turn per principal while one is active, so the recreate is deferred until the next
+ * Turn starts — the running Turn keeps the Handle (and gate set) it started with, the next Turn
+ * gets the recreated container with the new one. The supervisor's own `reconcile()` only restores
+ * registries, it never stops a container. (Its idle sweep can still stop a container whose last
+ * `touch` — Turn start — is older than its idle timeout; that is a separate, pre-existing exposure
+ * for Turns longer than that timeout, not this race.)
  */
 
 export interface HostOptions {
@@ -85,6 +116,11 @@ interface ActiveTurn {
   readonly turnId: string;
   readonly workspaceId: string;
   readonly chatId: string;
+  /** The container this Turn has been handed to — `undefined` from the slot reservation in
+   *  `handleStartTurn` until `ensureAttachment` resolves (see the module doc comment, leftover
+   *  44): while it is `undefined`, no container's stream may end or advance this Turn, because
+   *  none has been given it yet; once set, only that container's stream may. */
+  containerId: string | undefined;
   stopRequested: boolean;
   /** The `id` of the `switch_session` command written for this Turn while its response is still
    *  outstanding, `undefined` once it has been answered (or when no switch was needed at all).
@@ -117,12 +153,35 @@ export function createHost(options: HostOptions): Host {
   const attachments = new Map<string, AttachmentRecord>();
   const activeTurns = new Map<string, ActiveTurn>();
 
-  function handleContainerClosed(principalId: string, err: Error | undefined): void {
-    attachments.delete(principalId);
+  function handleContainerClosed(
+    principalId: string,
+    containerId: string,
+    err: Error | undefined,
+  ): void {
+    // Only the attachment that actually closed is dropped — by the time a *replaced* container's
+    // stream ends, `ensureAttachment` may already have cached the new one under this principal.
+    if (attachments.get(principalId)?.containerId === containerId) attachments.delete(principalId);
     const turn = activeTurns.get(principalId);
     if (!turn) {
       // Not mid-turn (e.g. idle-timeout stop, or a stop this process itself requested) —
       // nothing to report; the next startTurn re-spawns and re-attaches.
+      return;
+    }
+    if (turn.containerId !== containerId) {
+      // Leftover 44 (module doc comment): a container this Turn was never handed to — the
+      // previous container worker-supervisor retired inside this very Turn's `/resident/spawn`
+      // (`containerId` still `undefined`), or one it already replaced. Its stream ending says
+      // nothing about this Turn, which lives (or is about to live) in the new container.
+      log(
+        JSON.stringify({
+          level: 'info',
+          msg: 'agent-host: a container this turn is not bound to closed — ignoring (recreate in flight or already replaced)',
+          principalId,
+          turnId: turn.turnId,
+          closedContainerId: containerId,
+          boundContainerId: turn.containerId,
+        }),
+      );
       return;
     }
     activeTurns.delete(principalId);
@@ -188,11 +247,13 @@ export function createHost(options: HostOptions): Host {
     attachment?.io.writeLine(buildPromptCommand(turn.turnId, prompt));
   }
 
-  /** One line of pi's stdout for `principalId`'s container. Handles the `switch_session` and
-   *  `prompt` RPC response correlation itself (not part of `bridge.ts`'s event vocabulary — see
-   *  that module's own doc comment) before falling through to `translatePiEvent` for everything
-   *  else. */
-  function handleLine(principalId: string, line: string): void {
+  /** One line of pi's stdout for `principalId`'s container `containerId`. Handles the
+   *  `switch_session` and `prompt` RPC response correlation itself (not part of `bridge.ts`'s
+   *  event vocabulary — see that module's own doc comment) before falling through to
+   *  `translatePiEvent` for everything else. A line from a container the active Turn is not bound
+   *  to (leftover 44, module doc comment — a container being retired by a recreate, or one
+   *  already replaced) is dropped exactly like a line with no tracked Turn at all. */
+  function handleLine(principalId: string, containerId: string, line: string): void {
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
@@ -202,7 +263,8 @@ export function createHost(options: HostOptions): Host {
     if (typeof parsed !== 'object' || parsed === null) return;
     const record = parsed as Record<string, unknown>;
 
-    const turn = activeTurns.get(principalId);
+    const activeTurn = activeTurns.get(principalId);
+    const turn = activeTurn && activeTurn.containerId === containerId ? activeTurn : undefined;
 
     if (
       record.type === 'response' &&
@@ -317,8 +379,12 @@ export function createHost(options: HostOptions): Host {
     if (existing) existing.io.close(); // stale — the container behind it is gone (new id returned)
 
     const io = await containerIoClient.attach(spawnResult.containerId);
-    io.onLine((line) => handleLine(principalId, line));
-    io.onClose((err) => handleContainerClosed(principalId, err));
+    // Both listeners carry the id of the container they were attached to (module doc comment,
+    // leftover 44): `handleLine`/`handleContainerClosed` compare it against the active Turn's own
+    // binding rather than trusting "a stream for this principal" to mean "this Turn's stream".
+    const { containerId } = spawnResult;
+    io.onLine((line) => handleLine(principalId, containerId, line));
+    io.onClose((err) => handleContainerClosed(principalId, containerId, err));
     const record: AttachmentRecord = {
       containerId: spawnResult.containerId,
       io,
@@ -355,6 +421,7 @@ export function createHost(options: HostOptions): Host {
         turnId: cmd.turnId,
         workspaceId: cmd.workspaceId,
         chatId: cmd.chatId,
+        containerId: undefined, // bound below, once ensureAttachment says which container
         stopRequested: false,
         pendingSwitchId: undefined,
         pendingPrompt: undefined,
@@ -390,6 +457,12 @@ export function createHost(options: HostOptions): Host {
         );
         return;
       }
+
+      // Bind the Turn to the container it is about to be written to — before any command goes
+      // out, so every response/event this container emits for it is accepted, and nothing the
+      // previous container (if the spawn just replaced it) still emits is (leftover 44, module
+      // doc comment).
+      turn.containerId = record.containerId;
 
       // turnAccepted is sent from handleLine, once pi's own {"type":"response","command":"prompt",
       // "id":cmd.turnId,"success":true} confirms it — not here (see bridge.ts's
