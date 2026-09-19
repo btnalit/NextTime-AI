@@ -155,4 +155,34 @@ describe('ModelsPage', () => {
     fireEvent.click(within(form).getByRole('button', { name: /保存策略 Save policy/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(true));
   });
+
+  it('C11: un-ticking the current default model moves the default to the first remaining allowed model, on screen and on submit', async () => {
+    const http = scriptedHttp({
+      list_models: () => ({
+        items: [
+          { id: 'anthropic/claude', provider: 'anthropic', model: 'claude' },
+          { id: 'openai/gpt', provider: 'openai', model: 'gpt' },
+        ],
+      }),
+      list_quotas: () => ({ items: [] }),
+      list_policies: () => ({ items: [] }),
+      get_workspace: () => workspace('owner'),
+      get_agent_policy: () => agentPolicy({ allowedModels: ['anthropic/claude', 'openai/gpt'] }),
+      set_agent_policy: (params) => {
+        expect(params).toMatchObject({ allowedModels: ['openai/gpt'], defaultModel: 'openai/gpt' });
+        return agentPolicy({ allowedModels: ['openai/gpt'], defaultModel: 'openai/gpt' });
+      },
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('agent-policy-form');
+    const select = within(form).getByLabelText(/默认模型 Default model/) as HTMLSelectElement;
+    expect(select.value).toBe('anthropic/claude');
+
+    const checklist = within(form).getByTestId('agent-policy-allowed-models');
+    fireEvent.click(within(checklist).getByLabelText('anthropic/claude'));
+    expect(select.value).toBe('openai/gpt');
+
+    fireEvent.click(within(form).getByRole('button', { name: /保存策略 Save policy/ }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(true));
+  });
 });

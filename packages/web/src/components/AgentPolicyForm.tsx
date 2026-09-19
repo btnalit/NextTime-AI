@@ -79,6 +79,17 @@ export function AgentPolicyForm({
 
   const publishedSkills = skills.filter((s) => s.status === 'published');
 
+  const defaultModelOptions =
+    state.allowedModels.length > 0 ? state.allowedModels : models.map((m) => m.id);
+  // C11 (console-completion-plan §2b), mirroring `platform/CreateWorkspaceForm.tsx`'s guard:
+  // un-ticking the current default must not leave the `<select>` bound to a value that is no
+  // longer an option (React renders the first option while the state still holds the stale id,
+  // and that stale id is what used to be submitted — a guaranteed `entry_model_not_allowed`).
+  // The first remaining option becomes the effective default, both on screen and on submit.
+  const defaultModelValue = defaultModelOptions.includes(state.defaultModel)
+    ? state.defaultModel
+    : (defaultModelOptions[0] ?? '');
+
   function update<K extends keyof FormState>(key: K, value: FormState[K]): void {
     setState((prev) => ({ ...prev, [key]: value }));
   }
@@ -95,9 +106,18 @@ export function AgentPolicyForm({
       return;
     }
 
+    // C11: the kernel's `modelPolicyViolation` refuses a non-empty allow-list whose default is
+    // not in it; the guarded value below is what the select shows, so submit exactly that.
+    if (state.allowedModels.length > 0 && defaultModelValue === '') {
+      setFieldErrors({
+        defaultModel: '请先勾选至少一个模型作为默认 Pick a default from the allowed models.',
+      });
+      return;
+    }
+
     const params: SetAgentPolicyParams = {
       allowedModels: state.allowedModels,
-      defaultModel: state.defaultModel,
+      defaultModel: defaultModelValue,
       memberCanEditProfile: state.memberCanEditProfile,
       maxPromptAddendumChars: maxChars,
       allowedSkills: state.allowedSkills,
@@ -122,9 +142,6 @@ export function AgentPolicyForm({
       setSubmitting(false);
     }
   }
-
-  const defaultModelOptions =
-    state.allowedModels.length > 0 ? state.allowedModels : models.map((m) => m.id);
 
   return (
     <form
@@ -164,7 +181,7 @@ export function AgentPolicyForm({
       <Field id="ap-default-model" label="默认模型 Default model" error={fieldErrors.defaultModel}>
         <Select
           id="ap-default-model"
-          value={state.defaultModel}
+          value={defaultModelValue}
           onChange={(event) => update('defaultModel', event.target.value)}
           disabled={submitting}
           invalid={!!fieldErrors.defaultModel}
