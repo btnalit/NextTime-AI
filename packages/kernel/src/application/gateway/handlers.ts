@@ -75,7 +75,7 @@ import {
   setPolicy,
 } from '../../governance/policy/index.js';
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
-import { queryAudit, reconstruct } from '../../substrate/audit/index.js';
+import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { MAX_SEARCH_LIMIT, SqlGraphStore } from '../../substrate/graph/index.js';
@@ -309,10 +309,31 @@ function toAuditQueryFilter(filter: Record<string, unknown> | undefined): AuditQ
 }
 
 // S3.7 wire fix (see PR body): previously a bare `AuditRecordRow[]` — §3 "不返回裸数组".
+// S6-A (docs/console-completion-plan.md §5.5): keyset pagination — top-level `limit`/`cursor`
+// (`platform_audit_query`'s shape); the legacy `filter.limit` still applies when the top-level
+// `limit` is absent. A `limit` above `MAX_AUDIT_QUERY_LIMIT` is clamped and reported
+// `truncated: true` (docs/wire-contract-conventions.md §3), the convention `search` and
+// `list_action_requests` already follow.
 const auditQueryHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { filter } = params as { filter?: Record<string, unknown> };
-  const rows = await queryAudit(client, workspaceId, toAuditQueryFilter(filter));
-  return { result: { items: rows.map(toWireAuditRecord) } };
+  const { filter, limit, cursor } = params as {
+    filter?: Record<string, unknown>;
+    limit?: number;
+    cursor?: string;
+  };
+  const effectiveLimit = limit ?? toAuditQueryFilter(filter).limit;
+  const page = await queryAuditPage(client, workspaceId, {
+    ...toAuditQueryFilter(filter),
+    limit: effectiveLimit,
+    cursor,
+  });
+  const truncated = effectiveLimit !== undefined && effectiveLimit > MAX_AUDIT_QUERY_LIMIT;
+  return {
+    result: {
+      items: page.items.map(toWireAuditRecord),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(truncated ? { truncated: true as const } : {}),
+    },
+  };
 };
 
 const reconstructHandler: CapabilityHandler = async (client, workspaceId, params) => {

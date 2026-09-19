@@ -19,14 +19,18 @@ export {
   DEFAULT_AUDIT_QUERY_LIMIT,
   MAX_AUDIT_ACTION_STATS_DAYS,
   MAX_AUDIT_QUERY_LIMIT,
+  decodeAuditCursor,
+  encodeAuditCursor,
   queryAudit,
   queryAuditActionOperationStats,
+  queryAuditPage,
   writeAudit,
 } from './writer.js';
 export type {
   AuditActionOperationStatsFilter,
   AuditActionOperationStatsRow,
   AuditQueryFilter,
+  AuditQueryPage,
   AuditRecordInput,
   AuditRecordRow,
 } from './writer.js';

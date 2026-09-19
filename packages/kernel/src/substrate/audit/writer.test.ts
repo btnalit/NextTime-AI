@@ -6,7 +6,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { SqlGraphStore } from '../graph/index.js';
-import { queryAudit, writeAudit } from './writer.js';
+import {
+  MAX_AUDIT_QUERY_LIMIT,
+  decodeAuditCursor,
+  encodeAuditCursor,
+  queryAudit,
+  queryAuditPage,
+  writeAudit,
+} from './writer.js';
 
 /**
  * substrate/audit/writer.test: integration tests (real Postgres; auto-skip without DATABASE_URL)
@@ -19,6 +26,33 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+
+// S6-A `audit_query` keyset cursor (docs/console-completion-plan.md §5.5) — pure encode/decode,
+// no DB. Same "malformed reads as no cursor" contract as the other keyset cursors in this repo.
+describe('audit cursor encode/decode (unit, no DB)', () => {
+  it('round-trips (createdAt, id) through an opaque base64url string', () => {
+    const at = new Date('2026-09-19T10:11:12.345Z');
+    const id = randomUUID();
+    const cursor = encodeAuditCursor(at, id);
+    expect(cursor).not.toContain('|');
+    expect(decodeAuditCursor(cursor)).toEqual({ createdAt: at.toISOString(), id });
+  });
+
+  it('treats undefined, empty, non-base64, missing separator, bad timestamp and non-uuid id as no cursor', () => {
+    expect(decodeAuditCursor(undefined)).toBeNull();
+    expect(decodeAuditCursor('')).toBeNull();
+    expect(decodeAuditCursor('!!not-base64!!')).toBeNull();
+    expect(decodeAuditCursor(Buffer.from('no-separator', 'utf8').toString('base64url'))).toBeNull();
+    expect(
+      decodeAuditCursor(Buffer.from(`not-a-date|${randomUUID()}`, 'utf8').toString('base64url')),
+    ).toBeNull();
+    expect(
+      decodeAuditCursor(
+        Buffer.from('2026-09-19T10:11:12.345Z|not-a-uuid', 'utf8').toString('base64url'),
+      ),
+    ).toBeNull();
+  });
+});
 
 describe.runIf(DATABASE_URL !== undefined)(
   'substrate/audit/writer (integration, real Postgres)',
@@ -89,6 +123,77 @@ describe.runIf(DATABASE_URL !== undefined)(
           ]),
         ),
       ).rejects.toThrow();
+    });
+
+    // S6-A `audit_query` keyset pagination (docs/console-completion-plan.md §5.5; the leftover-23
+    // pattern, docs/STATUS.md §4 row 23): rows written in the *same millisecond* must not be
+    // skipped at a page boundary. `audit_records` is append-only (no back-dating after insert), so
+    // the rows are inserted with an explicit, shared `created_at` — plus one a microsecond later
+    // in the same millisecond, the exact case a raw `created_at <` comparison would lose.
+    it('queryAuditPage: same-millisecond rows are not skipped across a limit:1 page boundary; pages end with no nextCursor', async () => {
+      const resourceId = randomUUID();
+      const base = new Date('2026-09-19T08:00:00.500Z');
+      const ids = [randomUUID(), randomUUID(), randomUUID()];
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        // Two rows at exactly `base`, one at base + 1µs (still the same millisecond).
+        await client.query(
+          `insert into audit_records (workspace_id, id, actor_principal_id, action, resource_type, resource_id, payload, created_at)
+           values ($1, $3, $2, 'test.page', 'thing', $6, '{}'::jsonb, $7::timestamptz),
+                  ($1, $4, $2, 'test.page', 'thing', $6, '{}'::jsonb, $7::timestamptz),
+                  ($1, $5, $2, 'test.page', 'thing', $6, '{}'::jsonb, $7::timestamptz + interval '1 microsecond')`,
+          [workspaceId, ownerId, ids[0], ids[1], ids[2], resourceId, base.toISOString()],
+        );
+      });
+
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        const page = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAuditPage(client, workspaceId, { resourceId, limit: 1, cursor }),
+        );
+        expect(page.items.length).toBeLessThanOrEqual(1);
+        for (const row of page.items) seen.push(row.id);
+        cursor = page.nextCursor;
+        pages += 1;
+      } while (cursor !== undefined && pages < 10);
+
+      expect(pages).toBe(3);
+      expect(new Set(seen).size).toBe(3);
+      expect(seen.sort()).toEqual([...ids].sort());
+
+      // The ordering is total and deterministic: (ms-truncated created_at desc, id desc).
+      const all = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAuditPage(client, workspaceId, { resourceId }),
+      );
+      expect(all.nextCursor).toBeUndefined();
+      expect(all.items.map((row) => row.id)).toEqual([...ids].sort().reverse());
+      // And `queryAudit` (the plain-array read) still returns the same rows.
+      const plain = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAudit(client, workspaceId, { resourceId }),
+      );
+      expect(plain.map((row) => row.id)).toEqual(all.items.map((row) => row.id));
+    });
+
+    it('queryAuditPage: a malformed cursor reads as the first page; limit is clamped to MAX_AUDIT_QUERY_LIMIT', async () => {
+      const resourceId = randomUUID();
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: ownerId,
+          action: 'test.bad_cursor',
+          resourceId,
+        }),
+      );
+      const page = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAuditPage(client, workspaceId, {
+          resourceId,
+          cursor: 'definitely-not-a-cursor',
+          limit: MAX_AUDIT_QUERY_LIMIT * 10,
+        }),
+      );
+      expect(page.items).toHaveLength(1);
+      expect(page.nextCursor).toBeUndefined();
     });
 
     it('a failing audit write rolls back a prior write in the same transaction (S1.3 acceptance)', async () => {

@@ -1879,12 +1879,25 @@ const auditCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'auditor',
-    paramsSchema: z.object({ filter: jsonRecord.optional() }).strict(),
+    // S6-A (docs/console-completion-plan.md §5.5 "`audit_query` 加 keyset 分页（与平台审计页一致）"):
+    // top-level `limit` / `cursor`, the same shape `platform_audit_query` and
+    // `list_action_requests` use; `filter` keeps its pre-existing opaque record
+    // (`actorPrincipalId` / `action` / `resourceType` / `resourceId`, plus a legacy `limit` that
+    // still works when the top-level one is absent). Page order and cursor are
+    // `(date_trunc('milliseconds', created_at), id)` — substrate/audit/writer.ts's own doc comment.
+    paramsSchema: z
+      .object({
+        filter: jsonRecord.optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().min(1).optional(),
+      })
+      .strict(),
     // S3.7 wire fix (see PR body): previously a bare `AuditRecordRow[]` — §3 "不返回裸数组". This
     // name does not match `list_*`/`find_*` either, same reasoning as `search` (graph group)
     // above — fixed anyway.
     resultSchema: listEnvelope(wire.AuditRecordWireSchema),
-    description: 'Query AuditRecords.',
+    description:
+      'Query this workspace’s AuditRecords newest first, narrowed by filter {actorPrincipalId?, action?, resourceType?, resourceId?}; keyset-paginated (limit — default 100, max 1000, truncated: true when clamped — and cursor → nextCursor).',
   },
   {
     name: 'reconstruct',
