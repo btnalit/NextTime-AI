@@ -59,7 +59,8 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     const expectedReply = new RegExp(
       `^echo: <!--nexttime:turn_id=[^>]+-->\\n${escapeRegExp(prompt)}$`,
     );
-    await expect(page.locator('.turn-badge')).toHaveText('Turn completed', { timeout: 15_000 });
+    // B4 bilingual label ("本轮完成 Turn completed") — match the English half.
+    await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
     // `.message-user .message-text` / `.message-assistant .message-text`: the bubble element
     // carries both classes (components/ChatPage.tsx `renderMessage`) — stable across the redesign.
     // The user's own displayed message is the prompt as typed — the marker is only ever added to
@@ -71,5 +72,81 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await page.reload();
     await expect(page.locator('.message-user .message-text')).toHaveText(prompt);
     await expect(page.locator('.message-assistant .message-text')).toHaveText(expectedReply);
+  });
+
+  /**
+   * S6-A W1 (docs/console-completion-plan.md §5.1 "归档与改名"): auto-title on the first message,
+   * rename from the header, archive from the list with undo, the 已归档 tab, and restore. Written
+   * with the kernel contract in hand (archive_chat / unarchive_chat / rename_chat return the
+   * updated ChatWire; auto-title = first 40 code points of the first user message) but NOT yet
+   * run against a live kernel — the lane that wrote it had no e2e stack. First run: the S6-A
+   * host acceptance (`.github/workflows/e2e.yml`).
+   */
+  test('auto-title, rename, archive with undo, archived tab, restore', async ({ page }) => {
+    const apiKey = API_KEY as string;
+    await page.goto('/');
+    await reachLoginForm(page);
+    await loginWithApiKey(page, apiKey);
+    await expect(page.getByRole('heading', { name: /Chats/ })).toBeVisible();
+    await page
+      .locator('header')
+      .getByRole('button', { name: /New chat/ })
+      .click();
+    await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
+
+    // A brand-new chat reads as the placeholder until the first message lands …
+    await expect(page.getByTestId('chat-title')).toHaveText('新对话 New chat');
+    const prompt = `e2e-title-${Date.now()}`;
+    await page.getByPlaceholder('Message…').fill(prompt);
+    await page.getByRole('button', { name: 'Send' }).click();
+    // … then the `chat.metadata {title}` push (the first 40 code points of the message) names it.
+    await expect(page.getByTestId('chat-title')).toHaveText(prompt, { timeout: 15_000 });
+    await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
+
+    // Rename from the header; a rename is never overwritten by a later auto-title.
+    const renamed = `${prompt}-renamed`;
+    await page.getByTestId('chat-header-rename').click();
+    await page.getByTestId('chat-rename-input').fill(renamed);
+    await page.getByTestId('chat-rename-input').press('Enter');
+    await expect(page.getByTestId('chat-title')).toHaveText(renamed);
+
+    // The 模式 · 模型 · 来源 line is up and the switcher is enabled between Turns.
+    await expect(page.getByTestId('chat-model-line')).toContainText('模式 Mode');
+    await expect(page.getByTestId('chat-model-select')).toBeEnabled();
+
+    // Back to the list: the row carries the new title; archive it from the row (tier low → toast
+    // with 撤销 Undo), undo, then archive again and find it under 已归档.
+    await page.getByRole('button', { name: 'Back to chats' }).click();
+    const row = page.getByTestId('chat-row').filter({ hasText: renamed });
+    await expect(row).toBeVisible();
+    await row.getByTestId('chat-row-archive').click();
+    await expect(row).toHaveCount(0);
+    const toast = page.getByTestId('toast').filter({ hasText: renamed });
+    await expect(toast).toContainText('已归档 Archived');
+    await toast.getByRole('button', { name: '撤销 Undo' }).click();
+    await expect(page.getByTestId('chat-row').filter({ hasText: renamed })).toBeVisible();
+
+    await page
+      .getByTestId('chat-row')
+      .filter({ hasText: renamed })
+      .getByTestId('chat-row-archive')
+      .click();
+    await expect(page.getByTestId('chat-row').filter({ hasText: renamed })).toHaveCount(0);
+    await page.getByTestId('chats-tab-archived').click();
+    const archivedRow = page.getByTestId('chat-row').filter({ hasText: renamed });
+    await expect(archivedRow).toBeVisible();
+    await expect(archivedRow.getByTestId('chat-archived-chip')).toHaveText('已归档 Archived');
+
+    // Opening an archived chat is read-only; 恢复 from the composer note re-enables it.
+    await archivedRow.click();
+    await expect(page.getByTestId('chat-archived-notice')).toBeVisible();
+    await expect(page.getByPlaceholder('已归档 Archived')).toBeDisabled();
+    await page.getByTestId('chat-composer-restore').click();
+    await expect(page.getByTestId('chat-archived-notice')).toHaveCount(0);
+    await expect(page.getByPlaceholder('Message…')).toBeEnabled();
+
+    // Reload: the lifecycle survived (list_chats reflects the restore and the rename).
+    await page.reload();
+    await expect(page.getByTestId('chat-title')).toHaveText(renamed);
   });
 });
