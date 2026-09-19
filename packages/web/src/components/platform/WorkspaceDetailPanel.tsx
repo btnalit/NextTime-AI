@@ -3,11 +3,12 @@ import type {
   PlatformWorkspaceWire,
   UserMembershipWire,
 } from '@nexttime/shared';
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
+import { isExpiredEphemeral, purgeRetention } from '../../lib/platform-workspaces.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input, Select } from '../ui/Field.js';
@@ -37,6 +38,10 @@ export interface WorkspaceDetailPanelProps {
    *  configuration pages; `undefined` when they are not a member (P-A2 does not implement acting
    *  in a workspace without a membership). */
   readonly onOpenWorkspaceConfig?: () => void;
+  /** S6-A A1: open the page's `PurgeWorkspaceDrawer` for this workspace. The entry renders only
+   *  when `purgeable` and never for the platform default; the drawer is the page's (one focus
+   *  trap at a time), this panel only asks for it. */
+  readonly onPurge?: () => void;
 }
 
 /**
@@ -52,8 +57,10 @@ export interface WorkspaceDetailPanelProps {
  * the entry-model select below, for the same one-control-no-batch reason.
  *
  * 用途 (S5.3 `workspaces.purpose` / `expires_at`) is read-only here: it is decided at creation
- * (`create-workspace --purpose ephemeral --ttl <n>h`) and an expired ephemeral workspace is retired
- * by `scripts/delete-workspaces-matching.sh --expired`, never from the console.
+ * (`create-workspace --purpose ephemeral --ttl <n>h`). S6-A A1: an expired ephemeral workspace, or
+ * one disabled for 7 days (`disabledAt`, §12 决定 3), is `purgeable` — the panel's last section
+ * shows the retention clock and, once the kernel says so, the 清除 Purge entry (`onPurge` → the
+ * page's `PurgeWorkspaceDrawer`: preview, then the irreversible confirm).
  *
  * Disabling gets a same-drawer confirm step (the shape `UserDetailPanel` established for
  * `set_user_status`) because it is the most destructive thing on this page: every session in the
@@ -73,6 +80,7 @@ export function WorkspaceDetailPanel({
   onChanged,
   onDelegated,
   onOpenWorkspaceConfig,
+  onPurge,
 }: WorkspaceDetailPanelProps) {
   const [name, setName] = useState(workspace.name);
   const [savingName, setSavingName] = useState(false);
@@ -262,17 +270,10 @@ export function WorkspaceDetailPanel({
             size="s"
             testId="workspace-detail-purpose"
           />
-          {workspace.expiresAt ? (
-            <>
-              {' '}
-              <time
-                title={formatDateTime(workspace.expiresAt)}
-                data-testid="workspace-detail-expires"
-              >
-                到期 expires {formatRelative(workspace.expiresAt)}
-              </time>
-            </>
-          ) : null}
+        </dd>
+        <dt>生命周期 Lifecycle</dt>
+        <dd data-testid="workspace-detail-lifecycle">
+          <WorkspaceLifecycle workspace={workspace} />
         </dd>
       </dl>
 
@@ -483,6 +484,87 @@ export function WorkspaceDetailPanel({
           </div>
         </>
       )}
+
+      {workspace.purgeable && !workspace.isDefault ? (
+        <>
+          <div className="divider" />
+          <div className="stack-s" data-testid="workspace-purge-section">
+            <Notice tone="warn">
+              内核已接受清除：行与级联数据删除，平台审计行保留；下一步先预览计数与 service Handle
+              警告，再键入名称确认。 The kernel accepts a purge now: rows and cascaded data go, the
+              platform audit row stays. Next: preview the counts and Handle warnings, then retype
+              the name to confirm.
+            </Notice>
+            <div className="row" style={{ justifyContent: 'flex-end' }}>
+              <Button variant="danger" onClick={onPurge} data-testid="workspace-purge">
+                清除 Purge
+              </Button>
+            </div>
+          </div>
+        </>
+      ) : workspace.status === 'disabled' && !workspace.isDefault ? (
+        <p className="text-3 text-small" data-testid="workspace-purge-retention">
+          停用满 7 天后可清除（一次性工作区到期即可）。 Purgeable once disabled for 7 days (an
+          ephemeral workspace: once expired).
+        </p>
+      ) : null}
     </div>
   );
+}
+
+/**
+ * The 生命周期 Lifecycle cell (A1: `expiresAt` / `disabledAt` as columns, folded into one):
+ * an ephemeral workspace's expiry (已到期 once past it), a disabled workspace's "禁用于 … · N 天后
+ * 可清除" retention clock (`disabledAt === null` — disabled before migration 0030 — is purgeable
+ * now, §12 决定 3), `—` for a live standard workspace. Shared with the workspaces page's
+ * 生命周期 column.
+ */
+export function WorkspaceLifecycle({ workspace }: { readonly workspace: PlatformWorkspaceWire }) {
+  const parts: ReactNode[] = [];
+  if (workspace.purpose === 'ephemeral' && workspace.expiresAt !== null) {
+    const expired = isExpiredEphemeral(workspace);
+    parts.push(
+      <time
+        key="expires"
+        title={formatDateTime(workspace.expiresAt)}
+        className={expired ? 'text-danger' : undefined}
+        data-testid="workspace-expires"
+        data-expired={expired || undefined}
+      >
+        {expired ? '已到期 expired' : '到期 expires'} {formatRelative(workspace.expiresAt)}
+      </time>,
+    );
+  }
+  if (workspace.status === 'disabled') {
+    const retention = purgeRetention(workspace.disabledAt);
+    parts.push(
+      <span key="disabled" data-testid="workspace-disabled-at">
+        {workspace.disabledAt === null ? (
+          '禁用于迁移前 disabled before 0030'
+        ) : (
+          <time title={formatDateTime(workspace.disabledAt)}>
+            禁用于 disabled {formatRelative(workspace.disabledAt)}
+          </time>
+        )}
+        {' · '}
+        {workspace.isDefault ? (
+          <span className="text-3">默认工作区 default workspace</span>
+        ) : retention.daysRemaining === 0 ? (
+          <span className="text-danger">可清除 purgeable now</span>
+        ) : (
+          <span
+            title={
+              retention.purgeableAt === null
+                ? undefined
+                : formatDateTime(new Date(retention.purgeableAt).toISOString())
+            }
+          >
+            {retention.daysRemaining} 天后可清除 purgeable in {retention.daysRemaining} d
+          </span>
+        )}
+      </span>,
+    );
+  }
+  if (parts.length === 0) return <span className="text-3">—</span>;
+  return <span className="stack-s">{parts}</span>;
 }

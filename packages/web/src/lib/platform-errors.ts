@@ -41,6 +41,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   unknown_model: '模型不在目录里 No such model in the catalog',
   entry_model_not_allowed:
     '允许的模型列表必须包含入口模型；限制模型前要先设置入口模型 A non-empty allowed list must contain the entry model, and an entry model must be set before restricting',
+  // S6-A A1 (`purge_workspace`, console-completion-plan §5.2): the two 409s of the preconditions.
+  // `default_workspace` (above) and `workspace_not_found` (top) are reused by it verbatim.
+  workspace_active:
+    '该工作区仍在启用中，先停用（停用满 7 天后可清除）或等临时工作区到期 The workspace is still active — disable it first (purgeable 7 days later), or wait for an ephemeral one to expire',
+  retention_not_elapsed:
+    '停用未满 7 天，还不能清除 Disabled less than 7 days ago — not purgeable yet',
   // P-B1 (集成 Integrations): connectors, gate instances, external runtimes, and the workspace
   // "enable from platform catalog" flow.
   connector_not_found: '找不到该接入包 No such connector',
