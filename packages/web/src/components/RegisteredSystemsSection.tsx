@@ -5,6 +5,7 @@ import {
   type OperationView,
   groupOperationsByStatus,
 } from '../lib/connections.js';
+import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
@@ -75,7 +76,7 @@ export function GatekeeperCard({
       });
       onChanged();
     } catch (err) {
-      if (isForbidden(err)) onForbidden('publish_manifest');
+      if (isForbiddenError(err)) onForbidden('publish_manifest');
       setError(err);
     } finally {
       setPublishing(false);
@@ -98,7 +99,7 @@ export function GatekeeperCard({
       setPrincipalId('');
       setGrantOpen(false);
     } catch (err) {
-      if (isForbidden(err)) onForbidden('connect_gatekeeper');
+      if (isForbiddenError(err)) onForbidden('connect_gatekeeper');
       setError(err);
     } finally {
       setGranting(false);
@@ -233,14 +234,5 @@ export function GatekeeperCard({
         )}
       </div>
     </Card>
-  );
-}
-
-function isForbidden(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { code?: unknown }).code === 'forbidden'
   );
 }

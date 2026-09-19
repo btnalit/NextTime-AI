@@ -7,6 +7,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import type { CatalogTab } from '../lib/router.js';
 import { CatalogPage } from './CatalogPage.js';
+import { ToastProvider } from './ui/Toast.js';
 
 afterEach(cleanup);
 
@@ -39,7 +40,9 @@ function Harness({
 function renderPage(http: CapabilityCaller, initialTab?: CatalogTab) {
   return render(
     <PermissionsProvider>
-      <Harness http={http} initialTab={initialTab} />
+      <ToastProvider>
+        <Harness http={http} initialTab={initialTab} />
+      </ToastProvider>
     </PermissionsProvider>,
   );
 }
@@ -96,6 +99,25 @@ describe('CatalogPage', () => {
     await waitFor(() =>
       expect(http.calls.filter((c) => c.name === 'list_operations')).toHaveLength(2),
     );
+  });
+
+  it('C14: a failed Publish toasts the kernel message, not only the generic title', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft' }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'operation docker.restart is not a draft', 'conflict'),
+        ),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByRole('button', { name: 'Publish' }));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('Could not update docker.restart');
+    expect(toast.textContent).toContain('operation docker.restart is not a draft');
   });
 
   it('Operations: renders usage counters from get_operation_stats, degrading to "—" for a row with no matching stats', async () => {

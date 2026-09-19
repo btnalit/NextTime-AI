@@ -13,7 +13,7 @@ import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Input, Select } from './ui/Field.js';
+import { Field, Input } from './ui/Field.js';
 import { PageHeader } from './ui/PageHeader.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -96,29 +96,34 @@ export function AccessPage({ http }: AccessPageProps) {
       />
 
       <div className="page-toolbar">
-        <Field id="access-principal-filter" label="Filter by principal">
-          {principals.length > 0 ? (
-            <Select
-              id="access-principal-filter"
-              value={principalFilter}
-              onChange={(event) => setPrincipalFilter(event.target.value)}
-            >
-              <option value="">All members</option>
-              {principals.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.displayName}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <Input
-              id="access-principal-filter"
-              value={principalFilter}
-              onChange={(event) => setPrincipalFilter(event.target.value)}
-              placeholder="principal id (optional)"
-              mono
-            />
-          )}
+        {/* C20: one control from first paint — an id input with the member directory as a
+            `<datalist>` once `list_principals` lands — rather than an `<Input>` that turned into
+            a `<Select>` mid-typing and dropped whatever had been typed. Picking a suggestion
+            fills the id; an empty value is "all members". */}
+        <Field
+          id="access-principal-filter"
+          label="Filter by principal"
+          hint={
+            principals.length > 0
+              ? 'Pick a member from the suggestions, or paste a principal id. Empty = all members.'
+              : 'Principal id (optional). Empty = all members.'
+          }
+        >
+          <Input
+            id="access-principal-filter"
+            value={principalFilter}
+            onChange={(event) => setPrincipalFilter(event.target.value)}
+            placeholder="All members"
+            list="access-principal-suggestions"
+            mono
+          />
+          <datalist id="access-principal-suggestions">
+            {principals.map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.displayName}
+              </option>
+            ))}
+          </datalist>
         </Field>
       </div>
 

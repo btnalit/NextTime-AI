@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -139,6 +139,62 @@ describe('AccessPage', () => {
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
     );
+  });
+
+  it('C19: the grant form rejects scope JSON that is not an object, before any call', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [] }),
+      list_grants: () => ({ items: [] }),
+      grant_capability: () => grant(),
+    });
+    renderPage(http);
+    await screen.findByTestId('grants-empty');
+    fireEvent.click(screen.getByRole('button', { name: 'Grant capability' }));
+    const form = await screen.findByTestId('grant-capability-form');
+    fireEvent.change(within(form).getByLabelText(/Principal/), { target: { value: 'p-2' } });
+
+    for (const bad of ['"foo"', '42', 'null', '[1,2]']) {
+      fireEvent.change(within(form).getByLabelText(/Scope/), { target: { value: bad } });
+      fireEvent.click(within(form).getByRole('button', { name: 'Grant' }));
+      expect(await within(form).findByText(/Scope must be a JSON object/)).toBeTruthy();
+    }
+    expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(false);
+
+    fireEvent.change(within(form).getByLabelText(/Scope/), {
+      target: { value: '{"actionKindTag":"docker.container_restart"}' },
+    });
+    fireEvent.click(within(form).getByRole('button', { name: 'Grant' }));
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
+    );
+  });
+
+  it('C20: the principal filter keeps what was typed while list_principals is still loading, then offers suggestions', async () => {
+    let resolvePrincipals: (value: unknown) => void = () => undefined;
+    const http = scriptedHttp({
+      list_principals: () =>
+        new Promise((resolve) => {
+          resolvePrincipals = resolve;
+        }),
+      list_grants: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const filter = (await screen.findByLabelText(/Filter by principal/)) as HTMLInputElement;
+    fireEvent.change(filter, { target: { value: 'p-typed' } });
+    expect(filter.value).toBe('p-typed');
+
+    act(() => resolvePrincipals({ items: [{ id: 'p-1', displayName: 'Bob', role: 'member' }] }));
+    await waitFor(() =>
+      expect(document.querySelectorAll('#access-principal-suggestions option')).toHaveLength(1),
+    );
+    // Same element, same value — no control swap dropped the input.
+    expect((screen.getByLabelText(/Filter by principal/) as HTMLInputElement).value).toBe(
+      'p-typed',
+    );
+    expect(screen.getByLabelText(/Filter by principal/)).toBe(filter);
+    expect(http.calls.filter((call) => call.name === 'list_grants').at(-1)?.params).toEqual({
+      principalId: 'p-typed',
+    });
   });
 
   it('issuing a service Handle posts issue_service_handle and shows the token once', async () => {

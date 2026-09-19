@@ -51,6 +51,13 @@ export function GrantCapabilityForm({
         setScopeError('Scope must be valid JSON.');
         return;
       }
+      // C19: `GrantRow.scope` is read as a record everywhere (`Object.keys(row.scope)` on the
+      // Access page, the kernel's own qualifier matching) — a bare string, number, `null` or an
+      // array is valid JSON but not a scope, and used to be submitted verbatim.
+      if (typeof scope !== 'object' || scope === null || Array.isArray(scope)) {
+        setScopeError('Scope must be a JSON object, e.g. {"actionKindTag":"…"}.');
+        return;
+      }
     }
     if (!principalId.trim() || !resourceType.trim() || submitting) return;
     setSubmitting(true);

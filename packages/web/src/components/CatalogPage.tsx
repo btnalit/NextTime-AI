@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError } from '../lib/errors.js';
+import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatRelative } from '../lib/format.js';
 import {
   type OperationCatalogRow,
@@ -151,7 +151,12 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied(action);
-      toast.push({ tone: 'danger', title: `Could not update ${row.name}` });
+      // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
+      toast.push({
+        tone: 'danger',
+        title: `Could not update ${row.name}`,
+        description: describeError(err).message,
+      });
     } finally {
       setBusy(null);
     }
@@ -269,7 +274,12 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied(action);
-      toast.push({ tone: 'danger', title: `Could not update ${row.name}` });
+      // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
+      toast.push({
+        tone: 'danger',
+        title: `Could not update ${row.name}`,
+        description: describeError(err).message,
+      });
     } finally {
       setBusy(null);
     }
@@ -353,7 +363,12 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied(action);
-      toast.push({ tone: 'danger', title: `Could not update ${row.name}` });
+      // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
+      toast.push({
+        tone: 'danger',
+        title: `Could not update ${row.name}`,
+        description: describeError(err).message,
+      });
     } finally {
       setBusy(null);
     }
@@ -440,7 +455,11 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('deprecate_worker_definition');
-      toast.push({ tone: 'danger', title: 'Could not deprecate this definition' });
+      toast.push({
+        tone: 'danger',
+        title: 'Could not deprecate this definition',
+        description: describeError(err).message,
+      });
     } finally {
       setBusy(null);
     }
