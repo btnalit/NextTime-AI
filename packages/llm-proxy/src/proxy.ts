@@ -229,13 +229,11 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
   const fetchImpl = options.fetchImpl ?? fetch;
   const resolveApiKey = options.resolveApiKey ?? ((name: string) => process.env[name]);
   const log = options.log ?? ((line: string) => console.log(line));
+  const providersOption = options.providers;
   const lookupProvider: (name: string) => ProviderConfig | undefined =
-    typeof options.providers === 'function'
-      ? options.providers
-      : (
-          (providers) => (name: string) =>
-            providers[name]
-        )(options.providers);
+    typeof providersOption === 'function'
+      ? providersOption
+      : (name: string) => providersOption[name];
   const isBudgetExhausted = options.isBudgetExhausted ?? (() => undefined);
 
   async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
