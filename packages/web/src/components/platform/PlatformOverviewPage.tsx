@@ -1,8 +1,9 @@
-import type { PlatformOverviewWire } from '@nexttime/shared';
-import { useCapability } from '../../hooks/useCapability.js';
+import type { PlatformOverviewWire, PlatformWorkspaceWire } from '@nexttime/shared';
+import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { MeResult } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
+import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
 import { hrefs } from '../../lib/router.js';
 import { BindApiKeyForm } from '../BindApiKeyForm.js';
 import { Card } from '../ui/Card.js';
@@ -10,6 +11,7 @@ import { DataList, DataRow } from '../ui/DataList.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Icon } from '../ui/Icon.js';
+import { Notice } from '../ui/Notice.js';
 import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 
@@ -64,16 +66,36 @@ const HEALTH_CHIP_CLASS: Readonly<Record<ServiceHealth['status'], string>> = {
  * pre-existing API key's workspace membership onto this account without leaving the overview. A
  * successful bind both re-reads this page (the checklist and the pending-activation count change)
  * and, via `onKeyBound`, refreshes the session itself.
+ *
+ * S6-A A1 / A6 (§5.9 "页面对照原型 — 控制塔 … 验收残留横幅"): the residue banner reads the
+ * **unfiltered** `list_workspaces` (the only read that sees disabled and expired rows at once)
+ * and counts `isResidueWorkspace` — the same predicate the workspaces page's residue preset
+ * applies — linking to `#/platform/workspaces?residue=1`. A failed read simply shows no banner;
+ * the version card is `platform_overview.version.kernel` (B1's real value lives in the kernel).
  */
 export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageProps) {
   const overview = useCapability<PlatformOverviewWire>(http, 'platform_overview');
+  const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces');
+  const residue =
+    workspaces.state.status === 'ready'
+      ? workspaces.state.data.items.filter((row) => isResidueWorkspace(row))
+      : [];
 
   return (
     <div className="page">
       <PageHeader
         title="概览 Overview"
-        description="Kernel version, service health, the first-run checklist, and recent platform audit."
+        description="内核版本、服务健康、首次运行清单与最近的平台审计。 Kernel version, service health, the first-run checklist, and recent platform audit."
       />
+      {residue.length > 0 ? (
+        <Notice tone="warn" testId="platform-residue-banner">
+          验收残留 {residue.length} 个工作区待清除（已停用或已到期的临时工作区）。 {residue.length}{' '}
+          workspaces of acceptance residue await purging (disabled, or ephemeral past expiry).{' '}
+          <a href={residueWorkspacesHref()} data-testid="platform-residue-link">
+            去清理 Review and purge
+          </a>
+        </Notice>
+      ) : null}
       {overview.state.status === 'loading' ? (
         <SkeletonRows count={4} label="Loading overview" testId="platform-overview-loading" />
       ) : overview.state.status === 'error' ? (

@@ -369,7 +369,9 @@ function PlatformSettingsForm({
               <span className="text-3">—</span>
             ) : (
               initial.envAdmins.map((login) => (
-                <span key={login} className="chip chip-s chip-neutral">
+                // C17: a login is a label, not a status — no StatusChip machine fits; the `tag`
+                // class is what the users page's own `env` badge wears for the same logins.
+                <span key={login} className="tag mono" data-testid="platform-settings-env-admin">
                   {login}
                 </span>
               ))

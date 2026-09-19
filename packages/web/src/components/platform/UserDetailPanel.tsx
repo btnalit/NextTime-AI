@@ -240,8 +240,8 @@ export function UserDetailPanel({
             onChange={(event) => setPlatformRole(event.target.value as PlatformRoleWire)}
             disabled={savingProfile || protectedAdmin}
           >
-            <option value="user">user</option>
-            <option value="admin">admin</option>
+            <option value="user">用户 user</option>
+            <option value="admin">管理员 admin</option>
           </Select>
         </span>
       </Field>

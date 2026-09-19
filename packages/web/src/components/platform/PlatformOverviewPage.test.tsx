@@ -73,7 +73,10 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
 
 describe('PlatformOverviewPage', () => {
   it('renders version, the checklist with links, count tiles, health chips, and recent audit', async () => {
-    const http = scriptedHttp({ platform_overview: () => overview() });
+    const http = scriptedHttp({
+      platform_overview: () => overview(),
+      list_workspaces: () => ({ items: [] }),
+    });
     renderPage(http);
 
     const checklist = await screen.findByTestId('platform-checklist');
@@ -102,6 +105,7 @@ describe('PlatformOverviewPage', () => {
           counts: { ...overview().counts, pendingActivationUsers: calls === 1 ? 1 : 0 },
         });
       },
+      list_workspaces: () => ({ items: [] }),
     });
     renderPage(http);
 
@@ -131,8 +135,75 @@ describe('PlatformOverviewPage', () => {
   it('shows an error banner with retry on failure', async () => {
     const http = scriptedHttp({
       platform_overview: () => Promise.reject(new HttpError('network', 'boom')),
+      list_workspaces: () => ({ items: [] }),
     });
     renderPage(http);
     await screen.findByTestId('platform-overview-error');
+  });
+
+  it('A1 / A6: the 验收残留 banner counts disabled and expired-ephemeral workspaces from the unfiltered list and links to the residue preset', async () => {
+    const base = {
+      entryModel: null,
+      allowedModels: [],
+      ontologyEnforcement: 'reject',
+      purpose: 'standard',
+      expiresAt: null,
+      disabledAt: null,
+      purgeable: false,
+      isDefault: false,
+      memberCount: 0,
+      owners: [],
+      createdAt: '2026-09-01T00:00:00.000Z',
+    };
+    const http = scriptedHttp({
+      platform_overview: () => overview(),
+      list_workspaces: (params) => {
+        // The banner needs the unfiltered read — disabled ∪ expired is not one kernel filter.
+        expect(params).toEqual({});
+        return {
+          items: [
+            { ...base, id: 'ws-1', name: 'prod', status: 'active', isDefault: true },
+            { ...base, id: 'ws-2', name: 'old', status: 'disabled', purgeable: true },
+            {
+              ...base,
+              id: 'ws-3',
+              name: 'accept-s3',
+              status: 'active',
+              purpose: 'ephemeral',
+              expiresAt: '2020-01-01T00:00:00.000Z',
+              purgeable: true,
+            },
+            {
+              ...base,
+              id: 'ws-4',
+              name: 'demo-live',
+              status: 'active',
+              purpose: 'ephemeral',
+              expiresAt: '2099-01-01T00:00:00.000Z',
+            },
+          ],
+        };
+      },
+    });
+    renderPage(http);
+    const banner = await screen.findByTestId('platform-residue-banner');
+    expect(banner.textContent).toContain('验收残留 2 个工作区待清除');
+    expect(screen.getByTestId('platform-residue-link').getAttribute('href')).toBe(
+      '#/platform/workspaces?residue=1',
+    );
+  });
+
+  it('no banner without residue, and a failed list_workspaces read never blocks the page', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview(),
+      list_workspaces: () => Promise.reject(new HttpError('network', 'boom')),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-checklist');
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'list_workspaces')).toBe(true),
+    );
+    expect(screen.queryByTestId('platform-residue-banner')).toBeNull();
+    expect(screen.queryByTestId('platform-overview-error')).toBeNull();
   });
 });

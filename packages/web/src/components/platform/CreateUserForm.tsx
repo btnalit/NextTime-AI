@@ -108,7 +108,7 @@ export function CreateUserForm({
         id="cu-login"
         label="登录名 Login"
         required
-        hint="3–64 chars of a-z 0-9 . _ - — 小写字母或数字开头。"
+        hint="3–64 位 a-z 0-9 . _ -，以小写字母或数字开头。 3–64 chars of a-z 0-9 . _ -, starting with a lowercase letter or digit."
         error={loginInvalid ? '登录名格式不合法 Invalid login — 3–64 chars of a-z 0-9 . _ -' : null}
       >
         <Input
@@ -140,8 +140,8 @@ export function CreateUserForm({
           onChange={(event) => setPlatformRole(event.target.value as PlatformRoleWire)}
           disabled={submitting}
         >
-          <option value="user">user</option>
-          <option value="admin">admin</option>
+          <option value="user">用户 user</option>
+          <option value="admin">管理员 admin</option>
         </Select>
       </Field>
 
