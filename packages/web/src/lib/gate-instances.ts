@@ -22,10 +22,9 @@ export function gatePathForKind(kind: ConnectionKind): GatePath {
 }
 
 /** `#/platform/integrations/<gateId>` — the deep link the workspace page's "平台实例" chip uses.
- *  `lib/router.ts` (another lane's file) does not parse the trailing segment yet; until it does the
- *  hash falls back to the default route, so callers should prefer the bare
- *  `hrefs.platformIntegrations()` unless the route line reported by S6-C has landed. Kept here so
- *  the spelling exists in exactly one place. */
+ *  `lib/router.ts` parses the trailing segment (`{kind:'platformIntegrations', gateId}`) and
+ *  `hrefs.platformGateInstance` spells the same hash; kept here too so callers that only import
+ *  the gate helpers have it. */
 export function platformGateInstanceHref(gateId: string): string {
   return `#/platform/integrations/${encodeURIComponent(gateId)}`;
 }

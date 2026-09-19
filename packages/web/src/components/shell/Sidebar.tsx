@@ -30,14 +30,16 @@ interface ExternalNavItem {
   readonly href: string;
 }
 
-/** 图 Explorer — the read-only graph/decision/provenance UI (kernel `interfaces/explorer-
+/** Explorer（第三方）— the read-only graph/decision/provenance UI (kernel `interfaces/explorer-
  *  contract`), an unmodified third-party static bundle served by caddy at `/explorer/` on this
  *  same origin. Opens in a new tab; same visibility as the 治理 group (`showGovern`) since
- *  every Explorer endpoint requires at least the same role. */
+ *  every Explorer endpoint requires at least the same role. S6-C / S6-D: the console's own 图谱
+ *  page (`WORK_NAV`) is the primary graph entry; this link is rendered only while the bundle is
+ *  built (`explorerAvailable !== false`, `lib/explorer-probe.ts`). */
 const EXPLORER_NAV: ExternalNavItem = {
   testId: 'nav-explorer',
-  label: '图',
-  sub: 'Explorer',
+  label: '打开 Explorer',
+  sub: 'third-party',
   icon: 'search',
   href: '/explorer/',
 };
@@ -54,6 +56,9 @@ const WORK_NAV: readonly NavItem[] = [
     href: hrefs.approvals(),
   },
   { section: 'tasks', label: '任务', sub: 'Tasks', icon: 'tasks', href: hrefs.tasks() },
+  // S6-D: the native 图谱 page (object browser on search / state_at / explain) replaces the
+  // third-party Explorer bundle as the console's graph entry.
+  { section: 'graph', label: '图谱', sub: 'Graph', icon: 'link', href: hrefs.graph() },
   { section: 'agent', label: '我的智能体', sub: 'My Agent', icon: 'user', href: hrefs.agent() },
   // S4.1: sits right next to 我的智能体 — both are per-user "我的" settings, not governance.
   { section: 'account', label: '我的账户', sub: 'My Account', icon: 'user', href: hrefs.account() },
@@ -168,6 +173,9 @@ export interface SidebarProps {
    *  apiKey session (no platform user) or before a cookie session's user is known. Gates the
    *  whole 平台 group. */
   readonly platformRole?: 'admin' | 'user';
+  /** S6-C: `false` = the Explorer bundle is not built (placeholder served) → hide its link;
+   *  `null` / `undefined` = still probing → shown (`lib/explorer-probe.ts`). */
+  readonly explorerAvailable?: boolean | null;
   /** S6-A0 footer: the kernel version (`useKernelVersion`; admin sessions only) — omitted when
    *  unknown. */
   readonly kernelVersion?: string | null;
@@ -207,6 +215,7 @@ export function Sidebar({
   onSwitchWorkspace,
   switchingWorkspace,
   platformRole,
+  explorerAvailable,
   kernelVersion,
   currentUser,
 }: SidebarProps) {
@@ -267,7 +276,7 @@ export function Sidebar({
         {showGovern ? (
           <NavSectionGroup titleZh="治理" titleEn="Govern" testId="nav-section-govern">
             {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount))}
-            {renderExternalNavItem(EXPLORER_NAV)}
+            {explorerAvailable !== false ? renderExternalNavItem(EXPLORER_NAV) : null}
           </NavSectionGroup>
         ) : null}
 

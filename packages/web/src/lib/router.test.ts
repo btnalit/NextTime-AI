@@ -55,6 +55,10 @@ describe('routeFromHash', () => {
     expect(routeFromHash('#/govern/audit?nodeId=fact-1')).toEqual({ kind: 'audit' });
     expect(routeFromHash('#/work/graph')).toEqual({ kind: 'graph' });
     expect(routeFromHash('#/work/graph?objectId=o-1&q=host')).toEqual({ kind: 'graph' });
+    expect(routeFromHash('#/platform/integrations/gate-1')).toEqual({
+      kind: 'platformIntegrations',
+      gateId: 'gate-1',
+    });
   });
 
   it('an unknown or empty hash falls back to /work/chats (the default work view)', () => {
@@ -153,7 +157,7 @@ function hrefFor(route: Route): string {
     case 'platformWorkspaces':
       return hrefs.platformWorkspaces();
     case 'platformIntegrations':
-      return hrefs.platformIntegrations();
+      return route.gateId ? hrefs.platformGateInstance(route.gateId) : hrefs.platformIntegrations();
     case 'platformSettings':
       return hrefs.platformSettings();
     case 'platformAudit':

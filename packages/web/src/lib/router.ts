@@ -56,7 +56,7 @@ export type Route =
   | { readonly kind: 'platformOverview' }
   | { readonly kind: 'platformUsers' }
   | { readonly kind: 'platformWorkspaces' }
-  | { readonly kind: 'platformIntegrations' }
+  | { readonly kind: 'platformIntegrations'; readonly gateId?: string }
   | { readonly kind: 'platformSettings' }
   | { readonly kind: 'platformAudit' };
 
@@ -121,7 +121,13 @@ export function routeFromHash(fullHash: string): Route {
   if (hash === '#/platform/overview') return { kind: 'platformOverview' };
   if (hash === '#/platform/users') return { kind: 'platformUsers' };
   if (hash === '#/platform/workspaces') return { kind: 'platformWorkspaces' };
-  if (hash === '#/platform/integrations') return { kind: 'platformIntegrations' };
+  // S6-C: `#/platform/integrations/<gateId>` opens the 门实例 tab with that instance's drawer.
+  const integrations = /^#\/platform\/integrations(?:\/(.+))?$/.exec(hash);
+  if (integrations) {
+    return integrations[1]
+      ? { kind: 'platformIntegrations', gateId: decodeURIComponent(integrations[1]) }
+      : { kind: 'platformIntegrations' };
+  }
   if (hash === '#/platform/settings') return { kind: 'platformSettings' };
   if (hash === '#/platform/audit') return { kind: 'platformAudit' };
 
@@ -164,6 +170,7 @@ export const hrefs = {
   platformUsers: () => '#/platform/users',
   platformWorkspaces: () => '#/platform/workspaces',
   platformIntegrations: () => '#/platform/integrations',
+  platformGateInstance: (gateId: string) => `#/platform/integrations/${encodeURIComponent(gateId)}`,
   platformSettings: () => '#/platform/settings',
   platformAudit: () => '#/platform/audit',
 } as const;

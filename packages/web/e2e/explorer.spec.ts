@@ -79,9 +79,8 @@ test.describe('S4.1: Explorer cookie auth', () => {
   test('S6-C: the 图 Explorer entry is hidden while caddy serves the placeholder page', async ({
     page,
   }) => {
-    // Strict form of the check above — flip `fixme` off once `AppShell` passes
-    // `useExplorerAvailable()` to `Sidebar` (components/shell, another lane).
-    test.fixme(true, 'sidebar wiring for useExplorerAvailable() has not landed yet (S6-C report)');
+    // Strict form of the check above: `AppShell` passes `useExplorerAvailable()` to `Sidebar`
+    // (S6-C integration), so the entry's visibility follows the placeholder probe exactly.
     const ownerLogin = OWNER_LOGIN as string;
     const ownerPassword = OWNER_PASSWORD as string;
     await login(page, ownerLogin, ownerPassword);

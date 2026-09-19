@@ -284,8 +284,8 @@ describe('ConnectionsPage', () => {
     const selfConnected = cards.find((card) => card.getAttribute('data-gatekeeper-id') === 'gk-2');
     if (!fromPlatform || !selfConnected) throw new Error('cards missing');
     const link = within(fromPlatform).getByTestId('gatekeeper-platform-instance-link');
-    // The bare 集成 href until lib/router.ts parses `#/platform/integrations/<gateId>`.
-    expect(link.getAttribute('href')).toBe('#/platform/integrations');
+    // Deep link to the instance's own drawer (lib/router.ts parses the trailing gateId).
+    expect(link.getAttribute('href')).toBe('#/platform/integrations/gate-1');
     expect(link.textContent).toBe('gate-1');
     expect(within(selfConnected).queryByTestId('gatekeeper-platform-instance')).toBeNull();
     cleanup();

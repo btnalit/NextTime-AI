@@ -5,6 +5,7 @@ import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { useWsStatus } from '../../hooks/useWsStatus.js';
 import type { WireMembership, WireUser } from '../../lib/auth-api.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
+import { useExplorerAvailable } from '../../lib/explorer-probe.js';
 import type { WorkspaceInfo } from '../../lib/governance.js';
 import type { NavSection } from '../../lib/router.js';
 import { Sidebar } from './Sidebar.js';
@@ -52,6 +53,9 @@ export function AppShell({
   const wsStatus = useWsStatus(pushes);
   const { workspaceName, role } = useWorkspaceIdentity(http);
   const kernelVersion = useKernelVersion(http, platformRole === 'admin');
+  // S6-C (§5.7): hide the third-party Explorer link while caddy serves the "bundle not built"
+  // placeholder; the native 图谱 page is always there.
+  const explorerAvailable = useExplorerAvailable();
   // A second read of the same key as `useWorkspaceIdentity`'s `get_workspace` — served warm from
   // hooks/useCapability's per-caller cache while it refreshes, so the footer never flashes, but
   // still one extra request per shell mount. `caller.displayName` is the apiKey session's only
@@ -78,6 +82,7 @@ export function AppShell({
         onSwitchWorkspace={onSwitchWorkspace}
         switchingWorkspace={switchingWorkspace}
         platformRole={platformRole}
+        explorerAvailable={explorerAvailable}
         kernelVersion={kernelVersion}
         currentUser={currentUser}
       />

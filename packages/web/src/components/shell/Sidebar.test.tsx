@@ -59,6 +59,38 @@ describe('Sidebar', () => {
     }
   });
 
+  it('S6-C / S6-D: 图谱 is always in 使用; the third-party Explorer link hides once the probe says the bundle is not built', () => {
+    const { unmount } = render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+        explorerAvailable={false}
+      />,
+    );
+    expect(screen.getByTestId('nav-graph').getAttribute('href')).toBe('#/work/graph');
+    expect(screen.queryByTestId('nav-explorer')).toBeNull();
+    unmount();
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+        explorerAvailable={null}
+      />,
+    );
+    // Still probing → shown (fail open, same as `true`).
+    expect(screen.getByTestId('nav-explorer').getAttribute('href')).toBe('/explorer/');
+  });
+
   it('hides 治理 in cookie mode when no workspace is selected, even for a non-member role', () => {
     render(
       <Sidebar

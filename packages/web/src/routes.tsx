@@ -174,6 +174,7 @@ export function Routed({
           http={session.http}
           selectedGatekeeperId={route.gatekeeperId}
           onSelectGatekeeper={(id) => navigate(id ? hrefs.gatekeeper(id) : hrefs.systems())}
+          platformAdmin={session.user?.platformRole === 'admin'}
         />
       );
       break;
@@ -221,7 +222,16 @@ export function Routed({
       );
       break;
     case 'platformIntegrations':
-      page = requireAdmin(session, <PlatformIntegrationsPage http={session.http} />);
+      page = requireAdmin(
+        session,
+        <PlatformIntegrationsPage
+          http={session.http}
+          selectedGateId={route.gateId}
+          onSelectGate={(id) =>
+            navigate(id ? hrefs.platformGateInstance(id) : hrefs.platformIntegrations())
+          }
+        />,
+      );
       break;
     case 'platformSettings':
       page = requireAdmin(session, <PlatformSettingsPage http={session.http} />);
