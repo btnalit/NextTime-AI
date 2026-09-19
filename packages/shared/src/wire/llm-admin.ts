@@ -116,9 +116,16 @@ export type LlmProviderWire = z.infer<typeof LlmProviderWireSchema>;
 export const LlmProviderListWireSchema = z
   .object({
     items: z.array(LlmProviderWireSchema),
-    /** Where llm-proxy last wrote the merged catalog for pi / the kernel, or `null` when the
-     *  output directory is not writable (the page explains the operator step). */
+    /** When llm-proxy last rewrote the merged catalog (`models.json`) in this process, `null`
+     *  before the first mutation since start. */
     modelsJsonWrittenAt: z.string().nullable(),
+    /** The last rewrite failure (sanitized), `null` when the last rewrite succeeded or none was
+     *  attempted — the page turns a non-null value into the operator step (state directory /
+     *  config directory ownership, docs/runbooks/operations.md 供应商管理). */
+    modelsJsonError: z.string().nullable(),
+    /** Whether llm-proxy can persist store entries at all (`false` = the state directory is not
+     *  writable; reads still work, every mutation answers 503 `store_unwritable`). */
+    storeWritable: z.boolean(),
   })
   .strict();
 export type LlmProviderListWire = z.infer<typeof LlmProviderListWireSchema>;
