@@ -55,6 +55,7 @@ describe('routeFromHash', () => {
     expect(routeFromHash('#/govern/audit?nodeId=fact-1')).toEqual({ kind: 'audit' });
     expect(routeFromHash('#/work/graph')).toEqual({ kind: 'graph' });
     expect(routeFromHash('#/work/graph?objectId=o-1&q=host')).toEqual({ kind: 'graph' });
+    expect(routeFromHash('#/platform/models')).toEqual({ kind: 'platformModels' });
     expect(routeFromHash('#/platform/integrations/gate-1')).toEqual({
       kind: 'platformIntegrations',
       gateId: 'gate-1',
@@ -106,6 +107,7 @@ describe('hrefs', () => {
       { kind: 'models' },
       { kind: 'audit' },
       { kind: 'graph' },
+      { kind: 'platformModels' },
       { kind: 'platformOverview' },
       { kind: 'platformUsers' },
       { kind: 'platformWorkspaces' },
@@ -150,6 +152,8 @@ function hrefFor(route: Route): string {
       return hrefs.audit();
     case 'graph':
       return hrefs.graph();
+    case 'platformModels':
+      return hrefs.platformModels();
     case 'platformOverview':
       return hrefs.platformOverview();
     case 'platformUsers':

@@ -6291,6 +6291,43 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "issue_llm_admin_token",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "type": "string"
+        },
+        "jti": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "url",
+        "jti",
+        "expiresAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "connection",
     "minRole": "owner",
     "mode": "write",

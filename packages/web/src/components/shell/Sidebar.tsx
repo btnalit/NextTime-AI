@@ -120,6 +120,14 @@ const PLATFORM_NAV: readonly NavItem[] = [
     icon: 'connections',
     href: hrefs.platformIntegrations(),
   },
+  // S6-B (design §6.2): providers are platform-level; the page talks to llm-proxy's admin API.
+  {
+    section: 'platformModels',
+    label: '模型与供应商',
+    sub: 'Models & providers',
+    icon: 'cpu',
+    href: hrefs.platformModels(),
+  },
   {
     section: 'platformSettings',
     label: '平台设置',

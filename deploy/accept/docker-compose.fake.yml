@@ -27,8 +27,14 @@ services:
   llm-proxy:
     volumes:
       - ./config/llm-providers.fake.example.yaml:/data/config/llm-providers.yaml:ro
+      # S6-B: the admin API rewrites models.json after every provider mutation. Under this override
+      # it writes the acceptance copy (the same file worker-supervisor's MODELS_JSON_HOST_PATH
+      # points at below), so an admin mutation during an acceptance run can never touch the
+      # production ${NEXTTIME_DATA}/config/models.json (startup already never writes it).
+      - "${NEXTTIME_DATA:?}/accept:/data/accept"
     environment:
       FAKE_LLM_API_KEY: fake
+      MODELS_JSON_OUT_FILE: /data/accept/models.json
   worker-supervisor:
     environment:
       MODELS_JSON_HOST_PATH: "${NEXTTIME_DATA:?}/accept/models.json"

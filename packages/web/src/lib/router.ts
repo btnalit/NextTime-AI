@@ -32,6 +32,7 @@ export type NavSection =
   | 'platformUsers'
   | 'platformWorkspaces'
   | 'platformIntegrations'
+  | 'platformModels'
   | 'platformSettings'
   | 'platformAudit';
 
@@ -57,6 +58,7 @@ export type Route =
   | { readonly kind: 'platformUsers' }
   | { readonly kind: 'platformWorkspaces' }
   | { readonly kind: 'platformIntegrations'; readonly gateId?: string }
+  | { readonly kind: 'platformModels' }
   | { readonly kind: 'platformSettings' }
   | { readonly kind: 'platformAudit' };
 
@@ -128,6 +130,8 @@ export function routeFromHash(fullHash: string): Route {
       ? { kind: 'platformIntegrations', gateId: decodeURIComponent(integrations[1]) }
       : { kind: 'platformIntegrations' };
   }
+  // S6-B: platform-level 模型与供应商 (providers live in llm-proxy; the page talks to /api/llm-admin).
+  if (hash === '#/platform/models') return { kind: 'platformModels' };
   if (hash === '#/platform/settings') return { kind: 'platformSettings' };
   if (hash === '#/platform/audit') return { kind: 'platformAudit' };
 
@@ -171,6 +175,7 @@ export const hrefs = {
   platformWorkspaces: () => '#/platform/workspaces',
   platformIntegrations: () => '#/platform/integrations',
   platformGateInstance: (gateId: string) => `#/platform/integrations/${encodeURIComponent(gateId)}`,
+  platformModels: () => '#/platform/models',
   platformSettings: () => '#/platform/settings',
   platformAudit: () => '#/platform/audit',
 } as const;
