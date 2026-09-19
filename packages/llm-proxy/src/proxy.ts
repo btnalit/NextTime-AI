@@ -1,8 +1,10 @@
 import http from 'node:http';
 import type { HandleClaims } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
+import type { ExhaustedBudgetRow } from './budget-sync.js';
 import type { ProviderApiKind, ProviderConfig } from './config.js';
 import { HandleAuthError, extractHandleToken, verifyInboundHandle } from './handle-auth.js';
+import { BodyTooLargeError, readBufferedBody, sendJson } from './http-util.js';
 import type { LlmUsageRecord } from './report.js';
 import { computeCostUsd, createStreamUsageAccumulator, parseUsageFromJsonBody } from './usage.js';
 
@@ -52,13 +54,6 @@ const ACTION_PATH_BY_API: Readonly<Record<ProviderApiKind, string>> = {
   'anthropic-messages': '/v1/messages',
 };
 
-export class BodyTooLargeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'BodyTooLargeError';
-  }
-}
-
 const STRIPPED_REQUEST_HEADERS = new Set([
   'host',
   'content-length',
@@ -73,24 +68,6 @@ const STRIPPED_REQUEST_HEADERS = new Set([
 ]);
 
 const STRIPPED_RESPONSE_HEADERS = new Set(['transfer-encoding', 'connection']);
-
-function readBufferedBody(req: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        req.destroy();
-        reject(new BodyTooLargeError(`request body exceeds ${maxBytes} bytes`));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
 
 function buildOutboundHeaders(
   reqHeaders: http.IncomingHttpHeaders,
@@ -123,15 +100,6 @@ function upstreamHeadersToNodeHeaders(headers: Headers): http.OutgoingHttpHeader
     if (!STRIPPED_RESPONSE_HEADERS.has(key.toLowerCase())) result[key] = value;
   });
   return result;
-}
-
-function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    'content-type': 'application/json',
-    'content-length': Buffer.byteLength(payload),
-  });
-  res.end(payload);
 }
 
 /**
@@ -205,9 +173,30 @@ function parseAndMaybeMutateBody(raw: Buffer, provider: ProviderConfig): ParsedR
 }
 
 export interface ProxyServerOptions {
-  readonly providers: Readonly<Record<string, ProviderConfig>>;
+  /** The routing table. A plain record (S1.7 shape, still what most tests pass) is read as-is;
+   *  a function is consulted per request — S6-B's `ProviderCatalog.getRoutable`, so a provider
+   *  the administrator just created, edited or disabled through the admin API is honoured by the
+   *  very next request with no restart (catalog.ts "hot reload"). A disabled provider is
+   *  `undefined` here, i.e. 404 `unknown_provider` — indistinguishable from a name that never
+   *  existed, by design. */
+  readonly providers:
+    | Readonly<Record<string, ProviderConfig>>
+    | ((name: string) => ProviderConfig | undefined);
   readonly publicKey: CryptoKey;
   readonly isRevoked: (jti: string) => boolean;
+  /** S6-B leftover 19 (budget-sync.ts): consulted after Handle verification, before anything is
+   *  forwarded. A row means "answer 402 `budget_exhausted` for this workspace" — see
+   *  `BUDGET_EXHAUSTED_STATUS` below for why 402 and not 429. Optional: absent (tests, a kernel-
+   *  less proxy) means never exhausted. */
+  readonly isBudgetExhausted?: (workspaceId: string) => ExhaustedBudgetRow | undefined;
+  /** S6-B (admin-api.ts): handles every request whose first path segment is `admin` — the
+   *  provider-management endpoints caddy exposes as `/api/llm-admin/*`. Optional: absent means
+   *  404 like any other unknown provider name (`admin` is reserved either way, config.ts). */
+  readonly adminHandler?: (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    remainderPath: string,
+  ) => Promise<void>;
   readonly reporter: { record(record: LlmUsageRecord): void };
   readonly maxRequestBodyBytes: number;
   /** Ceiling for establishing the upstream connection / receiving response headers. */
@@ -225,10 +214,29 @@ export interface ProxyServerOptions {
   readonly log?: (line: string) => void;
 }
 
+/**
+ * S6-B leftover 19: the status for a budget-exhausted workspace. 402 rather than 429 on purpose:
+ * both official SDKs pi wraps (`openai`, `@anthropic-ai/sdk`) retry a 429 automatically with
+ * backoff before surfacing it, which would turn a hard "no more spend today" into several
+ * seconds of silent retries and then the same error; neither retries a 402, so the agent sees
+ * the structured `budget_exhausted` body on the first attempt and can relay it (design doc I18:
+ * "入口 agent 得知"). The body keeps the `{error: {code, message}}` shape every other refusal
+ * here uses, plus the scope / numbers the kernel reported so the message is concrete.
+ */
+export const BUDGET_EXHAUSTED_STATUS = 402;
+
 export function createProxyServer(options: ProxyServerOptions): http.Server {
   const fetchImpl = options.fetchImpl ?? fetch;
   const resolveApiKey = options.resolveApiKey ?? ((name: string) => process.env[name]);
   const log = options.log ?? ((line: string) => console.log(line));
+  const lookupProvider: (name: string) => ProviderConfig | undefined =
+    typeof options.providers === 'function'
+      ? options.providers
+      : (
+          (providers) => (name: string) =>
+            providers[name]
+        )(options.providers);
+  const isBudgetExhausted = options.isBudgetExhausted ?? (() => undefined);
 
   async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const startedAt = new Date();
@@ -241,12 +249,20 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
 
     const segments = url.pathname.split('/').filter((segment) => segment.length > 0);
     const providerName = segments[0];
-    const provider = providerName ? options.providers[providerName] : undefined;
+    const remainderPath = `/${segments.slice(1).join('/')}`;
+
+    // S6-B: `/admin/*` is the provider-management API (admin-api.ts), authenticated by its own
+    // 5-minute platform JWT — never by a Handle. `admin` is a reserved provider name (config.ts).
+    if (providerName === 'admin' && options.adminHandler) {
+      await options.adminHandler(req, res, `${remainderPath}${url.search}`);
+      return;
+    }
+
+    const provider = providerName ? lookupProvider(providerName) : undefined;
     if (!providerName || !provider) {
       sendJson(res, 404, { error: { code: 'unknown_provider', message: 'unknown provider' } });
       return;
     }
-    const remainderPath = `/${segments.slice(1).join('/')}`;
 
     let claims: HandleClaims;
     try {
@@ -269,6 +285,34 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
         return;
       }
       throw err;
+    }
+
+    // S6-B leftover 19 (design doc I18 "到 100% 时 llm-proxy 返回预算耗尽错误"): refused after the
+    // Handle is verified (an unauthenticated caller learns nothing about a workspace's budget)
+    // and before the request body is read, let alone forwarded — no upstream spend at all. The
+    // model list stays answerable: it is synthesized locally and costs nothing.
+    const exhausted = isBudgetExhausted(claims.ws);
+    if (exhausted && !(req.method === 'GET' && remainderPath === '/v1/models')) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: refused, workspace budget exhausted',
+          provider: providerName,
+          workspaceId: claims.ws,
+          scope: exhausted.scope,
+        }),
+      );
+      sendJson(res, BUDGET_EXHAUSTED_STATUS, {
+        error: {
+          code: 'budget_exhausted',
+          message: `workspace budget exhausted (${exhausted.scope}: ${exhausted.spent} of ${exhausted.budget}); resets at ${exhausted.until}`,
+          scope: exhausted.scope,
+          budget: exhausted.budget,
+          spent: exhausted.spent,
+          resetsAt: exhausted.until,
+        },
+      });
+      return;
     }
 
     if (req.method === 'GET' && remainderPath === '/v1/models') {

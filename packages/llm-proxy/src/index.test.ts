@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -91,6 +91,73 @@ describe('@nexttime/llm-proxy', () => {
 
       const health = await getJson(addressPort(app), '/healthz');
       expect(health).toEqual({ status: 200, body: { status: 'ok' } });
+    });
+
+    it('S6-B: loads the console-managed provider store next to the yaml and merges it into the catalog', async () => {
+      dir = mkdtempSync(join(tmpdir(), 'nexttime-llm-proxy-index-'));
+
+      const providersFile = join(dir, 'llm-providers.yaml');
+      writeFileSync(
+        providersFile,
+        [
+          'providers:',
+          '  example:',
+          '    api: openai-completions',
+          '    upstream_base_url: https://api.example.invalid',
+          '    api_key_env: EXAMPLE_API_KEY',
+          '    auth:',
+          '      header: authorization',
+          '      scheme: Bearer',
+          '    models:',
+          '      - id: example-model',
+          '',
+        ].join('\n'),
+      );
+      const storeFile = join(dir, 'state', 'providers.json');
+      mkdirSync(join(dir, 'state'));
+      writeFileSync(
+        storeFile,
+        JSON.stringify({
+          version: 1,
+          providers: {
+            acme: {
+              api: 'anthropic-messages',
+              upstream_base_url: 'https://acme.example.invalid',
+              api_key_env: 'ACME_KEY',
+              auth: { header: 'x-api-key' },
+              models: [{ id: 'acme-model' }],
+              enabled: true,
+              created_at: '2026-09-19T00:00:00.000Z',
+              updated_at: '2026-09-19T00:00:00.000Z',
+            },
+          },
+        }),
+      );
+
+      const { publicKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      const handlePubFile = join(dir, 'handle.pub');
+      writeFileSync(handlePubFile, await exportSPKI(publicKey));
+
+      const config: LlmProxyConfig = {
+        ...loadConfig({
+          LLM_PROVIDERS_FILE: providersFile,
+          HANDLE_PUBLIC_KEY_FILE: handlePubFile,
+          LLM_PROVIDER_STORE_FILE: storeFile,
+          MODELS_JSON_OUT_FILE: join(dir, 'models.json'),
+        }),
+        port: 0,
+      };
+
+      app = await startLlmProxy(config);
+      expect(app.catalog.resolve().map((p) => [p.id, p.source])).toEqual([
+        ['example', 'file'],
+        ['acme', 'store'],
+      ]);
+      // Never written at startup (deploy/accept/docker-compose.fake.yml relies on this).
+      expect(existsSync(join(dir, 'models.json'))).toBe(false);
     });
 
     it('fails fast when KERNEL_URL is configured but the internal-plane token file is missing (fix/internal-plane-auth)', async () => {

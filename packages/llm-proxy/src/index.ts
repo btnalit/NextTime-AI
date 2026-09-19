@@ -1,9 +1,22 @@
+import { readFile } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { internalAuthorizationHeader } from '@nexttime/shared';
+import type { KernelAuditEvent } from './admin-api.js';
+import { createAdminApi } from './admin-api.js';
+import type { BudgetSync } from './budget-sync.js';
+import { startBudgetSync } from './budget-sync.js';
+import { ProviderCatalog } from './catalog.js';
 import type { LlmProxyConfig } from './config.js';
 import { loadConfig, loadInternalToken, loadProvidersFile } from './config.js';
+import {
+  buildModelsJsonFromCatalog,
+  serializeModelsJson,
+  writeModelsJsonAtomic,
+} from './gen-models-json.js';
 import { loadHandlePublicKey } from './handle-auth.js';
+import { ProviderStore } from './provider-store.js';
+import { runProviderTest } from './provider-test.js';
 import { createProxyServer } from './proxy.js';
 import { LlmUsageReporter } from './report.js';
 import type { RevocationSync } from './revocation.js';
@@ -25,6 +38,15 @@ import { startRevocationSync } from './revocation.js';
  * unusable token file fails `startLlmProxy` outright in that case (this proxy cannot function
  * without reporting/revocation once a kernel is configured); with no `kernelUrl` at all, the token
  * is never loaded, matching every other kernel-optional behavior in this file.
+ *
+ * S6-B (docs/console-completion-plan.md §5.4): the one exception to "stateless" is the console-
+ * managed provider store (`provider-store.ts`, `/data/state/providers.json`) — merged over the
+ * operator's yaml by `catalog.ts` and edited through the admin API (`admin-api.ts`, `/admin/*`,
+ * caddy `/api/llm-admin/*`). Two more kernel round trips join the internal plane: the budget-
+ * exhausted poll (`budget-sync.ts`, leftover 19) and the per-mutation platform audit row
+ * (`postKernelAudit` below → `POST /internal/llm-admin-audit`), both under the same internal
+ * token. `models.json` is rewritten only after an admin mutation — never at startup (see
+ * `LlmProxyConfig.modelsJsonOutFile`); a mismatch found at startup is logged instead.
  */
 export const VERSION = '0.1.0';
 
@@ -32,6 +54,8 @@ export interface LlmProxyApp {
   readonly server: Server;
   readonly reporter: LlmUsageReporter;
   readonly revocationSync: RevocationSync;
+  readonly budgetSync: BudgetSync;
+  readonly catalog: ProviderCatalog;
   close(): Promise<void>;
 }
 
@@ -52,6 +76,25 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
+/** S6-B: one kernel platform audit row per admin mutation (design line "隔离与审计只增不减":
+ *  the kernel's `platform_audit_query` shows provider changes next to every other administrator
+ *  action, keyed by the token `jti` `issue_llm_admin_token` audited). Best-effort, one attempt —
+ *  the proxy's own `level: 'audit'` line is written first and unconditionally. */
+function makeKernelAuditPoster(
+  kernelUrl: string,
+  authorizationHeader: string,
+  fetchImpl: typeof fetch = fetch,
+): (event: KernelAuditEvent) => Promise<void> {
+  return async (event) => {
+    const res = await fetchImpl(`${kernelUrl}/internal/llm-admin-audit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: authorizationHeader },
+      body: JSON.stringify(event),
+    });
+    if (!res.ok) throw new Error(`kernel responded ${res.status}`);
+  };
+}
+
 /**
  * Loads config and `llm-providers.yaml`, imports the kernel's Handle public key, starts the
  * revocation sync and usage reporter, and binds the proxy server on all interfaces (reachable
@@ -69,11 +112,41 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     ? internalAuthorizationHeader(await loadInternalToken())
     : undefined;
 
+  const store = new ProviderStore(config.providerStoreFile);
+  await store.load();
+  const catalog = new ProviderCatalog(providersFile.providers, store);
+  const log = (line: string) => console.log(line);
+
+  // Report (never fix) a stale models.json at startup — see the module doc comment.
+  const desired = serializeModelsJson(
+    buildModelsJsonFromCatalog(catalog, { llmProxyPort: config.port }),
+  );
+  const current = await readFile(config.modelsJsonOutFile, 'utf8').catch(() => undefined);
+  if (current !== desired) {
+    log(
+      JSON.stringify({
+        level: current === undefined ? 'info' : 'warn',
+        msg:
+          current === undefined
+            ? 'llm-proxy: models.json not readable at startup (fine on a dev machine); it is written after the first admin mutation or by `make gen-models`'
+            : 'llm-proxy: models.json differs from the merged provider catalog — run `make gen-models`, or save any provider in the console, to regenerate it',
+        modelsJsonOutFile: config.modelsJsonOutFile,
+        storeProviders: store.entries().length,
+      }),
+    );
+  }
+
   const revocationSync = startRevocationSync({
     kernelUrl: config.kernelUrl,
     authorizationHeader,
     intervalMs: config.revocationSyncIntervalMs,
     overlapMs: config.revocationSyncOverlapMs,
+  });
+
+  const budgetSync = startBudgetSync({
+    kernelUrl: config.kernelUrl,
+    authorizationHeader,
+    intervalMs: config.budgetSyncIntervalMs,
   });
 
   const reporter = new LlmUsageReporter({
@@ -84,10 +157,31 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     maxQueueSize: config.usageMaxQueueSize,
   });
 
+  const adminHandler = createAdminApi({
+    catalog,
+    store,
+    publicKey,
+    writeModelsJson: () =>
+      writeModelsJsonAtomic(
+        config.modelsJsonOutFile,
+        buildModelsJsonFromCatalog(catalog, { llmProxyPort: config.port }),
+      ),
+    kernelAudit:
+      config.kernelUrl && authorizationHeader
+        ? makeKernelAuditPoster(config.kernelUrl, authorizationHeader)
+        : undefined,
+    runTest: (provider, model, realKey) =>
+      runProviderTest({ provider, model, realKey, timeoutMs: config.providerTestTimeoutMs }),
+    maxRequestBodyBytes: config.maxRequestBodyBytes,
+    log,
+  });
+
   const server = createProxyServer({
-    providers: providersFile.providers,
+    providers: (name) => catalog.getRoutable(name),
     publicKey,
     isRevoked: (jti: string) => revocationSync.isRevoked(jti),
+    isBudgetExhausted: (workspaceId: string) => budgetSync.isExhausted(workspaceId),
+    adminHandler,
     reporter,
     maxRequestBodyBytes: config.maxRequestBodyBytes,
     upstreamConnectTimeoutMs: config.upstreamConnectTimeoutMs,
@@ -100,8 +194,11 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     server,
     reporter,
     revocationSync,
+    budgetSync,
+    catalog,
     async close(): Promise<void> {
       revocationSync.close();
+      budgetSync.close();
       reporter.close();
       await closeServer(server);
     },
