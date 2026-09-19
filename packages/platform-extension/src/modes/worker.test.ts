@@ -312,7 +312,7 @@ describe('registerWorkerMode', () => {
     logSpy.mockRestore();
   });
 
-  it('report_result tells the model not to re-send on a 403/409-class rejection, and agent_settled still exits 0 after re-trying the pending contract once (never a non-zero exit)', async () => {
+  it('report_result ends the turn (terminate, not a throw) on a 403/409-class rejection the model cannot fix, with the kernel’s answer in the result; agent_settled re-sends once and exits 0', async () => {
     kernel.setHandler('report_task_result', () => ({
       ok: false,
       error: { code: 'illegal_transition', message: 'Task is waiting_approval' },
@@ -322,9 +322,12 @@ describe('registerWorkerMode', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
-    await expect(
-      tool.execute('call-1', { summary: 'x' }, undefined, undefined, fakeCtx()),
-    ).rejects.toThrow(/illegal_transition: Task is waiting_approval.*do not re-send/);
+    const result = await tool.execute('call-1', { summary: 'x' }, undefined, undefined, fakeCtx());
+    expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain('illegal_transition: Task is waiting_approval');
+    expect(text).toContain('cannot be fixed from inside this Worker');
 
     const agentSettled = fake.handlers.get('agent_settled');
     if (!agentSettled) throw new Error('agent_settled handler not registered');
@@ -333,6 +336,46 @@ describe('registerWorkerMode', () => {
 
     // The tool's own attempt + agent_settled's fallback re-send of the same pending contract.
     expect(kernel.requests.filter((r) => r.capability === 'report_task_result')).toHaveLength(2);
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('report_result surfaces a fixable rejection at most twice, then ends the turn — a Worker that keeps re-sending (a scripted one replays its last step) cannot spin', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: false,
+      error: { code: 'invalid_params', message: 'bad' },
+    }));
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await expect(
+      tool.execute('call-1', { summary: 'a' }, undefined, undefined, fakeCtx()),
+    ).rejects.toThrow(/invalid_params: bad.*call report_result again/);
+    await expect(
+      tool.execute('call-2', { summary: 'b' }, undefined, undefined, fakeCtx()),
+    ).rejects.toThrow(/invalid_params: bad.*call report_result again/);
+    const third = await tool.execute('call-3', { summary: 'c' }, undefined, undefined, fakeCtx());
+    expect(third.terminate).toBe(true);
+    const [firstPart] = third.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain('Rejected 3 times');
+
+    const agentSettled = fake.handlers.get('agent_settled');
+    if (!agentSettled) throw new Error('agent_settled handler not registered');
+    await agentSettled({}, fakeCtx());
+    await flushImmediate();
+    const reportCalls = kernel.requests.filter((r) => r.capability === 'report_task_result');
+    // Three tool attempts + one agent_settled re-send of the last contract ('c').
+    expect(reportCalls.map((r) => (r.params as { summary: string }).summary)).toEqual([
+      'a',
+      'b',
+      'c',
+      'c',
+    ]);
     expect(exitSpy).toHaveBeenCalledTimes(1);
     expect(exitSpy).toHaveBeenCalledWith(0);
     errorSpy.mockRestore();

@@ -257,19 +257,34 @@ function renderAccepted(
   return `Result contract accepted — ${taskLabel}${status}.${factsLine}${rejectionText}`;
 }
 
-/** The message a kernel `{ok:false}` on `report_task_result` becomes for the model (thrown, so
- *  pi maps it to `isError:true`). `invalid_params` (400) is the one class the model can fix by
- *  re-sending a corrected contract; `forbidden` (403 — the Handle's session is not this Task's
- *  WorkerRun) and `illegal_transition` (409 — the Task is not in a state that accepts a result)
- *  are not fixable from inside the Worker, and re-sending the same contract would only repeat
- *  them. Never interpolates the Handle — `KernelError.message` never carries it. */
-function describeKernelRejection(error: KernelError): string {
+/** `invalid_params` (400) is the one kernel rejection class the model can fix by re-sending a
+ *  corrected contract; `forbidden` (403 — the Handle's session is not this Task's WorkerRun) and
+ *  `illegal_transition` (409 — the Task is not in a state that accepts a result) are not fixable
+ *  from inside the Worker, and re-sending the same contract would only repeat them. */
+function isFixableByTheModel(error: KernelError): boolean {
+  return error.code === 'invalid_params';
+}
+
+/** How many fixable rejections `report_result` surfaces as a retryable (`isError`) tool result
+ *  before it ends the turn regardless. pi only sets `isError` on a throw, and a throw cannot
+ *  `terminate` the tool batch — so a Worker that keeps re-sending a rejected contract (a
+ *  scripted fake-llm Worker literally replays its last step; a real model can ignore the hint)
+ *  would otherwise spin against the kernel until its duration limit. Two corrections is what a
+ *  fixable 400 realistically needs. */
+const MAX_FIXABLE_REJECTIONS_SURFACED = 2;
+
+/** The message a kernel `{ok:false}` on `report_task_result` becomes for the model. Never
+ *  interpolates the Handle — `KernelError.message` never carries it. */
+function describeKernelRejection(error: KernelError, willAcceptRetry: boolean): string {
   const code = error.code ?? error.kind;
   const head = `report_result: the platform rejected this result contract — ${code}: ${error.message}.`;
-  if (code === 'invalid_params') {
+  if (willAcceptRetry) {
     return `${head} Correct the contract and call report_result again.`;
   }
-  return `${head} This cannot be fixed from inside this Worker (do not re-send the same contract); state it in your final message and end your turn.`;
+  if (isFixableByTheModel(error)) {
+    return `${head} Rejected ${MAX_FIXABLE_REJECTIONS_SURFACED + 1} times — ending this turn; the last contract is re-sent as-is when the turn ends.`;
+  }
+  return `${head} This cannot be fixed from inside this Worker — ending this turn (the contract is re-sent once as-is when the turn ends; the platform records the Task outcome).`;
 }
 
 export interface WorkerModeOptions {
@@ -297,6 +312,9 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
   let resultPosted = false;
   /** `agent_settled` has run (the process exit is scheduled) — guards a double fire. */
   let settled = false;
+  /** Fixable kernel rejections already thrown back to the model — see
+   *  `MAX_FIXABLE_REJECTIONS_SURFACED`. */
+  let fixableRejectionsSurfaced = 0;
 
   async function postResultContract(
     contract: WorkerResultContract,
@@ -389,14 +407,30 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
       } catch (error) {
         logKernelError(error, 'report_task_result');
         if (error instanceof KernelError && error.kind === 'capability_error') {
-          // The kernel's own `{ok:false}` (400 invalid_params / 403 forbidden / 409
-          // illegal_transition …): thrown, so pi maps it to isError:true and the model reads the
-          // code + message and acts (a corrected contract, or ending its turn — see
-          // describeKernelRejection). This never changes the S2.7 property "a kernel 4xx must
-          // not trigger a requeue": pi catches a tool's throw into the tool *result* (the process
-          // keeps running), and agent_settled below still exits 0 unconditionally — the only exit
-          // code worker-supervisor ever sees from this path is 0.
-          throw new Error(describeKernelRejection(error));
+          // The kernel's own `{ok:false}`. This never changes the S2.7 property "a kernel 4xx
+          // must not trigger a requeue": pi catches a tool's throw into the tool *result* (the
+          // process keeps running), a returned result ends the loop normally, and agent_settled
+          // below still exits 0 unconditionally — the only exit code worker-supervisor ever sees
+          // from this path is 0.
+          const willAcceptRetry =
+            isFixableByTheModel(error) &&
+            fixableRejectionsSurfaced < MAX_FIXABLE_REJECTIONS_SURFACED;
+          if (willAcceptRetry) {
+            // 400 invalid_params: thrown, so pi maps it to isError:true and the model reads the
+            // code + message and re-sends a corrected contract.
+            fixableRejectionsSurfaced += 1;
+            throw new Error(describeKernelRejection(error, true));
+          }
+          // 403 forbidden / 409 illegal_transition / anything else, or a fixable rejection the
+          // model has already been shown MAX_FIXABLE_REJECTIONS_SURFACED times: nothing further
+          // the model can do, so the turn ends here with the kernel's answer in the tool result
+          // (see MAX_FIXABLE_REJECTIONS_SURFACED for why this is a return, not a throw).
+          // agent_settled re-sends the pending contract once and exits 0.
+          return {
+            content: [{ type: 'text', text: describeKernelRejection(error, false) }],
+            details: { rejected: { code: error.code, message: error.message } },
+            terminate: true,
+          };
         }
         // network / timeout / malformed response: nothing the model can act on. Keep the contract
         // recorded and let agent_settled re-send it once the turn ends (the pre-leftover-42

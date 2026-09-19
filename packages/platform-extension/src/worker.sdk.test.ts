@@ -322,4 +322,54 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
       fauxProvider.unregister();
     },
   );
+
+  it(
+    'a scripted model that keeps replaying report_result against an unfixable kernel rejection does not spin: the turn ends after one attempt, agent_settled re-sends once, exit 0 (fake-llm safety)',
+    { timeout: 10000 },
+    async () => {
+      kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+      kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'x' } }));
+      kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+      kernel.setHandler('report_task_result', () => ({
+        ok: false,
+        error: { code: 'illegal_transition', message: 'Task is waiting_approval' },
+      }));
+
+      const fauxProvider = registerFauxProvider();
+      let modelCalls = 0;
+      // deploy/fake-llm/server.mjs replays a scenario's *last* step on every further request —
+      // modelled here as the same report_result call answered indefinitely.
+      fauxProvider.setResponses(
+        Array.from({ length: 8 }, () => () => {
+          modelCalls += 1;
+          return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'same' }), {
+            stopReason: 'toolUse',
+          });
+        }),
+      );
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const { session, events } = await startWorkerSession(fauxProvider, tmpDir);
+      await waitFor(() => exitSpy.mock.calls.length > 0);
+
+      const reportCalls = kernel.requests.filter(
+        (request) => request.capability === 'report_task_result',
+      );
+      expect(reportCalls).toHaveLength(2); // the tool's attempt + agent_settled's one re-send
+      expect(modelCalls).toBe(1); // the loop terminated after the first tool batch
+      const toolEnds = events.filter(
+        (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
+          event.type === 'tool_execution_end' && event.toolName === 'report_result',
+      );
+      expect(toolEnds).toHaveLength(1);
+      expect(toolEnds[0]?.isError).toBe(false);
+      expect(JSON.stringify(toolEnds[0]?.result)).toContain('illegal_transition');
+      expect(exitSpy).toHaveBeenCalledTimes(1);
+      expect(exitSpy).toHaveBeenCalledWith(0);
+
+      errorSpy.mockRestore();
+      session.dispose();
+      fauxProvider.unregister();
+    },
+  );
 });
