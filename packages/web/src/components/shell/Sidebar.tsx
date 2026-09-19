@@ -32,7 +32,7 @@ interface ExternalNavItem {
 
 /** 图 Explorer — the read-only graph/decision/provenance UI (kernel `interfaces/explorer-
  *  contract`), an unmodified third-party static bundle served by caddy at `/explorer/` on this
- *  same origin. Opens in a new tab; same visibility as 工作区配置 (`showWorkspaceConfig`) since
+ *  same origin. Opens in a new tab; same visibility as the 治理 group (`showGovern`) since
  *  every Explorer endpoint requires at least the same role. */
 const EXPLORER_NAV: ExternalNavItem = {
   testId: 'nav-explorer',
@@ -59,13 +59,13 @@ const WORK_NAV: readonly NavItem[] = [
   { section: 'account', label: '我的账户', sub: 'My Account', icon: 'user', href: hrefs.account() },
 ];
 
-/** 管理 → 工作区配置 (design doc §5) — the pre-existing owner-only pages, hidden for a *proven*
- *  member (S3.11: "member 只见工作区 + 「我的智能体」"), shown otherwise (owner/operator, or role
- *  not yet known this session — see `lib/role.ts` and this task's own contract note: "show
- *  governance nav to everyone and let the kernel's 403 render as an inline state — never invent a
- *  capability") and only once a workspace is in scope (`showWorkspaceConfig` — an apiKey session
- *  always has one implicitly; a cookie session needs `selectedWorkspaceId`, since a platform admin
- *  with zero memberships has nothing here to configure). */
+/** 治理 Govern (S6-A0 §5.9 "壳与导航": 使用 / 治理 / 平台) — the per-workspace owner/operator pages,
+ *  hidden for a *proven* member (S3.11: "member 只见工作区 + 「我的智能体」"), shown otherwise
+ *  (owner/operator, or role not yet known this session — see `lib/role.ts` and the runbook's
+ *  "角色与可见性": show governance nav to everyone and let the kernel's 403 render as an inline
+ *  state — never invent a capability) and only once a workspace is in scope (`showGovern` — an
+ *  apiKey session always has one implicitly; a cookie session needs `selectedWorkspaceId`, since a
+ *  platform admin with zero memberships has nothing here to configure). */
 const GOVERN_NAV: readonly NavItem[] = [
   { section: 'members', label: '成员与授权', sub: 'Members', icon: 'users', href: hrefs.members() },
   { section: 'access', label: '访问', sub: 'Access', icon: 'key', href: hrefs.access() },
@@ -81,23 +81,26 @@ const GOVERN_NAV: readonly NavItem[] = [
   { section: 'audit', label: '审计', sub: 'Audit', icon: 'search', href: hrefs.audit() },
 ];
 
-/** 管理 → 工作区配置 → 工作区 (P-A2, design doc §2 "工作区配置归管理面") — the platform's *list* of
- *  workspaces (create / disable / entry model / allowed models / owner delegation), as opposed to
- *  the per-workspace owner pages below it. Platform-admin only and independent of workspace
- *  role/selection, exactly like 用户/平台设置: an administrator configures a workspace they are not
- *  a member of, so this item (and its 工作区配置 sub-heading) shows even with zero memberships. */
-const PLATFORM_WORKSPACES_NAV: NavItem = {
-  section: 'platformWorkspaces',
-  label: '工作区',
-  sub: 'Workspaces',
-  icon: 'grid',
-  href: hrefs.platformWorkspaces(),
-};
-
-/** 管理 → 用户 / 平台设置 (design doc §5) — platform-admin only (`platformRole === 'admin'`),
- *  independent of workspace role/selection: a platform admin manages users and platform settings
- *  even with zero workspace memberships. */
-const PLATFORM_MANAGE_NAV: readonly NavItem[] = [
+/** 平台 Platform (S6-A0 §5.9) — platform-admin only (`platformRole === 'admin'`), independent of
+ *  workspace role/selection: an administrator configures workspaces they are not a member of,
+ *  manages users and platform settings with zero memberships. Overview first (the control tower
+ *  of §5.9 "页面对照原型"), then the four management pages, then the platform audit stream —
+ *  the former 管理 → 工作区配置 / 用户 / 平台设置 and 维护 groups folded into one labelled group. */
+const PLATFORM_NAV: readonly NavItem[] = [
+  {
+    section: 'platformOverview',
+    label: '概览',
+    sub: 'Overview',
+    icon: 'info',
+    href: hrefs.platformOverview(),
+  },
+  {
+    section: 'platformWorkspaces',
+    label: '工作区',
+    sub: 'Workspaces',
+    icon: 'grid',
+    href: hrefs.platformWorkspaces(),
+  },
   {
     section: 'platformUsers',
     label: '用户',
@@ -118,17 +121,6 @@ const PLATFORM_MANAGE_NAV: readonly NavItem[] = [
     sub: 'Platform settings',
     icon: 'grid',
     href: hrefs.platformSettings(),
-  },
-];
-
-/** 维护 Maintain (design doc §5) — platform-admin only. */
-const PLATFORM_MAINTAIN_NAV: readonly NavItem[] = [
-  {
-    section: 'platformOverview',
-    label: '概览',
-    sub: 'Overview',
-    icon: 'info',
-    href: hrefs.platformOverview(),
   },
   {
     section: 'platformAudit',
@@ -166,27 +158,34 @@ export interface SidebarProps {
   readonly onLogout: () => void;
   /** Cookie-mode only: every active membership the signed-in user holds. The switcher (a `<select>`
    *  next to the workspace name) only renders when there is more than one — a single membership
-   *  has nothing to switch to, same as `showWorkspaceConfig`'s "nothing to show, don't show it"
+   *  has nothing to switch to, same as `showGovern`'s "nothing to show, don't show it"
    *  rule. */
   readonly memberships?: readonly WireMembership[];
   readonly selectedWorkspaceId?: string | null;
   readonly onSwitchWorkspace?: (workspaceId: string) => void;
   readonly switchingWorkspace?: boolean;
   /** P-A1: the signed-in user's platform role (`WireUser.platformRole`) — `undefined` for an
-   *  apiKey session (no platform user) or before a cookie session's user is known. Gates 管理 →
-   *  用户/平台设置 and the whole 维护 group. */
+   *  apiKey session (no platform user) or before a cookie session's user is known. Gates the
+   *  whole 平台 group. */
   readonly platformRole?: 'admin' | 'user';
+  /** S6-A0 footer: the kernel version (`useKernelVersion`; admin sessions only) — omitted when
+   *  unknown. */
+  readonly kernelVersion?: string | null;
+  /** S6-A0 footer: who is signed in — the cookie user's display name, or for an apiKey session
+   *  the caller Principal's (`get_workspace.caller.displayName`). Omitted when unknown. */
+  readonly currentUser?: { readonly displayName: string; readonly login?: string } | null;
 }
 
 /**
- * components/shell/Sidebar: product mark + workspace name/role badge, three nav groups per the
- * platform-admin design doc §5 — 使用 Use (always visible), 管理 Manage (工作区配置 sub-group: the
- * platform 工作区 list for an admin, the per-workspace owner pages for a non-member workspace role
- * with a workspace in scope; plus 用户/平台设置 for a platform admin),
- * 维护 Maintain (platform admin only: 概览/平台审计) — with inline icons and the live
- * pending-approvals badge, and at the bottom the WS connection dot and "Forget key". Collapses to
- * an icon rail ≤1100px and a top bar ≤720px (styles/shell.css) — labels/sub-labels/section headers
- * hide, the `title`/`aria-label`s below keep every control nameable.
+ * components/shell/Sidebar: product mark + workspace switcher / name + role badge at the top,
+ * three labelled nav groups (S6-A0, docs/console-completion-plan.md §5.9 "壳与导航") — 使用 Use
+ * (always visible), 治理 Govern (the per-workspace owner/operator pages + the Explorer link, for a
+ * non-member workspace role with a workspace in scope), 平台 Platform (platform admin only) — with
+ * inline icons and the live pending-approvals badge, and at the bottom the WS connection dot, the
+ * kernel version, the current user and sign-out. Collapses to an icon rail ≤1100px and a top bar
+ * ≤720px (styles/shell.css) — labels/sub-labels/section headers/footer lines hide, the
+ * `title`/`aria-label`s below keep every control nameable. Visibility rules are the runbook's
+ * (web-console.md "角色与可见性"), unchanged by the regrouping.
  *
  * Role badge: a `{kind:'known'}` role (`get_workspace.caller.role`, the authoritative source as of
  * the S3.11 coordination addendum) renders as the same `StatusChip machine="role"` the Members
@@ -208,11 +207,12 @@ export function Sidebar({
   onSwitchWorkspace,
   switchingWorkspace,
   platformRole,
+  kernelVersion,
+  currentUser,
 }: SidebarProps) {
-  const showWorkspaceConfig =
+  const showGovern =
     !isProvenMember(role) && (authMode === 'apiKey' || selectedWorkspaceId != null);
   const isAdmin = platformRole === 'admin';
-  const showManage = showWorkspaceConfig || isAdmin;
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
   return (
     <aside className="sidebar">
@@ -264,30 +264,16 @@ export function Sidebar({
           {WORK_NAV.map((item) => renderNavItem(item, active, pendingCount))}
         </NavSectionGroup>
 
-        {showManage ? (
-          <NavSectionGroup titleZh="管理" titleEn="Manage" testId="nav-section-manage">
-            {/* Always has at least one item under it: `showManage` is `showWorkspaceConfig ||
-                isAdmin`, and those are exactly the two branches below. */}
-            <div className="nav-section-title" data-testid="nav-subsection-workspace-config">
-              <span>工作区配置</span>
-              <span className="nav-section-title-sub">Workspace config</span>
-            </div>
-            {isAdmin ? renderNavItem(PLATFORM_WORKSPACES_NAV, active, pendingCount) : null}
-            {showWorkspaceConfig ? (
-              <>
-                {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount))}
-                {renderExternalNavItem(EXPLORER_NAV)}
-              </>
-            ) : null}
-            {isAdmin
-              ? PLATFORM_MANAGE_NAV.map((item) => renderNavItem(item, active, pendingCount))
-              : null}
+        {showGovern ? (
+          <NavSectionGroup titleZh="治理" titleEn="Govern" testId="nav-section-govern">
+            {GOVERN_NAV.map((item) => renderNavItem(item, active, pendingCount))}
+            {renderExternalNavItem(EXPLORER_NAV)}
           </NavSectionGroup>
         ) : null}
 
         {isAdmin ? (
-          <NavSectionGroup titleZh="维护" titleEn="Maintain" testId="nav-section-maintain">
-            {PLATFORM_MAINTAIN_NAV.map((item) => renderNavItem(item, active, pendingCount))}
+          <NavSectionGroup titleZh="平台" titleEn="Platform" testId="nav-section-platform">
+            {PLATFORM_NAV.map((item) => renderNavItem(item, active, pendingCount))}
           </NavSectionGroup>
         ) : null}
       </nav>
@@ -298,7 +284,30 @@ export function Sidebar({
           <span className="conn-status-label" data-testid="ws-status">
             {STATUS_LABEL[wsStatus]}
           </span>
+          {kernelVersion ? (
+            <span
+              className="sidebar-version mono"
+              title={`Kernel version ${kernelVersion}`}
+              data-testid="kernel-version"
+            >
+              {kernelVersion}
+            </span>
+          ) : null}
         </div>
+        {currentUser ? (
+          <div
+            className="sidebar-user"
+            title={
+              currentUser.login
+                ? `${currentUser.displayName} (${currentUser.login})`
+                : currentUser.displayName
+            }
+            data-testid="current-user"
+          >
+            <Icon name="user" size="s" />
+            <span className="sidebar-user-name truncate">{currentUser.displayName}</span>
+          </div>
+        ) : null}
         {authMode === 'cookie' ? (
           <Button variant="ghost" size="s" icon="logout" onClick={onLogout} title="Sign out">
             登出 Sign out

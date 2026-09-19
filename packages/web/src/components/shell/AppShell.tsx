@@ -1,11 +1,14 @@
 import type { ReactNode } from 'react';
+import { useCapability } from '../../hooks/useCapability.js';
 import { usePendingCount } from '../../hooks/usePendingCount.js';
 import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { useWsStatus } from '../../hooks/useWsStatus.js';
-import type { WireMembership } from '../../lib/auth-api.js';
+import type { WireMembership, WireUser } from '../../lib/auth-api.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
+import type { WorkspaceInfo } from '../../lib/governance.js';
 import type { NavSection } from '../../lib/router.js';
 import { Sidebar } from './Sidebar.js';
+import { useKernelVersion } from './useKernelVersion.js';
 
 export interface AppShellProps {
   readonly active: NavSection;
@@ -20,12 +23,17 @@ export interface AppShellProps {
   /** A switch is in flight — the Sidebar disables its switcher so a second pick cannot race. */
   readonly switchingWorkspace?: boolean;
   /** P-A1: `session.user?.platformRole` — `undefined` for an apiKey session. Threaded straight to
-   *  the Sidebar, which uses it to gate 管理 → 用户/平台设置 and all of 维护. */
+   *  the Sidebar, which uses it to gate the 平台 group. */
   readonly platformRole?: 'admin' | 'user';
+  /** S6-A0: the signed-in cookie user (`session.user`) for the footer's "current user" line. An
+   *  apiKey session has none — the shell then falls back to `get_workspace.caller.displayName`. */
+  readonly user?: WireUser | null;
   readonly children: ReactNode;
 }
 
-/** components/shell/AppShell: sidebar + main. Pages render inside `main` and own their `.page`. */
+/** components/shell/AppShell: sidebar + main. Pages render inside `main` and own their `.page`.
+ *  S6-A0 (§5.9 "壳与导航"): also resolves the footer's kernel version (admin only —
+ *  `useKernelVersion`) and current user for the Sidebar. */
 export function AppShell({
   active,
   http,
@@ -37,11 +45,22 @@ export function AppShell({
   onSwitchWorkspace,
   switchingWorkspace,
   platformRole,
+  user,
   children,
 }: AppShellProps) {
   const pendingCount = usePendingCount(http, pushes);
   const wsStatus = useWsStatus(pushes);
   const { workspaceName, role } = useWorkspaceIdentity(http);
+  const kernelVersion = useKernelVersion(http, platformRole === 'admin');
+  // Same cache key as `useWorkspaceIdentity`'s own `get_workspace` read (hooks/useCapability
+  // caches per caller + name + params), so this costs one refresh, not a second cold load; the
+  // `caller` field is the apiKey session's only source of "who am I".
+  const workspace = useCapability<WorkspaceInfo>(http, 'get_workspace');
+  const currentUser = user
+    ? { displayName: user.displayName, login: user.login }
+    : workspace.state.status === 'ready'
+      ? { displayName: workspace.state.data.caller.displayName }
+      : null;
   return (
     <div className="shell">
       <Sidebar
@@ -57,6 +76,8 @@ export function AppShell({
         onSwitchWorkspace={onSwitchWorkspace}
         switchingWorkspace={switchingWorkspace}
         platformRole={platformRole}
+        kernelVersion={kernelVersion}
+        currentUser={currentUser}
       />
       <main className="main">{children}</main>
     </div>
