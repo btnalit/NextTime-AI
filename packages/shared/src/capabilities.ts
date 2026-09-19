@@ -2202,17 +2202,20 @@ const platformCapabilities: readonly Capability[] = [
         /** S6 A6: only users awaiting activation (`hasPassword: false`) — the "清理待激活用户"
          *  batch entry lists these and hands the selection to `purge_user`. */
         pendingOnly: z.boolean().optional(),
-        /** S6 A6: hide *residual* users — awaiting activation, holding at least one membership,
-         *  and none of their non-disabled memberships in an active `standard` workspace (every
-         *  one is in a disabled or an `ephemeral` workspace: acceptance-run residue that
-         *  `purge_workspace` removes with the workspace, §4 edge (b)). Omitted = shown, as before. */
+        /** S6 A6: hide *residual* users — awaiting activation (`hasPassword: false`), holding at
+         *  least one membership Principal, and with **no non-disabled membership in an active
+         *  `standard` workspace**: every live membership is in a disabled or an `ephemeral`
+         *  workspace, or every membership was removed. Acceptance-run residue that
+         *  `purge_workspace` removes with the workspace (§4 edge (b)) or `purge_user` takes.
+         *  Omitted = shown, as before. The "清理待激活用户" entry lists with `pendingOnly` instead
+         *  (`hideResidual` hides exactly the users `purge_user` can take). */
         hideResidual: z.boolean().optional(),
         ...platformCursorParams,
       })
       .strict(),
     resultSchema: listEnvelope(wire.UserWireSchema),
     description:
-      'The platform user directory with each user’s memberships. `hasPassword: false` marks a user awaiting activation (backfilled from a pre-S4.1 Principal, or created without a password). No filter lists everyone; `pendingOnly` keeps only users awaiting activation, `hideResidual` drops the awaiting-activation users whose memberships are all in disabled or ephemeral workspaces (the users page’s default view).',
+      'The platform user directory with each user’s memberships. `hasPassword: false` marks a user awaiting activation (backfilled from a pre-S4.1 Principal, or created without a password). No filter lists everyone; `pendingOnly` keeps only users awaiting activation, `hideResidual` drops the awaiting-activation users who hold a membership but none that is non-disabled in an active standard workspace (the users page’s default view).',
   },
   {
     name: 'create_user',
