@@ -23,6 +23,14 @@ describe('describeError', () => {
     );
   });
 
+  it('names the client-side RPC timeout (C5) for the banner', () => {
+    const described = describeError(
+      new RpcError(-32000, 'WsClient: approve timed out after 30000ms'),
+    );
+    expect(described.code).toBe('timeout');
+    expect(described.title).toBe('No response from the kernel');
+  });
+
   it('maps JSON-RPC codes to the same stable names the HTTP transport uses', () => {
     expect(describeError(new RpcError(-32001, 'unauthorized')).code).toBe('unauthorized');
     expect(describeError(new RpcError(-32002, 'nope')).code).toBe('forbidden');

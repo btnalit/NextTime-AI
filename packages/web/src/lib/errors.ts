@@ -37,6 +37,8 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32011]: 'illegal_transition',
   [-32012]: 'quota_exceeded',
   [-32013]: 'attenuation_denied',
+  // Client-side only (lib/ws-client.ts `RPC_TIMEOUT_CODE`, C5): the kernel never answered.
+  [-32000]: 'timeout',
 };
 
 const CODE_TITLES: Readonly<Record<string, string>> = {
@@ -62,6 +64,7 @@ const CODE_TITLES: Readonly<Record<string, string>> = {
   network: 'Network error',
   invalid_response: 'Unexpected response',
   connection_closed: 'Connection closed',
+  timeout: 'No response from the kernel',
   unknown: 'Error',
 };
 
