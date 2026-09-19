@@ -2277,6 +2277,12 @@
         "createdAt": {
           "type": "string"
         },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "entryModel": {
           "type": [
             "string",
@@ -2336,6 +2342,9 @@
           },
           "type": "array"
         },
+        "purgeable": {
+          "type": "boolean"
+        },
         "purpose": {
           "enum": [
             "standard",
@@ -2360,6 +2369,8 @@
         "ontologyEnforcement",
         "purpose",
         "expiresAt",
+        "disabledAt",
+        "purgeable",
         "isDefault",
         "memberCount",
         "owners",
@@ -8986,10 +8997,16 @@
           "minLength": 1,
           "type": "string"
         },
+        "hideResidual": {
+          "type": "boolean"
+        },
         "limit": {
           "maximum": 200,
           "minimum": 1,
           "type": "integer"
+        },
+        "pendingOnly": {
+          "type": "boolean"
         },
         "query": {
           "maxLength": 100,
@@ -9264,6 +9281,16 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "includeExpired": {
+          "type": "boolean"
+        },
+        "purpose": {
+          "enum": [
+            "standard",
+            "ephemeral"
+          ],
+          "type": "string"
+        },
         "status": {
           "enum": [
             "active",
@@ -9290,6 +9317,12 @@
               },
               "createdAt": {
                 "type": "string"
+              },
+              "disabledAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "entryModel": {
                 "type": [
@@ -9350,6 +9383,9 @@
                 },
                 "type": "array"
               },
+              "purgeable": {
+                "type": "boolean"
+              },
               "purpose": {
                 "enum": [
                   "standard",
@@ -9374,6 +9410,8 @@
               "ontologyEnforcement",
               "purpose",
               "expiresAt",
+              "disabledAt",
+              "purgeable",
               "isDefault",
               "memberCount",
               "owners",
@@ -10985,6 +11023,243 @@
         "publishedBy",
         "createdAt",
         "publishedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "purge_user",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "userIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "userIds"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "outcomes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "login": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "enum": [
+                  "user_not_found",
+                  "activated",
+                  "platform_admin",
+                  "has_sessions",
+                  "active_membership",
+                  "referenced"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "purged",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "userId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "userId",
+              "login",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "purgedCount": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "outcomes",
+        "purgedCount"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "purge_workspace",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeHandles": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "counts": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "executed": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "principalIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "purgedUsers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "login": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "login"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "purpose": {
+          "enum": [
+            "standard",
+            "ephemeral"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "disabled_retention_elapsed",
+            "ephemeral_expired"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        },
+        "taskIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "totalRows": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warnings": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "activeHandles": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "service_handle_in_use",
+                "type": "string"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "principalId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "principalId",
+              "name",
+              "activeHandles"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "name",
+        "purpose",
+        "status",
+        "reason",
+        "executed",
+        "counts",
+        "totalRows",
+        "activeHandles",
+        "warnings",
+        "purgedUsers",
+        "principalIds",
+        "taskIds"
       ],
       "type": "object"
     }
@@ -13466,6 +13741,12 @@
         "createdAt": {
           "type": "string"
         },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "entryModel": {
           "type": [
             "string",
@@ -13525,6 +13806,9 @@
           },
           "type": "array"
         },
+        "purgeable": {
+          "type": "boolean"
+        },
         "purpose": {
           "enum": [
             "standard",
@@ -13549,6 +13833,8 @@
         "ontologyEnforcement",
         "purpose",
         "expiresAt",
+        "disabledAt",
+        "purgeable",
         "isDefault",
         "memberCount",
         "owners",
@@ -14390,6 +14676,12 @@
         "createdAt": {
           "type": "string"
         },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "entryModel": {
           "type": [
             "string",
@@ -14449,6 +14741,9 @@
           },
           "type": "array"
         },
+        "purgeable": {
+          "type": "boolean"
+        },
         "purpose": {
           "enum": [
             "standard",
@@ -14473,6 +14768,8 @@
         "ontologyEnforcement",
         "purpose",
         "expiresAt",
+        "disabledAt",
+        "purgeable",
         "isDefault",
         "memberCount",
         "owners",
@@ -15956,6 +16253,12 @@
         "createdAt": {
           "type": "string"
         },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "entryModel": {
           "type": [
             "string",
@@ -16015,6 +16318,9 @@
           },
           "type": "array"
         },
+        "purgeable": {
+          "type": "boolean"
+        },
         "purpose": {
           "enum": [
             "standard",
@@ -16039,6 +16345,8 @@
         "ontologyEnforcement",
         "purpose",
         "expiresAt",
+        "disabledAt",
+        "purgeable",
         "isDefault",
         "memberCount",
         "owners",

@@ -55,6 +55,8 @@ function workspace(overrides: Partial<PlatformWorkspaceWire> = {}): PlatformWork
     ontologyEnforcement: 'reject',
     purpose: 'standard',
     expiresAt: null,
+    disabledAt: null,
+    purgeable: false,
     isDefault: true,
     memberCount: 3,
     owners: [{ userId: 'u-1', login: 'alice', displayName: 'Alice', principalId: 'p-1' }],
