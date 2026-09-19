@@ -55,7 +55,11 @@ import {
   WorkerDefinitionNotPublishedError,
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
-import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
+import {
+  ActionRequestNotFoundError,
+  ApprovalReasonRequiredError,
+  ApprovalScopeError,
+} from '../../governance/approval/index.js';
 import {
   GrantNotFoundError,
   HandleIssuanceError,
@@ -246,6 +250,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // INVALID_PARAMS where an existing code already fits and only ILLEGAL_TRANSITION is new.
   if (err instanceof ApprovalScopeError) {
     return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
+  }
+  // S6-A / C25: high-blast `approve` without a reason (see capability-route.ts's own mapping).
+  if (err instanceof ApprovalReasonRequiredError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (
     err instanceof ActionRequestNotFoundError ||

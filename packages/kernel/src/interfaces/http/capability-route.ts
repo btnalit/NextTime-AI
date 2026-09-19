@@ -83,7 +83,11 @@ import {
   WorkerDefinitionNotPublishedError,
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
-import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
+import {
+  ActionRequestNotFoundError,
+  ApprovalReasonRequiredError,
+  ApprovalScopeError,
+} from '../../governance/approval/index.js';
 import {
   GrantNotFoundError,
   HandleIssuanceError,
@@ -253,6 +257,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // request itself is well-formed, the row's *state* just does not allow it right now).
   if (err instanceof ApprovalScopeError) {
     return { status: 403, code: 'forbidden', message: err.message };
+  }
+  // S6-A / C25 (docs/console-completion-plan.md §5.8, §12 item 6): `approve` on a high-blast-radius
+  // ActionRequest without a reason — a well-formed request missing a field the row's own blast
+  // radius makes mandatory, so a 400 with its own code (the console requires the field too).
+  if (err instanceof ApprovalReasonRequiredError) {
+    return { status: 400, code: err.code, message: err.message };
   }
   if (
     err instanceof ActionRequestNotFoundError ||

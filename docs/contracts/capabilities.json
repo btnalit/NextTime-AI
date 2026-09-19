@@ -215,6 +215,9 @@
         "actionRequestId": {
           "minLength": 1,
           "type": "string"
+        },
+        "reason": {
+          "type": "string"
         }
       },
       "required": [
@@ -248,6 +251,24 @@
             "high"
           ],
           "type": "string"
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decidedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "executedAt": {
           "type": [
@@ -354,6 +375,66 @@
         "executedAt",
         "failedAt",
         "requesterCanApprove"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "write",
+    "name": "archive_chat",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "chatId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "ownerPrincipalId": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ownerPrincipalId",
+        "title",
+        "visibility",
+        "createdAt",
+        "archivedAt"
       ],
       "type": "object"
     }
@@ -549,9 +630,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "minLength": 1,
+          "type": "string"
+        },
         "filter": {
           "additionalProperties": {},
           "type": "object"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -616,6 +705,92 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "member",
+    "mode": "write",
+    "name": "cancel_connection_request",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connectionRequestId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "connectionRequestId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "completedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gatekeeperId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "requestedBy": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "requested",
+            "completed",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "kind",
+        "target",
+        "requestedBy",
+        "gatekeeperId",
+        "completedBy",
+        "requestedAt",
+        "completedAt"
       ],
       "type": "object"
     }
@@ -3420,6 +3595,10 @@
         "factId": {
           "minLength": 1,
           "type": "string"
+        },
+        "nodeId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "type": "object"
@@ -3910,6 +4089,24 @@
             "high"
           ],
           "type": "string"
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decidedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "executedAt": {
           "type": [
@@ -6190,6 +6387,10 @@
           "exclusiveMinimum": 0,
           "type": "integer"
         },
+        "parentWorkerRunId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "status": {
           "anyOf": [
             {
@@ -6232,6 +6433,10 @@
               "type": "array"
             }
           ]
+        },
+        "taskId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "type": "object"
@@ -6266,6 +6471,24 @@
                   "high"
                 ],
                 "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decidedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decisionReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "executedAt": {
                 "type": [
@@ -6561,7 +6784,11 @@
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "includeArchived": {
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "result": {
@@ -6572,6 +6799,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "archivedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "createdAt": {
                 "type": "string"
               },
@@ -6596,7 +6829,8 @@
               "ownerPrincipalId",
               "title",
               "visibility",
-              "createdAt"
+              "createdAt",
+              "archivedAt"
             ],
             "type": "object"
           },
@@ -7621,6 +7855,24 @@
                   "high"
                 ],
                 "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decidedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decisionReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "executedAt": {
                 "type": [
@@ -9317,6 +9569,12 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "createdAt": {
           "type": "string"
         },
@@ -9341,7 +9599,8 @@
         "ownerPrincipalId",
         "title",
         "visibility",
-        "createdAt"
+        "createdAt",
+        "archivedAt"
       ],
       "type": "object"
     }
@@ -11305,6 +11564,24 @@
           ],
           "type": "string"
         },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decidedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "executedAt": {
           "type": [
             "string",
@@ -11456,6 +11733,73 @@
         "userId",
         "workspaceId",
         "removed"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "write",
+    "name": "rename_chat",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chatId",
+        "title"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "ownerPrincipalId": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ownerPrincipalId",
+        "title",
+        "visibility",
+        "createdAt",
+        "archivedAt"
       ],
       "type": "object"
     }
@@ -12042,6 +12386,24 @@
                 "high"
               ],
               "type": "string"
+            },
+            "decidedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decidedBy": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decisionReason": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "executedAt": {
               "type": [
@@ -14905,6 +15267,66 @@
       "required": [
         "nodes",
         "edges"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "write",
+    "name": "unarchive_chat",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "chatId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "ownerPrincipalId": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ownerPrincipalId",
+        "title",
+        "visibility",
+        "createdAt",
+        "archivedAt"
       ],
       "type": "object"
     }

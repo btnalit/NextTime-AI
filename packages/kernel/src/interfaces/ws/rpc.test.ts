@@ -11,6 +11,7 @@ import {
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
+import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
 import { OperationIdentityConflictError } from '../../governance/gatekeepers/index.js';
 import { WS_ERROR_CODES, mapDispatchError } from './rpc.js';
@@ -31,6 +32,14 @@ describe('mapDispatchError — OperationIdentityConflictError (review 2026-09, P
     );
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
     expect(mapped.message).toContain('container.restart');
+  });
+});
+
+describe('mapDispatchError — S6-A / C25 approve.reason', () => {
+  it('ApprovalReasonRequiredError maps to INVALID_PARAMS, not INTERNAL_ERROR', () => {
+    const mapped = mapDispatchError(new ApprovalReasonRequiredError('ar-1'));
+    expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
+    expect(mapped.message).toContain('reason');
   });
 });
 
