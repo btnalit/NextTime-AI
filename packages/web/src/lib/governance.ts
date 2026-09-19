@@ -1,4 +1,5 @@
 import type { GrantStatus, PrincipalKind, Role } from '@nexttime/shared';
+import type { ActionRequestRowLike } from './action-card.js';
 
 /**
  * lib/governance: wire shapes for the S3.11 governance capabilities (docs/development-tasks.md
@@ -251,3 +252,32 @@ export interface WorkspaceInfo {
   readonly gatekeeperCount: number;
   readonly caller: WorkspaceCaller;
 }
+
+// -------------------------------------------------------------------------------------------
+// Approvals (S6-A C25 / C28 — docs/console-completion-plan.md §5.8 "确认态", §6; runbook
+// web-console.md 已知缺口 5 / 6): the human decision behind a decided ActionRequest, and the
+// row shape the approvals / task pages read from `list_pending` / `get_action` /
+// `list_action_requests`. Additive to `lib/action-card.ts`'s `ActionRequestRowLike` (the chat
+// lane's file — not extended there): a consumer intersects the two.
+// -------------------------------------------------------------------------------------------
+
+/** `ActionRequestWireSchema`'s S6-A C25 fields (packages/shared/src/wire/governance.ts): read
+ *  from the Approval Decision row by every handler that returns decided rows. *Optional* on the
+ *  wire (a `request_action` projection is produced before any decision exists) and `null` when
+ *  there was no human decision (pending, auto-approved, denied, expired) — a consumer treats
+ *  absence exactly like `null`. */
+export interface ActionRequestDecisionFields {
+  readonly decisionReason?: string | null;
+  /** The deciding principal's id (`decisions.decided_by`). */
+  readonly decidedBy?: string | null;
+  readonly decidedAt?: string | null;
+  /** Opaque reference into `decisions` — the `explain{nodeId}` root the audit page uses for a
+   *  decided request (its producing Activity is `kind: 'governance.approval_decision'`). */
+  readonly approvalDecisionId?: string | null;
+}
+
+/** `ActionRequestRowLike` (lib/action-card.ts, unchanged) plus the decision fields above — what
+ *  `ApprovalQueuePage` / `TaskDetail`'s linked approvals render. Named `Row` rather than `Wire`
+ *  because the older `ActionRequestRowLike` is deliberately looser than the wire schema (every
+ *  field beyond the S2.10 set optional, so an older row shape still renders). */
+export type ActionRequestRow = ActionRequestRowLike & ActionRequestDecisionFields;
