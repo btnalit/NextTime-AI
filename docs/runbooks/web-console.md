@@ -77,6 +77,20 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 - **壳**：侧栏三组 使用 / 治理 / 平台（可见性规则见上文"角色与可见性"，未变），底部连接状态 + 内核版本（`platform_overview.version.kernel`，仅管理员会话读取）+ 当前用户。
 - **CSP**（C21）：`deploy/caddy/Caddyfile` 对 SPA 下发严格 `Content-Security-Policy`（`default-src 'self'`；`style-src` 暂含 `'unsafe-inline'`，待内联 `style={{…}}` 清理后收紧；`font-src 'self' data:` 因 Vite 会把 < 4 KB 的字体切片内联成 data URI）与 `Permissions-Policy`；`/explorer/*` 单独一块略宽的策略。改动后用 `caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile` 校验。
 
+## 图谱页（S6-D）
+
+`#/work/graph`（`components/graph/`，`docs/console-completion-plan.md` §5.7 / §12 第 1 项）：原生对象浏览器，替代第三方 Explorer bundle（bundle 作为过渡保留，侧栏"打开 Explorer（第三方）"仅在构建了 bundle 时出现）。member 及以上可用——用到的能力全部 `minRole: 'member'`。
+
+- **导航状态全在 hash query**（`lib/graph-route.ts`）：`?objectId=` 深链到一个对象（任何页面的对象 `RefChip` 都可指向它）、`?q=&type=` 是已提交的搜索、`?at=` 是"截至 As of"时刻。刷新、书签、浏览器后退都回到同一视图；`lib/router.ts` 只识别路径，query 由页面自己解析。
+- **搜索与浏览（左栏）**：`list_types{kind:'object'}` 填类型下拉（失败则退化为手填类型），`search{query, objectType?, limit:25, cursor}` keyset "加载更多"。空关键字是合法的浏览——内核按 `%%` 子串匹配返回最近更新的对象，所以落地页从不空白。
+- **对象视图（右栏）**：一次 `state_at{objectId, at}` 同时给出对象（与 `get_object` 同一查询）与触及它的全部事实（双向、完整 `FactWire` 行）。**没有用 `traverse`**：它在线上只返回 id（`{nodes, edges:{linkId, linkType, source, target, depth}}`），没有 `epistemicStatus` / `confidence` / 有效期 / `lastObservedAt`，也没有 `direction` 参数——事实行渲染不出来。`at` 由页面在挂载时冻结一次（`useCapability` 以序列化参数做缓存键），只有"刷新 Refresh"推进；沿面包屑返回先从缓存渲染再后台重验。事实按 链接类型 × 方向（出 / 入 / 自）分组，每组默认显示 8 行，"显示全部"展开；"展开 Expand"聚焦邻居并把它压进面包屑轨迹，"溯源 Provenance"开抽屉。可选的内联 SVG 邻域图：中心 + 环上最多 24 个邻居，每个邻居是 `role="button"` 的可聚焦节点（Enter / Space 聚焦），边色 = 该邻居各事实中最差的新鲜度；列表才是完整视图。
+- **溯源抽屉**：`explain{nodeId: factId}`（遗留 1 已收窄到该事实自己的 Observation）映射到 `ui/ProvenanceChain`（事实 → 活动 → 来源，原始证据折叠），来源取事实的 `lastObservation.source`，否则取活动的第一条 Observation；人工 / agent `assert_fact` 的事实没有来源段，按"无 Not recorded"显示。"在审计页打开"= `hrefs.audit()` + `?nodeId=<factId>`。
+- **新鲜度着色**（`lib/graph-freshness.ts`，S5.2 语义）：`fresh`（窗口内再观测，绿 `ok`）/ `aging`（仍有效但最近观测早于窗口，琥珀 `warn`）/ `unobserved`（人工或 agent 断言、无观测时钟，灰——**有意不告警**）/ `not_reobserved`、`invalidated`、`superseded`（灰）/ `conflict`（在未解决冲突中或 `contradicted`，红 `danger`）。只用这四个语义色。窗口是页面常量 `OBSERVATION_WINDOW_MS = 2 h`——与内核 `ops.collector_silent` 的默认值一致，内核尚未通过能力暴露真实窗口（内核缺口），图例里印出该值。年龄一律相对页面冻结的 `at` 计算，时间旅行时相对所查时刻。
+- **冲突标记**：`list_conflicts{status:'open', limit:200}` 一次加载，按 `factAId` / `factBId` 在页面内匹配（能力没有按对象 / 事实过滤，内核缺口）；控制台尚无冲突处理界面，只显示计数与冲突 id。
+- **名称解析**：`state_at` / `traverse` 只给邻居 id，也没有批量读对象的能力（内核缺口）。页面级缓存（`GraphObjectsContext`）对每个未见过的 id 调一次 `get_object`（去重、并发 4、失败不重试也不报错），搜索结果与聚焦对象直接进缓存；只有渲染出来的行才请求名称，折叠组不花钱。显示名 = `name` / `displayName` / `title` / `label` / `hostname` 属性，否则按已发布本体 `identityKey` 顺序拼身份键值（跳过 uuid 形状的外键），都没有时 `RefChip` 显示灰色裸 id 回退。
+- **三态与键盘**：加载 / 空 / 错误沿用 `SkeletonRows` / `EmptyState` / `ErrorBanner`+Retry；结果行是 `DataRow`（Enter / Space 打开），行内动作都是真按钮，SVG 节点可 Tab 到。
+- **已知边界**：邻居列表不分页（一个对象的事实一次全拉，超大 hub 靠分组折叠兜底）；`list_conflicts` 只看第一页 200 条；深度 > 1 的邻域只能逐步"展开"；对象本身不显示历史属性版本（`reconstruct` 仍在审计页）；e2e `packages/web/e2e/graph.spec.ts` 已写、未在 CI 跑过（路由接线后再跑）。
+
 ## 排障
 
 | 现象 | 先查 | 说明 |
