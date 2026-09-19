@@ -2873,6 +2873,75 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
   action_update），方案 §5.5 的"对话里的 Fact / Decision 卡片加查看溯源"无落点；内联审批卡经"在审批页打开" →
   审批页"查看溯源"两跳可达。
 
+### S6-B 模型与供应商（A3 / C29 / 遗留 19）
+
+- **llm-proxy 管理面**（`packages/llm-proxy/src/admin-api.ts` 等）：`/admin/providers*`，经 caddy `handle_path
+  /api/llm-admin/*`（`rewrite /admin{uri}`、要求 `X-Requested-With: nexttime`、排在 `/api/*` 之前）反代到
+  `llm-proxy:8082`。GET 列表（id、显示名、api 种类、base URL、鉴权头、`apiKeyEnv`、`credentialPresent` 布尔、
+  enabled、`source: file|store`、`overridesFile`、models、lastTest；列表级 `modelsJsonWrittenAt` / `modelsJsonError` /
+  `storeWritable`），POST / PUT / DELETE（对 yaml 供应商的 PUT 生成 store 覆盖——这就是"停用文件供应商"的做法；DELETE
+  只对 store 行，删掉覆盖即恢复 yaml 条目），`POST /providers/:id/test`（一次补全 + 一次**强制**工具调用，
+  `tool_choice` 按 api 种类；结果 `{completion, tool_call, latency_ms, error(去密钥、≤200 字), tested_at}`），
+  `POST /providers/:id/secret` → **501 `not_implemented`**（见下）。store `${NEXTTIME_DATA}/llm-proxy/providers.json`
+  （容器 `/data/state`，原子 `.tmp`+rename，损坏即报错），按名整体覆盖 yaml；文件条目永远 enabled；路由表实时
+  （`proxy.ts` 的 providers 变为查找函数）。每次变更原子重写 `${NEXTTIME_DATA}/config/models.json`（`config/` 目录改
+  rw 挂载，`llm-providers.yaml` / `handle.pub` / `egress-sources.json` / `ontology/` 以 `:ro` 覆盖；**启动从不写**——
+  `deploy/accept/docker-compose.fake.yml` 换掉 yaml 后不能碰生产文件，验收覆盖里 `MODELS_JSON_OUT_FILE` 指向
+  `accept/models.json`）；`make gen-models` 也合并 store，不会丢掉控制台新增的供应商。审计：代理 `level:"audit"`
+  日志行 + `POST /internal/llm-admin-audit` → 内核 `platform.llm_provider_{created|updated|deleted|tested}` 行
+  （`resource_id` 为空、`payload.resourceRef` 放 slug，与 `dispatch.ts auditResourceRef` 同一惯例；FK 违规 400
+  `unknown_actor`），两处都带 token `jti` / `sub`，永不带密钥。
+- **鉴权**：`packages/shared/src/llm-admin-token.ts`（`typ nt-llm-admin+jwt`、`aud llm-admin`、`sub` = user id、
+  `jti`、TTL ≤ 300 s；与 Handle / 门宿主 token 互不接受，双向有测试）；内核 `issue_llm_admin_token`（platform ·
+  human · admin，`application/gateway/llm-admin-handlers.ts`，用 Handle 签名私钥签，平台审计
+  `platform.llm_admin_token_issued`（resourceId = jti，payload 不含 token），结果 `{token, url:'/api/llm-admin',
+  jti, expiresAt}`）；代理 `admin-auth.ts` 用 `HANDLE_PUBLIC_KEY_FILE` 验证。web `lib/llm-admin.ts` 按 caller 缓存
+  token 到到期前 60 s，401 重试一次。
+- **页面** `components/platform/PlatformModelsPage.tsx`（`#/platform/models`）：供应商表（enabled / 凭证状态 /
+  最近测试 chip、来源标签）、新增 / 编辑抽屉（无密钥字段，鉴权头随 api 种类）、测试调用结构化结果、停用
+  `ConfirmTier high`、启用 `medium`、删除 store 行 `irreversible`，凭证状态附操作员步骤说明，
+  `storeWritable=false` / `modelsJsonError` 时禁写并提示。工作区侧 `list_platform_models` **零改动**：它每次调用
+  重读 `/data/config/models.json`，代理重写后工作区"模型与配额"与对话页头部立刻看到新供应商。
+- **C29**：`QuotaListEntryWireSchema` / `PolicyWireSchema` 早已在 `wire/governance.ts` 公开且与内核一致
+  （`KERNEL_VALIDATE_RESULTS=1` 强制）——runbook 缺口 9 的前提过时；`ModelsPage` 改为真实列渲染（配额：键 / 生效值 /
+  缺省 vs 覆盖 / 设置者 / 时间；策略：actionKindTag / blastRadius chip / 自动批准 / 请求者可批 / 设置者 / 时间）。
+- **遗留 19**（I18 "100% 时代理返回预算耗尽错误"）：内核 `GET /internal/llm-budget-exhausted`
+  （`interfaces/http/internal/llm-budget.ts`）列出今日超 `task.daily_cost_budget_usd`（jsonb 数字；JSON null = 不限）
+  或 `LLM_DAILY_TOKEN_BUDGET` 的工作区（`until` = 下一 UTC 零点，DB 时钟），超级用户池查询（与
+  `handle-revocations.ts` 同一窄例外），`llm_usage` 读仍在 `governance/llm-usage/service.ts`；代理 `budget-sync.ts`
+  每 15 s 同步、失败 fail-open，`proxy.ts` 对这些工作区在验证 Handle 后、读 body 与接触上游前回 **402
+  `budget_exhausted`**（两家官方 SDK 都会自动重试 429、都不重试 402）；内核事后止损（Task `failed:
+  budget_exhausted` + Handle 吊销 → 401）仍为兜底。
+- **被维护者决定阻塞的部分**：控制台写供应商密钥（`/providers/:id/secret`）——`console-completion-plan.md` §12 末
+  "触及有凭证系统的动作必经审批"是否约束管理员控制台操作未答。代码里没有任何路径接受密钥（输入 schema strict、审计
+  schema 无密钥字段），密钥仍走 `secrets/llm-proxy.env` 的 `<apiKeyEnv>` + `--force-recreate llm-proxy`，页面如实
+  显示"凭证：待操作员配置"。答"不过审批"→ 在同一 JWT + 审计后实现（代理侧加密存储或 env 文件写入）；答"要过审批"→ 先
+  设计审批流。
+- 其它判断（可否决）：`config/` 目录 owner 改为 10001（`scripts/host-llm-proxy-init.sh`；单文件 rw bind 不能被 rename
+  覆盖、`host-env-init.sh` 重跑会把组写清掉，故取 owner-only；文件仍 root 644、输入以 `:ro` 覆盖）；yaml 改动仍需重启
+  （bind 挂载文件 watch 不可靠）；`ProviderStore.upsert/remove` 无互斥（单管理员控制台，两次并发写可能丢一次）；
+  显示名写进 `models.json` 的 pi `name`，内核投影 `{id, provider, model}` 不带。测试：`admin-api.test.ts` 12（真实监听
+  端到端，含每条路由的鉴权、Handle → 401、原子重写、审计 + 内核事件、501、不可写重写）、`admin-auth` 7、
+  `provider-store` 8、`catalog` 4、`provider-test` 6、`budget-sync` 5；内核 `llm-admin.integration.test.ts` 3、
+  `llm-budget.test.ts` 3、`llm-admin-audit.test.ts` 3；web `PlatformModelsPage` 6。runbook：operations.md §12
+  "供应商管理（S6-B）"，`report-usage.sh --by provider`。
+
+### S6 主机应用注意（本地分支，尚未合入 / 发版）
+
+① 迁移 core 0030（`workspaces.disabled_at`，不回填——既有 `disabled` 行立即可清）与 0031（`chats.archived_at`），
+均可加、可空；② 构建前 `export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"`
+（B1；`.env` 里的 `KERNEL_VERSION` 已失效可删），重建 kernel / caddy / llm-proxy / agent-host / worker-runtime
+（platform-extension）/ collector-host-inventory；③ S6-B：先 `sudo -E sh scripts/host-llm-proxy-init.sh`（建
+`${NEXTTIME_DATA}/llm-proxy` 0750 10001、`config/` owner 10001），`up -d --force-recreate llm-proxy`（新挂载与 env）；
+④ 首次清除前：`sh scripts/delete-workspaces-matching.sh --expired`（不带 `--yes`）与 `bootstrap.js purge-workspace
+<id>`（dry-run）过一遍 `purgedUsers` 与 `service_handle_in_use` 警告，确认生产采集器 token 指向生产工作区；CLI 审计行
+需 `--actor <login>` 或 `NEXTTIME_PLATFORM_ADMINS`；⑤ 遗留 43 的 prompt 只对新发布的 `kind: worker` WorkerDefinition
+版本生效（`propose_worker_definition` + `publish_worker_definition`）；⑥ `ops.collector_silent` 若生产采集器超 2h 无
+观察会立刻 > 0；⑦ 验收：S1 → S2 → S3 复跑（`accept_s3.sh` 不再改写 `secrets/collector-host-inventory.token`），
+`--real --runs 10` 看 ssh_run_approve 摘要是否引用 actionRequestId、docker_restart 是否仍 7/10+，对话中途
+`connect_gatekeeper` 后发消息不再 `interrupted`（遗留 44），`EXPLORER_BUILD=1` 可选（原生图谱页已替代入口）；
+⑧ 控制台走查按 `console-completion-plan.md` §5 各节验收句，截图入 `docs/private/`。
+
 ---
 
 ## 6. 验收矩阵
