@@ -5,14 +5,13 @@ import { useResource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, PrincipalRow } from '../../lib/governance.js';
-import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { useRefNames } from '../ui/RefChip.js';
 
 /**
  * components/approvals/useDirectoryNames (S6-A B3 — docs/console-completion-plan.md §5.8 "id →
  * 名称", §5.9 principle 3 "id 永不裸露"): the id → name maps the approvals / tasks / audit pages
  * feed their `RefChip`s, resolved client-side from the list capabilities that already exist
- * (`list_principals`, `list_gatekeepers`, `list_worker_definitions`) — never a new kernel read.
+ * (`list_principals`, `list_gatekeepers`) — never a new kernel read.
  *
  * `list_principals` is `minRole: 'operator'` (packages/shared/src/capabilities.ts) and the
  * kernel's role rule is exact-match below owner, so a member *or an auditor* is refused: that
@@ -20,8 +19,9 @@ import { useRefNames } from '../ui/RefChip.js';
  * `list_pending` read) that answers `[]` once the session has learned the 403, instead of
  * re-firing a request that can only fail again on every mount. Any other failure also degrades
  * to `[]` — the chip then shows the grey bare id (visibly a fallback), never an error state on a
- * page whose subject is something else. The two member-level lists go through
- * `useCapabilityList` (cached per session, permissions marked by the hook itself).
+ * page whose subject is something else. The member-level gatekeeper list goes through
+ * `useCapabilityList` (cached per session, permissions marked by the hook itself); Worker
+ * definition names come from `lib/tasks.ts`'s `definitionName` over the list the pages load.
  */
 const NONE: ReadonlyMap<string, string> = new Map();
 
@@ -67,15 +67,6 @@ export function usePrincipalNames(http: CapabilityCaller): ReadonlyMap<string, s
 export function useGatekeeperNames(http: CapabilityCaller): ReadonlyMap<string, string> {
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
   return useRefNames(gatekeepers.state.status === 'ready' ? gatekeepers.state.data : undefined);
-}
-
-export function useWorkerDefinitionNames(http: CapabilityCaller): ReadonlyMap<string, string> {
-  const definitions = useCapabilityList<WorkerDefinitionSummary>(
-    http,
-    'list_worker_definitions',
-    {},
-  );
-  return useRefNames(definitions.state.status === 'ready' ? definitions.state.data : undefined);
 }
 
 /** A `RefChip`-ready `name` for `id`: the resolved name, or `null` (bare-id fallback). */

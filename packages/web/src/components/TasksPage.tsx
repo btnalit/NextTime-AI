@@ -21,6 +21,7 @@ import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Icon } from './ui/Icon.js';
 import { PageHeader } from './ui/PageHeader.js';
+import { RefChip } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { Tabs } from './ui/Tabs.js';
@@ -273,7 +274,9 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
               ) ?? '任务 Task')
             : '任务 Task'
         }
-        subtitle={selectedId ? <span className="mono">{selectedId}</span> : undefined}
+        subtitle={
+          selectedId ? <RefChip kind="object" id={selectedId} name="Task" size="s" /> : undefined
+        }
         wide
         testId="task-drawer"
       >

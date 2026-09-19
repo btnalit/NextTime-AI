@@ -466,7 +466,11 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
         open={selectedId !== undefined}
         onClose={closeDetail}
         title={selectedRow ? humanizeKind(selectedRow.actionKindTag) : '审批请求 Approval request'}
-        subtitle={selectedId ? <span className="mono">{selectedId}</span> : undefined}
+        subtitle={
+          selectedId ? (
+            <RefChip kind="actionRequest" id={selectedId} name={null} size="s" />
+          ) : undefined
+        }
         testId="approval-drawer"
       >
         {selectedRow ? (
