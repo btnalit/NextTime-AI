@@ -4,11 +4,12 @@ import type {
   ExternalRuntimeWire,
   GateInstanceWire,
 } from '@nexttime/shared';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
+import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -33,6 +34,11 @@ type Tab = 'connectors' | 'instances' | 'runtimes';
 
 export interface PlatformIntegrationsPageProps {
   readonly http: CapabilityCaller;
+  /** S6-C: `#/platform/integrations/<gateId>` — opens the 门实例 tab with that instance's drawer
+   *  (the deep link the workspace page's "平台实例" chip uses). Needs `lib/router.ts` to parse the
+   *  trailing segment (another lane's file; the exact route lines are in the S6-C report). */
+  readonly selectedGateId?: string;
+  readonly onSelectGate?: (gateId: string | null) => void;
 }
 
 /**
@@ -45,16 +51,74 @@ export interface PlatformIntegrationsPageProps {
  * `ConnectionsPage`/`AccessPage` instead — they need a workspace and a Principal, which this
  * platform-scope page has neither of (design §6.3's own split, `development-tasks.md` §P-B
  * "拆分与决定").
+ *
+ * S6-C (docs/console-completion-plan.md §5.6): the page's one primary action is "接入一个系统
+ * Connect a system" — the same `ConnectSystemLauncher` the workspace 系统接入 page opens, mounted
+ * here with `origin: 'platform'` (the workspace steps link to 系统接入). The 门实例 tab keeps its
+ * own 新建门宿主实例 button as the quick path.
  */
-export function PlatformIntegrationsPage({ http }: PlatformIntegrationsPageProps) {
-  const [tab, setTab] = useState<Tab>('connectors');
+export function PlatformIntegrationsPage({
+  http,
+  selectedGateId,
+  onSelectGate,
+}: PlatformIntegrationsPageProps) {
+  const [tab, setTab] = useState<Tab>(selectedGateId !== undefined ? 'instances' : 'connectors');
+  const [launcherOpen, setLauncherOpen] = useState(false);
+  // The instance drawer to open: the route's (deep link) or, until `lib/router.ts` carries that
+  // segment, a local one the launcher's finish sets — so "finish → see the instance" works either way.
+  const [localGateId, setLocalGateId] = useState<string | undefined>(undefined);
+  const openGateId = selectedGateId ?? localGateId;
+  // A deep link that arrives after mount (the hash changing under an already-rendered page) still
+  // lands on the instances tab.
+  useEffect(() => {
+    if (selectedGateId !== undefined) setTab('instances');
+  }, [selectedGateId]);
+  function selectGate(gateId: string | null): void {
+    setLocalGateId(gateId ?? undefined);
+    onSelectGate?.(gateId);
+  }
 
   return (
     <div className="page" data-testid="platform-integrations-page">
       <PageHeader
         title="集成 Integrations"
-        description="The platform's integration catalog: connectors, the gate instances that announced themselves, and the external runtimes using them."
+        description="平台的集成目录：接入包、announce 过的门实例、以及在用它们的外部运行时。 The platform's integration catalog: connectors, the gate instances that announced themselves, and the external runtimes using them."
+        breadcrumb={[{ label: '平台 Platform' }, { label: '集成 Integrations' }]}
+        primaryAction={
+          <Button
+            variant="primary"
+            icon="plus"
+            onClick={() => setLauncherOpen(true)}
+            data-testid="connect-system-button"
+          >
+            接入一个系统 Connect a system
+          </Button>
+        }
       />
+
+      <Drawer
+        open={launcherOpen}
+        onClose={() => setLauncherOpen(false)}
+        title="接入一个系统 Connect a system"
+        subtitle="选类型 → 连接与凭证 → 能力与策略 → 握手验证"
+        wide
+        testId="connect-system-drawer"
+      >
+        {launcherOpen ? (
+          <ConnectSystemLauncher
+            http={http}
+            origin="platform"
+            onCancel={() => setLauncherOpen(false)}
+            onFinished={(result) => {
+              setLauncherOpen(false);
+              if (result.gateId) {
+                setTab('instances');
+                selectGate(result.gateId);
+              }
+            }}
+          />
+        ) : null}
+      </Drawer>
 
       <Tabs<Tab>
         ariaLabel="Integrations tabs"
@@ -80,7 +144,9 @@ export function PlatformIntegrationsPage({ http }: PlatformIntegrationsPageProps
       />
 
       {tab === 'connectors' ? <ConnectorsTab http={http} /> : null}
-      {tab === 'instances' ? <GateInstancesTab http={http} /> : null}
+      {tab === 'instances' ? (
+        <GateInstancesTab http={http} selectedGateId={openGateId} onSelectGate={selectGate} />
+      ) : null}
       {tab === 'runtimes' ? <ExternalRuntimesTab http={http} /> : null}
     </div>
   );
@@ -326,8 +392,28 @@ type InstancesPanel =
   | { readonly kind: 'create' }
   | { readonly kind: 'gate'; readonly gateId: string };
 
-function GateInstancesTab({ http }: { readonly http: CapabilityCaller }) {
-  const [panel, setPanel] = useState<InstancesPanel>({ kind: 'closed' });
+function GateInstancesTab({
+  http,
+  selectedGateId,
+  onSelectGate,
+}: {
+  readonly http: CapabilityCaller;
+  readonly selectedGateId?: string;
+  readonly onSelectGate?: (gateId: string | null) => void;
+}) {
+  const [panel, setPanelState] = useState<InstancesPanel>(() =>
+    selectedGateId !== undefined ? { kind: 'gate', gateId: selectedGateId } : { kind: 'closed' },
+  );
+  // The route is the source of truth for which drawer is open when the page is deep-linked; a
+  // local open/close also updates the hash through `onSelectGate` when the caller wires it.
+  useEffect(() => {
+    if (selectedGateId !== undefined) setPanelState({ kind: 'gate', gateId: selectedGateId });
+  }, [selectedGateId]);
+  function setPanel(next: InstancesPanel): void {
+    setPanelState(next);
+    if (next.kind === 'gate') onSelectGate?.(next.gateId);
+    else if (panel.kind === 'gate') onSelectGate?.(null);
+  }
   const instances = useCapabilityList<GateInstanceWire>(http, 'list_gate_instances', {});
   const rows = instances.state.status === 'ready' ? instances.state.data.items : [];
   const open = panel.kind === 'gate' ? rows.find((row) => row.gateId === panel.gateId) : undefined;
