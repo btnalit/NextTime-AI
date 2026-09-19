@@ -2721,6 +2721,21 @@ const platformCapabilities: readonly Capability[] = [
     description:
       'Revoke one external runtime’s session (and every Handle issued under it) immediately.',
   },
+  // S6-B (docs/console-completion-plan.md §5.4 / §6; docs/platform-admin-design.md §6.2): the
+  // console's only kernel-side piece of provider management. The provider records live in
+  // llm-proxy (web → caddy `/api/llm-admin/*` → llm-proxy admin endpoints); the kernel signs a
+  // short-lived capability token and audits the issuance — it never sees a provider key.
+  {
+    name: 'issue_llm_admin_token',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.LlmAdminTokenWireSchema,
+    description:
+      'S6-B: a 5-minute platform JWT (signed with the Handle key, distinct typ / aud — never accepted as a Handle) that lets the administrator’s browser call llm-proxy’s provider-management endpoints via caddy `/api/llm-admin/*`. Audited as `platform.llm_admin_token_issued` with the token’s `jti`; llm-proxy’s own audit lines carry the same `jti`. The token carries no provider key and the kernel stores none.',
+  },
 ];
 
 /** The complete capability registry (design doc §9.3). */
@@ -2836,6 +2851,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'delete_gate_instance',
     'issue_gate_host_token',
     'issue_gate_credential_token',
+    'issue_llm_admin_token',
   ],
 ]);
 
