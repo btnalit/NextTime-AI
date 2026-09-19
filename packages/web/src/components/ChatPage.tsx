@@ -3,6 +3,7 @@ import {
   type KeyboardEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -24,6 +25,7 @@ import { ToolCallRowView } from './ToolCallRowView.js';
 import { TurnStatusBadge } from './TurnStatusBadge.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
+import { FollowPill } from './ui/FollowPill.js';
 import { Kbd } from './ui/Kbd.js';
 import { useToast } from './ui/Toast.js';
 
@@ -42,6 +44,9 @@ interface CardCallState {
 }
 
 const IDLE_CARD_STATE: CardCallState = { busy: false, error: null };
+/** How close to the live end (px) still counts as "at the bottom" — the reader may be a line or
+ *  two up and still expects the thread to follow. Shared by the `IntersectionObserver` root
+ *  margin and the `scroll`-event fallback below so both mechanisms agree. */
 const AT_BOTTOM_THRESHOLD_PX = 48;
 
 /**
@@ -83,9 +88,19 @@ export function ChatPage({
   >({});
   const [cardState, setCardState] = useState<Readonly<Record<string, CardCallState>>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [atBottom, setAtBottom] = useState(true);
+  // W3 auto-follow (console-completion-plan §2 row W3, §5.1, §9). `followingRef` is the intent
+  // ("keep the live end in view") read synchronously by the layout effect and the observers;
+  // `following` mirrors it for rendering the `FollowPill`. `lastWrittenTop` is the scrollTop this
+  // component itself last wrote — the way the `scroll`-event fallback tells its own programmatic
+  // scroll (which must never stop following) from the reader's.
+  const followingRef = useRef(true);
+  const lastWrittenTop = useRef(0);
+  const [following, setFollowing] = useState(true);
   const [unseen, setUnseen] = useState(0);
+  const seenCount = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,37 +178,97 @@ export function ChatPage({
     };
   }, [client, chatId]);
 
-  // Auto-scroll: follow new content only while the reader is already at the bottom; otherwise
-  // count what arrived and offer "Jump to latest".
-  const contentVersion = `${messages.length}:${turn.streamingText.length}:${turn.toolCalls.length}`;
-  const lastCount = useRef(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: contentVersion is the trigger (streamed text/tool rows), not read in the body
-  useEffect(() => {
+  const scrollToBottom = useCallback((): void => {
     const el = scrollRef.current;
     if (!el) return;
-    if (atBottom) {
-      el.scrollTop = el.scrollHeight;
-      setUnseen(0);
-    } else if (messages.length > lastCount.current) {
-      setUnseen((count) => count + (messages.length - lastCount.current));
-    }
-    lastCount.current = messages.length;
-  }, [contentVersion, atBottom, messages.length]);
-
-  const onScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const nowAtBottom = distance < AT_BOTTOM_THRESHOLD_PX;
-    setAtBottom(nowAtBottom);
-    if (nowAtBottom) setUnseen(0);
+    el.scrollTop = el.scrollHeight;
+    // Read back rather than remember `scrollHeight`: the element clamps the write to its real
+    // maximum, and that clamped value is what a later `scroll` event will report.
+    lastWrittenTop.current = el.scrollTop;
   }, []);
 
-  function jumpToLatest(): void {
+  const setFollow = useCallback((next: boolean): void => {
+    followingRef.current = next;
+    setFollowing(next);
+    if (next) setUnseen(0);
+  }, []);
+
+  // The follow write. A *layout* effect, keyed on the `messages` / `turn` object identities:
+  //   - identity, not `${messages.length}:${streamingText.length}:${toolCalls.length}`, so a
+  //     tool-call result landing in an already-rendered row (W3 mechanism b — `toolCalls.length`
+  //     unchanged, the row grows in place) is a fresh `turn` object and still scrolls;
+  //   - layout (before paint), so the observers below never get to see the un-scrolled frame —
+  //     the sentinel is back in view before the browser measures intersections.
+  // While the reader has scrolled away, count the persisted messages that arrived for the pill.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `turn` is the trigger (streamed text / tool rows grow it), not read in the body
+  useLayoutEffect(() => {
+    if (followingRef.current) {
+      scrollToBottom();
+      seenCount.current = messages.length;
+      return;
+    }
+    if (messages.length > seenCount.current) {
+      const delta = messages.length - seenCount.current;
+      setUnseen((count) => count + delta);
+    }
+    seenCount.current = messages.length;
+  }, [messages, turn, scrollToBottom]);
+
+  // Bottom sentinel + `IntersectionObserver` (W3 fix, plan §5.1 "改用 IntersectionObserver 判底"):
+  // the sentinel is the last child of the thread, so "is it within AT_BOTTOM_THRESHOLD_PX of the
+  // viewport" *is* "is the reader at the bottom". Because every content change scrolls before
+  // paint (layout effect above) and every size change re-pins (`ResizeObserver` below — resize
+  // steps run before intersection steps in the same frame), the sentinel can only leave the
+  // viewport when the reader scrolls away — and it re-entering is the reader coming back.
+  // Guarded: jsdom has neither observer, so the `scroll` fallback carries the tests.
+  useEffect(() => {
+    const root = scrollRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[entries.length - 1];
+        if (!entry) return;
+        if (entry.isIntersecting !== followingRef.current) setFollow(entry.isIntersecting);
+      },
+      { root, rootMargin: `0px 0px ${AT_BOTTOM_THRESHOLD_PX}px 0px`, threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [setFollow]);
+
+  // In-place growth that no React state announces (an image or a `<details>` opening, fonts
+  // arriving, the viewport shrinking): re-pin to the bottom while following.
+  useEffect(() => {
+    const root = scrollRef.current;
+    const thread = threadRef.current;
+    if (!root || !thread || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (followingRef.current) scrollToBottom();
+    });
+    observer.observe(thread);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [scrollToBottom]);
+
+  // `scroll`-event fallback (no `IntersectionObserver`). The event a programmatic `scrollTop`
+  // write produces is asynchronous: if the next chunk has already been committed by the time it
+  // is dispatched, the naive "distance from bottom" reads that chunk's height and stops following
+  // (W3 mechanism a). Our own write leaves `scrollTop` at `lastWrittenTop` (or beyond, if the
+  // element grew and the browser kept the position) — a reader scrolling *up* is the only way
+  // for it to read lower, so that is the one case measured.
+  const onScroll = useCallback((): void => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-    setAtBottom(true);
-    setUnseen(0);
+    if (!el || typeof IntersectionObserver !== 'undefined') return;
+    if (followingRef.current && el.scrollTop >= lastWrittenTop.current) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nowAtBottom = distance < AT_BOTTOM_THRESHOLD_PX;
+    if (nowAtBottom !== followingRef.current) setFollow(nowAtBottom);
+  }, [setFollow]);
+
+  function jumpToLatest(): void {
+    setFollow(true);
+    scrollToBottom();
   }
 
   function setCardBusy(id: string, value: boolean): void {
@@ -267,7 +342,7 @@ export function ChatPage({
       const result = await client.sendChatMessage(chatId, text);
       setTurn(streamReducer(initialTurnState, { kind: 'turnStarted', turnId: result.turnId }));
       setComposerText('');
-      setAtBottom(true);
+      setFollow(true);
       textareaRef.current?.focus();
     } catch (err) {
       setSendError(err);
@@ -385,7 +460,7 @@ export function ChatPage({
       </header>
 
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
-        <div className="chat-thread" data-testid="chat-thread">
+        <div className="chat-thread" data-testid="chat-thread" ref={threadRef}>
           {subscribeError !== null ? (
             <ErrorBanner error={subscribeError} title="Could not open this chat" />
           ) : null}
@@ -415,18 +490,24 @@ export function ChatPage({
               ) : null}
             </div>
           ) : null}
+          <div ref={sentinelRef} aria-hidden data-testid="chat-bottom-sentinel" />
         </div>
-        {!atBottom ? (
+        {!following ? (
           <div className="chat-thread" style={{ paddingTop: 0, paddingBottom: 0 }}>
-            <Button
-              variant="secondary"
-              size="s"
-              icon="arrow-down"
-              className="jump-latest"
-              onClick={jumpToLatest}
+            {/* Same anchoring as the former `.jump-latest` button, inline so the pill keeps its
+                own pill-shaped border (the class carries a rectangular box-shadow). */}
+            <div
+              className="follow-pill-anchor"
+              style={{
+                position: 'sticky',
+                bottom: 'var(--space-3)',
+                alignSelf: 'center',
+                marginTop: 'calc(-1 * var(--space-4))',
+                zIndex: 2,
+              }}
             >
-              Jump to latest{unseen > 0 ? ` (${unseen})` : ''}
-            </Button>
+              <FollowPill count={unseen} onClick={jumpToLatest} testId="follow-pill" />
+            </div>
           </div>
         ) : null}
       </div>

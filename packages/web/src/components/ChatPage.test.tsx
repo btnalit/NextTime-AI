@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ChatStreamPayload } from '@nexttime/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, test, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { ChatMessage, ChatSubscriptionHandlers, WsClient } from '../lib/ws-client.js';
@@ -137,12 +137,12 @@ describe('ChatPage inline approval card (C8)', () => {
 });
 
 /**
- * W3 reproduction (console-completion-plan §2 row W3; §9 "W3 用 ... 复现两种情形后再修") — two
- * candidate mechanisms for "the thread stops following the stream", each pinned with mocked
- * element geometry. Both are `test.fails`: the assertion states the *desired* behaviour, so the
- * test passes today only because the page still exhibits the bug, and flips red the moment the
- * chat lane fixes it (bottom sentinel + `IntersectionObserver`, or ignoring self-triggered scroll
- * events) — at which point `test.fails` becomes `it`.
+ * W3 (console-completion-plan §2 row W3; §9 "W3 用 ... 复现两种情形后再修") — the two mechanisms
+ * behind "the thread stops following the stream", each pinned with mocked element geometry.
+ * Written as `test.fails` reproductions in S6-A0; S6-A fixed both (bottom sentinel +
+ * `IntersectionObserver` in a browser, a `scroll`-event fallback that ignores the page's own
+ * `scrollTop` writes under jsdom, and a layout effect keyed on the `messages` / `turn` object
+ * identities so in-place growth still scrolls), so they now assert the fixed behaviour.
  *
  * Geometry: `.chat-scroll` gets own-property `clientHeight` (fixed viewport), `scrollHeight` (a
  * variable the test bumps when it "commits" content) and a `scrollTop` accessor that clamps to
@@ -198,7 +198,7 @@ async function startRunningTurn(fake: FakeClient): Promise<Geometry> {
   return geometry;
 }
 
-describe('W3 reproduction: auto-follow stops during a stream', () => {
+describe('W3: auto-follow keeps following during a stream', () => {
   // Mechanism (a): the `scroll` event a programmatic `scrollTop` write produces is asynchronous.
   // If the next stream chunk is committed (scrollHeight grows) before that event is dispatched,
   // `onScroll` measures the new chunk's height as "distance from bottom"; past
@@ -207,70 +207,112 @@ describe('W3 reproduction: auto-follow stops during a stream', () => {
   // event, then the effect — which is the HTML event-loop order (scroll events fire in the
   // rendering steps, React passive effects after paint); a Playwright run is what proves the
   // browser actually interleaves them this way on a fast model.
-  test.fails(
-    '(a) a stale scroll event measured after the next chunk committed must not stop following',
-    async () => {
-      const fake = fakeClient();
-      renderChat(fake.client, scriptedHttp({}));
-      const geometry = await startRunningTurn(fake);
+  it('(a) a stale scroll event measured after the next chunk committed does not stop following', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    const geometry = await startRunningTurn(fake);
 
-      // Chunk 1: two lines land, the effect writes scrollTop to the (new) bottom.
-      geometry.setScrollHeight(400);
-      act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 1\nline 2\n' }));
-      expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
+    // Chunk 1: two lines land, the effect writes scrollTop to the (new) bottom.
+    geometry.setScrollHeight(400);
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 1\nline 2\n' }));
+    expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
 
-      // Chunk 2 commits — scrollHeight grows by 100 px — and only *then* does chunk 1's scroll
-      // event arrive. `onScroll` sees 500 - 100 - 300 = 100 px > 48 px and flips atBottom.
-      geometry.setScrollHeight(500);
-      fireEvent.scroll(geometry.el);
-      act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 3\nline 4\n' }));
+    // Chunk 2 commits — scrollHeight grows by 100 px — and only *then* does chunk 1's scroll
+    // event arrive. `onScroll` sees 500 - 100 - 300 = 100 px > 48 px and flips atBottom.
+    geometry.setScrollHeight(500);
+    fireEvent.scroll(geometry.el);
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 3\nline 4\n' }));
 
-      // Chunk 3: with atBottom false the effect no longer writes scrollTop.
-      geometry.setScrollHeight(600);
-      act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 5\nline 6\n' }));
+    // Chunk 3: with atBottom false the effect no longer writes scrollTop.
+    geometry.setScrollHeight(600);
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 5\nline 6\n' }));
 
-      // Desired: the reader never scrolled up, so the view follows and no "Jump to latest" appears.
-      expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull();
-      expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
-    },
-  );
+    // The reader never scrolled up, so the view follows and no FollowPill appears.
+    expect(screen.queryByTestId('follow-pill')).toBeNull();
+    expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
+  });
 
   // Mechanism (b): the scroll write is keyed on `contentVersion` =
   // `${messages.length}:${streamingText.length}:${toolCalls.length}`. A tool-call row that is
   // already on screen and whose *result* arrives later grows in place — `toolCalls.length` is
   // unchanged, so no effect runs and nothing scrolls, with no race involved at all.
-  test.fails(
-    '(b) a tool-call result growing in place (toolCalls.length unchanged) must still scroll to the bottom',
-    async () => {
-      const fake = fakeClient();
-      renderChat(fake.client, scriptedHttp({}));
-      const geometry = await startRunningTurn(fake);
+  it('(b) a tool-call result growing in place (toolCalls.length unchanged) still scrolls to the bottom', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    const geometry = await startRunningTurn(fake);
 
-      // The row appears (toolCalls 0 → 1): the effect writes scrollTop to the bottom.
-      geometry.setScrollHeight(400);
-      act(() =>
-        fake.stream('turn-1', {
-          streamKind: 'toolCallStarted',
-          toolCallId: 'tc-1',
-          name: 'docker.logs',
-          args: { container: 'web-1' },
-        }),
-      );
-      expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
+    // The row appears (toolCalls 0 → 1): the effect writes scrollTop to the bottom.
+    geometry.setScrollHeight(400);
+    act(() =>
+      fake.stream('turn-1', {
+        streamKind: 'toolCallStarted',
+        toolCallId: 'tc-1',
+        name: 'docker.logs',
+        args: { container: 'web-1' },
+      }),
+    );
+    expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
 
-      // Its result lands — 500 px of log text — but `toolCalls.length` is still 1.
-      geometry.setScrollHeight(900);
-      act(() =>
-        fake.stream('turn-1', {
-          streamKind: 'toolCallEnded',
-          toolCallId: 'tc-1',
-          result: 'x'.repeat(4000),
-        }),
-      );
+    // Its result lands — 500 px of log text — but `toolCalls.length` is still 1.
+    geometry.setScrollHeight(900);
+    act(() =>
+      fake.stream('turn-1', {
+        streamKind: 'toolCallEnded',
+        toolCallId: 'tc-1',
+        result: 'x'.repeat(4000),
+      }),
+    );
 
-      // Desired: the view still follows the (now much taller) content.
-      expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull();
-      expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
-    },
-  );
+    // The view still follows the (now much taller) content.
+    expect(screen.queryByTestId('follow-pill')).toBeNull();
+    expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
+  });
+
+  it('a reader who scrolled up gets the FollowPill counting new messages; clicking it re-follows', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    const geometry = await startRunningTurn(fake);
+    geometry.setScrollHeight(400);
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 1\nline 2\n' }));
+    expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
+
+    // The reader scrolls to the top: below `lastWrittenTop`, so this one is measured (100 px
+    // from the bottom > 48 px) and following stops.
+    geometry.el.scrollTop = 0;
+    fireEvent.scroll(geometry.el);
+    const pill = await screen.findByTestId('follow-pill');
+    expect(pill.getAttribute('data-count')).toBe('0');
+    expect(pill.textContent).toContain('跟随最新输出');
+
+    // Two persisted messages land while scrolled away — counted, not scrolled to.
+    act(() => {
+      fake.deliver({
+        id: 'm-a',
+        role: 'assistant',
+        text: 'first',
+        createdAt: '2026-09-03T00:00:01.000Z',
+        sequence: 2,
+        content: { text: 'first' },
+      });
+      fake.deliver({
+        id: 'm-b',
+        role: 'assistant',
+        text: 'second',
+        createdAt: '2026-09-03T00:00:02.000Z',
+        sequence: 3,
+        content: { text: 'second' },
+      });
+    });
+    expect(screen.getByTestId('follow-pill').getAttribute('data-count')).toBe('2');
+    expect(screen.getByTestId('follow-pill').textContent).toContain('2 条新消息');
+    expect(geometry.scrollTop()).toBe(0);
+
+    // Clicking the pill jumps to the bottom and re-enables following.
+    fireEvent.click(screen.getByTestId('follow-pill'));
+    expect(screen.queryByTestId('follow-pill')).toBeNull();
+    expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
+    geometry.setScrollHeight(500);
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 3\n' }));
+    expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
+  });
 });
