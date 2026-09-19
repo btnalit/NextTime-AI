@@ -189,6 +189,11 @@ export const ALLOWED_NON_TOOL_WORDS = {
     'context', // the pi `context` event/injection mechanism, not a capability of this name.
     'executed', // an ActionRequest status value, not a tool.
     'pending_approval', // an ActionRequest/Task status value, not a tool.
+    // Leftover 43: the field name the worker-mode gate tool prints in its `pending_approval`
+    // result ("pending approval, actionRequestId <id>", modes/worker.ts) — the prompt tells the
+    // Worker to cite it; not a tool. (`get_action` deliberately stays *un*-allow-listed: it is a
+    // human-only capability a Worker Handle can never call, so a prompt naming it must fail here.)
+    'actionRequestId',
   ]),
 };
 
