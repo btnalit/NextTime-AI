@@ -164,14 +164,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(afterRestore.items.some((c) => c.id === chat.id)).toBe(true);
 
       // Domain rows (chat.*) plus dispatch.ts's per-capability rows, all on resource chat/<id>.
+      // Compared as a multiset: a domain row and its dispatch row are written in one transaction
+      // and share `created_at` (`now()` is transaction-start time), so their relative order is
+      // not defined.
       const actions = await auditActions(chat.id);
-      expect(actions).toEqual([
-        'new_chat',
-        'chat.archive',
-        'archive_chat',
-        'chat.unarchive',
-        'unarchive_chat',
-      ]);
+      expect([...actions].sort()).toEqual(
+        ['new_chat', 'chat.archive', 'archive_chat', 'chat.unarchive', 'unarchive_chat'].sort(),
+      );
     });
 
     it('rename_chat: normalizes, is audited as chat.rename, and is never overwritten by the auto-title of the first message', async () => {
