@@ -24,12 +24,14 @@ Handle）、`docs/runbooks/host-explorer.md`（Explorer 九个端点里本脚本
 - 主机上有 `docker`、`docker compose`；**没有** `node`/`corepack`——脚本把每一次 kernel/Explorer/MCP
   交互都放进一次性 kernel 镜像容器里跑（见脚本头注释）。
 
-**先读：共享状态警告。** 本脚本会覆盖 `${NEXTTIME_DATA}/secrets/collector-host-inventory.token`
-——docker-compose.yml 里 `collector-host-inventory` 服务用的**同一个** Docker file secret 路径，
-Docker secret 没有按次调用覆盖的机制。这是真实的运维副作用，不是写进 scratch 目录的 fixture——
-只在专用验收环境跑，或者接受主机上真实采集器的下一轮会用这把 token 认证进本次的验收工作区，直到按
-`docs/runbooks/host-collector.md` §2 重新铸造。（S5.3 之前采集器还在磁盘缓存 Source id、本脚本要
-先删它；`register_source` 现在按 (kind, name) 幂等，采集器不再有任何本地状态。）
+**生产采集器的 token 不再被触碰（S6，遗留 41）。** 本脚本把本次验收用的采集器 Handle 铸到
+`${NEXTTIME_DATA}/accept/collector-s3-<时间戳>-<pid>.token`（目录 0750、文件 0644，与 `scripts/demo.sh`
+同一做法），只对那一次 `collector-host-inventory --once` 用 `docker compose run -e
+NEXTTIME_HANDLE_TOKEN_FILE=… -v <文件>:…:ro` 指过去，退出时（成功、失败、ssh 断开都经 EXIT / HUP trap）
+删除。`${NEXTTIME_DATA}/secrets/collector-host-inventory.token` 与常驻的 `collector-host-inventory`
+服务全程用自己的 token 继续跑——S6 之前本脚本覆盖那个文件，真实采集器随即对着已禁用的验收工作区 401
+了一周没人发现，就是遗留 41。（S5.3 之前采集器还在磁盘缓存 Source id、本脚本要先删它；`register_source`
+现在按 (kind, name) 幂等，采集器不再有任何本地状态。）
 
 ## 2. 怎么跑
 
@@ -68,7 +70,7 @@ PASS preflight-migrations up to date
 PASS preflight-collector-build collector-host-inventory image built
 PASS bootstrap-workspace workspace=<uuid> owner=<uuid> key=abc123...(redacted)
 PASS seed-domain-pack domain pack published: ops-assets (id=<uuid>, version=1)
-PASS collector-issue-service-handle token minted and written to ${NEXTTIME_DATA}/secrets/collector-host-inventory.token: 9f3a1c...(redacted)
+PASS collector-issue-service-handle token minted into a run-private file (never ${NEXTTIME_DATA}/secrets/collector-host-inventory.token): 9f3a1c...(redacted)
 PASS collector-first-run objectsUpserted=<N> factsAsserted=<N>
 PASS collector-container-search containerId=<uuid>
 PASS collector-runs-on-host Container <uuid> runs_on Host — 1 edge(s)
@@ -90,7 +92,8 @@ PASS mcp-issue-handle interactive Handle minted: eyJhbGc...(redacted)
 PASS mcp-tools-list tools=explain,get_object,get_task,search,state_at,traverse,...
 PASS mcp-traverse MCP traverse sees the same graph: {"isError":false,"edges":1}
 PASS mcp-no-handle no Handle -> 401
-PASS cleanup workspace retained: <uuid> (clean up periodically with: sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes)
+cleanup: deleted the run-private collector token (${NEXTTIME_DATA}/accept/collector-s3-<ts>-<pid>.token) — the production collector's own secret was never touched
+PASS cleanup workspace retained: <uuid> (purged by: sh scripts/delete-workspaces-matching.sh --expired --yes once its 7-day TTL passes)
 S3 OK
 ```
 
@@ -154,7 +157,8 @@ sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
 ```
 
 验收工作区自 S5.3 起以 `--purpose ephemeral --ttl 7d` 创建，到期后 `sh scripts/delete-workspaces-matching.sh
---expired --yes` 也能按策略清掉，不必再靠名字正则。`${NEXTTIME_DATA}/secrets/collector-host-inventory.token`
-**不会**被这次清理恢复——见 §1 的"共享状态警告"；需要把主机恢复到一个真实采集器部署应有的状态时，
-重新走一遍 `docs/runbooks/host-collector.md` §2（铸造一个新的、非验收用的 service Handle 覆盖回同一个
-文件）。
+--expired --yes` 按策略清掉（S6 起走受治理的 `purge-workspace`：级联删除、从未激活的 owner / alice / bob
+用户一并删除、平台审计行 `platform.workspace_purged` 保留——见 `docs/runbooks/operations.md` "工作区清除"），
+不必再靠名字正则；名字正则仍可用，但未到期的验收工作区会被内核拒绝（按名字批量删只对已到期 / 已禁用满 7 天
+的生效，`--force` 是操作员越权路径）。S6 起本脚本不再动 `${NEXTTIME_DATA}/secrets/collector-host-inventory.token`，
+验收之后不需要重铸生产采集器的 Handle（见 §1）。
