@@ -184,9 +184,20 @@ export function ConnectSystemLauncher({
   }, [step, refreshPoll]);
   const tracked: readonly TrackedGate[] = useMemo(() => {
     const rows = poll.state.status === 'ready' ? poll.state.data : [];
-    const mapped = rows.map((row) =>
-      'hosted' in row ? fromPlatformRow(row) : fromAvailableRow(row),
-    );
+    // The newer of the two wins per gate: a platform write's answer (`ownInstance`) over a poll
+    // row read before it, the poll over a stale answer (`updatedAt` is bumped on every write and
+    // announce — ISO strings compare lexicographically).
+    const mapped = rows.map((row) => {
+      if (
+        ownInstance &&
+        'hosted' in row &&
+        row.gateId === ownInstance.gateId &&
+        ownInstance.updatedAt > row.updatedAt
+      ) {
+        return fromPlatformRow(ownInstance);
+      }
+      return 'hosted' in row ? fromPlatformRow(row) : fromAvailableRow(row);
+    });
     if (ownInstance && !mapped.some((row) => row.gateId === ownInstance.gateId)) {
       mapped.unshift(fromPlatformRow(ownInstance));
     }
@@ -201,7 +212,7 @@ export function ConnectSystemLauncher({
   useEffect(() => {
     if (!ownInstance || poll.state.status !== 'ready') return;
     const fresh = poll.state.data.find((row) => row.gateId === ownInstance.gateId);
-    if (fresh && 'hosted' in fresh && fresh.updatedAt !== ownInstance.updatedAt) {
+    if (fresh && 'hosted' in fresh && fresh.updatedAt > ownInstance.updatedAt) {
       setOwnInstance(fresh);
     }
   }, [poll.state, ownInstance]);

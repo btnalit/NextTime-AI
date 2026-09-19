@@ -103,9 +103,13 @@ export function PackagedGateChecklist({ kind, gateId = '', testId }: PackagedGat
         </li>
         <li>
           在 <code>docker-compose.yml</code> 追加服务块（additive-only）： Append the service block:
-          <pre className="mono" data-testid="packaged-gate-compose">
-            {compose}
-          </pre>
+          {/* `.table-scroll` is the one existing horizontal-scroll box; a dedicated code-block
+              rule (surface-2 + border + padding, tokens only) is reported for the styles lane. */}
+          <div className="table-scroll">
+            <pre className="mono" data-testid="packaged-gate-compose">
+              {compose}
+            </pre>
+          </div>
         </li>
         <li>
           <code className="mono">mkdir -p "&lt;NEXTTIME_DATA&gt;/gatekeepers/{system}"</code>，然后{' '}
