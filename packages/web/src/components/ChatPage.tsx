@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { actionCardFromPendingContent, isPendingCardMessage } from '../lib/action-card.js';
+import { type ChatSummary, applyChatMetadata, isArchived } from '../lib/chat-lifecycle.js';
 import { insertChatMessage } from '../lib/chat-messages.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
@@ -19,14 +20,15 @@ import { systemStatusLineFromMessage } from '../lib/system-status.js';
 import type { ChatMessage, ChatSubscriptionHandlers, WsClient } from '../lib/ws-client.js';
 import { TurnAlreadyRunningError } from '../lib/ws-client.js';
 import { ActionRequestCard } from './ActionRequestCard.js';
-import type { ChatSummary } from './ChatListPage.js';
 import { SystemStatusLineView } from './SystemStatusLineView.js';
 import { ToolCallRowView } from './ToolCallRowView.js';
-import { TurnStatusBadge } from './TurnStatusBadge.js';
+import { ChatHeader } from './chat/ChatHeader.js';
+import { useRestoreChat } from './chat/ChatLifecycleActions.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { FollowPill } from './ui/FollowPill.js';
 import { Kbd } from './ui/Kbd.js';
+import { Notice } from './ui/Notice.js';
 import { useToast } from './ui/Toast.js';
 
 export interface ChatPageProps {
@@ -58,6 +60,13 @@ const AT_BOTTOM_THRESHOLD_PX = 48;
  *
  * The human channel has no "is a Turn running" read (S1.8 假设与偏离); the composer starts enabled
  * and learns of a foreign Turn from `send_chat_message`'s -32010 (`TurnAlreadyRunningError`).
+ *
+ * S6-A (console-completion-plan §5.1): the chat's own row (`chat` — title, `archivedAt`) comes
+ * from `list_chats{includeArchived: true}` and is kept current by `chat.metadata {title}` /
+ * `{archivedAt}` pushes (`applyChatMetadata`) and by the header's own rename / archive / restore
+ * results. An archived chat is read-only *here*: the composer is disabled with a 恢复 Restore
+ * note. The kernel does not refuse `send_chat_message` on an archived chat (`sendChatMessage`
+ * only checks access), so this is a client-side rule — restoring is one click away.
  */
 export function ChatPage({
   client,
@@ -76,7 +85,8 @@ export function ChatPage({
   const [composerText, setComposerText] = useState('');
   const [sendError, setSendError] = useState<unknown | null>(null);
   const [busy, setBusy] = useState(false);
-  const [title, setTitle] = useState<string | null>(null);
+  const [chat, setChat] = useState<ChatSummary | null>(null);
+  const [chatLookupFailed, setChatLookupFailed] = useState(false);
   const [actionStatusOverrides, setActionStatusOverrides] = useState<
     Readonly<Record<string, string>>
   >({});
@@ -100,20 +110,29 @@ export function ChatPage({
 
   useEffect(() => {
     let cancelled = false;
+    setChat(null);
+    setChatLookupFailed(false);
     client
-      .call<{ items: readonly ChatSummary[] }>('list_chats')
+      .call<{ items: readonly ChatSummary[] }>('list_chats', { includeArchived: true })
       .then((page) => {
         if (cancelled) return;
-        const match = page.items.find((chat) => chat.id === chatId);
-        setTitle(match?.title ?? 'Untitled chat');
+        const match = page.items.find((row) => row.id === chatId);
+        if (match) setChat(match);
+        else setChatLookupFailed(true);
       })
       .catch(() => {
-        if (!cancelled) setTitle('Chat');
+        if (!cancelled) setChatLookupFailed(true);
       });
     return () => {
       cancelled = true;
     };
   }, [client, chatId]);
+
+  const onChatChanged = useCallback((updated: ChatSummary): void => {
+    setChat(updated);
+  }, []);
+  const { restore, restoringId } = useRestoreChat(client, onChatChanged);
+  const archived = chat !== null && isArchived(chat);
 
   useEffect(
     () =>
@@ -150,8 +169,14 @@ export function ChatPage({
       onMetadata: (metadata) => {
         if (cancelled) return;
         setTurn((prev) => streamReducer(prev, { kind: 'metadata', metadata }));
-        // Any chat.metadata means the chat's one running Turn ended (one running Turn per chat).
-        setSendError((prev: unknown) => (prev instanceof TurnAlreadyRunningError ? null : prev));
+        // Lifecycle pushes (`{title}` from the auto-title / a rename, `{archivedAt}` from
+        // archive / restore) update the header and the read-only state in place.
+        setChat((prev) => (prev ? applyChatMetadata(prev, metadata) : prev));
+        // A Turn-end push (`{turnId, turnStatus}`) means the chat's one running Turn ended (one
+        // running Turn per chat) — a lifecycle push says nothing about that, so it is gated.
+        if (typeof metadata.turnStatus === 'string') {
+          setSendError((prev: unknown) => (prev instanceof TurnAlreadyRunningError ? null : prev));
+        }
       },
       onCaughtUp: () => {
         if (!cancelled) setCaughtUp(true);
@@ -342,7 +367,7 @@ export function ChatPage({
 
   async function send(): Promise<void> {
     const text = composerText.trim();
-    if (!text || turn.status === 'running' || busy) return;
+    if (!text || turn.status === 'running' || busy || archived) return;
     setSendError(null);
     setBusy(true);
     try {
@@ -381,7 +406,7 @@ export function ChatPage({
     }
   }
 
-  const composerDisabled = turn.status === 'running' || busy;
+  const composerDisabled = turn.status === 'running' || busy || archived;
   const canAlwaysAllow = !permissions.isDenied('set_auto_approved_action_kind');
 
   function renderMessage(message: ChatMessage) {
@@ -440,42 +465,31 @@ export function ChatPage({
 
   return (
     <div className="chat-page" data-testid="chat-page">
-      <header className="chat-header">
-        <Button
-          variant="ghost"
-          size="s"
-          icon="arrow-left"
-          iconOnly
-          aria-label="Back to chats"
-          onClick={onBack}
-        />
-        <h1 className="chat-header-title">{title ?? ' '}</h1>
-        <TurnStatusBadge status={turn.status} />
-        <div className="grow" />
-        <Button
-          variant={turn.status === 'running' ? 'danger' : 'ghost'}
-          size="s"
-          icon="stop"
-          onClick={() => void handleStop()}
-          disabled={busy}
-          title="Stop the running turn"
-        >
-          Stop
-        </Button>
-      </header>
+      <ChatHeader
+        client={client}
+        http={http}
+        chat={chat}
+        lookupFailed={chatLookupFailed}
+        turnStatus={turn.status}
+        stopBusy={busy}
+        onBack={onBack}
+        onStop={() => void handleStop()}
+        onChatChanged={onChatChanged}
+      />
 
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-thread" data-testid="chat-thread" ref={threadRef}>
           {subscribeError !== null ? (
-            <ErrorBanner error={subscribeError} title="Could not open this chat" />
+            <ErrorBanner error={subscribeError} title="无法打开对话 Could not open this chat" />
           ) : null}
           {!caughtUp && subscribeError === null ? (
-            <p className="chat-empty">Loading history…</p>
+            <p className="chat-empty">正在加载历史… Loading history…</p>
           ) : null}
           {caughtUp && messages.length === 0 && turn.status !== 'running' ? (
             <p className="chat-empty">
-              No messages yet. Ask the entry agent something — it can observe systems, propose
-              actions and delegate to Workers.
+              还没有消息。问入口 agent 点什么——它可以观察系统、提出动作并委派给 Worker。 No messages
+              yet. Ask the entry agent something — it can observe systems, propose actions and
+              delegate to Workers.
             </p>
           ) : null}
           {messages.map(renderMessage)}
@@ -519,6 +533,22 @@ export function ChatPage({
 
       <div className="composer-wrap">
         <form className="composer" onSubmit={handleSubmit}>
+          {archived && chat ? (
+            <Notice tone="info" testId="chat-archived-notice">
+              <span className="row-wrap">
+                <span>已归档：这个对话是只读的。 Archived — this chat is read-only.</span>
+                <Button
+                  variant="secondary"
+                  size="s"
+                  onClick={() => void restore(chat)}
+                  loading={restoringId === chat.id}
+                  data-testid="chat-composer-restore"
+                >
+                  恢复 Restore
+                </Button>
+              </span>
+            </Notice>
+          ) : null}
           {sendError !== null ? <ErrorBanner error={sendError} /> : null}
           <div className="composer-box">
             <textarea
@@ -527,7 +557,11 @@ export function ChatPage({
               onChange={(event) => setComposerText(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               placeholder={
-                composerDisabled ? 'Waiting for the current turn to finish…' : 'Message…'
+                archived
+                  ? '已归档 Archived'
+                  : composerDisabled
+                    ? '等待本轮结束… Waiting for the current turn to finish…'
+                    : 'Message…'
               }
               disabled={composerDisabled}
               rows={Math.min(6, Math.max(1, composerText.split('\n').length))}
@@ -546,7 +580,7 @@ export function ChatPage({
           </div>
           <div className="composer-hint">
             <span>
-              <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> for a new line
+              <Kbd>Enter</Kbd> 发送 send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> 换行 new line
             </span>
             <span className="mono" title={chatId}>
               {chatId.slice(0, 8)}

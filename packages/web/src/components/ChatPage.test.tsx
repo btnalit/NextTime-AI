@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { ChatStreamPayload } from '@nexttime/shared';
+import type { ChatStreamPayload, ChatWire } from '@nexttime/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
@@ -24,11 +24,28 @@ interface FakeClient {
   readonly caughtUp: () => void;
 }
 
-function fakeClient(): FakeClient {
+function chatRow(overrides: Partial<ChatWire> = {}): ChatWire {
+  return {
+    id: 'chat-1',
+    ownerPrincipalId: 'p-1',
+    title: 'Ops chat',
+    visibility: 'private',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
+function fakeClient(
+  extraCalls: Record<string, (params: unknown) => unknown | Promise<unknown>> = {},
+  row: ChatWire = chatRow(),
+): FakeClient {
   let handlers: ChatSubscriptionHandlers | undefined;
   const client = {
-    call: vi.fn(async (name: string) => {
-      if (name === 'list_chats') return { items: [{ id: 'chat-1', title: 'Ops chat' }] };
+    call: vi.fn(async (name: string, params?: unknown) => {
+      if (name === 'list_chats') return { items: [row] };
+      const handler = extraCalls[name];
+      if (handler) return handler(params);
       throw new Error(`unscripted ws capability ${name}`);
     }),
     subscribeChat: vi.fn(
@@ -53,12 +70,22 @@ function fakeClient(): FakeClient {
   };
 }
 
+/** The header's `ModelSwitcher` reads these on mount; decision assertions look past them. */
+const HEADER_READS = new Set(['get_agent_profile', 'get_agent_policy', 'list_models']);
+
+interface ScriptedHttp extends CapabilityCaller {
+  readonly calls: { readonly name: string; readonly params: unknown }[];
+  /** Calls other than the header's profile / policy / catalog reads. */
+  readonly decisions: () => { readonly name: string; readonly params: unknown }[];
+}
+
 function scriptedHttp(
   handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,
-): CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] } {
+): ScriptedHttp {
   const calls: { name: string; params: unknown }[] = [];
   return {
     calls,
+    decisions: () => calls.filter((call) => !HEADER_READS.has(call.name)),
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push({ name, params });
       const handler = handlers[name];
@@ -125,13 +152,13 @@ describe('ChatPage inline approval card (C8)', () => {
     fireEvent.click(within(card).getByRole('button', { name: /Always allow/ }));
 
     await waitFor(() =>
-      expect(http.calls.map((call) => call.name)).toEqual([
+      expect(http.decisions().map((call) => call.name)).toEqual([
         'approve',
         'set_auto_approved_action_kind',
       ]),
     );
-    expect(http.calls[0]?.params).toEqual({ actionRequestId: 'ar-1' });
-    expect(http.calls[1]?.params).toEqual({ actionKindTag: 'docker.container_restart' });
+    expect(http.decisions()[0]?.params).toEqual({ actionRequestId: 'ar-1' });
+    expect(http.decisions()[1]?.params).toEqual({ actionKindTag: 'docker.container_restart' });
     await screen.findByText(/will be auto-approved from now on/);
     // The card left `pending_approval` in place (the `approve` result's status) — the outcome
     // line sits beside the shared card inside the `.action-card` wrapper.
@@ -161,8 +188,8 @@ describe('ChatPage inline approval card (C8)', () => {
       target: { value: 'planned maintenance' },
     });
     fireEvent.click(within(card).getByRole('button', { name: /Approve/ }));
-    await waitFor(() => expect(http.calls).toHaveLength(1));
-    expect(http.calls[0]?.params).toEqual({
+    await waitFor(() => expect(http.decisions()).toHaveLength(1));
+    expect(http.decisions()[0]?.params).toEqual({
       actionRequestId: 'ar-1',
       reason: 'planned maintenance',
     });
@@ -231,7 +258,7 @@ async function startRunningTurn(fake: FakeClient): Promise<Geometry> {
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(fake.client.sendChatMessage).toHaveBeenCalled());
-  await screen.findByText('Agent is responding');
+  await screen.findByText(/Agent is responding/);
   return geometry;
 }
 
@@ -351,5 +378,282 @@ describe('W3: auto-follow keeps following during a stream', () => {
     geometry.setScrollHeight(500);
     act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'line 3\n' }));
     expect(geometry.scrollTop()).toBe(geometry.maxScrollTop());
+  });
+});
+
+// ---- S6-A / C22: send + stream, header, model switch, archived read-only ----------------------
+
+function persisted(sequence: number, role: 'user' | 'assistant', text: string): ChatMessage {
+  return {
+    id: `m-${sequence}`,
+    role,
+    text,
+    createdAt: `2026-09-03T00:00:0${sequence}.000Z`,
+    sequence,
+    content: { text },
+  };
+}
+
+const PROFILE = {
+  principalId: 'p-1',
+  model: null as string | null,
+  enabledSkills: null,
+  enabledGatekeepers: null,
+  enabledWorkerDefinitions: null,
+  promptAddendum: null,
+  autoApproveLow: null,
+  updatedAt: null,
+  updatedBy: null,
+  effective: {
+    model: 'openai/gpt-4o',
+    enabledSkills: [],
+    enabledGatekeepers: [],
+    enabledWorkerDefinitions: [],
+    promptAddendum: '',
+    autoApproveLow: false,
+  },
+};
+
+const POLICY = {
+  workspaceId: 'ws-1',
+  allowedModels: ['openai/gpt-4o', 'anthropic/claude-sonnet'],
+  defaultModel: 'openai/gpt-4o',
+  memberCanEditProfile: true,
+  maxPromptAddendumChars: 2000,
+  allowedSkills: [],
+  allowedGatekeepers: [],
+  allowMemberAutoApproveLow: false,
+  updatedAt: null,
+  updatedBy: null,
+};
+
+const MODELS = {
+  items: [
+    { id: 'openai/gpt-4o', provider: 'openai', model: 'gpt-4o' },
+    { id: 'anthropic/claude-sonnet', provider: 'anthropic', model: 'claude-sonnet' },
+    { id: 'deepseek/chat', provider: 'deepseek', model: 'chat' },
+  ],
+};
+
+function headerHttp(
+  extra: Record<string, (params: unknown) => unknown | Promise<unknown>> = {},
+  profile = PROFILE,
+) {
+  return scriptedHttp({
+    get_agent_profile: () => profile,
+    get_agent_policy: () => POLICY,
+    list_models: () => MODELS,
+    ...extra,
+  });
+}
+
+describe('ChatPage send and stream (C22)', () => {
+  it('sends the composer text, renders the stream, and settles when the Turn ends', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    expect(fake.client.subscribeChat).toHaveBeenCalledWith('chat-1', 0, expect.anything());
+    act(() => fake.caughtUp());
+    expect(screen.getByText(/还没有消息/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web-1' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() =>
+      expect(fake.client.sendChatMessage).toHaveBeenCalledWith('chat-1', 'restart web-1'),
+    );
+    await screen.findByText('回复中 Agent is responding');
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true);
+
+    act(() => {
+      fake.deliver(persisted(1, 'user', 'restart web-1'));
+      fake.stream('turn-1', { streamKind: 'textDelta', delta: 'On it' });
+      fake.stream('turn-1', { streamKind: 'textDelta', delta: ' — restarting.' });
+    });
+    expect(document.querySelector('.message-streaming .message-text')?.textContent).toContain(
+      'On it — restarting.',
+    );
+
+    act(() => {
+      fake.deliver(persisted(2, 'assistant', 'On it — restarting.'));
+      fake.deliver({
+        ...persisted(3, 'user', ''),
+        role: 'system',
+        kind: 'system.action_update',
+        content: {
+          kind: 'system.action_update',
+          text: 'docker container restart executed',
+          actionRequestId: 'ar-9',
+          status: 'executed',
+          actionKindTag: 'docker.container_restart',
+          isHolder: true,
+        },
+      });
+      // Turn-end metadata: the reducer settles and the composer re-enables.
+      handlersOf(fake).onMetadata({ turnId: 'turn-1', turnStatus: 'completed' });
+    });
+    await screen.findByText('本轮完成 Turn completed');
+    expect(document.querySelector('.message-streaming')).toBeNull();
+    expect(document.querySelectorAll('.message-assistant .message-text')).toHaveLength(1);
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);
+    // The 执行类动作提示 for a persisted action update is the status line with the shared chip.
+    const line = screen.getByTestId('system-status-line');
+    expect(line.querySelector('[data-status="executed"]')).toBeTruthy();
+    expect(line.textContent).toContain('docker container restart executed');
+  });
+});
+
+/** The page's subscription handlers, for pushes the `FakeClient` helpers do not wrap. */
+function handlersOf(fake: FakeClient): ChatSubscriptionHandlers {
+  const call = (fake.client.subscribeChat as ReturnType<typeof vi.fn>).mock.calls[0];
+  if (!call) throw new Error('subscribeChat not called');
+  return call[2] as ChatSubscriptionHandlers;
+}
+
+describe('ChatPage header (S6-A W1 / W2)', () => {
+  it('looks the chat up with includeArchived and applies a chat.metadata {title} push', async () => {
+    const fake = fakeClient({}, chatRow({ title: null }));
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    expect(fake.client.call).toHaveBeenCalledWith('list_chats', { includeArchived: true });
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-title').textContent).toBe('新对话 New chat'),
+    );
+    act(() => handlersOf(fake).onMetadata({ title: 'restart web-1' }));
+    expect(screen.getByTestId('chat-title').textContent).toBe('restart web-1');
+  });
+
+  it('shows 模式 · 模型 · 来源 from the profile and switches the model with set_agent_profile (下一轮生效)', async () => {
+    const fake = fakeClient();
+    const http = headerHttp({
+      set_agent_profile: (params) => ({
+        ...PROFILE,
+        model: (params as { model: string | null }).model,
+        effective: { ...PROFILE.effective, model: 'anthropic/claude-sonnet' },
+      }),
+    });
+    renderChat(fake.client, http);
+    const line = await screen.findByTestId('chat-model-line');
+    await waitFor(() => expect(within(line).getByTestId('chat-model-select')).toBeTruthy());
+    expect(line.textContent).toContain('模式 Mode：入口 agent');
+    expect(screen.getByTestId('chat-model-source').textContent).toContain('工作区默认');
+    const select = screen.getByTestId('chat-model-select') as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    expect(Array.from(select.options).map((option) => option.value)).toEqual([
+      '',
+      'openai/gpt-4o',
+      'anthropic/claude-sonnet',
+    ]);
+    // Labels read provider/model; the default option names the workspace default.
+    expect(select.options[0]?.textContent).toContain('openai/gpt-4o');
+    expect(select.options[2]?.textContent).toBe('anthropic/claude-sonnet');
+
+    fireEvent.change(select, { target: { value: 'anthropic/claude-sonnet' } });
+    await waitFor(() =>
+      expect(http.decisions()).toEqual([
+        { name: 'set_agent_profile', params: { model: 'anthropic/claude-sonnet' } },
+      ]),
+    );
+    await screen.findByText('下一轮生效 Takes effect next turn');
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-model-source').textContent).toContain('我的覆盖'),
+    );
+
+    // Back to the workspace default clears the override with `null` (S3.13).
+    fireEvent.change(screen.getByTestId('chat-model-select'), { target: { value: '' } });
+    await waitFor(() => expect(http.decisions()).toHaveLength(2));
+    expect(http.decisions()[1]).toEqual({ name: 'set_agent_profile', params: { model: null } });
+  });
+
+  it('flags an override that is no longer in the allow-list and still offers switching away', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, headerHttp({}, { ...PROFILE, model: 'deepseek/chat' }));
+    const select = (await screen.findByTestId('chat-model-select')) as HTMLSelectElement;
+    expect(select.value).toBe('deepseek/chat');
+    expect(screen.getByTestId('chat-model-outside').textContent).toContain('不在允许范围');
+    expect(screen.getByTestId('chat-model-flag')).toBeTruthy();
+    expect(Array.from(select.options).map((option) => option.value)).toContain(
+      'anthropic/claude-sonnet',
+    );
+  });
+
+  it('disables the model switcher while a Turn is in progress', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, headerHttp());
+    const select = (await screen.findByTestId('chat-model-select')) as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    await startRunningTurn(fake);
+    await waitFor(() =>
+      expect((screen.getByTestId('chat-model-select') as HTMLSelectElement).disabled).toBe(true),
+    );
+    expect(screen.getByTestId('chat-model-select').getAttribute('title')).toContain(
+      'Turn 进行中不能切换模型',
+    );
+    act(() => handlersOf(fake).onMetadata({ turnId: 'turn-1', turnStatus: 'completed' }));
+    await waitFor(() =>
+      expect((screen.getByTestId('chat-model-select') as HTMLSelectElement).disabled).toBe(false),
+    );
+  });
+
+  it('an archived chat is read-only until restored', async () => {
+    const archivedRow = chatRow({ archivedAt: '2026-09-04T00:00:00.000Z' });
+    const fake = fakeClient(
+      { unarchive_chat: () => ({ ...archivedRow, archivedAt: null }) },
+      archivedRow,
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    await screen.findByTestId('chat-archived-notice');
+    expect(screen.getByTestId('chat-archived-chip')).toBeTruthy();
+    const textarea = screen.getByLabelText('Message') as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(true);
+    expect(textarea.placeholder).toBe('已归档 Archived');
+    expect(screen.getByTestId('chat-header-restore')).toBeTruthy();
+    expect(screen.queryByTestId('chat-header-archive')).toBeNull();
+    expect(screen.queryByTestId('chat-header-rename')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('chat-composer-restore'));
+    await waitFor(() => expect(screen.queryByTestId('chat-archived-notice')).toBeNull());
+    expect(fake.client.call).toHaveBeenCalledWith('unarchive_chat', { chatId: 'chat-1' });
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);
+    expect(screen.getByTestId('chat-header-archive')).toBeTruthy();
+  });
+
+  it('归档 from the header archives in place (toast with undo) and a push can restore it', async () => {
+    const fake = fakeClient({
+      archive_chat: () => chatRow({ archivedAt: '2026-09-04T00:00:00.000Z' }),
+    });
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    await screen.findByTestId('chat-header-archive');
+    fireEvent.click(screen.getByTestId('chat-header-archive'));
+    await screen.findByTestId('chat-archived-notice');
+    expect(fake.client.call).toHaveBeenCalledWith('archive_chat', { chatId: 'chat-1' });
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('已归档 Archived · Ops chat');
+    expect(within(toast).getByRole('button', { name: '撤销 Undo' })).toBeTruthy();
+    // The per-chat `chat.metadata {archivedAt: null}` push (e.g. restored from the list in
+    // another tab) re-enables the composer here.
+    act(() => handlersOf(fake).onMetadata({ archivedAt: null }));
+    expect(screen.queryByTestId('chat-archived-notice')).toBeNull();
+  });
+
+  it('改名 from the header renames through rename_chat', async () => {
+    const fake = fakeClient({
+      rename_chat: (params) => chatRow({ title: (params as { title: string }).title }),
+    });
+    renderChat(fake.client, scriptedHttp({}));
+    await screen.findByTestId('chat-header-rename');
+    fireEvent.click(screen.getByTestId('chat-header-rename'));
+    const input = screen.getByTestId('chat-rename-input');
+    fireEvent.change(input, { target: { value: 'Web-1 incident' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-title').textContent).toBe('Web-1 incident'),
+    );
+    expect(fake.client.call).toHaveBeenCalledWith('rename_chat', {
+      chatId: 'chat-1',
+      title: 'Web-1 incident',
+    });
   });
 });

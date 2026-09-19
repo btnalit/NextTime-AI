@@ -1,11 +1,12 @@
 import type { TurnStatus } from '../lib/streaming-reducer.js';
 
+/** B4 bilingual (console-completion-plan §5.8 "语言与格式"); e2e keys on the English half. */
 const LABELS: Record<TurnStatus, string> = {
   idle: '',
-  running: 'Agent is responding',
-  completed: 'Turn completed',
-  interrupted: 'Turn interrupted',
-  failed: 'Turn failed',
+  running: '回复中 Agent is responding',
+  completed: '本轮完成 Turn completed',
+  interrupted: '本轮中断 Turn interrupted',
+  failed: '本轮失败 Turn failed',
 };
 
 /** components/TurnStatusBadge: renders `TurnState.status` (lib/streaming-reducer.ts), fed by

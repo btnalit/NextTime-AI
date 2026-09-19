@@ -33,8 +33,10 @@ export function chatTitle(chat: Pick<ChatWire, 'title'> | null | undefined): str
   return title === null || title === undefined || title === '' ? NEW_CHAT_TITLE_PLACEHOLDER : title;
 }
 
+/** `archivedAt` is the status. Read as "is a timestamp" rather than `!== null` so a row from a
+ *  kernel predating migration 0031 (no `archivedAt` key at all) still counts as active. */
 export function isArchived(chat: Pick<ChatWire, 'archivedAt'>): boolean {
-  return chat.archivedAt !== null;
+  return typeof chat.archivedAt === 'string';
 }
 
 /** Client-side mirror of the kernel's `normalizeChatTitle` (application/chat/service.ts): one

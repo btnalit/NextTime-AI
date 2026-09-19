@@ -33,9 +33,10 @@ describe('chatTitle / isArchived', () => {
     expect(chatTitle(chat())).toBe('Ops chat');
   });
 
-  it('archivedAt is the status', () => {
+  it('archivedAt is the status; a row without the key (older kernel) is active', () => {
     expect(isArchived(chat())).toBe(false);
     expect(isArchived(chat({ archivedAt: '2026-09-02T00:00:00.000Z' }))).toBe(true);
+    expect(isArchived({ archivedAt: undefined as unknown as null })).toBe(false);
   });
 });
 
