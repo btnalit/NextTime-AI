@@ -317,7 +317,7 @@ step_ok
 
 step_start "build"
 BUILD_T0=$(date +%s)
-remote "docker compose --profile test build"
+remote "export KERNEL_VERSION=\"\$(git describe --tags --abbrev=0) (\$(git rev-parse --short HEAD))\" && docker compose --profile test build"
 BUILD_RC1=$?
 remote "docker compose build worker-runtime"
 BUILD_RC2=$?

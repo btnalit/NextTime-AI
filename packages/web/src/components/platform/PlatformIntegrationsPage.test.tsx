@@ -249,6 +249,23 @@ describe('PlatformIntegrationsPage', () => {
     expect(result.textContent).toContain('4');
   });
 
+  // S6-A0 / C13 (docs/console-completion-plan.md §2b): a keyboard user reaches the detail through
+  // the row's own 详情 button, not by clicking the <tr>.
+  it('gate instance row exposes a Details button as the keyboard path to the detail panel (C13)', async () => {
+    const instance = gateInstance();
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [instance] }),
+    });
+    renderPage(http);
+
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    const open = within(table).getByTestId('gate-instance-open-gate-1');
+    expect(open.tagName).toBe('BUTTON');
+    fireEvent.click(open);
+    await screen.findByTestId('gate-instance-detail');
+  });
+
   it('hosted instance with no heartbeat shows the hosted badge and waiting-for-host status', async () => {
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [hostedGateInstance()] }),

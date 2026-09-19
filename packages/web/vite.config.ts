@@ -21,6 +21,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // S6-A0 / C21: fonts are never inlined as `data:` URIs (Vite's default 4 KB threshold caught
+    // a few tiny Noto Sans SC unicode-range slices), so deploy/caddy/Caddyfile can keep
+    // `font-src 'self'` without a `data:` escape hatch. Everything else keeps Vite's default.
+    assetsInlineLimit: (file) => (/\.woff2?$/.test(file) ? false : undefined),
   },
   server: {
     proxy: {

@@ -82,10 +82,9 @@ https://:8443 {
 	#     current browser; the bare `wss:` scheme is kept for older engines that did not (it admits
 	#     any wss host, but a script that could open one would already have needed `script-src`
 	#     to let it in). No `ws:` — this site is https only, a plaintext socket never occurs.
-	#   - `font-src 'self' data:` — Vite inlines assets under its 4 KB `assetsInlineLimit` as
-	#     `data:` URIs, which today catches three rare Noto Sans SC unicode-range slices (IPA /
-	#     flag-emoji ranges); `data:` fonts are not a script vector. Set `build.assetsInlineLimit`
-	#     to exclude fonts in packages/web/vite.config.ts and this can drop to `'self'`.
+	#   - `font-src 'self'` — every font is a bundled woff2 file; packages/web/vite.config.ts's
+	#     `assetsInlineLimit` excludes fonts from Vite's `data:` inlining so no escape hatch is
+	#     needed here.
 	#   - `style-src 'self' 'unsafe-inline'` — the UI kit still sets a few `style={{…}}` props;
 	#     S6-A0 follow-up (§7): move them to classes and tighten this to `'self'`.
 	#   - `img-src 'self' data:` — inline SVG icons need nothing; `data:` covers any future
@@ -94,7 +93,7 @@ https://:8443 {
 	# excluded from this matcher and gets its own, slightly looser block on its handler.
 	@app not path /explorer/*
 	header @app {
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 	}
 
 	# S3.5 / W7 (docs/development-tasks.md §S3.5; design doc §9.5) — the nine Explorer endpoints
