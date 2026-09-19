@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
-import type { ActionRequestRowLike } from '../lib/action-card.js';
 import { type CapabilityCaller, type PushSource, SILENT_PUSH_SOURCE } from '../lib/clients.js';
+import type { ActionRequestRow } from '../lib/governance.js';
+import { HttpError } from '../lib/http-client.js';
 import type { TaskSummary } from '../lib/tasks.js';
 import type { ActionPendingPush, ActionUpdatedPush, TaskUpdatedPush } from '../lib/ws-client.js';
 import { TasksPage } from './TasksPage.js';
@@ -43,7 +44,7 @@ function task(overrides: Partial<TaskSummary> = {}): TaskSummary {
   };
 }
 
-function approval(overrides: Partial<ActionRequestRowLike> = {}): ActionRequestRowLike {
+function approval(overrides: Partial<ActionRequestRow> = {}): ActionRequestRow {
   return {
     id: 'ar-1',
     status: 'pending_approval',
@@ -125,34 +126,47 @@ function renderPage(http: CapabilityCaller, pushes: PushSource, selectedId?: str
 }
 
 /**
- * TasksPage.test.tsx (C7, console-completion-plan §2b): every push reconciles one row — a
- * `task.updated` is one `get_task`, an `action.pending` one `get_action`, an `action.updated`
- * no request at all (the push carries the status) — never a second full-list reload on top.
+ * TasksPage.test.tsx (C7 / C28, console-completion-plan §2b, §5.5): a `task.updated` push is one
+ * `get_task`, never a list reload; the open Task's linked approvals come from
+ * `list_action_requests{taskId}` (decided rows included) and an approval push re-reads that one
+ * Task's list — no `list_pending` mirror, no per-row `get_action` on the page any more.
  */
-describe('TasksPage push reconciliation (C7)', () => {
-  it('action.updated drops the linked approval locally without any request; action.pending fetches just that row', async () => {
+describe('TasksPage linked approvals (C28) and push reconciliation (C7)', () => {
+  it('selecting a task lists its ActionRequests via list_action_requests{taskId}, decided ones included; an approval push refetches only that list', async () => {
     const pushes = pushSource();
+    const linkedParams: unknown[] = [];
     const http = scriptedHttp({
       list_tasks: () => ({ items: [task()] }),
       list_worker_definitions: () => ({ items: [] }),
-      list_pending: () => ({ items: [approval()] }),
-      get_action: (params) => {
-        expect(params).toEqual({ actionRequestId: 'ar-2' });
-        return approval({ id: 'ar-2', actionKindTag: 'docker.container_stop' });
+      list_action_requests: (params) => {
+        linkedParams.push(params);
+        return {
+          items: [
+            approval(),
+            approval({
+              id: 'ar-0',
+              status: 'approved',
+              actionKindTag: 'docker.container_stop',
+              decidedBy: 'p-op',
+              decisionReason: 'fine',
+            }),
+          ],
+        };
       },
     });
     renderPage(http, pushes, 'task-1');
     const detail = await screen.findByTestId('task-detail');
-    await within(detail).findByRole('button', { name: /container restart/i });
-    const listPendingCalls = () => http.calls.filter((name) => name === 'list_pending').length;
-    expect(listPendingCalls()).toBe(1);
+    const rows = await within(detail).findAllByTestId('linked-approval-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[1]?.textContent).toContain('docker container stop');
+    expect(rows[1]?.textContent).toContain('fine');
+    expect(linkedParams).toEqual([{ taskId: 'task-1', limit: 20 }]);
+    expect(http.calls.filter((name) => name === 'list_pending')).toHaveLength(0);
 
     act(() => pushes.emitUpdated({ id: 'ar-1', status: 'approved' }));
-    await waitFor(() =>
-      expect(within(detail).queryByRole('button', { name: /container restart/i })).toBeNull(),
-    );
-    expect(listPendingCalls()).toBe(1);
+    await waitFor(() => expect(linkedParams).toHaveLength(2));
     expect(http.calls.filter((name) => name === 'get_action')).toHaveLength(0);
+    expect(http.calls.filter((name) => name === 'list_tasks')).toHaveLength(1);
 
     act(() =>
       pushes.emitPending({
@@ -164,9 +178,19 @@ describe('TasksPage push reconciliation (C7)', () => {
         awaitDecision: true,
       }),
     );
-    await within(detail).findByRole('button', { name: /container stop/i });
-    expect(http.calls.filter((name) => name === 'get_action')).toHaveLength(1);
-    expect(listPendingCalls()).toBe(1);
+    await waitFor(() => expect(linkedParams).toHaveLength(3));
+  });
+
+  it('a member session (list_action_requests 403) sees the operator-role notice instead of an error', async () => {
+    const http = scriptedHttp({
+      list_tasks: () => ({ items: [task()] }),
+      list_worker_definitions: () => ({ items: [] }),
+      list_action_requests: () =>
+        Promise.reject(new HttpError('capability_error', 'role "member"', 'forbidden')),
+    });
+    renderPage(http, SILENT_PUSH_SOURCE, 'task-1');
+    await screen.findByTestId('linked-approvals-forbidden');
+    expect(screen.queryByTestId('linked-approvals-error')).toBeNull();
   });
 
   it('task.updated re-reads only that Task (get_task), never the whole list', async () => {
@@ -174,7 +198,6 @@ describe('TasksPage push reconciliation (C7)', () => {
     const http = scriptedHttp({
       list_tasks: () => ({ items: [task()] }),
       list_worker_definitions: () => ({ items: [] }),
-      list_pending: () => ({ items: [] }),
       get_task: () => task({ status: 'completed', completedAt: '2026-09-03T00:01:00.000Z' }),
     });
     renderPage(http, pushes);
@@ -189,5 +212,67 @@ describe('TasksPage push reconciliation (C7)', () => {
     );
     expect(http.calls.filter((name) => name === 'get_task')).toHaveLength(1);
     expect(http.calls.filter((name) => name === 'list_tasks')).toHaveLength(1);
+  });
+});
+
+/** S6-A B2 (§5.8 "确认态"): Cancel task confirms through the tier-`high` `ConfirmTier` drawer
+ *  (a sibling of the detail drawer — Escape inside it closes only the confirmation). */
+describe('TasksPage cancel confirmation (S6-A B2)', () => {
+  it('Cancel opens the confirmation with the impact list; confirming calls cancel_task; Escape closes only the confirmation', async () => {
+    const cancel = vi.fn(async () => ({ id: 'task-1', status: 'cancelled' }));
+    const http = scriptedHttp({
+      list_tasks: () => ({ items: [task({ tokensUsed: 1234 })] }),
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Restarter' },
+          },
+        ],
+      }),
+      list_action_requests: () => ({ items: [] }),
+      cancel_task: cancel,
+      get_task: () => task({ status: 'cancelled', cancelledAt: '2026-09-03T00:01:00.000Z' }),
+    });
+    const onSelect = vi.fn();
+    render(
+      <PermissionsProvider>
+        <ToastProvider>
+          <TasksPage
+            http={http}
+            pushes={SILENT_PUSH_SOURCE}
+            selectedId="task-1"
+            onSelect={onSelect}
+            onOpenApproval={vi.fn()}
+          />
+        </ToastProvider>
+      </PermissionsProvider>,
+    );
+    const detail = await screen.findByTestId('task-detail');
+    fireEvent.click(await within(detail).findByTestId('task-cancel'));
+    const confirm = await screen.findByTestId('task-cancel-confirm');
+    expect(confirm.getAttribute('role')).toBe('dialog');
+    expect(screen.getByTestId('confirm-target').textContent).toBe('Restarter');
+    expect(screen.getByTestId('confirm-impact').textContent).toContain('Running runs: 1');
+    expect(cancel).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('task-cancel-confirm')).toBeNull());
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByTestId('task-drawer')).toBeTruthy();
+
+    fireEvent.click(within(detail).getByTestId('task-cancel'));
+    await screen.findByTestId('task-cancel-confirm');
+    fireEvent.click(screen.getByTestId('confirm-button'));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith({ taskId: 'task-1' }));
+    await waitFor(() => expect(screen.queryByTestId('task-cancel-confirm')).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('task-row').querySelector('[data-status]')?.getAttribute('data-status'),
+      ).toBe('cancelled'),
+    );
   });
 });

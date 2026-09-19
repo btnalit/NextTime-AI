@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { usePermissions } from '../hooks/usePermissions.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useResource } from '../hooks/useResource.js';
-import type { ActionRequestRowLike } from '../lib/action-card.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
-import { isForbiddenError } from '../lib/errors.js';
 import { excerpt, formatDateTime, formatDuration, formatRelative } from '../lib/format.js';
+import { hrefs } from '../lib/router.js';
 import {
   type TaskSummary,
   type WorkerDefinitionSummary,
@@ -14,7 +12,9 @@ import {
   taskNeed,
 } from '../lib/tasks.js';
 import { TaskDetail } from './TaskDetail.js';
+import { usePrincipalNames } from './approvals/useDirectoryNames.js';
 import { Button } from './ui/Button.js';
+import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -37,17 +37,20 @@ export interface TasksPageProps {
 type Filter = 'active' | 'all' | 'done';
 
 /**
- * components/TasksPage: the caller's own Tasks (`list_tasks`, S2.10 deliverable 4) with a detail
- * drawer. Live: `task.updated` re-reads that one Task (`get_task`) and swaps it into the list.
- * Worker definition names come from `list_worker_definitions` (best effort — ids when it fails);
- * linked approvals from `list_pending` rows whose `parentWorkerRunId` is one of the Task's runs
- * (best effort — skipped for non-operators). The approval pushes are reconciled per row too (C7):
- * `action.updated` drops the named row locally once it leaves `pending_approval` (the push
- * carries the status — no request at all), `action.pending` fetches just that row with
- * `get_action`; the full `list_pending` reload is the fallback when a single-row read fails.
+ * components/TasksPage: 任务 Tasks — the caller's own Tasks (`list_tasks`, S2.10 deliverable 4;
+ * `list_tasks` takes no params — no keyset paging exists for it, B5 does not apply) with a
+ * detail drawer. Live: `task.updated` re-reads that one Task (`get_task`) and swaps it into the
+ * list (C7). Worker definition names come from `list_worker_definitions` (best effort — ids when
+ * it fails).
+ *
+ * S6-A (C28 / B2 / B4): linked approvals moved into `TaskDetail` → `approvals/LinkedApprovals`
+ * (`list_action_requests{taskId}`, decided rows included, reloaded per push for the open Task
+ * only) — the page no longer holds a `list_pending` mirror or reconciles approval pushes itself.
+ * Cancel goes through `ui/ConfirmTier` (tier `high`, §5.8 "确认态": Cancel task listed with the
+ * confirmations) rendered as a sibling of the detail drawer — the drawer's `onClose` is a stable
+ * callback that no-ops while the confirmation is open (both register Escape on `document`).
  */
 export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
-  const permissions = usePermissions();
   const toast = useToast();
   const load = useCallback(
     () => http.call<{ items: readonly TaskSummary[] }>('list_tasks').then((page) => page.items),
@@ -62,29 +65,12 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
     [http],
   );
   const definitions = useResource(loadDefinitions);
-  const pendingDenied = permissions.isDenied('list_pending');
-  const loadPending = useCallback(
-    () =>
-      pendingDenied
-        ? Promise.resolve<readonly ActionRequestRowLike[]>([])
-        : http
-            .call<{ items: readonly ActionRequestRowLike[] }>('list_pending')
-            .then((page) => page.items),
-    [http, pendingDenied],
-  );
-  const pendingApprovals = useResource(loadPending);
-  useEffect(() => {
-    if (
-      pendingApprovals.state.status === 'error' &&
-      isForbiddenError(pendingApprovals.state.error)
-    ) {
-      permissions.markDenied('list_pending');
-    }
-  }, [pendingApprovals.state, permissions]);
+  const principalNames = usePrincipalNames(http);
 
   const [filter, setFilter] = useState<Filter>('all');
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<unknown | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<TaskSummary | null>(null);
 
   const refreshOne = useCallback(
     async (taskId: string) => {
@@ -103,29 +89,6 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   );
 
   useEffect(() => pushes.onTaskUpdated((event) => void refreshOne(event.id)), [pushes, refreshOne]);
-  useEffect(() => {
-    const unsubPending = pushes.onActionPending((event) => {
-      if (pendingDenied) return;
-      http
-        .call<ActionRequestRowLike>('get_action', { actionRequestId: event.actionRequestId })
-        .then((row) => {
-          pendingApprovals.mutate((rows) =>
-            rows.some((candidate) => candidate.id === row.id)
-              ? rows.map((candidate) => (candidate.id === row.id ? row : candidate))
-              : [row, ...rows],
-          );
-        })
-        .catch(() => void pendingApprovals.reload());
-    });
-    const unsubUpdated = pushes.onActionUpdated((event) => {
-      if (event.status === 'pending_approval') return;
-      pendingApprovals.mutate((rows) => rows.filter((candidate) => candidate.id !== event.id));
-    });
-    return () => {
-      unsubPending();
-      unsubUpdated();
-    };
-  }, [pushes, http, pendingDenied, pendingApprovals.reload, pendingApprovals.mutate]);
 
   const allRows = tasks.state.status === 'ready' ? tasks.state.data : [];
   const rows = useMemo(() => {
@@ -136,35 +99,55 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   }, [allRows, filter]);
   const activeCount = allRows.filter((task) => !isTerminalTaskStatus(task.status)).length;
   const definitionRows = definitions.state.status === 'ready' ? definitions.state.data : undefined;
-  const pendingRows = pendingApprovals.state.status === 'ready' ? pendingApprovals.state.data : [];
 
   const selected = selectedId ? allRows.find((task) => task.id === selectedId) : undefined;
   useEffect(() => {
     if (selectedId && !selected && tasks.state.status === 'ready') void refreshOne(selectedId);
   }, [selectedId, selected, tasks.state.status, refreshOne]);
 
-  async function handleCancel(taskId: string): Promise<void> {
-    setCancelling(taskId);
+  // Stable for `Drawer`'s focus-trap effect; ignores Escape / overlay clicks that reach the
+  // detail drawer while the `ConfirmTier` drawer is on top of it.
+  const confirmOpenRef = useRef(false);
+  confirmOpenRef.current = confirmCancel !== null;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const closeDetail = useCallback(() => {
+    if (confirmOpenRef.current) return;
+    onSelectRef.current(null);
+  }, []);
+
+  /** The `cancel_task` call — throws so the `ConfirmTier` keeps its drawer open with the
+   *  kernel's error (also mirrored into `cancelError` for the detail view). */
+  async function performCancel(task: TaskSummary): Promise<void> {
+    setCancelling(task.id);
     setCancelError(null);
     try {
-      const result = await http.call<{ id: string; status: string }>('cancel_task', { taskId });
+      const result = await http.call<{ id: string; status: string }>('cancel_task', {
+        taskId: task.id,
+      });
       tasks.mutate((current) =>
-        current.map((task) => (task.id === result.id ? { ...task, status: result.status } : task)),
+        current.map((row) => (row.id === result.id ? { ...row, status: result.status } : row)),
       );
-      toast.push({ tone: 'info', title: 'Task cancelled' });
-      await refreshOne(taskId);
+      toast.push({ tone: 'info', title: '任务已取消 Task cancelled' });
+      await refreshOne(task.id);
     } catch (err) {
       setCancelError(err);
+      throw err;
     } finally {
       setCancelling(null);
     }
   }
 
+  const runningRuns = confirmCancel
+    ? confirmCancel.workerRuns.filter((run) => run.terminatedAt === null).length
+    : 0;
+
   return (
     <div className="page">
       <PageHeader
-        title="Tasks"
-        description="Work delegated to Workers on your behalf, with their runs and results."
+        breadcrumb={[{ label: '工作 Work', href: hrefs.chats() }, { label: '任务 Tasks' }]}
+        title="任务 Tasks"
+        description="代表你委派给 Worker 的工作，及其运行与结果。 Work delegated to Workers on your behalf, with their runs and results."
         actions={
           <Button
             variant="ghost"
@@ -172,7 +155,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
             onClick={() => void tasks.reload()}
             loading={tasks.state.status === 'ready' && tasks.state.refreshing}
           >
-            Refresh
+            刷新 Refresh
           </Button>
         }
       />
@@ -183,9 +166,9 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
           value={filter}
           onChange={setFilter}
           options={[
-            { value: 'all', label: 'All', count: allRows.length },
-            { value: 'active', label: 'Active', count: activeCount },
-            { value: 'done', label: 'Finished', count: allRows.length - activeCount },
+            { value: 'all', label: '全部 All', count: allRows.length },
+            { value: 'active', label: '进行中 Active', count: activeCount },
+            { value: 'done', label: '已结束 Finished', count: allRows.length - activeCount },
           ]}
         />
       </div>
@@ -195,15 +178,19 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
       ) : tasks.state.status === 'error' ? (
         <ErrorBanner
           error={tasks.state.error}
-          title="Could not load tasks"
+          title="无法加载任务 Could not load tasks"
           onRetry={() => void tasks.reload()}
           testId="tasks-error"
         />
       ) : rows.length === 0 ? (
         <EmptyState
           icon="cpu"
-          title={allRows.length === 0 ? 'No tasks yet' : 'No tasks match this filter'}
-          body="A Task is created when the entry agent delegates work to a Worker (invoke_worker). Its runs, result contract and approvals show up here."
+          title={
+            allRows.length === 0
+              ? '还没有任务 No tasks yet'
+              : '没有符合筛选的任务 No tasks match this filter'
+          }
+          body="入口智能体把工作委派给 Worker（invoke_worker）时会创建任务；它的运行、结果契约与审批都在这里。 A Task is created when the entry agent delegates work to a Worker (invoke_worker). Its runs, result contract and approvals show up here."
           testId="tasks-empty"
         />
       ) : (
@@ -242,7 +229,11 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
                       </time>
                       <span className="meta-sep" />
                       <span className="tabular">
-                        {finished ? 'took ' : task.status === 'running' ? 'running ' : 'waiting '}
+                        {finished
+                          ? '用时 took '
+                          : task.status === 'running'
+                            ? '运行中 running '
+                            : '等待中 waiting '}
                         {formatDuration(task.createdAt, finished)}
                       </span>
                       {task.tokenBudget ? (
@@ -272,15 +263,15 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
 
       <Drawer
         open={selectedId !== undefined}
-        onClose={() => onSelect(null)}
+        onClose={closeDetail}
         title={
           selected
             ? (definitionName(
                 definitionRows,
                 selected.workerDefinitionId,
                 selected.workerDefinitionVersion,
-              ) ?? 'Task')
-            : 'Task'
+              ) ?? '任务 Task')
+            : '任务 Task'
         }
         subtitle={selectedId ? <span className="mono">{selectedId}</span> : undefined}
         wide
@@ -294,14 +285,14 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
               selected.workerDefinitionId,
               selected.workerDefinitionVersion,
             )}
-            linkedApprovals={pendingRows.filter(
-              (row) =>
-                row.parentWorkerRunId !== undefined &&
-                row.parentWorkerRunId !== null &&
-                selected.workerRuns.some((run) => run.id === row.parentWorkerRunId),
-            )}
+            http={http}
+            pushes={pushes}
+            principalNames={principalNames}
             onOpenApproval={onOpenApproval}
-            onCancel={(taskId) => void handleCancel(taskId)}
+            onCancel={(taskId) => {
+              const task = allRows.find((row) => row.id === taskId);
+              if (task) setConfirmCancel(task);
+            }}
             cancelling={cancelling === selected.id}
             cancelError={cancelError}
           />
@@ -309,6 +300,39 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
           <SkeletonRows count={3} label="Loading task" />
         )}
       </Drawer>
+
+      <ConfirmTier
+        tier="high"
+        open={confirmCancel !== null}
+        title="取消任务 Cancel task"
+        description="取消后任务进入 cancelled，正在运行的 WorkerRun 会被终止；已写入的事实与审计不受影响。 The Task becomes cancelled and its running WorkerRuns are terminated; facts already written and the audit trail stay."
+        target={
+          confirmCancel
+            ? (definitionName(
+                definitionRows,
+                confirmCancel.workerDefinitionId,
+                confirmCancel.workerDefinitionVersion,
+              ) ?? confirmCancel.id)
+            : undefined
+        }
+        impact={
+          confirmCancel
+            ? [
+                `任务 Task: ${confirmCancel.id}`,
+                `运行中的 WorkerRun Running runs: ${runningRuns}`,
+                `已用 Token Tokens used: ${confirmCancel.tokensUsed.toLocaleString()}`,
+                '取消后不能恢复；需要时重新委派 Cannot be resumed — delegate again if needed',
+              ]
+            : undefined
+        }
+        confirmLabel="确认取消 Cancel task"
+        danger
+        onConfirm={async () => {
+          if (confirmCancel) await performCancel(confirmCancel);
+        }}
+        onClose={() => setConfirmCancel(null)}
+        testId="task-cancel-confirm"
+      />
     </div>
   );
 }
