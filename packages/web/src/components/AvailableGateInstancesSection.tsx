@@ -4,7 +4,7 @@ import type {
   GateHostTokenWire,
 } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
-import { useCapabilityList } from '../hooks/useCapability.js';
+import type { CapabilityListResult } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
@@ -16,9 +16,13 @@ import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
 import { SkeletonRows } from './ui/Skeleton.js';
+import { StatusChip } from './ui/StatusChip.js';
 
 export interface AvailableGateInstancesSectionProps {
   readonly http: CapabilityCaller;
+  /** S6-C: the catalog read is owned by `ConnectionsPage` now (it also feeds the launcher and the
+   *  registered-system → platform-instance links), passed in rather than read twice. */
+  readonly available: CapabilityListResult<AvailableGateInstanceWire>;
   /** The Registered systems section below must reload too: `enable_gate_instance` registers a
    *  Gatekeeper object that section reads independently. */
   readonly onEnabled: () => void;
@@ -33,18 +37,23 @@ export interface AvailableGateInstancesSectionProps {
  * `enable_gate_instance`, the workspace-owner half of P-B1's platform catalog. Rendered only for
  * an owner (`ConnectionsPage`'s existing `canCreate` — `create_connection`'s own owner-only
  * `deniedClosure`, which `enable_gate_instance`/`list_available_gate_instances` share).
+ *
+ * B7 (docs/console-completion-plan.md §2b, §4 "接入三层"): a row here is a *platform* instance —
+ * its `status` / `health` are the platform's (`enabled · ok` means "the administrator enabled it
+ * and it is healthy"), while the button is about *this workspace*. The old raw `enabled · ok`
+ * text next to a 启用 button read as a contradiction. Now the two facts are two `StatusChip`s and
+ * the button says what it does — 在本工作区启用 Enable here — and appears only while the workspace
+ * has no link yet (`gatekeeperId === null`) and the platform side is `enabled` (the only status
+ * the kernel accepts, `requireAvailable`'s `gate_not_enabled`); a linked row shows the Gatekeeper
+ * link instead.
  */
 export function AvailableGateInstancesSection({
   http,
+  available,
   onEnabled,
   canEnable,
 }: AvailableGateInstancesSectionProps) {
   const permissions = usePermissions();
-  const available = useCapabilityList<AvailableGateInstanceWire>(
-    http,
-    'list_available_gate_instances',
-    {},
-  );
   const forbidden = available.state.status === 'error' && isForbiddenError(available.state.error);
   useEffect(() => {
     if (forbidden) permissions.markDenied('list_available_gate_instances');
@@ -110,9 +119,10 @@ export function AvailableGateInstancesSection({
               <tr>
                 <th>名称 Name</th>
                 <th>接入包 Connector</th>
-                <th>状态/健康 Status/health</th>
+                <th>平台状态 Platform status</th>
+                <th>健康 Health</th>
                 <th>Operation 数</th>
-                <th aria-label="Actions" />
+                <th>本工作区 This workspace</th>
               </tr>
             </thead>
             <tbody>
@@ -165,12 +175,30 @@ function AvailableGateRow({
     }
   }
 
+  // B7: the platform side must be `enabled` for the kernel to accept a workspace enable; a row
+  // that is here only because this workspace linked it earlier (platform `disabled` / `lost`)
+  // shows its link but no button.
+  const platformEnabled = row.status === 'enabled';
+
   return (
     <tr data-testid={`available-gate-${row.gateId}`}>
-      <td>{row.displayName}</td>
+      <td>
+        <div className="stack-s" style={{ gap: 0 }}>
+          <span>{row.displayName}</span>
+          <span className="mono text-3">{row.gateId}</span>
+        </div>
+      </td>
       <td className="mono">{row.connector}</td>
       <td>
-        {row.status} · {row.health}
+        <StatusChip
+          machine="gateInstance"
+          status={row.status}
+          size="s"
+          testId={`available-gate-status-${row.gateId}`}
+        />
+      </td>
+      <td>
+        <StatusChip machine="gateHealth" status={row.health} size="s" />
       </td>
       <td className="mono">{row.operationCount}</td>
       <td>
@@ -186,6 +214,10 @@ function AvailableGateRow({
               tokenButtonLabel="录入我的凭证 Enter my credential"
             />
           </div>
+        ) : !platformEnabled ? (
+          <span className="muted" data-testid={`available-gate-not-enableable-${row.gateId}`}>
+            平台侧未启用 Not enabled on the platform
+          </span>
         ) : canEnable ? (
           <Button
             variant="primary"
@@ -194,7 +226,7 @@ function AvailableGateRow({
             loading={enabling}
             data-testid={`enable-gate-${row.gateId}`}
           >
-            启用 Enable
+            在本工作区启用 Enable here
           </Button>
         ) : (
           <span className="muted">未启用（由 owner 启用） Not enabled (owner enables)</span>
