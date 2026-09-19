@@ -22,6 +22,11 @@ const PLATFORM_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     '该账户已设置密码，不能被合并 That account already has a password — it cannot be merged',
   last_admin:
     '不能停用或降级最后一个活跃管理员 The last active administrator cannot be disabled or demoted',
+  // C10 (console-completion-plan §2b): the kernel split "you cannot disable yourself" out of
+  // `last_admin` into its own code; until a kernel carrying that split is deployed the older
+  // `last_admin` copy above still shows, with the kernel's own `message` as the secondary line
+  // (`PlatformError.tsx`) so the two cases stay distinguishable either way.
+  self_disable: '不能停用自己 You cannot disable your own account',
   last_owner:
     '不能移出或降级工作区的最后一个 owner The last owner of a workspace cannot be removed or demoted',
   protected_admin:
