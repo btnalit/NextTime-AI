@@ -7,11 +7,11 @@ import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
  * App.test.tsx: the two account-page flows the login page advertises and C1
  * (docs/console-completion-plan.md §2b) found unreachable — an API-key session setting a password
  * on 我的账户, and a cookie session binding a pre-existing API key there. Both go through the real
- * `App` → `Routed` → `AccountPage` wiring with the three I/O modules stubbed at the module
- * boundary: `lib/auth-api` (the `/api/auth/*` calls), `lib/ws-client` (`WsClient`, whose
- * `connect`/`authenticate` succeed instantly) and `lib/http-client` (`HttpClient`, whose every
- * capability call fails — the shell's own reads degrade to their fallbacks and are not under
- * test here).
+ * `App` → `useSessionMachine` (session/) → `Routed` (routes.tsx) → `AccountPage` wiring with the
+ * three I/O modules stubbed at the module boundary: `lib/auth-api` (the `/api/auth/*` calls),
+ * `lib/ws-client` (`WsClient`, whose `connect`/`authenticate` succeed instantly) and
+ * `lib/http-client` (`HttpClient`, whose every capability call fails — the shell's own reads
+ * degrade to their fallbacks and are not under test here).
  */
 
 const CAROL: WireUser = {
