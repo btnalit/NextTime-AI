@@ -1,4 +1,5 @@
-/* Primitives (components/ui/*). One class family per primitive. */
+/* Primitives (components/ui/*). One class family per primitive. Colour and type size come
+ * from tokens.css only (S6-A0 §5.9; scripts/guards/css-tokens.mjs enforces it). */
 
 /* ---- Icon ---------------------------------------------------------------------------- */
 .icon {
@@ -25,11 +26,12 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 12px;
+  /* §5.9 principle 6: minimum click height 36px. */
+  height: 36px;
+  padding: 0 var(--space-3);
   border-radius: var(--radius-m);
   border: 1px solid transparent;
-  font-size: 13px;
+  font-size: var(--fs-13);
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -37,28 +39,33 @@
     opacity var(--transition);
 }
 
+/* The compact size is for in-row / in-chip / toast placement; it is the one control allowed under
+ * the 36px floor and stays ≥ 28px. Row-level actions that are the only path to something should
+ * use the default size. */
 .btn-s {
-  height: 26px;
-  padding: 0 8px;
-  font-size: 12.5px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-12);
 }
 
 .btn-icon {
   padding: 0;
-  width: 32px;
+  width: 36px;
 }
 
 .btn-icon.btn-s {
-  width: 26px;
+  width: 28px;
 }
 
+/* Ink, not accent (§5.9 principle 1): the page's single main action is the darkest thing on it;
+ * blue is reserved for "clickable" affordances (links, selection, focus). */
 .btn-primary {
-  background: var(--accent);
+  background: var(--text);
   color: var(--text-on-accent);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--text-2);
 }
 
 .btn-secondary {
@@ -89,7 +96,7 @@
 
 .btn-danger:hover:not(:disabled) {
   background: var(--danger);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .btn:disabled {
@@ -130,13 +137,13 @@
   height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--fs-12);
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
   border: 1px solid transparent;
-  background: var(--surface-3);
-  color: var(--text-2);
+  background: var(--muted-soft);
+  color: var(--muted);
 }
 
 .chip::before {
@@ -150,13 +157,20 @@
 
 .chip-s {
   height: 20px;
-  font-size: 11.5px;
+  font-size: var(--fs-11);
   padding: 0 7px;
 }
 
+/* §5.9 principle 2 — one colour, one meaning: neutral = archived / superseded / residue / untested
+ * (grey), observe = read-only reach (teal); the four below are unchanged in meaning. */
 .chip-neutral {
-  background: var(--surface-3);
-  color: var(--text-2);
+  background: var(--muted-soft);
+  color: var(--muted);
+}
+
+.chip-observe {
+  background: var(--observe-soft);
+  color: var(--observe);
 }
 
 .chip-ok {
@@ -204,7 +218,7 @@
   border: 1px solid var(--border);
   color: var(--text-2);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-11);
   white-space: nowrap;
 }
 
@@ -233,7 +247,7 @@
 }
 
 .card-title {
-  font-size: 14px;
+  font-size: var(--fs-14);
   font-weight: 600;
 }
 
@@ -264,7 +278,7 @@
 
 .empty-state-body {
   max-width: 440px;
-  font-size: 13px;
+  font-size: var(--fs-13);
   color: var(--text-3);
 }
 
@@ -306,7 +320,7 @@
 
 .error-banner-code {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-11);
   color: var(--danger);
   background: var(--surface-1);
   border: 1px solid var(--border);
@@ -315,7 +329,7 @@
 }
 
 .error-banner-message {
-  font-size: 13px;
+  font-size: var(--fs-13);
   color: var(--text-2);
   overflow-wrap: anywhere;
 }
@@ -333,7 +347,7 @@
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-13);
 }
 
 .notice .icon {
@@ -395,7 +409,7 @@
 }
 
 .field-label {
-  font-size: 13px;
+  font-size: var(--fs-13);
   font-weight: 500;
   color: var(--text-2);
   display: flex;
@@ -408,12 +422,12 @@
 }
 
 .field-hint {
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-3);
 }
 
 .field-error {
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--danger);
 }
 
@@ -421,7 +435,7 @@
 .select,
 .textarea {
   width: 100%;
-  min-height: 34px;
+  min-height: 36px;
   padding: 6px 10px;
   border-radius: var(--radius-m);
   border: 1px solid var(--border-strong);
@@ -471,7 +485,7 @@
 .input-mono,
 .textarea-mono {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
 }
 
 .input-group {
@@ -504,7 +518,8 @@
   border: 1px solid var(--border-strong);
   background: var(--surface-1);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-13);
+  min-height: 36px;
 }
 
 .radio-option:has(input:checked) {
@@ -521,7 +536,7 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--fs-13);
   color: var(--text-2);
   cursor: pointer;
 }
@@ -576,13 +591,13 @@
 }
 
 .drawer-title {
-  font-size: 16px;
+  font-size: var(--fs-16);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .drawer-subtitle {
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-3);
 }
 
@@ -672,11 +687,11 @@
 
 .toast-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-13);
 }
 
 .toast-description {
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-2);
   overflow-wrap: anywhere;
 }
@@ -767,7 +782,7 @@
 }
 
 .data-row-meta {
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-3);
   display: flex;
   flex-wrap: wrap;
@@ -790,7 +805,7 @@
   align-items: center;
   gap: var(--space-2);
   color: var(--text-3);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
 }
 
 /* ---- Kbd / CopyId -------------------------------------------------------------------- */
@@ -804,7 +819,7 @@
   border-bottom-width: 2px;
   background: var(--surface-2);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-11);
   line-height: 16px;
   color: var(--text-2);
 }
@@ -814,7 +829,7 @@
   align-items: center;
   gap: 4px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-12);
   color: var(--text-2);
   padding: 0 2px 0 6px;
   border-radius: var(--radius-s);
@@ -830,8 +845,11 @@
   white-space: nowrap;
 }
 
+/* Inside a 22px chip the copy button cannot honour the 28px compact floor — sized to the chip. */
 .copy-id .btn {
   color: var(--text-3);
+  height: 20px;
+  width: 20px;
 }
 
 .copy-id .btn:hover {
@@ -857,7 +875,7 @@
   align-items: center;
   gap: var(--space-2);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-13);
   border-radius: var(--radius-m);
 }
 

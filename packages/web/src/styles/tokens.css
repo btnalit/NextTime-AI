@@ -1,34 +1,63 @@
-/* Design tokens. Dark is the default; light overrides under prefers-color-scheme. Text colours
- * are chosen for ≥ 4.5:1 against the surface they normally sit on (--text-3 is the floor, checked
- * against --surface-1 in both themes). */
+/* Design tokens (S6-A0, docs/console-completion-plan.md §5.9 "令牌"). Light is the default; dark
+ * is the `prefers-color-scheme: dark` override — the same token names in both, no new semantic
+ * names per theme. Values are §5.9's: neutrals carry content only, blue means "clickable", and
+ * the governance semantics are one colour per meaning (observe = teal, pending / warn / medium =
+ * amber, high / irreversible / reject / conflict / failed / purge = red, executed / published /
+ * healthy = green, system / proposal / production / default = blue, archived / superseded /
+ * acceptance-residue / untested = grey). Text colours keep ≥ 4.5:1 against the surface they
+ * normally sit on (`--text-3` 4.7:1 on white; each `--<semantic>` ≥ 4.5:1 on its own `-soft`).
+ *
+ * The only stylesheet allowed to carry colour and px font-size literals — `scripts/guards/
+ * css-tokens.mjs` (`pnpm ci:guards`) rejects them anywhere else under `styles/`. */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  --bg: #0b0d12;
-  --surface-1: #12151c;
-  --surface-2: #181c25;
-  --surface-3: #1f2430;
-  --border: #262c38;
-  --border-strong: #3a4252;
+  /* Neutrals (§5.9) */
+  --bg: #f4f5f7;
+  --surface-1: #ffffff;
+  --surface-2: #f8f9fb;
+  --surface-3: #eef0f3;
+  --border: #e3e6ea;
+  --border-strong: #cfd4da;
 
-  --text: #e7eaf0;
-  --text-2: #a9b1c0;
-  --text-3: #8b94a5;
-  --text-on-accent: #0b0d12;
+  --text: #12161c;
+  --text-2: #4b5563;
+  --text-3: #6b7280;
+  /* Text on a filled control — the ink primary button (`--text` background), the accent, and the
+   * filled danger hover all take this. */
+  --text-on-accent: #ffffff;
 
-  --accent: #6ea0ff;
-  --accent-hover: #86b0ff;
-  --accent-soft: rgba(110, 160, 255, 0.14);
+  /* Accent: links, selection, focus — never the primary button (that is ink). 6.3:1 on white. */
+  --accent: #1f4fd6;
+  --accent-hover: #1a43b8;
+  --accent-soft: #e8eefc;
 
-  --ok: #4fc38a;
-  --ok-soft: rgba(79, 195, 138, 0.14);
-  --warn: #e5b454;
-  --warn-soft: rgba(229, 180, 84, 0.16);
-  --danger: #f0716a;
-  --danger-soft: rgba(240, 113, 106, 0.16);
-  --info: #7fb2ff;
-  --info-soft: rgba(127, 178, 255, 0.14);
+  /* Governance semantics (§5.9 principle 2). */
+  --ok: #157347;
+  --ok-soft: #e3f5ea;
+  --warn: #b45309;
+  --warn-soft: #fdf1e3;
+  --danger: #b42318;
+  --danger-soft: #fde8e6;
+  --info: #1f4fd6;
+  --info-soft: #e8eefc;
+  --observe: #0f766e;
+  --observe-soft: #e0f2f1;
+  --muted: #6b7280;
+  --muted-soft: #f0f1f3;
 
+  /* Type scale (C24): every font-size in the console is one of these seven stops. */
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-19: 19px;
+  --fs-24: 24px;
+  --lh-tight: 1.3;
+  --lh-body: 1.6;
+
+  /* Radii 6 (chip) / 8 (control) / 12 (card); spacing 4 / 8 / 12 / 16 / 24 / 32. */
   --radius-s: 6px;
   --radius-m: 8px;
   --radius-l: 12px;
@@ -40,15 +69,20 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-  --overlay: rgba(4, 6, 10, 0.6);
+  /* Hierarchy is 1px borders, not shadows (§5.9 principle 5) — `--shadow-1` exists for the
+   * drawer and the toast stack only. */
+  --shadow-1: 0 1px 2px rgba(18, 22, 28, 0.08), 0 8px 24px rgba(18, 22, 28, 0.12);
+  --overlay: rgba(18, 22, 28, 0.35);
   --skeleton-a: var(--surface-2);
   --skeleton-b: var(--surface-3);
 
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC",
-    "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", "Noto Sans Mono",
-    monospace;
+  /* Self-hosted (styles/fonts.css → @fontsource, bundled by Vite; nothing loads from an external
+   * origin — C21's `font-src 'self'`). Noto Sans SC is unicode-range sliced, so a page only pulls
+   * the CJK slices it renders. */
+  --font-sans: "IBM Plex Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", Roboto,
+    "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
+    "Noto Sans Mono", monospace;
 
   --sidebar-w: 240px;
   --rail-w: 64px;
@@ -60,36 +94,42 @@
   --transition: 120ms ease;
 }
 
-@media (prefers-color-scheme: light) {
+/* Dark: same names, same contrast intent (each text step ≥ 4.5:1 on --surface-1; each semantic
+ * ≥ 4.5:1 on its own -soft). */
+@media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: light;
+    color-scheme: dark;
 
-    --bg: #f4f5f8;
-    --surface-1: #ffffff;
-    --surface-2: #f2f4f7;
-    --surface-3: #e8ecf1;
-    --border: #dde2ea;
-    --border-strong: #bfc7d3;
+    --bg: #0b0d12;
+    --surface-1: #12151c;
+    --surface-2: #181c25;
+    --surface-3: #1f2430;
+    --border: #262c38;
+    --border-strong: #3a4252;
 
-    --text: #15181e;
-    --text-2: #4a5262;
-    --text-3: #626b7b;
-    --text-on-accent: #ffffff;
+    --text: #e7eaf0;
+    --text-2: #a9b1c0;
+    --text-3: #8b94a5;
+    --text-on-accent: #0b0d12;
 
-    --accent: #2f6fe4;
-    --accent-hover: #245cc4;
-    --accent-soft: rgba(47, 111, 228, 0.1);
+    --accent: #6ea0ff;
+    --accent-hover: #86b0ff;
+    --accent-soft: rgba(110, 160, 255, 0.16);
 
-    --ok: #1f8f57;
-    --ok-soft: rgba(31, 143, 87, 0.12);
-    --warn: #8f6300;
-    --warn-soft: rgba(184, 132, 0, 0.14);
-    --danger: #c73a33;
-    --danger-soft: rgba(199, 58, 51, 0.1);
-    --info: #2b6cd9;
-    --info-soft: rgba(43, 108, 217, 0.1);
+    --ok: #4fc38a;
+    --ok-soft: rgba(79, 195, 138, 0.16);
+    --warn: #e5b454;
+    --warn-soft: rgba(229, 180, 84, 0.18);
+    --danger: #f0716a;
+    --danger-soft: rgba(240, 113, 106, 0.18);
+    --info: #7fb2ff;
+    --info-soft: rgba(127, 178, 255, 0.16);
+    --observe: #5ec8bf;
+    --observe-soft: rgba(94, 200, 191, 0.16);
+    --muted: #8b94a5;
+    --muted-soft: rgba(139, 148, 165, 0.16);
 
-    --shadow-1: 0 1px 2px rgba(20, 24, 33, 0.08), 0 8px 24px rgba(20, 24, 33, 0.1);
-    --overlay: rgba(20, 24, 33, 0.35);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --overlay: rgba(4, 6, 10, 0.6);
   }
 }
