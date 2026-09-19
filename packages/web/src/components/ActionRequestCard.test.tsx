@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCardData } from '../lib/action-card.js';
 import { HttpError } from '../lib/http-client.js';
@@ -8,6 +8,13 @@ import { ActionRequestCard, type ActionRequestCardProps } from './ActionRequestC
 // `globals: false` (vitest.base.ts) means `@testing-library/react`'s automatic afterEach cleanup
 // never fires — every jsdom component test file in this package registers it itself.
 afterEach(cleanup);
+
+/**
+ * ActionRequestCard.test.tsx (S6-A): the inline card on `ui/ApprovalCard`. The kit's own tests
+ * (ui/ApprovalCard.test.tsx) cover the reason validation and button states; this file covers the
+ * adapter — what of `ActionCardData` reaches the card, the two modes, the outcome line, the
+ * stable e2e hooks (`.action-card`, `.action-card-status`) and the callback shapes.
+ */
 
 function baseCard(overrides: Partial<ActionCardData> = {}): ActionCardData {
   return {
@@ -38,7 +45,6 @@ function baseCard(overrides: Partial<ActionCardData> = {}): ActionCardData {
 function renderCard(overrides: Partial<ActionRequestCardProps> = {}) {
   const props: ActionRequestCardProps = {
     card: baseCard(),
-    busy: false,
     error: null,
     onApprove: vi.fn(),
     onReject: vi.fn(),
@@ -49,41 +55,58 @@ function renderCard(overrides: Partial<ActionRequestCardProps> = {}) {
 }
 
 describe('ActionRequestCard', () => {
-  it('renders title, description, action kind tag, status chip and decision buttons for a holder-pending card', () => {
+  it('renders the shared card — kind, target, blast radius, description, decision buttons and the approvals link — for a holder-pending card', () => {
     renderCard();
-    expect(screen.getByText('docker container restart')).toBeTruthy();
+    expect(screen.getByTestId('action-request-card')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'docker.container_restart' })).toBeTruthy();
+    expect(screen.getByTestId('approval-target').textContent).toBe('web-1');
+    expect(screen.getByTestId('approval-blast-radius').getAttribute('data-status')).toBe('medium');
     expect(screen.getByText('Restart the web-1 container.')).toBeTruthy();
-    expect(document.querySelector('.tag')?.textContent).toBe('docker.container_restart');
-    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Reject' })).toBeTruthy();
-    expect(screen.getByRole('checkbox', { name: /Always allow/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Approve/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Reject/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Always allow/ })).toBeTruthy();
+    expect(screen.getByTestId('approval-open-page').getAttribute('href')).toBe(
+      '#/work/approvals/ar-1',
+    );
+    // The stable e2e hooks: `.action-card` wraps, `.action-card-status` carries the raw status.
+    expect(document.querySelector('.action-card')).toBeTruthy();
     const chip = document.querySelector('.action-card-status');
     expect(chip?.getAttribute('data-status')).toBe('pending_approval');
+    expect(screen.getByTestId('action-outcome').textContent).toContain('待审批 Pending approval');
   });
 
   it('renders a status-only line with no buttons when isHolder is false', () => {
     renderCard({ card: baseCard({ isHolder: false }) });
-    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Reject/ })).toBeNull();
+    expect(screen.queryByTestId('action-request-card')).toBeNull();
     expect(document.querySelector('.action-card-status-only')).toBeTruthy();
     expect(document.querySelector('.action-card-status')?.getAttribute('data-status')).toBe(
       'pending_approval',
     );
   });
 
-  it('hides the decision form once status is no longer pending_approval', () => {
-    renderCard({ card: baseCard({ status: 'approved' }) });
-    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  it('goes read-only and shows the outcome line once status is no longer pending_approval', () => {
+    renderCard({ card: baseCard({ status: 'executed' }) });
+    expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
+    expect(screen.queryByTestId('approval-reason')).toBeNull();
     expect(document.querySelector('.action-card-status')?.getAttribute('data-status')).toBe(
-      'approved',
+      'executed',
     );
-    expect(document.querySelector('.action-card-status')?.textContent).toBe('Approved');
+    expect(screen.getByTestId('action-outcome').textContent).toContain('已执行 Executed');
+    // The deep link stays available on a decided card.
+    expect(screen.getByTestId('approval-open-page')).toBeTruthy();
   });
 
-  it('applies the blocking style when awaitDecision is true and still pending', () => {
+  it('reads 已拒绝 for a rejected request', () => {
+    renderCard({ card: baseCard({ status: 'rejected' }) });
+    expect(screen.getByTestId('action-outcome').textContent).toContain('已拒绝 Rejected');
+  });
+
+  it('applies the blocking style and notice when awaitDecision is true and still pending', () => {
     renderCard({ card: baseCard({ awaitDecision: true }) });
     expect(document.querySelector('.action-card-blocking')).toBeTruthy();
-    expect(screen.getByText('Awaiting your decision.')).toBeTruthy();
+    expect(screen.getByText(/Awaiting your decision/)).toBeTruthy();
   });
 
   it('renders the simulated block only when present', () => {
@@ -95,42 +118,65 @@ describe('ActionRequestCard', () => {
     expect(document.querySelector('.action-card-simulated')?.textContent).toContain('wouldStop');
   });
 
-  it('calls onApprove with the actionRequestId and the always-allow choice', () => {
+  it('calls onApprove with the trimmed reason and alwaysAllow: false', async () => {
     const { props } = renderCard();
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    expect(props.onApprove).toHaveBeenCalledWith('ar-1', { alwaysAllow: false });
-
-    fireEvent.click(screen.getByRole('checkbox', { name: /Always allow/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    expect(props.onApprove).toHaveBeenLastCalledWith('ar-1', { alwaysAllow: true });
+    fireEvent.change(screen.getByTestId('approval-reason'), {
+      target: { value: '  routine restart  ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    await waitFor(() =>
+      expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
+        reason: 'routine restart',
+        alwaysAllow: false,
+      }),
+    );
   });
 
-  it('hides the always-allow checkbox when the session may not write auto-approval rules', () => {
+  it('"Always allow" approves with alwaysAllow: true', async () => {
+    const { props } = renderCard();
+    fireEvent.click(screen.getByRole('button', { name: /Always allow/ }));
+    await waitFor(() =>
+      expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
+        reason: undefined,
+        alwaysAllow: true,
+      }),
+    );
+  });
+
+  it('requires a reason to approve a high blast radius and never offers "Always allow" for it (I8)', async () => {
+    const { props } = renderCard({ card: baseCard({ blastRadius: 'high' }) });
+    expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    await screen.findByRole('alert');
+    expect(props.onApprove).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId('approval-reason'), {
+      target: { value: 'incident 42, approved by on-call' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    await waitFor(() =>
+      expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
+        reason: 'incident 42, approved by on-call',
+        alwaysAllow: false,
+      }),
+    );
+  });
+
+  it('hides "Always allow" when the session may not write auto-approval rules', () => {
     renderCard({ canAlwaysAllow: false });
-    expect(screen.queryByRole('checkbox')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Approve/ })).toBeTruthy();
   });
 
-  it('calls onReject with the trimmed reason, or undefined when blank', () => {
+  it('calls onReject with the trimmed reason, or undefined when blank', async () => {
     const { props } = renderCard();
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
-    expect(props.onReject).toHaveBeenCalledWith('ar-1', undefined);
+    fireEvent.click(screen.getByRole('button', { name: /Reject/ }));
+    await waitFor(() => expect(props.onReject).toHaveBeenCalledWith('ar-1', undefined));
 
-    fireEvent.change(screen.getByLabelText('Decision reason'), {
+    fireEvent.change(screen.getByTestId('approval-reason'), {
       target: { value: '  not needed  ' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
-    expect(props.onReject).toHaveBeenLastCalledWith('ar-1', 'not needed');
-  });
-
-  it('disables the decision controls while busy', () => {
-    renderCard({ busy: true });
-    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    fireEvent.click(screen.getByRole('button', { name: /Reject/ }));
+    await waitFor(() => expect(props.onReject).toHaveBeenLastCalledWith('ar-1', 'not needed'));
   });
 
   it('renders the decision error with its wire code', () => {
@@ -154,5 +200,15 @@ describe('ActionRequestCard', () => {
     expect(block?.textContent).toContain('"container": "web-1"');
     expect(block?.textContent).toContain('[redacted]');
     expect(block?.textContent).not.toContain('sk-secret-value');
+  });
+
+  it('shows on-behalf-of and policy when the row carries them', () => {
+    renderCard({
+      card: baseCard({ onBehalfOf: 'principal-9', policyDecision: 'require_approval' }),
+    });
+    expect(screen.getByTestId('approval-on-behalf-of').getAttribute('data-ref-id')).toBe(
+      'principal-9',
+    );
+    expect(screen.getByTestId('approval-policy').textContent).toBe('require_approval');
   });
 });

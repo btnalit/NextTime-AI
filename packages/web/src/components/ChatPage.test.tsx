@@ -121,9 +121,8 @@ describe('ChatPage inline approval card (C8)', () => {
       fake.caughtUp();
     });
 
-    const card = await screen.findByTestId('action-request-detail');
-    fireEvent.click(within(card).getByRole('checkbox'));
-    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }));
+    const card = await screen.findByTestId('action-request-card');
+    fireEvent.click(within(card).getByRole('button', { name: /Always allow/ }));
 
     await waitFor(() =>
       expect(http.calls.map((call) => call.name)).toEqual([
@@ -131,8 +130,46 @@ describe('ChatPage inline approval card (C8)', () => {
         'set_auto_approved_action_kind',
       ]),
     );
+    expect(http.calls[0]?.params).toEqual({ actionRequestId: 'ar-1' });
     expect(http.calls[1]?.params).toEqual({ actionKindTag: 'docker.container_restart' });
     await screen.findByText(/will be auto-approved from now on/);
+    // The card left `pending_approval` in place (the `approve` result's status) — the outcome
+    // line sits beside the shared card inside the `.action-card` wrapper.
+    const wrapper = card.closest('.action-card') as HTMLElement;
+    await waitFor(() =>
+      expect(within(wrapper).getByTestId('action-outcome').getAttribute('data-status')).toBe(
+        'approved',
+      ),
+    );
+  });
+
+  it('passes the typed reason through to approve (C25) and surfaces a kernel error on the card', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      approve: () => {
+        throw new Error('reason_required');
+      },
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(pendingCardMessage(1, 'ar-1'));
+      fake.caughtUp();
+    });
+    const card = await screen.findByTestId('action-request-card');
+    fireEvent.change(within(card).getByTestId('approval-reason'), {
+      target: { value: 'planned maintenance' },
+    });
+    fireEvent.click(within(card).getByRole('button', { name: /Approve/ }));
+    await waitFor(() => expect(http.calls).toHaveLength(1));
+    expect(http.calls[0]?.params).toEqual({
+      actionRequestId: 'ar-1',
+      reason: 'planned maintenance',
+    });
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('reason_required');
+    // Still decidable: the buttons stay.
+    expect(within(card).getByRole('button', { name: /Approve/ })).toBeTruthy();
   });
 });
 
