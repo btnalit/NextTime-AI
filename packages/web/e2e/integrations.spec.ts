@@ -272,6 +272,65 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await signOut(page);
   });
 
+  // S6-C (docs/console-completion-plan.md §5.6): the same "接入一个系统" launcher opens from both
+  // pages. On 集成 an http kind offers the hosted-instance form; on 系统接入 an ssh kind shows the
+  // packaged-gate checklist (the page never pretends to create a packaged gate). Read-only: it
+  // creates nothing, so it is safe on a retry. The seeded mcp instance is also pickable from the
+  // launcher's list on 系统接入 (test 2 enabled it there), with no 启用 button left (B7).
+  test('admin: the "接入一个系统" launcher opens from 集成 and 系统接入 with the right step-2 body', async ({
+    page,
+  }) => {
+    test.slow();
+    await signInAsAdmin(page);
+
+    await page.getByTestId('nav-platformIntegrations').click();
+    await expect(page.getByTestId('platform-integrations-page')).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId('connect-system-button').click();
+    const platformDrawer = page.getByTestId('connect-system-drawer');
+    const platformLauncher = platformDrawer.getByTestId('connect-system-launcher');
+    await expect(platformLauncher).toBeVisible({ timeout: 15_000 });
+    await platformLauncher.getByTestId('launcher-kind-http').check();
+    await platformLauncher.getByTestId('launcher-next').click();
+    await expect(platformLauncher.getByTestId('create-gate-instance-form')).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.keyboard.press('Escape');
+    await expect(platformDrawer).toBeHidden();
+
+    await ensureOwnedWorkspaceSelected(page);
+    await page.getByTestId('nav-systems').click();
+    await expect(page.getByRole('heading', { name: '系统接入 Systems' })).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.getByTestId('connect-system-button').click();
+    const workspaceDrawer = page.getByTestId('connect-system-drawer');
+    const workspaceLauncher = workspaceDrawer.getByTestId('connect-system-launcher');
+    await expect(workspaceLauncher).toBeVisible({ timeout: 15_000 });
+    await workspaceLauncher.getByTestId('launcher-kind-ssh').check();
+    await workspaceLauncher.getByTestId('launcher-next').click();
+    await expect(workspaceLauncher.getByTestId('launcher-packaged-checklist')).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(workspaceLauncher.getByTestId('packaged-gate-compose')).toContainText(
+      'GATE_TRANSPORT_KIND: ssh',
+    );
+    await workspaceLauncher.getByTestId('launcher-back').click();
+    await workspaceLauncher.getByTestId('launcher-kind-mcp').check();
+    await workspaceLauncher.getByTestId('launcher-next').click();
+    await workspaceLauncher.getByTestId(`launcher-gate-${GATE_ID}`).check({ timeout: 15_000 });
+    await workspaceLauncher.getByTestId('launcher-next').click();
+    // Enabled on the platform in test 1 and linked here in test 2: nothing left to enable (B7) —
+    // whether the platform half renders in place (routes.tsx passes `platformAdmin`) or as the
+    // "需要管理员" notice, there is no 启用 button, and the workspace half shows the link.
+    await expect(workspaceLauncher.getByTestId('launcher-workspace-linked')).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(workspaceLauncher.getByTestId('launcher-platform-enable-button')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(workspaceDrawer).toBeHidden();
+    await signOut(page);
+  });
+
   test('admin: issue a service Handle, then revoke the resulting external runtime', async ({
     page,
   }) => {
