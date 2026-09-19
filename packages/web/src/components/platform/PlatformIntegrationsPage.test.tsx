@@ -279,14 +279,16 @@ describe('PlatformIntegrationsPage', () => {
     expect(within(row).getByTestId('gate-instance-status').textContent).toContain('等待宿主接管');
   });
 
-  it('creating a hosted instance posts create_gate_instance (http omits manifestSource when blank) and opens its detail', async () => {
+  // C12 (S6-A0): an http instance can no longer be submitted without a manifest source, so the
+  // "omits manifestSource when blank" case is the mcp transport (mirrors CreateGateInstanceForm.test).
+  it('creating a hosted instance posts create_gate_instance (mcp omits manifestSource) and opens its detail', async () => {
     const created = hostedGateInstance({ gateId: 'gate-new', displayName: 'gate-new' });
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [] }),
       create_gate_instance: (params) => {
         expect(params).toEqual({
           gateId: 'gate-new',
-          transportKind: 'http',
+          transportKind: 'mcp',
           target: 'https://target.internal',
           credentialMode: 'shared',
         });
@@ -302,6 +304,7 @@ describe('PlatformIntegrationsPage', () => {
     fireEvent.change(within(form).getByLabelText(/Gate id/), {
       target: { value: 'gate-new' },
     });
+    fireEvent.click(within(form).getByLabelText(/mcp/));
     fireEvent.change(within(form).getByLabelText(/目标 Target/), {
       target: { value: 'https://target.internal' },
     });

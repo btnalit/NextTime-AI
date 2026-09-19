@@ -237,6 +237,7 @@ export function Routed({
       onSwitchWorkspace={onSwitchWorkspace}
       switchingWorkspace={switchingWorkspace}
       platformRole={session.user?.platformRole}
+      user={session.user}
     >
       {page}
     </AppShell>

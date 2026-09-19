@@ -1,12 +1,10 @@
 import type { GrantStatus, PrincipalKind, Role } from '@nexttime/shared';
 
 /**
- * lib/governance: wire shapes for the S3.11 governance capabilities this PR's web half codes
- * against (the "Contract you code against" section of the task — the kernel half is landing in a
- * parallel PR against the same names/shapes; see docs/development-tasks.md §S3.11). None of these
- * capabilities exist in `@nexttime/shared`'s `CAPABILITY_REGISTRY` yet on `main` as of this PR —
- * every page reading them treats a `not_found` response as "not deployed yet" (`lib/errors.ts`
- * `isNotFoundError`) rather than assuming the shape below is wrong. Field names follow
+ * lib/governance: wire shapes for the S3.11 governance capabilities (docs/development-tasks.md
+ * §S3.11). Written while the kernel half landed in a parallel PR; every capability named here has
+ * since shipped in `@nexttime/shared`'s `CAPABILITY_REGISTRY`, and the interim "treat `not_found`
+ * as not deployed yet" convention was retired in S6-A0 (B6). Field names follow
  * docs/wire-contract-conventions.md (`id` for the resource's own key, `<resource>Id` for a
  * reference, `*At` for ISO timestamps, list results as `{items, nextCursor?}`).
  */

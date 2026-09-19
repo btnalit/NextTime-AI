@@ -182,7 +182,7 @@ export function AgentProfileForm({
           onChange={(event) => update('model', event.target.value)}
           disabled={disabled}
           invalid={!!fieldErrors.model}
-          aria-describedby={describedBy('ap-model', true, !!fieldErrors.model)}
+          aria-describedby={describedBy('ap-model', !fieldErrors.model, !!fieldErrors.model)}
         >
           <option value={INHERIT_MODEL}>继承工作区默认 Inherit workspace default</option>
           {allowedModels.map((m) => (
@@ -254,7 +254,11 @@ export function AgentProfileForm({
           rows={4}
           disabled={disabled}
           invalid={!!fieldErrors.promptAddendum || overLimit}
-          aria-describedby={describedBy('ap-prompt', true, !!fieldErrors.promptAddendum)}
+          aria-describedby={describedBy(
+            'ap-prompt',
+            !fieldErrors.promptAddendum,
+            !!fieldErrors.promptAddendum,
+          )}
         />
       </Field>
 

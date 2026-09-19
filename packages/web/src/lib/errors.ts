@@ -97,16 +97,6 @@ export function isForbiddenError(err: unknown): boolean {
   return describeError(err).code === 'forbidden';
 }
 
-/** Whether `err` normalizes to the `not_found` code above (HTTP 404 / JSON-RPC `-32601` /
- *  `-32004`). B6 (console-completion-plan §2): the S3.11 / S3.13 parallel-rollout convention that
- *  rendered a `not_found` from an id-less `list_*` read as "该能力尚未上线" is retired — every one
- *  of those capabilities has shipped, and the branches are deleted. Kept only for
- *  `GatekeeperDetailDrawer.tsx`'s `get_gatekeeper` (an id-bearing read, where `not_found` means
- *  "no such gatekeeper" — that caller's copy is the last stale one and sits outside this lane). */
-export function isNotFoundError(err: unknown): boolean {
-  return describeError(err).code === 'not_found';
-}
-
 /** `gatekeeper_timeout` → `Gatekeeper timeout` for codes this file has no curated title for. */
 function titleFromCode(code: string): string {
   const words = code.replace(/[_-]+/g, ' ').trim();
