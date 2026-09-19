@@ -32,17 +32,22 @@
 #                session_id matches no worker_runs row (the entry agent's own session, which is
 #                never itself a Task) still comes back, with task_id/task_status = empty, rather
 #                than being silently dropped.
+#   --by provider: group by llm_usage.provider, llm_usage.model (S6-B, docs/console-completion-
+#                plan.md §5.4 acceptance: "report-usage.sh 里能按 provider / model 汇总") — the
+#                per-provider view after a provider was added in the console. `provider` is the
+#                proxy route name (the llm-providers.yaml / console store id), `model` the
+#                upstream id; no join needed, both are columns of llm_usage.
 #
 # Usage:
 #   sh scripts/report-usage.sh --workspace <uuid> [--since <ISO-8601 UTC>] [--until <ISO-8601 UTC>]
-#                               [--by turn|handle|task] [--markdown] [--summary]
+#                               [--by turn|handle|task|provider] [--markdown] [--summary]
 #   sh scripts/report-usage.sh --since <ISO-8601 UTC> [--until <ISO-8601 UTC>] ...   # cross-workspace
 #
 #   --workspace <uuid>   Required unless --since is given (then the report spans every workspace
 #                         whose llm_usage rows fall in the window — cross-workspace ops query).
 #   --since <ISO-8601>    Optional lower bound on started_at, e.g. 2026-09-17T10:00:00Z.
 #   --until <ISO-8601>    Optional (exclusive) upper bound on started_at.
-#   --by turn|handle|task  Grouping for the table report. Default: turn. Ignored when --summary is
+#   --by turn|handle|task|provider  Grouping for the table report. Default: turn. Ignored when --summary is
 #                         also given (see below).
 #   --markdown            Emit a Markdown table block (or, with --summary, a Markdown-formatted
 #                         summary line) ready to paste into docs/private/real-model-<date>.md.
@@ -78,7 +83,7 @@ SUMMARY=0
 usage() {
 	cat >&2 <<'EOF'
 usage: report-usage.sh --workspace <uuid> [--since <ISO-8601 UTC>] [--until <ISO-8601 UTC>]
-                        [--by turn|handle|task] [--markdown] [--summary]
+                        [--by turn|handle|task|provider] [--markdown] [--summary]
        report-usage.sh --since <ISO-8601 UTC> [--until <ISO-8601 UTC>] [same flags]
 EOF
 }
@@ -157,9 +162,9 @@ if [ -n "$UNTIL" ]; then
 fi
 
 case "$BY" in
-	turn | handle | task) ;;
+	turn | handle | task | provider) ;;
 	*)
-		echo "report-usage: --by must be one of turn|handle|task, got: $BY" >&2
+		echo "report-usage: --by must be one of turn|handle|task|provider, got: $BY" >&2
 		exit 1
 		;;
 esac
@@ -268,6 +273,10 @@ case "$BY" in
 	task)
 		header="task_id|task_status|worker_definition_id|calls|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at"
 		sql="select coalesce(t.id::text, '(none: no task, e.g. entry-agent session)') as task_id, coalesce(t.status, '(none)') as task_status, coalesce(t.worker_definition_id::text, '(none)') as worker_definition_id, count(*) as calls, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at from llm_usage l left join worker_runs wr on wr.workspace_id = l.workspace_id and wr.session_id = l.session_id left join tasks t on t.workspace_id = wr.workspace_id and t.id = wr.task_id where $WHERE_CLAUSE group by t.id, t.status, t.worker_definition_id order by min(l.started_at);"
+		;;
+	provider)
+		header="provider|model|calls|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at"
+		sql="select l.provider, l.model, count(*) as calls, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at from llm_usage l where $WHERE_CLAUSE group by l.provider, l.model order by l.provider, l.model;"
 		;;
 esac
 

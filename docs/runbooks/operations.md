@@ -315,3 +315,84 @@ sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
 | 想看 Prometheus 风格的指标面板，发现没有任何端点 | 见 §7——设计文档 §12 的指标体系尚未实现，这不是本次文档遗漏，是代码现状 | 用 §7 表格里的 SQL/capability 近似替代；若确实需要真正的指标端点，那是一项新的实现任务（development-tasks.md S3.8），不是本 runbook 能补的文档缺口 |
 | 目标主机上跑 `make migrate` 报 `corepack`/`pnpm` 不存在 | 目标主机通常没有 Node/corepack（`docs/runbooks/accept-s1.md` §1） | 用容器化命令 `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js`（见 §4.1）；`make migrate` 只在装了 Node/corepack 的机器（如开发机、CI）上直接可用 |
 | `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js` 报找不到该文件 | `kernel` 镜像还没构建，或构建的是旧代码 | `docker compose build kernel` 后重试 |
+
+## 12. 供应商管理（S6-B）
+
+`docs/console-completion-plan.md` §5.4 / §6；`docs/platform-admin-design.md` §6.2。平台页「模型与供应商」
+（`#/platform/models`，仅管理员）管理 llm-proxy 里的供应商：名称、API 种类（`openai-completions` /
+`openai-responses` / `anthropic-messages`——Gemini 走其 OpenAI 兼容端点，§12 第 2 项）、Base URL、鉴权头、
+密钥环境变量名、模型清单与显示名、启用；「测试调用」= 一次补全 **+ 一次强制工具调用往返**。
+
+**路径**：浏览器 → caddy `/api/llm-admin/*`（`deploy/caddy/Caddyfile`，去掉前缀后改写为 llm-proxy 的
+`/admin/*`，边缘先要求 `X-Requested-With: nexttime`）→ llm-proxy 管理端点（`packages/llm-proxy/src/admin-api.ts`）。
+鉴权是内核 `issue_llm_admin_token` 签发的 5 分钟平台 JWT（Handle 密钥签名，`typ` / `aud` 不同——Handle 永远进不了
+管理端点，管理令牌也永远不是 Handle）。内核只签令牌、只记审计，**不存供应商记录、不见密钥**。
+
+**两处状态（compose 新增两个挂载）**：
+
+| 主机路径 | 容器内 | 内容 | 谁写 |
+|---|---|---|---|
+| `${NEXTTIME_DATA}/llm-proxy/providers.json` | `/data/state/providers.json`（rw） | 控制台写入的供应商（`provider-store.ts`，原子写：`.tmp` + rename） | llm-proxy（uid 10001） |
+| `${NEXTTIME_DATA}/config/llm-providers.yaml` | `/data/config/llm-providers.yaml`（**ro**） | 操作员的基础配置，不变 | 操作员 |
+| `${NEXTTIME_DATA}/config/models.json` | `/data/config/models.json`（`config/` 目录 rw） | 合并目录（yaml + store，仅启用的），每次变更后原子重写 | llm-proxy 与 `make gen-models` |
+
+合并规则按名字：store 条目**整体**覆盖同名 yaml 条目（页面来源列显示「覆盖 yaml override」）；yaml 条目永远
+视为启用，「停用」一个 yaml 供应商就是写一条 `enabled:false` 的覆盖；删除覆盖 = 恢复 yaml 条目；纯 yaml
+条目不能在页面删除（409 `provider_from_file`，改 yaml）。`admin` / `healthz` / `internal` 是保留名。
+
+**一次性主机步骤**（新目录、`config/` 属主；否则页面每次写入 503 `store_unwritable`，或 models.json 重写失败
+并在列表里以 `modelsJsonError` 显示）：
+
+```bash
+set -a; . ./.env; set +a
+sudo -E sh scripts/host-llm-proxy-init.sh      # mkdir+chown llm-proxy/ 归 10001；chown config/ 归 10001（属主，不改 mode）
+docker compose build llm-proxy caddy            # 新代码
+docker compose up -d --force-recreate llm-proxy # 新挂载
+docker compose restart caddy                    # 新路由（Caddyfile 是 bind mount）
+```
+
+`config/` 改为 10001 属主而不是组可写：`host-env-init.sh` 每次重跑都会 `chmod 755` config/，组写位会被清掉，
+属主写不会。容器内 `llm-providers.yaml`、`handle.pub`、`egress-sources.json`、`ontology/` 仍以 `:ro` 单独覆盖
+挂载在 rw 目录之上，所以 llm-proxy 的写面只多了 models.json 一件事（见 `docker-compose.yml` 该服务块注释）。
+
+**密钥（不变，且 S6-B 明确不改）**：控制台**不收密钥**。每个供应商只记录环境变量名（`apiKeyEnv`），页面显示
+「凭证：已配置 / 待操作员配置 `<ENV>`」（代理只报告布尔值 `credentialPresent`）。装密钥仍是：
+
+```bash
+# 主机上，追加一行到 secrets/llm-proxy.env（变量名 = 页面里该供应商的 apiKeyEnv）
+ACME_API_KEY=...
+docker compose up -d --force-recreate llm-proxy   # §4.2：restart 不重读 env_file
+```
+
+`POST /api/llm-admin/providers/:id/secret` 返回 **501 `not_implemented`**：这是扩展点，**等维护者决定**控制台
+写供应商密钥是否属于底线「触及有凭证系统的动作必经审批」（`console-completion-plan.md` §12 末）。密钥未配置时
+「测试调用」被拒绝（409 `credential_missing`），不会向上游发空头。
+
+**`make gen-models` 的关系**：仍然可用，且 `cli/gen-models.ts` 现在也合并 store（`docker compose run` 复用同一
+服务定义，`/data/state` 同样挂着），输出与代理自己重写的一致；不再会把控制台加的供应商丢掉。llm-proxy
+**启动时不写** models.json（只在不一致时记一行 warn 日志）——验收覆盖 `deploy/accept/docker-compose.fake.yml`
+把它的 yaml 换成假 provider，必须不能覆盖生产 models.json。改了 yaml 仍需重建 llm-proxy（yaml 不热加载）+
+`make gen-models`（或在页面里随便保存一个供应商，也会重写）。
+
+**审计（只增不减）**：每次变更两条记录——llm-proxy 自己的 `level: "audit"` 结构化日志行（`docker compose logs
+llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy 经内部面 `POST /internal/llm-admin-audit`
+写入，动作 `platform.llm_provider_created / _updated / _deleted / _tested`，`resourceType: llm_provider`），两者都带
+令牌的 `jti`，与 `issue_llm_admin_token` 留下的 `platform.llm_admin_token_issued` 行对得上；均不含密钥。
+`report-usage.sh --by provider` 按 provider / model 汇总用量（§5.4 验收）。
+
+**遗留 19（I18「100% 时代理返回预算耗尽错误」）**：llm-proxy 每 `BUDGET_SYNC_INTERVAL_MS`（缺省 15 s）拉一次
+`GET /internal/llm-budget-exhausted`——内核列出今天（UTC）已超 `task.daily_cost_budget_usd` 配额（jsonb 数字；
+`null` = 不限）或 `LLM_DAILY_TOKEN_BUDGET` 的工作区——对这些工作区的每次补全在验证 Handle 后、接触上游前直接回
+**402 `budget_exhausted`**（body 含 `scope` / `budget` / `spent` / `resetsAt`；用 402 不用 429 是因为两家 SDK 都会
+对 429 自动重试）。每行带 `until`（下一个 UTC 零点），内核不可达时代理沿用上次集合但到点自动放行。内核事后止损
+（Task `failed: budget_exhausted` + 撤销 Handle → 401）仍是兜底。
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 页面顶部「状态目录不可写」 / 写入 503 `store_unwritable` | `${NEXTTIME_DATA}/llm-proxy` 不存在或不归 10001（Docker 代建的是 root） | 运行 `scripts/host-llm-proxy-init.sh`，`--force-recreate llm-proxy` |
+| 保存成功但列表显示 `modelsJsonError: EACCES` | `config/` 不归 10001 | 同上；临时用 `make gen-models` 手动重写 |
+| 「测试调用」409 `credential_missing` | 该供应商的 `apiKeyEnv` 在 `secrets/llm-proxy.env` 里没设 | 加一行、`--force-recreate llm-proxy` |
+| 测试：补全 ok、工具调用 error | 上游不支持函数调用 / 该模型不支持 `tool_choice` | Worker 与门工具依赖工具调用，换模型或换端点；补全 ok 只说明鉴权与路由对了 |
+| 新供应商在工作区「模型与配额」里看不到 | models.json 未重写（见 `modelsJsonError`）或浏览器缓存 | 刷新平台页看 `models.json 已于 … 重写`；内核每次调用都重读该文件，无需重启 |
+| `/api/llm-admin/*` 403 | 缺 `X-Requested-With` 头（非控制台调用） | 只有控制台会调这些端点；脚本化管理请用 `issue_llm_admin_token` 拿令牌并带上该头 |
+| `/api/llm-admin/*` 401 `token_expired` | 令牌 5 分钟到期 | 控制台自动重取一次；持续 401 检查 caddy → llm-proxy 与 `config/handle.pub` 是否同一密钥对 |
