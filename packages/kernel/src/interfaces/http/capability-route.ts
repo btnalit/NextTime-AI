@@ -4,7 +4,11 @@ import {
   GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
-import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import {
+  ChatArchivedError,
+  ChatNotFoundError,
+  TurnAlreadyRunningError,
+} from '../../application/chat/index.js';
 import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
 // application/gateway/index.ts's curated public surface (adding them there is a one-line change
@@ -187,6 +191,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // the service itself).
   if (err instanceof TurnAlreadyRunningError) {
     return { status: 409, code: 'turn_already_running', message: err.message };
+  }
+  // S6-A: an archived Chat takes no new Turn (application/chat/service.ts `ChatArchivedError`).
+  if (err instanceof ChatArchivedError) {
+    return { status: 409, code: 'chat_archived', message: err.message };
   }
   if (err instanceof ChatNotFoundError) {
     return { status: 404, code: 'chat_not_found', message: err.message };

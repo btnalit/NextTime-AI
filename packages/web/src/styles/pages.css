@@ -122,6 +122,34 @@
   gap: var(--space-3);
 }
 
+/* W3 (S6-A): the FollowPill sits in its own zero-padding thread column so it stays centred under
+ * the messages and sticky above the composer while the user is scrolled up. */
+.chat-thread-pill {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.follow-pill-anchor {
+  position: sticky;
+  bottom: var(--space-3);
+  align-self: center;
+  margin-top: calc(-1 * var(--space-4));
+  z-index: 2;
+}
+
+/* W2 (S6-A): the header's 模式 · 模型 · 来源 line and its compact model select. */
+.chat-header-meta {
+  font-size: var(--fs-13);
+  color: var(--text-3);
+}
+
+.chat-header-meta .select {
+  width: auto;
+  min-height: 28px;
+  padding: 2px var(--space-2);
+  font-size: var(--fs-13);
+}
+
 .message {
   display: flex;
   flex-direction: column;

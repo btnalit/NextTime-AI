@@ -35,7 +35,9 @@ export interface ApprovalCardProps {
   readonly onApprove?: (reason: string | undefined) => void | Promise<void>;
   readonly onReject?: (reason: string | undefined) => void | Promise<void>;
   /** "总是允许 Always allow this kind" — operator+ only; omit to hide. */
-  readonly onAlwaysAllow?: () => void | Promise<void>;
+  /** "总是允许": approve this request AND auto-approve its action kind from now on. Receives the
+   *  typed reason (if any) so a reason given before choosing this button is not dropped. */
+  readonly onAlwaysAllow?: (reason: string | undefined) => void | Promise<void>;
   /** Decided / not actionable: no buttons, status only. */
   readonly readOnly?: boolean;
   readonly testId?: string;
@@ -92,7 +94,7 @@ export function ApprovalCard({
     try {
       if (kind === 'approve') await onApprove?.(trimmed === '' ? undefined : trimmed);
       else if (kind === 'reject') await onReject?.(trimmed === '' ? undefined : trimmed);
-      else await onAlwaysAllow?.();
+      else await onAlwaysAllow?.(trimmed === '' ? undefined : trimmed);
     } finally {
       setBusy(null);
     }

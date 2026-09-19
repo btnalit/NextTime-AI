@@ -103,7 +103,7 @@ export function ActionRequestCard({
         onReject={(reason) => onReject(card.actionRequestId, reason)}
         onAlwaysAllow={
           offerAlwaysAllow
-            ? () => onApprove(card.actionRequestId, { reason: undefined, alwaysAllow: true })
+            ? (reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: true })
             : undefined
         }
         testId="action-request-card"

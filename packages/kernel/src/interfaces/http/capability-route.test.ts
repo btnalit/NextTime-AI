@@ -12,6 +12,7 @@ import {
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import { ChatArchivedError } from '../../application/chat/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   CapabilityNotImplementedError,
@@ -69,6 +70,15 @@ const neverConnectPool: PoolLike = {
     throw new Error('should not touch the database for this request');
   },
 };
+
+describe('mapCapabilityError — S6-A chat lifecycle (unit)', () => {
+  it('ChatArchivedError maps to 409 chat_archived', () => {
+    expect(mapCapabilityError(new ChatArchivedError('chat-1'))).toMatchObject({
+      status: 409,
+      code: 'chat_archived',
+    });
+  });
+});
 
 describe('mapCapabilityError — S6-A / C25 approve.reason (unit)', () => {
   it('ApprovalReasonRequiredError maps to 400 with its own code reason_required', () => {

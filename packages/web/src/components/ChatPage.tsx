@@ -512,19 +512,9 @@ export function ChatPage({
           <div ref={sentinelRef} aria-hidden data-testid="chat-bottom-sentinel" />
         </div>
         {!following ? (
-          <div className="chat-thread" style={{ paddingTop: 0, paddingBottom: 0 }}>
-            {/* Same anchoring as the former `.jump-latest` button, inline so the pill keeps its
-                own pill-shaped border (the class carries a rectangular box-shadow). */}
-            <div
-              className="follow-pill-anchor"
-              style={{
-                position: 'sticky',
-                bottom: 'var(--space-3)',
-                alignSelf: 'center',
-                marginTop: 'calc(-1 * var(--space-4))',
-                zIndex: 2,
-              }}
-            >
+          <div className="chat-thread chat-thread-pill">
+            {/* Same anchoring as the former `.jump-latest` button (pages.css `.follow-pill-anchor`). */}
+            <div className="follow-pill-anchor">
               <FollowPill count={unseen} onClick={jumpToLatest} testId="follow-pill" />
             </div>
           </div>

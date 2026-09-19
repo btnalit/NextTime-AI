@@ -134,7 +134,6 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
           disabled={disabled}
           title={disabledReason}
           aria-describedby={disabledReason ? `${selectId}-why` : undefined}
-          style={{ width: 'auto', minHeight: 28, padding: '2px 8px' }}
           data-testid="chat-model-select"
         >
           <option value={WORKSPACE_DEFAULT}>

@@ -4,7 +4,11 @@ import {
   GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
-import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import {
+  ChatArchivedError,
+  ChatNotFoundError,
+  TurnAlreadyRunningError,
+} from '../../application/chat/index.js';
 // NoActiveTurnError/TurnNotFoundError: see capability-route.ts's own comment on this same import
 // — exported by handlers.ts but not re-exported by gateway/index.ts's curated surface; that one-
 // line addition is inside application/gateway/**, outside this task's file ownership.
@@ -216,6 +220,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof TurnAlreadyRunningError) {
     return { code: WS_ERROR_CODES.TURN_ALREADY_RUNNING, message: err.message };
+  }
+  // S6-A: an archived Chat takes no new Turn — a state conflict, like an illegal transition.
+  if (err instanceof ChatArchivedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (err instanceof ChatNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };

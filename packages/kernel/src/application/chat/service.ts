@@ -60,6 +60,17 @@ export class TurnAlreadyRunningError extends Error {
   }
 }
 
+/** Thrown by `sendChatMessage` when the Chat is archived (S6-A, docs/console-completion-plan.md
+ *  §4 "Chat 生命周期": archiving only affects list visibility, but an archived Chat takes no new
+ *  Turn — restore it first). Enforced here, not only in the console, so an API caller cannot write
+ *  into an archived Chat either. Maps to 409 at every transport, like `TurnAlreadyRunningError`. */
+export class ChatArchivedError extends Error {
+  constructor(chatId: string) {
+    super(`chat ${chatId} is archived — unarchive it before sending`);
+    this.name = 'ChatArchivedError';
+  }
+}
+
 const ONE_RUNNING_TURN_PER_CHAT_CONSTRAINT = 'activities_one_running_turn_per_chat_uidx';
 
 function isUniqueViolation(err: unknown, constraintName: string): boolean {
@@ -398,6 +409,7 @@ export async function sendChatMessage(
   input: SendChatMessageInput,
 ): Promise<SendChatMessageResult> {
   const chat = await requireChatAccess(client, workspaceId, input.chatId);
+  if (chat.archivedAt !== null) throw new ChatArchivedError(input.chatId);
 
   let turnId: string;
   try {

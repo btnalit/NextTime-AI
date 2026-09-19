@@ -230,6 +230,24 @@ describe.runIf(DATABASE_URL !== undefined)(
         chatId: chat.id,
       })) as { items: unknown[] };
       expect(history.items).toHaveLength(1);
+
+      // S6-A integration: an archived Chat takes no new Turn (ChatArchivedError, 409 over HTTP) —
+      // enforced in the kernel, not only by the console's disabled composer — until it is restored.
+      // A second, still-untouched chat, so the first chat's running Turn does not shadow the check.
+      const parked = (await dispatchCapability({ pool }, memberA, 'new_chat', {})) as ChatWire;
+      await dispatchCapability({ pool }, memberA, 'archive_chat', { chatId: parked.id });
+      await expect(
+        dispatchCapability({ pool }, memberA, 'send_chat_message', {
+          chatId: parked.id,
+          text: 'into an archived chat',
+        }),
+      ).rejects.toMatchObject({ name: 'ChatArchivedError' });
+      await dispatchCapability({ pool }, memberA, 'unarchive_chat', { chatId: parked.id });
+      const restored = (await dispatchCapability({ pool }, memberA, 'send_chat_message', {
+        chatId: parked.id,
+        text: 'after restore',
+      })) as { turnId: string };
+      expect(restored.turnId).toBeTruthy();
     });
 
     it("another member's private chat is 404 (RLS, existence never leaked); a workspace-visible chat of another member is 403 for archive and rename", async () => {
