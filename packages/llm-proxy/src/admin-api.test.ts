@@ -433,6 +433,25 @@ describe('admin API — catalog lifecycle', () => {
     expect((refused.body as { error: { code: string } }).error.code).toBe('provider_from_file');
   });
 
+  it('PUT on a store row audits only the fields that changed (never the store timestamps)', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    expect(
+      (await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER }))
+        .status,
+    ).toBe(201);
+    const updated = await request(h.port, 'PUT', '/admin/providers/acme', {
+      headers: admin,
+      body: { ...NEW_PROVIDER, upstreamBaseUrl: 'https://acme-2.example.invalid' },
+    });
+    expect(updated.status).toBe(200);
+    expect(h.kernelEvents.at(-1)).toMatchObject({
+      action: 'provider_updated',
+      providerId: 'acme',
+      details: { changed: ['upstream_base_url'], overridesFile: false },
+    });
+  });
+
   it('PUT with a mismatched id is 400; unknown ids are 404', async () => {
     const h = await harness();
     const admin = await h.adminHeaders();

@@ -57,4 +57,4 @@ fi
 
 echo "host-llm-proxy-init: state dir  -> $(stat -c '%A %U:%G' "$STATE_DIR") $STATE_DIR"
 echo "host-llm-proxy-init: config dir -> $(stat -c '%A %U:%G' "$CONFIG_DIR") $CONFIG_DIR"
-echo "host-llm-proxy-init: done — now 'docker compose up -d --force-recreate llm-proxy' (new mounts) and 'docker compose restart caddy' (new route)"
+echo "host-llm-proxy-init: done — next (docs/runbooks/operations.md §12): docker compose build kernel llm-proxy caddy; up -d kernel; up -d --force-recreate llm-proxy; up -d caddy"

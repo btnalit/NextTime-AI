@@ -345,11 +345,15 @@ sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
 
 ```bash
 set -a; . ./.env; set +a
-sudo -E sh scripts/host-llm-proxy-init.sh      # mkdir+chown llm-proxy/ 归 10001；chown config/ 归 10001（属主，不改 mode）
-docker compose build llm-proxy caddy            # 新代码
-docker compose up -d --force-recreate llm-proxy # 新挂载
-docker compose restart caddy                    # 新路由（Caddyfile 是 bind mount）
+sudo -E sh scripts/host-llm-proxy-init.sh                 # mkdir+chown llm-proxy/ 归 10001；chown config/ 归 10001（属主，不改 mode）
+export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"   # release.md §3.1
+docker compose build kernel llm-proxy caddy                # kernel：新能力 + 两条内部路由；caddy：新路由 + 新页面（web 随镜像走）
+docker compose up -d kernel                                # 无新迁移；等 healthy（§4.1）
+docker compose up -d --force-recreate llm-proxy            # 新挂载 + 新环境变量（restart 不重读，§4.2）
+docker compose up -d caddy                                 # 新镜像（Caddyfile 是 bind mount，但页面在镜像里）
 ```
+
+不重建 kernel 的后果：页面 `issue_llm_admin_token` 返回 `not_found`，llm-proxy 的预算轮询与审计回写一直 404。
 
 `config/` 改为 10001 属主而不是组可写：`host-env-init.sh` 每次重跑都会 `chmod 755` config/，组写位会被清掉，
 属主写不会。容器内 `llm-providers.yaml`、`handle.pub`、`egress-sources.json`、`ontology/` 仍以 `:ro` 单独覆盖

@@ -205,7 +205,8 @@ function changedFields(
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   const changed: string[] = [];
   for (const key of keys) {
-    if (key === 'last_test') continue;
+    // Lifecycle / bookkeeping fields, never "what the administrator changed".
+    if (key === 'last_test' || key === 'created_at' || key === 'updated_at') continue;
     const a = JSON.stringify((before as Record<string, unknown>)[key] ?? null);
     const b = JSON.stringify((after as Record<string, unknown>)[key] ?? null);
     if (a !== b) changed.push(key);
