@@ -66,6 +66,12 @@ jobs:
       - name: Vocabulary guard (S3.7, docs/wire-contract-conventions.md §5)
         run: node scripts/guards/vocabulary.mjs
 
+      - name: CSS token guard detector unit tests (S6-A0)
+        run: node --test scripts/guards/css-tokens.test.mjs
+
+      - name: CSS token guard (S6-A0, docs/console-completion-plan.md §5.9 — no colour / px font-size literals outside tokens.css)
+        run: node scripts/guards/css-tokens.mjs
+
       - name: fake-llm scenario self-test (S2.12; spawns deploy/fake-llm/server.mjs on a local port)
         run: node deploy/accept-s2/fake-llm-scenario-selftest.mjs
 
