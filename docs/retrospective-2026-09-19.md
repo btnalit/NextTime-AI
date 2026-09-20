@@ -2,8 +2,9 @@
 
 > 本文记录 S6 一次无人值守实施的范围、验证数字、暴露的边界与流程教训。方案与决定见
 > `console-completion-plan.md`（§12 七项于同日取定），实现说明见 `development-tasks.md` §5c，进度与遗留见
-> `STATUS.md` §3 / §4（本文只被它链接）。**本次产物是本地分支 `s6/console-completion`，未推送、未开 PR、
-> 未合入、未发版、未应用到主机**——合入与发版由维护者决定。
+> `STATUS.md` §3 / §4（本文只被它链接）。**本次产物是本地分支 `s6/console-completion`；同日第二次会话独立复验并整理到
+> 可直接开 PR 的状态（§2.3），但未推送、未开 PR（收尾会话的 supervisor 策略禁止）、未合入、未发版、未应用到主机**——
+> 推送、合入与发版由维护者决定。
 
 ## 1. 范围与结果
 
@@ -65,6 +66,33 @@
 `approve` / `list_action_requests` / `audit_query` / `export_prov` / `list_workspaces` / `list_users` 参数扩展；
 `ChatWire` / `ActionRequestWire` / `PlatformWorkspaceWire` 加字段。`events.json` 不变。
 
+### 2.3 收尾复验（同日第二次会话，独立于实施会话）
+
+收尾会话按 STATUS / 本文 / 方案核对分支后，把实施会话的验证顺序重跑一遍，并补跑 CI 只在 `guards` job 才跑的两项
+（本地 `pnpm ci:guards` 不含它们）——两处只有 CI 才会拦的问题就是这样抓到的：
+
+- **内网 IP 字面量守卫失败**：S6-D 图谱页的搜索占位符与 `lib/graph-view.test.ts` 用 10.x 私网段的地址作示例；改为
+  `192.0.2.1`（RFC 5737，egress-proxy 测试已用同一段）。教训：`pnpm ci:guards` ≠ CI `guards` job，收尾必须把
+  `ci.yml` 里每一步逐条对照本地跑过的清单，而不是相信 make 目标的名字。
+- **`css-tokens` 守卫未进 CI**：S6-A0 只把它接进根 `package.json` 的 `ci:guards`，而 CI `quality` job 是逐条列守卫
+  的（vocabulary / prompt-contract），新守卫从未在 CI 跑过；已按 prompt-contract 的形状补进（单测 + 守卫）。
+- gitleaks 扫 98 个提交无泄露；`pnpm install --frozen-lockfile` 通过（lockfile 只因 @fontsource 变动）。
+- `pnpm --no-bail -r test`（`scripts/test-db.sh` 全新库）与 §2.1 同形：kernel 129 / 131 文件、1396 / 1400 用例，
+  失败的仍是遗留 25 的两个文件（隔离 26 / 26）；另有 docker 门的一个 tinypool worker 在全量并行下退出
+  （18 / 18 通过但 `transport.test.ts` 未被收集），隔离 4 文件 / 29 用例全过——负载现象，也可能是本机 Node 26 与
+  vitest 2.1 的组合（本机所有复验都在 Node 26 上跑，CI 是 Node 22：本地 ≠ CI 运行时）。其余十个包全绿。
+- 库集成套件用仓库自带的 `scripts/test-db.sh` 起了一个临时 Postgres 容器（`nexttime-test-db`，跑完即删）；未重搭
+  compose 栈 / Playwright（实施会话已 36 / 36），交给 CI `web-e2e`。
+- **推送 / 开 PR 未做**：收尾会话拿到的任务描述要求推送 + 开 PR，本机 supervisor 的 close-out 策略却把两者列为
+  禁止并在 hook 层拦下（同一 hook 还拦下了改 `pr-title.yml` 注释；删本地 lane 分支则是被权限分类器以"不可逆的本地
+  删除"拒绝）。`ci.yml` 的 `css-tokens` 补接线在该策略声明的 scope（`docs/`、`packages/`）之外，hook 放行、单独成
+  提交，维护者不认可可单独丢弃。按"遇到需要人工决策的阻塞记录下来"
+  处理：分支整理到可直接开 PR 的状态，PR 描述草稿写在本机 `docs/private/`，STATUS §3 阻塞项 ⑥。
+- 本机残留核对：十一条 `s6/lane-*` 分支的提交全部 patch-equivalent 于集成分支（唯一例外是 web-console 表冲突版
+  提交，已被 `5625239` 取代），可删；实施会话搭 e2e 栈留下的 `nexttime-ai-*` 镜像、四个匿名卷与 scratchpad 里
+  root / 10001 属主的数据目录只能重建、不含任何产物——收尾会话的策略不允许删除本机对象，记在 STATUS 遗留 53，
+  命令列在 PR 描述草稿里。
+
 ## 3. 实现时暴露的边界（与方案假设不同的地方）
 
 1. **遗留 44 的根因不在 supervisor**。方案与 STATUS 都写"spawn 路径先重建再派发"；实际 `resident-service.ts` 的
@@ -92,8 +120,10 @@
    （501 stub）。P-B2a"页面直接录入门凭证"是既有先例，本次没有据此推断。
 2. **镜像发布**（S5.8 第 4 项重评），本次未动。
 3. **遗留 45**（owner 归档私有 Chat）、**遗留 50**（`config/` owner）。
-4. **合入策略**：分支有 100+ 个 Conventional Commits（按车道分组、可按车道 squash）；`pnpm-lock.yaml` 只因三个
-   @fontsource 包变动；两条迁移（core 0030 / 0031）可加可空。
+4. **合入策略**：分支有 100 个 Conventional Commits（按车道分组）；仓库是 squash-only（W5 起），所以"按车道
+   squash"只能靠拆成多个 PR 实现，单个 PR 合入后 main 上只有 PR 标题这一条提交、release-please 由它定版本
+   （`feat` → v0.14.0）——拆不拆由维护者定；`pnpm-lock.yaml` 只因三个 @fontsource 包变动；两条迁移
+   （core 0030 / 0031）可加可空。
 
 ## 5. 流程教训
 
@@ -112,7 +142,7 @@
 
 顺序：`pnpm -r build` → `pnpm -r lint` → `pnpm -r typecheck` → `pnpm depcruise` → `pnpm ci:guards` →
 `pnpm contract:check` → `DATABASE_URL=<全新库> KERNEL_VALIDATE_RESULTS=1 pnpm -r test`（数字见 §2.1）→ e2e 栈
-构建与 36 例 Playwright → `accept_s1.sh --lite`。全部在 2026-09-19 本机完成，产物未推送。集成分支上主会话自己的
+构建与 36 例 Playwright → `accept_s1.sh --lite`。全部在 2026-09-19 本机完成；同日的收尾会话复验后未能推送（§2.3）。集成分支上主会话自己的
 提交（车道之外）：字体不内联 + CSP `font-src 'self'`、演练脚本导出 `KERNEL_VERSION`、C13 单测、a0-fixes 的车道外
 收尾（mcp 建实例测试、最后一处 B6、`describedBy`、shell `user`）、`reason_required` 与 `chat_archived` 的传输层
 映射、归档 Chat 拒绝发送、契约快照 ×3、路由 / 侧栏 / 深链接线 ×3、S6-B 守卫与验收覆盖、depcruise 分层修正、

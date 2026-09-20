@@ -2575,7 +2575,7 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
 **实现说明**（改哪一层、怎么验的、留下什么边界），方案与验收句以该文为准，不复述。实施方式：主会话统筹，
 两波共十一条文件互斥车道（各自 worktree + 私有测试库），主会话审 diff 后线性合入 `s6/console-completion`，
 车道不写本文与 STATUS，实现说明随最终报告回传、由主会话收口时统一写入（`retrospective-2026-09-18.md` §4 的教训）。
-本地分支未推送、未开 PR：合入、发版、主机应用由维护者决定。
+分支经同日收尾会话独立复验（`retrospective-2026-09-19.md` §2.3；推送 / 开 PR 被该会话的 supervisor 策略拦下）：推送、开 PR、合入、发版、主机应用由维护者决定。
 
 ### S6-A0 视觉体系落地 + 紧急修复
 
@@ -2594,7 +2594,7 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
   woff/woff2，因此 caddy CSP `font-src 'self'` 无需 `data:`。首屏静态上界：登录后首屏 582 KB、登录页 647 KB、
   管理员概览 705 KB（两字重全算，实际更低）。副作用：CSS 因 204 条 `@font-face` 涨到 275 KB（107 KB gz），
   `dist` 13 MB（含 fontsource 附带的 201 个未用 `.woff`）——可后续改手写 woff2-only `@font-face`。
-- 守卫：`scripts/guards/css-tokens.mjs`（进 `ci:guards`）拒绝 `styles/` 里除 `tokens.css` / `fonts.css` 之外
+- 守卫：`scripts/guards/css-tokens.mjs`（进 `ci:guards`；收尾时补进 CI `quality` job——该 job 逐条列守卫、不跑 `ci:guards`）拒绝 `styles/` 里除 `tokens.css` / `fonts.css` 之外
   的 `#hex` / `rgb(` / `hsl(` / px 字号，按 `file:line` 报；改前 70 处、改后 0。
 - C21：`deploy/caddy/Caddyfile` 全站 `Permissions-Policy`；SPA（`not path /explorer/*`）严格 CSP
   `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';
@@ -2761,7 +2761,7 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
   "总是允许"（I8），`FALLBACK_BLAST_RADIUS = 'medium'`（持久化内容里 `blastRadius` 可选）；卡片保留
   `.action-card-status` 钩子（e2e 依赖）。`ApprovalCard.onAlwaysAllow` 带已输入的 reason。
 - 测试：ChatPage 13、ChatListPage 10、ActionRequestCard 14、ModelSwitcher 4、ChatRenameForm 4、chat-lifecycle 9；
-  e2e `chat.spec.ts` 新增生命周期流程（未执行）。已知：`list_chats` 只返回本人的 Chat，owner 归档他人可见 Chat
+  e2e `chat.spec.ts` 新增生命周期流程（本机 compose 栈 36 / 36 通过，回顾 §2.1）。已知：`list_chats` 只返回本人的 Chat，owner 归档他人可见 Chat
   在 UI 上不可达（内核允许）。
 
 ### S6-A 平台工作区 / 用户页（A1 / A6）、成员 / 访问（B3 / B4 / B5 / B7）
@@ -2784,7 +2784,7 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
   （integrations e2e 用它）。
 - 概览：`验收残留 N 个工作区待清除` 横幅（同一谓词）；设置页 env-admin 登录名改 `tag mono`（标签不是状态）。
 - C22：`AppShell` / `WorkspaceDetailPanel` / `UserDetailPanel` 单测；e2e `workspaces.spec.ts` 加残留预设与清除流程
-  （未执行）。路由：`routeFromHash` 只按路径匹配、`?query` 归页面。
+  （本机 compose 栈通过）。路由：`routeFromHash` 只按路径匹配、`?query` 归页面。
 
 ### S6-C 接入（A7 / B7 / C26 / §5.7 入口）
 
@@ -2826,7 +2826,7 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
 - 内核缺口（记录未绕过）：`traverse` 线上无 `direction` 且只回 id；无批量 Object 读；`list_conflicts` 无对象 / Fact
   筛选；观察窗口无能力暴露；ObjectType 无显示名提示。已知边界：单个 Object 的 Fact 不分页；深度 > 1 只能逐步展开；
   冲突标记只覆盖前 200 条开放冲突；`sessionAt` 是浏览器时钟；`state_at` 的有效期过滤与 `traverse` 不同
-  （未来 `validFrom` / 过去 `validUntil` 不显示）；`RefChip` 缺 fact / conflict 种类（暂标为 对象）；e2e 未执行。
+  （未来 `validFrom` / 过去 `validUntil` 不显示）；`RefChip` 缺 fact / conflict 种类（暂标为 对象）；e2e `graph.spec.ts` 在本机 compose 栈通过。
 - 测试：GraphPage 11、NeighbourList 3、NeighbourhoodView 2、ProvenanceDrawer 2、FreshnessChip 3 + 三个 lib 单测；
   runbook web-console.md 新增"图谱页（S6-D）"。
 
@@ -2868,7 +2868,8 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
   新草稿不出现在 tab 里，发布从编辑器成功态做；三个 list 能力无 `limit` / `cursor`，目录保持单页。
 - 我的智能体：生效面板的 Skills / Systems / Worker definitions 以 `RefChip` 命名显示。
 - 测试：ApprovalDetail 7、ActionRequestDetail 5、TaskDetail 5、AuditPage 6、audit 7、catalog 9、三个编辑器各 3，
-  ApprovalQueuePage +5、CatalogPage +4；e2e `tasks.spec.ts` / `catalog.spec.ts` / `audit.spec.ts` 新增（未执行）。
+  ApprovalQueuePage +5、CatalogPage +4；e2e `tasks.spec.ts` / `catalog.spec.ts` / `audit.spec.ts` 新增（本机 compose 栈通过，
+  `catalog.spec.ts` 一处过度断言在集成后修正）。
   对话流里今天没有 Fact / Decision 卡片（`chat-message-content` 只有 task_update / action_pending /
   action_update），方案 §5.5 的"对话里的 Fact / Decision 卡片加查看溯源"无落点；内联审批卡经"在审批页打开" →
   审批页"查看溯源"两跳可达。

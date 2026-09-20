@@ -408,7 +408,7 @@ A6 / A1（残留治理）是维护者每天都会看到的，排 S6-A 第一；�
 
 ## 11b. 实施记录（2026-09-19，无人值守）
 
-§10 的五个波次与 §11 的六条最小版本已在本地分支 `s6/console-completion` 全部落地（未推送 / 未合入），实现说明在
+§10 的五个波次与 §11 的六条最小版本已在本地分支 `s6/console-completion` 全部落地（经收尾复验，待维护者推送 / 开 PR / 合入），实现说明在
 `development-tasks.md` §5c，回顾在 `retrospective-2026-09-19.md`，进度与新遗留在 `STATUS.md` §3 / §4。与本文
 假设不同的地方（遗留 44 根因在 agent-host、`get_action` 对 Worker 不可达、`export_prov` 不是审计范围导出、C29 的
 行结构早已公开、`traverse` 渲染不了 Fact 行故图谱页改用 `state_at`）都记在回顾 §3。§12 末的密钥写入问题仍未答，
