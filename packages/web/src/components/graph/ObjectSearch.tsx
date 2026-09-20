@@ -90,7 +90,7 @@ export function ObjectSearch({
             id="graph-q"
             value={draftQ}
             onChange={(event) => setDraftQ(event.target.value)}
-            placeholder="web / 10.0.0.1 / sha256:…"
+            placeholder="web / 192.0.2.1 / sha256:…"
             data-testid="graph-q"
           />
         </Field>

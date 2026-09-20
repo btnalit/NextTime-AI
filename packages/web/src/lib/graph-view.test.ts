@@ -60,10 +60,10 @@ describe('objectDisplayName', () => {
     expect(objectDisplayName(object)).toBe('api');
     expect(
       objectDisplayName(
-        { identityKey: { hostId: UUID, address: '10.0.0.1', port: 8080 }, properties: {} },
+        { identityKey: { hostId: UUID, address: '192.0.2.1', port: 8080 }, properties: {} },
         ['hostId', 'address', 'port'],
       ),
-    ).toBe('10.0.0.1 / 8080');
+    ).toBe('192.0.2.1 / 8080');
   });
 
   it('is undefined (bare-id fallback) when nothing usable exists', () => {
