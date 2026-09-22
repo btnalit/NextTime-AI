@@ -89,7 +89,11 @@ export type PlatformErrorCode =
   | 'credential_mode_mismatch'
   // S6 A1 (`purge_workspace`; application/platform/purge-workspace.ts)
   | 'workspace_active'
-  | 'retention_not_elapsed';
+  | 'retention_not_elapsed'
+  // S7-E (P-C §6.5; application/platform/runtime.ts)
+  | 'image_not_in_inventory'
+  | 'runtime_unreachable'
+  | 'no_previous_settings_version';
 
 /** Mapped by interfaces/http/capability-route.ts: `*_not_found` → 404, the rest → 409. */
 export class PlatformAdminError extends Error {
@@ -1426,7 +1430,9 @@ const PLATFORM_AUDIT_SELECT = `
     left join users u on u.id = a.actor_user_id
    where a.workspace_id is null`;
 
-async function queryPlatformAudit(
+// Exported for application/platform/runtime.ts's own `platform_status` handler (S7-E) — one
+// pagination/audit-query implementation, not a second copy.
+export async function queryPlatformAudit(
   client: PoolClient,
   filter: {
     actorUserId?: string;

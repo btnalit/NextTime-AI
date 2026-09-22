@@ -41,3 +41,13 @@ export {
 } from './instance-instructions.js';
 export type { LlmAdminAuditEventInput } from './llm-admin-audit.js';
 export { recordLlmAdminAudit } from './llm-admin-audit.js';
+export { resolveActiveRuntimeImage } from './runtime.js';
+export {
+  listRuntimeImagesHandler,
+  piDriftHandler,
+  platformStatusHandler,
+  rollEntryContainersHandler,
+  rollbackRuntimeImageHandler,
+  runtimeInventoryHandler,
+  setActiveRuntimeImageHandler,
+} from './runtime.js';

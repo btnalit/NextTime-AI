@@ -147,6 +147,60 @@ describe('TaskSupervisorClient', () => {
     await expect(client.status('wr1')).resolves.toBeUndefined();
   });
 
+  it('listImages: 200 returns the items array (S7-E)', async () => {
+    const items = [
+      {
+        id: 'sha256:abc',
+        tags: ['nexttime-ai-worker-runtime:v1'],
+        created: '2026-09-01T00:00:00.000Z',
+        labels: { 'ai.nexttime.pi-version': '0.84.4' },
+      },
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { items }));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.listImages?.()).resolves.toEqual(items);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://x/images');
+    expect(init.method).toBe('GET');
+  });
+
+  it('listImages: unexpected status maps to http_error', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(emptyResponse(500));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.listImages?.()).rejects.toMatchObject({ kind: 'http_error', status: 500 });
+  });
+
+  it('listResidents: 200 returns the items array (S7-E)', async () => {
+    const items = [
+      {
+        principalId: 'p1',
+        workspaceId: 'ws1',
+        containerId: 'c1',
+        running: true,
+        status: 'running',
+        image: 'nexttime-ai-worker-runtime:v1',
+        imageId: 'sha256:abc',
+        startedAt: '2026-09-01T00:00:00.000Z',
+        lastTouchedAt: '2026-09-01T00:00:00.000Z',
+      },
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { items }));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.listResidents?.()).resolves.toEqual(items);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://x/residents');
+    expect(init.method).toBe('GET');
+  });
+
+  it('listResidents: unexpected status maps to http_error', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(emptyResponse(500));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.listResidents?.()).rejects.toMatchObject({
+      kind: 'http_error',
+      status: 500,
+    });
+  });
+
   it('network failure maps to TaskSupervisorError kind network', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });

@@ -422,3 +422,95 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
 | `/api/llm-admin/*` 403 | 缺 `X-Requested-With` 头（非控制台调用） | 只有控制台会调这些端点；脚本化管理请用 `issue_llm_admin_token` 拿令牌并带上该头 |
 | `/api/llm-admin/*` 401 `token_expired` | 令牌 5 分钟到期 | 控制台自动重取一次；持续 401 检查 caddy → llm-proxy 与 `config/handle.pub` 是否同一密钥对 |
 | 从旧版本升级后密钥表单一直显示「待配置」 | 主机仍是升级前的目录布局（`models.json` 还在 `config/` 下） | 按 `docs/runbooks/release.md` §3.2 做一次性目录迁移 |
+
+## 13. 运行层（S7-E，P-C；docs/platform-admin-design.md §6.5 / §6.7）
+
+`docs/development-tasks.md` §5d S7-E。本节是**后端车道**（S7-E-backend）落的能力——`runtime_inventory` /
+`list_runtime_images` / `set_active_runtime_image` / `rollback_runtime_image` / `roll_entry_containers` /
+`pi_drift` / `platform_status`（`application/platform/runtime.ts`），均 `scope:'platform'`、仅管理员。**页面
+（"运行层" / "运行状态"）是后续车道（S7-E-page），本节给的是能力本身与 `curl` 调用方式**——在页面落地前，
+这是唯一的操作入口。
+
+**构建镜像仍在主机 / CI**（已否决在页面里构建，design §11）：
+
+```bash
+export PI_VERSION="$(cat pi.version)"
+export PLATFORM_EXTENSION_VERSION="$(node -p "require('./packages/platform-extension/package.json').version")"
+export BUILT_FROM="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
+docker compose build worker-runtime   # 打 ai.nexttime.pi-version / platform-extension-version / built-from 三个 label
+```
+
+**调用方式**（`scope:'platform'`：登录拿 cookie，不带 `X-Workspace-Id`——见 `web-console.md` §"凭证"）：
+
+```bash
+COOKIE=$(curl -s -i https://<host>:8443/api/auth/login \
+  -H 'content-type: application/json' -H 'X-Requested-With: nexttime' \
+  -d '{"login":"admin","password":"<密码>"}' \
+  | grep -i '^set-cookie:' | sed -E 's/^[Ss]et-[Cc]ookie: ([^;]+);.*/\1/')
+
+cap() { # $1 = capability 名, $2 = JSON 参数（缺省 {}）
+  curl -s https://<host>:8443/api/cap/"$1" \
+    -H "cookie: ${COOKIE}" -H 'X-Requested-With: nexttime' -H 'content-type: application/json' \
+    -d "${2:-{}}"
+}
+```
+
+**盘点**（`runtime_inventory`）：活动镜像（设置值，或未设时 worker-supervisor 自己的 `WORKER_IMAGE` env 缺省，
+`activeImageSource: "setting" | "env_default"`）、镜像清单（`list_runtime_images`，只列带上面三个 label 的
+镜像）、每个入口容器（用户、工作区、启动时间、是否空闲 `lastTouchedAt`）及其 `needsRebuild`：
+
+```bash
+cap runtime_inventory | jq '{activeImage, activeImageSource, images: [.images[]|.tags], residentContainers}'
+```
+
+**"待重建"是什么（决定 E2）**：`needsRebuild` 比较的是**镜像 id**（`docker inspect` 的 `Image`/`Id` 字段，
+`sha256:...`），不是 tag——这些镜像从不推到 registry，同一个 tag 重新构建也会换一个 id，只比 tag 会漏判。
+派生是**实时**的（每次调用现算，never 存表），不建任何"待重建"状态列。
+
+**滚动重建不是"拒绝新 Turn"（决定 E2）**：入口容器在自己的**下一次** Turn 开始时，`spawn()` 发现请求的镜像
+和容器当前标签不一致就自然重建（跟 Handle 轮换、Skill 集合变化走同一条"规格漂移重建"逻辑）——正在进行的
+Turn 不受影响。**没有 draining 状态**，也不会拒绝新 Turn；只有测试证明存在缝（例如"待重建"的容器长期无人
+发言）才会加更强的机制，S7-E 尚未加。
+
+**设为活动镜像 / 回滚**：
+
+```bash
+cap set_active_runtime_image '{"image":"nexttime-ai-worker-runtime:<tag或digest>"}'   # 必须在 list_runtime_images 里，否则 409 image_not_in_inventory
+cap rollback_runtime_image                                                             # 改回上一个 platform_settings 版本的值；无历史则 409 no_previous_settings_version
+```
+
+设置本身立即生效于*之后*的 spawn（design §8）；已运行的入口容器按上一段"下一次 Turn 自然重建"收敛。
+
+**`roll_entry_containers`（加速项，仅此而已）**：只停"待重建 **且** 内核自己的 Turn 台账（`activities`
+`kind='agent_turn' and status='running'`）里没有进行中 Turn"的容器；忙的容器永远跳过（`skipped_in_flight`），
+已经最新的跳过（`skipped_up_to_date`）。不给参数 = 处理当前每一个"待重建"的容器；给 `principalIds` 只处理
+这些：
+
+```bash
+cap roll_entry_containers                                   # 全部待重建且空闲的
+cap roll_entry_containers '{"principalIds":["<uuid>"]}'     # 只处理这些
+```
+
+**`pi_drift`（决定 E3）**：比较 `pi.version`（仓库锁定值）与活动镜像自带的 pi 版本 label；`pinnedPiVersion`
+读一个 CI 产出的静态 JSON（**不出网**，见 `application/platform/runtime.ts` 顶部注释）——本仓库当前的
+`.github/workflows/pi-drift.yml`（nightly，检查 pi@latest 是否破坏测试）**还没有**产出这个文件，所以
+`status` 现在总是 `"unknown"`。落地路径（未来工作，不在本车道）：`PI_DRIFT_FILE` env（缺省
+`/data/config/pi-drift.json`，走已有的 `config:ro` 挂载），内容 `{"pinnedPiVersion":"0.84.4","checkedAt":"<ISO>"}`。
+
+**`platform_status`（决定 E4）**：内核直接探测（2 秒超时）`llm-proxy` / `worker-supervisor` 的 `/healthz`；
+`egress-proxy` 的 healthz 按设计是 loopback-only（隔离边界，`packages/egress-proxy/src/index.ts`），**不探测**，
+固定报 `unknown`；门实例健康读的是已有的 `list_gate_instances` 最近一次检查结果，不重新探测；30 天跨工作区
+`llm_usage` 汇总（成本 + token）；最近 50 条平台审计。`backup` 字段如实报"未配置"——遗留 6 落地前没有备份
+定时器，这不是缺陷。
+
+```bash
+cap platform_status | jq '{health, backup, llmUsage30d}'
+```
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `set_active_runtime_image` 返回 409 `image_not_in_inventory` | 镜像没建，或建的 tag/digest 和传的不一致 | 先 `list_runtime_images` 核对，再 `docker compose build worker-runtime`（记得先 export 三个版本变量） |
+| `rollback_runtime_image` 返回 409 `no_previous_settings_version` | `platform_settings` 从未写过第二次 | 正常——第一次设置活动镜像后没有"上一个值"可回滚 |
+| `runtime_inventory` 里 `activeImageInfo` 是 `null` | 活动镜像的 tag/digest 不在 `list_runtime_images` 里（自定义镜像没打三个 label，或 worker-supervisor 连不上） | 检查镜像是否带 `ai.nexttime.*` label；`residentContainers[].needsRebuild` 此时恒为 `false`（不猜） |
+| `platform_status.health` 里 `llm-proxy` / `worker-supervisor` 是 `down` | 服务没起，或内核到不了 `KERNEL_LLM_URL` / `SUPERVISOR_URL` | `docker compose ps`；确认内核与这两个服务同在 `control` 网络 |
+| `roll_entry_containers` 全是 `skipped_in_flight` | 用户确实在用 | 符合预期——加速项不抢占正在进行的 Turn；等 Turn 结束，或等其自然下一次 spawn 收敛 |

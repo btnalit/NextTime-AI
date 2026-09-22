@@ -12,6 +12,7 @@ import {
   composeSystemPrompt,
   readInstanceInstructions,
 } from '../platform/instance-instructions.js';
+import { resolveActiveRuntimeImage } from '../platform/runtime.js';
 import { requirePublishedWorkerDefinition } from '../worker/index.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import {
@@ -333,7 +334,7 @@ export async function invokeWorkerCreate(
   const definitionName =
     typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
 
-  const { parentAuthority, skillsInline, effectiveModel, agentProfile, systemPrompt } =
+  const { parentAuthority, skillsInline, effectiveModel, agentProfile, systemPrompt, image } =
     await withWorkspace(
       deps.pool,
       { workspaceId, principalId: caller.principalId },
@@ -346,6 +347,10 @@ export async function invokeWorkerCreate(
           base: content.systemPrompt,
           instanceInstructions: await readInstanceInstructions(client),
         }),
+        // S7-E (P-C §6.5 决定 E1): the platform's active runtime image, read fresh alongside
+        // `systemPrompt` above — `undefined` (setting unset) leaves worker-supervisor's own
+        // `WORKER_IMAGE` env default in effect, unchanged from before this field existed.
+        image: await resolveActiveRuntimeImage(client),
         // S3.13: only read when the WorkerDefinition itself declares no model — the requesting
         // principal's own effective.model is the fallback, never a widening of what the
         // WorkerDefinition author already pinned. `EffectiveAgentProfile.model` is always a
@@ -427,6 +432,7 @@ export async function invokeWorkerCreate(
       skillsInline,
       egressDeny: content.egressDeny,
       systemPrompt,
+      image,
     });
   } catch (err) {
     await withWorkspace(

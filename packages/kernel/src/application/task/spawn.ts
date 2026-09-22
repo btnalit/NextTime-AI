@@ -70,6 +70,11 @@ export interface SpawnWorkerRunInput {
    *  `skillsInline` above already follow) and forwarded verbatim to the supervisor's `/task/spawn`
    *  — never re-derived here. */
   readonly egressDeny?: readonly string[];
+  /** S7-E (P-C §6.5 决定 E1): the platform's active runtime image (`PlatformSettings.
+   *  activeRuntimeImage`), resolved by the caller (`invoke.ts`'s initial spawn, `lifecycle.ts`'s
+   *  requeue) and forwarded verbatim to `/task/spawn`. `undefined` leaves worker-supervisor's own
+   *  `WORKER_IMAGE` env default in effect, unchanged from before this field existed. */
+  readonly image?: string;
 }
 
 /** Creates one WorkerRun row (`provisioning`), its `kind='worker_run'` Activity (S2.7 egress
@@ -177,6 +182,7 @@ export async function spawnWorkerRun(
       timeoutSec: durationLimitSec,
       egressDeny: input.egressDeny,
       systemPrompt: input.systemPrompt,
+      image: input.image,
     });
   } catch (err) {
     await withWorkspace(

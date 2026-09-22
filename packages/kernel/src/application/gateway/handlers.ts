@@ -79,6 +79,15 @@ import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substr
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { MAX_SEARCH_LIMIT, SqlGraphStore } from '../../substrate/graph/index.js';
+import {
+  listRuntimeImagesHandler,
+  piDriftHandler,
+  platformStatusHandler,
+  rollEntryContainersHandler,
+  rollbackRuntimeImageHandler,
+  runtimeInventoryHandler,
+  setActiveRuntimeImageHandler,
+} from '../platform/index.js';
 import { toWireActionRequest } from './action-request-wire.js';
 import {
   getAgentPolicyHandler,
@@ -1488,4 +1497,12 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S3.3 (docs/development-tasks.md S3.3) — ingest-handlers.ts.
   ['register_source', registerSourceHandler],
   ['submit_observations', submitObservationsHandler],
+  // S7-E (P-C §6.5/§6.7, docs/development-tasks.md §5d S7-E) — application/platform/runtime.ts.
+  ['runtime_inventory', runtimeInventoryHandler],
+  ['list_runtime_images', listRuntimeImagesHandler],
+  ['set_active_runtime_image', setActiveRuntimeImageHandler],
+  ['rollback_runtime_image', rollbackRuntimeImageHandler],
+  ['roll_entry_containers', rollEntryContainersHandler],
+  ['pi_drift', piDriftHandler],
+  ['platform_status', platformStatusHandler],
 ]);

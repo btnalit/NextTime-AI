@@ -14,6 +14,7 @@ import {
   composeSystemPrompt,
   readInstanceInstructions,
 } from '../platform/instance-instructions.js';
+import { resolveActiveRuntimeImage } from '../platform/runtime.js';
 import { getWorkerDefinition } from '../worker/index.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
 import type { TaskRuntimeDeps } from './runtime.js';
@@ -434,10 +435,8 @@ async function spawnWorkerRunForRetry(
 
   const scope = handleRow.scope as { capabilities: string[]; resources: Record<string, string[]> };
 
-  const { model, skillsInline, definitionName, egressDeny, systemPrompt } = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: onBehalfOf },
-    async (client) => {
+  const { model, skillsInline, definitionName, egressDeny, systemPrompt, image } =
+    await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
       const definition = await getWorkerDefinition(client, workspaceId, {
         definitionId: task.workerDefinitionId,
         version: task.workerDefinitionVersion,
@@ -453,6 +452,9 @@ async function spawnWorkerRunForRetry(
           definitionName: task.workerDefinitionId,
           egressDeny: undefined,
           systemPrompt: undefined,
+          // S7-E: still resolved even on this fallback path — the retry container must still
+          // pick up the platform's current active runtime image.
+          image: await resolveActiveRuntimeImage(client),
         };
       }
       const content = readDefinitionContent(definition.definition);
@@ -479,9 +481,11 @@ async function spawnWorkerRunForRetry(
           base: content.systemPrompt,
           instanceInstructions: await readInstanceInstructions(client),
         }),
+        // S7-E: read fresh alongside systemPrompt above — the retry container must pick up the
+        // platform's current active runtime image, same as the initial spawn (invoke.ts).
+        image: await resolveActiveRuntimeImage(client),
       };
-    },
-  );
+    });
 
   try {
     await spawnWorkerRun(deps, workspaceId, {
@@ -502,6 +506,7 @@ async function spawnWorkerRunForRetry(
       skillsInline,
       egressDeny,
       systemPrompt,
+      image,
     });
   } catch {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, (client) =>

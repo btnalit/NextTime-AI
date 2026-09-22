@@ -117,6 +117,30 @@ export interface TaskSpawnOutcome {
   readonly ip: string | undefined;
 }
 
+/** S7-E (P-C §6.5): one runtime image, as worker-supervisor's `GET /images` reports it — mirrors
+ *  `packages/worker-supervisor`'s own `RuntimeImageInfo` (this package cannot import that
+ *  package's type directly, same convention every other adapter shape here already follows). */
+export interface RuntimeImageInfo {
+  readonly id: string;
+  readonly tags: readonly string[];
+  readonly created: string;
+  readonly labels: Readonly<Record<string, string>>;
+}
+
+/** S7-E: one resident entry container, as worker-supervisor's `GET /residents` reports it —
+ *  mirrors that package's own `ResidentInventoryEntry`. */
+export interface ResidentInventoryEntry {
+  readonly principalId: string;
+  readonly workspaceId: string;
+  readonly containerId: string;
+  readonly running: boolean;
+  readonly status: string;
+  readonly image: string | undefined;
+  readonly imageId: string | undefined;
+  readonly startedAt: string | undefined;
+  readonly lastTouchedAt: string | undefined;
+}
+
 export type TaskSupervisorState = 'running' | 'exited' | 'terminated' | 'failed';
 
 export interface TaskSupervisorStatus {
@@ -204,6 +228,15 @@ export interface TaskSupervisorClientPort {
    * `true` when a container was stopped, `false` when worker-supervisor knew of none (404).
    */
   stopResident?(principalId: string): Promise<boolean>;
+  /** S7-E: `GET /images` — every runtime image carrying the platform's `ai.nexttime.*` labels.
+   *  Optional on the port for the same reason `stopResident` is (existing test fakes across
+   *  `application/task/*.integration.test.ts` model the Task-mode half only); `application/
+   *  platform/runtime.ts`'s handlers treat a missing implementation as "no images known", never a
+   *  thrown error. */
+  listImages?(): Promise<RuntimeImageInfo[]>;
+  /** S7-E: `GET /residents` — every resident entry container across every workspace. Same
+   *  optionality reasoning as `listImages` above. */
+  listResidents?(): Promise<ResidentInventoryEntry[]>;
 }
 
 export class TaskSupervisorClient implements TaskSupervisorClientPort {
@@ -273,6 +306,32 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
     throw new TaskSupervisorError('http_error', `POST /resident/stop returned ${status}`, {
       status,
     });
+  }
+
+  async listImages(): Promise<RuntimeImageInfo[]> {
+    const { status, body } = await requestJson(
+      this.fetchImpl,
+      this.timeoutMs,
+      `${this.supervisorUrl}/images`,
+      { method: 'GET', headers: { ...this.authHeaders } },
+    );
+    if (status !== 200) {
+      throw new TaskSupervisorError('http_error', `GET /images returned ${status}`, { status });
+    }
+    return (body as { items: RuntimeImageInfo[] }).items;
+  }
+
+  async listResidents(): Promise<ResidentInventoryEntry[]> {
+    const { status, body } = await requestJson(
+      this.fetchImpl,
+      this.timeoutMs,
+      `${this.supervisorUrl}/residents`,
+      { method: 'GET', headers: { ...this.authHeaders } },
+    );
+    if (status !== 200) {
+      throw new TaskSupervisorError('http_error', `GET /residents returned ${status}`, { status });
+    }
+    return (body as { items: ResidentInventoryEntry[] }).items;
   }
 
   async terminate(workerRunId: string): Promise<boolean> {
