@@ -6,7 +6,13 @@ import type {
   TaskUpdatedPush,
   WebSocketLike,
 } from './ws-client.js';
-import { RpcError, TurnAlreadyRunningError, WsClient } from './ws-client.js';
+import {
+  RPC_TIMEOUT_CODE,
+  RpcError,
+  RpcTimeoutError,
+  TurnAlreadyRunningError,
+  WsClient,
+} from './ws-client.js';
 
 /**
  * ws-client.test.ts: exercises `WsClient` (lib/ws-client.ts) against a fake `WebSocketLike`
@@ -592,6 +598,153 @@ describe('WsClient', () => {
       expect(err).toBeInstanceOf(RpcError);
       expect(err).not.toBeInstanceOf(TurnAlreadyRunningError);
       expect((err as RpcError).code).toBe(-32602);
+    });
+  });
+
+  describe('C5: per-call timeout', () => {
+    it('rejects with RpcTimeoutError when the socket never answers, logs it, and ignores a late frame', async () => {
+      const sockets: FakeWebSocket[] = [];
+      const client = new WsClient({
+        url: 'ws://kernel.test/ws',
+        createSocket: (url) => {
+          const socket = new FakeWebSocket(url);
+          sockets.push(socket);
+          return socket;
+        },
+        reconnectDelayMs: 0,
+        rpcTimeoutMs: 20,
+      });
+      const socket = await connectAndAuth(client, sockets);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const callPromise = client.call('approve', { actionRequestId: 'ar-1' });
+      const frame = sentFrame(socket, socket.sent.length - 1);
+      const err = await callPromise.catch((caught: unknown) => caught);
+      expect(err).toBeInstanceOf(RpcTimeoutError);
+      expect(err).toBeInstanceOf(RpcError);
+      expect((err as RpcTimeoutError).code).toBe(RPC_TIMEOUT_CODE);
+      expect((err as RpcTimeoutError).method).toBe('approve');
+      expect((err as Error).message).toMatch(/approve timed out after 20ms/);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // The late response has no pending call to land on — nothing throws, nothing resolves twice.
+      expect(() => respond(socket, frame, { status: 'approved' })).not.toThrow();
+      warn.mockRestore();
+    });
+
+    it('a per-call timeoutMs overrides the client default, and a response in time clears it', async () => {
+      const sockets: FakeWebSocket[] = [];
+      const client = new WsClient({
+        url: 'ws://kernel.test/ws',
+        createSocket: (url) => {
+          const socket = new FakeWebSocket(url);
+          sockets.push(socket);
+          return socket;
+        },
+        reconnectDelayMs: 0,
+        rpcTimeoutMs: 5,
+      });
+      const socket = await connectAndAuth(client, sockets);
+
+      const slow = client.call('list_chats', undefined, { timeoutMs: 200 });
+      await wait(20);
+      respond(socket, sentFrame(socket, socket.sent.length - 1), { items: [] });
+      await expect(slow).resolves.toEqual({ items: [] });
+
+      const never = client.call('list_chats', undefined, { timeoutMs: 0 });
+      await wait(20);
+      respond(socket, sentFrame(socket, socket.sent.length - 1), { items: ['late'] });
+      await expect(never).resolves.toEqual({ items: ['late'] });
+    });
+  });
+
+  describe('C6: seenSequences is dropped once caught up', () => {
+    function seenSize(client: WsClient): number {
+      const subscription = (
+        client as unknown as { activeSubscription?: { seenSequences: Set<number> } }
+      ).activeSubscription;
+      return subscription?.seenSequences.size ?? -1;
+    }
+
+    it('dedupes with the set while paging, then with sequence > lastSeenSequence — the set stays empty', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+      const onMessage = vi.fn();
+      const onCaughtUp = vi.fn();
+
+      const subscribePromise = client.subscribeChat(
+        'chat-1',
+        0,
+        noopHandlers({ onMessage, onCaughtUp }),
+      );
+      respond(socket, sentFrame(socket, socket.sent.length - 1), { subscribed: true });
+      await flush();
+      // Out-of-order live push during paging: 5 first, the page then brings 4, 5, 6 — 4 must
+      // still be delivered (a pure ">" test would drop it), 5 must not be delivered twice.
+      socket.receive({
+        jsonrpc: '2.0',
+        method: 'chat.message',
+        params: { chatId: 'chat-1', message: msg(5) },
+      });
+      expect(seenSize(client)).toBe(1);
+      respond(socket, sentFrame(socket, socket.sent.length - 1), {
+        items: [msg(4), msg(5), msg(6)],
+      });
+      await subscribePromise;
+      expect(onCaughtUp).toHaveBeenCalledTimes(1);
+      expect(onMessage.mock.calls.map(([m]) => (m as ChatMessage).sequence)).toEqual([5, 4, 6]);
+      expect(seenSize(client)).toBe(0);
+
+      // Purely live now: a replay of 6 is dropped, 7 and 8 delivered, and the set never grows.
+      for (const sequence of [6, 7, 8, 7]) {
+        socket.receive({
+          jsonrpc: '2.0',
+          method: 'chat.message',
+          params: { chatId: 'chat-1', message: msg(sequence) },
+        });
+      }
+      expect(onMessage.mock.calls.map(([m]) => (m as ChatMessage).sequence)).toEqual([
+        5, 4, 6, 7, 8,
+      ]);
+      expect(seenSize(client)).toBe(0);
+    });
+
+    it('re-arms the paging dedupe across a reconnect and drops it again once re-paged', async () => {
+      const { client, sockets } = harness;
+      const socket1 = await connectAndAuth(client, sockets);
+      const onMessage = vi.fn();
+
+      const subscribePromise = client.subscribeChat('chat-1', 0, noopHandlers({ onMessage }));
+      respond(socket1, sentFrame(socket1, socket1.sent.length - 1), { subscribed: true });
+      await flush();
+      respond(socket1, sentFrame(socket1, socket1.sent.length - 1), { items: [msg(1), msg(2)] });
+      await subscribePromise;
+      expect(seenSize(client)).toBe(0);
+
+      socket1.remoteClose();
+      await wait(0);
+      await flush();
+      const socket2 = sockets[1];
+      if (!socket2) throw new Error('expected a reconnect socket');
+      socket2.open();
+      await flush();
+      respond(socket2, sentFrame(socket2, 0), { authenticated: true });
+      await flush();
+      respond(socket2, sentFrame(socket2, 1), { subscribed: true });
+      await flush();
+      // Server convenience replay of 3 lands while the re-page is in flight, then the page also
+      // carries 3 — deduped by the (re-armed) set, and 4 delivered.
+      socket2.receive({
+        jsonrpc: '2.0',
+        method: 'chat.message',
+        params: { chatId: 'chat-1', message: msg(3) },
+      });
+      expect(seenSize(client)).toBe(1);
+      respond(socket2, sentFrame(socket2, 2), { items: [msg(3), msg(4)] });
+      await flush();
+
+      expect(onMessage.mock.calls.map(([m]) => (m as ChatMessage).sequence)).toEqual([1, 2, 3, 4]);
+      expect(seenSize(client)).toBe(0);
     });
   });
 });

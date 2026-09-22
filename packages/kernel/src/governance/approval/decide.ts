@@ -9,7 +9,12 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
 import { updateActionRequestStatusConditional } from './status-transition.js';
 import { recordTransition } from './transition-log.js';
-import { type ActionRequestRow, ApprovalScopeError, SelfApprovalNotAllowedError } from './types.js';
+import {
+  type ActionRequestRow,
+  ApprovalReasonRequiredError,
+  ApprovalScopeError,
+  SelfApprovalNotAllowedError,
+} from './types.js';
 
 /**
  * governance/approval/decide: `approve` / `reject` (design doc §5.4 I6/I11/I14, §5.5, §8.5; docs/
@@ -20,7 +25,9 @@ import { type ActionRequestRow, ApprovalScopeError, SelfApprovalNotAllowedError 
  *   1. `getActionRequestForUpdateOrThrow` (`SELECT ... FOR UPDATE`) — locks the row for the rest
  *      of this transaction. A second concurrent `approve`/`reject` on the same row blocks here
  *      until this transaction commits or rolls back, then re-reads the *already-updated* status.
- *   2. I14 precheck (`assertApproverScope`) and the `transition()` table lookup — the common case
+ *   2. I14 precheck (`assertApproverScope`), then — `approve` only — the S6-A C25 high-blast-radius
+ *      `reason` requirement (`ApprovalReasonRequiredError`), then the `transition()` table lookup
+ *      — the common case
  *      where a second concurrent caller loses the race fails *here*, with a plain
  *      `IllegalTransition` (its locked read already saw the new status), before ever writing a
  *      Decision row.
@@ -38,7 +45,18 @@ export interface DecideActionRequestInput {
   readonly actionRequestId: string;
   readonly approverPrincipalId: string;
   readonly approverRole: Role;
+  /** The human's stated rationale. For `approve` (S6-A C25) it is *required* when the row's
+   *  `blastRadius` is `high` (`ApprovalReasonRequiredError` otherwise) and optional below that;
+   *  for `reject` always optional. Trimmed before storage; a blank string counts as absent. */
   readonly reason?: string;
+}
+
+/** `undefined` for a missing or whitespace-only reason, else the trimmed text — so the stored
+ *  rationale / audit payload never carry an empty string and the `high` check cannot be satisfied
+ *  with spaces. */
+function normalizeReason(reason: string | undefined): string | undefined {
+  const trimmed = reason?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 /**
@@ -144,11 +162,21 @@ export async function approveActionRequest(
     existing,
   );
 
+  // S6-A C25 (docs/console-completion-plan.md §12 item 6): high blast radius needs a stated
+  // reason — checked after the scope/self-approval gates (a caller who may not approve at all
+  // gets 403, not a hint about what a valid approval would need) and before the transition
+  // lookup, so an already-decided row still answers 409 as before when a reason *is* given.
+  const reason = normalizeReason(input.reason);
+  if (existing.blastRadius === 'high' && reason === undefined) {
+    throw new ApprovalReasonRequiredError(existing.id);
+  }
+
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'approve');
   const approvalDecisionId = await writeApprovalDecision(client, workspaceId, {
     actionRequest: existing,
     decidedBy: input.approverPrincipalId,
     event: 'approve',
+    reason,
   });
   const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
     status: nextStatus,
@@ -161,6 +189,7 @@ export async function approveActionRequest(
     action: 'action_request.approve',
     actionRequestId: existing.id,
     resultingStatus: nextStatus,
+    extraAuditPayload: reason ? { reason } : undefined,
   });
 
   return updated;
@@ -184,12 +213,13 @@ export async function rejectActionRequest(
     existing,
   );
 
+  const reason = normalizeReason(input.reason);
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'reject');
   const approvalDecisionId = await writeApprovalDecision(client, workspaceId, {
     actionRequest: existing,
     decidedBy: input.approverPrincipalId,
     event: 'reject',
-    reason: input.reason,
+    reason,
   });
   const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
     status: nextStatus,
@@ -202,7 +232,7 @@ export async function rejectActionRequest(
     action: 'action_request.reject',
     actionRequestId: existing.id,
     resultingStatus: nextStatus,
-    extraAuditPayload: input.reason ? { reason: input.reason } : undefined,
+    extraAuditPayload: reason ? { reason } : undefined,
   });
 
   return updated;

@@ -55,6 +55,25 @@ function fakeCtx(
   } as unknown as ExtensionContext;
 }
 
+/** Contract fixtures that pass `WorkerResultContractSchema` (packages/shared/src/worker-result.ts)
+ *  — object refs are `{objectType, identity: record}`, evidence carries `content: record`, a
+ *  proposal carries a full `OperationSchema` and a uuid `gatekeeperId`. */
+const hostRef = { objectType: 'Host', identity: { hostname: 'h1' } };
+const serviceRef = { objectType: 'Service', identity: { name: 's1' } };
+const MADE_UP_GATEKEEPER_ID = '00000000-0000-4000-8000-00000000abcd';
+const sampleOperation = {
+  name: 'x.y',
+  binding: { kind: 'http', method: 'GET', path: '/x' },
+  params_schema: { type: 'object' },
+  mode: 'observe',
+  blast_radius: 'low',
+  reversibility: true,
+  auto_approvable: true,
+  await_decision: false,
+  reads: [],
+  writes: [],
+};
+
 /** Flushes the `setImmediate` `agent_settled` schedules its `process.exit(0)` call through. */
 function flushImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -193,6 +212,10 @@ describe('registerWorkerMode', () => {
     const text = firstPart?.type === 'text' ? firstPart.text : '';
     expect(text).toContain('willRestart');
     expect(text).toContain('pending approval, actionRequestId ar-1');
+    // Leftover 43: the point-of-use half of ops-runner.yaml's "以 ActionRequest 状态为准" contract.
+    expect(text).toContain('not executed yet');
+    expect(text).toContain('cite this actionRequestId');
+    expect(text).toContain('never report it as failed or not done');
   });
 
   it('report_result validates the contract with Zod, rejects (throws) on an invalid shape', async () => {
@@ -204,19 +227,307 @@ describe('registerWorkerMode', () => {
     ).rejects.toThrow(/invalid contract/);
   });
 
-  it('report_result accepts a valid contract and returns terminate:true', async () => {
+  it('report_result posts the contract synchronously (leftover 42) — sessionJsonlPath from the tool ctx — and returns terminate:true with the kernel’s answer', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: { id: 'task-1', status: 'completed', activityId: 'act-1', factIds: [] },
+    }));
     const tool = fake.tools.get('report_result');
     if (!tool) throw new Error('report_result tool not registered');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     const result = await tool.execute(
       'call-1',
       { summary: 'done', findings: ['ok'] },
       undefined,
       undefined,
+      fakeCtx('/workspace/.pi/sessions/abc.jsonl'),
+    );
+
+    expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain('Result contract accepted');
+    expect(text).toContain('Task task-1 is completed');
+    const reportCall = kernel.requests.find((r) => r.capability === 'report_task_result');
+    expect(reportCall?.params).toEqual({
+      summary: 'done',
+      findings: ['ok'],
+      sessionJsonlPath: '/workspace/.pi/sessions/abc.jsonl',
+    });
+    // No factsToAssert/proposedOperations/evidence in the contract → nothing the kernel could
+    // refuse per entry → no get_task read-back round trip.
+    expect(kernel.requests.filter((r) => r.capability === 'get_task')).toHaveLength(0);
+    logSpy.mockRestore();
+  });
+
+  it('report_result surfaces a kernel rejection as a thrown (isError) tool result the model can act on; a corrected call then posts (leftover 42)', async () => {
+    let attempt = 0;
+    kernel.setHandler('report_task_result', () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return {
+          ok: false,
+          error: { code: 'invalid_params', message: 'factsToAssert[0].linkType: must be a string' },
+        };
+      }
+      return {
+        ok: true,
+        result: { id: 'task-1', status: 'completed', activityId: 'act-1', factIds: [] },
+      };
+    });
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await expect(
+      tool.execute('call-1', { summary: 'first' }, undefined, undefined, fakeCtx()),
+    ).rejects.toThrow(/invalid_params: factsToAssert\[0\]\.linkType.*call report_result again/);
+
+    const second = await tool.execute(
+      'call-2',
+      { summary: 'corrected' },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+    expect(second.terminate).toBe(true);
+
+    const reportCalls = kernel.requests.filter((r) => r.capability === 'report_task_result');
+    expect(reportCalls.map((r) => (r.params as { summary: string }).summary)).toEqual([
+      'first',
+      'corrected',
+    ]);
+
+    // agent_settled: nothing left to post (the corrected call was accepted), still exits 0 once.
+    const agentSettled = fake.handlers.get('agent_settled');
+    if (!agentSettled) throw new Error('agent_settled handler not registered');
+    await agentSettled({}, fakeCtx());
+    await flushImmediate();
+    expect(kernel.requests.filter((r) => r.capability === 'report_task_result')).toHaveLength(2);
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('report_result ends the turn (terminate, not a throw) on a 403/409-class rejection the model cannot fix, with the kernel’s answer in the result; agent_settled re-sends once and exits 0', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: false,
+      error: { code: 'illegal_transition', message: 'Task is waiting_approval' },
+    }));
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const result = await tool.execute('call-1', { summary: 'x' }, undefined, undefined, fakeCtx());
+    expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain('illegal_transition: Task is waiting_approval');
+    expect(text).toContain('cannot be fixed from inside this Worker');
+
+    const agentSettled = fake.handlers.get('agent_settled');
+    if (!agentSettled) throw new Error('agent_settled handler not registered');
+    await agentSettled({}, fakeCtx());
+    await flushImmediate();
+
+    // The tool's own attempt + agent_settled's fallback re-send of the same pending contract.
+    expect(kernel.requests.filter((r) => r.capability === 'report_task_result')).toHaveLength(2);
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('report_result surfaces a fixable rejection at most twice, then ends the turn — a Worker that keeps re-sending (a scripted one replays its last step) cannot spin', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: false,
+      error: { code: 'invalid_params', message: 'bad' },
+    }));
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await expect(
+      tool.execute('call-1', { summary: 'a' }, undefined, undefined, fakeCtx()),
+    ).rejects.toThrow(/invalid_params: bad.*call report_result again/);
+    await expect(
+      tool.execute('call-2', { summary: 'b' }, undefined, undefined, fakeCtx()),
+    ).rejects.toThrow(/invalid_params: bad.*call report_result again/);
+    const third = await tool.execute('call-3', { summary: 'c' }, undefined, undefined, fakeCtx());
+    expect(third.terminate).toBe(true);
+    const [firstPart] = third.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain('Rejected 3 times');
+
+    const agentSettled = fake.handlers.get('agent_settled');
+    if (!agentSettled) throw new Error('agent_settled handler not registered');
+    await agentSettled({}, fakeCtx());
+    await flushImmediate();
+    const reportCalls = kernel.requests.filter((r) => r.capability === 'report_task_result');
+    // Three tool attempts + one agent_settled re-send of the last contract ('c').
+    expect(reportCalls.map((r) => (r.params as { summary: string }).summary)).toEqual([
+      'a',
+      'b',
+      'c',
+      'c',
+    ]);
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('report_result echoes factsRejected / proposedOperationsRejected / evidenceDropped read back from get_task (S5.6 #208 / #211 per-entry refusals, I16 included)', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: { id: 'task-1', status: 'completed', activityId: 'act-1', factIds: ['fact-a'] },
+    }));
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: {
+        id: 'task-1',
+        status: 'completed',
+        result: {
+          summary: 's',
+          factIds: ['fact-a'],
+          factsRejected: [
+            {
+              index: 1,
+              linkType: 'runs_on',
+              reason: 'meta_ontology_type',
+              detail: 'ObjectType "Gatekeeper" is platform meta-ontology (I16)',
+            },
+            {
+              index: 2,
+              linkType: 'depends_on',
+              reason: 'link_type_not_allowed',
+              sourceType: 'Host',
+              targetType: 'Service',
+              expected: ['hosts'],
+            },
+          ],
+          proposedOperationsRejected: [
+            { index: 0, gatekeeperId: MADE_UP_GATEKEEPER_ID, reason: 'gatekeeper_not_found' },
+          ],
+          evidenceDropped: [1],
+        },
+      },
+    }));
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        summary: 'restarted',
+        factsToAssert: [
+          { linkType: 'hosts', source: hostRef, target: serviceRef },
+          {
+            linkType: 'runs_on',
+            source: hostRef,
+            target: { objectType: 'Gatekeeper', identity: { name: 'docker' } },
+          },
+          { linkType: 'depends_on', source: hostRef, target: serviceRef },
+        ],
+        evidence: [
+          { kind: 'command', content: { stdout: 'restarted' } },
+          { kind: 'command', content: { stdout: 'x' }, factIndex: 9 },
+        ],
+        proposedOperations: [{ gatekeeperId: MADE_UP_GATEKEEPER_ID, operation: sampleOperation }],
+      },
+      undefined,
+      undefined,
       fakeCtx(),
     );
 
     expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain('1 of 3 factsToAssert written as Facts');
+    expect(text).toContain('Refused by the platform');
+    expect(text).toContain(
+      'factsToAssert[1] (runs_on): meta_ontology_type — ObjectType "Gatekeeper" is platform meta-ontology (I16)',
+    );
+    expect(text).toContain(
+      'factsToAssert[2] (depends_on): link_type_not_allowed — expected ["hosts"]',
+    );
+    expect(text).toContain(
+      `proposedOperations[0] (gatekeeperId ${MADE_UP_GATEKEEPER_ID}): gatekeeper_not_found`,
+    );
+    expect(text).toContain('evidence[1]: dropped');
+    expect(kernel.requests.filter((r) => r.capability === 'get_task')).toHaveLength(1);
+    logSpy.mockRestore();
+  });
+
+  it('report_result still terminates with an accepted result when the get_task read-back fails (the echo is best-effort)', async () => {
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: { id: 'task-1', status: 'completed', activityId: 'act-1', factIds: [] },
+    }));
+    // no get_task handler → 404
+    const tool = fake.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        summary: 'x',
+        factsToAssert: [{ linkType: 'hosts', source: hostRef, target: serviceRef }],
+      },
+      undefined,
+      undefined,
+      fakeCtx(),
+    );
+
+    expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain('Result contract accepted');
+    expect(text).not.toContain('Refused');
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('report_result on a network failure records the contract and terminates; agent_settled then re-sends it and exits 0', async () => {
+    const unreachable = new KernelClient({
+      kernelUrl: 'http://127.0.0.1:1',
+      capabilityHandle: 'h',
+      timeoutMs: 500,
+    });
+    const fake2 = createFakePi();
+    registerWorkerMode(fake2.api, {
+      kernelClient: unreachable,
+      workspaceId: 'ws-1',
+      taskId: 'task-1',
+    });
+    const tool = fake2.tools.get('report_result');
+    if (!tool) throw new Error('report_result tool not registered');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const result = await tool.execute('call-1', { summary: 'x' }, undefined, undefined, fakeCtx());
+    expect(result.terminate).toBe(true);
+    const [firstPart] = result.content;
+    const text = firstPart?.type === 'text' ? firstPart.text : '';
+    expect(text).toContain('could not be reached');
+
+    const agentSettled = fake2.handlers.get('agent_settled');
+    if (!agentSettled) throw new Error('agent_settled handler not registered');
+    await agentSettled({}, fakeCtx());
+    await flushImmediate();
+    // The fallback re-send also fails (still unreachable) — logged, and the exit is still 0.
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(logSpy).toHaveBeenCalledWith('nexttime-worker check=report_task_result result=fail');
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 
   it('the context handler injects Task input (get_task) and related facts (search) as a non-persisted custom message', async () => {
@@ -263,16 +574,17 @@ describe('registerWorkerMode', () => {
     errorSpy.mockRestore();
   });
 
-  it('agent_settled posts the report_result-recorded contract (with sessionJsonlPath) and exits 0', async () => {
+  it('agent_settled after an accepted report_result posts nothing more and still exits 0 exactly once (the exit must not depend on the post having happened here)', async () => {
     kernel.setHandler('report_task_result', () => ({ ok: true, result: { status: 'completed' } }));
     const reportResultTool = fake.tools.get('report_result');
     if (!reportResultTool) throw new Error('report_result tool not registered');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     await reportResultTool.execute(
       'call-1',
       { summary: 'pong', findings: [] },
       undefined,
       undefined,
-      fakeCtx(),
+      fakeCtx('/workspace/.pi/sessions/abc.jsonl'),
     );
 
     const agentSettled = fake.handlers.get('agent_settled');
@@ -280,12 +592,15 @@ describe('registerWorkerMode', () => {
     await agentSettled({}, fakeCtx('/workspace/.pi/sessions/abc.jsonl'));
     await flushImmediate();
 
-    const reportCall = kernel.requests.find((r) => r.capability === 'report_task_result');
-    expect(reportCall?.params).toMatchObject({
+    const reportCalls = kernel.requests.filter((r) => r.capability === 'report_task_result');
+    expect(reportCalls).toHaveLength(1);
+    expect(reportCalls[0]?.params).toMatchObject({
       summary: 'pong',
       sessionJsonlPath: '/workspace/.pi/sessions/abc.jsonl',
     });
+    expect(exitSpy).toHaveBeenCalledTimes(1);
     expect(exitSpy).toHaveBeenCalledWith(0);
+    logSpy.mockRestore();
   });
 
   it('agent_settled synthesizes a fallback contract from the final assistant text when report_result was never called', async () => {

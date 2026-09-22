@@ -6,53 +6,58 @@
 
 ## 路由（S3.14）
 
-`lib/router.ts` 的 hash 路由，未匹配（含所有 S3.14 之前的旧 hash，如 `#/chats`）一律回落到 `#/work/chats`：
+`lib/router.ts` 的 hash 路由，未匹配（含所有 S3.14 之前的旧 hash，如 `#/chats`）一律回落到 `#/work/chats`。S6 起路由只按路径匹配，`?query` 归页面自己读（`#/platform/workspaces?residue=1`、`#/govern/audit?nodeId=…`、`#/work/graph?objectId=…`）：
 
 | 路径 | 页面 | 导航分组 |
 |---|---|---|
 | `#/work/chats[/<id>]` | 对话列表 / 对话 | 工作 |
 | `#/work/tasks[/<id>]` | 任务 | 工作 |
 | `#/work/approvals[/<id>]` | 待我审批 | 工作 |
+| `#/work/graph[?objectId&q&type&at]` | 图谱（原生对象浏览器，S6-D；第三方 Explorer 只在 bundle 已构建时作为附加链接） | 工作 |
 | `#/me/agent` | 我的智能体（S3.13：模型/Skills/系统接入/Worker 定义/提示词附加/自动批准低风险，均为 Grant∩Policy 的子集投影，owner 可切换查看/编辑其他 principal） | 工作 |
 | `#/govern/members` | 成员与授权 | 治理 |
 | `#/govern/access` | 访问（Grant 矩阵） | 治理 |
 | `#/govern/systems[/<gatekeeperId>]` | 系统接入（原 Connections 页；健康与 Operation 详情抽屉新增） | 治理 |
 | `#/govern/catalog[/<tab>]` | 能力目录（operations/skills/procedures/workers 四个 tab） | 治理 |
 | `#/govern/models` | 模型与配额 | 治理 |
-| `#/govern/audit` | 审计（explain / reconstruct / audit_query） | 治理 |
+| `#/govern/audit[?nodeId&resourceType&resourceId&actionRequestId&actorPrincipalId&action]` | 审计（explain / reconstruct / audit_query；S6-A 起从任务 / 审批 / 图谱页带入口参数进入） | 治理 |
+| `#/platform/integrations[/<gateId>]` | 集成（S6-C：尾段打开该门实例抽屉） | 平台 |
 
 ## 页面与 capability 对照
 
 | 页面 | 读 | 写 | 实时推送 |
 |---|---|---|---|
-| Chats / Chat | `list_chats` `get_chat_history` `subscribe_chat`（WS） | `new_chat` `send_chat_message` `stop_agent`（WS）；卡片内 `approve` `reject` `set_auto_approved_action_kind`（HTTP） | `chat.message` `chat.stream` `chat.metadata` `action.updated` |
-| Approvals | `list_pending` `get_action` | `approve` `reject` `set_auto_approved_action_kind` | `action.pending` `action.updated` |
-| Tasks | `list_tasks` `get_task` `list_worker_definitions`（名字）`list_pending`（关联审批） | `cancel_task` | `task.updated` `action.pending/updated` |
-| 系统接入（`/govern/systems`） | `list_connection_requests` `search{objectType:Gatekeeper}` `search{objectType:Operation}` `get_gatekeeper`（S3.11，健康与 Operation 详情）`list_available_gate_instances`（P-B1，owner） | `request_connection` `create_connection` `publish_manifest` `connect_gatekeeper` `enable_gate_instance`（P-B1，owner：从平台目录一键启用）`issue_gate_credential_token`（P-B2a，member：已启用实例行上的"录入我的凭证"——浏览器直接把凭证 POST 到门宿主，内核不经手；`credential_mode_mismatch` 内联显示）；接入向导（S3.12，`OnboardingWizard`）额外用 `propose_operation`+`publish_operation`（逐条 Operation 提议重分类，两步，不提供直接改的捷径） | 无 |
+| Chats / Chat | `list_chats{includeArchived?}`（S6-A：默认隐藏已归档，`archivedAt` 字段区分）`get_chat_history` `subscribe_chat`（WS） | `new_chat` `send_chat_message`（S6-A：第一条用户消息自动写 `title`，前 40 字）`stop_agent`（WS）；`archive_chat` / `unarchive_chat` / `rename_chat`（S6-A，member：本人 Chat；owner 可归档他人可见的 Chat；列表 活跃 / 已归档 两个 tab、归档带撤销、内联改名；已归档的 Chat 只读——内核 `send_chat_message` 也 409 `chat_archived`）；头部 `get_agent_profile` / `get_agent_policy` / `list_models` + `set_agent_profile`（W2：在 AgentPolicy 允许范围内切模型，Turn 进行中禁用）；卡片内 `approve{reason?}` `reject{reason?}` `set_auto_approved_action_kind`（HTTP） | `chat.message` `chat.stream` `chat.metadata`（S6-A 起还会推 `{title}` / `{archivedAt}`）`action.updated` |
+| Approvals | `list_pending` `get_action` `list_action_requests`（历史 tab；S6-A 起行上带 `decisionReason` / `decidedBy` / `decidedAt`） | `approve{actionRequestId, reason?}`（S6-A C25：`blastRadius = high` 时内核要求非空 `reason`，否则 400 `reason_required`；中低可选）`reject{reason?}` `set_auto_approved_action_kind` | `action.pending` `action.updated` |
+| Tasks | `list_tasks` `get_task` `list_worker_definitions`（名字）`list_action_requests{taskId, limit, cursor}`（关联审批，S6-A C28：已决定的也能看到，keyset 加载更多） | `cancel_task` | `task.updated` `action.pending/updated` |
+| 系统接入（`/govern/systems`） | `list_connection_requests` `search{objectType:Gatekeeper}` `search{objectType:Operation}` `get_gatekeeper`（S3.11，健康与 Operation 详情）`list_available_gate_instances`（P-B1，owner） | `request_connection` `cancel_connection_request`（S6-A C26，member：本人的申请；owner：任何申请；仅 `requested` 可取消，否则 409 `illegal_transition`；行上的 取消 按钮经 `ConfirmTier medium`）；"接入一个系统"启动器（S6-C，`components/connect/ConnectSystemLauncher.tsx`）按种类分支：http / mcp 走门宿主实例路径（平台侧建实例 → 测试 → 工作区侧启用 → 导入 → 审核 → 发布 → 授予），ssh / cli 显示打包门部署清单并轮询 `list_gate_instances` / `list_available_gate_instances` 直到 announce`create_connection` `publish_manifest` `connect_gatekeeper` `enable_gate_instance`（P-B1，owner：从平台目录一键启用）`issue_gate_credential_token`（P-B2a，member：已启用实例行上的"录入我的凭证"——浏览器直接把凭证 POST 到门宿主，内核不经手；`credential_mode_mismatch` 内联显示）；接入向导（S3.12，`OnboardingWizard`）额外用 `propose_operation`+`publish_operation`（逐条 Operation 提议重分类，两步，不提供直接改的捷径） | 无 |
 | 成员与授权（`/govern/members`） | `list_principals` | `create_principal` `set_principal_role` `rotate_api_key` `disable_principal` | 无 |
-| 访问（`/govern/access`） | `list_grants` `list_principals`（填充成员下拉，无则退化为手填 id） | `grant_capability`（已有）`revoke_capability`（已有）`issue_service_handle`（P-B1，owner：给 service Principal 签外部运行时 Handle，token 只显示一次） | 无 |
-| 能力目录（`/govern/catalog`） | `list_operations`（S3.11 新增）`list_skills` `list_procedures` `list_worker_definitions`（均已有） | `publish_operation`/`deprecate_operation`、`publish_skill`/`deprecate_skill`、`publish_procedure`/`deprecate_procedure`、`deprecate_worker_definition`（均已有——两步 propose/publish，控制台不提供"直接改分类"捷径） | 无 |
-| 模型与配额（`/govern/models`） | `list_models` `get_agent_policy`（S3.13，member 可读）`list_quotas` `list_policies` | `set_agent_policy`（S3.13，owner——非 owner 只看只读摘要，不渲染可编辑表单） | 无 |
-| 审计（`/govern/audit`） | `explain`（已有，member 可用）`reconstruct` `audit_query`（均已有，auditor） | 无 | 无 |
+| 访问（`/govern/access`） | `list_grants` `list_principals`（填充成员下拉，无则退化为手填 id）`list_gatekeepers`（S6-A B3：只为把门 id 换成名字） | `grant_capability`（已有）`revoke_capability`（已有）`issue_service_handle`（P-B1，owner：给 service Principal 签外部运行时 Handle，token 只显示一次；S6-A B7：TTL 缺省 30 天、上限来自注册表 schema，能力从 handle 通道清单勾选） | 无 |
+| 能力目录（`/govern/catalog`） | `list_operations`（S3.11 新增）`list_skills` `list_procedures` `list_worker_definitions`（均已有）`list_gatekeepers`（名字）`list_models`（Worker 定义编辑器的模型 datalist） | `publish_operation`/`deprecate_operation`、`publish_skill`/`deprecate_skill`、`publish_procedure`/`deprecate_procedure`、`deprecate_worker_definition`（均已有——两步 propose/publish，控制台不提供"直接改分类"捷径）；S6-A A2 编辑器：`propose_skill{skill}`（SKILL.md 表单）/ `propose_procedure{procedure}`（类型化步骤）/ `propose_worker_definition{definitionId?, kind, definition}` 新建草稿并从成功态发布——Skill / Procedure 的"编辑"是复制成新家族（能力无家族 id），Worker 是真正的下一版本 | 无 |
+| 模型与配额（`/govern/models`） | `list_models` `get_agent_policy`（S3.13，member 可读）`list_quotas` `list_policies`（S6-B C29：按 `QuotaListEntryWire` / `PolicyWire` 渲染成列，见已知缺口 9） | `set_agent_policy`（S3.13，owner——非 owner 只看只读摘要，不渲染可编辑表单） | 无 |
+| 审计（`/govern/audit`） | `explain`（已有，member 可用）`reconstruct` `audit_query{filter?, limit?, cursor?}`（S6-A：keyset 分页，`nextCursor` / `truncated`，与平台审计页同形）`export_prov{nodeId | factId | decisionId | activityId, depth?}`（S6-A C27：`nodeId` 与 `explain` 同一种无类型 id，审计页"导出 PROV-JSON"直接用当前 explain 的 id；审计记录列表的"导出本页"由前端序列化）`get_action`（`?actionRequestId=` 入口的请求上下文）`list_principals`（actor 选择器，被拒时退化为文本框）（`reconstruct` / `audit_query` 需 auditor） | 无 | 无 |
 | 我的智能体（`/me/agent`） | `get_agent_profile{principalId?}` `get_agent_policy` `list_models` `list_skills` `list_gatekeepers` `list_worker_definitions` `list_principals`（owner 切换查看对象用） | `set_agent_profile`（member 改自己且 policy 允许；owner 改任何人） | 无 |
-| 工作区（`/platform/workspaces`，P-A2，仅管理员） | `list_workspaces` `list_platform_models` `list_users`（挑 owner） | `create_workspace` `update_workspace` `set_workspace_status` `set_allowed_models`；委托 owner 用 `add_membership{role:'owner'}` / `set_membership_role` | 无 |
+| 工作区（`/platform/workspaces`，P-A2，仅管理员） | `list_workspaces{status?, purpose?, includeExpired?}`（S6-A：页面缺省 `{status:'active', includeExpired:false}`；`?residue=1` = 概览横幅的"残留"预设，读全量、客户端只留已停用 ∪ 已到期 ephemeral）`list_platform_models`（S6-B：读 llm-proxy 重写后的 `models.json`，含控制台新增的供应商——每次调用重读，无需重启）`list_users`（挑 owner） | `create_workspace` `update_workspace` `set_workspace_status` `set_allowed_models`；委托 owner 用 `add_membership{role:'owner'}` / `set_membership_role`；`purge_workspace{workspaceId, confirm?}`（S6-A A1：无 `confirm` = 预览计数 + `service_handle_in_use` 警告 → `ConfirmTier irreversible` 键入名称 + 知情勾选 → `confirm:true`；仅 `purgeable` 且非默认工作区） | 无 |
+| 用户（`/platform/users`，P-A1，仅管理员） | `list_users{…, hideResidual}`（S6-A A6：缺省 `true`，可切换）`pendingOnly`（"清理待激活用户"候选） | `create_user` `update_user` `set_user_status`（对自己 409 `self_disable`）`reset_user_password` `merge_user` `set_user_budget`；`purge_user{userIds}`（批量 ≤ 200，`ConfirmTier high`，逐行 outcome） | 无 |
+| 模型与供应商（`/platform/models`，S6-B，仅管理员） | `issue_llm_admin_token`（5 分钟平台 JWT，每次动作簇取一次、到期前 60 s 内重取）→ 直接调 caddy `/api/llm-admin/providers`（GET 列表：`credentialPresent` 布尔、`source: file|store`、`overridesFile`、`lastTest`）——**不经 `/api/cap`**，内核不存供应商记录 | `/api/llm-admin/providers`（POST 新增）`/providers/:id`（PUT 编辑 / 覆盖 yaml 条目 / 停用，DELETE 仅 store 条目）`/providers/:id/test`（一次补全 + 一次工具调用往返）；`/providers/:id/secret` 为 501 占位（待维护者决定是否必经审批，plan §12 末）；每次变更 llm-proxy 重写 `models.json`，本表下一行的工作区页随之看到新模型 | 无 |
+| 图谱（`/work/graph`，S6-D） | `list_types{kind:'object'}` `search{query, objectType?, limit, cursor}` `state_at{objectId, at}`（对象 + 两向全部 Fact；`at` 按页面挂载冻结）`get_object`（邻居名称，去重、并发 4）`list_conflicts{status:'open'}` `explain{nodeId}`（溯源抽屉） | 无 | 无 |
 | 集成（`/platform/integrations`，P-B1/P-B2a，仅管理员） | `list_connectors` `list_gate_instances` `get_gate_instance` `list_external_runtimes` | `set_connector_mode`（三态 + 按 Operation 禁用；`platform_preset` 现在对 http/mcp 也放开，仅 cli/ssh 仍被拒）`update_gate_instance`（改名 / 启用 / 禁用 / `vetted`）`test_gate_instance` `revoke_external_runtime`；门实例 tab 新增"新建门宿主实例"（`create_gate_instance`，http/mcp，从不携带凭证）、详情抽屉的"删除"（`delete_gate_instance`，`gate_in_use` 时提示先禁用）与共享凭证实例的"录入共享凭证"（`issue_gate_host_token` 拿 5 分钟令牌 → 浏览器直接 POST 给门宿主，内核不经手） | 无 |
 | 侧栏徽标 | `list_pending`（计数） | — | `action.pending` `action.updated` |
 | 侧栏工作区名 + 角色徽标 | `get_workspace`（S3.11，`caller` 字段是角色的权威来源，S3.13 起启用） | — | 无 |
 
 所有 HTTP 调用都是 `POST /api/cap/<name>`；WS 为 `/ws` JSON-RPC。凭证有两种（S4.1）：**用户名 + 密码登录**得到的控制台会话 cookie `nexttime_console_session`（HttpOnly，8 小时；每个能力调用带 `X-Workspace-Id` 与 `X-Requested-With: nexttime`，WS `authenticate {workspaceId}`；登出 `POST /api/auth/logout` 服务端吊销），以及登录页折叠项里的 **API key**（`Authorization: Bearer <api key>`，给自动化与过渡期；只存在 `sessionStorage`，关标签页即失效，"Forget key" 立即清除）。登录、绑定 API key、claim、我的账户改密都走 `/api/auth/*`（`packages/kernel/src/interfaces/http/auth-routes.ts`）；没有初始化路由——`admin` 由 kernel 预置，见"排障"表。
 
-## 内核并行落地：`该能力尚未上线`
+## 内核并行落地：`该能力尚未上线`（历史记录；S6-A0 B6 已删除该识别逻辑）
 
-**S3.11（已合并——PR #100）**：成员与授权、访问、系统接入的 `get_gatekeeper`、能力目录的 `list_operations`、模型与配额的 `list_quotas`/`list_policies`、`get_workspace`（含 `caller` 字段）均已上线，本节以下内容仅作历史记录：这些 capability 曾由一条并行的内核 PR 实现，与 web 半针对同一份契约（`docs/development-tasks.md` §S3.11）各自开发；若内核尚未部署，调用返回 404 `not_found`，控制台用 `lib/errors.ts` 的 `isNotFoundError` 识别并展示"该能力尚未上线"空状态而不是报错或崩溃——这套识别逻辑仍在，只是现在几乎不会真的触发。
+**S3.11（已合并——PR #100）**：成员与授权、访问、系统接入的 `get_gatekeeper`、能力目录的 `list_operations`、模型与配额的 `list_quotas`/`list_policies`、`get_workspace`（含 `caller` 字段）均已上线，本节以下内容仅作历史记录：这些 capability 曾由一条并行的内核 PR 实现，与 web 半针对同一份契约（`docs/development-tasks.md` §S3.11）各自开发；若内核尚未部署，调用返回 404 `not_found`，控制台用 `lib/errors.ts` 的 `isNotFoundError` 识别并展示"该能力尚未上线"空状态而不是报错或崩溃——这套识别逻辑随 S6-A0（B6）删除：所有并行落地的能力都已上线，`lib/errors.ts` 的 `isNotFoundError` 与 11 处"该能力尚未上线"分支不再存在，`not_found` 一律按普通错误横幅渲染。
 
-**S3.13（进行中）**：`get_agent_profile`/`set_agent_profile`/`get_agent_policy`/`set_agent_policy`（我的智能体、模型与配额页的 AgentPolicy 编辑器）由另一条并行的内核 PR 实现，与本 PR（web 半，`docs/development-tasks.md` §S3.13）针对同一份契约各自开发。同样的 `not_found` → "该能力尚未上线" 识别逻辑覆盖这四个新 capability；`AgentProfilePage` 的自查视图（不带 `principalId`）把 404 视为"未上线"，但 owner 切到别的 principal 查看时的 404 是真正的歧义（未上线 vs. 无此 principal），改渲染成普通错误横幅而不是"未上线"文案——见该组件自己的注释。两条 PR 合并、内核侧部署后，这些页面无需改动即可正常工作。
+**S3.13（已合并）**：`get_agent_profile`/`set_agent_profile`/`get_agent_policy`/`set_agent_policy`（我的智能体、模型与配额页的 AgentPolicy 编辑器）由另一条并行的内核 PR 实现，与本 PR（web 半，`docs/development-tasks.md` §S3.13）针对同一份契约各自开发。同样的 `not_found` → "该能力尚未上线" 识别逻辑覆盖这四个新 capability；`AgentProfilePage` 的自查视图（不带 `principalId`）把 404 视为"未上线"，但 owner 切到别的 principal 查看时的 404 是真正的歧义（未上线 vs. 无此 principal），改渲染成普通错误横幅而不是"未上线"文案——见该组件自己的注释。两条 PR 合并、内核侧部署后，这些页面无需改动即可正常工作。
 
 ## 角色与可见性
 
 `get_workspace` 现在把已解析的调用方回传（`caller: {id, role, displayName, kind}`，S3.11 的一次协调追加）——`hooks/useWorkspaceIdentity.ts` 把它当作**权威**角色来源，一旦这次读取 ready 就用 `{kind:'known', role}`。**下方描述的 403/200 推断现在只是 fallback**：`get_workspace` 尚未 ready、或返回 404（内核早于该字段上线）时才会用到。
 
-按钮级别的可见性仍按**首次 403** 推断（与角色徽标独立，因为具体页面自身的 capability 调用永远是比粗粒度角色标签更精确的证据）：某个 capability 一旦返回 `forbidden`，本会话内它以及注册表里同一 `minRole`（及更高）的 capability 一并视为不可用（`hooks/usePermissions.tsx` 的 `deniedClosure`，按 `@nexttime/shared` 的 `CAPABILITY_REGISTRY` 派生），相关按钮隐藏或替换为说明。
+按钮级别的可见性：成员与授权 / 访问两页的 owner-only 写按钮自 S6-A0（C9）起以 `get_workspace.caller.role === 'owner'` 为准（403 推断只在该读未 ready 时作 fallback）；其余页面仍按**首次 403** 推断（与角色徽标独立，因为具体页面自身的 capability 调用永远是比粗粒度角色标签更精确的证据）：某个 capability 一旦返回 `forbidden`，本会话内它以及注册表里同一 `minRole`（及更高）的 capability 一并视为不可用（`hooks/usePermissions.tsx` 的 `deniedClosure`，按 `@nexttime/shared` 的 `CAPABILITY_REGISTRY` 派生），相关按钮隐藏或替换为说明。
 
 S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**（`get_workspace.caller.role`）时徽标直接显示真实角色（复用成员页同一个 `StatusChip machine="role"`，与 owner/builder/operator/member/auditor 同一套色调）；角色仍是**推断**（`lib/role.ts` `inferRole`）时用尽力而为的正面推断——owner-minRole 的 capability 一旦调用成功 → 徽标显示 Owner；operator-minRole 的一旦被拒 → 徽标显示 Member 且"治理"分组隐藏（这是最强的反证：拒绝证明既非 operator 也非 owner）；operator-minRole 成功但尚无 owner-only 被拒的证据 → 显示 Operator+（诚实的区间，而非猜测）；两者都还没有证据 → 显示 "—"（未知）。无论已知还是推断，"治理"分组只在角色被证实为 `member` 时隐藏（`isProvenMember`）；其余情况下**默认展示**给所有人，具体页面按各自 capability 的 403 就地渲染"需要 owner/operator 权限"的说明。
 
@@ -64,6 +69,32 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 ## 状态词表
 
 芯片（StatusChip）的颜色与文字来自 `@nexttime/shared` 的枚举（`enums.ts`）与转移表（`transitions.ts`）：ActionRequest 13 态、Task、WorkerRun、ConnectionRequest（`requested|completed|cancelled`）、Publishable（`draft|published|deprecated`）、Grant（`active|revoked|expired`，S3.14 新增）、Role（`owner|builder|operator|member|auditor`，S3.14 新增，非真正状态机，复用同一套色调以保持视觉一致）。内核新增一个状态而 web 没有配色时 `tsc` 与 `StatusChip.test.tsx` 都会失败；线上若出现未知值，芯片以虚线边框 + 原始字符串显示，不会被误染成别的语义。Tasks 页的"Cancel task"只在 `TASK_TRANSITIONS` 有 `cancel` 出边的状态（`running`）下出现。
+
+## 视觉体系 / 令牌（S6-A0）
+
+设计基线是 `docs/console-completion-plan.md` §5.9（已定稿）。实现落点：
+
+- **令牌**：`packages/web/src/styles/tokens.css` 是唯一允许出现颜色字面量与 px 字号的样式表。浅色是默认，深色是 `prefers-color-scheme: dark` 覆盖，两套沿同一令牌名。语义色六类固定映射（observe 青 / 待审批·warn·中影响 琥珀 / 高影响·不可逆·reject·冲突·失败·清除 红 / 已执行·已发布·健康 绿 / 系统·提案·生产·默认 蓝 / 归档·被替代·残留·未测试 灰），对应 `--observe` `--warn` `--danger` `--ok` `--info` `--muted`（各带 `-soft` 底色）。字号刻度 `--fs-11 … --fs-24`，行高 `--lh-tight` / `--lh-body`。主按钮是 ink（`--text`），蓝色 `--accent` 只用于"可以点"。
+- **守卫**：`node scripts/guards/css-tokens.mjs`（`pnpm ci:guards` 的一环）扫描 `styles/` 下除 `tokens.css` / `fonts.css` 之外的每个样式表，遇到 `#hex`、`rgb()`/`hsl()`、`font-size: <n>px` 即按 `file:line` 报错。新样式一律写 `var(--…)`。
+- **字体**：随包自托管——`styles/fonts.css` 通过 `@fontsource/ibm-plex-sans`（latin 400/500/600）、`@fontsource/ibm-plex-mono`（latin 400/500）、`@fontsource/noto-sans-sc`（unicode-range 切片，400/500）引入，Vite 把 woff2 打进 `dist/assets/`，页面只拉它实际渲染到的中文切片；没有任何外部字体服务（caddy 的 `font-src` 不放行外域）。换字重只改 `fonts.css` 的 `@import` 行。
+- **状态芯片**：`lib/status-tone.ts` 是状态 → 色调的唯一映射，S6-A0 起覆盖平台面（用户状态、工作区状态 / 用途、门实例状态 / 健康 / 信任、接入包模式、服务健康、平台角色）与 ActionRequest 的两个治理标量（Operation 模式、影响范围）。`components/platform/` 不再手拼 `chip chip-*`；派生态（`待激活`、`等待宿主接管`）由 `deriveUserStatus` / `deriveGateInstanceStatus` 得出。
+- **UI kit**：`ui/RefChip`（id → 名称，配 `useRefNames`）、`ui/ConfirmTier`（低 / 中 / 高 / 不可逆四档确认）、`ui/ApprovalCard`、`ui/ProvenanceChain`、`ui/FollowPill`、`ui/Launcher`（四步接入启动器壳）。`PageHeader` 新增 `breadcrumb` 与 `primaryAction`。
+- **壳**：侧栏三组 使用 / 治理 / 平台（可见性规则见上文"角色与可见性"，未变），底部连接状态 + 内核版本（`platform_overview.version.kernel`，仅管理员会话读取）+ 当前用户。
+- **CSP**（C21）：`deploy/caddy/Caddyfile` 对 SPA 下发严格 `Content-Security-Policy`（`default-src 'self'`；`style-src` 暂含 `'unsafe-inline'`，待内联 `style={{…}}` 清理后收紧；`font-src 'self' data:` 因 Vite 会把 < 4 KB 的字体切片内联成 data URI）与 `Permissions-Policy`；`/explorer/*` 单独一块略宽的策略。改动后用 `caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile` 校验。
+
+## 图谱页（S6-D）
+
+`#/work/graph`（`components/graph/`，`docs/console-completion-plan.md` §5.7 / §12 第 1 项）：原生对象浏览器，替代第三方 Explorer bundle（bundle 作为过渡保留，侧栏"打开 Explorer（第三方）"仅在构建了 bundle 时出现）。member 及以上可用——用到的能力全部 `minRole: 'member'`。
+
+- **导航状态全在 hash query**（`lib/graph-route.ts`）：`?objectId=` 深链到一个对象（任何页面的对象 `RefChip` 都可指向它）、`?q=&type=` 是已提交的搜索、`?at=` 是"截至 As of"时刻。刷新、书签、浏览器后退都回到同一视图；`lib/router.ts` 只识别路径，query 由页面自己解析。
+- **搜索与浏览（左栏）**：`list_types{kind:'object'}` 填类型下拉（失败则退化为手填类型），`search{query, objectType?, limit:25, cursor}` keyset "加载更多"。空关键字是合法的浏览——内核按 `%%` 子串匹配返回最近更新的对象，所以落地页从不空白。
+- **对象视图（右栏）**：一次 `state_at{objectId, at}` 同时给出对象（与 `get_object` 同一查询）与触及它的全部事实（双向、完整 `FactWire` 行）。**没有用 `traverse`**：它在线上只返回 id（`{nodes, edges:{linkId, linkType, source, target, depth}}`），没有 `epistemicStatus` / `confidence` / 有效期 / `lastObservedAt`，也没有 `direction` 参数——事实行渲染不出来。`at` 由页面在挂载时冻结一次（`useCapability` 以序列化参数做缓存键），只有"刷新 Refresh"推进；沿面包屑返回先从缓存渲染再后台重验。事实按 链接类型 × 方向（出 / 入 / 自）分组，每组默认显示 8 行，"显示全部"展开；"展开 Expand"聚焦邻居并把它压进面包屑轨迹，"溯源 Provenance"开抽屉。可选的内联 SVG 邻域图：中心 + 环上最多 24 个邻居，每个邻居是 `role="button"` 的可聚焦节点（Enter / Space 聚焦），边色 = 该邻居各事实中最差的新鲜度；列表才是完整视图。
+- **溯源抽屉**：`explain{nodeId: factId}`（遗留 1 已收窄到该事实自己的 Observation）映射到 `ui/ProvenanceChain`（事实 → 活动 → 来源，原始证据折叠），来源取事实的 `lastObservation.source`，否则取活动的第一条 Observation；人工 / agent `assert_fact` 的事实没有来源段，按"无 Not recorded"显示。"在审计页打开"= `hrefs.audit()` + `?nodeId=<factId>`。
+- **新鲜度着色**（`lib/graph-freshness.ts`，S5.2 语义）：`fresh`（窗口内再观测，绿 `ok`）/ `aging`（仍有效但最近观测早于窗口，琥珀 `warn`）/ `unobserved`（人工或 agent 断言、无观测时钟，灰——**有意不告警**）/ `not_reobserved`、`invalidated`、`superseded`（灰）/ `conflict`（在未解决冲突中或 `contradicted`，红 `danger`）。只用这四个语义色。窗口是页面常量 `OBSERVATION_WINDOW_MS = 2 h`——与内核 `ops.collector_silent` 的默认值一致，内核尚未通过能力暴露真实窗口（内核缺口），图例里印出该值。年龄一律相对页面冻结的 `at` 计算，时间旅行时相对所查时刻。
+- **冲突标记**：`list_conflicts{status:'open', limit:200}` 一次加载，按 `factAId` / `factBId` 在页面内匹配（能力没有按对象 / 事实过滤，内核缺口）；控制台尚无冲突处理界面，只显示计数与冲突 id。
+- **名称解析**：`state_at` / `traverse` 只给邻居 id，也没有批量读对象的能力（内核缺口）。页面级缓存（`GraphObjectsContext`）对每个未见过的 id 调一次 `get_object`（去重、并发 4、失败不重试也不报错），搜索结果与聚焦对象直接进缓存；只有渲染出来的行才请求名称，折叠组不花钱。显示名 = `name` / `displayName` / `title` / `label` / `hostname` 属性，否则按已发布本体 `identityKey` 顺序拼身份键值（跳过 uuid 形状的外键），都没有时 `RefChip` 显示灰色裸 id 回退。
+- **三态与键盘**：加载 / 空 / 错误沿用 `SkeletonRows` / `EmptyState` / `ErrorBanner`+Retry；结果行是 `DataRow`（Enter / Space 打开），行内动作都是真按钮，SVG 节点可 Tab 到。
+- **已知边界**：邻居列表不分页（一个对象的事实一次全拉，超大 hub 靠分组折叠兜底）；`list_conflicts` 只看第一页 200 条；深度 > 1 的邻域只能逐步"展开"；对象本身不显示历史属性版本（`reconstruct` 仍在审计页）；e2e `packages/web/e2e/graph.spec.ts` 已写、未在 CI 跑过（路由接线后再跑）。
 
 ## 排障
 
@@ -93,14 +124,14 @@ S3.14 起的侧栏角色徽标与"治理"导航分组显隐：角色**已知**�
 
 1. ~~没有"当前 principal 是谁 / 什么角色"的直接读取能力~~——S3.11 协调追加的 `get_workspace.caller` 填了这个缺口，`hooks/useWorkspaceIdentity.ts` 把它当权威来源；403/200 双向推断（见"角色与可见性"）现在只是该字段尚未 ready/未部署时的 fallback，不再是唯一来源。
 2. ~~没有 principal 目录~~——S3.11 的 `list_principals` 填了这个缺口；`connect_gatekeeper`/`GrantCapabilityForm` 的成员下拉在该 capability 部署前仍退化为手填 id。
-3. ~~没有列出已决定 ActionRequest 的能力（`list_pending` 只回 pending，`get_action` 按 id）——"All" 标签只包含本会话观察到的决定~~——S5.5（遗留 21）的 `list_action_requests` 填了这个缺口：全部状态、与 `list_pending` 同一 I14 可见性、keyset 分页；审批页"历史"tab 已接（`ApprovalQueuePage.tsx`）。仍缺的是按 Task / WorkerRun 过滤（见第 6 条）。
-4. ~~`search` 固定 50 条上限、无分页、无排序参数~~——内核侧已由 W5（STATUS 遗留 2）补上 `limit` / `cursor` keyset 分页与 `truncated` 标记；**控制台侧**"Registered systems"等治理页列表仍按旧的 50 条一次取（`console-completion-plan.md` B5），排在 S6-A。
-5. `approve` 没有 `reason` 参数（`reject` 有）——理由只随 Reject 提交。
-6. 没有 Task → ActionRequest 的读取——"Linked approvals" 只能从 `list_pending` 按 `parentWorkerRunId` 反查 pending 的。
+3. ~~没有列出已决定 ActionRequest 的能力（`list_pending` 只回 pending，`get_action` 按 id）——"All" 标签只包含本会话观察到的决定~~——S5.5（遗留 21）的 `list_action_requests` 填了这个缺口：全部状态、与 `list_pending` 同一 I14 可见性、keyset 分页；审批页"历史"tab 已接（`ApprovalQueuePage.tsx`）。按 Task / WorkerRun 过滤已随 S6-A 补上（见第 6 条）。
+4. ~~`search` 固定 50 条上限、无分页、无排序参数~~——内核侧已由 W5（STATUS 遗留 2）补上 `limit` / `cursor` keyset 分页与 `truncated` 标记；**控制台侧**（S6-A B5）：凡能力支持 `limit` / `cursor` 的列表（审批历史、关联审批、审计流、图谱搜索）都已改 keyset 加载更多；`list_grants` / `list_principals` / `list_skills` / `list_procedures` / `list_worker_definitions` / `list_tasks` 在注册表里没有分页参数，对应页面保持单页（不造参数）——内核侧扩展候选。
+5. ~~`approve` 没有 `reason` 参数（`reject` 有）——理由只随 Reject 提交~~——S6-A（C25）内核侧已补：`approve{actionRequestId, reason?}` 与 `reject` 对称；`blastRadius = high` 时 `reason` 必填（非空白），缺省 400 `reason_required`，在 `governance/approval/decide.ts` 强制，不只是前端校验；理由写入 Approval Decision 的 `rationale.reason` 与 `action_request.approve` 审计行；`approve` / `reject` / `get_action` / `list_pending` / `list_action_requests` 的行上新增 `decisionReason` / `decidedBy` / `decidedAt`（无人工决定时为 `null`）。控制台侧（S6-A）：审批页与对话内卡片都用 `ui/ApprovalCard`，高影响 Approve 与所有 Reject 走 `ConfirmTier high`，History 显示决定字段。
+6. ~~没有 Task → ActionRequest 的读取——"Linked approvals" 只能从 `list_pending` 按 `parentWorkerRunId` 反查 pending 的~~——S6-A（C28）内核侧已补：`list_action_requests{taskId?, parentWorkerRunId?}`，`taskId` 在 handler 里解析为该 Task 的全部 WorkerRun（`application/task`），已决定的行一样返回；未知 `taskId` 返回空页而不是 404（与未知 `gatekeeperId` 一致）；I14 可见性与 keyset 分页不变。任务详情页已改用它（S6-A `approvals/LinkedApprovals`）。
 7. `action.pending` 推送的 `title`/`description` 仍由 `actionKind` 拼出（S2.11 已知偏离），`simulated` 恒为空。
-8. `cancel_connection_request` 未交付（S2.13 已知偏离），控制台没有取消按钮。
-9. `list_quotas`/`list_policies` 没有公开的行结构（`Policy`/`Quota` 在写侧都是 `set_policy{policy: jsonRecord}`/`set_quota{key,value}` 的不透明结构）——模型与配额页把 Quota 渲染成 key/value 表，Policy 渲染成脱敏后的 JSON 折叠块，不假设列名。
-10. `export_prov` 未在审计页接入（范围外，留给后续任务）。
+8. ~~`cancel_connection_request` 未交付（S2.13 已知偏离），控制台没有取消按钮~~——S6-A（C26）内核侧已补：`cancel_connection_request{connectionRequestId}`（member：本人的申请；owner：任何申请，否则 403），仅 `requested → cancelled`（其它状态 409 `illegal_transition`，与 `create_connection` 对非 `requested` 行的回答一致），审计 `connection.request_cancelled`；行上以 `status: 'cancelled'` 表示（0005 迁移没有 `cancelled_at` 列，谁 / 何时取消看审计行）。注意 `list_connection_requests` 仍是 owner-only，member 取消后没有列出自己申请的读取能力（沿用 S2.13 的形状，未扩）。取消按钮已接（S6-C，`ConfirmTier medium`）。
+9. ~~`list_quotas`/`list_policies` 没有公开的行结构（`Policy`/`Quota` 在写侧都是 `set_policy{policy: jsonRecord}`/`set_quota{key,value}` 的不透明结构）——模型与配额页把 Quota 渲染成 key/value 表，Policy 渲染成脱敏后的 JSON 折叠块，不假设列名。~~——S6-B（C29）核对：行结构其实早已公开——`packages/shared/src/wire/governance.ts` 的 `QuotaListEntryWireSchema`（`{key, value, isDefault, updatedBy, updatedAt}`，`application/task/quotas.ts` `listQuotas`）与 `PolicyWireSchema`（`{id, actionKindTag, blastRadius, autoApprove, requesterCanApprove, setBy, createdAt, updatedAt}`，`resource-wire.ts` `toWirePolicy`），都是 `.strict()` 且被 `KERNEL_VALIDATE_RESULTS=1` 校验；内核无改动，`ModelsPage.tsx` 改为按这两个形状渲染真实列（配额：键 / 生效值（`null` = 不限）/ 默认或覆盖 / 设置人 / 时间；策略：动作种类 / 影响 / 自动批准 / 申请人可自批 / 设置人 / 时间）。
+10. `export_prov` 未在审计页接入（范围外，留给后续任务）——S6-A（C27）内核侧补了 `nodeId` 参数（与 `explain{nodeId}` 同一种无类型 id，内核按 Fact → Activity → Decision 解析），审计页"导出"可直接把当前 explain 的 id 交给它；`audit_query` 的筛选结果（一组审计行）不是溯源图，`export_prov` 不覆盖它——那一半若要导出，前端把已拿到的 `audit_query` 页序列化即可。审计页已接（S6-A：`ExplainSection` 导出 PROV-JSON，`AuditLogSection` 导出已加载的页）。
 11. ~~（S3.12）接入向导第④步"提议重分类"对刚导入的 Operation 结构性地总是 409~~——**内核侧已修复（fix/operation-revision-via-propose）**：`propose_operation` 的冲突守卫（`governance/gatekeepers/manifest.ts` 的 `isOwnProposalDraft`）过去只允许替换**同一提议者**此前通过 `propose_operation` 自己写的草稿，向导审核页每一行都是 `origin:'import'` 的 Operation（`publish_manifest` 早已把它发布成 `published`），从不满足这个条件，一律撞上 `OperationIdentityConflictError`（HTTP 409 `conflict`）。现在 `propose_operation` 对一个**已发布**的身份会开一条新的修订草稿（`version = 已发布版本 + 1`，`draftOf` 指回已发布行；已发布行本身完全不动，`find_operations`/`list_allowed_operations`/门工具解析/`getPublishedOperation` 在修订发布前继续返回它），owner 再用既有的 `publish_operation` 二次调用发布这条修订草稿——**同一事务**内把旧版本转为 `deprecated`（除非它已经被单独弃用，那时跳过、不报错），发布 Activity 的 `metadata.supersedes` 记下被替换行的 id 供 audit/explain 查询；`list_operations`/`get_gatekeeper.operations` 继续展示完整版本历史（旧版本仍可见，只是 `status` 变成 `deprecated`）。若目标此刻仍是 `origin:'import'` 且尚未 `publish_manifest` 的草稿，`propose_operation` 仍然 409（该草稿不是提议者通过 `propose_operation` 自己写的，与 I16 一致，未变）。控制台一侧未改：按钮仍然调用真实的两个 capability，把内核的原话通过 `ErrorBanner` 显示出来，行为自动跟随内核修复而改善。详见 `governance/gatekeepers/manifest.ts` 模块级注释与 `manifest.test.ts`。
 12. ~~（S3.12）目录页与接入向导都没有 Operation 调用/审批统计列~~——**已实现（feat/operation-stats-and-worker-definition-filter）**：`get_operation_stats{gatekeeperId?, days?}`（`connection` 组，`mode: observe`，`minRole: member`）注册在 `packages/shared/src/capabilities.ts`，`handler` 与 `list_operations` 同一模块（`gatekeeper-read-handlers.ts`）。返回 `{items: [{gatekeeperId, operationName, calls, approved, rejected, autoApproved, failed, lastCalledAt}]}`——**execute 类 Operation 专属**：四个分类计数来自 `action_requests` 的 `status` 列，按**当前**状态取（`governance/approval/reads.ts` 的 `getOperationStats`），不是"曾经历过"的累计决策历史；`calls` 是窗口内不限状态的总数。**observe 类 Operation（`<gate>.<op>`/`observe_operation`）未纳入**——`substrate/audit` 的 `queryAudit` 服务接口既无日期范围过滤也无 payload 路径分组，直接查 `audit_records` 表又违反该模块自己的边界（"其它模块不得直接查询其表"），扩展这个查询面超出本次范围；留作已记录的缺口而非编造近似值。`CatalogPage.tsx` 的 Operations tab 已去掉 TODO，加了调用/批准/拒绝/最近四列（独立于 `list_operations` 的 `useCapabilityList` 调用，取不到该 capability 或某一行没有匹配的 stats 时单独显示"—"，不拖垮整个列表）。
 13. **（S3.13）`get_agent_profile`/`set_agent_profile`/`get_agent_policy`/`set_agent_policy` 均由并行内核 PR 落地**——见上文"内核并行落地"一节；控制台已按契约把 UI 编完，等待该 PR 合并部署。

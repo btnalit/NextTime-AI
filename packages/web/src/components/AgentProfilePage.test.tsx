@@ -93,6 +93,46 @@ function renderPage(http: CapabilityCaller) {
 }
 
 describe('AgentProfilePage', () => {
+  it('B3: the effective panel renders gatekeeper / worker-definition ids as named RefChips from the lists it already loads', async () => {
+    const http = scriptedHttp({
+      get_agent_profile: () =>
+        profile({
+          effective: {
+            model: 'anthropic/claude',
+            enabledSkills: [],
+            enabledGatekeepers: ['gk-1'],
+            enabledWorkerDefinitions: ['wd-1'],
+            promptAddendum: '',
+            autoApproveLow: false,
+          },
+        }),
+      list_gatekeepers: () => ({
+        items: [{ id: 'gk-1', name: 'docker-prod', kind: 'http', status: 'active' }],
+      }),
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const effective = await screen.findByTestId('agent-profile-effective');
+    const gate = effective.querySelector('[data-ref-kind="gatekeeper"]');
+    expect(gate?.getAttribute('data-ref-id')).toBe('gk-1');
+    await waitFor(() => expect(gate?.textContent).toContain('docker-prod'));
+    await waitFor(() =>
+      expect(effective.querySelector('[data-ref-kind="workerDefinition"]')?.textContent).toContain(
+        'Fixer',
+      ),
+    );
+  });
+
   it('renders the effective panel and a form pre-filled from the profile', async () => {
     const http = scriptedHttp({
       get_agent_profile: () => profile({ model: 'anthropic/claude' }),
@@ -106,13 +146,13 @@ describe('AgentProfilePage', () => {
     expect(within(form).getByLabelText(/模型 Model/)).toHaveProperty('value', 'anthropic/claude');
   });
 
-  it('shows "该能力尚未上线" for the self view when get_agent_profile 404s', async () => {
+  it('renders a get_agent_profile not_found as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
     const http = scriptedHttp({
       get_agent_profile: () =>
         Promise.reject(new HttpError('capability_error', 'no handler', 'not_found')),
     });
     renderPage(http);
-    await screen.findByTestId('agent-profile-unavailable');
+    await screen.findByTestId('agent-profile-error');
   });
 
   it('save sends the full six-field state, using null for inherited/empty fields', async () => {

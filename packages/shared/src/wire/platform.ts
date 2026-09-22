@@ -219,6 +219,14 @@ export const PlatformWorkspaceWireSchema = z
     purpose: WorkspacePurposeWireSchema,
     /** ISO timestamp; `null` unless `purpose` is `ephemeral`. */
     expiresAt: z.string().nullable(),
+    /** S6 (migration core 0030): when `set_workspace_status` last disabled it; `null` while
+     *  active — and `null` on a workspace disabled before 0030, which counts as "retention
+     *  elapsed" (docs/console-completion-plan.md §12 决定 3). */
+    disabledAt: z.string().nullable(),
+    /** S6: `purge_workspace` would accept this workspace right now — disabled for 7 days (or
+     *  disabled before 0030), or an ephemeral workspace past `expiresAt`; never the platform
+     *  default workspace. The console shows the purge entry only when this is `true`. */
+    purgeable: z.boolean(),
     isDefault: z.boolean(),
     /** Active human memberships (Principals with a user, not disabled). */
     memberCount: z.number().int().nonnegative(),
@@ -227,6 +235,112 @@ export const PlatformWorkspaceWireSchema = z
   })
   .strict();
 export type PlatformWorkspaceWire = z.infer<typeof PlatformWorkspaceWireSchema>;
+
+// -------------------------------------------------------------------------------------------
+// S6 A1 / A6 (docs/console-completion-plan.md §4 "Workspace 生命周期", §5.2, §6 rows
+// `purge_workspace` / `purge_user`): the purge plane — `purged` is a workspace's terminal state
+// (rows and cascade deleted, the platform audit row kept), and a never-activated user is
+// deleted either with its workspace (edge (b)) or by `purge_user`.
+// -------------------------------------------------------------------------------------------
+
+/** Why `purge_workspace` accepts the workspace (the two preconditions of §5.2). */
+export const PurgeWorkspaceReasonWireSchema = z.enum([
+  'disabled_retention_elapsed',
+  'ephemeral_expired',
+]);
+export type PurgeWorkspaceReasonWire = z.infer<typeof PurgeWorkspaceReasonWireSchema>;
+
+/** §4 edge (a): a `service` Principal (a collector, an external runtime) still exists in the
+ *  workspace — some process out there may hold its Handle and will start failing with 401 the
+ *  moment the purge runs (leftover 41's origin). Shown in the confirmation before purging. */
+export const PurgeWarningWireSchema = z
+  .object({
+    kind: z.literal('service_handle_in_use'),
+    principalId: z.string(),
+    /** The service Principal's display name (`issue-service-handle --name`). */
+    name: z.string().nullable(),
+    /** Its Handles not yet revoked or expired at assessment time. */
+    activeHandles: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PurgeWarningWire = z.infer<typeof PurgeWarningWireSchema>;
+
+export const PurgedUserWireSchema = z.object({ id: z.string(), login: z.string() }).strict();
+export type PurgedUserWire = z.infer<typeof PurgedUserWireSchema>;
+
+/**
+ * `purge_workspace`'s result for both its modes — the preview (`confirm` omitted or `false`:
+ * nothing deleted, every field is "what would happen") and the execution (`confirm: true`,
+ * `executed: true`: every field is what happened). The console's two-step confirmation shows the
+ * preview, then sends `confirm: true`.
+ *
+ * `counts` is keyed by the workspace-scoped table the rows come from, camel-cased
+ * (`capabilityHandles`, `auditRecords`, `facts`, …), only tables that held at least one row;
+ * `totalRows` is their sum. `principalIds` / `taskIds` are for the host-side cleanup the kernel
+ * cannot do itself — each Principal's resident entry container and data directory, each Task's
+ * `workspaces/tasks/<taskId>` directory (`scripts/delete-workspace.sh`).
+ */
+export const PurgeWorkspaceResultWireSchema = z
+  .object({
+    workspaceId: z.string(),
+    name: z.string(),
+    purpose: WorkspacePurposeWireSchema,
+    status: WorkspaceStatusWireSchema,
+    reason: PurgeWorkspaceReasonWireSchema,
+    executed: z.boolean(),
+    counts: z.record(z.string(), z.number().int().nonnegative()),
+    totalRows: z.number().int().nonnegative(),
+    /** CapabilityHandles still live at assessment time — revoked first, then deleted (§4). */
+    activeHandles: z.number().int().nonnegative(),
+    warnings: z.array(PurgeWarningWireSchema),
+    /** §4 edge (b): users whose memberships were all in this workspace and who never activated
+     *  (no password, no console session, nothing else referencing them) — deleted with it. */
+    purgedUsers: z.array(PurgedUserWireSchema),
+    principalIds: z.array(z.string()),
+    taskIds: z.array(z.string()),
+  })
+  .strict();
+export type PurgeWorkspaceResultWire = z.infer<typeof PurgeWorkspaceResultWireSchema>;
+
+/** Why `purge_user` skipped one of the requested users. */
+export const PurgeUserSkipReasonWireSchema = z.enum([
+  'user_not_found',
+  /** Has a password — a real account, never purgeable (disable it instead). */
+  'activated',
+  'platform_admin',
+  /** Has logged into the console at least once (`user_sessions`). */
+  'has_sessions',
+  /** Holds a membership Principal that is not disabled — remove it first, or purge the
+   *  workspace, which cascades the user (§4 edge (b)). */
+  'active_membership',
+  /** Something else references the row (a platform audit row, a settings version); audit only
+   *  ever grows, so the user stays. */
+  'referenced',
+]);
+export type PurgeUserSkipReasonWire = z.infer<typeof PurgeUserSkipReasonWireSchema>;
+
+export const PurgeUserOutcomeWireSchema = z
+  .object({
+    userId: z.string(),
+    /** `null` when the id matched no user. */
+    login: z.string().nullable(),
+    status: z.enum(['purged', 'skipped']),
+    reason: PurgeUserSkipReasonWireSchema.optional(),
+    /** Human-readable detail for `referenced` (which table). */
+    detail: z.string().optional(),
+  })
+  .strict();
+export type PurgeUserOutcomeWire = z.infer<typeof PurgeUserOutcomeWireSchema>;
+
+/** `purge_user`: one outcome per requested id, in request order. A skipped user never fails the
+ *  batch — the console reports the reasons next to each row. */
+export const PurgeUsersResultWireSchema = z
+  .object({
+    outcomes: z.array(PurgeUserOutcomeWireSchema),
+    purgedCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PurgeUsersResultWire = z.infer<typeof PurgeUsersResultWireSchema>;
 
 // -------------------------------------------------------------------------------------------
 // P-B1 (docs/platform-admin-design.md §6.3 集成): connectors (接入包), gate instances (门实例) and

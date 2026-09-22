@@ -61,11 +61,39 @@ https://:8443 {
 	# Baseline security headers reasonable for an internal tool. No Strict-Transport-Security:
 	# this deployment's TLS is an internal/self-signed CA (see runbook), and HSTS pinning could
 	# strand a client across a future CA rotation.
+	#
+	# S6-A0 / C21 (docs/console-completion-plan.md §7 "传输层加固"): Permissions-Policy turns off
+	# every powerful browser feature the console never uses (it is a text UI over HTTP + WS). Set
+	# here, unscoped, so the Explorer bundle and every proxied response carry it too.
 	header {
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), midi=(), magnetometer=(), gyroscope=(), accelerometer=(), display-capture=(), screen-wake-lock=(), xr-spatial-tracking=(), browsing-topics=(), interest-cohort=()"
 		-Server
+	}
+
+	# S6-A0 / C21: strict Content-Security-Policy for the SPA (and, harmlessly, for the JSON the
+	# `/api/*` proxy returns). Everything the console needs ships in its own bundle
+	# (packages/web/dist — scripts, styles, the self-hosted @fontsource woff2 files), so every
+	# source is `'self'`:
+	#   - `connect-src 'self' wss:` — capability calls are same-origin `/api/*`; the WS is the
+	#     same-origin `/ws`. Per CSP3 `'self'` already matches a same-host `wss:` upgrade in every
+	#     current browser; the bare `wss:` scheme is kept for older engines that did not (it admits
+	#     any wss host, but a script that could open one would already have needed `script-src`
+	#     to let it in). No `ws:` — this site is https only, a plaintext socket never occurs.
+	#   - `font-src 'self'` — every font is a bundled woff2 file; packages/web/vite.config.ts's
+	#     `assetsInlineLimit` excludes fonts from Vite's `data:` inlining so no escape hatch is
+	#     needed here.
+	#   - `style-src 'self' 'unsafe-inline'` — the UI kit still sets a few `style={{…}}` props;
+	#     S6-A0 follow-up (§7): move them to classes and tighten this to `'self'`.
+	#   - `img-src 'self' data:` — inline SVG icons need nothing; `data:` covers any future
+	#     generated image (QR for a one-time token, a chart export) without a policy change.
+	# The Explorer bundle (below) is a third-party build this repository does not vendor, so it is
+	# excluded from this matcher and gets its own, slightly looser block on its handler.
+	@app not path /explorer/*
+	header @app {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 	}
 
 	# S3.5 / W7 (docs/development-tasks.md §S3.5; design doc §9.5) — the nine Explorer endpoints
@@ -94,6 +122,25 @@ https://:8443 {
 	# NOTE raised in the PR, not decided here: design doc §7.7 / §10.2 describe a separate
 	# `llm-proxy` service for provider traffic. Routing /llm/* to `kernel` instead of
 	# `llm-proxy` may be a documentation gap in §E8 — kept as the task doc states.
+	# S6-B (docs/console-completion-plan.md §5.4 / §6; docs/platform-admin-design.md §6.2): the
+	# second and last path that bypasses the kernel — the administrator's browser manages LLM
+	# providers straight at llm-proxy's admin endpoints, authenticated by a 5-minute platform JWT
+	# the kernel signed (`issue_llm_admin_token`; llm-proxy verifies it with config/handle.pub,
+	# packages/llm-proxy/src/admin-auth.ts). Provider keys never travel this path (the secret-write
+	# route is a 501 stub pending the maintainer decision in plan §12 末); the kernel never sees a
+	# provider record. `handle_path` strips `/api/llm-admin`, the `rewrite` re-mounts the remainder
+	# under llm-proxy's reserved `/admin` segment (`/api/llm-admin/providers` → `/admin/providers`).
+	# Placed before `@backend` and — independently of textual order — winning by Caddy's own
+	# longest-path-first route sorting over `/api/*` (verified with `caddy adapt`, see the runbook).
+	# The same `X-Requested-With: nexttime` the kernel demands on `/api/*` (§7.11 CSRF) is required
+	# here too, once at the edge and again inside llm-proxy.
+	handle_path /api/llm-admin/* {
+		@llm_admin_no_csrf not header X-Requested-With nexttime
+		respond @llm_admin_no_csrf 403
+		rewrite * /admin{uri}
+		reverse_proxy llm-proxy:8082
+	}
+
 	@backend path /api/* /ws /mcp /mcp/* /llm/*
 	handle @backend {
 		reverse_proxy kernel:8080
@@ -115,6 +162,13 @@ https://:8443 {
 	# docs/runbooks/host-explorer.md). `handle_path` strips the `/explorer` prefix before serving,
 	# matching the `--base=/explorer/` the build script passes to `vite build`.
 	handle_path /explorer/* {
+		# S6-A0 / C21: the Explorer is an unmodified upstream Vite build (or the placeholder page,
+		# which carries an inline <style>). It is scoped to the same origin — it only talks to
+		# the nine `/api/*` Explorer endpoints — but as a third-party bundle it may use inline
+		# styles, blob: workers and data: images its graph libraries generate, so this block is
+		# deliberately looser than the SPA's above and applies only under /explorer/. S6-C (host
+		# build of the bundle) verifies the built bundle against it and tightens what it can.
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 		root * /srv/explorer
 		file_server
 		try_files {path} /index.html

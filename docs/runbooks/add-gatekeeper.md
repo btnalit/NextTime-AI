@@ -34,12 +34,16 @@ base.ts`）在**门自己的进程里**按 `Operation.name` 建一个 Map（`ope
 operations`"这条路径时，两份才**保证**是同一份（因为图里导入的就是门自己吐出来的那份）。见 §6 的
 详细说明与 §9 的已知陷阱——这是本文档写作时在代码里核实到的一个真实、容易踩的坑。
 
-**两条互补的注册路径，不是二选一淘汰关系。** ①主机操作员的 CLI 路径（`bootstrap.js
+**三条互补的注册路径，不是二选一淘汰关系。** ①主机操作员的 CLI 路径（`bootstrap.js
 register-gatekeeper`，不经过任何用户/权限模型，见 `docs/runbooks/host-gatekeepers.md` §5）；
 ②面向终端用户的 capability 路径（`request_connection` 卡片 → owner `create_connection` →
-`publish_manifest` → `connect_gatekeeper` 授权，见 `docs/runbooks/host-gatekeepers.md` §10）。
-新增一个门实例本身（起服务、验证协议端点）用哪条都行；本文档默认走②，因为它同时覆盖了"给谁用"这一
-步（①需要额外手动查 `capability_grants` 表或另跑一遍连接流程）。
+`publish_manifest` → `connect_gatekeeper` 授权，见 `docs/runbooks/host-gatekeepers.md` §10）；
+③**控制台路径（S6-C 起）**：平台"集成"页与工作区"系统接入"页右上角同一个"接入一个系统 Connect a
+system"启动器——http / mcp 走平台门宿主实例（管理员建实例、凭证直达门宿主、工作区一键启用，
+P-B2a，不需要 compose 服务），ssh / cli 走打包门（页面**不假装能建**，只显示部署清单并等门
+announce），见 §4b。新增一个门实例本身（起服务、验证协议端点）用哪条都行；本文档 §4–§7 默认走②
+（它同时覆盖了"给谁用"这一步，①需要额外手动查 `capability_grants` 表或另跑一遍连接流程），
+§4b 讲③。
 
 ## 3. 前置条件
 
@@ -107,6 +111,77 @@ a concrete gate"与"Manifest format"两节；`accept-s2-ssh-gate`/`accept-s2-htt
 若目标系统走 `https` 且证书自签，见 `docs/runbooks/host-gatekeepers.md` §11.1（`GATE_TLS_CA_FILE`/
 `GATE_TLS_SERVERNAME`——**不要**用 `NODE_TLS_REJECT_UNAUTHORIZED=0`，`fix/gate-protocol-hardening`
 之后门会直接拒绝启动）。
+
+## 4b. 步骤 A'：从控制台接入——"接入一个系统"启动器（S6-C）
+
+对应 `docs/console-completion-plan.md` §5.6 / §5.9 "Launcher"。平台"集成"（`#/platform/integrations`）
+与工作区"系统接入"（`#/govern/systems`）两页右上角的主按钮都是同一个四步启动器：
+**选类型 → 连接与凭证 → 能力与策略 → 握手验证**（`packages/web/src/components/connect/
+ConnectSystemLauncher.tsx`）。按第一步选的种类分两条路：
+
+### http / mcp：门宿主实例（不需要 compose 服务）
+
+| 步 | 谁 | 页面做什么 | 内核能力 |
+|---|---|---|---|
+| 连接与凭证 | 管理员 | 在启动器里直接填 `CreateGateInstanceForm`（gate id、目标地址、凭证模式、http 的 OpenAPI 清单 URL）；`shared` 模式随后"获取 5 分钟令牌"把共享凭证**直接 POST 到门宿主**（经 caddy `/gate-host/*`，内核不经手）；然后等门宿主接管（默认 60 秒内，页面每 5 秒重查） | `create_gate_instance`、`issue_gate_host_token` |
+| 能力与策略（平台侧） | 管理员 | **启用**该实例——按钮只在 `discovered` 出现（B7；`disabled` 显示"重新启用"，`enabled` 无按钮）；若接入包（`http` / `mcp`）不是**平台预置**，页面提示并可一键设为 `platform_preset`（否则工作区在目录里看不到它，`connector_not_preset`） | `update_gate_instance{status}`、`set_connector_mode` |
+| 能力与策略（工作区侧） | owner | **在本工作区启用**（注册 Gatekeeper、导入并**发布** announce 的 Operation、写工作区链接）→ 审核分类（同接入向导第④步，`propose_operation` / `publish_operation`）→ 授予成员（成员下拉来自 `list_principals`） | `enable_gate_instance`、`connect_gatekeeper` |
+| 握手验证 | 管理员 / owner | "测试连接"（平台侧）+ 状态 / 健康 / 本工作区的门链接 | `test_gate_instance` |
+
+从**工作区页**打开时，非管理员在平台侧步骤看到"需要管理员在平台集成页创建实例"与链接，并可从
+平台目录（`list_available_gate_instances`——只含已启用且接入包为平台预置的实例）选一个已有实例
+继续；平台管理员则可在原地完成两侧。从**平台页**打开时，工作区侧步骤链接到"系统接入"页。
+
+### ssh / cli：打包门（页面只给清单，等 announce）
+
+页面显示的部署清单（`PackagedGateChecklist.tsx`）就是本文 §4 的通用 `gatekeeper-base` 服务块，
+加上 §4 样板还没有的 P-B1 **自注册三件套**（`packages/gatekeeper-base/src/announce.ts`）。
+清单原文（占位符 `<gate-id>` / `<system>` 随页面里填的 `GATE_ID` 替换）：
+
+```yaml
+  gatekeeper-<system>:
+    build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
+    secrets: [gate_token, internal_token]          # internal_token 让门 announce 到内核
+    environment:
+      GATE_TRANSPORT_KIND: ssh                     # 或 cli
+      GATE_ID: <gate-id>                           # ^[a-z0-9][a-z0-9-]{1,63}$，稳定身份
+      GATE_CONNECTOR: <system>                     # 系统专属名——不要用 ssh / cli 这两个通用名
+      GATE_SERVICE_NAME: gatekeeper-<system>
+      KERNEL_URL: http://kernel:8080
+      GATE_MANIFEST_FILE: /data/gate-manifest.json
+      GATE_PORT: "8090"
+      # ssh: GATE_SSH_HOST / GATE_SSH_USER / GATE_SSH_PORT / GATE_SSH_IDENTITY_FILE /
+      #      GATE_SSH_KNOWN_HOSTS_FILE / GATE_SSH_STRICT_HOST_KEY_CHECKING: "yes"
+    volumes:
+      - "${NEXTTIME_DATA}/gatekeepers/<system>:/data/gate"
+      - "${NEXTTIME_DATA}/secrets/<system>:/data/secrets:ro"   # 私钥 / known_hosts 只在主机 secrets 目录
+      - "./deploy/gatekeepers/<system>-manifest.json:/data/gate-manifest.json:ro"
+    networks: [control]
+    restart: unless-stopped
+```
+
+两条内核规则，光看 compose 文件猜不到：
+- `GATE_CONNECTOR` **必须是系统专属名**（`ops-host`、`backup-cli`……），不能是 `ssh` / `cli`：通用
+  种类的接入包是 `packaged: false`，`set_connector_mode` 对它拒绝 `platform_preset`
+  （`connector_mode_not_allowed`），那样的实例永远进不了工作区目录。
+- 启动后它 announce 到内核，出现在"集成 → 门实例"为**未启用 discovered**；管理员**启用**它并把该
+  接入包设为**平台预置**后，工作区 owner 才能在"系统接入"里启用（`list_available_gate_instances`
+  的 `where` 就是这两个条件）。
+
+启动器在"连接与凭证"步等门出现：管理员视角每 5 秒重查 `list_gate_instances`（所有状态），非管理员
+视角重查 `list_available_gate_instances`（只有管理员启用 + 预置之后才会出现，页面有说明）；填了
+`GATE_ID` 的话出现即自动选中，后续步骤与 http / mcp 相同（平台侧启用 → 预置 → 工作区侧启用 →
+审核 → 授予 → 握手）。
+
+### 与本文其它路径的关系
+
+- 走门宿主（http / mcp）的实例**不能**再用 §7 的 `create_connection` 接一遍——内核对指向平台目录
+  实例的 `endpoint` 拒绝 `endpoint_is_platform_gate`（STATUS 遗留 36），唯一入口是
+  `enable_gate_instance`（启动器的"在本工作区启用"）。
+- §7 / §8 的 capability 路径与接入向导仍然可用（页面上的"直接注册门"与"接入向导"两个次级按钮），
+  适合自连的、不进平台目录的门（接入包 `self_serve` 模式）。
+- 页面上一个 `requested` 的连接申请现在可以**取消**（`cancel_connection_request`，C26）：本人取消
+  自己的，owner 可取消任何；非 `requested` 状态 409。
 
 ## 5. 步骤 B：需要自定义逻辑时——写一个专属 `gatekeepers/<system>/` 包
 

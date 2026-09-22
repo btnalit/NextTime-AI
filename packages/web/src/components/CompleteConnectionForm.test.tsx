@@ -40,12 +40,31 @@ describe('CompleteConnectionForm', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
     expect(await screen.findByText('The Gatekeeper endpoint is required.')).toBeTruthy();
-    expect(
-      (screen.getByLabelText(/Gatekeeper endpoint/) as HTMLInputElement).getAttribute(
-        'aria-invalid',
-      ),
-    ).toBe('true');
+    const endpoint = screen.getByLabelText(/Gatekeeper endpoint/) as HTMLInputElement;
+    expect(endpoint.getAttribute('aria-invalid')).toBe('true');
+    // C16: with the error shown, `Field` no longer renders the hint — the control must point
+    // only at the error id, never at a `-hint` id that is not in the DOM.
+    expect(endpoint.getAttribute('aria-describedby')).toBe('cc-endpoint-error');
+    expect(document.getElementById('cc-endpoint-error')).not.toBeNull();
     expect(http.call).not.toHaveBeenCalled();
+  });
+
+  it('C15: rejects a Gatekeeper endpoint that is not a URL, on the field, before any call', async () => {
+    const http = httpWith(async () => ({}));
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    const endpoint = screen.getByLabelText(/Gatekeeper endpoint/) as HTMLInputElement;
+    // Before any submit the hint is the only description.
+    expect(endpoint.getAttribute('aria-describedby')).toBe('cc-endpoint-hint');
+
+    fireEvent.change(screen.getByLabelText(/Target system/), { target: { value: 'erp' } });
+    fireEvent.change(endpoint, { target: { value: 'gate-host:8080' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
+    expect(await screen.findByText(/endpoint must be a URL/)).toBeTruthy();
+    expect(http.call).not.toHaveBeenCalled();
+
+    fireEvent.change(endpoint, { target: { value: 'http://gate-host:8080' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
+    await waitFor(() => expect(http.call).toHaveBeenCalledTimes(1));
   });
 
   it('shows the credentials box only for connected_account, and requires it there', async () => {

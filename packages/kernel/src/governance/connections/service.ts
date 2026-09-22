@@ -11,6 +11,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import {
   CONNECTION_REQUEST_ROW_COLUMNS,
@@ -252,6 +253,82 @@ export async function completeConnection(
     skippedOperationNames: imported.skipped.map((entry) => entry.name),
     connectionRequest,
   };
+}
+
+// -------------------------------------------------------------------------------------------
+// cancelConnectionRequest — `cancel_connection_request(connectionRequestId)` (S6-A C26,
+// docs/console-completion-plan.md §5.6 / §6; S2.13's own "known deviation"): the `requested →
+// cancelled` edge of `CONNECTION_REQUEST_TRANSITIONS` this module's migration (governance/0005)
+// already reserved — "a future task can wire a `cancel_connection_request` capability onto
+// without a further migration". Same lock → transition → conditional-UPDATE discipline as
+// `completeConnection`; the row's `completed_*` columns stay null (0005's CHECK), so the wire row
+// signals cancellation through `status` alone (there is no `cancelled_at` column — the
+// `connection.request_cancelled` audit row carries who and when). No outbox event: the shared
+// event vocabulary (packages/shared/src/events.ts) has no `ConnectionCancelled` type and nothing
+// consumes one yet — the audit row is the durable record.
+// -------------------------------------------------------------------------------------------
+
+export interface CancelConnectionRequestInput {
+  readonly connectionRequestId: string;
+  readonly cancelledBy: string;
+}
+
+/**
+ * Throws `ConnectionRequestNotFoundError` (404) when the id does not resolve in this workspace,
+ * `IllegalTransition` (409) when the row is not currently `requested` — a completed request has
+ * a registered Gatekeeper behind it and cannot be un-done here; an already-cancelled one is not
+ * silently re-cancelled either, so a stale button press is visible as such. Who may call this
+ * (the requester, or the workspace owner) is `application/gateway/connection-handlers.ts`'s
+ * check, made on the row it reads first.
+ */
+export async function cancelConnectionRequest(
+  client: PoolClient,
+  workspaceId: string,
+  input: CancelConnectionRequestInput,
+): Promise<ConnectionRequestRow> {
+  const locked = await client.query(
+    `select ${CONNECTION_REQUEST_ROW_COLUMNS} from connection_requests
+     where workspace_id = $1 and id = $2
+     for update`,
+    [workspaceId, input.connectionRequestId],
+  );
+  const existing = locked.rows[0] ? mapConnectionRequestRow(locked.rows[0]) : null;
+  if (!existing) {
+    throw new ConnectionRequestNotFoundError(workspaceId, input.connectionRequestId);
+  }
+  // I6: throws IllegalTransition unless `existing.status` is `requested`.
+  const nextStatus = transition(CONNECTION_REQUEST_TRANSITIONS, existing.status, 'cancel');
+
+  const result = await client.query(
+    `update connection_requests
+     set status = $3
+     where workspace_id = $1 and id = $2 and status = 'requested'
+     returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
+    [workspaceId, existing.id, nextStatus],
+  );
+  const row = result.rows[0];
+  // Unreachable while the row lock above is held — the conditional-UPDATE belt to the lock's
+  // braces, same as `completeConnection`.
+  if (!row) {
+    throw new Error('cancelConnectionRequest: connection request left `requested` under lock');
+  }
+  const cancelled = mapConnectionRequestRow(row);
+
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: input.cancelledBy,
+    action: 'connection.request_cancelled',
+    resourceType: 'connection_request',
+    resourceId: cancelled.id,
+    payload: {
+      resultingStatus: cancelled.status,
+      kind: cancelled.kind,
+      target: cancelled.target,
+      requestedBy: cancelled.requestedBy,
+    },
+  });
+
+  return cancelled;
 }
 
 // -------------------------------------------------------------------------------------------

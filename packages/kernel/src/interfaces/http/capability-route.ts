@@ -4,7 +4,11 @@ import {
   GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
-import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import {
+  ChatArchivedError,
+  ChatNotFoundError,
+  TurnAlreadyRunningError,
+} from '../../application/chat/index.js';
 import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
 // application/gateway/index.ts's curated public surface (adding them there is a one-line change
@@ -83,7 +87,11 @@ import {
   WorkerDefinitionNotPublishedError,
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
-import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
+import {
+  ActionRequestNotFoundError,
+  ApprovalReasonRequiredError,
+  ApprovalScopeError,
+} from '../../governance/approval/index.js';
 import {
   GrantNotFoundError,
   HandleIssuanceError,
@@ -184,6 +192,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof TurnAlreadyRunningError) {
     return { status: 409, code: 'turn_already_running', message: err.message };
   }
+  // S6-A: an archived Chat takes no new Turn (application/chat/service.ts `ChatArchivedError`).
+  if (err instanceof ChatArchivedError) {
+    return { status: 409, code: 'chat_archived', message: err.message };
+  }
   if (err instanceof ChatNotFoundError) {
     return { status: 404, code: 'chat_not_found', message: err.message };
   }
@@ -253,6 +265,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // request itself is well-formed, the row's *state* just does not allow it right now).
   if (err instanceof ApprovalScopeError) {
     return { status: 403, code: 'forbidden', message: err.message };
+  }
+  // S6-A / C25 (docs/console-completion-plan.md §5.8, §12 item 6): `approve` on a high-blast-radius
+  // ActionRequest without a reason — a well-formed request missing a field the row's own blast
+  // radius makes mandatory, so a 400 with its own code (the console requires the field too).
+  if (err instanceof ApprovalReasonRequiredError) {
+    return { status: 400, code: err.code, message: err.message };
   }
   if (
     err instanceof ActionRequestNotFoundError ||

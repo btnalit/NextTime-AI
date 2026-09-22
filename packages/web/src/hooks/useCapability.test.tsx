@@ -199,4 +199,79 @@ describe('useCapabilityList', () => {
     );
     expect(caller.calls[1]).toMatchObject({ name: 'list_gatekeepers', params: { cursor: 'c1' } });
   });
+
+  it('C2: a push-triggered reload re-walks every page the reader had loaded — the row count never shrinks', async () => {
+    const pages: Record<string, { items: number[]; nextCursor?: string }> = {
+      first: { items: [1, 2], nextCursor: 'c1' },
+      c1: { items: [3, 4], nextCursor: 'c2' },
+      c2: { items: [5] },
+    };
+    const caller = scriptedCaller([
+      () => Promise.resolve(pages.first),
+      () => Promise.resolve(pages.c1),
+      // The reload: page one again, then the cursor page it must follow to keep 4 rows.
+      () => Promise.resolve({ items: [1, 2], nextCursor: 'c1' }),
+      () => Promise.resolve({ items: [3, 4], nextCursor: 'c2' }),
+    ]);
+    const pushes = pushSourceWithUpdated();
+    const { result } = renderHook(
+      () =>
+        useCapabilityList<number>(
+          caller,
+          'list_action_requests',
+          { limit: 2 },
+          {
+            pushes,
+            reloadOn: ['actionUpdated'],
+          },
+        ),
+      { wrapper: PermissionsProvider },
+    );
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    await act(async () => {
+      await result.current.loadMore();
+    });
+    expect(result.current.state.status === 'ready' && result.current.state.data.items).toEqual([
+      1, 2, 3, 4,
+    ]);
+
+    act(() => pushes.emit({ id: 'ar-1', status: 'approved' }));
+    await waitFor(() =>
+      expect(result.current.state.status === 'ready' && result.current.state.refreshing).toBe(
+        false,
+      ),
+    );
+    expect(result.current.state.status === 'ready' && result.current.state.data).toEqual({
+      items: [1, 2, 3, 4],
+      nextCursor: 'c2',
+    });
+    // Reload = first page + one cursor follow-up, with the original params carried along.
+    expect(caller.calls.slice(2)).toEqual([
+      { name: 'list_action_requests', params: { limit: 2 } },
+      { name: 'list_action_requests', params: { limit: 2, cursor: 'c1' } },
+    ]);
+    // `loadMore` still appends from the kept cursor.
+    expect(result.current.state.status === 'ready' && result.current.state.data.nextCursor).toBe(
+      'c2',
+    );
+  });
+
+  it('C2: a reload of a single-page list is still one call', async () => {
+    const caller = scriptedCaller([
+      () => Promise.resolve({ items: ['a'] }),
+      () => Promise.resolve({ items: ['a', 'b'] }),
+    ]);
+    const { result } = renderHook(() => useCapabilityList<string>(caller, 'list_grants'), {
+      wrapper: PermissionsProvider,
+    });
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.state.status === 'ready' && result.current.state.data.items).toEqual([
+      'a',
+      'b',
+    ]);
+    expect(caller.calls).toHaveLength(2);
+  });
 });

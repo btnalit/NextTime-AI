@@ -19,14 +19,18 @@ export {
   DEFAULT_AUDIT_QUERY_LIMIT,
   MAX_AUDIT_ACTION_STATS_DAYS,
   MAX_AUDIT_QUERY_LIMIT,
+  decodeAuditCursor,
+  encodeAuditCursor,
   queryAudit,
   queryAuditActionOperationStats,
+  queryAuditPage,
   writeAudit,
 } from './writer.js';
 export type {
   AuditActionOperationStatsFilter,
   AuditActionOperationStatsRow,
   AuditQueryFilter,
+  AuditQueryPage,
   AuditRecordInput,
   AuditRecordRow,
 } from './writer.js';
@@ -35,6 +39,7 @@ export { reconstruct } from './reconstruct.js';
 export type { ReconstructInput, ReconstructResult } from './reconstruct.js';
 
 export {
+  DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS,
   DEFAULT_OUTBOX_STUCK_THRESHOLD_MS,
   INVARIANT_CHECK_IDS,
   renderInvariantMetricsPrometheus,

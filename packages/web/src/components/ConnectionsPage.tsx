@@ -1,17 +1,22 @@
+import type { AvailableGateInstanceWire } from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useResource } from '../hooks/useResource.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
+  type CancelConnectionRequestResult,
   type ConnectionRequestRow,
   type CreateConnectionResult,
   type GraphObjectRow,
+  cancelConnectionRequestMessage,
   gatekeeperFromObject,
   operationFromObject,
   searchItems,
 } from '../lib/connections.js';
-import { isForbiddenError } from '../lib/errors.js';
+import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
+import { HttpError } from '../lib/http-client.js';
 import { statusValues } from '../lib/status-tone.js';
 import { AvailableGateInstancesSection } from './AvailableGateInstancesSection.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
@@ -19,7 +24,9 @@ import { GatekeeperDetailDrawer } from './GatekeeperDetailDrawer.js';
 import { OnboardingWizard } from './OnboardingWizard.js';
 import { GatekeeperCard } from './RegisteredSystemsSection.js';
 import { RequestConnectionForm } from './RequestConnectionForm.js';
+import { ConnectSystemLauncher } from './connect/ConnectSystemLauncher.js';
 import { Button } from './ui/Button.js';
+import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -37,6 +44,10 @@ export interface ConnectionsPageProps {
    *  route-addressable so a link can deep-link straight into it). */
   readonly selectedGatekeeperId?: string;
   readonly onSelectGatekeeper?: (gatekeeperId: string | null) => void;
+  /** S6-C: `session.user?.platformRole === 'admin'` (routes.tsx) — lets the launcher create /
+   *  enable the platform instance in place and the registered-system cards link to the platform
+   *  集成 page. `false` (an apiKey session, a plain member) shows the "需要管理员" notices instead. */
+  readonly platformAdmin?: boolean;
 }
 
 type RequestFilter = 'requested' | 'all' | 'completed' | 'cancelled';
@@ -44,7 +55,8 @@ type DrawerMode =
   | { readonly kind: 'closed' }
   | { readonly kind: 'request' }
   | { readonly kind: 'complete'; readonly request: ConnectionRequestRow | null }
-  | { readonly kind: 'wizard' };
+  | { readonly kind: 'wizard' }
+  | { readonly kind: 'launcher' };
 
 const REQUEST_FILTERS: readonly RequestFilter[] = [
   'requested',
@@ -63,16 +75,26 @@ const REQUEST_FILTERS: readonly RequestFilter[] = [
  * object type (kernel gap). S3.11/S3.14 addition: each card's "Health & operations" action opens
  * `GatekeeperDetailDrawer` (`get_gatekeeper`, new) — the rest of this page (including its file
  * name) is otherwise untouched by that task; see the PR report for why it was not renamed/rewritten.
+ *
+ * S6-C (docs/console-completion-plan.md §5.6): the page's one primary action is now "接入一个系统
+ * Connect a system" — `ConnectSystemLauncher`, the same launcher the platform 集成 page opens
+ * (§5.9 principle 1: one ink button per page; the older 接入向导 / quick registration / request
+ * buttons stay as secondaries). The platform catalog (`list_available_gate_instances`) is read
+ * here once and shared by the catalog section, the launcher and the registered-system cards (the
+ * gatekeeper → platform-instance link). C26: a `requested` row gets 取消 Cancel
+ * (`cancel_connection_request`, medium-tier confirm; the returned row is spliced in place).
  */
 export function ConnectionsPage({
   http,
   selectedGatekeeperId,
   onSelectGatekeeper,
+  platformAdmin = false,
 }: ConnectionsPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
   const [filter, setFilter] = useState<RequestFilter>('requested');
   const [drawer, setDrawer] = useState<DrawerMode>({ kind: 'closed' });
+  const [cancelling, setCancelling] = useState<ConnectionRequestRow | null>(null);
 
   const loadRequests = useCallback(
     () =>
@@ -106,6 +128,12 @@ export function ConnectionsPage({
     [http],
   );
   const operations = useResource(loadOperations);
+  const available = useCapabilityList<AvailableGateInstanceWire>(
+    http,
+    'list_available_gate_instances',
+    {},
+  );
+  const availableRows = available.state.status === 'ready' ? available.state.data.items : [];
 
   const requestRows = useMemo(() => {
     const rows = requests.state.status === 'ready' ? requests.state.data : [];
@@ -137,29 +165,61 @@ export function ConnectionsPage({
     reloadRegistry();
   }
 
+  /** C26: `cancel_connection_request` answers with the row itself (`status: 'cancelled'`) — spliced
+   *  in place; a mapped refusal (403 not yours / 409 no longer requested) becomes bilingual copy,
+   *  anything else is the kernel's own message. Thrown so `ConfirmTier` keeps the card open. */
+  async function cancelRequest(row: ConnectionRequestRow): Promise<void> {
+    try {
+      const cancelled = await http.call<CancelConnectionRequestResult>(
+        'cancel_connection_request',
+        { connectionRequestId: row.id },
+      );
+      requests.mutate((rows) => rows.map((item) => (item.id === cancelled.id ? cancelled : item)));
+      toast.push({ tone: 'ok', title: '已取消申请 Connection request cancelled' });
+    } catch (err) {
+      const described = describeError(err);
+      const mapped = cancelConnectionRequestMessage(described.code);
+      if (described.code === 'illegal_transition') void requests.reload();
+      // Keep the wire code on the rethrow so `ErrorBanner` still titles it (`CODE_TITLES`).
+      throw mapped ? new HttpError('capability_error', mapped, described.code) : err;
+    }
+  }
+
   const canCreate = !permissions.isDenied('create_connection');
 
   return (
     <div className="page">
       <PageHeader
         title="系统接入 Systems"
-        description="Bring systems in behind a Gatekeeper, publish their operations, and grant gates to people's entry agents."
+        description="把系统接到门后面、发布它的 Operation、把门授予成员的入口 agent。 Bring systems in behind a Gatekeeper, publish their operations, and grant gates to people's entry agents."
+        breadcrumb={[{ label: '治理 Govern' }, { label: '系统接入 Systems' }]}
+        primaryAction={
+          <Button
+            variant="primary"
+            icon="plus"
+            onClick={() => setDrawer({ kind: 'launcher' })}
+            data-testid="connect-system-button"
+          >
+            接入一个系统 Connect a system
+          </Button>
+        }
         actions={
           <>
-            <Button variant="secondary" icon="plus" onClick={() => setDrawer({ kind: 'request' })}>
-              Request connection
+            <Button variant="secondary" icon="inbox" onClick={() => setDrawer({ kind: 'request' })}>
+              申请连接 Request connection
             </Button>
             {canCreate ? (
               <Button
                 variant="secondary"
                 icon="connections"
                 onClick={() => setDrawer({ kind: 'complete', request: null })}
+                data-testid="register-gate-button"
               >
-                Connect a system
+                直接注册门 Register a gate
               </Button>
             ) : null}
             {canCreate ? (
-              <Button variant="primary" icon="grid" onClick={() => setDrawer({ kind: 'wizard' })}>
+              <Button variant="secondary" icon="grid" onClick={() => setDrawer({ kind: 'wizard' })}>
                 接入向导 Onboarding wizard
               </Button>
             ) : null}
@@ -249,23 +309,55 @@ export function ConnectionsPage({
                   </>
                 }
                 trailing={
-                  row.status === 'requested' && canCreate ? (
-                    <Button
-                      variant="primary"
-                      size="s"
-                      onClick={() => setDrawer({ kind: 'complete', request: row })}
-                    >
-                      Complete
-                    </Button>
+                  row.status === 'requested' ? (
+                    <span className="row-wrap">
+                      {canCreate ? (
+                        <Button
+                          variant="secondary"
+                          size="s"
+                          onClick={() => setDrawer({ kind: 'complete', request: row })}
+                        >
+                          完成 Complete
+                        </Button>
+                      ) : null}
+                      <Button
+                        variant="ghost"
+                        size="s"
+                        onClick={() => setCancelling(row)}
+                        data-testid={`cancel-request-${row.id}`}
+                      >
+                        取消 Cancel
+                      </Button>
+                    </span>
                   ) : undefined
                 }
               />
             ))}
           </DataList>
         )}
+        {cancelling ? (
+          <ConfirmTier
+            tier="medium"
+            open
+            title="取消连接申请 Cancel this connection request"
+            description="申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。 The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any."
+            target={`${cancelling.kind} · ${cancelling.target}`}
+            confirmLabel="取消申请 Cancel request"
+            cancelLabel="保留 Keep"
+            danger
+            onConfirm={() => cancelRequest(cancelling)}
+            onClose={() => setCancelling(null)}
+            testId="cancel-request-confirm"
+          />
+        ) : null}
       </section>
 
-      <AvailableGateInstancesSection http={http} onEnabled={reloadRegistry} canEnable={canCreate} />
+      <AvailableGateInstancesSection
+        http={http}
+        available={available}
+        onEnabled={reloadRegistry}
+        canEnable={canCreate}
+      />
 
       <section className="section" aria-labelledby="registered-systems-title">
         <div className="section-header">
@@ -323,6 +415,10 @@ export function ConnectionsPage({
                 onChanged={reloadRegistry}
                 onForbidden={permissions.markDenied}
                 onOpenDetail={onSelectGatekeeper}
+                platformInstance={
+                  availableRows.find((row) => row.gatekeeperId === gatekeeper.id) ?? null
+                }
+                platformAdmin={platformAdmin}
               />
             ))}
             {gatekeepers.state.data.length >= 50 ? (
@@ -356,9 +452,11 @@ export function ConnectionsPage({
         open={drawer.kind === 'complete'}
         onClose={() => setDrawer({ kind: 'closed' })}
         title={
-          drawer.kind === 'complete' && drawer.request ? 'Complete connection' : 'Connect a system'
+          drawer.kind === 'complete' && drawer.request
+            ? '完成连接 Complete connection'
+            : '直接注册门 Register a gate'
         }
-        subtitle="Registers the Gatekeeper, imports its manifest as drafts, and stores the credential in the gate only."
+        subtitle="注册一个已在跑的门实例、把清单导入为草稿；凭证只存在门里。 Registers the Gatekeeper, imports its manifest as drafts, and stores the credential in the gate only."
         wide
         testId="complete-connection-drawer"
       >
@@ -369,6 +467,36 @@ export function ConnectionsPage({
             request={drawer.request}
             onDone={handleCompleted}
             onCancel={() => setDrawer({ kind: 'closed' })}
+          />
+        ) : null}
+      </Drawer>
+
+      <Drawer
+        open={drawer.kind === 'launcher'}
+        onClose={() => setDrawer({ kind: 'closed' })}
+        title="接入一个系统 Connect a system"
+        subtitle="选类型 → 连接与凭证 → 能力与策略 → 握手验证"
+        wide
+        testId="connect-system-drawer"
+      >
+        {drawer.kind === 'launcher' ? (
+          <ConnectSystemLauncher
+            http={http}
+            origin="workspace"
+            platformAdmin={platformAdmin}
+            canEnable={canCreate}
+            available={availableRows}
+            onEnabled={() => {
+              void available.reload();
+              reloadRegistry();
+            }}
+            onCancel={() => setDrawer({ kind: 'closed' })}
+            onFinished={(result) => {
+              setDrawer({ kind: 'closed' });
+              void available.reload();
+              reloadRegistry();
+              if (result.gatekeeperId) onSelectGatekeeper?.(result.gatekeeperId);
+            }}
           />
         ) : null}
       </Drawer>

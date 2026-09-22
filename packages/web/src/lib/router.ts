@@ -27,10 +27,12 @@ export type NavSection =
   | 'catalog'
   | 'models'
   | 'audit'
+  | 'graph'
   | 'platformOverview'
   | 'platformUsers'
   | 'platformWorkspaces'
   | 'platformIntegrations'
+  | 'platformModels'
   | 'platformSettings'
   | 'platformAudit';
 
@@ -39,6 +41,7 @@ export type CatalogTab = (typeof CATALOG_TAB_VALUES)[number];
 
 export type Route =
   | { readonly kind: 'login' }
+  | { readonly kind: 'graph' }
   | { readonly kind: 'chats' }
   | { readonly kind: 'chat'; readonly chatId: string }
   | { readonly kind: 'approvals'; readonly actionRequestId?: string }
@@ -54,7 +57,8 @@ export type Route =
   | { readonly kind: 'platformOverview' }
   | { readonly kind: 'platformUsers' }
   | { readonly kind: 'platformWorkspaces' }
-  | { readonly kind: 'platformIntegrations' }
+  | { readonly kind: 'platformIntegrations'; readonly gateId?: string }
+  | { readonly kind: 'platformModels' }
   | { readonly kind: 'platformSettings' }
   | { readonly kind: 'platformAudit' };
 
@@ -69,8 +73,14 @@ function isCatalogTab(value: string | undefined): value is CatalogTab {
  *  see this module's doc comment. */
 const DEFAULT_ROUTE: Route = { kind: 'chats' };
 
-export function routeFromHash(hash: string): Route {
+export function routeFromHash(fullHash: string): Route {
+  // S6-A / S6-D: a `?query` after the path belongs to the page (`#/platform/workspaces?residue=1`
+  // read by PlatformWorkspacesPage, `#/govern/audit?nodeId=…` by AuditPage, `#/work/graph?objectId=…`
+  // by GraphPage); routing matches the path part only.
+  const query = fullHash.indexOf('?');
+  const hash = query === -1 ? fullHash : fullHash.slice(0, query);
   if (hash === '#/login') return { kind: 'login' };
+  if (hash === '#/work/graph') return { kind: 'graph' };
 
   const chat = /^#\/work\/chats\/(.+)$/.exec(hash);
   if (chat?.[1]) return { kind: 'chat', chatId: decodeURIComponent(chat[1]) };
@@ -113,7 +123,15 @@ export function routeFromHash(hash: string): Route {
   if (hash === '#/platform/overview') return { kind: 'platformOverview' };
   if (hash === '#/platform/users') return { kind: 'platformUsers' };
   if (hash === '#/platform/workspaces') return { kind: 'platformWorkspaces' };
-  if (hash === '#/platform/integrations') return { kind: 'platformIntegrations' };
+  // S6-C: `#/platform/integrations/<gateId>` opens the 门实例 tab with that instance's drawer.
+  const integrations = /^#\/platform\/integrations(?:\/(.+))?$/.exec(hash);
+  if (integrations) {
+    return integrations[1]
+      ? { kind: 'platformIntegrations', gateId: decodeURIComponent(integrations[1]) }
+      : { kind: 'platformIntegrations' };
+  }
+  // S6-B: platform-level 模型与供应商 (providers live in llm-proxy; the page talks to /api/llm-admin).
+  if (hash === '#/platform/models') return { kind: 'platformModels' };
   if (hash === '#/platform/settings') return { kind: 'platformSettings' };
   if (hash === '#/platform/audit') return { kind: 'platformAudit' };
 
@@ -151,10 +169,13 @@ export const hrefs = {
   catalog: (tab: CatalogTab = 'operations') => `#/govern/catalog/${tab}`,
   models: () => '#/govern/models',
   audit: () => '#/govern/audit',
+  graph: () => '#/work/graph',
   platformOverview: () => '#/platform/overview',
   platformUsers: () => '#/platform/users',
   platformWorkspaces: () => '#/platform/workspaces',
   platformIntegrations: () => '#/platform/integrations',
+  platformGateInstance: (gateId: string) => `#/platform/integrations/${encodeURIComponent(gateId)}`,
+  platformModels: () => '#/platform/models',
   platformSettings: () => '#/platform/settings',
   platformAudit: () => '#/platform/audit',
 } as const;

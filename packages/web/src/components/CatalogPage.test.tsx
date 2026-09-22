@@ -7,6 +7,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import type { CatalogTab } from '../lib/router.js';
 import { CatalogPage } from './CatalogPage.js';
+import { ToastProvider } from './ui/Toast.js';
 
 afterEach(cleanup);
 
@@ -39,7 +40,9 @@ function Harness({
 function renderPage(http: CapabilityCaller, initialTab?: CatalogTab) {
   return render(
     <PermissionsProvider>
-      <Harness http={http} initialTab={initialTab} />
+      <ToastProvider>
+        <Harness http={http} initialTab={initialTab} />
+      </ToastProvider>
     </PermissionsProvider>,
   );
 }
@@ -62,13 +65,13 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('tab', { name: 'Skills' }).getAttribute('aria-selected')).toBe('true');
   });
 
-  it('shows "该能力尚未上线" for a tab whose capability is not deployed yet (404 not_found)', async () => {
+  it('renders a not_found from a tab capability as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
     const http = scriptedHttp({
       list_operations: () =>
         Promise.reject(new HttpError('capability_error', 'no handler', 'not_found')),
     });
     renderPage(http);
-    await screen.findByTestId('catalog-unavailable');
+    await screen.findByTestId('catalog-error');
   });
 
   it('Operations: Publish and Deprecate call the right capability and refresh the list', async () => {
@@ -91,11 +94,30 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: 'Publish' }));
+    fireEvent.click(within(row).getByRole('button', { name: /Publish/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
     await waitFor(() =>
       expect(http.calls.filter((c) => c.name === 'list_operations')).toHaveLength(2),
     );
+  });
+
+  it('C14: a failed Publish toasts the kernel message, not only the generic title', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft' }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'operation docker.restart is not a draft', 'conflict'),
+        ),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByRole('button', { name: /Publish/ }));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('Could not update docker.restart');
+    expect(toast.textContent).toContain('operation docker.restart is not a draft');
   });
 
   it('Operations: renders usage counters from get_operation_stats, degrading to "—" for a row with no matching stats', async () => {
@@ -158,7 +180,125 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'workers');
     const row = await screen.findByTestId('catalog-row');
-    expect(within(row).queryByRole('button', { name: 'Publish' })).toBeNull();
-    expect(within(row).getByRole('button', { name: 'Deprecate' })).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: /Publish/ })).toBeNull();
+    expect(within(row).getByRole('button', { name: /Deprecate/ })).toBeTruthy();
+  });
+});
+
+/** S6-A A2 (console-completion-plan §5.3): the editors are reachable from each tab and the
+ *  page refreshes its list once a draft is done. Submit shapes are covered per editor in
+ *  `components/catalog/*.test.tsx`. */
+describe('CatalogPage editors (S6-A A2)', () => {
+  it('Skills: "New draft" opens the SKILL.md editor; proposing then Done refreshes list_skills', async () => {
+    let listCalls = 0;
+    const http = scriptedHttp({
+      list_skills: () => {
+        listCalls += 1;
+        return { items: [] };
+      },
+      propose_skill: () => ({ id: 'sk-1', version: 1, status: 'draft', name: 'restart-web' }),
+    });
+    renderPage(http, 'skills');
+    await screen.findByTestId('catalog-empty');
+    fireEvent.click(screen.getByTestId('skills-new-draft'));
+    const drawer = await screen.findByTestId('skill-editor-drawer');
+    fireEvent.change(within(drawer).getByLabelText(/^名称 name/), {
+      target: { value: 'restart-web' },
+    });
+    fireEvent.change(within(drawer).getByLabelText(/^描述 description/), {
+      target: { value: 'Restart web' },
+    });
+    fireEvent.change(within(drawer).getByLabelText(/SKILL.md 正文/), {
+      target: { value: '# Steps' },
+    });
+    fireEvent.click(within(drawer).getByTestId('skill-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(http.calls.find((c) => c.name === 'propose_skill')?.params).toEqual({
+      skill: { name: 'restart-web', description: 'Restart web', markdown: '# Steps' },
+    });
+    // One reload when the draft is proposed (the list now holds it), one more on Done.
+    await waitFor(() => expect(listCalls).toBe(2));
+    fireEvent.click(within(drawer).getByTestId('draft-done'));
+    await waitFor(() => expect(listCalls).toBe(3));
+    await waitFor(() => expect(screen.queryByTestId('skill-editor-drawer')).toBeNull());
+  });
+
+  it('Skills: "Edit as new draft" pre-fills the row (body excluded) and says the result is a new Skill', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-1',
+            version: 3,
+            status: 'published',
+            name: 'restart-web',
+            description: 'Restart web',
+            applicable: { gateKinds: ['http'] },
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'skills');
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('skill-editor-drawer');
+    expect(within(drawer).getByTestId('skill-copy-notice').textContent).toContain('new');
+    expect((within(drawer).getByLabelText(/^名称 name/) as HTMLInputElement).value).toBe(
+      'restart-web',
+    );
+    expect((within(drawer).getByLabelText(/gateKinds/) as HTMLInputElement).value).toBe('http');
+    expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('Workers: "Edit as new draft version" proposes under the same definitionId with the kind locked', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 2,
+            kind: 'entry',
+            status: 'published',
+            definition: { name: 'Entry', systemPrompt: 'Be helpful.', capabilities: ['search'] },
+          },
+        ],
+      }),
+      list_models: () => ({ items: [] }),
+      propose_worker_definition: () => ({ id: 'wd-1', version: 3, status: 'draft' }),
+    });
+    renderPage(http, 'workers');
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    expect((within(drawer).getByTestId('wd-kind') as HTMLSelectElement).disabled).toBe(true);
+    expect((within(drawer).getByTestId('wd-kind') as HTMLSelectElement).value).toBe('entry');
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(http.calls.find((c) => c.name === 'propose_worker_definition')?.params).toEqual({
+      definitionId: 'wd-1',
+      kind: 'entry',
+      definition: { systemPrompt: 'Be helpful.', name: 'Entry', capabilities: ['search'] },
+    });
+  });
+
+  it('hides "New draft" once propose_* has been refused for the session', async () => {
+    const http = scriptedHttp({
+      list_procedures: () => ({ items: [] }),
+      propose_procedure: () =>
+        Promise.reject(new HttpError('capability_error', 'builder required', 'forbidden')),
+    });
+    renderPage(http, 'procedures');
+    await screen.findByTestId('catalog-empty');
+    fireEvent.click(screen.getByTestId('procedures-new-draft'));
+    const drawer = await screen.findByTestId('procedure-editor-drawer');
+    fireEvent.change(within(drawer).getByLabelText(/^名称 name/), { target: { value: 'Deploy' } });
+    fireEvent.change(within(drawer).getByLabelText(/^描述 description/), {
+      target: { value: 'Deploy web' },
+    });
+    fireEvent.click(within(drawer).getByTestId('procedure-submit'));
+    const banner = await within(drawer).findByTestId('procedure-editor-error');
+    expect(banner.getAttribute('data-error-code')).toBe('forbidden');
+    fireEvent.click(within(drawer).getByRole('button', { name: /Cancel/ }));
+    await waitFor(() => expect(screen.queryByTestId('procedures-new-draft')).toBeNull());
   });
 });

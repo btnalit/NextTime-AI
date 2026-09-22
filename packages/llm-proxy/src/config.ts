@@ -49,6 +49,11 @@ const ProviderModelSchema = z
   .object({
     id: z.string().min(1),
     cost: ModelCostSchema.optional(),
+    /** S6-B: optional display name — surfaces in the console and as pi's own optional
+     *  `ModelDefinition.name` in `models.json` (verified against pi 0.84.4's
+     *  `packages/coding-agent/src/core/model-config.ts` `ModelDefinitionSchema`, where `name` is
+     *  `Type.Optional(Type.String())`). Absent = the id is the name. */
+    display_name: z.string().min(1).optional(),
   })
   .strict();
 export type ProviderModel = z.infer<typeof ProviderModelSchema>;
@@ -85,7 +90,7 @@ export type ProviderAuth = z.infer<typeof ProviderAuthSchema>;
  * inbound path this proxy actually receives is already correct without any per-kind branching
  * here.
  */
-const ProviderConfigSchema = z
+export const ProviderConfigSchema = z
   .object({
     api: z.enum(['openai-completions', 'openai-responses', 'anthropic-messages']),
     upstream_base_url: z.string().url(),
@@ -94,9 +99,25 @@ const ProviderConfigSchema = z
     api_key_env: z.string().min(1),
     auth: ProviderAuthSchema,
     models: z.array(ProviderModelSchema).min(1),
+    /** S6-B: optional display name for the console; absent = the provider name. */
+    display_name: z.string().min(1).optional(),
   })
   .strict();
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
+
+/**
+ * S6-B: provider names are the first path segment of every inbound route (`/<provider>/v1/*`),
+ * and the admin API (`admin-api.ts`) now lives under `/admin/*` on the same listener — so a
+ * provider literally named `admin` would shadow it (and `healthz` already is a route). Refused at
+ * load time for the yaml (below) and at write time for the store (provider-store.ts) rather than
+ * silently shadowed; the same list is published as `LLM_PROVIDER_RESERVED_IDS` in
+ * `@nexttime/shared`'s wire/llm-admin.ts so the console can refuse it before the round trip.
+ */
+export const RESERVED_PROVIDER_NAMES: ReadonlySet<string> = new Set([
+  'admin',
+  'healthz',
+  'internal',
+]);
 /** One of the three `api` kinds this proxy understands — verified against pi 0.84.4's own
  *  provider implementations (see `ProviderAuthSchema`'s doc comment above for the exact files). */
 export type ProviderApiKind = ProviderConfig['api'];
@@ -142,6 +163,13 @@ export async function loadProvidersFile(filePath: string): Promise<LlmProvidersF
     throw new LlmProxyConfigError(
       `llm-providers.yaml at "${filePath}" does not match the expected schema: ${result.error.message}`,
     );
+  }
+  for (const name of Object.keys(result.data.providers)) {
+    if (RESERVED_PROVIDER_NAMES.has(name)) {
+      throw new LlmProxyConfigError(
+        `llm-providers.yaml at "${filePath}": provider name "${name}" is reserved for this proxy's own routes`,
+      );
+    }
   }
   return result.data;
 }
@@ -197,6 +225,24 @@ export interface LlmProxyConfig {
    *  tens of seconds mid-stream while the model "thinks". */
   readonly upstreamIdleTimeoutMs: number;
   readonly upstreamConnectTimeoutMs: number;
+  /** S6-B (docs/console-completion-plan.md §5.4): the console-managed provider store —
+   *  `providers.json` in this service's own read-write state mount (`${NEXTTIME_DATA}/llm-proxy`
+   *  → `/data/state`, docker-compose.yml). The yaml above stays the operator-managed base; store
+   *  entries extend / override it by name (provider-store.ts, catalog.ts). */
+  readonly providerStoreFile: string;
+  /** S6-B: where the merged catalog is rewritten as pi's `models.json` after every admin mutation
+   *  (`.tmp` + rename — the same atomic guarantee `make gen-models` gives). The kernel's
+   *  `list_models` / `list_platform_models` and every spawned agent container read this file, so
+   *  it must be the `${NEXTTIME_DATA}/config/models.json` they mount (compose mounts that
+   *  directory read-write into this service). Never written at startup — an acceptance run
+   *  swaps this service's yaml for the fake provider file (deploy/accept/docker-compose.fake.yml)
+   *  and must not clobber the production catalog. */
+  readonly modelsJsonOutFile: string;
+  /** S6-B leftover 19: poll interval for `GET ${kernelUrl}/internal/llm-budget-exhausted`
+   *  (budget-sync.ts) — the I18 "100% 时代理返回预算耗尽错误" signal. */
+  readonly budgetSyncIntervalMs: number;
+  /** S6-B: ceiling for the two upstream round trips of `POST /admin/providers/:id/test`. */
+  readonly providerTestTimeoutMs: number;
 }
 
 function parseIntEnv(value: string | undefined, fallback: number): number {
@@ -219,5 +265,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LlmProxyConfig
     maxRequestBodyBytes: parseIntEnv(env.MAX_REQUEST_BODY_BYTES, 10 * 1024 * 1024),
     upstreamIdleTimeoutMs: parseIntEnv(env.UPSTREAM_IDLE_TIMEOUT_MS, 300_000),
     upstreamConnectTimeoutMs: parseIntEnv(env.UPSTREAM_CONNECT_TIMEOUT_MS, 10_000),
+    providerStoreFile: env.LLM_PROVIDER_STORE_FILE ?? '/data/state/providers.json',
+    modelsJsonOutFile: env.MODELS_JSON_OUT_FILE ?? '/data/config/models.json',
+    budgetSyncIntervalMs: parseIntEnv(env.BUDGET_SYNC_INTERVAL_MS, 15_000),
+    providerTestTimeoutMs: parseIntEnv(env.PROVIDER_TEST_TIMEOUT_MS, 30_000),
   };
 }

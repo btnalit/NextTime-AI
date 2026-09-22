@@ -22,6 +22,11 @@ const PLATFORM_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     '该账户已设置密码，不能被合并 That account already has a password — it cannot be merged',
   last_admin:
     '不能停用或降级最后一个活跃管理员 The last active administrator cannot be disabled or demoted',
+  // C10 (console-completion-plan §2b): the kernel split "you cannot disable yourself" out of
+  // `last_admin` into its own code; until a kernel carrying that split is deployed the older
+  // `last_admin` copy above still shows, with the kernel's own `message` as the secondary line
+  // (`PlatformError.tsx`) so the two cases stay distinguishable either way.
+  self_disable: '不能停用自己 You cannot disable your own account',
   last_owner:
     '不能移出或降级工作区的最后一个 owner The last owner of a workspace cannot be removed or demoted',
   protected_admin:
@@ -36,6 +41,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   unknown_model: '模型不在目录里 No such model in the catalog',
   entry_model_not_allowed:
     '允许的模型列表必须包含入口模型；限制模型前要先设置入口模型 A non-empty allowed list must contain the entry model, and an entry model must be set before restricting',
+  // S6-A A1 (`purge_workspace`, console-completion-plan §5.2): the two 409s of the preconditions.
+  // `default_workspace` (above) and `workspace_not_found` (top) are reused by it verbatim.
+  workspace_active:
+    '该工作区仍在启用中，先停用（停用满 7 天后可清除）或等临时工作区到期 The workspace is still active — disable it first (purgeable 7 days later), or wait for an ephemeral one to expire',
+  retention_not_elapsed:
+    '停用未满 7 天，还不能清除 Disabled less than 7 days ago — not purgeable yet',
   // P-B1 (集成 Integrations): connectors, gate instances, external runtimes, and the workspace
   // "enable from platform catalog" flow.
   connector_not_found: '找不到该接入包 No such connector',

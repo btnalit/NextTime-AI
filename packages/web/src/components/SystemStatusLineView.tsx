@@ -35,7 +35,7 @@ export function SystemStatusLineView({ line, onOpen }: SystemStatusLineViewProps
         className="system-status-line system-status-line-button"
         onClick={onOpen}
         data-testid="system-status-line"
-        title={line.variant === 'action_update' ? 'Open approval' : 'Open task'}
+        title={line.variant === 'action_update' ? '打开审批 Open approval' : '打开任务 Open task'}
       >
         {body}
       </button>

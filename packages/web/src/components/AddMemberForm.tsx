@@ -77,7 +77,7 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
         id="am-role"
         label="角色 Role"
         required
-        hint="Can be changed later from the member's row."
+        hint="之后可在成员行里修改。 Can be changed later from the member's row."
       >
         <Select
           id="am-role"

@@ -292,6 +292,97 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     });
 
+    it('ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, and one in an ephemeral workspace are not (S6, leftover 41)', async () => {
+      const serviceId = randomUUID();
+      const silentSourceId = randomUUID();
+      const freshSourceId = randomUUID();
+      const neverObservedSourceId = randomUUID();
+      const activityId = randomUUID();
+      const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+
+      const ephemeralWorkspaceId = randomUUID();
+      const ephemeralServiceId = randomUUID();
+      const ephemeralSourceId = randomUUID();
+      const ephemeralActivityId = randomUUID();
+
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'service', 'member', 'collector')`,
+            [workspaceId, serviceId],
+          );
+          for (const sourceId of [silentSourceId, freshSourceId, neverObservedSourceId]) {
+            await client.query(
+              `insert into sources (workspace_id, id, kind, name, owner_principal_id, visibility)
+               values ($1, $2::uuid, 'collector-test', $3, $4, 'workspace')`,
+              [workspaceId, sourceId, sourceId, serviceId],
+            );
+          }
+          await client.query(
+            `insert into activities (workspace_id, id, kind, status, started_by)
+             values ($1, $2, 'collector_run', 'completed', $3)`,
+            [workspaceId, activityId, serviceId],
+          );
+          await client.query(
+            `insert into observations (workspace_id, source_id, activity_id, created_at)
+             values ($1, $2, $3, $4), ($1, $2, $3, $4 - interval '1 hour'), ($1, $5, $3, now())`,
+            [workspaceId, silentSourceId, activityId, threeHoursAgo, freshSourceId],
+          );
+          // The same silent shape in an ephemeral workspace — expected to go quiet, never flagged.
+          await client.query(
+            `insert into workspaces (id, name, purpose, expires_at)
+             values ($1, 'invariant-checks-ephemeral', 'ephemeral', now() + interval '1 day')`,
+            [ephemeralWorkspaceId],
+          );
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'service', 'member', 'collector')`,
+            [ephemeralWorkspaceId, ephemeralServiceId],
+          );
+          await client.query(
+            `insert into sources (workspace_id, id, kind, name, owner_principal_id, visibility)
+             values ($1, $2, 'collector-test', 'ephemeral', $3, 'workspace')`,
+            [ephemeralWorkspaceId, ephemeralSourceId, ephemeralServiceId],
+          );
+          await client.query(
+            `insert into activities (workspace_id, id, kind, status, started_by)
+             values ($1, $2, 'collector_run', 'completed', $3)`,
+            [ephemeralWorkspaceId, ephemeralActivityId, ephemeralServiceId],
+          );
+          await client.query(
+            `insert into observations (workspace_id, source_id, activity_id, created_at)
+             values ($1, $2, $3, $4)`,
+            [ephemeralWorkspaceId, ephemeralSourceId, ephemeralActivityId, threeHoursAgo],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+
+      const results = await runInvariantChecks(pool);
+      const silent = results.find((result) => result.invariant === 'ops.collector_silent');
+      expect(silent).toBeDefined();
+      const flagged = (silent?.sample ?? []).map((entry) => entry.split(' ')[0]);
+      expect(flagged).toContain(`${workspaceId}:${silentSourceId}`);
+      expect(flagged).not.toContain(`${workspaceId}:${freshSourceId}`);
+      expect(flagged).not.toContain(`${workspaceId}:${neverObservedSourceId}`);
+      expect(flagged).not.toContain(`${ephemeralWorkspaceId}:${ephemeralSourceId}`);
+      expect(
+        silent?.sample.find((entry) => entry.startsWith(`${workspaceId}:${silentSourceId}`)),
+      ).toMatch(/last observed/);
+
+      // A wider threshold clears it — the same Source is fine when its cadence is slower.
+      const relaxed = await runInvariantChecks(pool, {
+        collectorSilenceThresholdMs: 24 * 60 * 60 * 1000,
+      });
+      const relaxedSilent = relaxed.find((result) => result.invariant === 'ops.collector_silent');
+      expect((relaxedSilent?.sample ?? []).map((entry) => entry.split(' ')[0])).not.toContain(
+        `${workspaceId}:${silentSourceId}`,
+      );
+    });
+
     it('I4/I12: the append-only and publish-immutability triggers are present and enabled (unconditional — pg_trigger presence, not data)', async () => {
       const results = await runInvariantChecks(pool);
       expect(results.find((r) => r.invariant === 'I4')?.violations).toBe(0);

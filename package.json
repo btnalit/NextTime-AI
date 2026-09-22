@@ -13,7 +13,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "depcruise": "depcruise --config .dependency-cruiser.cjs --output-type err packages/*/src",
-    "ci:guards": "sh scripts/check-kernel-purity.sh && sh scripts/check-pi-version-consistency.sh && sh scripts/check-membership-capabilities-not-in-handle-scope.sh && node scripts/guards/vocabulary.mjs && node scripts/guards/prompt-contract.mjs && sh -c \"! git ls-files -s 'scripts/*.sh' | grep -qv '^100755 ' && ! grep -Uql \\\"$(printf '\\r')\\\" scripts/*.sh\"",
+    "ci:guards": "sh scripts/check-kernel-purity.sh && sh scripts/check-pi-version-consistency.sh && sh scripts/check-membership-capabilities-not-in-handle-scope.sh && node scripts/guards/vocabulary.mjs && node scripts/guards/prompt-contract.mjs && sh -c \"! git ls-files -s 'scripts/*.sh' | grep -qv '^100755 ' && ! grep -Uql \\\"$(printf '\\r')\\\" scripts/*.sh\" && node scripts/guards/css-tokens.mjs",
     "contract:snapshot": "pnpm --filter @nexttime/shared build && node scripts/contract-snapshot.mjs",
     "contract:check": "pnpm --filter @nexttime/shared build && node scripts/contract-snapshot.mjs --check"
   },

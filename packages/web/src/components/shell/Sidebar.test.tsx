@@ -59,7 +59,39 @@ describe('Sidebar', () => {
     }
   });
 
-  it('hides 工作区配置 in cookie mode when no workspace is selected, even for a non-member role', () => {
+  it('S6-C / S6-D: 图谱 is always in 使用; the third-party Explorer link hides once the probe says the bundle is not built', () => {
+    const { unmount } = render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+        explorerAvailable={false}
+      />,
+    );
+    expect(screen.getByTestId('nav-graph').getAttribute('href')).toBe('#/work/graph');
+    expect(screen.queryByTestId('nav-explorer')).toBeNull();
+    unmount();
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+        explorerAvailable={null}
+      />,
+    );
+    // Still probing → shown (fail open, same as `true`).
+    expect(screen.getByTestId('nav-explorer').getAttribute('href')).toBe('/explorer/');
+  });
+
+  it('hides 治理 in cookie mode when no workspace is selected, even for a non-member role', () => {
     render(
       <Sidebar
         active="chats"
@@ -75,13 +107,15 @@ describe('Sidebar', () => {
     expect(screen.queryByTestId('nav-members')).toBeNull();
     expect(screen.queryByTestId('nav-audit')).toBeNull();
     expect(screen.queryByTestId('nav-explorer')).toBeNull();
-    // No 管理 group at all when neither 工作区配置 nor a platform admin's items apply.
-    expect(screen.queryByTestId('nav-section-manage')).toBeNull();
-    expect(screen.queryByTestId('nav-subsection-workspace-config')).toBeNull();
+    // Neither the 治理 nor the 平台 group renders when nothing under them applies (S6-A0 §5.9:
+    // three labelled groups 使用 / 治理 / 平台).
+    expect(screen.queryByTestId('nav-section-govern')).toBeNull();
+    expect(screen.queryByTestId('nav-section-platform')).toBeNull();
     expect(screen.queryByTestId('nav-platformWorkspaces')).toBeNull();
+    expect(screen.getByTestId('nav-section-use')).toBeTruthy();
   });
 
-  it('shows 用户/平台设置 and 维护 only for a platform admin, independent of workspace role', () => {
+  it('shows the 平台 group only for a platform admin, independent of workspace role', () => {
     render(
       <Sidebar
         active="chats"
@@ -98,9 +132,11 @@ describe('Sidebar', () => {
     // A proven member with no workspace selected still gets none of the per-workspace pages...
     expect(screen.queryByTestId('nav-members')).toBeNull();
     expect(screen.queryByTestId('nav-explorer')).toBeNull();
-    // ...but the 工作区配置 sub-heading still renders, carrying P-A2's platform 工作区 list: an
-    // administrator configures workspaces they are not a member of.
-    expect(screen.getByTestId('nav-subsection-workspace-config')).toBeTruthy();
+    expect(screen.queryByTestId('nav-section-govern')).toBeNull();
+    // ...but the whole 平台 group renders, overview first, carrying P-A2's platform 工作区 list:
+    // an administrator configures workspaces they are not a member of.
+    const platform = screen.getByTestId('nav-section-platform');
+    expect(platform.querySelector('a')?.getAttribute('data-testid')).toBe('nav-platformOverview');
     expect(screen.getByTestId('nav-platformWorkspaces').getAttribute('href')).toBe(
       '#/platform/workspaces',
     );
@@ -131,11 +167,11 @@ describe('Sidebar', () => {
       expect(screen.queryByTestId('nav-platformUsers')).toBeNull();
       expect(screen.queryByTestId('nav-platformIntegrations')).toBeNull();
       expect(screen.queryByTestId('nav-platformSettings')).toBeNull();
-      expect(screen.queryByTestId('nav-section-maintain')).toBeNull();
-      // P-A2's platform 工作区 list is admin-only too — the owner pages below it are not.
+      expect(screen.queryByTestId('nav-section-platform')).toBeNull();
+      // P-A2's platform 工作区 list is admin-only too — the owner pages are not.
       expect(screen.queryByTestId('nav-platformWorkspaces')).toBeNull();
-      // 工作区配置 still shows — an apiKey session always has an implicit workspace.
-      expect(screen.getByTestId('nav-subsection-workspace-config')).toBeTruthy();
+      // 治理 still shows — an apiKey session always has an implicit workspace.
+      expect(screen.getByTestId('nav-section-govern')).toBeTruthy();
       expect(screen.getByTestId('nav-members')).toBeTruthy();
       unmount();
     }
@@ -172,6 +208,41 @@ describe('Sidebar', () => {
     );
     const badge = screen.getByTestId('role-badge');
     expect(badge.textContent).toBe('Auditor');
+  });
+
+  it('renders the kernel version and current user in the footer only when known (S6-A0)', () => {
+    const { rerender } = render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        authMode="cookie"
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('kernel-version')).toBeNull();
+    expect(screen.queryByTestId('current-user')).toBeNull();
+    // `ws-status` keeps its exact text — e2e keys on it.
+    expect(screen.getByTestId('ws-status').textContent).toBe('Connected');
+
+    rerender(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        authMode="cookie"
+        onLogout={vi.fn()}
+        kernelVersion="0.13.2"
+        currentUser={{ displayName: 'Ada', login: 'ada' }}
+      />,
+    );
+    expect(screen.getByTestId('kernel-version').textContent).toBe('0.13.2');
+    expect(screen.getByTestId('current-user').textContent).toBe('Ada');
+    expect(screen.getByTestId('current-user').getAttribute('title')).toBe('Ada (ada)');
   });
 
   it('marks the active section current for a11y/highlight', () => {

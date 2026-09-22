@@ -36,7 +36,7 @@
   display: grid;
   place-items: center;
   font-weight: 700;
-  font-size: 13px;
+  font-size: var(--fs-13);
   flex-shrink: 0;
 }
 
@@ -49,7 +49,7 @@
 
 .sidebar-product {
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--fs-14);
 }
 
 .sidebar-workspace-row {
@@ -60,7 +60,7 @@
 }
 
 .sidebar-workspace {
-  font-size: 12px;
+  font-size: var(--fs-12);
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -73,7 +73,7 @@
   align-items: center;
   padding: 1px 6px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--fs-11);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -115,20 +115,22 @@
   align-items: baseline;
   gap: 6px;
   padding: 4px 10px;
-  font-size: 11px;
+  font-size: var(--fs-11);
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--text-3);
 }
 
 .nav-section-title-sub {
-  font-size: 10px;
+  font-size: var(--fs-11);
   font-weight: 500;
   opacity: 0.75;
 }
 
 .nav-label-sub {
   display: block;
-  font-size: 11px;
+  font-size: var(--fs-11);
   font-weight: 400;
   color: var(--text-3);
 }
@@ -177,7 +179,7 @@
   border-radius: 999px;
   background: var(--warn-soft);
   color: var(--warn);
-  font-size: 11.5px;
+  font-size: var(--fs-11);
   font-weight: 600;
   display: inline-grid;
   place-items: center;
@@ -197,8 +199,37 @@
   align-items: center;
   gap: var(--space-2);
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-3);
+}
+
+/* S6-A0 footer lines: kernel version next to the connection dot, current user beneath. */
+.sidebar-version {
+  margin-left: auto;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 50%;
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 10px;
+  font-size: var(--fs-13);
+  color: var(--text-2);
+  min-width: 0;
+}
+
+.sidebar-user .icon {
+  color: var(--text-3);
+}
+
+.sidebar-user-name {
+  min-width: 0;
 }
 
 .conn-dot {
@@ -273,7 +304,38 @@
 
 .page-description {
   color: var(--text-3);
-  font-size: 13px;
+  font-size: var(--fs-13);
+}
+
+/* S6-A0 §5.9 page header pattern: breadcrumb small text above the title. */
+.page-breadcrumb ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+
+.page-breadcrumb li + li::before {
+  content: "/";
+  margin-right: var(--space-1);
+  color: var(--border-strong);
+}
+
+.page-breadcrumb a {
+  color: var(--text-3);
+}
+
+.page-breadcrumb a:hover {
+  color: var(--accent);
+}
+
+.page-breadcrumb [aria-current="page"] {
+  color: var(--text-2);
 }
 
 .page-header-actions {
@@ -306,8 +368,9 @@
   background: transparent;
   color: var(--text-2);
   border-radius: var(--radius-s);
-  font-size: 13px;
+  font-size: var(--fs-13);
   font-weight: 500;
+  min-height: 28px;
 }
 
 .tab:hover {
@@ -317,7 +380,7 @@
 .tab[aria-selected="true"] {
   background: var(--surface-1);
   color: var(--text);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
+  box-shadow: 0 0 0 1px var(--border-strong);
 }
 
 .tab-count {
@@ -345,6 +408,8 @@
   .nav-label,
   .nav-section-title,
   .conn-status-label,
+  .sidebar-version,
+  .sidebar-user,
   .sidebar-footer .btn-label {
     display: none;
   }
@@ -361,7 +426,7 @@
     right: 8px;
     min-width: 16px;
     height: 16px;
-    font-size: 10px;
+    font-size: var(--fs-11);
     padding: 0 4px;
     box-shadow: 0 0 0 2px var(--surface-1);
   }

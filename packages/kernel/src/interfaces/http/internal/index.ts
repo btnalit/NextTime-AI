@@ -5,6 +5,8 @@ import {
   type HandleRevocationsRoutesDeps,
   registerHandleRevocationRoutes,
 } from './handle-revocations.js';
+import { type LlmAdminAuditRoutesDeps, registerLlmAdminAuditRoutes } from './llm-admin-audit.js';
+import { type LlmBudgetRoutesDeps, registerLlmBudgetRoutes } from './llm-budget.js';
 import { type LlmUsageRoutesDeps, registerLlmUsageRoutes } from './llm-usage.js';
 import { type MetricsRoutesDeps, registerMetricsRoute } from './metrics.js';
 
@@ -24,6 +26,10 @@ import { type MetricsRoutesDeps, registerMetricsRoute } from './metrics.js';
  *   - `POST /internal/egress` (S1.10 kernel gap; egress.ts)
  *   - `GET /internal/metrics` (S3.8; metrics.ts — Prometheus text format, substrate-agnostic; see
  *     that file's own doc comment for why `deps.renderMetrics` is a plain closure)
+ *   - `GET /internal/llm-budget-exhausted` (S6-B leftover 19; llm-budget.ts — the model proxy's
+ *     budget-exhausted poll, I18 "100%")
+ *   - `POST /internal/llm-admin-audit` (S6-B; llm-admin-audit.ts — one platform audit row per
+ *     provider mutation the model proxy performed for an administrator)
  */
 
 export interface InternalRoutesDeps
@@ -31,7 +37,9 @@ export interface InternalRoutesDeps
     HandleRevocationsRoutesDeps,
     EgressRoutesDeps,
     MetricsRoutesDeps,
-    GatesRoutesDeps {}
+    GatesRoutesDeps,
+    LlmBudgetRoutesDeps,
+    LlmAdminAuditRoutesDeps {}
 
 export async function registerInternalRoutes(
   app: FastifyInstance,
@@ -42,6 +50,8 @@ export async function registerInternalRoutes(
   await registerEgressRoutes(app, deps);
   await registerMetricsRoute(app, deps);
   await registerGatesRoutes(app, deps);
+  await registerLlmBudgetRoutes(app, deps);
+  await registerLlmAdminAuditRoutes(app, deps);
 }
 
 export type { LlmUsageRoutesDeps } from './llm-usage.js';
@@ -49,3 +59,5 @@ export type { HandleRevocationsRoutesDeps, RevokedHandleRow } from './handle-rev
 export type { EgressRoutesDeps } from './egress.js';
 export type { MetricsRoutesDeps } from './metrics.js';
 export type { GatesRoutesDeps } from './gates.js';
+export type { LlmBudgetRoutesDeps, ExhaustedBudgetRow } from './llm-budget.js';
+export type { LlmAdminAuditRoutesDeps, LlmAdminAuditEvent } from './llm-admin-audit.js';

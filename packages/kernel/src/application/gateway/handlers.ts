@@ -15,8 +15,10 @@ import {
   getChatHistory,
   listChats,
   newChat,
+  renameChat,
   requireChatAccess,
   sendChatMessage,
+  setChatArchived,
 } from '../../application/chat/index.js';
 import type { AgentRuntime } from '../../application/host-bridge/index.js';
 import { findAttributableTurn } from '../../application/host-bridge/index.js';
@@ -24,6 +26,7 @@ import { drainPendingContextItems } from '../../application/linkage/index.js';
 import {
   type InvokeWorkerInput,
   type InvokeWorkerResult,
+  TaskNotFoundError,
   type TaskRow,
   type WorkerRunRow,
   findOperations,
@@ -50,11 +53,13 @@ import {
 import { readAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   ActionRequestNotFoundError,
+  type ActionRequestRow,
   MAX_ACTION_REQUEST_LIST_LIMIT,
   approveActionRequest,
   getActionRequest,
   listActionRequestsForApprover,
   listPendingForApprover,
+  readApprovalDecisions,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
 import {
@@ -70,7 +75,7 @@ import {
   setPolicy,
 } from '../../governance/policy/index.js';
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
-import { queryAudit, reconstruct } from '../../substrate/audit/index.js';
+import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
 import { MAX_SEARCH_LIMIT, SqlGraphStore } from '../../substrate/graph/index.js';
@@ -84,6 +89,7 @@ import {
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
+  cancelConnectionRequestHandler,
   connectGatekeeperHandler,
   createConnectionHandler,
   listConnectionRequestsHandler,
@@ -115,6 +121,7 @@ import {
 } from './gatekeeper-read-handlers.js';
 import { registerSourceHandler, submitObservationsHandler } from './ingest-handlers.js';
 import { issueHandleHandler } from './issue-handle-handler.js';
+import { issueLlmAdminTokenHandler } from './llm-admin-handlers.js';
 import {
   addMemberHandler,
   createPrincipalHandler,
@@ -163,6 +170,8 @@ import {
   mergeUserHandler,
   platformAuditQueryHandler,
   platformOverviewHandler,
+  purgeUserHandler,
+  purgeWorkspaceHandler,
   removeMembershipHandler,
   resetUserPasswordHandler,
   setAllowedModelsHandler,
@@ -304,10 +313,31 @@ function toAuditQueryFilter(filter: Record<string, unknown> | undefined): AuditQ
 }
 
 // S3.7 wire fix (see PR body): previously a bare `AuditRecordRow[]` — §3 "不返回裸数组".
+// S6-A (docs/console-completion-plan.md §5.5): keyset pagination — top-level `limit`/`cursor`
+// (`platform_audit_query`'s shape); the legacy `filter.limit` still applies when the top-level
+// `limit` is absent. A `limit` above `MAX_AUDIT_QUERY_LIMIT` is clamped and reported
+// `truncated: true` (docs/wire-contract-conventions.md §3), the convention `search` and
+// `list_action_requests` already follow.
 const auditQueryHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { filter } = params as { filter?: Record<string, unknown> };
-  const rows = await queryAudit(client, workspaceId, toAuditQueryFilter(filter));
-  return { result: { items: rows.map(toWireAuditRecord) } };
+  const { filter, limit, cursor } = params as {
+    filter?: Record<string, unknown>;
+    limit?: number;
+    cursor?: string;
+  };
+  const effectiveLimit = limit ?? toAuditQueryFilter(filter).limit;
+  const page = await queryAuditPage(client, workspaceId, {
+    ...toAuditQueryFilter(filter),
+    limit: effectiveLimit,
+    cursor,
+  });
+  const truncated = effectiveLimit !== undefined && effectiveLimit > MAX_AUDIT_QUERY_LIMIT;
+  return {
+    result: {
+      items: page.items.map(toWireAuditRecord),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(truncated ? { truncated: true as const } : {}),
+    },
+  };
 };
 
 const reconstructHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -340,9 +370,10 @@ export function setAgentRuntimeForHandlers(runtime: AgentRuntime): void {
   agentRuntime = runtime;
 }
 
-const listChatsHandler: CapabilityHandler = async (client, workspaceId) => {
+const listChatsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { includeArchived } = params as { includeArchived?: boolean };
   const principalId = await currentPrincipalId(client);
-  const rows = await listChats(client, workspaceId, principalId);
+  const rows = await listChats(client, workspaceId, principalId, { includeArchived });
   return { result: { items: rows.map(toWireChat) } };
 };
 
@@ -441,6 +472,84 @@ const subscribeChatHandler: CapabilityHandler = async (client, workspaceId, para
   const { chatId } = params as { chatId: string };
   await requireChatAccess(client, workspaceId, chatId);
   return { result: { subscribed: true }, resourceType: 'chat', resourceId: chatId };
+};
+
+// -------------------------------------------------------------------------------------------
+// S6-A chat lifecycle (docs/console-completion-plan.md §5.1, §6): `archive_chat` /
+// `unarchive_chat` / `rename_chat`. Ownership rule (§6 "本人的 Chat；owner 可归档他人"):
+//   - `requireChatAccess` first — RLS (`chats_visibility`, migrations/core/0003) decides what the
+//     caller can see at all; another member's *private* chat is invisible and answers 404, the
+//     same "existence is never leaked" contract every other chat handler here relies on. This
+//     lane deliberately does not add an RLS bypass for the owner (isolation only ever tightens).
+//   - then the caller must be the Chat's owner, or — for archive/unarchive only — hold the
+//     workspace `owner` role (`ctx.principal.role`, the resolved human Principal dispatch.ts
+//     threads through; `currentPrincipalRole` below is the fallback for a call with no ctx, e.g. a
+//     unit test). Anything else is 403 `forbidden`.
+// The service functions (application/chat/service.ts) write the domain audit row and push
+// `chat.metadata`; the returned row goes through the same `toWireChat` projection `list_chats`
+// uses, so the console can splice the result straight into its list.
+// -------------------------------------------------------------------------------------------
+
+async function requireChatOwnership(
+  client: PoolClient,
+  workspaceId: string,
+  chatId: string,
+  ctx: Parameters<CapabilityHandler>[3],
+  options: { readonly allowWorkspaceOwner: boolean },
+): Promise<{ readonly principalId: string }> {
+  const chat = await requireChatAccess(client, workspaceId, chatId);
+  const caller = ctx?.principal
+    ? { id: ctx.principal.id, role: ctx.principal.role }
+    : await currentPrincipalRole(client, workspaceId);
+  const isChatOwner = chat.ownerPrincipalId === caller.id;
+  const isWorkspaceOwner = options.allowWorkspaceOwner && caller.role === 'owner';
+  if (!isChatOwner && !isWorkspaceOwner) {
+    throw new ForbiddenError(
+      options.allowWorkspaceOwner
+        ? `chat ${chatId} belongs to another principal; only its owner or the workspace owner may change it`
+        : `chat ${chatId} belongs to another principal; only its owner may rename it`,
+    );
+  }
+  return { principalId: caller.id };
+}
+
+const archiveChatHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { chatId } = params as { chatId: string };
+  const { principalId } = await requireChatOwnership(client, workspaceId, chatId, ctx, {
+    allowWorkspaceOwner: true,
+  });
+  const chat = await setChatArchived(client, workspaceId, {
+    chatId,
+    archived: true,
+    actorPrincipalId: principalId,
+  });
+  return { result: toWireChat(chat), resourceType: 'chat', resourceId: chat.id };
+};
+
+const unarchiveChatHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { chatId } = params as { chatId: string };
+  const { principalId } = await requireChatOwnership(client, workspaceId, chatId, ctx, {
+    allowWorkspaceOwner: true,
+  });
+  const chat = await setChatArchived(client, workspaceId, {
+    chatId,
+    archived: false,
+    actorPrincipalId: principalId,
+  });
+  return { result: toWireChat(chat), resourceType: 'chat', resourceId: chat.id };
+};
+
+const renameChatHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { chatId, title } = params as { chatId: string; title: string };
+  const { principalId } = await requireChatOwnership(client, workspaceId, chatId, ctx, {
+    allowWorkspaceOwner: false,
+  });
+  const chat = await renameChat(client, workspaceId, {
+    chatId,
+    title,
+    actorPrincipalId: principalId,
+  });
+  return { result: toWireChat(chat), resourceType: 'chat', resourceId: chat.id };
 };
 
 // -------------------------------------------------------------------------------------------
@@ -710,16 +819,59 @@ async function currentPrincipalRole(
   return { id: principalId, role };
 }
 
+/**
+ * S6-A C25 (docs/console-completion-plan.md §5.8, §6 `approve{reason?}`; wire/governance.ts
+ * `ActionRequestWireSchema.decisionReason` / `decidedBy` / `decidedAt`): decorates
+ * `toWireActionRequest`'s projection with the human decision behind `approvalDecisionId`, read in
+ * one keyed query per handler call (`governance/approval/reads.ts`'s `readApprovalDecisions`).
+ * `null` for a row with no human decision (pending, auto-approved, denied, expired) — and for
+ * `decisionReason` when the decision carried no reason. Used by every handler in this file that
+ * returns ActionRequest rows a human may have decided; `request_action`'s own projections
+ * (request-action-handler.ts) are request-time and untouched, which is why the wire fields are
+ * optional rather than required.
+ */
+async function withApprovalDecision(
+  client: PoolClient,
+  workspaceId: string,
+  rows: readonly ActionRequestRow[],
+): Promise<ReturnType<typeof toWireActionRequest>[]> {
+  const decisions = await readApprovalDecisions(
+    client,
+    workspaceId,
+    rows.flatMap((row) => (row.approvalDecisionId ? [row.approvalDecisionId] : [])),
+  );
+  return rows.map((row) => {
+    const decision = row.approvalDecisionId ? decisions.get(row.approvalDecisionId) : undefined;
+    return {
+      ...toWireActionRequest(row),
+      decisionReason: decision?.reason ?? null,
+      decidedBy: decision?.decidedBy ?? null,
+      decidedAt: decision ? decision.decidedAt.toISOString() : null,
+    };
+  });
+}
+
+async function oneWithApprovalDecision(
+  client: PoolClient,
+  workspaceId: string,
+  row: ActionRequestRow,
+): Promise<ReturnType<typeof toWireActionRequest>> {
+  const [wire] = await withApprovalDecision(client, workspaceId, [row]);
+  if (!wire) throw new Error('withApprovalDecision: one row in, no row out');
+  return wire;
+}
+
 const approveHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { actionRequestId } = params as { actionRequestId: string };
+  const { actionRequestId, reason } = params as { actionRequestId: string; reason?: string };
   const caller = await currentPrincipalRole(client, workspaceId);
   const result = await approveActionRequest(client, workspaceId, {
     actionRequestId,
     approverPrincipalId: caller.id,
     approverRole: caller.role,
+    reason,
   });
   return {
-    result: toWireActionRequest(result),
+    result: await oneWithApprovalDecision(client, workspaceId, result),
     resourceType: 'action_request',
     resourceId: result.id,
   };
@@ -735,7 +887,7 @@ const rejectHandler: CapabilityHandler = async (client, workspaceId, params) => 
     reason,
   });
   return {
-    result: toWireActionRequest(result),
+    result: await oneWithApprovalDecision(client, workspaceId, result),
     resourceType: 'action_request',
     resourceId: result.id,
   };
@@ -749,7 +901,7 @@ const listPendingHandler: CapabilityHandler = async (client, workspaceId) => {
     principalId: caller.id,
     role: caller.role,
   });
-  return { result: { items: rows.map(toWireActionRequest) } };
+  return { result: { items: await withApprovalDecision(client, workspaceId, rows) } };
 };
 
 /** `get_action`: workspace-scoped read, not I14-narrowed (§9.3 "get_action returns one
@@ -759,11 +911,42 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
   const result = await getActionRequest(client, workspaceId, actionRequestId);
   if (!result) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
   return {
-    result: toWireActionRequest(result),
+    result: await oneWithApprovalDecision(client, workspaceId, result),
     resourceType: 'action_request',
     resourceId: actionRequestId,
   };
 };
+
+/**
+ * S6-A C28 (docs/console-completion-plan.md §5.5, §6): `list_action_requests`'s `taskId` /
+ * `parentWorkerRunId` filters, folded into one `parent_worker_run_id in (...)` set for
+ * `governance/approval` (which must not read `application/task`'s `worker_runs` table itself).
+ * `taskId` → every WorkerRun of that Task (`getTaskWithWorkerRuns`, the same read `get_task`
+ * uses — workspace-scoped, so I14 visibility is still decided by the list query, unchanged);
+ * an unknown Task, or one with no WorkerRuns, yields `[]` (matches nothing — empty page, not
+ * 404, the same way an unknown `gatekeeperId` behaves). Both given → intersection. Neither
+ * given → `undefined` (no narrowing).
+ */
+async function resolveParentWorkerRunFilter(
+  client: PoolClient,
+  workspaceId: string,
+  input: { readonly taskId?: string; readonly parentWorkerRunId?: string },
+): Promise<readonly string[] | undefined> {
+  if (input.taskId === undefined) {
+    return input.parentWorkerRunId === undefined ? undefined : [input.parentWorkerRunId];
+  }
+  let taskWorkerRunIds: string[];
+  try {
+    const { workerRuns } = await getTaskWithWorkerRuns(client, workspaceId, input.taskId);
+    taskWorkerRunIds = workerRuns.map((run) => run.id);
+  } catch (err) {
+    if (err instanceof TaskNotFoundError) return [];
+    throw err;
+  }
+  return input.parentWorkerRunId === undefined
+    ? taskWorkerRunIds
+    : taskWorkerRunIds.filter((id) => id === input.parentWorkerRunId);
+}
 
 /** `list_action_requests` (S5.5 leftover 21, docs/STATUS.md row 21): the console's "审批历史" read —
  *  every ActionRequest regardless of status, I14-scoped the same way `list_pending` is
@@ -772,23 +955,29 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
  *  (docs/wire-contract-conventions.md §3), the same convention `search`'s own handler
  *  (`searchHandler` above) follows. §3 envelope — `{items, nextCursor?}`, never a bare array. */
 const listActionRequestsHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { status, gatekeeperId, limit, cursor } = params as {
+  const { status, gatekeeperId, taskId, parentWorkerRunId, limit, cursor } = params as {
     status?: ActionRequestStatus | ActionRequestStatus[];
     gatekeeperId?: string;
+    taskId?: string;
+    parentWorkerRunId?: string;
     limit?: number;
     cursor?: string;
   };
   const caller = await currentPrincipalRole(client, workspaceId);
+  const parentWorkerRunIds = await resolveParentWorkerRunFilter(client, workspaceId, {
+    taskId,
+    parentWorkerRunId,
+  });
   const page = await listActionRequestsForApprover(
     client,
     workspaceId,
     { principalId: caller.id, role: caller.role },
-    { status, gatekeeperId, limit, cursor },
+    { status, gatekeeperId, parentWorkerRunIds, limit, cursor },
   );
   const truncated = limit !== undefined && limit > MAX_ACTION_REQUEST_LIST_LIMIT;
   return {
     result: {
-      items: page.items.map(toWireActionRequest),
+      items: await withApprovalDecision(client, workspaceId, page.items),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(truncated ? { truncated: true as const } : {}),
     },
@@ -1162,6 +1351,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['create_workspace', createWorkspaceHandler],
   ['update_workspace', updateWorkspaceHandler],
   ['set_workspace_status', setWorkspaceStatusHandler],
+  // S6 A1 / A6: the purge plane (platform-handlers.ts "purge").
+  ['purge_workspace', purgeWorkspaceHandler],
+  ['purge_user', purgeUserHandler],
+  ['issue_llm_admin_token', issueLlmAdminTokenHandler],
   ['set_allowed_models', setAllowedModelsHandler],
   // P-B1: integrations (platform-gates-handlers.ts) and the workspace-side enable
   // (gate-instance-handlers.ts).
@@ -1194,6 +1387,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['stop_agent', stopAgentHandler],
   ['get_chat_history', getChatHistoryHandler],
   ['subscribe_chat', subscribeChatHandler],
+  ['archive_chat', archiveChatHandler],
+  ['unarchive_chat', unarchiveChatHandler],
+  ['rename_chat', renameChatHandler],
   ['get_entry_context', getEntryContextHandler],
   ['report_turn', reportTurnHandler],
   ['record_decision', recordDecisionHandler],
@@ -1258,6 +1454,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['create_connection', createConnectionHandler],
   ['connect_gatekeeper', connectGatekeeperHandler],
   ['list_connection_requests', listConnectionRequestsHandler],
+  ['cancel_connection_request', cancelConnectionRequestHandler],
   ['publish_manifest', publishManifestHandler],
   // S3.11 (docs/development-tasks.md "中台控制面") — gatekeeper-read-handlers.ts.
   ['list_gatekeepers', listGatekeepersHandler],

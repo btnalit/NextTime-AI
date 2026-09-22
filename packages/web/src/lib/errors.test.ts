@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeError, errorMessage, isForbiddenError, isNotFoundError } from './errors.js';
+import { describeError, errorMessage, isForbiddenError } from './errors.js';
 import { HttpError } from './http-client.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
 
@@ -21,6 +21,14 @@ describe('describeError', () => {
     expect(describeError(new HttpError('invalid_response', 'non-JSON')).title).toBe(
       'Unexpected response',
     );
+  });
+
+  it('names the client-side RPC timeout (C5) for the banner', () => {
+    const described = describeError(
+      new RpcError(-32000, 'WsClient: approve timed out after 30000ms'),
+    );
+    expect(described.code).toBe('timeout');
+    expect(described.title).toBe('No response from the kernel');
   });
 
   it('maps JSON-RPC codes to the same stable names the HTTP transport uses', () => {
@@ -46,13 +54,5 @@ describe('describeError', () => {
       message: 'plain string',
     });
     expect(errorMessage(new Error('m'))).toBe('m');
-  });
-
-  it('isNotFoundError recognizes the "no such capability" code on both transports', () => {
-    expect(isNotFoundError(new HttpError('capability_error', 'no handler', 'not_found'))).toBe(
-      true,
-    );
-    expect(isNotFoundError(new RpcError(-32601, 'method not found'))).toBe(true);
-    expect(isNotFoundError(new HttpError('capability_error', 'nope', 'forbidden'))).toBe(false);
   });
 });

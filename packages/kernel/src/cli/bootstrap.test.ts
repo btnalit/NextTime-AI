@@ -19,6 +19,11 @@ import {
   setUserPassword,
 } from '../application/identity/index.js';
 import {
+  PURGE_TABLE_PRIORITY,
+  assessPurgeEligibility,
+  wireTableKey,
+} from '../application/platform/index.js';
+import {
   generateEphemeralHandleKeyPair,
   loadHandleKeyPair,
   verifyHandle,
@@ -34,6 +39,7 @@ import {
   createWorkspace,
   issueServiceHandleFromCli,
   parseDeleteWorkspaceArgs,
+  parsePurgeWorkspaceArgs,
   parseTtl,
   registerGatekeeperFromCli,
   resolveDomainPackDir,
@@ -219,6 +225,126 @@ describe('S5.3 create-workspace --purpose ephemeral --ttl (pure, no DB)', () => 
     expect(resolveDomainPackDir({ DOMAIN_PACK_DIR: missing })).toBe(resolveOntologyDir({}));
     expect(resolveDomainPackDir({ DOMAIN_PACK_DIR: tmpdir() })).toBe(tmpdir());
     expect(resolveDomainPackDir({})).toBe(resolveOntologyDir({}));
+  });
+});
+
+describe('S6 purge-workspace (pure, no DB)', () => {
+  const DAY = 86_400_000;
+  const now = new Date('2026-09-19T00:00:00Z');
+
+  it('assessPurgeEligibility: an expired ephemeral workspace is purgeable whatever its status', () => {
+    for (const status of ['active', 'disabled'] as const) {
+      expect(
+        assessPurgeEligibility(
+          {
+            status,
+            purpose: 'ephemeral',
+            expiresAt: new Date(now.getTime() - 1),
+            disabledAt: null,
+          },
+          now,
+        ),
+      ).toEqual({ eligible: true, reason: 'ephemeral_expired' });
+    }
+  });
+
+  it('assessPurgeEligibility: an active workspace (or an unexpired ephemeral one) → workspace_active', () => {
+    expect(
+      assessPurgeEligibility(
+        { status: 'active', purpose: 'standard', expiresAt: null, disabledAt: null },
+        now,
+      ),
+    ).toMatchObject({ eligible: false, code: 'workspace_active' });
+    expect(
+      assessPurgeEligibility(
+        {
+          status: 'active',
+          purpose: 'ephemeral',
+          expiresAt: new Date(now.getTime() + DAY),
+          disabledAt: null,
+        },
+        now,
+      ),
+    ).toMatchObject({ eligible: false, code: 'workspace_active' });
+  });
+
+  it('assessPurgeEligibility: disabled < 7 days → retention_not_elapsed; ≥ 7 days or a pre-0030 null → purgeable', () => {
+    expect(
+      assessPurgeEligibility(
+        {
+          status: 'disabled',
+          purpose: 'standard',
+          expiresAt: null,
+          disabledAt: new Date(now.getTime() - 6 * DAY),
+        },
+        now,
+      ),
+    ).toMatchObject({ eligible: false, code: 'retention_not_elapsed' });
+    expect(
+      assessPurgeEligibility(
+        {
+          status: 'disabled',
+          purpose: 'standard',
+          expiresAt: null,
+          disabledAt: new Date(now.getTime() - 7 * DAY),
+        },
+        now,
+      ),
+    ).toEqual({ eligible: true, reason: 'disabled_retention_elapsed' });
+    expect(
+      assessPurgeEligibility(
+        { status: 'disabled', purpose: 'standard', expiresAt: null, disabledAt: null },
+        now,
+      ),
+    ).toEqual({ eligible: true, reason: 'disabled_retention_elapsed' });
+  });
+
+  it('computeWorkspaceTableDeletionOrder breaks ties in the §4 order (handles, tasks, … audit, principals last)', () => {
+    const tables = [...PURGE_TABLE_PRIORITY, 'policies', 'quotas'].sort();
+    // No foreign keys at all: every table is ready at once, so the order is purely the tie-break.
+    expect(computeWorkspaceTableDeletionOrder({ tables, foreignKeys: [] })).toEqual([
+      ...PURGE_TABLE_PRIORITY,
+      'policies',
+      'quotas',
+    ]);
+    // A foreign key still wins over the priority list.
+    expect(
+      computeWorkspaceTableDeletionOrder({
+        tables: ['principals', 'capability_handles'],
+        foreignKeys: [{ childTable: 'principals', parentTable: 'capability_handles' }],
+      }),
+    ).toEqual(['principals', 'capability_handles']);
+  });
+
+  it('wireTableKey camel-cases a table name', () => {
+    expect(wireTableKey('capability_handles')).toBe('capabilityHandles');
+    expect(wireTableKey('tasks')).toBe('tasks');
+    expect(wireTableKey('workspace_gate_links')).toBe('workspaceGateLinks');
+  });
+
+  it('parsePurgeWorkspaceArgs: dry run by default, --yes executes, --name / --actor parsed, --yes with --dry-run refused', () => {
+    expect(parsePurgeWorkspaceArgs(['ws-1'])).toEqual({
+      workspaceId: 'ws-1',
+      yes: false,
+      dryRun: true,
+    });
+    expect(parsePurgeWorkspaceArgs(['ws-1', '--dry-run'])).toMatchObject({
+      yes: false,
+      dryRun: true,
+    });
+    expect(
+      parsePurgeWorkspaceArgs(['ws-1', '--yes', '--name', 'accept-s3-x', '--actor', 'root-admin']),
+    ).toEqual({
+      workspaceId: 'ws-1',
+      yes: true,
+      dryRun: false,
+      expectedName: 'accept-s3-x',
+      actorLogin: 'root-admin',
+    });
+    expect(() => parsePurgeWorkspaceArgs(['--yes'])).toThrow(BootstrapUsageError);
+    expect(() => parsePurgeWorkspaceArgs(['ws-1', '--yes', '--dry-run'])).toThrow(
+      BootstrapUsageError,
+    );
   });
 });
 

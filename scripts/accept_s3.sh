@@ -27,19 +27,18 @@
 #   - `${NEXTTIME_DATA}/secrets/gate_token` and the other host-bootstrap secrets already exist
 #     (docs/runbooks/host-bootstrap.md) — this script does not generate them.
 #
-# Shared-state warning (read before running against a host that also runs a *real* host-inventory
-# collector deployment): this script overwrites
-# ${NEXTTIME_DATA}/secrets/collector-host-inventory.token — the *same* Docker secret file path a
-# real `collector-host-inventory` deployment on this host would use (docker-compose.yml's own
-# `collector_host_inventory_token` secret definition; there is no per-invocation override for a
-# Docker file-based secret) — with a freshly-minted service Handle scoped to this run's own
-# throwaway workspace. A real operational side effect, not a fixture write under a scratch
-# directory — same class of caveat docs/runbooks/host-explorer.md's own "信任边界" section documents
-# for a different secret. Run this only in a dedicated verification environment, or accept that the
-# real collector's next scheduled run authenticates into this run's workspace until the token is
-# re-minted (docs/runbooks/host-collector.md §2). (Before S5.3 the collector also kept a cached
-# Source id on disk that this script had to delete; `register_source` is idempotent now and the
-# collector keeps no local state — docs/development-tasks.md S5.3.)
+# The production collector's secret is never touched (S6, leftover 41): this script mints its
+# collector Handle into a run-private file under ${NEXTTIME_DATA}/accept/ and points the one
+# `collector-host-inventory --once` invocation at it with `docker compose run -e
+# NEXTTIME_HANDLE_TOKEN_FILE=… -v <file>:…:ro` — the same pattern scripts/demo.sh established —
+# then deletes the file on exit, success or failure. Until S6 this script overwrote
+# ${NEXTTIME_DATA}/secrets/collector-host-inventory.token (the real deployment's Docker secret)
+# with a Handle scoped to this run's throwaway workspace, and the real collector then 401'd
+# against a disabled acceptance workspace for a week without anyone noticing (docs/STATUS.md
+# leftover 41). The production `collector-host-inventory` service keeps running its own token
+# throughout an acceptance run. (Before S5.3 the collector also kept a cached Source id on disk
+# that this script had to delete; `register_source` is idempotent now and the collector keeps no
+# local state — docs/development-tasks.md S5.3.)
 #
 # Toolset: identical rationale to accept_s1.sh/accept_s2.sh's own header comments — every kernel
 # capability call and every Explorer/MCP HTTP call runs through the shared driver,
@@ -55,8 +54,9 @@
 # contracts.
 #
 # Confidentiality (repo is public): every generated secret (the collector's service-Handle token,
-# API keys) is held only in shell variables/files under ${NEXTTIME_DATA} for this process's
-# lifetime and only ever printed via redact().
+# API keys) is held only in shell variables — plus the one run-private token file under
+# ${NEXTTIME_DATA}/accept/, deleted by the EXIT trap — for this process's lifetime and only ever
+# printed via redact().
 
 set -u
 
@@ -112,18 +112,32 @@ fi
 . "$(dirname "$0")/lib/accept-common.sh"
 require_driver
 
+# The run-private collector token file (collector_fixtures_step sets it; see the header
+# comment). Removed by the traps below on every exit path — `fail` exits the shell directly, so
+# cleanup_step alone would leave the credential behind on a failed run.
+ACCEPT_COLLECTOR_TOKEN_FILE=""
+accept_s3_cleanup_token() {
+  if [ -n "$ACCEPT_COLLECTOR_TOKEN_FILE" ] && [ -f "$ACCEPT_COLLECTOR_TOKEN_FILE" ]; then
+    rm -f "$ACCEPT_COLLECTOR_TOKEN_FILE"
+    echo "cleanup: deleted the run-private collector token ($ACCEPT_COLLECTOR_TOKEN_FILE) — the production collector's own secret was never touched"
+  fi
+}
+
 # Traps first, switch second: if the recreate fails half-way the EXIT trap still restores
 # whatever landed on the override; HUP/PIPE cover a dropped ssh session (the documented way
 # to run this script), which would otherwise kill the shell without running the EXIT trap.
+# Both modes install the token cleanup; only the fake-provider mode has a provider to restore.
 if [ "$REAL" -eq 0 ]; then
-  trap accept_provider_restore EXIT
-  trap 'accept_provider_restore; exit 130' INT TERM HUP PIPE
+  trap 'accept_s3_cleanup_token; accept_provider_restore' EXIT
+  trap 'accept_s3_cleanup_token; accept_provider_restore; exit 130' INT TERM HUP PIPE
   accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
   pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
 else
   # W7 real-model mode (same contract as accept_s2.sh --real): deployed provider untouched, the
   # entry agent pinned to $REAL_MODEL, the dependency chat repeated --runs times and judged on
   # its outcome only.
+  trap accept_s3_cleanup_token EXIT
+  trap 'accept_s3_cleanup_token; exit 130' INT TERM HUP PIPE
   ACCEPT_S3_MODEL=$REAL_MODEL
   export ACCEPT_S3_MODEL
   pass "preflight-real-provider" "real provider left as deployed; entry agent pinned to model=$REAL_MODEL, runs=$RUNS"
@@ -244,10 +258,14 @@ seed_domain_pack_step() {
   pass "seed-domain-pack" "$(printf '%s' "$out" | tail -1)"
 }
 
-# S3.9 (b): mint the collector's own service Handle (docs/runbooks/host-collector.md §2) into
-# ${NEXTTIME_DATA}/secrets/collector-host-inventory.token, and reset the collector's cached
-# Source-id state file so this run's `register_source` targets *this* fresh workspace — see this
-# script's own header comment ("Shared-state warning") for why the reset is required, not optional.
+# S3.9 (b): mint the collector's own service Handle (docs/runbooks/host-collector.md §2) into a
+# run-private file under ${NEXTTIME_DATA}/accept/ — never the production
+# ${NEXTTIME_DATA}/secrets/collector-host-inventory.token (S6, leftover 41; this script's header
+# comment). Same file-mode reasoning as scripts/demo.sh's collector_handle_mint_step: the file is
+# bind-mounted plainly (not a compose `secrets:` entry, which would re-expose it root-owned 0444
+# regardless), the collector runs as uid 10001 inside its container, so the file needs an
+# "other" read bit — 644 on a freshly created file this step fully controls; the directory is
+# 0750 (the container never traverses the host directory tree for a bind-mounted file).
 collector_fixtures_step() {
   out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js issue-service-handle \
     --workspace "$WORKSPACE_ID" --name host-inventory --scope register_source,submit_observations \
@@ -260,10 +278,12 @@ collector_fixtures_step() {
   if [ -z "$collector_token" ]; then
     fail "collector-issue-service-handle" "could not parse a Handle token from output: $(printf '%s' "$out" | tail -10)"
   fi
-  mkdir -p "${NEXTTIME_DATA}/secrets"
-  printf '%s' "$collector_token" >"${NEXTTIME_DATA}/secrets/collector-host-inventory.token"
-  chmod 640 "${NEXTTIME_DATA}/secrets/collector-host-inventory.token"
-  pass "collector-issue-service-handle" "token minted and written to \${NEXTTIME_DATA}/secrets/collector-host-inventory.token: $(redact "$collector_token")"
+  mkdir -p "${NEXTTIME_DATA}/accept"
+  chmod 0750 "${NEXTTIME_DATA}/accept"
+  ACCEPT_COLLECTOR_TOKEN_FILE="${NEXTTIME_DATA}/accept/collector-s3-$(date -u +%Y%m%dT%H%M%SZ)-$$.token"
+  printf '%s' "$collector_token" >"$ACCEPT_COLLECTOR_TOKEN_FILE"
+  chmod 644 "$ACCEPT_COLLECTOR_TOKEN_FILE"
+  pass "collector-issue-service-handle" "token minted into a run-private file (never \${NEXTTIME_DATA}/secrets/collector-host-inventory.token): $(redact "$collector_token")"
 }
 
 # Runs `collector-host-inventory --once`, returning its combined stdout+stderr — callers parse
@@ -271,8 +291,18 @@ collector_fixtures_step() {
 # `consoleLogger`: one `console.log(JSON.stringify({level:'info', message:'run complete',
 # objectsUpserted, factsAsserted, factsSuperseded, factsInvalidated}))` line per run —
 # `factsInvalidated` since S5.2, what the run's observation window retired).
+#
+# Pointed at this run's private token file via NEXTTIME_HANDLE_TOKEN_FILE (collectors/
+# host-inventory/src/config.ts reads it fresh on every run; a `docker compose run -e` override for
+# one invocation is enough) — never at the compose service's own `secrets:` path. The bind-mount
+# target `/run/accept-collector-token` is a fresh path under `/run`, which the service's own
+# `read_only: true` does not block (mount setup precedes the read-only flag) — scripts/demo.sh's
+# run_collector_once is the precedent.
 run_collector_once() {
-  docker compose run --rm --no-deps -T collector-host-inventory node dist/index.js --once </dev/null 2>&1
+  docker compose run --rm --no-deps -T \
+    -e NEXTTIME_HANDLE_TOKEN_FILE=/run/accept-collector-token \
+    -v "${ACCEPT_COLLECTOR_TOKEN_FILE}:/run/accept-collector-token:ro" \
+    collector-host-inventory node dist/index.js --once </dev/null 2>&1
 }
 
 collector_run_complete_field() {
@@ -713,10 +743,14 @@ cleanup_step() {
     resident_stop "$OWNER_ID" >/dev/null 2>&1
     echo "cleanup: stopped the owner's entry container via the supervisor API"
   fi
+  # The run-private collector token is a credential, not a fixture — deleted regardless of --keep
+  # (the EXIT trap covers the failure paths; this is the success path's explicit step).
+  accept_s3_cleanup_token
   # Workspace/principal/graph/chat/audit rows are the audit trail (design doc §12) — left in place
-  # on purpose, same precedent as accept_s1.sh/accept_s2.sh's own cleanup_step. Periodic cleanup:
-  # sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes.
-  pass "cleanup" "workspace retained: $WORKSPACE_ID (clean up periodically with: sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes)"
+  # on purpose, same precedent as accept_s1.sh/accept_s2.sh's own cleanup_step. The workspace is
+  # ephemeral with a 7-day TTL: `sh scripts/delete-workspaces-matching.sh --expired --yes` purges
+  # it (and its never-activated users) once expired; the regex form still works before then.
+  pass "cleanup" "workspace retained: $WORKSPACE_ID (purged by: sh scripts/delete-workspaces-matching.sh --expired --yes once its 7-day TTL passes)"
 }
 
 # --------------------------------------------------------------------------------------------

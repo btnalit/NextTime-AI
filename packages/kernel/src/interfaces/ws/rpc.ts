@@ -4,7 +4,11 @@ import {
   GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
-import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import {
+  ChatArchivedError,
+  ChatNotFoundError,
+  TurnAlreadyRunningError,
+} from '../../application/chat/index.js';
 // NoActiveTurnError/TurnNotFoundError: see capability-route.ts's own comment on this same import
 // — exported by handlers.ts but not re-exported by gateway/index.ts's curated surface; that one-
 // line addition is inside application/gateway/**, outside this task's file ownership.
@@ -55,7 +59,11 @@ import {
   WorkerDefinitionNotPublishedError,
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
-import { ActionRequestNotFoundError, ApprovalScopeError } from '../../governance/approval/index.js';
+import {
+  ActionRequestNotFoundError,
+  ApprovalReasonRequiredError,
+  ApprovalScopeError,
+} from '../../governance/approval/index.js';
 import {
   GrantNotFoundError,
   HandleIssuanceError,
@@ -213,6 +221,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof TurnAlreadyRunningError) {
     return { code: WS_ERROR_CODES.TURN_ALREADY_RUNNING, message: err.message };
   }
+  // S6-A: an archived Chat takes no new Turn — a state conflict, like an illegal transition.
+  if (err instanceof ChatArchivedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
   if (err instanceof ChatNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
@@ -246,6 +258,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // INVALID_PARAMS where an existing code already fits and only ILLEGAL_TRANSITION is new.
   if (err instanceof ApprovalScopeError) {
     return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
+  }
+  // S6-A / C25: high-blast `approve` without a reason (see capability-route.ts's own mapping).
+  if (err instanceof ApprovalReasonRequiredError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (
     err instanceof ActionRequestNotFoundError ||

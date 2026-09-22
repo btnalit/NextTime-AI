@@ -12,6 +12,7 @@ import {
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import { ChatArchivedError } from '../../application/chat/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   CapabilityNotImplementedError,
@@ -37,6 +38,7 @@ import {
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
 } from '../../application/worker/index.js';
+import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import {
   HANDLE_SIGNING_ALG,
   HandleIssuanceError,
@@ -68,6 +70,24 @@ const neverConnectPool: PoolLike = {
     throw new Error('should not touch the database for this request');
   },
 };
+
+describe('mapCapabilityError — S6-A chat lifecycle (unit)', () => {
+  it('ChatArchivedError maps to 409 chat_archived', () => {
+    expect(mapCapabilityError(new ChatArchivedError('chat-1'))).toMatchObject({
+      status: 409,
+      code: 'chat_archived',
+    });
+  });
+});
+
+describe('mapCapabilityError — S6-A / C25 approve.reason (unit)', () => {
+  it('ApprovalReasonRequiredError maps to 400 with its own code reason_required', () => {
+    expect(mapCapabilityError(new ApprovalReasonRequiredError('ar-1'))).toMatchObject({
+      status: 400,
+      code: 'reason_required',
+    });
+  });
+});
 
 describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
   it('maps the connection-flow not-found classes to 404 not_found', () => {

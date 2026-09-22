@@ -6,6 +6,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { ToastProvider } from '../ui/Toast.js';
 import { PlatformWorkspacesPage } from './PlatformWorkspacesPage.js';
 
 afterEach(cleanup);
@@ -32,18 +33,24 @@ function renderPage(
   options: {
     readonly memberships?: readonly WireMembership[];
     readonly onOpenWorkspaceConfig?: (workspaceId: string) => void;
+    readonly initialHash?: string;
   } = {},
 ) {
   return render(
     <PermissionsProvider>
-      <PlatformWorkspacesPage
-        http={http}
-        memberships={options.memberships ?? []}
-        onOpenWorkspaceConfig={options.onOpenWorkspaceConfig ?? vi.fn()}
-      />
+      <ToastProvider>
+        <PlatformWorkspacesPage
+          http={http}
+          memberships={options.memberships ?? []}
+          onOpenWorkspaceConfig={options.onOpenWorkspaceConfig ?? vi.fn()}
+          initialHash={options.initialHash ?? '#/platform/workspaces'}
+        />
+      </ToastProvider>
     </PermissionsProvider>,
   );
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function workspace(overrides: Partial<PlatformWorkspaceWire> = {}): PlatformWorkspaceWire {
   return {
@@ -55,6 +62,8 @@ function workspace(overrides: Partial<PlatformWorkspaceWire> = {}): PlatformWork
     ontologyEnforcement: 'reject',
     purpose: 'standard',
     expiresAt: null,
+    disabledAt: null,
+    purgeable: false,
     isDefault: true,
     memberCount: 3,
     owners: [{ userId: 'u-1', login: 'alice', displayName: 'Alice', principalId: 'p-1' }],
@@ -123,8 +132,13 @@ describe('PlatformWorkspacesPage', () => {
     expect(within(first).getByTestId('workspace-default-badge')).toBeTruthy();
     expect(within(second).queryByTestId('workspace-default-badge')).toBeNull();
 
-    expect(within(first).getByTestId('workspace-status').textContent).toBe('active');
-    expect(within(second).getByTestId('workspace-status').textContent).toBe('disabled');
+    // S6-A0 / C17: the row status is the shared workspaceStatus StatusChip (bilingual, raw value on
+    // `data-status` for e2e); purpose is a column of its own.
+    const firstStatus = within(first).getByTestId('workspace-status');
+    expect(firstStatus.textContent).toBe('活跃 Active');
+    expect(firstStatus.getAttribute('data-status')).toBe('active');
+    expect(within(second).getByTestId('workspace-status').textContent).toBe('已停用 Disabled');
+    expect(within(first).getByTestId('workspace-purpose').textContent).toBe('常规 standard');
 
     // `entryModel: null` reads as the platform default; `allowedModels: []` as "all".
     expect(first.textContent).toContain('平台默认');
@@ -135,7 +149,11 @@ describe('PlatformWorkspacesPage', () => {
     expect(within(first).getByTestId('workspace-owner-chip').textContent).toBe('alice');
     expect(within(second).queryByTestId('workspace-owner-chip')).toBeNull();
 
-    expect(http.calls.some((call) => call.name === 'list_workspaces')).toBe(true);
+    // A1: the default view asks the kernel to hide disabled and expired ephemeral workspaces.
+    expect(http.calls.find((call) => call.name === 'list_workspaces')?.params).toEqual({
+      status: 'active',
+      includeExpired: false,
+    });
     expect(http.calls.some((call) => call.name === 'list_platform_models')).toBe(true);
     // The user directory is only read once a drawer that needs a user picker is open.
     expect(http.calls.some((call) => call.name === 'list_users')).toBe(false);
@@ -195,7 +213,8 @@ describe('PlatformWorkspacesPage', () => {
 
     // The created row is on screen and its drawer opened on top of it.
     const detail = await screen.findByTestId('workspace-detail');
-    expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('active');
+    // S6-A0 / C17: the detail panel renders status through the shared workspaceStatus StatusChip.
+    expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('活跃 Active');
     await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
     expect(screen.getByTestId('workspace-row-ws-2')).toBeTruthy();
   });
@@ -278,8 +297,10 @@ describe('PlatformWorkspacesPage', () => {
     expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toContain(
       'ephemeral',
     );
-    expect(within(detail).getByTestId('workspace-detail-expires')).toBeTruthy();
+    expect(within(detail).getByTestId('workspace-expires').textContent).toContain('到期 expires');
     expect(within(detail).queryByTestId('workspace-purpose-select')).toBeNull();
+    // Not purgeable (still live) — no purge entry anywhere.
+    expect(within(detail).queryByTestId('workspace-purge')).toBeNull();
   });
 
   it('a failed ontology-enforcement switch rolls back to the saved value and shows the error', async () => {
@@ -347,7 +368,9 @@ describe('PlatformWorkspacesPage', () => {
 
     fireEvent.click(within(detail).getByRole('button', { name: '确认停用 Confirm disable' }));
     await waitFor(() =>
-      expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('disabled'),
+      expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe(
+        '已停用 Disabled',
+      ),
     );
   });
 
@@ -460,5 +483,374 @@ describe('PlatformWorkspacesPage', () => {
     detail = await screen.findByTestId('workspace-detail');
     fireEvent.click(within(detail).getByTestId('open-workspace-config'));
     expect(onOpenWorkspaceConfig).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('A1: the filter controls re-query list_workspaces; residue-only reads everything and narrows client-side', async () => {
+    const now = Date.now();
+    const live = workspace({ id: 'ws-1', name: 'Acme', isDefault: false });
+    const disabled = workspace({
+      id: 'ws-2',
+      name: 'Old',
+      status: 'disabled',
+      isDefault: false,
+      disabledAt: new Date(now - 10 * DAY_MS).toISOString(),
+      purgeable: true,
+    });
+    const expired = workspace({
+      id: 'ws-3',
+      name: 'accept-s3',
+      isDefault: false,
+      purpose: 'ephemeral',
+      expiresAt: new Date(now - DAY_MS).toISOString(),
+      purgeable: true,
+    });
+    const http = scriptedHttp({
+      ...baseHandlers([live]),
+      // Mirrors the kernel's own semantics for the three filters over a fixed fixture.
+      list_workspaces: (params) => {
+        const p = params as Record<string, unknown>;
+        return {
+          items: [live, disabled, expired].filter(
+            (row) =>
+              (p.status === undefined || row.status === p.status) &&
+              (p.purpose === undefined || row.purpose === p.purpose) &&
+              (p.includeExpired !== false || row.id !== 'ws-3'),
+          ),
+        };
+      },
+    });
+    renderPage(http);
+    await screen.findByTestId('workspace-row-ws-1');
+    expect(screen.queryByTestId('workspace-row-ws-2')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText(/状态 Status/), { target: { value: 'disabled' } });
+    await screen.findByTestId('workspace-row-ws-2');
+    expect(http.calls.at(-1)?.params).toEqual({ status: 'disabled', includeExpired: false });
+    // 禁用于 … · 可清除: disabled 10 days ago, past the 7-day retention.
+    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain(
+      '可清除 purgeable now',
+    );
+
+    fireEvent.change(screen.getByLabelText(/状态 Status/), { target: { value: 'all' } });
+    fireEvent.change(screen.getByLabelText(/用途 Purpose/), { target: { value: 'ephemeral' } });
+    fireEvent.click(screen.getByTestId('platform-workspaces-include-expired'));
+    await screen.findByTestId('workspace-row-ws-3');
+    expect(http.calls.at(-1)?.params).toEqual({ purpose: 'ephemeral' });
+    expect(screen.getByTestId('workspace-expires').getAttribute('data-expired')).toBe('true');
+
+    // Residue only: `{}` to the kernel, disabled ∪ expired on screen, the live row dropped.
+    fireEvent.click(screen.getByTestId('platform-workspaces-residue-only'));
+    await screen.findByTestId('workspace-row-ws-2');
+    expect(http.calls.at(-1)?.params).toEqual({});
+    expect(screen.getByTestId('workspace-row-ws-3')).toBeTruthy();
+    expect(screen.queryByTestId('workspace-row-ws-1')).toBeNull();
+  });
+
+  it('A1: the overview banner hash (?residue=1) preselects the residue view', async () => {
+    const disabled = workspace({
+      id: 'ws-2',
+      name: 'Old',
+      status: 'disabled',
+      isDefault: false,
+      disabledAt: null,
+      purgeable: true,
+    });
+    const http = scriptedHttp({
+      ...baseHandlers([]),
+      list_workspaces: (params) => {
+        expect(params).toEqual({});
+        return { items: [workspace(), disabled] };
+      },
+    });
+    renderPage(http, { initialHash: '#/platform/workspaces?residue=1' });
+    await screen.findByTestId('workspace-row-ws-2');
+    expect(screen.queryByTestId('workspace-row-ws-1')).toBeNull();
+    expect(
+      (screen.getByTestId('platform-workspaces-residue-only') as HTMLInputElement).checked,
+    ).toBe(true);
+    // disabledAt null (pre-0030) reads as purgeable now.
+    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain(
+      '可清除 purgeable now',
+    );
+  });
+
+  it('A1: the residue preset also applies on a hashchange while the page is mounted', async () => {
+    const disabled = workspace({ id: 'ws-2', name: 'Old', status: 'disabled', isDefault: false });
+    const http = scriptedHttp({
+      ...baseHandlers([]),
+      list_workspaces: (params) =>
+        Object.keys(params as object).length === 0
+          ? { items: [workspace(), disabled] }
+          : { items: [workspace()] },
+    });
+    renderPage(http);
+    await screen.findByTestId('workspace-row-ws-1');
+    expect(screen.queryByTestId('workspace-row-ws-2')).toBeNull();
+
+    window.location.hash = '#/platform/workspaces?residue=1';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    await screen.findByTestId('workspace-row-ws-2');
+    expect(screen.queryByTestId('workspace-row-ws-1')).toBeNull();
+    window.location.hash = '';
+  });
+
+  it('A1: a disabled workspace inside retention shows the days left and no purge entry', async () => {
+    const recent = workspace({
+      id: 'ws-2',
+      name: 'Recent',
+      status: 'disabled',
+      isDefault: false,
+      disabledAt: new Date(Date.now() - 2 * DAY_MS).toISOString(),
+      purgeable: false,
+    });
+    const http = scriptedHttp(baseHandlers([recent]));
+    renderPage(http);
+    const row = await screen.findByTestId('workspace-row-ws-2');
+    expect(within(row).getByTestId('workspace-disabled-at').textContent).toContain(
+      '5 天后可清除 purgeable in 5 d',
+    );
+    expect(within(row).queryByTestId('workspace-purge')).toBeNull();
+
+    fireEvent.click(row);
+    const detail = await screen.findByTestId('workspace-detail');
+    expect(within(detail).queryByTestId('workspace-purge')).toBeNull();
+    expect(within(detail).getByTestId('workspace-purge-retention')).toBeTruthy();
+  });
+
+  it('A1: the platform default workspace never offers purge, even if the kernel flags it purgeable', async () => {
+    const http = scriptedHttp(baseHandlers([workspace({ purgeable: true })]));
+    renderPage(http);
+    const row = await screen.findByTestId('workspace-row-ws-1');
+    expect(within(row).queryByTestId('workspace-purge')).toBeNull();
+    fireEvent.click(row);
+    const detail = await screen.findByTestId('workspace-detail');
+    expect(within(detail).queryByTestId('workspace-purge')).toBeNull();
+  });
+
+  it('A1: purge — preview (dry run) with counts and the service-Handle warning, then the irreversible confirm executes and removes the row', async () => {
+    const old = workspace({
+      id: 'ws-2',
+      name: 'accept-s3-old',
+      status: 'disabled',
+      isDefault: false,
+      disabledAt: null,
+      purgeable: true,
+      owners: [],
+    });
+    const preview = {
+      workspaceId: 'ws-2',
+      name: 'accept-s3-old',
+      purpose: 'standard',
+      status: 'disabled',
+      reason: 'disabled_retention_elapsed',
+      executed: false,
+      counts: { capabilityHandles: 2, facts: 40, principals: 3 },
+      totalRows: 45,
+      activeHandles: 1,
+      warnings: [
+        {
+          kind: 'service_handle_in_use',
+          principalId: 'p-collector',
+          name: 'collector',
+          activeHandles: 1,
+        },
+      ],
+      purgedUsers: [{ id: 'u-9', login: 'alice-s3' }],
+      principalIds: ['p-collector', 'p-a', 'p-b'],
+      taskIds: ['t-1'],
+    };
+    const http = scriptedHttp({
+      ...baseHandlers([workspace(), old]),
+      purge_workspace: (params) => {
+        const p = params as Record<string, unknown>;
+        expect(p.workspaceId).toBe('ws-2');
+        return p.confirm === true ? { ...preview, executed: true } : preview;
+      },
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('workspace-row-ws-2');
+
+    // The row's own purge button opens the purge drawer, not the detail drawer.
+    fireEvent.click(within(row).getByTestId('workspace-purge'));
+    const drawer = await screen.findByTestId('purge-workspace-drawer');
+    expect(screen.queryByTestId('workspace-detail')).toBeNull();
+
+    // Step 1: the dry run — sent without `confirm`.
+    const previewCalls = () => http.calls.filter((call) => call.name === 'purge_workspace');
+    await waitFor(() => expect(previewCalls()).toHaveLength(1));
+    expect(previewCalls()[0]?.params).toEqual({ workspaceId: 'ws-2' });
+
+    const warning = await within(drawer).findByTestId('purge-warning-service-handle');
+    expect(warning.textContent).toContain('service Handle 仍在使用');
+    expect(within(warning).getByTestId('purge-warning-principal').textContent).toContain(
+      'collector',
+    );
+    expect(within(drawer).getByTestId('purge-preview-reason').textContent).toContain(
+      '已停用满 7 天',
+    );
+    expect(within(drawer).getByTestId('purge-preview-total').textContent).toBe('45');
+    const counts = within(drawer).getByTestId('purge-preview-counts');
+    expect(counts.querySelector('[data-purge-table="facts"]')?.textContent).toContain('40');
+    expect(within(drawer).getByTestId('purge-preview-users').textContent).toContain('alice-s3');
+    expect(within(drawer).getByTestId('purge-preview-host-side').textContent).toContain('3');
+
+    // Step 2: irreversible — type the name + acknowledge before the danger button enables.
+    fireEvent.click(within(drawer).getByTestId('purge-workspace-continue'));
+    const confirm = await screen.findByTestId('purge-workspace-confirm');
+    expect(screen.queryByTestId('purge-workspace-drawer')).toBeNull();
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('accept-s3-old');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain('45 行数据');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain('collector');
+    const button = within(confirm).getByTestId('confirm-button');
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: 'accept-s3-old' },
+    });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(previewCalls()).toHaveLength(1);
+
+    fireEvent.click(button);
+    await waitFor(() => expect(previewCalls()).toHaveLength(2));
+    expect(previewCalls()[1]?.params).toEqual({ workspaceId: 'ws-2', confirm: true });
+
+    // Executed: the row is gone (mutated, no re-read), every drawer closed, a toast with counts.
+    await waitFor(() => expect(screen.queryByTestId('workspace-row-ws-2')).toBeNull());
+    expect(screen.queryByTestId('purge-workspace-confirm')).toBeNull();
+    expect(screen.queryByTestId('purge-workspace-drawer')).toBeNull();
+    expect(screen.getByTestId('workspace-row-ws-1')).toBeTruthy();
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('accept-s3-old');
+    expect(toast.textContent).toContain('45 行');
+    expect(http.calls.filter((call) => call.name === 'list_workspaces')).toHaveLength(1);
+  });
+
+  it('A1: cancelling the irreversible step returns to the preview; the detail panel offers the same entry', async () => {
+    const old = workspace({
+      id: 'ws-2',
+      name: 'Old',
+      status: 'disabled',
+      isDefault: false,
+      disabledAt: null,
+      purgeable: true,
+    });
+    const http = scriptedHttp({
+      ...baseHandlers([old]),
+      purge_workspace: () => ({
+        workspaceId: 'ws-2',
+        name: 'Old',
+        purpose: 'standard',
+        status: 'disabled',
+        reason: 'disabled_retention_elapsed',
+        executed: false,
+        counts: {},
+        totalRows: 0,
+        activeHandles: 0,
+        warnings: [],
+        purgedUsers: [],
+        principalIds: [],
+        taskIds: [],
+      }),
+    });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('workspace-row-ws-2'));
+    const detail = await screen.findByTestId('workspace-detail');
+    fireEvent.click(within(detail).getByTestId('workspace-purge'));
+    const drawer = await screen.findByTestId('purge-workspace-drawer');
+    await within(drawer).findByTestId('purge-preview-reason');
+    expect(within(drawer).queryByTestId('purge-warning-service-handle')).toBeNull();
+
+    fireEvent.click(within(drawer).getByTestId('purge-workspace-continue'));
+    const confirm = await screen.findByTestId('purge-workspace-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+    await screen.findByTestId('purge-workspace-drawer');
+    expect(screen.queryByTestId('purge-workspace-confirm')).toBeNull();
+
+    // Cancelling the preview goes back to the detail drawer; nothing was deleted.
+    fireEvent.click(screen.getByTestId('purge-workspace-cancel'));
+    await screen.findByTestId('workspace-detail');
+    expect(
+      http.calls.filter(
+        (call) => call.name === 'purge_workspace' && (call.params as { confirm?: boolean }).confirm,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('A1: the purge 409s render as the mapped bilingual copy — on the preview and on the confirm', async () => {
+    const old = workspace({
+      id: 'ws-2',
+      name: 'Old',
+      status: 'disabled',
+      isDefault: false,
+      purgeable: true,
+      disabledAt: null,
+    });
+    let previewCalls = 0;
+    const http = scriptedHttp({
+      ...baseHandlers([old]),
+      purge_workspace: (params) => {
+        const p = params as Record<string, unknown>;
+        if (p.confirm === true) {
+          return Promise.reject(
+            new HttpError('capability_error', 'the workspace is active', 'workspace_active'),
+          );
+        }
+        previewCalls += 1;
+        if (previewCalls === 1) {
+          return Promise.reject(
+            new HttpError(
+              'capability_error',
+              'the workspace was disabled on … and becomes purgeable on …',
+              'retention_not_elapsed',
+            ),
+          );
+        }
+        return {
+          workspaceId: 'ws-2',
+          name: 'Old',
+          purpose: 'standard',
+          status: 'disabled',
+          reason: 'disabled_retention_elapsed',
+          executed: false,
+          counts: {},
+          totalRows: 0,
+          activeHandles: 0,
+          warnings: [],
+          purgedUsers: [],
+          principalIds: [],
+          taskIds: [],
+        };
+      },
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('workspace-row-ws-2');
+    fireEvent.click(within(row).getByTestId('workspace-purge'));
+    const drawer = await screen.findByTestId('purge-workspace-drawer');
+    const error = await within(drawer).findByTestId('purge-preview-error');
+    expect(error.textContent).toContain('停用未满 7 天');
+    expect(error.getAttribute('data-error-code')).toBe('retention_not_elapsed');
+    expect(within(drawer).getByTestId('purge-workspace-continue').hasAttribute('disabled')).toBe(
+      true,
+    );
+
+    // Reopen (the drawer remounts and previews again), then fail the execute step.
+    fireEvent.click(within(drawer).getByTestId('purge-workspace-cancel'));
+    const detail = await screen.findByTestId('workspace-detail');
+    fireEvent.click(within(detail).getByTestId('workspace-purge'));
+    const reopened = await screen.findByTestId('purge-workspace-drawer');
+    await within(reopened).findByTestId('purge-preview-reason');
+    fireEvent.click(within(reopened).getByTestId('purge-workspace-continue'));
+    const confirm = await screen.findByTestId('purge-workspace-confirm');
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: 'Old' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const confirmError = await within(confirm).findByTestId('confirm-error');
+    expect(confirmError.textContent).toContain('该工作区仍在启用中');
+    expect(confirmError.getAttribute('data-error-code')).toBe('workspace_active');
+    // Still on the confirm, nothing removed.
+    expect(screen.getByTestId('workspace-row-ws-2')).toBeTruthy();
   });
 });

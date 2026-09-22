@@ -61,8 +61,34 @@ test.describe('S4.1: Explorer cookie auth', () => {
     const body = await res.json();
     expect(Array.isArray(body.nodes)).toBe(true);
 
+    // S6-C (§5.7): the sidebar hides the 图 entry when caddy serves the placeholder page
+    // ("Explorer bundle not built" — `lib/explorer-probe.ts`). CI does not build the bundle, so
+    // the entry is expected to be absent there once the shell wiring lands; a deployment with a
+    // real bundle keeps the link. Until the Sidebar change is merged the placeholder case may
+    // still show the link — both are accepted here, and the strict check is the fixme below.
+    const explorerBody = await (await page.request.get('/explorer/')).text();
+    const bundleBuilt = !explorerBody.includes('Explorer bundle not built');
     const explorerLink = page.getByTestId('nav-explorer');
-    await expect(explorerLink).toHaveAttribute('href', '/explorer/');
+    if (bundleBuilt) {
+      await expect(explorerLink).toHaveAttribute('href', '/explorer/');
+    } else if (await explorerLink.isVisible().catch(() => false)) {
+      await expect(explorerLink).toHaveAttribute('href', '/explorer/');
+    }
+  });
+
+  test('S6-C: the 图 Explorer entry is hidden while caddy serves the placeholder page', async ({
+    page,
+  }) => {
+    // Strict form of the check above: `AppShell` passes `useExplorerAvailable()` to `Sidebar`
+    // (S6-C integration), so the entry's visibility follows the placeholder probe exactly.
+    const ownerLogin = OWNER_LOGIN as string;
+    const ownerPassword = OWNER_PASSWORD as string;
+    await login(page, ownerLogin, ownerPassword);
+    const explorerBody = await (await page.request.get('/explorer/')).text();
+    const bundleBuilt = !explorerBody.includes('Explorer bundle not built');
+    const explorerLink = page.getByTestId('nav-explorer');
+    if (bundleBuilt) await expect(explorerLink).toBeVisible();
+    else await expect(explorerLink).toBeHidden();
   });
 
   test('Sign out clears both cookies -> 401 again', async ({ page }) => {

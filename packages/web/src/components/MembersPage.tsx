@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
+import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { type PrincipalRow, principalDisplayRole } from '../lib/governance.js';
 import { AddMemberForm } from './AddMemberForm.js';
@@ -36,7 +37,12 @@ type DrawerState =
  * `rotate_api_key` ("owner 或本人" — a non-owner rotating their own key would need a `principalId`
  * they cannot discover from this page anyway, since a member never sees `/govern/*` once role is
  * proven — see `Sidebar`), so this page's write affordances hide behind a single `canManage`
- * 403-derived flag.
+ * flag. C9 (console-completion-plan §2b): that flag reads the *authoritative* role first —
+ * `get_workspace.caller.role` via `useWorkspaceIdentity`, owner only, the same read the Sidebar
+ * badge already makes — and falls back to the 403 inference only while that read is not ready.
+ * The inference alone never hid these buttons from an operator: `list_principals` is
+ * operator-readable, so an operator's session never learned a denial and could click straight
+ * into a guaranteed 403.
  *
  * P-A1 splits the two things "add a member" used to mean (design doc §5): a **person** joins by
  * their platform login (`add_member` — a membership Principal with no API key, they sign in with
@@ -48,10 +54,12 @@ type DrawerState =
 export function MembersPage({ http }: MembersPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
+  const { role } = useWorkspaceIdentity(http);
   const principals = useCapabilityList<PrincipalRow>(http, 'list_principals');
   const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
 
-  const canManage = !permissions.isDenied('create_principal');
+  const canManage =
+    role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('create_principal');
 
   function refreshList(): void {
     invalidateCapability(http, 'list_principals');
@@ -68,14 +76,12 @@ export function MembersPage({ http }: MembersPageProps) {
 
   const rows = principals.state.status === 'ready' ? principals.state.data.items : [];
   const forbidden = principals.state.status === 'error' && isForbiddenError(principals.state.error);
-  const unavailable =
-    principals.state.status === 'error' && isNotFoundError(principals.state.error);
 
   return (
     <div className="page">
       <PageHeader
         title="成员与授权 Members"
-        description="Who can sign in, what role they hold, and their API key lifecycle."
+        description="谁能进入这个工作区、持有什么角色、API key 的生命周期。 Who can sign in, what role they hold, and their API key lifecycle."
         actions={
           canManage ? (
             <>
@@ -97,24 +103,17 @@ export function MembersPage({ http }: MembersPageProps) {
       {principals.state.status === 'loading' ? (
         <SkeletonRows count={4} label="Loading members" testId="members-loading" />
       ) : principals.state.status === 'error' ? (
-        unavailable ? (
-          <EmptyState
-            icon="users"
-            title="该能力尚未上线 Not live yet"
-            body="list_principals is part of S3.11, still landing on the kernel side."
-            testId="members-unavailable"
-          />
-        ) : forbidden ? (
+        forbidden ? (
           <EmptyState
             icon="shield"
-            title="需要 owner 权限"
-            body="list_principals is restricted to the workspace owner."
+            title="需要 owner 权限 Owner role required"
+            body="list_principals 仅工作区 owner 可读。 list_principals is restricted to the workspace owner."
             testId="members-forbidden"
           />
         ) : (
           <ErrorBanner
             error={principals.state.error}
-            title="Could not load members"
+            title="无法加载成员 Could not load members"
             onRetry={() => void principals.reload()}
             testId="members-error"
           />
@@ -122,8 +121,8 @@ export function MembersPage({ http }: MembersPageProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="users"
-          title="No members yet"
-          body="Create the first member to hand out an API key."
+          title="还没有成员 No members yet"
+          body="先添加一个成员，或创建一个服务凭证。 Add the first member, or create a service credential."
           testId="members-empty"
         />
       ) : (
@@ -138,7 +137,7 @@ export function MembersPage({ http }: MembersPageProps) {
                 <>
                   <span className="truncate">{row.displayName}</span>
                   {row.kind !== 'human' ? <span className="tag">{row.kind}</span> : null}
-                  {row.disabledAt ? <span className="tag text-danger">disabled</span> : null}
+                  {row.disabledAt ? <span className="tag text-danger">已停用 disabled</span> : null}
                 </>
               }
               meta={
@@ -149,7 +148,7 @@ export function MembersPage({ http }: MembersPageProps) {
                   {row.hasApiKey ? (
                     <>
                       <span className="meta-sep" />
-                      <span>API key issued</span>
+                      <span>已签发 API key issued</span>
                     </>
                   ) : null}
                 </>
@@ -164,7 +163,7 @@ export function MembersPage({ http }: MembersPageProps) {
         open={drawer.kind === 'addMember'}
         onClose={() => setDrawer({ kind: 'closed' })}
         title="添加成员 Add member"
-        subtitle="By platform login — no account is created here and no API key is issued."
+        subtitle="按平台登录名添加；这里不创建账户、不签发 API key。 By platform login — no account is created here and no API key is issued."
         testId="add-member-drawer"
       >
         {drawer.kind === 'addMember' ? (
@@ -173,7 +172,7 @@ export function MembersPage({ http }: MembersPageProps) {
             onCancel={() => setDrawer({ kind: 'closed' })}
             onDone={(principal) => {
               setDrawer({ kind: 'closed' });
-              toast.push({ tone: 'ok', title: `${principal.displayName} added` });
+              toast.push({ tone: 'ok', title: `已添加 ${principal.displayName} added` });
               refreshList();
             }}
           />
@@ -184,7 +183,7 @@ export function MembersPage({ http }: MembersPageProps) {
         open={drawer.kind === 'create'}
         onClose={() => setDrawer({ kind: 'closed' })}
         title="服务凭证 Service credential (API key)"
-        subtitle="Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person."
+        subtitle="创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。 Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person."
         testId="create-principal-drawer"
       >
         {drawer.kind === 'create' ? (
@@ -193,7 +192,7 @@ export function MembersPage({ http }: MembersPageProps) {
             onCancel={() => setDrawer({ kind: 'closed' })}
             onDone={(principal) => {
               setDrawer({ kind: 'closed' });
-              toast.push({ tone: 'ok', title: `${principal.displayName} created` });
+              toast.push({ tone: 'ok', title: `已创建 ${principal.displayName} created` });
               refreshList();
             }}
           />
@@ -203,7 +202,7 @@ export function MembersPage({ http }: MembersPageProps) {
       <Drawer
         open={drawer.kind === 'detail'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title={drawer.kind === 'detail' ? drawer.principal.displayName : 'Member'}
+        title={drawer.kind === 'detail' ? drawer.principal.displayName : '成员 Member'}
         subtitle={
           drawer.kind === 'detail' ? <span className="mono">{drawer.principal.id}</span> : undefined
         }

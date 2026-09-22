@@ -89,6 +89,8 @@ export function toWireChat(row: ChatRow) {
     title: row.title,
     visibility: row.visibility,
     createdAt: row.createdAt.toISOString(),
+    // S6-A chat lifecycle (wire/chat.ts `ChatWireSchema.archivedAt`): null = active.
+    archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
   };
 }
 

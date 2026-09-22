@@ -14,7 +14,12 @@ export interface ActionRequestDetailProps {
   readonly busy: boolean;
   /** The most recent error from a decision call on *this* request, if any. */
   readonly error: unknown | null;
-  readonly onApprove: (actionRequestId: string, options: { alwaysAllow: boolean }) => void;
+  /** `reason` (S6-A C25) is present only when the textarea holds a non-blank value — kept out
+   *  of the options object otherwise so pre-S6-A callers see exactly the shape they always did. */
+  readonly onApprove: (
+    actionRequestId: string,
+    options: { alwaysAllow: boolean; reason?: string },
+  ) => void;
   readonly onReject: (actionRequestId: string, reason: string | undefined) => void;
   /** `false` hides "Always allow this kind" — `set_auto_approved_action_kind` is operator+, and
    *  the session has already been told 403 for it (hooks/usePermissions). */
@@ -35,8 +40,12 @@ const BLAST_TONE: Readonly<Record<'low' | 'medium' | 'high', string>> = {
  * gate, scope, blast radius, requester), then params (sensitive keys redacted client-side, see
  * `lib/format.ts` `redactSensitive`), then the decision form while the request is decidable
  * (`isDecidable` — `ACTION_REQUEST_TRANSITIONS` only leaves `pending_approval` on approve/reject).
- * `approve` takes no reason on the wire (`packages/shared/src/capabilities.ts`), so the reason
- * box is labelled as travelling with Reject only.
+ * S6-A C25: `approve{reason?}` exists on the wire and the kernel refuses a high-blast-radius
+ * approval without one (400 `reason_required`) — the textarea travels with both decisions and
+ * Approve is refused client-side, with the same message, while `blastRadius === 'high'` and the
+ * box is blank. The approvals page itself no longer renders this component: it uses
+ * `approvals/ApprovalDetail` on the shared `ui/ApprovalCard` (with the tiered confirmation);
+ * this one stays for the chat's inline card (`ActionRequestCard.tsx`) until that lane migrates.
  */
 export function ActionRequestDetail({
   card,
@@ -48,7 +57,9 @@ export function ActionRequestDetail({
   compact = false,
 }: ActionRequestDetailProps) {
   const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState<string | null>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
+  const reasonRequired = card.blastRadius === 'high';
   const decidable = card.isHolder && isDecidable(card.status);
   const blocking = card.awaitDecision && isDecidable(card.status);
   const reasonId = `reason-${card.actionRequestId}`;
@@ -158,12 +169,27 @@ export function ActionRequestDetail({
           <Textarea
             id={reasonId}
             value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            placeholder="Reason (optional, recorded with Reject)"
+            onChange={(event) => {
+              setReason(event.target.value);
+              if (reasonError) setReasonError(null);
+            }}
+            placeholder={
+              reasonRequired
+                ? '理由（高影响：批准必填，进审计） Reason (required for a high-impact approval; audited)'
+                : '理由（可选，随决定记入审计） Reason (optional, recorded with the decision)'
+            }
             aria-label="Decision reason"
+            aria-required={reasonRequired || undefined}
+            aria-describedby={reasonError ? `${reasonId}-error` : undefined}
             rows={2}
             disabled={busy}
+            invalid={reasonError !== null}
           />
+          {reasonError ? (
+            <p className="field-error" id={`${reasonId}-error`} role="alert">
+              {reasonError}
+            </p>
+          ) : null}
           <div className="action-detail-actions">
             {canAlwaysAllow ? (
               <label className="checkbox">
@@ -188,7 +214,19 @@ export function ActionRequestDetail({
             <Button
               variant="primary"
               loading={busy}
-              onClick={() => onApprove(card.actionRequestId, { alwaysAllow })}
+              onClick={() => {
+                const trimmed = reason.trim();
+                if (reasonRequired && trimmed === '') {
+                  setReasonError(
+                    '高影响动作必须填写批准理由 A reason is required for a high-impact action',
+                  );
+                  return;
+                }
+                onApprove(card.actionRequestId, {
+                  alwaysAllow,
+                  ...(trimmed !== '' ? { reason: trimmed } : {}),
+                });
+              }}
             >
               Approve
             </Button>

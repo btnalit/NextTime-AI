@@ -27,6 +27,9 @@
  */
 
 export {
+  CHAT_AUTO_TITLE_MAX_CHARS,
+  CHAT_TITLE_MAX_CHARS,
+  ChatArchivedError,
   ChatNotFoundError,
   DEFAULT_CHAT_HISTORY_LIMIT,
   TurnAlreadyRunningError,
@@ -38,8 +41,11 @@ export {
   insertChatMessage,
   listChats,
   newChat,
+  normalizeChatTitle,
+  renameChat,
   requireChatAccess,
   sendChatMessage,
+  setChatArchived,
 } from './service.js';
 export type {
   ChatHistoryPage,
@@ -48,10 +54,13 @@ export type {
   ChatRow,
   GetChatHistoryInput,
   InsertChatMessageInput,
+  ListChatsInput,
   NewChatInput,
+  RenameChatInput,
   RunningTurn,
   SendChatMessageInput,
   SendChatMessageResult,
+  SetChatArchivedInput,
 } from './service.js';
 
 export { createChatEventSink } from './event-sink.js';

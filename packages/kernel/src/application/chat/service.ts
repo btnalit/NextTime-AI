@@ -1,6 +1,8 @@
 import type { PoolClient } from 'pg';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
+import { publishChatPushEvent } from './push.js';
 
 /**
  * application/chat/service: Chat/Turn persistence (design doc §5.1.3 Chat/Turn, §8.1
@@ -58,6 +60,17 @@ export class TurnAlreadyRunningError extends Error {
   }
 }
 
+/** Thrown by `sendChatMessage` when the Chat is archived (S6-A, docs/console-completion-plan.md
+ *  §4 "Chat 生命周期": archiving only affects list visibility, but an archived Chat takes no new
+ *  Turn — restore it first). Enforced here, not only in the console, so an API caller cannot write
+ *  into an archived Chat either. Maps to 409 at every transport, like `TurnAlreadyRunningError`. */
+export class ChatArchivedError extends Error {
+  constructor(chatId: string) {
+    super(`chat ${chatId} is archived — unarchive it before sending`);
+    this.name = 'ChatArchivedError';
+  }
+}
+
 const ONE_RUNNING_TURN_PER_CHAT_CONSTRAINT = 'activities_one_running_turn_per_chat_uidx';
 
 function isUniqueViolation(err: unknown, constraintName: string): boolean {
@@ -77,6 +90,10 @@ export interface ChatRow {
   readonly title: string | null;
   readonly visibility: string;
   readonly createdAt: Date;
+  /** S6-A chat lifecycle (migrations/core/0031_chat_archived_at.sql): `null` = active. Archiving
+   *  only affects `listChats`'s default filter — every other read of the Chat and its Turns is
+   *  unchanged (docs/console-completion-plan.md §4 "归档只影响列表可见性"). */
+  readonly archivedAt: Date | null;
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'system';
@@ -108,6 +125,7 @@ interface ChatDbRow {
   title: string | null;
   visibility: string;
   created_at: Date;
+  archived_at: Date | null;
 }
 
 interface ChatMessageDbRow {
@@ -122,7 +140,8 @@ interface ChatMessageDbRow {
   source_outbox_id: string | null; // bigint comes back from `pg` as a string
 }
 
-const CHAT_COLUMNS = 'workspace_id, id, owner_principal_id, title, visibility, created_at';
+const CHAT_COLUMNS =
+  'workspace_id, id, owner_principal_id, title, visibility, created_at, archived_at';
 const CHAT_MESSAGE_COLUMNS =
   'workspace_id, id, chat_id, turn_id, role, content, sequence, created_at, source_outbox_id';
 
@@ -134,6 +153,7 @@ function mapChatRow(row: ChatDbRow): ChatRow {
     title: row.title,
     visibility: row.visibility,
     createdAt: row.created_at,
+    archivedAt: row.archived_at,
   };
 }
 
@@ -210,16 +230,25 @@ export async function currentPrincipalId(client: PoolClient): Promise<string> {
 // listChats / newChat
 // -------------------------------------------------------------------------------------------
 
+export interface ListChatsInput {
+  /** S6-A (docs/console-completion-plan.md §5.1 "列表默认隐藏已归档"): `false`/omitted hides rows
+   *  with `archived_at` set; `true` returns active and archived rows together (the console's
+   *  "已归档" filter). */
+  readonly includeArchived?: boolean;
+}
+
 export async function listChats(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
+  input: ListChatsInput = {},
 ): Promise<readonly ChatRow[]> {
   const result = await client.query<ChatDbRow>(
     `select ${CHAT_COLUMNS} from chats
      where workspace_id = $1 and owner_principal_id = $2
+       and ($3::boolean or archived_at is null)
      order by created_at desc`,
-    [workspaceId, principalId],
+    [workspaceId, principalId, input.includeArchived === true],
   );
   return result.rows.map(mapChatRow);
 }
@@ -379,7 +408,8 @@ export async function sendChatMessage(
   principalId: string,
   input: SendChatMessageInput,
 ): Promise<SendChatMessageResult> {
-  await requireChatAccess(client, workspaceId, input.chatId);
+  const chat = await requireChatAccess(client, workspaceId, input.chatId);
+  if (chat.archivedAt !== null) throw new ChatArchivedError(input.chatId);
 
   let turnId: string;
   try {
@@ -403,6 +433,10 @@ export async function sendChatMessage(
     content: { text: input.text },
   });
 
+  if (chat.title === null) {
+    await autoTitleChat(client, workspaceId, input.chatId, input.text);
+  }
+
   await enqueue(client, {
     type: 'TurnStarted',
     workspaceId,
@@ -415,6 +449,164 @@ export async function sendChatMessage(
   });
 
   return { message, turnId };
+}
+
+// -------------------------------------------------------------------------------------------
+// S6-A chat lifecycle (docs/console-completion-plan.md §4 "Chat 生命周期", §5.1, §6): auto-title
+// on the first user message, `rename_chat`, `archive_chat` / `unarchive_chat`. Each write here
+// also appends its own domain audit row (`chat.rename` / `chat.archive` / `chat.unarchive`) —
+// dispatch.ts's per-capability row documents the API call, this one the Chat transition, the
+// same two-row discipline governance/approval's transition-log.ts follows — and pushes
+// `chat.metadata` so a client with the chat open (or the chat list) learns the new title /
+// archived state without a reload (the same in-process push turn-recovery.ts uses for
+// `turnStatus`). Ownership (own Chat; owner may archive others') is the *handler's* check
+// (application/gateway/handlers.ts) — this module only ever sees a Chat RLS already showed the
+// caller (`requireChatAccess`), and it never widens that.
+// -------------------------------------------------------------------------------------------
+
+/** docs/console-completion-plan.md §4 "title 在第一条用户消息落库时自动生成（截断）", §5.1 "前 40 字". */
+export const CHAT_AUTO_TITLE_MAX_CHARS = 40;
+/** `rename_chat`'s own ceiling (packages/shared/src/capabilities.ts `rename_chat.paramsSchema`). */
+export const CHAT_TITLE_MAX_CHARS = 200;
+
+/**
+ * One line, trimmed, inner whitespace runs collapsed to a single space, cut to `maxChars` *code
+ * points* (`Array.from`, so a CJK character or an emoji counts as one and is never split in the
+ * middle of a surrogate pair). Returns `null` when nothing printable is left — the caller then
+ * leaves the title untouched rather than writing an empty string.
+ */
+export function normalizeChatTitle(text: string, maxChars: number): string | null {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (collapsed.length === 0) return null;
+  const chars = Array.from(collapsed);
+  return chars.length <= maxChars ? collapsed : chars.slice(0, maxChars).join('').trimEnd();
+}
+
+/**
+ * Auto-title: `chats.title` was null when the caller's `sendChatMessage` read the row, so the
+ * first `CHAT_AUTO_TITLE_MAX_CHARS` of this (first) user message become the title. The
+ * `title is null` predicate is load-bearing — it is what makes `rename_chat` (and `new_chat`'s
+ * explicit `title`) win forever: a concurrent or earlier rename means 0 rows updated, never an
+ * overwrite. No audit row of its own (it is part of the `send_chat_message` call dispatch.ts
+ * already audits, and it carries no decision by a human); the `chat.metadata` push tells a live
+ * client the list entry's title changed.
+ */
+async function autoTitleChat(
+  client: PoolClient,
+  workspaceId: string,
+  chatId: string,
+  firstMessageText: string,
+): Promise<void> {
+  const title = normalizeChatTitle(firstMessageText, CHAT_AUTO_TITLE_MAX_CHARS);
+  if (title === null) return;
+  const result = await client.query<{ title: string }>(
+    `update chats set title = $3
+     where workspace_id = $1 and id = $2 and title is null
+     returning title`,
+    [workspaceId, chatId, title],
+  );
+  if (result.rows[0] !== undefined) {
+    publishChatPushEvent({ type: 'chat.metadata', chatId, metadata: { title } });
+  }
+}
+
+export interface RenameChatInput {
+  readonly chatId: string;
+  /** Raw title as the caller sent it — normalized here (`normalizeChatTitle`,
+   *  `CHAT_TITLE_MAX_CHARS`). The capability's `paramsSchema` already guarantees at least one
+   *  non-whitespace character, so normalization never yields `null` for a dispatched call. */
+  readonly title: string;
+  readonly actorPrincipalId: string;
+}
+
+/** `rename_chat` — writes `chats.title` unconditionally (a rename always wins over the auto-title,
+ *  see `autoTitleChat`), audits `chat.rename` with the before/after pair, pushes `chat.metadata`.
+ *  Throws `ChatNotFoundError` when RLS hides the row (the handler has already done the ownership
+ *  check on the row it read, so this can only be a race with a concurrent delete). */
+export async function renameChat(
+  client: PoolClient,
+  workspaceId: string,
+  input: RenameChatInput,
+): Promise<ChatRow> {
+  const title = normalizeChatTitle(input.title, CHAT_TITLE_MAX_CHARS);
+  if (title === null) {
+    throw new Error(
+      'renameChat: title is blank after normalization (paramsSchema should refuse it)',
+    );
+  }
+  const before = await requireChatAccess(client, workspaceId, input.chatId);
+  const result = await client.query<ChatDbRow>(
+    `update chats set title = $3
+     where workspace_id = $1 and id = $2
+     returning ${CHAT_COLUMNS}`,
+    [workspaceId, input.chatId, title],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new ChatNotFoundError(workspaceId, input.chatId);
+  const updated = mapChatRow(row);
+
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: input.actorPrincipalId,
+    action: 'chat.rename',
+    resourceType: 'chat',
+    resourceId: updated.id,
+    payload: { from: before.title, to: updated.title },
+  });
+  publishChatPushEvent({
+    type: 'chat.metadata',
+    chatId: updated.id,
+    metadata: { title: updated.title },
+  });
+  return updated;
+}
+
+export interface SetChatArchivedInput {
+  readonly chatId: string;
+  /** `true` = `archive_chat` (sets `archived_at = now()` if not already set), `false` =
+   *  `unarchive_chat` (clears it). Both idempotent: re-archiving keeps the original timestamp,
+   *  re-activating an active chat is a no-op — still audited, since the caller asked for it. */
+  readonly archived: boolean;
+  readonly actorPrincipalId: string;
+}
+
+/** `archive_chat` / `unarchive_chat` (docs/console-completion-plan.md §4 `active ↔ archived`):
+ *  visibility-only — nothing about the Chat's Turns, messages or provenance changes. Audits
+ *  `chat.archive` / `chat.unarchive`, pushes `chat.metadata {archivedAt}`. */
+export async function setChatArchived(
+  client: PoolClient,
+  workspaceId: string,
+  input: SetChatArchivedInput,
+): Promise<ChatRow> {
+  const result = await client.query<ChatDbRow>(
+    input.archived
+      ? `update chats set archived_at = coalesce(archived_at, now())
+         where workspace_id = $1 and id = $2
+         returning ${CHAT_COLUMNS}`
+      : `update chats set archived_at = null
+         where workspace_id = $1 and id = $2
+         returning ${CHAT_COLUMNS}`,
+    [workspaceId, input.chatId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new ChatNotFoundError(workspaceId, input.chatId);
+  const updated = mapChatRow(row);
+  const archivedAt = updated.archivedAt ? updated.archivedAt.toISOString() : null;
+
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: input.actorPrincipalId,
+    action: input.archived ? 'chat.archive' : 'chat.unarchive',
+    resourceType: 'chat',
+    resourceId: updated.id,
+    payload: { ownerPrincipalId: updated.ownerPrincipalId, archivedAt },
+  });
+  publishChatPushEvent({
+    type: 'chat.metadata',
+    chatId: updated.id,
+    metadata: { archivedAt },
+  });
+  return updated;
 }
 
 // -------------------------------------------------------------------------------------------

@@ -17,7 +17,10 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * (`config/llm-providers.fake.example.yaml`, which the e2e workflow copies into
  * `${NEXTTIME_DATA}/config/llm-providers.yaml`) — one model cannot show an allow-list *narrowing*
  * anything. No new environment variable: every user, workspace and password this file needs it
- * creates itself.
+ * creates itself. The last test (S6-A A1) opens the residue preset and, when the stack holds a
+ * `purgeable` workspace, walks the purge flow (preview → retype name → executed); on a clean
+ * stack it asserts the empty residue view instead — it never creates a purgeable row itself
+ * (that would mean waiting out the 7-day retention or an ephemeral TTL).
  *
  * **Runs before login.spec.ts, and that ordering is load-bearing**: login.spec.ts's last test
  * deliberately locks the `admin` account for `LOGIN_LOCK_MINUTES` (5) minutes, and this file signs
@@ -235,7 +238,9 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     const row = workspaceRow(page, workspaceName);
     await expect(row).toHaveCount(1);
     await expect(row.getByTestId('workspace-owner-chip')).toHaveText(ownerLogin);
-    await expect(row.getByTestId('workspace-status')).toHaveText('active');
+    // S6-A0 / C17: the status cell is the shared StatusChip — bilingual text, raw value on
+    // `data-status`.
+    await expect(row.getByTestId('workspace-status')).toHaveAttribute('data-status', 'active');
 
     await signOut(page);
   });
@@ -339,16 +344,79 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     await drawer.getByTestId('workspace-status-toggle').click();
     await expect(drawer.getByTestId('workspace-disable-confirm')).toBeVisible();
     await drawer.getByRole('button', { name: /确认停用 Confirm disable/ }).click();
-    await expect(row.getByTestId('workspace-status')).toHaveText('disabled', { timeout: 15_000 });
+    // The row is updated in place (never re-read here — the page's default filter would drop a
+    // disabled row on a re-read), so it stays on screen with its new status and retention clock.
+    await expect(row.getByTestId('workspace-status')).toHaveAttribute('data-status', 'disabled', {
+      timeout: 15_000,
+    });
+    await expect(row.getByTestId('workspace-disabled-at')).toContainText('天后可清除');
+    // Just disabled: inside the 7-day retention, no purge entry anywhere (S6-A A1).
+    await expect(row.getByTestId('workspace-purge')).toHaveCount(0);
+    await expect(drawer.getByTestId('workspace-purge-retention')).toBeVisible();
 
     // Back to `active` before this test ends — the same toggle, now labelled 启用 Enable. A CI
     // retry of this group creates its own workspace, but re-enabling keeps the one this attempt
     // made usable (and its owner able to sign in) for anyone reading the stack afterwards.
     await drawer.getByTestId('workspace-status-toggle').click();
-    await expect(row.getByTestId('workspace-status')).toHaveText('active', { timeout: 15_000 });
+    await expect(row.getByTestId('workspace-status')).toHaveAttribute('data-status', 'active', {
+      timeout: 15_000,
+    });
 
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
+    await signOut(page);
+  });
+
+  test('admin: the default view hides residue; the residue preset and the purge flow (S6-A A1)', async ({
+    page,
+  }) => {
+    test.slow();
+    await signInAsAdmin(page);
+
+    // The overview banner is the entry point when residue exists; it may legitimately be absent on
+    // a clean stack, so the residue preset is reached by its hash directly.
+    await page.goto('/#/platform/workspaces?residue=1');
+    await expect(page.getByTestId('platform-workspaces-page')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('platform-workspaces-residue-only')).toBeChecked();
+
+    // Purge is offered only on rows the kernel flags `purgeable` (disabled ≥ 7 days, or an
+    // expired ephemeral workspace) and never on the default workspace — a CI stack that has just
+    // created W2 has none, so the flow is exercised only when such a row exists.
+    const purgeButtons = page.getByTestId('workspace-purge');
+    if ((await purgeButtons.count()) === 0) {
+      await expect(page.getByTestId('platform-workspaces-empty')).toBeVisible();
+      await signOut(page);
+      return;
+    }
+    const target = page
+      .getByTestId('platform-workspaces-table')
+      .locator('tbody tr')
+      .filter({ has: purgeButtons.first() });
+    const targetName = ((await target.locator('td').first().textContent()) ?? '').trim();
+    expect(targetName.length).toBeGreaterThan(0);
+
+    await purgeButtons.first().click();
+    const preview = page.getByTestId('purge-workspace-drawer');
+    await expect(preview).toBeVisible();
+    // Step 1: the dry run — nothing deleted; counts and reason on screen.
+    await expect(preview.getByTestId('purge-preview-reason')).toBeVisible({ timeout: 15_000 });
+    await expect(preview.getByTestId('purge-preview-total')).toBeVisible();
+    await preview.getByTestId('purge-workspace-continue').click();
+
+    // Step 2: irreversible — the danger button stays disabled until the name is retyped and the
+    // acknowledgement ticked (§5.9 principle 4).
+    const confirm = page.getByTestId('purge-workspace-confirm');
+    await expect(confirm).toBeVisible();
+    await expect(confirm.getByTestId('confirm-button')).toBeDisabled();
+    await confirm.getByTestId('confirm-typed-name').fill(targetName);
+    await confirm.getByTestId('confirm-acknowledge').check();
+    await expect(confirm.getByTestId('confirm-button')).toBeEnabled();
+    await confirm.getByTestId('confirm-button').click();
+
+    await expect(confirm).toBeHidden({ timeout: 15_000 });
+    await expect(target).toHaveCount(0);
+    await expect(page.getByTestId('toast').filter({ hasText: targetName })).toBeVisible();
+
     await signOut(page);
   });
 });

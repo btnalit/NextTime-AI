@@ -133,11 +133,16 @@ function createFakeSupervisorClient() {
   };
   let spawnError: Error | undefined;
   let touchError: Error | undefined;
+  /** Runs while a spawn is in flight — after the request is "sent", before its result comes back
+   *  (leftover 44 tests below use it to model worker-supervisor stopping the previous container
+   *  *inside* this very spawn call: its attach stream closes before the new id is returned). */
+  let spawnInterceptor: ((input: SpawnInput) => Promise<void> | void) | undefined;
 
   const client: SupervisorClientPort = {
     async spawn(input: SpawnInput): Promise<SpawnResult> {
       spawnCalls.push(input);
       if (spawnError) throw spawnError;
+      if (spawnInterceptor) await spawnInterceptor(input);
       return spawnResult;
     },
     async stop(): Promise<void> {},
@@ -163,6 +168,9 @@ function createFakeSupervisorClient() {
     },
     setTouchError: (err: Error | undefined) => {
       touchError = err;
+    },
+    setSpawnInterceptor: (hook: ((input: SpawnInput) => Promise<void> | void) | undefined) => {
+      spawnInterceptor = hook;
     },
   };
 }
@@ -681,6 +689,113 @@ describe('createHost — container stdio closing', () => {
     // so the same chat is switched to once more rather than assumed still current.
     const secondAttachment = containerIo.attachmentsByContainerId.get('c2');
     expect(secondAttachment?.written).toEqual([switchCommand(nextTurn)]);
+  });
+});
+
+describe('createHost — resident container recreated inside a Turn’s own spawn (leftover 44)', () => {
+  /** A completed first Turn on `c1`, so the principal has a cached attachment worker-supervisor
+   *  can retire, and a second `startTurn` for the same chat whose spawn comes back with `c2`. */
+  async function firstTurnOnC1(setup: ReturnType<typeof setUp>) {
+    const first = startTurnCommand();
+    const c1 = await startTurnAndAccept(setup.host, setup.containerIo, first);
+    c1?.emitLine({ type: 'agent_settled' });
+    expect(setup.kernelLink.runtimeEvents.map((event) => event.type)).toEqual(['turnEnded']);
+    setup.supervisor.setSpawnResult({
+      containerId: 'c2',
+      ip: '100.64.0.3',
+      status: 'running',
+      created: true,
+      restarts: 1,
+    });
+    const second = startTurnCommand({
+      principalId: first.principalId,
+      workspaceId: first.workspaceId,
+      chatId: first.chatId,
+      handle: 'rotated-jwt', // a gate was connected in between: the kernel reissued the Handle
+    });
+    return { first, second, c1 };
+  }
+
+  it("does not report the new Turn interrupted when the previous container's stream closes while its spawn is still in flight, and delivers it to the new container", async () => {
+    const setup = setUp();
+    const { host, supervisor, containerIo, kernelLink } = setup;
+    const { first, second, c1 } = await firstTurnOnC1(setup);
+
+    // worker-supervisor's resident-service.ts: the incoming Handle's jti no longer matches the
+    // running container's label → `docker stop` the old one → create a new one → only then
+    // answer /resident/spawn. From here that is: c1's attach stream ends *during* the spawn call.
+    supervisor.setSpawnInterceptor(() => {
+      c1?.emitClose(undefined);
+    });
+    await host.handleStartTurn(second);
+
+    // The close belonged to a container this Turn was never handed to — nothing was reported.
+    expect(kernelLink.runtimeEvents).toHaveLength(1);
+    expect(kernelLink.rejected).toEqual([]);
+    expect(containerIo.attachCalls).toEqual(['c1', 'c2']);
+
+    // The Turn went to the new container: session switch, prompt, acceptance, completion all on c2.
+    const c2 = containerIo.attachmentsByContainerId.get('c2');
+    expect(c2?.written).toEqual([switchCommand(second)]);
+    emitSwitchOk(c2, second.turnId);
+    expect(c2?.written).toEqual([switchCommand(second), promptCommand(second)]);
+    c2?.emitLine({ type: 'response', command: 'prompt', id: second.turnId, success: true });
+    expect(kernelLink.accepted).toEqual([first.turnId, second.turnId]);
+    c2?.emitLine({ type: 'agent_settled' });
+    expect(kernelLink.runtimeEvents.at(-1)).toEqual({
+      type: 'turnEnded',
+      status: 'completed',
+      workspaceId: second.workspaceId,
+      chatId: second.chatId,
+      turnId: second.turnId,
+      principalId: second.principalId,
+    });
+  });
+
+  it('ignores stdout the retiring container still emits during the spawn (a stray agent_settled must not complete the unbound Turn)', async () => {
+    const setup = setUp();
+    const { host, supervisor, containerIo, kernelLink } = setup;
+    const { second, c1 } = await firstTurnOnC1(setup);
+
+    supervisor.setSpawnInterceptor(() => {
+      c1?.emitLine({ type: 'agent_settled' }); // the old pi process winding down under SIGTERM
+      c1?.emitLine({ type: 'response', command: 'switch_session', success: false, error: 'x' });
+      c1?.emitClose(new Error('container exited'));
+    });
+    await host.handleStartTurn(second);
+
+    expect(kernelLink.runtimeEvents).toHaveLength(1); // still only the first Turn's completion
+    expect(kernelLink.rejected).toEqual([]);
+    const c2 = containerIo.attachmentsByContainerId.get('c2');
+    expect(c2?.written).toEqual([switchCommand(second)]);
+    emitSwitchOk(c2, second.turnId);
+    expect(c2?.written).toEqual([switchCommand(second), promptCommand(second)]);
+  });
+
+  it('still reports interrupted when the container the Turn is actually bound to closes (the bound-container path is unchanged)', async () => {
+    const setup = setUp();
+    const { host, containerIo, kernelLink } = setup;
+    const { second } = await firstTurnOnC1(setup);
+    await host.handleStartTurn(second);
+    const c2 = containerIo.attachmentsByContainerId.get('c2');
+    emitSwitchOk(c2, second.turnId);
+    c2?.emitLine({ type: 'response', command: 'prompt', id: second.turnId, success: true });
+
+    c2?.emitClose(new Error('container exited'));
+
+    expect(kernelLink.runtimeEvents.at(-1)).toMatchObject({
+      type: 'turnEnded',
+      status: 'interrupted',
+      turnId: second.turnId,
+    });
+    // ...and the next Turn re-spawns/re-attaches rather than reusing the dead attachment.
+    const third = startTurnCommand({
+      principalId: second.principalId,
+      workspaceId: second.workspaceId,
+      chatId: second.chatId,
+    });
+    await host.handleStartTurn(third);
+    expect(containerIo.attachCalls).toEqual(['c1', 'c2', 'c2']);
   });
 });
 

@@ -67,14 +67,42 @@ function renderPage(http: CapabilityCaller) {
 }
 
 describe('ModelsPage', () => {
-  it('renders the models table, quotas table, and policy dumps independently', async () => {
+  it('renders the models table and the structured quota / policy rows (C29) independently', async () => {
     const http = scriptedHttp({
       list_models: () => ({
         items: [{ id: 'anthropic/claude', provider: 'anthropic', model: 'claude-sonnet' }],
       }),
-      list_quotas: () => ({ items: [{ key: 'invoke_worker.max_depth', value: 5 }] }),
+      list_quotas: () => ({
+        items: [
+          {
+            key: 'task.max_depth',
+            value: 2,
+            isDefault: false,
+            updatedBy: 'owner-1',
+            updatedAt: '2026-09-01T00:00:00.000Z',
+          },
+          {
+            key: 'task.daily_cost_budget_usd',
+            value: null,
+            isDefault: true,
+            updatedBy: null,
+            updatedAt: null,
+          },
+        ],
+      }),
       list_policies: () => ({
-        items: [{ decision: 'require_approval', actionKindTag: 'docker.*' }],
+        items: [
+          {
+            id: 'pol-1',
+            actionKindTag: 'docker.restart_container',
+            blastRadius: 'high',
+            autoApprove: false,
+            requesterCanApprove: false,
+            setBy: 'owner-1',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            updatedAt: '2026-09-02T00:00:00.000Z',
+          },
+        ],
       }),
     });
     renderPage(http);
@@ -83,14 +111,25 @@ describe('ModelsPage', () => {
     expect(modelsTable.textContent).toContain('claude-sonnet');
 
     const quotasTable = await screen.findByTestId('quotas-table');
-    expect(quotasTable.textContent).toContain('invoke_worker.max_depth');
-    expect(quotasTable.textContent).toContain('5');
+    const depth = within(quotasTable).getByTestId('quota-row-task.max_depth');
+    expect(within(depth).getByTestId('quota-value').textContent).toBe('2');
+    expect(within(depth).getByTestId('quota-source').textContent).toContain('override');
+    const cost = within(quotasTable).getByTestId('quota-row-task.daily_cost_budget_usd');
+    expect(within(cost).getByTestId('quota-value').textContent).toContain('unlimited');
+    expect(within(cost).getByTestId('quota-source').textContent).toContain('default');
 
-    const policies = await screen.findByTestId('policies-list');
-    expect(policies.textContent).toContain('require_approval');
+    const policies = await screen.findByTestId('policies-table');
+    const row = within(policies).getByTestId('policy-row-pol-1');
+    expect(within(row).getByTestId('policy-action-kind').textContent).toBe(
+      'docker.restart_container',
+    );
+    expect(within(row).getByTestId('policy-auto-approve').textContent).toContain(
+      'requires approval',
+    );
+    expect(row.textContent).toContain('High');
   });
 
-  it('each section degrades to "该能力尚未上线" independently on 404 not_found', async () => {
+  it('each section degrades to its own error banner independently on 404 not_found (B6: no "not live yet" branch)', async () => {
     const http = scriptedHttp({
       list_models: () => ({ items: [] }),
       list_quotas: () =>
@@ -101,9 +140,9 @@ describe('ModelsPage', () => {
     });
     renderPage(http);
     await screen.findByTestId('models-empty');
-    await screen.findByTestId('quotas-unavailable');
+    await screen.findByTestId('quotas-error');
     await screen.findByTestId('policies-empty');
-    await screen.findByTestId('agent-policy-unavailable');
+    await screen.findByTestId('agent-policy-error');
   });
 
   it('shows a role explanation on 403 for the owner-only quotas/policies sections', async () => {
@@ -152,6 +191,36 @@ describe('ModelsPage', () => {
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-policy-form');
+    fireEvent.click(within(form).getByRole('button', { name: /保存策略 Save policy/ }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(true));
+  });
+
+  it('C11: un-ticking the current default model moves the default to the first remaining allowed model, on screen and on submit', async () => {
+    const http = scriptedHttp({
+      list_models: () => ({
+        items: [
+          { id: 'anthropic/claude', provider: 'anthropic', model: 'claude' },
+          { id: 'openai/gpt', provider: 'openai', model: 'gpt' },
+        ],
+      }),
+      list_quotas: () => ({ items: [] }),
+      list_policies: () => ({ items: [] }),
+      get_workspace: () => workspace('owner'),
+      get_agent_policy: () => agentPolicy({ allowedModels: ['anthropic/claude', 'openai/gpt'] }),
+      set_agent_policy: (params) => {
+        expect(params).toMatchObject({ allowedModels: ['openai/gpt'], defaultModel: 'openai/gpt' });
+        return agentPolicy({ allowedModels: ['openai/gpt'], defaultModel: 'openai/gpt' });
+      },
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('agent-policy-form');
+    const select = within(form).getByLabelText(/默认模型 Default model/) as HTMLSelectElement;
+    expect(select.value).toBe('anthropic/claude');
+
+    const checklist = within(form).getByTestId('agent-policy-allowed-models');
+    fireEvent.click(within(checklist).getByLabelText('anthropic/claude'));
+    expect(select.value).toBe('openai/gpt');
+
     fireEvent.click(within(form).getByRole('button', { name: /保存策略 Save policy/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(true));
   });

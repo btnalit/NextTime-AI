@@ -37,6 +37,8 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32011]: 'illegal_transition',
   [-32012]: 'quota_exceeded',
   [-32013]: 'attenuation_denied',
+  // Client-side only (lib/ws-client.ts `RPC_TIMEOUT_CODE`, C5): the kernel never answered.
+  [-32000]: 'timeout',
 };
 
 const CODE_TITLES: Readonly<Record<string, string>> = {
@@ -62,6 +64,7 @@ const CODE_TITLES: Readonly<Record<string, string>> = {
   network: 'Network error',
   invalid_response: 'Unexpected response',
   connection_closed: 'Connection closed',
+  timeout: 'No response from the kernel',
   unknown: 'Error',
 };
 
@@ -92,22 +95,6 @@ export function describeError(err: unknown): ErrorDescription {
  *  rather than keep offering a button that can only fail. */
 export function isForbiddenError(err: unknown): boolean {
   return describeError(err).code === 'forbidden';
-}
-
-/** Whether `err` is the kernel's "no such capability" (`CapabilityNotFoundError`,
- *  `application/gateway/dispatch.ts`) — HTTP 404 / JSON-RPC `-32601`, both normalized to the
- *  `not_found` code above. S3.11's governance capabilities (`list_principals`, `list_grants`,
- *  `list_gatekeepers`, ...) are being built in parallel by another agent against the same
- *  contract this console codes against; a kernel that has not picked up that PR yet answers a
- *  workspace-scoped, no-id capability like `list_principals` with exactly this error, since there
- *  is no resource id in play for it to mean "record not found" instead (unlike e.g. `get_action`
- *  by a bad id, which also maps to `not_found` — see this file's own `CODE_TITLES` — but is never
- *  routed through this helper: only capabilities with no id-shaped param, mostly S3.11's `list_*`
- *  reads, are). Governance pages use this to render "该能力尚未上线" (this capability is not live
- *  yet) instead of a generic error banner — a real, expected state during the parallel rollout,
- *  never a crash. */
-export function isNotFoundError(err: unknown): boolean {
-  return describeError(err).code === 'not_found';
 }
 
 /** `gatekeeper_timeout` → `Gatekeeper timeout` for codes this file has no curated title for. */

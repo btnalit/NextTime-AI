@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isForbiddenError, isNotFoundError } from '../lib/errors.js';
-import { formatDateTime, formatRelative, prettyJson, shortId } from '../lib/format.js';
-import type { GrantRow, PrincipalRow } from '../lib/governance.js';
+import { isForbiddenError } from '../lib/errors.js';
+import { formatDateTime, formatRelative, prettyJson } from '../lib/format.js';
+import type { GatekeeperListRow, GrantRow, PrincipalRow } from '../lib/governance.js';
+import { hrefs } from '../lib/router.js';
 import { GrantCapabilityForm } from './GrantCapabilityForm.js';
 import { IssueServiceHandleSection } from './IssueServiceHandleSection.js';
 import { Button } from './ui/Button.js';
@@ -12,8 +14,9 @@ import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Input, Select } from './ui/Field.js';
+import { Field, Input } from './ui/Field.js';
 import { PageHeader } from './ui/PageHeader.js';
+import { RefChip, useRefNames } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { useToast } from './ui/Toast.js';
@@ -26,28 +29,61 @@ export interface AccessPageProps {
  * components/AccessPage: 访问 Access (`/govern/access`, S3.11) — the CapabilityGrant matrix.
  * `list_grants{principalId?}` / `grant_capability` (existing) / `revoke_capability` (existing).
  * All owner-only per the design doc's minRole table ("成员/授权/策略 = owner") — this page's write
- * affordances (Grant / Revoke) hide behind the same `create_principal`-derived `canManage` signal
- * `MembersPage` uses (same closure — `grant_capability` and `create_principal` share `minRole:
- * 'owner'`, so a 403 on either denies both, per `hooks/usePermissions.tsx`'s `deniedClosure`).
+ * affordances (Grant / Revoke / issue a service Handle) hide behind the same `canManage` rule
+ * `MembersPage` uses: the authoritative `get_workspace.caller.role` (owner only) once it is
+ * known, the `grant_capability` 403 inference only as fallback (C9 — `list_grants` is
+ * operator-readable, so an operator never learned that denial and saw owner-only buttons).
+ *
+ * B3 (§5.8 "id → 名称"): the grant's principal, its grantor and a `gatekeeper` resource render as
+ * `RefChip`s named from `list_principals` (already read for the filter / form) and
+ * `list_gatekeepers` (member-readable, read here for the names alone); a missing name degrades to
+ * the grey bare-id chip. B5: `list_grants` and `list_principals` take no `limit` / `cursor`
+ * (`capabilities.ts`), so both stay single-page — no "加载更多" is offered because there is no
+ * keyset to follow; the registry, not the page, decides when that changes.
  */
 export function AccessPage({ http }: AccessPageProps) {
   const permissions = usePermissions();
   const toast = useToast();
+  const { role } = useWorkspaceIdentity(http);
+  // C20: `principalFilter` is what the input shows; `committedFilter` is what `list_grants` is
+  // asked for. They diverge only while an id is being typed — committed on blur / Enter, or at
+  // once when the text matches a member from the directory — so a half-typed id never fires a
+  // query per keystroke (each one a `list_grants{principalId}` that flashes "No grants yet").
   const [principalFilter, setPrincipalFilter] = useState('');
+  const [committedFilter, setCommittedFilter] = useState('');
   const [grantOpen, setGrantOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<unknown | null>(null);
 
   const principalsList = useCapabilityList<PrincipalRow>(http, 'list_principals');
   const principals = principalsList.state.status === 'ready' ? principalsList.state.data.items : [];
+  const gatekeepersList = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
+  const principalNames = useRefNames(
+    principalsList.state.status === 'ready' ? principalsList.state.data : undefined,
+  );
+  const gatekeeperNames = useRefNames(
+    gatekeepersList.state.status === 'ready' ? gatekeepersList.state.data : undefined,
+  );
 
   const grants = useCapabilityList<GrantRow>(
     http,
     'list_grants',
-    principalFilter ? { principalId: principalFilter } : {},
+    committedFilter ? { principalId: committedFilter } : {},
   );
 
-  const canManage = !permissions.isDenied('grant_capability');
+  function commitFilter(value: string = principalFilter): void {
+    setCommittedFilter(value.trim());
+  }
+
+  function handleFilterChange(value: string): void {
+    setPrincipalFilter(value);
+    // An exact directory match (a picked suggestion, or a pasted id) and an emptied field both
+    // apply immediately — nothing more will be typed for them.
+    if (value === '' || principals.some((row) => row.id === value)) commitFilter(value);
+  }
+
+  const canManage =
+    role.kind === 'known' ? role.role === 'owner' : !permissions.isDenied('grant_capability');
 
   function refreshGrants(): void {
     invalidateCapability(http, 'list_grants');
@@ -65,7 +101,7 @@ export function AccessPage({ http }: AccessPageProps) {
           row.id === grantId ? { ...row, status: 'revoked' as const } : row,
         ),
       }));
-      toast.push({ tone: 'info', title: 'Grant revoked' });
+      toast.push({ tone: 'info', title: '已撤销授权 Grant revoked' });
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('revoke_capability');
       setRevokeError(err);
@@ -76,74 +112,78 @@ export function AccessPage({ http }: AccessPageProps) {
 
   const rows = grants.state.status === 'ready' ? grants.state.data.items : [];
   const forbidden = grants.state.status === 'error' && isForbiddenError(grants.state.error);
-  const unavailable = grants.state.status === 'error' && isNotFoundError(grants.state.error);
 
   return (
     <div className="page">
       <PageHeader
         title="访问 Access"
-        description="Which Principal holds which capability, over which resource."
+        description="哪个主体持有哪项能力、作用于哪个资源。 Which Principal holds which capability, over which resource."
         actions={
           canManage ? (
             <Button variant="primary" icon="plus" onClick={() => setGrantOpen(true)}>
-              Grant capability
+              授予能力 Grant capability
             </Button>
           ) : undefined
         }
       />
 
       <div className="page-toolbar">
-        <Field id="access-principal-filter" label="Filter by principal">
-          {principals.length > 0 ? (
-            <Select
-              id="access-principal-filter"
-              value={principalFilter}
-              onChange={(event) => setPrincipalFilter(event.target.value)}
-            >
-              <option value="">All members</option>
-              {principals.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.displayName}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <Input
-              id="access-principal-filter"
-              value={principalFilter}
-              onChange={(event) => setPrincipalFilter(event.target.value)}
-              placeholder="principal id (optional)"
-              mono
-            />
-          )}
+        {/* C20: one control from first paint — an id input with the member directory as a
+            `<datalist>` once `list_principals` lands — rather than an `<Input>` that turned into
+            a `<Select>` mid-typing and dropped whatever had been typed. Picking a suggestion
+            fills (and commits) the id; an empty value is "all members". */}
+        <Field
+          id="access-principal-filter"
+          label="按主体筛选 Filter by principal"
+          hint={
+            principals.length > 0
+              ? '从建议里选一个成员，或输入 principal id 后按 Enter；留空 = 全部成员。 Pick a member from the suggestions, or type a principal id and press Enter. Empty = all members.'
+              : 'Principal id（可选），按 Enter 应用；留空 = 全部成员。 Principal id (optional) — press Enter to apply. Empty = all members.'
+          }
+        >
+          <Input
+            id="access-principal-filter"
+            value={principalFilter}
+            onChange={(event) => handleFilterChange(event.target.value)}
+            onBlur={() => commitFilter()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitFilter();
+              }
+            }}
+            placeholder="全部成员 All members"
+            list="access-principal-suggestions"
+            mono
+          />
+          <datalist id="access-principal-suggestions">
+            {principals.map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.displayName}
+              </option>
+            ))}
+          </datalist>
         </Field>
       </div>
 
       {revokeError !== null ? (
-        <ErrorBanner error={revokeError} title="Could not revoke this grant" />
+        <ErrorBanner error={revokeError} title="无法撤销授权 Could not revoke this grant" />
       ) : null}
 
       {grants.state.status === 'loading' ? (
         <SkeletonRows count={4} label="Loading grants" testId="grants-loading" />
       ) : grants.state.status === 'error' ? (
-        unavailable ? (
-          <EmptyState
-            icon="key"
-            title="该能力尚未上线 Not live yet"
-            body="list_grants is part of S3.11, still landing on the kernel side."
-            testId="grants-unavailable"
-          />
-        ) : forbidden ? (
+        forbidden ? (
           <EmptyState
             icon="shield"
-            title="需要 owner 权限"
-            body="list_grants is restricted to the workspace owner."
+            title="需要 owner 权限 Owner role required"
+            body="list_grants 仅工作区 owner 可读。 list_grants is restricted to the workspace owner."
             testId="grants-forbidden"
           />
         ) : (
           <ErrorBanner
             error={grants.state.error}
-            title="Could not load grants"
+            title="无法加载授权 Could not load grants"
             onRetry={() => void grants.reload()}
             testId="grants-error"
           />
@@ -151,8 +191,8 @@ export function AccessPage({ http }: AccessPageProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="key"
-          title="No grants yet"
-          body="Grant a Gatekeeper (or another resource) to a member so their entry agent can use it."
+          title="还没有授权 No grants yet"
+          body="把一个门（或其他资源）授予成员，他的入口 agent 才能使用它。 Grant a Gatekeeper (or another resource) to a member so their entry agent can use it."
           testId="grants-empty"
         />
       ) : (
@@ -165,20 +205,50 @@ export function AccessPage({ http }: AccessPageProps) {
               title={
                 <>
                   <span className="tag">{row.resourceType}</span>
-                  <span className="mono truncate">{row.resourceId ?? 'any'}</span>
+                  {row.resourceId === null || row.resourceId === undefined ? (
+                    <span className="text-3">任意 any</span>
+                  ) : row.resourceType === 'gatekeeper' ? (
+                    <RefChip
+                      kind="gatekeeper"
+                      id={row.resourceId}
+                      name={gatekeeperNames.get(row.resourceId)}
+                      href={hrefs.gatekeeper(row.resourceId)}
+                      size="s"
+                      testId="grant-resource"
+                    />
+                  ) : (
+                    <span className="mono truncate" data-testid="grant-resource">
+                      {row.resourceId}
+                    </span>
+                  )}
                 </>
               }
               meta={
                 <>
-                  <span title={row.principalId}>principal {shortId(row.principalId)}</span>
+                  <RefChip
+                    kind="principal"
+                    id={row.principalId}
+                    name={principalNames.get(row.principalId)}
+                    size="s"
+                    testId="grant-principal"
+                  />
                   <span className="meta-sep" />
-                  <span title={row.grantedBy}>by {shortId(row.grantedBy)}</span>
+                  <span>授予者 by</span>
+                  <RefChip
+                    kind="principal"
+                    id={row.grantedBy}
+                    name={principalNames.get(row.grantedBy)}
+                    size="s"
+                    testId="grant-granted-by"
+                  />
                   <span className="meta-sep" />
                   <time title={formatDateTime(row.createdAt)}>{formatRelative(row.createdAt)}</time>
                   {row.expiresAt ? (
                     <>
                       <span className="meta-sep" />
-                      <span>expires {formatRelative(row.expiresAt)}</span>
+                      <span title={formatDateTime(row.expiresAt)}>
+                        到期 expires {formatRelative(row.expiresAt)}
+                      </span>
                     </>
                   ) : null}
                   {row.scope && Object.keys(row.scope).length > 0 ? (
@@ -199,7 +269,7 @@ export function AccessPage({ http }: AccessPageProps) {
                     onClick={() => void handleRevoke(row.id)}
                     loading={revoking === row.id}
                   >
-                    Revoke
+                    撤销 Revoke
                   </Button>
                 ) : undefined
               }
@@ -213,7 +283,7 @@ export function AccessPage({ http }: AccessPageProps) {
       <Drawer
         open={grantOpen}
         onClose={() => setGrantOpen(false)}
-        title="Grant capability"
+        title="授予能力 Grant capability"
         subtitle="grant_capability{principalId, resourceType, resourceId?, scope?}"
         testId="grant-drawer"
       >
@@ -221,11 +291,11 @@ export function AccessPage({ http }: AccessPageProps) {
           <GrantCapabilityForm
             http={http}
             principals={principals}
-            defaultPrincipalId={principalFilter || undefined}
+            defaultPrincipalId={committedFilter || undefined}
             onCancel={() => setGrantOpen(false)}
             onDone={() => {
               setGrantOpen(false);
-              toast.push({ tone: 'ok', title: 'Grant created' });
+              toast.push({ tone: 'ok', title: '已授予 Grant created' });
               refreshGrants();
             }}
           />

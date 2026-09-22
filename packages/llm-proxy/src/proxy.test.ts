@@ -733,3 +733,133 @@ describe('createProxyServer + LlmUsageReporter — kernel down then up', () => {
     expect(receivedBatches[0]?.[0]).toMatchObject({ provider: 'openai', model: 'gpt-example' });
   }, 15000);
 });
+
+describe('createProxyServer — S6-B budget-exhausted refusal (leftover 19) and live providers', () => {
+  it('402s a completion for an exhausted workspace before contacting upstream; the model list still answers', async () => {
+    let upstreamHits = 0;
+    const upstream = http.createServer((_req, res) => {
+      upstreamHits += 1;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(OPENAI_SSE_BODY);
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const exhaustedWorkspace = randomUUID();
+    const logLines: string[] = [];
+    const proxy = createProxyServer({
+      providers: { openai: openAiProvider(upstreamPort) },
+      publicKey,
+      isRevoked: () => false,
+      isBudgetExhausted: (workspaceId) =>
+        workspaceId === exhaustedWorkspace
+          ? {
+              workspaceId,
+              scope: 'workspace_daily_cost',
+              budget: 5,
+              spent: 5.25,
+              until: '2099-01-01T00:00:00.000Z',
+            }
+          : undefined,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: (line) => logLines.push(line),
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+
+    const blocked = await signHandle(privateKey, { ws: exhaustedWorkspace });
+    const refused = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${blocked}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', stream: true }),
+    });
+    expect(refused.status).toBe(402);
+    const body = JSON.parse(refused.body.toString('utf8'));
+    expect(body.error.code).toBe('budget_exhausted');
+    expect(body.error.scope).toBe('workspace_daily_cost');
+    expect(body.error.resetsAt).toBe('2099-01-01T00:00:00.000Z');
+    expect(upstreamHits).toBe(0);
+    expect(logLines.some((line) => line.includes('workspace budget exhausted'))).toBe(true);
+
+    // The synthesized model list is free and stays answerable for the blocked workspace.
+    const models = await rawRequest({
+      port: proxyPort,
+      method: 'GET',
+      path: '/openai/v1/models',
+      headers: { authorization: `Bearer ${blocked}` },
+    });
+    expect(models.status).toBe(200);
+
+    // Another workspace is unaffected.
+    const other = await signHandle(privateKey);
+    const allowed = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${other}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', stream: true }),
+    });
+    expect(allowed.status).toBe(200);
+    expect(upstreamHits).toBe(1);
+  });
+
+  it('a function-shaped providers option is consulted per request (a provider added later routes without restart)', async () => {
+    const upstream = startFakeUpstream({
+      sseBody: OPENAI_SSE_BODY,
+      expectedHeader: 'authorization',
+      expectedValue: `Bearer ${REAL_OPENAI_KEY}`,
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const live: Record<string, ProviderConfig | undefined> = {};
+    const proxy = createProxyServer({
+      providers: (name) => live[name],
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey,
+      log: () => {},
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+
+    const token = await signHandle(privateKey);
+    const before = await rawRequest({
+      port: proxyPort,
+      method: 'GET',
+      path: '/openai/v1/models',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(before.status).toBe(404);
+
+    live.openai = openAiProvider(upstreamPort);
+    const after = await rawRequest({
+      port: proxyPort,
+      method: 'GET',
+      path: '/openai/v1/models',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(after.status).toBe(200);
+
+    live.openai = undefined;
+    const gone = await rawRequest({
+      port: proxyPort,
+      method: 'GET',
+      path: '/openai/v1/models',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(gone.status).toBe(404);
+  });
+});

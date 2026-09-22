@@ -70,6 +70,15 @@ import type { PoolClient } from 'pg';
  * - `ops.outbox_stuck` — an `outbox` row with `dispatched_at is null` older than a configurable
  *   threshold (default 30 minutes) — §13 "outbox 派发器崩溃 ... 消费者幂等" assumes the dispatcher
  *   eventually catches up; a row stuck well past that is a live symptom worth alerting on.
+ * - `ops.collector_silent` (S6, docs/STATUS.md leftover 41 後半; docs/console-completion-plan.md
+ *   §8 "采集器与外部运行时的连续 401 / 非零错误进 /internal/metrics") — a Source owned by a `service`
+ *   Principal (a collector, an external runtime) in an active `standard` workspace that has
+ *   observed at least once but not within a configurable threshold (default 2 hours ≈ eight
+ *   15-minute collector cycles). The kernel cannot hear a collector whose Handle it rejects (a 401
+ *   leaves no row anywhere), so the honest DB-side signal is the *silence* that follows: the
+ *   collector that spent a week 401-ing against a disabled acceptance workspace would have read
+ *   here as one silent production Source. Ephemeral and disabled workspaces are excluded —
+ *   their Sources are expected to go quiet.
  */
 
 export interface InvariantCheckResult {
@@ -91,6 +100,9 @@ export interface RunInvariantChecksOptions {
   /** `ops.outbox_stuck`'s staleness threshold. Default {@link DEFAULT_OUTBOX_STUCK_THRESHOLD_MS}
    *  (30 minutes). */
   readonly outboxStuckThresholdMs?: number;
+  /** `ops.collector_silent`'s silence threshold. Default
+   *  {@link DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS} (2 hours). */
+  readonly collectorSilenceThresholdMs?: number;
 }
 
 const SAMPLE_LIMIT = 5;
@@ -523,6 +535,54 @@ async function checkOutboxStuck(
   };
 }
 
+export const DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * `ops.collector_silent` (see module doc comment): every `sources` row whose owner Principal is
+ * `kind = 'service'`, in a workspace that is `active` and `standard`, that has at least one
+ * `observations` row and whose newest one is older than `thresholdMs`. A Source registered but
+ * never observed is not counted — it never established a cadence to fall silent from (an
+ * external runtime that registered a Source for a one-off import stays quiet legitimately).
+ */
+async function checkCollectorSilent(
+  client: PoolClient,
+  thresholdMs: number,
+): Promise<InvariantCheckResult> {
+  const cutoff = new Date(Date.now() - thresholdMs).toISOString();
+  const result = await client.query<{
+    workspace_id: string;
+    id: string;
+    name: string | null;
+    last_observed_at: Date;
+  }>(
+    `select s.workspace_id, s.id, s.name, o.last_observed_at
+       from sources s
+       join principals p on p.workspace_id = s.workspace_id and p.id = s.owner_principal_id
+       join workspaces w on w.id = s.workspace_id
+       join lateral (
+         select max(created_at) as last_observed_at
+           from observations ob
+          where ob.workspace_id = s.workspace_id and ob.source_id = s.id
+       ) o on true
+      where p.kind = 'service'
+        and w.status = 'active' and w.purpose = 'standard'
+        and o.last_observed_at is not null
+        and o.last_observed_at < $1::timestamptz
+      order by o.last_observed_at`,
+    [cutoff],
+  );
+  return {
+    invariant: 'ops.collector_silent',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map(
+        (row) =>
+          `${row.workspace_id}:${row.id} (${row.name ?? '-'}, last observed ${row.last_observed_at.toISOString()})`,
+      ),
+  };
+}
+
 // -------------------------------------------------------------------------------------------
 // Runner
 // -------------------------------------------------------------------------------------------
@@ -544,6 +604,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-S5-3',
   'ops.one_running_turn',
   'ops.outbox_stuck',
+  'ops.collector_silent',
 ];
 
 /** Runs every DB-checkable invariant check once, on one connection taken directly off `pool`
@@ -558,6 +619,8 @@ export async function runInvariantChecks(
   options: RunInvariantChecksOptions = {},
 ): Promise<readonly InvariantCheckResult[]> {
   const thresholdMs = options.outboxStuckThresholdMs ?? DEFAULT_OUTBOX_STUCK_THRESHOLD_MS;
+  const collectorSilenceMs =
+    options.collectorSilenceThresholdMs ?? DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS;
   const client = await pool.connect();
   try {
     return [
@@ -574,6 +637,7 @@ export async function runInvariantChecks(
       await checkIS53(client),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
+      await checkCollectorSilent(client, collectorSilenceMs),
     ];
   } finally {
     client.release();

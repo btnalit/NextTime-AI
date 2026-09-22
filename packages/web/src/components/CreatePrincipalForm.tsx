@@ -57,8 +57,9 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
     return (
       <div className="stack" data-testid="create-principal-key">
         <Notice tone="warn">
-          This API key is shown once. Copy it now and send it to{' '}
-          <strong>{created.principal.displayName}</strong> — the console never displays it again.
+          这个 API key 只显示一次：现在复制并交给 <strong>{created.principal.displayName}</strong>
+          ，控制台不会再显示。 This API key is shown once. Copy it now and send it to the runtime —
+          the console never displays it again.
         </Notice>
         <div className="code-block row" style={{ justifyContent: 'space-between' }}>
           <span className="mono" data-testid="created-api-key">
@@ -96,7 +97,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
         person: add people with 添加成员 Add member.
       </Notice>
 
-      <Field id="cp-name" label="Display name" required>
+      <Field id="cp-name" label="显示名 Display name" required>
         <Input
           id="cp-name"
           value={displayName}
@@ -106,7 +107,12 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
         />
       </Field>
 
-      <Field id="cp-role" label="Role" required hint="Can be changed later from the member's row.">
+      <Field
+        id="cp-role"
+        label="角色 Role"
+        required
+        hint="之后可在成员行里修改。 Can be changed later from the member's row."
+      >
         <Select
           id="cp-role"
           value={role}
@@ -121,14 +127,16 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
         </Select>
       </Field>
 
-      {error !== null ? <ErrorBanner error={error} title="Could not create this member" /> : null}
+      {error !== null ? (
+        <ErrorBanner error={error} title="无法创建 Could not create this service credential" />
+      ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          Cancel
+          取消 Cancel
         </Button>
         <Button type="submit" variant="primary" loading={submitting} disabled={!displayName.trim()}>
-          Create
+          创建 Create
         </Button>
       </div>
     </form>

@@ -122,6 +122,7 @@ docker compose up -d --force-recreate <service>
 | `config/llm-providers.yaml`（换 provider，随后必须 `make gen-models` 重生成 `models.json`——见 §6 常见问题） | `worker-supervisor` 消费的是重新生成的 `models.json` 文件本身（bind mount 内容变了，不需要重建容器），但换 provider 后新拉起的入口/Worker 容器才会用上新值 | 见 `docs/runbooks/host-worker-runtime.md` §3（验收脚本 `accept_s1/s2/s3.sh` 不走这条路径——它们经 `deploy/accept/docker-compose.fake.yml` 自行切到 fake provider，不改这份生产文件，见 `docs/runbooks/accept-s1.md` §1） |
 | `deploy/caddy/Caddyfile` | `caddy` | 普通 `docker compose restart caddy` 即可（bind mount，不需要重建镜像） |
 | `packages/web` 代码改动 | `caddy`（静态产物随镜像走，见 `docs/runbooks/host-caddy.md` §E8.5） | `docker compose build caddy && docker compose up -d caddy` |
+| 发版 / 切 tag 后重建 `kernel`（概览的版本号随镜像走，B1） | `kernel` | 先 `export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"`，再 `docker compose build kernel && docker compose up -d kernel`——版本是**构建参数**烙进镜像的 ENV，不是 `.env` 里的值（`.env` 里的 `KERNEL_VERSION` 已不被读取，可删）；漏了 export 概览会显示 `dev`。见 `docs/runbooks/release.md` §3.1 |
 | `secrets/handle.key` / `secrets/internal.token` / `secrets/gate.token` | 见 `docs/runbooks/key-rotation.md`（涉及多个服务协同重启，不是单服务局部重启） | — |
 
 ### 4.3 恢复顺序（主机崩溃/意外重启后）
@@ -225,6 +226,16 @@ exporter/collector 接入（`packages/kernel/src` 下没有 `prom-client`/`opent
 （默认 10 分钟）定时跑，违反的不变量打结构化 `warn` 日志、`GET /internal/metrics` 暴露当前计数；
 混沌演练脚本（主动杀容器验证 §13 自愈）与这个监控器的运维面见 `docs/runbooks/host-chaos.md`。
 
+**采集器 / 外部运行时的失联（S6，遗留 41 后半）**：`nexttime_invariant_violations{invariant="ops.collector_silent"}`
+——`active` 且 `standard` 工作区里、由 `service` Principal 拥有、曾经提交过观察、但最近一次观察距今超过
+2 小时（`collectorSilenceThresholdMs` 缺省；约 8 个采集周期）的 Source 数。内核听不到被它拒掉的采集器
+（401 不落任何行），所以能看见的信号是随之而来的**沉默**：token 指向了错的工作区、Handle 被撤销、采集器
+容器停了，都表现为这一项 > 0。`sample` 里给出 `<workspaceId>:<sourceId> (<name>, last observed <时间>)`。
+ephemeral 与 disabled 工作区的 Source 不计（本就该安静）。采集器自己那一侧：interval 模式每轮失败的日志行
+带 `consecutiveFailures`，内核拒绝时还带 `kernelStatus` / `kernelErrorCode`；连续
+`HOST_INVENTORY_FAILURE_STREAK_ALERT`（缺省 3）轮后变成 `level: "error", message: "collector failing
+repeatedly"`——`docker compose logs collector-host-inventory | grep 'failing repeatedly'` 即可。
+
 ## 8. 验证
 
 ```bash
@@ -246,7 +257,54 @@ curl -sk -o /dev/null -w '%{http_code}\n' "https://${KERNEL_BIND_ADDR}:8443/api/
 - 不确定改动是否安全时，优先用 §4.2 的 `--force-recreate` 而不是 `docker compose down`
   再 `up`——前者只重建目标服务，后者会短暂中断所有服务（即使随后立刻 `up -d` 拉回来）。
 
-## 10. 常见问题
+## 10. 工作区清除（purge，S6）
+
+工作区的生命周期是 `active → disabled → purged`（`docs/console-completion-plan.md` §4）；`purged`
+是终态：行与级联数据删除，平台审计行 `platform.workspace_purged`（谁、何时、清了什么——按表计数、
+撤销的 Handle 数、随之删除的用户、service Handle 警告）保留。控制台"工作区"页的清除入口与下面的脚本
+是**同一条路径**（`application/platform/purge-workspace.ts`）。
+
+**前置条件（内核强制，脚本与页面一致）**：`disabled` 满 7 天（`workspaces.disabled_at`，迁移 core
+0030；0030 之前就已 `disabled` 的行 `disabled_at` 为空、视为立即可清），或 `ephemeral` 且 `expires_at`
+已过（此时哪怕仍 `active` 也可清——S5.3 `--expired` 的语义不变）；平台默认工作区永远拒绝。
+
+**级联（一个事务）**：撤销并删除全部 CapabilityHandle → Task → Chat / Turn / Activity / Decision /
+Conflict / Fact / Object / Source / Observation / Evidence → 该工作区自己的审计行 → Principal →
+工作区行；再加上"成员资格全在该工作区、且从未激活（无密码、无控制台登录、无平台审计 / 设置版本引用、
+不是管理员）"的 User——这是验收残留用户（A6）的真正修法；有任何引用的 User 内核留下不删（审计只增不减），
+用户页的 `hideResidual` 缺省过滤把它们藏起来。主机侧的入口容器与 `${NEXTTIME_DATA}/workspaces/<principalId>`、
+`workspaces/tasks/<taskId>` 目录内核不碰，脚本按内核打印的 `PRINCIPAL=` / `TASK=` 行清理。
+
+**两条从主机实战学来的边**：(a) 工作区里若还有 `service` Principal（采集器、外部运行时），预览与结果都带
+`service_handle_in_use` 警告——它的 Handle 还在被某个进程用，清除后那个进程立刻 401（遗留 41 的来源），
+先把那个进程指回正确的工作区；(b) 上面的 User 级联。
+
+```bash
+# 列出现在就能清的（到期 ephemeral；加 --include-disabled 含禁用满 7 天的）——不删任何东西
+sh scripts/delete-workspaces-matching.sh --expired
+sh scripts/delete-workspaces-matching.sh --expired --include-disabled
+
+# 真删：每个工作区走 scripts/delete-workspace.sh（内核 purge-workspace + 主机侧目录 / 容器清理）
+sh scripts/delete-workspaces-matching.sh --expired --yes
+sh scripts/delete-workspaces-matching.sh --expired --include-disabled --yes
+
+# 单个：预览（dry run）→ 执行
+docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js purge-workspace <workspaceId>
+sh scripts/delete-workspace.sh <workspaceId> --name <expected name>
+
+# 名字正则仍可用，但不满足前置条件的会被内核拒绝（计入失败、继续下一个）
+sh scripts/delete-workspaces-matching.sh '^accept-s3' --yes
+```
+
+- `--actor <login>`：审计行记录的管理员。不传时取 `.env` 里 `NEXTTIME_PLATFORM_ADMINS` 的第一个；
+  两者都解析不到用户时**不写审计行**，内核在 stderr 打一行 `workspace_purged` 事件并明说。
+- `--force`（仅 `delete-workspace.sh` / 正则模式）：操作员越权，走旧的 `delete-workspace` 子命令跳过
+  前置条件——只用于"建错了、不想等 7 天"的情形；审计行 `forced: true`。
+- 从未激活且已无活跃成员资格的残留用户（例如已 `remove_membership` 的），控制台用户页的"清理待激活用户"
+  批量入口（`purge_user`）处理；每个 id 各自给出 `purged` / `skipped` 与原因。
+- 备份里的旧 dump 不受影响（`docs/runbooks/backup-restore.md`）。
+
+## 11. 常见问题
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
@@ -257,3 +315,88 @@ curl -sk -o /dev/null -w '%{http_code}\n' "https://${KERNEL_BIND_ADDR}:8443/api/
 | 想看 Prometheus 风格的指标面板，发现没有任何端点 | 见 §7——设计文档 §12 的指标体系尚未实现，这不是本次文档遗漏，是代码现状 | 用 §7 表格里的 SQL/capability 近似替代；若确实需要真正的指标端点，那是一项新的实现任务（development-tasks.md S3.8），不是本 runbook 能补的文档缺口 |
 | 目标主机上跑 `make migrate` 报 `corepack`/`pnpm` 不存在 | 目标主机通常没有 Node/corepack（`docs/runbooks/accept-s1.md` §1） | 用容器化命令 `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js`（见 §4.1）；`make migrate` 只在装了 Node/corepack 的机器（如开发机、CI）上直接可用 |
 | `docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js` 报找不到该文件 | `kernel` 镜像还没构建，或构建的是旧代码 | `docker compose build kernel` 后重试 |
+
+## 12. 供应商管理（S6-B）
+
+`docs/console-completion-plan.md` §5.4 / §6；`docs/platform-admin-design.md` §6.2。平台页「模型与供应商」
+（`#/platform/models`，仅管理员）管理 llm-proxy 里的供应商：名称、API 种类（`openai-completions` /
+`openai-responses` / `anthropic-messages`——Gemini 走其 OpenAI 兼容端点，§12 第 2 项）、Base URL、鉴权头、
+密钥环境变量名、模型清单与显示名、启用；「测试调用」= 一次补全 **+ 一次强制工具调用往返**。
+
+**路径**：浏览器 → caddy `/api/llm-admin/*`（`deploy/caddy/Caddyfile`，去掉前缀后改写为 llm-proxy 的
+`/admin/*`，边缘先要求 `X-Requested-With: nexttime`）→ llm-proxy 管理端点（`packages/llm-proxy/src/admin-api.ts`）。
+鉴权是内核 `issue_llm_admin_token` 签发的 5 分钟平台 JWT（Handle 密钥签名，`typ` / `aud` 不同——Handle 永远进不了
+管理端点，管理令牌也永远不是 Handle）。内核只签令牌、只记审计，**不存供应商记录、不见密钥**。
+
+**两处状态（compose 新增两个挂载）**：
+
+| 主机路径 | 容器内 | 内容 | 谁写 |
+|---|---|---|---|
+| `${NEXTTIME_DATA}/llm-proxy/providers.json` | `/data/state/providers.json`（rw） | 控制台写入的供应商（`provider-store.ts`，原子写：`.tmp` + rename） | llm-proxy（uid 10001） |
+| `${NEXTTIME_DATA}/config/llm-providers.yaml` | `/data/config/llm-providers.yaml`（**ro**） | 操作员的基础配置，不变 | 操作员 |
+| `${NEXTTIME_DATA}/config/models.json` | `/data/config/models.json`（`config/` 目录 rw） | 合并目录（yaml + store，仅启用的），每次变更后原子重写 | llm-proxy 与 `make gen-models` |
+
+合并规则按名字：store 条目**整体**覆盖同名 yaml 条目（页面来源列显示「覆盖 yaml override」）；yaml 条目永远
+视为启用，「停用」一个 yaml 供应商就是写一条 `enabled:false` 的覆盖；删除覆盖 = 恢复 yaml 条目；纯 yaml
+条目不能在页面删除（409 `provider_from_file`，改 yaml）。`admin` / `healthz` / `internal` 是保留名。
+
+**一次性主机步骤**（新目录、`config/` 属主；否则页面每次写入 503 `store_unwritable`，或 models.json 重写失败
+并在列表里以 `modelsJsonError` 显示）：
+
+```bash
+set -a; . ./.env; set +a
+sudo -E sh scripts/host-llm-proxy-init.sh                 # mkdir+chown llm-proxy/ 归 10001；chown config/ 归 10001（属主，不改 mode）
+export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"   # release.md §3.1
+docker compose build kernel llm-proxy caddy                # kernel：新能力 + 两条内部路由；caddy：新路由 + 新页面（web 随镜像走）
+docker compose up -d kernel                                # 无新迁移；等 healthy（§4.1）
+docker compose up -d --force-recreate llm-proxy            # 新挂载 + 新环境变量（restart 不重读，§4.2）
+docker compose up -d caddy                                 # 新镜像（Caddyfile 是 bind mount，但页面在镜像里）
+```
+
+不重建 kernel 的后果：页面 `issue_llm_admin_token` 返回 `not_found`，llm-proxy 的预算轮询与审计回写一直 404。
+
+`config/` 改为 10001 属主而不是组可写：`host-env-init.sh` 每次重跑都会 `chmod 755` config/，组写位会被清掉，
+属主写不会。容器内 `llm-providers.yaml`、`handle.pub`、`egress-sources.json`、`ontology/` 仍以 `:ro` 单独覆盖
+挂载在 rw 目录之上，所以 llm-proxy 的写面只多了 models.json 一件事（见 `docker-compose.yml` 该服务块注释）。
+
+**密钥（不变，且 S6-B 明确不改）**：控制台**不收密钥**。每个供应商只记录环境变量名（`apiKeyEnv`），页面显示
+「凭证：已配置 / 待操作员配置 `<ENV>`」（代理只报告布尔值 `credentialPresent`）。装密钥仍是：
+
+```bash
+# 主机上，追加一行到 secrets/llm-proxy.env（变量名 = 页面里该供应商的 apiKeyEnv）
+ACME_API_KEY=...
+docker compose up -d --force-recreate llm-proxy   # §4.2：restart 不重读 env_file
+```
+
+`POST /api/llm-admin/providers/:id/secret` 返回 **501 `not_implemented`**：这是扩展点，**等维护者决定**控制台
+写供应商密钥是否属于底线「触及有凭证系统的动作必经审批」（`console-completion-plan.md` §12 末）。密钥未配置时
+「测试调用」被拒绝（409 `credential_missing`），不会向上游发空头。
+
+**`make gen-models` 的关系**：仍然可用，且 `cli/gen-models.ts` 现在也合并 store（`docker compose run` 复用同一
+服务定义，`/data/state` 同样挂着），输出与代理自己重写的一致；不再会把控制台加的供应商丢掉。llm-proxy
+**启动时不写** models.json（只在不一致时记一行 warn 日志）——验收覆盖 `deploy/accept/docker-compose.fake.yml`
+把它的 yaml 换成假 provider，必须不能覆盖生产 models.json。改了 yaml 仍需重建 llm-proxy（yaml 不热加载）+
+`make gen-models`（或在页面里随便保存一个供应商，也会重写）。
+
+**审计（只增不减）**：每次变更两条记录——llm-proxy 自己的 `level: "audit"` 结构化日志行（`docker compose logs
+llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy 经内部面 `POST /internal/llm-admin-audit`
+写入，动作 `platform.llm_provider_created / _updated / _deleted / _tested`，`resourceType: llm_provider`），两者都带
+令牌的 `jti`，与 `issue_llm_admin_token` 留下的 `platform.llm_admin_token_issued` 行对得上；均不含密钥。
+`report-usage.sh --by provider` 按 provider / model 汇总用量（§5.4 验收）。
+
+**遗留 19（I18「100% 时代理返回预算耗尽错误」）**：llm-proxy 每 `BUDGET_SYNC_INTERVAL_MS`（缺省 15 s）拉一次
+`GET /internal/llm-budget-exhausted`——内核列出今天（UTC）已超 `task.daily_cost_budget_usd` 配额（jsonb 数字；
+`null` = 不限）或 `LLM_DAILY_TOKEN_BUDGET` 的工作区——对这些工作区的每次补全在验证 Handle 后、接触上游前直接回
+**402 `budget_exhausted`**（body 含 `scope` / `budget` / `spent` / `resetsAt`；用 402 不用 429 是因为两家 SDK 都会
+对 429 自动重试）。每行带 `until`（下一个 UTC 零点），内核不可达时代理沿用上次集合但到点自动放行。内核事后止损
+（Task `failed: budget_exhausted` + 撤销 Handle → 401）仍是兜底。
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 页面顶部「状态目录不可写」 / 写入 503 `store_unwritable` | `${NEXTTIME_DATA}/llm-proxy` 不存在或不归 10001（Docker 代建的是 root） | 运行 `scripts/host-llm-proxy-init.sh`，`--force-recreate llm-proxy` |
+| 保存成功但列表显示 `modelsJsonError: EACCES` | `config/` 不归 10001 | 同上；临时用 `make gen-models` 手动重写 |
+| 「测试调用」409 `credential_missing` | 该供应商的 `apiKeyEnv` 在 `secrets/llm-proxy.env` 里没设 | 加一行、`--force-recreate llm-proxy` |
+| 测试：补全 ok、工具调用 error | 上游不支持函数调用 / 该模型不支持 `tool_choice` | Worker 与门工具依赖工具调用，换模型或换端点；补全 ok 只说明鉴权与路由对了 |
+| 新供应商在工作区「模型与配额」里看不到 | models.json 未重写（见 `modelsJsonError`）或浏览器缓存 | 刷新平台页看 `models.json 已于 … 重写`；内核每次调用都重读该文件，无需重启 |
+| `/api/llm-admin/*` 403 | 缺 `X-Requested-With` 头（非控制台调用） | 只有控制台会调这些端点；脚本化管理请用 `issue_llm_admin_token` 拿令牌并带上该头 |
+| `/api/llm-admin/*` 401 `token_expired` | 令牌 5 分钟到期 | 控制台自动重取一次；持续 401 检查 caddy → llm-proxy 与 `config/handle.pub` 是否同一密钥对 |

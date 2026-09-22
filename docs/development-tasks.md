@@ -2568,6 +2568,381 @@ W9 三车道文件互斥可并行，也与 P-B2b（平台面：`application/plat
 W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工、W10-B 的 24 先合入；W11 依赖 W9-B。
 每波结束：主机应用、验收、`docs/STATUS.md` 更新。
 
+## 5c. S6 — 控制台完善（2026-09-19 立项，同日无人值守实施）
+
+背景：`console-completion-plan.md`（2026-09-18 维护者首次完整使用控制台后的七条问题 + 走查 B1–B7 +
+代码级核对 C1–C29）给出了逐条根因与波次；七项待决于 2026-09-19 取定（该文 §12，PR #216）。本节只记
+**实现说明**（改哪一层、怎么验的、留下什么边界），方案与验收句以该文为准，不复述。实施方式：主会话统筹，
+两波共十一条文件互斥车道（各自 worktree + 私有测试库），主会话审 diff 后线性合入 `s6/console-completion`，
+车道不写本文与 STATUS，实现说明随最终报告回传、由主会话收口时统一写入（`retrospective-2026-09-18.md` §4 的教训）。
+分支经同日收尾会话独立复验（`retrospective-2026-09-19.md` §2.3；推送 / 开 PR 被该会话的 supervisor 策略拦下）：推送、开 PR、合入、发版、主机应用由维护者决定。
+
+### S6-A0 视觉体系落地 + 紧急修复
+
+**令牌与字体（§5.9，C24 / C21）**
+- `packages/web/src/styles/tokens.css`：浅色成为 `:root` 缺省（`color-scheme: light`），深色改为
+  `prefers-color-scheme: dark` 覆盖；同名 56 个令牌、无深色专有名。§5.9 的中性 / 强调 / 语义值原样落入，新增
+  `--observe(-soft)`、`--muted(-soft)`、字号刻度 `--fs-11…24`、`--lh-tight 1.3` / `--lh-body 1.6`。`--muted` 取
+  `#626b7b` 而非 §5.9 的 `#6b7280`：后者在 `--muted-soft` 上只有 4.28:1，低于原则 6 的 4.5:1（实测 4.75）。
+  `--text-3` 在 `--bg` 上 4.43:1（`.page-description`）按规范保留，记为已知。
+- C24：`base.css` / `ui.css` / `pages.css` / `shell.css` 的 68 处 px 字号全部换刻度（10→11、11.5→12、12.5→13、
+  15→16、18→19、20→19），`ui.css:92` 的 `#fff` → `--text-on-accent`，选中 tab 的 `rgba()` 阴影改 1px 环
+  （原则 5）；主按钮 ink（`--text` 底）、`.btn` 36px、控件 min-height 36。
+- 字体随包自托管（§12 第 7 项）：`styles/fonts.css` `@import` @fontsource（IBM Plex Sans latin 400/500/600、
+  Plex Mono latin 400/500、Noto Sans SC 400/500——fontsource 本身按 unicode-range 切片，浏览器只拉页面用到的
+  片），Vite 打进 `dist/assets`（201 个 woff2，零外域引用）；`vite.config.ts` 的 `assetsInlineLimit` 排除
+  woff/woff2，因此 caddy CSP `font-src 'self'` 无需 `data:`。首屏静态上界：登录后首屏 582 KB、登录页 647 KB、
+  管理员概览 705 KB（两字重全算，实际更低）。副作用：CSS 因 204 条 `@font-face` 涨到 275 KB（107 KB gz），
+  `dist` 13 MB（含 fontsource 附带的 201 个未用 `.woff`）——可后续改手写 woff2-only `@font-face`。
+- 守卫：`scripts/guards/css-tokens.mjs`（进 `ci:guards`；收尾时补进 CI `quality` job——该 job 逐条列守卫、不跑 `ci:guards`）拒绝 `styles/` 里除 `tokens.css` / `fonts.css` 之外
+  的 `#hex` / `rgb(` / `hsl(` / px 字号，按 `file:line` 报；改前 70 处、改后 0。
+- C21：`deploy/caddy/Caddyfile` 全站 `Permissions-Policy`；SPA（`not path /explorer/*`）严格 CSP
+  `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';
+  connect-src 'self' wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`；
+  `/explorer/*` 单独一块略宽（`img-src blob:`、`worker-src blob:`）。`style-src` 暂留 `'unsafe-inline'`：页面
+  仍有 83 处 `style={{…}}`，清理后收紧（§7）。`caddy validate` 通过；HSTS 缺席的既有注释不变。
+
+**UI kit 增补（`components/ui/*`，各带 vitest）**
+- `RefChip`（B3 / 原则 3）：五种引用（principal / gatekeeper / workerDefinition / object / actionRequest），名称 +
+  类型 + 截断 id + `CopyId`，无名时灰色虚线裸 id 回退；`useRefNames(source)` 把 `list_*` 结果折成 id→name。
+- `StatusChip` + `lib/status-tone.ts`：`Tone` 加 `observe`；新增 11 个机器（operationMode / blastRadius /
+  userStatus(+`pending_activation`) / workspaceStatus / workspacePurpose / gateInstance(+`awaiting_host`) /
+  gateHealth / gateTrust / connectorMode / serviceHealth / platformRole），运行时数组取自 shared Zod 枚举
+  `.options`，映射按 §5.9 六色一义；`components/platform/` 五个文件的手拼 `chip chip-*` 全部替换（C17）。
+- `ConfirmTier`：`tier: low | medium | high | irreversible`——low 立即执行 + 可撤销 toast；medium 内联卡；
+  high / irreversible 复用既有 `Drawer`（焦点陷阱 / Escape / 焦点回归），irreversible 档要求键入目标名 + 知情勾选。
+- `ApprovalCard`（对话与审批页共用）、`ProvenanceChain`（自带窄 prop 类型，不引内核类型）、`FollowPill`、
+  `Launcher`（四步壳 + http / mcp / ssh / cli 种类选择）、`PageHeader` 加 `breadcrumb` / `primaryAction`。
+- 壳：侧栏 使用 / 治理 / 平台 三组（可见性规则同 runbook），底部连接状态 + `platform_overview.version.kernel`
+  （仅管理员读）+ 当前用户（`session.user` 或 `get_workspace.caller`）；门实例行加 详情 按钮作键盘路径（C13）。
+
+**C 系列文件级修复（§2b；测试见 §9 对应项）**
+- C1（P1）：`Session.apiKey`（`connectApiKey` 时捕获），两处 `<AccountPage>` 传 `apiKey` / `onClaimed` /
+  `onBound`；claim 成功后 `clearApiKey()` + `proceedAfterCookieAuth`，落到 `changePassword` / `noWorkspace` 时
+  拆掉仍在发布的旧会话。`App.test.tsx` 三例（API key 登录设密码、cookie 绑定卡、noWorkspace 绑定卡）。
+- C2：`useCapability` 加 `load` 选项，`useCapabilityList` 重载时沿 `nextCursor` 走到"读者已加载的行数"，不再截回
+  第一页。C3 / C7：审批页 `setDecided` 移出 `mutate` 更新器，推送后只 `get_action` 单行；任务页按推送状态本地
+  mutate，全量重载只作失败兜底。C4：`AccountPage` 用共享 `LOGIN_PATTERN`，映射 `invalid_login`。C5 / C6：
+  `ws-client` `rpc()` 30 s 缺省超时（`RpcTimeoutError`，-32000，可按调用覆盖，`errors.ts` 命名 `timeout`）；
+  `seenSequences` 只在分页期间使用，`onCaughtUp` 后退化为 `sequence > lastSeenSequence`。C8：找不到卡片时跳过
+  `set_auto_approved_action_kind` 并 toast。C9：`canManage` 以 `get_workspace.caller.role === 'owner'` 为准，403
+  推断只作 fallback。C10：内核拆出 `self_disable`（`last_admin` 保留真正的最后一位管理员）；客户端映射并把内核
+  `message` 作为副文案。C11：`AgentPolicyForm` 默认模型回退守卫。C12 / C15 / C16：http 实例必填 manifestSource、
+  endpoint 复用 URL 正则、`describedBy` 只指向真渲染的 hint。C14 / C18 / C19 / C20：目录 toast 带内核 message、
+  `isForbiddenError` 共享、scope 只收对象、访问页筛选控件不再中途换类型（提交时才改查询参数）。B6：11 处
+  "该能力尚未上线"死分支全删，`isNotFoundError` 随之删除。C23：`App.tsx`（673 行）拆为 `routes.tsx`（路由表，
+  顶部"add new pages here"）+ `session/useSessionMachine.ts` + `session/types.ts`，`App.tsx` 剩 88 行渲染开关；
+  `index.ts` 去掉 `console.log`。
+- W3 复现：`ChatPage.test.tsx` 用 `Object.defineProperty` 伪造几何，两种机制都复现——(a) 程序写 `scrollTop`
+  与其异步 `scroll` 事件之间又提交了一段流式文本，`atBottom` 翻 false；(b) 工具调用行结果原地增长
+  （`toolCalls.length` 不变）根本不触发滚动写入。修法在 S6-A 对话车道。
+
+### S6 遗留修复（42 / 43 / 44）与 B1
+
+- **遗留 44**：根因与 STATUS 行的假设不同——`resident-service.ts` 的 `spawn()` 本就在返回新容器 id 之前完成
+  stop → remove → createAndStart，`reconcile()` 也从不停容器（重建在 `spawn()` 的 `rotated` 分支：
+  `connect_gatekeeper` → 新 Grant → 内核 `ensureEntryHandle` 换发 → jti 变）。真正的缺口在 agent-host
+  `host.ts`：`handleStartTurn` 先占 `activeTurns[principal]` 再调 `/resident/spawn`，supervisor 在这次 spawn 里
+  `docker stop` 旧容器、旧 attach 流关闭，`handleContainerClosed` 只按 principal 查到这条尚未派给任何容器的新
+  Turn，报 `interrupted` 并删除，随后写给新容器的 `switch_session` 无人认领。修法：Turn 绑定唯一容器
+  （`ActiveTurn.containerId`，`ensureAttachment` 返回后、写任何命令前设定），`onLine` / `onClose` 监听器带所属
+  容器 id，非绑定容器的事件一律忽略，只在关闭的正是缓存的 attachment 时才丢弃它。未改 kernel / supervisor。
+  对话中途接门：`/resident/spawn` 只由 `handleStartTurn` 发起且同一 principal 同时只有一个 Turn，重建推迟到下一轮
+  Turn；既有暴露（未修）：`sweepIdle` 只按 Turn 开始时的 `touch` 计时，超过 `entryIdleTimeoutMs` 的 Turn 仍可能
+  被停。测试：`host.test.ts` 假 supervisor 加 `setSpawnInterceptor`，三例确定性复现，前两例在修复前失败。
+- **遗留 42**：`platform-extension/src/modes/worker.ts` 的 `report_result` 改为在工具调用内同步 POST
+  `report_task_result`；内核 `invalid_params`（可修）抛出 → pi `isError:true`，最多两次；`forbidden` /
+  `illegal_transition` / 其它以 `terminate:true` 的普通结果带着内核答复结束本轮（pi 只在 throw 时置 `isError`，
+  throw 不能终止批次，fake-llm 逐次重放最后一步会空转）；网络 / 超时 / 畸形响应仍由 `agent_settled` 兜底重发。
+  `agent_settled` 改用独立 `settled` 标志守卫退出（原 `if (resultAlreadyPosted) return` 会不退出、容器挂到
+  supervisor 超时）。`factsRejected` 不在 `ReportTaskResultWireSchema`（strict）里，上报成功后 best-effort
+  `get_task` 读回 `factsRejected[]` / `proposedOperationsRejected[]` / `evidenceDropped[]` 按契约下标回显（含
+  I16 `meta_ontology_type`——#211 之后 I16 已是单条拒绝而非 403）。真 pi SDK 测试证明模型看得到并能改正、模型
+  重放 8 次撞永久 409 只 1 次模型调用 / 2 次 POST / 1 次退出。
+- **遗留 43**：Worker 无法轮询（`get_action` 是 human-only、`minRole: operator`），契约取"结果以 ActionRequest
+  状态为准"：`ontology/ops-runner.yaml` 改写 `await_decision=false` 一条并新增 "Reporting an action that was
+  still pending"（引用每个 `actionRequestId`、不写"未执行 / 失败"、不再调执行类工具去"查看"）；门工具
+  `pending_approval` 结果文本同句提示。守卫允许名单加 `actionRequestId`，`get_action` 故意不进并有单测。生产
+  工作区需发布新的 `kind: worker` 版本才生效。
+- **B1**：`packages/kernel/Dockerfile` runtime 阶段 `ARG KERNEL_VERSION=dev` → `ENV`（置于全部 COPY 之后）；
+  `docker-compose.yml` `kernel.build.args` 传 `${KERNEL_VERSION:-dev}`，删除运行时 `environment:` 同名项（compose
+  environment 会覆盖镜像 ENV，正是漂移原因）；值由构建 shell 导出 `export KERNEL_VERSION="$(git describe --tags
+  --abbrev=0) ($(git rev-parse --short HEAD))"`，渲染 `v0.13.2 (0fa5a1e)`；`drill-upgrade.sh` / `drill-install.sh`
+  每次 `docker compose build` 前导出；runbook release.md §3.1 / operations.md §4.2 / `.env.example`。本机实构镜像
+  核实 `Config.Env` 与容器内 `process.env`。
+
+### S6-A 内核能力（对话生命周期、approve.reason、审批过滤、审计分页、取消接入申请、export_prov）
+
+- **`archive_chat` / `unarchive_chat` / `rename_chat`**（迁移 core 0031 `chats.archived_at`）：workspace · human ·
+  member；本人的 Chat，owner 可归档 / 恢复他人可见（`visibility='workspace'`）的 Chat 但不能改名；他人私有 Chat
+  对 owner 仍是 404（`chats_visibility` RLS，"存在性不泄露"——未加 security-definer 绕过，隔离只紧不松，见
+  STATUS 遗留 45）。`ChatWire.archivedAt: string | null`，`list_chats{includeArchived?}` 缺省隐藏；审计
+  `chat.archive` / `chat.unarchive` / `chat.rename`；推送 `chat.metadata {title}` / `{archivedAt}` 只走单聊订阅。
+  归档不切断溯源：`explain(turn)` 集成测试。
+- **自动标题**：`sendChatMessage` 插入首条用户消息后 `update chats set title=$3 where … and title is null`
+  （前 40 个码点、单行），`rename_chat` / `new_chat{title}` 永不被覆盖。
+- **`approve{actionRequestId, reason?}`**（C25，§12 第 6 项）：`blastRadius === 'high'` 且无非空 reason →
+  `ApprovalReasonRequiredError`（`code = 'reason_required'`），HTTP 400 / WS `INVALID_PARAMS`；reason 进 Decision
+  `rationale.reason` 与 `action_request.approve` 审计 payload，与 `reject` 对称。`ActionRequestWire` 加
+  `decisionReason` / `decidedBy` / `decidedAt`（`.nullable().optional()`——`request_action` 自己的投影在
+  `action-request-wire.ts`，五个审批 handler 经 `withApprovalDecision` 装饰；后续可把决定字段并进
+  `toWireActionRequest(row, decision?)`）。accept-s2 两个 manifest 是 low / medium、S3 不走审批，验收 driver 不用改。
+- **`list_action_requests{taskId?, parentWorkerRunId?}`**（C28）：`taskId` → `getTaskWithWorkerRuns` → run id 集，
+  两者同给取交集，未知 Task 返回空页（不 404）；I14 与 keyset 分页不变。
+- **`audit_query{filter?, limit?, cursor?}`** → `{items, nextCursor?, truncated?}`：`substrate/audit/writer.ts`
+  `queryAuditPage` 按 `(date_trunc('milliseconds', created_at), id)` 排序比较（遗留 23 模式），缺省 100 / 上限
+  1000，`filter.limit` 旧形状仍认；同毫秒三行 `limit:1` 翻页不漏不重的用例。
+- **`cancel_connection_request{connectionRequestId}`**（C26）：`requested → cancelled`（0005 预留的边，无迁移），
+  本人或 owner，非 `requested` 为 409 `illegal_transition`；审计 `connection.request_cancelled`；无
+  `cancelled_at` 列（谁 / 何时在审计行）。
+- **`export_prov`** 加 `nodeId?`（与 `explain{nodeId}` 同一种无类型 id）：它导出的是围绕一个节点的 PROV 图，不是
+  `audit_query` 的筛选范围——方案 §6 的措辞把两者混了；审计记录列表由前端序列化已加载的页。
+
+### S6-A 内核能力（工作区 / 用户清除、列表过滤、C10、遗留 41）
+
+- **迁移 core 0030**：`workspaces.disabled_at timestamptz null` + `grant update (disabled_at)`；不回填（§12 第 3
+  项：既有 `disabled` 行 `disabled_at is null` 视为保留期已过）；`set_workspace_status` 用
+  `coalesce(disabled_at, now())` 落、启用清空。
+- **`purge_workspace{workspaceId, confirm?}`**（platform · human · admin）：级联在
+  `application/platform/purge-workspace.ts`，走 bootstrap 超级用户路径（app 角色无 `workspaces` /
+  `audit_records` 的 DELETE、不能关 `links_immutable_delete` / `audit_records_no_delete` 触发器），能力 handler
+  第一阶段只做前置检查（`workspace_active` / `retention_not_elapsed` / `default_workspace`，拒绝不写审计行），
+  `afterCommit` 跑级联并在同一事务 `select … for update` 复查；删除顺序由活表结构拓扑排序、方案 §4 顺序作平局；
+  边 (a) service Principal → `warnings[{kind:'service_handle_in_use', principalId, name, activeHandles}]`；
+  边 (b) 从 `pg_constraint` 枚举所有引用 `users(id)` 的 FK 显式检查（不靠捕获 FK 错误），从未激活且成员资格全在
+  本工作区的 User 随之删除；不传 `confirm` 即预览（计数 + 警告，不删）；`platform.workspace_purged` 审计行含
+  按表计数与 `params.workspaceId`。内核不能删主机文件：结果带 `taskIds` / `principalIds`，CLI / 脚本负责
+  `workspaces/tasks/<id>` 目录。
+- **`purge_user{userIds}`**：全程平台事务；六种跳过原因（`user_not_found` / `activated` / `platform_admin` /
+  `has_sessions` / `active_membership` / `referenced`）；禁用成员资格的 Principal `user_id` 置空、行保留作审计
+  谱系；每个用户一条 `platform.user_purged`。
+- **列表过滤**：`list_workspaces{status?, purpose?, includeExpired?}`（省略 = 今天行为；控制台缺省
+  `{status:'active', includeExpired:false}`），行加 `purpose` / `expiresAt` / `disabledAt` / `purgeable`；
+  `list_users{pendingOnly?, hideResidual?}`——残留 = 无密码 ∧ 有 ≥1 成员资格 ∧ 没有任何"未禁用且在 active +
+  standard 工作区"的成员资格。
+- **CLI / 脚本**：`bootstrap.js purge-workspace <id> [--yes|--dry-run] [--name] [--actor]`、
+  `purge-expired-workspaces [--yes] [--include-disabled]` 与能力同一函数；`delete-workspace` 变为 `force:true`
+  越权（审计 payload `forced: true`）；`--actor` → `NEXTTIME_PLATFORM_ADMINS[0]` → 无则不写审计行、只打 stderr
+  事件；`delete-workspace.sh` / `delete-workspaces-matching.sh` 不再直接 SQL，regex 模式拒绝不合格的匹配
+  （`--force` 覆盖），`--expired` 走 `purge-expired-workspaces` 列表模式。
+- **遗留 41 前半**：`accept_s3.sh` 把采集器 Handle 铸到 `${NEXTTIME_DATA}/accept/collector-s3-<ts>-<pid>.token`，
+  `docker compose run -e NEXTTIME_HANDLE_TOKEN_FILE -v …:ro` 只对本次 `--once` 生效，EXIT / INT / TERM / HUP /
+  PIPE trap 删除（fake 与 `--real` 两种模式都接），生产 `secrets/collector-host-inventory.token` 不再被写。
+  **后半**：采集器 interval 模式每轮失败日志带 `consecutiveFailures` / `kernelStatus`，连续
+  `HOST_INVENTORY_FAILURE_STREAK_ALERT`（缺省 3）轮转为 `error "collector failing repeatedly"`（不退出）；内核
+  新增不变量 `ops.collector_silent`（active + standard 工作区里 service Principal 的 Source 超
+  `collectorSilenceThresholdMs`（缺省 2h）无观察）进 `/internal/metrics`。方案 §8 写的 `I-S6-1` 按运维健康前缀
+  命名为 `ops.collector_silent`（与 `ops.outbox_stuck` 同类）。
+- **C10**：`setUserStatusHandler` 对自己抛 `self_disable`，`last_admin` 保留。
+- 测试：`platform-purge.integration.test.ts`（11 例）、`delete-workspace.integration.test.ts`（owner 用户级联）、
+  `bootstrap.test.ts` 纯函数、`invariant-checks.integration.test.ts` `ops.collector_silent`、
+  `collectors/host-inventory` `failure-streak.test.ts`。
+
+### S6-A 对话页（W1 / W2 / W3）
+
+- **W3 两个根因都成立并已修**：(a) 页面自己写 `scrollTop` 触发的异步 `scroll` 事件把下一段流式文本量成"距底距离"；
+  (b) 跟随写入只由 `toolCalls.length` 驱动，原地增长的工具结果从不滚动。修法：底部哨兵 + `IntersectionObserver`
+  （rootMargin = `AT_BOTTOM_THRESHOLD_PX` 48，语义不变）+ `ResizeObserver`，跟随写入改为 `useLayoutEffect` 以
+  `[messages, turn]` 对象身份为键（`toolCallEnded` 生成新的 `turn` 对象）；jsdom 回退忽略 `scrollTop >=
+  lastWrittenTop` 的自触发事件；`ui/FollowPill` 只计持久化消息。两个 `test.fails` 翻为通过。
+- **生命周期**：`lib/chat-lifecycle.ts`（`chatTitle` / `isArchived`（`archivedAt` 为字符串才算归档，0031 之前的行
+  算活跃）/ `normalizeChatTitle`（镜像内核）/ `spliceChat` / `applyChatMetadata`）；列表一次
+  `list_chats{includeArchived:true}` 后客户端分 活跃 / 已归档 两个 tab，每次生命周期调用都 `mutate(spliceChat)`
+  不重读；归档确认 `ConfirmTier low` + 撤销 = `unarchive_chat`，由页面持有（splice 会卸载发起的行）；改名内联
+  编辑（Enter / Escape、IME 安全、空白客户端拒绝）；新对话占位"新对话 New chat"直到自动标题推送到达。
+- **头部**：`components/chat/ChatHeader.tsx` + `ModelSwitcher.tsx`——"模式 Mode：入口 agent · 模型 Model：
+  <select> · 来源 Source：工作区默认 / 我的覆盖"，选项 = `list_models` 目录 ∩ AgentPolicy `allowedModels`
+  （空 = 不限制），首项"工作区默认"= `set_agent_profile{model:null}`；选择后 `invalidateCapability` + toast
+  "下一轮生效"；Turn 进行中禁用（遗留 44 的规则）、403 后禁用；覆盖值不在允许清单内时标记而不隐藏。模式只显示。
+- **ChatPage 的 Turn 结束处理改为以 `metadata.turnStatus` 为门**：`{title}` / `{archivedAt}` 推送在 Turn 开始时到
+  达，原逻辑会误清 `TurnAlreadyRunningError`。归档的对话只读：composer 禁用 + 恢复按钮；内核侧同步加
+  `ChatArchivedError`（`send_chat_message` 409 `chat_archived`），不只靠前端。
+- **审批卡**：`ActionRequestCard` 改建在 `ui/ApprovalCard` 上，`reason` 随 `approve` 走（C25），高影响隐藏
+  "总是允许"（I8），`FALLBACK_BLAST_RADIUS = 'medium'`（持久化内容里 `blastRadius` 可选）；卡片保留
+  `.action-card-status` 钩子（e2e 依赖）。`ApprovalCard.onAlwaysAllow` 带已输入的 reason。
+- 测试：ChatPage 13、ChatListPage 10、ActionRequestCard 14、ModelSwitcher 4、ChatRenameForm 4、chat-lifecycle 9；
+  e2e `chat.spec.ts` 新增生命周期流程（本机 compose 栈 36 / 36 通过，回顾 §2.1）。已知：`list_chats` 只返回本人的 Chat，owner 归档他人可见 Chat
+  在 UI 上不可达（内核允许）。
+
+### S6-A 平台工作区 / 用户页（A1 / A6）、成员 / 访问（B3 / B4 / B5 / B7）
+
+- 工作区页缺省 `{status:'active', includeExpired:false}`；"残留" = 已停用 ∪ 已到期 ephemeral，内核单个筛选表达不了，
+  预设 `#/platform/workspaces?residue=1`（概览横幅链接，挂载与 hashchange 都读）读全量再用
+  `isResidueWorkspace`（`lib/platform-workspaces.ts`）客户端过滤；生命周期列显示"到期 …"或"禁用于 … · N 天后可清除 /
+  可清除"（7 天保留，`disabledAt === null` ⇒ 立即可清）。清除入口只在 `purgeable && !isDefault`：
+  `PurgeWorkspaceDrawer` 第一步直接 `http.call('purge_workspace',{workspaceId})` 预览（不走 `useCapability`
+  缓存，避免陈旧计数）——计数表、`purgedUsers`、每条 `service_handle_in_use` 警告带 `RefChip`；第二步
+  `ConfirmTier irreversible`（键入工作区名 + 知情勾选）→ `confirm:true` → 行 `mutate` 移除、toast 计数。停用后的行
+  原地 mutate 不重读（缺省筛选会把它丢掉，e2e"停用后再启用"依赖此）。409 在预览步走 `PlatformError`、确认步
+  以映射文案重抛给 `ConfirmTier`。
+- 用户页缺省 `hideResidual:true`（可切换）；"清理待激活用户"用 `pendingOnly` 列候选、勾选后
+  `ConfirmTier high` → `purge_user{userIds}`（上限 200）→ 逐行 outcome（跳过原因表以 wire 枚举定型）。
+- 成员 / 访问：principal / gatekeeper / worker-definition id → `RefChip`（访问页新增 `list_gatekeepers` 读只为名字）；
+  双语文案；B5：`list_grants` / `list_principals` 注册表无 cursor / limit，保持单页（不造参数）。B7：签发服务 Handle
+  TTL 缺省 30 天（方案 §5.6 的 30 / 365），上限从注册表 Zod schema `maxValue` 读；能力从 `listByChannel('handle')`
+  去掉 `<gate>.<op>` 模式行的清单勾选（与 `assertValidScope` 同一规则），`#ish-scope` 保留为校验过的粘贴框
+  （integrations e2e 用它）。
+- 概览：`验收残留 N 个工作区待清除` 横幅（同一谓词）；设置页 env-admin 登录名改 `tag mono`（标签不是状态）。
+- C22：`AppShell` / `WorkspaceDetailPanel` / `UserDetailPanel` 单测；e2e `workspaces.spec.ts` 加残留预设与清除流程
+  （本机 compose 栈通过）。路由：`routeFromHash` 只按路径匹配、`?query` 归页面。
+
+### S6-C 接入（A7 / B7 / C26 / §5.7 入口）
+
+- 一个启动器两处入口：`components/connect/ConnectSystemLauncher.tsx` 建在 `ui/Launcher` 上，`origin`
+  （workspace / platform）决定哪一侧是表单、哪一侧是"带链接的提示"，`platformAdmin` 让管理员在工作区页原地完成
+  平台侧；http / mcp 复用 `CreateGateInstanceForm` / `GateCredentialEntry`（凭证浏览器 → caddy → 门宿主，内核不见）
+  / `OnboardingWizardReview`（新增 `showDone`）不复制逻辑；平台侧前置条件显式化——实例 `discovered → enabled`
+  与接入包 `platform_preset`（一键 `set_connector_mode`），否则工作区目录看不到。ssh / cli：
+  `PackagedGateChecklist`（add-gatekeeper §4 的 compose 块 + `GATE_ID` / `GATE_CONNECTOR` / `KERNEL_URL` 与
+  secrets 三件套，只用 `<NEXTTIME_DATA>` / `<system>` 占位符），`useGateInstancePoll` 每 5 秒重查直到 announce。
+- 链接：工作区卡片的"平台实例"由 `list_available_gate_instances.gatekeeperId` 反查，管理员深链
+  `#/platform/integrations/<gateId>`（路由新增 `gateId` 段 + `hrefs.platformGateInstance`）；平台实例详情只有
+  `enabledWorkspaceCount`（线上契约无工作区列表——内核扩展候选）+ 当前工作区的门 `RefChip`。
+- B7：启用按钮只在 `discovered` / `lost`（`lost` 保留是因为 CI 种子只 announce 一次、180 s 后即 `lost`），
+  `enabled` 无按钮；状态 / 健康 `StatusChip`。C26：`requested` 行取消按钮 → `ConfirmTier medium` →
+  `cancel_connection_request`，行就地替换，403 / 409 / 404 文案在 `lib/connections.ts`。
+- Explorer 入口：`lib/explorer-probe.ts` 同源 GET `/explorer/`、以占位页标题 "Explorer bundle not built" 为判据、
+  失败即视为可用；`AppShell` 把 `useExplorerAvailable()` 传给 `Sidebar`，第三方链接改为"打开 Explorer（third-party）"
+  且只在 bundle 已构建时显示，原生 图谱 页成为 使用 组的固定入口。runbook：add-gatekeeper §4b、host-explorer 显隐。
+
+### S6-D 原生图谱页（A5）
+
+- 路由 `#/work/graph[?objectId&q&type&at]`（`lib/graph-route.ts`），`lib/router.ts` 只认路径。页面
+  `components/graph/*`：`list_types{kind:'object'}` 类型筛选 + `search{query, objectType?, limit:25, cursor}`
+  keyset 加载更多（空查询 = 最近更新）；对象视图**一次 `state_at{objectId, at}`**——`traverse` 的线上结果只有 id
+  （无 `direction`）渲染不了 Fact 行，`state_at` 同时给出 Object 与两个方向的全部 `FactWire`，`at = now` 时正是
+  `traverse` 深度 1 的活跃集合，换一个 `at` 就是"截至 As of"时间旅行；`at` 按页面挂载冻结（`sessionAt`）、只由
+  刷新推进（`useCapability` 以序列化参数作缓存键，每次渲染 `new Date()` 会无限重载），所有新鲜度按同一时刻判断。
+- 邻居按 linkType × 方向分组（出边在前，预览 8 行）、展开走面包屑轨迹（缓存渲染 + 后台复验）；内联 SVG 环形布局
+  （中心 + 至多 24 个邻居，边色取该邻居各 Fact 最差新鲜度），无物理引擎、无新依赖；每个节点 / 行都有键盘路径。
+- 新鲜度（`lib/graph-freshness.ts`，S5.2 语义）：冲突（open Conflict 任一侧或 `contradicted`）→ 被替代 → 已失效
+  （原因 `not_reobserved` 单列）→ 未观察（`assert_fact`、无时钟，故意灰而非琥珀）→ 新鲜（≤ 2h）→ 老化；只用
+  ok / warn / neutral / danger 四色；窗口 `OBSERVATION_WINDOW_MS` = 2h，注明是内核
+  `DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS` 的复述并印在图例里。
+- 名称：页面级 Object 缓存，搜索 / 聚焦结果灌入，渲染到的行按未见 id 调 `get_object`（去重、并发 4、失败 → 裸 chip）；
+  显示名 = 名称类属性，否则按本体 `identityKey` 顺序拼身份值（跳过 uuid 形状的外键）。冲突：
+  `list_conflicts{status:'open', limit:200}` 一次、客户端按 `factAId` / `factBId` 匹配。溯源抽屉
+  `explain{nodeId: factId}` → `ui/ProvenanceChain`，"在审计页打开" → `#/govern/audit?nodeId=`。
+- 内核缺口（记录未绕过）：`traverse` 线上无 `direction` 且只回 id；无批量 Object 读；`list_conflicts` 无对象 / Fact
+  筛选；观察窗口无能力暴露；ObjectType 无显示名提示。已知边界：单个 Object 的 Fact 不分页；深度 > 1 只能逐步展开；
+  冲突标记只覆盖前 200 条开放冲突；`sessionAt` 是浏览器时钟；`state_at` 的有效期过滤与 `traverse` 不同
+  （未来 `validFrom` / 过去 `validUntil` 不显示）；`RefChip` 缺 fact / conflict 种类（暂标为 对象）；e2e `graph.spec.ts` 在本机 compose 栈通过。
+- 测试：GraphPage 11、NeighbourList 3、NeighbourhoodView 2、ProvenanceDrawer 2、FreshnessChip 3 + 三个 lib 单测；
+  runbook web-console.md 新增"图谱页（S6-D）"。
+
+### S6-A 审批页 / 任务页 / 审计页 / 能力目录（B2 / C25 / C28 / A4 / C27 / A2）
+
+- **审批页**：详情 `components/approvals/ApprovalDetail.tsx` 建在 `ui/ApprovalCard` 上；`approve{reason?}` 高影响
+  必填（卡片在内核 400 之前先校验）；高影响 Approve 与所有 Reject 走 `ConfirmTier high`（影响清单：动作 / 目标 /
+  门 / 影响面 / 代表者 / 被阻塞的 Worker），确认层是详情 `Drawer` 的**同级**而非嵌套（两个 Drawer 都在 `document`
+  上监听 Escape；确认打开时详情的 `onClose` 经 ref 变为 no-op，测试证明 Escape 只关确认层）；内核错误让确认层保持
+  打开、行回退。History 显示 `decidedBy`（`RefChip`，名字来自 `list_principals`）/ `decisionReason` / `decidedAt`。
+  "总是允许"复选框语义与 e2e 选择器保留。名字目录 `approvals/useDirectoryNames.tsx`：`list_principals` 是
+  operator-only 且内核角色规则精确匹配，member / auditor 被拒后答 `[]` 不再重发。
+- **任务页 / 详情**：关联审批 = `approvals/LinkedApprovals`（`list_action_requests{taskId, limit:20}`，含已决，
+  keyset 加载更多，仅对打开的 Task 按推送重载）；`list_pending` 反查与其推送处理删除——C7 的断言改为"每次审批推送
+  一次任务范围的 `list_action_requests` 重取"；取消任务走 `ConfirmTier high`；`workerDefinition` / `onBehalfOf` 为
+  `RefChip`；"查看溯源"按 Task（`?resourceType=task&resourceId=`）与 WorkerRun 行（`worker_run`，两者由
+  `application/task/transition-log.ts` 写入）跳审计页。`list_tasks` 无参数、无分页（B5 不适用）。
+- **审计页**：`lib/audit.ts`——`auditHref` / `auditEntryFromHash`（`?nodeId` / `?resourceType&resourceId` /
+  `?actionRequestId` / `?actorPrincipalId` / `?action`）、`AUDIT_RESOURCE_TYPES`（内核实际写入的 26 个
+  `resourceType` 字面量，从 `application/ governance/ substrate/` grep 而来，不是已发布枚举）、
+  `auditActionSuggestions()`（工作区能力名 + 生命周期动作）、`explainView`（`ExplainResultWire` →
+  `ProvenanceChain` props + Decision + `activity.metadata` 的 taskId / workerRunId / actionRequestId 链接）、
+  `downloadJson`（Blob + `<a download>`）。`ExplainSection`（自动 `explain{nodeId}`，Decision 块在链之上，Fact /
+  Activity chip 页内再 explain，导出 `export_prov{nodeId}`）、`AuditLogSection`（`audit_query{filter?, limit:50,
+  cursor}` keyset；actor 选择器来自 `list_principals`，被拒时从一开始就是文本框、从不中途换控件；action 文本 +
+  datalist；资源类型枚举；行内 actor / 资源 `RefChip` 链接到各自页面；"导出本页"客户端序列化——`export_prov`
+  是围绕单节点的 PROV 图，不是审计范围）、`ApprovalContext`（`?actionRequestId=` → `get_action` 只读卡片 +
+  `parentWorkerRunId`）。验收句：Fact 节点一屏内 Fact → Activity →（WorkerRun chip）→ Source；从已执行审批一次点击
+  到审计页看到请求卡、`action_request.*` 行与决定的 explain（`governance.approval_decision` Activity 本身不再链到
+  WorkerRun，页面说明）。
+- **能力目录编辑器**：`lib/catalog.ts` 用 shared Zod（`ProposeSkillContentSchema` / `ProposeProcedureContentSchema` /
+  `workerDefinitionContentSchemaFor(kind)`）做表单校验与字段错误提取，`parseMarkdownBlocks` 无 HTML 预览；
+  `SkillEditor`（SKILL.md 表单 + 编辑 / 预览）→ `propose_skill{skill}` → 成功态里 `publish_skill`；
+  `ProcedureEditor`（有序类型化步骤 + JSON 视图）；`WorkerDefinitionEditor`（`kind` 版本化时锁定，model datalist
+  来自 `list_models`）→ `propose_worker_definition{definitionId?, kind, definition}` → 发布。内核事实（UI 里注明）：
+  Skill / Procedure 的"编辑"是**复制成新家族**（`propose_skill{skill}` / `propose_procedure{procedure}` 内容
+  schema `.strict()` 无家族 id；`ProposeSkillInput.skillId` 存在于 `application/worker/skills.ts` 但没有能力传它），
+  Skill 复制无法预填正文（`list_skills` 无 `markdown`、无 `get_skill`）；`list_worker_definitions` 只回已发布行，
+  新草稿不出现在 tab 里，发布从编辑器成功态做；三个 list 能力无 `limit` / `cursor`，目录保持单页。
+- 我的智能体：生效面板的 Skills / Systems / Worker definitions 以 `RefChip` 命名显示。
+- 测试：ApprovalDetail 7、ActionRequestDetail 5、TaskDetail 5、AuditPage 6、audit 7、catalog 9、三个编辑器各 3，
+  ApprovalQueuePage +5、CatalogPage +4；e2e `tasks.spec.ts` / `catalog.spec.ts` / `audit.spec.ts` 新增（本机 compose 栈通过，
+  `catalog.spec.ts` 一处过度断言在集成后修正）。
+  对话流里今天没有 Fact / Decision 卡片（`chat-message-content` 只有 task_update / action_pending /
+  action_update），方案 §5.5 的"对话里的 Fact / Decision 卡片加查看溯源"无落点；内联审批卡经"在审批页打开" →
+  审批页"查看溯源"两跳可达。
+
+### S6-B 模型与供应商（A3 / C29 / 遗留 19）
+
+- **llm-proxy 管理面**（`packages/llm-proxy/src/admin-api.ts` 等）：`/admin/providers*`，经 caddy `handle_path
+  /api/llm-admin/*`（`rewrite /admin{uri}`、要求 `X-Requested-With: nexttime`、排在 `/api/*` 之前）反代到
+  `llm-proxy:8082`。GET 列表（id、显示名、api 种类、base URL、鉴权头、`apiKeyEnv`、`credentialPresent` 布尔、
+  enabled、`source: file|store`、`overridesFile`、models、lastTest；列表级 `modelsJsonWrittenAt` / `modelsJsonError` /
+  `storeWritable`），POST / PUT / DELETE（对 yaml 供应商的 PUT 生成 store 覆盖——这就是"停用文件供应商"的做法；DELETE
+  只对 store 行，删掉覆盖即恢复 yaml 条目），`POST /providers/:id/test`（一次补全 + 一次**强制**工具调用，
+  `tool_choice` 按 api 种类；结果 `{completion, tool_call, latency_ms, error(去密钥、≤200 字), tested_at}`），
+  `POST /providers/:id/secret` → **501 `not_implemented`**（见下）。store `${NEXTTIME_DATA}/llm-proxy/providers.json`
+  （容器 `/data/state`，原子 `.tmp`+rename，损坏即报错），按名整体覆盖 yaml；文件条目永远 enabled；路由表实时
+  （`proxy.ts` 的 providers 变为查找函数）。每次变更原子重写 `${NEXTTIME_DATA}/config/models.json`（`config/` 目录改
+  rw 挂载，`llm-providers.yaml` / `handle.pub` / `egress-sources.json` / `ontology/` 以 `:ro` 覆盖；**启动从不写**——
+  `deploy/accept/docker-compose.fake.yml` 换掉 yaml 后不能碰生产文件，验收覆盖里 `MODELS_JSON_OUT_FILE` 指向
+  `accept/models.json`）；`make gen-models` 也合并 store，不会丢掉控制台新增的供应商。审计：代理 `level:"audit"`
+  日志行 + `POST /internal/llm-admin-audit` → 内核 `platform.llm_provider_{created|updated|deleted|tested}` 行
+  （`resource_id` 为空、`payload.resourceRef` 放 slug，与 `dispatch.ts auditResourceRef` 同一惯例；FK 违规 400
+  `unknown_actor`），两处都带 token `jti` / `sub`，永不带密钥。
+- **鉴权**：`packages/shared/src/llm-admin-token.ts`（`typ nt-llm-admin+jwt`、`aud llm-admin`、`sub` = user id、
+  `jti`、TTL ≤ 300 s；与 Handle / 门宿主 token 互不接受，双向有测试）；内核 `issue_llm_admin_token`（platform ·
+  human · admin，`application/gateway/llm-admin-handlers.ts`，用 Handle 签名私钥签，平台审计
+  `platform.llm_admin_token_issued`（resourceId = jti，payload 不含 token），结果 `{token, url:'/api/llm-admin',
+  jti, expiresAt}`）；代理 `admin-auth.ts` 用 `HANDLE_PUBLIC_KEY_FILE` 验证。web `lib/llm-admin.ts` 按 caller 缓存
+  token 到到期前 60 s，401 重试一次。
+- **页面** `components/platform/PlatformModelsPage.tsx`（`#/platform/models`）：供应商表（enabled / 凭证状态 /
+  最近测试 chip、来源标签）、新增 / 编辑抽屉（无密钥字段，鉴权头随 api 种类）、测试调用结构化结果、停用
+  `ConfirmTier high`、启用 `medium`、删除 store 行 `irreversible`，凭证状态附操作员步骤说明，
+  `storeWritable=false` / `modelsJsonError` 时禁写并提示。工作区侧 `list_platform_models` **零改动**：它每次调用
+  重读 `/data/config/models.json`，代理重写后工作区"模型与配额"与对话页头部立刻看到新供应商。
+- **C29**：`QuotaListEntryWireSchema` / `PolicyWireSchema` 早已在 `wire/governance.ts` 公开且与内核一致
+  （`KERNEL_VALIDATE_RESULTS=1` 强制）——runbook 缺口 9 的前提过时；`ModelsPage` 改为真实列渲染（配额：键 / 生效值 /
+  缺省 vs 覆盖 / 设置者 / 时间；策略：actionKindTag / blastRadius chip / 自动批准 / 请求者可批 / 设置者 / 时间）。
+- **遗留 19**（I18 "100% 时代理返回预算耗尽错误"）：内核 `GET /internal/llm-budget-exhausted`
+  （`interfaces/http/internal/llm-budget.ts`）列出今日超 `task.daily_cost_budget_usd`（jsonb 数字；JSON null = 不限）
+  或 `LLM_DAILY_TOKEN_BUDGET` 的工作区（`until` = 下一 UTC 零点，DB 时钟），超级用户池查询（与
+  `handle-revocations.ts` 同一窄例外），`llm_usage` 读仍在 `governance/llm-usage/service.ts`；代理 `budget-sync.ts`
+  每 15 s 同步、失败 fail-open，`proxy.ts` 对这些工作区在验证 Handle 后、读 body 与接触上游前回 **402
+  `budget_exhausted`**（两家官方 SDK 都会自动重试 429、都不重试 402）；内核事后止损（Task `failed:
+  budget_exhausted` + Handle 吊销 → 401）仍为兜底。
+- **被维护者决定阻塞的部分**：控制台写供应商密钥（`/providers/:id/secret`）——`console-completion-plan.md` §12 末
+  "触及有凭证系统的动作必经审批"是否约束管理员控制台操作未答。代码里没有任何路径接受密钥（输入 schema strict、审计
+  schema 无密钥字段），密钥仍走 `secrets/llm-proxy.env` 的 `<apiKeyEnv>` + `--force-recreate llm-proxy`，页面如实
+  显示"凭证：待操作员配置"。答"不过审批"→ 在同一 JWT + 审计后实现（代理侧加密存储或 env 文件写入）；答"要过审批"→ 先
+  设计审批流。
+- 其它判断（可否决）：`config/` 目录 owner 改为 10001（`scripts/host-llm-proxy-init.sh`；单文件 rw bind 不能被 rename
+  覆盖、`host-env-init.sh` 重跑会把组写清掉，故取 owner-only；文件仍 root 644、输入以 `:ro` 覆盖）；yaml 改动仍需重启
+  （bind 挂载文件 watch 不可靠）；`ProviderStore.upsert/remove` 无互斥（单管理员控制台，两次并发写可能丢一次）；
+  显示名写进 `models.json` 的 pi `name`，内核投影 `{id, provider, model}` 不带。测试：`admin-api.test.ts` 12（真实监听
+  端到端，含每条路由的鉴权、Handle → 401、原子重写、审计 + 内核事件、501、不可写重写）、`admin-auth` 7、
+  `provider-store` 8、`catalog` 4、`provider-test` 6、`budget-sync` 5；内核 `llm-admin.integration.test.ts` 3、
+  `llm-budget.test.ts` 3、`llm-admin-audit.test.ts` 3；web `PlatformModelsPage` 6。runbook：operations.md §12
+  "供应商管理（S6-B）"，`report-usage.sh --by provider`。
+
+### S6 主机应用注意（本地分支，尚未合入 / 发版）
+
+① 迁移 core 0030（`workspaces.disabled_at`，不回填——既有 `disabled` 行立即可清）与 0031（`chats.archived_at`），
+均可加、可空；② 构建前 `export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"`
+（B1；`.env` 里的 `KERNEL_VERSION` 已失效可删），重建 kernel / caddy / llm-proxy / agent-host / worker-runtime
+（platform-extension）/ collector-host-inventory；③ S6-B：先 `sudo -E sh scripts/host-llm-proxy-init.sh`（建
+`${NEXTTIME_DATA}/llm-proxy` 0750 10001、`config/` owner 10001），`up -d --force-recreate llm-proxy`（新挂载与 env）；
+④ 首次清除前：`sh scripts/delete-workspaces-matching.sh --expired`（不带 `--yes`）与 `bootstrap.js purge-workspace
+<id>`（dry-run）过一遍 `purgedUsers` 与 `service_handle_in_use` 警告，确认生产采集器 token 指向生产工作区；CLI 审计行
+需 `--actor <login>` 或 `NEXTTIME_PLATFORM_ADMINS`；⑤ 遗留 43 的 prompt 只对新发布的 `kind: worker` WorkerDefinition
+版本生效（`propose_worker_definition` + `publish_worker_definition`）；⑥ `ops.collector_silent` 若生产采集器超 2h 无
+观察会立刻 > 0；⑦ 验收：S1 → S2 → S3 复跑（`accept_s3.sh` 不再改写 `secrets/collector-host-inventory.token`），
+`--real --runs 10` 看 ssh_run_approve 摘要是否引用 actionRequestId、docker_restart 是否仍 7/10+，对话中途
+`connect_gatekeeper` 后发消息不再 `interrupted`（遗留 44），`EXPLORER_BUILD=1` 可选（原生图谱页已替代入口）；
+⑧ 控制台走查按 `console-completion-plan.md` §5 各节验收句，截图入 `docs/private/`。
+
 ---
 
 ## 6. 验收矩阵

@@ -38,6 +38,12 @@ interface FieldErrors {
   readonly target?: string;
 }
 
+/** "Looks like a URL": a scheme followed by `://` — the same loose check the manifest-source
+ *  field always had, now shared with the endpoint (C15). Deliberately not `new URL()`: a gate
+ *  endpoint is routinely a bare compose service name with a port, which the WHATWG parser accepts
+ *  anyway, and this form's job is to catch a pasted hostname with no scheme, not to validate. */
+const URL_LIKE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 /** Parses the credential box: JSON when it is JSON, the raw string otherwise (the gate's
  *  ConnectedAccount store accepts either — `create_connection.credentials` is `z.unknown()`). */
 export function parseCredentials(text: string): unknown {
@@ -66,6 +72,9 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
  * (`packages/shared/src/capabilities.ts`). Credentials go straight to the gate and are cleared
  * from this form the moment the call returns; they are never echoed, logged or kept in state after
  * submit. 400 highlights the field it names; 502/504 show the gate's own message verbatim.
+ * `aria-describedby` follows what `Field` actually renders (C16): the hint only while there is
+ * no error (`ui/Field.tsx` swaps the hint out for the error), so no control ever points at an id
+ * that is not in the DOM.
  */
 export function CompleteConnectionForm({
   http,
@@ -89,11 +98,17 @@ export function CompleteConnectionForm({
   function validate(): FieldErrors {
     const errors: { -readonly [K in keyof FieldErrors]?: string } = {};
     if (!target.trim()) errors.target = 'Target is required.';
-    if (!endpoint.trim()) errors.endpoint = 'The Gatekeeper endpoint is required.';
+    if (!endpoint.trim()) {
+      errors.endpoint = 'The Gatekeeper endpoint is required.';
+    } else if (!URL_LIKE_PATTERN.test(endpoint.trim())) {
+      // C15: the kernel only checks non-empty, then fails the gate round trip with a far less
+      // helpful `gatekeeper_error` / `gatekeeper_timeout` — say it here, on the field.
+      errors.endpoint = 'The Gatekeeper endpoint must be a URL (http://gate-host:port).';
+    }
     if (credentialKind === 'connected_account' && !credentials.trim()) {
       errors.credentials = 'A connected-account credential is required, or choose Shared.';
     }
-    if (manifestSource.trim() && !/^[a-z][a-z0-9+.-]*:\/\//i.test(manifestSource.trim())) {
+    if (manifestSource.trim() && !URL_LIKE_PATTERN.test(manifestSource.trim())) {
       errors.manifestSource = 'Manifest source must be a URL.';
     }
     return errors;
@@ -188,7 +203,7 @@ export function CompleteConnectionForm({
           value={target}
           onChange={(event) => setTarget(event.target.value)}
           invalid={!!fieldErrors.target}
-          aria-describedby={describedBy('cc-target', true, !!fieldErrors.target)}
+          aria-describedby={describedBy('cc-target', !fieldErrors.target, !!fieldErrors.target)}
           disabled={submitting}
           mono
         />
@@ -207,7 +222,11 @@ export function CompleteConnectionForm({
           onChange={(event) => setEndpoint(event.target.value)}
           placeholder="http://gate-host:port"
           invalid={!!fieldErrors.endpoint}
-          aria-describedby={describedBy('cc-endpoint', true, !!fieldErrors.endpoint)}
+          aria-describedby={describedBy(
+            'cc-endpoint',
+            !fieldErrors.endpoint,
+            !!fieldErrors.endpoint,
+          )}
           disabled={submitting}
           mono
         />
@@ -256,7 +275,11 @@ export function CompleteConnectionForm({
               onChange={(event) => setCredentials(event.target.value)}
               rows={3}
               invalid={!!fieldErrors.credentials}
-              aria-describedby={describedBy('cc-credentials', true, !!fieldErrors.credentials)}
+              aria-describedby={describedBy(
+                'cc-credentials',
+                !fieldErrors.credentials,
+                !!fieldErrors.credentials,
+              )}
               autoComplete="off"
               spellCheck={false}
               disabled={submitting}
@@ -300,7 +323,11 @@ export function CompleteConnectionForm({
                 : 'http://mcp-host:port/mcp'
             }
             invalid={!!fieldErrors.manifestSource}
-            aria-describedby={describedBy('cc-manifest', true, !!fieldErrors.manifestSource)}
+            aria-describedby={describedBy(
+              'cc-manifest',
+              !fieldErrors.manifestSource,
+              !!fieldErrors.manifestSource,
+            )}
             disabled={submitting}
             mono
           />

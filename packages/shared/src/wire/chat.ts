@@ -15,6 +15,12 @@ export const ChatWireSchema = z
     title: z.string().nullable(),
     visibility: z.string(),
     createdAt: z.string(),
+    /** S6-A chat lifecycle (docs/console-completion-plan.md §4): `null` = active; an ISO timestamp
+     *  = archived at that moment (`archive_chat`; `unarchive_chat` sets it back to `null`).
+     *  `list_chats` hides archived rows unless `includeArchived: true`. Chosen over a
+     *  `status: 'active' | 'archived'` enum because the timestamp *is* the status and the console
+     *  wants to show "archived <relative time>" — one field, no second source of truth. */
+    archivedAt: z.string().nullable(),
   })
   .strict();
 export type ChatWire = z.infer<typeof ChatWireSchema>;

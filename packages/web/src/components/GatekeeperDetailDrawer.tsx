@@ -1,6 +1,5 @@
 import { useCapability } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { isNotFoundError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { type GatekeeperDetail, healthView } from '../lib/governance.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -27,16 +26,8 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
     return <SkeletonRows count={3} label="Loading gatekeeper" testId="gatekeeper-detail-loading" />;
   }
   if (detail.state.status === 'error') {
-    if (isNotFoundError(detail.state.error)) {
-      return (
-        <EmptyState
-          icon="connections"
-          title="该能力尚未上线 Not live yet"
-          body="get_gatekeeper is part of S3.11, still landing on the kernel side."
-          testId="gatekeeper-detail-unavailable"
-        />
-      );
-    }
+    // B6 (S6-A0): a `get_gatekeeper` not_found is "no such gatekeeper", rendered by the ordinary
+    // error banner — the S3.11 "该能力尚未上线" placeholder branch is retired with the rest.
     return (
       <ErrorBanner
         error={detail.state.error}

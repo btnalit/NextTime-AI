@@ -1,6 +1,7 @@
-import { writeFile } from 'node:fs/promises';
+import { rename, unlink, writeFile } from 'node:fs/promises';
+import type { ProviderCatalog } from './catalog.js';
 import { DEFAULT_LLM_PROXY_PORT, loadProvidersFile } from './config.js';
-import type { LlmProvidersFile, ModelCost } from './config.js';
+import type { LlmProvidersFile, ModelCost, ProviderConfig } from './config.js';
 
 /**
  * gen-models-json: derives pi's `models.json` (design doc §7.7 "同一份配置生成内核路由表与
@@ -38,6 +39,9 @@ import type { LlmProvidersFile, ModelCost } from './config.js';
 
 export interface PiModelDefinition {
   readonly id: string;
+  /** pi's own optional display name (`ModelDefinitionSchema.name`, pi 0.84.4 model-config.ts) —
+   *  S6-B writes the console's per-model display name here; absent when none was set. */
+  readonly name?: string;
   readonly cost?: ModelCost;
 }
 
@@ -77,12 +81,31 @@ export function buildModelsJson(
   providersFile: LlmProvidersFile,
   options: BuildModelsJsonOptions = {},
 ): PiModelsJson {
+  return buildModelsJsonFromEntries(
+    Object.entries(providersFile.providers).map(([name, config]) => ({ name, config })),
+    options,
+  );
+}
+
+export interface ModelsJsonEntry {
+  readonly name: string;
+  readonly config: ProviderConfig;
+}
+
+/** S6-B: the same transform over an explicit provider list — what `ProviderCatalog` feeds it
+ *  (`buildModelsJsonFromCatalog`): file + store merged, *enabled* providers only, so a provider
+ *  the administrator disabled disappears from pi's picker and from the kernel's projection the
+ *  moment `models.json` is rewritten, matching proxy.ts's own 404 for it. */
+export function buildModelsJsonFromEntries(
+  entries: readonly ModelsJsonEntry[],
+  options: BuildModelsJsonOptions = {},
+): PiModelsJson {
   const host = options.llmProxyHost ?? 'llm-proxy';
   const port = options.llmProxyPort ?? DEFAULT_LLM_PROXY_PORT;
   const capabilityHandleEnvVar = options.capabilityHandleEnvVar ?? 'CAPABILITY_HANDLE';
 
   const providers: Record<string, PiProviderConfig> = {};
-  for (const [name, provider] of Object.entries(providersFile.providers)) {
+  for (const { name, config: provider } of entries) {
     // See this module's own doc comment for why the two api-kind families need different
     // baseUrl shapes here.
     const baseUrl =
@@ -96,12 +119,53 @@ export function buildModelsJson(
       api: provider.api,
       models: provider.models.map((model) => ({
         id: model.id,
+        ...(model.display_name ? { name: model.display_name } : {}),
         ...(model.cost ? { cost: model.cost } : {}),
       })),
     };
   }
 
   return { providers };
+}
+
+export function buildModelsJsonFromCatalog(
+  catalog: ProviderCatalog,
+  options: BuildModelsJsonOptions = {},
+): PiModelsJson {
+  return buildModelsJsonFromEntries(
+    catalog
+      .resolve()
+      .filter((provider) => provider.enabled)
+      .map((provider) => ({ name: provider.id, config: provider.config })),
+    options,
+  );
+}
+
+export function serializeModelsJson(modelsJson: PiModelsJson): string {
+  return `${JSON.stringify(modelsJson, null, 2)}\n`;
+}
+
+/**
+ * S6-B: writes `models.json` atomically — `<outFile>.tmp-<pid>` then `rename`, the exact
+ * guarantee the Makefile's `gen-models` target gives with its own `.tmp` + `mv` (its comment:
+ * "readers only ever see the old complete file or the new complete file, never a partial one").
+ * The kernel re-reads this file on every `list_models` / `list_platform_models` call and
+ * worker-supervisor bind-mounts it into every container it spawns, so a torn write would be
+ * visible immediately. The temp file is removed on any failure so a failed rewrite leaves no
+ * debris for `make gen-models` to trip over.
+ */
+export async function writeModelsJsonAtomic(
+  outFile: string,
+  modelsJson: PiModelsJson,
+): Promise<void> {
+  const tmp = `${outFile}.tmp-${process.pid}`;
+  try {
+    await writeFile(tmp, serializeModelsJson(modelsJson), { encoding: 'utf8', mode: 0o644 });
+    await rename(tmp, outFile);
+  } catch (err) {
+    await unlink(tmp).catch(() => undefined);
+    throw err;
+  }
 }
 
 export interface GenerateModelsJsonOptions extends BuildModelsJsonOptions {
@@ -116,6 +180,6 @@ export async function generateModelsJson(
 ): Promise<PiModelsJson> {
   const providersFile = await loadProvidersFile(options.providersFile);
   const modelsJson = buildModelsJson(providersFile, options);
-  await writeFile(options.outFile, `${JSON.stringify(modelsJson, null, 2)}\n`, 'utf8');
+  await writeFile(options.outFile, serializeModelsJson(modelsJson), 'utf8');
   return modelsJson;
 }

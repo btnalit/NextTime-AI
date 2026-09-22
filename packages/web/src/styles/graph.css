@@ -1,0 +1,310 @@
+/* 图谱 Graph page (S6-D, docs/console-completion-plan.md §5.7) — components/graph/*. Tokens only
+ * (scripts/guards/css-tokens.mjs); freshness colours are the same six semantic tokens the chips
+ * use (§5.9 principle 2), applied to SVG strokes / fills through `graph-edge-<tone>` /
+ * `graph-node-<tone>`. Layout: search pane left, object pane right, stacked under 960px. */
+
+.graph-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.graph-search-pane,
+.graph-object-pane {
+  min-width: 0;
+}
+
+.graph-search-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  position: sticky;
+  top: var(--space-4);
+}
+
+.graph-search .inline-form {
+  align-items: flex-end;
+}
+
+.graph-search .inline-form .field {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.graph-type-tag {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+/* Focused object header */
+.graph-object-card {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.graph-object-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.graph-object-title {
+  margin: 0;
+  font-size: var(--fs-19);
+  line-height: var(--lh-tight);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.graph-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+}
+
+.graph-identity-pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+.graph-as-of {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.graph-as-of .field {
+  margin: 0;
+}
+
+/* Focus trail */
+.graph-trail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.graph-trail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  font-size: var(--fs-13);
+}
+
+.graph-trail-item + .graph-trail-item::before {
+  content: "›";
+  color: var(--text-3);
+  margin: 0 var(--space-1);
+}
+
+.graph-trail-link {
+  border: 0;
+  background: transparent;
+  padding: 0 var(--space-1);
+  min-height: 24px;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+}
+
+.graph-trail-link:hover {
+  text-decoration: underline;
+}
+
+/* Fact groups */
+.graph-groups {
+  gap: var(--space-4);
+}
+
+.graph-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.graph-group-title {
+  margin: 0;
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.graph-group-more {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  font-size: var(--fs-12);
+}
+
+.graph-fact-row {
+  align-items: flex-start;
+}
+
+.graph-fact-direction {
+  width: 24px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-16);
+  line-height: 1;
+  padding-top: var(--space-1);
+}
+
+.graph-fact-row .data-row-trailing {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Neighbourhood picture (inline SVG, fixed ring layout) */
+.graph-picture {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface-1);
+}
+
+.graph-svg {
+  display: block;
+  width: 100%;
+  max-height: 400px;
+  height: auto;
+}
+
+.graph-edge {
+  stroke: var(--border-strong);
+  stroke-linecap: round;
+}
+
+.graph-edge-ok {
+  stroke: var(--ok);
+}
+
+.graph-edge-warn {
+  stroke: var(--warn);
+}
+
+.graph-edge-danger {
+  stroke: var(--danger);
+}
+
+.graph-edge-neutral {
+  stroke: var(--muted);
+  stroke-dasharray: 4 3;
+}
+
+.graph-node circle {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+
+.graph-node-ok circle {
+  fill: var(--ok-soft);
+  stroke: var(--ok);
+}
+
+.graph-node-warn circle {
+  fill: var(--warn-soft);
+  stroke: var(--warn);
+}
+
+.graph-node-danger circle {
+  fill: var(--danger-soft);
+  stroke: var(--danger);
+}
+
+.graph-node-neutral circle {
+  fill: var(--muted-soft);
+  stroke: var(--muted);
+}
+
+.graph-node-centre circle {
+  fill: var(--text);
+  stroke: var(--text);
+}
+
+.graph-node-overflow {
+  fill: var(--text-on-accent);
+  font-size: var(--fs-11);
+  font-weight: 600;
+}
+
+.graph-node-label {
+  fill: var(--text-2);
+  font-size: var(--fs-11);
+  font-family: var(--font-sans);
+}
+
+.graph-node-bare .graph-node-label {
+  fill: var(--text-3);
+  font-family: var(--font-mono);
+}
+
+.graph-node[role="button"] {
+  cursor: pointer;
+  outline: none;
+}
+
+.graph-node[role="button"]:hover circle {
+  stroke-width: 3;
+}
+
+.graph-node[role="button"]:focus-visible circle {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.graph-node[role="button"]:focus-visible .graph-node-label {
+  fill: var(--accent);
+}
+
+/* Legend */
+.graph-legend-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.graph-legend-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 960px) {
+  .graph-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .graph-search-pane {
+    position: static;
+  }
+
+  /* With an Object open on a narrow screen, the object pane comes first. */
+  .graph-layout[data-object-open="true"] .graph-object-pane {
+    order: -1;
+  }
+}

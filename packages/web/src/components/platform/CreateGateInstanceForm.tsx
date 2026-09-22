@@ -45,7 +45,13 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
 
   const gateIdValid = GATE_ID_PATTERN.test(gateId.trim());
   const targetValid = target.trim().length > 0 && isValidUrl(target.trim());
-  const ready = gateIdValid && targetValid && !submitting;
+  // C12 (console-completion-plan §2b): `create_gate_instance`'s `superRefine` requires
+  // `manifestSource` for http (and it must be a URL) — the field said "required" while `ready`
+  // ignored it, so a blank one was a guaranteed 400. Not consulted for mcp (field hidden).
+  const manifestSourceValid =
+    transportKind !== 'http' ||
+    (manifestSource.trim().length > 0 && isValidUrl(manifestSource.trim()));
+  const ready = gateIdValid && targetValid && manifestSourceValid && !submitting;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -184,7 +190,13 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         <Field
           id="cgi-manifest-source"
           label="Manifest source"
+          required
           hint="必填：OpenAPI 文档 URL，门宿主从这里导入 Operation。 Required — the OpenAPI document URL the host imports Operations from."
+          error={
+            manifestSource.length > 0 && !manifestSourceValid
+              ? '不是合法的 URL Not a valid URL'
+              : undefined
+          }
         >
           <Input
             id="cgi-manifest-source"
@@ -193,6 +205,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
             disabled={submitting}
             mono
             required
+            invalid={manifestSource.length > 0 && !manifestSourceValid}
             placeholder="https://…/openapi.json"
           />
         </Field>

@@ -128,6 +128,25 @@ test('checkPromptFile', async (t) => {
     assert.match(violations[0], /facts_to_assert/);
   });
 
+  await t.test(
+    'leftover 43: a Worker prompt naming the human-only get_action as a tool is caught, while the allow-listed actionRequestId field name passes',
+    () => {
+      const contractKeys = new Set(['summary', 'findings']);
+      const combined = new Set([...toolSet, ...contractKeys]);
+      const opsRunnerAllowed = ALLOWED_NON_TOOL_WORDS['ontology/ops-runner.yaml'];
+      // The tempting wording — a Worker Handle cannot call get_action (channel human, operator).
+      const badPrompt = 'Before `report_result`, poll `get_action` on any pending request.';
+      const violations = checkPromptFile('fixture.yaml', badPrompt, combined, opsRunnerAllowed);
+      assert.equal(violations.length, 1);
+      assert.match(violations[0], /get_action/);
+      // The contract the real prompt uses instead: cite the id, defer to the ActionRequest.
+      const goodPrompt =
+        'Cite each request’s `actionRequestId` in `summary` — its outcome is determined by the ' +
+        'ActionRequest’s status; a `pending_approval` request is never "failed".';
+      assert.deepEqual(checkPromptFile('fixture.yaml', goodPrompt, combined, opsRunnerAllowed), []);
+    },
+  );
+
   await t.test('a call-signature example resolves to its leading tool name', () => {
     const withInvoke = new Set([...toolSet, 'invoke_worker']);
     const prompt =

@@ -172,9 +172,12 @@ const chatCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: noParams,
+    // S6-A (docs/console-completion-plan.md §5.1): archived chats are hidden by default — the
+    // console's "已归档" filter passes `includeArchived: true` to see them alongside active ones.
+    paramsSchema: z.object({ includeArchived: z.boolean().optional() }).strict(),
     resultSchema: listEnvelope(wire.ChatWireSchema),
-    description: 'List the chats owned by the calling principal.',
+    description:
+      'List the chats owned by the calling principal, newest first. Archived chats (archivedAt set) are omitted unless includeArchived is true.',
   },
   {
     name: 'new_chat',
@@ -234,6 +237,54 @@ const chatCapabilities: readonly Capability[] = [
     resultSchema: z.object({ subscribed: z.boolean() }).strict(),
     description:
       'Subscribe to a Chat’s push events before paging history, so no event is missed (§9.4).',
+  },
+  // -----------------------------------------------------------------------------------------
+  // S6-A chat lifecycle (docs/console-completion-plan.md §4 "Chat 生命周期", §5.1, §6 rows
+  // `archive_chat` / `unarchive_chat` / `rename_chat`): `active ↔ archived` is a visibility-only
+  // change (`chats.archived_at`, migrations/core/0031); the Chat's Turns/Decisions/Facts stay
+  // fully resolvable (`explain`) either way. All three are `mode: 'write'` — an immediate,
+  // audited, in-platform state change with no external system behind it (docs/wire-contract-
+  // conventions.md §1). Ownership is enforced by the handler (application/gateway/handlers.ts):
+  // the calling principal's own Chat, plus — for archive/unarchive only — any Chat the workspace
+  // owner can already see (RLS `chats_visibility`, migrations/core/0003, never widened here).
+  // Each writes its own domain audit row (`chat.archive` / `chat.unarchive` / `chat.rename`) in
+  // addition to dispatch.ts's per-capability row, the same two-row discipline
+  // `governance/approval`'s transition log follows.
+  // -----------------------------------------------------------------------------------------
+  {
+    name: 'archive_chat',
+    group: 'chat',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ chatId: id }).strict(),
+    resultSchema: wire.ChatWireSchema,
+    description:
+      'Archive a Chat (sets archivedAt; hidden from list_chats unless includeArchived). Own Chat, or any visible Chat for the workspace owner; 403 otherwise. Idempotent on an already-archived Chat. Audit: chat.archive.',
+  },
+  {
+    name: 'unarchive_chat',
+    group: 'chat',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ chatId: id }).strict(),
+    resultSchema: wire.ChatWireSchema,
+    description:
+      'Restore an archived Chat (clears archivedAt). Own Chat, or any visible Chat for the workspace owner; 403 otherwise. Idempotent on an active Chat. Audit: chat.unarchive.',
+  },
+  {
+    name: 'rename_chat',
+    group: 'chat',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    // At least one non-whitespace character; the handler trims and collapses inner whitespace to
+    // one line before writing, so the stored title is never blank.
+    paramsSchema: z.object({ chatId: id, title: z.string().min(1).max(200).regex(/\S/) }).strict(),
+    resultSchema: wire.ChatWireSchema,
+    description:
+      'Set a Chat’s title (trimmed, single line, at most 200 characters). Own Chat only; 403 otherwise. A renamed title is never overwritten by the auto-title later messages would produce. Audit: chat.rename.',
   },
 ];
 
@@ -613,6 +664,24 @@ const connectionCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ status: ConnectionRequestStatusSchema.optional() }).strict(),
     resultSchema: listEnvelope(wire.ConnectionRequestWireSchema),
     description: 'List ConnectionRequests, optionally filtered by status.',
+  },
+  {
+    // S6-A C26 (docs/console-completion-plan.md §5.6, §6; S2.13's own "known deviation", runbook
+    // web-console.md 已知缺口 8): the `requested → cancelled` edge `CONNECTION_REQUEST_TRANSITIONS`
+    // (transitions.ts) and migrations/governance/0005 have carried since S2.13, finally wired.
+    // `mode: 'write'` — an immediate, audited, in-platform state change (docs/wire-contract-
+    // conventions.md §1); the vocabulary guard reserves `propose` for `propose_*`/`request_*`
+    // names. Ownership (own request; the workspace owner may cancel any) is the handler's check
+    // (application/gateway/connection-handlers.ts). Audit: `connection.request_cancelled`.
+    name: 'cancel_connection_request',
+    group: 'connection',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ connectionRequestId: id }).strict(),
+    resultSchema: wire.ConnectionRequestWireSchema,
+    description:
+      'Cancel a ConnectionRequest that is still `requested` (→ `cancelled`; any other status is 409 illegal_transition). The requester may cancel their own request; the workspace owner may cancel any. Audit: connection.request_cancelled.',
   },
   // -----------------------------------------------------------------------------------------
   // S3.11 read-side additions (docs/development-tasks.md, 2026-09-08 "中台控制面" decision): the
@@ -1222,15 +1291,20 @@ const governanceCapabilities: readonly Capability[] = [
       'A Worker’s only execute-mode entry point onto a Gatekeeper; creates an ActionRequest.',
   },
   {
+    // S6-A C25 (docs/console-completion-plan.md §5.8 "确认态", §6, §12 item 6): `reason` is
+    // symmetric with `reject`'s and *kernel-enforced* — `governance/approval/decide.ts` refuses
+    // (400 `reason_required`) a `blastRadius === 'high'` ActionRequest approved without a
+    // non-blank reason; low/medium keep it optional. Stored in the Approval Decision's rationale
+    // and the `action_request.approve` audit row, read back as `decisionReason` on the wire row.
     name: 'approve',
     group: 'governance',
     mode: 'execute',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: z.object({ actionRequestId: id }).strict(),
+    paramsSchema: z.object({ actionRequestId: id, reason: z.string().optional() }).strict(),
     resultSchema: wire.ActionRequestWireSchema,
     description:
-      'Approve a pending ActionRequest (I14: the approver must hold the requested scope).',
+      'Approve a pending ActionRequest (I14: the approver must hold the requested scope). `reason` is optional for low/medium blast radius and required (non-blank) for high — 400 reason_required otherwise; it is written to the decision rationale and the audit row and exposed as decisionReason.',
   },
   {
     name: 'reject',
@@ -1240,7 +1314,8 @@ const governanceCapabilities: readonly Capability[] = [
     minRole: 'operator',
     paramsSchema: z.object({ actionRequestId: id, reason: z.string().optional() }).strict(),
     resultSchema: wire.ActionRequestWireSchema,
-    description: 'Reject a pending ActionRequest.',
+    description:
+      'Reject a pending ActionRequest. `reason` (optional) is written to the decision rationale and the audit row and exposed as decisionReason.',
   },
   {
     name: 'list_pending',
@@ -1278,6 +1353,14 @@ const governanceCapabilities: readonly Capability[] = [
       .object({
         status: z.union([ActionRequestStatusSchema, z.array(ActionRequestStatusSchema)]).optional(),
         gatekeeperId: id.optional(),
+        // S6-A C28 (docs/console-completion-plan.md §5.5, §6; runbook web-console.md 已知缺口 6):
+        // the task detail's "关联审批" — every ActionRequest a Task's WorkerRuns raised, decided
+        // ones included (`list_pending` could only reverse-look-up pending ones). `taskId` is
+        // resolved by the handler to the Task's WorkerRun ids (`parent_worker_run_id`); an
+        // unknown `taskId` matches nothing (empty page, not 404 — same as an unknown
+        // `gatekeeperId`). Both given → intersection.
+        taskId: id.optional(),
+        parentWorkerRunId: id.optional(),
         // Same default/max as `search` (docs/wire-contract-conventions.md §3;
         // substrate/graph/store.ts `DEFAULT_SEARCH_LIMIT`/`MAX_SEARCH_LIMIT`).
         limit: z.number().int().positive().optional(),
@@ -1287,8 +1370,9 @@ const governanceCapabilities: readonly Capability[] = [
     resultSchema: listEnvelope(wire.ActionRequestWireSchema),
     description:
       'List ActionRequests regardless of status (the approval history), optionally filtered by ' +
-      'status or gatekeeperId; keyset-paginated (limit, cursor → nextCursor). Same I14 visibility ' +
-      'as list_pending.',
+      'status, gatekeeperId, taskId (every WorkerRun of that Task) or parentWorkerRunId; ' +
+      'keyset-paginated (limit, cursor → nextCursor). Same I14 visibility as list_pending. Decided ' +
+      'rows carry decisionReason / decidedBy / decidedAt.',
   },
   {
     name: 'set_auto_approved_action_kind',
@@ -1813,12 +1897,25 @@ const auditCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'auditor',
-    paramsSchema: z.object({ filter: jsonRecord.optional() }).strict(),
+    // S6-A (docs/console-completion-plan.md §5.5 "`audit_query` 加 keyset 分页（与平台审计页一致）"):
+    // top-level `limit` / `cursor`, the same shape `platform_audit_query` and
+    // `list_action_requests` use; `filter` keeps its pre-existing opaque record
+    // (`actorPrincipalId` / `action` / `resourceType` / `resourceId`, plus a legacy `limit` that
+    // still works when the top-level one is absent). Page order and cursor are
+    // `(date_trunc('milliseconds', created_at), id)` — substrate/audit/writer.ts's own doc comment.
+    paramsSchema: z
+      .object({
+        filter: jsonRecord.optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().min(1).optional(),
+      })
+      .strict(),
     // S3.7 wire fix (see PR body): previously a bare `AuditRecordRow[]` — §3 "不返回裸数组". This
     // name does not match `list_*`/`find_*` either, same reasoning as `search` (graph group)
     // above — fixed anyway.
     resultSchema: listEnvelope(wire.AuditRecordWireSchema),
-    description: 'Query AuditRecords.',
+    description:
+      'Query this workspace’s AuditRecords newest first, narrowed by filter {actorPrincipalId?, action?, resourceType?, resourceId?}; keyset-paginated (limit — default 100, max 1000, truncated: true when clamped — and cursor → nextCursor).',
   },
   {
     name: 'reconstruct',
@@ -1846,6 +1943,10 @@ const auditCapabilities: readonly Capability[] = [
     // does for its own `factId`/`decisionId` pair. `depth` only affects a `factId`/`decisionId`
     // root (walked the same way `causal_chain` does); ignored for an `activityId` root, which has
     // no further "chain" to walk beyond itself — see the handler's own doc comment.
+    // S6-A C27 (docs/console-completion-plan.md §5.5, §6 "只导出当前筛选范围"): `nodeId` — the same
+    // untyped id `explain{nodeId}` takes (Fact, Decision or Activity, resolved the same way) — so
+    // the audit page can export exactly the explain view it is showing without first knowing which
+    // of the three the id is. Counts as one of the "exactly one root" alternatives.
     name: 'export_prov',
     group: 'audit',
     mode: 'observe',
@@ -1853,6 +1954,7 @@ const auditCapabilities: readonly Capability[] = [
     minRole: 'auditor',
     paramsSchema: z
       .object({
+        nodeId: id.optional(),
         factId: id.optional(),
         decisionId: id.optional(),
         activityId: id.optional(),
@@ -1861,7 +1963,7 @@ const auditCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.ExportProvResultSchema,
     description:
-      'Export a PROV-JSON-style provenance graph around a Fact, Decision, or Activity, built from explain().',
+      'Export a PROV-JSON-style provenance graph around one root — exactly one of nodeId (any of the three, resolved like explain), factId, decisionId or activityId — built from explain(); depth (1-5) bounds the causal walk for a Fact/Decision root.',
   },
 ];
 
@@ -2097,12 +2199,23 @@ const platformCapabilities: readonly Capability[] = [
         status: wire.UserStatusWireSchema.optional(),
         /** Case-insensitive substring over login and display name. */
         query: z.string().min(1).max(100).optional(),
+        /** S6 A6: only users awaiting activation (`hasPassword: false`) — the "清理待激活用户"
+         *  batch entry lists these and hands the selection to `purge_user`. */
+        pendingOnly: z.boolean().optional(),
+        /** S6 A6: hide *residual* users — awaiting activation (`hasPassword: false`), holding at
+         *  least one membership Principal, and with **no non-disabled membership in an active
+         *  `standard` workspace**: every live membership is in a disabled or an `ephemeral`
+         *  workspace, or every membership was removed. Acceptance-run residue that
+         *  `purge_workspace` removes with the workspace (§4 edge (b)) or `purge_user` takes.
+         *  Omitted = shown, as before. The "清理待激活用户" entry lists with `pendingOnly` instead
+         *  (`hideResidual` hides exactly the users `purge_user` can take). */
+        hideResidual: z.boolean().optional(),
         ...platformCursorParams,
       })
       .strict(),
     resultSchema: listEnvelope(wire.UserWireSchema),
     description:
-      'The platform user directory with each user’s memberships. `hasPassword: false` marks a user awaiting activation (backfilled from a pre-S4.1 Principal, or created without a password).',
+      'The platform user directory with each user’s memberships. `hasPassword: false` marks a user awaiting activation (backfilled from a pre-S4.1 Principal, or created without a password). No filter lists everyone; `pendingOnly` keeps only users awaiting activation, `hideResidual` drops the awaiting-activation users who hold a membership but none that is non-disabled in an active standard workspace (the users page’s default view).',
   },
   {
     name: 'create_user',
@@ -2310,10 +2423,19 @@ const platformCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     scope: 'platform',
-    paramsSchema: z.object({ status: wire.WorkspaceStatusWireSchema.optional() }).strict(),
+    paramsSchema: z
+      .object({
+        status: wire.WorkspaceStatusWireSchema.optional(),
+        /** S6 A1: `standard` or `ephemeral` only. */
+        purpose: wire.WorkspacePurposeWireSchema.optional(),
+        /** S6 A1: `false` drops ephemeral workspaces whose `expiresAt` has passed (they are
+         *  purgeable and only clutter the page). Omitted or `true` = included, as before. */
+        includeExpired: z.boolean().optional(),
+      })
+      .strict(),
     resultSchema: listEnvelope(wire.PlatformWorkspaceWireSchema),
     description:
-      'Every workspace with its status, entry model, allowed-model list, owners and active member count, oldest first. Disabled workspaces are included (filter with `status`).',
+      'Every workspace with its status, entry model, allowed-model list, owners, active member count, purpose / expiry / disabled-at and whether it is purgeable right now, oldest first. No filter lists everything (disabled and expired included); `status` / `purpose` narrow, `includeExpired: false` hides expired ephemeral workspaces — the workspaces page’s default view is `{status: "active", includeExpired: false}`.',
   },
   {
     name: 'list_platform_models',
@@ -2398,7 +2520,42 @@ const platformCapabilities: readonly Capability[] = [
     resultSchema: wire.PlatformWorkspaceWireSchema,
     description:
       'Set the models a workspace’s members may pick in 我的智能体 (the AgentPolicy allow-list). A member whose current choice falls outside the list is served the entry model from their next Turn.',
-  }, // P-B1 (docs/platform-admin-design.md §6.3 集成; development-tasks P-B "拆分与决定"): connectors,
+  },
+  // S6 A1 / A6 (docs/console-completion-plan.md §4 "Workspace 生命周期", §5.2, §6, §7): the purge
+  // plane. Governed, administrator-only, two-step on the console, platform audit kept
+  // (`platform.workspace_purged` / `platform.user_purged` carry what was removed). The cascade
+  // itself runs on the kernel's bootstrap (superuser) path after the platform transaction commits
+  // — the application role never gains DELETE on audit rows or workspaces (audit only grows).
+  {
+    name: 'purge_workspace',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        workspaceId: z.string().min(1),
+        /** Omitted / `false`: preview only — counts, warnings and the users that would go, nothing
+         *  deleted. `true`: execute. The console shows the preview, then sends `true`. */
+        confirm: z.boolean().optional(),
+      })
+      .strict(),
+    resultSchema: wire.PurgeWorkspaceResultWireSchema,
+    description:
+      'Purge a workspace — the terminal state after disable: revoke and delete every CapabilityHandle, then Tasks, Chats / Turns / Activities / Decisions / Conflicts / Facts / Objects / Sources / Observations / Evidence, the workspace’s own audit rows, its Principals and the row itself, in one transaction; users whose memberships were all here and who never activated go with it. Accepted only for a workspace disabled ≥ 7 days (or disabled before migration 0030) or an ephemeral workspace past its expiry (409 workspace_active / retention_not_elapsed); never the platform default (409 default_workspace). Without `confirm: true` it is a dry run. A `service_handle_in_use` warning names each service Principal (collector, external runtime) whose Handle a process may still be using. The platform audit row `platform.workspace_purged` records the counts; host-side task / principal directories are listed for scripts/delete-workspace.sh.',
+  },
+  {
+    name: 'purge_user',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ userIds: z.array(platformUserId).min(1).max(200) }).strict(),
+    resultSchema: wire.PurgeUsersResultWireSchema,
+    description:
+      'Delete users awaiting activation that hold no active membership — the leftovers after their workspaces were purged or their memberships removed. Batch: each id gets its own outcome (`purged`, or `skipped` with a reason: a password, a console login, a platform administrator, a non-disabled membership, or an audit / settings reference); a skipped user never fails the call. Disabled membership Principals are detached (their `userId` cleared, rows kept for audit lineage). One `platform.user_purged` audit row per purged user.',
+  },
+  // P-B1 (docs/platform-admin-design.md §6.3 集成; development-tasks P-B "拆分与决定"): connectors,
   // gate instances and external runtimes as platform objects. Enabling an instance *in* a workspace
   // stays on the workspace plane (`enable_gate_instance`, connection group) — it needs a Principal.
   {
@@ -2564,6 +2721,21 @@ const platformCapabilities: readonly Capability[] = [
     description:
       'Revoke one external runtime’s session (and every Handle issued under it) immediately.',
   },
+  // S6-B (docs/console-completion-plan.md §5.4 / §6; docs/platform-admin-design.md §6.2): the
+  // console's only kernel-side piece of provider management. The provider records live in
+  // llm-proxy (web → caddy `/api/llm-admin/*` → llm-proxy admin endpoints); the kernel signs a
+  // short-lived capability token and audits the issuance — it never sees a provider key.
+  {
+    name: 'issue_llm_admin_token',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.LlmAdminTokenWireSchema,
+    description:
+      'S6-B: a 5-minute platform JWT (signed with the Handle key, distinct typ / aud — never accepted as a Handle) that lets the administrator’s browser call llm-proxy’s provider-management endpoints via caddy `/api/llm-admin/*`. Audited as `platform.llm_admin_token_issued` with the token’s `jti`; llm-proxy’s own audit lines carry the same `jti`. The token carries no provider key and the kernel stores none.',
+  },
 ];
 
 /** The complete capability registry (design doc §9.3). */
@@ -2679,6 +2851,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'delete_gate_instance',
     'issue_gate_host_token',
     'issue_gate_credential_token',
+    'issue_llm_admin_token',
   ],
 ]);
 

@@ -1,11 +1,21 @@
-import type { GateHostTokenWire, GateInstanceWire, GateTrustWire } from '@nexttime/shared';
+import type {
+  AvailableGateInstanceWire,
+  GateHostTokenWire,
+  GateInstanceWire,
+  GateTrustWire,
+} from '@nexttime/shared';
 import { useState } from 'react';
+import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { hrefs } from '../../lib/router.js';
+import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
+import { RefChip } from '../ui/RefChip.js';
+import { StatusChip } from '../ui/StatusChip.js';
 import { GateCredentialEntry } from './GateCredentialEntry.js';
 import { PlatformError } from './PlatformError.js';
 
@@ -40,6 +50,16 @@ export interface GateInstanceDetailPanelProps {
  * low-stakes here (design §6.3: a disabled instance just disappears from the workspace catalog —
  * an existing workspace link keeps working until its own Operations are disabled), so this panel,
  * unlike `WorkspaceDetailPanel`/`UserDetailPanel`, acts directly rather than behind a confirm step.
+ *
+ * S6-C: B7 (docs/console-completion-plan.md §4 "接入三层": 启用 only appears in `discovered`) —
+ * the status control is one button whose meaning follows the machine: `discovered` → 启用,
+ * `enabled` → 禁用, `disabled` → 重新启用, `lost` → 启用 (the kernel accepts it — a gate that
+ * announced once and fell silent is enabled on its return; the CI seed is exactly that), derived
+ * `awaiting_host` → 启用 disabled with a hint. And §5.6's
+ * instance ↔ connection links: the workspaces using this instance (`enabledWorkspaceCount` — the
+ * wire carries the count, not the list) plus, when this session has a workspace in scope, that
+ * workspace's own Gatekeeper for it (`list_available_gate_instances`, a workspace-plane read that
+ * simply yields nothing on a platform-only session) linking to its 系统接入 detail.
  */
 export function GateInstanceDetailPanel({
   http,
@@ -166,7 +186,14 @@ export function GateInstanceDetailPanel({
         <dt>端点 Endpoint</dt>
         <dd className="mono">{instance.endpoint}</dd>
         <dt>健康 Health</dt>
-        <dd>{instance.health}</dd>
+        <dd>
+          <StatusChip
+            machine="gateHealth"
+            status={instance.health}
+            size="s"
+            testId="gate-instance-detail-health"
+          />
+        </dd>
         <dt>最近心跳 Last seen</dt>
         <dd>
           {instance.lastSeenAt === null ? (
@@ -180,6 +207,8 @@ export function GateInstanceDetailPanel({
         <dt>启用它的工作区数</dt>
         <dd className="mono">{instance.enabledWorkspaceCount}</dd>
       </dl>
+
+      <WorkspacesUsingSection http={http} instance={instance} />
 
       {instance.hosted && instance.definition ? (
         <>
@@ -280,19 +309,17 @@ export function GateInstanceDetailPanel({
 
       <PlatformError error={statusError} title="无法修改状态 Could not change the status" />
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span
-          className={`chip chip-s ${instance.status === 'enabled' ? 'chip-ok' : instance.status === 'lost' ? 'chip-warn' : 'chip-neutral'}`}
-        >
-          {instance.status}
-        </span>
-        <Button
-          variant={instance.status === 'enabled' ? 'danger' : 'secondary'}
-          onClick={() => void setStatus(instance.status === 'enabled' ? 'disabled' : 'enabled')}
-          loading={changingStatus}
-          data-testid="gate-instance-status-toggle"
-        >
-          {instance.status === 'enabled' ? '禁用 Disable' : '启用 Enable'}
-        </Button>
+        <StatusChip
+          machine="gateInstance"
+          status={deriveGateInstanceStatus(instance)}
+          size="s"
+          testId="gate-instance-detail-status"
+        />
+        <StatusToggle
+          instance={instance}
+          busy={changingStatus}
+          onChange={(status) => void setStatus(status)}
+        />
       </div>
 
       {instance.transportKind === 'mcp' ? (
@@ -310,11 +337,12 @@ export function GateInstanceDetailPanel({
             title="无法设置信任级别 Could not set the trust level"
           />
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <span
-              className={`chip chip-s ${instance.trust === 'vetted' ? 'chip-ok' : 'chip-neutral'}`}
-            >
-              {instance.trust}
-            </span>
+            <StatusChip
+              machine="gateTrust"
+              status={instance.trust}
+              size="s"
+              testId="gate-instance-detail-trust"
+            />
             <Button
               variant="secondary"
               onClick={() => void setTrust(instance.trust === 'vetted' ? 'byo' : 'vetted')}
@@ -402,6 +430,115 @@ export function GateInstanceDetailPanel({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** B7: the one status button, labelled by the machine (see the module doc comment). Keeps the
+ *  `gate-instance-status-toggle` test id and the exact `禁用 Disable` text two e2e specs branch on. */
+function StatusToggle({
+  instance,
+  busy,
+  onChange,
+}: {
+  readonly instance: GateInstanceWire;
+  readonly busy: boolean;
+  readonly onChange: (status: 'enabled' | 'disabled') => void;
+}) {
+  const display = deriveGateInstanceStatus(instance);
+  if (display === 'awaiting_host') {
+    return (
+      <Button
+        variant="secondary"
+        disabled
+        title="等待门宿主接管后再启用 Wait for the gate host to take it over"
+        data-testid="gate-instance-status-toggle"
+      >
+        启用 Enable
+      </Button>
+    );
+  }
+  if (display === 'discovered' || display === 'lost') {
+    return (
+      <Button
+        variant="secondary"
+        onClick={() => onChange('enabled')}
+        loading={busy}
+        data-testid="gate-instance-status-toggle"
+      >
+        启用 Enable
+      </Button>
+    );
+  }
+  if (display === 'disabled') {
+    return (
+      <Button
+        variant="secondary"
+        onClick={() => onChange('enabled')}
+        loading={busy}
+        data-testid="gate-instance-status-toggle"
+      >
+        重新启用 Re-enable
+      </Button>
+    );
+  }
+  return (
+    <Button
+      variant="danger"
+      onClick={() => onChange('disabled')}
+      loading={busy}
+      data-testid="gate-instance-status-toggle"
+    >
+      禁用 Disable
+    </Button>
+  );
+}
+
+/** §5.6 instance → connection link. The platform wire exposes only `enabledWorkspaceCount`
+ *  (`GateInstanceWireSchema`; the per-workspace list would be a kernel extension), so this shows
+ *  the count, a link to the workspace 系统接入 page, and — for the session's own workspace, when
+ *  it has one — that workspace's Gatekeeper for this instance as a `RefChip`. The workspace read
+ *  fails quietly (403 / no workspace on a platform-only session): nothing is rendered for it. */
+function WorkspacesUsingSection({
+  http,
+  instance,
+}: {
+  readonly http: CapabilityCaller;
+  readonly instance: GateInstanceWire;
+}) {
+  const available = useCapabilityList<AvailableGateInstanceWire>(
+    http,
+    'list_available_gate_instances',
+    {},
+  );
+  const own =
+    available.state.status === 'ready'
+      ? available.state.data.items.find((row) => row.gateId === instance.gateId)
+      : undefined;
+  return (
+    <div className="stack-s" data-testid="gate-instance-workspaces">
+      <span className="section-title">启用它的工作区 Workspaces using it</span>
+      <p className="text-2">
+        {instance.enabledWorkspaceCount === 0
+          ? '还没有工作区启用它。 No workspace has enabled it yet.'
+          : `${instance.enabledWorkspaceCount} 个工作区已启用（各自的连接在该工作区的系统接入页）。 ${instance.enabledWorkspaceCount} workspace${instance.enabledWorkspaceCount === 1 ? '' : 's'} enabled it — each connection lives on that workspace's 系统接入 page.`}
+      </p>
+      {own?.gatekeeperId ? (
+        <div className="row-wrap" data-testid="gate-instance-own-workspace">
+          <span className="text-3">当前工作区 Current workspace:</span>
+          <RefChip
+            kind="gatekeeper"
+            id={own.gatekeeperId}
+            name={own.displayName}
+            href={hrefs.gatekeeper(own.gatekeeperId)}
+            size="s"
+            testId="gate-instance-own-gatekeeper"
+          />
+        </div>
+      ) : null}
+      <a href={hrefs.systems()} data-testid="gate-instance-systems-link">
+        打开工作区系统接入页 Open the workspace 系统接入 page
+      </a>
     </div>
   );
 }

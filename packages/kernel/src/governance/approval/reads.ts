@@ -144,6 +144,11 @@ export const MAX_ACTION_REQUEST_LIST_LIMIT = 200;
 export interface ListActionRequestsFilter {
   readonly status?: ActionRequestStatus | readonly ActionRequestStatus[];
   readonly gatekeeperId?: string;
+  /** S6-A C28: `parent_worker_run_id in (...)`. `undefined` = no narrowing; an *empty* array
+   *  matches nothing (the handler passes `[]` for a `taskId` with no WorkerRuns or that does not
+   *  exist). Task → WorkerRun resolution is the caller's job (`application/task`'s
+   *  `getTaskWithWorkerRuns`) — `worker_runs` is that module's table, not read from here. */
+  readonly parentWorkerRunIds?: readonly string[];
   readonly limit?: number;
   readonly cursor?: string;
 }
@@ -156,7 +161,8 @@ export interface ActionRequestListPage {
 /**
  * `list_action_requests` (S5.5 leftover 21, docs/STATUS.md row 21): the console's "审批历史" read —
  * every ActionRequest regardless of status (unlike `listPendingForApprover` above, hardcoded to
- * `status = 'pending_approval'`), optionally narrowed by `status`/`gatekeeperId`, keyset-paginated
+ * `status = 'pending_approval'`), optionally narrowed by `status`/`gatekeeperId`/
+ * `parentWorkerRunIds` (S6-A C28), keyset-paginated
  * on `(requested_at, id)` the same way `search` paginates on `(updated_at, id)` (see this file's
  * own cursor doc comment above; `truncated`-on-clamp is the caller's concern, same as `search`'s
  * own handler).
@@ -195,6 +201,7 @@ export async function listActionRequestsForApprover(
      where ar.workspace_id = $1
        and ($2::text[] is null or ar.status = any($2::text[]))
        and ($3::uuid is null or ar.gatekeeper_id = $3::uuid)
+       and ($9::uuid[] is null or ar.parent_worker_run_id = any($9::uuid[]))
        and (
          $5::timestamptz is null
          or (date_trunc('milliseconds', ar.requested_at), ar.id) < ($5::timestamptz, $6::uuid)
@@ -229,6 +236,7 @@ export async function listActionRequestsForApprover(
       cursor?.id ?? null,
       isOwner,
       approver.principalId,
+      filter.parentWorkerRunIds === undefined ? null : [...filter.parentWorkerRunIds],
     ],
   );
 
@@ -240,6 +248,64 @@ export async function listActionRequestsForApprover(
       ? encodeActionRequestCursor(last.requestedAt, last.id)
       : undefined;
   return nextCursor === undefined ? { items } : { items, nextCursor };
+}
+
+// -------------------------------------------------------------------------------------------
+// readApprovalDecisions — S6-A C25 (docs/console-completion-plan.md §5.8, §6 `approve{reason?}`):
+// the human decision behind `ActionRequestRow.approvalDecisionId`, for the wire projection's
+// `decisionReason` / `decidedBy` / `decidedAt` (application/gateway/handlers.ts's
+// `withApprovalDecision`). A separate keyed read rather than a LEFT JOIN folded into
+// `ACTION_REQUEST_ROW_COLUMNS`: that column list feeds ~10 queries in this module including
+// `returning` clauses and `select ... for update` (which cannot take the nullable side of an outer
+// join), and `ActionRequestRow` is the internal row every mutator reads and writes — widening it
+// for a read-side display concern would touch all of them. `decide.ts`'s `writeApprovalDecision`
+// is what writes these rows (`rationale.reason`, `decided_by`, `decided_at`); they have no
+// `source_id`, so the `decisions_visibility` policy (migrations/core/0002) shows them
+// workspace-wide — exactly the audience `get_action`/`list_action_requests` already serve.
+// -------------------------------------------------------------------------------------------
+
+export interface ApprovalDecisionSummary {
+  readonly decisionId: string;
+  /** `rationale.reason` as `decide.ts` stored it — `null` for a reason-less low/medium approve
+   *  or a reason-less reject. */
+  readonly reason: string | null;
+  readonly decidedBy: string;
+  readonly decidedAt: Date;
+}
+
+interface ApprovalDecisionDbRow {
+  id: string;
+  reason: string | null;
+  decided_by: string;
+  decided_at: Date;
+}
+
+/** Keyed by decision id; ids with no row (deleted, or not visible) are simply absent. Empty input
+ *  short-circuits without a round trip. */
+export async function readApprovalDecisions(
+  client: PoolClient,
+  workspaceId: string,
+  decisionIds: readonly string[],
+): Promise<ReadonlyMap<string, ApprovalDecisionSummary>> {
+  const unique = [...new Set(decisionIds)];
+  if (unique.length === 0) return new Map();
+  const result = await client.query<ApprovalDecisionDbRow>(
+    `select id, rationale ->> 'reason' as reason, decided_by, decided_at
+     from decisions
+     where workspace_id = $1 and id = any($2::uuid[]) and decided_by is not null and decided_at is not null`,
+    [workspaceId, unique],
+  );
+  return new Map(
+    result.rows.map((row) => [
+      row.id,
+      {
+        decisionId: row.id,
+        reason: row.reason,
+        decidedBy: row.decided_by,
+        decidedAt: row.decided_at,
+      },
+    ]),
+  );
 }
 
 /**

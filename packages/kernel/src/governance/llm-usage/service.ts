@@ -253,3 +253,66 @@ export async function recordUsage(
 
   return { inserted };
 }
+
+// -------------------------------------------------------------------------------------------
+// S6-B leftover 19 — the cross-workspace daily sums behind `GET /internal/llm-budget-exhausted`
+// (interfaces/http/internal/llm-budget.ts; design doc I18 "到 100% 时 llm-proxy 返回预算耗尽错误").
+// -------------------------------------------------------------------------------------------
+
+export interface WorkspaceDailyTotal {
+  readonly workspaceId: string;
+  readonly total: number;
+}
+
+/**
+ * Today's (UTC calendar day, same predicate as `sumTodayTokens` / `sumTodayCostUsd`) `cost_usd`
+ * sum for *every* workspace with any usage today — one row per workspace. Meant for a
+ * kernel-internal, cross-workspace caller on a superuser-pool client (the internal budget route,
+ * same posture as `interfaces/http/internal/handle-revocations.ts`'s cross-workspace read):
+ * under the RLS-constrained `nexttime_app` role this naturally collapses to the current
+ * workspace's single row. `llm_usage` stays this module's table — the route never queries it.
+ */
+export async function sumTodayCostUsdByWorkspace(
+  client: PoolClient,
+): Promise<readonly WorkspaceDailyTotal[]> {
+  const result = await client.query<{ workspace_id: string; total: string }>(
+    `select workspace_id, coalesce(sum(coalesce(cost_usd, 0)), 0) as total
+     from llm_usage
+     where started_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+     group by workspace_id`,
+  );
+  return result.rows.map((row) => ({ workspaceId: row.workspace_id, total: Number(row.total) }));
+}
+
+/** Today's total token sum (input + output + cache read + cache write — `sumTodayTokens`'s own
+ *  definition) per workspace, for the `LLM_DAILY_TOKEN_BUDGET` axis of the same route. */
+export async function sumTodayTokensByWorkspace(
+  client: PoolClient,
+): Promise<readonly WorkspaceDailyTotal[]> {
+  const result = await client.query<{ workspace_id: string; total: string }>(
+    `select workspace_id, coalesce(sum(
+       input_tokens + output_tokens + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0)
+     ), 0) as total
+     from llm_usage
+     where started_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+     group by workspace_id`,
+  );
+  return result.rows.map((row) => ({ workspaceId: row.workspace_id, total: Number(row.total) }));
+}
+
+/** The configured `LLM_DAILY_TOKEN_BUDGET` (S1.7), or `undefined` for unlimited — exported so
+ *  the budget route applies exactly the value `recordUsage`'s 80% warning uses. */
+export function configuredDailyTokenBudget(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  return readDailyTokenBudgetFromEnv(env);
+}
+
+/** The next UTC midnight after `now` — when every "today" sum above resets, and therefore the
+ *  `until` the proxy stops enforcing a budget-exhausted row on its own even if the kernel is
+ *  unreachable then. */
+export function nextUtcMidnight(now: Date = new Date()): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0),
+  );
+}

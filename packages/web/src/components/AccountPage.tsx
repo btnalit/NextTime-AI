@@ -9,6 +9,7 @@ import {
   patchMe,
 } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
+import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
@@ -29,8 +30,8 @@ export interface AccountPageProps {
   /** Fires when the claim form (API-key mode) succeeds — `App.tsx`'s `handleClaimed` swaps the
    *  API-key session for the freshly-minted cookie one. */
   readonly onClaimed?: (result: SessionResult) => void;
-  /** Fires when the bind form (cookie mode) succeeds — `App.tsx`'s `handleBound` refreshes the
-   *  live session's/pre-session's `memberships`. */
+  /** Fires when the bind form (cookie mode) succeeds — `App.tsx`'s `handleKeyBound` refreshes the
+   *  live session's/pre-session's `memberships`. The bind card renders only when this is wired. */
   readonly onBound?: (result: MeResult) => void;
   /** Injectable `fetch` for tests — see `lib/auth-api.ts`'s own module doc comment. */
   readonly fetchImpl?: typeof fetch;
@@ -82,13 +83,18 @@ export function AccountPage({
  *  message via `ErrorBanner`. */
 function claimErrorMessage(err: unknown): string | null {
   if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
-  if (err.code === 'already_claimed') {
-    return '该身份已经有密码了；请登出后用密码登录';
+  switch (err.code) {
+    case 'already_claimed':
+      return '该身份已经有密码了；请登出后用密码登录';
+    // C4: the kernel's `normalizeLogin` (identity/users.ts) is the authority; the shared
+    // `LOGIN_PATTERN` (lib/platform-errors.ts) mirrors it client-side, and this maps the wire
+    // code for the case the mirror still lets through.
+    case 'invalid_login':
+      return '登录名格式不正确：3–64 位，首字符须为字母或数字，仅小写字母、数字、. _ -';
+    default:
+      return null;
   }
-  return null;
 }
-
-const LOGIN_PATTERN = /^[a-z0-9._-]{3,64}$/;
 
 function ClaimPasswordCard({
   apiKey,
@@ -143,7 +149,7 @@ function ClaimPasswordCard({
           id="account-claim-login"
           label="登录名 Login"
           required
-          hint="3–64 位，仅小写字母、数字、. _ - 3–64 characters: lowercase letters, digits, . _ -"
+          hint="3–64 位，首字符为字母或数字，仅小写字母、数字、. _ - 3–64 characters, starting with a letter or digit: lowercase letters, digits, . _ -"
           error={loginInvalid ? '登录名格式不正确 Invalid login format' : null}
         >
           <Input

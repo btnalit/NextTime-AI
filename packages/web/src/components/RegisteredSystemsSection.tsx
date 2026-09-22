@@ -1,3 +1,4 @@
+import type { AvailableGateInstanceWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
@@ -5,7 +6,10 @@ import {
   type OperationView,
   groupOperationsByStatus,
 } from '../lib/connections.js';
+import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
+import { platformGateInstanceHref } from '../lib/gate-instances.js';
+import { hrefs } from '../lib/router.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { CopyId } from './ui/CopyId.js';
@@ -28,6 +32,12 @@ export interface GatekeeperCardProps {
    *  omitted, the "Health & operations" action does not render (a page rendering the card without
    *  a drawer to open it into, e.g. a future embedded use). */
   readonly onOpenDetail?: (gatekeeperId: string) => void;
+  /** S6-C (§5.6 "实例与连接之间的互相链接"): the platform gate instance this Gatekeeper was enabled
+   *  from (`list_available_gate_instances` row whose `gatekeeperId` is this gate), when it was —
+   *  a self-connected gate (`create_connection`) has none. */
+  readonly platformInstance?: AvailableGateInstanceWire | null;
+  /** The reader may open the platform 集成 page — the instance row links there only then. */
+  readonly platformAdmin?: boolean;
 }
 
 /**
@@ -46,6 +56,8 @@ export function GatekeeperCard({
   onChanged,
   onForbidden,
   onOpenDetail,
+  platformInstance = null,
+  platformAdmin = false,
 }: GatekeeperCardProps) {
   const toast = useToast();
   const [publishing, setPublishing] = useState(false);
@@ -75,7 +87,7 @@ export function GatekeeperCard({
       });
       onChanged();
     } catch (err) {
-      if (isForbidden(err)) onForbidden('publish_manifest');
+      if (isForbiddenError(err)) onForbidden('publish_manifest');
       setError(err);
     } finally {
       setPublishing(false);
@@ -98,7 +110,7 @@ export function GatekeeperCard({
       setPrincipalId('');
       setGrantOpen(false);
     } catch (err) {
-      if (isForbidden(err)) onForbidden('connect_gatekeeper');
+      if (isForbiddenError(err)) onForbidden('connect_gatekeeper');
       setError(err);
     } finally {
       setGranting(false);
@@ -170,6 +182,34 @@ export function GatekeeperCard({
               {formatRelative(gatekeeper.updatedAt)}
             </time>
           </dd>
+          {platformInstance ? (
+            <>
+              <dt>平台实例 Platform instance</dt>
+              <dd className="row-wrap" data-testid="gatekeeper-platform-instance">
+                {platformAdmin ? (
+                  // Deep link to the instance's own drawer on 集成 (`lib/router.ts` parses
+                  // `#/platform/integrations/<gateId>` since S6-C integration).
+                  <a
+                    className="mono"
+                    href={platformGateInstanceHref(platformInstance.gateId)}
+                    data-testid="gatekeeper-platform-instance-link"
+                  >
+                    {platformInstance.gateId}
+                  </a>
+                ) : (
+                  <span className="mono">{platformInstance.gateId}</span>
+                )}
+                <span className="tag">{platformInstance.connector}</span>
+                <StatusChip machine="gateInstance" status={platformInstance.status} size="s" />
+                <StatusChip machine="gateHealth" status={platformInstance.health} size="s" />
+                {!platformAdmin ? (
+                  <span className="text-3 text-small">
+                    由平台管理员管理 managed on the platform 集成 page
+                  </span>
+                ) : null}
+              </dd>
+            </>
+          ) : null}
         </dl>
 
         {grantOpen ? (
@@ -233,14 +273,5 @@ export function GatekeeperCard({
         )}
       </div>
     </Card>
-  );
-}
-
-function isForbidden(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { code?: unknown }).code === 'forbidden'
   );
 }

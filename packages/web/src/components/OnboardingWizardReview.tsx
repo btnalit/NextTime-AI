@@ -21,6 +21,10 @@ export interface OnboardingWizardReviewProps {
   readonly http: CapabilityCaller;
   readonly gatekeeperId: string;
   readonly onDone: () => void;
+  /** S6-C: the "接入一个系统" launcher (`connect/ConnectSystemLauncher.tsx`) composes this step
+   *  inside `ui/Launcher`, whose own footer already carries 下一步 — `false` drops this component's
+   *  Next button so the reader does not see two. Default `true` for the five-step wizard. */
+  readonly showDone?: boolean;
 }
 
 /**
@@ -56,6 +60,7 @@ export function OnboardingWizardReview({
   http,
   gatekeeperId,
   onDone,
+  showDone = true,
 }: OnboardingWizardReviewProps) {
   const loadOperations = useCallback(
     () =>
@@ -107,11 +112,13 @@ export function OnboardingWizardReview({
         </table>
       )}
 
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="primary" onClick={onDone}>
-          下一步 Next
-        </Button>
-      </div>
+      {showDone ? (
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <Button variant="primary" onClick={onDone}>
+            下一步 Next
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

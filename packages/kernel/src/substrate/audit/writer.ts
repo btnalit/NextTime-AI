@@ -90,7 +90,8 @@ export async function writeAudit(
   return mapAuditRecordRow(row);
 }
 
-/** Filters accepted by {@link queryAudit} — the `audit_query` capability's `filter` param (§9.3). */
+/** Filters accepted by {@link queryAudit} / {@link queryAuditPage} — the `audit_query`
+ *  capability's `filter` param (§9.3). */
 export interface AuditQueryFilter {
   readonly actorPrincipalId?: string;
   readonly action?: string;
@@ -98,6 +99,10 @@ export interface AuditQueryFilter {
   readonly resourceId?: string;
   /** Defaults to {@link DEFAULT_AUDIT_QUERY_LIMIT}; capped at {@link MAX_AUDIT_QUERY_LIMIT}. */
   readonly limit?: number;
+  /** S6-A (docs/console-completion-plan.md §5.5 "`audit_query` 加 keyset 分页"): the opaque
+   *  `nextCursor` a previous page returned. Malformed → treated as absent (first page), never an
+   *  error — the same convention `search`/`query_decisions`/`list_action_requests` follow. */
+  readonly cursor?: string;
 }
 
 export const DEFAULT_AUDIT_QUERY_LIMIT = 100;
@@ -109,12 +114,61 @@ function resolveLimit(limit: number | undefined): number {
   return Math.min(Math.floor(limit), MAX_AUDIT_QUERY_LIMIT);
 }
 
-/** Reads AuditRecords newest-first, narrowed by whichever `filter` fields are given. */
-export async function queryAudit(
+/**
+ * `audit_query` keyset cursor (S6-A, docs/console-completion-plan.md §5.5; the leftover-23 pattern,
+ * docs/STATUS.md §4 row 23): the page boundary is the last row's `(created_at, id)`, compared and
+ * ordered on `date_trunc('milliseconds', created_at)` — the cursor's timestamp travels as an ISO
+ * string with millisecond precision, so a microsecond-precision column compared raw would skip
+ * every row written in the same millisecond as the boundary row (same-transaction audit rows are
+ * exactly that case); truncating both sides and tie-breaking on `id` keeps the order total.
+ * Opaque on the wire (base64url of `<iso>|<uuid>`) — another private copy of the encoding, the
+ * same deliberate choice `governance/approval/reads.ts` records for its own cursor.
+ */
+const AUDIT_CURSOR_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function encodeAuditCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+export function decodeAuditCursor(
+  cursor: string | undefined,
+): { readonly createdAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const createdAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (!createdAt || Number.isNaN(Date.parse(createdAt)) || !AUDIT_CURSOR_UUID_PATTERN.test(id)) {
+      return null;
+    }
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
+export interface AuditQueryPage {
+  readonly items: readonly AuditRecordRow[];
+  /** Present only when a further page exists (the query over-fetches by one to know). */
+  readonly nextCursor?: string;
+}
+
+/**
+ * Reads one page of AuditRecords newest-first, narrowed by whichever `filter` fields are given,
+ * keyset-paginated on `(date_trunc('milliseconds', created_at), id)` (see the cursor doc comment
+ * above). `filter.limit` is clamped to `MAX_AUDIT_QUERY_LIMIT` here; whether to report that clamp
+ * as `truncated: true` is the capability handler's concern (docs/wire-contract-conventions.md §3),
+ * which knows the caller's original number.
+ */
+export async function queryAuditPage(
   client: PoolClient,
   workspaceId: string,
   filter: AuditQueryFilter = {},
-): Promise<readonly AuditRecordRow[]> {
+): Promise<AuditQueryPage> {
+  const limit = resolveLimit(filter.limit);
+  const cursor = decodeAuditCursor(filter.cursor);
   const result = await client.query<AuditRecordDbRow>(
     `select workspace_id, id, actor_principal_id, action, resource_type, resource_id, payload, created_at
      from audit_records
@@ -123,7 +177,11 @@ export async function queryAudit(
        and ($3::text is null or action = $3)
        and ($4::text is null or resource_type = $4)
        and ($5::uuid is null or resource_id = $5)
-     order by created_at desc
+       and (
+         $7::timestamptz is null
+         or (date_trunc('milliseconds', created_at), id) < ($7::timestamptz, $8::uuid)
+       )
+     order by date_trunc('milliseconds', created_at) desc, id desc
      limit $6`,
     [
       workspaceId,
@@ -131,10 +189,30 @@ export async function queryAudit(
       filter.action ?? null,
       filter.resourceType ?? null,
       filter.resourceId ?? null,
-      resolveLimit(filter.limit),
+      limit + 1,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
     ],
   );
-  return result.rows.map(mapAuditRecordRow);
+  const rows = result.rows.slice(0, limit).map(mapAuditRecordRow);
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    result.rows.length > limit && last ? encodeAuditCursor(last.createdAt, last.id) : undefined;
+  return nextCursor === undefined ? { items: rows } : { items: rows, nextCursor };
+}
+
+/** Reads AuditRecords newest-first, narrowed by whichever `filter` fields are given — the first
+ *  page of {@link queryAuditPage} as a plain array, for the callers that only ever want a bounded
+ *  newest-first scan (`reconstruct.ts`, `request-action-handler.ts`'s terminal-outcome read). Same
+ *  rows as before S6-A's pagination; same-millisecond rows now tie-break on `id` instead of
+ *  arbitrary physical order. */
+export async function queryAudit(
+  client: PoolClient,
+  workspaceId: string,
+  filter: AuditQueryFilter = {},
+): Promise<readonly AuditRecordRow[]> {
+  const page = await queryAuditPage(client, workspaceId, filter);
+  return page.items;
 }
 
 /**

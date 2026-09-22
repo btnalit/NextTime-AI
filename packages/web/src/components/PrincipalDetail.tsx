@@ -9,6 +9,7 @@ import { CopyId } from './ui/CopyId.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Select } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
+import { RefChip } from './ui/RefChip.js';
 import { StatusChip } from './ui/StatusChip.js';
 
 export interface PrincipalDetailProps {
@@ -21,11 +22,12 @@ export interface PrincipalDetailProps {
 
 /**
  * components/PrincipalDetail: one Member's drawer body — `set_principal_role`,
- * `rotate_api_key`, `disable_principal` (S3.11). `disable_principal` gets a same-drawer confirm
- * step (no confirm-dialog primitive exists in `components/ui` yet — adding one for a single call
- * site would be the kind of infrastructure-for-its-own-sake this console's constitution warns
- * against; a two-click local toggle is enough) since it revokes every Handle/session the member
- * holds (S3.11 background: "撤销其全部 Handle 与入口会话").
+ * `rotate_api_key`, `disable_principal` (S3.11). `disable_principal` keeps its same-drawer confirm
+ * step (a two-click local toggle; the drawer-based `ConfirmTier` tiers would open a second focus
+ * trap inside this drawer) since it revokes every Handle/session the member holds (S3.11
+ * background: "撤销其全部 Handle 与入口会话"). B3 / B4 (S6-A): the Worker-definition reference is a
+ * `RefChip` (bare — this page loads no `list_worker_definitions`; the grey chip says so) and the
+ * copy is bilingual.
  */
 export function PrincipalDetail({
   http,
@@ -108,22 +110,23 @@ export function PrincipalDetail({
         <dd>
           <CopyId id={principal.id} label="principal" />
         </dd>
-        <dt>Kind</dt>
+        <dt>类型 Kind</dt>
         <dd>
           <span className="tag">{principal.kind}</span>
         </dd>
-        <dt>Status</dt>
+        <dt>状态 Status</dt>
         <dd>
           <span
             className={`chip chip-s ${disabled ? 'chip-neutral' : 'chip-ok'}`}
+            data-status={disabled ? 'disabled' : 'active'}
             data-testid="principal-status"
           >
-            {disabled ? 'Disabled' : 'Active'}
+            {disabled ? '已停用 Disabled' : '活跃 Active'}
           </span>
         </dd>
         <dt>API key</dt>
-        <dd>{principal.hasApiKey ? 'issued' : 'none'}</dd>
-        <dt>Created</dt>
+        <dd>{principal.hasApiKey ? '已签发 issued' : '无 none'}</dd>
+        <dt>创建 Created</dt>
         <dd>
           <time title={formatDateTime(principal.createdAt)}>
             {formatRelative(principal.createdAt)}
@@ -131,7 +134,7 @@ export function PrincipalDetail({
         </dd>
         {principal.disabledAt ? (
           <>
-            <dt>Disabled</dt>
+            <dt>停用于 Disabled</dt>
             <dd>
               <time title={formatDateTime(principal.disabledAt)}>
                 {formatRelative(principal.disabledAt)}
@@ -141,8 +144,15 @@ export function PrincipalDetail({
         ) : null}
         {principal.workerDefinitionId ? (
           <>
-            <dt>Worker definition</dt>
-            <dd className="mono">{principal.workerDefinitionId}</dd>
+            <dt>Worker 定义 Worker definition</dt>
+            <dd>
+              <RefChip
+                kind="workerDefinition"
+                id={principal.workerDefinitionId}
+                size="s"
+                testId="principal-worker-definition"
+              />
+            </dd>
           </>
         ) : null}
       </dl>
@@ -151,7 +161,7 @@ export function PrincipalDetail({
         <>
           <div className="divider" />
 
-          <Field id="principal-role" label="Role">
+          <Field id="principal-role" label="角色 Role">
             <div className="row">
               <Select
                 id="principal-role"
@@ -171,12 +181,12 @@ export function PrincipalDetail({
                 loading={savingRole}
                 disabled={role === principal.role || disabled}
               >
-                Save
+                保存 Save
               </Button>
             </div>
           </Field>
           {roleError !== null ? (
-            <ErrorBanner error={roleError} title="Could not change the role" />
+            <ErrorBanner error={roleError} title="无法修改角色 Could not change the role" />
           ) : null}
 
           <div className="row-wrap">
@@ -190,17 +200,18 @@ export function PrincipalDetail({
                 loading={rotating}
                 disabled={disabled}
               >
-                Rotate API key
+                轮换 API key Rotate API key
               </Button>
             )}
           </div>
           {rotateError !== null ? (
-            <ErrorBanner error={rotateError} title="Could not rotate the key" />
+            <ErrorBanner error={rotateError} title="无法轮换 Could not rotate the key" />
           ) : null}
           {rotated ? (
             <div className="stack-s" data-testid="rotated-api-key">
               <Notice tone="warn">
-                New API key shown once — the previous key stops working immediately.
+                新 API key 只显示一次；旧 key 立即失效。 New API key shown once — the previous key
+                stops working immediately.
               </Notice>
               <div className="code-block row" style={{ justifyContent: 'space-between' }}>
                 <span className="mono">{rotated.apiKey}</span>
@@ -219,25 +230,25 @@ export function PrincipalDetail({
           {disabled ? null : confirmingDisable ? (
             <div className="stack-s">
               <Notice tone="warn">
-                Disabling revokes every Handle and entry session this member holds. This cannot be
-                undone from here.
+                停用会吊销该成员持有的全部 Handle 与入口会话，且不能从这里撤销。 Disabling revokes
+                every Handle and entry session this member holds. This cannot be undone from here.
               </Notice>
               {disableError !== null ? (
-                <ErrorBanner error={disableError} title="Could not disable this member" />
+                <ErrorBanner error={disableError} title="无法停用 Could not disable this member" />
               ) : null}
               <div className="row" style={{ justifyContent: 'flex-end' }}>
                 <Button variant="ghost" onClick={() => setConfirmingDisable(false)}>
-                  Cancel
+                  取消 Cancel
                 </Button>
                 <Button variant="danger" onClick={() => void disable()} loading={disabling}>
-                  Confirm disable
+                  确认停用 Confirm disable
                 </Button>
               </div>
             </div>
           ) : (
             <div className="row" style={{ justifyContent: 'flex-end' }}>
               <Button variant="danger" onClick={() => setConfirmingDisable(true)}>
-                Disable member
+                停用成员 Disable member
               </Button>
             </div>
           )}

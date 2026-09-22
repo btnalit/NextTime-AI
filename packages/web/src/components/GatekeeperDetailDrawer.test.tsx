@@ -83,11 +83,11 @@ describe('GatekeeperDetailDrawer', () => {
     expect(health.className).toContain('chip-neutral');
   });
 
-  it('shows "该能力尚未上线" when get_gatekeeper is not yet deployed (404 not_found)', async () => {
+  it('renders the error banner when get_gatekeeper answers not_found (B6: no "not live yet" placeholder)', async () => {
     const http = callerReturning(() =>
-      Promise.reject(new HttpError('capability_error', 'no handler', 'not_found')),
+      Promise.reject(new HttpError('capability_error', 'no such gatekeeper', 'not_found')),
     );
     renderDrawer(http);
-    await screen.findByTestId('gatekeeper-detail-unavailable');
+    await screen.findByTestId('gatekeeper-detail-error');
   });
 });

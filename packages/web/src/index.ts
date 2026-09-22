@@ -3,10 +3,11 @@
  * contract (VERSION + main()). The real app entry Vite builds is `index.html` -> `src/main.tsx`
  * (design doc §7.6, S1.8: login, chat list, chat page, `lib/ws-client.ts`); Vite never loads this
  * file, since a static-site bundler's entry point is a script tag, not a package's `main`/
- * `exports` field.
+ * `exports` field. `main()` is therefore a documented no-op (C23: the `console.log` it used to
+ * carry was the package's only stray console write).
  */
 export const VERSION = '0.1.0';
 
 export function main(): void {
-  console.log(`@nexttime/web ${VERSION}`);
+  // Intentionally nothing — see the module doc comment.
 }

@@ -315,6 +315,7 @@ checkout_ref_step() {
 # build_step <label>: docker compose --profile test build + explicit worker-runtime build.
 build_step() {
   label="$1"
+  export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
   if ! docker compose --profile test build >"$DRILL_LOG" 2>&1; then
     fail "build-$label" "docker compose --profile test build failed: $(tail -30 "$DRILL_LOG")"
   fi
@@ -373,6 +374,7 @@ accept_step_required() {
 # PROBE — non-fatal by construction: never calls fail(), only records PROBE_RESULT.
 probe_step() {
   checkout_from_step "probe-from"
+  export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
   if ! docker compose --profile test build >"$DRILL_LOG" 2>&1; then
     echo "PROBE old-code-on-new-schema failed (build: $(tail -10 "$DRILL_LOG"))"
     PROBE_RESULT="failed (build)"
@@ -404,6 +406,7 @@ probe_step() {
 # probe_step above bailed out early), then the live restore.
 rollback_step() {
   checkout_from_step "rollback-from"
+  export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
   if ! docker compose --profile test build >"$DRILL_LOG" 2>&1; then
     fail "rollback-build" "docker compose --profile test build failed: $(tail -30 "$DRILL_LOG")"
   fi
@@ -487,6 +490,7 @@ echo "  rollback + accept S1: ${PHASE_ROLLBACK}s"
 echo ""
 echo "to re-apply this upgrade for real (not a drill), from the checkout root:"
 echo "  git fetch origin --tags && git checkout ${TO_TAG}"
+echo "  export KERNEL_VERSION=\"\$(git describe --tags --abbrev=0) (\$(git rev-parse --short HEAD))\""
 echo "  docker compose --profile test build && docker compose build worker-runtime"
 echo "  docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js"
 echo "  docker compose --profile test up -d"

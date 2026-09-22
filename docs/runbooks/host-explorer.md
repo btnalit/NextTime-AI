@@ -46,6 +46,17 @@ Explorer 凭证。若内核没配 Handle 签名密钥，`POST /api/auth/login` �
 侧栏的"图 Explorer"链接，新标签页打开）——未改动的 Explorer 静态包做的是普通同源 `fetch()`，浏览器会
 自动带上这两枚 cookie。
 
+## 侧栏入口的显隐（S6-C，console-completion-plan.md §5.7）
+
+控制台加载时探测一次 `GET /explorer/`（同源、带会话 cookie；`packages/web/src/lib/explorer-probe.ts`）：
+caddy 的 `handle_path /explorer/*` 以 `try_files {path} /index.html` 收尾，所以无论 bundle 是否构建都
+回 200——判据是**响应体**里是否含占位页 `deploy/caddy/explorer-placeholder/index.html` 的标题
+"Explorer bundle not built"。含 → 侧栏"图 Explorer"入口**隐藏**（而不是让人点进去看占位说明）；
+不含（真实 bundle）或探测失败（网络错误、非 2xx）→ 显示（宁可多显示一次 404，不因瞬时错误藏起真
+bundle）。每次页面加载只探测一次，不轮询；按上面步骤 1 构建并 `up -d caddy` 后**刷新控制台**入口
+即出现。这一段只管第三方 bundle 的入口；原生"图谱"页（S6-D）是另一个入口，不受此探测影响。
+CI 不构建 bundle，`e2e/explorer.spec.ts` 里对隐藏入口的严格断言标为 `fixme`，待侧栏接线合入后打开。
+
 ## 步骤
 
 ### 1. 构建 Explorer 静态包并重建 caddy

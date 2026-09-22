@@ -1,6 +1,7 @@
 import type {
   CreateUserResultWire,
   PlatformSettingsWire,
+  PurgeUsersResultWire,
   UserStatusWire,
   UserWire,
 } from '@nexttime/shared';
@@ -14,6 +15,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
 import { deriveWorkspaceOptions } from '../../lib/platform-workspaces.js';
+import { deriveUserStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -21,7 +23,10 @@ import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select } from '../ui/Field.js';
 import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
+import { StatusChip } from '../ui/StatusChip.js';
+import { useToast } from '../ui/Toast.js';
 import { CreateUserForm } from './CreateUserForm.js';
+import { PurgeUsersDialog } from './PurgeUsersDialog.js';
 import { TemporaryPasswordDialog } from './TemporaryPasswordDialog.js';
 import { UserDetailPanel } from './UserDetailPanel.js';
 import { UserMembershipsPanel } from './UserMembershipsPanel.js';
@@ -45,7 +50,8 @@ type Panel =
   | { readonly kind: 'create' }
   | { readonly kind: 'user'; readonly userId: string }
   | { readonly kind: 'memberships'; readonly userId: string }
-  | { readonly kind: 'password'; readonly login: string; readonly password: string };
+  | { readonly kind: 'password'; readonly login: string; readonly password: string }
+  | { readonly kind: 'purgeUsers' };
 
 /**
  * components/platform/PlatformUsersPage: 用户 Users (`/platform/users`, design doc §5/§6.1) — the
@@ -60,20 +66,30 @@ type Panel =
  * `envAdmins` (the `NEXTTIME_PLATFORM_ADMINS` logins that can be neither disabled nor demoted,
  * design §6.6), `defaultWorkspaceId` and `defaultPlatformRole` for the create dialog. A settings
  * read that fails leaves the directory fully usable.
+ *
+ * S6-A A6 (docs/console-completion-plan.md §5.2 "列表默认过滤", §4 "User 与 Principal"): the
+ * default view sends `hideResidual: true` — the users awaiting activation whose every membership
+ * is in a disabled or ephemeral workspace (or was removed) are acceptance residue, hidden until
+ * the toggle shows them. The "清理待激活用户" entry (`PurgeUsersDialog`) lists the `pendingOnly`
+ * candidates and hands a selection to `purge_user`; the directory is re-read afterwards.
  */
 export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
+  const toast = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [hideResidual, setHideResidual] = useState(true);
   const [queryInput, setQueryInput] = useState('');
   const [appliedQuery, setAppliedQuery] = useState('');
   const [panel, setPanel] = useState<Panel>({ kind: 'closed' });
 
-  // `list_users`'s `query` is `min(1)` — an empty box omits the field rather than sending `''`.
+  // `list_users`'s `query` is `min(1)` — an empty box omits the field rather than sending `''`;
+  // `hideResidual` is only ever sent as `true` (omitted = shown, the kernel's default).
   const params = useMemo(() => {
     const next: Record<string, unknown> = { limit: PAGE_SIZE };
     if (statusFilter !== 'all') next.status = statusFilter;
     if (appliedQuery !== '') next.query = appliedQuery;
+    if (hideResidual) next.hideResidual = true;
     return next;
-  }, [statusFilter, appliedQuery]);
+  }, [statusFilter, appliedQuery, hideResidual]);
 
   const users = useCapabilityList<UserWire>(http, 'list_users', params);
   const settings = useCapability<PlatformSettingsWire>(http, 'get_platform_settings');
@@ -139,14 +155,39 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
     refreshList();
   }
 
+  /** The dialog stays open on its results view; the directory (every cached `list_users` page,
+   *  the dialog's own `pendingOnly` read included) is re-read underneath it. */
+  function handlePurgedUsers(result: PurgeUsersResultWire): void {
+    const skipped = result.outcomes.length - result.purgedCount;
+    toast.push({
+      tone: result.purgedCount > 0 ? 'ok' : 'warn',
+      title: `已清理 ${result.purgedCount} 个用户 Purged ${result.purgedCount} users`,
+      description:
+        skipped > 0 ? `${skipped} 个被跳过 skipped — 原因见对话框 see the dialog` : undefined,
+      key: 'purge-users',
+    });
+    invalidateCapability(http, 'list_users');
+    void users.reload();
+  }
+
   return (
     <div className="page">
       <PageHeader
         title="用户 Users"
-        description="Who can sign in, which workspaces they belong to, and their budgets."
-        actions={
+        description="谁能登录、属于哪些工作区、预算多少。 Who can sign in, which workspaces they belong to, and their budgets."
+        primaryAction={
           <Button variant="primary" icon="plus" onClick={() => setPanel({ kind: 'create' })}>
             新建用户 Create user
+          </Button>
+        }
+        actions={
+          <Button
+            variant="secondary"
+            icon="users"
+            onClick={() => setPanel({ kind: 'purgeUsers' })}
+            data-testid="purge-users-open"
+          >
+            清理待激活用户 Clean up pending users
           </Button>
         }
       />
@@ -163,8 +204,8 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
             onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
           >
             <option value="all">全部 All</option>
-            <option value="active">active</option>
-            <option value="disabled">disabled</option>
+            <option value="active">活跃 Active</option>
+            <option value="disabled">已停用 Disabled</option>
           </Select>
         </Field>
         <Field
@@ -181,6 +222,15 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
         <Button type="submit" variant="secondary">
           应用 Apply
         </Button>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={hideResidual}
+            onChange={(event) => setHideResidual(event.target.checked)}
+            data-testid="platform-users-hide-residual"
+          />
+          <span>隐藏验收残留 Hide residual（待激活且成员资格全在已停用 / 临时工作区）</span>
+        </label>
       </form>
 
       {users.state.status === 'loading' ? (
@@ -319,6 +369,14 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
           onClose={() => setPanel({ kind: 'closed' })}
         />
       ) : null}
+
+      {panel.kind === 'purgeUsers' ? (
+        <PurgeUsersDialog
+          http={http}
+          onClose={() => setPanel({ kind: 'closed' })}
+          onPurged={handlePurgedUsers}
+        />
+      ) : null}
     </div>
   );
 }
@@ -391,25 +449,16 @@ function UserRow({
 /** `status` first (an explicitly disabled account is disabled whatever else is true of it), then
  *  `hasPassword: false` — the "待激活" state a backfilled or password-less user sits in
  *  (`wire/platform.ts` `UserWireSchema`). `待激活` is a *derived* display value, never a filter
- *  value: `list_users`'s own `status` param is only `active | disabled`. */
+ *  value: `list_users`'s own `status` param is only `active | disabled`. S6-A0 (C17): the
+ *  derivation lives in `lib/status-tone.ts` (`deriveUserStatus`) and renders through the shared
+ *  `StatusChip` — one colour vocabulary with every other status in the console. */
 function UserStatusCell({ user }: { readonly user: UserWire }) {
-  if (user.status === 'disabled') {
-    return (
-      <span className="chip chip-s chip-neutral" data-testid="platform-user-status">
-        disabled
-      </span>
-    );
-  }
-  if (!user.hasPassword) {
-    return (
-      <span className="chip chip-s chip-warn" data-testid="platform-user-status">
-        待激活 Pending activation
-      </span>
-    );
-  }
   return (
-    <span className="chip chip-s chip-ok" data-testid="platform-user-status">
-      active
-    </span>
+    <StatusChip
+      machine="userStatus"
+      status={deriveUserStatus(user)}
+      size="s"
+      testId="platform-user-status"
+    />
   );
 }

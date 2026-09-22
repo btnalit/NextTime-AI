@@ -22,17 +22,17 @@
 }
 
 .login-title {
-  font-size: 18px;
+  font-size: var(--fs-19);
   font-weight: 600;
 }
 
 .login-subtitle {
-  font-size: 13px;
+  font-size: var(--fs-13);
   color: var(--text-3);
 }
 
 .login-footer {
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-3);
   display: flex;
   flex-direction: column;
@@ -53,7 +53,7 @@
 
 .api-key-login summary {
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-13);
   color: var(--text-2);
 }
 
@@ -97,7 +97,7 @@
 }
 
 .chat-header-title {
-  font-size: 14px;
+  font-size: var(--fs-14);
   font-weight: 600;
   min-width: 0;
   overflow: hidden;
@@ -120,6 +120,34 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* W3 (S6-A): the FollowPill sits in its own zero-padding thread column so it stays centred under
+ * the messages and sticky above the composer while the user is scrolled up. */
+.chat-thread-pill {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.follow-pill-anchor {
+  position: sticky;
+  bottom: var(--space-3);
+  align-self: center;
+  margin-top: calc(-1 * var(--space-4));
+  z-index: 2;
+}
+
+/* W2 (S6-A): the header's 模式 · 模型 · 来源 line and its compact model select. */
+.chat-header-meta {
+  font-size: var(--fs-13);
+  color: var(--text-3);
+}
+
+.chat-header-meta .select {
+  width: auto;
+  min-height: 28px;
+  padding: 2px var(--space-2);
+  font-size: var(--fs-13);
 }
 
 .message {
@@ -146,7 +174,7 @@
   background: var(--surface-1);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.55;
+  line-height: var(--lh-body);
 }
 
 .message-user .message-bubble {
@@ -167,7 +195,7 @@
   display: flex;
   gap: var(--space-2);
   align-items: center;
-  font-size: 11.5px;
+  font-size: var(--fs-11);
   color: var(--text-3);
   padding: 0 4px;
 }
@@ -175,7 +203,7 @@
 .message-tool .message-bubble {
   background: var(--surface-2);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-2);
 }
 
@@ -196,7 +224,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
   background: var(--surface-1);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
 }
 
 .tool-call-row > summary {
@@ -239,7 +267,7 @@
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface-1);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-2);
   max-width: 100%;
 }
@@ -264,7 +292,7 @@
   padding: var(--space-6) var(--gutter);
   text-align: center;
   color: var(--text-3);
-  font-size: 13px;
+  font-size: var(--fs-13);
 }
 
 .jump-latest {
@@ -327,7 +355,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  font-size: 12px;
+  font-size: var(--fs-12);
   color: var(--text-3);
   padding: 0 4px;
 }
@@ -336,7 +364,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-3);
 }
 
@@ -383,7 +411,7 @@
 }
 
 .action-detail-title {
-  font-size: 14px;
+  font-size: var(--fs-14);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -413,7 +441,7 @@
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: var(--fs-13);
 }
 
 .worker-run-table th,
@@ -430,7 +458,7 @@
 .data-table th {
   color: var(--text-3);
   font-weight: 500;
-  font-size: 11.5px;
+  font-size: var(--fs-11);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -463,7 +491,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 13px;
+  font-size: var(--fs-13);
   color: var(--text-2);
 }
 
@@ -507,7 +535,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
   background: var(--surface-2);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   min-width: 0;
 }
 
@@ -524,7 +552,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-3);
 }
 
@@ -551,7 +579,7 @@
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-3);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   white-space: nowrap;
 }
 
@@ -579,12 +607,12 @@
 }
 
 .platform-tile-label {
-  font-size: 12px;
+  font-size: var(--fs-12);
   color: var(--text-3);
 }
 
 .platform-tile-value {
-  font-size: 24px;
+  font-size: var(--fs-24);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -595,7 +623,7 @@
 
 .platform-audit-payload summary {
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text-3);
 }
 

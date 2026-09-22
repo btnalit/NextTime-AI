@@ -1,12 +1,9 @@
 /**
- * lib/agent-profile: wire shapes for the S3.13 AgentProfile/AgentPolicy capabilities this PR's web
- * half codes against (the task's "Contract you code against" section — the kernel half is landing
- * in a parallel PR against the same names/shapes; see docs/development-tasks.md §S3.13). None of
- * these capabilities exist in `@nexttime/shared`'s `CAPABILITY_REGISTRY` yet on `main` as of this
- * PR — every page reading them treats a `not_found` response as "not deployed yet"
- * (`lib/errors.ts` `isNotFoundError`), the same convention `lib/governance.ts`'s own doc comment
- * established for the S3.11 capabilities. Field names follow the task brief verbatim; `null` on
- * an `AgentProfile` field means "inherit the workspace default" (§S3.13: "缺省 = 继承 AgentPolicy
+ * lib/agent-profile: wire shapes for the S3.13 AgentProfile/AgentPolicy capabilities
+ * (docs/development-tasks.md §S3.13). Written while the kernel half landed in a parallel PR; the
+ * capabilities have since shipped and the interim "treat `not_found` as not deployed yet"
+ * convention was retired in S6-A0 (B6). Field names follow the task brief verbatim; `null` on an
+ * `AgentProfile` field means "inherit the workspace default" (§S3.13: "缺省 = 继承 AgentPolicy
  * 默认").
  */
 

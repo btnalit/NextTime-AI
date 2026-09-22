@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { type Capability, getCapability, listByChannel } from '@nexttime/shared';
+import { useMemo, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { hrefs } from '../lib/router.js';
@@ -9,8 +10,38 @@ import { Drawer } from './ui/Drawer.js';
 import { Field, Input, Select } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
 
-const MAX_TTL_DAYS = 365;
-const DEFAULT_TTL_DAYS = 365;
+const SECONDS_PER_DAY = 86400;
+/** The registry's own ceiling (`issue_service_handle.ttlSeconds` `.max(...)`, one year) read
+ *  from the Zod schema so this page cannot drift from the kernel; the literal is only the
+ *  fallback if the schema shape ever changes (`serviceHandleMaxTtlSeconds` is unit-tested). */
+const FALLBACK_MAX_TTL_SECONDS = 365 * SECONDS_PER_DAY;
+/** B7 (docs/console-completion-plan.md §5.6 "TTL 默认 30 天、上限 365"): the default sits well
+ *  below the cap — a runtime credential that outlives its purpose by a year was the old default. */
+const DEFAULT_TTL_DAYS = 30;
+
+export function serviceHandleMaxTtlSeconds(): number {
+  const schema = getCapability('issue_service_handle')?.paramsSchema as
+    | {
+        readonly shape?: {
+          readonly ttlSeconds?: { readonly unwrap?: () => { readonly maxValue?: number | null } };
+        };
+      }
+    | undefined;
+  const max = schema?.shape?.ttlSeconds?.unwrap?.().maxValue;
+  return typeof max === 'number' && max > 0 ? max : FALLBACK_MAX_TTL_SECONDS;
+}
+
+/**
+ * B7: the capabilities a service Handle may carry — every `channel: 'handle'` registry entry
+ * (`governance/capability/handles.ts` `assertValidScope` refuses anything else at issuance, and
+ * `scripts/check-membership-capabilities-not-in-handle-scope.sh` guards the ceiling arrays the
+ * same way), minus the two `<gate>.<op>` pattern rows, which are not names a scope can hold
+ * (`assertValidScope` looks each name up verbatim; gate operations are reached through
+ * `request_action` / `observe_operation`). Grouped by registry group for the checklist.
+ */
+export function handleScopeCapabilities(): readonly Capability[] {
+  return listByChannel('handle').filter((capability) => !capability.name.includes('<'));
+}
 
 /** `issue_service_handle`'s result — an inline `capabilities.ts` schema with no `wire/*.ts`
  *  counterpart, so it is redefined locally (the `lib/governance.ts` precedent). */
@@ -29,7 +60,7 @@ export interface IssueServiceHandleSectionProps {
   readonly principals: readonly PrincipalRow[];
 }
 
-function parseScope(raw: string): readonly string[] {
+function parseNames(raw: string): readonly string[] {
   return Array.from(new Set(raw.split(/[\s,]+/).filter((name) => name.length > 0)));
 }
 
@@ -41,23 +72,53 @@ function parseScope(raw: string): readonly string[] {
  * each other, the same reasoning `TemporaryPasswordDialog`'s own doc comment gives for never
  * showing two one-time-secret dialogs at once. Only the resulting Handle — shown exactly once,
  * like `TemporaryPasswordDialog`'s password — opens in a `Drawer`.
+ *
+ * B7 (§2 B7, §5.6): the TTL defaults to 30 days under the registry's one-year cap, and the scope is
+ * picked from the registry's handle-channel names (`handleScopeCapabilities`) — a checklist plus
+ * a paste box for names copied from a runbook, validated against the same set, so a human-only
+ * capability (or a typo) is refused here with the reason instead of by the kernel's 400.
  */
 export function IssueServiceHandleSection({ http, principals }: IssueServiceHandleSectionProps) {
   const servicePrincipals = principals.filter(
     (principal) => principal.kind === 'service' && !principal.disabledAt,
   );
+  const maxTtlDays = Math.floor(serviceHandleMaxTtlSeconds() / SECONDS_PER_DAY);
+  const catalog = useMemo(() => handleScopeCapabilities(), []);
+  const allowed = useMemo(() => new Set(catalog.map((capability) => capability.name)), [catalog]);
+  const groups = useMemo(() => {
+    const byGroup = new Map<string, Capability[]>();
+    for (const capability of catalog) {
+      const list = byGroup.get(capability.group) ?? [];
+      list.push(capability);
+      byGroup.set(capability.group, list);
+    }
+    return [...byGroup.entries()];
+  }, [catalog]);
 
   const [principalId, setPrincipalId] = useState('');
   const [ttlDays, setTtlDays] = useState(String(DEFAULT_TTL_DAYS));
-  const [scopeText, setScopeText] = useState('');
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [pastedText, setPastedText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [issued, setIssued] = useState<IssueServiceHandleResult | null>(null);
 
-  const scope = parseScope(scopeText);
+  const pasted = parseNames(pastedText);
+  const unknownPasted = pasted.filter((name) => !allowed.has(name));
+  const scope = Array.from(new Set([...picked, ...pasted.filter((name) => allowed.has(name))]));
   const ttlValid =
-    /^\d+$/.test(ttlDays.trim()) && Number(ttlDays) >= 1 && Number(ttlDays) <= MAX_TTL_DAYS;
-  const canSubmit = principalId !== '' && scope.length > 0 && ttlValid && !submitting;
+    /^\d+$/.test(ttlDays.trim()) && Number(ttlDays) >= 1 && Number(ttlDays) <= maxTtlDays;
+  const canSubmit =
+    principalId !== '' && scope.length > 0 && unknownPasted.length === 0 && ttlValid && !submitting;
+
+  function toggle(name: string): void {
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
 
   async function submit(): Promise<void> {
     if (!canSubmit) return;
@@ -68,7 +129,7 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
         await http.call<IssueServiceHandleResult>('issue_service_handle', {
           principalId,
           scope,
-          ttlSeconds: Number(ttlDays) * 86400,
+          ttlSeconds: Number(ttlDays) * SECONDS_PER_DAY,
         }),
       );
     } catch (err) {
@@ -80,7 +141,8 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
 
   function closeIssued(): void {
     setIssued(null);
-    setScopeText('');
+    setPicked(new Set());
+    setPastedText('');
   }
 
   return (
@@ -108,7 +170,7 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
           void submit();
         }}
       >
-        <Field id="ish-principal" label="Service principal" required>
+        <Field id="ish-principal" label="服务主体 Service principal" required>
           <Select
             id="ish-principal"
             value={principalId}
@@ -127,8 +189,12 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
         <Field
           id="ish-ttl"
           label="有效期（天）TTL (days)"
-          hint={`默认 ${DEFAULT_TTL_DAYS}，最多 ${MAX_TTL_DAYS} Default ${DEFAULT_TTL_DAYS}, max ${MAX_TTL_DAYS}`}
-          error={ttlValid ? null : '必须是 1 到 365 的整数 Must be an integer from 1 to 365'}
+          hint={`默认 ${DEFAULT_TTL_DAYS}，最多 ${maxTtlDays} Default ${DEFAULT_TTL_DAYS}, max ${maxTtlDays}`}
+          error={
+            ttlValid
+              ? null
+              : `必须是 1 到 ${maxTtlDays} 的整数 Must be an integer from 1 to ${maxTtlDays}`
+          }
         >
           <Input
             id="ish-ttl"
@@ -141,21 +207,65 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
           />
         </Field>
 
+        <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+          <legend className="field-label">
+            能力 Capabilities
+            <span className="field-required" aria-hidden>
+              *
+            </span>
+            <span className="field-hint" style={{ margin: 0 }}>
+              {' '}
+              — 只有 handle 通道的能力可签给服务 Handle；成员管理与平台能力永远不在此列。 Only
+              handle-channel capabilities; member-management and platform ones are never offered.
+            </span>
+          </legend>
+          <div className="stack-s model-checklist" data-testid="ish-scope-checklist">
+            {groups.map(([group, capabilities]) => (
+              <div key={group} className="stack-s">
+                <span className="text-3 text-small">{group}</span>
+                {capabilities.map((capability) => (
+                  <label className="checkbox" key={capability.name} title={capability.description}>
+                    <input
+                      type="checkbox"
+                      checked={picked.has(capability.name)}
+                      onChange={() => toggle(capability.name)}
+                      disabled={submitting}
+                      data-capability={capability.name}
+                    />
+                    <span className="mono">{capability.name}</span>
+                    <span className="text-3 text-small">{capability.mode}</span>
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+        </fieldset>
+
         <Field
           id="ish-scope"
-          label="能力 Capabilities"
-          required
-          hint="用逗号或空格分隔的能力名。 Comma- or space-separated capability names."
+          label="粘贴能力名 Paste names"
+          hint="从运行手册复制的能力名，逗号或空格分隔；与上面勾选的合并。 Names copied from a runbook, comma- or space-separated; merged with the ticks above."
+          error={
+            unknownPasted.length > 0
+              ? `不是可签发的能力名 Not issuable to a service Handle: ${unknownPasted.join(', ')}`
+              : null
+          }
         >
           <Input
             id="ish-scope"
-            value={scopeText}
-            onChange={(event) => setScopeText(event.target.value)}
+            value={pastedText}
+            onChange={(event) => setPastedText(event.target.value)}
             disabled={submitting}
-            placeholder="list_gatekeepers get_gatekeeper"
+            invalid={unknownPasted.length > 0}
+            placeholder="get_task report_task_result"
             mono
           />
         </Field>
+
+        <p className="text-3 text-small" data-testid="ish-scope-summary">
+          将签发 {scope.length} 个能力 {scope.length} capabilities in scope
+          {scope.length > 0 ? `: ${scope.join(', ')}` : ''}
+        </p>
 
         <PlatformError error={error} title="无法签发 Could not issue the Handle" />
 

@@ -1,32 +1,66 @@
 import type {
   ActionRequestStatus,
+  BlastRadius,
   ConnectionRequestStatus,
+  ConnectorModeWire,
+  GateInstanceStatusWire,
+  GateTrustWire,
   GrantStatus,
+  OperationMode,
+  PlatformRoleWire,
   PublishableStatus,
   Role,
   TaskStatus,
+  UserStatusWire,
   WorkerRunStatus,
+  WorkspacePurposeWire,
+  WorkspaceStatusWire,
 } from '@nexttime/shared';
 import {
   ACTION_REQUEST_STATUS_VALUES,
+  BLAST_RADIUS_VALUES,
   CONNECTION_REQUEST_STATUS_VALUES,
+  ConnectorModeWireSchema,
   GRANT_STATUS_VALUES,
+  GateHealthWireSchema,
+  GateInstanceStatusWireSchema,
+  GateTrustWireSchema,
+  OPERATION_MODE_VALUES,
   PUBLISHABLE_STATUS_VALUES,
+  PlatformRoleWireSchema,
   ROLE_VALUES,
+  ServiceHealthWireSchema,
   TASK_STATUS_VALUES,
+  UserStatusWireSchema,
   WORKER_RUN_STATUS_VALUES,
+  WorkspacePurposeWireSchema,
+  WorkspaceStatusWireSchema,
 } from '@nexttime/shared';
 
 /**
  * lib/status-tone: the one status → visual-tone map per state machine, keyed by the enums
- * `@nexttime/shared` (`enums.ts`) owns. Every map is typed `Record<<Status>, ChipStyle>`, so a
+ * `@nexttime/shared` (`enums.ts`, and for the platform plane the `wire/platform.ts` Zod enums —
+ * their `.options` are the runtime arrays). Every map is typed `Record<<Status>, ChipStyle>`, so a
  * state added to the kernel's enum fails `tsc` here until it is given a tone — and
- * `status-tone.test.ts` walks the runtime `*_STATUS_VALUES` arrays so the same holds at test time.
- * No status string is hand-typed anywhere in the UI: components pass the wire value through
+ * `StatusChip.test.tsx` walks the runtime value arrays so the same holds at test time. No status
+ * string is hand-typed anywhere in the UI: components pass the wire value through
  * `statusChipStyle(machine, value)` and get back tone + label.
+ *
+ * Tones follow docs/console-completion-plan.md §5.9 principle 2 — one colour, one meaning:
+ *   observe (teal)   — read-only reach: `OperationMode.observe`
+ *   warn (amber)     — in flight / pending a human / medium impact / `warn` enforcement
+ *   danger (red)     — high impact, irreversible, rejected, conflict, failed, unreachable, purge
+ *   ok (green)       — executed, published, healthy, active, vetted
+ *   info (blue)      — system / proposal / production / default / platform-run
+ *   neutral (grey)   — archived, superseded, disabled, acceptance residue, untested, unknown
+ *   accent           — the caller's own elevated standing (owner, platform admin) — a "you can
+ *                      act here" mark, the same blue family as links
+ * S6-A0 (C17) extended the machines to the platform plane: user status, workspace status and
+ * purpose, gate-instance status / health / trust, connector mode, service health, platform role,
+ * and the two governance scalars every ActionRequest carries (operation mode, blast radius).
  */
 
-export type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'info' | 'accent';
+export type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'info' | 'accent' | 'observe';
 
 export interface ChipStyle {
   readonly tone: Tone;
@@ -42,7 +76,18 @@ export type StatusMachine =
   | 'connectionRequest'
   | 'publishable'
   | 'grant'
-  | 'role';
+  | 'role'
+  | 'operationMode'
+  | 'blastRadius'
+  | 'userStatus'
+  | 'workspaceStatus'
+  | 'workspacePurpose'
+  | 'gateInstance'
+  | 'gateHealth'
+  | 'gateTrust'
+  | 'connectorMode'
+  | 'serviceHealth'
+  | 'platformRole';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: 'Proposed' },
@@ -107,6 +152,118 @@ export const ROLE_TONES: Readonly<Record<Role, ChipStyle>> = {
   member: { tone: 'neutral', label: 'Member' },
 };
 
+// -------------------------------------------------------------------------------------------
+// S6-A0 / C17: the governance scalars and the platform plane (docs/console-completion-plan.md
+// §5.9 "StatusChip 扩到平台面枚举"). Runtime arrays come from the shared Zod enums' `.options`.
+// -------------------------------------------------------------------------------------------
+
+/** `Operation.mode` (design §6.3): observe is read-only reach (teal), execute changes the world
+ *  and is the mode approvals exist for (amber). */
+export const OPERATION_MODE_TONES: Readonly<Record<OperationMode, ChipStyle>> = {
+  observe: { tone: 'observe', label: '观察 Observe' },
+  execute: { tone: 'warn', label: '执行 Execute' },
+};
+
+/** `ActionRequest.blastRadius` — the confirmation tier driver (§5.9 principle 4). */
+export const BLAST_RADIUS_TONES: Readonly<Record<BlastRadius, ChipStyle>> = {
+  low: { tone: 'ok', label: '低影响 Low' },
+  medium: { tone: 'warn', label: '中影响 Medium' },
+  high: { tone: 'danger', label: '高影响 High' },
+};
+
+/** `pending_activation` is a *derived* display state (`UserWire.hasPassword === false` on an
+ *  `active` user — a backfilled or password-less account; never a `list_users` filter value, see
+ *  `PlatformUsersPage`'s own note). It is appended to the wire enum here so the users page can
+ *  render all three through one chip; `deriveUserStatus` is the one place that derivation lives. */
+export type UserDisplayStatus = UserStatusWire | 'pending_activation';
+export const USER_STATUS_VALUES: readonly UserDisplayStatus[] = [
+  ...UserStatusWireSchema.options,
+  'pending_activation',
+];
+export const USER_STATUS_TONES: Readonly<Record<UserDisplayStatus, ChipStyle>> = {
+  active: { tone: 'ok', label: '活跃 Active' },
+  disabled: { tone: 'neutral', label: '已停用 Disabled' },
+  pending_activation: { tone: 'warn', label: '待激活 Pending activation' },
+};
+
+export function deriveUserStatus(user: {
+  readonly status: UserStatusWire;
+  readonly hasPassword: boolean;
+}): UserDisplayStatus {
+  if (user.status === 'disabled') return 'disabled';
+  return user.hasPassword ? 'active' : 'pending_activation';
+}
+
+export const WORKSPACE_STATUS_TONES: Readonly<Record<WorkspaceStatusWire, ChipStyle>> = {
+  active: { tone: 'ok', label: '活跃 Active' },
+  disabled: { tone: 'neutral', label: '已停用 Disabled' },
+};
+
+/** `standard` is the production default (blue); `ephemeral` is acceptance residue (grey, §5.9). */
+export const WORKSPACE_PURPOSE_TONES: Readonly<Record<WorkspacePurposeWire, ChipStyle>> = {
+  standard: { tone: 'info', label: '常规 standard' },
+  ephemeral: { tone: 'neutral', label: '临时 ephemeral' },
+};
+
+/** `awaiting_host` is derived: a hosted instance (`create_gate_instance`) the gate host has not
+ *  taken over yet (`hosted && lastSeenAt === null`) — see `PlatformIntegrationsPage`. */
+export type GateInstanceDisplayStatus = GateInstanceStatusWire | 'awaiting_host';
+export const GATE_INSTANCE_STATUS_VALUES: readonly GateInstanceDisplayStatus[] = [
+  ...GateInstanceStatusWireSchema.options,
+  'awaiting_host',
+];
+export const GATE_INSTANCE_TONES: Readonly<Record<GateInstanceDisplayStatus, ChipStyle>> = {
+  discovered: { tone: 'neutral', label: '未启用 Discovered' },
+  enabled: { tone: 'ok', label: '已启用 Enabled' },
+  disabled: { tone: 'neutral', label: '已禁用 Disabled' },
+  lost: { tone: 'warn', label: '失联 Lost' },
+  awaiting_host: { tone: 'warn', label: '等待宿主接管 Waiting for gate host', live: true },
+};
+
+export function deriveGateInstanceStatus(instance: {
+  readonly status: GateInstanceStatusWire;
+  readonly hosted: boolean;
+  readonly lastSeenAt: string | null;
+}): GateInstanceDisplayStatus {
+  return instance.hosted && instance.lastSeenAt === null ? 'awaiting_host' : instance.status;
+}
+
+type GateHealthWire = (typeof GateHealthWireSchema.options)[number];
+export const GATE_HEALTH_TONES: Readonly<Record<GateHealthWire, ChipStyle>> = {
+  ok: { tone: 'ok', label: '健康 Healthy' },
+  unreachable: { tone: 'danger', label: '不可达 Unreachable' },
+  unauthorized: { tone: 'danger', label: '未授权 Unauthorized' },
+  unknown: { tone: 'neutral', label: '未知 Unknown' },
+};
+
+/** MCP trust mark (design §6.3): `vetted` unlocks auto-approval of non-destructive tool calls. */
+export const GATE_TRUST_TONES: Readonly<Record<GateTrustWire, ChipStyle>> = {
+  byo: { tone: 'neutral', label: '自带 BYO' },
+  vetted: { tone: 'ok', label: '已审核 Vetted' },
+};
+
+/** Connector three-state (design §6.3): `platform_preset` = the platform runs the instances and
+ *  workspaces enable them one-click (published, green); `self_serve` = owners connect their own
+ *  (the system default, blue); `disabled` = grey. */
+export const CONNECTOR_MODE_TONES: Readonly<Record<ConnectorModeWire, ChipStyle>> = {
+  disabled: { tone: 'neutral', label: '已禁用 Disabled' },
+  self_serve: { tone: 'info', label: '自助 Self-serve' },
+  platform_preset: { tone: 'ok', label: '平台预置 Platform preset' },
+};
+
+type ServiceHealthStatus = (typeof ServiceHealthWireSchema.shape.status.options)[number];
+export const SERVICE_HEALTH_TONES: Readonly<Record<ServiceHealthStatus, ChipStyle>> = {
+  ok: { tone: 'ok', label: '健康 Healthy' },
+  degraded: { tone: 'warn', label: '降级 Degraded' },
+  down: { tone: 'danger', label: '不可用 Down' },
+  unknown: { tone: 'neutral', label: '未知 Unknown' },
+};
+
+export const PLATFORM_ROLE_TONES: Readonly<Record<PlatformRoleWire, ChipStyle>> = {
+  admin: { tone: 'accent', label: '管理员 Admin' },
+  user: { tone: 'neutral', label: '用户 User' },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -117,6 +274,20 @@ const MACHINES: Readonly<
   publishable: { values: PUBLISHABLE_STATUS_VALUES, tones: PUBLISHABLE_TONES },
   grant: { values: GRANT_STATUS_VALUES, tones: GRANT_TONES },
   role: { values: ROLE_VALUES, tones: ROLE_TONES },
+  operationMode: { values: OPERATION_MODE_VALUES, tones: OPERATION_MODE_TONES },
+  blastRadius: { values: BLAST_RADIUS_VALUES, tones: BLAST_RADIUS_TONES },
+  userStatus: { values: USER_STATUS_VALUES, tones: USER_STATUS_TONES },
+  workspaceStatus: { values: WorkspaceStatusWireSchema.options, tones: WORKSPACE_STATUS_TONES },
+  workspacePurpose: { values: WorkspacePurposeWireSchema.options, tones: WORKSPACE_PURPOSE_TONES },
+  gateInstance: { values: GATE_INSTANCE_STATUS_VALUES, tones: GATE_INSTANCE_TONES },
+  gateHealth: { values: GateHealthWireSchema.options, tones: GATE_HEALTH_TONES },
+  gateTrust: { values: GateTrustWireSchema.options, tones: GATE_TRUST_TONES },
+  connectorMode: { values: ConnectorModeWireSchema.options, tones: CONNECTOR_MODE_TONES },
+  serviceHealth: {
+    values: ServiceHealthWireSchema.shape.status.options,
+    tones: SERVICE_HEALTH_TONES,
+  },
+  platformRole: { values: PlatformRoleWireSchema.options, tones: PLATFORM_ROLE_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

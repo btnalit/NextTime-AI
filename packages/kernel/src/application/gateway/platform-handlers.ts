@@ -3,6 +3,9 @@ import type {
   PlatformAuditRecordWire,
   PlatformOverviewWire,
   PlatformWorkspaceWire,
+  PurgeUserOutcomeWire,
+  PurgeUsersResultWire,
+  PurgeWorkspaceResultWire,
   Role,
   UserMembershipWire,
   UserWire,
@@ -13,9 +16,16 @@ import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-co
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
 import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { hashPassword } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
+import {
+  PurgeWorkspaceRefusedError,
+  assessPurgeEligibility,
+  findUserReferences,
+  purgeWorkspace,
+} from '../platform/purge-workspace.js';
 import {
   DEFAULT_PLATFORM_SETTINGS,
   type PlatformSettings,
@@ -53,6 +63,9 @@ export type PlatformErrorCode =
   | 'already_member'
   | 'already_claimed'
   | 'last_admin'
+  /** S6 C10: "cannot disable your own account" — split out of `last_admin`, which is kept for
+   *  the real last-active-administrator case; the console renders each with its own text. */
+  | 'self_disable'
   | 'last_owner'
   | 'protected_admin'
   | 'weak_password'
@@ -73,7 +86,10 @@ export type PlatformErrorCode =
   | 'gate_id_taken'
   | 'gate_in_use'
   | 'gate_not_hosted'
-  | 'credential_mode_mismatch';
+  | 'credential_mode_mismatch'
+  // S6 A1 (`purge_workspace`; application/platform/purge-workspace.ts)
+  | 'workspace_active'
+  | 'retention_not_elapsed';
 
 /** Mapped by interfaces/http/capability-route.ts: `*_not_found` → 404, the rest → 409. */
 export class PlatformAdminError extends Error {
@@ -200,10 +216,31 @@ function decodeCursor(cursor: string): { createdAt: string; id: string } | null 
   return { createdAt: decoded.slice(0, separator), id: decoded.slice(separator + 1) };
 }
 
+/**
+ * S6 A6 (`list_users {hideResidual}`): a *residual* user is one awaiting activation
+ * (`has_password = false`) who holds at least one membership and none of whose non-disabled
+ * memberships is in an active `standard` workspace — every one sits in a disabled workspace or an
+ * `ephemeral` one (an acceptance run, a demo). Those are the "重复的、看不懂的用户" of A6: they
+ * leave with their workspace (`purge_workspace`, §4 edge (b)) and the page hides them by default
+ * until then. A user with no membership at all, or with a membership somewhere real, is never
+ * residual whatever their password state. Expressed as SQL so the keyset cursor stays exact.
+ */
+const RESIDUAL_USER_CONDITION = `
+  (u.has_password = false
+   and exists (select 1 from principals p where p.user_id = u.id and p.kind = 'human')
+   and not exists (
+     select 1 from principals p
+       join workspaces w on w.id = p.workspace_id
+      where p.user_id = u.id and p.kind = 'human' and p.disabled_at is null
+        and w.status = 'active' and w.purpose = 'standard'
+   ))`;
+
 export const listUsersHandler: CapabilityHandler = async (client, _workspaceId, params) => {
-  const { status, query, cursor, limit } = params as {
+  const { status, query, pendingOnly, hideResidual, cursor, limit } = params as {
     status?: 'active' | 'disabled';
     query?: string;
+    pendingOnly?: boolean;
+    hideResidual?: boolean;
     cursor?: string;
     limit?: number;
   };
@@ -220,6 +257,8 @@ export const listUsersHandler: CapabilityHandler = async (client, _workspaceId, 
       `(lower(u.login) like $${values.length} or lower(u.display_name) like $${values.length})`,
     );
   }
+  if (pendingOnly) conditions.push('u.has_password = false');
+  if (hideResidual) conditions.push(`not ${RESIDUAL_USER_CONDITION}`);
   if (cursor) {
     const decoded = decodeCursor(cursor);
     if (decoded) {
@@ -467,7 +506,9 @@ export const setUserStatusHandler: CapabilityHandler = async (
   const before = await loadUser(client, input.userId);
   if (input.status === 'disabled') {
     if (before.id === actingUser(context).id) {
-      throw new PlatformAdminError('last_admin', 'you cannot disable your own account');
+      // C10: its own code — the last-admin rule below is a different refusal with different
+      // advice (make someone else an administrator first vs. ask another administrator).
+      throw new PlatformAdminError('self_disable', 'you cannot disable your own account');
     }
     await assertAdminCanBeReduced(client, before);
   }
@@ -738,6 +779,9 @@ interface PlatformWorkspaceDbRow {
   ontology_enforcement: OntologyEnforcement;
   purpose: WorkspacePurpose;
   expires_at: Date | null;
+  /** S6 (migration core 0030): stamped by `set_workspace_status`; null while active or when the
+   *  row was disabled before 0030 (then purgeable at once — §12 决定 3). */
+  disabled_at: Date | null;
   created_at: Date;
   default_model: string | null;
   allowed_models: unknown;
@@ -746,7 +790,7 @@ interface PlatformWorkspaceDbRow {
 
 const WORKSPACE_SELECT = `
   select w.id, w.name, w.status, w.entry_model, w.ontology_enforcement, w.purpose, w.expires_at,
-         w.created_at,
+         w.disabled_at, w.created_at,
          ap.default_model, coalesce(ap.allowed_models, '[]'::jsonb) as allowed_models,
          (select count(*)::int from principals p
            where p.workspace_id = w.id and p.kind = 'human' and p.user_id is not null
@@ -814,6 +858,17 @@ function toWirePlatformWorkspace(
     ontologyEnforcement: row.ontology_enforcement,
     purpose: row.purpose,
     expiresAt: row.expires_at?.toISOString() ?? null,
+    disabledAt: row.disabled_at?.toISOString() ?? null,
+    // S6: the same rule `purge_workspace` applies (application/platform/purge-workspace.ts), so the
+    // console shows the purge entry exactly when the call would succeed.
+    purgeable:
+      defaultWorkspaceId !== row.id &&
+      assessPurgeEligibility({
+        status: row.status,
+        purpose: row.purpose,
+        expiresAt: row.expires_at,
+        disabledAt: row.disabled_at,
+      }).eligible,
     isDefault: defaultWorkspaceId === row.id,
     memberCount: row.member_count,
     owners: [...owners],
@@ -940,10 +995,34 @@ async function stopEntryContainers(principalIds: readonly string[]): Promise<voi
 }
 
 export const listWorkspacesHandler: CapabilityHandler = async (client, _workspaceId, params) => {
-  const input = params as { status?: 'active' | 'disabled' };
+  // S6 A1: no filter = every workspace, as before; `status` / `purpose` narrow; `includeExpired:
+  // false` drops ephemeral workspaces past their expiry (the console's default view passes
+  // `{status: 'active', includeExpired: false}` — an expired ephemeral workspace is purgeable
+  // residue, not something to configure).
+  const input = params as {
+    status?: 'active' | 'disabled';
+    purpose?: WorkspacePurpose;
+    includeExpired?: boolean;
+  };
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+  if (input.status) {
+    values.push(input.status);
+    conditions.push(`w.status = $${values.length}`);
+  }
+  if (input.purpose) {
+    values.push(input.purpose);
+    conditions.push(`w.purpose = $${values.length}`);
+  }
+  if (input.includeExpired === false) {
+    conditions.push(
+      `not (w.purpose = 'ephemeral' and w.expires_at is not null and w.expires_at < now())`,
+    );
+  }
+  const where = conditions.length > 0 ? ` where ${conditions.join(' and ')}` : '';
   const result = await client.query<PlatformWorkspaceDbRow>(
-    `${WORKSPACE_SELECT}${input.status ? ' where w.status = $1' : ''} order by w.created_at, w.id`,
-    input.status ? [input.status] : [],
+    `${WORKSPACE_SELECT}${where} order by w.created_at, w.id`,
+    values,
   );
   const owners = await loadOwners(
     client,
@@ -1079,10 +1158,17 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
     );
     principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });
   }
-  await client.query('update workspaces set status = $2 where id = $1', [
-    input.workspaceId,
-    input.status,
-  ]);
+  // S6 (migration core 0030): `disabled_at` starts the 7-day purge retention clock; re-enabling
+  // clears it (a later disable starts a fresh clock). `coalesce` keeps the original timestamp
+  // when an already-disabled workspace is disabled again — and keeps a pre-0030 `null` null,
+  // which `purge_workspace` reads as "retention elapsed" (§12 决定 3).
+  await client.query(
+    `update workspaces
+        set status = $2,
+            disabled_at = case when $2 = 'disabled' then coalesce(disabled_at, now()) else null end
+      where id = $1`,
+    [input.workspaceId, input.status],
+  );
   const result = await loadPlatformWorkspace(client, input.workspaceId);
   return {
     result,
@@ -1113,6 +1199,192 @@ export const setAllowedModelsHandler: CapabilityHandler = async (client, _worksp
     resourceType: 'workspace',
     resourceId: input.workspaceId,
   };
+};
+
+// -------------------------------------------------------------------------------------------
+// purge (S6 A1 / A6 — docs/console-completion-plan.md §4 "Workspace 生命周期", §5.2, §6 rows
+// `purge_workspace` / `purge_user`, §7 "清除类能力只在 platform scope、管理员、两步确认、平台审计保留").
+// -------------------------------------------------------------------------------------------
+
+/**
+ * `purge_workspace {workspaceId, confirm?}` — two phases, the `create_workspace` shape: this
+ * platform transaction loads the row and applies every precondition (a refusal is a clean 409
+ * with no audit row, like every other guard here); the cascade — or, without `confirm`, the
+ * count-only preview — then runs in `afterCommit` on the bootstrap (superuser) path, because the
+ * application role has no DELETE on `workspaces` / `audit_records` and cannot lift the
+ * append-only triggers (application/platform/purge-workspace.ts has the full rationale). The
+ * cascade re-checks the preconditions under a row lock, so a workspace re-enabled between the
+ * phases survives. Dispatch writes the `purge_workspace` audit row for the call (params carry
+ * `confirm`, so a preview is distinguishable); the cascade writes `platform.workspace_purged`
+ * with the counts once it has actually run.
+ */
+export const purgeWorkspaceHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  context,
+) => {
+  const input = params as { workspaceId: string; confirm?: boolean };
+  const acting = actingUser(context);
+  const row = await loadPlatformWorkspaceRow(client, input.workspaceId);
+  const { settings } = await readPlatformSettings(client);
+  if (settings.defaultWorkspaceId === row.id) {
+    throw new PlatformAdminError(
+      'default_workspace',
+      'the platform default workspace cannot be purged — pick another default first',
+    );
+  }
+  const eligibility = assessPurgeEligibility({
+    status: row.status,
+    purpose: row.purpose,
+    expiresAt: row.expires_at,
+    disabledAt: row.disabled_at,
+  });
+  if (!eligibility.eligible) {
+    throw new PlatformAdminError(eligibility.code, eligibility.message);
+  }
+  const confirm = input.confirm === true;
+  return {
+    // Phase-1 placeholder: dispatch replaces it with `afterCommit`'s value (the real preview or
+    // outcome); the audit row for this call carries the params and the workspace as resource.
+    result: { workspaceId: row.id, executed: false },
+    resourceType: 'workspace',
+    resourceId: row.id,
+    afterCommit: async (pool: PoolLike): Promise<PurgeWorkspaceResultWire> => {
+      try {
+        return await purgeWorkspace(pool, {
+          workspaceId: row.id,
+          confirm,
+          actorUserId: acting.id,
+        });
+      } catch (err) {
+        // The row-locked re-check refused (re-enabled, or purged concurrently): surface it as
+        // the same 404 / 409 the phase-1 guard would have — the phase-1 audit row records an
+        // attempt with no matching `platform.workspace_purged`, like `create_workspace`'s.
+        if (err instanceof PurgeWorkspaceRefusedError) {
+          throw new PlatformAdminError(err.code, err.message);
+        }
+        throw err;
+      }
+    },
+  };
+};
+
+interface PurgeUserDbRow {
+  id: string;
+  login: string;
+  platform_role: 'admin' | 'user';
+  has_password: boolean;
+  session_count: string;
+  active_membership_count: string;
+}
+
+/**
+ * `purge_user {userIds}` — the leftovers `purge_workspace` cannot reach: users awaiting
+ * activation whose memberships were all removed (disabled Principals) or who never had one.
+ * Runs entirely in this platform transaction (0021 grants the application role DELETE on
+ * `users` / `user_sessions` for `merge_user`). Per user, in order: exists → has no password →
+ * is not a platform administrator → has never logged in → holds no non-disabled membership
+ * (§5.2 "无活跃成员资格": a membership in a *disabled* workspace still counts — purge the
+ * workspace instead, which cascades the user) → nothing else references the row
+ * (`findUserReferences`, the same explicit catalog check the cascade uses). Disabled membership
+ * Principals are then detached (`user_id = null`; the rows stay for audit lineage — nothing in
+ * the kernel sweeps a user-less human Principal back into a user) and the row deleted, with one
+ * `platform.user_purged` audit row per purged user so `platform_audit_query {targetUserId}` finds
+ * it. A skipped user never fails the batch.
+ */
+export const purgeUserHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  context,
+) => {
+  const input = params as { userIds: string[] };
+  const acting = actingUser(context);
+  const outcomes: PurgeUserOutcomeWire[] = [];
+  let purgedCount = 0;
+  for (const userId of [...new Set(input.userIds)]) {
+    const found = await client.query<PurgeUserDbRow>(
+      `select u.id, u.login, u.platform_role, u.has_password,
+              (select count(*) from user_sessions s where s.user_id = u.id)::text as session_count,
+              (select count(*) from principals p
+                where p.user_id = u.id and p.kind = 'human' and p.disabled_at is null)::text
+                as active_membership_count
+         from users u where u.id = $1`,
+      [userId],
+    );
+    const user = found.rows[0];
+    if (!user) {
+      outcomes.push({ userId, login: null, status: 'skipped', reason: 'user_not_found' });
+      continue;
+    }
+    const skip = (reason: PurgeUserOutcomeWire['reason'], detail?: string): void => {
+      outcomes.push({
+        userId,
+        login: user.login,
+        status: 'skipped',
+        reason,
+        ...(detail !== undefined ? { detail } : {}),
+      });
+    };
+    if (user.has_password) {
+      skip('activated');
+      continue;
+    }
+    if (effectivePlatformRole(user.login, user.platform_role) === 'admin') {
+      skip('platform_admin');
+      continue;
+    }
+    if (Number(user.session_count) > 0) {
+      skip('has_sessions');
+      continue;
+    }
+    if (Number(user.active_membership_count) > 0) {
+      skip('active_membership');
+      continue;
+    }
+    const references = (await findUserReferences(client, userId)).filter(
+      // The disabled memberships are detached below, not a reason to keep the user.
+      (ref) => !(ref.table === 'principals' && ref.column === 'user_id'),
+    );
+    if (references.length > 0) {
+      skip(
+        'referenced',
+        references.map((ref) => `${ref.table}.${ref.column} (${ref.rows})`).join(', '),
+      );
+      continue;
+    }
+    const detached = await client.query<{ workspace_id: string; id: string }>(
+      `update principals set user_id = null
+        where user_id = $1 and kind = 'human'
+        returning workspace_id, id`,
+      [userId],
+    );
+    await client.query('delete from user_sessions where user_id = $1', [userId]);
+    await client.query('delete from users where id = $1', [userId]);
+    await writeAudit(client, {
+      workspaceId: null,
+      actorPrincipalId: null,
+      actorUserId: acting.id,
+      action: 'platform.user_purged',
+      resourceType: 'user',
+      resourceId: userId,
+      payload: {
+        channel: 'platform',
+        actorLogin: acting.login,
+        params: { userId },
+        login: user.login,
+        detachedPrincipals: detached.rows.map((row) => ({
+          workspaceId: row.workspace_id,
+          principalId: row.id,
+        })),
+      },
+    });
+    outcomes.push({ userId, login: user.login, status: 'purged' });
+    purgedCount += 1;
+  }
+  const result: PurgeUsersResultWire = { outcomes, purgedCount };
+  return { result };
 };
 
 // -------------------------------------------------------------------------------------------

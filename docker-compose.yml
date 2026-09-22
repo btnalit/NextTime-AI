@@ -48,7 +48,20 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   kernel:
-    build: { context: ., dockerfile: packages/kernel/Dockerfile }
+    # KERNEL_VERSION (docs/console-completion-plan.md §5.8 "版本号", B1): a *build* arg, baked into
+    # the image as ENV by packages/kernel/Dockerfile — deliberately not a runtime `environment:`
+    # entry any more (a compose `environment:` value overrides the image's own ENV at `up` time,
+    # which is how the overview kept showing whatever stale value the host shell / `.env` had).
+    # Taken from the shell that runs `docker compose build`; unset → "dev". Set it with the
+    # one-liner in docs/runbooks/release.md §3 (`export KERNEL_VERSION="$(git describe --tags
+    # --abbrev=0) ($(git rev-parse --short HEAD))"`) before building, so the overview renders
+    # `v0.13.2 (0fa5a1e)`-style.
+    build:
+      {
+        context: .,
+        dockerfile: packages/kernel/Dockerfile,
+        args: { KERNEL_VERSION: "${KERNEL_VERSION:-dev}" },
+      }
     env_file: ${NEXTTIME_DATA:?}/secrets/kernel.env # DB URL、Handle 密钥文件路径；无任何外部凭证（I9）
     # handle_key：Handle 签名私钥，只进这一个容器：/run/secrets/handle_key。internal_token
     # （fix/internal-plane-auth）：内核整个 internal plane（/internal/* + /internal/agent-host）的
@@ -84,8 +97,6 @@ services:
         # the console cannot disable or demote them. Optional, comma-separated. Kept in env on
         # purpose (a hijacked admin session must not be able to lock the operator out).
         NEXTTIME_PLATFORM_ADMINS: "${NEXTTIME_PLATFORM_ADMINS:-}",
-        # Shown on the platform overview page; set by the release/build pipeline when known.
-        KERNEL_VERSION: "${KERNEL_VERSION:-dev}",
         # S5.3 (docs/runbooks/add-domain-pack.md): where `bootstrap.js seed-domain-pack` reads a
         # domain pack from when `--dir` is not given — the host's `${NEXTTIME_DATA}/config/ontology`,
         # visible through the read-only /data/config mount below. Put the yaml there, run seed;
@@ -850,15 +861,49 @@ services:
   llm-proxy:
     build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }
     env_file: ${NEXTTIME_DATA:?}/secrets/llm-proxy.env # provider keys 只在这里
-    volumes: ["${NEXTTIME_DATA:?}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro", "${NEXTTIME_DATA:?}/config/handle.pub:/data/config/handle.pub:ro"]
-    environment: { KERNEL_URL: http://kernel:8080, HANDLE_PUBLIC_KEY_FILE: /data/config/handle.pub, LLM_PROXY_PORT: 8082 }
+    # S6-B 供应商管理（docs/console-completion-plan.md §5.4；docs/runbooks/operations.md「供应商管理」）:
+    #   - ${NEXTTIME_DATA}/llm-proxy → /data/state（rw）：控制台写入的 providers.json（provider-store.ts）
+    #     ——本服务唯一的持久状态；主机上须归 uid 10001（scripts/host-llm-proxy-init.sh）。
+    #   - ${NEXTTIME_DATA}/config → /data/config（rw 目录）：管理端点每次变更后原子重写
+    #     models.json（.tmp + rename，与 `make gen-models` 同一保证）。内核 `list_platform_models`
+    #     与 worker-supervisor 都读这个路径下的 models.json，所以只能写这里。目录须归 uid 10001
+    #     （同上脚本）；除 models.json 外本服务不写任何文件——它自己的两个输入
+    #     （llm-providers.yaml、handle.pub）与 egress-proxy 的 egress-sources.json、内核的 ontology/
+    #     在下面再以 :ro 单文件 / 单目录挂载覆盖在 rw 目录之上（Docker 按目标路径长度排序挂载，嵌套
+    #     生效），所以容器内它们仍是只读的：写面只增加了 models.json 这一件事。
+    #   - 启动时**不**写 models.json（不一致只记一行日志）：deploy/accept/docker-compose.fake.yml
+    #     把本服务的 yaml 换成假 provider，必须不能覆盖生产 models.json。
+    volumes:
+      [
+        "${NEXTTIME_DATA:?}/llm-proxy:/data/state",
+        "${NEXTTIME_DATA:?}/config:/data/config",
+        "${NEXTTIME_DATA:?}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro",
+        "${NEXTTIME_DATA:?}/config/handle.pub:/data/config/handle.pub:ro",
+        "${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json:ro",
+        "${NEXTTIME_DATA:?}/config/ontology:/data/config/ontology:ro",
+      ]
+    # LLM_PROVIDER_STORE_FILE / MODELS_JSON_OUT_FILE / BUDGET_SYNC_INTERVAL_MS（S6-B，
+    # packages/llm-proxy/src/config.ts）：前两个是上面两个挂载在容器内的路径；后一个是遗留 19 的
+    # 预算耗尽轮询间隔（GET /internal/llm-budget-exhausted），缺省 15s，只为可在 .env 覆盖而列出。
+    environment:
+      {
+        KERNEL_URL: http://kernel:8080,
+        HANDLE_PUBLIC_KEY_FILE: /data/config/handle.pub,
+        LLM_PROXY_PORT: 8082,
+        LLM_PROVIDER_STORE_FILE: /data/state/providers.json,
+        MODELS_JSON_OUT_FILE: /data/config/models.json,
+        BUDGET_SYNC_INTERVAL_MS: "${BUDGET_SYNC_INTERVAL_MS:-15000}",
+      }
     # internal_token（fix/internal-plane-auth）：revocation sync（GET /internal/handle-revocations）
-    # 与 usage 上报（POST /internal/llm-usage）都要带它——见 kernel 服务块自己的注释。
+    # 与 usage 上报（POST /internal/llm-usage）都要带它——见 kernel 服务块自己的注释。S6-B 再加两条：
+    # 预算耗尽轮询（GET /internal/llm-budget-exhausted）与供应商变更的平台审计行
+    # （POST /internal/llm-admin-audit），同一个 token。
     secrets: [internal_token]
     networks: [control, workers]
     restart: unless-stopped
     # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/llm-proxy/Dockerfile, uid
-    # 10001); config/handle.pub are ro bind mounts — only /tmp needs to stay writable.
+    # 10001); the two rw bind mounts above (state, config) are external bind mounts — unaffected
+    # by `read_only` — and only /tmp inside the image needs to stay writable.
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: [ALL]

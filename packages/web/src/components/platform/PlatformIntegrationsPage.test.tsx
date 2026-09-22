@@ -26,10 +26,16 @@ function scriptedHttp(
   };
 }
 
-function renderPage(http: CapabilityCaller) {
+function renderPage(
+  http: CapabilityCaller,
+  props: {
+    readonly selectedGateId?: string;
+    readonly onSelectGate?: (id: string | null) => void;
+  } = {},
+) {
   return render(
     <PermissionsProvider>
-      <PlatformIntegrationsPage http={http} />
+      <PlatformIntegrationsPage http={http} {...props} />
     </PermissionsProvider>,
   );
 }
@@ -120,6 +126,80 @@ function runtime(overrides: Partial<ExternalRuntimeWire> = {}): ExternalRuntimeW
 }
 
 describe('PlatformIntegrationsPage', () => {
+  // S6-C (§5.6): the page's one primary action opens the shared launcher for the platform plane;
+  // the 门实例 tab keeps 新建门宿主实例 as the quick path.
+  it('"接入一个系统 Connect a system" is the primary action and opens the launcher; finishing it opens the instance drawer', async () => {
+    const instance = gateInstance({
+      gateId: 'billing',
+      displayName: 'Billing',
+      transportKind: 'http',
+      connector: 'http',
+      status: 'enabled',
+    });
+    const http = scriptedHttp({
+      list_connectors: () => ({
+        items: [
+          connector({ name: 'http', kind: 'http', packaged: false, mode: 'platform_preset' }),
+        ],
+      }),
+      list_gate_instances: () => ({ items: [instance] }),
+    });
+    const onSelectGate = vi.fn();
+    renderPage(http, { onSelectGate });
+    const button = screen.getByTestId('connect-system-button');
+    expect(button.className).toContain('btn-primary');
+    fireEvent.click(button);
+    const drawer = await screen.findByTestId('connect-system-drawer');
+    const launcher = within(drawer).getByTestId('connect-system-launcher');
+    fireEvent.click(within(launcher).getByTestId('launcher-kind-http'));
+    fireEvent.click(within(launcher).getByTestId('launcher-next'));
+    // From the platform page the create form is offered; an existing instance may be picked too.
+    await within(launcher).findByTestId('create-gate-instance-form');
+    fireEvent.click(await within(launcher).findByTestId('launcher-gate-billing'));
+    fireEvent.click(within(launcher).getByTestId('launcher-next'));
+    expect(within(launcher).getByTestId('launcher-policy-workspace-link')).toBeTruthy();
+    fireEvent.click(within(launcher).getByTestId('launcher-next'));
+    fireEvent.click(within(launcher).getByTestId('launcher-next'));
+    await waitFor(() => expect(screen.queryByTestId('connect-system-drawer')).toBeNull());
+    expect(onSelectGate).toHaveBeenCalledWith('billing');
+    // Lands on the 门实例 tab with that instance's drawer open.
+    const detail = await screen.findByTestId('gate-instance-detail');
+    expect(detail).toBeTruthy();
+    expect(screen.getByTestId('new-gate-instance')).toBeTruthy();
+  });
+
+  it('a deep-linked selectedGateId opens the 门实例 tab with that drawer; closing it reports null', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [gateInstance()] }),
+    });
+    const onSelectGate = vi.fn();
+    renderPage(http, { selectedGateId: 'gate-1', onSelectGate });
+    const drawer = await screen.findByTestId('gate-instance-drawer');
+    expect(within(drawer).getByTestId('gate-instance-detail')).toBeTruthy();
+    expect(screen.getByTestId('gate-instances-table')).toBeTruthy();
+    fireEvent.keyDown(drawer, { key: 'Escape' });
+    await waitFor(() => expect(onSelectGate).toHaveBeenCalledWith(null));
+  });
+
+  // B7 in the platform detail: an `enabled · ok` instance offers 禁用, never 启用.
+  it('B7: an enabled instance’s detail shows 禁用 Disable and its health chip, not a 启用 button', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [gateInstance({ status: 'enabled', health: 'ok' })] }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    fireEvent.click(within(table).getByTestId('gate-instance-open-gate-1'));
+    const detail = await screen.findByTestId('gate-instance-detail');
+    expect(within(detail).getByTestId('gate-instance-status-toggle').textContent).toBe(
+      '禁用 Disable',
+    );
+    expect(within(detail).getByTestId('gate-instance-detail-health').textContent).toContain(
+      '健康 Healthy',
+    );
+    expect(within(detail).getByTestId('gate-instance-workspaces')).toBeTruthy();
+  });
+
   it('lists connectors and changing the mode posts set_connector_mode', async () => {
     const updated = connector({ mode: 'platform_preset' });
     const http = scriptedHttp({
@@ -249,6 +329,23 @@ describe('PlatformIntegrationsPage', () => {
     expect(result.textContent).toContain('4');
   });
 
+  // S6-A0 / C13 (docs/console-completion-plan.md §2b): a keyboard user reaches the detail through
+  // the row's own 详情 button, not by clicking the <tr>.
+  it('gate instance row exposes a Details button as the keyboard path to the detail panel (C13)', async () => {
+    const instance = gateInstance();
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [instance] }),
+    });
+    renderPage(http);
+
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    const open = within(table).getByTestId('gate-instance-open-gate-1');
+    expect(open.tagName).toBe('BUTTON');
+    fireEvent.click(open);
+    await screen.findByTestId('gate-instance-detail');
+  });
+
   it('hosted instance with no heartbeat shows the hosted badge and waiting-for-host status', async () => {
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [hostedGateInstance()] }),
@@ -262,14 +359,16 @@ describe('PlatformIntegrationsPage', () => {
     expect(within(row).getByTestId('gate-instance-status').textContent).toContain('等待宿主接管');
   });
 
-  it('creating a hosted instance posts create_gate_instance (http omits manifestSource when blank) and opens its detail', async () => {
+  // C12 (S6-A0): an http instance can no longer be submitted without a manifest source, so the
+  // "omits manifestSource when blank" case is the mcp transport (mirrors CreateGateInstanceForm.test).
+  it('creating a hosted instance posts create_gate_instance (mcp omits manifestSource) and opens its detail', async () => {
     const created = hostedGateInstance({ gateId: 'gate-new', displayName: 'gate-new' });
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [] }),
       create_gate_instance: (params) => {
         expect(params).toEqual({
           gateId: 'gate-new',
-          transportKind: 'http',
+          transportKind: 'mcp',
           target: 'https://target.internal',
           credentialMode: 'shared',
         });
@@ -285,6 +384,7 @@ describe('PlatformIntegrationsPage', () => {
     fireEvent.change(within(form).getByLabelText(/Gate id/), {
       target: { value: 'gate-new' },
     });
+    fireEvent.click(within(form).getByLabelText(/mcp/));
     fireEvent.change(within(form).getByLabelText(/目标 Target/), {
       target: { value: 'https://target.internal' },
     });

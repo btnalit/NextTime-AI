@@ -1,17 +1,21 @@
 import { McpTransport, importMcpTools, importOpenApi } from '@nexttime/gatekeeper-base';
 import type { McpToolsListResult, OpenApiDocumentLike } from '@nexttime/gatekeeper-base';
-import type { Operation, PrincipalKind } from '@nexttime/shared';
+import type { Operation, PrincipalKind, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import type { ConnectionRequestKind } from '../../governance/connections/index.js';
 import {
+  ConnectionRequestNotFoundError,
+  cancelConnectionRequest,
   completeConnection,
   connectGatekeeper,
+  getConnectionRequest,
   listConnectionRequests,
   requestConnection,
 } from '../../governance/connections/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
 
@@ -348,3 +352,65 @@ export const listConnectionRequestsHandler: CapabilityHandler = async (
   const rows = await listConnectionRequests(client, workspaceId, { status });
   return { result: { items: rows.map(toWireConnectionRequest) } };
 };
+
+/**
+ * `cancel_connection_request(connectionRequestId)` — S6-A C26 (docs/console-completion-plan.md
+ * §5.6, §6; runbook web-console.md 已知缺口 8). `minRole: 'member'` gates entry; *which* request a
+ * member may cancel is decided here: their own (`requested_by`), or any if they hold the
+ * workspace `owner` role (`ctx.principal.role`, resolved by dispatch.ts for every human call;
+ * one `principals` read as the fallback when no ctx was passed). `connection_requests`' RLS is
+ * workspace-wide (governance/0005's own comment), so another member's request *is* visible and
+ * a wrong caller gets a clean 403, never a misleading 404. The `requested`-only rule and the
+ * `connection.request_cancelled` audit row are `governance/connections`'s
+ * `cancelConnectionRequest` (409 `illegal_transition` otherwise — `completeConnection` on the
+ * same table already answers that way for a non-`requested` row).
+ */
+export const cancelConnectionRequestHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { connectionRequestId } = params as { connectionRequestId: string };
+  const existing = await getConnectionRequest(client, workspaceId, connectionRequestId);
+  if (!existing) throw new ConnectionRequestNotFoundError(workspaceId, connectionRequestId);
+
+  const caller = ctx?.principal
+    ? { id: ctx.principal.id, role: ctx.principal.role }
+    : await currentPrincipalWithRole(client, workspaceId);
+  if (existing.requestedBy !== caller.id && caller.role !== 'owner') {
+    throw new ForbiddenError(
+      `cancel_connection_request: ConnectionRequest ${connectionRequestId} was requested by another principal; only the requester or the workspace owner may cancel it`,
+    );
+  }
+
+  const cancelled = await cancelConnectionRequest(client, workspaceId, {
+    connectionRequestId,
+    cancelledBy: caller.id,
+  });
+  return {
+    result: toWireConnectionRequest(cancelled),
+    resourceType: 'connection_request',
+    resourceId: cancelled.id,
+  };
+};
+
+/** Fallback for a call with no `ctx` (a unit test driving the handler directly): the RLS session
+ *  principal plus its `role` — the same two reads handlers.ts's own `currentPrincipalRole` makes. */
+async function currentPrincipalWithRole(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<{ id: string; role: Role }> {
+  const id = await currentPrincipalId(client);
+  const result = await client.query<{ role: Role }>(
+    'select role from principals where workspace_id = $1 and id = $2',
+    [workspaceId, id],
+  );
+  const role = result.rows[0]?.role;
+  if (!role) {
+    throw new Error(
+      `cancel_connection_request: principal ${id} not found in workspace ${workspaceId}`,
+    );
+  }
+  return { id, role };
+}

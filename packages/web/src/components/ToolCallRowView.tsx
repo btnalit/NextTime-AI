@@ -11,7 +11,8 @@ export function ToolCallRowView({ row }: { readonly row: ToolCallRow }) {
   // an error result, which is the single most useful thing to know when reading a transcript.
   const failed = row.status === 'ended' && row.isError === true;
   const chipClass = running ? 'chip-info chip-live' : failed ? 'chip-danger' : 'chip-neutral';
-  const chipLabel = running ? 'running' : failed ? 'failed' : 'done';
+  // B4 bilingual; `data-tool-outcome` stays the machine-readable hook.
+  const chipLabel = running ? '运行中 running' : failed ? '失败 failed' : '完成 done';
   return (
     <details
       className={`tool-call-row tool-call-row-${row.status}${failed ? ' tool-call-row-failed' : ''}`}
@@ -29,18 +30,20 @@ export function ToolCallRowView({ row }: { readonly row: ToolCallRow }) {
       <div className="tool-call-detail">
         {row.args !== undefined ? (
           <>
-            <span className="section-title">Arguments</span>
+            <span className="section-title">参数 Arguments</span>
             <pre className="code-block">{prettyJson(row.args)}</pre>
           </>
         ) : null}
         {row.status === 'ended' && row.result !== undefined ? (
           <>
-            <span className="section-title">Result</span>
+            <span className="section-title">结果 Result</span>
             <pre className="code-block">{prettyJson(row.result)}</pre>
           </>
         ) : null}
         {row.args === undefined && (row.status !== 'ended' || row.result === undefined) ? (
-          <span className="text-3 text-small">No arguments or result recorded.</span>
+          <span className="text-3 text-small">
+            未记录参数或结果。 No arguments or result recorded.
+          </span>
         ) : null}
       </div>
     </details>

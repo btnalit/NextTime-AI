@@ -563,10 +563,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
-      it('set_user_status: cannot be disabled — neither by itself nor by another administrator', async () => {
+      it('set_user_status: cannot be disabled — neither by itself (self_disable, C10) nor by another administrator (last_admin)', async () => {
+        // S6 C10: disabling *yourself* is its own refusal, whatever the administrator count.
         await expectPlatformError(
           () => callAsAdmin('set_user_status', { userId: admin.id, status: 'disabled' }),
-          'last_admin',
+          'self_disable',
         );
         await expectPlatformError(
           () =>

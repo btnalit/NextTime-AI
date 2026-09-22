@@ -162,6 +162,27 @@ export class TurnAlreadyRunningError extends RpcError {
 
 const TURN_ALREADY_RUNNING_CODE = -32010;
 
+/** Client-side code for a request the kernel never answered (C5). JSON-RPC 2.0 reserves
+ *  -32000…-32099 for implementation-defined server errors; the kernel's own `WS_ERROR_CODES`
+ *  (interfaces/ws/rpc.ts) use none of that range, so this cannot collide with a real response —
+ *  and `lib/errors.ts` names it `timeout` for the banner. */
+export const RPC_TIMEOUT_CODE = -32000;
+
+/** `rpc()` gave up waiting for the response to one request (C5, console-completion-plan §2b):
+ *  the socket stayed open but no frame with that `id` came back within the deadline. A subclass
+ *  of `RpcError` so every existing `instanceof RpcError` / `err.code` consumer keeps working;
+ *  `method` names the call for the log line and the banner. */
+export class RpcTimeoutError extends RpcError {
+  readonly method: string;
+  readonly timeoutMs: number;
+  constructor(method: string, timeoutMs: number) {
+    super(RPC_TIMEOUT_CODE, `WsClient: ${method} timed out after ${timeoutMs}ms`);
+    this.name = 'RpcTimeoutError';
+    this.method = method;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 function toTypedError(error: { readonly code: number; readonly message: string }): RpcError {
   if (error.code === TURN_ALREADY_RUNNING_CODE) return new TurnAlreadyRunningError(error.message);
   return new RpcError(error.code, error.message);
@@ -222,7 +243,22 @@ function isNotificationFrame(
 interface PendingCall {
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
+  /** The C5 deadline — cleared on response, on close, and on timeout itself; `undefined` when the
+   *  call was made with `timeoutMs: 0`. */
+  readonly timer: ReturnType<typeof setTimeout> | undefined;
 }
+
+/** Per-call options for `call()` — today only the C5 deadline override. */
+export interface CallOptions {
+  /** Overrides `WsClientOptions.rpcTimeoutMs` for this one request (`0` disables the deadline —
+   *  reserved for calls that legitimately block on the kernel, none in this console today). */
+  readonly timeoutMs?: number;
+}
+
+/** Default for `WsClientOptions.rpcTimeoutMs` (C5): long enough for `send_chat_message` on a
+ *  loaded kernel (it returns as soon as the Turn is *started*, never when it ends), short enough
+ *  that an Approve / Reject / Stop whose response was lost does not hang the page until a reload. */
+const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 
 /** How many messages one `get_chat_history` page requests at a time while `subscribeChat` walks
  *  full history. Independent of the server's own `SUBSCRIBE_REPLAY_LIMIT` (interfaces/ws/
@@ -237,7 +273,14 @@ const DEFAULT_RECONNECT_DELAY_MS = 1000;
 interface ActiveSubscription {
   readonly chatId: string;
   readonly handlers: ChatSubscriptionHandlers;
-  readonly seenSequences: Set<number>;
+  /** Dedupe set for the *paging* window only (C6): while `get_chat_history` pages are still in
+   *  flight a live push can arrive out of order relative to them (sequence 5 pushed, then a page
+   *  delivering 4, 5, 6), so a plain "greater than the last seen" test would drop 4. Once
+   *  `onCaughtUp` fires the client is purely live and in order, the set is emptied, and
+   *  `deliverMessage` degrades to `sequence > lastSeenSequence` — so a chat left open all day no
+   *  longer grows this set by one entry per message. Re-armed for the re-page on reconnect. */
+  seenSequences: Set<number>;
+  caughtUp: boolean;
   lastSeenSequence: number;
 }
 
@@ -245,12 +288,16 @@ export interface WsClientOptions {
   readonly url: string;
   readonly createSocket?: WebSocketFactory;
   readonly reconnectDelayMs?: number;
+  /** C5: how long one `call()` waits for its JSON-RPC response before rejecting with
+   *  `RpcTimeoutError`. Default 30 s; `0` disables. Per call override: `call(_, _, {timeoutMs})`. */
+  readonly rpcTimeoutMs?: number;
 }
 
 export class WsClient {
   private readonly url: string;
   private readonly createSocket: WebSocketFactory;
   private readonly reconnectDelayMs: number;
+  private readonly rpcTimeoutMs: number;
 
   private socket: WebSocketLike | undefined;
   private nextId = 1;
@@ -279,6 +326,7 @@ export class WsClient {
     this.url = options.url;
     this.createSocket = options.createSocket ?? defaultWebSocketFactory;
     this.reconnectDelayMs = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
+    this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   }
 
   /** Opens the socket and resolves once it is open (or rejects on a connect-time error). Does not
@@ -326,25 +374,45 @@ export class WsClient {
   /** One JSON-RPC request/response round trip. `method` must be a registered chat capability name
    *  (or `"authenticate"`, handled specially by the server) — see packages/shared/src/
    *  capabilities.ts for the `chat` group this client is scoped to. Rejects with `RpcError` (or
-   *  its `TurnAlreadyRunningError` subclass) on a JSON-RPC error response. */
-  call<T = unknown>(method: string, params?: unknown): Promise<T> {
+   *  its `TurnAlreadyRunningError` subclass) on a JSON-RPC error response, and with
+   *  `RpcTimeoutError` when no response arrives within the deadline (C5). */
+  call<T = unknown>(method: string, params?: unknown, options: CallOptions = {}): Promise<T> {
     if (method !== 'authenticate' && !this.authenticated) {
       return Promise.reject(new Error('WsClient: call() before authenticate() succeeded'));
     }
-    return this.rpc<T>(method, params);
+    return this.rpc<T>(method, params, options);
   }
 
-  private rpc<T = unknown>(method: string, params?: unknown): Promise<T> {
+  private rpc<T = unknown>(
+    method: string,
+    params?: unknown,
+    options: CallOptions = {},
+  ): Promise<T> {
     const socket = this.socket;
     if (!socket || socket.readyState !== READY_STATE_OPEN) {
       return Promise.reject(new Error('WsClient: not connected'));
     }
     const id = this.nextId++;
     const request = { jsonrpc: '2.0' as const, id, method, params };
+    const timeoutMs = options.timeoutMs ?? this.rpcTimeoutMs;
     return new Promise<T>((resolve, reject) => {
+      // C5: a request the kernel accepted but never answered (a handler that threw past the
+      // JSON-RPC layer, a dropped frame) used to leave this promise pending forever — Approve /
+      // Reject / Send / Stop would hang until a page reload. The deadline rejects it instead, and
+      // the late frame (if it ever comes) is ignored by `handleFrame` since the id is gone.
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              if (!this.pending.delete(id)) return;
+              const error = new RpcTimeoutError(method, timeoutMs);
+              console.warn(error.message, { id });
+              reject(error);
+            }, timeoutMs)
+          : undefined;
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
         reject,
+        timer,
       });
       socket.send(JSON.stringify(request));
     });
@@ -371,13 +439,14 @@ export class WsClient {
       chatId,
       handlers,
       seenSequences: new Set<number>(),
+      caughtUp: false,
       lastSeenSequence: startAfter,
     };
     this.activeSubscription = subscription;
 
     await this.call('subscribe_chat', { chatId, startAfter: String(startAfter) });
     await this.pageHistory(subscription);
-    subscription.handlers.onCaughtUp?.();
+    this.markCaughtUp(subscription);
 
     return () => {
       if (this.activeSubscription === subscription) this.activeSubscription = undefined;
@@ -398,9 +467,21 @@ export class WsClient {
     }
   }
 
+  /** The paging window closed (C6): drop the dedupe set — from here every message is live and
+   *  in order, so `sequence > lastSeenSequence` is the whole dedupe — and tell the caller. */
+  private markCaughtUp(subscription: ActiveSubscription): void {
+    subscription.caughtUp = true;
+    subscription.seenSequences = new Set<number>();
+    subscription.handlers.onCaughtUp?.();
+  }
+
   private deliverMessage(subscription: ActiveSubscription, message: ChatMessage): void {
-    if (subscription.seenSequences.has(message.sequence)) return;
-    subscription.seenSequences.add(message.sequence);
+    if (subscription.caughtUp) {
+      if (message.sequence <= subscription.lastSeenSequence) return;
+    } else {
+      if (subscription.seenSequences.has(message.sequence)) return;
+      subscription.seenSequences.add(message.sequence);
+    }
     if (message.sequence > subscription.lastSeenSequence) {
       subscription.lastSeenSequence = message.sequence;
     }
@@ -475,6 +556,7 @@ export class WsClient {
     const pending = this.pending.get(id);
     if (!pending) return;
     this.pending.delete(id);
+    clearTimeout(pending.timer);
     if (parsed.error) {
       pending.reject(toTypedError(parsed.error));
     } else {
@@ -532,6 +614,7 @@ export class WsClient {
 
   private handleClose(event: { code?: number; reason?: string }): void {
     for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
       pending.reject(new Error('WsClient: connection closed'));
     }
     this.pending.clear();
@@ -567,9 +650,11 @@ export class WsClient {
    * Reconnects and, if a chat was subscribed, re-subscribes with `startAfter` set to the last
    * `sequence` this client already delivered — never re-delivering an already-seen message, and
    * never missing one committed while the socket was down (docs/development-tasks.md S1.8
-   * deliverable 1: "reconnect with resubscribe from the last seen sequence"). Reuses the same
-   * `seenSequences` set across the reconnect so a message replayed again by the server's own
-   * catch-up (interfaces/ws/server.ts `handleSubscribeChat`) still dedupes correctly.
+   * deliverable 1: "reconnect with resubscribe from the last seen sequence"). Re-arms the paging
+   * dedupe window (C6: `caughtUp = false`, a fresh `seenSequences`) for the re-page, so a message
+   * replayed by the server's own catch-up (interfaces/ws/server.ts `handleSubscribeChat`) and by
+   * the page walk still dedupes correctly; `lastSeenSequence` already fences everything delivered
+   * before the drop.
    */
   private async reconnect(): Promise<void> {
     const subscription = this.activeSubscription;
@@ -578,12 +663,14 @@ export class WsClient {
       await this.connect();
       if (credential) await this.authenticate(credential);
       if (subscription) {
+        subscription.caughtUp = false;
+        subscription.seenSequences = new Set<number>();
         await this.call('subscribe_chat', {
           chatId: subscription.chatId,
           startAfter: String(subscription.lastSeenSequence),
         });
         await this.pageHistory(subscription);
-        subscription.handlers.onCaughtUp?.();
+        this.markCaughtUp(subscription);
       }
     } catch {
       this.scheduleReconnect();

@@ -215,6 +215,9 @@
         "actionRequestId": {
           "minLength": 1,
           "type": "string"
+        },
+        "reason": {
+          "type": "string"
         }
       },
       "required": [
@@ -248,6 +251,24 @@
             "high"
           ],
           "type": "string"
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decidedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "executedAt": {
           "type": [
@@ -354,6 +375,66 @@
         "executedAt",
         "failedAt",
         "requesterCanApprove"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "write",
+    "name": "archive_chat",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "chatId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "ownerPrincipalId": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ownerPrincipalId",
+        "title",
+        "visibility",
+        "createdAt",
+        "archivedAt"
       ],
       "type": "object"
     }
@@ -549,9 +630,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "minLength": 1,
+          "type": "string"
+        },
         "filter": {
           "additionalProperties": {},
           "type": "object"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -616,6 +705,92 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "member",
+    "mode": "write",
+    "name": "cancel_connection_request",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connectionRequestId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "connectionRequestId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "completedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gatekeeperId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "http",
+            "mcp",
+            "cli",
+            "ssh"
+          ],
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "requestedBy": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "requested",
+            "completed",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "kind",
+        "target",
+        "requestedBy",
+        "gatekeeperId",
+        "completedBy",
+        "requestedAt",
+        "completedAt"
       ],
       "type": "object"
     }
@@ -2102,6 +2277,12 @@
         "createdAt": {
           "type": "string"
         },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "entryModel": {
           "type": [
             "string",
@@ -2161,6 +2342,9 @@
           },
           "type": "array"
         },
+        "purgeable": {
+          "type": "boolean"
+        },
         "purpose": {
           "enum": [
             "standard",
@@ -2185,6 +2369,8 @@
         "ontologyEnforcement",
         "purpose",
         "expiresAt",
+        "disabledAt",
+        "purgeable",
         "isDefault",
         "memberCount",
         "owners",
@@ -3420,6 +3606,10 @@
         "factId": {
           "minLength": 1,
           "type": "string"
+        },
+        "nodeId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "type": "object"
@@ -3910,6 +4100,24 @@
             "high"
           ],
           "type": "string"
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decidedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "executedAt": {
           "type": [
@@ -6083,6 +6291,43 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "issue_llm_admin_token",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "type": "string"
+        },
+        "jti": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "url",
+        "jti",
+        "expiresAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "connection",
     "minRole": "owner",
     "mode": "write",
@@ -6190,6 +6435,10 @@
           "exclusiveMinimum": 0,
           "type": "integer"
         },
+        "parentWorkerRunId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "status": {
           "anyOf": [
             {
@@ -6232,6 +6481,10 @@
               "type": "array"
             }
           ]
+        },
+        "taskId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "type": "object"
@@ -6266,6 +6519,24 @@
                   "high"
                 ],
                 "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decidedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decisionReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "executedAt": {
                 "type": [
@@ -6561,7 +6832,11 @@
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "includeArchived": {
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "result": {
@@ -6572,6 +6847,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "archivedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "createdAt": {
                 "type": "string"
               },
@@ -6596,7 +6877,8 @@
               "ownerPrincipalId",
               "title",
               "visibility",
-              "createdAt"
+              "createdAt",
+              "archivedAt"
             ],
             "type": "object"
           },
@@ -7621,6 +7903,24 @@
                   "high"
                 ],
                 "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decidedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "decisionReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "executedAt": {
                 "type": [
@@ -8734,10 +9034,16 @@
           "minLength": 1,
           "type": "string"
         },
+        "hideResidual": {
+          "type": "boolean"
+        },
         "limit": {
           "maximum": 200,
           "minimum": 1,
           "type": "integer"
+        },
+        "pendingOnly": {
+          "type": "boolean"
         },
         "query": {
           "maxLength": 100,
@@ -9012,6 +9318,16 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "includeExpired": {
+          "type": "boolean"
+        },
+        "purpose": {
+          "enum": [
+            "standard",
+            "ephemeral"
+          ],
+          "type": "string"
+        },
         "status": {
           "enum": [
             "active",
@@ -9038,6 +9354,12 @@
               },
               "createdAt": {
                 "type": "string"
+              },
+              "disabledAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "entryModel": {
                 "type": [
@@ -9098,6 +9420,9 @@
                 },
                 "type": "array"
               },
+              "purgeable": {
+                "type": "boolean"
+              },
               "purpose": {
                 "enum": [
                   "standard",
@@ -9122,6 +9447,8 @@
               "ontologyEnforcement",
               "purpose",
               "expiresAt",
+              "disabledAt",
+              "purgeable",
               "isDefault",
               "memberCount",
               "owners",
@@ -9317,6 +9644,12 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "createdAt": {
           "type": "string"
         },
@@ -9341,7 +9674,8 @@
         "ownerPrincipalId",
         "title",
         "visibility",
-        "createdAt"
+        "createdAt",
+        "archivedAt"
       ],
       "type": "object"
     }
@@ -10731,6 +11065,243 @@
     }
   },
   {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "purge_user",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "userIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "userIds"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "outcomes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "login": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "enum": [
+                  "user_not_found",
+                  "activated",
+                  "platform_admin",
+                  "has_sessions",
+                  "active_membership",
+                  "referenced"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "purged",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "userId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "userId",
+              "login",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "purgedCount": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "outcomes",
+        "purgedCount"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "purge_workspace",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeHandles": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "counts": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "executed": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "principalIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "purgedUsers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "login": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "login"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "purpose": {
+          "enum": [
+            "standard",
+            "ephemeral"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "disabled_retention_elapsed",
+            "ephemeral_expired"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ],
+          "type": "string"
+        },
+        "taskIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "totalRows": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warnings": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "activeHandles": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "service_handle_in_use",
+                "type": "string"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "principalId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "principalId",
+              "name",
+              "activeHandles"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "name",
+        "purpose",
+        "status",
+        "reason",
+        "executed",
+        "counts",
+        "totalRows",
+        "activeHandles",
+        "warnings",
+        "purgedUsers",
+        "principalIds",
+        "taskIds"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "handle",
     "group": "epistemic",
     "minRole": "member",
@@ -11305,6 +11876,24 @@
           ],
           "type": "string"
         },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decidedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "executedAt": {
           "type": [
             "string",
@@ -11456,6 +12045,73 @@
         "userId",
         "workspaceId",
         "removed"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "write",
+    "name": "rename_chat",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chatId",
+        "title"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "ownerPrincipalId": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ownerPrincipalId",
+        "title",
+        "visibility",
+        "createdAt",
+        "archivedAt"
       ],
       "type": "object"
     }
@@ -12042,6 +12698,24 @@
                 "high"
               ],
               "type": "string"
+            },
+            "decidedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decidedBy": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decisionReason": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "executedAt": {
               "type": [
@@ -13104,6 +13778,12 @@
         "createdAt": {
           "type": "string"
         },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "entryModel": {
           "type": [
             "string",
@@ -13163,6 +13843,9 @@
           },
           "type": "array"
         },
+        "purgeable": {
+          "type": "boolean"
+        },
         "purpose": {
           "enum": [
             "standard",
@@ -13187,6 +13870,8 @@
         "ontologyEnforcement",
         "purpose",
         "expiresAt",
+        "disabledAt",
+        "purgeable",
         "isDefault",
         "memberCount",
         "owners",
@@ -14028,6 +14713,12 @@
         "createdAt": {
           "type": "string"
         },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "entryModel": {
           "type": [
             "string",
@@ -14087,6 +14778,9 @@
           },
           "type": "array"
         },
+        "purgeable": {
+          "type": "boolean"
+        },
         "purpose": {
           "enum": [
             "standard",
@@ -14111,6 +14805,8 @@
         "ontologyEnforcement",
         "purpose",
         "expiresAt",
+        "disabledAt",
+        "purgeable",
         "isDefault",
         "memberCount",
         "owners",
@@ -14911,6 +15607,66 @@
   },
   {
     "channel": "human",
+    "group": "chat",
+    "minRole": "member",
+    "mode": "write",
+    "name": "unarchive_chat",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "chatId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "chatId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "ownerPrincipalId": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ownerPrincipalId",
+        "title",
+        "visibility",
+        "createdAt",
+        "archivedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "platform",
     "mode": "write",
     "name": "update_gate_instance",
@@ -15534,6 +16290,12 @@
         "createdAt": {
           "type": "string"
         },
+        "disabledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "entryModel": {
           "type": [
             "string",
@@ -15593,6 +16355,9 @@
           },
           "type": "array"
         },
+        "purgeable": {
+          "type": "boolean"
+        },
         "purpose": {
           "enum": [
             "standard",
@@ -15617,6 +16382,8 @@
         "ontologyEnforcement",
         "purpose",
         "expiresAt",
+        "disabledAt",
+        "purgeable",
         "isDefault",
         "memberCount",
         "owners",
