@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.15.0](https://github.com/btnalit/NextTime-AI/compare/v0.14.0...v0.15.0) (2026-09-22)
+
+
+### Features
+
+* **llm-proxy:** console-managed provider keys; models.json in its own directory (S7-A) ([#224](https://github.com/btnalit/NextTime-AI/issues/224)) ([8f841b3](https://github.com/btnalit/NextTime-AI/commit/8f841b3ab35d186ff065a695f65c79537fb85af4))
+
+
+### Bug Fixes
+
+* **agent-host,platform-extension,kernel:** runtime robustness — leftovers 46 / 55 / 56 / 47 (S7-B) ([#222](https://github.com/btnalit/NextTime-AI/issues/222)) ([658dc02](https://github.com/btnalit/NextTime-AI/commit/658dc02737497c98dd63e9317ac66d589e02bcbe))
+* CLI purge always audits, hermetic reaper test, chat undo refresh — leftovers 54 / 51 / 57 (S7-C) ([#221](https://github.com/btnalit/NextTime-AI/issues/221)) ([34e5bd4](https://github.com/btnalit/NextTime-AI/commit/34e5bd40d8cafa0a030ad9fc5c8b983d2ca6135e))
+
 ## [0.14.0](https://github.com/btnalit/NextTime-AI/compare/v0.13.2...v0.14.0) (2026-09-22)
 
 
