@@ -20,6 +20,25 @@
 import Docker from 'dockerode';
 import type { DockerConnection } from './config.js';
 
+/** S7-E (P-C §6.5): the platform labels `deploy/worker-runtime/Dockerfile` stamps on every
+ *  runtime image build — `listImages` filters to images carrying `IMAGE_PI_VERSION_LABEL` (the
+ *  platform's own signal for "this is a `nexttime-ai-worker-runtime` build", as opposed to any
+ *  other image the host happens to have pulled/built). */
+export const IMAGE_PI_VERSION_LABEL = 'ai.nexttime.pi-version';
+export const IMAGE_PLATFORM_EXTENSION_VERSION_LABEL = 'ai.nexttime.platform-extension-version';
+export const IMAGE_BUILT_FROM_LABEL = 'ai.nexttime.built-from';
+
+/** One runtime image (`GET /images`) — never a registry digest (this platform never pushes
+ *  `nexttime-ai-worker-runtime`; see `id`'s own doc comment). */
+export interface RuntimeImageInfo {
+  /** Docker's own image id (`sha256:...`) — the actual content identity; see `ContainerState.
+   *  imageId`'s doc comment for why this, not a `RepoDigests` entry, is "the digest" here. */
+  readonly id: string;
+  readonly tags: readonly string[];
+  readonly created: string;
+  readonly labels: Readonly<Record<string, string>>;
+}
+
 export interface ContainerSpec {
   readonly name: string;
   readonly image: string;
@@ -61,6 +80,13 @@ export interface ContainerState {
   /** Docker's `State.ExitCode` — only meaningful (and only surfaced) once the container is no
    *  longer running; `undefined` while `running` is true (task-service.ts's status/reap logic). */
   readonly exitCode: number | undefined;
+  /** S7-E (P-C §6.5 决定 E2): Docker's own top-level `Image` field — the resolved image id
+   *  (`sha256:...`) this container was actually created from, immutable for the container's whole
+   *  life even if the tag it was created with is later reassigned to different content. This, not
+   *  `IMAGE_LABEL`'s tag/digest *string*, is what `runtime_inventory`'s "待重建" derivation compares
+   *  against the active image's own resolved id (`inspectImage`) — a same-tag rebuild changes this
+   *  even though the label string does not. */
+  readonly imageId: string;
 }
 
 export interface DockerClient {
@@ -99,6 +125,14 @@ export interface DockerClient {
     readonly event: readonly string[];
     readonly label: readonly string[];
   }): Promise<NodeJS.ReadableStream>;
+  /** S7-E (P-C §6.5 "GET /images（只列带平台 label 的镜像）"): every image carrying `labelKey`
+   *  (bare key, matches any value — same `docker.listContainers`-style filter shape
+   *  `getContainerEvents`'s own `label` option already uses). */
+  listImages(labelKey: string): Promise<RuntimeImageInfo[]>;
+  /** Resolves one image by tag/digest/id — `undefined` when the host has no such image (never
+   *  filtered by label; used to resolve the *active* image even when it happens to carry none of
+   *  the platform labels). */
+  inspectImage(nameOrTag: string): Promise<RuntimeImageInfo | undefined>;
 }
 
 const COMPOSE_NETWORK_LABEL = 'com.docker.compose.network';
@@ -118,6 +152,21 @@ function toContainerState(inspect: Docker.ContainerInspectInfo): ContainerState 
     ip: firstNetwork?.IPAddress || undefined,
     labels: inspect.Config?.Labels ?? {},
     exitCode: inspect.State?.Running ? undefined : inspect.State?.ExitCode,
+    // `inspect.Image` (top-level, NOT `inspect.Config.Image`) is the resolved image id Docker
+    // actually created this container from — see `ContainerState.imageId`'s own doc comment.
+    imageId: inspect.Image,
+  };
+}
+
+/** `RepoDigests` entries look like `"repo@sha256:..."` — kept only for a possible future need;
+ *  `toRuntimeImageInfo` below deliberately does not use it (see `RuntimeImageInfo.id`'s doc
+ *  comment: a locally-built, never-pushed image has no meaningful registry digest). */
+function toRuntimeImageInfo(image: Docker.ImageInfo): RuntimeImageInfo {
+  return {
+    id: image.Id,
+    tags: (image.RepoTags ?? []).filter((tag) => tag !== '<none>:<none>'),
+    created: new Date(image.Created * 1000).toISOString(),
+    labels: image.Labels ?? {},
   };
 }
 
@@ -249,6 +298,28 @@ export function createDockerClient(options: CreateDockerClientOptions): DockerCl
           label: [...options.label],
         },
       });
+    },
+
+    async listImages(labelKey: string): Promise<RuntimeImageInfo[]> {
+      const images = await docker.listImages({ filters: { label: [labelKey] } });
+      return images.map(toRuntimeImageInfo);
+    },
+
+    async inspectImage(nameOrTag: string): Promise<RuntimeImageInfo | undefined> {
+      try {
+        const inspect = await docker.getImage(nameOrTag).inspect();
+        return {
+          id: inspect.Id,
+          // `ImageInspectInfo.Created` is already an ISO string (unlike `ImageInfo.Created`'s own
+          // epoch-seconds number from `listImages` — @types/dockerode's two distinct shapes).
+          tags: inspect.RepoTags.filter((tag) => tag !== '<none>:<none>'),
+          created: inspect.Created,
+          labels: inspect.Config.Labels,
+        };
+      } catch (err) {
+        if (isNotFound(err)) return undefined;
+        throw err;
+      }
     },
   };
 }

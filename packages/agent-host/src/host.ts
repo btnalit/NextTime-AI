@@ -400,6 +400,7 @@ export function createHost(options: HostOptions): Host {
     model: string | undefined,
     egressDeny: readonly string[] | undefined,
     skillsInline: SpawnInput['skillsInline'],
+    image: string | undefined,
   ): Promise<AttachmentRecord> {
     const spawnResult = await supervisorClient.spawn({
       workspaceId,
@@ -411,6 +412,7 @@ export function createHost(options: HostOptions): Host {
       model,
       egressDeny,
       skillsInline,
+      image,
     });
 
     // Best-effort — spawn() itself already refreshed worker-supervisor's idle clock for this
@@ -487,6 +489,7 @@ export function createHost(options: HostOptions): Host {
           cmd.model,
           cmd.egressDeny,
           cmd.skillsInline,
+          cmd.image,
         );
       } catch (err) {
         activeTurns.delete(cmd.principalId); // release the reservation — this turn never started

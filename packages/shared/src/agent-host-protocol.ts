@@ -220,6 +220,14 @@ export const KernelStartTurnCommandSchema = z
      *  worker-supervisor writes to the entry container's `<agentDir>/skills/<name>/` before
      *  (re)creating it. Omitted/empty means no Skill is mounted — never a widening. */
     skillsInline: z.array(AgentHostSkillInlineSchema).optional(),
+    /** S7-E (P-C §6.5 决定 E1): the platform's active runtime image (`PlatformSettings.
+     *  activeRuntimeImage`), resolved by the kernel fresh on every `startTurn` — forwarded by
+     *  agent-host as `/resident/spawn`'s own `image`, validated by worker-supervisor against the
+     *  same `WORKER_IMAGE_ALLOWLIST` `/task/spawn` already enforces (403 `image_not_allowed`).
+     *  Omitted = worker-supervisor's own `WORKER_IMAGE` env default applies, unchanged from before
+     *  this field existed. A changed value forces `resident-service.ts`'s `spawn()` to recreate the
+     *  entry container (spec-drift rebuild, same mechanism `skillsInline`/Handle rotation use). */
+    image: z.string().optional(),
   })
   .strict();
 

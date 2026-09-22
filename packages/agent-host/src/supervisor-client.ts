@@ -7,8 +7,9 @@
  * never logs either.
  *
  *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
- *                                   systemPrompt?, model?, egressDeny?, skillsInline?}
+ *                                   systemPrompt?, model?, egressDeny?, skillsInline?, image?}
  *                                   -> 200 {containerId, ip, status, created, restarts}
+ *                                      | 403 (image not allowlisted)
  *   POST /resident/stop           {principalId} -> 204
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404
  *   POST /resident/:principalId/touch -> 204 | 404
@@ -82,6 +83,14 @@ export interface SpawnInput {
    *  worker-supervisor writes each entry to `<agentDir>/skills/<name>/` before (re)creating the
    *  container. `undefined`/empty mounts no Skill. */
   readonly skillsInline?: readonly SkillInlineMount[];
+  /** S7-E (P-C §6.5 决定 E1): the platform's active runtime image (`PlatformSettings.
+   *  activeRuntimeImage`), forwarded verbatim from the `startTurn` command's own `image` field —
+   *  worker-supervisor validates it against the same allowlist `/task/spawn` already enforces
+   *  (403 `image_not_allowed`, surfaced here as `SupervisorError('http_error', ..., {status:403})`
+   *  since this client has no dedicated error kind for it, unlike the kernel's own
+   *  `TaskSupervisorClient`). `undefined` leaves worker-supervisor's own `WORKER_IMAGE` env
+   *  default in effect, unchanged from before this field existed. */
+  readonly image?: string;
 }
 
 /** One Skill mounted by content — mirrors `worker-supervisor`'s own `config.ts`

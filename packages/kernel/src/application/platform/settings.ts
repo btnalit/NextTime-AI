@@ -21,6 +21,11 @@ export interface PlatformSettings {
   readonly defaultMonthlyTokenBudget: number | null;
   readonly defaultPlatformRole: 'admin' | 'user';
   readonly passwordMinLength: number;
+  /** S7-E (P-C §6.5 决定 E1): the active runtime image `task/spawn` and `startTurn` request —
+   *  `null` = worker-supervisor's own `WORKER_IMAGE` env default applies (`application/platform/
+   *  runtime.ts`'s `resolveActiveRuntimeImage`). Set only via `set_active_runtime_image` /
+   *  `rollback_runtime_image`, never through `update_platform_settings`'s generic patch. */
+  readonly activeRuntimeImage: string | null;
 }
 
 export const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
@@ -33,6 +38,7 @@ export const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
   defaultMonthlyTokenBudget: null,
   defaultPlatformRole: 'user',
   passwordMinLength: 8,
+  activeRuntimeImage: null,
 };
 
 export interface PlatformSettingsRow {
@@ -66,6 +72,7 @@ function project(raw: Record<string, unknown>): PlatformSettings {
     defaultMonthlyTokenBudget: pick('defaultMonthlyTokenBudget'),
     defaultPlatformRole: pick('defaultPlatformRole'),
     passwordMinLength: pick('passwordMinLength'),
+    activeRuntimeImage: pick('activeRuntimeImage'),
   };
 }
 

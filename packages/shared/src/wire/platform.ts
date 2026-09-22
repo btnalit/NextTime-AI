@@ -101,6 +101,12 @@ export const PlatformSettingsWireSchema = z
     defaultMonthlyTokenBudget: z.number().int().nonnegative().nullable(),
     defaultPlatformRole: PlatformRoleWireSchema,
     passwordMinLength: z.number().int().min(8).max(128),
+    /** S7-E (P-C §6.5 决定 E1): the runtime image `task/spawn` and the entry `startTurn` command
+     *  request — a tag or digest reference the supervisor's image allowlist must also cover.
+     *  `null` = worker-supervisor's own `WORKER_IMAGE` env default applies (unchanged pre-S7-E
+     *  behavior). Set only via `set_active_runtime_image` (validated against `list_runtime_images`)
+     *  or `rollback_runtime_image` — never through the generic `update_platform_settings` patch. */
+    activeRuntimeImage: z.string().nullable(),
     envAdmins: z.array(z.string()),
     version: z.number().int().nonnegative(),
     updatedAt: z.string().nullable(),
@@ -134,6 +140,7 @@ export const ServiceHealthWireSchema = z
     detail: z.string().optional(),
   })
   .strict();
+export type ServiceHealthWire = z.infer<typeof ServiceHealthWireSchema>;
 
 /** The first-run checklist (design §4): each item is the state of one page, read live, never a
  *  wizard step. `key` is stable for the web to map onto a page link. */
@@ -390,6 +397,7 @@ export const GateTrustWireSchema = z.enum(['byo', 'vetted']);
 export type GateTrustWire = z.infer<typeof GateTrustWireSchema>;
 
 export const GateHealthWireSchema = z.enum(['ok', 'unreachable', 'unauthorized', 'unknown']);
+export type GateHealthWire = z.infer<typeof GateHealthWireSchema>;
 
 /** One announced Operation, as the gate described it (a subset of `OperationSchema`). */
 export const GateOperationSummaryWireSchema = z
@@ -532,3 +540,170 @@ export const DeleteGateInstanceResultWireSchema = z
   .object({ gateId: z.string(), deleted: z.literal(true) })
   .strict();
 export type DeleteGateInstanceResultWire = z.infer<typeof DeleteGateInstanceResultWireSchema>;
+
+// -------------------------------------------------------------------------------------------
+// S7-E (docs/platform-admin-design.md §6.5 / §6.7, development-tasks.md §5d S7-E 决定 E1–E4):
+// the runtime layer (active image, image inventory, resident-container rebuild derivation, pi
+// drift) and platform status (service health, 30-day llm_usage rollup, backup posture). Mirrors
+// `application/platform/runtime.ts` (kernel) and `worker-supervisor`'s own `GET /images` /
+// `GET /residents` shapes one level up (camelCase, no snake_case, no raw Docker fields beyond
+// what a human/the console needs).
+// -------------------------------------------------------------------------------------------
+
+/** One runtime image worker-supervisor knows about (`GET /images` — only images carrying every
+ *  `ai.nexttime.*` platform label). `id` is Docker's own image id (`sha256:...`) — for a locally
+ *  built, never-pushed image (this platform never pushes `nexttime-ai-worker-runtime` to a
+ *  registry) there is no meaningful registry digest, so `id` **is** what "镜像 digest" means
+ *  throughout this API: the same tag rebuilt with different content always gets a different `id`,
+ *  which is exactly the signal `runtime_inventory`'s "待重建" derivation (E2) needs and a
+ *  `RepoDigests`-based field (empty for an unpushed image) could not give. */
+export const RuntimeImageWireSchema = z
+  .object({
+    id: z.string(),
+    tags: z.array(z.string()),
+    createdAt: z.string(),
+    /** `ai.nexttime.pi-version` label, when present. */
+    piVersion: z.string().nullable(),
+    /** `ai.nexttime.platform-extension-version` label, when present. */
+    platformExtensionVersion: z.string().nullable(),
+    /** `ai.nexttime.built-from` label, when present (a git ref / commit the build was cut from). */
+    builtFrom: z.string().nullable(),
+    labels: z.record(z.string(), z.string()),
+  })
+  .strict();
+export type RuntimeImageWire = z.infer<typeof RuntimeImageWireSchema>;
+
+/** One resident entry container, as `runtime_inventory` lists it. `needsRebuild` (E2 "待重建") is
+ *  derived, never stored: `true` only when both this container's own resolved image id and the
+ *  active image's own resolved id are known and differ — an unresolvable comparison (the active
+ *  image missing from `list_runtime_images`, or the container not currently running) is `false`,
+ *  never a guessed `true` (E2: no stored draining/rebuild state, and a false positive here would
+ *  be far worse than a false negative — the acceleration capability, `roll_entry_containers`,
+ *  reads this same field). */
+export const ResidentContainerWireSchema = z
+  .object({
+    principalId: z.string(),
+    workspaceId: z.string(),
+    containerId: z.string(),
+    running: z.boolean(),
+    status: z.string(),
+    /** The image reference (tag/digest string) this container was last (re)created with — what
+     *  worker-supervisor was asked to spawn, not necessarily the currently active setting. */
+    image: z.string().nullable(),
+    /** This container's own resolved image id (`docker inspect`'s `Image` field) — `null` when
+     *  not running (Docker releases it) or never observed. */
+    imageId: z.string().nullable(),
+    startedAt: z.string().nullable(),
+    lastTouchedAt: z.string().nullable(),
+    needsRebuild: z.boolean(),
+  })
+  .strict();
+export type ResidentContainerWire = z.infer<typeof ResidentContainerWireSchema>;
+
+export const RuntimeInventoryWireSchema = z
+  .object({
+    /** The image reference `task/spawn` and `startTurn` currently request — the platform setting
+     *  when set (`"setting"`), else worker-supervisor's own reported `WORKER_IMAGE` default
+     *  (`"env_default"` — read live from worker-supervisor, never a kernel-side guess). `null`
+     *  with `activeImageSource: "unknown"` only when the setting is unset *and* worker-supervisor
+     *  could not be reached to report its own default — never guessed. */
+    activeImage: z.string().nullable(),
+    activeImageSource: z.enum(['setting', 'env_default', 'unknown']),
+    /** The active image's own inventory entry, when it could be resolved (found in
+     *  `list_runtime_images`) — `null` when the active image carries no platform label or is not
+     *  known to worker-supervisor, in which case every `residentContainers[].needsRebuild` is
+     *  `false` (unresolvable, never guessed). */
+    activeImageInfo: RuntimeImageWireSchema.nullable(),
+    images: z.array(RuntimeImageWireSchema),
+    residentContainers: z.array(ResidentContainerWireSchema),
+    checkedAt: z.string(),
+  })
+  .strict();
+export type RuntimeInventoryWire = z.infer<typeof RuntimeInventoryWireSchema>;
+
+/** `roll_entry_containers` (E2 "加速项"): stops entry containers that both need rebuild (digest
+ *  mismatch) and have no in-flight Turn (the kernel's own `activities` bookkeeping,
+ *  `kind='agent_turn' and status='running'`) — never a forced stop of a busy container, never a
+ *  "draining"/reject-new-Turn state. */
+export const RollEntryContainerActionWireSchema = z.enum([
+  'stopped',
+  'skipped_in_flight',
+  'skipped_up_to_date',
+  'skipped_not_found',
+]);
+export type RollEntryContainerActionWire = z.infer<typeof RollEntryContainerActionWireSchema>;
+
+export const RollEntryContainerOutcomeWireSchema = z
+  .object({
+    principalId: z.string(),
+    workspaceId: z.string(),
+    action: RollEntryContainerActionWireSchema,
+  })
+  .strict();
+export type RollEntryContainerOutcomeWire = z.infer<typeof RollEntryContainerOutcomeWireSchema>;
+
+export const RollEntryContainersResultWireSchema = z
+  .object({
+    outcomes: z.array(RollEntryContainerOutcomeWireSchema),
+    stoppedCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type RollEntryContainersResultWire = z.infer<typeof RollEntryContainersResultWireSchema>;
+
+/** `pi_drift` (E3): whether the pinned `pi.version` (repo source of truth) and the active
+ *  runtime image's own baked-in pi version agree. `pinnedPiVersion` comes from a CI-produced
+ *  static JSON file (never a live npm/GitHub lookup — E3 "不出网"); `null` when that file does not
+ *  exist yet in this deployment, in which case `status` is always `unknown` — this repo's current
+ *  `pi-drift.yml` checks pi@latest test compatibility, it does not yet emit this comparison file
+ *  (documented assumption, see the PR body). `activeImagePiVersion`/`platformExtensionVersion` are
+ *  read live off the active runtime image's own labels (`list_runtime_images`), which is not a
+ *  network call — the image already lives on this host. */
+export const PiDriftStatusWireSchema = z.enum(['consistent', 'drifted', 'unknown']);
+export type PiDriftStatusWire = z.infer<typeof PiDriftStatusWireSchema>;
+
+export const PiDriftWireSchema = z
+  .object({
+    status: PiDriftStatusWireSchema,
+    pinnedPiVersion: z.string().nullable(),
+    activeImagePiVersion: z.string().nullable(),
+    platformExtensionVersion: z.string().nullable(),
+    detail: z.string(),
+    /** The CI file's own timestamp, when available. */
+    checkedAt: z.string().nullable(),
+  })
+  .strict();
+export type PiDriftWire = z.infer<typeof PiDriftWireSchema>;
+
+/** `platform_status` (E4): service health probes kernel actually performs (never a stand-in for
+ *  the workspace-scoped `list_gate_instances` health, which is reused verbatim here), a 30-day
+ *  cross-workspace `llm_usage` rollup, and the most recent platform audit rows. `backup` reports
+ *  "未配置 not configured" until 遗留 6 lands — no backup timer exists, this is not a stub for one. */
+export const PlatformStatusBackupWireSchema = z
+  .object({
+    configured: z.boolean(),
+    detail: z.string(),
+  })
+  .strict();
+export type PlatformStatusBackupWire = z.infer<typeof PlatformStatusBackupWireSchema>;
+
+export const PlatformStatusLlmUsageWireSchema = z
+  .object({
+    windowDays: z.literal(30),
+    totalCostUsd: z.number().nullable(),
+    totalInputTokens: z.number().nonnegative(),
+    totalOutputTokens: z.number().nonnegative(),
+    callCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PlatformStatusLlmUsageWire = z.infer<typeof PlatformStatusLlmUsageWireSchema>;
+
+export const PlatformStatusWireSchema = z
+  .object({
+    health: z.array(ServiceHealthWireSchema),
+    backup: PlatformStatusBackupWireSchema,
+    llmUsage30d: PlatformStatusLlmUsageWireSchema,
+    recentAudit: z.array(PlatformAuditRecordWireSchema),
+    checkedAt: z.string(),
+  })
+  .strict();
+export type PlatformStatusWire = z.infer<typeof PlatformStatusWireSchema>;

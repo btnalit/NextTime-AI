@@ -23,6 +23,7 @@ import {
   composeSystemPrompt,
   readInstanceInstructions,
 } from '../platform/instance-instructions.js';
+import { resolveActiveRuntimeImage } from '../platform/runtime.js';
 import {
   getPublishedEntryDefinition,
   listPublishedSkillIds,
@@ -376,6 +377,15 @@ export class AgentHostRuntime implements AgentRuntime {
       input.turnId,
     );
 
+    // S7-E (P-C §6.5 决定 E1): the platform's active runtime image, read fresh per Turn like
+    // everything else above; a read failure degrades to `undefined` (worker-supervisor's own
+    // `WORKER_IMAGE` env default applies), never a Turn failure.
+    const image = await this.resolveActiveRuntimeImage(
+      input.workspaceId,
+      input.principalId,
+      input.turnId,
+    );
+
     const sent = this.sendStartTurnFrame(
       link,
       input,
@@ -384,6 +394,7 @@ export class AgentHostRuntime implements AgentRuntime {
       agentProfile?.effective,
       skillsInline,
       instanceInstructions,
+      image,
     );
     if (!sent.ok) {
       this.activeTurns.delete(input.turnId);
@@ -482,6 +493,7 @@ export class AgentHostRuntime implements AgentRuntime {
     agentProfile: EffectiveAgentProfile | undefined,
     skillsInline: SkillInlineMount[],
     instanceInstructions: string,
+    image: string | undefined,
   ): { ok: true; wait: Promise<AcceptOutcome> } | { ok: false; reason: string } {
     let resolveWait!: (outcome: AcceptOutcome) => void;
     const wait = new Promise<AcceptOutcome>((resolve) => {
@@ -526,6 +538,7 @@ export class AgentHostRuntime implements AgentRuntime {
           ? { egressDeny: entryDefinition.egressDeny }
           : {}),
         ...(skillsInline.length > 0 ? { skillsInline } : {}),
+        ...(image !== undefined ? { image } : {}),
       });
     } catch (err) {
       this.pendingAccepts.delete(input.turnId);
@@ -861,6 +874,32 @@ export class AgentHostRuntime implements AgentRuntime {
         }),
       );
       return '';
+    }
+  }
+
+  /** S7-E (P-C §6.5 决定 E1): `PlatformSettings.activeRuntimeImage`, `undefined` when unset or
+   *  unreadable (never fatal — same convention as `resolveInstanceInstructions` above; a read
+   *  failure leaves worker-supervisor's own `WORKER_IMAGE` env default in effect, exactly as an
+   *  unset setting already does). */
+  private async resolveActiveRuntimeImage(
+    workspaceId: string,
+    principalId: string,
+    turnId: string,
+  ): Promise<string | undefined> {
+    try {
+      return await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+        resolveActiveRuntimeImage(client),
+      );
+    } catch (err) {
+      this.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'agent-host-runtime: failed to read platform activeRuntimeImage (continuing without)',
+          turnId,
+          error: String(err),
+        }),
+      );
+      return undefined;
     }
   }
 

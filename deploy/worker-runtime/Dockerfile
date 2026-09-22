@@ -118,4 +118,33 @@ ENV HOME=/workspace
 # does not depend on worker-supervisor's env allowlist, which deliberately passes nothing else.
 ENV PI_OFFLINE=1
 
+# S7-E (docs/platform-admin-design.md §6.5 "镜像 label"; docs/development-tasks.md §5d S7-E):
+# `worker-supervisor`'s `GET /images` (packages/worker-supervisor/src/docker-client.ts
+# `IMAGE_PI_VERSION_LABEL`) lists only images carrying these three labels — the kernel's
+# `runtime_inventory`/`pi_drift` capabilities read them back over that HTTP call, never by
+# reaching into the image build itself.
+#
+# Same "build arg -> image metadata, value supplied by the *build* shell's environment" shape
+# `packages/kernel/Dockerfile`'s own `KERNEL_VERSION` already uses (see that file's header comment
+# for the full "why not derive it inside the Dockerfile" reasoning — `.git/` is excluded from the
+# build context here too, and this image has no equivalent way to read
+# `packages/platform-extension/package.json`'s own version after `pnpm deploy` flattens it away).
+# `pi.version` stays the single source of truth for the *pinned dependency* (the `COPY pi.version`
+# + `npm install` above, unchanged) — `PI_VERSION` here is only the transient carrier that copies
+# that same file's content into this label, computed by the build invoker immediately before
+# `docker compose build worker-runtime`:
+#
+#   export PI_VERSION="$(cat pi.version)"
+#   export PLATFORM_EXTENSION_VERSION="$(node -p "require('./packages/platform-extension/package.json').version")"
+#   export BUILT_FROM="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
+#
+# (docs/runbooks — "运行层" operations section). Unset -> "dev", matching KERNEL_VERSION's own
+# fallback for a local/CI build that never exported these.
+ARG PI_VERSION=dev
+ARG PLATFORM_EXTENSION_VERSION=dev
+ARG BUILT_FROM=dev
+LABEL ai.nexttime.pi-version="${PI_VERSION}" \
+      ai.nexttime.platform-extension-version="${PLATFORM_EXTENSION_VERSION}" \
+      ai.nexttime.built-from="${BUILT_FROM}"
+
 ENTRYPOINT ["/opt/nexttime/entrypoint.sh"]

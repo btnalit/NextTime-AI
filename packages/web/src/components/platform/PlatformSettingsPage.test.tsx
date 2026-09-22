@@ -43,6 +43,7 @@ function settings(overrides: Partial<PlatformSettingsWire> = {}): PlatformSettin
     defaultMonthlyTokenBudget: null,
     defaultPlatformRole: 'user',
     passwordMinLength: 12,
+    activeRuntimeImage: null,
     envAdmins: ['root'],
     version: 3,
     updatedAt: '2026-09-09T00:00:00.000Z',

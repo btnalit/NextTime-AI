@@ -367,6 +367,13 @@ export const SpawnRequestSchema = z
      *  `TaskSpawnRequestSchema.skillsInline` exactly (same schema, same write-to-disk mechanism,
      *  `resident-service.ts`'s `spawn()`). Omitted/empty means no Skill is mounted. */
     skillsInline: z.array(TaskSkillInlineSchema).optional(),
+    /** S7-E (P-C §6.5 决定 E1): the platform's active runtime image, forwarded by agent-host from
+     *  the `startTurn` command's own `image` field — validated by `server.ts` against the same
+     *  `taskImageAllowlist` / `isImageAllowed` `/task/spawn` already enforces (403
+     *  `image_not_allowed`), then resolved to `config.workerImage` when omitted before reaching
+     *  `residentService.spawn()` (same "route resolves the default, service always sees a concrete
+     *  value" shape `/task/spawn` already uses for its own `image`). */
+    image: z.string().min(1).optional(),
   })
   .strict();
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;

@@ -90,6 +90,11 @@ function createFakePool(
   rolesByPrincipal: ReadonlyMap<string, Role> = new Map(),
   /** W5.5: jtis `readHandleFreshness` should report as revoked (empty by default). */
   revokedJtis: ReadonlySet<string> = new Set(),
+  /** S7-E: the `platform_settings` row's own `settings` jsonb — empty by default (every field
+   *  projects through to `DEFAULT_PLATFORM_SETTINGS`, same as a fresh deployment;
+   *  `resolveActiveRuntimeImage` then resolves `undefined`, matching every pre-S7-E test's
+   *  existing behavior). */
+  platformSettingsOverrides: Record<string, unknown> = {},
 ) {
   const sessionsByPrincipal = new Map<string, FakeSessionRow>();
   const handleCount = new Map<string, number>();
@@ -262,6 +267,24 @@ function createFakePool(
       return {
         rows: publishedSkills.map((skill) => ({ id: skill.id })),
         rowCount: publishedSkills.length,
+      };
+    }
+
+    // S7-E: application/platform/settings.ts's readPlatformSettings, called by
+    // resolveActiveRuntimeImage below (and by resolveInstanceInstructions, already exercised by
+    // every existing test here — an unmatched query previously made both degrade to their
+    // documented "unreadable, continue without" fallback, which is why this handler's absence
+    // never broke a pre-S7-E test).
+    if (sql.startsWith('select settings, version, updated_at from platform_settings')) {
+      return {
+        rows: [
+          {
+            settings: platformSettingsOverrides,
+            version: 1,
+            updated_at: new Date('2026-01-01T00:00:00Z'),
+          },
+        ],
+        rowCount: 1,
       };
     }
 
@@ -836,6 +859,66 @@ describe('AgentHostRuntime — startTurn resolves the published entry WorkerDefi
 
     const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
     expect(command.egressDeny).toBeUndefined();
+  });
+});
+
+describe('AgentHostRuntime — resolves PlatformSettings.activeRuntimeImage (S7-E 决定 E1)', () => {
+  it('includes image on the startTurn frame when the platform setting is set', async () => {
+    const input = startTurnInput();
+    const { pool } = createFakePool(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { activeRuntimeImage: 'nexttime-ai-worker-runtime:v2' },
+    );
+    const { sink } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.image).toBe('nexttime-ai-worker-runtime:v2');
+  });
+
+  it('omits image (never fails the turn) when the platform setting is unset', async () => {
+    const { pool } = createFakePool(); // activeRuntimeImage unset — DEFAULT_PLATFORM_SETTINGS applies
+    const { sink, events } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput();
+    const startPromise = runtime.startTurn(input);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
+    await startPromise;
+
+    const command = sent[0] as Extract<KernelToAgentHostFrame, { type: 'startTurn' }>;
+    expect(command.image).toBeUndefined();
+    expect(events).toEqual([]); // never a turnEnded — the lookup gap is not fatal
   });
 });
 
