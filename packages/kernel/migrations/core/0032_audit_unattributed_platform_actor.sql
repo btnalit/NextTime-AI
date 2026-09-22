@@ -31,6 +31,11 @@
 -- authenticated `context.platformUser`) is untouched. Widening only — every row that satisfied
 -- the old constraint still satisfies this one, so no backfill.
 --
+-- `is not distinct from`, not `=`: a CHECK passes when its expression is NULL, and
+-- `payload -> 'attributedActor'` is NULL when the key is missing — with `=` a missing marker made
+-- the whole disjunction NULL and slipped through. The jsonb comparison also requires the JSON
+-- boolean, not the string "false".
+--
 -- Cross-process bootstrap lock: see 0001_identity.sql — the first statement of every file in this
 -- module.
 select pg_advisory_xact_lock(7241000101);
@@ -40,5 +45,6 @@ alter table audit_records add constraint audit_records_actor_shape check (
   (workspace_id is not null and actor_principal_id is not null)
   or (workspace_id is null and actor_principal_id is null
       and (actor_user_id is not null
-           or (action = 'platform.workspace_purged' and payload ->> 'attributedActor' = 'false')))
+           or (action = 'platform.workspace_purged'
+               and (payload -> 'attributedActor') is not distinct from 'false'::jsonb)))
 );
