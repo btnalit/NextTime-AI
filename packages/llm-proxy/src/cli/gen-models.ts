@@ -15,7 +15,10 @@ import { ProviderStore } from '../provider-store.js';
  *
  *   docker compose build llm-proxy
  *   docker compose run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js \
- *     > "${NEXTTIME_DATA}/config/models.json"
+ *     > "${NEXTTIME_DATA}/models/models.json"
+ *
+ * (S7-A, docs/STATUS.md 维护者决定 2026-09-22 ⑤: `models.json` moved out of `config/` into its own
+ * `${NEXTTIME_DATA}/models/` directory — see config.ts's own doc comment on `modelsJsonOutFile`.)
  *
  * Prints the generated `models.json` document to **stdout** (pretty-printed, trailing newline)
  * rather than writing a file directly — `docker compose run` reuses the service definition, and

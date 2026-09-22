@@ -20,8 +20,8 @@
 #
 # The script switches llm-proxy / worker-supervisor / fake-llm to the fake provider itself via
 # deploy/accept/docker-compose.fake.yml and restores production wiring from an EXIT trap, so
-# ${NEXTTIME_DATA}/config/llm-providers.yaml and models.json are never modified — no manual
-# provider switch is needed before or after this script runs.
+# ${NEXTTIME_DATA}/config/llm-providers.yaml and ${NEXTTIME_DATA}/models/models.json are never
+# modified — no manual provider switch is needed before or after this script runs.
 #
 # Every docker compose run/exec below carries </dev/null: this script is meant to work when
 # piped or invoked non-interactively over ssh, where stdin may not be a terminal — a command that

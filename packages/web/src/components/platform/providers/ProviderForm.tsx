@@ -85,7 +85,9 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
   const idTrimmed = id.trim();
   const idValid = PROVIDER_ID_PATTERN.test(idTrimmed) && !RESERVED_IDS.has(idTrimmed);
   const urlValid = isValidUrl(upstreamBaseUrl.trim()) && !/\/v1\/?$/.test(upstreamBaseUrl.trim());
-  const envValid = API_KEY_ENV_PATTERN.test(apiKeyEnv.trim());
+  // S7-A: optional — a provider may rely purely on a console key (set separately, after
+  // creation, via ProviderSecretForm) and have no env var at all.
+  const envValid = apiKeyEnv.trim().length === 0 || API_KEY_ENV_PATTERN.test(apiKeyEnv.trim());
   const modelIds = models.map((m) => m.id.trim()).filter((v) => v.length > 0);
   const modelsValid = modelIds.length > 0 && new Set(modelIds).size === modelIds.length;
   const ready = idValid && urlValid && envValid && modelsValid && !submitting;
@@ -110,7 +112,7 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
       upstreamBaseUrl: upstreamBaseUrl.trim().replace(/\/+$/, ''),
       authHeader,
       authScheme: authHeader === 'authorization' ? 'Bearer' : null,
-      apiKeyEnv: apiKeyEnv.trim(),
+      ...(apiKeyEnv.trim().length > 0 ? { apiKeyEnv: apiKeyEnv.trim() } : {}),
       models: models
         .filter((m) => m.id.trim().length > 0)
         .map((m) => {
@@ -246,8 +248,7 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
       <Field
         id="provider-api-key-env"
         label="密钥环境变量名 Key env var"
-        required
-        hint="只填变量名。密钥本身由操作员写进主机 secrets/llm-proxy.env 后重建 llm-proxy；控制台不收密钥。 The variable name only — the operator sets its value in secrets/llm-proxy.env on the host; the console never takes a key."
+        hint="可选——只填变量名，值由操作员写进主机 secrets/llm-proxy.env 后重建 llm-proxy。留空也可以，保存后在下方为这个供应商单独设置控制台密钥（优先于环境变量）。 Optional — the variable name only, its value set by the operator in secrets/llm-proxy.env on the host. Leave it blank and set a console key for this provider after saving instead (it takes priority over the env var)."
         error={
           apiKeyEnv.length > 0 && !envValid ? '大写字母、数字、下划线 UPPER_CASE only' : undefined
         }

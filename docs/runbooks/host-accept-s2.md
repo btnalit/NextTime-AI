@@ -12,7 +12,8 @@
   服务不在任何 profile 下，`docker compose up -d` 默认就会拉起，只是显式点名确保）。
 - 不需要手动切换 provider：脚本自己会通过 `deploy/accept/docker-compose.fake.yml` 把 llm-proxy /
   worker-supervisor / fake-llm 切到 fake provider，并在退出时用 EXIT trap 恢复生产配置——
-  `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `models.json` 全程不会被改动，跑前跑后都不用重跑
+  `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
+  全程不会被改动，跑前跑后都不用重跑
   `make gen-models`（同 accept-s1.md §1）。
 - `fake-llm` 镜像是用当前代码构建的：`deploy/fake-llm/server.mjs` 的脚本化场景烤在镜像里，拉新代码后要 `docker compose --profile test build fake-llm && docker compose --profile test up -d --force-recreate fake-llm`，否则场景不匹配、入口 agent 只会回 echo。
 - 迁移已跑到最新。

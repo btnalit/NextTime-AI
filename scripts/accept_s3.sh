@@ -22,8 +22,8 @@
 #     agent-host docker-socket-proxy-collector) already running. The script switches llm-proxy /
 #     worker-supervisor / fake-llm to the fake provider itself via
 #     deploy/accept/docker-compose.fake.yml and restores production wiring from an EXIT trap, so
-#     ${NEXTTIME_DATA}/config/llm-providers.yaml and models.json are never modified — no manual
-#     provider switch is needed before or after.
+#     ${NEXTTIME_DATA}/config/llm-providers.yaml and ${NEXTTIME_DATA}/models/models.json are
+#     never modified — no manual provider switch is needed before or after.
 #   - `${NEXTTIME_DATA}/secrets/gate_token` and the other host-bootstrap secrets already exist
 #     (docs/runbooks/host-bootstrap.md) — this script does not generate them.
 #

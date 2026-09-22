@@ -863,3 +863,120 @@ describe('createProxyServer — S6-B budget-exhausted refusal (leftover 19) and 
     expect(gone.status).toBe(404);
   });
 });
+
+describe('createProxyServer — S7-A console-key resolution order', () => {
+  const CONSOLE_KEY = 'sk-console-key';
+
+  it('a console key takes precedence over api_key_env for the same provider id', async () => {
+    const upstream = startFakeUpstream({
+      sseBody: OPENAI_SSE_BODY,
+      expectedHeader: 'authorization',
+      expectedValue: `Bearer ${CONSOLE_KEY}`,
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const proxy = createProxyServer({
+      providers: { openai: openAiProvider(upstreamPort) },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveApiKey, // would resolve to REAL_OPENAI_KEY — must not win over the console key
+      resolveConsoleKey: (id) => (id === 'openai' ? CONSOLE_KEY : undefined),
+      log: () => {},
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+
+    const token = await signHandle(privateKey);
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', stream: true }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('a provider with no api_key_env at all still forwards using only the console key', async () => {
+    const upstream = startFakeUpstream({
+      sseBody: OPENAI_SSE_BODY,
+      expectedHeader: 'authorization',
+      expectedValue: `Bearer ${CONSOLE_KEY}`,
+    });
+    const upstreamPort = await listen(upstream);
+    cleanup.push(() => closeServer(upstream));
+
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const noEnvProvider: ProviderConfig = {
+      api: 'openai-completions',
+      upstream_base_url: `http://127.0.0.1:${upstreamPort}`,
+      auth: { header: 'authorization', scheme: 'Bearer' },
+      models: [{ id: 'gpt-example' }],
+    };
+    const proxy = createProxyServer({
+      providers: { openai: noEnvProvider },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      resolveConsoleKey: (id) => (id === 'openai' ? CONSOLE_KEY : undefined),
+      log: () => {},
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+
+    const token = await signHandle(privateKey);
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', stream: true }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('502s upstream_not_configured with neither a console key nor api_key_env resolving', async () => {
+    const { privateKey, publicKey } = await ephemeralKeyPair();
+    const noEnvProvider: ProviderConfig = {
+      api: 'openai-completions',
+      upstream_base_url: 'http://127.0.0.1:1',
+      auth: { header: 'authorization', scheme: 'Bearer' },
+      models: [{ id: 'gpt-example' }],
+    };
+    const logLines: string[] = [];
+    const proxy = createProxyServer({
+      providers: { openai: noEnvProvider },
+      publicKey,
+      isRevoked: () => false,
+      reporter: { record: () => {} },
+      maxRequestBodyBytes: 1_000_000,
+      upstreamConnectTimeoutMs: 2000,
+      upstreamIdleTimeoutMs: 2000,
+      log: (line) => logLines.push(line),
+    });
+    const proxyPort = await listen(proxy);
+    cleanup.push(() => closeServer(proxy));
+
+    const token = await signHandle(privateKey);
+    const res = await rawRequest({
+      port: proxyPort,
+      method: 'POST',
+      path: '/openai/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-example', stream: true }),
+    });
+    expect(res.status).toBe(502);
+    const body = JSON.parse(res.body.toString('utf8'));
+    expect(body.error.code).toBe('upstream_not_configured');
+    expect(logLines.some((line) => line.includes('no provider key resolved'))).toBe(true);
+  });
+});

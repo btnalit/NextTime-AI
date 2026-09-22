@@ -33,7 +33,7 @@ describe('loadConfig', () => {
     expect(config.entryIdleTimeoutMs).toBe(30 * 60 * 1000);
     expect(config.egressSourceMapFile).toBe('/data/config/egress-sources.json');
     expect(config.dockerSocketPath).toBe('/var/run/docker.sock');
-    expect(config.modelsJsonHostPath).toBe('/data-host/config/models.json');
+    expect(config.modelsJsonHostPath).toBe('/data-host/models/models.json');
     expect(config.dockerConnection).toEqual({
       kind: 'socket',
       socketPath: '/var/run/docker.sock',

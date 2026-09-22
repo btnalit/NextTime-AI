@@ -1,5 +1,7 @@
 // gen-models-json.ts — thin CLI: reads ${NEXTTIME_DATA}/config/llm-providers.yaml, writes
-// ${NEXTTIME_DATA}/config/models.json (design doc §7.7, §10.1; docs/development-tasks.md S1.7).
+// ${NEXTTIME_DATA}/models/models.json (design doc §7.7, §10.1; docs/development-tasks.md S1.7;
+// S7-A, docs/STATUS.md 维护者决定 2026-09-22 ⑤: models.json moved out of config/ into its own
+// directory — see packages/llm-proxy/src/config.ts's own doc comment on `modelsJsonOutFile`).
 //
 // The real transform lives in packages/llm-proxy/src/gen-models-json.ts (typechecked and unit-
 // tested as part of that package, against config/llm-providers.example.yaml) — this file only
@@ -20,7 +22,7 @@ if (!NEXTTIME_DATA) {
 
 const providersFile =
   process.env.LLM_PROVIDERS_FILE ?? `${NEXTTIME_DATA}/config/llm-providers.yaml`;
-const outFile = process.env.MODELS_JSON_FILE ?? `${NEXTTIME_DATA}/config/models.json`;
+const outFile = process.env.MODELS_JSON_FILE ?? `${NEXTTIME_DATA}/models/models.json`;
 const llmProxyPort = process.env.LLM_PROXY_PORT ? Number(process.env.LLM_PROXY_PORT) : undefined;
 
 generateModelsJson({ providersFile, outFile, llmProxyPort })

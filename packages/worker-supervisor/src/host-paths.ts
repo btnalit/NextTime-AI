@@ -47,13 +47,14 @@ export function workspacePaths(config: SupervisorConfig, principalId: string): W
 }
 
 /** Host-side source of the models.json bind mount — `MODELS_JSON_HOST_PATH` when set (an
- *  acceptance run's fake-provider file), else `${NEXTTIME_DATA}/config/models.json`. */
+ *  acceptance run's fake-provider file), else `${NEXTTIME_DATA}/models/models.json` (S7-A,
+ *  docs/STATUS.md 维护者决定 2026-09-22 ⑤: moved out of config/ into its own directory). */
 export function hostModelsJsonPath(config: SupervisorConfig): string {
   return config.modelsJsonHostPath;
 }
 
 export function localModelsJsonPath(config: SupervisorConfig): string {
-  return `${config.localDataDir}/config/models.json`;
+  return `${config.localDataDir}/models/models.json`;
 }
 
 /** `deploy/worker-runtime/entrypoint.sh`'s `SYSTEM_PROMPT_FILE` path, relative to whichever

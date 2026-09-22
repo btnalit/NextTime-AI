@@ -4,15 +4,22 @@ import { writeAudit } from '../../substrate/audit/index.js';
 
 /**
  * application/platform/llm-admin-audit: the platform audit row for an llm-proxy provider mutation
- * (S6-B, docs/console-completion-plan.md §5.4 / §6). The proxy reports each administrator action
- * to `POST /internal/llm-admin-audit` (interfaces/http/internal/llm-admin-audit.ts); that route is
- * an interface and must not reach into `substrate/audit` itself (.dependency-cruiser.cjs
+ * (S6-B, docs/console-completion-plan.md §5.4 / §6; S7-A, docs/STATUS.md 维护者决定 2026-09-22 ①
+ * for `provider_secret_set`/`provider_secret_cleared`). The proxy reports each administrator
+ * action to `POST /internal/llm-admin-audit` (interfaces/http/internal/llm-admin-audit.ts); that
+ * route is an interface and must not reach into `substrate/audit` itself (.dependency-cruiser.cjs
  * `kernel-interfaces-must-not-reach-into-substrate-directly`), so the write lives here, on the
  * application layer, the same way every other interface reaches audit through a service.
  */
 
 export interface LlmAdminAuditEventInput {
-  readonly action: 'provider_created' | 'provider_updated' | 'provider_deleted' | 'provider_tested';
+  readonly action:
+    | 'provider_created'
+    | 'provider_updated'
+    | 'provider_deleted'
+    | 'provider_tested'
+    | 'provider_secret_set'
+    | 'provider_secret_cleared';
   readonly providerId: string;
   readonly actorUserId: string;
   readonly tokenJti: string;

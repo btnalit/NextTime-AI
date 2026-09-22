@@ -1,19 +1,35 @@
 import type { LlmProviderWire } from '@nexttime/shared';
 
 export interface CredentialStateProps {
-  readonly provider: Pick<LlmProviderWire, 'credentialPresent' | 'apiKeyEnv'>;
-  /** Long form: the chip plus the operator instruction (drawer); short form: the chip only. */
+  readonly provider: Pick<LlmProviderWire, 'credentialPresent' | 'credentialSource' | 'apiKeyEnv'>;
+  /** Long form: the chip plus an explanation of where the key comes from (drawer); short form:
+   *  the chip only. */
   readonly withInstruction?: boolean;
 }
 
+function chipLabel(provider: CredentialStateProps['provider']): string {
+  switch (provider.credentialSource) {
+    case 'console':
+      return '凭证：控制台 Credential: console';
+    case 'env':
+      return `凭证：环境变量 ${provider.apiKeyEnv} Credential: env var ${provider.apiKeyEnv}`;
+    case 'none':
+      return provider.apiKeyEnv
+        ? `凭证：待配置 ${provider.apiKeyEnv} Credential: not set ${provider.apiKeyEnv}`
+        : '凭证：待配置 Credential: not set';
+  }
+}
+
 /**
- * components/platform/providers/CredentialState: the honest credential state (S6-B, plan §5.4
- * "密钥只写不读" — and, until the maintainer decides on approval for console key writes (plan §12
- * 末), not even written here). The proxy reports `credentialPresent: boolean` for the env var
- * named by `apiKeyEnv`; the value never reaches any wire. The instruction is the operator step
- * that actually installs a key: `secrets/llm-proxy.env` on the host + recreate `llm-proxy`.
+ * components/platform/providers/CredentialState: the honest credential state (S6-B plan §5.4
+ * "密钥只写不读"; S7-A docs/STATUS.md 维护者决定 2026-09-22 ①). The proxy reports
+ * `credentialPresent: boolean` and `credentialSource: 'console' | 'env' | 'none'` — the value
+ * itself never reaches any wire. `console` means a key was set through
+ * `ProviderSecretForm`/`PUT .../secret`; `env` means the container's own `apiKeyEnv` var is set
+ * (`secrets/llm-proxy.env` on the host); `none` means neither.
  */
 export function CredentialState({ provider, withInstruction = false }: CredentialStateProps) {
+  const { credentialSource } = provider;
   const present = provider.credentialPresent;
   return (
     <div className="stack-s">
@@ -21,15 +37,20 @@ export function CredentialState({ provider, withInstruction = false }: Credentia
         className={`chip chip-s ${present ? 'chip-ok' : 'chip-warn'}`}
         data-testid="provider-credential"
         data-status={present ? 'present' : 'missing'}
-        title={provider.apiKeyEnv}
+        data-source={credentialSource}
+        title={provider.apiKeyEnv ?? undefined}
       >
-        {present ? '凭证：已配置 Credential set' : `凭证：待操作员配置 ${provider.apiKeyEnv}`}
+        {chipLabel(provider)}
       </span>
       {withInstruction ? (
         <p className="text-small text-2" data-testid="provider-credential-instruction">
-          {present
-            ? `密钥来自 llm-proxy 容器环境变量 ${provider.apiKeyEnv}（主机 secrets/llm-proxy.env）。控制台不显示、也不写入密钥。 The key is read from the llm-proxy container env var ${provider.apiKeyEnv} (secrets/llm-proxy.env on the host); the console never shows or writes it.`
-            : `操作员步骤：在主机 secrets/llm-proxy.env 里加一行 ${provider.apiKeyEnv}=<密钥>，然后 docker compose up -d --force-recreate llm-proxy。控制台写入密钥的入口待维护者决定（是否必经审批），目前为 501 占位。 Operator step: add ${provider.apiKeyEnv}=<key> to secrets/llm-proxy.env on the host, then docker compose up -d --force-recreate llm-proxy. The console key-entry route is a 501 stub pending the maintainer decision on approval.`}
+          {credentialSource === 'console'
+            ? '密钥由管理员在下方设置，存于代理自己的状态目录（keys.json），从不回显。 Set below by an administrator, held in the proxy’s own state directory (keys.json); never echoed back.'
+            : credentialSource === 'env'
+              ? `密钥来自 llm-proxy 容器环境变量 ${provider.apiKeyEnv}（主机 secrets/llm-proxy.env）。也可以在下方为这个供应商单独设置控制台密钥，控制台密钥优先。 The key is read from the llm-proxy container env var ${provider.apiKeyEnv} (secrets/llm-proxy.env on the host). A console key set below takes priority over it.`
+              : provider.apiKeyEnv
+                ? `尚未配置：可在下方设置控制台密钥，或由操作员在主机 secrets/llm-proxy.env 里加一行 ${provider.apiKeyEnv}=<密钥> 后重建 llm-proxy。 Not configured yet — set a console key below, or have the operator add ${provider.apiKeyEnv}=<key> to secrets/llm-proxy.env and recreate llm-proxy.`
+                : '尚未配置：可在下方设置控制台密钥（这个供应商没有配置环境变量名）。 Not configured yet — set a console key below (this provider has no env var name configured).'}
         </p>
       ) : null}
     </div>

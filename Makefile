@@ -36,16 +36,18 @@ up:
 down:
 	docker compose down
 
-# Generates ${NEXTTIME_DATA}/config/models.json from ${NEXTTIME_DATA}/config/llm-providers.yaml
+# Generates ${NEXTTIME_DATA}/models/models.json from ${NEXTTIME_DATA}/config/llm-providers.yaml
 # (docs/graph-ai-middle-platform-design.md §7.7, §10.1; docs/development-tasks.md S1.5, second
-# half, deliverable 5). Runs entirely through the built llm-proxy image
-# (packages/llm-proxy/src/cli/gen-models.ts), not a local Node/corepack toolchain — the target
-# deployment host has neither (docs/runbooks/host-worker-runtime.md §10 "the host has no
-# corepack"). Requires NEXTTIME_DATA already exported in the calling shell (e.g. `set -a; . ./.env;
-# set +a` first, same convention every host runbook already uses) — docker compose's own
+# half, deliverable 5; S7-A, docs/STATUS.md 维护者决定 2026-09-22 ⑤: models.json moved out of
+# config/ into its own directory — do not chown config/). Runs entirely through the built
+# llm-proxy image (packages/llm-proxy/src/cli/gen-models.ts), not a local Node/corepack toolchain
+# — the target deployment host has neither (docs/runbooks/host-worker-runtime.md §10 "the host has
+# no corepack"). Requires NEXTTIME_DATA already exported in the calling shell (e.g. `set -a; .
+# ./.env; set +a` first, same convention every host runbook already uses) — docker compose's own
 # `${NEXTTIME_DATA}` substitution resolves the llm-proxy service's `llm-providers.yaml` read-only
 # mount, and this recipe's redirect writes the result straight to the host path, no separate
 # read-write mount needed (see gen-models.ts's own doc comment for why stdout, not a file).
+# `${NEXTTIME_DATA}/models/` itself is created by scripts/host-env-init.sh (0755, owned 10001).
 #
 # Writes to a `.tmp` sibling first, then `mv`s it into place (lane-6 review P3) — `models.json` is
 # bind-mounted read-only into every entry/Worker container this Task/resident spawns; a direct
@@ -59,9 +61,9 @@ down:
 # leave debris for the next one to trip over.
 gen-models:
 	docker compose build llm-proxy
-	docker compose run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js > "$${NEXTTIME_DATA}/config/models.json.tmp" \
-		&& mv "$${NEXTTIME_DATA}/config/models.json.tmp" "$${NEXTTIME_DATA}/config/models.json" \
-		|| { rm -f "$${NEXTTIME_DATA}/config/models.json.tmp"; exit 1; }
+	docker compose run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js > "$${NEXTTIME_DATA}/models/models.json.tmp" \
+		&& mv "$${NEXTTIME_DATA}/models/models.json.tmp" "$${NEXTTIME_DATA}/models/models.json" \
+		|| { rm -f "$${NEXTTIME_DATA}/models/models.json.tmp"; exit 1; }
 
 # S5.8 交付与演示闭环 item 3 (docs/development-tasks.md §S5.8): a 15-minute, single-command demo —
 # ephemeral workspace → host-inventory collector run → three preset questions through the real

@@ -27,6 +27,8 @@ describe('loadConfig', () => {
       maxRequestBodyBytes: 10 * 1024 * 1024,
       upstreamIdleTimeoutMs: 300_000,
       upstreamConnectTimeoutMs: 10_000,
+      providerStoreFile: '/data/state/providers.json',
+      keyStoreFile: '/data/state/keys.json',
     });
   });
 
@@ -44,6 +46,8 @@ describe('loadConfig', () => {
       MAX_REQUEST_BODY_BYTES: '1024',
       UPSTREAM_IDLE_TIMEOUT_MS: '9000',
       UPSTREAM_CONNECT_TIMEOUT_MS: '3000',
+      LLM_PROVIDER_STORE_FILE: '/custom/providers.json',
+      LLM_KEY_STORE_FILE: '/custom/keys.json',
     });
     expect(config).toMatchObject({
       port: 9000,
@@ -58,6 +62,8 @@ describe('loadConfig', () => {
       maxRequestBodyBytes: 1024,
       upstreamIdleTimeoutMs: 9000,
       upstreamConnectTimeoutMs: 3000,
+      providerStoreFile: '/custom/providers.json',
+      keyStoreFile: '/custom/keys.json',
     });
   });
 
@@ -115,6 +121,22 @@ providers:
       scheme: 'Bearer',
     });
     expect(config.providers['example-anthropic']?.auth).toEqual({ header: 'x-api-key' });
+  });
+
+  it('accepts a provider with no api_key_env (S7-A: optional — a store override may carry only a console key)', async () => {
+    const file = writeYaml(`
+providers:
+  no-env:
+    api: openai-completions
+    upstream_base_url: https://api.example.invalid
+    auth:
+      header: authorization
+      scheme: Bearer
+    models:
+      - id: m
+`);
+    const config = await loadProvidersFile(file);
+    expect(config.providers['no-env']?.api_key_env).toBeUndefined();
   });
 
   it('throws LlmProxyConfigError for a missing file', async () => {

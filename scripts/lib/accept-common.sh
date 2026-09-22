@@ -124,7 +124,8 @@ wait_for_gate_health() {
 # fake-provider models.json into ${NEXTTIME_DATA}/accept/ and recreates llm-proxy /
 # worker-supervisor / fake-llm with deploy/accept/docker-compose.fake.yml merged in;
 # `accept_provider_restore` recreates the two production services from the root file alone.
-# The production ${NEXTTIME_DATA}/config/llm-providers.yaml and models.json are never touched.
+# The production ${NEXTTIME_DATA}/config/llm-providers.yaml and
+# ${NEXTTIME_DATA}/models/models.json are never touched.
 # Scripts install `trap accept_provider_restore EXIT` (plus INT/TERM/HUP/PIPE handlers that
 # restore and exit) *before* calling `accept_provider_up`, so a run that dies half-way — including
 # a dropped ssh session — still leaves the host on its real provider.
