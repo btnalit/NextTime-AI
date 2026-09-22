@@ -1394,7 +1394,10 @@ export const purgeUserHandler: CapabilityHandler = async (
 interface AuditDbRow {
   id: string;
   action: string;
-  actor_user_id: string;
+  // 遗留 54: null for an unattributed operator-CLI platform row (`payload.attributedActor: false`,
+  // audit_records_actor_shape / migration core 0032) — the join below already yields `actor_login:
+  // null` for the same rows.
+  actor_user_id: string | null;
   actor_login: string | null;
   resource_type: string | null;
   resource_id: string | null;

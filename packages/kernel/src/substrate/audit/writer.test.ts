@@ -196,6 +196,87 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(page.nextCursor).toBeUndefined();
     });
 
+    // 遗留 54 / migration core 0032 (2026-09-22 review of PR #221): `audit_records_actor_shape`
+    // legalizes an actor-less platform row (`workspace_id`/`actor_principal_id` both null,
+    // `actor_user_id` null) for exactly one shape — `action = 'platform.workspace_purged'` with
+    // `payload.attributedActor` the JSON boolean `false` — and rejects every other actor-less
+    // platform row, so a future bug in an unrelated write path cannot silently start writing
+    // unattributed rows too.
+    describe('audit_records_actor_shape (遗留 54, migration core 0032)', () => {
+      // These write a platform row (`workspace_id is null`) directly through `writeAudit`, the
+      // same shape `purgeWorkspace` itself writes — that only ever runs on the admin/skip-role-
+      // switch path (RLS's own `audit_records_workspace_isolation` policy requires `app.platform
+      // = on` for a `workspace_id is null` row otherwise; `purge-workspace.ts`'s own doc comment
+      // — "why the superuser path" — has the detail), so these tests use it too.
+      it('accepts an actor-less platform.workspace_purged row with payload.attributedActor: false', async () => {
+        const resourceId = randomUUID();
+        const row = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            writeAudit(client, {
+              workspaceId: null,
+              actorPrincipalId: null,
+              action: 'platform.workspace_purged',
+              resourceType: 'workspace',
+              resourceId,
+              payload: { attributedActor: false },
+            }),
+          { skipRoleSwitch: true },
+        );
+        expect(row.actorUserId).toBeNull();
+      });
+
+      it('rejects an actor-less platform row for any other action, even with attributedActor: false', async () => {
+        await expect(
+          withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              writeAudit(client, {
+                workspaceId: null,
+                actorPrincipalId: null,
+                action: 'platform.user_purged',
+                payload: { attributedActor: false },
+              }),
+            { skipRoleSwitch: true },
+          ),
+        ).rejects.toThrow(/audit_records_actor_shape/);
+      });
+
+      it('rejects an actor-less platform.workspace_purged row when attributedActor is missing or true', async () => {
+        await expect(
+          withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              writeAudit(client, {
+                workspaceId: null,
+                actorPrincipalId: null,
+                action: 'platform.workspace_purged',
+                payload: {},
+              }),
+            { skipRoleSwitch: true },
+          ),
+        ).rejects.toThrow(/audit_records_actor_shape/);
+
+        await expect(
+          withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              writeAudit(client, {
+                workspaceId: null,
+                actorPrincipalId: null,
+                action: 'platform.workspace_purged',
+                payload: { attributedActor: true },
+              }),
+            { skipRoleSwitch: true },
+          ),
+        ).rejects.toThrow(/audit_records_actor_shape/);
+      });
+    });
+
     it('a failing audit write rolls back a prior write in the same transaction (S1.3 acceptance)', async () => {
       const store = new SqlGraphStore();
       const nonExistentActor = randomUUID(); // no principals row — FK violation forces the failure

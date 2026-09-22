@@ -112,7 +112,12 @@ export const PlatformAuditRecordWireSchema = z
   .object({
     id: z.string(),
     action: z.string(),
-    actorUserId: z.string(),
+    /** null for a platform row the operator CLI wrote with no resolvable administrator (遗留 54:
+     *  `purge-workspace` / `purge-expired-workspaces` with neither `--actor` nor
+     *  `NEXTTIME_PLATFORM_ADMINS` naming a real user) — `payload.attributedActor` is `false` on
+     *  those rows. Every capability-dispatched platform row still always has one
+     *  (`actingUser(context)`). */
+    actorUserId: z.string().nullable(),
     actorLogin: z.string().nullable(),
     resourceType: z.string().nullable(),
     resourceId: z.string().nullable(),

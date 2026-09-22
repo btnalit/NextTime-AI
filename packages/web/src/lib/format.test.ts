@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   excerpt,
+  formatAuditActor,
   formatDuration,
   formatRelative,
   humanizeKind,
@@ -33,6 +34,17 @@ describe('format', () => {
 
   it('humanizeKind matches the kernel label convention', () => {
     expect(humanizeKind('docker.container_restart')).toBe('docker container restart');
+  });
+
+  it('formatAuditActor prefers login, falls back to the raw id, then to an unattributed label (遗留 54)', () => {
+    expect(formatAuditActor({ actorLogin: 'alice', actorUserId: 'u-1' })).toBe('alice');
+    expect(formatAuditActor({ actorLogin: null, actorUserId: 'u-1' })).toBe('u-1');
+    // A CLI purge with no resolvable administrator (`platform.workspace_purged`,
+    // `payload.attributedActor: false`) writes actor_user_id null — never render that as blank or
+    // the literal string "null".
+    expect(formatAuditActor({ actorLogin: null, actorUserId: null })).toBe(
+      '主机操作员（未署名） Host operator (unattributed)',
+    );
   });
 
   it('excerpt truncates and redactSensitive masks credential-like keys deeply', () => {

@@ -2,7 +2,7 @@ import type { PlatformAuditRecordWire } from '@nexttime/shared';
 import { type FormEvent, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, prettyJson, redactSensitive } from '../../lib/format.js';
+import { formatAuditActor, formatDateTime, prettyJson, redactSensitive } from '../../lib/format.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -106,7 +106,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                   {row.action}
                 </div>
                 <div className="data-row-meta">
-                  {row.actorLogin ?? row.actorUserId}
+                  {formatAuditActor(row)}
                   {row.resourceType
                     ? ` · ${row.resourceType}${row.resourceId ? `:${row.resourceId}` : ''}`
                     : ''}

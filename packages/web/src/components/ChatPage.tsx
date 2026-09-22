@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useChatChangeListener } from '../hooks/useChatUpdates.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { actionCardFromPendingContent, isPendingCardMessage } from '../lib/action-card.js';
 import { type ChatSummary, applyChatMetadata, isArchived } from '../lib/chat-lifecycle.js';
@@ -131,6 +132,17 @@ export function ChatPage({
   const onChatChanged = useCallback((updated: ChatSummary): void => {
     setChat(updated);
   }, []);
+  // 遗留 57: the archive Undo toast can fire after this page (or a different one) unmounted and
+  // remounted for a different `chatId` — `hooks/useChatUpdates.tsx`'s broadcast reaches whichever
+  // page is mounted when it fires, not only the one that triggered it. Only apply it when it is
+  // still about *this* open chat.
+  const onBroadcastChatChanged = useCallback(
+    (updated: ChatSummary): void => {
+      if (updated.id === chatId) setChat(updated);
+    },
+    [chatId],
+  );
+  useChatChangeListener(onBroadcastChatChanged);
   const { restore, restoringId } = useRestoreChat(client, onChatChanged);
   const archived = chat !== null && isArchived(chat);
 

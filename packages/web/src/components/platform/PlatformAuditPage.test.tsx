@@ -106,4 +106,27 @@ describe('PlatformAuditPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-audit-error');
   });
+
+  it('renders an unattributed-actor row (遗留 54: an operator-CLI purge with no resolvable administrator) with a clear label, never blank or "null"', async () => {
+    const http = scriptedHttp({
+      platform_audit_query: () => ({
+        items: [
+          row({
+            id: 'audit-unattributed',
+            action: 'platform.workspace_purged',
+            actorUserId: null,
+            actorLogin: null,
+            resourceType: 'workspace',
+            resourceId: 'ws-1',
+            payload: { attributedActor: false },
+          }),
+        ],
+      }),
+    });
+    renderPage(http);
+
+    const list = await screen.findByTestId('platform-audit-list');
+    expect(list.textContent).toContain('主机操作员（未署名） Host operator (unattributed)');
+    expect(list.textContent).not.toContain('null');
+  });
 });

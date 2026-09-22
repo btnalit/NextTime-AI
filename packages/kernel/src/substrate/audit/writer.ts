@@ -14,11 +14,18 @@ import type { PoolClient } from 'pg';
 
 export interface AuditRecordInput {
   /** `null` for a platform action (P-A1, migration 0019 `audit_records_actor_shape`): then
-   *  `actorPrincipalId` must be `null` and `actorUserId` set. */
+   *  `actorPrincipalId` must be `null`. `actorUserId` is normally set too; 遗留 54 (migration core
+   *  0032) legalizes exactly one platform row with no `actorUserId` — `action:
+   *  'platform.workspace_purged'` with `payload.attributedActor: false`, the operator CLI's
+   *  unattributed purge (`application/platform/purge-workspace.ts`'s own doc comment has the
+   *  detail). Any other actor-less platform row is still rejected by the DB constraint — this
+   *  interface does not enforce that narrower shape itself, so get it exactly right at the call
+   *  site or the INSERT fails. */
   readonly workspaceId: string | null;
   /** FK to `principals` — the acting Principal (I13: for a Handle call, its `on_behalf_of`). */
   readonly actorPrincipalId: string | null;
-  /** The acting platform user, for platform rows (`workspace_id is null`). */
+  /** The acting platform user, for platform rows (`workspace_id is null`) — omitted only for the
+   *  遗留 54 unattributed `platform.workspace_purged` case above. */
   readonly actorUserId?: string;
   /** The governed action name — the capability name for capability-dispatch audit rows. */
   readonly action: string;

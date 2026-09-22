@@ -2,6 +2,7 @@
 import type { ChatWire } from '@nexttime/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ChatUpdatesProvider } from '../hooks/useChatUpdates.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { ChatListPage } from './ChatListPage.js';
 import { ToastProvider } from './ui/Toast.js';
@@ -169,6 +170,75 @@ describe('ChatListPage archive / restore (W1, ConfirmTier low + undo)', () => {
     const toast = await screen.findByTestId('toast');
     expect(toast.textContent).toContain('失败 failed');
     expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat']);
+  });
+});
+
+describe('ChatListPage archive undo across a remount (遗留 57)', () => {
+  /** `ToastProvider` / `ChatUpdatesProvider` stand in for `App.tsx`'s app-root mount, which stays
+   *  up across `routes.tsx` swapping the page under it — exactly what `showList: false` then
+   *  `true` simulates (navigate away from the list, then back to a *fresh* instance of it). */
+  function Harness({ client, showList }: { client: CapabilityCaller; showList: boolean }) {
+    return (
+      <ToastProvider>
+        <ChatUpdatesProvider>
+          {showList ? (
+            <ChatListPage client={client} onSelectChat={vi.fn()} />
+          ) : (
+            <div data-testid="elsewhere" />
+          )}
+        </ChatUpdatesProvider>
+      </ToastProvider>
+    );
+  }
+
+  it('an Undo fired after the archiving list instance unmounted still updates a freshly remounted list', async () => {
+    // A *stateful* fake — unlike `scriptedClient`'s usual static fixtures, `list_chats` here must
+    // reflect what `archive_chat`/`unarchive_chat` actually did, the same way the real kernel
+    // would, so a remount's own fresh fetch is a meaningful "true server state at that moment"
+    // rather than always resetting to the pristine fixture.
+    const rows = new Map(FIXTURE.map((row) => [row.id, row]));
+    const client = scriptedClient({
+      list_chats: () => ({ items: [...rows.values()] }),
+      archive_chat: (params) => {
+        const id = (params as { chatId: string }).chatId;
+        const updated = chat({ ...rows.get(id), archivedAt: '2026-09-05T00:00:00.000Z' });
+        rows.set(id, updated);
+        return updated;
+      },
+      unarchive_chat: (params) => {
+        const id = (params as { chatId: string }).chatId;
+        const updated = chat({ ...rows.get(id), archivedAt: null });
+        rows.set(id, updated);
+        return updated;
+      },
+    });
+    const { rerender } = render(<Harness client={client} showList={true} />);
+    await screen.findByTestId('chats-list');
+
+    const opsRow = screen.getAllByTestId('chat-row')[1] as HTMLElement;
+    fireEvent.click(within(opsRow).getByTestId('chat-row-archive'));
+    await waitFor(() => expect(rowTitles()).toEqual(['新对话 New chat']));
+    const toast = await screen.findByTestId('toast');
+
+    // Navigate away (unmount this ChatListPage instance — its own `onChanged` closure, and the
+    // `ChatArchiveConfirm` that captured it, are now dead) and back (a brand-new instance, its own
+    // fresh `list_chats` call — still showing the archive, the true server state at that moment).
+    rerender(<Harness client={client} showList={false} />);
+    expect(screen.queryByTestId('chats-list')).toBeNull();
+    rerender(<Harness client={client} showList={true} />);
+    await screen.findByTestId('chats-list');
+    expect(rowTitles()).toEqual(['新对话 New chat']);
+
+    // The toast (owned by the app-root ToastProvider, never unmounted) survived both transitions.
+    // Its Undo still targets the *original*, now-doubly-unmounted ChatListPage's `onChanged` — but
+    // the broadcast (hooks/useChatUpdates.tsx) reaches the *current* mount's own listener too, so
+    // the already-rendered fresh list updates live, no further remount or `list_chats` call needed.
+    const listChatsCallsBeforeUndo = client.calls.filter((c) => c.name === 'list_chats').length;
+    fireEvent.click(within(toast).getByRole('button', { name: '撤销 Undo' }));
+    await waitFor(() => expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat']));
+    expect(client.calls.filter((c) => c.name === 'list_chats')).toHaveLength(
+      listChatsCallsBeforeUndo,
+    );
   });
 });
 
