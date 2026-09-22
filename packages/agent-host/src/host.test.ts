@@ -324,6 +324,24 @@ describe('createHost — handleStartTurn happy path', () => {
     ]);
   });
 
+  it('forwards image from the startTurn command to supervisorClient.spawn (S7-E 决定 E1)', async () => {
+    const { host, supervisor } = setUp();
+    const cmd = startTurnCommand({ image: 'nexttime-ai-worker-runtime:v2' });
+
+    await host.handleStartTurn(cmd);
+
+    expect(supervisor.spawnCalls).toEqual([
+      {
+        workspaceId: cmd.workspaceId,
+        principalId: cmd.principalId,
+        handle: cmd.handle,
+        kernelUrl: 'http://kernel:8080',
+        llmUrl: cmd.kernelLlmUrl,
+        image: 'nexttime-ai-worker-runtime:v2',
+      },
+    ]);
+  });
+
   it('rejects a second concurrent turn for the same principal without spawning again', async () => {
     const { host, supervisor, kernelLink } = setUp();
     const first = startTurnCommand();
