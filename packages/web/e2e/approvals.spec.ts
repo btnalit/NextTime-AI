@@ -130,7 +130,9 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     // (ActionRequestCard.tsx `action-outcome`) reuses that class and carries `data-status` itself,
     // so while the card sits on `approved` the class locator matches both (strict-mode violation).
     await expect(
-      page.getByTestId('system-status-line').filter({ has: page.locator('[data-status="approved"]') }),
+      page
+        .getByTestId('system-status-line')
+        .filter({ has: page.locator('[data-status="approved"]') }),
     ).toBeVisible({ timeout: 15_000 });
   });
 });
