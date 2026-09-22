@@ -196,6 +196,108 @@ describe('POST /resident/spawn', () => {
     });
     expect(res.json()).toMatchObject({ created: false });
   });
+
+  // S7-E (P-C §6.5 决定 E1): the optional `image` is checked against the exact same allowlist
+  // `/task/spawn` already enforces above — one security boundary for both spawn APIs.
+  it('403s a non-allowlisted image (same allowlist /task/spawn uses)', async () => {
+    const { app, docker } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AUTH,
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h', image: 'some-random-image' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('image_not_allowed');
+    expect(docker.createCalls).toHaveLength(0);
+  });
+
+  it('200s an explicitly allowlisted image and spawns the container with it', async () => {
+    const { app, docker } = setup({ WORKER_IMAGE_ALLOWLIST: 'some-approved-image' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AUTH,
+      payload: {
+        workspaceId: WS_R,
+        principalId: ALICE,
+        handle: 'h',
+        image: 'some-approved-image',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(docker.createCalls[0]?.image).toBe('some-approved-image');
+  });
+
+  it('200s and uses config.workerImage when image is omitted (unchanged pre-S7-E behavior)', async () => {
+    const { app, docker, config } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AUTH,
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(docker.createCalls[0]?.image).toBe(config.workerImage);
+  });
+});
+
+describe('GET /residents (S7-E inventory)', () => {
+  it('401s with no Authorization header', async () => {
+    const { app } = setup();
+    const res = await app.inject({ method: 'GET', url: '/residents' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('lists every resident container', async () => {
+    const { app } = setup();
+    await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AUTH,
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
+    });
+    const res = await app.inject({ method: 'GET', url: '/residents', headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({ principalId: ALICE, workspaceId: WS_R, running: true });
+  });
+});
+
+describe('GET /images (S7-E inventory)', () => {
+  it('401s with no Authorization header', async () => {
+    const { app } = setup();
+    const res = await app.inject({ method: 'GET', url: '/images' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('lists only images carrying the platform pi-version label', async () => {
+    const { app, docker } = setup();
+    docker.registerImage({
+      id: 'sha256:abc',
+      tags: ['nexttime-ai-worker-runtime:v1'],
+      created: '2026-09-22T00:00:00.000Z',
+      labels: { 'ai.nexttime.pi-version': '0.84.4' },
+    });
+    docker.registerImage({
+      id: 'sha256:def',
+      tags: ['unrelated:latest'],
+      created: '2026-09-22T00:00:00.000Z',
+      labels: {},
+    });
+    const res = await app.inject({ method: 'GET', url: '/images', headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items).toEqual([
+      {
+        id: 'sha256:abc',
+        tags: ['nexttime-ai-worker-runtime:v1'],
+        created: '2026-09-22T00:00:00.000Z',
+        labels: { 'ai.nexttime.pi-version': '0.84.4' },
+      },
+    ]);
+  });
 });
 
 describe('POST /resident/stop', () => {

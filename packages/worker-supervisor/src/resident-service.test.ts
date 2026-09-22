@@ -332,6 +332,146 @@ describe('resident-service spawn', () => {
   });
 });
 
+describe('resident-service spawn — S7-E active runtime image (E1/E2)', () => {
+  it('creates the container with the given image, stamped onto the image label', async () => {
+    const { service, docker } = setup();
+    const outcome = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:v2',
+    });
+    expect(outcome.created).toBe(true);
+    expect(docker.createCalls[0]?.image).toBe('nexttime-ai-worker-runtime:v2');
+    expect(docker.createCalls[0]?.labels['nexttime.image']).toBe('nexttime-ai-worker-runtime:v2');
+  });
+
+  it('falls back to config.workerImage when no image is given', async () => {
+    const { service, docker, config } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(docker.createCalls[0]?.image).toBe(config.workerImage);
+    expect(docker.createCalls[0]?.labels['nexttime.image']).toBe(config.workerImage);
+  });
+
+  it('reuses a running container when the image is unchanged across spawns', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:v2',
+    });
+    const second = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:v2',
+    });
+    expect(second.created).toBe(false);
+    expect(second.containerId).toBe(first.containerId);
+    expect(docker.createCalls).toHaveLength(1);
+  });
+
+  it('recreates (does not reuse) a running container when the active image changes (E2 spec-drift rebuild)', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:v1',
+    });
+    expect(first.created).toBe(true);
+    expect(docker.createCalls[0]?.image).toBe('nexttime-ai-worker-runtime:v1');
+
+    const second = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:v2',
+    });
+    expect(second.created).toBe(true);
+    expect(second.containerId).not.toBe(first.containerId);
+    expect(second.restarts).toBe(1);
+    // Gracefully stopped (not force-killed) before being removed and recreated — same shape the
+    // Handle-rotation/skillsInline-change recreate paths already use.
+    expect(docker.stopCalls).toEqual([{ name: 'nexttime-entry-alice', timeoutSeconds: 10 }]);
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    expect(docker.createCalls).toHaveLength(2);
+    expect(docker.createCalls[1]?.image).toBe('nexttime-ai-worker-runtime:v2');
+    expect(docker.createCalls[1]?.labels['nexttime.image']).toBe('nexttime-ai-worker-runtime:v2');
+  });
+
+  it('does not force a recreation on first spawn (no existing label to compare against)', async () => {
+    const { service, docker } = setup();
+    const outcome = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:v1',
+    });
+    expect(outcome.created).toBe(true);
+    expect(docker.createCalls).toHaveLength(1);
+  });
+});
+
+describe('resident-service list / listImages (S7-E inventory)', () => {
+  it('list() returns every entry container with its principal/workspace/image/imageId', async () => {
+    const { service } = setup();
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:v1',
+    });
+    const inventory = await service.list();
+    expect(inventory).toHaveLength(1);
+    expect(inventory[0]).toMatchObject({
+      principalId: 'alice',
+      workspaceId: 'ws-1',
+      running: true,
+      status: 'running',
+      image: 'nexttime-ai-worker-runtime:v1',
+    });
+    expect(inventory[0]?.imageId).toBe('sha256:fake-nexttime-ai-worker-runtime:v1');
+  });
+
+  it('list() reports imageId undefined for a stopped container', async () => {
+    const { service, docker } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    await service.stop('alice');
+    const inventory = await service.list();
+    expect(inventory[0]?.running).toBe(false);
+    expect(inventory[0]?.imageId).toBeUndefined();
+    // sanity: the fake actually recorded the stop
+    expect(docker.stopCalls).toHaveLength(1);
+  });
+
+  it('listImages() forwards to docker.listImages filtered by the pi-version label', async () => {
+    const { service, docker } = setup();
+    docker.registerImage({
+      id: 'sha256:abc',
+      tags: ['nexttime-ai-worker-runtime:v1'],
+      created: '2026-09-22T00:00:00.000Z',
+      labels: { 'ai.nexttime.pi-version': '0.84.4' },
+    });
+    docker.registerImage({
+      id: 'sha256:def',
+      tags: ['some-unrelated-image:latest'],
+      created: '2026-09-22T00:00:00.000Z',
+      labels: {},
+    });
+    const images = await service.listImages();
+    expect(images).toEqual([
+      {
+        id: 'sha256:abc',
+        tags: ['nexttime-ai-worker-runtime:v1'],
+        created: '2026-09-22T00:00:00.000Z',
+        labels: { 'ai.nexttime.pi-version': '0.84.4' },
+      },
+    ]);
+  });
+});
+
 describe('resident-service spawn — S3.13 skillsInline', () => {
   const SKILL = { name: 'writing-tips', files: { 'SKILL.md': '# writing tips\n\nbody' } };
 

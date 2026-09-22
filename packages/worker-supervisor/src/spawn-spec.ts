@@ -32,6 +32,12 @@
  * `systemPrompt` is **not** part of this spec — `resident-service.ts` writes it straight to
  * `/workspace/.nexttime/system-prompt.md` (a file, not an env var or CMD arg) before calling
  * `buildSpawnSpec`, since `entrypoint.sh` already reads that exact path.
+ *
+ * S7-E addition (P-C §6.5 决定 E1/E2): `input.image` is now the container's actual `image`
+ * (previously always `config.workerImage`) and is stamped as `IMAGE_LABEL` — `resident-service.ts`'s
+ * `spawn()` compares it against the running container's own label the same way it already compares
+ * `HANDLE_JTI_LABEL`/`SKILLS_HASH_LABEL`/`EGRESS_DENY_LABEL`, so a changed active runtime image
+ * forces a recreate at the container's own next spawn instead of silently keeping the old image.
  */
 
 import { createHash } from 'node:crypto';
@@ -74,6 +80,12 @@ export const EGRESS_DENY_LABEL = 'nexttime.egress-deny';
  *  older container predating this label reads back as via `?? ''`, so neither ever forces a
  *  spurious recreate on its own. */
 export const SKILLS_HASH_LABEL = 'nexttime.skills-hash';
+/** S7-E (P-C §6.5 决定 E1/E2): the exact image reference (tag/digest string) this container was
+ *  (re)created with — stamped so `resident-service.ts`'s `spawn()` can fold an active-runtime-
+ *  image change into the same recreate decision `HANDLE_JTI_LABEL`/`SKILLS_HASH_LABEL` already
+ *  drive. Always non-empty (every spawn resolves a concrete image, `config.workerImage` at worst),
+ *  unlike those two labels' own "empty = no Skills / undecodable Handle" convention. */
+export const IMAGE_LABEL = 'nexttime.image';
 
 /**
  * A deterministic digest of `skillsInline`'s content — order-independent across both the skill
@@ -108,6 +120,10 @@ export interface BuildSpawnSpecInput {
   /** Carried forward from the previous container's `nexttime.restarts` label (0 for a first-ever
    *  spawn) — see `resident-service.ts`. */
   readonly restarts: number;
+  /** S7-E (P-C §6.5 决定 E1): the image to spawn — resolved by the caller (`resident-service.ts`'s
+   *  `spawn()`: `input.image ?? config.workerImage`), always a concrete value by the time it
+   *  reaches this function. Stamped as `IMAGE_LABEL`. */
+  readonly image: string;
   /** S2.6: `<provider>/<id>` from the workspace's published entry WorkerDefinition, when set —
    *  becomes container CMD `['--model', model]`; `entrypoint.sh` appends any CMD after its own
    *  fixed pi flags (same mechanism `task-spawn-spec.ts`'s one-shot Task mode already uses).
@@ -157,7 +173,7 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
 
   return {
     name: entryContainerName(input.principalId),
-    image: config.workerImage,
+    image: input.image,
     cmd: input.model ? ['--model', input.model] : undefined,
     env,
     binds,
@@ -169,6 +185,7 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
       [HANDLE_JTI_LABEL]: input.handleJti ?? '',
       [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
       [SKILLS_HASH_LABEL]: input.skillsHash ?? '',
+      [IMAGE_LABEL]: input.image,
     },
     networkName: input.networkName,
     runtime: config.workerRuntime,

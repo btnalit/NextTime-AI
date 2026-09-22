@@ -29,6 +29,7 @@ describe('buildSpawnSpec', () => {
     handle: 'the-handle-jwt',
     networkName: 'nexttime-ai_workers',
     restarts: 0,
+    image: config.workerImage,
   });
 
   it('names and images the container', () => {
@@ -87,6 +88,7 @@ describe('buildSpawnSpec', () => {
       llmUrl: 'http://llm-override:9',
       networkName: 'workers',
       restarts: 0,
+      image: config.workerImage,
     });
     expect(overridden.env).toContain('KERNEL_URL=http://kernel-override:9');
     expect(overridden.env).toContain('KERNEL_LLM_URL=http://llm-override:9');
@@ -107,6 +109,7 @@ describe('buildSpawnSpec', () => {
       handle: 'h',
       networkName: 'workers',
       restarts: 0,
+      image: config.workerImage,
     });
     expect(withFakeModelsPath.binds).toEqual([
       '/host/data/workspaces/alice:/workspace',
@@ -129,6 +132,7 @@ describe('buildSpawnSpec', () => {
       handle: 'h',
       networkName: 'workers',
       restarts: 0,
+      image: config.workerImage,
     });
     expect(withCpus.cpus).toBe(1.5);
   });
@@ -145,6 +149,7 @@ describe('buildSpawnSpec', () => {
       handle: 'h',
       networkName: 'workers',
       restarts: 0,
+      image: config.workerImage,
     });
     expect(withDns.dns).toEqual(['198.51.100.53', '198.51.100.54']);
   });
@@ -158,7 +163,12 @@ describe('buildSpawnSpec', () => {
       'nexttime.handle-jti': '',
       'nexttime.egress-deny': '',
       'nexttime.skills-hash': '',
+      'nexttime.image': 'nexttime-ai-worker-runtime',
     });
+  });
+
+  it('stamps the resolved image onto the image label (S7-E)', () => {
+    expect(spec.labels['nexttime.image']).toBe('nexttime-ai-worker-runtime');
   });
 
   it('stamps a comma-joined egressDeny onto the label when given (feat/egress-definition-lists)', () => {
@@ -169,6 +179,7 @@ describe('buildSpawnSpec', () => {
       handle: 'h',
       networkName: 'workers',
       restarts: 0,
+      image: config.workerImage,
       egressDeny: ['blocked.example.com', '.suffix.example.net'],
     });
     expect(withDeny.labels['nexttime.egress-deny']).toBe('blocked.example.com,.suffix.example.net');
@@ -182,6 +193,7 @@ describe('buildSpawnSpec', () => {
       handle: 'h',
       networkName: 'workers',
       restarts: 0,
+      image: config.workerImage,
       handleJti: 'the-jti-value',
     });
     expect(withJti.labels['nexttime.handle-jti']).toBe('the-jti-value');
@@ -195,6 +207,7 @@ describe('buildSpawnSpec', () => {
       handle: 'h',
       networkName: 'workers',
       restarts: 3,
+      image: config.workerImage,
     });
     expect(recreated.labels['nexttime.restarts']).toBe('3');
   });
@@ -211,6 +224,7 @@ describe('buildSpawnSpec', () => {
       handle: 'the-handle-jwt',
       networkName: 'nexttime-ai_workers',
       restarts: 0,
+      image: config.workerImage,
       model: 'example-provider/example-model',
     });
     expect(withModel.cmd).toEqual(['--model', 'example-provider/example-model']);
@@ -224,6 +238,7 @@ describe('buildSpawnSpec', () => {
       handle: 'h',
       networkName: 'workers',
       restarts: 0,
+      image: config.workerImage,
       skillsHash: 'deadbeef',
     });
     expect(withSkills.labels['nexttime.skills-hash']).toBe('deadbeef');

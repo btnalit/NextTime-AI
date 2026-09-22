@@ -12,11 +12,15 @@
  *
  * Routes:
  *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
- *                                   systemPrompt?, model?}                        [guarded]
+ *                                   systemPrompt?, model?, image?}                [guarded]
  *                                  -> 200 {containerId, ip, status, created, restarts}
+ *                                     | 403 (image not allowlisted)
  *   POST /resident/stop           {principalId} -> 204                           [guarded]
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404                    [guarded]
  *   POST /resident/:principalId/touch -> 204 | 404                               [guarded]
+ *   GET  /residents               -> 200 {items: ResidentInventoryEntry[]}       [guarded]
+ *   GET  /images                  -> 200 {items: RuntimeImageInfo[]} (platform-labelled only)
+ *                                                                                 [guarded]
  *   POST /task/spawn              {taskId, workerRunId, workspaceId, onBehalfOf, capabilityHandle,
  *                                   image?, model?, systemPrompt?, skillsInline?,
  *                                   timeoutSec?}                                  [guarded]
@@ -24,6 +28,12 @@
  *   POST /task/:workerRunId/terminate -> 204 | 404
  *   GET  /task/:workerRunId       -> 200 TaskStatus | 404
  *   GET  /healthz                 -> 200 {status:"ok"}
+ *
+ * S7-E (P-C §6.5): `/resident/spawn`'s optional `image` is validated against the exact same
+ * `isImageAllowed`/`config.taskImageAllowlist` `/task/spawn` already uses — one allowlist, one
+ * security boundary, for both spawn APIs (design §6.6 "WORKER_IMAGE_ALLOWLIST 仍在 env，不进页面").
+ * `/images` and `/residents` are read-only inventory for the kernel's `runtime_inventory`
+ * capability — see `resident-service.ts`'s `listImages`/`list` for what each actually returns.
  */
 
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -43,8 +53,9 @@ export interface CreateServerOptions {
   /** Optional so existing resident-only callers (none left in this repo, but kept defensive)
    *  aren't forced to wire up Task mode — `/task/*` routes 501 without it. */
   readonly taskService?: TaskService;
-  /** Only needed alongside `taskService`, for `POST /task/spawn`'s image-allowlist check
-   *  (`config.taskImageAllowlist` / `isImageAllowed`). */
+  /** `POST /task/spawn`'s image-allowlist check (`config.taskImageAllowlist` / `isImageAllowed`)
+   *  needs this alongside `taskService`. S7-E: `POST /resident/spawn`'s own optional `image` is
+   *  checked against the same allowlist when this is present (see that route's own comment). */
   readonly config?: SupervisorConfig;
   /** The internal-plane shared secret (`internal-auth.ts` `loadInternalToken`'s output) —
    *  required on `POST /task/spawn` and every `/resident/*` route. `undefined` fails closed:
@@ -67,8 +78,22 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       reply.code(400);
       return { error: { code: 'invalid_body', message: parsed.error.message } };
     }
+    // S7-E (P-C §6.5 决定 E1): same allowlist and same 403 shape `/task/spawn` already enforces
+    // below (`isImageAllowed`/`config.taskImageAllowlist`) — one security boundary for both spawn
+    // APIs. `config` stays optional here (unlike `/task/spawn`'s hard 501 guard) for the same
+    // "existing resident-only caller, none left in this repo, kept defensive" reason
+    // `CreateServerOptions.config`'s own doc comment already gives: every real deployment passes
+    // it, so the allowlist is enforced in practice; a caller that omits `config` entirely gets the
+    // pre-S7-E behavior (no image override possible to allowlist in the first place, since
+    // `image` then falls back to `undefined` and `residentService.spawn` resolves its own
+    // `config.workerImage`).
+    const image = parsed.data.image ?? config?.workerImage;
+    if (config && image && !isImageAllowed(config, image)) {
+      reply.code(403);
+      return { error: { code: 'image_not_allowed', message: `image not allowlisted: ${image}` } };
+    }
     try {
-      const outcome = await residentService.spawn(parsed.data);
+      const outcome = await residentService.spawn({ ...parsed.data, image });
       reply.code(200);
       return outcome;
     } catch (err) {
@@ -76,6 +101,18 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       reply.code(500);
       return { error: { code: 'internal_error', message: String(err) } };
     }
+  });
+
+  app.get('/residents', requireInternal, async (_request, reply) => {
+    const items = await residentService.list();
+    reply.code(200);
+    return { items };
+  });
+
+  app.get('/images', requireInternal, async (_request, reply) => {
+    const items = await residentService.listImages();
+    reply.code(200);
+    return { items };
   });
 
   app.post('/resident/stop', requireInternal, async (request, reply) => {

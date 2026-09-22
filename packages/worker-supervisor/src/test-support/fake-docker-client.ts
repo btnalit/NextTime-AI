@@ -4,7 +4,12 @@
  * sequential IP so tests can assert egress registration without a real Docker network.
  */
 
-import type { ContainerSpec, ContainerState, DockerClient } from '../docker-client.js';
+import type {
+  ContainerSpec,
+  ContainerState,
+  DockerClient,
+  RuntimeImageInfo,
+} from '../docker-client.js';
 
 export interface FakeDockerClient extends DockerClient {
   /** Every container this fake has ever created, keyed by name — includes stopped/removed ones
@@ -20,6 +25,9 @@ export interface FakeDockerClient extends DockerClient {
    *  uses this to distinguish "the process finished" (`exited`/`failed`, depending on the code)
    *  from an out-of-band kill or this service's own `stop()`/`remove()` calls. */
   simulateExit(name: string, exitCode: number): void;
+  /** S7-E: registers a fake host image `listImages`/`inspectImage` can find — tests never touch a
+   *  real Docker image store. */
+  registerImage(image: RuntimeImageInfo): void;
 }
 
 let ipCounter = 10;
@@ -30,6 +38,7 @@ function nextIp(): string {
 
 export function createFakeDockerClient(options: { networkName?: string } = {}): FakeDockerClient {
   const containers = new Map<string, ContainerState & { idCounter: number }>();
+  const images: RuntimeImageInfo[] = [];
   let idSeq = 0;
   const createCalls: ContainerSpec[] = [];
   const stopCalls: Array<{ name: string; timeoutSeconds: number }> = [];
@@ -53,6 +62,10 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
         ip: nextIp(),
         labels: { ...spec.labels },
         exitCode: undefined,
+        // Deterministic per distinct `spec.image` — mirrors real Docker's own "same content ->
+        // same image id" property closely enough for the drift-comparison tests this fake exists
+        // for (resident-service.test.ts's own "image changed forces a recreate" case).
+        imageId: `sha256:fake-${spec.image}`,
       };
       containers.set(spec.name, state);
       return state;
@@ -127,6 +140,18 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
           exitCode,
         });
       }
+    },
+
+    async listImages(labelKey: string): Promise<RuntimeImageInfo[]> {
+      return images.filter((image) => labelKey in image.labels);
+    },
+
+    async inspectImage(nameOrTag: string): Promise<RuntimeImageInfo | undefined> {
+      return images.find((image) => image.id === nameOrTag || image.tags.includes(nameOrTag));
+    },
+
+    registerImage(image: RuntimeImageInfo): void {
+      images.push(image);
     },
   };
 }

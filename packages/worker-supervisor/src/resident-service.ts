@@ -39,7 +39,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { posix as posixPath } from 'node:path';
 import type { SpawnRequest, SupervisorConfig, TaskSkillInline } from './config.js';
-import type { DockerClient } from './docker-client.js';
+import type { DockerClient, RuntimeImageInfo } from './docker-client.js';
+import { IMAGE_PI_VERSION_LABEL } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
 import type { EgressMapStore, SourceMapFile } from './egress-map.js';
 import { decodeHandleJtiUnsafe } from './handle-jti.js';
@@ -49,6 +50,7 @@ import {
   ENTRY_ROLE_LABEL,
   ENTRY_ROLE_VALUE,
   HANDLE_JTI_LABEL,
+  IMAGE_LABEL,
   PRINCIPAL_LABEL,
   RESTARTS_LABEL,
   SKILLS_HASH_LABEL,
@@ -117,6 +119,27 @@ export interface ResidentStatus {
   readonly lastTouchedAt: string | undefined;
 }
 
+/** S7-E (P-C §6.5 "入口容器列表（用户、工作区、镜像 digest、启动时间、是否空闲）"): one row of `GET
+ *  /residents` — raw facts only. Whether a container "待重建" is derived by the *kernel*
+ *  (`runtime_inventory`), not here: this process knows the platform's own active-image setting
+ *  never (that lives in `platform_settings`, which only the kernel reads), so it can only ever
+ *  report what a container *is*, never whether it matches what it *should* be. */
+export interface ResidentInventoryEntry {
+  readonly principalId: string;
+  readonly workspaceId: string;
+  readonly containerId: string;
+  readonly running: boolean;
+  readonly status: string;
+  /** The image reference this container was last (re)created with (`IMAGE_LABEL`) — `undefined`
+   *  for a container predating this label. */
+  readonly image: string | undefined;
+  /** This container's own resolved image id (`ContainerState.imageId`) — `undefined` when not
+   *  running (Docker releases it, same convention `ip` already follows). */
+  readonly imageId: string | undefined;
+  readonly startedAt: string | undefined;
+  readonly lastTouchedAt: string | undefined;
+}
+
 interface RegistryEntry {
   workspaceId: string;
   containerId: string;
@@ -182,6 +205,12 @@ export interface ResidentService {
    *  actually unregisters it (or for a container this instance never knew about). Returns `true`
    *  only when it actually unregistered a known, now-confirmed-not-running container. */
   notifyContainerExited(containerId: string, action: string): Promise<boolean>;
+  /** S7-E: `GET /residents` — every entry container across every workspace, raw facts (see
+   *  `ResidentInventoryEntry`'s own doc comment for why no "待重建" field lives here). */
+  list(): Promise<ResidentInventoryEntry[]>;
+  /** S7-E: `GET /images` — every image carrying the platform's `ai.nexttime.pi-version` label
+   *  (`docker-client.ts`'s `IMAGE_PI_VERSION_LABEL`). */
+  listImages(): Promise<RuntimeImageInfo[]>;
 }
 
 export function createResidentService(deps: ResidentServiceDeps): ResidentService {
@@ -359,6 +388,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       } = input;
       const name = entryContainerName(principalId);
       const paths = workspacePaths(config, principalId);
+      // S7-E (P-C §6.5 决定 E1): resolved once, at the top — every use below (the drift check, the
+      // (re)create spec, the returned/stamped label) reads this one value, matching how `handle`/
+      // `skillsInline` are already destructured once rather than re-read from `input`.
+      const image = input.image ?? config.workerImage;
 
       // The supervisor's own container runs as uid:gid 10001 (Dockerfile `USER nexttime`,
       // matching every other @nexttime/* image) — a directory this process creates is therefore
@@ -395,6 +428,16 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       const existingSkillsHash = existing?.labels[SKILLS_HASH_LABEL] ?? '';
       const skillsChanged = Boolean(existing && existingSkillsHash !== incomingSkillsHash);
 
+      // S7-E (P-C §6.5 决定 E1/E2): same shape again — a mismatch between the resolved `image`
+      // this call requests and the running container's own `IMAGE_LABEL` means the platform's
+      // active runtime image changed since this container was (re)created, and Docker cannot swap
+      // a running container's image out from under it, so reuse must not apply. `existingImage`
+      // empty/absent (a container predating this label) never forces a recreate on its own — only
+      // an actual, observed mismatch does, matching `handleRotated`/`skillsChanged`'s own "unknown
+      // never rotates" convention.
+      const existingImage = existing?.labels[IMAGE_LABEL];
+      const imageChanged = Boolean(existing && existingImage && existingImage !== image);
+
       // 遗留22 / code-review-2026-09-10.md §3.5: EGRESS_DENY_LABEL only ever reflects the list
       // this container was (re)created with — an *earlier* reuse call's own `registerEgress`
       // below (unconditional on every reuse, so a newly published list takes effect without
@@ -429,7 +472,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           splitEgressDenyLabel(existing?.labels[EGRESS_DENY_LABEL]),
         );
 
-      const rotated = handleRotated || skillsChanged || egressDenyDrifted;
+      const rotated = handleRotated || skillsChanged || egressDenyDrifted || imageChanged;
 
       if (existing?.running && !rotated) {
         registry.set(principalId, {
@@ -496,6 +539,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         handleJti: incomingJti,
         egressDeny,
         skillsHash: incomingSkillsHash,
+        image,
       });
       const created = await docker.createAndStart(spec);
 
@@ -666,6 +710,33 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         }),
       );
       return true;
+    },
+
+    async list(): Promise<ResidentInventoryEntry[]> {
+      const containers = await docker.listByLabel(ENTRY_ROLE_LABEL, ENTRY_ROLE_VALUE);
+      return containers
+        .map((state): ResidentInventoryEntry | undefined => {
+          const principalId = state.labels[PRINCIPAL_LABEL];
+          const workspaceId = state.labels[WORKSPACE_LABEL];
+          if (!principalId || !workspaceId) return undefined;
+          const entry = registry.get(principalId);
+          return {
+            principalId,
+            workspaceId,
+            containerId: state.id,
+            running: state.running,
+            status: state.status,
+            image: state.labels[IMAGE_LABEL] || undefined,
+            imageId: state.running ? state.imageId : undefined,
+            startedAt: state.startedAt,
+            lastTouchedAt: entry ? new Date(entry.lastTouchedAt).toISOString() : undefined,
+          };
+        })
+        .filter((entry): entry is ResidentInventoryEntry => entry !== undefined);
+    },
+
+    async listImages(): Promise<RuntimeImageInfo[]> {
+      return docker.listImages(IMAGE_PI_VERSION_LABEL);
     },
   };
 }

@@ -417,8 +417,24 @@ services:
   # `nexttime-ai-worker-runtime` image worker-supervisor's resident mode spawns by name (its
   # `WORKER_IMAGE` env above) — this service itself is never `up` (deploy/worker-runtime/
   # Dockerfile; docs/runbooks/host-worker-runtime.md has the build/spawn walkthrough).
+  #
+  # S7-E: PI_VERSION / PLATFORM_EXTENSION_VERSION / BUILT_FROM are *build* args, baked into the
+  # image as the `ai.nexttime.*` labels `deploy/worker-runtime/Dockerfile` stamps (that file's own
+  # comment has the full "why a build arg, not derived inside the Dockerfile" reasoning and the
+  # exact export lines to run before this build — same shape `kernel`'s own `KERNEL_VERSION`
+  # above already uses). Unset → "dev".
   worker-runtime:
-    build: { context: ., dockerfile: deploy/worker-runtime/Dockerfile }
+    build:
+      {
+        context: .,
+        dockerfile: deploy/worker-runtime/Dockerfile,
+        args:
+          {
+            PI_VERSION: "${PI_VERSION:-dev}",
+            PLATFORM_EXTENSION_VERSION: "${PLATFORM_EXTENSION_VERSION:-dev}",
+            BUILT_FROM: "${BUILT_FROM:-dev}",
+          },
+      }
     image: nexttime-ai-worker-runtime
     profiles: ["build-only"]
 
