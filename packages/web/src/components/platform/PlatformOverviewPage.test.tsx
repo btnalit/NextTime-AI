@@ -96,6 +96,32 @@ describe('PlatformOverviewPage', () => {
     expect(audit.textContent).toContain('admin');
   });
 
+  it('renders an unattributed-actor recent-audit row (遗留 54) with a clear label, never blank or "null"', async () => {
+    const http = scriptedHttp({
+      platform_overview: () =>
+        overview({
+          recentAudit: [
+            {
+              id: 'audit-unattributed',
+              action: 'platform.workspace_purged',
+              actorUserId: null,
+              actorLogin: null,
+              resourceType: 'workspace',
+              resourceId: 'ws-1',
+              payload: { attributedActor: false },
+              createdAt: '2026-09-10T00:00:00.000Z',
+            },
+          ],
+        }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const audit = await screen.findByTestId('platform-overview-audit');
+    expect(audit.textContent).toContain('主机操作员（未署名） Host operator (unattributed)');
+    expect(audit.textContent).not.toContain('null');
+  });
+
   it('shows BindApiKeyForm only when there are pending-activation users, and reloads on success', async () => {
     let calls = 0;
     const http = scriptedHttp({

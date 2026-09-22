@@ -2,7 +2,7 @@ import type { PlatformOverviewWire, PlatformWorkspaceWire } from '@nexttime/shar
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { MeResult } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime } from '../../lib/format.js';
+import { formatAuditActor, formatDateTime } from '../../lib/format.js';
 import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
 import { hrefs } from '../../lib/router.js';
 import { BindApiKeyForm } from '../BindApiKeyForm.js';
@@ -210,7 +210,7 @@ function PlatformOverviewBody({
                 key={row.id}
                 testId="platform-overview-audit-row"
                 title={row.action}
-                meta={`${row.actorLogin ?? row.actorUserId} · ${formatDateTime(row.createdAt)}`}
+                meta={`${formatAuditActor(row)} · ${formatDateTime(row.createdAt)}`}
               />
             ))}
           </DataList>
