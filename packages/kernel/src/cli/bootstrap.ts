@@ -541,11 +541,13 @@ export async function issueServiceHandleFromCli(
 // mechanism, not content (design doc §7.10). That cleanup is `scripts/delete-workspace.sh`'s job,
 // driven by these subcommands' own `PRINCIPAL=`/`TASK=` output lines (see `printHostCleanupLines`).
 //
-// The audit row: `audit_records_actor_shape` (0019) needs an acting user on a platform row. A
-// CLI run names one with `--actor <login>` or, failing that, takes the first login in
-// `NEXTTIME_PLATFORM_ADMINS` (the anti-lockout administrator every host sets); when neither
-// resolves to a user, no audit row is written and the structured `workspace_purged` event line on
-// stderr is the only trail — the same replacement `delete-workspace` always used.
+// The audit row: a CLI run names the acting administrator with `--actor <login>` or, failing
+// that, takes the first login in `NEXTTIME_PLATFORM_ADMINS` (the anti-lockout administrator every
+// host sets). 遗留 54: when neither resolves to a user, `purgeWorkspace` still always writes the
+// `platform.workspace_purged` row — `actor_user_id` null, `payload.attributedActor: false`
+// (`audit_records_actor_shape`, migration core 0032, legalizes that shape) — rather than leaving
+// only the structured `workspace_purged` event line on stderr as the sole trail; that line is
+// still printed either way, same as `delete-workspace` always did.
 // -------------------------------------------------------------------------------------------
 
 export type { ForeignKeyEdge, WorkspaceScopedSchema } from '../application/platform/index.js';
@@ -1219,8 +1221,9 @@ function printPurgeSummary(purged: PurgeWorkspaceResultWire, verb: string): void
   }
 }
 
-/** The structured stderr event — the trail a CLI purge always leaves, whether or not it could
- *  also write the `platform.workspace_purged` audit row (see the section doc comment). */
+/** The structured stderr event — always printed alongside the `platform.workspace_purged` audit
+ *  row `purgeWorkspace` itself now always writes (遗留 54), whether or not a real administrator
+ *  could be named (see the section doc comment). */
 function printPurgeEvent(
   purged: PurgeWorkspaceResultWire,
   actor: { readonly login: string } | undefined,
@@ -1236,7 +1239,7 @@ function printPurgeEvent(
       forced,
       purgedAt: new Date().toISOString(),
       actorLogin: actor?.login ?? null,
-      auditRowWritten: actor !== undefined,
+      attributedActor: actor !== undefined,
       principalCount: purged.principalIds.length,
       taskCount: purged.taskIds.length,
       purgedUsers: purged.purgedUsers.map((u) => u.login),
@@ -1245,7 +1248,7 @@ function printPurgeEvent(
   );
   if (actor === undefined) {
     console.error(
-      'purge: no acting administrator resolved (pass --actor <login> or set NEXTTIME_PLATFORM_ADMINS) — no platform audit row was written; the event line above is the only trail',
+      'purge: no acting administrator resolved (pass --actor <login> or set NEXTTIME_PLATFORM_ADMINS) — the platform audit row was still written, recorded as an unattributed host-operator action (payload.attributedActor: false)',
     );
   }
 }

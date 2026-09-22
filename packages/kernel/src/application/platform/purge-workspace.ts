@@ -380,10 +380,12 @@ export interface PurgeWorkspaceInput {
   readonly workspaceId: string;
   /** `false`: preview only (nothing written). `true`: execute. */
   readonly confirm: boolean;
-  /** The acting administrator, for the `platform.workspace_purged` audit row
-   *  (`audit_records_actor_shape` needs one on a platform row). Omitted — the operator CLI with
-   *  no resolvable administrator — means no audit row: the CLI then prints its own structured
-   *  event line instead. */
+  /** The acting administrator, for the `platform.workspace_purged` audit row. Every capability
+   *  call has one (`actingUser(context)` never returns undefined). Omitted only by the operator
+   *  CLI when neither `--actor` nor `NEXTTIME_PLATFORM_ADMINS` resolves to a real user — the row
+   *  is still written (遗留 54: audit only grows), just with `actor_user_id` null and
+   *  `payload.attributedActor: false` (`audit_records_actor_shape`, migration core 0032, legalizes
+   *  that shape for a platform row); the CLI additionally prints its own structured event line. */
   readonly actorUserId?: string;
   /** Operator override (the bootstrap CLI's legacy `delete-workspace`, `scripts/delete-
    *  workspace.sh --force`): skip the eligibility and default-workspace checks. Never reachable
@@ -655,36 +657,39 @@ export async function purgeWorkspace(
         taskIds,
       };
 
-      if (input.actorUserId !== undefined) {
-        // The platform audit row that outlives the workspace (§4 "平台审计行保留", §8). Written
-        // here, inside the cascade's own transaction, so it exists exactly when the purge does.
-        // `params.workspaceId` mirrors what dispatch writes for every capability row, so
-        // `platform_audit_query {targetWorkspaceId}` finds this row too.
-        await writeAudit(client, {
-          workspaceId: null,
-          actorPrincipalId: null,
-          actorUserId: input.actorUserId,
-          action: 'platform.workspace_purged',
-          resourceType: 'workspace',
-          resourceId: workspace.id,
-          payload: {
-            channel: 'platform',
-            params: { workspaceId: workspace.id },
-            workspaceName: workspace.name,
-            purpose: workspace.purpose,
-            status: workspace.status,
-            reason,
-            forced: input.force === true,
-            counts,
-            totalRows,
-            activeHandles,
-            warnings,
-            purgedUsers,
-            principalIds: result.principalIds,
-            taskIds,
-          },
-        });
-      }
+      // The platform audit row that outlives the workspace (§4 "平台审计行保留", §8). Written
+      // here, inside the cascade's own transaction, so it exists exactly when the purge does.
+      // `params.workspaceId` mirrors what dispatch writes for every capability row, so
+      // `platform_audit_query {targetWorkspaceId}` finds this row too. Always written — 遗留 54:
+      // the operator CLI can reach this with no resolvable `actorUserId` (neither `--actor` nor
+      // `NEXTTIME_PLATFORM_ADMINS` named a real user), and skipping the row there left "audit only
+      // grows" with a silent exception. `attributedActor: false` marks that case; `actor_user_id`
+      // is null on the row itself (`audit_records_actor_shape`, migration core 0032).
+      await writeAudit(client, {
+        workspaceId: null,
+        actorPrincipalId: null,
+        ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+        action: 'platform.workspace_purged',
+        resourceType: 'workspace',
+        resourceId: workspace.id,
+        payload: {
+          channel: 'platform',
+          params: { workspaceId: workspace.id },
+          workspaceName: workspace.name,
+          purpose: workspace.purpose,
+          status: workspace.status,
+          reason,
+          forced: input.force === true,
+          attributedActor: input.actorUserId !== undefined,
+          counts,
+          totalRows,
+          activeHandles,
+          warnings,
+          purgedUsers,
+          principalIds: result.principalIds,
+          taskIds,
+        },
+      });
 
       return result;
     },

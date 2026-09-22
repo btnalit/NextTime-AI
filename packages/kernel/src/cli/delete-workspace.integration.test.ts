@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
+import { createPlatformAdmin } from '../application/identity/index.js';
 import {
   DeleteWorkspaceRefusedError,
   computeWorkspaceTableDeletionOrder,
@@ -211,6 +212,30 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     expect(result.purgedUsers.map((u) => u.id)).toEqual([ownerUserId]);
     expect(result.deletedCounts.get('users')).toBe(1);
 
+    // 遗留 54: this call passed no `options.actorUserId` (no `--actor` and no
+    // `NEXTTIME_PLATFORM_ADMINS` resolved, the operator-CLI gap) — the `platform.workspace_purged`
+    // row must still exist (audit only grows), just unattributed: `actor_user_id` null,
+    // `payload.attributedActor: false` (`audit_records_actor_shape`, migration core 0032).
+    const purgedAudit = await withWorkspace(
+      pool,
+      { workspaceId: randomUUID(), principalId: randomUUID() },
+      async (client) => {
+        const rows = await client.query<{
+          actor_user_id: string | null;
+          payload: { attributedActor?: boolean };
+        }>(
+          `select actor_user_id, payload from audit_records
+           where workspace_id is null and action = 'platform.workspace_purged' and resource_id = $1`,
+          [target.workspaceId],
+        );
+        return rows.rows[0];
+      },
+      { skipRoleSwitch: true },
+    );
+    expect(purgedAudit).toBeDefined();
+    expect(purgedAudit?.actor_user_id).toBeNull();
+    expect(purgedAudit?.payload?.attributedActor).toBe(false);
+
     // Every workspace-scoped table — not just the ones seeded above — has zero rows left for the
     // deleted workspace. Uses the exact same table discovery `deleteWorkspace` itself relied on,
     // so this assertion can never silently miss a table a future migration adds.
@@ -268,6 +293,37 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
         { skipRoleSwitch: true },
       ),
     ).rejects.toThrow(/append-only/);
+  });
+
+  it('遗留 54: writes an attributed platform.workspace_purged row when an actorUserId resolves (contrast with the unattributed case above)', async () => {
+    const admin = await createPlatformAdmin(pool, {
+      login: `delete-workspace-audit-actor-${randomUUID()}`,
+      displayName: 'Audit Actor',
+      password: 'a-strong-enough-password',
+    });
+    const target = await createWorkspace(pool, `delete-workspace-attributed-${Date.now()}`, 'Dana');
+
+    await deleteWorkspace(pool, target.workspaceId, { actorUserId: admin.id });
+
+    const purgedAudit = await withWorkspace(
+      pool,
+      { workspaceId: randomUUID(), principalId: randomUUID() },
+      async (client) => {
+        const rows = await client.query<{
+          actor_user_id: string | null;
+          payload: { attributedActor?: boolean };
+        }>(
+          `select actor_user_id, payload from audit_records
+           where workspace_id is null and action = 'platform.workspace_purged' and resource_id = $1`,
+          [target.workspaceId],
+        );
+        return rows.rows[0];
+      },
+      { skipRoleSwitch: true },
+    );
+    expect(purgedAudit).toBeDefined();
+    expect(purgedAudit?.actor_user_id).toBe(admin.id);
+    expect(purgedAudit?.payload?.attributedActor).toBe(true);
   });
 
   it('rejects deleting a workspace that does not exist', async () => {
