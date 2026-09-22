@@ -2919,6 +2919,7 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
   显示"凭证：待操作员配置"。答"不过审批"→ 在同一 JWT + 审计后实现（代理侧加密存储或 env 文件写入）；答"要过审批"→ 先
   设计审批流。
 - 其它判断（可否决）：`config/` 目录 owner 改为 10001（`scripts/host-llm-proxy-init.sh`；单文件 rw bind 不能被 rename
+  - **2026-09-22 维护者否决**上面 `config/` owner 改 10001 的判断：`models.json` 挪专用目录（S7-A，`STATUS.md` §3），`host-llm-proxy-init.sh` 不再 chown `config/`；S7-A 合入发版前主机不执行下面的主机应用步骤。
   覆盖、`host-env-init.sh` 重跑会把组写清掉，故取 owner-only；文件仍 root 644、输入以 `:ro` 覆盖）；yaml 改动仍需重启
   （bind 挂载文件 watch 不可靠）；`ProviderStore.upsert/remove` 无互斥（单管理员控制台，两次并发写可能丢一次）；
   显示名写进 `models.json` 的 pi `name`，内核投影 `{id, provider, model}` 不带。测试：`admin-api.test.ts` 12（真实监听
