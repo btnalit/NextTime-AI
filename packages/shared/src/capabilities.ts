@@ -2736,6 +2736,92 @@ const platformCapabilities: readonly Capability[] = [
     description:
       'S6-B: a 5-minute platform JWT (signed with the Handle key, distinct typ / aud — never accepted as a Handle) that lets the administrator’s browser call llm-proxy’s provider-management endpoints via caddy `/api/llm-admin/*`. Audited as `platform.llm_admin_token_issued` with the token’s `jti`; llm-proxy’s own audit lines carry the same `jti`. The token carries no provider key and the kernel stores none.',
   },
+  // S7-E (P-C, docs/platform-admin-design.md §6.5 / §6.7; development-tasks.md §5d S7-E 决定
+  // E1–E4): the runtime layer (active image / inventory / rollback / pi drift) and platform
+  // status. Handlers live in application/platform/runtime.ts (kernel), not platform-handlers.ts.
+  {
+    name: 'runtime_inventory',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.RuntimeInventoryWireSchema,
+    description:
+      'The active runtime image (tag/digest, baked-in pi and platform-extension versions) and every resident entry container across workspaces, each flagged 待重建 when its own resolved image id differs from the active image’s — derived live, never stored.',
+  },
+  {
+    name: 'list_runtime_images',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.RuntimeImageWireSchema),
+    description:
+      'Every runtime image worker-supervisor knows about that carries the platform’s `ai.nexttime.*` labels (built by `docker compose build worker-runtime` on the host/CI — this capability never builds one).',
+  },
+  {
+    name: 'set_active_runtime_image',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ image: z.string().min(1) }).strict(),
+    resultSchema: wire.PlatformSettingsWireSchema,
+    description:
+      'Sets the platform’s active runtime image (must already appear in `list_runtime_images`) — resident entry containers pick it up at their own next spawn (spec-drift rebuild, E2); no forced restart. Audited.',
+  },
+  {
+    name: 'rollback_runtime_image',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformSettingsWireSchema,
+    description:
+      'Sets the active runtime image back to the value it held one platform-settings version ago (`platform_settings_history`). A no-op when that version’s value already equals the current one (an intervening unrelated settings write, not a bug — settings roll back by version, not per-field history). Audited.',
+  },
+  {
+    name: 'roll_entry_containers',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        /** Omitted = every resident container currently flagged 待重建; when given, only these
+         *  principals are considered (still skipped if not 待重建 or in-flight). */
+        principalIds: z.array(z.string().min(1)).optional(),
+      })
+      .strict(),
+    resultSchema: wire.RollEntryContainersResultWireSchema,
+    description:
+      'Acceleration only (E2): stops resident entry containers that both need rebuild and have no in-flight Turn (kernel’s own `activities` bookkeeping) — never a forced stop of a busy container, never a draining/reject-new-Turn state. Every stopped container is recreated with the active image at its own next spawn regardless of whether this was ever called.',
+  },
+  {
+    name: 'pi_drift',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.PiDriftWireSchema,
+    description:
+      'Whether the repo-pinned `pi.version`, the active runtime image’s own baked-in pi version, and the platform-extension version agree — reads a CI-produced static JSON (never a live npm/GitHub lookup); `status: "unknown"` when that file is not present in this deployment.',
+  },
+  {
+    name: 'platform_status',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformStatusWireSchema,
+    description:
+      'Read-only service health (kernel, postgres, llm-proxy, worker-supervisor, egress-proxy [unknown — its healthz is loopback-only by design], every gate instance’s last-known health), a 30-day cross-workspace llm_usage rollup, the most recent 50 platform audit rows, and backup posture (reports "未配置 not configured" until 遗留 6 lands — no backup timer exists).',
+  },
 ];
 
 /** The complete capability registry (design doc §9.3). */

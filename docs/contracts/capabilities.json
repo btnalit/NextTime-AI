@@ -5255,6 +5255,12 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activeRuntimeImage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "announcement": {
           "type": "string"
         },
@@ -5337,6 +5343,7 @@
         "defaultMonthlyTokenBudget",
         "defaultPlatformRole",
         "passwordMinLength",
+        "activeRuntimeImage",
         "envAdmins",
         "version",
         "updatedAt"
@@ -8510,6 +8517,89 @@
     }
   },
   {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_runtime_images",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "builtFrom": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "piVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "platformExtensionVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tags": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "tags",
+              "createdAt",
+              "piVersion",
+              "platformExtensionVersion",
+              "builtFrom",
+              "labels"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "channel": "handle",
     "group": "meta",
     "minRole": "member",
@@ -9734,6 +9824,68 @@
     "channel": "human",
     "group": "platform",
     "mode": "observe",
+    "name": "pi_drift",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeImagePiVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checkedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "pinnedPiVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platformExtensionVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "consistent",
+            "drifted",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "pinnedPiVersion",
+        "activeImagePiVersion",
+        "platformExtensionVersion",
+        "detail",
+        "checkedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
     "name": "platform_audit_query",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -10044,6 +10196,167 @@
         "health",
         "checklist",
         "recentAudit"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "platform_status",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "backup": {
+          "additionalProperties": false,
+          "properties": {
+            "configured": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "configured",
+            "detail"
+          ],
+          "type": "object"
+        },
+        "checkedAt": {
+          "type": "string"
+        },
+        "health": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "ok",
+                  "degraded",
+                  "down",
+                  "unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "llmUsage30d": {
+          "additionalProperties": false,
+          "properties": {
+            "callCount": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "totalCostUsd": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "totalInputTokens": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "totalOutputTokens": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "windowDays": {
+              "const": 30,
+              "type": "number"
+            }
+          },
+          "required": [
+            "windowDays",
+            "totalCostUsd",
+            "totalInputTokens",
+            "totalOutputTokens",
+            "callCount"
+          ],
+          "type": "object"
+        },
+        "recentAudit": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "actorLogin": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actorUserId": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              "resourceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resourceType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "action",
+              "actorUserId",
+              "actorLogin",
+              "resourceType",
+              "resourceId",
+              "payload",
+              "createdAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "health",
+        "backup",
+        "llmUsage30d",
+        "recentAudit",
+        "checkedAt"
       ],
       "type": "object"
     }
@@ -13222,6 +13535,181 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "roll_entry_containers",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "principalIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "outcomes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "stopped",
+                  "skipped_in_flight",
+                  "skipped_up_to_date",
+                  "skipped_not_found"
+                ],
+                "type": "string"
+              },
+              "principalId": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "principalId",
+              "workspaceId",
+              "action"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "stoppedCount": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "outcomes",
+        "stoppedCount"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "rollback_runtime_image",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeRuntimeImage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "announcement": {
+          "type": "string"
+        },
+        "defaultDailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultEntryModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultMonthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPlatformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "defaultWorkspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "envAdmins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instanceInstructions": {
+          "type": "string"
+        },
+        "passwordMinLength": {
+          "maximum": 128,
+          "minimum": 8,
+          "type": "integer"
+        },
+        "siteName": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "siteName",
+        "announcement",
+        "instanceInstructions",
+        "defaultWorkspaceId",
+        "defaultEntryModel",
+        "defaultDailyCallLimit",
+        "defaultMonthlyTokenBudget",
+        "defaultPlatformRole",
+        "passwordMinLength",
+        "activeRuntimeImage",
+        "envAdmins",
+        "version",
+        "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "members",
     "minRole": "member",
     "mode": "write",
@@ -13254,6 +13742,221 @@
       "required": [
         "principalId",
         "apiKey"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "runtime_inventory",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeImage": {
+          "type": "string"
+        },
+        "activeImageInfo": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "builtFrom": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "labels": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "piVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "platformExtensionVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "tags",
+                "createdAt",
+                "piVersion",
+                "platformExtensionVersion",
+                "builtFrom",
+                "labels"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "activeImageSource": {
+          "enum": [
+            "setting",
+            "env_default"
+          ],
+          "type": "string"
+        },
+        "checkedAt": {
+          "type": "string"
+        },
+        "images": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "builtFrom": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "piVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "platformExtensionVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tags": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "tags",
+              "createdAt",
+              "piVersion",
+              "platformExtensionVersion",
+              "builtFrom",
+              "labels"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "residentContainers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "containerId": {
+                "type": "string"
+              },
+              "image": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "imageId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastTouchedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "needsRebuild": {
+                "type": "boolean"
+              },
+              "principalId": {
+                "type": "string"
+              },
+              "running": {
+                "type": "boolean"
+              },
+              "startedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "principalId",
+              "workspaceId",
+              "containerId",
+              "running",
+              "status",
+              "image",
+              "imageId",
+              "startedAt",
+              "lastTouchedAt",
+              "needsRebuild"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "activeImage",
+        "activeImageSource",
+        "activeImageInfo",
+        "images",
+        "residentContainers",
+        "checkedAt"
       ],
       "type": "object"
     }
@@ -13400,6 +14103,125 @@
         "messageId",
         "sequence",
         "turnId"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "set_active_runtime_image",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeRuntimeImage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "announcement": {
+          "type": "string"
+        },
+        "defaultDailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultEntryModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultMonthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPlatformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "defaultWorkspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "envAdmins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instanceInstructions": {
+          "type": "string"
+        },
+        "passwordMinLength": {
+          "maximum": 128,
+          "minimum": 8,
+          "type": "integer"
+        },
+        "siteName": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "siteName",
+        "announcement",
+        "instanceInstructions",
+        "defaultWorkspaceId",
+        "defaultEntryModel",
+        "defaultDailyCallLimit",
+        "defaultMonthlyTokenBudget",
+        "defaultPlatformRole",
+        "passwordMinLength",
+        "activeRuntimeImage",
+        "envAdmins",
+        "version",
+        "updatedAt"
       ],
       "type": "object"
     }
@@ -16000,6 +16822,12 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activeRuntimeImage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "announcement": {
           "type": "string"
         },
@@ -16082,6 +16910,7 @@
         "defaultMonthlyTokenBudget",
         "defaultPlatformRole",
         "passwordMinLength",
+        "activeRuntimeImage",
         "envAdmins",
         "version",
         "updatedAt"
