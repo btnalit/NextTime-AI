@@ -126,8 +126,11 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
       { timeout: 15_000 },
     );
     await expect(chatCard.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    // By test id, not the `.system-status-line` class: the chat card's own outcome row
+    // (ActionRequestCard.tsx `action-outcome`) reuses that class and carries `data-status` itself,
+    // so while the card sits on `approved` the class locator matches both (strict-mode violation).
     await expect(
-      page.locator('.system-status-line').filter({ has: page.locator('[data-status="approved"]') }),
+      page.getByTestId('system-status-line').filter({ has: page.locator('[data-status="approved"]') }),
     ).toBeVisible({ timeout: 15_000 });
   });
 });
