@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/btnalit/NextTime-AI/compare/v0.13.2...v0.14.0) (2026-09-22)
+
+
+### Features
+
+* **console:** S6 控制台完善 — 视觉体系、遗留 41–44、对话 / 治理 / 供应商 / 接入 / 图谱页 ([#217](https://github.com/btnalit/NextTime-AI/issues/217)) ([b4c10a3](https://github.com/btnalit/NextTime-AI/commit/b4c10a3b9b9face1eaae2060ed31e0161b83d5ce))
+
 ## [0.13.2](https://github.com/btnalit/NextTime-AI/compare/v0.13.1...v0.13.2) (2026-09-18)
 
 
