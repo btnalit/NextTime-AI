@@ -112,10 +112,12 @@ export interface SupervisorConfig {
    *  chown-equivalent, existence checks, the egress source-map read-modify-write). */
   readonly localDataDir: string;
   /** Host path of the `models.json` bind-mounted read-only into every spawned container
-   *  (`host-paths.ts` `hostModelsJsonPath`). Defaults to `${NEXTTIME_DATA}/config/models.json`,
-   *  the file `make gen-models` writes for the real provider. `MODELS_JSON_HOST_PATH` overrides
-   *  it so an acceptance run can point spawned containers at a separately generated fake-provider
-   *  file (deploy/accept/docker-compose.fake.yml, W6) without touching the production one. */
+   *  (`host-paths.ts` `hostModelsJsonPath`). Defaults to `${NEXTTIME_DATA}/models/models.json`
+   *  (S7-A, docs/STATUS.md 维护者决定 2026-09-22 ⑤: moved out of config/ into its own directory —
+   *  see packages/llm-proxy/src/config.ts's own doc comment on `modelsJsonOutFile`), the file
+   *  `make gen-models` writes for the real provider. `MODELS_JSON_HOST_PATH` overrides it so an
+   *  acceptance run can point spawned containers at a separately generated fake-provider file
+   *  (deploy/accept/docker-compose.fake.yml, W6) without touching the production one. */
   readonly modelsJsonHostPath: string;
   /** Docker network the spawned containers get attached to (design doc §7.9/§10.2 `workers`,
    *  `internal: true`). When unset, resolved at startup from the `com.docker.compose.network`
@@ -205,7 +207,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     workerRuntime: env.WORKER_RUNTIME ?? 'runc',
     nextTimeData,
     localDataDir,
-    modelsJsonHostPath: env.MODELS_JSON_HOST_PATH || `${nextTimeData}/config/models.json`,
+    modelsJsonHostPath: env.MODELS_JSON_HOST_PATH || `${nextTimeData}/models/models.json`,
     networkWorkers: env.NETWORK_WORKERS || undefined,
     kernelUrl: env.KERNEL_URL ?? 'http://kernel:8080',
     kernelLlmUrl: env.KERNEL_LLM_URL ?? 'http://llm-proxy:8082',

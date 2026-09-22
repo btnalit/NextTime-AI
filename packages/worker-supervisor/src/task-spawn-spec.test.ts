@@ -107,7 +107,7 @@ describe('buildTaskSpawnSpec', () => {
   it('mounts exactly the host Task workspace dir and a read-only models.json', () => {
     expect(spec.binds).toEqual([
       '/host/data/workspaces/tasks/task-1:/workspace',
-      '/host/data/config/models.json:/workspace/.pi/agent/models.json:ro',
+      '/host/data/models/models.json:/workspace/.pi/agent/models.json:ro',
     ]);
   });
 

@@ -55,7 +55,8 @@ ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s3.sh --real <provider/mod
 `--real` 时一样，是同一批 PASS/FAIL 断言。**两个脚本之间不需要任何切换动作**——两者都直接使用
 主机上已部署的真实 provider，跑完 `accept_s2.sh --real` 紧接着跑 `accept_s3.sh --real` 不需要
 恢复或重新配置任何东西（`--real` 模式下两个脚本都完全跳过 fake-provider 的 up/restore 那一步，
-`${NEXTTIME_DATA}/config/llm-providers.yaml`/`models.json` 全程不被触碰）。
+`${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
+全程不被触碰）。
 
 **`--runs 3` 与 `--runs 10` 两种用法（S5.7）：** `--runs 3` 是开发期/单次改动后的快速冒烟——验证
 某个具体修复没有让某个场景整体失效，不追求统计意义上的成功率。**`--runs 10` 是每次发版后的例行

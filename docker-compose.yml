@@ -109,9 +109,13 @@ services:
     # S4.1: the pre-created `admin` user's temporary initial password (design §7.11); the kernel
     # writes it here 0600 when no platform admin exists; host-env-init.sh creates the directory
     # owned by uid 10001.
+    # models: models.json now lives in its own ${NEXTTIME_DATA}/models/ directory, not config/
+    # (S7-A, docs/STATUS.md 维护者决定 2026-09-22 ⑤) — `list_models`/`list_platform_models`
+    # (application/gateway/models-catalog-handler.ts, `MODELS_JSON_FILE`) reads it from here.
     volumes:
       [
         "${NEXTTIME_DATA:?}/config:/data/config:ro",
+        "${NEXTTIME_DATA:?}/models:/data/models:ro",
         "${NEXTTIME_DATA:?}/secrets/setup:/run/setup",
       ]
     # healthcheck (lane-7 P2 fix): GET /api/health via node's own http client — no curl/wget in
@@ -339,9 +343,13 @@ services:
     # DOCKER_HOST=tcp://docker-socket-proxy:2375 on the new `dockerapi` network instead (see that
     # service's own comment above for the endpoint inventory and env-flag reasoning). workspaces:
     # rw — this is where per-principal directories get created (I15) and bind-mounted (as HOST
-    # paths, via NEXTTIME_DATA below) into spawned containers. config: ro for models.json's
-    # bind-mount source and general config visibility, EXCEPT egress-sources.json — that single
-    # file is re-mounted read-write on top so this service can register/unregister spawned
+    # paths, via NEXTTIME_DATA below) into spawned containers. config: ro for general config
+    # visibility (models.json moved out of config/ into its own ${NEXTTIME_DATA}/models/
+    # directory, S7-A — this service never reads that file itself anyway: `hostModelsJsonPath`
+    # is a plain HOST path string handed to the Docker Engine API as a *spawned* container's
+    # bind-mount source, resolved by the daemon against the host filesystem, not this container's
+    # own mount namespace), EXCEPT egress-sources.json — that single file is re-mounted
+    # read-write on top so this service can register/unregister spawned
     # containers' IPs with @nexttime/egress-proxy's SOURCE_MAP_FILE (S1.5a task brief: that
     # package exposes no admin registration endpoint — verified reading
     # packages/egress-proxy/src/admin.ts — so the documented file-based contract is the only
@@ -861,37 +869,42 @@ services:
   llm-proxy:
     build: { context: ., dockerfile: packages/llm-proxy/Dockerfile }
     env_file: ${NEXTTIME_DATA:?}/secrets/llm-proxy.env # provider keys 只在这里
-    # S6-B 供应商管理（docs/console-completion-plan.md §5.4；docs/runbooks/operations.md「供应商管理」）:
-    #   - ${NEXTTIME_DATA}/llm-proxy → /data/state（rw）：控制台写入的 providers.json（provider-store.ts）
-    #     ——本服务唯一的持久状态；主机上须归 uid 10001（scripts/host-llm-proxy-init.sh）。
-    #   - ${NEXTTIME_DATA}/config → /data/config（rw 目录）：管理端点每次变更后原子重写
-    #     models.json（.tmp + rename，与 `make gen-models` 同一保证）。内核 `list_platform_models`
-    #     与 worker-supervisor 都读这个路径下的 models.json，所以只能写这里。目录须归 uid 10001
-    #     （同上脚本）；除 models.json 外本服务不写任何文件——它自己的两个输入
-    #     （llm-providers.yaml、handle.pub）与 egress-proxy 的 egress-sources.json、内核的 ontology/
-    #     在下面再以 :ro 单文件 / 单目录挂载覆盖在 rw 目录之上（Docker 按目标路径长度排序挂载，嵌套
-    #     生效），所以容器内它们仍是只读的：写面只增加了 models.json 这一件事。
+    # S6-B / S7-A 供应商管理（docs/console-completion-plan.md §5.4；docs/STATUS.md 维护者决定
+    # 2026-09-22 ①⑤；docs/runbooks/operations.md「供应商管理」):
+    #   - ${NEXTTIME_DATA}/llm-proxy → /data/state（rw）：控制台写入的 providers.json
+    #     （provider-store.ts）与 keys.json（key-store.ts，控制台密钥，S7-A）——本服务唯一的持久
+    #     状态目录；主机上须归 uid 10001（scripts/host-llm-proxy-init.sh）。
+    #   - ${NEXTTIME_DATA}/models → /data/models（rw）：管理端点每次变更后原子重写 models.json
+    #     （.tmp + rename，与 `make gen-models` 同一保证）。内核 `list_platform_models` 与
+    #     worker-supervisor 都读这个目录下的 models.json。独立于 config/ 之外（S7-A 维护者决定
+    #     ⑤：不 chown ${NEXTTIME_DATA}/config/）——目录须归 uid 10001，由
+    #     scripts/host-env-init.sh 创建（不再是 host-llm-proxy-init.sh 的 config/ chown 步骤）。
+    #   - config 侧四个输入（llm-providers.yaml、handle.pub、egress-sources.json、ontology/）单独
+    #     以 :ro 文件 / 目录挂载——本服务不再整体挂载 ${NEXTTIME_DATA}/config，所以除 models/ 外
+    #     没有任何写面。
     #   - 启动时**不**写 models.json（不一致只记一行日志）：deploy/accept/docker-compose.fake.yml
     #     把本服务的 yaml 换成假 provider，必须不能覆盖生产 models.json。
     volumes:
       [
         "${NEXTTIME_DATA:?}/llm-proxy:/data/state",
-        "${NEXTTIME_DATA:?}/config:/data/config",
+        "${NEXTTIME_DATA:?}/models:/data/models",
         "${NEXTTIME_DATA:?}/config/llm-providers.yaml:/data/config/llm-providers.yaml:ro",
         "${NEXTTIME_DATA:?}/config/handle.pub:/data/config/handle.pub:ro",
         "${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json:ro",
         "${NEXTTIME_DATA:?}/config/ontology:/data/config/ontology:ro",
       ]
-    # LLM_PROVIDER_STORE_FILE / MODELS_JSON_OUT_FILE / BUDGET_SYNC_INTERVAL_MS（S6-B，
-    # packages/llm-proxy/src/config.ts）：前两个是上面两个挂载在容器内的路径；后一个是遗留 19 的
-    # 预算耗尽轮询间隔（GET /internal/llm-budget-exhausted），缺省 15s，只为可在 .env 覆盖而列出。
+    # LLM_PROVIDER_STORE_FILE / LLM_KEY_STORE_FILE / MODELS_JSON_OUT_FILE /
+    # BUDGET_SYNC_INTERVAL_MS（S6-B / S7-A，packages/llm-proxy/src/config.ts）：前三个是上面两个
+    # rw 挂载在容器内的路径；最后一个是遗留 19 的预算耗尽轮询间隔（GET
+    # /internal/llm-budget-exhausted），缺省 15s，只为可在 .env 覆盖而列出。
     environment:
       {
         KERNEL_URL: http://kernel:8080,
         HANDLE_PUBLIC_KEY_FILE: /data/config/handle.pub,
         LLM_PROXY_PORT: 8082,
         LLM_PROVIDER_STORE_FILE: /data/state/providers.json,
-        MODELS_JSON_OUT_FILE: /data/config/models.json,
+        LLM_KEY_STORE_FILE: /data/state/keys.json,
+        MODELS_JSON_OUT_FILE: /data/models/models.json,
         BUDGET_SYNC_INTERVAL_MS: "${BUDGET_SYNC_INTERVAL_MS:-15000}",
       }
     # internal_token（fix/internal-plane-auth）：revocation sync（GET /internal/handle-revocations）
@@ -902,7 +915,7 @@ services:
     networks: [control, workers]
     restart: unless-stopped
     # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/llm-proxy/Dockerfile, uid
-    # 10001); the two rw bind mounts above (state, config) are external bind mounts — unaffected
+    # 10001); the two rw bind mounts above (state, models) are external bind mounts — unaffected
     # by `read_only` — and only /tmp inside the image needs to stay writable.
     read_only: true
     tmpfs: ["/tmp"]

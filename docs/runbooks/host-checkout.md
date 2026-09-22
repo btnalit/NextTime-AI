@@ -20,9 +20,10 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/host-env-init.
 ```
 幂等，依赖 E2（`secrets/pg_password` 存在）。创建 `secrets/kernel.env`（`DATABASE_URL` 取自
 `pg_password`，特殊字符 URL-encode）、`secrets/{llm-proxy,gatekeeper-ragflow}.env`（无值模
-板）、`config/{llm-providers.yaml,models.json,handle.pub,egress-sources.json}`（占位）；把 `workspaces
-artifacts caddy` 属主改成容器非 root 用户（uid:gid 见脚本注释），`config/` 设为可读；
-`pgdata/`、`secrets/` 目录本身、`backups/` 不动。用 `stat` / `ls -ln` 验证，**不要 `cat` 密钥**。
+板）、`config/{llm-providers.yaml,handle.pub,egress-sources.json}`（占位）、`models/models.json`
+（占位——S7-A 起单独一个目录，不再是 `config/models.json`）；把 `workspaces artifacts caddy models`
+属主改成容器非 root 用户（uid:gid 见脚本注释），`config/` 设为可读；`pgdata/`、`secrets/` 目录本身、
+`backups/` 不动。用 `stat` / `ls -ln` 验证，**不要 `cat` 密钥**。
 
 紧接着跑 `ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/gen-handle-keys.sh` 生成 Handle 签名密钥对（S1.9，幂等）：私钥落在 `secrets/handle.key`（0640，组 10001，只经 compose secret `handle_key` 挂进 kernel），公钥在 `config/handle.pub`。若 `secrets/kernel.env` 是在此之前生成的，用 `sed -i` 把其中 `HANDLE_PRIVATE_KEY_FILE` 改成 `/run/secrets/handle_key` 并补一行 `HANDLE_PUBLIC_KEY_FILE=/data/config/handle.pub`（不要 `cat` 该文件）。
 

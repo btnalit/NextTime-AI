@@ -16,18 +16,20 @@
 # `mkdir -p`'d defensively right before it is chowned — see that step's own comment for why.
 #
 # Scope: writes secrets/{kernel,llm-proxy,gatekeeper-ragflow}.env and
-# config/{llm-providers.yaml,models.json,handle.pub,egress-sources.json} as placeholders/
-# templates — no real credentials exist yet at this point in the task list (S1.7/S1.9 fill them in
-# later; egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc §7.9 — an
-# empty object is a valid "no sources registered yet" map, not a stub for a later task to
-# overwrite; gatekeeper-ragflow.env's real shape is S2.5's, see below).
+# config/{llm-providers.yaml,handle.pub,egress-sources.json} as placeholders/templates — no real
+# credentials exist yet at this point in the task list (S1.7/S1.9 fill them in later;
+# egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc §7.9 — an empty
+# object is a valid "no sources registered yet" map, not a stub for a later task to overwrite;
+# gatekeeper-ragflow.env's real shape is S2.5's, see below). Also creates models/models.json as a
+# placeholder (S7-A, docs/STATUS.md 维护者决定 2026-09-22 ⑤: models.json moved out of config/ into
+# its own directory — do not chown config/; see that step's own comment below).
 # Then creates collectors/host-inventory/ if missing (S3.3) and chowns workspaces/ artifacts/
-# gatekeepers/{docker,ragflow}/ collectors/host-inventory/ to the non-root uid:gid (backups/ is
-# forced back to root-owned — see its own step), and the platform's containers run as, chowns
-# pgdata/ and chgrp's secrets/pg_password to the postgres image's own uid:gid (遗留20/S5.5
-# hardening — see that step's own comment), makes config/ world-readable (it holds no secrets),
-# and chmod -R o+rX's caddy/ (root-owned — chown doesn't help there, see that step's own comment).
-# Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
+# gatekeepers/{docker,ragflow}/ collectors/host-inventory/ models/ to the non-root uid:gid
+# (backups/ is forced back to root-owned — see its own step), and the platform's containers run
+# as, chowns pgdata/ and chgrp's secrets/pg_password to the postgres image's own uid:gid
+# (遗留20/S5.5 hardening — see that step's own comment), makes config/ world-readable (it holds no
+# secrets), and chmod -R o+rX's caddy/ (root-owned — chown doesn't help there, see that step's own
+# comment). Never echoes secret file contents. Touches nothing outside $NEXTTIME_DATA.
 
 set -eu
 
@@ -170,8 +172,8 @@ if [ ! -f "$LLM_PROVIDERS_YAML" ]; then
 # Placeholder — no real provider endpoints or keys here. `providers: {}` (an empty map) is valid
 # and is exactly what an idle llm-proxy needs — see config/llm-providers.example.yaml at the repo
 # root for the full schema (api / upstream_base_url / api_key_env / auth / models) and a worked
-# example; scripts/gen-models-json.ts (S1.7) then derives config/models.json from whatever you
-# put here. See design doc §7.7.
+# example; scripts/gen-models-json.ts (S1.7) then derives models/models.json (S7-A — moved out of
+# config/) from whatever you put here. See design doc §7.7.
 providers: {}
 # Example provider entry (uncomment and adapt — matches config/llm-providers.example.yaml):
 # providers:
@@ -195,13 +197,24 @@ else
 	SKIPPED="$SKIPPED config/llm-providers.yaml"
 fi
 
-# --- config/models.json: empty object; S1.7's gen-models-json.ts regenerates it ---------------
-MODELS_JSON="$CONFIG_DIR/models.json"
+# --- models/: llm-proxy's own read-write output directory for the merged catalog (S7-A,
+# docs/STATUS.md 维护者决定 2026-09-22 ⑤: models.json moved out of config/ so this proxy never
+# needs config/ chowned to write it — packages/llm-proxy/src/config.ts's own doc comment on
+# `modelsJsonOutFile`). Created 0755, owned by the container uid (below, with the other uid-10001
+# directories) — world-readable like config/ (models.json holds no secret: its own `apiKey` field
+# is always the literal template string `$CAPABILITY_HANDLE`, never a real key).
+mkdir -p "$NEXTTIME_DATA/models"
+chmod 755 "$NEXTTIME_DATA/models"
+
+# --- models/models.json: empty object; S1.7's gen-models-json.ts (now S7-A's own directory)
+# regenerates it — a spawned entry/Worker container's bind-mount source must already exist as a
+# file, or Docker creates a directory there instead (same reasoning as egress-sources.json below).
+MODELS_JSON="$NEXTTIME_DATA/models/models.json"
 if [ ! -f "$MODELS_JSON" ]; then
 	echo "{}" >"$MODELS_JSON"
-	CREATED="$CREATED config/models.json"
+	CREATED="$CREATED models/models.json"
 else
-	SKIPPED="$SKIPPED config/models.json"
+	SKIPPED="$SKIPPED models/models.json"
 fi
 
 # --- config/handle.pub: empty placeholder; S1.9 writes the real Handle-signing public key -----
@@ -241,24 +254,26 @@ mkdir -p "$SECRETS_DIR/setup"
 chown "${CONTAINER_UID}:${CONTAINER_GID}" "$SECRETS_DIR/setup"
 chmod 0700 "$SECRETS_DIR/setup"
 
-# --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/ ---
-# must be usable by the platform's non-root containers (uid:gid 10001:10001 — gatekeepers/*/
-# Dockerfile and collectors/host-inventory/Dockerfile all create the same `nexttime` uid:gid as
-# every other @nexttime/* image, S2.5/S3.3). pgdata/ needs a DIFFERENT uid:gid (999:999, see
-# POSTGRES_UID/POSTGRES_GID above, and its own step just below) — not this platform's own
-# CONTAINER_UID/CONTAINER_GID convention. secrets/ (root-owned, 0700 — compose passes its contents
-# via env_file / Docker secrets, not a bind-mounted directory read by a container process) is left
-# untouched here, per task scope, EXCEPT secrets/pg_password (its own step just below, same
-# 遗留20/S5.5 hardening). `caddy/` is deliberately NOT in this loop — see its own step below.
+# --- ownership: workspaces/ artifacts/ gatekeepers/{docker,ragflow}/ collectors/host-inventory/
+# models/ must be usable by the platform's non-root containers (uid:gid 10001:10001 —
+# gatekeepers/*/Dockerfile and collectors/host-inventory/Dockerfile all create the same `nexttime`
+# uid:gid as every other @nexttime/* image, S2.5/S3.3). pgdata/ needs a DIFFERENT uid:gid
+# (999:999, see POSTGRES_UID/POSTGRES_GID above, and its own step just below) — not this
+# platform's own CONTAINER_UID/CONTAINER_GID convention. secrets/ (root-owned, 0700 — compose
+# passes its contents via env_file / Docker secrets, not a bind-mounted directory read by a
+# container process) is left untouched here, per task scope, EXCEPT secrets/pg_password (its own
+# step just below, same 遗留20/S5.5 hardening). `caddy/` is deliberately NOT in this loop — see
+# its own step below.
 # workspaces/artifacts/gatekeepers/{docker,ragflow} are not `mkdir -p`'d here (unlike
 # collectors/host-inventory just above) — scripts/host-bootstrap.sh (E2) has created all four of
 # those since before this script existed, with no equivalent drift ever reported for them.
 # gate-host/ (P-B2a): the generic gate host's GATE_DATA_DIR (per-instance credential stores +
 # idempotency files) — mkdir -p'd here too because a v0.9.0 host that upgrades never ran the newer
 # host-bootstrap.sh, and a root-owned bind mount makes the host log EACCES on its first take-over.
+# models/ (S7-A): created above, next to its own models.json placeholder.
 mkdir -p "$NEXTTIME_DATA/gate-host"
 chmod 750 "$NEXTTIME_DATA/gate-host"
-for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow gate-host collectors/host-inventory; do
+for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow gate-host collectors/host-inventory models; do
 	chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$NEXTTIME_DATA/$d"
 done
 
@@ -333,7 +348,7 @@ echo "host-env-init: config/ (mode, owner:group, path):"
 find "$CONFIG_DIR" -maxdepth 1 -printf '  %M %U:%G %p\n'
 echo ""
 echo "host-env-init: ownership fix-up (uid:gid ${CONTAINER_UID}:${CONTAINER_GID}) applied to:"
-for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow gate-host; do
+for d in workspaces artifacts gatekeepers/docker gatekeepers/ragflow gate-host models; do
 	echo "  $NEXTTIME_DATA/$d -> $(stat -c '%U:%G' "$NEXTTIME_DATA/$d")"
 done
 echo "host-env-init: pgdata/ owner -> $(stat -c '%u:%g' "$NEXTTIME_DATA/pgdata" 2>/dev/null || echo '?') (expect ${POSTGRES_UID}:${POSTGRES_GID})"

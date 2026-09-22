@@ -242,11 +242,13 @@ export interface LlmProxyConfig {
   readonly keyStoreFile: string;
   /** S6-B: where the merged catalog is rewritten as pi's `models.json` after every admin mutation
    *  (`.tmp` + rename — the same atomic guarantee `make gen-models` gives). The kernel's
-   *  `list_models` / `list_platform_models` and every spawned agent container read this file, so
-   *  it must be the `${NEXTTIME_DATA}/config/models.json` they mount (compose mounts that
-   *  directory read-write into this service). Never written at startup — an acceptance run
-   *  swaps this service's yaml for the fake provider file (deploy/accept/docker-compose.fake.yml)
-   *  and must not clobber the production catalog. */
+   *  `list_models` / `list_platform_models` and every spawned agent container read this file.
+   *  S7-A (docs/STATUS.md 维护者决定 2026-09-22 ⑤: do NOT chown `${NEXTTIME_DATA}/config/`):
+   *  moved out of `config/` into its own `${NEXTTIME_DATA}/models/` directory — owned 10001 by
+   *  `scripts/host-env-init.sh`, mounted read-write into *only* this service (compose), so the
+   *  operator's `config/` never needs to change ownership for this proxy to rewrite the file.
+   *  Never written at startup — an acceptance run swaps this service's yaml for the fake provider
+   *  file (deploy/accept/docker-compose.fake.yml) and must not clobber the production catalog. */
   readonly modelsJsonOutFile: string;
   /** S6-B leftover 19: poll interval for `GET ${kernelUrl}/internal/llm-budget-exhausted`
    *  (budget-sync.ts) — the I18 "100% 时代理返回预算耗尽错误" signal. */
@@ -277,7 +279,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LlmProxyConfig
     upstreamConnectTimeoutMs: parseIntEnv(env.UPSTREAM_CONNECT_TIMEOUT_MS, 10_000),
     providerStoreFile: env.LLM_PROVIDER_STORE_FILE ?? '/data/state/providers.json',
     keyStoreFile: env.LLM_KEY_STORE_FILE ?? '/data/state/keys.json',
-    modelsJsonOutFile: env.MODELS_JSON_OUT_FILE ?? '/data/config/models.json',
+    modelsJsonOutFile: env.MODELS_JSON_OUT_FILE ?? '/data/models/models.json',
     budgetSyncIntervalMs: parseIntEnv(env.BUDGET_SYNC_INTERVAL_MS, 15_000),
     providerTestTimeoutMs: parseIntEnv(env.PROVIDER_TEST_TIMEOUT_MS, 30_000),
   };

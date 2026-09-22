@@ -416,4 +416,4 @@ echo "drill-install: known manual/out-of-scope items NOT covered by this drill (
 echo "  - browser trust of caddy's internal CA (host-caddy.md §E8.2) — client-side, per operator machine, not needed for S1/S2/S3"
 echo "  - Explorer static bundle build (host-explorer.md, EXPLORER_BUILD=1) — optional, left at the placeholder page"
 echo "  - a real LLM provider key (host-agent-host.md) — accept_s1/s2/s3 ran entirely on the fake provider; config/llm-providers.yaml is still host-env-init.sh's empty placeholder"
-echo "  - config/models.json is still host-env-init.sh's '{}' placeholder — fine for accept_s1/s2/s3 (they generate their own fake accept/models.json); a real deployment needs 'make gen-models' once a provider is configured"
+echo "  - models/models.json is still host-env-init.sh's '{}' placeholder — fine for accept_s1/s2/s3 (they generate their own fake accept/models.json); a real deployment needs 'make gen-models' once a provider is configured"
