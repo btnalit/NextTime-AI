@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { useChatChangeListener } from '../hooks/useChatUpdates.js';
 import { useResource } from '../hooks/useResource.js';
 import { type ChatSummary, chatTitle, isArchived, spliceChat } from '../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -80,6 +81,11 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
     },
     [chats.mutate],
   );
+  // 遗留 57: an archive Undo toast fired from a different, now-unmounted page (or from this page
+  // after it remounted for an unrelated reason) reaches every currently-mounted listener via
+  // `hooks/useChatUpdates.tsx`'s broadcast, not only the `ChatArchiveConfirm` instance below —
+  // `onChanged` already knows how to splice a changed row into this page's own cache.
+  useChatChangeListener(onChanged);
   const { restore, restoringId } = useRestoreChat(client, onChanged);
 
   const newChatButton = (

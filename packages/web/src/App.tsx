@@ -3,6 +3,7 @@ import { ChangePasswordPage } from './components/ChangePasswordPage.js';
 import { LoginPage } from './components/LoginPage.js';
 import { NoWorkspacePage } from './components/NoWorkspacePage.js';
 import { ToastProvider } from './components/ui/Toast.js';
+import { ChatUpdatesProvider } from './hooks/useChatUpdates.js';
 import { PermissionsProvider } from './hooks/usePermissions.js';
 import { hrefs, navigate } from './lib/router.js';
 import { Routed, useHashRoute } from './routes.js';
@@ -25,20 +26,24 @@ export function App() {
     return (
       <PermissionsProvider key={session.generation}>
         <ToastProvider>
-          <Routed
-            session={session}
-            route={route}
-            onLogout={
-              session.authMode === 'cookie' ? () => void machine.cookieLogout() : machine.forgetKey
-            }
-            onSwitchWorkspace={(workspaceId, destination) =>
-              void machine.switchWorkspace(workspaceId, destination)
-            }
-            switchingWorkspace={machine.switchingWorkspace}
-            onUserChanged={machine.userChanged}
-            onKeyBound={machine.keyBound}
-            onClaimed={machine.claimed}
-          />
+          <ChatUpdatesProvider>
+            <Routed
+              session={session}
+              route={route}
+              onLogout={
+                session.authMode === 'cookie'
+                  ? () => void machine.cookieLogout()
+                  : machine.forgetKey
+              }
+              onSwitchWorkspace={(workspaceId, destination) =>
+                void machine.switchWorkspace(workspaceId, destination)
+              }
+              switchingWorkspace={machine.switchingWorkspace}
+              onUserChanged={machine.userChanged}
+              onKeyBound={machine.keyBound}
+              onClaimed={machine.claimed}
+            />
+          </ChatUpdatesProvider>
         </ToastProvider>
       </PermissionsProvider>
     );

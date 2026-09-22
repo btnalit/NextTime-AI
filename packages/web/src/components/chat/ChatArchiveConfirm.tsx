@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { useNotifyChatChanged } from '../../hooks/useChatUpdates.js';
 import {
   type ChatSummary,
   archiveChat,
@@ -15,7 +16,9 @@ export interface ChatArchiveConfirmProps {
   readonly client: CapabilityCaller;
   /** The chat to archive; `null` = closed. The owner sets it from a row's / the header's 归档. */
   readonly chat: ChatSummary | null;
-  /** The kernel's updated row after the archive and after an undo — the owner splices it. */
+  /** The kernel's updated row after the archive and after an undo — the owner splices it. Also
+   *  broadcast via `hooks/useChatUpdates.tsx` for whichever page is mounted when the undo fires
+   *  (遗留 57) — this callback still runs first, when the owner is still around to receive it. */
   readonly onChanged: (chat: ChatSummary) => void;
   readonly onClose: () => void;
 }
@@ -30,10 +33,16 @@ export interface ChatArchiveConfirmProps {
  */
 export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArchiveConfirmProps) {
   const toast = useToast();
+  // 遗留 57: the confirm toast (and its 撤销 Undo action) is pushed through the app-root
+  // `ToastProvider` and can outlive this component — the owning page may have been navigated away
+  // from by the time either fires. `onChanged` still updates *this* page's own state when it is
+  // still around to receive it; `notifyChatChanged` additionally reaches whichever page (this one,
+  // a different one, or none) is mounted at that moment (`hooks/useChatUpdates.tsx`).
+  const notifyChatChanged = useNotifyChatChanged();
   // `ConfirmTier` low keys its effect on `open` alone and reads the callbacks through a ref; the
   // undo closure it captures must reach the *current* chat and `onChanged` the same way.
-  const latest = useRef({ chat, onChanged });
-  latest.current = { chat, onChanged };
+  const latest = useRef({ chat, onChanged, notifyChatChanged });
+  latest.current = { chat, onChanged, notifyChatChanged };
   return (
     <ConfirmTier
       tier="low"
@@ -42,7 +51,9 @@ export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArc
       onConfirm={async () => {
         const target = latest.current.chat;
         if (!target) return;
-        latest.current.onChanged(await archiveChat(client, target.id));
+        const updated = await archiveChat(client, target.id);
+        latest.current.onChanged(updated);
+        latest.current.notifyChatChanged(updated);
       }}
       onClose={onClose}
       undo={{
@@ -50,7 +61,9 @@ export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArc
           const target = chat;
           if (!target) return;
           try {
-            latest.current.onChanged(await unarchiveChat(client, target.id));
+            const updated = await unarchiveChat(client, target.id);
+            latest.current.onChanged(updated);
+            latest.current.notifyChatChanged(updated);
           } catch (err) {
             toast.push({
               tone: 'danger',
