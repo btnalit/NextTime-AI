@@ -147,8 +147,8 @@ describe('TaskSupervisorClient', () => {
     await expect(client.status('wr1')).resolves.toBeUndefined();
   });
 
-  it('listImages: 200 returns the items array (S7-E)', async () => {
-    const items = [
+  it('listImages: 200 returns {defaultImage, images} (S7-E)', async () => {
+    const images = [
       {
         id: 'sha256:abc',
         tags: ['nexttime-ai-worker-runtime:v1'],
@@ -156,9 +156,14 @@ describe('TaskSupervisorClient', () => {
         labels: { 'ai.nexttime.pi-version': '0.84.4' },
       },
     ];
-    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { items }));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { defaultImage: 'nexttime-ai-worker-runtime', images }));
     const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
-    await expect(client.listImages?.()).resolves.toEqual(items);
+    await expect(client.listImages?.()).resolves.toEqual({
+      defaultImage: 'nexttime-ai-worker-runtime',
+      images,
+    });
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://x/images');
     expect(init.method).toBe('GET');

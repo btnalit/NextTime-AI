@@ -17,6 +17,7 @@ import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
 import type {
   ResidentInventoryEntry,
   RuntimeImageInfo,
+  RuntimeImageInventory,
   TaskSupervisorClientPort,
 } from '../../adapters/supervisor-client/index.js';
 import { listGateInstances } from '../gates/store.js';
@@ -36,11 +37,14 @@ import {
  * `scope:'platform'` (registered in `application/gateway/handlers.ts`, not `platform-handlers.ts`
  * itself — S7-E's own dispatch note: "handler 各放新文件... 共享文件只加注册行").
  *
- * Label/default duplication (deliberate, not drift risk in practice): this package never depends
- * on `@nexttime/worker-supervisor` (the two communicate only over HTTP, `adapters/supervisor-
- * client`), so the `ai.nexttime.*` image label keys and the `WORKER_IMAGE` env default are
- * literal copies of worker-supervisor's own image/container-client and config constants, not
- * imports — see each constant's own comment.
+ * Label duplication (deliberate, not drift risk in practice): this package never depends on
+ * `@nexttime/worker-supervisor` (the two communicate only over HTTP, `adapters/supervisor-
+ * client`), so the `ai.nexttime.*` image label keys are literal copies of worker-supervisor's own
+ * image/container-client constants, not imports — see each constant's own comment. The
+ * `WORKER_IMAGE` env default itself is *not* duplicated here — this package has no way to know a
+ * host's actual configured value (a host may override it away from the image's own build-time
+ * default name), so every handler below reads worker-supervisor's own reported `defaultImage`
+ * (`GET /images`) instead of guessing (see `resolveActiveImage`'s own doc comment).
  *
  * "待重建" (E2) is always derived here, live, from two facts worker-supervisor reports over HTTP
  * (`GET /images`, `GET /residents`) — comparing resolved image ids (`RuntimeImageInfo.id` /
@@ -58,15 +62,6 @@ import {
 const IMAGE_PI_VERSION_LABEL = 'ai.nexttime.pi-version';
 const IMAGE_PLATFORM_EXTENSION_VERSION_LABEL = 'ai.nexttime.platform-extension-version';
 const IMAGE_BUILT_FROM_LABEL = 'ai.nexttime.built-from';
-
-/** Mirrors `packages/worker-supervisor/src/config.ts`'s own `loadConfig` default for
- *  `WORKER_IMAGE` — used only to *display* what the active image resolves to when the platform
- *  setting is unset (`activeImageSource: 'env_default'`); worker-supervisor itself is still the
- *  one process that actually applies this default at spawn time; a host that overrides
- *  `WORKER_IMAGE` away from this value will see a display-only mismatch here until an
- *  administrator sets `activeRuntimeImage` explicitly (best-effort, documented in the PR body's
- *  own assumptions list, not silently treated as authoritative). */
-const DEFAULT_WORKER_IMAGE = 'nexttime-ai-worker-runtime';
 
 /** Nil UUID — the same placeholder `platform-handlers.ts`'s `countGatekeepers` already uses for
  *  `setWorkspaceContext`'s `principalId` argument when no real acting Principal exists for the
@@ -97,14 +92,20 @@ function requireSupervisorClient(): TaskSupervisorClientPort {
 }
 
 /** Soft read for dashboard-style aggregations (`runtime_inventory`, `platform_status`,
- *  `pi_drift`) — a missing implementation or a network failure both degrade to `[]`, never a
- *  thrown error, so one unreachable dependency never blanks out the rest of the dashboard. */
-async function tryListImages(): Promise<RuntimeImageInfo[]> {
+ *  `pi_drift`) — a missing implementation or a network failure both degrade to `{defaultImage:
+ *  undefined, images: []}`, never a thrown error, so one unreachable dependency never blanks out
+ *  the rest of the dashboard. */
+async function tryListImages(): Promise<{
+  defaultImage: string | undefined;
+  images: RuntimeImageInfo[];
+}> {
   try {
     const client = getConfiguredTaskRuntime().supervisorClient;
-    return client.listImages ? await client.listImages() : [];
+    if (!client.listImages) return { defaultImage: undefined, images: [] };
+    const inventory = await client.listImages();
+    return { defaultImage: inventory.defaultImage, images: inventory.images };
   } catch {
-    return [];
+    return { defaultImage: undefined, images: [] };
   }
 }
 
@@ -115,6 +116,22 @@ async function tryListResidents(): Promise<ResidentInventoryEntry[]> {
   } catch {
     return [];
   }
+}
+
+/** What `activeImage`/`activeImageSource` should be, given the platform setting and
+ *  worker-supervisor's own reported `defaultImage` — never a kernel-side guess (see this
+ *  module's own doc comment). `'unknown'` only when the setting is unset *and* worker-supervisor
+ *  could not be reached to report its own default. */
+function resolveActiveImage(
+  settingValue: string | null,
+  defaultImage: string | undefined,
+): {
+  activeImage: string | null;
+  activeImageSource: 'setting' | 'env_default' | 'unknown';
+} {
+  if (settingValue) return { activeImage: settingValue, activeImageSource: 'setting' };
+  if (defaultImage) return { activeImage: defaultImage, activeImageSource: 'env_default' };
+  return { activeImage: null, activeImageSource: 'unknown' };
 }
 
 function toWireRuntimeImage(image: RuntimeImageInfo): RuntimeImageWire {
@@ -146,13 +163,12 @@ function findImage(
 
 export const runtimeInventoryHandler: CapabilityHandler = async (client) => {
   const { settings } = await readPlatformSettings(client);
-  const activeImage = settings.activeRuntimeImage ?? DEFAULT_WORKER_IMAGE;
-  const activeImageSource: 'setting' | 'env_default' = settings.activeRuntimeImage
-    ? 'setting'
-    : 'env_default';
-
-  const [images, residents] = await Promise.all([tryListImages(), tryListResidents()]);
-  const activeImageInfo = findImage(images, activeImage);
+  const [imagesResult, residents] = await Promise.all([tryListImages(), tryListResidents()]);
+  const { activeImage, activeImageSource } = resolveActiveImage(
+    settings.activeRuntimeImage,
+    imagesResult.defaultImage,
+  );
+  const activeImageInfo = activeImage ? findImage(imagesResult.images, activeImage) : undefined;
 
   const residentContainers: ResidentContainerWire[] = residents.map((resident) => ({
     principalId: resident.principalId,
@@ -175,7 +191,7 @@ export const runtimeInventoryHandler: CapabilityHandler = async (client) => {
     activeImage,
     activeImageSource,
     activeImageInfo: activeImageInfo ? toWireRuntimeImage(activeImageInfo) : null,
-    images: images.map(toWireRuntimeImage),
+    images: imagesResult.images.map(toWireRuntimeImage),
     residentContainers,
     checkedAt: new Date().toISOString(),
   };
@@ -193,7 +209,7 @@ export const listRuntimeImagesHandler: CapabilityHandler = async () => {
       'application/platform/runtime: the configured supervisor client does not implement listImages (S7-E)',
     );
   }
-  const images = await supervisor.listImages();
+  const { images } = await supervisor.listImages();
   return { result: { items: images.map(toWireRuntimeImage) } };
 };
 
@@ -216,7 +232,7 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
   }
   let images: RuntimeImageInfo[];
   try {
-    images = await supervisor.listImages();
+    ({ images } = await supervisor.listImages());
   } catch (err) {
     throw new PlatformAdminError(
       'runtime_unreachable',
@@ -240,12 +256,17 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
   };
 };
 
-/** E3: "改回 platform_settings_history 里上一个值" — the immediately-prior *settings version's*
- *  own `activeRuntimeImage`, not the last time that field specifically changed. When an unrelated
- *  setting (e.g. `siteName`) was the most recent write, that version's `activeRuntimeImage` still
- *  equals the current one, and this is then a documented no-op — settings roll back by version,
- *  the same granularity `platform_settings_history` already stores at, not per-field history
- *  (see the PR body's own assumptions list). Never re-validates the restored value against
+/** E3: "改回 platform_settings_history 里上一个值" — reread as "the most recent history version
+ *  whose `activeRuntimeImage` *differs* from the current one", not "the immediately-prior
+ *  version" (review fix, 2026-09-22): using `order by version desc limit 1` unconditionally broke
+ *  as soon as any unrelated setting (e.g. `siteName`) was saved after the last image change — that
+ *  version's own `activeRuntimeImage` still equals the current value, making rollback a silent
+ *  no-op. Skipping over same-value versions instead makes this "switch back to the previous
+ *  *different* image" — calling it repeatedly toggles between the last two distinct values (A → B
+ *  → A → B → …), which is the intended recovery semantics and is now documented in
+ *  `docs/runbooks/operations.md` §13 and this capability's own registry description. A missing
+ *  key in an old history row (predates this field) is treated as JSON `null` (`coalesce(...,
+ *  'null'::jsonb)`), matching an unset setting. Never re-validates the restored value against
  *  `list_runtime_images` (unlike `set_active_runtime_image`) — this is a deliberate recovery
  *  action reverting to a known-prior state; if that image has since been pruned from the host,
  *  `runtime_inventory` will show it missing and a spawn attempt will fail loudly on its own. */
@@ -255,14 +276,20 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
   _params,
   context,
 ) => {
+  const { settings: currentSettings } = await readPlatformSettings(client);
+  const currentImageJson = JSON.stringify(currentSettings.activeRuntimeImage ?? null);
   const historyResult = await client.query<{ settings: Record<string, unknown> }>(
-    'select settings from platform_settings_history order by version desc limit 1',
+    `select settings from platform_settings_history
+      where coalesce(settings -> 'activeRuntimeImage', 'null'::jsonb) is distinct from $1::jsonb
+      order by version desc
+      limit 1`,
+    [currentImageJson],
   );
   const previous = historyResult.rows[0];
   if (!previous) {
     throw new PlatformAdminError(
       'no_previous_settings_version',
-      'no previous platform-settings version exists to roll back to',
+      'no previous platform-settings version with a different activeRuntimeImage exists to roll back to',
     );
   }
   const previousValue = previous.settings.activeRuntimeImage;
@@ -319,12 +346,19 @@ export const rollEntryContainersHandler: CapabilityHandler = async (
   }
 
   const { settings } = await readPlatformSettings(client);
-  const activeImage = settings.activeRuntimeImage ?? DEFAULT_WORKER_IMAGE;
-  const [images, residents] = await Promise.all([
+  const [imagesResult, residents] = await Promise.all([
     supervisor.listImages(),
     supervisor.listResidents(),
   ]);
-  const activeImageInfo = findImage(images, activeImage);
+  // `imagesResult.defaultImage` is always a real string here — this is the hard, direct
+  // `supervisor.listImages()` call (already guarded above), and worker-supervisor always reports
+  // its own `config.workerImage`; `activeImageSource` is included only for symmetry with
+  // `resolveActiveImage`'s other callers and is never `'unknown'` in practice on this path.
+  const { activeImage } = resolveActiveImage(
+    settings.activeRuntimeImage,
+    imagesResult.defaultImage,
+  );
+  const activeImageInfo = activeImage ? findImage(imagesResult.images, activeImage) : undefined;
   const byPrincipal = new Map(residents.map((resident) => [resident.principalId, resident]));
 
   const targetIds = principalIds ?? residents.map((resident) => resident.principalId);
@@ -398,9 +432,12 @@ async function readPinnedPiVersion(): Promise<{
 
 export const piDriftHandler: CapabilityHandler = async (client) => {
   const { settings } = await readPlatformSettings(client);
-  const activeImage = settings.activeRuntimeImage ?? DEFAULT_WORKER_IMAGE;
-  const images = await tryListImages();
-  const activeImageInfo = findImage(images, activeImage);
+  const imagesResult = await tryListImages();
+  const { activeImage } = resolveActiveImage(
+    settings.activeRuntimeImage,
+    imagesResult.defaultImage,
+  );
+  const activeImageInfo = activeImage ? findImage(imagesResult.images, activeImage) : undefined;
   const activeImagePiVersion = activeImageInfo?.labels[IMAGE_PI_VERSION_LABEL] ?? null;
   const platformExtensionVersion =
     activeImageInfo?.labels[IMAGE_PLATFORM_EXTENSION_VERSION_LABEL] ?? null;

@@ -127,6 +127,16 @@ export interface RuntimeImageInfo {
   readonly labels: Readonly<Record<string, string>>;
 }
 
+/** S7-E: `GET /images`'s full response — `defaultImage` is worker-supervisor's own
+ *  `config.workerImage` (its `WORKER_IMAGE` env, resolved). The kernel has no other way to learn
+ *  this (the two processes only ever talk over HTTP) — `application/platform/runtime.ts` reads
+ *  this instead of guessing a compiled-in default, so a host that overrides `WORKER_IMAGE` away
+ *  from the image's own build-time default name is still reported correctly. */
+export interface RuntimeImageInventory {
+  readonly defaultImage: string;
+  readonly images: RuntimeImageInfo[];
+}
+
 /** S7-E: one resident entry container, as worker-supervisor's `GET /residents` reports it —
  *  mirrors that package's own `ResidentInventoryEntry`. */
 export interface ResidentInventoryEntry {
@@ -228,12 +238,12 @@ export interface TaskSupervisorClientPort {
    * `true` when a container was stopped, `false` when worker-supervisor knew of none (404).
    */
   stopResident?(principalId: string): Promise<boolean>;
-  /** S7-E: `GET /images` — every runtime image carrying the platform's `ai.nexttime.*` labels.
-   *  Optional on the port for the same reason `stopResident` is (existing test fakes across
-   *  `application/task/*.integration.test.ts` model the Task-mode half only); `application/
-   *  platform/runtime.ts`'s handlers treat a missing implementation as "no images known", never a
-   *  thrown error. */
-  listImages?(): Promise<RuntimeImageInfo[]>;
+  /** S7-E: `GET /images` — every runtime image carrying the platform's `ai.nexttime.*` labels,
+   *  plus worker-supervisor's own reported `defaultImage`. Optional on the port for the same
+   *  reason `stopResident` is (existing test fakes across `application/task/*.integration.test.ts`
+   *  model the Task-mode half only); `application/platform/runtime.ts`'s handlers treat a missing
+   *  implementation as "no images known", never a thrown error. */
+  listImages?(): Promise<RuntimeImageInventory>;
   /** S7-E: `GET /residents` — every resident entry container across every workspace. Same
    *  optionality reasoning as `listImages` above. */
   listResidents?(): Promise<ResidentInventoryEntry[]>;
@@ -308,7 +318,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
     });
   }
 
-  async listImages(): Promise<RuntimeImageInfo[]> {
+  async listImages(): Promise<RuntimeImageInventory> {
     const { status, body } = await requestJson(
       this.fetchImpl,
       this.timeoutMs,
@@ -318,7 +328,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
     if (status !== 200) {
       throw new TaskSupervisorError('http_error', `GET /images returned ${status}`, { status });
     }
-    return (body as { items: RuntimeImageInfo[] }).items;
+    return body as RuntimeImageInventory;
   }
 
   async listResidents(): Promise<ResidentInventoryEntry[]> {

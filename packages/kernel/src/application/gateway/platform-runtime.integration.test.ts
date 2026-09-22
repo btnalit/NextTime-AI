@@ -9,7 +9,7 @@ import type {
   RuntimeImageWire,
   RuntimeInventoryWire,
 } from '@nexttime/shared';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -44,11 +44,60 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * specific value) — this file's own database has no such services reachable, in CI or locally, and
  * `application/platform/runtime.ts`'s own module doc comment documents that this is a live probe,
  * not something this test double can control.
+ *
+ * Private database per file (review fix, 2026-09-22 — same `createIsolatedDatabase` this suite's
+ * sibling `platform-workspaces.integration.test.ts` already uses, and for the identical reason:
+ * `platform_settings`/`platform_settings_history` are global singletons, not workspace-scoped, so
+ * sharing CI's one `nexttime_test` database with every other integration test file would make
+ * `rollback_runtime_image`'s `no_previous_settings_version` case (which needs to observe a
+ * genuinely empty history table) depend on what other files happened to run first.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+
+/** Polls `pg_stat_activity` until no backend is connected to `name` — same rationale and
+ *  implementation as `platform-workspaces.integration.test.ts`'s own `waitForNoConnections`
+ *  (`pool.end()` only *schedules* each idle client's close, so without this wait `drop database …
+ *  with (force)` can race a connection of this file's own still shutting down). */
+async function waitForNoConnections(cluster: Pool, name: string): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const { rows } = await cluster.query<{ n: string }>(
+      'select count(*)::text as n from pg_stat_activity where datname = $1',
+      [name],
+    );
+    if (rows[0]?.n === '0') return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+async function createIsolatedDatabase(): Promise<{
+  readonly pool: Pool;
+  readonly drop: () => Promise<void>;
+}> {
+  if (DATABASE_URL === undefined) throw new Error('createIsolatedDatabase needs DATABASE_URL');
+  const cluster = createPool();
+  const name = `nexttime_platform_runtime_${randomUUID().replace(/-/g, '')}`;
+  try {
+    await cluster.query(`create database "${name}"`);
+  } catch (err) {
+    await cluster.end();
+    throw err;
+  }
+  const url = new URL(DATABASE_URL);
+  url.pathname = `/${name}`;
+  const pool = createPool({ connectionString: url.toString() });
+  return {
+    pool,
+    drop: async () => {
+      await pool.end();
+      await waitForNoConnections(cluster, name);
+      await cluster.query(`drop database if exists "${name}" with (force)`);
+      await cluster.end();
+    },
+  };
+}
 
 const IMAGE_V1: RuntimeImageInfo = {
   id: 'sha256:v1000000000000000000000000000000000000000000000000000000000000',
@@ -64,10 +113,15 @@ const IMAGE_V2: RuntimeImageInfo = {
 };
 
 /** In-memory `TaskSupervisorClientPort` — `images`/`residents` are set directly by each test;
- *  `stoppedPrincipalIds` records every `stopResident` call for `roll_entry_containers` assertions. */
+ *  `stoppedPrincipalIds` records every `stopResident` call for `roll_entry_containers` assertions.
+ *  `defaultImage` mirrors worker-supervisor's own `config.workerImage` (S7-E review fix: the
+ *  kernel must never guess this — see `application/platform/runtime.ts`'s own doc comment);
+ *  `imagesShouldThrow` simulates worker-supervisor being unreachable for `listImages()`. */
 class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
   images: RuntimeImageInfo[] = [];
   residents: ResidentInventoryEntry[] = [];
+  defaultImage = 'nexttime-ai-worker-runtime';
+  imagesShouldThrow = false;
   readonly stoppedPrincipalIds: string[] = [];
 
   async spawn(): Promise<TaskSpawnOutcome> {
@@ -83,8 +137,11 @@ class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
     this.stoppedPrincipalIds.push(principalId);
     return true;
   }
-  async listImages(): Promise<RuntimeImageInfo[]> {
-    return this.images;
+  async listImages(): Promise<{ defaultImage: string; images: RuntimeImageInfo[] }> {
+    if (this.imagesShouldThrow) {
+      throw new Error('simulated: worker-supervisor unreachable');
+    }
+    return { defaultImage: this.defaultImage, images: this.images };
   }
   async listResidents(): Promise<ResidentInventoryEntry[]> {
     return this.residents;
@@ -110,6 +167,7 @@ describe.runIf(DATABASE_URL !== undefined)(
   'S7-E platform runtime capabilities (integration, real Postgres)',
   () => {
     let pool: Pool;
+    let dropDatabase: (() => Promise<void>) | undefined;
     let admin: UserRow;
     let supervisor: FakeRuntimeSupervisorClient;
     let workspaceId: string;
@@ -200,9 +258,22 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
+    /** Test-only cleanup, outside any capability — `set_active_runtime_image` can only ever set a
+     *  real, inventory-validated image, so a test that needs the setting genuinely *unset* (to
+     *  exercise `activeImageSource: 'env_default' | 'unknown'`) has no capability-level way to get
+     *  there once an earlier test in this shared-workspace file has set it. Bypasses
+     *  `platform_settings_history` on purpose — this is test setup, not a rollback exercise. */
+    async function resetActiveRuntimeImageSetting(): Promise<void> {
+      await pool.query(
+        `update platform_settings set settings = settings - 'activeRuntimeImage' where singleton`,
+      );
+    }
+
     beforeAll(async () => {
       if (DATABASE_URL === undefined) return;
-      pool = createPool({ connectionString: DATABASE_URL });
+      const isolated = await createIsolatedDatabase();
+      pool = isolated.pool;
+      dropDatabase = isolated.drop;
       await runMigrations(pool, MIGRATIONS_DIR);
 
       admin = await createPlatformAdmin(pool, {
@@ -214,7 +285,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     }, 120_000);
 
     afterAll(async () => {
-      if (pool) await pool.end();
+      if (dropDatabase) await dropDatabase();
     });
 
     beforeEach(async () => {
@@ -242,6 +313,17 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('set_active_runtime_image / rollback_runtime_image', () => {
+      // Must run before any other test in this describe block mutates `platform_settings` —
+      // `platform_settings_history` is genuinely empty only on this file's own freshly-migrated,
+      // isolated database (see the module doc comment on why this file no longer shares CI's
+      // single `nexttime_test` database with every other integration test file).
+      it('rejects rollback on a fresh install — no platform_settings_history row exists yet (no_previous_settings_version)', async () => {
+        await expectPlatformError(
+          () => callAsAdmin('rollback_runtime_image'),
+          'no_previous_settings_version',
+        );
+      });
+
       it('sets the active image when it is in the inventory, and reflects it in get_platform_settings', async () => {
         supervisor.images = [IMAGE_V1];
         const result = await callAsAdmin<PlatformSettingsWire>('set_active_runtime_image', {
@@ -261,16 +343,31 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
-      it('rolls back to the value one settings version ago', async () => {
+      it('rolls back to A after set A → set B → an unrelated settings write (siteName) — review fix', async () => {
         supervisor.images = [IMAGE_V1, IMAGE_V2];
         await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v1' });
         await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
+        // An unrelated settings write in between — the naive "one version ago" implementation
+        // made rollback a no-op here (that version's activeRuntimeImage still reads "v2").
+        await callAsAdmin('update_platform_settings', { siteName: `unrelated-${randomUUID()}` });
 
         const rolledBack = await callAsAdmin<PlatformSettingsWire>('rollback_runtime_image');
         expect(rolledBack.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v1');
 
         const settings = await callAsAdmin<PlatformSettingsWire>('get_platform_settings');
         expect(settings.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v1');
+      });
+
+      it('repeated rollback toggles between the last two distinct images', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V2];
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v1' });
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
+
+        const first = await callAsAdmin<PlatformSettingsWire>('rollback_runtime_image');
+        expect(first.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v1');
+
+        const second = await callAsAdmin<PlatformSettingsWire>('rollback_runtime_image');
+        expect(second.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v2');
       });
     });
 
@@ -299,10 +396,33 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('never guesses needsRebuild when the active image cannot be resolved', async () => {
-        supervisor.images = []; // active image (env default) not found in inventory
+        supervisor.images = []; // active image not found in the (empty) inventory
         supervisor.residents = [residentEntry({ imageId: 'sha256:unrelated' })];
 
         const result = await callAsAdmin<RuntimeInventoryWire>('runtime_inventory');
+        expect(result.activeImageInfo).toBeNull();
+        expect(result.residentContainers.every((c) => c.needsRebuild === false)).toBe(true);
+      });
+
+      it('uses worker-supervisor’s own reported defaultImage when the setting is unset (never a kernel-side guess — review fix)', async () => {
+        await resetActiveRuntimeImageSetting();
+        supervisor.defaultImage = 'custom-host-image-name:latest';
+        supervisor.images = [];
+        supervisor.residents = [];
+
+        const result = await callAsAdmin<RuntimeInventoryWire>('runtime_inventory');
+        expect(result.activeImage).toBe('custom-host-image-name:latest');
+        expect(result.activeImageSource).toBe('env_default');
+      });
+
+      it('reports activeImageSource "unknown" (activeImage null) when the setting is unset and worker-supervisor is unreachable', async () => {
+        await resetActiveRuntimeImageSetting();
+        supervisor.imagesShouldThrow = true;
+        supervisor.residents = [residentEntry({ imageId: 'sha256:unrelated' })];
+
+        const result = await callAsAdmin<RuntimeInventoryWire>('runtime_inventory');
+        expect(result.activeImage).toBeNull();
+        expect(result.activeImageSource).toBe('unknown');
         expect(result.activeImageInfo).toBeNull();
         expect(result.residentContainers.every((c) => c.needsRebuild === false)).toBe(true);
       });
