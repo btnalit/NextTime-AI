@@ -404,12 +404,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         return taskId;
       }
 
+      /** `runTaskReaper`'s duration-timeout scan is cross-workspace by design (its own doc comment:
+       *  "exactly one kernel process, not one per workspace") — on a reused test DB (not CI's own
+       *  always-fresh one) it can pick up a `running` WorkerRun some *other* test file left behind
+       *  whose Task duration limit has since elapsed, and try to terminate it (leftover 51). Neither
+       *  test below seeds such a row itself, but a bare `{}` fake can't stand in for the supervisor
+       *  client here the way it does in the ActionRequest-routing `describe` above — `terminate`/
+       *  `status` need to actually exist so a foreign candidate doesn't throw `TypeError: ... is not
+       *  a function` and fail this file's own, unrelated assertions. Hermetic no-ops, not real calls. */
+      function fakeSupervisorClient(): TaskSupervisorClientPort {
+        return {
+          spawn: () =>
+            Promise.reject(new Error('unexpected spawn() in queued crash-gap sweep test')),
+          terminate: async () => true,
+          status: async () => undefined,
+        };
+      }
+
       it("fails a Task stuck `queued` past the sweep's own threshold, through the governed path (failure_reason='spawn_lost', audited)", async () => {
         const staleTaskId = await insertQueuedTask(new Date(Date.now() - 90 * 1000)); // 90s ago
 
-        const supervisorClient = {} as TaskSupervisorClientPort; // no worker_runs row exists for
-        // this Task — the duration-timeout scan's own SELECT (worker_runs join tasks) never
-        // matches it, so the supervisor client is never actually called for this fixture.
+        const supervisorClient = fakeSupervisorClient(); // no worker_runs row exists for this
+        // Task itself — the duration-timeout scan's own SELECT (worker_runs join tasks) never
+        // matches it — but see the fixture doc comment above for why the fake still needs real
+        // `terminate`/`status`.
         const { privateKey } = await generateEphemeralHandleKeyPair();
         const taskDeps: TaskRuntimeDeps = { pool, privateKey, supervisorClient };
 
@@ -438,7 +456,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('leaves a freshly `queued` Task alone — the sweep only fires past its own threshold', async () => {
         const freshTaskId = await insertQueuedTask(new Date());
 
-        const supervisorClient = {} as TaskSupervisorClientPort;
+        const supervisorClient = fakeSupervisorClient();
         const { privateKey } = await generateEphemeralHandleKeyPair();
         const taskDeps: TaskRuntimeDeps = { pool, privateKey, supervisorClient };
 
