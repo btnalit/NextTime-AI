@@ -17,6 +17,9 @@
 #     (${NEXTTIME_DATA}/accept/models.json, written by `accept_provider_up` from the fake provider
 #     file through this same override) via MODELS_JSON_HOST_PATH, so the production
 #     ${NEXTTIME_DATA}/config/models.json is never rewritten.
+#   - llm-proxy's /data/state (the S6-B console-managed providers.json) is ${NEXTTIME_DATA}/accept
+#     instead of ${NEXTTIME_DATA}/llm-proxy, emptied per run by `accept_provider_up`, so the
+#     acceptance stack never reads or writes the production provider store.
 #
 # Restoring production wiring is a plain `docker compose up -d --force-recreate llm-proxy
 # worker-supervisor` (no override) — `accept_provider_restore`, run from the scripts' EXIT trap.
@@ -32,9 +35,17 @@ services:
       # points at below), so an admin mutation during an acceptance run can never touch the
       # production ${NEXTTIME_DATA}/config/models.json (startup already never writes it).
       - "${NEXTTIME_DATA:?}/accept:/data/accept"
+      # S6-B: the console-managed provider store (providers.json) lives in /data/state. Replacing
+      # that mount (same container path) keeps the production ${NEXTTIME_DATA}/llm-proxy out of the
+      # acceptance stack in both directions: gen-models and the proxy never merge a provider the
+      # administrator added in the console into the fake catalog, and an admin mutation never writes
+      # the production store. `accept_provider_up` removes the acceptance copy first, so every run
+      # starts from an empty store.
+      - "${NEXTTIME_DATA:?}/accept:/data/state"
     environment:
       FAKE_LLM_API_KEY: fake
       MODELS_JSON_OUT_FILE: /data/accept/models.json
+      LLM_PROVIDER_STORE_FILE: /data/state/providers.json
   worker-supervisor:
     environment:
       MODELS_JSON_HOST_PATH: "${NEXTTIME_DATA:?}/accept/models.json"

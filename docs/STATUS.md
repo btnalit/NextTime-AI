@@ -273,6 +273,7 @@
 | 51 | 复用的测试库跨运行累积 `running` Task 后，`reaper.integration.test.ts` 的 crash-gap 用例撞上其它文件遗留的超时 Task（`deps.supervisorClient.terminate is not a function`）；CI 每次全新库不受影响，本机用全新库通过。可给该用例的假 supervisor 补 `terminate` 或让 reaper 用例只看自己的工作区 | P3 | S7 候选 | 开放 |
 | 52 | `.github/workflows/pr-title.yml` 头注释仍写"仓库用 merge commit、不用 squash"，与 W5 起 squash-only 的仓库设置、以及 release-please 从 PR 标题（= squash 后的提交）生成版本与 CHANGELOG 的事实不符（2026-09-19 收尾会话的策略拦截了对该文件的改动，留给维护者顺手改） | P3 | 文档漂移 | 开放 |
 | 53 | S6 实施会话在本机留下的残留（2026-09-19 收尾复核：均不含产物、可随时重建；收尾会话的策略不允许删除本机对象，留给维护者）：① 11 条 `s6/lane-*` 本地分支——逐条 `git cherry` 核实其提交全部 patch-equivalent 于 `s6/console-completion`（唯一例外是 web-console 能力表带冲突标记的那版，已被后续提交取代），可直接删除；② 本机 e2e 栈的 5 个 `nexttime-ai-*` 镜像与 4 个匿名卷；③ 实施会话 scratchpad 里 e2e 栈的 `nexttime-data/` 数据目录，子目录归 root / 10001 / 999，无免密 sudo，需 root 辅助容器删除；④ 收尾会话为跑库集成套件起的临时容器 `nexttime-test-db`（`scripts/test-db.sh`），若收尾会话未能删掉则手动删 | — | 本机运维 | 开放 |
+| 54 | 主机 CLI 清除（`bootstrap.js purge-workspace` / `purge-expired-workspaces` / `delete-workspace`）在既无 `--actor` 也无 `NEXTTIME_PLATFORM_ADMINS` 时不写 `platform.workspace_purged` 审计行，只在终端告警（`cli/bootstrap.ts`）；控制台路径总有操作者。与"审计只增不减"有张力：可改为无操作者时拒绝执行，或以 operator 身份落一行（2026-09-22 PR #217 审查） | P3 | S7 候选 | 开放 |
 
 ## 5. 更新规则
 

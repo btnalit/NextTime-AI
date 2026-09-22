@@ -149,6 +149,8 @@ accept_provider_up() {
   # driver, same guard.
   require_world_readable "$PWD/config/llm-providers.fake.example.yaml" "fake provider file"
   mkdir -p "$NEXTTIME_DATA/accept" || return 1
+  # The override mounts this directory as llm-proxy's /data/state: an empty provider store per run.
+  rm -f "$NEXTTIME_DATA/accept/providers.json"
   if ! compose_accept run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js \
       </dev/null >"$NEXTTIME_DATA/accept/models.json.tmp" 2>"$NEXTTIME_DATA/accept/gen-models.err"; then
     echo "accept: gen-models (fake provider) failed: $(tail -5 "$NEXTTIME_DATA/accept/gen-models.err")" >&2
