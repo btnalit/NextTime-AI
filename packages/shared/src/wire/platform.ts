@@ -603,9 +603,12 @@ export type ResidentContainerWire = z.infer<typeof ResidentContainerWireSchema>;
 export const RuntimeInventoryWireSchema = z
   .object({
     /** The image reference `task/spawn` and `startTurn` currently request — the platform setting
-     *  when set, else worker-supervisor's own `WORKER_IMAGE` env default. */
-    activeImage: z.string(),
-    activeImageSource: z.enum(['setting', 'env_default']),
+     *  when set (`"setting"`), else worker-supervisor's own reported `WORKER_IMAGE` default
+     *  (`"env_default"` — read live from worker-supervisor, never a kernel-side guess). `null`
+     *  with `activeImageSource: "unknown"` only when the setting is unset *and* worker-supervisor
+     *  could not be reached to report its own default — never guessed. */
+    activeImage: z.string().nullable(),
+    activeImageSource: z.enum(['setting', 'env_default', 'unknown']),
     /** The active image's own inventory entry, when it could be resolved (found in
      *  `list_runtime_images`) — `null` when the active image carries no platform label or is not
      *  known to worker-supervisor, in which case every `residentContainers[].needsRebuild` is

@@ -13765,7 +13765,10 @@
       "additionalProperties": false,
       "properties": {
         "activeImage": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "activeImageInfo": {
           "anyOf": [
@@ -13828,7 +13831,8 @@
         "activeImageSource": {
           "enum": [
             "setting",
-            "env_default"
+            "env_default",
+            "unknown"
           ],
           "type": "string"
         },

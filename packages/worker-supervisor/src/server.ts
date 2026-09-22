@@ -19,7 +19,10 @@
  *   GET  /resident/:principalId   -> 200 ResidentStatus | 404                    [guarded]
  *   POST /resident/:principalId/touch -> 204 | 404                               [guarded]
  *   GET  /residents               -> 200 {items: ResidentInventoryEntry[]}       [guarded]
- *   GET  /images                  -> 200 {items: RuntimeImageInfo[]} (platform-labelled only)
+ *   GET  /images                  -> 200 {defaultImage: string, images: RuntimeImageInfo[]}
+ *                                     (images: platform-labelled only; defaultImage is this
+ *                                     process's own config.workerImage — the kernel has no other
+ *                                     way to learn it)
  *                                                                                 [guarded]
  *   POST /task/spawn              {taskId, workerRunId, workspaceId, onBehalfOf, capabilityHandle,
  *                                   image?, model?, systemPrompt?, skillsInline?,
@@ -110,9 +113,9 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
   });
 
   app.get('/images', requireInternal, async (_request, reply) => {
-    const items = await residentService.listImages();
+    const { defaultImage, images } = await residentService.listImages();
     reply.code(200);
-    return { items };
+    return { defaultImage, images };
   });
 
   app.post('/resident/stop', requireInternal, async (request, reply) => {

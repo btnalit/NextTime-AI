@@ -2781,7 +2781,7 @@ const platformCapabilities: readonly Capability[] = [
     paramsSchema: noParams,
     resultSchema: wire.PlatformSettingsWireSchema,
     description:
-      'Sets the active runtime image back to the value it held one platform-settings version ago (`platform_settings_history`). A no-op when that version’s value already equals the current one (an intervening unrelated settings write, not a bug — settings roll back by version, not per-field history). Audited.',
+      'Switches the active runtime image back to the most recent `platform_settings_history` value that differs from the current one — an intervening unrelated settings write (e.g. siteName) is skipped over, not treated as "the previous value". Calling this repeatedly toggles between the last two distinct images. Audited.',
   },
   {
     name: 'roll_entry_containers',

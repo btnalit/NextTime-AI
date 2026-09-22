@@ -272,8 +272,8 @@ describe('GET /images (S7-E inventory)', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('lists only images carrying the platform pi-version label', async () => {
-    const { app, docker } = setup();
+  it('lists only images carrying the platform pi-version label, plus defaultImage (S7-E)', async () => {
+    const { app, docker, config } = setup();
     docker.registerImage({
       id: 'sha256:abc',
       tags: ['nexttime-ai-worker-runtime:v1'],
@@ -289,7 +289,8 @@ describe('GET /images (S7-E inventory)', () => {
     const res = await app.inject({ method: 'GET', url: '/images', headers: AUTH });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.items).toEqual([
+    expect(body.defaultImage).toBe(config.workerImage);
+    expect(body.images).toEqual([
       {
         id: 'sha256:abc',
         tags: ['nexttime-ai-worker-runtime:v1'],

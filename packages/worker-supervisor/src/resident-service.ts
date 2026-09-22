@@ -209,8 +209,18 @@ export interface ResidentService {
    *  `ResidentInventoryEntry`'s own doc comment for why no "待重建" field lives here). */
   list(): Promise<ResidentInventoryEntry[]>;
   /** S7-E: `GET /images` — every image carrying the platform's `ai.nexttime.pi-version` label
-   *  (`docker-client.ts`'s `IMAGE_PI_VERSION_LABEL`). */
-  listImages(): Promise<RuntimeImageInfo[]>;
+   *  (`docker-client.ts`'s `IMAGE_PI_VERSION_LABEL`), plus this process's own `config.workerImage`
+   *  (`defaultImage`) — the kernel has no other way to learn worker-supervisor's actual configured
+   *  default (the two processes only ever talk over HTTP), and a host may set `WORKER_IMAGE` away
+   *  from the image's own build-time default name. */
+  listImages(): Promise<RuntimeImageInventory>;
+}
+
+/** S7-E: `GET /images`'s full response — see `ResidentService.listImages`'s own doc comment for
+ *  why `defaultImage` travels alongside the image list rather than being a kernel-side guess. */
+export interface RuntimeImageInventory {
+  readonly defaultImage: string;
+  readonly images: RuntimeImageInfo[];
 }
 
 export function createResidentService(deps: ResidentServiceDeps): ResidentService {
@@ -735,8 +745,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         .filter((entry): entry is ResidentInventoryEntry => entry !== undefined);
     },
 
-    async listImages(): Promise<RuntimeImageInfo[]> {
-      return docker.listImages(IMAGE_PI_VERSION_LABEL);
+    async listImages(): Promise<RuntimeImageInventory> {
+      const images = await docker.listImages(IMAGE_PI_VERSION_LABEL);
+      return { defaultImage: config.workerImage, images };
     },
   };
 }

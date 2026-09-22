@@ -446,8 +446,8 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
     expect(docker.stopCalls).toHaveLength(1);
   });
 
-  it('listImages() forwards to docker.listImages filtered by the pi-version label', async () => {
-    const { service, docker } = setup();
+  it('listImages() forwards to docker.listImages filtered by the pi-version label, plus this process’s own config.workerImage as defaultImage (S7-E)', async () => {
+    const { service, docker, config } = setup();
     docker.registerImage({
       id: 'sha256:abc',
       tags: ['nexttime-ai-worker-runtime:v1'],
@@ -460,8 +460,9 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
       created: '2026-09-22T00:00:00.000Z',
       labels: {},
     });
-    const images = await service.listImages();
-    expect(images).toEqual([
+    const result = await service.listImages();
+    expect(result.defaultImage).toBe(config.workerImage);
+    expect(result.images).toEqual([
       {
         id: 'sha256:abc',
         tags: ['nexttime-ai-worker-runtime:v1'],
