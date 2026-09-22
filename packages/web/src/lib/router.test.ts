@@ -107,6 +107,7 @@ describe('hrefs', () => {
       { kind: 'models' },
       { kind: 'audit' },
       { kind: 'graph' },
+      { kind: 'platformModules' },
       { kind: 'platformModels' },
       { kind: 'platformOverview' },
       { kind: 'platformUsers' },
@@ -152,6 +153,8 @@ function hrefFor(route: Route): string {
       return hrefs.audit();
     case 'graph':
       return hrefs.graph();
+    case 'platformModules':
+      return hrefs.platformModules();
     case 'platformModels':
       return hrefs.platformModels();
     case 'platformOverview':

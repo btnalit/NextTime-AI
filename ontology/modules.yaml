@@ -1,0 +1,54 @@
+# Module index (P-B2b, docs/platform-admin-design.md §6.4 "模块（领域包、Worker 模板、Skill）";
+# docs/development-tasks.md §5d S7-D 决定 D1). A **module** is a versioned domain pack — the same
+# `ontology/<pack>-v<N>.yaml` files `substrate/ontology/loader.ts`'s `publishOntologyDomainPack`
+# already knows how to publish (design §7.10) — plus the metadata the platform 模块 page and the
+# `list_modules` / `install_module` / `upgrade_module` capabilities need that the pack file itself
+# does not carry: which family a file belongs to, its version number, human-readable release notes,
+# and whether upgrading *to* it is a breaking change.
+#
+# **Not modules** (D1, explicit): `platform-meta.yaml` (seeded once per workspace by
+# `seedPlatformMetaOntology`, never installed/upgraded through this index), `entry-agent.yaml` /
+# `ops-runner.yaml` (WorkerDefinition templates, not OntologyDefinition domain packs — a different
+# publish path, `proposeWorkerDefinition`/`publishWorkerDefinition`). Neither is listed below.
+#
+# Shape: `modules[].name` is the pack's stable family name — exactly what
+# `publishOntologyDomainPack({packName})`/`deriveOntologyPackId(packName)` already use, so this
+# index never invents a second identifier for the same family. `modules[].versions[]` is ordered
+# oldest-first and must be **dense from 1** (1, 2, 3, … — no gaps): not required by
+# `install_module`/`upgrade_module`'s own algorithm (both always target the latest version
+# directly, in one publish — `packages/kernel/src/application/platform/modules.ts`'s own doc
+# comment has the full algorithm, including how a workspace's *index* version, found by hash match,
+# D2, is a different counter from the `ontology_versions.version` row number) — kept as a data-
+# hygiene guard so a gap never reads as though a version was silently withdrawn.
+#
+#   - `file`      — the `ontology/<file>` this version's `OntologyDefinition` lives in.
+#   - `version`   — this version's number within the family (matches the file's own header comment
+#     and `ontology_versions.version` once published — see loader.ts's `publishOntologyDomainPack`).
+#   - `notes`     — one line a human reads before installing/upgrading (shown by the module page and
+#     the workspace capability catalog's 模块 tab, and in `ModuleConfirmRequiredError`'s body).
+#   - `breaking`  — true when upgrading *to* this version from the previous one changes existing
+#     ObjectType/LinkType shapes in a way a workspace's own Facts/Links may not already satisfy
+#     (design §6.4 "显示迁移说明与不兼容变更"). `install_module`/`upgrade_module` refuse a breaking
+#     target without `confirm: true` (D3). Version 1 of a family is never breaking (nothing
+#     precedes it to break).
+#
+# Hashes are **never** stored here (D2, deliberately): `install_module`'s "already at this version" /
+# "customized" detection hashes each version's file fresh, at call time, against the image's own
+# `ontology/` directory (`resolveOntologyDir()`) — the same source `publishOntologyDomainPack`
+# itself reads from, so the two can never drift against each other the way a cached hash could.
+modules:
+  - name: ops-assets
+    versions:
+      - file: ops-assets-v1.yaml
+        version: 1
+        notes: >-
+          Docker / systemd / 进程基础设施台账：Host、ComposeProject、Container、Image、
+          SystemdService、Process、Volume、Network、Endpoint、Repository、Owner。只读观察型对象，
+          host-inventory 采集器写入。
+        breaking: false
+      - file: ops-assets-v2.yaml
+        version: 2
+        notes: >-
+          在 v1 基础上新增 RAGFlow 知识库领域：KnowledgeBase、Document、Dataset（保留未用）。
+          纯新增（新增 ObjectType/LinkType，v1 的每个类型原样保留），已有 v1 数据与写入点不受影响。
+        breaking: false

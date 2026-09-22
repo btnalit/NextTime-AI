@@ -74,6 +74,16 @@ export const CAPABILITY_GROUP_VALUES = [
   // P-A1 (docs/platform-admin-design.md §5): the platform-management plane — users, platform
   // settings, overview, platform audit. Every member is `scope: 'platform'` (see `Capability.scope`).
   'platform',
+  // P-B2b (docs/platform-admin-design.md §6.4 模块; docs/development-tasks.md §5d S7-D): the
+  // workspace-scope half of modules — `list_workspace_modules`/`install_module`/`upgrade_module`
+  // (the owner's 能力目录 模块 tab). `assertRegistryConsistent` below requires every `scope:
+  // 'platform'` capability to sit in group `'platform'` (and vice versa), so this group's own
+  // `list_modules`/`set_default_modules` counterpart stays in `platformCapabilities` alongside
+  // every other `scope:'platform'` capability — `connection` follows the identical split
+  // (`list_connectors`/`set_connector_mode` are `group:'platform'`, `scope:'platform'`;
+  // `enable_gate_instance` is `group:'connection'`, `scope:'workspace'` — two groups, not one
+  // shared across both scopes, corrected from this group's own earlier draft comment).
+  'modules',
 ] as const;
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
@@ -2822,6 +2832,89 @@ const platformCapabilities: readonly Capability[] = [
     description:
       'Read-only service health (kernel, postgres, llm-proxy, worker-supervisor, egress-proxy [unknown — its healthz is loopback-only by design], every gate instance’s last-known health), a 30-day cross-workspace llm_usage rollup, the most recent 50 platform audit rows, and backup posture (reports "未配置 not configured" until 遗留 6 lands — no backup timer exists).',
   },
+  // P-B2b (docs/platform-admin-design.md §6.4 模块; docs/development-tasks.md §5d S7-D 决定 D1–D4):
+  // the platform plane's own view of modules — every module this deployment ships
+  // (`ontology/modules.yaml`), aggregated across workspaces, plus which install by default into a
+  // new workspace. `group: 'platform'` (not `'modules'`, `assertRegistryConsistent`'s own
+  // scope↔group invariant below) — the workspace-scope half (`list_workspace_modules`/
+  // `install_module`/`upgrade_module`, the owner's 能力目录 模块 tab, P-B2 决定 ①) is
+  // `modulesCapabilities` further down.
+  {
+    name: 'list_modules',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.ModuleWireSchema),
+    description:
+      'Every module this deployment ships (`ontology/modules.yaml`), with its version list and how many workspaces have it installed / are behind the latest version.',
+  },
+  {
+    name: 'set_default_modules',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ defaultModules: z.array(z.string().min(1)).max(100) }).strict(),
+    resultSchema: wire.PlatformSettingsWireSchema,
+    description:
+      'Set the module family names `create_workspace` installs (each at its own latest indexed version) into every new workspace. Every name must already be in `list_modules`’ own index — an unknown name 400s rather than being silently kept.',
+  },
+];
+
+// -------------------------------------------------------------------------------------------
+// modules, workspace half (P-B2b, docs/platform-admin-design.md §6.4; docs/development-tasks.md
+// §5d S7-D 决定 D1–D4): `list_workspace_modules` / `install_module` / `upgrade_module` — the
+// owner's 能力目录 模块 tab (P-B2 决定 ①: install/upgrade is `scope:'workspace'`, owner — same
+// rule `enable_gate_instance` already follows for the analogous "enable a platform-catalog thing
+// into my own workspace" action). The platform-scope half (`list_modules`/`set_default_modules`)
+// is in `platformCapabilities` above, `group: 'platform'` (`assertRegistryConsistent`'s own
+// invariant: every `scope:'platform'` capability must be `group:'platform'`, and vice versa).
+// -------------------------------------------------------------------------------------------
+
+const modulesCapabilities: readonly Capability[] = [
+  {
+    name: 'list_workspace_modules',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.WorkspaceModuleWireSchema),
+    description:
+      'Every module this deployment ships, with this workspace’s own install state (not installed / up to date / outdated / customized) — the owner’s 能力目录 模块 tab.',
+  },
+  {
+    name: 'install_module',
+    group: 'modules',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({
+        name: z.string().min(1),
+        /** Required when the module is currently `customized`, or any index version between the
+         *  current one and the latest is `breaking` (400 `module_confirm_required` otherwise, with
+         *  the exact versions in `details`). */
+        confirm: z.boolean().optional(),
+      })
+      .strict(),
+    resultSchema: wire.WorkspaceModuleWireSchema,
+    description:
+      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. Already installed → identical to `upgrade_module` (same underlying call, D3).',
+  },
+  {
+    name: 'upgrade_module',
+    group: 'modules',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ name: z.string().min(1), confirm: z.boolean().optional() }).strict(),
+    resultSchema: wire.WorkspaceModuleWireSchema,
+    description:
+      'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number).',
+  },
 ];
 
 /** The complete capability registry (design doc §9.3). */
@@ -2841,6 +2934,7 @@ export const CAPABILITY_REGISTRY: readonly Capability[] = [
   ...membersCapabilities,
   ...agentProfileCapabilities,
   ...platformCapabilities,
+  ...modulesCapabilities,
 ];
 
 /** Capability names that must always be on the human channel (I16/I17/§9.3), never handle. */

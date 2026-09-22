@@ -15,6 +15,7 @@ import { GraphPage } from './components/graph/GraphPage.js';
 import { PlatformAuditPage } from './components/platform/PlatformAuditPage.js';
 import { PlatformIntegrationsPage } from './components/platform/PlatformIntegrationsPage.js';
 import { PlatformModelsPage } from './components/platform/PlatformModelsPage.js';
+import { PlatformModulesPage } from './components/platform/PlatformModulesPage.js';
 import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage.js';
 import { PlatformSettingsPage } from './components/platform/PlatformSettingsPage.js';
 import { PlatformUsersPage } from './components/platform/PlatformUsersPage.js';
@@ -234,6 +235,9 @@ export function Routed({
         />,
       );
       break;
+    case 'platformModules':
+      page = requireAdmin(session, <PlatformModulesPage http={session.http} />);
+      break;
     case 'platformModels':
       page = requireAdmin(session, <PlatformModelsPage http={session.http} />);
       break;
@@ -282,6 +286,7 @@ export function isPlatformRoute(kind: Route['kind']): boolean {
     kind === 'platformUsers' ||
     kind === 'platformWorkspaces' ||
     kind === 'platformIntegrations' ||
+    kind === 'platformModules' ||
     kind === 'platformModels' ||
     kind === 'platformSettings' ||
     kind === 'platformAudit'

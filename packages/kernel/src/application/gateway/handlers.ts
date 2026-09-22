@@ -192,6 +192,13 @@ import {
   updateUserHandler,
   updateWorkspaceHandler,
 } from './platform-handlers.js';
+import {
+  installModuleHandler,
+  listModulesHandler,
+  listWorkspaceModulesHandler,
+  setDefaultModulesHandler,
+  upgradeModuleHandler,
+} from './platform-modules-handlers.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
 import {
   toWireAuditRecord,
@@ -1383,6 +1390,12 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['delete_gate_instance', deleteGateInstanceHandler],
   ['issue_gate_host_token', issueGateHostTokenHandler],
   ['issue_gate_credential_token', issueGateCredentialTokenHandler],
+  // P-B2b modules (platform-modules-handlers.ts)
+  ['list_modules', listModulesHandler],
+  ['set_default_modules', setDefaultModulesHandler],
+  ['list_workspace_modules', listWorkspaceModulesHandler],
+  ['install_module', installModuleHandler],
+  ['upgrade_module', upgradeModuleHandler],
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
   ['search', searchHandler],

@@ -67,6 +67,13 @@ import {
   WORKSPACE_HEADER,
   parseCookieHeader,
 } from '../../application/identity/index.js';
+// P-B2b: same direct-import convention as GateInstanceNotAvailableError above — these two live in
+// application/platform/modules.ts (a domain module, not a *-handlers.ts file), imported directly
+// rather than routed through application/gateway/index.ts's curated surface.
+import {
+  ModuleConfirmRequiredError,
+  ModuleNotFoundError,
+} from '../../application/platform/modules.js';
 import {
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
@@ -171,6 +178,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       code: err.code,
       message: err.message,
     };
+  }
+  // P-B2b (application/platform/modules.ts): `install_module`/`upgrade_module`/`set_default_modules`
+  // naming a module this deployment's index does not carry.
+  if (err instanceof ModuleNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  // P-B2b: D3's "customized or breaking needs confirm: true" — same 400-with-details shape as
+  // OntologyViolationError below, so the console can show exactly what to confirm.
+  if (err instanceof ModuleConfirmRequiredError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // S4.1 console-session channel (resolve-caller.ts): three `ForbiddenError` subclasses with
   // their own codes so the web client can act on them (pick a workspace / add the CSRF header /
