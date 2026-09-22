@@ -384,8 +384,10 @@ export interface PurgeWorkspaceInput {
    *  call has one (`actingUser(context)` never returns undefined). Omitted only by the operator
    *  CLI when neither `--actor` nor `NEXTTIME_PLATFORM_ADMINS` resolves to a real user — the row
    *  is still written (遗留 54: audit only grows), just with `actor_user_id` null and
-   *  `payload.attributedActor: false` (`audit_records_actor_shape`, migration core 0032, legalizes
-   *  that shape for a platform row); the CLI additionally prints its own structured event line. */
+   *  `payload.attributedActor: false`, the one exact shape `audit_records_actor_shape` (migration
+   *  core 0032) legalizes for `action = 'platform.workspace_purged'` — every other platform row
+   *  still requires a real `actor_user_id`; the CLI additionally prints its own structured event
+   *  line. */
   readonly actorUserId?: string;
   /** Operator override (the bootstrap CLI's legacy `delete-workspace`, `scripts/delete-
    *  workspace.sh --force`): skip the eligibility and default-workspace checks. Never reachable
@@ -663,8 +665,11 @@ export async function purgeWorkspace(
       // `platform_audit_query {targetWorkspaceId}` finds this row too. Always written — 遗留 54:
       // the operator CLI can reach this with no resolvable `actorUserId` (neither `--actor` nor
       // `NEXTTIME_PLATFORM_ADMINS` named a real user), and skipping the row there left "audit only
-      // grows" with a silent exception. `attributedActor: false` marks that case; `actor_user_id`
-      // is null on the row itself (`audit_records_actor_shape`, migration core 0032).
+      // grows" with a silent exception. `attributedActor: false` in the payload, `actor_user_id`
+      // null on the row itself, `action` exactly `'platform.workspace_purged'` (never change this
+      // literal without also updating migration core 0032's CHECK, which matches on it) — the one
+      // shape `audit_records_actor_shape` legalizes for an actor-less platform row; it stays a
+      // rejected combination for every other action.
       await writeAudit(client, {
         workspaceId: null,
         actorPrincipalId: null,

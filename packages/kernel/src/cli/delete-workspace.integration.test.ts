@@ -297,7 +297,9 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
 
   it('遗留 54: writes an attributed platform.workspace_purged row when an actorUserId resolves (contrast with the unattributed case above)', async () => {
     const admin = await createPlatformAdmin(pool, {
-      login: `delete-workspace-audit-actor-${randomUUID()}`,
+      // `normalizeLogin` caps a login at 64 chars (`application/identity/users.ts`
+      // `LOGIN_PATTERN`) — a full uuid plus a long prefix overflows it.
+      login: `audit-actor-${randomUUID()}`,
       displayName: 'Audit Actor',
       password: 'a-strong-enough-password',
     });

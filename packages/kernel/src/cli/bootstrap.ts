@@ -544,8 +544,9 @@ export async function issueServiceHandleFromCli(
 // The audit row: a CLI run names the acting administrator with `--actor <login>` or, failing
 // that, takes the first login in `NEXTTIME_PLATFORM_ADMINS` (the anti-lockout administrator every
 // host sets). 遗留 54: when neither resolves to a user, `purgeWorkspace` still always writes the
-// `platform.workspace_purged` row — `actor_user_id` null, `payload.attributedActor: false`
-// (`audit_records_actor_shape`, migration core 0032, legalizes that shape) — rather than leaving
+// `platform.workspace_purged` row — `actor_user_id` null, `payload.attributedActor: false` — the
+// one narrow shape `audit_records_actor_shape` (migration core 0032) legalizes for that one
+// action; every other platform row still requires a real `actor_user_id` — rather than leaving
 // only the structured `workspace_purged` event line on stderr as the sole trail; that line is
 // still printed either way, same as `delete-workspace` always did.
 // -------------------------------------------------------------------------------------------
