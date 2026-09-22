@@ -10311,7 +10311,10 @@
                 ]
               },
               "actorUserId": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "createdAt": {
                 "type": "string"
