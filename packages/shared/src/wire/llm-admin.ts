@@ -12,11 +12,14 @@ import { z } from 'zod';
  * `llm-providers.yaml` / `providers.json` keep the S1.7 snake_case (`upstream_base_url`,
  * `api_key_env`) — the translation happens once, inside llm-proxy's admin layer.
  *
- * What is deliberately absent: any field that could carry a provider key. `apiKeyEnv` is the
- * *name* of the env var llm-proxy reads the key from (`secrets/llm-proxy.env`, set by the
- * operator), `credentialPresent` says whether that var is set — never its value. The secret-write
- * path (`POST /providers/:id/secret`) is a 501 stub until the maintainer decides whether console
- * writes of a provider key must go through approval (plan §12 末 "仍待维护者确认").
+ * What is deliberately absent: any field that could carry a provider key *back out*. `apiKeyEnv`
+ * is the *name* of the env var llm-proxy reads the key from (`secrets/llm-proxy.env`, set by the
+ * operator) — optional as of S7-A (docs/STATUS.md 维护者决定 2026-09-22 ①: console-written keys,
+ * no approval flow): a store provider may have no env var at all and rely purely on the console
+ * key. `credentialPresent` says whether *some* credential resolves (console key, then env var);
+ * `credentialSource` says which one. Neither ever carries the value — the one write path that
+ * does (`PUT /providers/:id/secret {key}`) takes the key in, never echoes it back out on any
+ * response, log line, or audit row (llm-proxy's key-store.ts / admin-api.ts).
  */
 
 /** The three upstream API kinds llm-proxy speaks (packages/llm-proxy/src/config.ts
@@ -86,6 +89,12 @@ export type LlmProviderTestResultWire = z.infer<typeof LlmProviderTestResultWire
 
 export const LlmProviderSourceWireSchema = z.enum(['file', 'store']);
 
+/** S7-A: which of the two possible sources resolves a credential for this provider, in the order
+ *  llm-proxy actually applies them — console key (key-store.ts) first, then the env var named by
+ *  `apiKeyEnv`, else none. `credentialPresent` (below) is `credentialSource !== 'none'`. */
+export const LlmProviderCredentialSourceWireSchema = z.enum(['console', 'env', 'none']);
+export type LlmProviderCredentialSourceWire = z.infer<typeof LlmProviderCredentialSourceWireSchema>;
+
 export const LlmProviderWireSchema = z
   .object({
     id: LlmProviderIdWireSchema,
@@ -94,10 +103,13 @@ export const LlmProviderWireSchema = z
     upstreamBaseUrl: z.string(),
     authHeader: LlmProviderAuthHeaderWireSchema,
     authScheme: z.literal('Bearer').nullable(),
-    apiKeyEnv: LlmProviderApiKeyEnvWireSchema,
-    /** Whether `process.env[apiKeyEnv]` is set in the llm-proxy container — the honest credential
-     *  state the page shows ("凭证：已配置 / 待操作员配置"). Never the value. */
+    /** `null` when this provider has no env var configured at all — S7-A: valid for a store
+     *  provider whose key is set purely through the console. */
+    apiKeyEnv: LlmProviderApiKeyEnvWireSchema.nullable(),
+    /** Whether *some* credential resolves — console key or `process.env[apiKeyEnv]`. Never the
+     *  value; see `credentialSource` for which one. */
     credentialPresent: z.boolean(),
+    credentialSource: LlmProviderCredentialSourceWireSchema,
     enabled: z.boolean(),
     /** `file`: from the operator-managed `llm-providers.yaml` (read-only base). `store`: from
      *  llm-proxy's own `providers.json`, written through this API. */
@@ -130,7 +142,10 @@ export const LlmProviderListWireSchema = z
   .strict();
 export type LlmProviderListWire = z.infer<typeof LlmProviderListWireSchema>;
 
-/** `POST /providers` (all fields) and `PUT /providers/:id` (same, `id` must match the path). */
+/** `POST /providers` (all fields) and `PUT /providers/:id` (same, `id` must match the path).
+ *  `apiKeyEnv` optional (S7-A): omitted means "no env var" — the console key (if any) is this
+ *  provider's only credential source. A full replace on `PUT` clears a previously-set `apiKeyEnv`
+ *  when the field is left out, same as every other field here. */
 export const LlmProviderInputWireSchema = z
   .object({
     id: LlmProviderIdWireSchema,
@@ -139,7 +154,7 @@ export const LlmProviderInputWireSchema = z
     upstreamBaseUrl: z.string().url(),
     authHeader: LlmProviderAuthHeaderWireSchema,
     authScheme: z.literal('Bearer').nullable().optional(),
-    apiKeyEnv: LlmProviderApiKeyEnvWireSchema,
+    apiKeyEnv: LlmProviderApiKeyEnvWireSchema.optional(),
     models: z.array(LlmProviderModelWireSchema).min(1).max(200),
     enabled: z.boolean().optional(),
   })
@@ -153,6 +168,37 @@ export const LlmProviderTestInputWireSchema = z
   })
   .strict();
 export type LlmProviderTestInputWire = z.infer<typeof LlmProviderTestInputWireSchema>;
+
+/** Deliberately a char-code loop, not a `/[\x00-\x1f\x7f]/` regex (biome's
+ *  `noControlCharactersInRegex` — same reasoning as `interfaces/explorer-contract/index.ts`'s
+ *  `safeContentDispositionFilename`): avoids the lint without a suppression comment. C0 controls
+ *  (0x00–0x1F: NUL, CR, LF, tab, …) plus DEL (0x7F) — the same "surely a mistake, not a real key"
+ *  set a pasted-with-a-trailing-newline value would trip. */
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/** S7-A: `PUT /providers/:id/secret` (set/replace) and `POST /providers/:id/secret` (alias, kept
+ *  for the original design's route — plan §6/§12). `.trim()` runs during parsing so the stored
+ *  value is exactly what the store persists; the control-character refine catches a pasted
+ *  newline/tab a human would not otherwise notice. `DELETE /providers/:id/secret` (clear, falls
+ *  back to `apiKeyEnv`) has no body. */
+export const LLM_PROVIDER_SECRET_MAX_LENGTH = 4096;
+export const LlmProviderSecretInputWireSchema = z
+  .object({
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(LLM_PROVIDER_SECRET_MAX_LENGTH)
+      .refine((value) => !hasControlCharacter(value), 'key must not contain control characters'),
+  })
+  .strict();
+export type LlmProviderSecretInputWire = z.infer<typeof LlmProviderSecretInputWireSchema>;
 
 export const DeleteLlmProviderResultWireSchema = z
   .object({

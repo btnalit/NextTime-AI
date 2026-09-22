@@ -166,11 +166,31 @@ describe('LlmAdminClient', () => {
     expect(JSON.stringify(fetch.seen)).not.toContain('apiKey"');
   });
 
+  it('sends setProviderSecret / clearProviderSecret with the right method, path and body — never leaks the key into the request log', async () => {
+    const http = scriptedHttp(() => tokenWire());
+    const fetch = scriptedFetch([
+      { status: 200, body: { id: 'acme', credentialSource: 'console' } },
+      { status: 200, body: { id: 'acme', credentialSource: 'none' } },
+    ]);
+    const client = new LlmAdminClient(http, { fetchImpl: fetch.fetchImpl });
+    client.forgetToken();
+
+    await client.setProviderSecret('acme', 'sk-test-key');
+    await client.clearProviderSecret('acme');
+
+    expect(fetch.seen.map((s) => [s.method, s.url])).toEqual([
+      ['PUT', '/api/llm-admin/providers/acme/secret'],
+      ['DELETE', '/api/llm-admin/providers/acme/secret'],
+    ]);
+    expect(fetch.seen[0]?.body).toEqual({ key: 'sk-test-key' });
+    expect(fetch.seen[1]?.body).toBeUndefined();
+  });
+
   it('maps the proxy error envelope to LlmAdminError and the known codes to bilingual copy', async () => {
     const http = scriptedHttp(() => tokenWire());
     const fetch = scriptedFetch([
       { status: 503, body: { error: { code: 'store_unwritable', message: 'not writable' } } },
-      { status: 501, body: { error: { code: 'not_implemented', message: 'blocked' } } },
+      { status: 409, body: { error: { code: 'credential_missing', message: 'no key' } } },
       { status: 502, body: undefined },
     ]);
     const client = new LlmAdminClient(http, { fetchImpl: fetch.fetchImpl });
@@ -180,8 +200,8 @@ describe('LlmAdminClient', () => {
     expect(unwritable).toMatchObject({ status: 503, code: 'store_unwritable' });
     expect(llmAdminErrorMessage(unwritable)).toContain('host-llm-proxy-init.sh');
 
-    const blocked = await client.listProviders().catch((err: unknown) => err);
-    expect(llmAdminErrorMessage(blocked)).toContain('pending the maintainer decision');
+    const missing = await client.listProviders().catch((err: unknown) => err);
+    expect(llmAdminErrorMessage(missing)).toContain('secrets/llm-proxy.env');
 
     const opaque = await client.listProviders().catch((err: unknown) => err);
     expect(opaque).toMatchObject({ status: 502, code: 'http_error' });

@@ -208,6 +208,11 @@ export interface ProxyServerOptions {
   /** Resolves `api_key_env` to the real provider key. Defaults to `process.env[name]` — injected
    *  in tests. */
   readonly resolveApiKey?: (envVarName: string) => string | undefined;
+  /** S7-A: the console-written key for a provider id (key-store.ts `KeyStore.get`), consulted
+   *  *before* `resolveApiKey`/`api_key_env` for every forwarded request — "console overrides env"
+   *  holds even for a file/yaml provider. Absent (no key store configured) or returning
+   *  `undefined` falls through to `resolveApiKey` exactly as before S7-A. */
+  readonly resolveConsoleKey?: (providerId: string) => string | undefined;
   readonly fetchImpl?: typeof fetch;
   /** Defaults to `console.log`; overridable for tests. Never receives a key, a Handle, or a
    *  request/response body — see the calls below. */
@@ -363,14 +368,18 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       return;
     }
 
-    const realKey = resolveApiKey(provider.api_key_env);
+    // S7-A resolution order: a console key for this provider id, then the env var named by
+    // `api_key_env` (now optional — a store provider may have none), else no key at all.
+    const realKey =
+      options.resolveConsoleKey?.(providerName) ??
+      (provider.api_key_env ? resolveApiKey(provider.api_key_env) : undefined);
     if (!realKey) {
       log(
         JSON.stringify({
           level: 'error',
-          msg: 'llm-proxy: provider api key env var is unset',
+          msg: 'llm-proxy: no provider key resolved (no console key, and api_key_env is unset or its env var is empty)',
           provider: providerName,
-          envVar: provider.api_key_env,
+          envVar: provider.api_key_env ?? null,
         }),
       );
       sendJson(res, 502, {

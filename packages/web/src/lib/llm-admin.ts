@@ -26,9 +26,13 @@ import type { CapabilityCaller } from './clients.js';
  * proxy's `{error: {code, message}}` vocabulary is its own, so failures become
  * {@link LlmAdminError} (status + code + message) for the page to branch on — a 401
  * `token_expired` drops the cached token and retries once; `store_unwritable` /
- * `credential_missing` / `not_implemented` are surfaced verbatim with their operator steps.
- * Never sends or receives a provider key — the wire shapes (`@nexttime/shared` wire/llm-admin.ts)
- * have no field for one and the secret route is a 501 stub.
+ * `credential_missing` are surfaced verbatim with their operator steps.
+ *
+ * S7-A (docs/STATUS.md 维护者决定 2026-09-22 ①): `setProviderSecret`/`clearProviderSecret` are the
+ * one place a provider key ever crosses this client — sent once, in the request body, never
+ * echoed back (every response — including these two calls' own — uses `LlmProviderWire`, which
+ * has no key field, only `credentialPresent`/`credentialSource`). Callers must clear their own
+ * local input state right after a successful call; this module holds nothing.
  */
 
 export class LlmAdminError extends Error {
@@ -195,6 +199,19 @@ export class LlmAdminClient {
       input,
     );
   }
+
+  /** Sets/replaces the console key for `id`. `key` should already be trimmed by the caller (the
+   *  form does this); the proxy trims and validates it again regardless. */
+  setProviderSecret(id: string, key: string): Promise<LlmProviderWire> {
+    return this.request<LlmProviderWire>('PUT', `/providers/${encodeURIComponent(id)}/secret`, {
+      key,
+    });
+  }
+
+  /** Clears the console key for `id` — falls back to `apiKeyEnv` (if set) or no credential. */
+  clearProviderSecret(id: string): Promise<LlmProviderWire> {
+    return this.request<LlmProviderWire>('DELETE', `/providers/${encodeURIComponent(id)}/secret`);
+  }
 }
 
 /** The bilingual copy for the codes the page branches on; anything else shows the proxy's own
@@ -206,9 +223,7 @@ export function llmAdminErrorMessage(error: unknown): string | null {
     case 'store_unwritable':
       return '模型代理的状态目录不可写——请操作员在主机上运行 scripts/host-llm-proxy-init.sh 后重建 llm-proxy。 The model proxy cannot write its state directory — the operator must run scripts/host-llm-proxy-init.sh on the host and recreate llm-proxy.';
     case 'credential_missing':
-      return '该供应商的密钥环境变量尚未配置——请操作员在 secrets/llm-proxy.env 里设置后重建 llm-proxy。 This provider’s key env var is not set — the operator sets it in secrets/llm-proxy.env and recreates llm-proxy.';
-    case 'not_implemented':
-      return '控制台写入供应商密钥尚未启用（待维护者决定是否必经审批）。 Writing a provider key from the console is not enabled yet (pending the maintainer decision on approval).';
+      return '该供应商尚未配置密钥（控制台或 secrets/llm-proxy.env 均未设置）。 This provider has no key configured (neither the console nor secrets/llm-proxy.env).';
     case 'provider_exists':
       return '已存在同名供应商。 A provider with this id already exists.';
     case 'provider_from_file':

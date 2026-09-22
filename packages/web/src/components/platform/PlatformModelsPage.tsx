@@ -21,6 +21,7 @@ import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
 import { CredentialState } from './providers/CredentialState.js';
 import { ProviderForm } from './providers/ProviderForm.js';
+import { ProviderSecretForm } from './providers/ProviderSecretForm.js';
 import { ProviderTestResult } from './providers/ProviderTestResult.js';
 
 export interface PlatformModelsPageProps {
@@ -57,10 +58,13 @@ const API_LABEL: Readonly<Record<LlmProviderWire['api'], string>> = {
  *
  * Data path: `lib/llm-admin.ts` — `issue_llm_admin_token` for a 5-minute JWT, then llm-proxy's
  * admin endpoints directly through caddy `/api/llm-admin/*`. Nothing here goes through a kernel
- * capability except the token mint, and nothing here ever holds a provider key: the page shows
- * whether the env var named by `apiKeyEnv` is set in the proxy container and tells the operator
- * how to set it (`secrets/llm-proxy.env`). The console key-entry route is a 501 stub until the
- * maintainer decides whether it must go through approval (plan §12 末).
+ * capability except the token mint. The page shows the honest credential state
+ * (`credentialPresent`/`credentialSource`) and lets an administrator set/replace/clear a
+ * provider's key directly (S7-A, docs/STATUS.md 维护者决定 2026-09-22 ①: no approval flow —
+ * `providers/ProviderSecretForm.tsx`, in the detail drawer) as an alternative to the operator step
+ * of setting `apiKeyEnv` in `secrets/llm-proxy.env`; a console key always takes priority. The typed
+ * key itself never round-trips back through this page — every response uses `LlmProviderWire`,
+ * which has no field for one.
  *
  * The workspace side stays "只选不配": after a change here the proxy rewrites `models.json`, so
  * `list_platform_models` (工作区 page's model picker) and every new agent container see the new
@@ -118,7 +122,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
       upstreamBaseUrl: provider.upstreamBaseUrl,
       authHeader: provider.authHeader,
       authScheme: provider.authScheme,
-      apiKeyEnv: provider.apiKeyEnv,
+      ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
       models: provider.models,
       enabled,
     });
@@ -365,7 +369,9 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                             title={
                               provider.credentialPresent
                                 ? undefined
-                                : `${provider.apiKeyEnv} 未配置 — 测试会被拒绝 not set, the test will be refused`
+                                : provider.apiKeyEnv
+                                  ? `${provider.apiKeyEnv} 未配置 — 测试会被拒绝 not set, the test will be refused`
+                                  : '没有配置任何凭证 — 测试会被拒绝 no credential configured, the test will be refused'
                             }
                             data-testid="provider-test"
                           >
@@ -488,7 +494,9 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                 {drawerProvider.authScheme ? `: ${drawerProvider.authScheme} <key>` : ': <key>'}
               </dd>
               <dt>密钥环境变量 Key env var</dt>
-              <dd className="mono">{drawerProvider.apiKeyEnv}</dd>
+              <dd className="mono">
+                {drawerProvider.apiKeyEnv ?? <span className="text-3">（未配置 none）</span>}
+              </dd>
               <dt>来源 Source</dt>
               <dd>
                 {drawerProvider.source === 'file'
@@ -509,6 +517,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
               ) : null}
             </dl>
             <CredentialState provider={drawerProvider} withInstruction />
+            <ProviderSecretForm provider={drawerProvider} client={client} onUpdated={replaceRow} />
             <div className="stack-s">
               <span className="section-title">模型 Models</span>
               <ul data-testid="provider-detail-models">

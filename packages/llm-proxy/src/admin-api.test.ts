@@ -13,17 +13,18 @@ import { createAdminApi } from './admin-api.js';
 import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog, writeModelsJsonAtomic } from './gen-models-json.js';
+import { KeyStore } from './key-store.js';
 import { ProviderStore } from './provider-store.js';
 import type { StoreTestResult } from './provider-store.js';
 import { createProxyServer } from './proxy.js';
 
 /**
- * admin-api.test: the S6-B admin endpoints end-to-end through the real proxy listener (the same
- * loopback-server pattern proxy.test.ts uses): auth failures on every route, list / create /
- * update / delete / test / 501 secret, the models.json rewrite (atomic, no debris, enabled-only),
- * the audit line + kernel audit event per mutation (with the token jti, never a key), and the
- * "live" guarantee — a provider created through the API routes for a Handle on the very next
- * request, and a disabled one 404s.
+ * admin-api.test: the S6-B / S7-A admin endpoints end-to-end through the real proxy listener (the
+ * same loopback-server pattern proxy.test.ts uses): auth failures on every route, list / create /
+ * update / delete / test / secret set-replace-clear, the models.json rewrite (atomic, no debris,
+ * enabled-only), the audit line + kernel audit event per mutation (with the token jti, never a
+ * key), and the "live" guarantee — a provider created through the API routes for a Handle on the
+ * very next request, and a disabled one 404s.
  */
 
 const cleanup: Array<() => Promise<void> | void> = [];
@@ -112,6 +113,7 @@ interface Harness {
   adminHeaders: () => Promise<Record<string, string>>;
   handle: () => Promise<string>;
   store: ProviderStore;
+  keyStore: KeyStore;
 }
 
 async function harness(
@@ -130,6 +132,8 @@ async function harness(
   });
   const store = new ProviderStore(join(dir, 'state', 'providers.json'));
   await store.load();
+  const keyStore = new KeyStore(join(dir, 'state', 'keys.json'));
+  await keyStore.load();
   const catalog = new ProviderCatalog({ openai: FILE_PROVIDER }, store);
   const modelsJsonFile = options.modelsJsonUnwritable
     ? join(dir, 'missing-config-dir', 'models.json')
@@ -143,6 +147,7 @@ async function harness(
   const adminHandler = createAdminApi({
     catalog,
     store,
+    keyStore,
     publicKey,
     resolveApiKey,
     writeModelsJson: () =>
@@ -180,6 +185,7 @@ async function harness(
     upstreamConnectTimeoutMs: 2000,
     upstreamIdleTimeoutMs: 2000,
     resolveApiKey,
+    resolveConsoleKey: (id) => keyStore.get(id),
     log: (line) => logLines.push(line),
   });
   const port = await listen(server);
@@ -195,6 +201,7 @@ async function harness(
     kernelEvents,
     testRuns,
     store,
+    keyStore,
     adminHeaders: async () => {
       const { token } = await mintLlmAdminToken({
         privateKey,
@@ -278,6 +285,7 @@ describe('admin API — catalog lifecycle', () => {
       source: 'file',
       enabled: true,
       credentialPresent: true,
+      credentialSource: 'env',
       apiKeyEnv: 'FILE_KEY',
       overridesFile: false,
       lastTest: null,
@@ -301,6 +309,7 @@ describe('admin API — catalog lifecycle', () => {
       source: 'store',
       enabled: true,
       credentialPresent: false,
+      credentialSource: 'none',
       authScheme: 'Bearer',
       models: [{ id: 'acme-large', displayName: 'Acme Large', cost: null }],
     });
@@ -525,18 +534,6 @@ describe('admin API — catalog lifecycle', () => {
     expect(h.testRuns).toEqual([]);
   });
 
-  it('secret write is 501 not_implemented (blocked by maintainer decision) and leaves no trace', async () => {
-    const h = await harness();
-    const res = await request(h.port, 'POST', '/admin/providers/openai/secret', {
-      headers: await h.adminHeaders(),
-      body: { apiKey: 'sk-nope' },
-    });
-    expect(res.status).toBe(501);
-    expect((res.body as { error: { code: string } }).error.code).toBe('not_implemented');
-    expect(h.logLines.join('\n')).not.toContain('sk-nope');
-    expect(h.kernelEvents).toEqual([]);
-  });
-
   it('a failed models.json rewrite does not fail the mutation; the list reports the error', async () => {
     const h = await harness({ modelsJsonUnwritable: true });
     const admin = await h.adminHeaders();
@@ -549,5 +546,180 @@ describe('admin API — catalog lifecycle', () => {
     expect((list.body as LlmProviderListWire).modelsJsonError).toBe('ENOENT');
     expect((list.body as LlmProviderListWire).items.map((p) => p.id)).toEqual(['openai', 'acme']);
     expect(h.logLines.some((line) => line.includes('models.json rewrite failed'))).toBe(true);
+  });
+});
+
+describe('admin API — provider secrets (S7-A)', () => {
+  it('PUT sets a console key: credentialSource flips to console, overriding env; DELETE clears back to env', async () => {
+    const h = await harness({ env: { FILE_KEY: 'sk-file-secret' } });
+    const admin = await h.adminHeaders();
+
+    const set = await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: 'sk-console-secret' },
+    });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({
+      id: 'openai',
+      credentialPresent: true,
+      credentialSource: 'console',
+    });
+    expect(h.keyStore.get('openai')).toBe('sk-console-secret');
+
+    // The test route now uses the console key, not the env var.
+    const tested = await request(h.port, 'POST', '/admin/providers/openai/test', {
+      headers: admin,
+      body: {},
+    });
+    expect(tested.status).toBe(200);
+    expect(h.testRuns.at(-1)).toMatchObject({ realKey: 'sk-console-secret' });
+
+    const cleared = await request(h.port, 'DELETE', '/admin/providers/openai/secret', {
+      headers: admin,
+    });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body).toMatchObject({
+      id: 'openai',
+      credentialPresent: true,
+      credentialSource: 'env',
+    });
+    expect(h.keyStore.get('openai')).toBeUndefined();
+
+    // Audit: two rows, never the key value.
+    const setEvent = h.kernelEvents.find((e) => e.action === 'provider_secret_set');
+    const clearedEvent = h.kernelEvents.find((e) => e.action === 'provider_secret_cleared');
+    expect(setEvent).toMatchObject({ providerId: 'openai', actorUserId: 'admin-user' });
+    expect(clearedEvent).toMatchObject({ providerId: 'openai', actorUserId: 'admin-user' });
+    expect(h.logLines.join('\n')).not.toContain('sk-console-secret');
+    expect(JSON.stringify(h.kernelEvents)).not.toContain('sk-console-secret');
+  });
+
+  it('POST is accepted as an alias for PUT (the original design route)', async () => {
+    const h = await harness();
+    const res = await request(h.port, 'POST', '/admin/providers/openai/secret', {
+      headers: await h.adminHeaders(),
+      body: { key: 'sk-via-post' },
+    });
+    expect(res.status).toBe(200);
+    expect(h.keyStore.get('openai')).toBe('sk-via-post');
+  });
+
+  it('a provider with no apiKeyEnv at all can still get a console-only key', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    const created = await request(h.port, 'POST', '/admin/providers', {
+      headers: admin,
+      body: { ...NEW_PROVIDER, apiKeyEnv: undefined },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ apiKeyEnv: null, credentialSource: 'none' });
+
+    const set = await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+      headers: admin,
+      body: { key: 'sk-console-only' },
+    });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ credentialSource: 'console', credentialPresent: true });
+
+    const tested = await request(h.port, 'POST', '/admin/providers/acme/test', {
+      headers: admin,
+      body: {},
+    });
+    expect(tested.status).toBe(200);
+    expect(h.testRuns.at(-1)).toMatchObject({ realKey: 'sk-console-only' });
+  });
+
+  it('refuses an empty, oversized, or control-character key (400) and never touches the store', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+
+    const empty = await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: '   ' },
+    });
+    expect(empty.status).toBe(400);
+    expect((empty.body as { error: { code: string } }).error.code).toBe('invalid_body');
+
+    const tooLong = await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: 'x'.repeat(5000) },
+    });
+    expect(tooLong.status).toBe(400);
+
+    const withNewline = await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: 'sk-line1\nsk-line2' },
+    });
+    expect(withNewline.status).toBe(400);
+
+    expect(h.keyStore.get('openai')).toBeUndefined();
+    expect(h.kernelEvents).toEqual([]);
+  });
+
+  it('trims surrounding whitespace before storing', async () => {
+    const h = await harness();
+    const res = await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: await h.adminHeaders(),
+      body: { key: '  sk-needs-trim  ' },
+    });
+    expect(res.status).toBe(200);
+    expect(h.keyStore.get('openai')).toBe('sk-needs-trim');
+  });
+
+  it('PUT and DELETE 404 for an unknown provider id', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    expect(
+      (
+        await request(h.port, 'PUT', '/admin/providers/nope/secret', {
+          headers: admin,
+          body: { key: 'sk-x' },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (await request(h.port, 'DELETE', '/admin/providers/nope/secret', { headers: admin })).status,
+    ).toBe(404);
+  });
+
+  it('DELETE with no console key set is a no-op 200 (the end state — no console key — already holds)', async () => {
+    const h = await harness();
+    const res = await request(h.port, 'DELETE', '/admin/providers/openai/secret', {
+      headers: await h.adminHeaders(),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 'openai', credentialSource: 'env' });
+  });
+
+  it('GET/list never returns the key value, whatever the source', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: 'sk-must-not-leak' },
+    });
+    const list = await request(h.port, 'GET', '/admin/providers', { headers: admin });
+    expect(JSON.stringify(list.body)).not.toContain('sk-must-not-leak');
+    const detail = await request(h.port, 'GET', '/admin/providers/openai', { headers: admin });
+    expect(JSON.stringify(detail.body)).not.toContain('sk-must-not-leak');
+  });
+
+  it('a secret mutation does not rewrite models.json', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: 'sk-x' },
+    });
+    const list = await request(h.port, 'GET', '/admin/providers', { headers: admin });
+    expect((list.body as LlmProviderListWire).modelsJsonWrittenAt).toBeNull();
+  });
+
+  it('unsupported methods on /secret are 405', async () => {
+    const h = await harness();
+    const res = await request(h.port, 'GET', '/admin/providers/openai/secret', {
+      headers: await h.adminHeaders(),
+    });
+    expect(res.status).toBe(405);
   });
 });
