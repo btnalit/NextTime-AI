@@ -90,13 +90,16 @@ jobs:
             build kernel caddy llm-proxy gate-host fixture-mcp
 
       # One-off `docker compose run` (never `up`) — llm-proxy is otherwise unused by this suite
-      # (see this file's header comment); this is the only thing it is built for.
+      # (see this file's header comment); this is the only thing it is built for. S7-A
+      # (docs/STATUS.md 维护者决定 2026-09-22 ⑤): models.json lives in its own
+      # ${NEXTTIME_DATA}/models/ directory now, not config/ — host-env-init.sh (the bootstrap step
+      # above) already created it.
       - name: Generate models.json (fake provider)
         run: |
           set -euo pipefail
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
             run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js </dev/null \
-            | sudo tee "$NEXTTIME_DATA/config/models.json" >/dev/null
+            | sudo tee "$NEXTTIME_DATA/models/models.json" >/dev/null
 
       - name: Start postgres
         run: |

@@ -95,8 +95,13 @@ export const ProviderConfigSchema = z
     api: z.enum(['openai-completions', 'openai-responses', 'anthropic-messages']),
     upstream_base_url: z.string().url(),
     /** Name of the env var (in this container's own env — `secrets/llm-proxy.env`, design doc
-     *  §10.2) holding the real provider key. Never the key itself. */
-    api_key_env: z.string().min(1),
+     *  §10.2) holding the real provider key. Never the key itself. Optional as of S7-A
+     *  (docs/STATUS.md 维护者决定 2026-09-22 ①): a store provider (admin-api.ts, provider-
+     *  store.ts) may omit it entirely and rely purely on a console-written key instead
+     *  (key-store.ts) — resolution tries the console key first, then this env var, so a file/yaml
+     *  provider keeps `api_key_env` required in practice (the yaml has no console-key concept of
+     *  its own) even though the schema allows omitting it there too. */
+    api_key_env: z.string().min(1).optional(),
     auth: ProviderAuthSchema,
     models: z.array(ProviderModelSchema).min(1),
     /** S6-B: optional display name for the console; absent = the provider name. */
@@ -230,13 +235,20 @@ export interface LlmProxyConfig {
    *  → `/data/state`, docker-compose.yml). The yaml above stays the operator-managed base; store
    *  entries extend / override it by name (provider-store.ts, catalog.ts). */
   readonly providerStoreFile: string;
+  /** S7-A: the console-written provider secrets — `keys.json`, in the *same* read-write state
+   *  mount as `providerStoreFile` above (`${NEXTTIME_DATA}/llm-proxy` → `/data/state`), keyed by
+   *  provider id (key-store.ts). Never the operator's `secrets/llm-proxy.env` — that file is not
+   *  writable by this process and is not this config value. */
+  readonly keyStoreFile: string;
   /** S6-B: where the merged catalog is rewritten as pi's `models.json` after every admin mutation
    *  (`.tmp` + rename — the same atomic guarantee `make gen-models` gives). The kernel's
-   *  `list_models` / `list_platform_models` and every spawned agent container read this file, so
-   *  it must be the `${NEXTTIME_DATA}/config/models.json` they mount (compose mounts that
-   *  directory read-write into this service). Never written at startup — an acceptance run
-   *  swaps this service's yaml for the fake provider file (deploy/accept/docker-compose.fake.yml)
-   *  and must not clobber the production catalog. */
+   *  `list_models` / `list_platform_models` and every spawned agent container read this file.
+   *  S7-A (docs/STATUS.md 维护者决定 2026-09-22 ⑤: do NOT chown `${NEXTTIME_DATA}/config/`):
+   *  moved out of `config/` into its own `${NEXTTIME_DATA}/models/` directory — owned 10001 by
+   *  `scripts/host-env-init.sh`, mounted read-write into *only* this service (compose), so the
+   *  operator's `config/` never needs to change ownership for this proxy to rewrite the file.
+   *  Never written at startup — an acceptance run swaps this service's yaml for the fake provider
+   *  file (deploy/accept/docker-compose.fake.yml) and must not clobber the production catalog. */
   readonly modelsJsonOutFile: string;
   /** S6-B leftover 19: poll interval for `GET ${kernelUrl}/internal/llm-budget-exhausted`
    *  (budget-sync.ts) — the I18 "100% 时代理返回预算耗尽错误" signal. */
@@ -266,7 +278,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LlmProxyConfig
     upstreamIdleTimeoutMs: parseIntEnv(env.UPSTREAM_IDLE_TIMEOUT_MS, 300_000),
     upstreamConnectTimeoutMs: parseIntEnv(env.UPSTREAM_CONNECT_TIMEOUT_MS, 10_000),
     providerStoreFile: env.LLM_PROVIDER_STORE_FILE ?? '/data/state/providers.json',
-    modelsJsonOutFile: env.MODELS_JSON_OUT_FILE ?? '/data/config/models.json',
+    keyStoreFile: env.LLM_KEY_STORE_FILE ?? '/data/state/keys.json',
+    modelsJsonOutFile: env.MODELS_JSON_OUT_FILE ?? '/data/models/models.json',
     budgetSyncIntervalMs: parseIntEnv(env.BUDGET_SYNC_INTERVAL_MS, 15_000),
     providerTestTimeoutMs: parseIntEnv(env.PROVIDER_TEST_TIMEOUT_MS, 30_000),
   };

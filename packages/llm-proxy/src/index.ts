@@ -15,6 +15,7 @@ import {
   writeModelsJsonAtomic,
 } from './gen-models-json.js';
 import { loadHandlePublicKey } from './handle-auth.js';
+import { KeyStore } from './key-store.js';
 import { ProviderStore } from './provider-store.js';
 import { runProviderTest } from './provider-test.js';
 import { createProxyServer } from './proxy.js';
@@ -47,6 +48,11 @@ import { startRevocationSync } from './revocation.js';
  * (`postKernelAudit` below → `POST /internal/llm-admin-audit`), both under the same internal
  * token. `models.json` is rewritten only after an admin mutation — never at startup (see
  * `LlmProxyConfig.modelsJsonOutFile`); a mismatch found at startup is logged instead.
+ *
+ * S7-A: a second small store joins the state mount — `key-store.ts`'s `keys.json`, the console-
+ * written provider secrets (docs/STATUS.md 维护者决定 2026-09-22 ①). Loaded at startup like
+ * `store`; consulted by both `createAdminApi` (credential state, the `/secret` routes, the test
+ * route's real key) and `createProxyServer` (`resolveConsoleKey`, ahead of `resolveApiKey`).
  */
 export const VERSION = '0.1.0';
 
@@ -114,6 +120,10 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
 
   const store = new ProviderStore(config.providerStoreFile);
   await store.load();
+  // S7-A: the console-written provider secrets — same read-write state mount as `store` above,
+  // a separate file so a key never rides along in providers.json (key-store.ts).
+  const keyStore = new KeyStore(config.keyStoreFile);
+  await keyStore.load();
   const catalog = new ProviderCatalog(providersFile.providers, store);
   const log = (line: string) => console.log(line);
 
@@ -160,6 +170,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
   const adminHandler = createAdminApi({
     catalog,
     store,
+    keyStore,
     publicKey,
     writeModelsJson: () =>
       writeModelsJsonAtomic(
@@ -186,6 +197,7 @@ export async function startLlmProxy(config: LlmProxyConfig = loadConfig()): Prom
     maxRequestBodyBytes: config.maxRequestBodyBytes,
     upstreamConnectTimeoutMs: config.upstreamConnectTimeoutMs,
     upstreamIdleTimeoutMs: config.upstreamIdleTimeoutMs,
+    resolveConsoleKey: (providerId: string) => keyStore.get(providerId),
   });
 
   await listen(server, config.port, '0.0.0.0');

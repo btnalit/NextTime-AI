@@ -95,7 +95,7 @@ describe('buildSpawnSpec', () => {
   it('mounts exactly the host workspace dir and a read-only models.json', () => {
     expect(spec.binds).toEqual([
       '/host/data/workspaces/alice:/workspace',
-      '/host/data/config/models.json:/workspace/.pi/agent/models.json:ro',
+      '/host/data/models/models.json:/workspace/.pi/agent/models.json:ro',
     ]);
   });
 

@@ -11,7 +11,8 @@
   egress-proxy worker-supervisor agent-host fake-llm`）——脚本第一步只检查，不负责拉起。
 - 不需要手动切换 provider：脚本自己会通过 `deploy/accept/docker-compose.fake.yml` 把 llm-proxy /
   worker-supervisor / fake-llm 切到 fake provider，并在退出时用 EXIT trap 恢复生产配置——
-  `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `models.json` 全程不会被改动，跑前跑后都不用重跑
+  `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
+  全程不会被改动，跑前跑后都不用重跑
   `make gen-models`。
 - 迁移已跑到最新（`make migrate` 或已随 `kernel` 容器启动流程跑过）。
 - 主机上有 `docker`、`curl`；**没有** `node`/`corepack`（`scripts/accept_s1.sh` 因此把每一次

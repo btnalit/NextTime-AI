@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { z } from 'zod';
 import { ModelCostSchema, ProviderConfigSchema, RESERVED_PROVIDER_NAMES } from './config.js';
 import type { ProviderConfig } from './config.js';
+import { Mutex } from './mutex.js';
 
 /**
  * provider-store: the console-managed half of the provider catalog (S6-B, docs/console-
@@ -27,7 +28,12 @@ import type { ProviderConfig } from './config.js';
  * API can answer 503 `store_unwritable` with the operator step instead of an opaque EACCES.
  *
  * What is never here: a provider key. The store carries `api_key_env` — the *name* of the env
- * var the operator sets in `secrets/llm-proxy.env` — exactly like the yaml.
+ * var the operator sets in `secrets/llm-proxy.env` — exactly like the yaml (S7-A: now optional,
+ * see config.ts's own doc comment on `ProviderConfigSchema.api_key_env` — a store provider may
+ * rely purely on a console key instead, held separately in `key-store.ts`'s `keys.json`, never
+ * here). S7-A also adds an in-process `Mutex` (mutex.ts) around every mutation (`upsert`/
+ * `recordTest`/`remove`) — S6-B leftover 50 ("并发写无互斥（单管理员前提）"): two concurrent admin
+ * requests now queue instead of one silently clobbering the other's read-modify-write.
  */
 
 export const PROVIDER_STORE_VERSION = 1;
@@ -94,6 +100,7 @@ export class ProviderStore {
   private readonly filePath: string;
   private state: ProviderStoreFile = emptyStore();
   private writableState: boolean | undefined;
+  private readonly mutex = new Mutex();
 
   constructor(filePath: string) {
     this.filePath = filePath;
@@ -165,55 +172,63 @@ export class ProviderStore {
   }
 
   /** Inserts or replaces one entry and persists atomically. Refuses reserved names (config.ts
-   *  `RESERVED_PROVIDER_NAMES`). `created_at` is preserved across replacements. */
+   *  `RESERVED_PROVIDER_NAMES`). `created_at` is preserved across replacements. Serialized against
+   *  every other mutation on this instance (S7-A `Mutex`, S6-B leftover 50). */
   async upsert(
     id: string,
     entry: Omit<StoreProvider, 'created_at' | 'updated_at'>,
     now: Date = new Date(),
   ): Promise<StoreProvider> {
-    if (RESERVED_PROVIDER_NAMES.has(id)) {
-      throw new ProviderStoreError(
-        'reserved_name',
-        `provider id "${id}" is reserved for this proxy's own routes`,
-      );
-    }
-    const existing = this.state.providers[id];
-    const stamped: StoreProvider = StoreProviderSchema.parse({
-      ...entry,
-      created_at: existing?.created_at ?? now.toISOString(),
-      updated_at: now.toISOString(),
+    return this.mutex.runExclusive(async () => {
+      if (RESERVED_PROVIDER_NAMES.has(id)) {
+        throw new ProviderStoreError(
+          'reserved_name',
+          `provider id "${id}" is reserved for this proxy's own routes`,
+        );
+      }
+      const existing = this.state.providers[id];
+      const stamped: StoreProvider = StoreProviderSchema.parse({
+        ...entry,
+        created_at: existing?.created_at ?? now.toISOString(),
+        updated_at: now.toISOString(),
+      });
+      const next: ProviderStoreFile = {
+        version: PROVIDER_STORE_VERSION,
+        providers: { ...this.state.providers, [id]: stamped },
+      };
+      await this.persist(next);
+      this.state = next;
+      return stamped;
     });
-    const next: ProviderStoreFile = {
-      version: PROVIDER_STORE_VERSION,
-      providers: { ...this.state.providers, [id]: stamped },
-    };
-    await this.persist(next);
-    this.state = next;
-    return stamped;
   }
 
   /** Records a test outcome on an existing store entry (no-op for a file-only provider — the
-   *  catalog keeps those results in memory, see catalog.ts). */
+   *  catalog keeps those results in memory, see catalog.ts). Serialized like `upsert`/`remove`. */
   async recordTest(id: string, result: StoreTestResult): Promise<boolean> {
-    const existing = this.state.providers[id];
-    if (!existing) return false;
-    const next: ProviderStoreFile = {
-      version: PROVIDER_STORE_VERSION,
-      providers: { ...this.state.providers, [id]: { ...existing, last_test: result } },
-    };
-    await this.persist(next);
-    this.state = next;
-    return true;
+    return this.mutex.runExclusive(async () => {
+      const existing = this.state.providers[id];
+      if (!existing) return false;
+      const next: ProviderStoreFile = {
+        version: PROVIDER_STORE_VERSION,
+        providers: { ...this.state.providers, [id]: { ...existing, last_test: result } },
+      };
+      await this.persist(next);
+      this.state = next;
+      return true;
+    });
   }
 
-  /** Removes one entry and persists atomically. `false` when it was not there. */
+  /** Removes one entry and persists atomically. `false` when it was not there. Serialized like
+   *  `upsert`/`recordTest`. */
   async remove(id: string): Promise<boolean> {
-    if (!(id in this.state.providers)) return false;
-    const { [id]: _removed, ...rest } = this.state.providers;
-    const next: ProviderStoreFile = { version: PROVIDER_STORE_VERSION, providers: rest };
-    await this.persist(next);
-    this.state = next;
-    return true;
+    return this.mutex.runExclusive(async () => {
+      if (!(id in this.state.providers)) return false;
+      const { [id]: _removed, ...rest } = this.state.providers;
+      const next: ProviderStoreFile = { version: PROVIDER_STORE_VERSION, providers: rest };
+      await this.persist(next);
+      this.state = next;
+      return true;
+    });
   }
 
   private async persist(next: ProviderStoreFile): Promise<void> {

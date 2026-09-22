@@ -5,12 +5,14 @@ import { recordLlmAdminAudit } from '../../../application/platform/index.js';
 
 /**
  * interfaces/http/internal/llm-admin-audit: `POST /internal/llm-admin-audit` (S6-B, docs/console-
- * completion-plan.md §6 "llm-proxy 自己的审计日志 + 内核平台审计一行（不含密钥）"; §8). The model
- * proxy posts one event here after every provider mutation it performs on an administrator's
- * behalf (its admin-api.ts: create / update / delete / test), and this route turns it into one
- * platform audit row — `platform.llm_provider_created` / `_updated` / `_deleted` / `_tested` —
- * next to every other administrator action `platform_audit_query` shows. That is the design line
- * "隔离与审计只增不减" for a write that, by design, never passes through a kernel capability.
+ * completion-plan.md §6 "llm-proxy 自己的审计日志 + 内核平台审计一行（不含密钥）"; §8; S7-A,
+ * docs/STATUS.md 维护者决定 2026-09-22 ① for `provider_secret_set`/`provider_secret_cleared`). The
+ * model proxy posts one event here after every provider mutation it performs on an administrator's
+ * behalf (its admin-api.ts: create / update / delete / test / secret set / secret cleared), and
+ * this route turns it into one platform audit row — `platform.llm_provider_created` / `_updated` /
+ * `_deleted` / `_tested` / `_secret_set` / `_secret_cleared` — next to every other administrator
+ * action `platform_audit_query` shows. That is the design line "隔离与审计只增不减" for a write
+ * that, by design, never passes through a kernel capability.
  *
  * Correlation: `actorUserId` and `tokenJti` are the `sub` / `jti` of the llm-admin token the proxy
  * verified (`@nexttime/shared` llm-admin-token.ts); the `jti` is the same one
@@ -23,8 +25,9 @@ import { recordLlmAdminAudit } from '../../../application/platform/index.js';
  * Trust boundary: behind `interfaces/internal-auth`'s shared-secret guard like every `/internal/*`
  * route — only the proxy (holding the internal-plane token) can reach this; a browser cannot
  * write its own audit rows here. `details` is a bounded, schema-checked object and never carries
- * a key: the proxy has no key to send (the secret-write path is a 501 stub) and this schema has
- * no field for one.
+ * a key: the proxy never sends one for `provider_secret_set`/`provider_secret_cleared` (see its
+ * admin-api.ts — the `audit()` calls for both pass an empty `details`) and this schema has no
+ * field that could carry one either way.
  */
 
 const DetailsSchema = z
@@ -33,7 +36,14 @@ const DetailsSchema = z
 
 export const LlmAdminAuditEventSchema = z
   .object({
-    action: z.enum(['provider_created', 'provider_updated', 'provider_deleted', 'provider_tested']),
+    action: z.enum([
+      'provider_created',
+      'provider_updated',
+      'provider_deleted',
+      'provider_tested',
+      'provider_secret_set',
+      'provider_secret_cleared',
+    ]),
     providerId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
     actorUserId: z.string().uuid(),
     tokenJti: z.string().uuid(),

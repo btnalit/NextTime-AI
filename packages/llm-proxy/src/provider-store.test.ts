@@ -135,6 +135,25 @@ describe('ProviderStore', () => {
     await expect(new ProviderStore(file).load()).rejects.toMatchObject({ code: 'invalid' });
   });
 
+  it('concurrent upserts on different ids never lose a write (Mutex serializes them, S6-B leftover 50)', async () => {
+    const dir = tempDir();
+    const store = new ProviderStore(join(dir, 'providers.json'));
+    await store.load();
+
+    await Promise.all([
+      store.upsert('acme', ENTRY),
+      store.upsert('other', { ...ENTRY, api_key_env: 'OTHER_KEY' }),
+      store.upsert('third', { ...ENTRY, api_key_env: 'THIRD_KEY' }),
+    ]);
+
+    expect(store.get('acme')).toBeDefined();
+    expect(store.get('other')?.api_key_env).toBe('OTHER_KEY');
+    expect(store.get('third')?.api_key_env).toBe('THIRD_KEY');
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'providers.json'), 'utf8'));
+    expect(Object.keys(onDisk.providers).sort()).toEqual(['acme', 'other', 'third']);
+  });
+
   it('reports an unwritable directory and turns a write into a store_unwritable error', async () => {
     if (process.getuid?.() === 0) return; // root ignores mode bits
     const dir = tempDir();

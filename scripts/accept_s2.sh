@@ -25,8 +25,9 @@
 #   - `docker compose --profile test up -d` already running plus `docker compose up -d
 #     gatekeeper-docker`. The script switches llm-proxy / worker-supervisor / fake-llm to the fake
 #     provider itself via deploy/accept/docker-compose.fake.yml and restores production wiring
-#     from an EXIT trap, so ${NEXTTIME_DATA}/config/llm-providers.yaml and models.json are never
-#     modified — no manual provider switch is needed before or after.
+#     from an EXIT trap, so ${NEXTTIME_DATA}/config/llm-providers.yaml and
+#     ${NEXTTIME_DATA}/models/models.json are never modified — no manual provider switch is
+#     needed before or after.
 #   - `docker compose --profile accept-s2 build` has been run at least once (images built).
 #   - `docker compose build worker-runtime` (profile build-only) has produced
 #     `nexttime-ai-worker-runtime` — step 6's fallback env/egress probe runs that image directly.

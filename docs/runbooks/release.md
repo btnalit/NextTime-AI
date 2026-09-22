@@ -100,6 +100,35 @@ HEAD` 取——两段拼起来就是概览要的 `v0.13.2 (0fa5a1e)` 形态，�
 checkout 目标 ref **之后**）都应先做同样的 `export`，否则演练 / 安装出来的镜像概览会显示 `dev`；
 用 `docker image inspect nexttime-ai-kernel --format '{{.Config.Env}}'` 可以在 `up` 之前核对镜像里烙的值。
 
+### 3.2 一次性目录迁移：`models.json` 挪出 `config/`（S7-A）
+
+S7-A（docs/STATUS.md 维护者决定 2026-09-22 ⑤：不给 `${NEXTTIME_DATA}/config/` 换属主）把 llm-proxy
+原子重写的 `models.json` 从 `${NEXTTIME_DATA}/config/models.json` 挪到它自己的
+`${NEXTTIME_DATA}/models/models.json`——kernel、worker-supervisor、`make gen-models`、
+`scripts/host-env-init.sh`/`scripts/host-llm-proxy-init.sh` 都随这个版本的镜像/脚本一起换成新路径。
+**已经部署过旧版本**（`config/models.json` 存在）的主机，在这次 `docker compose up` **之前**手动做一次
+目录搬迁，不然新代码在新目录下找不到 `models.json`，`list_models`/`list_platform_models` 会 503、新
+拉起的 agent 容器也拿不到白名单：
+
+```bash
+ssh <TARGET_HOST>
+cd <CODE_DIR>
+set -a; . ./.env; set +a
+mkdir -p "${NEXTTIME_DATA}/models"
+mv "${NEXTTIME_DATA}/config/models.json" "${NEXTTIME_DATA}/models/models.json"
+chown 10001:10001 "${NEXTTIME_DATA}/models" "${NEXTTIME_DATA}/models/models.json"
+```
+
+之后照常按 §3 切到目标 tag、`docker compose build kernel llm-proxy worker-supervisor caddy` +
+`docker compose up -d`（`scripts/host-env-init.sh` 幂等重跑一次也可以——它现在会自己补建
+`models/`，但**不会**帮你把旧文件从 `config/` 搬过去，搬家必须是这条手动步骤）。回滚（§5）等价对称：
+如果要切回一个 S7-A 之前的 tag，把 `models.json` 搬回 `config/` 下（`mv` 反方向），否则旧代码在
+`config/` 下找不到它。
+
+一次性步骤，不属于 §6 的 schema 迁移可逆性表（这是文件系统布局变化，不是数据库迁移）——`models.json`
+本身是纯派生数据（`llm-providers.yaml` + 控制台 `providers.json` 的合并投影），丢了也能用
+`make gen-models` 重新生成，只是省不了这一步手动 `mv` 加 `chown`。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

@@ -2,8 +2,9 @@
 
 对应任务：development-tasks.md § S1.5（本 runbook 覆盖前半：`worker-runtime` 镜像 +
 `worker-supervisor` 常驻模式）。占位符取值见 `docs/private/`（不入库）。前置：E1–E4（gVisor 已
-验证或已在 `.env` 回退 `runc`、数据目录已建、`.env` 已生成、Postgres 已起）；`config/models.json`
-须是有效的 pi `models.json`（见 §3）。**`DOCKER_GID` 更新（fix/socket-proxy-and-backup-user）**：
+验证或已在 `.env` 回退 `runc`、数据目录已建、`.env` 已生成、Postgres 已起）；`models/models.json`
+（S7-A 起单独目录，不再是 `config/models.json`）须是有效的 pi `models.json`（见 §3）。
+**`DOCKER_GID` 更新（fix/socket-proxy-and-backup-user）**：
 `worker-supervisor` 不再直接挂载 `/var/run/docker.sock`——它现在经 `docker-socket-proxy`（新
 `dockerapi` 网络，`DOCKER_HOST=tcp://docker-socket-proxy:2375`）访问 Docker Engine API，`.env` 里
 的 `DOCKER_GID` 因此不再是这个服务的前置条件（下面 §10 那条 EACCES crash-loop 记录已成历史，见该
@@ -46,16 +47,18 @@ docker run --rm nexttime-ai-worker-runtime pi --version   # 期望输出含 0.84
 docker run --rm --entrypoint pi nexttime-ai-worker-runtime --version
 ```
 
-## 3. 准备 `config/models.json`
+## 3. 准备 `models/models.json`
 
 `scripts/host-env-init.sh`（E2）写的占位符是字面 `{}`，**不是**合法的 pi `models.json`
-（pi 的 schema 要求 `providers` 字段必填——见 PR body"主机验收结果"）。用真正的生成器覆盖：
+（pi 的 schema 要求 `providers` 字段必填——见 PR body"主机验收结果"）。用真正的生成器覆盖（S7-A，
+docs/STATUS.md 维护者决定 2026-09-22 ⑤：目标文件挪到了 `${NEXTTIME_DATA}/models/`，不再是
+`config/`）：
 
 ```bash
 cd <CODE_DIR>
 set -a; . ./.env; set +a
-make gen-models     # 从 ${NEXTTIME_DATA}/config/llm-providers.yaml 生成 config/models.json
-cat "${NEXTTIME_DATA}/config/models.json"   # S1.7 未接入真实 provider 时期望 {"providers": {}}
+make gen-models     # 从 ${NEXTTIME_DATA}/config/llm-providers.yaml 生成 models/models.json
+cat "${NEXTTIME_DATA}/models/models.json"   # S1.7 未接入真实 provider 时期望 {"providers": {}}
 ```
 
 ## 4. 起 `egress-proxy` 与 `worker-supervisor`
