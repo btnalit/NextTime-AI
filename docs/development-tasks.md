@@ -2960,6 +2960,17 @@ store 供应商的 `apiKeyEnv` 变为可选；GET 只回 `credentialPresent` + `
 ⑤ `models.json` 挪 `${NEXTTIME_DATA}/models/`——不放 `${NEXTTIME_DATA}/llm-proxy/`，因为内核与 supervisor 要挂载
 `models.json` 所在目录，而那里有 `keys.json`。
 
+- **实现说明（2026-09-22 合入）**：S7-A #224——`packages/llm-proxy/src/key-store.ts`（`/data/state/keys.json`，0600，
+  tmp + chmod + rename，进程内 `Mutex` 串行，`ProviderStore` 共用）；`PUT` / `POST` / `DELETE /admin/providers/:id/secret`，
+  输入 `LlmProviderSecretInputWireSchema`（trim、≤ 4096、无控制字符），错误响应只带 zod v3 issue（不含输入值）；
+  审计动作 `provider_secret_set` / `provider_secret_cleared`（内核 `LlmAdminAuditEventSchema` 同步）；页面
+  `ProviderSecretForm`（清除走 ConfirmTier medium，不重输密码）。`models.json` 挪 `${NEXTTIME_DATA}/models/`：llm-proxy
+  改为四个只读单文件 / 目录挂载 + 可写 `models/`，内核只读挂 `models/`，supervisor 缺省宿主路径同步；既有主机迁移
+  `release.md` §3.2。S7-B #222——见 STATUS 遗留 46 / 47 / 55 / 56 关闭说明。S7-C #221——迁移 core 0032：审查把全量放宽
+  改窄为 `action = 'platform.workspace_purged'` 且 `payload -> 'attributedActor' is not distinct from 'false'::jsonb`
+  （最初写成 `->> … = 'false'`，键缺失时整式为 NULL、CHECK 放行，被 CI 上的负向集成测试抓出）；wire
+  `PlatformAuditRecordWire.actorUserId` 可空，页面经 `formatAuditActor` 显示"主机操作员（未署名）"。
+
 ### S7-D 模块（P-B2b，design §6.4；P-B2 决定 ① / ④）
 
 核实的事实（2026-09-22）：本体按包族 id（`deriveOntologyPackId(packName)`）分版本，`definition` 是
