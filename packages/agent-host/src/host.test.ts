@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentRuntimeEventWire, KernelToAgentHostFrame } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import type { AttachedContainerIo, ContainerIoClient } from './container-io.js';
-import { type Host, createHost } from './host.js';
+import { type Host, type HostOptions, createHost } from './host.js';
 import type { KernelLink } from './kernel-link.js';
 import type {
   ResidentStatus,
@@ -175,7 +175,9 @@ function createFakeSupervisorClient() {
   };
 }
 
-function setUp() {
+/** `overrides.now` lets a test drive `refreshTouch`'s throttle window (leftover 46) without real
+ *  timers — see that describe block below. */
+function setUp(overrides: Partial<HostOptions> = {}) {
   const supervisor = createFakeSupervisorClient();
   const containerIo = createFakeContainerIoClient();
   const kernelLink = createFakeKernelLink();
@@ -186,6 +188,7 @@ function setUp() {
     kernelUrl: 'http://kernel:8080',
     defaultKernelLlmUrl: 'http://llm-proxy:8082',
     log: () => {},
+    ...overrides,
   });
   return { host, supervisor, containerIo, kernelLink };
 }
@@ -590,6 +593,127 @@ describe('createHost — stopTurn', () => {
 
     host.handleStopTurn({ type: 'stopTurn', turnId: randomUUID(), principalId: cmd.principalId });
     expect(attachment?.written).toEqual([switchCommand(cmd), promptCommand(cmd)]);
+  });
+
+  it('does not write the prompt when a stopTurn for it arrives while ensureAttachment is still in flight, on the direct-write path (leftover 56)', async () => {
+    // The direct-write path is only reachable when `record.currentChatId` already matches the
+    // incoming chat — i.e. a second turn in the same chat, on the same still-attached container.
+    // See host.ts's own comment on this branch: unlike `handleSwitchSessionResponse` (exercised by
+    // the "stopTurn overtakes the pending switch" test above), this path used to write the prompt
+    // to pi regardless of `turn.stopRequested`.
+    const { host, supervisor, containerIo, kernelLink } = setUp();
+    const first = startTurnCommand();
+    const attachment = await startTurnAndAccept(host, containerIo, first);
+    attachment?.emitLine({ type: 'agent_settled' }); // frees the principal for a second turn
+
+    const second = startTurnCommand({
+      principalId: first.principalId,
+      workspaceId: first.workspaceId,
+      chatId: first.chatId, // same chat as before — record.currentChatId already matches
+    });
+    supervisor.setSpawnInterceptor(() => {
+      // A stopTurn frame for `second` reaches agent-host while its own ensureAttachment (spawn)
+      // is still awaiting — the exact window leftover 56 describes. `handleStopTurn` finds no
+      // `pendingSwitchId` yet (this turn hasn't reached the switch/direct-write decision at all)
+      // and falls through to its own abort write, to whatever is currently attached (`c1`, the
+      // first turn's now-idle attachment).
+      host.handleStopTurn({
+        type: 'stopTurn',
+        turnId: second.turnId,
+        principalId: second.principalId,
+      });
+    });
+
+    await host.handleStartTurn(second);
+
+    // The prompt for `second` must never reach pi — before the fix this branch ignored
+    // `stopRequested` and wrote it anyway, swallowing the stop.
+    expect(attachment?.written).toEqual([
+      switchCommand(first),
+      promptCommand(first),
+      { type: 'abort' }, // handleStopTurn's own write during the in-flight spawn
+    ]);
+    expect(kernelLink.rejected).toEqual([
+      { turnId: second.turnId, reason: 'turn stopped before the prompt was sent' },
+    ]);
+    expect(kernelLink.accepted).toEqual([first.turnId]); // never accepted for `second`
+
+    // The reservation was released — a following turn for the same principal is not blocked as
+    // "already processing".
+    supervisor.setSpawnInterceptor(undefined);
+    const third = startTurnCommand({
+      principalId: first.principalId,
+      workspaceId: first.workspaceId,
+      chatId: first.chatId,
+    });
+    await host.handleStartTurn(third);
+    expect(kernelLink.rejected).toHaveLength(1); // still just `second`'s own rejection
+    expect(attachment?.written).toEqual([
+      switchCommand(first),
+      promptCommand(first),
+      { type: 'abort' },
+      promptCommand(third),
+    ]);
+  });
+});
+
+describe('createHost — mid-turn idle-clock refresh (leftover 46)', () => {
+  it("refreshes the supervisor's idle clock as pi keeps emitting activity for a Turn long past the idle timeout, throttled so it is not a touch per line", async () => {
+    let clock = 0;
+    const { host, supervisor, containerIo } = setUp({ now: () => clock });
+    const cmd = startTurnCommand();
+
+    await host.handleStartTurn(cmd);
+    expect(supervisor.touchCalls).toEqual([cmd.principalId]); // Turn-start touch only, so far
+
+    const attachment = containerIo.attachmentsByContainerId.get('c1');
+
+    // Activity soon after start, still inside the throttle window — no extra touch yet.
+    clock += 1_000;
+    emitSwitchOk(attachment, cmd.turnId);
+    expect(supervisor.touchCalls).toEqual([cmd.principalId]);
+
+    // The Turn keeps running well past worker-supervisor's idle timeout (30 min default) — the
+    // exposure leftover 46 describes — but pi is still emitting activity for it. Once the
+    // throttle window (5 min) has elapsed since the last touch, the next line refreshes it.
+    clock += 6 * 60 * 1000;
+    attachment?.emitLine({
+      type: 'message_update',
+      usage: {},
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'still working' },
+    });
+    expect(supervisor.touchCalls).toEqual([cmd.principalId, cmd.principalId]);
+
+    // A further burst of lines inside the new throttle window does not re-touch again.
+    attachment?.emitLine({
+      type: 'message_update',
+      usage: {},
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'more' },
+    });
+    expect(supervisor.touchCalls).toHaveLength(2);
+  });
+
+  it('does not refresh the idle clock for a line once the Turn it belonged to has already ended (idle-stop stray output)', async () => {
+    let clock = 0;
+    const { host, supervisor, containerIo } = setUp({ now: () => clock });
+    const cmd = startTurnCommand();
+    await host.handleStartTurn(cmd);
+    const attachment = containerIo.attachmentsByContainerId.get('c1');
+    emitSwitchOk(attachment, cmd.turnId);
+    attachment?.emitLine({ type: 'response', command: 'prompt', id: cmd.turnId, success: true });
+
+    clock += 6 * 60 * 1000;
+    attachment?.emitLine({ type: 'agent_settled' }); // ends the turn — activeTurns entry is cleared
+    const touchCallsAfterSettle = supervisor.touchCalls.length;
+
+    // A stray line after the turn already ended (e.g. during the container's idle-timeout stop) —
+    // `handleLine`'s own `turn` lookup finds nothing to correlate it to, so no refresh either.
+    attachment?.emitLine({
+      type: 'message_update',
+      usage: {},
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'after the turn ended' },
+    });
+    expect(supervisor.touchCalls).toHaveLength(touchCallsAfterSettle); // no tracked turn, no refresh
   });
 });
 

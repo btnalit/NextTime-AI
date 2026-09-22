@@ -134,12 +134,16 @@ export function registerActionRequestRoutingConsumer(
     // S5.6 leftover 30: only a Worker that is itself blocked on this decision (`await_decision:
     // true`, the gate tool polling inside `request-action-handler.ts`) parks its Task at
     // `waiting_approval`. With `await_decision: false` the gate tool returns `pending_approval`
-    // at once and the Worker carries on — it may legitimately `report_task_result` while the
-    // ActionRequest is still pending, and a Task parked here would reject that report
-    // (`waiting_approval` has no `complete` edge), roll the whole result back, and end up
-    // `failed: no_result` once the Worker exits: exactly the container-restart failure the
-    // real-model run produced (STATUS leftover 30). `governance/approval/await-decision.ts`: "await_decision=true 时 Task 进
-    // waiting_approval" — the field was never read here before.
+    // at once and the Worker carries on normally — it must not be treated as blocked: this gate
+    // is what keeps `lifecycle.ts`'s `reactToSupervisorStatus` (P1-6: no requeue-on-crash, straight
+    // to `failed: no_result` on exit, both keyed off `waiting_approval`) from misfiring on an
+    // ordinary still-running Worker just because *some* gate call of its returned
+    // `pending_approval`. `completeTaskWithResult`'s own `waiting_approval` handling (leftover 47 —
+    // it now hops through the existing `resume` edge rather than rejecting outright) means a
+    // `report_task_result` call while genuinely parked here no longer loses the whole contract, but
+    // that is orthogonal to this gate: an `await_decision: false` Task was never meant to be parked
+    // at all, `complete`-edge or not. `governance/approval/await-decision.ts`: "await_decision=true
+    // 时 Task 进 waiting_approval" — the field was never read here before.
     if (!actionRequest.awaitDecision) return;
 
     await withWorkspace(

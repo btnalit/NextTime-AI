@@ -147,6 +147,39 @@ function pathToRunning(status: TaskStatus): readonly TaskEvent[] {
   }
 }
 
+/** The equivalent hop sequence for `completeTaskWithResult`'s `complete` event (leftover 47,
+ *  docs/STATUS.md §4) — kept separate from `pathToRunning` above because the two events need
+ *  different hops for `waiting_approval`: `fail` already has a *direct* edge from `waiting_approval`
+ *  (the P1-6 fix `pathToRunning`'s own doc comment describes), but `complete` only has one from
+ *  `running`, so `waiting_approval` needs an explicit `resume` hop first. That `resume` edge
+ *  already exists in `TASK_TRANSITIONS` — used today when an `ActionRequestUpdated` event resolves
+ *  the approval a Task is blocked on (`reaper.ts`'s `resumeTaskFromWaitingApproval`) — and
+ *  `application/task/service.ts`'s own file-local `pathToRunning` (for `cancelTask`'s `cancel`
+ *  event, same "only a direct edge from `running`" shape as `complete`) already resolves
+ *  `waiting_approval` the identical way; this mirrors that established convention rather than
+ *  inventing a new one. No edge is added to `TASK_TRANSITIONS` — see this function's only caller,
+ *  `completeTaskWithResult`, for why a Worker reporting a real result while its Task is still
+ *  `waiting_approval` (a gate tool's `await_decision: true` wait timed out with the decision still
+ *  undecided) is exactly the case this closes: before this, the direct `transition(...,'complete')`
+ *  call threw `IllegalTransition` (409), discarding the whole result contract — including any
+ *  Facts/evidence/proposals already written earlier in the same transaction — and the Task later
+ *  ended `failed: no_result` once its WorkerRun's exit was observed (`reactToSupervisorStatus`
+ *  below). Same "never externally observable as a separate persisted row state" convention as
+ *  `pathToRunning`: no separate `task.resume` audit row is recorded for this hop, only the
+ *  resulting `task.complete` one `completeTaskWithResult` already writes. */
+function pathToRunningForComplete(status: TaskStatus): readonly TaskEvent[] {
+  switch (status) {
+    case 'created':
+      return ['queue', 'start'];
+    case 'queued':
+      return ['start'];
+    case 'waiting_approval':
+      return ['resume'];
+    default:
+      return [];
+  }
+}
+
 /** Transitions a Task to `failed` with `failure_reason = reason`, unless it is already in a
  *  terminal status (`completed`/`failed`/`cancelled`) — idempotent for the same reasons
  *  `terminateWorkerRunRow` is. */
@@ -184,14 +217,30 @@ export async function failTaskRow(
 
 /**
  * The S2.9 result-contract seam (docs/development-tasks.md S2.7 "leave a completeTaskWithResult
- * seam S2.9 will call"): transitions a `running` Task to `completed` and records
- * `result` (design doc §7.3 "Worker 结束时返回结构化结果 ... 内核把 facts_to_assert 以 inferred 状态
- * 写入..." — writing `facts_to_assert`/evidence/proposals from that result is S2.9's own job, not
- * this function's; this function only owns the Task row's own transition). Also terminates the
+ * seam S2.9 will call"): transitions a `running` **or `waiting_approval`** Task to `completed` and
+ * records `result` (design doc §7.3 "Worker 结束时返回结构化结果 ... 内核把 facts_to_assert 以 inferred
+ * 状态写入..." — writing `facts_to_assert`/evidence/proposals from that result is S2.9's own job,
+ * not this function's; this function only owns the Task row's own transition). Also terminates the
  * WorkerRun that produced the result (revoking its Handle) — a completed Task's WorkerRun has
- * nothing left to do. Throws `IllegalTransition` if the Task is not currently `running` (e.g.
- * called twice, or after the reaper already marked it `failed: no_result` — S2.9's own caller is
- * expected to race against that and accept the failure).
+ * nothing left to do. Throws `IllegalTransition` for any other status (e.g. called twice, or after
+ * the reaper already marked it `failed: no_result` — S2.9's own caller is expected to race against
+ * that and accept the failure).
+ *
+ * **`waiting_approval` (leftover 47, docs/STATUS.md §4)**: a Worker can legitimately have a real
+ * result to report while its Task is still `waiting_approval` — a gate tool called with
+ * `await_decision: true` polls for a bounded time (`governance/approval/await-decision.ts`) and
+ * returns `{status:'pending_approval'}` to the model if the human decision has not landed yet,
+ * without resolving the ActionRequest; the model may then call `report_result` anyway. Before this,
+ * `transition(..., 'complete')` had no edge out of `waiting_approval` and threw here, rolling back
+ * the whole contract this function's caller (`application/task/result.ts`'s `postWorkerResult`) had
+ * already written earlier in the same transaction — the Worker exited 0 regardless (nothing more it
+ * can do about a 409), and the Task went on to end `failed: no_result` once `reactToSupervisorStatus`
+ * below observed the exit. `pathToRunningForComplete` hops through the *already-existing*
+ * `waiting_approval -> running` edge first (the same one `reaper.ts`'s own
+ * `resumeTaskFromWaitingApproval` uses once the ActionRequest resolves, and the same hop
+ * `application/task/service.ts`'s `cancelTask` already takes for its own `cancel` event) — no new
+ * edge is added to `TASK_TRANSITIONS`. The ActionRequest itself is unaffected: it keeps resolving
+ * through its own state machine independent of the Task's status, same as today.
  */
 export async function completeTaskWithResult(
   client: PoolClient,
@@ -205,7 +254,11 @@ export async function completeTaskWithResult(
   if (!row)
     throw new Error(`completeTaskWithResult: no Task ${taskId} in workspace ${workspaceId}`);
 
-  transition(TASK_TRANSITIONS, row.status, 'complete');
+  let cursor: TaskStatus = row.status;
+  for (const event of pathToRunningForComplete(row.status)) {
+    cursor = transition(TASK_TRANSITIONS, cursor, event);
+  }
+  transition(TASK_TRANSITIONS, cursor, 'complete');
   const updateResult = await client.query(
     `update tasks set status = 'completed', completed_at = now(), result = $3::jsonb
      where workspace_id = $1 and id = $2
