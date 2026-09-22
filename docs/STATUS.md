@@ -209,12 +209,12 @@
 
 | 车道 | 项 | 状态 |
 |---|---|---|
-| S7-A 供应商收尾 | ① 密钥写入（store 供应商的 key 落 llm-proxy 自有 `/data/state`，文件 0600，只写不读）；⑤ `models.json` 专用目录 + 既有主机迁移步骤；`ProviderStore` 写互斥（遗留 50）；P-D 剩余 `set_entry_model` / `set_platform_default_model` | 进行中 |
+| S7-A 供应商收尾 | ① 密钥写入（store 供应商的 key 落 llm-proxy 自有 `/data/state`，文件 0600，只写不读）；⑤ `models.json` 专用目录 + 既有主机迁移步骤；`ProviderStore` 写互斥（遗留 50） | 进行中 |
 | S7-B 运行时稳健 | 遗留 46（`sweepIdle` 中途停掉进行中 Turn）、47（`waiting_approval` 下 `report_result` 409 → `no_result`）、55（`worker.sdk.test.ts` 超时级联）、56（agent-host 直写路径不查 `stopRequested`） | 进行中 |
 | S7-C 小修 | 遗留 51（reaper 测试跨运行污染）、54（CLI 清除无操作者不写审计）、57（归档撤销跳转后视图不刷新） | 进行中 |
 | 主机应用 v0.14.x | S7-A 合入发版后按 `development-tasks.md` §5c 末执行（清除先 `--dry-run`、`purge-expired-workspaces` 分批）；S1 → S2 → S3 复跑，遗留 43 / 44 的真实模型复跑 | 待 S7-A |
-| S7-D P-B2b 模块 | `ontology/modules.yaml` 索引、`list_modules` / `install_module` / `upgrade_module` / `set_default_modules`、模块页；设计点先与顾问过：模块索引与 `WorkerDefinition` 的关系（"已安装版本 = 定义哈希匹配"） | 待设计 |
-| S7-E P-C 运行层与运行状态 | `runtime_inventory` / `list_runtime_images` / `set_active_runtime_image` / `roll_entry_containers`（draining 语义先定）/ `rollback_runtime_image` / `pi_drift` / `platform_status`（备份项在 ③ 之前显示"未配置"） | 待设计 |
+| S7-D P-B2b 模块 | `ontology/modules.yaml` 索引、`list_modules` / `install_module` / `upgrade_module` / `set_default_modules`、模块页；决定 D1–D4 见 `development-tasks.md` §5d（模块 = 本体包；哈希走同一解析路径；默认模块照 `seedPlatformMetaOntology` 先例） | 设计已定，待 S7-A/B/C 后派出 |
+| S7-E P-C 运行层与运行状态 | `runtime_inventory` / `list_runtime_images` / `set_active_runtime_image` / `roll_entry_containers` / `rollback_runtime_image` / `pi_drift` / `platform_status`，并入 P-D 剩余 `set_platform_default_model`；决定 E1–E5 见 §5d（活动镜像为平台设置并下发两条 spawn；滚动重建不引入 draining 状态） | 设计已定，待 S7-A 合入后派出 |
 | 之后 | 遗留 48（图谱页内核缺口）/ 49（前端体积与 CSP）；最后 ② 镜像发布、③ 遗留 6，及 10 / 11 / 35 | — |
 
 **S6 立项与顺序记录**（2026-09-19 维护者取定 `console-completion-plan.md` §12 七项待决，S6 插在 P-B2b **之前**）：顺序 S6-A0（视觉体系 + 紧急修复，C1 单独小 PR 先修）→ 遗留 44（S6-A 对话中途切换的硬前置，独立 PR）→ S6-A ∥ S6-B（文件互斥车道，与 W9–W11 同一模式）→ S6-C（接入 + Explorer bundle 过渡）→ S6-D（原生图谱页，新立项）；之后按原顺序 P-B2b → P-C → P-D。七项结论：原生图谱页立项；Gemini 原生适配器不排期；`purge_workspace` 禁用满 7 天可清、既有 `disabled` 行回填 null 立即可清（新迁移 `workspaces.disabled_at`）；验收脚本只改"不造 User"、不打破 0019 不变量；`approve.reason` 高影响必填、内核强制；字体接受首屏约 600 KB。仍待维护者确认一条：管理员在控制台写供应商密钥要不要过审批（底线解释，决定 S6-B 范围，§12 末）。方案本身：2026-09-18 维护者首次完整使用控制台后的七条问题 + 走查发现 B1–B7 + 第二轮代码级核对 C1–C29（含 1 条 P1），逐条根因分类；视觉基线已定稿（§5.9）。本波实施后：41–44 与 19 已在本地分支关闭（§4）；镜像发布仍待维护者决定。
