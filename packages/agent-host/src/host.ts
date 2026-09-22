@@ -71,9 +71,18 @@ import type { SpawnInput, SupervisorClientPort } from './supervisor-client.js';
  * a second Turn per principal while one is active, so the recreate is deferred until the next
  * Turn starts — the running Turn keeps the Handle (and gate set) it started with, the next Turn
  * gets the recreated container with the new one. The supervisor's own `reconcile()` only restores
- * registries, it never stops a container. (Its idle sweep can still stop a container whose last
- * `touch` — Turn start — is older than its idle timeout; that is a separate, pre-existing exposure
- * for Turns longer than that timeout, not this race.)
+ * registries, it never stops a container.
+ *
+ * **Mid-Turn idle-clock refresh** (docs/STATUS.md leftover 46): worker-supervisor's `sweepIdle`
+ * only knows a container is busy through `touch`, and `ensureAttachment` used to call it exactly
+ * once, at Turn start — a Turn still running past `entryIdleTimeoutMs` (30 min default) later
+ * could be stopped by the sweep out from under it. `handleLine` now calls `refreshTouch` for every
+ * line pi emits while bound to the active Turn (switch/prompt responses and translated events
+ * alike — see its own comment), throttled to at most once per `TOUCH_REFRESH_INTERVAL_MS` so a
+ * fast token stream doesn't turn into a `touch` call per line. This only keeps the clock fresh for
+ * a Turn that is still producing pi stdout; a Turn silently blocked for longer than the idle
+ * timeout with no pi activity at all (e.g. a long `await_decision` gate wait) is not covered — out
+ * of scope for this fix, same as before.
  */
 
 export interface HostOptions {
@@ -95,6 +104,9 @@ export interface HostOptions {
    *  in practice — see PR body "假设与偏离". */
   readonly defaultKernelLlmUrl: string;
   readonly log?: (line: string) => void;
+  /** Injectable clock for `refreshTouch`'s throttle window (module doc comment, leftover 46) —
+   *  defaults to `Date.now`. Tests supply a fake clock instead of real timers. */
+  readonly now?: () => number;
 }
 
 export interface Host {
@@ -145,13 +157,51 @@ function piSessionPathForChat(chatId: string): string {
   return `${PI_SESSION_DIR}/chat-${chatId}.jsonl`;
 }
 
+/** Leftover 46 (module doc comment): how often `refreshTouch` is allowed to call
+ *  `supervisorClient.touch` for the same principal while a Turn is active — comfortably under
+ *  worker-supervisor's `entryIdleTimeoutMs` default (30 min, `ENTRY_IDLE_TIMEOUT_MS`) so a Turn
+ *  producing any pi activity at all never goes idle-swept, without a `touch` per stdout line. */
+const TOUCH_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
 export function createHost(options: HostOptions): Host {
   const { supervisorClient, containerIoClient, kernelLink, kernelUrl, defaultKernelLlmUrl } =
     options;
   const log = options.log ?? ((line: string) => console.error(line));
+  const now = options.now ?? (() => Date.now());
 
   const attachments = new Map<string, AttachmentRecord>();
   const activeTurns = new Map<string, ActiveTurn>();
+  /** Leftover 46 (module doc comment): last time `refreshTouch` (or the Turn-start touch in
+   *  `ensureAttachment`) actually called `supervisorClient.touch` for this principal — the
+   *  throttle window's own clock, distinct from worker-supervisor's `lastTouchedAt` registry. */
+  const lastTouchAt = new Map<string, number>();
+
+  /** Best-effort `supervisorClient.touch` — failures are logged, never thrown, since a missed
+   *  touch only risks a future idle sweep, not this Turn's own correctness. */
+  function performTouch(principalId: string, context: string): void {
+    supervisorClient.touch(principalId).catch((err: unknown) => {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: `agent-host: supervisor touch failed (${context})`,
+          principalId,
+          error: String(err),
+        }),
+      );
+    });
+  }
+
+  /** Leftover 46: called from `handleLine` for every line pi emits while bound to an active Turn.
+   *  Throttled to `TOUCH_REFRESH_INTERVAL_MS` — `lastTouchAt` is set here (and by
+   *  `ensureAttachment`'s own Turn-start touch below) so a burst of streamed events right after a
+   *  Turn starts doesn't immediately re-touch on top of the touch `ensureAttachment` already sent. */
+  function refreshTouch(principalId: string): void {
+    const last = lastTouchAt.get(principalId) ?? 0;
+    const nowMs = now();
+    if (nowMs - last < TOUCH_REFRESH_INTERVAL_MS) return;
+    lastTouchAt.set(principalId, nowMs);
+    performTouch(principalId, 'mid-turn idle-clock refresh');
+  }
 
   function handleContainerClosed(
     principalId: string,
@@ -266,6 +316,11 @@ export function createHost(options: HostOptions): Host {
     const activeTurn = activeTurns.get(principalId);
     const turn = activeTurn && activeTurn.containerId === containerId ? activeTurn : undefined;
 
+    // Leftover 46 (module doc comment): any stdout line from the container this Turn is actually
+    // bound to is proof it is still alive and busy — refresh the idle clock (throttled) rather
+    // than letting `sweepIdle` judge liveness solely by this Turn's own start time.
+    if (turn) refreshTouch(principalId);
+
     if (
       record.type === 'response' &&
       record.command === 'switch_session' &&
@@ -362,17 +417,10 @@ export function createHost(options: HostOptions): Host {
     // principal (resident-service.ts's own spawn() sets `lastTouchedAt` on every call, reuse or
     // fresh), so a failure here never blocks the turn; this call is the architecture's explicit
     // "touch the supervisor each Turn" requirement made visible even when spawn alone would have
-    // sufficed.
-    supervisorClient.touch(principalId).catch((err: unknown) => {
-      log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'agent-host: supervisor touch failed (spawn already refreshed the idle clock)',
-          principalId,
-          error: String(err),
-        }),
-      );
-    });
+    // sufficed. Also seeds `refreshTouch`'s own throttle window (leftover 46, module doc comment)
+    // so the first pi stdout line right after this doesn't immediately re-touch on top of it.
+    lastTouchAt.set(principalId, now());
+    performTouch(principalId, 'spawn already refreshed the idle clock');
 
     const existing = attachments.get(principalId);
     if (existing && existing.containerId === spawnResult.containerId) return existing;
@@ -467,7 +515,21 @@ export function createHost(options: HostOptions): Host {
       // turnAccepted is sent from handleLine, once pi's own {"type":"response","command":"prompt",
       // "id":cmd.turnId,"success":true} confirms it — not here (see bridge.ts's
       // buildPromptCommand doc comment for why that is the real acceptance signal).
+      //
+      // Leftover 56 (docs/STATUS.md): `turn.stopRequested` must be checked here exactly like
+      // `handleSwitchSessionResponse` already checks it before its own prompt write, above — a
+      // `stopTurn` can arrive for this turnId while `ensureAttachment` was still awaiting (the
+      // window between the synchronous reservation and this point). Without this check the prompt
+      // still reached pi and the stop was silently swallowed: `handleStopTurn` had already run and
+      // found no `pendingSwitchId` to fall through from, so it wrote an `abort` to whatever
+      // attachment existed at that moment (stale or none) instead of this Turn's prompt, which
+      // this branch would then send anyway.
       if (record.currentChatId === cmd.chatId) {
+        if (turn.stopRequested) {
+          activeTurns.delete(cmd.principalId);
+          kernelLink.sendTurnRejected(cmd.turnId, 'turn stopped before the prompt was sent');
+          return;
+        }
         record.io.writeLine(buildPromptCommand(cmd.turnId, cmd.prompt));
         return;
       }
