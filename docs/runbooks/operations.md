@@ -66,7 +66,10 @@ postgres ──(healthy)──> backup
 
 `fake-llm`（`profiles: ["test"]`）与全部 `accept-s2-*`（`profiles: ["accept-s2"]`）、
 `worker-runtime`（`profiles: ["build-only"]`）默认 `docker compose up` 不会拉起，不在下面的常驻
-服务清单里。
+服务清单里。`accept_s1.sh`/`accept_s2.sh`/`accept_s3.sh`、`scripts/drill-install.sh`、
+`scripts/drill-upgrade.sh` 用的是 `docker compose --profile test up -d`，会把 `fake-llm` 一起拉
+起来，验收完不会自己停掉它——验收/演练结束后如果不想让它继续常驻，手动
+`docker compose --profile test stop fake-llm`。
 
 ## 4. 服务重启顺序
 

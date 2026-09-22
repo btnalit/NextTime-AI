@@ -57,7 +57,11 @@
 #   2. pre-upgrade dump      — docker compose run --rm -e BACKUP_NOW=1 backup, resolve the dump it
 #                              produced (same resolution logic scripts/drill-restore.sh uses).
 #                              NEVER deleted by this script.
-#   3. checkout v(n)         — git fetch origin --tags && git checkout <to>.
+#   3. checkout v(n)         — git fetch origin --tags && git checkout <to>, then layout_step:
+#                              reconcile ${NEXTTIME_DATA}/models/ vs config/models.json and
+#                              ${NEXTTIME_DATA}/llm-proxy/ against whatever v(n)'s own
+#                              docker-compose.yml mounts expect (docs/runbooks/release.md §3.2) —
+#                              detected from the checked-out tree, not from TO_TAG/FROM_TAG.
 #   4. build v(n)            — docker compose --profile test build (every default-profile service
 #                              + fake-llm) + docker compose build worker-runtime (build-only
 #                              profile, named explicitly — docs/runbooks/host-worker-runtime.md §2's
@@ -68,15 +72,18 @@
 #   7. accept S1/S2/S3 (v(n)) — scripts/accept_s1.sh / accept_s2.sh / accept_s3.sh, their default
 #                              fake-provider mode. A failure here IS a drill failure — "三份验收
 #                              通过" is the acceptance criterion for the upgrade half.
-#   8. PROBE                 — checkout v(n-1), build, up -d (schema is still v(n) — migrations
-#                              were never rolled back), run accept_s1.sh (v(n-1)'s OWN copy of it)
-#                              against that schema. Prints `PROBE old-code-on-new-schema ok` or
-#                              `PROBE old-code-on-new-schema failed` — NON-FATAL either way; this
-#                              is the reversibility evidence docs/runbooks/release.md's table cites,
-#                              not a pass/fail gate on this drill.
+#   8. PROBE                 — checkout v(n-1) (+ layout_step, same reconciliation as step 3 but
+#                              back to whatever v(n-1)'s own tree expects), build, up -d (schema is
+#                              still v(n) — migrations were never rolled back), run accept_s1.sh
+#                              (v(n-1)'s OWN copy of it) against that schema. Prints `PROBE
+#                              old-code-on-new-schema ok` or `PROBE old-code-on-new-schema failed`
+#                              — NON-FATAL either way; this is the reversibility evidence
+#                              docs/runbooks/release.md's table cites, not a pass/fail gate on this
+#                              drill.
 #   9. rollback proper        — re-affirm v(n-1) is checked out/built/up (idempotent — step 8 already
-#                              did this; done again here so rollback is correct even if the PROBE
-#                              step above failed outright, e.g. a build failure), THEN
+#                              did this, including layout_step; done again here so rollback is
+#                              correct even if the PROBE step above failed outright, e.g. a build
+#                              failure), THEN
 #                              `sh scripts/restore.sh --db <pre-upgrade dump> --target-db nexttime
 #                              --i-know` (restore.sh's own EXIT trap restarts kernel/agent-host/
 #                              worker-supervisor/backup — since those are already v(n-1) images at
@@ -312,6 +319,53 @@ checkout_ref_step() {
   pass "checkout-$label" "$ref ($(git rev-parse HEAD))"
 }
 
+# layout_step <label>: idempotent host-directory-layout reconciliation for the two filesystem
+# moves a checkout can straddle — models.json (S7-A, docs/runbooks/release.md §3.2: config/ ->
+# its own models/ directory) and ${NEXTTIME_DATA}/llm-proxy/ (S6-B: llm-proxy's own read-write
+# state dir, providers.json/keys.json). Run right after every checkout in this script (both
+# directions, and around the PROBE checkout) so the on-disk layout always matches whatever code
+# is currently checked out. Detected from the checked-out tree's own docker-compose.yml mount
+# lines, never by parsing TO_TAG/FROM_TAG version strings.
+layout_step() {
+  label="$1"
+
+  if grep -qF '${NEXTTIME_DATA:?}/models:/data/models' ./docker-compose.yml; then
+    # This tree expects models.json under its own directory (S7-A layout).
+    mkdir -p "${NEXTTIME_DATA}/models" || fail "layout-$label" "mkdir -p \${NEXTTIME_DATA}/models failed"
+    if [ -f "${NEXTTIME_DATA}/config/models.json" ] && [ ! -e "${NEXTTIME_DATA}/models/models.json" ]; then
+      mv "${NEXTTIME_DATA}/config/models.json" "${NEXTTIME_DATA}/models/models.json" || fail "layout-$label" "mv \${NEXTTIME_DATA}/config/models.json -> models/models.json failed"
+    fi
+    chown 10001:10001 "${NEXTTIME_DATA}/models"
+    [ -f "${NEXTTIME_DATA}/models/models.json" ] && chown 10001:10001 "${NEXTTIME_DATA}/models/models.json"
+    models_state="\${NEXTTIME_DATA}/models/models.json"
+  else
+    # This tree expects models.json under config/ (pre-S7-A layout). config/ itself is never
+    # chowned (release.md §3.2 / S6-B leftover 50 第二项 — maintainer rejected changing its
+    # ownership); only the file, if present, moves back.
+    if [ -f "${NEXTTIME_DATA}/models/models.json" ] && [ ! -e "${NEXTTIME_DATA}/config/models.json" ]; then
+      mv "${NEXTTIME_DATA}/models/models.json" "${NEXTTIME_DATA}/config/models.json" || fail "layout-$label" "mv \${NEXTTIME_DATA}/models/models.json -> config/models.json failed"
+    fi
+    models_state="\${NEXTTIME_DATA}/config/models.json"
+  fi
+
+  if grep -qF '${NEXTTIME_DATA:?}/llm-proxy:/data/state' ./docker-compose.yml; then
+    # This tree expects llm-proxy's own read-write state dir (S6-B+). Created directly here
+    # (mkdir/chmod/chown), NOT by running the checked-out tree's own
+    # scripts/host-llm-proxy-init.sh — that script's v0.14.0 revision also chowned
+    # ${NEXTTIME_DATA}/config (the maintainer rejected that, docs/development-tasks.md §5c "S6
+    # 主机应用注意" / S7-A 决定; only v0.15.0+'s revision stopped doing it), and telling the two
+    # revisions apart here would mean parsing versions, which this step deliberately avoids.
+    mkdir -p "${NEXTTIME_DATA}/llm-proxy" || fail "layout-$label" "mkdir -p \${NEXTTIME_DATA}/llm-proxy failed"
+    chmod 0750 "${NEXTTIME_DATA}/llm-proxy"
+    chown 10001:10001 "${NEXTTIME_DATA}/llm-proxy"
+    llm_proxy_state="\${NEXTTIME_DATA}/llm-proxy/ (0750, 10001:10001)"
+  else
+    llm_proxy_state="not needed (pre-S6-B tree)"
+  fi
+
+  pass "layout-$label" "models.json -> $models_state; llm-proxy/: $llm_proxy_state"
+}
+
 # build_step <label>: docker compose --profile test build + explicit worker-runtime build.
 build_step() {
   label="$1"
@@ -374,6 +428,7 @@ accept_step_required() {
 # PROBE — non-fatal by construction: never calls fail(), only records PROBE_RESULT.
 probe_step() {
   checkout_from_step "probe-from"
+  layout_step "probe-from"
   export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
   if ! docker compose --profile test build >"$DRILL_LOG" 2>&1; then
     echo "PROBE old-code-on-new-schema failed (build: $(tail -10 "$DRILL_LOG"))"
@@ -406,6 +461,7 @@ probe_step() {
 # probe_step above bailed out early), then the live restore.
 rollback_step() {
   checkout_from_step "rollback-from"
+  layout_step "rollback-from"
   export KERNEL_VERSION="$(git describe --tags --abbrev=0) ($(git rev-parse --short HEAD))"
   if ! docker compose --profile test build >"$DRILL_LOG" 2>&1; then
     fail "rollback-build" "docker compose --profile test build failed: $(tail -30 "$DRILL_LOG")"
@@ -440,6 +496,7 @@ dump_step
 PHASE_DUMP=$(( $(date +%s) - T_DUMP0 ))
 
 checkout_ref_step "to" "$TO_TAG"
+layout_step "to"
 
 T_BUILD_TO0=$(date +%s)
 build_step "to"
@@ -490,6 +547,9 @@ echo "  rollback + accept S1: ${PHASE_ROLLBACK}s"
 echo ""
 echo "to re-apply this upgrade for real (not a drill), from the checkout root:"
 echo "  git fetch origin --tags && git checkout ${TO_TAG}"
+echo "  # if the target tag's docker-compose.yml layout differs from what this host currently has on"
+echo "  # disk (models.json under config/ vs its own models/ dir, \${NEXTTIME_DATA}/llm-proxy/ state"
+echo "  # dir) — see docs/runbooks/release.md §3.2 for the manual mv/mkdir/chown this drill did for you"
 echo "  export KERNEL_VERSION=\"\$(git describe --tags --abbrev=0) (\$(git rev-parse --short HEAD))\""
 echo "  docker compose --profile test build && docker compose build worker-runtime"
 echo "  docker compose run --rm --no-deps -T kernel node dist/cli/migrate.js"

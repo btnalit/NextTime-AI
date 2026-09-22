@@ -129,6 +129,12 @@ chown 10001:10001 "${NEXTTIME_DATA}/models" "${NEXTTIME_DATA}/models/models.json
 本身是纯派生数据（`llm-providers.yaml` + 控制台 `providers.json` 的合并投影），丢了也能用
 `make gen-models` 重新生成，只是省不了这一步手动 `mv` 加 `chown`。
 
+`scripts/drill-upgrade.sh` 现在会在自己每一次 `git checkout`（切到 `--to` 目标 tag、PROBE 阶段切回
+v(n-1)、最终回滚切回 v(n-1)）之后自动做这次搬家（`layout_step`）——不看 tag 号，只看检出树自己的
+`docker-compose.yml` 是否挂载 `${NEXTTIME_DATA:?}/models`，来判断 `models.json` 该在 `config/`
+还是 `models/`，以及是否需要建 `${NEXTTIME_DATA}/llm-proxy/`（S6-B），两个方向都是幂等的。真实升级
+（不是演练）仍然要按上面的手动步骤做一次——这个自动化目前只存在于演练脚本里。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -189,6 +195,16 @@ schema 上跑它自己的 `accept_s1.sh`"）就是把这条判断从"读代码�
 | v0.11.0 | core `0027_find_active_facts_for_identity`：`CREATE OR REPLACE` 把 `find_active_fact_for_identity` 从"最多返回 1 行（`limit 1`）"改成"返回该身份全部仍活跃的 Fact（可能 > 1 行），且 `for update` 现在锁的是全部这些行" | 可逆 | 读了 v(n-1) 的调用方（`sql-store.ts` `assertFact`，`git show <v0.11.0 前一个 commit>`）：调用方只做 `priorResult.rows[0]`（取第一行）和 `rows.length === 0`（判断"完全没有"），两者在返回集从"至多 1 行"变成"至多 N 行（`order by recorded_at desc` 不变）"后行为不变——`rows[0]` 仍然是最新的那一行，`length === 0` 仍然只在真的没有活跃 Fact 时成立。v(n-1) 代码因此退化成它升级前本来的行为（对同一身份的多个活跃 Fact 只处理最新一条），这正是 S3.2 就已知、文档化过的既有局限，不是这次迁移新引入的破坏。唯一的真实差异：并发场景下现在会锁住更多行（更强的串行化），可能略增锁等待，不是正确性问题 | 只需回退代码（并发锁范围变化是性能/可用性层面的细微差异，不影响正确性） |
 | v0.12.0 | core `0028_source_name_workspace_purpose`：`sources` 新增可空 `name`（仅在同一 `(workspace_id, kind, name)` 唯一时回填）+ 局部唯一索引 `where name is not null`；`workspaces` 新增 `purpose`（默认 `'standard'`）/`expires_at`（可空） | 可逆 | v(n-1) 的 `register_source`/`create-workspace` 不知道 `name`/`purpose`/`expires_at` 这几列，插入语句是显式列清单，不会给 `name` 赋值——插入行 `name` 恒为 `NULL`，局部唯一索引的 `where name is not null` 条件天然不适用，不会因为"名字冲突"而报错；v(n-1) 版本的采集器本来就是用本地状态文件缓存 Source id 做幂等（S5.3 之前的既有机制），回退后这个机制原样继续工作，只是重新失去"按 name 天然幂等"这个 S5.3 才有的好处，不是错误 | 只需回退代码 |
 | v0.12.0 | core `0029_latest_fact_dead_end_for_identity`：新增函数 `latest_fact_invalidated_for_identity`（v(n-1) 完全没有任何代码调用过这个此前不存在的函数名） | 可逆 | 纯新增，且是全新函数名——v(n-1) 代码库里没有、也不可能有对它的调用（S5.5 才第一次引入这个调用点），回退没有任何"曾经调用、现在行为变了"的路径需要检查 | 只需回退代码 |
+| v0.13.0–v0.13.2 | （无——`git diff --name-status v0.12.0 v0.13.2 -- packages/kernel/migrations/` 为空，这三个版本之间没有新迁移文件） | 可逆（N/A） | 无迁移可回退 | 按 §3 切回上一个 tag 即可，无需 `restore.sh` |
+| v0.14.0 | core `0030_workspace_disabled_at`：`workspaces` 新增可空 `disabled_at`（S6 A1/A6，工作区生命周期：`set_workspace_status` 在 `disabled` 时打时间戳、`active` 时清空；既有 `disabled` 行不回填——决定 3，视为立即可清）；`nexttime_app` 只拿到这一列的 `update` 授权 | 可逆 | 读了 v0.13.2 的调用方（`application/workspace/create.ts` 的 `insert into workspaces (id, name, entry_model, ontology_enforcement, purpose, expires_at) …`、`application/gateway/platform-handlers.ts` 的 `update workspaces set status = $2 where id = $1` 与 `select id, name, status from workspaces …`，`git show v0.13.2:<path>`）：全部是显式列清单，v0.13.2 代码既不写也不读 `disabled_at`；新列可空、无默认值以外约束，插入/更新不受影响。读这一列的 `purge_workspace` 是 v0.14.0 才引入的新代码，回退后这个读取点本身就不存在了 | 只需回退代码 |
+| v0.14.0 | core `0031_chat_archived_at`：`chats` 新增可空 `archived_at`（S6-A 会话生命周期：`active → archived` 只影响 `list_chats` 默认可见性，`explain`/`get_chat_history`/`subscribe_chat` 不受影响；无回填） | 可逆 | 读了 v0.13.2 的 `application/chat/service.ts`：`CHAT_COLUMNS`（`'workspace_id, id, owner_principal_id, title, visibility, created_at'`）是编译进二进制的显式字符串常量，insert/select/`returning` 全部走这个常量，不含 `archived_at`——新列对 v0.13.2 代码完全透明，与 0026 行的既有先例（`FACT_COLUMNS`/`OBJECT_COLUMNS`）同一判断方式 | 只需回退代码 |
+| v0.15.0 | core `0032_audit_unattributed_platform_actor`：把 `audit_records_actor_shape`（0019：平台行——`workspace_id is null`——必须有 `actor_user_id`）窄化放宽成"…或者 `action = 'platform.workspace_purged'` 且该行自己的 `payload -> 'attributedActor'` 是 JSON 布尔 `false`"，只对这一个具体场景放宽，其余平台行仍强制要求 `actor_user_id`（遗留 54：CLI `purge-workspace` 在解析不出操作者时不应该完全不留审计行） | 可逆 | 读了 v0.14.0 的调用方（`application/platform/purge-workspace.ts`，`git show v0.14.0:<path>`）：`if (input.actorUserId !== undefined) { … await writeAudit(...) }`——`actorUserId` 解析不出时 v0.14.0 **根本不调用** `writeAudit`，从未尝试写一条 `actor_user_id` 为空的平台审计行。0032 本身只放宽（widening）：凡满足旧约束的行必然满足新约束，新增的合法分支（`attributedActor = false`）是 v0.14.0 代码从不触发的新路径；回退到 v0.14.0 代码后，审计缺口的行为退回成迁移前就已知的局限（只留终端警告、无审计行——0032 自己的迁移注释也这么记），不是这次改动新引入的破坏 | 只需回退代码 |
+
+上面 v0.14.0/v0.15.0 三行的"依据"都还只是读代码得到的推理——这条链路（v0.13.2 主机直接升级到 v0.15.0，跳过
+v0.14.0）的 `drill-upgrade.sh --to v0.15.0 --ack-live-restore` PROBE 实测证据（`PROBE
+old-code-on-new-schema ok|failed`）尚未在主机上跑过，是下一次真实升级前要补的确认证据，不是本次改动
+自带的。`drill-upgrade.sh` 现在已经知道在 PROBE 切回 v0.13.2 时把 `models.json` 挪回 `config/`（§3.2）
+——之前这条 PROBE 会因为目录布局对不上直接在 `accept_s1.sh` 那一步失败，而不是给出真正的可逆性结果。
 
 **规则**：任何一次发布如果表里出现"不可逆"，必须在合并那次 release PR **之前**把这条不可逆标注
 手工加进它自己的 `CHANGELOG.md` 那一节（本文件 §5"回滚一次还没合并的 release PR"已经说明这个

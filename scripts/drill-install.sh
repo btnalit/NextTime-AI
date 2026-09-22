@@ -252,6 +252,17 @@ if ! $SSH "$TARGET_HOST" "NEXTTIME_DATA='$NEXTTIME_DATA' sh -s" < scripts/host-e
 fi
 step_ok
 
+# llm-proxy-init (S6-B, scripts/host-llm-proxy-init.sh's own header: "Run as root after
+# scripts/host-env-init.sh, before docker compose up -d llm-proxy") — creates
+# ${NEXTTIME_DATA}/llm-proxy/ (0750, uid 10001) so the console's provider-secret writes don't 503
+# store_unwritable once the stack is up. Piped from this checkout's own copy, same convention as
+# every other host-*.sh step above/below.
+step_start "llm-proxy-init"
+if ! $SSH "$TARGET_HOST" "NEXTTIME_DATA='$NEXTTIME_DATA' sh -s" < scripts/host-llm-proxy-init.sh; then
+  step_fail "docs/runbooks/operations.md §12 (scripts/host-llm-proxy-init.sh)"
+fi
+step_ok
+
 step_start "handle-keys"
 if ! $SSH "$TARGET_HOST" "NEXTTIME_DATA='$NEXTTIME_DATA' sh -s" < scripts/gen-handle-keys.sh; then
   step_fail "docs/runbooks/host-checkout.md §E3.3"
