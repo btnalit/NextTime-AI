@@ -132,6 +132,19 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
   let savedEnv: Record<string, string | undefined>;
   // biome-ignore lint/suspicious/noExplicitAny: spying on process.exit's overloaded signature.
   let exitSpy: any;
+  // Leftover 55 (docs/STATUS.md, CI run 35763937452): each test used to call `session.dispose()`
+  // / `fauxProvider.unregister()` itself, after its own assertions — never reached when a test
+  // throws or hits its own timeout under CI load. The leaked session kept its real, self-driven
+  // Agent loop running in the background; when it eventually reached `agent_settled` and called
+  // `process.exit(0)`, `exitSpy` had already been restored by *this* test's own `afterEach` and a
+  // *new* spy installed by the *next* test's `beforeEach` — so the stray call landed on the next
+  // test's spy and broke its call-count assertions. Tracking the live session/provider/extra spy
+  // here and tearing them down from `afterEach` (which always runs, pass, fail, or timeout, before
+  // the next test's `beforeEach`) closes that window regardless of how a test body exits.
+  let session: AgentSession | undefined;
+  let fauxProvider: ReturnType<typeof registerFauxProvider> | undefined;
+  // biome-ignore lint/suspicious/noExplicitAny: vi.spyOn's generic return type isn't worth naming here.
+  let errorSpy: any;
 
   beforeEach(async () => {
     kernel = await startFakeKernel();
@@ -145,9 +158,17 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
     // The real agent_settled handler calls process.exit(0) — must never actually kill the test
     // process (worker.test.ts's fake-stub tests spy on this too, for the same reason).
     exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    session = undefined;
+    fauxProvider = undefined;
+    errorSpy = undefined;
   });
 
   afterEach(async () => {
+    // Leftover 55: dispose/unregister unconditionally, before anything else — see the field
+    // comments above for why this must not live only at the end of each test body.
+    session?.dispose();
+    fauxProvider?.unregister();
+    errorSpy?.mockRestore();
     for (const key of ENV_KEYS) {
       if (savedEnv[key] === undefined) delete process.env[key];
       else process.env[key] = savedEnv[key];
@@ -157,219 +178,209 @@ describe('platform-extension loaded through the real pi SDK (worker mode)', () =
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it(
-    'self-drives its one turn via sendUserMessage, registers a gate tool with real isError wiring, and posts report_task_result on report_result',
-    { timeout: 10000 },
-    async () => {
-      kernel.setHandler('list_allowed_operations', () => ({
-        ok: true,
-        result: {
-          items: [
-            {
-              gatekeeperId: 'gk-1',
-              gateName: 'inventory',
-              name: 'get',
-              operation: { params_schema: { type: 'object', properties: {} } },
-            },
-          ],
-        },
-      }));
-      kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'check stock levels' } }));
-      kernel.setHandler('search', () => ({ ok: true, result: { objects: [] } }));
-      kernel.setHandler('request_action', () => ({
-        ok: false,
-        error: { code: 'not_found', message: 'no such gatekeeper' },
-      }));
-      kernel.setHandler('report_task_result', () => ({
-        ok: true,
-        result: { status: 'completed' },
-      }));
+  it('self-drives its one turn via sendUserMessage, registers a gate tool with real isError wiring, and posts report_task_result on report_result', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({
+      ok: true,
+      result: {
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            gateName: 'inventory',
+            name: 'get',
+            operation: { params_schema: { type: 'object', properties: {} } },
+          },
+        ],
+      },
+    }));
+    kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'check stock levels' } }));
+    kernel.setHandler('search', () => ({ ok: true, result: { objects: [] } }));
+    kernel.setHandler('request_action', () => ({
+      ok: false,
+      error: { code: 'not_found', message: 'no such gatekeeper' },
+    }));
+    kernel.setHandler('report_task_result', () => ({
+      ok: true,
+      result: { status: 'completed' },
+    }));
 
-      const fauxProvider = registerFauxProvider();
-      const capturedContexts: Context[] = [];
-      fauxProvider.setResponses([
-        (context) => {
-          capturedContexts.push(context);
-          return fauxAssistantMessage(fauxToolCall('inventory_get', {}), { stopReason: 'toolUse' });
-        },
-        (context) => {
-          capturedContexts.push(context);
-          return fauxAssistantMessage(
-            fauxToolCall('report_result', { summary: 'stock check failed' }),
-            {
-              stopReason: 'toolUse',
-            },
-          );
-        },
-      ]);
+    const localFauxProvider = registerFauxProvider();
+    fauxProvider = localFauxProvider; // tracked on the outer var for `afterEach` disposal (leftover 55)
+    const capturedContexts: Context[] = [];
+    localFauxProvider.setResponses([
+      (context) => {
+        capturedContexts.push(context);
+        return fauxAssistantMessage(fauxToolCall('inventory_get', {}), { stopReason: 'toolUse' });
+      },
+      (context) => {
+        capturedContexts.push(context);
+        return fauxAssistantMessage(
+          fauxToolCall('report_result', { summary: 'stock check failed' }),
+          {
+            stopReason: 'toolUse',
+          },
+        );
+      },
+    ]);
 
-      const { session, events } = await startWorkerSession(fauxProvider, tmpDir);
+    const started = await startWorkerSession(localFauxProvider, tmpDir);
+    const activeSession = started.session;
+    session = activeSession; // tracked on the outer var for `afterEach` disposal (leftover 55)
+    const { events } = started;
 
-      // No test-initiated session.prompt() anywhere in this test — the whole turn below is driven
-      // by the real extension's own session_start -> pi.sendUserMessage() call.
-      await waitFor(() =>
-        kernel.requests.some((request) => request.capability === 'report_task_result'),
-      );
+    // No test-initiated session.prompt() anywhere in this test — the whole turn below is driven
+    // by the real extension's own session_start -> pi.sendUserMessage() call.
+    await waitFor(() =>
+      kernel.requests.some((request) => request.capability === 'report_task_result'),
+    );
 
-      // The tool list is exactly report_result + the one gate tool the Handle's scope allowed
-      // (S2.9 acceptance: "工具列表恰好等于 Handle 内的 Operation").
-      const toolNames = session.agent.state.tools.map((tool) => tool.name);
-      expect(toolNames).toEqual(expect.arrayContaining(['report_result', 'inventory_get']));
+    // The tool list is exactly report_result + the one gate tool the Handle's scope allowed
+    // (S2.9 acceptance: "工具列表恰好等于 Handle 内的 Operation").
+    const toolNames = activeSession.agent.state.tools.map((tool) => tool.name);
+    expect(toolNames).toEqual(expect.arrayContaining(['report_result', 'inventory_get']));
 
-      // context injection carried the Task input into the model's first call.
-      expect(capturedContexts.length).toBeGreaterThanOrEqual(1);
-      expect(JSON.stringify(capturedContexts[0]?.messages)).toContain('check stock levels');
-      expect(session.messages.some((message) => message.role === 'custom')).toBe(false);
+    // context injection carried the Task input into the model's first call.
+    expect(capturedContexts.length).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(capturedContexts[0]?.messages)).toContain('check stock levels');
+    expect(activeSession.messages.some((message) => message.role === 'custom')).toBe(false);
 
-      // The gate tool's kernel failure really became isError:true through pi's real tool-call
-      // wiring (not just "the promise rejected", which a fake-ExtensionAPI stub cannot prove).
-      const toolEnds = events.filter(
-        (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
-          event.type === 'tool_execution_end',
-      );
-      const gateToolEnd = toolEnds.find((event) => event.toolName === 'inventory_get');
-      expect(gateToolEnd?.isError).toBe(true);
-      expect(JSON.stringify(gateToolEnd?.result)).toContain('no such gatekeeper');
+    // The gate tool's kernel failure really became isError:true through pi's real tool-call
+    // wiring (not just "the promise rejected", which a fake-ExtensionAPI stub cannot prove).
+    const toolEnds = events.filter(
+      (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
+        event.type === 'tool_execution_end',
+    );
+    const gateToolEnd = toolEnds.find((event) => event.toolName === 'inventory_get');
+    expect(gateToolEnd?.isError).toBe(true);
+    expect(JSON.stringify(gateToolEnd?.result)).toContain('no such gatekeeper');
 
-      // report_result posted the contract itself (leftover 42) and its terminate:true stopped the
-      // loop; agent_settled posted nothing more and (mocked) exited the process.
-      const reportCalls = kernel.requests.filter(
-        (request) => request.capability === 'report_task_result',
-      );
-      expect(reportCalls).toHaveLength(1);
-      expect(reportCalls[0]?.params).toMatchObject({ summary: 'stock check failed' });
-      await waitFor(() => exitSpy.mock.calls.length > 0);
-      expect(exitSpy).toHaveBeenCalledWith(0);
+    // report_result posted the contract itself (leftover 42) and its terminate:true stopped the
+    // loop; agent_settled posted nothing more and (mocked) exited the process.
+    const reportCalls = kernel.requests.filter(
+      (request) => request.capability === 'report_task_result',
+    );
+    expect(reportCalls).toHaveLength(1);
+    expect(reportCalls[0]?.params).toMatchObject({ summary: 'stock check failed' });
+    await waitFor(() => exitSpy.mock.calls.length > 0);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    // session/fauxProvider disposal now happens unconditionally in `afterEach` (leftover 55).
+  });
 
-      session.dispose();
-      fauxProvider.unregister();
-    },
-  );
-
-  it(
-    'a kernel rejection of report_result reaches the model as isError:true through pi’s real wiring, the corrected call lands, and the process still exits 0 (leftover 42)',
-    { timeout: 10000 },
-    async () => {
-      kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
-      kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'check stock levels' } }));
-      kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
-      let reportAttempts = 0;
-      kernel.setHandler('report_task_result', () => {
-        reportAttempts += 1;
-        if (reportAttempts === 1) {
-          return {
-            ok: false,
-            error: { code: 'invalid_params', message: 'summary must not be empty' },
-          };
-        }
+  it('a kernel rejection of report_result reaches the model as isError:true through pi’s real wiring, the corrected call lands, and the process still exits 0 (leftover 42)', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+    kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'check stock levels' } }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    let reportAttempts = 0;
+    kernel.setHandler('report_task_result', () => {
+      reportAttempts += 1;
+      if (reportAttempts === 1) {
         return {
-          ok: true,
-          result: { id: 'task-sdk-test', status: 'completed', activityId: 'a', factIds: [] },
+          ok: false,
+          error: { code: 'invalid_params', message: 'summary must not be empty' },
         };
-      });
+      }
+      return {
+        ok: true,
+        result: { id: 'task-sdk-test', status: 'completed', activityId: 'a', factIds: [] },
+      };
+    });
 
-      const fauxProvider = registerFauxProvider();
-      const capturedContexts: Context[] = [];
-      fauxProvider.setResponses([
-        (context) => {
-          capturedContexts.push(context);
-          return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'first try' }), {
-            stopReason: 'toolUse',
-          });
-        },
-        (context) => {
-          capturedContexts.push(context);
-          return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'second try' }), {
-            stopReason: 'toolUse',
-          });
-        },
-      ]);
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const localFauxProvider = registerFauxProvider();
+    fauxProvider = localFauxProvider; // tracked on the outer var for `afterEach` disposal (leftover 55)
+    const capturedContexts: Context[] = [];
+    localFauxProvider.setResponses([
+      (context) => {
+        capturedContexts.push(context);
+        return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'first try' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      (context) => {
+        capturedContexts.push(context);
+        return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'second try' }), {
+          stopReason: 'toolUse',
+        });
+      },
+    ]);
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined); // ditto
 
-      const { session, events } = await startWorkerSession(fauxProvider, tmpDir);
+    const started = await startWorkerSession(localFauxProvider, tmpDir);
+    session = started.session; // ditto
+    const { events } = started;
 
-      await waitFor(() => reportAttempts >= 2);
-      await waitFor(() => exitSpy.mock.calls.length > 0);
+    await waitFor(() => reportAttempts >= 2);
+    await waitFor(() => exitSpy.mock.calls.length > 0);
 
-      // The first report_result's kernel 400 became isError:true on that tool call (pi's own
-      // wiring, not just a rejected promise), carrying the kernel's code + message for the model.
-      const toolEnds = events.filter(
-        (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
-          event.type === 'tool_execution_end' && event.toolName === 'report_result',
-      );
-      expect(toolEnds.map((event) => event.isError)).toEqual([true, false]);
-      expect(JSON.stringify(toolEnds[0]?.result)).toContain('invalid_params');
-      expect(JSON.stringify(toolEnds[0]?.result)).toContain('summary must not be empty');
-      expect(JSON.stringify(toolEnds[1]?.result)).toContain('Result contract accepted');
+    // The first report_result's kernel 400 became isError:true on that tool call (pi's own
+    // wiring, not just a rejected promise), carrying the kernel's code + message for the model.
+    const toolEnds = events.filter(
+      (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
+        event.type === 'tool_execution_end' && event.toolName === 'report_result',
+    );
+    expect(toolEnds.map((event) => event.isError)).toEqual([true, false]);
+    expect(JSON.stringify(toolEnds[0]?.result)).toContain('invalid_params');
+    expect(JSON.stringify(toolEnds[0]?.result)).toContain('summary must not be empty');
+    expect(JSON.stringify(toolEnds[1]?.result)).toContain('Result contract accepted');
 
-      // The model's second call saw the error as a tool result in its own context.
-      expect(JSON.stringify(capturedContexts[1]?.messages)).toContain('invalid_params');
+    // The model's second call saw the error as a tool result in its own context.
+    expect(JSON.stringify(capturedContexts[1]?.messages)).toContain('invalid_params');
 
-      // Exactly two posts (the rejected one and the corrected one) — agent_settled added none —
-      // and the exit code is still 0: a kernel 4xx never turns into an S2.7 requeue.
-      const reportCalls = kernel.requests.filter(
-        (request) => request.capability === 'report_task_result',
-      );
-      expect(reportCalls.map((r) => (r.params as { summary: string }).summary)).toEqual([
-        'first try',
-        'second try',
-      ]);
-      expect(exitSpy).toHaveBeenCalledTimes(1);
-      expect(exitSpy).toHaveBeenCalledWith(0);
+    // Exactly two posts (the rejected one and the corrected one) — agent_settled added none —
+    // and the exit code is still 0: a kernel 4xx never turns into an S2.7 requeue.
+    const reportCalls = kernel.requests.filter(
+      (request) => request.capability === 'report_task_result',
+    );
+    expect(reportCalls.map((r) => (r.params as { summary: string }).summary)).toEqual([
+      'first try',
+      'second try',
+    ]);
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    // session/fauxProvider/errorSpy cleanup now happens unconditionally in `afterEach` (leftover 55).
+  });
 
-      errorSpy.mockRestore();
-      session.dispose();
-      fauxProvider.unregister();
-    },
-  );
+  it('a scripted model that keeps replaying report_result against an unfixable kernel rejection does not spin: the turn ends after one attempt, agent_settled re-sends once, exit 0 (fake-llm safety)', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+    kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'x' } }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    kernel.setHandler('report_task_result', () => ({
+      ok: false,
+      error: { code: 'illegal_transition', message: 'Task is waiting_approval' },
+    }));
 
-  it(
-    'a scripted model that keeps replaying report_result against an unfixable kernel rejection does not spin: the turn ends after one attempt, agent_settled re-sends once, exit 0 (fake-llm safety)',
-    { timeout: 10000 },
-    async () => {
-      kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
-      kernel.setHandler('get_task', () => ({ ok: true, result: { input: 'x' } }));
-      kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
-      kernel.setHandler('report_task_result', () => ({
-        ok: false,
-        error: { code: 'illegal_transition', message: 'Task is waiting_approval' },
-      }));
+    const localFauxProvider = registerFauxProvider();
+    fauxProvider = localFauxProvider; // tracked on the outer var for `afterEach` disposal (leftover 55)
+    let modelCalls = 0;
+    // deploy/fake-llm/server.mjs replays a scenario's *last* step on every further request —
+    // modelled here as the same report_result call answered indefinitely.
+    localFauxProvider.setResponses(
+      Array.from({ length: 8 }, () => () => {
+        modelCalls += 1;
+        return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'same' }), {
+          stopReason: 'toolUse',
+        });
+      }),
+    );
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined); // ditto
 
-      const fauxProvider = registerFauxProvider();
-      let modelCalls = 0;
-      // deploy/fake-llm/server.mjs replays a scenario's *last* step on every further request —
-      // modelled here as the same report_result call answered indefinitely.
-      fauxProvider.setResponses(
-        Array.from({ length: 8 }, () => () => {
-          modelCalls += 1;
-          return fauxAssistantMessage(fauxToolCall('report_result', { summary: 'same' }), {
-            stopReason: 'toolUse',
-          });
-        }),
-      );
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const started = await startWorkerSession(localFauxProvider, tmpDir);
+    session = started.session; // ditto
+    const { events } = started;
+    await waitFor(() => exitSpy.mock.calls.length > 0);
 
-      const { session, events } = await startWorkerSession(fauxProvider, tmpDir);
-      await waitFor(() => exitSpy.mock.calls.length > 0);
-
-      const reportCalls = kernel.requests.filter(
-        (request) => request.capability === 'report_task_result',
-      );
-      expect(reportCalls).toHaveLength(2); // the tool's attempt + agent_settled's one re-send
-      expect(modelCalls).toBe(1); // the loop terminated after the first tool batch
-      const toolEnds = events.filter(
-        (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
-          event.type === 'tool_execution_end' && event.toolName === 'report_result',
-      );
-      expect(toolEnds).toHaveLength(1);
-      expect(toolEnds[0]?.isError).toBe(false);
-      expect(JSON.stringify(toolEnds[0]?.result)).toContain('illegal_transition');
-      expect(exitSpy).toHaveBeenCalledTimes(1);
-      expect(exitSpy).toHaveBeenCalledWith(0);
-
-      errorSpy.mockRestore();
-      session.dispose();
-      fauxProvider.unregister();
-    },
-  );
+    const reportCalls = kernel.requests.filter(
+      (request) => request.capability === 'report_task_result',
+    );
+    expect(reportCalls).toHaveLength(2); // the tool's attempt + agent_settled's one re-send
+    expect(modelCalls).toBe(1); // the loop terminated after the first tool batch
+    const toolEnds = events.filter(
+      (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
+        event.type === 'tool_execution_end' && event.toolName === 'report_result',
+    );
+    expect(toolEnds).toHaveLength(1);
+    expect(toolEnds[0]?.isError).toBe(false);
+    expect(JSON.stringify(toolEnds[0]?.result)).toContain('illegal_transition');
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    // session/fauxProvider/errorSpy cleanup now happens unconditionally in `afterEach` (leftover 55).
+  });
 });

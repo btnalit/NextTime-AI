@@ -2919,6 +2919,7 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
   显示"凭证：待操作员配置"。答"不过审批"→ 在同一 JWT + 审计后实现（代理侧加密存储或 env 文件写入）；答"要过审批"→ 先
   设计审批流。
 - 其它判断（可否决）：`config/` 目录 owner 改为 10001（`scripts/host-llm-proxy-init.sh`；单文件 rw bind 不能被 rename
+  - **2026-09-22 维护者否决**上面 `config/` owner 改 10001 的判断：`models.json` 挪专用目录（S7-A，`STATUS.md` §3），`host-llm-proxy-init.sh` 不再 chown `config/`；S7-A 合入发版前主机不执行下面的主机应用步骤。
   覆盖、`host-env-init.sh` 重跑会把组写清掉，故取 owner-only；文件仍 root 644、输入以 `:ro` 覆盖）；yaml 改动仍需重启
   （bind 挂载文件 watch 不可靠）；`ProviderStore.upsert/remove` 无互斥（单管理员控制台，两次并发写可能丢一次）；
   显示名写进 `models.json` 的 pi `name`，内核投影 `{id, provider, model}` 不带。测试：`admin-api.test.ts` 12（真实监听
@@ -2942,6 +2943,68 @@ W10-A 与 W10-B 都碰 `substrate/graph/sql-store.ts` 附近，按函数分工�
 `--real --runs 10` 看 ssh_run_approve 摘要是否引用 actionRequestId、docker_restart 是否仍 7/10+，对话中途
 `connect_gatekeeper` 后发消息不再 `interrupted`（遗留 44），`EXPLORER_BUILD=1` 可选（原生图谱页已替代入口）；
 ⑧ 控制台走查按 `console-completion-plan.md` §5 各节验收句，截图入 `docs/private/`。
+
+---
+
+## 5d. S7 — 稳定与平台面收尾（2026-09-22 立项）
+
+维护者 2026-09-22 取定原阻塞项 ①–⑥（`STATUS.md` §3）。S7 不新增一等概念：S7-A / B / C 收尾 S6 与遗留，S7-D / S7-E
+兑现 P-B2b 与 P-C（design `platform-admin-design.md` §6.4 / §6.5 / §6.7），P-D 剩余项并入 S7-E。车道文件互斥、
+各自 worktree + PR，同时 ≤ 3 条；主会话审 diff、线性合入、写本节与 STATUS。
+
+### S7-A / S7-B / S7-C（2026-09-22 派出）
+
+范围见 `STATUS.md` §3 表。S7-A 的两处决定：① store 与 yaml 供应商都可在控制台写密钥，按**供应商 id** 存 llm-proxy
+自有 `/data/state/keys.json`（0600、原子写、热更新），解析顺序"控制台密钥 → `process.env[apiKeyEnv]`"，
+store 供应商的 `apiKeyEnv` 变为可选；GET 只回 `credentialPresent` + `credentialSource`；审计不记值、不记指纹。
+⑤ `models.json` 挪 `${NEXTTIME_DATA}/models/`——不放 `${NEXTTIME_DATA}/llm-proxy/`，因为内核与 supervisor 要挂载
+`models.json` 所在目录，而那里有 `keys.json`。
+
+### S7-D 模块（P-B2b，design §6.4；P-B2 决定 ① / ④）
+
+核实的事实（2026-09-22）：本体按包族 id（`deriveOntologyPackId(packName)`）分版本，`definition` 是
+`parseOntologyDefinition` 的校验输出而非 yaml 原样，存为 jsonb（键序不保留）；`publishOntologyDomainPack` 对同内容
+再发布也消耗下一个版本号；`create_workspace` 已在同一事务里以新 owner Principal 种 `platform-meta` 本体与入口
+WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefinition`）。
+
+- 决定 D1：**模块 = 本体包**（`ontology/modules.yaml` 索引：`name`、版本列表 `{file, version, notes, breaking}`）。
+  WorkerDefinition / Skill / Procedure 走 S6-A 的工作区编辑器；`promote_template`（跨工作区复制）继续推后。
+- 决定 D2：**"已安装版本"= 哈希匹配**。哈希 = 同一 `parseOntologyDefinition` 路径产出的定义做键排序规范化 JSON
+  后的 sha256；内核启动时对镜像内 `ontology/` 计算，**索引文件不存哈希**。工作区某族最新 `published` 定义的哈希
+  匹配到索引项 → 该版本；否则 "已定制"。
+- 决定 D3：`install_module` / `upgrade_module` 底层同一调用（族不存在 → v1；存在 → 下一版本）；目标版本哈希已等于
+  当前 → 不发布、直接返回（不空耗版本号）；当前为"已定制"或目标 `breaking: true` → 请求须带 `confirm: true`
+  （页面走 ConfirmTier）。`scope:'workspace'`、owner 动作（P-B2 决定 ①）；平台模块页只展示"装到 n 个工作区 /
+  m 个有新版"并跳到工作区能力目录。
+- 决定 D4：**默认模块**是平台设置 `defaultModules`（`set_default_modules`，`scope:'platform'`）；`create_workspace`
+  照 `seedPlatformMetaOntology` 的先例在同一事务里以新 owner Principal 发布——`proposed_by` = owner（FK 所需），
+  平台审计 `workspace.created` 的 details 记 `defaultModules`，Activity 记 `triggeredBy: create_workspace`：负责人
+  （管理员）与名下（owner）都可回答，不造系统 Principal。
+- e2e（design §9 P-B）：模块页把 `ops-assets` v2 装进第二个工作区。
+
+### S7-E 运行层与运行状态（P-C，design §6.5 / §6.7）+ P-D 剩余
+
+核实的事实：内核 → supervisor 的 `POST /task/spawn` 已带可选 `image`（supervisor 按 `WORKER_IMAGE_ALLOWLIST`
+校验，403 `image_not_allowed`）；常驻入口容器由 **agent-host** 调 `/resident/spawn`，镜像取 supervisor env
+`WORKER_IMAGE`（`spawn-spec.ts`）；`spawn()` 在规格变化时先重建再返回（遗留 44 分析）；入口有效模型 =
+`agent_policies.default_model ?? workspaces.entry_model`，平台侧已可改（`set_entry_model` 由此覆盖）。
+
+- 决定 E1：**活动镜像是平台设置 `activeRuntimeImage`**（env `WORKER_IMAGE` 仍为缺省）；内核在 `task/spawn` 传它，
+  并经 agent-host 协议的 StartTurn 下发给 `/resident/spawn`（新增可选 `image`，同一 allowlist 校验——安全边界
+  留在 supervisor）。
+- 决定 E2：**滚动重建不引入 draining 状态**。入口容器在自己的下一个 Turn 开始时经 spawn 的规格漂移重建自然换到
+  新镜像，进行中的 Turn 不受影响（遗留 44 后 Turn 绑定容器 id）；`roll_entry_containers` 只是"现在就停掉空闲的"
+  加速项；盘点按 digest 不一致派生"待重建"，不建表、不存状态。只有测试证明存在缝时才加"拒绝新 Turn"。
+- 决定 E3：`rollback_runtime_image` = 活动镜像改回 `platform_settings_history` 里上一个值；`pi_drift` 读 CI 产出的
+  静态 JSON，不出网。
+- 决定 E4：`platform_status` 的备份项在遗留 6 落地前如实显示"未配置"；不做备份定时器。
+- 决定 E5：P-D 剩余只有 `set_platform_default_model`（平台设置，新工作区取值），与 E1 同一块 `platform_settings`
+  代码；控制在模型与供应商页，须在 S7-A 合入后开工。
+- 车道：E-后端（supervisor `GET /images` + 镜像 label、内核能力、`platform_status`）→ E-页面（运行层 / 运行状态），
+  页面依赖后端 wire shape。
+- 合入次序：S7-D 与 S7-E 都往 `platform-handlers.ts`、shared 能力注册表与 `docs/contracts/capabilities.json` 加行——
+  handler 各放新文件（`application/platform/modules.ts` / `runtime.ts`），共享文件只加注册行；每个 PR 合入前
+  rebase 并重跑 `contract:check`。
 
 ---
 

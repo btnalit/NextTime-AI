@@ -1,12 +1,10 @@
 name: pr-title
 
 # Lints the PR title against conventional commits (feat/fix/docs/chore/...(scope)!: subject) —
-# this repo already writes its commits that way (see `git log`). This repo merges with regular
-# merge commits, not squash (Settings → General → "Allow squash merging" is off) — GitHub's
-# default merge commit puts the PR title on the merge commit's second line, so an inconsistent
-# title still shows up in `main`'s history even though no tool derives the commit message *from*
-# the title the way squash-merge does. Documentation/hygiene, not required — see
-# docs/runbooks/automation.md.
+# this repo already writes its commits that way (see `git log`). The repo is squash-only
+# (Settings → General: only "Allow squash merging" is on), so the PR title becomes the commit on
+# `main` and release-please derives the version bump and CHANGELOG entry from it — a wrong type
+# here means a wrong release. See docs/runbooks/automation.md.
 
 on:
   pull_request_target:
