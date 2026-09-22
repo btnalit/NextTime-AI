@@ -521,14 +521,19 @@ export const platformStatusHandler: CapabilityHandler = async (client) => {
   const llmProxyUrl = process.env.KERNEL_LLM_URL ?? 'http://llm-proxy:8082';
   const supervisorUrl = process.env.SUPERVISOR_URL ?? 'http://worker-supervisor:8081';
 
-  const [llmProxyHealth, supervisorHealth, gateInstances, llmUsage30d, recentAudit] =
-    await Promise.all([
-      probeHttpHealthz('llm-proxy', llmProxyUrl),
-      probeHttpHealthz('worker-supervisor', supervisorUrl),
-      listGateInstances(client),
-      sumLlmUsage30Days(client),
-      queryPlatformAudit(client, { limit: 50 }),
-    ]);
+  // The two HTTP healthz probes touch no DB connection and run concurrently; the three DB reads
+  // below all share this handler's single `client` (one Postgres connection/transaction) — a
+  // `PoolClient` can only run one query at a time, so those three must be awaited in sequence,
+  // never combined into the same `Promise.all` (a real bug this handler shipped with once,
+  // caught by vitest.setup.ts's pg-concurrent-query guard under a real database — see the PR's
+  // own history for this fix).
+  const [llmProxyHealth, supervisorHealth] = await Promise.all([
+    probeHttpHealthz('llm-proxy', llmProxyUrl),
+    probeHttpHealthz('worker-supervisor', supervisorUrl),
+  ]);
+  const gateInstances = await listGateInstances(client);
+  const llmUsage30d = await sumLlmUsage30Days(client);
+  const recentAudit = await queryPlatformAudit(client, { limit: 50 });
 
   const health: ServiceHealthWire[] = [
     { service: 'kernel', status: 'ok' },

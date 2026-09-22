@@ -156,9 +156,35 @@ describe.runIf(DATABASE_URL !== undefined)(
       return id;
     }
 
+    /** `activities.started_by` FKs to `principals (workspace_id, id)` — `startRunningTurn` below
+     *  needs a real principal row, not just any UUID (a fake resident's `principalId` from
+     *  `residentEntry()` is otherwise unconstrained, since worker-supervisor is faked here and the
+     *  kernel never validates a resident's principal against `principals` for
+     *  `runtime_inventory`/`roll_entry_containers` — only `startRunningTurn`'s own INSERT does). */
+    async function insertHumanPrincipal(
+      workspaceIdArg: string,
+      displayName: string,
+    ): Promise<string> {
+      const id = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: workspaceIdArg, principalId: id },
+        async (client) => {
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'member', $3)`,
+            [workspaceIdArg, id, displayName],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      return id;
+    }
+
     /** Starts a real `kind='agent_turn'` Activity (`status='running'`, `started_by = principalId`)
-     *  — the exact DB-backed signal `roll_entry_containers`'s `hasInFlightTurn` reads. No `chatId`
-     *  needed (nullable FK — see this file's own comment where it's used). */
+     *  — the exact DB-backed signal `roll_entry_containers`'s `hasInFlightTurn` reads. `principalId`
+     *  must already be a real row (`insertHumanPrincipal`) — `activities.started_by` FKs to
+     *  `principals`. No `chatId` needed (nullable FK). */
     async function startRunningTurn(principalId: string): Promise<string> {
       return withWorkspace(
         pool,
@@ -288,7 +314,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
 
         const idleStale = residentEntry({ workspaceId, imageId: IMAGE_V1.id });
-        const busyStale = residentEntry({ workspaceId, imageId: IMAGE_V1.id });
+        const busyPrincipalId = await insertHumanPrincipal(workspaceId, 'Busy Principal');
+        const busyStale = residentEntry({
+          workspaceId,
+          principalId: busyPrincipalId,
+          imageId: IMAGE_V1.id,
+        });
         supervisor.residents = [idleStale, busyStale];
 
         await startRunningTurn(busyStale.principalId);
