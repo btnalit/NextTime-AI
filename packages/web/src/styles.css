@@ -1,15 +1,19 @@
-/* Hand-written stylesheet (design doc §7.6: "no UI framework required"). Plain CSS, no
+/* Hand-written stylesheet (design doc §7.6; S8 W1-A0 adds Tailwind v4 for components/kit/* only —
+ * see tailwind.css's own header for why the rest of this file is unaffected). Plain CSS, no
  * preprocessor, no web fonts, no CDN — the console is served by caddy on a LAN host with no
  * internet, so everything the page needs ships in this bundle. Split by concern and inlined by
  * Vite at build time:
- *   tokens.css — colour/spacing/typography tokens, dark default + light via prefers-color-scheme
- *   base.css   — reset, typography, focus rings, reduced motion
- *   shell.css  — sidebar/topbar layout, page header, responsive breakpoints
- *   ui.css     — the primitives under components/ui/ (one class family each)
- *   pages.css  — page-specific layout (login, chat, approvals, tasks, connections)
- *   graph.css  — the S6-D 图谱 page (two-pane object browser, fact rows, SVG neighbourhood)
+ *   tokens.css   — colour/spacing/typography tokens, dark default + light via prefers-color-scheme
+ *   tailwind.css — S8 W1-A0: Tailwind v4 theme + utilities layers, scanned only for
+ *                  components/kit/*, theme aliased onto tokens.css (docs/development-tasks.md §5e)
+ *   base.css     — reset, typography, focus rings, reduced motion
+ *   shell.css    — sidebar/topbar layout, page header, responsive breakpoints
+ *   ui.css       — the primitives under components/ui/ (one class family each)
+ *   pages.css    — page-specific layout (login, chat, approvals, tasks, connections)
+ *   graph.css    — the S6-D 图谱 page (two-pane object browser, fact rows, SVG neighbourhood)
  */
 @import "./styles/tokens.css";
+@import "./styles/tailwind.css";
 @import "./styles/base.css";
 @import "./styles/shell.css";
 @import "./styles/ui.css";

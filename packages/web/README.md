@@ -2,10 +2,59 @@
 
 React + Vite SPA served statically by caddy (design doc §7.6): the workspace console — login,
 chats, approvals, tasks, and (S3.11/S3.14) a governance control plane — members, access, systems,
-capability catalog, models/quotas, audit. No UI framework, no router library, no web fonts, no
-CDN: the console is served on a LAN host with no internet, so everything ships in the bundle
-(`lib/router.ts`'s own hand-rolled hash router included — see that file's doc comment for why
-S3.14 extended it instead of adding `react-router-dom`).
+capability catalog, models/quotas, audit. No router library, no web fonts, no CDN: the console is
+served on a LAN host with no internet, so everything ships in the bundle (`lib/router.ts`'s own
+hand-rolled hash router included — see that file's doc comment for why S3.14 extended it instead
+of adding `react-router-dom`; S8 W1-A0 did not touch it).
+
+**UI framework (S8 W1-A0, docs/development-tasks.md §5e decision F3):** this project used to carry
+a flat "no UI framework" stance (hand-rolled `components/ui/*` + hand-written `styles/*.css`
+only). S8 replaces that for new work: **Radix UI primitives + a shadcn/ui-style kit copied into
+`components/kit/`** (source lives in this repo, not a runtime dependency on a component-library
+package — the copy-in-and-own-it shadcn/ui model, just with the files under `kit/` instead of the
+default `ui/`, because shadcn's own lowercase filenames such as `button.tsx` collide with the
+existing `components/ui/Button.tsx` on a case-insensitive filesystem), styled with **Tailwind v4**
+on the §5.9 design tokens. `components/ui/*` and its hand-written stylesheets are not going away
+in one shot — pages migrate to `components/kit/*` one at a time, each its own PR with a
+three-breakpoint screenshot diff (S8 §5e risk ①); until a page's lane lands, it keeps rendering
+`components/ui/*` unchanged. `scripts/guards/css-tokens.mjs` enforces the boundary during the
+migration: it rejects any *new* file importing `components/ui/*` that isn't already on
+`scripts/guards/legacy-ui-importers.json`'s allowlist (that file documents how to regenerate it)
+— so new code reaches for `components/kit/*`, not the legacy kit, while every already-migrated
+caller of `components/ui/*` keeps working. The hash router is unchanged by any of this.
+
+- **No preflight, existing pages unaffected.** `styles/tailwind.css` imports only Tailwind's
+  `theme` and `utilities` layers (`@import "tailwindcss/theme.css" layer(theme); @import
+  "tailwindcss/utilities.css" layer(utilities) source(none);`), never the full `"tailwindcss"`
+  entry — that also pulls in `preflight.css`, which would restyle bare elements on every existing
+  page; `styles/base.css` already owns the app's own reset. Every pre-S8 stylesheet
+  (tokens/base/shell/ui/pages/graph) stays unlayered CSS, and per the CSS Cascading Layers spec an
+  unlayered declaration always beats a layered one for the same property on the same element,
+  regardless of source order or specificity — so even if a future kit utility and an old
+  hand-written rule ever target the same selector, the old page's own styling still wins until
+  that page's own migration PR removes the old rule.
+- **Scan restriction.** `source(none)` on the utilities import turns off Tailwind's automatic
+  project-wide class scanning; `@source "../components/kit"` (relative to `styles/tailwind.css`)
+  re-enables scanning for only that one directory. Without this, Tailwind would scan every `.tsx`
+  in the app and could start generating a utility for an old, unrelated class name that happens to
+  look like one — pre-S8 markup already has `className="hidden"` / `"truncate"` / `"grid"` in
+  several places, all of which are also valid Tailwind utility names.
+- **Theme.** `styles/tailwind.css`'s `@theme inline` block resets Tailwind's default
+  colour/font/text-size/radius/shadow namespaces to empty and re-declares each one as a `var()`
+  alias onto the matching §5.9 token in `tokens.css` (`--color-bg: var(--bg)`, `--text-13:
+  var(--fs-13)`, …) — `tokens.css` stays the only stylesheet allowed to hold colour/px literals
+  (still enforced by `scripts/guards/css-tokens.mjs`, which S8 W1-A0 extended to also flag a
+  Tailwind arbitrary-value literal such as `bg-[#fff]` or `text-[13px]` anywhere under
+  `packages/web/src/**/*.{ts,tsx}` — those bypass the token aliasing entirely). Dark mode is
+  unaffected: the aliases are `var()` references to the tokens, and `prefers-color-scheme: dark`
+  already overrides those tokens in `tokens.css`.
+- **Widening `@source` as pages migrate.** A page's migration PR that starts rendering
+  `components/kit/*` needs Tailwind to see that page's own file too — add its path to the
+  `@source` line(s) in `styles/tailwind.css` at that point (or broaden the single `@source` to a
+  shared ancestor once enough pages have migrated that per-page entries get unwieldy). Do not
+  widen it pre-emptively "just in case" — every directory added to `@source` is scanned for every
+  build, and the whole point of the restriction is that only directories actually using the new
+  kit are in scope.
 
 ## Develop
 
@@ -60,6 +109,8 @@ src/
     format.ts              shortId, relative time, duration, redactSensitive
     session.ts             API key in sessionStorage only, plus (S4.1) the last-selected workspace
                           id for a cookie session (a UX convenience, never the source of truth)
+    cn.ts                  S8 W1-A0: clsx + tailwind-merge, components/kit/* only (see "UI
+                          framework" above) — components/ui/* keeps composing plain classNames
   hooks/
     useResource.ts        loading / error / ready(refreshing, refreshError) state machine
     useCapability.ts       S3.14 data layer: useCapability/useCapabilityList over CapabilityCaller —
@@ -69,6 +120,11 @@ src/
     usePendingCount.ts    sidebar badge; useWsStatus.ts; usePushToasts.ts
   components/ui/          Button StatusChip Card PageHeader EmptyState ErrorBanner Notice Skeleton
                           Field(+Input/Select/Textarea) Drawer Toast DataList Tabs Kbd CopyId Icon
+                          — pre-S8; migrates to components/kit/* one page at a time (see "UI
+                          framework" above), unchanged by S8 W1-A0 itself
+  components/kit/         S8 W1-A0: the Radix/Tailwind foundation — button dialog sheet tooltip
+                          table (+ each one's .test.tsx) — not wired into any page yet; the first
+                          real usage (PageHeader) is a later S8 W1-A lane
   components/shell/       AppShell, Sidebar (工作 Work / 治理 Governance nav, S3.14; S4.1: workspace
                           switcher when >1 membership, cookie-vs-apiKey sign-out label)
   components/             LoginPage (S4.1: primary login+password form, collapsed API-key
@@ -91,7 +147,8 @@ src/
                           — S3.12: OnboardingWizard (+ OnboardingWizardReview) — the 接入向导 on
                           ConnectionsPage, a guided alternative to the existing "Connect a system"
                           drawer; reuses CompleteConnectionForm for its own step ②
-  styles/                 tokens.css base.css shell.css ui.css pages.css (imported by styles.css)
+  styles/                 tokens.css tailwind.css (S8 W1-A0) base.css shell.css ui.css pages.css
+                          graph.css (imported by styles.css — see its own header for the order)
 ```
 
 ## Routes
@@ -239,6 +296,12 @@ decisions, push reconcile), `StatusChip` (exhaustive over every shared enum valu
 push-triggered reload, pagination), `Sidebar` (nav guard + role badge), `MembersPage` (create → key
 shown once, role change, disable), `AccessPage` (grant/revoke), `CatalogPage` (tab switching,
 publish/deprecate), `GatekeeperDetailDrawer` (health-shape variants), `ModelsPage`.
+
+S8 W1-A0 additions: `components/kit/button` (variant/size classes, `asChild` via Slot),
+`components/kit/dialog` (closed until triggered, renders, closes via `DialogClose`),
+`components/kit/sheet` (`side` variant classes, open/close), `components/kit/tooltip` (closed vs.
+open content, role="tooltip"), `components/kit/table` (renders native table roles, shell classes)
+— none of the five is imported by any page yet.
 
 S3.13 additions: `useWorkspaceIdentity` (known role once `get_workspace` resolves, inferred
 fallback on `not_found`/loading), `AgentProfilePage` (pre-filled form, `not_found` degrade on the
