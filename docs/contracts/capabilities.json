@@ -1777,6 +1777,25 @@
           "minimum": 0,
           "type": "integer"
         },
+        "enablingWorkspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "endpoint": {
           "type": "string"
         },
@@ -2976,6 +2995,152 @@
         "gatekeeperId",
         "publishedOperationNames",
         "skippedOperationNames"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "governance",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "execution_readiness",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "principalId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gates": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "gateId": {
+                "type": "string"
+              },
+              "granted": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "publishedOperationCount": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "gateId",
+              "name",
+              "granted",
+              "publishedOperationCount"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "missing": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "no_enabled_gate",
+                  "no_grant",
+                  "no_published_worker"
+                ],
+                "type": "string"
+              },
+              "gateId": {
+                "type": "string"
+              },
+              "workerDefinitionId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "principalId": {
+          "type": "string"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "workers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "blockedBy": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "enum": [
+                        "no_enabled_gate",
+                        "no_grant",
+                        "no_published_worker"
+                      ],
+                      "type": "string"
+                    },
+                    "gateId": {
+                      "type": "string"
+                    },
+                    "workerDefinitionId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "definitionId": {
+                "type": "string"
+              },
+              "delegable": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "definitionId",
+              "version",
+              "delegable",
+              "blockedBy"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "principalId",
+        "ready",
+        "missing",
+        "gates",
+        "workers"
       ],
       "type": "object"
     }
@@ -4807,6 +4972,25 @@
           "minimum": 0,
           "type": "integer"
         },
+        "enablingWorkspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "endpoint": {
           "type": "string"
         },
@@ -5357,6 +5541,116 @@
         "updatedAt"
       ],
       "type": "object"
+    }
+  },
+  {
+    "channel": "handle",
+    "group": "meta",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_skill",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "skillId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "skillId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "applicable": {
+              "additionalProperties": false,
+              "properties": {
+                "gateKinds": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "objectTypes": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "markdown": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "proposedBy": {
+              "type": "string"
+            },
+            "publishedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "publishedBy": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "published",
+                "deprecated"
+              ],
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "status",
+            "name",
+            "description",
+            "applicable",
+            "markdown",
+            "proposedBy",
+            "publishedBy",
+            "createdAt",
+            "publishedAt"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   {
@@ -6933,6 +7227,61 @@
   },
   {
     "channel": "human",
+    "group": "governance",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_capability_names",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "enum": [
+                  "observe",
+                  "write",
+                  "propose",
+                  "execute"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "mode"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "chat",
     "minRole": "member",
     "mode": "observe",
@@ -7019,9 +7368,17 @@
         "cursor": {
           "type": "string"
         },
+        "factId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "limit": {
           "exclusiveMinimum": 0,
           "type": "integer"
+        },
+        "objectId": {
+          "minLength": 1,
+          "type": "string"
         },
         "status": {
           "enum": [
@@ -7503,6 +7860,25 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "enablingWorkspaces": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "endpoint": {
                 "type": "string"
               },
@@ -7668,7 +8044,12 @@
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "q": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "result": {
@@ -7736,6 +8117,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
         "principalId": {
           "minLength": 1,
           "type": "string"
@@ -7974,6 +8362,10 @@
       "additionalProperties": false,
       "properties": {
         "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "q": {
           "minLength": 1,
           "type": "string"
         }
@@ -8386,7 +8778,19 @@
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "q": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "result": {
@@ -8476,7 +8880,15 @@
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
       "type": "object"
     },
     "result": {
@@ -8803,7 +9215,15 @@
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
       "type": "object"
     },
     "result": {
@@ -8891,7 +9311,15 @@
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
       "type": "object"
     },
     "result": {
@@ -9502,12 +9930,19 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "type": "string"
+        },
         "kind": {
           "enum": [
             "entry",
             "worker"
           ],
           "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -13703,6 +14138,81 @@
   },
   {
     "channel": "human",
+    "group": "members",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "resolve_refs",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "object",
+                  "principal",
+                  "gatekeeper",
+                  "workerDefinition",
+                  "actionRequest"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "typeName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "governance",
     "minRole": "owner",
     "mode": "execute",
@@ -16976,6 +17486,14 @@
           "minimum": 1,
           "type": "integer"
         },
+        "direction": {
+          "enum": [
+            "in",
+            "out",
+            "both"
+          ],
+          "type": "string"
+        },
         "fromId": {
           "minLength": 1,
           "type": "string"
@@ -17020,6 +17538,28 @@
               "sourceObjectId",
               "targetObjectId",
               "depth"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nodeDetails": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "typeName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "typeName"
             ],
             "type": "object"
           },
@@ -17201,6 +17741,25 @@
         "enabledWorkspaceCount": {
           "minimum": 0,
           "type": "integer"
+        },
+        "enablingWorkspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         },
         "endpoint": {
           "type": "string"
