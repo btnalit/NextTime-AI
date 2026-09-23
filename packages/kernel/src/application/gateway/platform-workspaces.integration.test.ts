@@ -547,6 +547,54 @@ describe.runIf(DATABASE_URL !== undefined)(
         // The meta-ontology seed plus an entry WorkerDefinition publish is past Vitest's default.
       }, 120_000);
 
+      // S7-E E5: `create_workspace` falls back to the platform's own default entry model
+      // (`set_platform_default_model`) when its caller omits `entryModel` — an explicit value
+      // still always wins. `platform_settings` is a global singleton, so each case resets
+      // `defaultEntryModel` back to `null` in a `finally` rather than depending on test order.
+      it('falls back to the platform default entry model when none is given', async () => {
+        await withAdminClient(pool, (client) =>
+          updatePlatformSettings(client, { defaultEntryModel: MODEL_B }, null),
+        );
+        try {
+          const name = `default-model-fallback-${randomUUID().slice(0, 8)}`;
+          const created = await callAsAdmin<PlatformWorkspaceWire>('create_workspace', {
+            name,
+            ownerUserId: owner.id,
+          });
+          expect(created.entryModel).toBe(MODEL_B);
+
+          const ownerPrincipal = created.owners[0];
+          if (!ownerPrincipal) throw new Error('create_workspace returned no owner');
+          const policy = await inWorkspace(created.id, ownerPrincipal.principalId, (client) =>
+            readAgentPolicy(client, created.id),
+          );
+          expect(policy.defaultModel).toBe(MODEL_B);
+        } finally {
+          await withAdminClient(pool, (client) =>
+            updatePlatformSettings(client, { defaultEntryModel: null }, null),
+          );
+        }
+      }, 60_000);
+
+      it('an explicit entryModel still wins over the platform default', async () => {
+        await withAdminClient(pool, (client) =>
+          updatePlatformSettings(client, { defaultEntryModel: MODEL_B }, null),
+        );
+        try {
+          const name = `default-model-override-${randomUUID().slice(0, 8)}`;
+          const created = await callAsAdmin<PlatformWorkspaceWire>('create_workspace', {
+            name,
+            ownerUserId: owner.id,
+            entryModel: MODEL_A,
+          });
+          expect(created.entryModel).toBe(MODEL_A);
+        } finally {
+          await withAdminClient(pool, (client) =>
+            updatePlatformSettings(client, { defaultEntryModel: null }, null),
+          );
+        }
+      }, 60_000);
+
       it('rejects a model that is not in the llm-proxy catalog', async () => {
         await expectPlatformError(
           () =>

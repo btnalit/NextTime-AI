@@ -20,6 +20,7 @@ import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
 import { CredentialState } from './providers/CredentialState.js';
+import { DefaultModelControl } from './providers/DefaultModelControl.js';
 import { ProviderForm } from './providers/ProviderForm.js';
 import { ProviderSecretForm } from './providers/ProviderSecretForm.js';
 import { ProviderTestResult } from './providers/ProviderTestResult.js';
@@ -221,6 +222,8 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           scripts/host-llm-proxy-init.sh and recreate llm-proxy, or make gen-models.
         </Notice>
       ) : null}
+
+      <DefaultModelControl http={http} />
 
       <section className="section" aria-labelledby="providers-title">
         <div className="section-header">

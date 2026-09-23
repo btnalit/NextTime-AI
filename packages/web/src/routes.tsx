@@ -17,7 +17,9 @@ import { PlatformIntegrationsPage } from './components/platform/PlatformIntegrat
 import { PlatformModelsPage } from './components/platform/PlatformModelsPage.js';
 import { PlatformModulesPage } from './components/platform/PlatformModulesPage.js';
 import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage.js';
+import { PlatformRuntimePage } from './components/platform/PlatformRuntimePage.js';
 import { PlatformSettingsPage } from './components/platform/PlatformSettingsPage.js';
+import { PlatformStatusPage } from './components/platform/PlatformStatusPage.js';
 import { PlatformUsersPage } from './components/platform/PlatformUsersPage.js';
 import { PlatformWorkspacesPage } from './components/platform/PlatformWorkspacesPage.js';
 import { AppShell } from './components/shell/AppShell.js';
@@ -244,6 +246,12 @@ export function Routed({
     case 'platformSettings':
       page = requireAdmin(session, <PlatformSettingsPage http={session.http} />);
       break;
+    case 'platformRuntime':
+      page = requireAdmin(session, <PlatformRuntimePage http={session.http} />);
+      break;
+    case 'platformStatus':
+      page = requireAdmin(session, <PlatformStatusPage http={session.http} />);
+      break;
     case 'platformAudit':
       page = requireAdmin(session, <PlatformAuditPage http={session.http} />);
       break;
@@ -289,6 +297,8 @@ export function isPlatformRoute(kind: Route['kind']): boolean {
     kind === 'platformModules' ||
     kind === 'platformModels' ||
     kind === 'platformSettings' ||
+    kind === 'platformRuntime' ||
+    kind === 'platformStatus' ||
     kind === 'platformAudit'
   );
 }

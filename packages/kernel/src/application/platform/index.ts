@@ -50,4 +50,5 @@ export {
   rollbackRuntimeImageHandler,
   runtimeInventoryHandler,
   setActiveRuntimeImageHandler,
+  setPlatformDefaultModelHandler,
 } from './runtime.js';

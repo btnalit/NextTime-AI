@@ -1065,8 +1065,19 @@ export const createWorkspaceHandler: CapabilityHandler = async (
     throw new PlatformAdminError('user_disabled', 'the owner must be an active user');
   }
   const allowedModels = input.allowedModels ?? [];
-  await assertModelsInCatalog([...(input.entryModel ? [input.entryModel] : []), ...allowedModels]);
-  assertEntryModelAllowed(input.entryModel ?? null, allowedModels);
+  // E5: an explicit `entryModel` always wins; omitted falls back to the platform's own default
+  // entry model (`set_platform_default_model`) — the same precedence `ensureDefaultWorkspace`
+  // already applies when bootstrapping the very first workspace (application/platform/
+  // default-workspace.ts). Still validated exactly like an explicit value: a platform default
+  // that conflicts with a non-empty `allowedModels` this call also sets fails loudly
+  // (`entry_model_not_allowed`) rather than silently being dropped.
+  const { settings } = await readPlatformSettings(client);
+  const effectiveEntryModel = input.entryModel ?? settings.defaultEntryModel ?? undefined;
+  await assertModelsInCatalog([
+    ...(effectiveEntryModel ? [effectiveEntryModel] : []),
+    ...allowedModels,
+  ]);
+  assertEntryModelAllowed(effectiveEntryModel ?? null, allowedModels);
 
   // P-B2b (§5d S7-D 决定 D4): the platform setting `defaultModules` this new workspace installs,
   // read here (this platform transaction can read `platform_settings`) so the bootstrap call below
@@ -1119,7 +1130,7 @@ export const createWorkspaceHandler: CapabilityHandler = async (
         workspaceId,
         name: input.name,
         owner: { userId: owner.id, displayName: owner.displayName },
-        entryModel: input.entryModel,
+        entryModel: effectiveEntryModel,
         allowedModels,
         ontologyEnforcement: input.ontologyEnforcement,
         defaultModules: settings.defaultModules,

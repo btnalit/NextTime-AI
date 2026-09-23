@@ -35,6 +35,8 @@ export type NavSection =
   | 'platformModules'
   | 'platformModels'
   | 'platformSettings'
+  | 'platformRuntime'
+  | 'platformStatus'
   | 'platformAudit';
 
 export const CATALOG_TAB_VALUES = [
@@ -68,6 +70,8 @@ export type Route =
   | { readonly kind: 'platformModules' }
   | { readonly kind: 'platformModels' }
   | { readonly kind: 'platformSettings' }
+  | { readonly kind: 'platformRuntime' }
+  | { readonly kind: 'platformStatus' }
   | { readonly kind: 'platformAudit' };
 
 function isCatalogTab(value: string | undefined): value is CatalogTab {
@@ -143,6 +147,9 @@ export function routeFromHash(fullHash: string): Route {
   // S6-B: platform-level 模型与供应商 (providers live in llm-proxy; the page talks to /api/llm-admin).
   if (hash === '#/platform/models') return { kind: 'platformModels' };
   if (hash === '#/platform/settings') return { kind: 'platformSettings' };
+  // S7-E (P-C §6.5/§6.7): 运行层 / 运行状态.
+  if (hash === '#/platform/runtime') return { kind: 'platformRuntime' };
+  if (hash === '#/platform/status') return { kind: 'platformStatus' };
   if (hash === '#/platform/audit') return { kind: 'platformAudit' };
 
   return DEFAULT_ROUTE;
@@ -188,6 +195,8 @@ export const hrefs = {
   platformModules: () => '#/platform/modules',
   platformModels: () => '#/platform/models',
   platformSettings: () => '#/platform/settings',
+  platformRuntime: () => '#/platform/runtime',
+  platformStatus: () => '#/platform/status',
   platformAudit: () => '#/platform/audit',
 } as const;
 

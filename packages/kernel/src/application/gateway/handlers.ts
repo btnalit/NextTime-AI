@@ -87,6 +87,7 @@ import {
   rollbackRuntimeImageHandler,
   runtimeInventoryHandler,
   setActiveRuntimeImageHandler,
+  setPlatformDefaultModelHandler,
 } from '../platform/index.js';
 import { toWireActionRequest } from './action-request-wire.js';
 import {
@@ -1518,4 +1519,6 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['roll_entry_containers', rollEntryContainersHandler],
   ['pi_drift', piDriftHandler],
   ['platform_status', platformStatusHandler],
+  // S7-E (P-D 剩余 E5, docs/development-tasks.md §5d) — application/platform/runtime.ts.
+  ['set_platform_default_model', setPlatformDefaultModelHandler],
 ]);
