@@ -17,6 +17,7 @@ import { breadcrumbFor } from '../../lib/nav.js';
 import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
 import { deriveWorkspaceOptions } from '../../lib/platform-workspaces.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
+import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
@@ -251,33 +252,15 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
           testId="platform-users-empty"
         />
       ) : (
-        <div className="table-scroll">
-          <table className="data-table" data-testid="platform-users-table">
-            <thead>
-              <tr>
-                <th>登录名 Login</th>
-                <th>显示名 Display name</th>
-                <th>平台角色 Role</th>
-                <th>状态 Status</th>
-                <th>工作区 Workspaces</th>
-                <th>预算 Budget</th>
-                <th>最近登录 Last login</th>
-                <th>创建 Created</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <UserRow
-                  key={row.id}
-                  user={row}
-                  protectedAdmin={envAdmins.includes(row.login)}
-                  onOpen={() => setPanel({ kind: 'user', userId: row.id })}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={userColumns(envAdmins, (userId) => setPanel({ kind: 'user', userId }))}
+          data={rows}
+          getRowId={(row) => row.id}
+          ariaLabel="Users"
+          testId="platform-users-table"
+          rowTestId={() => 'platform-user-row'}
+          rowDataAttrs={(row) => ({ 'data-login': row.login })}
+        />
       )}
 
       {users.state.status === 'ready' && nextCursor !== undefined ? (
@@ -383,31 +366,80 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
   );
 }
 
-function UserRow({
-  user,
-  protectedAdmin,
-  onOpen,
-}: {
-  readonly user: UserWire;
-  readonly protectedAdmin: boolean;
-  readonly onOpen: () => void;
-}) {
-  return (
-    <tr data-testid="platform-user-row" data-login={user.login}>
-      <td className="mono">{user.login}</td>
-      <td>
-        <span className="truncate">{user.displayName}</span>
-        {protectedAdmin ? (
-          <span className="tag" title={ENV_ADMIN_TITLE} data-testid="platform-user-env-admin">
-            env
-          </span>
-        ) : null}
-      </td>
-      <td>{user.platformRole}</td>
-      <td>
-        <UserStatusCell user={user} />
-      </td>
-      <td>
+/**
+ * S8 W1-A4 (audit S3): column definitions for the responsive `DataTable` — `displayName` is the
+ * card title (`primary`), `status` and the 管理 Manage action stay always-visible next to it
+ * (`high`), everything else becomes a label/value pair at ≤ 768px. `envAdmins`/`onOpen` are
+ * closed over per render rather than module-level state, matching the row callbacks the original
+ * `<table>` markup captured the same way.
+ */
+function userColumns(
+  envAdmins: readonly string[],
+  onOpen: (userId: string) => void,
+): readonly DataTableColumn<UserWire>[] {
+  return [
+    {
+      id: 'displayName',
+      header: '显示名 Display name',
+      priority: 'primary',
+      cell: (user) => (
+        <>
+          <span className="truncate">{user.displayName}</span>
+          {envAdmins.includes(user.login) ? (
+            <span className="tag" title={ENV_ADMIN_TITLE} data-testid="platform-user-env-admin">
+              env
+            </span>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      id: 'login',
+      header: '登录名 Login',
+      priority: 'high',
+      cellClassName: 'mono',
+      cell: (user) => user.login,
+    },
+    {
+      id: 'status',
+      header: '状态 Status',
+      priority: 'high',
+      cell: (user) => (
+        // `status` first (an explicitly disabled account is disabled whatever else is true of
+        // it), then `hasPassword: false` — the "待激活" state a backfilled or password-less user
+        // sits in (`wire/platform.ts` `UserWireSchema`). `待激活` is a *derived* display value,
+        // never a filter value: `list_users`'s own `status` param is only `active | disabled`.
+        // S6-A0 (C17): the derivation lives in `lib/status-tone.ts` (`deriveUserStatus`) and
+        // renders through the shared `StatusChip` — one colour vocabulary with every other status
+        // in the console.
+        <StatusChip
+          machine="userStatus"
+          status={deriveUserStatus(user)}
+          size="s"
+          testId="platform-user-status"
+        />
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      priority: 'high',
+      hideInCard: true,
+      cell: (user) => (
+        <Button variant="ghost" size="s" onClick={() => onOpen(user.id)}>
+          管理 Manage
+        </Button>
+      ),
+    },
+    {
+      id: 'platformRole',
+      header: '平台角色 Role',
+      cell: (user) => user.platformRole,
+    },
+    {
+      id: 'workspaces',
+      header: '工作区 Workspaces',
+      cell: (user) => (
         <div className="row-wrap">
           {user.memberships.length === 0 ? (
             <span className="text-3">—</span>
@@ -424,43 +456,35 @@ function UserRow({
             ))
           )}
         </div>
-      </td>
-      <td className="mono">
-        {user.dailyCallLimit === null ? '默认 default' : user.dailyCallLimit} /{' '}
-        {user.monthlyTokenBudget === null ? '默认 default' : user.monthlyTokenBudget}
-      </td>
-      <td>
-        {user.lastLoginAt === null ? (
+      ),
+    },
+    {
+      id: 'budget',
+      header: '预算 Budget',
+      cellClassName: 'mono',
+      cell: (user) => (
+        <>
+          {user.dailyCallLimit === null ? '默认 default' : user.dailyCallLimit} /{' '}
+          {user.monthlyTokenBudget === null ? '默认 default' : user.monthlyTokenBudget}
+        </>
+      ),
+    },
+    {
+      id: 'lastLogin',
+      header: '最近登录 Last login',
+      cell: (user) =>
+        user.lastLoginAt === null ? (
           <span className="text-3">从未 Never</span>
         ) : (
           <time title={formatDateTime(user.lastLoginAt)}>{formatRelative(user.lastLoginAt)}</time>
-        )}
-      </td>
-      <td>
+        ),
+    },
+    {
+      id: 'created',
+      header: '创建 Created',
+      cell: (user) => (
         <time title={formatDateTime(user.createdAt)}>{formatRelative(user.createdAt)}</time>
-      </td>
-      <td>
-        <Button variant="ghost" size="s" onClick={onOpen}>
-          管理 Manage
-        </Button>
-      </td>
-    </tr>
-  );
-}
-
-/** `status` first (an explicitly disabled account is disabled whatever else is true of it), then
- *  `hasPassword: false` — the "待激活" state a backfilled or password-less user sits in
- *  (`wire/platform.ts` `UserWireSchema`). `待激活` is a *derived* display value, never a filter
- *  value: `list_users`'s own `status` param is only `active | disabled`. S6-A0 (C17): the
- *  derivation lives in `lib/status-tone.ts` (`deriveUserStatus`) and renders through the shared
- *  `StatusChip` — one colour vocabulary with every other status in the console. */
-function UserStatusCell({ user }: { readonly user: UserWire }) {
-  return (
-    <StatusChip
-      machine="userStatus"
-      status={deriveUserStatus(user)}
-      size="s"
-      testId="platform-user-status"
-    />
-  );
+      ),
+    },
+  ];
 }
