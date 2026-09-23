@@ -147,13 +147,43 @@ describe('TaskSupervisorClient', () => {
     await expect(client.status('wr1')).resolves.toBeUndefined();
   });
 
-  it('listImages: 200 returns {defaultImage, images} (S7-E)', async () => {
+  it('listImages: 200 returns {defaultImage, images, allowedImages} (S7-E)', async () => {
     const images = [
       {
         id: 'sha256:abc',
         tags: ['nexttime-ai-worker-runtime:v1'],
         created: '2026-09-01T00:00:00.000Z',
         labels: { 'ai.nexttime.pi-version': '0.84.4' },
+      },
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        defaultImage: 'nexttime-ai-worker-runtime',
+        images,
+        allowedImages: ['nexttime-ai-worker-runtime', 'nexttime-ai-worker-runtime:v1'],
+      }),
+    );
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.listImages?.()).resolves.toEqual({
+      defaultImage: 'nexttime-ai-worker-runtime',
+      images,
+      allowedImages: ['nexttime-ai-worker-runtime', 'nexttime-ai-worker-runtime:v1'],
+    });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://x/images');
+    expect(init.method).toBe('GET');
+  });
+
+  // P1-a hotfix (post-v0.16.0 review): defends against an older worker-supervisor that does not
+  // yet send `allowedImages` — defaults to `[]` (fail closed: nothing allowed), never guessed
+  // open.
+  it('listImages: defaults allowedImages to [] when the response omits it (older worker-supervisor)', async () => {
+    const images = [
+      {
+        id: 'sha256:abc',
+        tags: ['nexttime-ai-worker-runtime:v1'],
+        created: '2026-09-01T00:00:00.000Z',
+        labels: {},
       },
     ];
     const fetchImpl = vi
@@ -163,10 +193,8 @@ describe('TaskSupervisorClient', () => {
     await expect(client.listImages?.()).resolves.toEqual({
       defaultImage: 'nexttime-ai-worker-runtime',
       images,
+      allowedImages: [],
     });
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('http://x/images');
-    expect(init.method).toBe('GET');
   });
 
   it('listImages: unexpected status maps to http_error', async () => {
