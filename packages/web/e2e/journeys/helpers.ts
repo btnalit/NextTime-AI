@@ -31,21 +31,69 @@ export async function asSecondPrincipal(page: Page): Promise<void> {
   await loginAsOwner(page, SECOND_PRINCIPAL_API_KEY as string);
 }
 
-/** The Sidebar nav item whose visible label (Chinese half) matches `labelZh` — `Sidebar.tsx`
- *  renders each item as one `<a role="link">` whose accessible name is `label + sub` concatenated
- *  (e.g. "对话Chats"), so a `RegExp` substring match on the Chinese label alone is the stable part
- *  across the S4/S7/S14 中文为主 i18n work still to land (W1-A1) — the English half is not pinned
- *  here on purpose. */
+/**
+ * `NavSection` values (`lib/router.ts`) keyed by the Chinese label every journey spec calls
+ * `goToByLabel` with — `Sidebar.tsx`'s own `data-testid={`nav-${item.section}`}` convention,
+ * already how every *other* spec in this suite clicks a nav item (workspaces.spec.ts,
+ * login.spec.ts, catalog.spec.ts, …), reused here rather than re-derived. Not every `NavSection`
+ * needs an entry — only the ones a journey actually navigates to today.
+ *
+ * Why not click by the nav item's own accessible name (an earlier version of this file did): at
+ * ≤1100px (`styles/shell.css`'s icon-rail breakpoint — 768px, the F4 narrow-screen state every
+ * journey is supposed to cover, falls inside it) `.nav-label` is `display: none`, and the first
+ * baseline-generation CI run showed the link's accessible name does not reliably fall back to its
+ * `title` attribute in that state — `getByRole('link', {name: …})` timed out waiting for a click
+ * target that was in fact on screen (an icon-only rail item), full stop. `data-testid` is a DOM
+ * attribute, unaffected by what CSS hides — the fix, not a workaround, and it's F4's actual intent
+ * either way: "navigate by what the Sidebar item *is*", not by a hash route.
+ */
+const NAV_TESTID_BY_LABEL: Readonly<Record<string, string>> = {
+  对话: 'chats',
+  待我审批: 'approvals',
+  任务: 'tasks',
+  图谱: 'graph',
+  我的智能体: 'agent',
+  我的账户: 'account',
+  成员与授权: 'members',
+  访问: 'access',
+  系统接入: 'systems',
+  能力目录: 'catalog',
+  模型与配额: 'models',
+  审计: 'audit',
+  概览: 'platformOverview',
+  工作区: 'platformWorkspaces',
+  用户: 'platformUsers',
+  集成: 'platformIntegrations',
+  模块: 'platformModules',
+  模型与供应商: 'platformModels',
+  平台设置: 'platformSettings',
+  运行层: 'platformRuntime',
+  运行状态: 'platformStatus',
+  平台审计: 'platformAudit',
+};
+
+/** The Sidebar nav item labelled (in Chinese) `labelZh` — see `NAV_TESTID_BY_LABEL`'s doc comment
+ *  for why this is `data-testid`-based rather than accessible-name-based. */
 export function navItem(page: Page, labelZh: string) {
-  return page.getByRole('link', { name: new RegExp(labelZh) });
+  const testId = NAV_TESTID_BY_LABEL[labelZh];
+  if (testId === undefined) {
+    throw new Error(
+      `no NavSection mapped for "${labelZh}" — add it to NAV_TESTID_BY_LABEL in journeys/helpers.ts`,
+    );
+  }
+  return page.getByTestId(`nav-${testId}`);
 }
 
 /** Clicks the nav item and waits for the resulting page's own `<h1>` (every page uses
- *  `components/ui/PageHeader.tsx`) to carry the same label — the generic "did the click actually
- *  navigate" signal every journey step needs without each one restating it. */
+ *  `components/ui/PageHeader.tsx`, one per page) to carry the same label — the generic "did the
+ *  click actually navigate" signal every journey step needs without each one restating it.
+ *  `level: 1` (not just a `RegExp` name match): some pages nest a second heading whose text also
+ *  contains `labelZh` as a substring (e.g. AuditPage's own `<h1>审计 Audit</h1>` plus a nested
+ *  `<h2>审计流 Audit log</h2>`) — restricting to `<h1>` is what every page's single PageHeader
+ *  actually guarantees, a plain substring match on "heading, any level" does not. */
 export async function goToByLabel(page: Page, labelZh: string): Promise<void> {
   await navItem(page, labelZh).click();
-  await expect(page.getByRole('heading', { name: new RegExp(labelZh) })).toBeVisible({
+  await expect(page.getByRole('heading', { level: 1, name: new RegExp(labelZh) })).toBeVisible({
     timeout: 15_000,
   });
 }

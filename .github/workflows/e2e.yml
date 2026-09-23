@@ -328,19 +328,22 @@ jobs:
       # `-c`: psql only performs `:'var'` interpolation and `\gset` on input it parses itself (the
       # same finding scripts/accept_s2.sh's leak check records).
       #
-      # S8 W1-B added three more seeded rows, same shape, for `00-gates/` and `journeys/03-*`:
+      # S8 W1-B added four more seeded rows, same shape, for `00-gates/` and `journeys/03-*`:
       # `e2e-gate-pending` is read-only forever (screenshot.spec.ts's "an approval pending" state
       # only ever views it — never approves it, so it stays pending across the whole run
-      # regardless of file order) and `e2e-journey3-approve` is seeded *twice* (the same scope
-      # marker on two separate rows) — journeys/03-approve-action.spec.ts runs the same journey
-      # once at 1440px and once at 768px, each approving one of the two rows via `.first()` (see
-      # that file's own doc comment) — kept separate from approvals.spec.ts's own two scopes so
-      # the two suites can never race for the same row.
+      # regardless of file order); `e2e-journey3-approve-a`/`-b` are journeys/03-approve-action.
+      # spec.ts's own two rows — one per viewport (1440px, 768px) it runs the same journey at.
+      # Two *distinct* scopes rather than the same one twice on purpose: that file's own `.first()`
+      # + `toHaveCount(0)` assertion needs its row uniquely identified after the other viewport's
+      # run has already approved a different row sharing the same marker text — the first
+      # baseline-generation run caught this the hard way (a real CI failure, not a hypothetical).
+      # All four kept separate from approvals.spec.ts's own two scopes so the suites can never race
+      # for the same row.
       - name: Seed pending ActionRequests (approvals.spec.ts, 00-gates/, journeys/03-*)
         run: |
           set -euo pipefail
           for scope in e2e-approve-flow e2e-isolation-flow e2e-gate-pending \
-            e2e-journey3-approve e2e-journey3-approve; do
+            e2e-journey3-approve-a e2e-journey3-approve-b; do
             sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
               exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 \
               -v workspace_id="$E2E_WORKSPACE_ID" -v on_behalf_of="$E2E_OWNER_PRINCIPAL_ID" \
@@ -431,15 +434,20 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # S8 W1-B: the regenerated baselines themselves — only on the `update_baselines` dispatch,
-      # only once "Run web e2e (regenerate gate baselines)" actually succeeded (an interrupted or
-      # failed regeneration can leave a surface's entry missing/stale — not something to fetch and
-      # commit). Download with `gh run download <run-id> -n gate-baselines`, then copy
-      # `00-gates/__screenshots__/` and the two `*-baseline.json` files it contains over the
-      # matching paths under `packages/web/e2e/00-gates/` and commit — see
+      # S8 W1-B: the regenerated baselines themselves — only on the `update_baselines` dispatch.
+      # Deliberately *not* gated on the previous step's success: Playwright's own documented
+      # behaviour is that a *missing* screenshot snapshot is always reported as a test failure —
+      # even under `--update-snapshots` — specifically so a human reviews the newly-written PNG
+      # before it's trusted (verified against this workflow's own first baseline-generation run:
+      # every 00-gates/screenshot.spec.ts test "failed" with "snapshot doesn't exist ... writing
+      # actual", while the file was in fact written to the real snapshot path — the axe/copy-guard
+      # baselines in content.spec.ts, which never hit that codepath, passed outright). `!cancelled()`
+      # still skips this on an actually-cancelled run. Download with `gh run download <run-id> -n
+      # gate-baselines`, then copy `00-gates/__screenshots__/` and the two `*-baseline.json` files
+      # it contains over the matching paths under `packages/web/e2e/00-gates/` and commit — see
       # docs/runbooks/web-console.md "UX 门槛基线".
       - name: Upload gate baselines
-        if: ${{ github.event.inputs.update_baselines == 'true' && success() }}
+        if: ${{ github.event.inputs.update_baselines == 'true' && !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gate-baselines

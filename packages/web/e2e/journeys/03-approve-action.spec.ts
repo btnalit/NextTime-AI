@@ -7,9 +7,9 @@ import { OWNER_API_KEY, asOwner, goToByLabel } from './helpers.js';
  * capability as a *journey*: what a person actually clicks, by visible label, start to finish)
  *
  * 步骤:
- *   1. 待我审批 队列里出现一张待批准的行（本旅程用一条专属种子行 `e2e-journey3-approve`，见
- *      `.github/workflows/e2e.yml`"Seed pending ActionRequests" —— 与 approvals.spec.ts 自己的两条
- *      种子行分开，两个套件不会抢同一行）。
+ *   1. 待我审批 队列里出现一张待批准的行（本旅程用两条专属种子行 `e2e-journey3-approve-a`/`-b`，见
+ *      `.github/workflows/e2e.yml`"Seed pending ActionRequests" —— 每个视口一条，避免两次跑互相抢
+ *      同一行；与 approvals.spec.ts 自己的两条种子行也分开，两个套件不会抢同一行）。
  *   2. 点开这一行，看到动作详情（谁、对什么、blast radius）。
  *   3. 批准。
  *   4. 队列里这一行消失；对应的对话卡片状态更新为已批准/执行中/已执行/失败之一（种子 Gatekeeper 没有
@@ -31,15 +31,21 @@ import { OWNER_API_KEY, asOwner, goToByLabel } from './helpers.js';
  * 稳定能力——不是 W2/W3 才补的东西，所以这是六条里 F4 点名"如果可行就做成真实通过"的那一条。
  */
 
-const JOURNEY3_SCOPE = 'e2e-journey3-approve';
+/** One seeded row per viewport (`.github/workflows/e2e.yml`) — not the same scope marker twice:
+ *  `getByTestId('approval-row').filter({hasText}).first()` followed by `toHaveCount(0)` cannot
+ *  tell "the row I approved is gone" apart from "a *different* row sharing the same marker text is
+ *  still there" when two rows share one marker — the first baseline-generation run hit exactly
+ *  this (desktop's `toHaveCount(0)` saw the *other* viewport's still-pending row and timed out). */
+const JOURNEY3_SCOPE_DESKTOP = 'e2e-journey3-approve-a';
+const JOURNEY3_SCOPE_NARROW = 'e2e-journey3-approve-b';
 const SEED_ACTION_REQUESTS = process.env.WEB_E2E_SEED_ACTION_REQUESTS === '1';
 
-async function runJourney(page: import('@playwright/test').Page): Promise<void> {
+async function runJourney(page: import('@playwright/test').Page, scope: string): Promise<void> {
   await asOwner(page);
 
   // Step 1+2: navigate by the sidebar's own visible label, not the hash, then open the row.
   await goToByLabel(page, '待我审批');
-  const row = page.getByTestId('approval-row').filter({ hasText: JOURNEY3_SCOPE }).first();
+  const row = page.getByTestId('approval-row').filter({ hasText: scope }).first();
   await expect(row).toBeVisible({ timeout: 15_000 });
   await row.click();
   const drawer = page.getByTestId('approval-drawer');
@@ -58,7 +64,7 @@ async function runJourney(page: import('@playwright/test').Page): Promise<void> 
 
   await goToByLabel(page, '对话');
   await page.locator('.chat-list-item').first().click();
-  const chatCard = page.locator('.action-card', { hasText: JOURNEY3_SCOPE }).first();
+  const chatCard = page.locator('.action-card', { hasText: scope }).first();
   await expect(chatCard).toBeVisible({ timeout: 15_000 });
   await expect(chatCard.locator('.action-card-status')).toHaveAttribute(
     'data-status',
@@ -77,11 +83,11 @@ test.describe('Journey ③: 审批一个执行类动作', () => {
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await runJourney(page);
+    await runJourney(page, JOURNEY3_SCOPE_DESKTOP);
   });
 
   test('narrow screen (768px): same journey', async ({ page }) => {
     await page.setViewportSize({ width: 768, height: 900 });
-    await runJourney(page);
+    await runJourney(page, JOURNEY3_SCOPE_NARROW);
   });
 });
