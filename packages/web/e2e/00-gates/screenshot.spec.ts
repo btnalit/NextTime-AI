@@ -56,7 +56,16 @@ test.describe('S8 W1-B screenshot gate', () => {
     await page.getByPlaceholder('Message…').fill(CHAT_FIXTURE_PROMPT);
     await page.getByRole('button', { name: 'Send' }).click();
     await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
-    await expect(page.locator('.message-assistant .message-text')).toBeVisible();
+    // S8 W1-A2: the assistant bubble renders through a lazy-loaded chunk
+    // (components/chat/MessageBody.tsx's `Suspense`/`React.lazy` around `components/kit/
+    // markdown.tsx`) — before it resolves, the same text shows through a plain `.pre-wrap`
+    // fallback span. Waiting for the real `.markdown-body` root (react-markdown's own wrapper
+    // class) rather than just `.message-text` avoids capturing the transitional fallback layout,
+    // which has different DOM structure and (a few pixels of) block margin the loaded version
+    // doesn't necessarily share.
+    await expect(page.locator('.message-assistant .markdown-body')).toBeVisible({
+      timeout: 15_000,
+    });
 
     // The fake runtime's echoed reply embeds a random `turn_id` (chat.spec.ts's own doc comment) —
     // not covered by the base MASK_SELECTORS (it renders as plain bubble text, not a `<time>`/
@@ -67,13 +76,14 @@ test.describe('S8 W1-B screenshot gate', () => {
     ]);
 
     // Archive this fixture chat immediately after capturing it. `application/linkage/
-    // chat-targets.ts`'s `resolveDefaultChat` — "the most recently created Chat" —
-    // `approvals.spec.ts` and `journeys/03-approve-action.spec.ts` both rely on that phrase
-    // resolving to the *pre-existing* auto-created chat their seeded ActionRequest cards were
-    // linked into at seed time (before this suite ever ran). `listChats` excludes archived rows by
-    // default (`archived_at is null`), same as the console's own default (non-已归档) chat list —
-    // archiving here keeps this fixture chat from shadowing that lookup for every spec that runs
-    // after `00-gates/` in file order, without needing to special-case *where* this test lives.
+    // chat-targets.ts`'s `resolveDefaultChat` — "the most recently created Chat" — is what
+    // `approvals.spec.ts` (unmodified, existing spec) relies on for its own seeded-ActionRequest
+    // chat-card assertion. `listChats` excludes archived rows by default (`archived_at is null`),
+    // same as the console's own default (non-已归档) chat list — archiving here keeps this fixture
+    // chat from shadowing that lookup for every spec that runs after `00-gates/` in file order.
+    // (`journeys/03-approve-action.spec.ts` no longer needs this guarantee itself — it finds its
+    // own chat by searching, `journeys/helpers.ts`'s `findChatWithActionCard` — but
+    // `approvals.spec.ts` still does, so the archiving stays.)
     await page.getByRole('button', { name: 'Back to chats' }).click();
     const row = page.getByTestId('chat-row').filter({ hasText: CHAT_FIXTURE_PROMPT.slice(0, 20) });
     await expect(row).toBeVisible({ timeout: 15_000 });
