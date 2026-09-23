@@ -199,6 +199,12 @@ export function useCapability<T = unknown>(
 export interface ListEnvelope<T> {
   readonly items: readonly T[];
   readonly nextCursor?: string;
+  /** S8 W1-A4 (audit S3 follow-up, #243's six newly-paginated `list_*` capabilities):
+   *  `docs/wire-contract-conventions.md` §3 — set when the caller's own `limit` was clamped to the
+   *  capability's server-side ceiling (never when a page is merely not the last one; that is what
+   *  `nextCursor` already means). Carried through `loadMore`/`reloadLoadedPages` from whichever
+   *  page was fetched most recently, so a reader who paged past the ceiling still sees it. */
+  readonly truncated?: true;
 }
 
 export interface CapabilityListResult<T> extends Resource<ListEnvelope<T>> {
@@ -227,32 +233,52 @@ async function reloadLoadedPages<T>(
   let page = await caller.call<ListEnvelope<T>>(name, params);
   let items = page.items;
   let cursor = page.nextCursor;
+  let truncated = page.truncated;
   while (cursor !== undefined && items.length < target) {
     page = await caller.call<ListEnvelope<T>>(name, { ...params, cursor });
     items = [...items, ...page.items];
+    truncated = page.truncated;
     if (page.nextCursor === cursor || page.items.length === 0) {
       cursor = undefined;
       break;
     }
     cursor = page.nextCursor;
   }
-  return cursor === undefined ? { items } : { items, nextCursor: cursor };
+  return {
+    items,
+    ...(cursor !== undefined ? { nextCursor: cursor } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
 }
 
-/** `useCapability` specialized for the `{items, nextCursor?}` list envelope every `list_*`
- *  capability returns (docs/wire-contract-conventions.md §3). `params` is spread with `cursor` for
- *  `loadMore` — pass the same params object shape `caller.call(name, params)` already expects.
- *  Reloads (a "Refresh" click, a `reloadOn` push, `reload()`) re-walk every page the reader had
- *  loaded (`reloadLoadedPages`) instead of resetting to page one. */
+export interface UseCapabilityListOptions<T = unknown>
+  extends UseCapabilityOptions<ListEnvelope<T>> {
+  /**
+   * S8 W1-A4 (audit S3 follow-up): walk every page automatically as pages become available,
+   * instead of waiting for a reader to click "加载更多" — for a list consumed as a selector or a
+   * name-resolution directory (a checklist, an autocomplete's suggestions, `RefChip`'s id → name
+   * map) where a row silently missing past the first page is a correctness bug, not a paging UX
+   * choice. Leave unset for an actual browsable list/table, where a manual "加载更多" affordance
+   * (with `truncated` surfaced) is the right UX — see `PlatformUsersPage` for that shape.
+   */
+  readonly autoLoadAll?: boolean;
+}
+
+/** `useCapability` specialized for the `{items, nextCursor?, truncated?}` list envelope every
+ *  `list_*` capability returns (docs/wire-contract-conventions.md §3). `params` is spread with
+ *  `cursor` for `loadMore` — pass the same params object shape `caller.call(name, params)` already
+ *  expects. Reloads (a "Refresh" click, a `reloadOn` push, `reload()`) re-walk every page the
+ *  reader had loaded (`reloadLoadedPages`) instead of resetting to page one. */
 export function useCapabilityList<T = unknown>(
   caller: CapabilityCaller,
   name: string,
   params: Readonly<Record<string, unknown>> = {},
-  options: UseCapabilityOptions<ListEnvelope<T>> = {},
+  options: UseCapabilityListOptions<T> = {},
 ): CapabilityListResult<T> {
+  const { autoLoadAll, ...capabilityOptions } = options;
   const base = useCapability<ListEnvelope<T>>(caller, name, params, {
-    ...options,
-    load: options.load ?? reloadLoadedPages,
+    ...capabilityOptions,
+    load: capabilityOptions.load ?? reloadLoadedPages,
   });
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<unknown | null>(null);
@@ -267,7 +293,8 @@ export function useCapabilityList<T = unknown>(
       const page = await caller.call<ListEnvelope<T>>(name, { ...params, cursor });
       base.mutate((data) => ({
         items: [...data.items, ...page.items],
-        nextCursor: page.nextCursor,
+        ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+        ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
       }));
     } catch (error) {
       setLoadMoreError(error);
@@ -275,6 +302,14 @@ export function useCapabilityList<T = unknown>(
       setLoadingMore(false);
     }
   }, [caller, name, params, loadingMore, base.state, base.mutate]);
+
+  useEffect(() => {
+    if (!autoLoadAll) return;
+    if (base.state.status !== 'ready') return;
+    if (base.state.data.nextCursor === undefined) return;
+    if (loadingMore) return;
+    void loadMore();
+  }, [autoLoadAll, base.state, loadingMore, loadMore]);
 
   return { ...base, loadingMore, loadMoreError, loadMore };
 }
