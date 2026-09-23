@@ -370,11 +370,18 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       // pending revision draft or both at once — `find_operations`/`list_allowed_operations`'s own
       // pure-query half and gate tool resolution (`request-action-handler.ts`) all read
       // `getPublishedOperation`/this same published-only filter.
+      // S8 W2-K1 (leftover 71): find_operations now does a *tokenised keyword* search, not a
+      // whole-string substring match — op.name's own tokens (e.g. "container"/"restart") may
+      // also match other fixtures' names in this shared-gatekeeper describe block, so the
+      // candidate list is filtered down to rows actually identified by op.name before asserting
+      // "exactly one, never the pending draft alongside it" (the property this test actually
+      // guards, I16/I17).
       const candidates = await inTx((client) =>
         findOperationCandidates(client, workspaceId, { need: op.name }),
       );
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0]?.properties.mode).toBe('execute');
+      const ownCandidates = candidates.filter((c) => c.properties.name === op.name);
+      expect(ownCandidates).toHaveLength(1);
+      expect(ownCandidates[0]?.properties.mode).toBe('execute');
       const allowed = await inTx((client) =>
         listPublishedOperationsForGatekeepers(client, workspaceId, [gatekeeperId]),
       );
@@ -505,12 +512,15 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       expect(current?.version).toBe(2);
       expect(current?.status).toBe('published');
 
-      // Agent-facing reads see exactly v2, never v1 or both.
+      // Agent-facing reads see exactly v2, never v1 or both (see the "S8 W2-K1" comment on the
+      // sibling test above for why the candidate list is filtered by op.name first — find_operations
+      // is now a tokenised keyword search, not a whole-string substring match).
       const candidates = await inTx((client) =>
         findOperationCandidates(client, workspaceId, { need: op.name }),
       );
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0]?.properties.mode).toBe('observe');
+      const ownCandidates = candidates.filter((c) => c.properties.name === op.name);
+      expect(ownCandidates).toHaveLength(1);
+      expect(ownCandidates[0]?.properties.mode).toBe('observe');
       const allowed = await inTx((client) =>
         listPublishedOperationsForGatekeepers(client, workspaceId, [gatekeeperId]),
       );
@@ -733,12 +743,15 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       expect(legacyRecord.rows[0]?.properties.status).toBe('deprecated');
 
       // find_operations / list_allowed_operations / gate tool resolution dedupe by identity:
-      // exactly one candidate, the new published version.
+      // exactly one candidate, the new published version (see the "S8 W2-K1" comment earlier in
+      // this file for why the candidate list is filtered by name first — find_operations is now a
+      // tokenised keyword search, not a whole-string substring match).
       const candidates = await inTx((client) =>
         findOperationCandidates(client, workspaceId, { need: name }),
       );
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0]?.id).toBe(revision.id);
+      const ownCandidates = candidates.filter((c) => c.properties.name === name);
+      expect(ownCandidates).toHaveLength(1);
+      expect(ownCandidates[0]?.id).toBe(revision.id);
       const allowed = await inTx((client) =>
         listPublishedOperationsForGatekeepers(client, workspaceId, [gatekeeperId]),
       );
