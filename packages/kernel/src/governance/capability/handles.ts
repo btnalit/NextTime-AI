@@ -189,16 +189,6 @@ export const ENTRY_CEILING_CAPABILITIES: readonly string[] = buildEntryCeilingCa
 // is rejected (never silently dropped) — see that function's own doc comment for the full rule,
 // including why this is the literal mechanism behind "入口 Handle 请求含 execute 的子 Handle 被拒"
 // (docs/development-tasks.md S2.7 acceptance).
-//
-// Known seam for S2.4/S2.13: today this ceiling is the *only* source of what a WorkerRun Handle
-// may ever hold — there is no path yet for a Gatekeeper connection/grant (S2.13's
-// `connect_gatekeeper`, not yet implemented) to widen what an entry Handle can pass down. Once
-// S2.4/S2.13 land a real Gatekeeper and a real CapabilityGrant for it, extending *this* file's
-// `entryScope()` to also populate `resources` from the on_behalf_of principal's active Grants (or
-// extending `computeChildHandleScope` to consult `governance/capability/grants.ts`'s
-// `hasActiveGrant` directly) is the natural next step — deliberately not done here, since no real
-// Gatekeeper exists yet to grant access to and inventing the convention without that concrete
-// shape in hand would be speculative (B2 "write only what was asked for").
 // -------------------------------------------------------------------------------------------
 
 const WORKER_CEILING_EXTRA_CAPABILITY_NAMES = [
