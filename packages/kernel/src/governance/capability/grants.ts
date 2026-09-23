@@ -206,29 +206,93 @@ export async function getGrant(
  * what is currently active (unlike `hasActiveGrant`/`listGrantHolderPrincipalIds` above, which are
  * I14's "does an *active* grant exist" question, not a directory read).
  */
+// -------------------------------------------------------------------------------------------
+// S8 W1-C (leftover 48 pagination list): `list_grants` keyset cursor — same
+// `(date_trunc('milliseconds', created_at), id)` shape docs/wire-contract-conventions.md §3
+// names, `desc` (newest first), preserving `listGrants`'s own pre-existing `order by created_at
+// desc` for the no-`limit` case. One private cursor copy per list (this codebase's established
+// convention — see `governance/approval/reads.ts`'s own doc comment).
+// -------------------------------------------------------------------------------------------
+export const DEFAULT_LIST_GRANTS_LIMIT = 100;
+export const MAX_LIST_GRANTS_LIMIT = 500;
+
+const GRANT_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function encodeListGrantsCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeListGrantsCursor(
+  cursor: string | undefined,
+): { readonly createdAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const createdAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (!createdAt || Number.isNaN(Date.parse(createdAt)) || !GRANT_UUID_PATTERN.test(id)) {
+      return null;
+    }
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
 export interface ListGrantsFilter {
   readonly principalId?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface ListGrantsPage {
+  readonly items: readonly CapabilityGrantRow[];
+  readonly nextCursor?: string;
+  readonly truncated?: true;
 }
 
 export async function listGrants(
   client: PoolClient,
   workspaceId: string,
   filter: ListGrantsFilter = {},
-): Promise<readonly CapabilityGrantRow[]> {
-  const result = filter.principalId
-    ? await client.query<CapabilityGrantDbRow>(
-        `select ${GRANT_COLUMNS} from capability_grants
-         where workspace_id = $1 and principal_id = $2
-         order by created_at desc`,
-        [workspaceId, filter.principalId],
-      )
-    : await client.query<CapabilityGrantDbRow>(
-        `select ${GRANT_COLUMNS} from capability_grants
-         where workspace_id = $1
-         order by created_at desc`,
-        [workspaceId],
-      );
-  return result.rows.map(mapGrantRow);
+): Promise<ListGrantsPage> {
+  const requestedLimit = filter.limit ?? DEFAULT_LIST_GRANTS_LIMIT;
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_GRANTS_LIMIT);
+  const cursor = decodeListGrantsCursor(filter.cursor);
+
+  const result = await client.query<CapabilityGrantDbRow>(
+    `select ${GRANT_COLUMNS} from capability_grants
+     where workspace_id = $1
+       and ($2::uuid is null or principal_id = $2)
+       and (
+         $3::timestamptz is null
+         or (date_trunc('milliseconds', created_at), id) < ($3::timestamptz, $4::uuid)
+       )
+     order by date_trunc('milliseconds', created_at) desc, id desc
+     limit $5`,
+    [
+      workspaceId,
+      filter.principalId ?? null,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
+      limit + 1,
+    ],
+  );
+
+  const rows = result.rows.slice(0, limit).map(mapGrantRow);
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    result.rows.length > limit && last
+      ? encodeListGrantsCursor(last.createdAt, last.id)
+      : undefined;
+  const truncated = requestedLimit > MAX_LIST_GRANTS_LIMIT ? (true as const) : undefined;
+  return {
+    items: rows,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
 }
 
 // -------------------------------------------------------------------------------------------

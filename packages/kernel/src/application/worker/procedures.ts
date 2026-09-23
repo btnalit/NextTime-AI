@@ -365,21 +365,90 @@ export async function getProcedure(
   return row ? mapRow(row) : null;
 }
 
+// -------------------------------------------------------------------------------------------
+// S8 W1-C (leftover 48 pagination list): same shape/reasoning as `skills.ts`'s own `listSkills`
+// keyset page — see that function's own doc comment.
+// -------------------------------------------------------------------------------------------
+export const DEFAULT_LIST_PROCEDURES_LIMIT = 100;
+export const MAX_LIST_PROCEDURES_LIMIT = 500;
+
+const PROCEDURE_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function encodeListProceduresCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeListProceduresCursor(
+  cursor: string | undefined,
+): { readonly createdAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const createdAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (!createdAt || Number.isNaN(Date.parse(createdAt)) || !PROCEDURE_UUID_PATTERN.test(id)) {
+      return null;
+    }
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
+export interface ListProceduresFilter {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface ProceduresPage {
+  readonly items: readonly ProcedureRow[];
+  readonly nextCursor?: string;
+  readonly truncated?: true;
+}
+
 /** `list_procedures` — same "published, or my own draft" predicate as `skills.ts`'s `listSkills`
- *  (I16 read-privacy; see that function's own doc comment). */
+ *  (I16 read-privacy; see that function's own doc comment), and the same keyset-page shape. */
 export async function listProcedures(
   client: PoolClient,
   workspaceId: string,
   callerPrincipalId: string,
-): Promise<readonly ProcedureRow[]> {
+  filter: ListProceduresFilter = {},
+): Promise<ProceduresPage> {
+  const requestedLimit = filter.limit ?? DEFAULT_LIST_PROCEDURES_LIMIT;
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_PROCEDURES_LIMIT);
+  const cursor = decodeListProceduresCursor(filter.cursor);
+
   const result = await client.query<ProcedureDbRow>(
-    `select distinct on (id) ${SELECT_COLUMNS} from procedures
-     where workspace_id = $1
-       and (status = 'published' or (status = 'draft' and proposed_by = $2))
-     order by id, version desc`,
-    [workspaceId, callerPrincipalId],
+    `with latest as (
+       select distinct on (id) ${SELECT_COLUMNS} from procedures
+       where workspace_id = $1
+         and (status = 'published' or (status = 'draft' and proposed_by = $2))
+       order by id, version desc
+     )
+     select * from latest
+     where (
+       $3::timestamptz is null
+       or (date_trunc('milliseconds', created_at), id) < ($3::timestamptz, $4::uuid)
+     )
+     order by date_trunc('milliseconds', created_at) desc, id desc
+     limit $5`,
+    [workspaceId, callerPrincipalId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
   );
-  return result.rows.map(mapRow);
+
+  const rows = result.rows.slice(0, limit).map(mapRow);
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    result.rows.length > limit && last
+      ? encodeListProceduresCursor(last.createdAt, last.id)
+      : undefined;
+  const truncated = requestedLimit > MAX_LIST_PROCEDURES_LIMIT ? (true as const) : undefined;
+  return {
+    items: rows,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
 }
 
 export { IllegalTransition };

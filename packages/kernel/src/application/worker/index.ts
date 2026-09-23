@@ -16,6 +16,7 @@ export {
   getPublishedEntryDefinition,
   getWorkerDefinition,
   listWorkerDefinitions,
+  listWorkerDefinitionsPage,
   proposeWorkerDefinition,
   publishWorkerDefinition,
   requirePublishedWorkerDefinition,
@@ -26,13 +27,16 @@ export {
   WorkerDefinitionValidationError,
 } from './definitions.js';
 export type {
+  ListWorkerDefinitionsPageFilter,
   ProposeWorkerDefinitionInput,
   WorkerDefinitionRow,
+  WorkerDefinitionsPage,
   WorkerDefinitionVersionRef,
 } from './definitions.js';
 
 export {
   deprecateSkill,
+  getSkill,
   listPublishedSkillIds,
   listSkills,
   proposeSkill,
@@ -43,7 +47,7 @@ export {
   SkillNotFoundError,
   SkillValidationError,
 } from './skills.js';
-export type { ProposeSkillInput, SkillRow } from './skills.js';
+export type { ListSkillsFilter, ProposeSkillInput, SkillRow, SkillsPage } from './skills.js';
 
 export {
   deprecateProcedure,
@@ -54,4 +58,9 @@ export {
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
 } from './procedures.js';
-export type { ProcedureRow, ProposeProcedureInput } from './procedures.js';
+export type {
+  ListProceduresFilter,
+  ProcedureRow,
+  ProceduresPage,
+  ProposeProcedureInput,
+} from './procedures.js';

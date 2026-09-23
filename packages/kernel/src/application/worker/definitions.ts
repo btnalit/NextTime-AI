@@ -401,7 +401,9 @@ export async function getPublishedEntryDefinition(
 
 /** Lists published WorkerDefinitions (`list_worker_definitions`'s own description: "List
  *  published WorkerDefinitions" — packages/shared/src/capabilities.ts), optionally filtered by
- *  `kind`. */
+ *  `kind`. Every caller that does not need pagination (`find_workers`'s own candidate resolution,
+ *  `application/gateway/agent-profile-handlers.ts`'s `resolveAvailableResources`) keeps calling
+ *  this with `paginate` omitted — unpaginated, unchanged behavior, every published row. */
 export async function listWorkerDefinitions(
   client: PoolClient,
   workspaceId: string,
@@ -421,6 +423,99 @@ export async function listWorkerDefinitions(
         [workspaceId],
       );
   return result.rows.map(mapRow);
+}
+
+// -------------------------------------------------------------------------------------------
+// S8 W1-C (leftover 48 pagination list): `list_worker_definitions`'s own keyset page — a second,
+// paginated entry point rather than changing `listWorkerDefinitions`'s own signature/behavior
+// above (every existing caller of that function needs the full, unpaginated list — `find_workers`'
+// candidate resolution and `resolveAvailableResources`'s AgentProfile ceiling both iterate every
+// published row; splitting the read-model capability's own paginated shape into its own function
+// keeps neither one guessing at a default `limit` it does not need). Same
+// `(date_trunc('milliseconds', created_at), id)` cursor shape, `desc` — preserves the pre-existing
+// `order by created_at desc` for the no-`limit` case.
+// -------------------------------------------------------------------------------------------
+export const DEFAULT_LIST_WORKER_DEFINITIONS_LIMIT = 100;
+export const MAX_LIST_WORKER_DEFINITIONS_LIMIT = 500;
+
+const WORKER_DEFINITION_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function encodeListWorkerDefinitionsCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeListWorkerDefinitionsCursor(
+  cursor: string | undefined,
+): { readonly createdAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const createdAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (
+      !createdAt ||
+      Number.isNaN(Date.parse(createdAt)) ||
+      !WORKER_DEFINITION_UUID_PATTERN.test(id)
+    ) {
+      return null;
+    }
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
+export interface ListWorkerDefinitionsPageFilter {
+  readonly kind?: WorkerDefinitionKind;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface WorkerDefinitionsPage {
+  readonly items: readonly WorkerDefinitionRow[];
+  readonly nextCursor?: string;
+  readonly truncated?: true;
+}
+
+export async function listWorkerDefinitionsPage(
+  client: PoolClient,
+  workspaceId: string,
+  filter: ListWorkerDefinitionsPageFilter = {},
+): Promise<WorkerDefinitionsPage> {
+  const requestedLimit = filter.limit ?? DEFAULT_LIST_WORKER_DEFINITIONS_LIMIT;
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_WORKER_DEFINITIONS_LIMIT);
+  const cursor = decodeListWorkerDefinitionsCursor(filter.cursor);
+
+  const result = await client.query<WorkerDefinitionDbRow>(
+    `select ${SELECT_COLUMNS} from worker_definitions
+     where workspace_id = $1
+       and status = 'published'
+       and ($2::text is null or kind = $2)
+       and (
+         $3::timestamptz is null
+         or (date_trunc('milliseconds', created_at), id) < ($3::timestamptz, $4::uuid)
+       )
+     order by date_trunc('milliseconds', created_at) desc, id desc
+     limit $5`,
+    [workspaceId, filter.kind ?? null, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+  );
+
+  const rows = result.rows.slice(0, limit).map(mapRow);
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    result.rows.length > limit && last
+      ? encodeListWorkerDefinitionsCursor(last.createdAt, last.id)
+      : undefined;
+  const truncated =
+    requestedLimit > MAX_LIST_WORKER_DEFINITIONS_LIMIT ? (true as const) : undefined;
+  return {
+    items: rows,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
 }
 
 export { IllegalTransition };

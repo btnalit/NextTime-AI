@@ -375,19 +375,117 @@ export async function deprecateSkill(
  *  draft proposed by principal A is simply absent from principal B's `list_skills` result, the same
  *  "not found" behavior a single-row lookup would give, without needing a separate single-row
  *  capability to test it against). */
+// -------------------------------------------------------------------------------------------
+// S8 W1-C (leftover 48 pagination list): `list_skills` keyset page — the pre-existing `distinct
+// on (id) ... order by id, version desc` picked "latest version per id" but sorted the *page*
+// itself by `id` (an arbitrary uuid order, not a business ordering) — no existing caller relies
+// on that specific order (only `.some(...)`/set-membership checks; `packages/web/src/lib/*.ts`
+// callers pass no `limit` and build an id→row map, order-independent), so wrapping the dedup in a
+// CTE and sorting the outer page `created_at desc` (newest first, this task's own default
+// direction) is additive, not a behavior change any caller depends on.
+// -------------------------------------------------------------------------------------------
+export const DEFAULT_LIST_SKILLS_LIMIT = 100;
+export const MAX_LIST_SKILLS_LIMIT = 500;
+
+const SKILL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function encodeListSkillsCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeListSkillsCursor(
+  cursor: string | undefined,
+): { readonly createdAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const createdAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (!createdAt || Number.isNaN(Date.parse(createdAt)) || !SKILL_UUID_PATTERN.test(id)) {
+      return null;
+    }
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
+export interface ListSkillsFilter {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface SkillsPage {
+  readonly items: readonly SkillRow[];
+  readonly nextCursor?: string;
+  readonly truncated?: true;
+}
+
 export async function listSkills(
   client: PoolClient,
   workspaceId: string,
   callerPrincipalId: string,
-): Promise<readonly SkillRow[]> {
+  filter: ListSkillsFilter = {},
+): Promise<SkillsPage> {
+  const requestedLimit = filter.limit ?? DEFAULT_LIST_SKILLS_LIMIT;
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_SKILLS_LIMIT);
+  const cursor = decodeListSkillsCursor(filter.cursor);
+
   const result = await client.query<SkillDbRow>(
-    `select distinct on (id) ${SELECT_COLUMNS} from skills
-     where workspace_id = $1
-       and (status = 'published' or (status = 'draft' and proposed_by = $2))
-     order by id, version desc`,
-    [workspaceId, callerPrincipalId],
+    `with latest as (
+       select distinct on (id) ${SELECT_COLUMNS} from skills
+       where workspace_id = $1
+         and (status = 'published' or (status = 'draft' and proposed_by = $2))
+       order by id, version desc
+     )
+     select * from latest
+     where (
+       $3::timestamptz is null
+       or (date_trunc('milliseconds', created_at), id) < ($3::timestamptz, $4::uuid)
+     )
+     order by date_trunc('milliseconds', created_at) desc, id desc
+     limit $5`,
+    [workspaceId, callerPrincipalId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
   );
-  return result.rows.map(mapRow);
+
+  const rows = result.rows.slice(0, limit).map(mapRow);
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    result.rows.length > limit && last
+      ? encodeListSkillsCursor(last.createdAt, last.id)
+      : undefined;
+  const truncated = requestedLimit > MAX_LIST_SKILLS_LIMIT ? (true as const) : undefined;
+  return {
+    items: rows,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
+}
+
+/** `get_skill` (S8 W1-C, leftover 48 "无 get_skill"): one Skill's latest version, full markdown
+ *  body included — same I16 read-privacy predicate as `listSkills` (published, or the caller's
+ *  own draft); `null` for an unknown id or a draft the caller does not own (never distinguished —
+ *  same "not found" convention `listSkills`'s own doc comment already established for this
+ *  predicate). */
+export async function getSkill(
+  client: PoolClient,
+  workspaceId: string,
+  callerPrincipalId: string,
+  skillId: string,
+): Promise<SkillRow | null> {
+  const result = await client.query<SkillDbRow>(
+    `select ${SELECT_COLUMNS} from skills
+     where workspace_id = $1
+       and id = $2
+       and (status = 'published' or (status = 'draft' and proposed_by = $3))
+     order by version desc
+     limit 1`,
+    [workspaceId, skillId, callerPrincipalId],
+  );
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
 }
 
 /** Every currently-published Skill's own `id` (workspace-wide, no caller-draft mixing — unlike

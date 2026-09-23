@@ -171,12 +171,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         const ownList = await inTx(proposerId, (client) =>
           listSkills(client, workspaceId, proposerId),
         );
-        expect(ownList.some((s) => s.name === unique)).toBe(true);
+        expect(ownList.items.some((s) => s.name === unique)).toBe(true);
 
         const otherList = await inTx(otherPrincipalId, (client) =>
           listSkills(client, workspaceId, otherPrincipalId),
         );
-        expect(otherList.some((s) => s.name === unique)).toBe(false);
+        expect(otherList.items.some((s) => s.name === unique)).toBe(false);
       });
 
       it('after publish, the Skill becomes visible to every principal', async () => {
@@ -189,7 +189,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         const otherList = await inTx(otherPrincipalId, (client) =>
           listSkills(client, workspaceId, otherPrincipalId),
         );
-        expect(otherList.some((s) => s.name === unique && s.status === 'published')).toBe(true);
+        expect(otherList.items.some((s) => s.name === unique && s.status === 'published')).toBe(
+          true,
+        );
       });
     });
 
