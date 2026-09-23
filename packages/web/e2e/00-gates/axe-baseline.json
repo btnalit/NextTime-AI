@@ -1,1 +1,142 @@
-{}
+{
+  "access": {
+    "color-contrast": {
+      "count": 25
+    },
+    "link-in-text-block": {
+      "count": 1
+    }
+  },
+  "account": {
+    "color-contrast": {
+      "count": 3
+    }
+  },
+  "agent": {
+    "color-contrast": {
+      "count": 15
+    }
+  },
+  "approvals": {
+    "color-contrast": {
+      "count": 4
+    }
+  },
+  "audit": {
+    "color-contrast": {
+      "count": 6
+    }
+  },
+  "catalog-modules": {
+    "color-contrast": {
+      "count": 8
+    }
+  },
+  "catalog-operations": {
+    "color-contrast": {
+      "count": 5
+    }
+  },
+  "catalog-procedures": {
+    "color-contrast": {
+      "count": 5
+    }
+  },
+  "catalog-skills": {
+    "color-contrast": {
+      "count": 5
+    }
+  },
+  "catalog-workers": {
+    "color-contrast": {
+      "count": 4
+    }
+  },
+  "chats": {
+    "color-contrast": {
+      "count": 4
+    }
+  },
+  "graph": {
+    "color-contrast": {
+      "count": 7
+    }
+  },
+  "login": {},
+  "members": {
+    "color-contrast": {
+      "count": 4
+    }
+  },
+  "models": {
+    "color-contrast": {
+      "count": 22
+    }
+  },
+  "platform-audit": {
+    "color-contrast": {
+      "count": 5
+    }
+  },
+  "platform-integrations": {
+    "color-contrast": {
+      "count": 11
+    },
+    "select-name": {
+      "count": 5
+    }
+  },
+  "platform-models": {
+    "color-contrast": {
+      "count": 5
+    }
+  },
+  "platform-modules": {
+    "color-contrast": {
+      "count": 10
+    }
+  },
+  "platform-overview": {
+    "color-contrast": {
+      "count": 5
+    }
+  },
+  "platform-runtime": {
+    "color-contrast": {
+      "count": 5
+    }
+  },
+  "platform-settings": {
+    "color-contrast": {
+      "count": 6
+    },
+    "link-in-text-block": {
+      "count": 1
+    }
+  },
+  "platform-status": {
+    "color-contrast": {
+      "count": 5
+    }
+  },
+  "platform-users": {
+    "color-contrast": {
+      "count": 16
+    }
+  },
+  "platform-workspaces": {
+    "color-contrast": {
+      "count": 17
+    }
+  },
+  "systems": {
+    "color-contrast": {
+      "count": 6
+    }
+  },
+  "tasks": {
+    "color-contrast": {
+      "count": 5
+    }
+  }
+}
