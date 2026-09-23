@@ -73,7 +73,11 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
           value={key}
           onChange={(event) => setKey(event.target.value)}
           placeholder="sk-…"
-          autoComplete="off"
+          // P3 hotfix (post-v0.16.0 review): `autocomplete="off"` is widely ignored by browser
+          // password managers on a `type="password"` input, which then offer to autofill/save an
+          // unrelated saved credential here — `"new-password"` is the value browsers actually
+          // respect for "this is a fresh secret, never autofill, never offer to save".
+          autoComplete="new-password"
           disabled={submitting}
           mono
           data-testid="provider-secret-input"

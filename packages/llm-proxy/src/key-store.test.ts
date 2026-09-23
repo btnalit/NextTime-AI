@@ -44,6 +44,23 @@ describe('KeyStore', () => {
     expect(store.has('acme')).toBe(false);
   });
 
+  it('never reads through the prototype chain for a prototype-shaped id (P3 hotfix, post-v0.16.0 review)', async () => {
+    const store = new KeyStore(join(tempDir(), 'keys.json'));
+    await store.load();
+    for (const id of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(store.has(id)).toBe(false);
+      expect(store.get(id)).toBeUndefined();
+      expect(await store.remove(id)).toBe(false);
+    }
+    // Setting one of these ids for real must still work — an own property with that literal
+    // name, not a prototype mutation (object-literal computed keys never trigger the special
+    // `__proto__` setter).
+    await store.set('__proto__', 'sk-proto-shaped-id');
+    expect(store.has('__proto__')).toBe(true);
+    expect(store.get('__proto__')).toBe('sk-proto-shaped-id');
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype); // no pollution leaked globally
+  });
+
   it('set persists atomically (tmp + rename, no debris), mode 0600, and is readable back hot', async () => {
     const dir = tempDir();
     const file = join(dir, 'keys.json');

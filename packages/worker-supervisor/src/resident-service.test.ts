@@ -470,6 +470,23 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
         labels: { 'ai.nexttime.pi-version': '0.84.4' },
       },
     ]);
+    // P1-a hotfix (post-v0.16.0 review): `allowedImages` is `config.taskImageAllowlist` verbatim
+    // — the same static list `isImageAllowed`/`/task/spawn`/`/resident/spawn` already enforce, so
+    // the kernel can reject a `set_active_runtime_image` target that would 403 at spawn time
+    // instead of only discovering it later.
+    expect(result.allowedImages).toEqual(config.taskImageAllowlist);
+  });
+
+  it('listImages() reports allowedImages additively from WORKER_IMAGE_ALLOWLIST, not just config.workerImage (P1-a hotfix)', async () => {
+    const { service, config } = setup({ WORKER_IMAGE_ALLOWLIST: 'nexttime-ai-worker-runtime:v1' });
+    const result = await service.listImages();
+    // P1-a review follow-up (PR #233): config.workerImage itself stays raw — `taskImageAllowlist`
+    // (what listImages() actually reports) is the normalized form, Docker's own implicit :latest.
+    expect(config.workerImage).toBe('nexttime-ai-worker-runtime');
+    expect(result.allowedImages).toEqual([
+      'nexttime-ai-worker-runtime:latest',
+      'nexttime-ai-worker-runtime:v1',
+    ]);
   });
 });
 

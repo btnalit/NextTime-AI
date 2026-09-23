@@ -206,6 +206,11 @@ export const DeleteLlmProviderResultWireSchema = z
     deleted: z.literal(true),
     /** `true` when the deleted row was an override and the file entry is visible again. */
     restoredFileEntry: z.boolean(),
+    /** P2 hotfix (post-v0.16.0 review): `true` when this delete also cleared a console key that
+     *  had been set for this provider id (key-store.ts) — recreating the id later never silently
+     *  reuses a stale key against a possibly different upstream. `false` when there was no console
+     *  key to clear. */
+    secretCleared: z.boolean(),
   })
   .strict();
 export type DeleteLlmProviderResultWire = z.infer<typeof DeleteLlmProviderResultWireSchema>;

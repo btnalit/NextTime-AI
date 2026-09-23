@@ -123,6 +123,169 @@ function createFakeClient(options: FakeClientOptions) {
   return { client, calls, workspaceId, taskId, workerRunId, actorPrincipalId };
 }
 
+/**
+ * A second fake `PoolClient`, purpose-built for the P1-b hotfix (post-v0.16.0 review, "task status
+ * race"): scripts the exact sequence of return values for `readTaskRow`'s SELECT and the guarded
+ * `update tasks ... where ... and status = $3` UPDATE, rather than modeling real concurrency (the
+ * dispatch's own "no real race needed" — a lost guarded UPDATE and a concurrent writer's status
+ * change are indistinguishable from this function's point of view; scripting `rowCount: 0` directly
+ * exercises the same code path a real race would).
+ */
+interface RaceFakeClientOptions {
+  /** Each `select ... from tasks` call returns the next entry — the first is
+   *  `completeTaskWithResult`'s own initial read; each later one models a re-read after a lost
+   *  guarded-UPDATE attempt. The queue's last entry repeats once exhausted. */
+  readonly taskStatuses: readonly TaskStatus[];
+  /** Each guarded `update tasks ... returning` call consumes the next entry — `true` = the guard
+   *  matched (rowCount 1, the row moves to `completed`), `false` = it did not (rowCount 0). */
+  readonly updateOutcomes: readonly boolean[];
+}
+
+function createRaceFakeClient(options: RaceFakeClientOptions) {
+  const workspaceId = 'ws-1';
+  const taskId = 'task-1';
+  const workerRunId = 'wr-1';
+  const actorPrincipalId = 'principal-1';
+
+  const baseTaskRow = {
+    workspace_id: workspaceId,
+    id: taskId,
+    on_behalf_of: actorPrincipalId,
+    created_by_activity_id: null,
+    worker_definition_id: 'def-1',
+    worker_definition_version: 1,
+    input: {},
+    result: null,
+    token_budget: null,
+    duration_limit_sec: null,
+    tokens_used: 0,
+    budget_warned_at: null,
+    failure_reason: null,
+    retry_count: 0,
+    created_at: new Date(),
+    updated_at: new Date(),
+    completed_at: null,
+    failed_at: null,
+    cancelled_at: null,
+  };
+
+  const workerRunDbRow = {
+    workspace_id: workspaceId,
+    id: workerRunId,
+    status: 'running',
+    task_id: taskId,
+    parent_worker_run_id: null,
+    session_id: null,
+    container_id: null,
+    depth: 0,
+    activity_id: null,
+    attempt: 1,
+    agent_principal_id: 'agent-1',
+    started_at: new Date(),
+    terminated_at: null,
+  };
+
+  const auditRowFor = () => ({
+    workspace_id: workspaceId,
+    id: randomUUID(),
+    actor_principal_id: actorPrincipalId,
+    actor_user_id: null,
+    action: 'x',
+    resource_type: null,
+    resource_id: null,
+    payload: {},
+    created_at: new Date(),
+  });
+
+  let taskReadIndex = 0;
+  let updateIndex = 0;
+
+  const client = {
+    query: async (text: string) => {
+      const sql = text.replace(/\s+/g, ' ').trim().toLowerCase();
+
+      if (sql.startsWith('update tasks') && sql.includes('returning')) {
+        const outcome = options.updateOutcomes[updateIndex] ?? true;
+        updateIndex += 1;
+        if (!outcome) return { rows: [], rowCount: 0 };
+        return {
+          rows: [{ ...baseTaskRow, status: 'completed', completed_at: new Date() }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith('select') && sql.includes('from tasks')) {
+        const idx = Math.min(taskReadIndex, options.taskStatuses.length - 1);
+        const status = options.taskStatuses[idx];
+        taskReadIndex += 1;
+        return { rows: [{ ...baseTaskRow, status }], rowCount: 1 };
+      }
+      if (
+        sql.startsWith('select') &&
+        sql.includes('where workspace_id = $1 and parent_worker_run_id = $2')
+      ) {
+        return { rows: [], rowCount: 0 }; // no children
+      }
+      if (sql.startsWith('select') && sql.includes('from worker_runs')) {
+        return { rows: [workerRunDbRow], rowCount: 1 };
+      }
+      if (sql.startsWith('update worker_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.startsWith('insert into audit_records')) {
+        return { rows: [auditRowFor()], rowCount: 1 };
+      }
+      if (sql.startsWith('insert into outbox')) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(`fake PoolClient: unhandled query in lifecycle.test.ts (race): ${text}`);
+    },
+  } as unknown as PoolClient;
+
+  return { client, workspaceId, taskId, workerRunId, actorPrincipalId };
+}
+
+describe('completeTaskWithResult — status-guarded UPDATE + retry (P1-b hotfix, post-v0.16.0 review "task status race")', () => {
+  it('retries once and succeeds when the guarded UPDATE loses the race exactly once (e.g. an approval landing waiting_approval -> running concurrently)', async () => {
+    const { client, workspaceId, taskId, workerRunId, actorPrincipalId } = createRaceFakeClient({
+      taskStatuses: ['waiting_approval', 'running'],
+      updateOutcomes: [false, true],
+    });
+
+    const result = await completeTaskWithResult(
+      client,
+      workspaceId,
+      actorPrincipalId,
+      taskId,
+      workerRunId,
+      { summary: 'completed after one retry' },
+    );
+
+    expect(result.status).toBe('completed');
+  });
+
+  it('throws IllegalTransition (never reverts) when the re-read after a lost race finds a terminal status', async () => {
+    const { client, workspaceId, taskId, workerRunId, actorPrincipalId } = createRaceFakeClient({
+      taskStatuses: ['running', 'cancelled'],
+      updateOutcomes: [false],
+    });
+
+    await expect(
+      completeTaskWithResult(client, workspaceId, actorPrincipalId, taskId, workerRunId, {}),
+    ).rejects.toThrow(IllegalTransition);
+  });
+
+  it('throws IllegalTransition after losing the guarded UPDATE race twice in a row, instead of retrying forever', async () => {
+    const { client, workspaceId, taskId, workerRunId, actorPrincipalId } = createRaceFakeClient({
+      taskStatuses: ['running', 'running'],
+      updateOutcomes: [false, false],
+    });
+
+    await expect(
+      completeTaskWithResult(client, workspaceId, actorPrincipalId, taskId, workerRunId, {}),
+    ).rejects.toThrow(IllegalTransition);
+  });
+});
+
 describe('completeTaskWithResult — waiting_approval (leftover 47)', () => {
   it('completes a Task that is waiting_approval by hopping through the already-existing resume edge, instead of throwing IllegalTransition', async () => {
     const { client, workspaceId, taskId, workerRunId, actorPrincipalId } = createFakeClient({

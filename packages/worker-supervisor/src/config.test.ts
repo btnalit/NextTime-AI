@@ -41,7 +41,9 @@ describe('loadConfig', () => {
     expect(config.taskMaxRuntimeSec).toBe(3600);
     expect(config.taskWorkdirRetentionHours).toBe(72);
     expect(config.taskReapIntervalMs).toBe(10_000);
-    expect(config.taskImageAllowlist).toEqual(['nexttime-ai-worker-runtime']);
+    // P1-a review follow-up (PR #233): normalized to Docker's own implicit :latest — see
+    // buildTaskImageAllowlist's own doc comment.
+    expect(config.taskImageAllowlist).toEqual(['nexttime-ai-worker-runtime:latest']);
   });
 
   it('honors every override', () => {
@@ -95,7 +97,11 @@ describe('loadConfig', () => {
       taskWorkdirRetentionHours: 24,
       taskReapIntervalMs: 5000,
     });
-    expect(config.taskImageAllowlist).toEqual(['custom-image', 'extra-image-a', 'extra-image-b']);
+    expect(config.taskImageAllowlist).toEqual([
+      'custom-image:latest',
+      'extra-image-a:latest',
+      'extra-image-b:latest',
+    ]);
   });
 
   it('ignores non-numeric overrides and falls back to the default', () => {
@@ -409,5 +415,22 @@ describe('isImageAllowed', () => {
     expect(isImageAllowed(config, 'nexttime-ai-worker-runtime')).toBe(true);
     expect(isImageAllowed(config, 'extra-image')).toBe(true);
     expect(isImageAllowed(config, 'still-not-allowed')).toBe(false);
+  });
+
+  // P1-a review follow-up (post-v0.16.0, PR #233): an allowlist entry with no explicit tag means
+  // Docker's own implicit :latest (`name` ≡ `name:latest`) — permits both the bare name and the
+  // explicit :latest form of the *same* image, but never a genuinely different tag.
+  it('an untagged allowlist entry (Docker\'s own implicit :latest) permits both the bare name and ":latest", never a different tag', () => {
+    const config = loadConfig({ NEXTTIME_DATA: '/d', WORKER_IMAGE: 'x' });
+    expect(isImageAllowed(config, 'x')).toBe(true);
+    expect(isImageAllowed(config, 'x:latest')).toBe(true);
+    expect(isImageAllowed(config, 'x:v1')).toBe(false);
+  });
+
+  it('an allowlist entry with an explicit tag only permits that exact tag, not the bare name', () => {
+    const config = loadConfig({ NEXTTIME_DATA: '/d', WORKER_IMAGE: 'x:v1' });
+    expect(isImageAllowed(config, 'x:v1')).toBe(true);
+    expect(isImageAllowed(config, 'x')).toBe(false);
+    expect(isImageAllowed(config, 'x:latest')).toBe(false);
   });
 });

@@ -47,6 +47,30 @@ describe('ProviderStore', () => {
     expect(store.entries()).toEqual([]);
   });
 
+  it('never reads through the prototype chain for a prototype-shaped id (P3 hotfix, post-v0.16.0 review)', async () => {
+    const store = new ProviderStore(join(tempDir(), 'providers.json'));
+    await store.load();
+    const testResult = {
+      model: 'm1',
+      completion: 'ok' as const,
+      tool_call: 'ok' as const,
+      latency_ms: 1,
+      error: null,
+      tested_at: '2026-09-19T00:00:00.000Z',
+    };
+    for (const id of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(store.get(id)).toBeUndefined();
+      expect(await store.remove(id)).toBe(false);
+      expect(await store.recordTest(id, testResult)).toBe(false);
+    }
+    // Setting one of these ids for real must still work — an own property with that literal
+    // name, not a prototype mutation (object-literal computed keys never trigger the special
+    // `__proto__` setter).
+    await store.upsert('__proto__', ENTRY, new Date('2026-09-19T00:00:00.000Z'));
+    expect(store.get('__proto__')).toBeDefined();
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype); // no pollution leaked globally
+  });
+
   it('upsert persists atomically (tmp + rename, no debris) and stamps created_at / updated_at', async () => {
     const dir = tempDir();
     const file = join(dir, 'providers.json');

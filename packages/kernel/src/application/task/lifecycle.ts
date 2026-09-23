@@ -1,4 +1,5 @@
 import {
+  IllegalTransition,
   TASK_TRANSITIONS,
   type TaskEvent,
   type TaskStatus,
@@ -243,6 +244,34 @@ export async function failTaskRow(
  * edge is added to `TASK_TRANSITIONS`. The ActionRequest itself is unaffected: it keeps resolving
  * through its own state machine independent of the Task's status, same as today.
  */
+/** One guarded attempt: validates `fromStatus`'s own transition legality (never touches the DB —
+ *  a bad hop throws `IllegalTransition` before any query runs, same as before this fix), then runs
+ *  the UPDATE conditioned on `status = fromStatus`. Returns `undefined` on `rowCount === 0` — the
+ *  row's `status` no longer matched `fromStatus` by the time this ran, meaning some other writer
+ *  changed it concurrently since it was read — never an error by itself; the caller decides what
+ *  that means. */
+async function attemptCompleteTask(
+  client: PoolClient,
+  workspaceId: string,
+  taskId: string,
+  fromStatus: TaskStatus,
+  result: unknown,
+): Promise<TaskRow | undefined> {
+  let cursor: TaskStatus = fromStatus;
+  for (const event of pathToRunningForComplete(fromStatus)) {
+    cursor = transition(TASK_TRANSITIONS, cursor, event);
+  }
+  transition(TASK_TRANSITIONS, cursor, 'complete');
+  const updateResult = await client.query(
+    `update tasks set status = 'completed', completed_at = now(), result = $4::jsonb
+     where workspace_id = $1 and id = $2 and status = $3
+     returning ${TASK_ROW_COLUMNS}`,
+    [workspaceId, taskId, fromStatus, JSON.stringify(result ?? null)],
+  );
+  const row = updateResult.rows[0];
+  return row ? mapTaskRow(row) : undefined;
+}
+
 export async function completeTaskWithResult(
   client: PoolClient,
   workspaceId: string,
@@ -251,23 +280,43 @@ export async function completeTaskWithResult(
   workerRunId: string,
   result: unknown,
 ): Promise<TaskRow> {
-  const row = await readTaskRow(client, workspaceId, taskId);
-  if (!row)
+  const initial = await readTaskRow(client, workspaceId, taskId);
+  if (!initial)
     throw new Error(`completeTaskWithResult: no Task ${taskId} in workspace ${workspaceId}`);
 
-  let cursor: TaskStatus = row.status;
-  for (const event of pathToRunningForComplete(row.status)) {
-    cursor = transition(TASK_TRANSITIONS, cursor, event);
+  // Status-guarded UPDATE + rowCount (leftover 47's race, P1-b hotfix, post-v0.16.0 review): the
+  // previous read-then-unconditional-UPDATE let a Worker's `report_task_result` call (this
+  // function) race a concurrently-landing approval resolution (`reaper.ts`'s
+  // `resumeTaskFromWaitingApproval`, `waiting_approval -> running`) — whichever UPDATE ran last
+  // silently won, and a `running -> completed` write landing after a stale read could revert an
+  // already-`completed` Task back toward `running` forever (the `waiting_approval` hop above would
+  // have already happened in memory, but the row itself had moved on). The UPDATE below is instead
+  // conditioned on `status = <the status just read>`; `rowCount === 0` means some other writer
+  // changed it first, and is never silently treated as success.
+  let updated = await attemptCompleteTask(client, workspaceId, taskId, initial.status, result);
+  if (!updated) {
+    // Lost the race — re-read once. A Task already in a terminal status has nothing left for this
+    // call to do (IllegalTransition, the same 409 this function has always thrown for a genuinely
+    // illegal call, e.g. calling `report_task_result` twice); anything else means the race is still
+    // live (e.g. the approval resolved `waiting_approval -> running` concurrently) and is retried
+    // exactly once more, from the freshly-read status.
+    const reread = await readTaskRow(client, workspaceId, taskId);
+    if (!reread) {
+      throw new Error(`completeTaskWithResult: Task ${taskId} disappeared mid-race`);
+    }
+    if (
+      reread.status === 'completed' ||
+      reread.status === 'failed' ||
+      reread.status === 'cancelled'
+    ) {
+      throw new IllegalTransition(TASK_TRANSITIONS.machine, reread.status, 'complete');
+    }
+    updated = await attemptCompleteTask(client, workspaceId, taskId, reread.status, result);
+    if (!updated) {
+      // Lost the guarded UPDATE race twice in a row — surface plainly instead of retrying forever.
+      throw new IllegalTransition(TASK_TRANSITIONS.machine, reread.status, 'complete');
+    }
   }
-  transition(TASK_TRANSITIONS, cursor, 'complete');
-  const updateResult = await client.query(
-    `update tasks set status = 'completed', completed_at = now(), result = $3::jsonb
-     where workspace_id = $1 and id = $2
-     returning ${TASK_ROW_COLUMNS}`,
-    [workspaceId, taskId, JSON.stringify(result ?? null)],
-  );
-  const updated = updateResult.rows[0];
-  if (!updated) throw new Error('completeTaskWithResult: UPDATE ... RETURNING produced no row');
 
   await recordTaskTransition(client, workspaceId, {
     actorPrincipalId,
@@ -278,7 +327,7 @@ export async function completeTaskWithResult(
 
   await terminateWorkerRunRow(client, workspaceId, actorPrincipalId, workerRunId, 'completed');
 
-  return mapTaskRow(updated);
+  return updated;
 }
 
 /**

@@ -99,6 +99,13 @@ export interface CreateWorkspaceOutcome {
   readonly ownerPrincipalId: string;
   /** Present only when `owner.issueApiKey` was set. Never logged. */
   readonly apiKey?: string;
+  /** P2 hotfix (post-v0.16.0 review, "default modules drift"): the subset of `input.defaultModules`
+   *  that named a module no longer in this deployment's module index (`ontology/modules.yaml`) —
+   *  always present, `[]` when every named module installed cleanly or `defaultModules` was
+   *  omitted. A deploy-time guard that keeps a platform setting's `defaultModules` in sync with the
+   *  currently-deployed index is deferred to S8 (not built here) — this only keeps one drifted name
+   *  from hard-failing the whole workspace-creation transaction. */
+  readonly skippedDefaultModules: readonly string[];
 }
 
 async function loadWorkerDefinitionTemplate(
@@ -119,6 +126,7 @@ export async function createWorkspaceWithOwner(
   const apiKey = input.owner.issueApiKey ? generateApiKey() : undefined;
   const apiKeyHash = apiKey ? hashApiKey(apiKey) : null;
   const ontologyDir = input.ontologyDir ?? resolveOntologyDir();
+  const skippedDefaultModules: string[] = [];
 
   await withWorkspace(
     pool,
@@ -175,9 +183,31 @@ export async function createWorkspaceWithOwner(
       // `installOrUpgradeModule` always takes its "family absent → publish the latest index
       // version" branch — never `confirm` (nothing installed yet to be `customized`, and a fresh
       // install is never a "breaking upgrade").
+      //
+      // P2 hotfix (post-v0.16.0 review, "default modules drift"): a platform setting's
+      // `defaultModules` can name a module that has since been removed from this deployment's own
+      // `ontology/modules.yaml` (a host upgraded the kernel image without also clearing the stale
+      // setting) — `installOrUpgradeModule`/`requireModule` would throw `ModuleNotFoundError` for
+      // that one name and hard-fail this entire transaction, refusing to create the workspace at
+      // all over an unrelated, already-broken setting. Skip an unknown name instead (warn-logged,
+      // collected into `skippedDefaultModules` for the caller's own audit row) and keep installing
+      // the rest. A deploy-time guard that keeps the setting itself from drifting is deferred to S8
+      // (not built here).
       if (input.defaultModules && input.defaultModules.length > 0) {
         const registry = await loadModuleRegistry(ontologyDir);
         for (const name of input.defaultModules) {
+          if (!registry.has(name)) {
+            skippedDefaultModules.push(name);
+            console.warn(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'application/workspace/create: defaultModules names a module no longer in the module index — skipped',
+                workspaceId,
+                name,
+              }),
+            );
+            continue;
+          }
           await installOrUpgradeModule(
             client,
             workspaceId,
@@ -207,5 +237,7 @@ export async function createWorkspaceWithOwner(
     { skipRoleSwitch: true },
   );
 
-  return apiKey ? { workspaceId, ownerPrincipalId, apiKey } : { workspaceId, ownerPrincipalId };
+  return apiKey
+    ? { workspaceId, ownerPrincipalId, apiKey, skippedDefaultModules }
+    : { workspaceId, ownerPrincipalId, skippedDefaultModules };
 }

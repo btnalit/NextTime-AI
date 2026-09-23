@@ -93,7 +93,10 @@ export type PlatformErrorCode =
   // S7-E (P-C §6.5; application/platform/runtime.ts)
   | 'image_not_in_inventory'
   | 'runtime_unreachable'
-  | 'no_previous_settings_version';
+  | 'no_previous_settings_version'
+  // P1-a hotfix (post-v0.16.0 review): a target not in worker-supervisor's own allowlist
+  // (`WORKER_IMAGE_ALLOWLIST` / `config.taskImageAllowlist`) — see runtime.ts.
+  | 'image_not_allowed';
 
 /** Mapped by interfaces/http/capability-route.ts: `*_not_found` → 404, the rest → 409. */
 export class PlatformAdminError extends Error {
@@ -1125,7 +1128,7 @@ export const createWorkspaceHandler: CapabilityHandler = async (
     resourceType: 'workspace',
     resourceId: workspaceId,
     afterCommit: async (pool: PoolLike) => {
-      await createWorkspaceWithOwner(pool, {
+      const outcome = await createWorkspaceWithOwner(pool, {
         workspaceId,
         name: input.name,
         owner: { userId: owner.id, displayName: owner.displayName },
@@ -1134,6 +1137,30 @@ export const createWorkspaceHandler: CapabilityHandler = async (
         ontologyEnforcement: input.ontologyEnforcement,
         defaultModules: settings.defaultModules,
       });
+      // P2 hotfix (post-v0.16.0 review, "default modules drift"): only known once the bootstrap
+      // above has actually run its install loop — too late for the phase-1 `workspace.created` row
+      // above (already committed). A second row, same action/resourceId, same "hand-written row
+      // alongside the automatic one" convention this handler's own phase-1 comment documents —
+      // distinguished by carrying `skippedDefaultModules` where the phase-1 row never does. Only
+      // written when something was actually skipped, never for the ordinary case.
+      if (outcome.skippedDefaultModules.length > 0) {
+        await withPlatform(pool, { userId: acting.id }, (platformClient) =>
+          writeAudit(platformClient, {
+            workspaceId: null,
+            actorPrincipalId: null,
+            actorUserId: acting.id,
+            action: 'workspace.created',
+            resourceType: 'workspace',
+            resourceId: workspaceId,
+            payload: {
+              channel: 'platform',
+              actorLogin: acting.login,
+              details: { skippedDefaultModules: outcome.skippedDefaultModules },
+              triggeredBy: 'create_workspace',
+            },
+          }),
+        );
+      }
       return withPlatform(pool, { userId: acting.id }, (platformClient) =>
         loadPlatformWorkspace(platformClient, workspaceId),
       );

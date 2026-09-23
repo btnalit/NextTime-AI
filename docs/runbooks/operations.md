@@ -442,6 +442,21 @@ export BUILT_FROM="$(git describe --tags --abbrev=0) ($(git rev-parse --short HE
 docker compose build worker-runtime   # 打 ai.nexttime.pi-version / platform-extension-version / built-from 三个 label
 ```
 
+**镜像 allowlist（P1-a 修复，2026-09）——想日后能回滚到某个 build，先给它打一个不会被覆盖的 tag**：
+`docker compose build` 每次都把 `nexttime-ai-worker-runtime:latest`（或 compose 里配的那个 tag）
+指向新构建的镜像，旧 build 就此**掉 tag、只剩 digest**——`set_active_runtime_image`/`rollback_runtime_image`
+现在都会先查 worker-supervisor 自己的 allowlist（`WORKER_IMAGE_ALLOWLIST` env，
+`isImageAllowed`/`config.taskImageAllowlist`，跟 `/task/spawn`、`/resident/spawn` 的 403 判断同一份），
+一个 digest 永远不可能出现在这份 allowlist 里（allowlist 只装名字/tag，这些镜像从不推 registry，没有
+真正意义上的 digest 可配）——所以只剩 digest 的旧 build**再也回不去**，"设为活动"/回滚都会 409
+`image_not_allowed`。构建后立刻给它一个不会被下次构建覆盖的 tag，再加进 allowlist：
+
+```bash
+docker tag nexttime-ai-worker-runtime nexttime-ai-worker-runtime:v0.16.0   # 或用 $BUILT_FROM/commit 做 tag
+# .env: WORKER_IMAGE_ALLOWLIST=nexttime-ai-worker-runtime:v0.16.0（追加式，WORKER_IMAGE 自身始终在 allowlist 里）
+docker compose up -d --no-deps worker-supervisor   # 重启才读到新的 WORKER_IMAGE_ALLOWLIST
+```
+
 **调用方式**（`scope:'platform'`：登录拿 cookie，不带 `X-Workspace-Id`——见 `web-console.md` §"凭证"）：
 
 ```bash
@@ -477,11 +492,12 @@ Turn 不受影响。**没有 draining 状态**，也不会拒绝新 Turn；只�
 **设为活动镜像 / 回滚**：
 
 ```bash
-cap set_active_runtime_image '{"image":"nexttime-ai-worker-runtime:<tag或digest>"}'   # 必须在 list_runtime_images 里，否则 409 image_not_in_inventory
-cap rollback_runtime_image                                                             # 改回上一个 platform_settings 版本的值；无历史则 409 no_previous_settings_version
+cap set_active_runtime_image '{"image":"nexttime-ai-worker-runtime:<tag>"}'   # 必须在 list_runtime_images 里，否则 409 image_not_in_inventory；必须在 WORKER_IMAGE_ALLOWLIST 里，否则 409 image_not_allowed（P1-a）——传 digest 几乎必错，见上面的"镜像 allowlist"
+cap rollback_runtime_image                                                    # 改回上一个 platform_settings 版本的值；无历史则 409 no_previous_settings_version；那个值如果已被踢出 allowlist 则 409 image_not_allowed（P1-a，不会盲目改设置）
 ```
 
-设置本身立即生效于*之后*的 spawn（design §8）；已运行的入口容器按上一段"下一次 Turn 自然重建"收敛。
+设置本身立即生效于*之后*的 spawn（design §8）；已运行的入口容器按上一段"下一次 Turn 自然重建"收敛。控制台
+`#/platform/runtime` 页面对不在 allowlist 里的镜像直接置灰"设为活动"按钮（P1-a-page），不用等 409。
 
 **`roll_entry_containers`（加速项，仅此而已）**：只停"待重建 **且** 内核自己的 Turn 台账（`activities`
 `kind='agent_turn' and status='running'`）里没有进行中 Turn"的容器；忙的容器永远跳过（`skipped_in_flight`），
@@ -512,6 +528,8 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `set_active_runtime_image` 返回 409 `image_not_in_inventory` | 镜像没建，或建的 tag/digest 和传的不一致 | 先 `list_runtime_images` 核对，再 `docker compose build worker-runtime`（记得先 export 三个版本变量） |
+| `set_active_runtime_image` / `rollback_runtime_image` 返回 409 `image_not_allowed`（P1-a） | 目标镜像不在 worker-supervisor 的 `WORKER_IMAGE_ALLOWLIST` 里——常见于重建覆盖了旧 tag，只剩 digest | 给这个 build 打一个专属 tag、加进 `WORKER_IMAGE_ALLOWLIST`、重启 worker-supervisor（见上面"镜像 allowlist"一节）；digest 永远进不了 allowlist，不要传 digest |
+| `set_active_runtime_image` / `rollback_runtime_image` 返回 409 `runtime_unreachable` | 内核连不上 worker-supervisor（`SUPERVISOR_URL`），拒绝盲目设置 | `docker compose ps worker-supervisor`；确认内核与它同在 `control` 网络 |
 | `rollback_runtime_image` 返回 409 `no_previous_settings_version` | `platform_settings` 从未写过第二次 | 正常——第一次设置活动镜像后没有"上一个值"可回滚 |
 | `runtime_inventory` 里 `activeImageInfo` 是 `null` | 活动镜像的 tag/digest 不在 `list_runtime_images` 里（自定义镜像没打三个 label，或 worker-supervisor 连不上） | 检查镜像是否带 `ai.nexttime.*` label；`residentContainers[].needsRebuild` 此时恒为 `false`（不猜） |
 | `platform_status.health` 里 `llm-proxy` / `worker-supervisor` 是 `down` | 服务没起，或内核到不了 `KERNEL_LLM_URL` / `SUPERVISOR_URL` | `docker compose ps`；确认内核与这两个服务同在 `control` 网络 |

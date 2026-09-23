@@ -42,14 +42,21 @@ function renderPage(http: CapabilityCaller) {
 }
 
 function image(overrides: Partial<RuntimeInventoryWire['images'][number]> = {}) {
+  // `activatableRef` defaults to `tags[0]` (the same fallback expression the real kernel handler
+  // used pre-P1-a-follow-up) so a test that overrides `tags` without separately overriding
+  // `activatableRef` still gets a self-consistent fixture, not a stale default that silently
+  // mismatches the new `tags`.
+  const tags = overrides.tags ?? ['nexttime-ai-worker-runtime:v1'];
   return {
     id: 'sha256:v1000000000000000000000000000000000000000000000000000000000000',
-    tags: ['nexttime-ai-worker-runtime:v1'],
+    tags,
     createdAt: '2026-09-01T00:00:00.000Z',
     piVersion: '0.84.4',
     platformExtensionVersion: '1.0.0',
     builtFrom: 'v0.15.0 (abc1234)',
     labels: {},
+    allowed: true,
+    activatableRef: tags[0] ?? null,
     ...overrides,
   };
 }
@@ -179,6 +186,58 @@ describe('PlatformRuntimePage', () => {
     await waitFor(() =>
       expect(http.calls.some((c) => c.name === 'set_active_runtime_image')).toBe(true),
     );
+  });
+
+  it('设为活动 sends activatableRef, not tags[0], for a multi-tag image where only a later tag is allowlisted (review follow-up, PR #233)', async () => {
+    const multiTagImage = image({
+      id: 'sha256:v3000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:stale-alias', 'nexttime-ai-worker-runtime:v3'],
+      activatableRef: 'nexttime-ai-worker-runtime:v3',
+    });
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory({ images: [image(), multiTagImage] }),
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+      set_active_runtime_image: (params) => {
+        expect(params).toEqual({ image: 'nexttime-ai-worker-runtime:v3' });
+        return {};
+      },
+    });
+    renderPage(http);
+
+    const row = await screen.findByTestId(`runtime-image-row-${multiTagImage.id}`);
+    fireEvent.click(within(row).getByTestId('runtime-image-activate'));
+
+    const confirm = await screen.findByTestId('runtime-activate-confirm');
+    expect(confirm.textContent).toContain('nexttime-ai-worker-runtime:v3');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'set_active_runtime_image')).toBe(true),
+    );
+  });
+
+  it('设为活动 is disabled with a hint for an image not in WORKER_IMAGE_ALLOWLIST (P1-a hotfix)', async () => {
+    const notAllowed = image({
+      id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:v2'],
+      allowed: false,
+      activatableRef: null,
+    });
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory({ images: [image(), notAllowed] }),
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const row = await screen.findByTestId(`runtime-image-row-${notAllowed.id}`);
+    const button = within(row).getByTestId('runtime-image-activate') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(row.textContent).toContain('WORKER_IMAGE_ALLOWLIST');
+
+    fireEvent.click(button);
+    expect(http.calls.some((c) => c.name === 'set_active_runtime_image')).toBe(false);
   });
 
   it('回滚到上一个镜像 opens a medium confirm and calls rollback_runtime_image', async () => {

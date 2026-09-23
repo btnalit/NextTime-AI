@@ -131,10 +131,17 @@ export interface RuntimeImageInfo {
  *  `config.workerImage` (its `WORKER_IMAGE` env, resolved). The kernel has no other way to learn
  *  this (the two processes only ever talk over HTTP) — `application/platform/runtime.ts` reads
  *  this instead of guessing a compiled-in default, so a host that overrides `WORKER_IMAGE` away
- *  from the image's own build-time default name is still reported correctly. */
+ *  from the image's own build-time default name is still reported correctly.
+ *
+ * `allowedImages` (P1-a hotfix, post-v0.16.0 review): worker-supervisor's own
+ * `config.taskImageAllowlist` verbatim — the exact static allowlist its `/task/spawn` and
+ * `/resident/spawn` already enforce (`isImageAllowed`). `application/platform/runtime.ts` reads
+ * this to reject a `set_active_runtime_image`/`rollback_runtime_image` target that is not
+ * allowlisted, instead of only discovering it once every future spawn starts 403ing. */
 export interface RuntimeImageInventory {
   readonly defaultImage: string;
   readonly images: RuntimeImageInfo[];
+  readonly allowedImages: readonly string[];
 }
 
 /** S7-E: one resident entry container, as worker-supervisor's `GET /residents` reports it —
@@ -328,7 +335,10 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
     if (status !== 200) {
       throw new TaskSupervisorError('http_error', `GET /images returned ${status}`, { status });
     }
-    return body as RuntimeImageInventory;
+    const parsed = body as RuntimeImageInventory;
+    // P1-a hotfix: defend against an older worker-supervisor that does not yet send
+    // `allowedImages` — default to "nothing allowed" (fail closed), never guessed open.
+    return { ...parsed, allowedImages: parsed.allowedImages ?? [] };
   }
 
   async listResidents(): Promise<ResidentInventoryEntry[]> {

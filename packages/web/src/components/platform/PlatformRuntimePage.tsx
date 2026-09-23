@@ -106,7 +106,12 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
   }
 
   async function activate(image: RuntimeImageWire): Promise<void> {
-    await http.call('set_active_runtime_image', { image: image.tags[0] ?? image.id });
+    // Review follow-up (PR #233): `activatableRef` — never `tags[0] ?? id` — is the one identifier
+    // the kernel already confirmed both exists as a literal tag on this image *and* normalizes
+    // (Docker's own implicit `:latest`) into worker-supervisor's allowlist. The button is disabled
+    // whenever this is `null` (see below), so `activate` is never reachable in that state.
+    if (!image.activatableRef) return;
+    await http.call('set_active_runtime_image', { image: image.activatableRef });
     await refreshAll();
   }
 
@@ -205,7 +210,11 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
         title="设为活动镜像 Set active image"
         description="已运行的入口容器不会立刻重启——它们在各自下一轮对话开始时按规格漂移自然换成新镜像，进行中的对话不受影响。 Running entry containers are not restarted now — each picks up the new image only at the start of its own next turn (spec-drift rebuild); an in-flight turn is unaffected."
         target={
-          confirm.kind === 'activate' ? (confirm.image.tags[0] ?? confirm.image.id) : undefined
+          // Shows exactly what will be sent (review follow-up, PR #233) — `activatableRef` may
+          // differ from `tags[0]` for a multi-tag image where only a later tag is allowlisted.
+          confirm.kind === 'activate'
+            ? (confirm.image.activatableRef ?? confirm.image.tags[0] ?? confirm.image.id)
+            : undefined
         }
         confirmLabel="设为活动 Set active"
         onConfirm={() => (confirm.kind === 'activate' ? activate(confirm.image) : undefined)}
@@ -345,11 +354,25 @@ function RuntimeBody({
                             variant="ghost"
                             size="s"
                             onClick={() => onActivate(image)}
+                            disabled={!image.allowed}
+                            title={
+                              image.allowed
+                                ? undefined
+                                : '未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST'
+                            }
                             data-testid="runtime-image-activate"
                           >
                             设为活动 Set active
                           </Button>
                         )}
+                        {!active && !image.allowed ? (
+                          <div
+                            className="text-3 text-small"
+                            data-testid="runtime-image-not-allowed-hint"
+                          >
+                            未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST
+                          </div>
+                        ) : null}
                       </td>
                     </tr>
                   );

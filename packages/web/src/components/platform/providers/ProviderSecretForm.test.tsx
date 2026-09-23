@@ -65,6 +65,10 @@ describe('ProviderSecretForm', () => {
 
     const input = screen.getByTestId('provider-secret-input') as HTMLInputElement;
     expect(input.type).toBe('password');
+    // P3 hotfix (post-v0.16.0 review): `autocomplete="off"` is widely ignored by browser password
+    // managers on a password input — `"new-password"` is the value that actually suppresses
+    // autofill/save prompts here.
+    expect(input.autocomplete).toBe('new-password');
     fireEvent.change(input, { target: { value: '  sk-typed-key  ' } });
     fireEvent.click(screen.getByTestId('provider-secret-submit'));
 

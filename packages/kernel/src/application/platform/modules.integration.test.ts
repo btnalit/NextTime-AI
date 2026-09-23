@@ -360,4 +360,39 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
     );
     expect(row.rowCount).toBe(0);
   });
+
+  // P2 hotfix (post-v0.16.0 review, "default modules drift"): a defaultModules entry naming a
+  // module no longer in the deployed index must not hard-fail the whole workspace-creation
+  // transaction — it is skipped (reported back via skippedDefaultModules) and every other named
+  // module still installs normally.
+  it('D4 hotfix: an unknown defaultModules name is skipped, not fatal — the workspace and its other default modules still install', async () => {
+    const outcome = await createWorkspaceWithOwner(pool, {
+      name: `modules-drift-${randomUUID().slice(0, 8)}`,
+      owner: { displayName: 'Drifted Default Modules Owner' },
+      defaultModules: ['ops-assets', 'no-such-module-in-the-index'],
+    });
+    expect(outcome.skippedDefaultModules).toEqual(['no-such-module-in-the-index']);
+
+    const row = await withWorkspace(
+      pool,
+      { workspaceId: outcome.workspaceId, principalId: outcome.ownerPrincipalId },
+      (client) =>
+        client.query('select status from ontology_versions where workspace_id = $1 and id = $2', [
+          outcome.workspaceId,
+          deriveOntologyPackId('ops-assets'),
+        ]),
+    );
+    expect(row.rows).toHaveLength(1);
+    expect(row.rows[0]?.status).toBe('published');
+  });
+
+  it('D4 hotfix: defaultModules of only unknown names skips every one and still creates the workspace', async () => {
+    const outcome = await createWorkspaceWithOwner(pool, {
+      name: `modules-all-drifted-${randomUUID().slice(0, 8)}`,
+      owner: { displayName: 'All Drifted Owner' },
+      defaultModules: ['no-such-module-a', 'no-such-module-b'],
+    });
+    expect(outcome.skippedDefaultModules).toEqual(['no-such-module-a', 'no-such-module-b']);
+    expect(outcome.workspaceId).toBeDefined();
+  });
 });

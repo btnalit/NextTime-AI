@@ -163,8 +163,12 @@ export class ProviderStore {
     return this.writableState;
   }
 
+  /** P3 hotfix (post-v0.16.0 review): `Object.hasOwn`, not a bare bracket lookup — `this.state.
+   *  providers` is a plain object, so an id like `"constructor"`/`"toString"` would otherwise read
+   *  through the prototype chain and return the inherited function instead of `undefined`. Same
+   *  fix, same reasoning as `key-store.ts`'s `get()`/`has()`. */
   get(id: string): StoreProvider | undefined {
-    return this.state.providers[id];
+    return Object.hasOwn(this.state.providers, id) ? this.state.providers[id] : undefined;
   }
 
   entries(): ReadonlyArray<readonly [string, StoreProvider]> {
@@ -186,7 +190,9 @@ export class ProviderStore {
           `provider id "${id}" is reserved for this proxy's own routes`,
         );
       }
-      const existing = this.state.providers[id];
+      const existing = Object.hasOwn(this.state.providers, id)
+        ? this.state.providers[id]
+        : undefined;
       const stamped: StoreProvider = StoreProviderSchema.parse({
         ...entry,
         created_at: existing?.created_at ?? now.toISOString(),
@@ -206,6 +212,7 @@ export class ProviderStore {
    *  catalog keeps those results in memory, see catalog.ts). Serialized like `upsert`/`remove`. */
   async recordTest(id: string, result: StoreTestResult): Promise<boolean> {
     return this.mutex.runExclusive(async () => {
+      if (!Object.hasOwn(this.state.providers, id)) return false;
       const existing = this.state.providers[id];
       if (!existing) return false;
       const next: ProviderStoreFile = {
@@ -222,7 +229,7 @@ export class ProviderStore {
    *  `upsert`/`recordTest`. */
   async remove(id: string): Promise<boolean> {
     return this.mutex.runExclusive(async () => {
-      if (!(id in this.state.providers)) return false;
+      if (!Object.hasOwn(this.state.providers, id)) return false;
       const { [id]: _removed, ...rest } = this.state.providers;
       const next: ProviderStoreFile = { version: PROVIDER_STORE_VERSION, providers: rest };
       await this.persist(next);

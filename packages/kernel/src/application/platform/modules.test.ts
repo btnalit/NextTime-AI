@@ -2,12 +2,16 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { PoolClient } from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
+import { deriveOntologyPackId } from '../../substrate/ontology/index.js';
+import type { ModuleRegistryEntry } from './modules.js';
 import {
   ModuleIndexParseError,
   ModuleNotFoundError,
   classifyModuleState,
   hashOntologyDefinition,
+  installOrUpgradeModule,
   loadModuleRegistry,
   readModulesIndexFile,
   requireModule,
@@ -193,5 +197,60 @@ describe('classifyModuleState', () => {
     const state = classifyModuleState(entry, 'hash-hand-edited');
     expect(state.status).toBe('customized');
     expect(state.installedVersion).toBeNull();
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// installOrUpgradeModule — advisory-lock ordering (P2 hotfix, post-v0.16.0 review "module install
+// race"). Fake-PoolClient, no real DB: the fake only answers the lock query and then throws on
+// whatever query comes next, deliberately short-circuiting before `loadInstalledPackVersion`'s
+// real read or `publishOntologyDomainPack`'s own multi-query write path — those stay covered by
+// `modules.integration.test.ts` (DB-gated). This test only asserts the lock is issued, and issued
+// *first*, which needs no real Postgres to observe.
+// -------------------------------------------------------------------------------------------
+
+describe('installOrUpgradeModule — advisory lock (P2 hotfix, module install race)', () => {
+  it('issues pg_advisory_xact_lock(hashtext(...)) as the very first query, before reading installed state', async () => {
+    const workspaceId = 'ws-1';
+    const principalId = 'principal-1';
+    const packId = deriveOntologyPackId('ops-assets');
+    const registry: ReadonlyMap<string, ModuleRegistryEntry> = new Map([
+      [
+        'ops-assets',
+        {
+          name: 'ops-assets',
+          versions: [
+            { file: 'ops-assets.v1.yaml', version: 1, notes: '', breaking: false, hash: 'hash-v1' },
+          ],
+        },
+      ],
+    ]);
+    const calls: { text: string; params: unknown[] }[] = [];
+    const client = {
+      query: async (text: string, params: unknown[] = []) => {
+        calls.push({ text, params });
+        if (calls.length === 1) return { rows: [], rowCount: 0 }; // the advisory lock itself
+        // Anything past the lock is out of this unit test's scope — stop deterministically rather
+        // than simulating `loadInstalledPackVersion`/`publishOntologyDomainPack`'s real DB reads
+        // and writes.
+        throw new Error('stop-after-lock: this unit test only asserts lock-first ordering');
+      },
+    } as unknown as PoolClient;
+
+    await expect(
+      installOrUpgradeModule(
+        client,
+        workspaceId,
+        principalId,
+        registry,
+        { name: 'ops-assets' },
+        '/fake/ontology/dir',
+      ),
+    ).rejects.toThrow('stop-after-lock');
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.text.toLowerCase()).toContain('pg_advisory_xact_lock');
+    expect(calls[0]?.params).toEqual([`install_module:${workspaceId}:${packId}`]);
+    expect(calls[1]?.text.toLowerCase()).toContain('from ontology_versions');
   });
 });

@@ -187,6 +187,42 @@ describe('runProviderTest', () => {
     expect(captured).toHaveLength(1);
   });
 
+  it('redacts a token-like string in the upstream error even when it is not the exact key this test used (P3 hotfix, post-v0.16.0 review)', async () => {
+    const leakedToken = 'sk-leaked-other-provider-1234567890';
+    const { port } = await start(() => ({
+      status: 401,
+      body: {
+        error: {
+          message: `upstream misconfigured, saw stray credential ${leakedToken} in a shared error template`,
+        },
+      },
+    }));
+    const result = await runProviderTest({
+      provider: provider('openai-completions', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result.error).not.toContain(leakedToken);
+    expect(result.error).toContain('***');
+  });
+
+  it('redacts a long base64-ish run in the upstream error even with no sk/key/tok prefix', async () => {
+    const longRun = 'Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7k8';
+    const { port } = await start(() => ({
+      status: 500,
+      body: { error: { message: `internal error, trace=${longRun}` } },
+    }));
+    const result = await runProviderTest({
+      provider: provider('openai-completions', port),
+      model: 'm',
+      realKey: REAL_KEY,
+      timeoutMs: 2000,
+    });
+    expect(result.error).not.toContain(longRun);
+    expect(result.error).toContain('***');
+  });
+
   it('reports an unreachable upstream as an error, not an exception', async () => {
     const result = await runProviderTest({
       provider: { ...provider('openai-completions', 1), upstream_base_url: 'http://127.0.0.1:1' },

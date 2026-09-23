@@ -13,7 +13,7 @@ import { createAdminApi } from './admin-api.js';
 import { ProviderCatalog } from './catalog.js';
 import type { ProviderConfig } from './config.js';
 import { buildModelsJsonFromCatalog, writeModelsJsonAtomic } from './gen-models-json.js';
-import { KeyStore } from './key-store.js';
+import { KeyStore, KeyStoreError } from './key-store.js';
 import { ProviderStore } from './provider-store.js';
 import type { StoreTestResult } from './provider-store.js';
 import { createProxyServer } from './proxy.js';
@@ -424,7 +424,12 @@ describe('admin API — catalog lifecycle', () => {
 
     const restored = await request(h.port, 'DELETE', '/admin/providers/openai', { headers: admin });
     expect(restored.status).toBe(200);
-    expect(restored.body).toEqual({ id: 'openai', deleted: true, restoredFileEntry: true });
+    expect(restored.body).toEqual({
+      id: 'openai',
+      deleted: true,
+      restoredFileEntry: true,
+      secretCleared: false,
+    });
     expect(
       (
         await request(h.port, 'GET', '/openai/v1/models', {
@@ -440,6 +445,60 @@ describe('admin API — catalog lifecycle', () => {
     const refused = await request(h.port, 'DELETE', '/admin/providers/openai', { headers: admin });
     expect(refused.status).toBe(409);
     expect((refused.body as { error: { code: string } }).error.code).toBe('provider_from_file');
+  });
+
+  it('DELETE also clears the console key (P2 hotfix, post-v0.16.0 review) — recreating the id later must never silently reuse it', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    expect(
+      (await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER }))
+        .status,
+    ).toBe(201);
+    expect(
+      (
+        await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+          headers: admin,
+          body: { key: 'sk-console-acme' },
+        })
+      ).status,
+    ).toBe(200);
+    expect(h.keyStore.get('acme')).toBe('sk-console-acme');
+
+    const deleted = await request(h.port, 'DELETE', '/admin/providers/acme', { headers: admin });
+    expect(deleted.status).toBe(200);
+    expect(deleted.body).toEqual({
+      id: 'acme',
+      deleted: true,
+      restoredFileEntry: false,
+      secretCleared: true,
+    });
+    expect(h.keyStore.get('acme')).toBeUndefined();
+    expect(h.kernelEvents.at(-1)).toMatchObject({
+      action: 'provider_secret_cleared',
+      providerId: 'acme',
+    });
+    expect(h.kernelEvents.some((e) => e.action === 'provider_deleted')).toBe(true);
+
+    // Recreating the same id afterward must start with no console key — the whole point of P2.
+    expect(
+      (await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER }))
+        .status,
+    ).toBe(201);
+    expect(h.keyStore.get('acme')).toBeUndefined();
+  });
+
+  it('DELETE with no console key set reports secretCleared: false and never emits provider_secret_cleared', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    expect(
+      (await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER }))
+        .status,
+    ).toBe(201);
+
+    const deleted = await request(h.port, 'DELETE', '/admin/providers/acme', { headers: admin });
+    expect(deleted.status).toBe(200);
+    expect((deleted.body as { secretCleared: boolean }).secretCleared).toBe(false);
+    expect(h.kernelEvents.some((e) => e.action === 'provider_secret_cleared')).toBe(false);
   });
 
   it('PUT on a store row audits only the fields that changed (never the store timestamps)', async () => {
@@ -481,6 +540,16 @@ describe('admin API — catalog lifecycle', () => {
     expect(
       (await request(h.port, 'POST', '/admin/providers/nope/test', { headers: admin })).status,
     ).toBe(404);
+  });
+
+  it('a malformed percent-encoded id is 400 invalid_id, not an unhandled 500 (P3 hotfix, post-v0.16.0 review)', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    // `decodeURIComponent('%zz')` throws URIError — parseId must turn that into the same 400
+    // invalid_id a merely-invalid-but-decodable id already gets, never propagate uncaught.
+    const res = await request(h.port, 'GET', '/admin/providers/%zz', { headers: admin });
+    expect(res.status).toBe(400);
+    expect((res.body as { error: { code: string } }).error.code).toBe('invalid_id');
   });
 
   it('test: runs the injected round trips with the real key, records the outcome, audits without the key', async () => {
@@ -721,5 +790,23 @@ describe('admin API — provider secrets (S7-A)', () => {
       headers: await h.adminHeaders(),
     });
     expect(res.status).toBe(405);
+  });
+
+  it('a KeyStoreError past requireWritableKeyStore’s own guard (TOCTOU) maps like ProviderStoreError (P3 hotfix, post-v0.16.0 review)', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    // Simulates the directory becoming unwritable between requireWritableKeyStore()'s probe and
+    // the actual write — `writable()` still reports true (cached), but the write itself throws.
+    const originalSet = h.keyStore.set.bind(h.keyStore);
+    h.keyStore.set = async () => {
+      throw new KeyStoreError('unwritable', 'simulated TOCTOU: directory removed after the probe');
+    };
+    const res = await request(h.port, 'PUT', '/admin/providers/openai/secret', {
+      headers: admin,
+      body: { key: 'sk-x' },
+    });
+    expect(res.status).toBe(503);
+    expect((res.body as { error: { code: string } }).error.code).toBe('store_unwritable');
+    h.keyStore.set = originalSet;
   });
 });

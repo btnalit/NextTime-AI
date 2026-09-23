@@ -71,7 +71,10 @@ export interface ActionRequestEventSource {
   ): () => void;
 }
 
-async function moveTaskToWaitingApproval(
+/** Exported for `reaper.test.ts`'s fake-PoolClient unit coverage of the P1-b hotfix (post-v0.16.0
+ *  review, "task status race") — otherwise only reached indirectly through
+ *  `registerActionRequestRoutingConsumer`'s event consumers below. */
+export async function moveTaskToWaitingApproval(
   client: PoolClient,
   workspaceId: string,
   taskId: string,
@@ -81,10 +84,17 @@ async function moveTaskToWaitingApproval(
   if (!task || task.status !== 'running') return; // already waiting, or terminal — nothing to do.
 
   transition(TASK_TRANSITIONS, 'running', 'await_approval');
-  await client.query(
-    "update tasks set status = 'waiting_approval' where workspace_id = $1 and id = $2",
+  // Status-guarded UPDATE + rowCount (P1-b hotfix): guards against the same class of race
+  // `lifecycle.ts`'s `completeTaskWithResult` closes — a concurrent writer (e.g. the WorkerRun
+  // completing/failing between the read above and this UPDATE) may have already moved the Task
+  // off `running`; `rowCount === 0` is a silent, safe no-op rather than forcing `waiting_approval`
+  // onto a row that has moved on, and the audit/outbox write below only happens once the UPDATE
+  // actually took effect.
+  const updateResult = await client.query(
+    "update tasks set status = 'waiting_approval' where workspace_id = $1 and id = $2 and status = 'running'",
     [workspaceId, taskId],
   );
+  if ((updateResult.rowCount ?? 0) === 0) return;
   await recordTaskTransition(client, workspaceId, {
     actorPrincipalId,
     action: 'task.await_approval',
@@ -93,7 +103,8 @@ async function moveTaskToWaitingApproval(
   });
 }
 
-async function resumeTaskFromWaitingApproval(
+/** Exported for `reaper.test.ts` — see `moveTaskToWaitingApproval`'s own doc comment. */
+export async function resumeTaskFromWaitingApproval(
   client: PoolClient,
   workspaceId: string,
   taskId: string,
@@ -103,10 +114,18 @@ async function resumeTaskFromWaitingApproval(
   if (!task || task.status !== 'waiting_approval') return;
 
   transition(TASK_TRANSITIONS, 'waiting_approval', 'resume');
-  await client.query("update tasks set status = 'running' where workspace_id = $1 and id = $2", [
-    workspaceId,
-    taskId,
-  ]);
+  // Status-guarded UPDATE + rowCount (leftover 47's race, P1-b hotfix, post-v0.16.0 review): before
+  // this guard, a Worker completing from `waiting_approval` (`lifecycle.ts`'s
+  // `completeTaskWithResult`, which itself now guards on status too) could race this resume — an
+  // `ActionRequestUpdated` event resolving concurrently — and this unconditional UPDATE would
+  // revert an already-`completed` Task back to `running` forever. `rowCount === 0` means the row
+  // was no longer `waiting_approval` by the time this ran; a safe no-op, and the audit/outbox row
+  // is written only once the UPDATE actually took effect.
+  const updateResult = await client.query(
+    "update tasks set status = 'running' where workspace_id = $1 and id = $2 and status = 'waiting_approval'",
+    [workspaceId, taskId],
+  );
+  if ((updateResult.rowCount ?? 0) === 0) return;
   await recordTaskTransition(client, workspaceId, {
     actorPrincipalId,
     action: 'task.resume',

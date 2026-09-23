@@ -226,8 +226,12 @@ export const KernelStartTurnCommandSchema = z
      *  same `WORKER_IMAGE_ALLOWLIST` `/task/spawn` already enforces (403 `image_not_allowed`).
      *  Omitted = worker-supervisor's own `WORKER_IMAGE` env default applies, unchanged from before
      *  this field existed. A changed value forces `resident-service.ts`'s `spawn()` to recreate the
-     *  entry container (spec-drift rebuild, same mechanism `skillsInline`/Handle rotation use). */
-    image: z.string().optional(),
+     *  entry container (spec-drift rebuild, same mechanism `skillsInline`/Handle rotation use).
+     *  `min(1)` (P3 hotfix, post-v0.16.0 review): an empty string is not a valid image reference —
+     *  matches worker-supervisor's own `config.ts` `SpawnRequestSchema.image`
+     *  (`z.string().min(1).optional()`), which this frame's `image` ultimately becomes
+     *  `/resident/spawn`'s own `image`. */
+    image: z.string().min(1).optional(),
   })
   .strict();
 
