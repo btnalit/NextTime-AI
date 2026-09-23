@@ -10,6 +10,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { ConfirmTier } from '../ui/ConfirmTier.js';
@@ -181,6 +182,190 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
       ? (providers.find((row) => row.id === drawer.provider.id) ?? drawer.provider)
       : undefined;
 
+  // S8 W1-A4 (audit S3: "1440 下供应商表也溢出" — too many columns to ever fit one screen, even
+  // wide). `layout="sticky"`: 供应商/状态/操作 pin left at every width; the rest scrolls
+  // horizontally underneath. Defined inline (not a top-level `xColumns(...)` factory like the
+  // Users/Workspaces pages use) — this table's cells close over enough page state
+  // (testResults/rowError/testing/meta/setDrawer/setConfirm/runTest) that a factory's parameter
+  // list would be longer than the columns themselves.
+  const providerColumns: readonly DataTableColumn<LlmProviderWire>[] = [
+    {
+      id: 'provider',
+      header: '供应商 Provider',
+      priority: 'primary',
+      width: 200,
+      cell: (provider) => (
+        <>
+          <span data-testid="provider-name">{provider.displayName}</span>
+          {provider.displayName !== provider.id ? (
+            <div className="mono text-3 text-small">{provider.id}</div>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      id: 'status',
+      header: '状态 Status',
+      priority: 'high',
+      width: 110,
+      cell: (provider) => (
+        <StatusChip
+          machine="workspaceStatus"
+          status={provider.enabled ? 'active' : 'disabled'}
+          size="s"
+          testId="provider-enabled-chip"
+        />
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      priority: 'high',
+      hideInCard: true,
+      width: 340,
+      cell: (provider) => (
+        <>
+          <div className="row">
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => setDrawer({ kind: 'detail', provider })}
+              data-testid="provider-open"
+            >
+              详情 Details
+            </Button>
+            <Button
+              variant="secondary"
+              size="s"
+              onClick={() => void runTest(provider)}
+              loading={testing === provider.id}
+              disabled={testing !== null || !provider.enabled}
+              title={
+                provider.credentialPresent
+                  ? undefined
+                  : provider.apiKeyEnv
+                    ? `${provider.apiKeyEnv} 未配置 — 测试会被拒绝 not set, the test will be refused`
+                    : '没有配置任何凭证 — 测试会被拒绝 no credential configured, the test will be refused'
+              }
+              data-testid="provider-test"
+            >
+              测试调用 Test
+            </Button>
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => setDrawer({ kind: 'edit', provider })}
+              disabled={meta?.storeWritable === false}
+              data-testid="provider-edit"
+            >
+              编辑 Edit
+            </Button>
+            {provider.enabled ? (
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={() => setConfirm({ kind: 'disable', provider })}
+                disabled={meta?.storeWritable === false}
+                data-testid="provider-disable"
+              >
+                停用 Disable
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={() => setConfirm({ kind: 'enable', provider })}
+                disabled={meta?.storeWritable === false}
+                data-testid="provider-enable"
+              >
+                启用 Enable
+              </Button>
+            )}
+            {provider.source === 'store' ? (
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={() => setConfirm({ kind: 'delete', provider })}
+                disabled={meta?.storeWritable === false}
+                data-testid="provider-delete"
+              >
+                {provider.overridesFile ? '删除覆盖 Drop override' : '删除 Delete'}
+              </Button>
+            ) : null}
+          </div>
+          {rowError && rowError.id === provider.id ? (
+            <div className="field-error" role="alert" data-testid="provider-row-error">
+              {llmAdminErrorMessage(rowError.error) ??
+                (rowError.error instanceof Error ? rowError.error.message : String(rowError.error))}
+            </div>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      id: 'api',
+      header: 'API',
+      cellClassName: 'text-small',
+      cell: (provider) => API_LABEL[provider.api],
+    },
+    {
+      id: 'baseUrl',
+      header: 'Base URL',
+      cellClassName: 'mono text-small',
+      cell: (provider) => provider.upstreamBaseUrl,
+    },
+    {
+      id: 'models',
+      header: '模型 Models',
+      cell: (provider) => (
+        <span className="tag" title={provider.models.map((m) => m.id).join(', ')}>
+          {provider.models.length}
+        </span>
+      ),
+    },
+    {
+      id: 'credential',
+      header: '凭证 Credential',
+      cell: (provider) => <CredentialState provider={provider} />,
+    },
+    {
+      id: 'lastTest',
+      header: '最近测试 Last test',
+      cell: (provider) => {
+        const lastTest = testResults[provider.id] ?? provider.lastTest;
+        return lastTest ? (
+          <StatusChip
+            machine="serviceHealth"
+            status={
+              lastTest.completion === 'ok' && lastTest.toolCall === 'ok'
+                ? 'ok'
+                : lastTest.completion === 'ok'
+                  ? 'degraded'
+                  : 'down'
+            }
+            size="s"
+            testId="provider-last-test-chip"
+          />
+        ) : (
+          <span className="text-3 text-small">未测试 untested</span>
+        );
+      },
+    },
+    {
+      id: 'source',
+      header: '来源 Source',
+      cell: (provider) => (
+        <span className="tag" data-testid="provider-source">
+          {provider.source === 'file'
+            ? 'yaml'
+            : provider.overridesFile
+              ? '覆盖 yaml override'
+              : '控制台 console'}
+        </span>
+      ),
+    },
+  ];
+
   return (
     <div className="page" data-testid="platform-models-page">
       <PageHeader
@@ -285,169 +470,16 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             testId="providers-empty"
           />
         ) : (
-          <div className="table-scroll">
-            <table className="data-table" data-testid="providers-table">
-              <thead>
-                <tr>
-                  <th>供应商 Provider</th>
-                  <th>API</th>
-                  <th>Base URL</th>
-                  <th>模型 Models</th>
-                  <th>状态 Status</th>
-                  <th>凭证 Credential</th>
-                  <th>最近测试 Last test</th>
-                  <th>来源 Source</th>
-                  <th aria-label="Actions" />
-                </tr>
-              </thead>
-              <tbody>
-                {providers.map((provider) => {
-                  const lastTest = testResults[provider.id] ?? provider.lastTest;
-                  return (
-                    <tr
-                      key={provider.id}
-                      data-testid={`provider-row-${provider.id}`}
-                      data-provider-id={provider.id}
-                    >
-                      <td>
-                        <span data-testid="provider-name">{provider.displayName}</span>
-                        {provider.displayName !== provider.id ? (
-                          <div className="mono text-3 text-small">{provider.id}</div>
-                        ) : null}
-                      </td>
-                      <td className="text-small">{API_LABEL[provider.api]}</td>
-                      <td className="mono text-small">{provider.upstreamBaseUrl}</td>
-                      <td>
-                        <span className="tag" title={provider.models.map((m) => m.id).join(', ')}>
-                          {provider.models.length}
-                        </span>
-                      </td>
-                      <td>
-                        <StatusChip
-                          machine="workspaceStatus"
-                          status={provider.enabled ? 'active' : 'disabled'}
-                          size="s"
-                          testId="provider-enabled-chip"
-                        />
-                      </td>
-                      <td>
-                        <CredentialState provider={provider} />
-                      </td>
-                      <td>
-                        {lastTest ? (
-                          <StatusChip
-                            machine="serviceHealth"
-                            status={
-                              lastTest.completion === 'ok' && lastTest.toolCall === 'ok'
-                                ? 'ok'
-                                : lastTest.completion === 'ok'
-                                  ? 'degraded'
-                                  : 'down'
-                            }
-                            size="s"
-                            testId="provider-last-test-chip"
-                          />
-                        ) : (
-                          <span className="text-3 text-small">未测试 untested</span>
-                        )}
-                      </td>
-                      <td>
-                        <span className="tag" data-testid="provider-source">
-                          {provider.source === 'file'
-                            ? 'yaml'
-                            : provider.overridesFile
-                              ? '覆盖 yaml override'
-                              : '控制台 console'}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="row">
-                          <Button
-                            variant="ghost"
-                            size="s"
-                            onClick={() => setDrawer({ kind: 'detail', provider })}
-                            data-testid="provider-open"
-                          >
-                            详情 Details
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            size="s"
-                            onClick={() => void runTest(provider)}
-                            loading={testing === provider.id}
-                            disabled={testing !== null || !provider.enabled}
-                            title={
-                              provider.credentialPresent
-                                ? undefined
-                                : provider.apiKeyEnv
-                                  ? `${provider.apiKeyEnv} 未配置 — 测试会被拒绝 not set, the test will be refused`
-                                  : '没有配置任何凭证 — 测试会被拒绝 no credential configured, the test will be refused'
-                            }
-                            data-testid="provider-test"
-                          >
-                            测试调用 Test
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="s"
-                            onClick={() => setDrawer({ kind: 'edit', provider })}
-                            disabled={meta?.storeWritable === false}
-                            data-testid="provider-edit"
-                          >
-                            编辑 Edit
-                          </Button>
-                          {provider.enabled ? (
-                            <Button
-                              variant="ghost"
-                              size="s"
-                              onClick={() => setConfirm({ kind: 'disable', provider })}
-                              disabled={meta?.storeWritable === false}
-                              data-testid="provider-disable"
-                            >
-                              停用 Disable
-                            </Button>
-                          ) : (
-                            <Button
-                              variant="ghost"
-                              size="s"
-                              onClick={() => setConfirm({ kind: 'enable', provider })}
-                              disabled={meta?.storeWritable === false}
-                              data-testid="provider-enable"
-                            >
-                              启用 Enable
-                            </Button>
-                          )}
-                          {provider.source === 'store' ? (
-                            <Button
-                              variant="ghost"
-                              size="s"
-                              onClick={() => setConfirm({ kind: 'delete', provider })}
-                              disabled={meta?.storeWritable === false}
-                              data-testid="provider-delete"
-                            >
-                              {provider.overridesFile ? '删除覆盖 Drop override' : '删除 Delete'}
-                            </Button>
-                          ) : null}
-                        </div>
-                        {rowError && rowError.id === provider.id ? (
-                          <div
-                            className="field-error"
-                            role="alert"
-                            data-testid="provider-row-error"
-                          >
-                            {llmAdminErrorMessage(rowError.error) ??
-                              (rowError.error instanceof Error
-                                ? rowError.error.message
-                                : String(rowError.error))}
-                          </div>
-                        ) : null}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={providerColumns}
+            data={providers}
+            getRowId={(provider) => provider.id}
+            ariaLabel="Providers"
+            layout="sticky"
+            testId="providers-table"
+            rowTestId={(provider) => `provider-row-${provider.id}`}
+            rowDataAttrs={(provider) => ({ 'data-provider-id': provider.id })}
+          />
         )}
       </section>
 
