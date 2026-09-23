@@ -15,6 +15,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishOperationHandler } from '../../application/gateway/operation-manifest-handlers.js';
 import { findOperationCandidates } from '../../substrate/graph/index.js';
 import {
+  OperationDescriptionRequiredError,
   OperationIdentityConflictError,
   OperationNotFoundError,
   deprecateOperation,
@@ -45,6 +46,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 function testOperation(overrides: Partial<Operation> = {}): Operation {
   return {
     name: `test.op.${randomUUID()}`,
+    description: 'A test operation.',
     binding: { kind: 'http', method: 'GET', path: '/stock' },
     params_schema: {},
     mode: 'observe',
@@ -158,6 +160,44 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
     );
     expect(published).toBeNull();
+  });
+
+  it('S8 W2-K1 (CO1): requireDescription omitted (default) still accepts a blank description — every existing caller (create_connection, enable_gate_instance) is unaffected', async () => {
+    const op = testOperation({ name: `no-desc.${randomUUID()}`, description: '' });
+    const act = await newActivity();
+    const imported = await inTx((client) =>
+      importManifest(client, workspaceId, {
+        gatekeeperId,
+        operations: [op],
+        proposedBy: { id: ownerId, kind: 'human' },
+        activityId: act,
+      }),
+    );
+    expect(imported.imported.map((r) => r.name)).toEqual([op.name]);
+  });
+
+  it('S8 W2-K1 (CO1): requireDescription:true rejects a blank description, naming the operation, before writing anything', async () => {
+    const good = testOperation({ name: `good-desc.${randomUUID()}` });
+    const bad = testOperation({ name: `blank-desc.${randomUUID()}`, description: '   ' });
+    const act = await newActivity();
+
+    await expect(
+      inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [good, bad],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+          requireDescription: true,
+        }),
+      ),
+    ).rejects.toThrow(OperationDescriptionRequiredError);
+
+    // Atomic: `good` (which came first and does have a description) was not written either.
+    const goodRecord = await inTx((client) =>
+      getOperation(client, workspaceId, gatekeeperId, good.name),
+    );
+    expect(goodRecord).toBeNull();
   });
 
   it('unknown Operation name resolves to null (I17 "unclassified")', async () => {

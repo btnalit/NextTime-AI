@@ -1,6 +1,7 @@
 [
   {
     "name": "containers.list",
+    "description": "List every container on this host (running and stopped), with id, name, image, and current state.",
     "binding": { "kind": "cli", "command_template": "docker ps --all --format json" },
     "params_schema": {
       "type": "object",
@@ -23,6 +24,7 @@
   },
   {
     "name": "container.inspect",
+    "description": "Read one container's full configuration and current runtime state by id.",
     "binding": { "kind": "cli", "command_template": "docker inspect {id}" },
     "params_schema": {
       "type": "object",
@@ -46,6 +48,7 @@
   },
   {
     "name": "compose.ls",
+    "description": "List the containers belonging to one docker-compose project.",
     "binding": {
       "kind": "cli",
       "command_template": "docker ps --all --filter label=com.docker.compose.project={project} --format json"
@@ -65,6 +68,7 @@
   },
   {
     "name": "container.logs_tail",
+    "description": "Read the last N lines of one container's logs.",
     "binding": { "kind": "cli", "command_template": "docker logs --tail {tail} {id}" },
     "params_schema": {
       "type": "object",
@@ -85,6 +89,7 @@
   },
   {
     "name": "container.restart",
+    "description": "Restart one container, giving it up to timeoutSeconds to stop gracefully first.",
     "binding": {
       "kind": "cli",
       "command_template": "docker restart --time {timeoutSeconds} {id}"
@@ -114,6 +119,7 @@
   },
   {
     "name": "compose.up",
+    "description": "Start every stopped container in one docker-compose project.",
     "binding": {
       "kind": "cli",
       "command_template": "docker compose --project-name {project} start"
@@ -134,6 +140,7 @@
   },
   {
     "name": "compose.down",
+    "description": "Stop every running container in one docker-compose project (does not remove them).",
     "binding": {
       "kind": "cli",
       "command_template": "docker compose --project-name {project} stop"

@@ -6,7 +6,11 @@ describe('importOpenApi', () => {
   const document = {
     paths: {
       '/stock': {
-        get: { operationId: 'stock_list', parameters: [{ name: 'sku', in: 'query' as const }] },
+        get: {
+          operationId: 'stock_list',
+          summary: 'List stock items',
+          parameters: [{ name: 'sku', in: 'query' as const }],
+        },
         post: { operationId: 'stock_adjust' },
       },
       '/stock/{id}': {
@@ -41,6 +45,18 @@ describe('importOpenApi', () => {
     const get = operations.find((op) => op.name === 'stock_list');
     const schema = get?.params_schema as { properties?: Record<string, { 'x-in'?: string }> };
     expect(schema.properties?.sku?.['x-in']).toBe('query');
+  });
+
+  it('S8 W2-K1 (CO1/B3): description prefers summary, then description, then a synthesized fallback — never blank', () => {
+    const operations = importOpenApi(document);
+    const get = operations.find((op) => op.name === 'stock_list');
+    const post = operations.find((op) => op.name === 'stock_adjust');
+    const del = operations.find(
+      (op) => op.binding.kind === 'http' && op.binding.method === 'DELETE',
+    );
+    expect(get?.description).toBe('List stock items');
+    expect(post?.description).toBe('POST /stock');
+    expect(del?.description).toBe('DELETE /stock/{id}');
   });
 });
 

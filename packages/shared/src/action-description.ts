@@ -108,6 +108,17 @@ export type ResultMapping = z.infer<typeof ResultMappingSchema>;
 
 export const OperationSchema = z.object({
   name: z.string(),
+  /** S8 W2-K1 (leftover 71/72, audit B3/CO1): human-readable, markdown-free description of what
+   *  this Operation does — used by `find_operations`'s own keyword ranking
+   *  (`substrate/graph/find-means.ts`) and shown wherever an Operation is listed for a human to
+   *  pick. Optional at this schema's own level — a manifest sourced from a live gate's
+   *  `describe_operations` (accept-s2 fixtures, a third-party MCP/OpenAPI system) may not have
+   *  one yet, and this package does no business-logic validation (R4 scope: "no IO / no business
+   *  logic here"). `governance/gatekeepers/manifest.ts`'s `importManifest` is where a *blank*
+   *  description is actually rejected, and only for the one call site that opts in
+   *  (`requireDescription`) — see that module's own doc comment for why the rule cannot be
+   *  unconditional here. */
+  description: z.string().optional(),
   binding: OperationBindingSchema,
   params_schema: JsonSchemaObjectSchema,
   mode: OperationModeSchema,
