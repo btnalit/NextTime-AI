@@ -531,7 +531,11 @@ export function WorkspaceLifecycle({ workspace }: { readonly workspace: Platform
         data-testid="workspace-expires"
         data-expired={expired || undefined}
       >
-        {expired ? '已到期 expired' : '到期 expires'} {formatRelative(workspace.expiresAt)}
+        {expired ? (
+          <>已到期 expired {formatRelative(workspace.expiresAt)}</>
+        ) : (
+          <>{formatRelative(workspace.expiresAt)}到期 expires</>
+        )}
       </time>,
     );
   }
