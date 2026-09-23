@@ -71,6 +71,14 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
 
   const chatCard = await findChatWithActionCard(page, scope);
   await expect(chatCard).toBeVisible({ timeout: 15_000 });
+  // A reload here, not just a wait: `findChatWithActionCard` may have opened and left one or more
+  // *other* Chats along the way (searching for the right one) before landing on this one — each
+  // switch tears down and re-establishes `subscribe_chat`'s WS subscription, so the live
+  // `action.updated` push this card's status transition depends on can land while a *different*
+  // Chat is the one subscribed, and never reach this render. A reload forces a fresh
+  // `get_chat_history` fetch of the Chat's *current* server-side state instead of depending on a
+  // push this page may never have been subscribed to receive.
+  await page.reload();
   await expect(chatCard.locator('.action-card-status')).toHaveAttribute(
     'data-status',
     /^(approved|executing|executed|failed)$/,
