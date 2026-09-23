@@ -360,7 +360,10 @@ function RuntimeBody({
                           </Button>
                         )}
                         {!active && !image.allowed ? (
-                          <div className="text-3 text-small" data-testid="runtime-image-not-allowed-hint">
+                          <div
+                            className="text-3 text-small"
+                            data-testid="runtime-image-not-allowed-hint"
+                          >
                             未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST
                           </div>
                         ) : null}

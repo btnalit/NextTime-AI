@@ -473,7 +473,10 @@ describe('admin API — catalog lifecycle', () => {
       secretCleared: true,
     });
     expect(h.keyStore.get('acme')).toBeUndefined();
-    expect(h.kernelEvents.at(-1)).toMatchObject({ action: 'provider_secret_cleared', providerId: 'acme' });
+    expect(h.kernelEvents.at(-1)).toMatchObject({
+      action: 'provider_secret_cleared',
+      providerId: 'acme',
+    });
     expect(h.kernelEvents.some((e) => e.action === 'provider_deleted')).toBe(true);
 
     // Recreating the same id afterward must start with no console key — the whole point of P2.

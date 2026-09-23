@@ -147,7 +147,10 @@ function resolveActiveImage(
  *  be a confusing edge case this platform's build process (one tag per build) does not produce in
  *  practice; keeping this in lockstep with what the console actually sends is simpler and never
  *  claims "allowed" for a call that would 409. */
-function toWireRuntimeImage(image: RuntimeImageInfo, allowedImages: ReadonlySet<string>): RuntimeImageWire {
+function toWireRuntimeImage(
+  image: RuntimeImageInfo,
+  allowedImages: ReadonlySet<string>,
+): RuntimeImageWire {
   return {
     id: image.id,
     tags: [...image.tags],

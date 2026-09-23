@@ -508,11 +508,20 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
             }),
           );
         }
-        audit(claims, 'provider_deleted', id, { restoredFileEntry, modelsJsonError, secretCleared });
+        audit(claims, 'provider_deleted', id, {
+          restoredFileEntry,
+          modelsJsonError,
+          secretCleared,
+        });
         if (secretCleared) {
           audit(claims, 'provider_secret_cleared', id, {});
         }
-        const body: DeleteLlmProviderResultWire = { id, deleted: true, restoredFileEntry, secretCleared };
+        const body: DeleteLlmProviderResultWire = {
+          id,
+          deleted: true,
+          restoredFileEntry,
+          secretCleared,
+        };
         return { status: 200, body };
       }
       throw new AdminApiError(405, 'method_not_allowed', 'method not allowed');

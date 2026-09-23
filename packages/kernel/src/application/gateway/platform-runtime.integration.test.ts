@@ -156,8 +156,10 @@ class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
     if (this.imagesShouldThrow) {
       throw new Error('simulated: worker-supervisor unreachable');
     }
-    const allowedImages =
-      this.allowedImages ?? [this.defaultImage, ...this.images.flatMap((image) => image.tags)];
+    const allowedImages = this.allowedImages ?? [
+      this.defaultImage,
+      ...this.images.flatMap((image) => image.tags),
+    ];
     return { defaultImage: this.defaultImage, images: this.images, allowedImages };
   }
   async listResidents(): Promise<ResidentInventoryEntry[]> {
@@ -464,7 +466,10 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('refuses rollback to a previous value that has since been dropped from the allowlist (image_not_allowed)', async () => {
         supervisor.images = [IMAGE_V1, IMAGE_V2];
-        supervisor.allowedImages = ['nexttime-ai-worker-runtime:v1', 'nexttime-ai-worker-runtime:v2'];
+        supervisor.allowedImages = [
+          'nexttime-ai-worker-runtime:v1',
+          'nexttime-ai-worker-runtime:v2',
+        ];
         await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v1' });
         await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
         // An operator tightens WORKER_IMAGE_ALLOWLIST after the fact — v1 is no longer allowed.
@@ -591,7 +596,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       // already does — not an unstructured error with no `interfaces/http` mapping.
       it('wraps an unreachable worker-supervisor into runtime_unreachable, like set_active_runtime_image', async () => {
         supervisor.imagesShouldThrow = true;
-        await expectPlatformError(() => callAsAdmin('roll_entry_containers'), 'runtime_unreachable');
+        await expectPlatformError(
+          () => callAsAdmin('roll_entry_containers'),
+          'runtime_unreachable',
+        );
       });
     });
 

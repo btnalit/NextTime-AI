@@ -138,7 +138,10 @@ describe('LlmAdminClient', () => {
     const fetch = scriptedFetch([
       { status: 201, body: { id: 'acme' } },
       { status: 200, body: { id: 'acme' } },
-      { status: 200, body: { id: 'acme', deleted: true, restoredFileEntry: false, secretCleared: false } },
+      {
+        status: 200,
+        body: { id: 'acme', deleted: true, restoredFileEntry: false, secretCleared: false },
+      },
       { status: 200, body: { providerId: 'acme', completion: 'ok', toolCall: 'ok' } },
     ]);
     const client = new LlmAdminClient(http, { fetchImpl: fetch.fetchImpl });

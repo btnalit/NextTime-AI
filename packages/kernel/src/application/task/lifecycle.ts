@@ -304,7 +304,11 @@ export async function completeTaskWithResult(
     if (!reread) {
       throw new Error(`completeTaskWithResult: Task ${taskId} disappeared mid-race`);
     }
-    if (reread.status === 'completed' || reread.status === 'failed' || reread.status === 'cancelled') {
+    if (
+      reread.status === 'completed' ||
+      reread.status === 'failed' ||
+      reread.status === 'cancelled'
+    ) {
       throw new IllegalTransition(TASK_TRANSITIONS.machine, reread.status, 'complete');
     }
     updated = await attemptCompleteTask(client, workspaceId, taskId, reread.status, result);
