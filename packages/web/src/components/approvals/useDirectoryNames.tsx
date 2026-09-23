@@ -19,9 +19,13 @@ import { useRefNames } from '../ui/RefChip.js';
  * `list_pending` read) that answers `[]` once the session has learned the 403, instead of
  * re-firing a request that can only fail again on every mount. Any other failure also degrades
  * to `[]` — the chip then shows the grey bare id (visibly a fallback), never an error state on a
- * page whose subject is something else. The member-level gatekeeper list goes through
- * `useCapabilityList` (cached per session, permissions marked by the hook itself); Worker
- * definition names come from `lib/tasks.ts`'s `definitionName` over the list the pages load.
+ * page whose subject is something else. S8 W1-C (#243) made `list_principals` keyset-paginated
+ * (default 100, max 500); the loader below walks every page — a name resolution directory that
+ * silently stopped at page one would start showing bare-id chips for real members once a
+ * workspace grew past 100, which is a correctness regression, not an acceptable degradation. The
+ * member-level gatekeeper list goes through `useCapabilityList` (cached per session, permissions
+ * marked by the hook itself); Worker definition names come from `lib/tasks.ts`'s `definitionName`
+ * over the list the pages load.
  */
 const NONE: ReadonlyMap<string, string> = new Map();
 
@@ -39,7 +43,7 @@ interface PrincipalLoad {
 }
 
 /** `list_principals` as rows + names — for a page that also needs the rows (the audit page's
- *  actor selector). See the module doc for why this read is guarded. */
+ *  actor selector). See the module doc for why this read is guarded, and walks every page. */
 export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirectory {
   const permissions = usePermissions();
   const denied = permissions.isDenied('list_principals');
@@ -47,8 +51,17 @@ export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirector
   const load = useCallback(async (): Promise<PrincipalLoad> => {
     if (denied) return { items: [], failed: true };
     try {
-      const page = await http.call<{ items: readonly PrincipalRow[] }>('list_principals');
-      return { items: page.items, failed: false };
+      let items: readonly PrincipalRow[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await http.call<{ items: readonly PrincipalRow[]; nextCursor?: string }>(
+          'list_principals',
+          cursor ? { cursor } : {},
+        );
+        items = [...items, ...page.items];
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
+      return { items, failed: false };
     } catch (err) {
       if (isForbiddenError(err)) markDenied('list_principals');
       return { items: [], failed: true };

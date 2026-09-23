@@ -77,7 +77,9 @@ export function ModelsPage({ http }: ModelsPageProps) {
   const isOwner = role.role === 'owner';
 
   const models = useCapabilityList<ModelRow>(http, 'list_models');
-  const skills = useCapabilityList<SkillRow>(http, 'list_skills');
+  // A picker inside AgentPolicyForm, not a browsable list — autoLoadAll (S8 W1-C #243 made
+  // list_skills keyset-paginated; a missing Skill past page one would be a correctness bug here).
+  const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
   const agentPolicy = useCapability<AgentPolicy>(http, 'get_agent_policy');
   const quotas = useCapabilityList<QuotaListEntryWire>(http, 'list_quotas');

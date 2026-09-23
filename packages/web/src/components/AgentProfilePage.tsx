@@ -34,6 +34,11 @@ export interface AgentProfilePageProps {
  * such principal").
  *
  * An owner may switch the target principal via a dropdown seeded from `list_principals`.
+ *
+ * S8 W1-C (#243) made `list_skills` / `list_worker_definitions` / `list_principals` keyset-
+ * paginated. Every one of them backs a checklist or a picker on this page (never a browsable list
+ * of its own) — `{ autoLoadAll: true }` walks every page up front so a workspace with more than
+ * the default 100 rows still offers all of them, instead of a checklist silently missing some.
  */
 export function AgentProfilePage({ http }: AgentProfilePageProps) {
   const toast = useToast();
@@ -41,14 +46,20 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
   const [selectedPrincipalId, setSelectedPrincipalId] = useState<string | undefined>(undefined);
 
   const models = useCapabilityList<ModelRow>(http, 'list_models');
-  const skills = useCapabilityList<SkillRow>(http, 'list_skills');
+  const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
   const workerDefinitions = useCapabilityList<WorkerDefinitionSummary>(
     http,
     'list_worker_definitions',
     {},
+    { autoLoadAll: true },
   );
-  const principals = useCapabilityList<PrincipalRow>(http, 'list_principals');
+  const principals = useCapabilityList<PrincipalRow>(
+    http,
+    'list_principals',
+    {},
+    { autoLoadAll: true },
+  );
   const policy = useCapability<AgentPolicy>(http, 'get_agent_policy');
   const profile = useCapability<AgentProfile>(
     http,
