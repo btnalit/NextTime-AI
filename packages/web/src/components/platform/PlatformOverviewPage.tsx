@@ -3,16 +3,17 @@ import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { MeResult } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime } from '../../lib/format.js';
+import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
 import { hrefs } from '../../lib/router.js';
 import { BindApiKeyForm } from '../BindApiKeyForm.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Card } from '../ui/Card.js';
 import { DataList, DataRow } from '../ui/DataList.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Icon } from '../ui/Icon.js';
 import { Notice } from '../ui/Notice.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 
 export interface PlatformOverviewPageProps {
@@ -84,6 +85,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={breadcrumbFor('platformOverview')}
         title="概览 Overview"
         description="内核版本、服务健康、首次运行清单与最近的平台审计。 Kernel version, service health, the first-run checklist, and recent platform audit."
       />

@@ -14,6 +14,7 @@ import {
   operationKey,
   operationStatsKey,
 } from '../lib/governance.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
 import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
@@ -22,12 +23,12 @@ import { ModulesTab } from './catalog/ModulesTab.js';
 import { ProcedureEditor } from './catalog/ProcedureEditor.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerDefinitionEditor } from './catalog/WorkerDefinitionEditor.js';
+import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
-import { PageHeader } from './ui/PageHeader.js';
 import { RefChip } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -84,10 +85,7 @@ export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={[
-          { label: '治理 Governance', href: hrefs.members() },
-          { label: '能力目录 Catalog' },
-        ]}
+        breadcrumb={breadcrumbFor('catalog')}
         title="能力目录 Catalog"
         description="工作区里已发布的 Operation、Skill、Procedure 与 Worker 定义，以及你自己的草稿。 Published Operations, Skills, Procedures and Worker definitions across the workspace, plus your own drafts."
       />

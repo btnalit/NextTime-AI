@@ -13,15 +13,16 @@ import {
 } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { breadcrumbFor } from '../../lib/nav.js';
 import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
 import { deriveWorkspaceOptions } from '../../lib/platform-workspaces.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select } from '../ui/Field.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
@@ -173,6 +174,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={breadcrumbFor('platformUsers')}
         title="用户 Users"
         description="谁能登录、属于哪些工作区、预算多少。 Who can sign in, which workspaces they belong to, and their budgets."
         primaryAction={

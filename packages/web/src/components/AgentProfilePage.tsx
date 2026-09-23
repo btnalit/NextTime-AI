@@ -5,15 +5,16 @@ import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { AgentProfileForm } from './AgentProfileForm.js';
 import { nameOf } from './approvals/useDirectoryNames.js';
+import { PageHeader } from './kit/page-header.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Select } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
-import { PageHeader } from './ui/PageHeader.js';
 import { RefChip, useRefNames } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { useToast } from './ui/Toast.js';
@@ -86,6 +87,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={breadcrumbFor('agent')}
         title="我的智能体 My Agent"
         description="Per-user Agent configuration — model, Skills, connected systems, prompt addendum."
         actions={

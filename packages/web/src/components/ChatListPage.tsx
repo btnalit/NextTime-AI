@@ -4,15 +4,16 @@ import { useResource } from '../hooks/useResource.js';
 import { type ChatSummary, chatTitle, isArchived, spliceChat } from '../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import { ChatArchiveConfirm } from './chat/ChatArchiveConfirm.js';
 import { ChatLifecycleActions, useRestoreChat } from './chat/ChatLifecycleActions.js';
 import { ChatRenameForm } from './chat/ChatRenameForm.js';
+import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Icon } from './ui/Icon.js';
-import { PageHeader } from './ui/PageHeader.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { Tabs } from './ui/Tabs.js';
 
@@ -97,6 +98,7 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={breadcrumbFor('chats')}
         title="对话 Chats"
         description="与工作区入口 agent 的对话。 Your conversations with the workspace entry agent."
         primaryAction={newChatButton}

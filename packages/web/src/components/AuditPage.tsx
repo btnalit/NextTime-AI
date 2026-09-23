@@ -10,16 +10,16 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
-import { hrefs } from '../lib/router.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import { useGatekeeperNames, usePrincipalDirectory } from './approvals/useDirectoryNames.js';
 import { ApprovalContext } from './audit/ApprovalContext.js';
 import { AuditLogSection } from './audit/AuditLogSection.js';
 import { ExplainSection } from './audit/ExplainSection.js';
+import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input } from './ui/Field.js';
-import { PageHeader } from './ui/PageHeader.js';
 
 export interface AuditPageProps {
   readonly http: CapabilityCaller;
@@ -69,7 +69,7 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={[{ label: '治理 Governance', href: hrefs.members() }, { label: '审计 Audit' }]}
+        breadcrumb={breadcrumbFor('audit')}
         title="审计 Audit"
         description="按 id 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。 Provenance lookups (explain, reconstruct) and the audit log, by id or filter — reachable from tasks, approvals and facts in a chat."
       />

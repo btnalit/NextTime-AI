@@ -8,9 +8,9 @@ import {
   isValidInstant,
   objectTypeOptions,
 } from '../../lib/graph-view.js';
-import { hrefs } from '../../lib/router.js';
+import { breadcrumbFor } from '../../lib/nav.js';
+import { PageHeader } from '../kit/page-header.js';
 import { EmptyState } from '../ui/EmptyState.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { FreshnessLegend } from './FreshnessLegend.js';
 import { GraphObjectsProvider } from './GraphObjectsContext.js';
 import { ObjectSearch } from './ObjectSearch.js';
@@ -93,7 +93,7 @@ export function GraphPage({ http }: GraphPageProps) {
   return (
     <div className="page graph-page">
       <PageHeader
-        breadcrumb={[{ label: '使用 Work', href: hrefs.chats() }, { label: '图谱 Graph' }]}
+        breadcrumb={breadcrumbFor('graph')}
         title="图谱 Graph"
         description="浏览对象、展开邻居、追溯事实来源；颜色表示新鲜度。 Browse Objects, expand neighbours, trace a Fact’s provenance; colour is freshness."
       />

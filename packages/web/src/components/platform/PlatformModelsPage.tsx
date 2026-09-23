@@ -9,13 +9,14 @@ import { useResource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
+import { breadcrumbFor } from '../../lib/nav.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { ConfirmTier } from '../ui/ConfirmTier.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Notice } from '../ui/Notice.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
@@ -183,7 +184,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
   return (
     <div className="page" data-testid="platform-models-page">
       <PageHeader
-        breadcrumb={[{ label: '平台 Platform' }, { label: '模型与供应商' }]}
+        breadcrumb={breadcrumbFor('platformModels')}
         title="模型与供应商 Models & providers"
         description="llm-proxy 里的供应商：名称、API 种类、Base URL、鉴权头、密钥环境变量、模型清单、启用；测试调用含一次工具调用往返。工作区侧只从这里的投影里选。 The providers llm-proxy routes to; workspaces only pick from this projection."
         primaryAction={

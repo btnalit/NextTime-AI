@@ -6,12 +6,13 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
+import { PageHeader } from './kit/page-header.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
-import { PageHeader } from './ui/PageHeader.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { useToast } from './ui/Toast.js';
@@ -85,6 +86,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={breadcrumbFor('models')}
         title="模型与配额 Models & Quotas"
         description="The llm-proxy model allow-list, workspace AgentPolicy, quotas, and policy rules."
       />

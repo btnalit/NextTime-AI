@@ -3,13 +3,14 @@ import { useEffect } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime } from '../../lib/format.js';
+import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { DataList, DataRow } from '../ui/DataList.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 
@@ -73,7 +74,7 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
   return (
     <div className="page" data-testid="platform-status-page">
       <PageHeader
-        breadcrumb={[{ label: '平台 Platform' }, { label: '运行状态' }]}
+        breadcrumb={breadcrumbFor('platformStatus')}
         title="运行状态 Status"
         description="哪个服务不健康、队列积压、备份多久了。 Which service is unhealthy, and how stale the backup is — auto-refreshes every 30s while this tab is visible."
         actions={

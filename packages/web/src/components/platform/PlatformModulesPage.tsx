@@ -2,10 +2,11 @@ import type { ModuleWire, PlatformSettingsWire } from '@nexttime/shared';
 import { useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { breadcrumbFor } from '../../lib/nav.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { PlatformError } from './PlatformError.js';
 
@@ -64,7 +65,7 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
       <PageHeader
         title="模块 Modules"
         description="随镜像发布的版本化领域包——本部署带哪些模块、装到了几个工作区、哪些工作区有新版可用，以及新建工作区默认安装哪些。 Versioned domain packs shipped with this deployment: what's available, how many workspaces have each installed, and which install by default into a new workspace."
-        breadcrumb={[{ label: '平台 Platform' }, { label: '模块 Modules' }]}
+        breadcrumb={breadcrumbFor('platformModules')}
       />
 
       <PlatformError

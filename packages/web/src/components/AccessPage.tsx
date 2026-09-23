@@ -6,16 +6,17 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, prettyJson } from '../lib/format.js';
 import type { GatekeeperListRow, GrantRow, PrincipalRow } from '../lib/governance.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import { GrantCapabilityForm } from './GrantCapabilityForm.js';
 import { IssueServiceHandleSection } from './IssueServiceHandleSection.js';
+import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input } from './ui/Field.js';
-import { PageHeader } from './ui/PageHeader.js';
 import { RefChip, useRefNames } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -116,6 +117,7 @@ export function AccessPage({ http }: AccessPageProps) {
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={breadcrumbFor('access')}
         title="访问 Access"
         description="哪个主体持有哪项能力、作用于哪个资源。 Which Principal holds which capability, over which resource."
         actions={
