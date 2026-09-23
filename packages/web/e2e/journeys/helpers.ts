@@ -194,11 +194,26 @@ export async function createFreshWorkspace(page: Page): Promise<{
 export async function findChatWithActionCard(page: Page, scope: string): Promise<Locator> {
   await goToByLabel(page, '对话');
   const rows = page.getByTestId('chat-row');
+  // `goToByLabel` only waits for the page's own `<h1>` — the list itself still loads
+  // asynchronously behind `components/ui/Skeleton.tsx`'s `SkeletonRows` (`.skeleton-rows`, the
+  // same generic "content loaded" signal `00-gates/surfaces.ts`'s `goToSurface` waits on). Without
+  // this, `rows.count()` right below can read 0 while the list is still loading — not "no chats
+  // exist" — and the loop below would never run, throwing immediately instead of actually
+  // searching. The first baseline-generation run after the S8 W1-A1/A2 rebase hit exactly this
+  // (both journey ③ sub-tests failed in ~1.6s, far too fast to have actually opened any chat).
+  await expect(page.locator('.skeleton-rows')).toHaveCount(0, { timeout: 15_000 });
   const count = await rows.count();
   for (let i = 0; i < count; i++) {
     await rows.nth(i).click();
+    // Bounded `waitFor` (polls), not an instant `.count()`: the opened chat's own history is
+    // still an async fetch + WS subscribe (same class of race as the list above) — a chat that
+    // *does* hold the card can still read 0 matches for a moment right after navigating in.
     const card = page.locator('.action-card', { hasText: scope }).first();
-    if ((await card.count()) > 0) return card;
+    const found = await card
+      .waitFor({ state: 'visible', timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (found) return card;
     await page.getByRole('button', { name: 'Back to chats' }).click();
   }
   throw new Error(`no Chat in the list contains an action card for scope "${scope}"`);
