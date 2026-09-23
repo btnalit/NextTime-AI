@@ -3062,8 +3062,8 @@ WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefini
   主机上只读冒烟。以后由这些测试去"点"，不再靠人工走查发现断点。
 - **F5 UX 合入门槛（CI）。** 三档截图回归（1440 / 1280 / 768，`toHaveScreenshot`，fake 栈固定数据、字体与时间）；axe
   无 serious / critical；文案守卫（页面可见文本不得出现裸 UUID、原始枚举值、内部代号如 `P-B2a` / `I16` / "遗留 N"、环境
-  变量名）；界面语言中文为主，英文收进语言切换，`<html lang="zh-CN">`。每个 UI PR 附三档截图，经设计评审（维护者或持
-  §5.9 基线的评审 agent）后合入。
+  变量名）；界面语言中文为主，英文收进语言切换，`<html lang="zh-CN">`。每个 UI PR 附三档截图，经设计评审后合入（2026-09-24
+  维护者决定：不逐个交维护者，由持 §5.9 基线的评审 agent 批量独立评审或 advisor 过目，无阻断即合入；维护者只做 S8 最终旅程验收）。
 - **F6 内核只加读模型，不改领域模型。** `execution_readiness`（按成员：可用门 / 已授权门 / 可委派 Worker，缺项与去处）；
   `resolve_refs`（批量 id → 名称 + 类型，含遗留 48 的批量 Object 读）；选择器数据源（成员、门、Operation、能力名）。
 
@@ -3074,7 +3074,7 @@ WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefini
 | 波次 | 内容 | 审计条目 | 完成判据 |
 |---|---|---|---|
 | W0 主机运维（2026-09-25 09:59 UTC 前） | 采集器 Handle 重铸回生产默认工作区，核实观测回流；停 fake-llm；清孤儿入口容器与到期残留。按 runbook 执行，结果记 `docs/private/` | B1、R8、B6 主机部分；遗留 70 | 生产工作区最新观测回到当日；该工作区 `collector_silent` 只剩遗留 62 的旧 Source |
-| W1 基座 | **W1-A** 组件地基（F3）与系统性组件：PageHeader（S1）、窄屏导航（S2）、响应式数据表（S3）、中文为主的 i18n（S4 / S7 / S14）、令牌对比度 / 字号 / 命中区（S5 / S6 / S8）、时间格式化（S9 / PW1）、RefChip（S10）、就近 ConfirmTier（S13 / RT2）、Markdown 渲染（C2）、对话顶栏（C3）、主按钮 / 语义色 / 分区 / 抽屉规则（L2 / L3 / L5 / L8）、面包屑与分组命名（S12）。**W1-B** UX 门槛（F5）+ 旅程测试框架。**W1-C** 读模型（F6，含遗留 48） | S1–S10、S12–S14、C2、C3、L2、L3、L5、L8、PW1、RT2 | 三档截图基线建立并经维护者认可；axe 与文案守卫进 CI；现有 16 个 e2e 在新组件上仍绿 |
+| W1 基座 | **W1-A** 组件地基（F3）与系统性组件：PageHeader（S1）、窄屏导航（S2）、响应式数据表（S3）、中文为主的 i18n（S4 / S7 / S14）、令牌对比度 / 字号 / 命中区（S5 / S6 / S8）、时间格式化（S9 / PW1）、RefChip（S10）、就近 ConfirmTier（S13 / RT2）、Markdown 渲染（C2）、对话顶栏（C3）、主按钮 / 语义色 / 分区 / 抽屉规则（L2 / L3 / L5 / L8）、面包屑与分组命名（S12）。**W1-B** UX 门槛（F5）+ 旅程测试框架。**W1-C** 读模型（F6，含遗留 48） | S1–S10、S12–S14、C2、C3、L2、L3、L5、L8、PW1、RT2 | 三档截图基线建立并经独立设计评审认可（2026-09-24 改）；axe 与文案守卫进 CI；现有 16 个 e2e 在新组件上仍绿 |
 | W2 试点：旅程① | 统一授权流程（J6 / AX1 / R5 / U2）；启动器必经"启用 + 授权"（J2 / J5）；启用确认与旧注册关联（J3 / J4 / B7：`enable_gate_instance` 按 target / endpoint 识别已有 Gatekeeper 并关联，不再新建，给旧注册写可逆迁移）；Worker 编辑器选择器与模板（J7 / CW1 / CW2 / R6）；概览"执行就绪"（J1 / O1）；系统接入页收敛（SY1–SY4 / U5 / L4）；Operation 描述必填（CO1 / CO2）；`find_*` 匹配（B3）；`find_procedures` 白名单一致（B4）；`invoke_worker` 门参数（R4）；入口 prompt 契约（B2 / B8 / R9：全空指引、ops-runner 条件化、回复语言，`prompt-contract` 守卫加断言） | 见左；遗留 71–73 | 旅程①测试在 CI 通过；在全新工作区从零走通（不用 SQL、不用 CLI）；主机只读冒烟 |
 | W3 其余旅程与页面 | 旅程②–⑥；图谱（G1–G3）；我的（M1 / M2 / U4 / L10 / AC1）；成员与身份（S15）；审计与溯源（AU1 / J8 / S11 / PA1 / L9）；概览控制塔（L1 / O2 / O3）；工作区与用户（PW2 / PW3 / PU1）；集成与模块（PI1–PI3 / PM1）；模型（GM1 / PMo1）；设置（PS1）；运行状态（ST1 / ST2）；菜单范围说明（U1）；其余（C1 / C4 / CM1 / R7 / U3 / L6 / L7 / L11 / L12） | 见左 | 六条旅程测试全绿；审计 P0 / P1 清零（或经维护者标"不修"） |
 | W4 运行时与数据正确性 | Worker 产物持久化（R1）；门操作结果截断与 Worker 工具瘦身（R2）；观测结果回写图谱（R3）；验收脚本 trap 与停 fake-llm（B5）；清除工作区时回收入口容器 + 运行层容器状态列（B6 / RT1）；构建版本溯源与 pi 漂移（RT3 / 遗留 59）；遗留 60 / 61 / 62 / 64 / 65 / 66 / 67 | 见左；遗留 74–77 | 各项有正向用例；主机复跑 S1 / S2 / S3 |
@@ -3092,7 +3092,18 @@ WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefini
 | W1-B UX 门槛与旅程框架 | 三档截图（基线在 CI 的 Linux 上生成、以产物回收，不在 Windows 本机生成）、axe、文案守卫、`<html lang="zh-CN">`、旅程测试骨架 | `packages/web/e2e/**`、`playwright.config.ts`、`.github/workflows/e2e.yml` | A0 合入 |
 | W1-A1… 系统性组件 | 每个系统性组件一个 PR：PageHeader（S1 / S12）→ 时间格式化（S9 / PW1）→ Markdown 与对话顶栏（C2 / C3）→ 响应式数据表（S3）→ 窄屏导航（S2）→ RefChip（S10，用 `resolve_refs`）→ 就近 ConfirmTier（S13 / RT2）→ i18n 中文为主（S4 / S7 / S14）→ 令牌对比度 / 字号 / 命中区（S5 / S6 / S8）→ 主按钮 / 语义色 / 分区 / 抽屉规则（L2 / L3 / L5 / L8） | `packages/web/src/**` | A0；RefChip 另依赖 C；截图随 B |
 
-截图认可是维护者关口：A0 之后每个带界面变化的 PR 把三档截图直接给维护者看，W1 以"三档截图基线经维护者认可"收口。
+截图评审（2026-09-24 维护者决定，替代原"截图认可是维护者关口"）：界面 PR 不逐个交维护者；几个 PR 攒一批，由持 §5.9 基线的
+评审 agent 对照三档截图独立评审（或 advisor 过目），无阻断即合入，结论记在 PR 与本节；维护者在 S8 验收时按旅程做页面验收。
+W1-A1 / A2 先于 W1-B 合入，基线直接在新界面上生成，首批评审对整套基线做。
+
+**W1 实现说明**（2026-09-24）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W1-A0 | #241 | Tailwind v4 只扫 `components/kit/`、不引 preflight；`@theme inline` 清空默认色板 / 字号并映射 §5.9 令牌；kit：button / dialog / sheet / tooltip / table；`css-tokens` 守卫拒 Tailwind 任意值类、拒新文件引用旧 `ui/*`（`scripts/guards/legacy-ui-importers.json` 只减不增）；根 `biome.json` 忽略 `tailwind.css`（Biome 1.9 解析不了 v4 语法）。构建对比：既有选择器零变化，CSS +5 kB、JS 0 | — |
+| W1-C | #243 | 新增 `execution_readiness`（复用 `computeChildHandleScope` 与建入口 Handle 的同一组函数，集成测试与 `find_workers` 交叉验证）、`resolve_refs`（对象 / 门 / 成员 / Worker 定义 / 审批请求，不可见 id 省略）、`list_capability_names`、`get_skill`；`traverse` 方向与邻居名称、`list_conflicts` 对象 / Fact 筛选、`list_gatekeepers` / `list_operations` 的 `q`、`GateInstanceWire.enablingWorkspaces`；六个 `list_*` keyset 分页（缺省 100、上限 500；生产最大 21 行，今日不丢行）。无迁移 | `resolve_refs` 补 Operation / Task / Chat / 工作区（RefChip 车道）；控制台列表须能翻页（S3 数据表车道）；readiness 复刻 `ensureEntryHandle` 的步骤，后续抽共享函数；观察窗口内核无对应（窗口由每轮 `window.complete` 驱动），转 W3 图谱 G1–G3 按每个 Source 最近完整窗口判断 |
+| W1-A1 | #245 | 旧样式表进 `@layer legacy`（位于 Tailwind utilities 之下，`tokens.css` 保持不分层），511 条既有规则逐字节不变；kit `page-header`（标题列最小宽度 + 操作区整体换行、面包屑 36 px 命中区）；导航数据抽到 `lib/nav.ts`，分组名统一"使用 / 治理 / 平台"，22 页迁移、11 页首次有面包屑；旧 `ui/PageHeader` 删除 | 面包屑 `aria-label` 仍为英文（i18n 车道） |
+| W1-A2 | #246 | kit `markdown`（react-markdown + remark-gfm，不渲染原始 HTML、不出 `<img>`、链接只放 http(s) / mailto），`React.lazy` 懒加载（主包 +1 kB gzip，独立分块 57 kB gzip）；`lib/format.ts` 一套 zh-CN 格式：绝对时间带时区标注、相对时间对称（"2 天后"），PW1 到期列修正 | `MessageBody` 一处行内 `style` 归遗留 49；访问页授权到期词序同 PW1（W3） |
 
 **S8 验收**：六条旅程测试在 CI 通过；维护者在主机按旅程①–⑥做页面验收；审计清单 P0 / P1 全部关闭或经维护者标"不修"；
 三档截图基线经维护者认可。
