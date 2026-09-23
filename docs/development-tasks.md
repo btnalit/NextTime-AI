@@ -2983,7 +2983,9 @@ WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefini
 - 决定 D2：**"已安装版本"= 哈希匹配**。哈希 = 同一 `parseOntologyDefinition` 路径产出的定义做键排序规范化 JSON
   后的 sha256；内核启动时对镜像内 `ontology/` 计算，**索引文件不存哈希**。工作区某族最新 `published` 定义的哈希
   匹配到索引项 → 该版本；否则 "已定制"。
-- 决定 D3：`install_module` / `upgrade_module` 底层同一调用（族不存在 → v1；存在 → 下一版本）；目标版本哈希已等于
+- 决定 D3：`install_module` / `upgrade_module` 底层同一调用，**目标一律是索引最新版**（一次发布直达，不逐级）；
+  "族不存在 → v1、存在 → 下一版本"只指 `ontology_versions.version` 这个发布计数，与索引版本号无关（2026-09-23 更正：
+  原措辞在 S7-D 审查中被读成"装索引 v1 / 升到 `installedRow.version + 1`"）；目标版本哈希已等于
   当前 → 不发布、直接返回（不空耗版本号）；当前为"已定制"或目标 `breaking: true` → 请求须带 `confirm: true`
   （页面走 ConfirmTier）。`scope:'workspace'`、owner 动作（P-B2 决定 ①）；平台模块页只展示"装到 n 个工作区 /
   m 个有新版"并跳到工作区能力目录。
@@ -2992,6 +2994,13 @@ WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefini
   平台审计 `workspace.created` 的 details 记 `defaultModules`，Activity 记 `triggeredBy: create_workspace`：负责人
   （管理员）与名下（owner）都可回答，不造系统 Principal。
 - e2e（design §9 P-B）：模块页把 `ops-assets` v2 装进第二个工作区。
+
+- **实现说明（2026-09-23 合入，#227）**：`application/platform/modules.ts`（索引读取、`hashOntologyDefinition` = 键排序
+  规范化 JSON 的 sha256、`classifyModuleState` 只按哈希判定、`installOrUpgradeModule(…, dir)` 直达最新版、跨越 breaking
+  或已定制须 `confirm`、`countModuleInstallations`）；能力组：平台两项在 `platform` 组、工作区三项在 `modules` 组
+  （`assertRegistryConsistent` 要求 `scope:'platform'` ⇒ `platform` 组）；`create_workspace` 的负责人记录是一行手写的
+  平台审计 `workspace.created`（details 含 `defaultModules` 与 `triggeredBy`），与 `purge_user` 的 `platform.user_purged`
+  同一做法——派发层的审计行不支持 handler 附加 details。
 
 ### S7-E 运行层与运行状态（P-C，design §6.5 / §6.7）+ P-D 剩余
 
@@ -3018,6 +3027,14 @@ WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefini
   rebase 并重跑 `contract:check`。
 
 ---
+
+- **S7-E 实现说明（2026-09-23 合入，#229 / #230）**：`application/platform/runtime.ts`；`rollback_runtime_image` 取
+  `platform_settings_history` 里最近一个 `activeRuntimeImage` 与当前值不同的版本（缺键视为 JSON null = env 缺省），
+  连续回滚在最近两个镜像之间切换；未设置时的活动镜像由 supervisor `GET /images` 的 `defaultImage` 上报（内核不写死，
+  supervisor 不可达时如实为 `unknown`）；`roll_entry_containers` 按常驻容器所属工作区设上下文后查 `activities`
+  （`agent_turn` 且 `running`）跳过忙容器；`platform_status` 的三次库读串行（同一 `PoolClient`），两路 HTTP 探测并发。
+  `set_platform_default_model` 未知模型回 409 `unknown_model`（与 `create_workspace` / `update_workspace` 同一规则同一
+  码）；`update_platform_settings` 不再接受 `defaultEntryModel`。集成测试用独立新建库（`platform_settings` 是全局单行）。
 
 ## 6. 验收矩阵
 
