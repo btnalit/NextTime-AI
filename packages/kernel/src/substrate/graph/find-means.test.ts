@@ -49,10 +49,11 @@ describe('tokenizeNeed', () => {
 });
 
 describe('buildFindMeansQuery', () => {
-  it('blank need (no tokens): where degrades to true, rank expression to the constant 0', () => {
+  it('blank need (no tokens): where degrades to true, rank term omitted from ORDER BY (a bare 0 is a Postgres positional column reference, not a literal)', () => {
     const q = buildFindMeansQuery('WorkerDefinition', 'ws1', [], 20);
     expect(q.text).toContain('and true');
-    expect(q.text).toContain('order by (0) desc, updated_at desc');
+    expect(q.text).toContain('order by updated_at desc');
+    expect(q.text).not.toContain('case when');
     expect(q.values).toEqual(['ws1', 'WorkerDefinition', false, 20]);
   });
 

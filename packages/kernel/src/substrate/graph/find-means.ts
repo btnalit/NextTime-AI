@@ -216,12 +216,17 @@ export function buildFindMeansQuery(
     const p = values.length;
     const checks = fields.map((field) => `${field} ilike $${p}`);
     if (objectType === 'Operation') {
+      // gk.id is uuid, identity_key ->> 'gatekeeperId' is text (`->>` always returns text) —
+      // compared as text, the same convention governance/gatekeepers/manifest.ts's own
+      // `identity_key ->> 'gatekeeperId' = $n` queries already use, rather than casting the
+      // right-hand side to uuid (which would throw on any malformed value instead of simply not
+      // matching).
       checks.push(
         `exists (
            select 1 from objects gk
            where gk.workspace_id = objects.workspace_id
              and gk.object_type = 'Gatekeeper'
-             and gk.id = (objects.identity_key ->> 'gatekeeperId')
+             and gk.id::text = (objects.identity_key ->> 'gatekeeperId')
              and gk.properties ->> 'name' ilike $${p}
          )`,
       );
@@ -232,7 +237,12 @@ export function buildFindMeansQuery(
   }
 
   const whereMatch = tokenClauses.length > 0 ? `(${tokenClauses.join(' or ')})` : 'true';
-  const rankExpr = rankTerms.length > 0 ? rankTerms.join(' + ') : '0';
+  // Postgres's ORDER BY treats a bare integer constant (even parenthesized) as a positional
+  // column reference, not a literal value ("ORDER BY position 0 is not in select list" — caught
+  // by this lane's own CI run against real Postgres, not reproducible against sqlite/mocks). When
+  // there are no tokens (blank need), every row ties on rank anyway, so the rank term is simply
+  // omitted from ORDER BY rather than emitted as a literal `0`.
+  const rankExpr = rankTerms.length > 0 ? rankTerms.join(' + ') : null;
 
   const publishedOnly = objectType === 'Operation';
   values.push(publishedOnly);
@@ -240,13 +250,14 @@ export function buildFindMeansQuery(
   values.push(limit);
   const limitParam = values.length;
 
+  const orderBy = rankExpr !== null ? `(${rankExpr}) desc, updated_at desc` : 'updated_at desc';
   const text = `select ${OBJECT_COLUMNS}
      from objects
      where workspace_id = $1
        and object_type = $2
        and ${whereMatch}
        and (not $${publishedParam}::boolean or properties ->> 'status' = 'published')
-     order by (${rankExpr}) desc, updated_at desc
+     order by ${orderBy}
      limit $${limitParam}`;
 
   return { text, values };
