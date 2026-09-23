@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.16.0](https://github.com/btnalit/NextTime-AI/compare/v0.15.0...v0.16.0) (2026-09-23)
+
+
+### Features
+
+* **console:** runtime layer and platform status pages; platform default entry model (S7-E web, P-C / P-D) ([#230](https://github.com/btnalit/NextTime-AI/issues/230)) ([bc1f99a](https://github.com/btnalit/NextTime-AI/commit/bc1f99a49d51bbe9830f27aa04699fa4f93d1794))
+* **modules:** module index, list / install / upgrade / default modules, modules page (S7-D, P-B2b) ([#227](https://github.com/btnalit/NextTime-AI/issues/227)) ([d6596d1](https://github.com/btnalit/NextTime-AI/commit/d6596d1b8d85109dc8dc5d009dfad0bdd2fdf161))
+* **runtime:** active runtime image, image inventory, rollback, platform status (S7-E backend, P-C) ([#229](https://github.com/btnalit/NextTime-AI/issues/229)) ([e45d740](https://github.com/btnalit/NextTime-AI/commit/e45d7403229d9e18f0ec4fe07a9d8ea8cbe0ddc3))
+
+
+### Bug Fixes
+
+* **scripts:** drill-upgrade handles the models/ and llm-proxy/ layout both ways; release §6 rows for 0030–0032 ([#226](https://github.com/btnalit/NextTime-AI/issues/226)) ([a2bd821](https://github.com/btnalit/NextTime-AI/commit/a2bd8217c4e75026b055b512800eecd4528b2ac6))
+
 ## [0.15.0](https://github.com/btnalit/NextTime-AI/compare/v0.14.0...v0.15.0) (2026-09-22)
 
 
