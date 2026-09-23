@@ -1,3 +1,4 @@
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 // Minimal Vite config: no @vitejs/plugin-react dependency, esbuild already strips TS/JSX for
@@ -18,6 +19,12 @@ export default defineConfig({
   esbuild: {
     jsx: 'automatic',
   },
+  // S8 W1-A0 (docs/development-tasks.md §5e F3): Tailwind v4 for the new components/kit/*
+  // primitives only. `src/styles/tailwind.css` imports just the theme + utilities layers (no
+  // preflight — base.css already resets) and restricts class scanning to components/kit/ via
+  // `source(none)` + `@source`, so no existing page markup can accidentally start matching a
+  // generated utility. See that file's own header comment for the full rationale.
+  plugins: [tailwindcss()],
   build: {
     outDir: 'dist',
     emptyOutDir: true,
