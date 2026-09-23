@@ -1,6 +1,10 @@
 import type { PlatformSettingsWire } from '@nexttime/shared';
 import { useState } from 'react';
-import { invalidateCapability, useCapability, useCapabilityList } from '../../../hooks/useCapability.js';
+import {
+  invalidateCapability,
+  useCapability,
+  useCapabilityList,
+} from '../../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import type { ModelRow } from '../../../lib/governance.js';
 import { Card } from '../../ui/Card.js';
@@ -67,7 +71,11 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
           this; empty = pi's own default.
         </p>
         {settings.state.status === 'loading' ? (
-          <SkeletonRows count={1} label="Loading the default model" testId="platform-default-model-loading" />
+          <SkeletonRows
+            count={1}
+            label="Loading the default model"
+            testId="platform-default-model-loading"
+          />
         ) : settings.state.status === 'error' ? (
           <ErrorBanner
             error={settings.state.error}
@@ -93,9 +101,7 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
             </Select>
           </Field>
         )}
-        {saved ? (
-          <Notice testId="platform-default-model-saved">已保存 Saved</Notice>
-        ) : null}
+        {saved ? <Notice testId="platform-default-model-saved">已保存 Saved</Notice> : null}
         {error !== null ? (
           <ErrorBanner
             error={error}

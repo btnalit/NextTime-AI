@@ -118,9 +118,7 @@ describe('PlatformStatusPage', () => {
     screen.getByTestId('status-refresh').click();
 
     await waitFor(() =>
-      expect(http.calls.filter((c) => c.name === 'platform_status').length).toBeGreaterThan(
-        before,
-      ),
+      expect(http.calls.filter((c) => c.name === 'platform_status').length).toBeGreaterThan(before),
     );
   });
 });

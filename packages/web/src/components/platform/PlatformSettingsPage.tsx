@@ -270,8 +270,7 @@ function PlatformSettingsForm({
           </Field>
 
           <p className="text-3 text-small" data-testid="platform-settings-default-model-hint">
-            默认入口模型在"模型与供应商"页设置（经目录校验）。 The default entry model is set on
-            the{' '}
+            默认入口模型在"模型与供应商"页设置（经目录校验）。 The default entry model is set on the{' '}
             <a href={hrefs.platformModels()}>模型与供应商 Models &amp; providers</a> page (validated
             against the catalog there).
           </p>

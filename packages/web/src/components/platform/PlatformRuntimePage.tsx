@@ -32,7 +32,9 @@ const PI_DRIFT_CHIP_CLASS: Readonly<Record<PiDriftWire['status'], string>> = {
   unknown: 'chip-neutral',
 };
 
-const ACTIVE_IMAGE_SOURCE_LABEL: Readonly<Record<RuntimeInventoryWire['activeImageSource'], string>> = {
+const ACTIVE_IMAGE_SOURCE_LABEL: Readonly<
+  Record<RuntimeInventoryWire['activeImageSource'], string>
+> = {
   setting: '平台设置 platform setting',
   env_default: 'supervisor 环境变量缺省 worker-supervisor env default',
   unknown: '未知（供应商不可达）unknown — worker-supervisor unreachable',
@@ -249,12 +251,7 @@ function RuntimeBody({
       <Card
         title="活动镜像 Active image"
         actions={
-          <Button
-            variant="secondary"
-            size="s"
-            onClick={onRollback}
-            data-testid="runtime-rollback"
-          >
+          <Button variant="secondary" size="s" onClick={onRollback} data-testid="runtime-rollback">
             回滚到上一个镜像 Roll back
           </Button>
         }
@@ -284,8 +281,8 @@ function RuntimeBody({
                 （来源：{ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource]}）不在下面的镜像清单
                 里——可能没打平台 label，或 worker-supervisor 不可达；此时下方"待重建"一律按
                 "无法判断"显示为否，不猜测。 The active image reference is not in the inventory
-                below (missing platform labels, or worker-supervisor unreachable) — every
-                "needs rebuild" below reads false rather than guessing.
+                below (missing platform labels, or worker-supervisor unreachable) — every "needs
+                rebuild" below reads false rather than guessing.
               </>
             ) : (
               <>
@@ -451,7 +448,9 @@ function ResidentRow({
       <td>
         <RefChip kind="principal" id={resident.principalId} size="s" />
       </td>
-      <td className="text-small">{workspaceName ?? <span className="text-3">{resident.workspaceId}</span>}</td>
+      <td className="text-small">
+        {workspaceName ?? <span className="text-3">{resident.workspaceId}</span>}
+      </td>
       <td className="mono text-small">{resident.image ?? '—'}</td>
       <td className="text-small">
         <time title={formatDateTime(resident.startedAt)}>{formatRelative(resident.startedAt)}</time>
@@ -496,4 +495,3 @@ function PiDriftBody({ data }: { readonly data: PiDriftWire }) {
     </dl>
   );
 }
-
