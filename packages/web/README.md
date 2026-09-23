@@ -153,9 +153,15 @@ src/
                           input, not Markdown-authored) and lazy-loads the kit component
                           (`React.lazy`) since react-markdown + remark-gfm add ~185 kB raw / ~57 kB
                           gzip that only a chat page with an assistant message ever needs
+                          — S8 W1-A3 (audit C3): `dropdown-menu` — the chat header's 改名/归档
+                          overflow menu, first kit component wired into `components/chat/*`
   components/shell/       AppShell, Sidebar (三组 使用 / 治理 / 平台 nav, S6-A0; nav data itself lives
                           in lib/nav.ts as of S8 W1-A1; S4.1: workspace switcher when >1 membership,
-                          cookie-vs-apiKey sign-out label)
+                          cookie-vs-apiKey sign-out label). S8 W1-A3 (audit S2): `Sidebar` now wraps
+                          a shared `SidebarContent`; ≤960px `AppShell` renders `MobileTopBar` +
+                          `NavDrawer` (a `kit/sheet` holding that same `SidebarContent`) instead —
+                          `useNarrowViewport.ts` is the `matchMedia`-backed breakpoint hook. The
+                          icon rail range is now (960px, 1100px]; it was (720px, 1100px] before
   components/             LoginPage (S4.1: primary login+password form, collapsed API-key
                           `<details>` via ApiKeyLoginDetails; no setup page any more — P-A1's
                           pre-created `admin` always reaches this form) ChangePasswordPage (S4.1:
@@ -339,6 +345,17 @@ S8 W1-A1 additions: `components/kit/page-header` (title as the sole `h1`, breadc
 `components/ui/PageHeader` callers); `lib/nav.test.ts` (`breadcrumbFor` resolves every
 `NavSection` to `[{group}, {page}]` and `[]` for a section with no nav entry); `Sidebar.test.tsx`
 unchanged (nav data moved to `lib/nav.ts`, `Sidebar`'s own rendered output did not).
+
+S8 W1-A3 additions (audit S2/C3): `Sidebar.test.tsx` gains `MobileTopBar` (renders `nav-open`,
+page title, workspace + role) and `NavDrawer` (closed until `open`, renders every `nav-<section>`
+testid + the workspace switcher/current user/sign-out once open, closes on `Escape`, focus returns
+to the element that had it before open); `AppShell.test.tsx` gains a "narrow viewport" describe
+block that stubs `window.matchMedia` to force the ≤960px branch and asserts `Sidebar`'s `<aside>`
+is absent, `MobileTopBar` is present, opening the drawer surfaces the nav testids, and changing
+`active` (a simulated navigation) closes it; `ChatHeader.test.tsx` (new) covers the two-row layout,
+the overflow menu's rename/archive/restore items calling the existing handlers, and the disabled
+restore item while a restore is in flight; `kit/dropdown-menu.test.tsx` (new) covers open/select/
+close the same way `kit/dialog.test.tsx` covers `Dialog`.
 
 S3.13 additions: `useWorkspaceIdentity` (known role once `get_workspace` resolves, inferred
 fallback on `not_found`/loading), `AgentProfilePage` (pre-filled form, `not_found` degrade on the

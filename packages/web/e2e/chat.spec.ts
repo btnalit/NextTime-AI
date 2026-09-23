@@ -103,8 +103,10 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await expect(page.getByTestId('chat-title')).toHaveText(prompt, { timeout: 15_000 });
     await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
 
-    // Rename from the header; a rename is never overwritten by a later auto-title.
+    // Rename from the header; a rename is never overwritten by a later auto-title. S8 W1-A3
+    // (audit C3): rename/archive moved into the header's overflow menu — open it first.
     const renamed = `${prompt}-renamed`;
+    await page.getByTestId('chat-header-menu').click();
     await page.getByTestId('chat-header-rename').click();
     await page.getByTestId('chat-rename-input').fill(renamed);
     await page.getByTestId('chat-rename-input').press('Enter');

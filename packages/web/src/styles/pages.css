@@ -78,22 +78,39 @@
   min-height: 0;
 }
 
-@media (max-width: 720px) {
+/* S8 W1-A3 (audit S2): the narrow breakpoint moved from 720px to 960px, and the sidebar's old
+ * horizontal icon row (~53px) is now `.mobile-topbar` (styles/shell.css, a fixed 52px). */
+@media (max-width: 960px) {
   .chat-page {
-    height: calc(100vh - 53px);
+    height: calc(100vh - 52px);
   }
 }
 
+/* S8 W1-A3 (audit C3 "对话顶栏"): two fixed rows — row 1 title + actions, row 2 the model line
+ * alone — instead of one wrapping row, so neither wraps into the other at 1440/1280/768. */
 .chat-header {
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
+  flex-direction: column;
+  gap: var(--space-2);
   padding: var(--space-3) var(--gutter);
   border-bottom: 1px solid var(--border);
   background: var(--surface-1);
   position: sticky;
   top: 0;
   z-index: 3;
+}
+
+.chat-header-row1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.chat-header-row2 {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .chat-header-title {
