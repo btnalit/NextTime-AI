@@ -150,6 +150,9 @@ accept_provider_up() {
   # driver, same guard.
   require_world_readable "$PWD/config/llm-providers.fake.example.yaml" "fake provider file"
   mkdir -p "$NEXTTIME_DATA/accept" || return 1
+  # llm-proxy (uid 10001) must traverse this directory: the override mounts it as /data/state and
+  # /data/accept. Run-private files live in their own 0750 subdirectory (accept_s3.sh), never here.
+  chmod 0755 "$NEXTTIME_DATA/accept" || return 1
   # The override mounts this directory as llm-proxy's /data/state: an empty provider store per run.
   rm -f "$NEXTTIME_DATA/accept/providers.json"
   if ! compose_accept run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js \
