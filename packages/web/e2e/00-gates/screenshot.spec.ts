@@ -68,7 +68,7 @@ test.describe('S8 W1-B screenshot gate', () => {
 
     // Archive this fixture chat immediately after capturing it. `application/linkage/
     // chat-targets.ts`'s `resolveDefaultChat` — "the most recently created Chat" —
-    // `approvals.spec.ts` and `journeys/03-approve-action.spec.ts` both rely on that phrase
+    // `approvals.spec.ts` and `01-journeys/03-approve-action.spec.ts` both rely on that phrase
     // resolving to the *pre-existing* auto-created chat their seeded ActionRequest cards were
     // linked into at seed time (before this suite ever ran). `listChats` excludes archived rows by
     // default (`archived_at is null`), same as the console's own default (non-已归档) chat list —

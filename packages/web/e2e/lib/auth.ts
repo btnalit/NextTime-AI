@@ -3,13 +3,13 @@ import { loginWithApiKey, loginWithPassword, reachLoginForm } from '../auth-help
 
 /**
  * e2e/lib/auth.ts: the two session-establishing flows the S8 W1-B gates (`e2e/00-gates/`) and
- * journeys (`e2e/journeys/`) both need, factored out once rather than re-derived per file the way
+ * journeys (`e2e/01-journeys/`) both need, factored out once rather than re-derived per file the way
  * every pre-existing spec's own local `login()`/`signInAsAdmin()` does (see e.g.
  * workspaces.spec.ts's own doc comment on why *that* file keeps a local copy — those predate this
  * one and are left alone, S8 W1-B does not touch other spec files). `auth-helpers.ts` stays the
  * single place for the byte-identical low-level form interactions; this module adds the
  * higher-level "get me a signed-in owner/admin session" wrappers on top, shared by every file
- * under `00-gates/` and `journeys/`.
+ * under `00-gates/` and `01-journeys/`.
  */
 
 export const OWNER_API_KEY = process.env.WEB_E2E_API_KEY;

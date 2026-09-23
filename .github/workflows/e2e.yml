@@ -328,10 +328,10 @@ jobs:
       # `-c`: psql only performs `:'var'` interpolation and `\gset` on input it parses itself (the
       # same finding scripts/accept_s2.sh's leak check records).
       #
-      # S8 W1-B added four more seeded rows, same shape, for `00-gates/` and `journeys/03-*`:
+      # S8 W1-B added four more seeded rows, same shape, for `00-gates/` and `01-journeys/03-*`:
       # `e2e-gate-pending` is read-only forever (screenshot.spec.ts's "an approval pending" state
       # only ever views it — never approves it, so it stays pending across the whole run
-      # regardless of file order); `e2e-journey3-approve-a`/`-b` are journeys/03-approve-action.
+      # regardless of file order); `e2e-journey3-approve-a`/`-b` are 01-journeys/03-approve-action.
       # spec.ts's own two rows — one per viewport (1440px, 768px) it runs the same journey at.
       # Two *distinct* scopes rather than the same one twice on purpose: that file's own `.first()`
       # + `toHaveCount(0)` assertion needs its row uniquely identified after the other viewport's
@@ -339,7 +339,7 @@ jobs:
       # baseline-generation run caught this the hard way (a real CI failure, not a hypothetical).
       # All four kept separate from approvals.spec.ts's own two scopes so the suites can never race
       # for the same row.
-      - name: Seed pending ActionRequests (approvals.spec.ts, 00-gates/, journeys/03-*)
+      - name: Seed pending ActionRequests (approvals.spec.ts, 00-gates/, 01-journeys/03-*)
         run: |
           set -euo pipefail
           for scope in e2e-approve-flow e2e-isolation-flow e2e-gate-pending \

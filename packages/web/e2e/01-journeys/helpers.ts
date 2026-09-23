@@ -2,13 +2,24 @@ import { type Page, expect } from '@playwright/test';
 import { loginAsAdmin, loginAsOwner } from '../lib/auth.js';
 
 /**
- * e2e/journeys/helpers.ts: shared plumbing for the six S8 F4 journey specs (`journeys/*.spec.ts`)
- * — login as the two roles a journey typically needs, and navigation by the Sidebar's own visible
- * label rather than a hard-coded `#/...` hash (F4's own instruction: a journey narrates what a
- * person clicks, not which route that happens to be — `lib/router.ts`'s hash shape is an
- * implementation detail a journey spec should survive a change to). See `journeys/README.md` for
- * how a journey is specified and what "host read-only smoke" will mean once one of these runs
- * against a real host.
+ * e2e/01-journeys/helpers.ts: shared plumbing for the six S8 F4 journey specs
+ * (`01-journeys/*.spec.ts`) — login as the two roles a journey typically needs, and navigation by
+ * the Sidebar's own visible label rather than a hard-coded `#/...` hash (F4's own instruction: a
+ * journey narrates what a person clicks, not which route that happens to be — `lib/router.ts`'s
+ * hash shape is an implementation detail a journey spec should survive a change to). See
+ * `01-journeys/README.md` for how a journey is specified and what "host read-only smoke" will mean
+ * once one of these runs against a real host.
+ *
+ * Directory prefixed `01-` (like `00-gates/`'s own `00-` prefix — see `lib/determinism.ts`'s doc
+ * comment) so Playwright discovers it second, right after `00-gates/` and before every other spec
+ * file. Load-bearing, not cosmetic: `03-approve-action.spec.ts` sorted after `chat.spec.ts` when
+ * this directory was still plain `journeys/`, and `chat.spec.ts`'s own first test creates a Chat
+ * it never archives — `application/linkage/chat-targets.ts`'s "most recently created Chat" targeting then
+ * resolves to *that* Chat instead of the one the seeded ActionRequests actually linked into,
+ * exactly as `approvals.spec.ts`'s own doc comment already relies on. The second baseline-
+ * generation CI run hit this for real (journey ③ found its approval row but never found the
+ * matching chat card) — moving this whole directory ahead of `chat.spec.ts` in file order is the
+ * fix, not a workaround around the chat lookup itself.
  */
 
 export const OWNER_API_KEY = process.env.WEB_E2E_API_KEY;
@@ -78,7 +89,7 @@ export function navItem(page: Page, labelZh: string) {
   const testId = NAV_TESTID_BY_LABEL[labelZh];
   if (testId === undefined) {
     throw new Error(
-      `no NavSection mapped for "${labelZh}" — add it to NAV_TESTID_BY_LABEL in journeys/helpers.ts`,
+      `no NavSection mapped for "${labelZh}" — add it to NAV_TESTID_BY_LABEL in 01-journeys/helpers.ts`,
     );
   }
   return page.getByTestId(`nav-${testId}`);

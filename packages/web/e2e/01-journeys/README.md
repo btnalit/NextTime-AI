@@ -1,4 +1,4 @@
-# e2e/journeys — S8 F4 旅程测试
+# e2e/01-journeys — S8 F4 旅程测试
 
 依据：`docs/development-tasks.md` §5e 决定 F4 — "工作单元是用户旅程，不是页面"。六条旅程（① 让入口
 agent 能执行、② 接入一个新系统、③ 审批一个执行类动作、④ 追溯"agent 为什么这么说"、⑤ 清理验收残留、
@@ -27,7 +27,7 @@ agent 能执行、② 接入一个新系统、③ 审批一个执行类动作、
  */
 ```
 
-- **步骤**是"一个人会做的事"，用 `journeys/helpers.ts` 的 `goToByLabel`/`navItem` 按可见文字导航
+- **步骤**是"一个人会做的事"，用 `01-journeys/helpers.ts` 的 `goToByLabel`/`navItem` 按可见文字导航
   （侧栏中文标签），不拼 `#/...` 哈希——路由是实现细节，旅程描述的是操作。
 - **状态覆盖**列出这条旅程在产品今天的状态机里会经过的四类分支：空状态、出错、无权限、窄屏（768px，
   与 `00-gates/` 的第三档截图呼应，但旅程测试不做像素比对，只做"窄屏下这条路走不走得通"）。
@@ -53,6 +53,12 @@ agent 能执行、② 接入一个新系统、③ 审批一个执行类动作、
 
 ## 与 `00-gates/` 的关系
 
-`00-gates/` 回答"每个页面单独看，像不像、读不读得通、无障碍过不过"；`journeys/` 回答"一串页面连起来，
-一件事办不办得成"。两者共用 `e2e/lib/auth.ts` 的登录辅助，`journeys/helpers.ts` 只加旅程特有的东西
+`00-gates/` 回答"每个页面单独看，像不像、读不读得通、无障碍过不过"；`01-journeys/` 回答"一串页面连起来，
+一件事办不办得成"。两者共用 `e2e/lib/auth.ts` 的登录辅助，`01-journeys/helpers.ts` 只加旅程特有的东西
 （按标签导航、`createFreshWorkspace`）。
+
+目录名前缀 `01-`（紧跟 `00-gates/` 的 `00-`）不是随意编号——Playwright 按文件路径字母序发现 spec，
+这让本目录排在 `chat.spec.ts` 之前跑。这是硬约束：`chat.spec.ts` 自己的第一个用例会新建一个从不归档
+的对话，一旦排在它之后，③ 审批一个执行类动作依赖的"最近一个对话"（`application/linkage/
+chat-targets.ts` 的 `resolveDefaultChat`）就会指向那个新对话而不是种子 ActionRequest 真正写入的那
+一个——这正是第二次基线生成 CI 跑到的真实失败，不是假设。见 `helpers.ts` 自己的文档注释。
