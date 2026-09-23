@@ -132,16 +132,21 @@ export class KeyStore {
     return this.writableState;
   }
 
-  /** `true` when a console key is set for this provider id — never returns the value itself. */
+  /** `true` when a console key is set for this provider id — never returns the value itself.
+   *  P3 hotfix (post-v0.16.0 review): `Object.hasOwn`, not `in` — `this.state.keys` is a plain
+   *  object (zod's `z.record()` output / the spread in `set()`), so `in` walks the prototype chain
+   *  too: an id like `"constructor"`/`"toString"` would otherwise read as "has a console key" (and
+   *  `get()` would return the inherited function, not `undefined`) even though none was ever set. */
   has(id: string): boolean {
-    return id in this.state.keys;
+    return Object.hasOwn(this.state.keys, id);
   }
 
   /** The console key for this provider id, or `undefined` — read from the in-memory state kept
    *  current by `load()`/`set()`/`remove()`, never a fresh disk read (hot: no restart needed
-   *  after a write from this same process). */
+   *  after a write from this same process). See `has()`'s own doc comment for why this is an
+   *  own-property check, not a bare `this.state.keys[id]`. */
   get(id: string): string | undefined {
-    return this.state.keys[id];
+    return Object.hasOwn(this.state.keys, id) ? this.state.keys[id] : undefined;
   }
 
   /** Sets (or replaces) the console key for `id` and persists atomically, mode 0600. The caller
@@ -163,7 +168,7 @@ export class KeyStore {
    *  already holds). */
   async remove(id: string): Promise<boolean> {
     return this.mutex.runExclusive(async () => {
-      if (!(id in this.state.keys)) return false;
+      if (!Object.hasOwn(this.state.keys, id)) return false;
       const { [id]: _removed, ...rest } = this.state.keys;
       const next: KeyStoreFile = { version: KEY_STORE_VERSION, keys: rest };
       await this.persist(next);

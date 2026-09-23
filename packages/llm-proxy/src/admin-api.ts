@@ -341,7 +341,17 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
   }
 
   function parseId(raw: string): string {
-    const id = decodeURIComponent(raw);
+    // P3 hotfix (post-v0.16.0 review): `decodeURIComponent` itself throws `URIError` on malformed
+    // percent-encoding (e.g. a lone `%`, or `%zz`) — before this, that propagated out of this
+    // function uncaught, past every `AdminApiError`/`ProviderStoreError` branch in the outer
+    // catch, as an unhandled 500 instead of the same 400 `invalid_id` a merely-invalid-but-
+    // decodable id already gets.
+    let id: string;
+    try {
+      id = decodeURIComponent(raw);
+    } catch {
+      throw new AdminApiError(400, 'invalid_id', 'invalid provider id');
+    }
     const parsed = LlmProviderIdWireSchema.safeParse(id);
     if (!parsed.success) throw new AdminApiError(400, 'invalid_id', 'invalid provider id');
     return parsed.data;
@@ -620,6 +630,17 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         return;
       }
       if (err instanceof ProviderStoreError) {
+        sendJson(res, err.code === 'unwritable' ? 503 : 500, {
+          error: { code: `store_${err.code}`, message: err.message },
+        });
+        return;
+      }
+      // P3 hotfix (post-v0.16.0 review): a `KeyStoreError` from anywhere not already behind an
+      // explicit `requireWritableKeyStore()` guard (e.g. a TOCTOU between that probe and the
+      // actual write, or `keyStore.remove()`'s best-effort call inside the provider-DELETE path
+      // above surfacing here instead of being swallowed there) gets the same mapping
+      // `ProviderStoreError` already has, same code prefix.
+      if (err instanceof KeyStoreError) {
         sendJson(res, err.code === 'unwritable' ? 503 : 500, {
           error: { code: `store_${err.code}`, message: err.message },
         });

@@ -173,6 +173,30 @@ function toolCallSucceeded(api: ProviderApiKind, body: unknown): boolean {
   }
 }
 
+// P3 hotfix (post-v0.16.0 review): beyond the exact-key scrub (`.split(realKey).join('***')`
+// below), also redact anything that merely *looks* like a credential — an upstream error can just
+// as easily echo back a *different* secret-shaped string than the one this test call used
+// (another provider's key baked into a shared error template, an internal token, a signed-url
+// token, …), which an exact-match scrub alone would never catch. Two patterns: a short
+// recognizable-prefix run (`sk`/`key`/`tok`-led, case-insensitive, ≥ 8 trailing id chars) and any
+// long (≥ 24 char) base64-ish run regardless of prefix.
+const TOKEN_LIKE_PREFIX_PATTERN = /(sk|key|tok)[-_A-Za-z0-9]{8,}/gi;
+const LONG_BASE64ISH_PATTERN = /[A-Za-z0-9+/_-]{24,}/g;
+const ERROR_TEXT_MAX_LENGTH = 200;
+
+/** Scrubs `realKey` verbatim, then every token-like run (see the two patterns above), then
+ *  truncates — truncation runs last so a redaction is never cut in half. Shared by
+ *  `describeFailure` (a structured upstream error body) and `runProviderTest`'s own two
+ *  `catch (err)` blocks (a thrown `Error`'s `String(err)`, which can embed the request URL/body). */
+function scrubUpstreamText(text: string, realKey: string): string {
+  const scrubbed = text
+    .split(realKey)
+    .join('***')
+    .replace(TOKEN_LIKE_PREFIX_PATTERN, '***')
+    .replace(LONG_BASE64ISH_PATTERN, '***');
+  return scrubbed.slice(0, ERROR_TEXT_MAX_LENGTH);
+}
+
 /** A short, key-scrubbed description of an upstream failure for the result's `error` field. */
 function describeFailure(status: number, body: unknown, realKey: string): string {
   let detail = '';
@@ -181,7 +205,7 @@ function describeFailure(status: number, body: unknown, realKey: string): string
     if (isRecord(error) && typeof error.message === 'string') detail = error.message;
     else if (typeof error === 'string') detail = error;
   }
-  detail = detail.split(realKey).join('***').slice(0, 200);
+  detail = scrubUpstreamText(detail, realKey);
   return detail ? `HTTP ${status}: ${detail}` : `HTTP ${status}`;
 }
 
@@ -246,7 +270,7 @@ export async function runProviderTest(options: ProviderTestOptions): Promise<Sto
         : describeFailure(first.status, first.body, options.realKey);
     }
   } catch (err) {
-    error = `completion request failed: ${String(err).split(options.realKey).join('***').slice(0, 200)}`;
+    error = `completion request failed: ${scrubUpstreamText(String(err), options.realKey)}`;
   }
 
   if (completion === 'ok') {
@@ -262,7 +286,7 @@ export async function runProviderTest(options: ProviderTestOptions): Promise<Sto
       }
     } catch (err) {
       tool = 'error';
-      error = `tool-call request failed: ${String(err).split(options.realKey).join('***').slice(0, 200)}`;
+      error = `tool-call request failed: ${scrubUpstreamText(String(err), options.realKey)}`;
     }
   }
 
