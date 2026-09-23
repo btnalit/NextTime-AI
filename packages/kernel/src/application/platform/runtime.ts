@@ -410,10 +410,24 @@ export const rollEntryContainersHandler: CapabilityHandler = async (
   }
 
   const { settings } = await readPlatformSettings(client);
-  const [imagesResult, residents] = await Promise.all([
-    supervisor.listImages(),
-    supervisor.listResidents(),
-  ]);
+  // P3 hotfix (post-v0.16.0 review): wrapped like `setActiveRuntimeImageHandler`'s own
+  // `supervisor.listImages()` call — an unreachable worker-supervisor otherwise threw whatever
+  // `TaskSupervisorClient`'s raw HTTP error is (uncaught here), which has no mapping in
+  // `interfaces/http/capability-route.ts` and surfaces as an unstructured 500 instead of this
+  // capability's own clean `runtime_unreachable` (409).
+  let imagesResult: RuntimeImageInventory;
+  let residents: ResidentInventoryEntry[];
+  try {
+    [imagesResult, residents] = await Promise.all([
+      supervisor.listImages(),
+      supervisor.listResidents(),
+    ]);
+  } catch (err) {
+    throw new PlatformAdminError(
+      'runtime_unreachable',
+      `could not reach worker-supervisor to roll entry containers: ${String(err)}`,
+    );
+  }
   // `imagesResult.defaultImage` is always a real string here — this is the hard, direct
   // `supervisor.listImages()` call (already guarded above), and worker-supervisor always reports
   // its own `config.workerImage`; `activeImageSource` is included only for symmetry with

@@ -585,6 +585,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           { principalId: unknownId, workspaceId: '', action: 'skipped_not_found' },
         ]);
       });
+
+      // P3 hotfix (post-v0.16.0 review): an unreachable worker-supervisor must surface as this
+      // capability's own clean `runtime_unreachable` (409), the same as `set_active_runtime_image`
+      // already does — not an unstructured error with no `interfaces/http` mapping.
+      it('wraps an unreachable worker-supervisor into runtime_unreachable, like set_active_runtime_image', async () => {
+        supervisor.imagesShouldThrow = true;
+        await expectPlatformError(() => callAsAdmin('roll_entry_containers'), 'runtime_unreachable');
+      });
     });
 
     describe('pi_drift', () => {
