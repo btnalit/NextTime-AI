@@ -76,7 +76,9 @@ test.describe('S7-E acceptance: platform default entry model round-trips through
 
     const select = page.getByTestId('platform-default-model-select');
     await expect(select).toBeVisible({ timeout: 15_000 });
-    await expect(select.locator('option', { hasText: 'fake/fake-echo' })).toHaveCount(1);
+    // Exact match on the option's `value` — the catalog also has `fake/fake-echo-alt`, which
+    // `hasText: 'fake/fake-echo'` (a substring match) would also match, over-counting to 2.
+    await expect(select.locator('option[value="fake/fake-echo"]')).toHaveCount(1);
 
     try {
       await select.selectOption('fake/fake-echo');
