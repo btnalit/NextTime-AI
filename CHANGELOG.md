@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/btnalit/NextTime-AI/compare/v0.16.0...v0.16.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* v0.16.1 post-merge review — runtime image allowlist, task status race, provider key cleanup, module install lock ([#233](https://github.com/btnalit/NextTime-AI/issues/233)) ([7db5255](https://github.com/btnalit/NextTime-AI/commit/7db5255e2cd6191f083906123ce43286a06570c9))
+
 ## [0.16.0](https://github.com/btnalit/NextTime-AI/compare/v0.15.0...v0.16.0) (2026-09-23)
 
 
