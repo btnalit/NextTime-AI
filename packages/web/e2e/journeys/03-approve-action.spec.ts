@@ -39,6 +39,13 @@ import { OWNER_API_KEY, asOwner, goToByLabel } from './helpers.js';
  * 车道允许改的文件范围内（`packages/kernel/**` 不在允许列表）——见 PR 说明里的"范围外发现"。
  * ApprovalQueuePage 自己的"历史"tab（`list_action_requests`）在同一页读同一个 `ActionRequest` 的
  * 权威状态，不经过"对话卡片落在哪个对话"这一层，天然绕开了这个问题。
+ *
+ * 为什么第 4 步要挨个打开历史行的详情抽屉，不直接在列表行上按 `resourceScope` 过滤：
+ * `ApprovalQueuePage.tsx` 的历史行（`approval-history-row`）本身不渲染 `resourceScope`——只有点开
+ * 详情抽屉（`ApprovalDetail.tsx` 经 `ApprovalCard` 的 `target` 属性）才显示。种子 Gatekeeper 造出的
+ * 几行历史记录（`e2e-approve-flow`/`e2e-isolation-flow`/本旅程自己的两条）在列表上视觉完全一样，
+ * 只能靠打开详情逐条比对——同一页内的操作，数量有限（这个工作区的种子数据只有个位数），不是回到"跨
+ * 对话搜索"那种不确定性。
  */
 
 const JOURNEY3_SCOPE_DESKTOP = 'e2e-journey3-approve-a';
@@ -75,13 +82,26 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   await page.keyboard.press('Escape');
 
   await page.getByRole('tab', { name: '历史 History' }).click();
-  const historyRow = page.getByTestId('approval-history-row').filter({ hasText: scope }).first();
-  await expect(historyRow).toBeVisible({ timeout: 15_000 });
-  await expect(historyRow.locator('[data-status]').first()).toHaveAttribute(
-    'data-status',
-    /^(approved|executing|executed|failed)$/,
-    { timeout: 15_000 },
-  );
+  const historyRows = page.getByTestId('approval-history-row');
+  await expect(historyRows.first()).toBeVisible({ timeout: 15_000 });
+  const detail = page.getByTestId('approval-detail');
+  const status = page.getByTestId('approval-status');
+  const count = await historyRows.count();
+  let found = false;
+  for (let i = 0; i < count; i++) {
+    await historyRows.nth(i).press('Enter');
+    await expect(detail).toBeVisible({ timeout: 15_000 });
+    if ((await detail.getByText(scope, { exact: true }).count()) > 0) {
+      found = true;
+      break;
+    }
+    await page.keyboard.press('Escape');
+    await expect(detail).toBeHidden();
+  }
+  expect(found, `no History row's detail shows resourceScope "${scope}"`).toBe(true);
+  await expect(status).toHaveAttribute('data-status', /^(approved|executing|executed|failed)$/, {
+    timeout: 15_000,
+  });
 }
 
 test.describe('Journey ③: 审批一个执行类动作', () => {
