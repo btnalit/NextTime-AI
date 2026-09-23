@@ -1767,7 +1767,10 @@ const taskCapabilities: readonly Capability[] = [
       'returns as soon as the Task exists; with `wait: true` it holds for up to `timeout` ' +
       'seconds (90 at most) and returns the terminal result if the Worker finishes in time, ' +
       'otherwise the same `{taskId, status}`. `gates` narrows the Worker’s Handle to those ' +
-      'Gatekeepers (it can only narrow, never widen). The outcome — completion, failure, or an ' +
+      'Gatekeepers (it can only narrow, never widen) — each entry is a Gatekeeper id; a ' +
+      'Gatekeeper’s name is also accepted when it names exactly one Gatekeeper this ' +
+      'WorkerDefinition declares (ambiguous or unknown names are rejected with the declared ' +
+      'ids/names listed). The outcome — completion, failure, or an ' +
       'approval that landed — is delivered later: entry agents receive it in a later turn’s ' +
       'context; other callers read it with `get_task`. The Worker acts on behalf of the calling ' +
       'principal.',

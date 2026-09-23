@@ -13,6 +13,72 @@ import {
 } from '../../governance/capability/index.js';
 import { InvokeWorkerAttenuationError, InvokeWorkerValidationError } from './types.js';
 
+// -------------------------------------------------------------------------------------------
+// resolveRequestedGateIds — R4 (leftover audit "invoke_worker 接受门名"): `invoke_worker`'s `gates`
+// param accepts a declared Gatekeeper id (unchanged) or, new, its `name` when that name resolves
+// to exactly one Gatekeeper this WorkerDefinition declares. Pure — no IO (this module's own
+// "no `client`/DB access, never fetches a Gatekeeper's name itself" rule, see this file's module
+// doc comment above) — the caller (`invoke.ts`) resolves each declared gate's current `name` via
+// `governance/gatekeepers`'s `getGatekeeper` and passes the `{id, name}` pairs in.
+// -------------------------------------------------------------------------------------------
+
+/** One of a WorkerDefinition's own declared gates, with its Gatekeeper's current `name` — the unit
+ *  `resolveRequestedGateIds` resolves a caller-supplied id-or-name against. */
+export interface DeclaredGateRecord {
+  readonly id: string;
+  readonly name: string;
+}
+
+function formatGateCandidates(candidates: readonly DeclaredGateRecord[]): string {
+  return candidates.length > 0
+    ? candidates.map((c) => `${c.name} (${c.id})`).join(', ')
+    : '(none declared)';
+}
+
+/**
+ * Resolves each of `requestedGates` (`invoke_worker`'s own `gates` param) against `declaredGates`
+ * (the invoked WorkerDefinition's own declared Gatekeepers, id + current name): a value that is
+ * already one of `declaredGates`' ids passes through unchanged (existing behaviour); otherwise it
+ * is resolved as a Gatekeeper **name** — exactly one declared Gatekeeper with that name resolves
+ * it to that Gatekeeper's id. Zero matches or more than one match is an
+ * `InvokeWorkerValidationError` naming every declared Gatekeeper's id *and* name (R4: "报错里列出
+ * 可用 id" — never a bare "not found"), so a caller who guessed wrong the first time (the audit's
+ * own repro: passing a gate's display name where an id was expected) can immediately see the
+ * right value(s) to use — either the id directly, or, when the name is ambiguous across more than
+ * one declared Gatekeeper, which ids that name could mean.
+ *
+ * Matching is exact (case-sensitive) — a Gatekeeper name is a stable identifier an owner chose at
+ * registration time, not free text; fuzzy matching here would make "which gate did I just narrow
+ * to" non-obvious from the call site alone.
+ */
+export function resolveRequestedGateIds(
+  requestedGates: readonly string[],
+  declaredGates: readonly DeclaredGateRecord[],
+): readonly string[] {
+  const idSet = new Set(declaredGates.map((gate) => gate.id));
+  const byName = new Map<string, DeclaredGateRecord[]>();
+  for (const gate of declaredGates) {
+    const list = byName.get(gate.name);
+    if (list) list.push(gate);
+    else byName.set(gate.name, [gate]);
+  }
+
+  return requestedGates.map((requested) => {
+    if (idSet.has(requested)) return requested;
+    const matches = byName.get(requested) ?? [];
+    const [onlyMatch] = matches;
+    if (matches.length === 1 && onlyMatch) return onlyMatch.id;
+    if (matches.length > 1) {
+      throw new InvokeWorkerValidationError(
+        `invoke_worker: gate name "${requested}" matches more than one Gatekeeper this WorkerDefinition declares — pass the id instead: ${formatGateCandidates(matches)}`,
+      );
+    }
+    throw new InvokeWorkerValidationError(
+      `invoke_worker: gate "${requested}" is neither a declared Gatekeeper id nor a name that matches exactly one — available: ${formatGateCandidates(declaredGates)}`,
+    );
+  });
+}
+
 /**
  * application/task/handle-mint: mints the child CapabilityHandle a WorkerRun holds (design doc
  * §5.1.4 "子 Handle 是自身 Handle 的衰减", §5.2 `WR -->|holds| H2[child Handle ⊂ H]`, §5.4 I13;
