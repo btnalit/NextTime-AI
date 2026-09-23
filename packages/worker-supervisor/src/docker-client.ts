@@ -331,3 +331,16 @@ function isNotFound(err: unknown): boolean {
 function isNotModified(err: unknown): boolean {
   return typeof err === 'object' && err !== null && 'statusCode' in err && err.statusCode === 304;
 }
+
+/** v0.16.2 (fix/supervisor-images-proxy): duck-types the `.statusCode` `docker-modem` attaches to
+ *  a rejected Engine API call (`Modem.prototype.buildPayload` — same property `isNotFound`/
+ *  `isNotModified` above already rely on for 404/304). Exported so `server.ts`'s `GET /images`
+ *  handler can distinguish "Docker/the proxy rejected this call" (e.g.
+ *  `docker-socket-proxy-images` 403ing an unexpected verb) from an unrelated internal error and
+ *  report the real upstream status instead of leaking whatever HTTP code the failed call happened
+ *  to carry as if it were this service's own decision. */
+export function dockerErrorStatusCode(err: unknown): number | undefined {
+  if (typeof err !== 'object' || err === null || !('statusCode' in err)) return undefined;
+  const status = (err as { statusCode: unknown }).statusCode;
+  return typeof status === 'number' ? status : undefined;
+}

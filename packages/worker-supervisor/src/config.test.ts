@@ -38,6 +38,13 @@ describe('loadConfig', () => {
       kind: 'socket',
       socketPath: '/var/run/docker.sock',
     });
+    // v0.16.2 (fix/supervisor-images-proxy): unset DOCKER_IMAGES_HOST and DOCKER_HOST both ->
+    // the same plain-socket fallback dockerConnection above gets — dev/CI without either proxy
+    // keeps working unchanged.
+    expect(config.dockerImagesConnection).toEqual({
+      kind: 'socket',
+      socketPath: '/var/run/docker.sock',
+    });
     expect(config.taskMaxRuntimeSec).toBe(3600);
     expect(config.taskWorkdirRetentionHours).toBe(72);
     expect(config.taskReapIntervalMs).toBe(10_000);
@@ -67,6 +74,7 @@ describe('loadConfig', () => {
       EGRESS_SOURCE_MAP_FILE: '/x/sources.json',
       DOCKER_SOCKET_PATH: '/tmp/docker.sock',
       DOCKER_HOST: 'tcp://docker-socket-proxy:2375',
+      DOCKER_IMAGES_HOST: 'tcp://docker-socket-proxy-images:2375',
       TASK_MAX_RUNTIME_SEC: '600',
       TASK_WORKDIR_RETENTION_HOURS: '24',
       TASK_REAP_INTERVAL_MS: '5000',
@@ -92,6 +100,7 @@ describe('loadConfig', () => {
       egressSourceMapFile: '/x/sources.json',
       dockerSocketPath: '/tmp/docker.sock',
       dockerConnection: { kind: 'tcp', host: 'docker-socket-proxy', port: 2375 },
+      dockerImagesConnection: { kind: 'tcp', host: 'docker-socket-proxy-images', port: 2375 },
       modelsJsonHostPath: '/x/accept/models.json',
       taskMaxRuntimeSec: 600,
       taskWorkdirRetentionHours: 24,
@@ -153,6 +162,56 @@ describe('parseDockerConnection', () => {
       socketPath: '/tmp/docker.sock',
     });
     expect(parseDockerConnection('not a url', '/tmp/docker.sock')).toEqual({
+      kind: 'socket',
+      socketPath: '/tmp/docker.sock',
+    });
+  });
+});
+
+// v0.16.2 (fix/supervisor-images-proxy): DOCKER_IMAGES_HOST — a dedicated docker-socket-proxy
+// instance (`docker-socket-proxy-images`, IMAGES=1 only) for GET /images's Docker reads, separate
+// from DOCKER_HOST's own `docker-socket-proxy` (IMAGES=0 — turning it on would also need POST=1,
+// already set for container lifecycle, which would then also grant image pull/delete). See
+// config.ts's `dockerImagesConnection` doc comment.
+describe('loadConfig — dockerImagesConnection (DOCKER_IMAGES_HOST)', () => {
+  it('defaults to DOCKER_HOST when DOCKER_IMAGES_HOST is unset', () => {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/d',
+      DOCKER_HOST: 'tcp://docker-socket-proxy:2375',
+    });
+    expect(config.dockerConnection).toEqual({
+      kind: 'tcp',
+      host: 'docker-socket-proxy',
+      port: 2375,
+    });
+    expect(config.dockerImagesConnection).toEqual({
+      kind: 'tcp',
+      host: 'docker-socket-proxy',
+      port: 2375,
+    });
+  });
+
+  it('overrides DOCKER_HOST when DOCKER_IMAGES_HOST is set — the two connections can point at two different proxy instances', () => {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/d',
+      DOCKER_HOST: 'tcp://docker-socket-proxy:2375',
+      DOCKER_IMAGES_HOST: 'tcp://docker-socket-proxy-images:2375',
+    });
+    expect(config.dockerConnection).toEqual({
+      kind: 'tcp',
+      host: 'docker-socket-proxy',
+      port: 2375,
+    });
+    expect(config.dockerImagesConnection).toEqual({
+      kind: 'tcp',
+      host: 'docker-socket-proxy-images',
+      port: 2375,
+    });
+  });
+
+  it('falls back to the plain socket path when neither DOCKER_IMAGES_HOST nor DOCKER_HOST is set (dev/CI)', () => {
+    const config = loadConfig({ NEXTTIME_DATA: '/d', DOCKER_SOCKET_PATH: '/tmp/docker.sock' });
+    expect(config.dockerImagesConnection).toEqual({
       kind: 'socket',
       socketPath: '/tmp/docker.sock',
     });

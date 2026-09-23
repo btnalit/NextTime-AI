@@ -81,8 +81,13 @@ export async function main(): Promise<void> {
   // POST /task/spawn or any /resident/* route without it (internal-auth.ts's own doc comment).
   const internalToken = loadInternalToken();
   const docker = createDockerClient({ connection: config.dockerConnection });
+  // v0.16.2 (fix/supervisor-images-proxy): a second, read-only client for GET /images
+  // (listImages/inspectImage) — see `config.ts`'s `dockerImagesConnection` doc comment for why
+  // this is a genuinely different Docker Engine API target, not just a second handle onto the
+  // same one.
+  const imagesDocker = createDockerClient({ connection: config.dockerImagesConnection });
   const egressMap = createEgressMapStore(config.egressSourceMapFile);
-  const residentService = createResidentService({ config, docker, egressMap });
+  const residentService = createResidentService({ config, docker, imagesDocker, egressMap });
   const taskService = createTaskService({ config, docker, egressMap });
 
   await residentService.reconcile();

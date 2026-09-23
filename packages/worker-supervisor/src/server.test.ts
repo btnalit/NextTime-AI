@@ -316,6 +316,44 @@ describe('GET /images (S7-E inventory)', () => {
       'nexttime-ai-worker-runtime:v2',
     ]);
   });
+
+  // v0.16.2 (fix/supervisor-images-proxy): verified on the production host — worker-supervisor's
+  // GET /images 403'd because docker-socket-proxy (IMAGES=0) refused the call. The fix adds a
+  // dedicated docker-socket-proxy-images instance the images client talks to instead, but this
+  // route must still fail predictably (502, not a raw pass-through of Docker's 403 or an
+  // unhandled-error 500) whenever the upstream call fails for any reason.
+  it('502s with code docker_upstream_error and the upstream status when the images Docker client rejects (e.g. docker-socket-proxy-images 403ing the call)', async () => {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/host/data',
+      LOCAL_DATA_DIR: dir,
+      EGRESS_SOURCE_MAP_FILE: join(dir, 'egress-sources.json'),
+    });
+    const docker = createFakeDockerClient();
+    const imagesDocker = createFakeDockerClient();
+    const upstreamError = Object.assign(
+      new Error('(HTTP code 403) unexpected - Request forbidden by administrative rules'),
+      { statusCode: 403 },
+    );
+    imagesDocker.listImages = async () => {
+      throw upstreamError;
+    };
+    const egressMap = createEgressMapStore(config.egressSourceMapFile);
+    const residentService = createResidentService({ config, docker, imagesDocker, egressMap });
+    const taskService = createTaskService({ config, docker, egressMap });
+    const app = createServer({
+      residentService,
+      taskService,
+      config,
+      internalToken: TEST_INTERNAL_TOKEN,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/images', headers: AUTH });
+
+    expect(res.statusCode).toBe(502);
+    const body = res.json();
+    expect(body.error.code).toBe('docker_upstream_error');
+    expect(body.error.status).toBe(403);
+  });
 });
 
 describe('POST /resident/stop', () => {

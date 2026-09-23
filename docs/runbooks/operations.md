@@ -433,6 +433,24 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
 平台审计，页面可见时每 30 秒自动刷新）。下面给的 `curl` 调用方式仍然有效——两条路径读写同一批能力，
 没有页面专属的逻辑；脚本化操作（CI、批量重建）继续用 `curl`，人工排查优先用页面。
 
+**`docker-socket-proxy-images`（fix/supervisor-images-proxy，v0.16.2）**：`list_runtime_images` /
+`runtime_inventory` / `set_active_runtime_image` / `rollback_runtime_image` 最终都要 worker-supervisor
+的 `GET /images`（`docker-client.ts` `listImages`/`inspectImage`）——这条 v0.16.1 上主机实测过：
+worker-supervisor 原有的 `docker-socket-proxy` 连接是 `IMAGES=0`，这几个能力全部因 403 "Request
+forbidden by administrative rules" 失败关闭（内核已按 `runtime_unreachable` 处理，不会崩，但页面/
+`cap` 调用全部报错）。v0.16.2 起 `GET /images` 改走一个专用的第四个代理实例
+`docker-socket-proxy-images`（`IMAGES=1` 独此一项，`POST=0`——不在既有 `docker-socket-proxy` 上直接
+开 `IMAGES=1`，因为那条连接已有 `POST=1`，两者叠加会连带放开镜像 pull/delete，超出这个修复要给的
+权限）。**从旧版本升级到 v0.16.2 的主机**，除了照常 `docker compose build worker-supervisor` +
+`docker compose up -d`，一定要把新代理也一起启动、并让 worker-supervisor 用新的
+`DOCKER_IMAGES_HOST`/`dockerapi-images` 网络重建（`docker compose up -d` 单跑
+`docker-socket-proxy-images` 是不够的，worker-supervisor 容器本身也要重建）：
+
+```bash
+docker compose up -d docker-socket-proxy-images worker-supervisor
+docker compose ps docker-socket-proxy-images worker-supervisor   # 都应为 healthy
+```
+
 **构建镜像仍在主机 / CI**（已否决在页面里构建，design §11）：
 
 ```bash
@@ -527,6 +545,7 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
+| `runtime_inventory` / `list_runtime_images` 等返回 409 `runtime_unreachable`，worker-supervisor 日志里 `GET /images` 是 502 `docker_upstream_error`（v0.16.2） | `docker-socket-proxy-images` 没起、不 healthy，或 worker-supervisor 还是旧容器（没有 `DOCKER_IMAGES_HOST`/`dockerapi-images`） | 见上面"`docker-socket-proxy-images`"一节的两条命令；`docker compose ps docker-socket-proxy-images` 确认 healthy，`docker compose exec worker-supervisor env \| grep DOCKER_IMAGES_HOST` 确认新 env 已生效（没有就是容器没重建） |
 | `set_active_runtime_image` 返回 409 `image_not_in_inventory` | 镜像没建，或建的 tag/digest 和传的不一致 | 先 `list_runtime_images` 核对，再 `docker compose build worker-runtime`（记得先 export 三个版本变量） |
 | `set_active_runtime_image` / `rollback_runtime_image` 返回 409 `image_not_allowed`（P1-a） | 目标镜像不在 worker-supervisor 的 `WORKER_IMAGE_ALLOWLIST` 里——常见于重建覆盖了旧 tag，只剩 digest | 给这个 build 打一个专属 tag、加进 `WORKER_IMAGE_ALLOWLIST`、重启 worker-supervisor（见上面"镜像 allowlist"一节）；digest 永远进不了 allowlist，不要传 digest |
 | `set_active_runtime_image` / `rollback_runtime_image` 返回 409 `runtime_unreachable` | 内核连不上 worker-supervisor（`SUPERVISOR_URL`），拒绝盲目设置 | `docker compose ps worker-supervisor`；确认内核与它同在 `control` 网络 |

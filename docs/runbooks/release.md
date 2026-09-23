@@ -135,6 +135,30 @@ v(n-1)、最终回滚切回 v(n-1)）之后自动做这次搬家（`layout_step`
 还是 `models/`，以及是否需要建 `${NEXTTIME_DATA}/llm-proxy/`（S6-B），两个方向都是幂等的。真实升级
 （不是演练）仍然要按上面的手动步骤做一次——这个自动化目前只存在于演练脚本里。
 
+### 3.3 新增只读镜像代理：`docker-socket-proxy-images`（fix/supervisor-images-proxy，v0.16.2）
+
+`docker-compose.yml` 新增第四个 `docker-socket-proxy` 实例（`IMAGES=1` 独此一项，`POST=0`）+ 专属
+`dockerapi-images` 网络，worker-supervisor 新增 `DOCKER_IMAGES_HOST` env、加入这个网络——背景与为什么
+不直接在既有 `docker-socket-proxy` 上开 `IMAGES=1`，见 `docker-compose.yml` 该服务块自己的注释，以及
+`docs/runbooks/operations.md` §13"`docker-socket-proxy-images`"一节。
+
+**已经部署过 v0.16.1 及更早版本的主机**，在这次 `docker compose up` 时（按 §3 切到目标 tag 之后）：
+
+```bash
+ssh <TARGET_HOST>
+cd <CODE_DIR>
+docker compose up -d docker-socket-proxy-images worker-supervisor
+docker compose ps docker-socket-proxy-images worker-supervisor   # 都应为 healthy
+```
+
+`docker compose up -d`（不带服务名，§3 正常流程的一部分）本身就会创建新网络、拉起新服务、并因为
+worker-supervisor 的服务定义变了（新 env + 新网络）而重建它——上面这条命令只是把这一步单独点名出来，
+避免漏看（`GET /images` 在旧容器上会继续 403，`list_runtime_images`/`runtime_inventory`/
+`set_active_runtime_image`/`rollback_runtime_image` 全部失败关闭，直到 worker-supervisor 真正重建）。
+无数据库迁移，无文件系统搬迁——纯 compose 拓扑变化，回滚（§5）等价对称：切回 v0.16.1 之前的 tag 后，
+`docker-socket-proxy-images`/`dockerapi-images` 不再被任何 compose 文件引用，`docker compose up -d`
+会自然不再拉起它（旧容器需要的话手动 `docker compose down docker-socket-proxy-images` 清理，非必须）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

@@ -488,6 +488,66 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
       'nexttime-ai-worker-runtime:v1',
     ]);
   });
+
+  // v0.16.2 (fix/supervisor-images-proxy): listImages() must read through the dedicated
+  // `imagesDocker` dependency (docker-socket-proxy-images), never the container-lifecycle
+  // `docker` client (docker-socket-proxy, IMAGES=0) — see `ResidentServiceDeps.imagesDocker`'s
+  // own doc comment. Two distinct fakes here (not `setup()`'s shared one) so a passing assertion
+  // can only mean the images call actually went through the second client.
+  it('listImages() reads from imagesDocker, not docker, when the two are distinct clients (S7-E / v0.16.2)', async () => {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/host/data',
+      LOCAL_DATA_DIR: dir,
+      EGRESS_SOURCE_MAP_FILE: join(dir, 'egress-sources.json'),
+    });
+    const docker = createFakeDockerClient();
+    const imagesDocker = createFakeDockerClient();
+    imagesDocker.registerImage({
+      id: 'sha256:only-on-images-client',
+      tags: ['nexttime-ai-worker-runtime:v9'],
+      created: '2026-09-23T00:00:00.000Z',
+      labels: { 'ai.nexttime.pi-version': '0.84.4' },
+    });
+    // Registered on the *wrong* (container-lifecycle) client — must never show up below.
+    docker.registerImage({
+      id: 'sha256:only-on-container-client',
+      tags: ['nexttime-ai-worker-runtime:v-wrong'],
+      created: '2026-09-23T00:00:00.000Z',
+      labels: { 'ai.nexttime.pi-version': '0.84.4' },
+    });
+    const egressMap = createEgressMapStore(config.egressSourceMapFile);
+    const service = createResidentService({ config, docker, imagesDocker, egressMap });
+
+    const result = await service.listImages();
+
+    expect(result.images).toEqual([
+      {
+        id: 'sha256:only-on-images-client',
+        tags: ['nexttime-ai-worker-runtime:v9'],
+        created: '2026-09-23T00:00:00.000Z',
+        labels: { 'ai.nexttime.pi-version': '0.84.4' },
+      },
+    ]);
+  });
+
+  it('listImages() falls back to docker when imagesDocker is not provided (backward compatible with a single-connection caller)', async () => {
+    const { service, docker } = setup();
+    docker.registerImage({
+      id: 'sha256:shared-client',
+      tags: ['nexttime-ai-worker-runtime:v1'],
+      created: '2026-09-23T00:00:00.000Z',
+      labels: { 'ai.nexttime.pi-version': '0.84.4' },
+    });
+    const result = await service.listImages();
+    expect(result.images).toEqual([
+      {
+        id: 'sha256:shared-client',
+        tags: ['nexttime-ai-worker-runtime:v1'],
+        created: '2026-09-23T00:00:00.000Z',
+        labels: { 'ai.nexttime.pi-version': '0.84.4' },
+      },
+    ]);
+  });
 });
 
 describe('resident-service spawn — S3.13 skillsInline', () => {

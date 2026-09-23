@@ -168,6 +168,15 @@ function restartsFromLabels(labels: Readonly<Record<string, string>>): number {
 export interface ResidentServiceDeps {
   readonly config: SupervisorConfig;
   readonly docker: DockerClient;
+  /** v0.16.2 (fix/supervisor-images-proxy): the read-only `DockerClient` `listImages()` below
+   *  calls, pointed at `config.dockerImagesConnection` (`docker-socket-proxy-images`, `IMAGES=1`
+   *  only) instead of `docker` above's `config.dockerConnection` (`docker-socket-proxy`,
+   *  `IMAGES=0`) — see `config.ts`'s `dockerImagesConnection` doc comment for why they're
+   *  deliberately two different proxy instances. Optional and defaults to `docker` so every
+   *  existing caller (this package's own tests, and any future non-compose run that only ever
+   *  configures one Docker connection) keeps working unchanged — only `index.ts`'s real wiring
+   *  passes a genuinely distinct client. */
+  readonly imagesDocker?: DockerClient;
   readonly egressMap: EgressMapStore;
   readonly now?: () => number;
 }
@@ -233,6 +242,7 @@ export interface RuntimeImageInventory {
 
 export function createResidentService(deps: ResidentServiceDeps): ResidentService {
   const { config, docker, egressMap } = deps;
+  const imagesDocker = deps.imagesDocker ?? docker;
   const now = deps.now ?? (() => Date.now());
   const registry = new Map<string, RegistryEntry>();
   let cachedNetworkName: string | undefined;
@@ -754,7 +764,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     },
 
     async listImages(): Promise<RuntimeImageInventory> {
-      const images = await docker.listImages(IMAGE_PI_VERSION_LABEL);
+      // v0.16.2: `imagesDocker`, not `docker` — see `ResidentServiceDeps.imagesDocker`'s own doc
+      // comment for why image reads go through a separate, dedicated read-only proxy connection.
+      const images = await imagesDocker.listImages(IMAGE_PI_VERSION_LABEL);
       return { defaultImage: config.workerImage, images, allowedImages: config.taskImageAllowlist };
     },
   };
