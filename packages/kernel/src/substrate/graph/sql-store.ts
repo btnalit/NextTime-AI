@@ -13,6 +13,7 @@ import {
   buildGetFactForUpdateQuery,
   buildGetObjectByIdentityQuery,
   buildGetObjectQuery,
+  buildGetObjectsByIdsQuery,
   buildInsertFactQuery,
   buildInvalidateUnobservedFactsQuery,
   buildLatestFactInvalidatedForIdentityQuery,
@@ -239,6 +240,19 @@ export class SqlGraphStore implements GraphStore {
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     const row = result.rows[0];
     return row === undefined ? null : mapObjectRow(row);
+  }
+
+  async getObjectsByIds(
+    client: PoolClient,
+    workspaceId: string,
+    objectIds: readonly string[],
+  ): Promise<ReadonlyMap<string, GraphObject>> {
+    if (objectIds.length === 0) return new Map();
+    const query = buildGetObjectsByIdsQuery(workspaceId, objectIds);
+    const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
+    const map = new Map<string, GraphObject>();
+    for (const row of result.rows) map.set(row.id, mapObjectRow(row));
+    return map;
   }
 
   async getObjectByIdentity(

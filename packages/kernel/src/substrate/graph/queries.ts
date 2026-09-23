@@ -104,6 +104,20 @@ export function buildGetObjectQuery(workspaceId: string, objectId: string): SqlQ
     values: [workspaceId, objectId],
   };
 }
+
+/** S8 W1-C (leftover 48 "无批量 Object 读"; `resolve_refs`/`traverse`'s `nodeDetails`): the batched
+ *  counterpart to `buildGetObjectQuery` — one query for up to 200 ids rather than N round trips.
+ *  An id with no matching row (unknown, or another workspace's) is simply absent from the result,
+ *  never an error. */
+export function buildGetObjectsByIdsQuery(
+  workspaceId: string,
+  objectIds: readonly string[],
+): SqlQuery {
+  return {
+    text: `select ${OBJECT_COLUMNS} from objects where workspace_id = $1 and id = any($2::uuid[])`,
+    values: [workspaceId, objectIds],
+  };
+}
 /** `getObjectByIdentity` (store.ts): looks up an Object by its `(object_type, identity_key)`
  *  upsert key — the same partial unique index `buildUpsertObjectQuery` conflicts against
  *  (migrations/core/0006_object_identity.sql). jsonb equality (`=`), not containment (`@>`): an
