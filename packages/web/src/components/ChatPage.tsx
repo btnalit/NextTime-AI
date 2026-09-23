@@ -15,7 +15,7 @@ import { type ChatSummary, applyChatMetadata, isArchived } from '../lib/chat-lif
 import { insertChatMessage } from '../lib/chat-messages.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { formatDateTime } from '../lib/format.js';
+import { formatDateTime, formatTime } from '../lib/format.js';
 import { initialTurnState, streamReducer } from '../lib/streaming-reducer.js';
 import { systemStatusLineFromMessage } from '../lib/system-status.js';
 import type { ChatMessage, ChatSubscriptionHandlers, WsClient } from '../lib/ws-client.js';
@@ -25,6 +25,7 @@ import { SystemStatusLineView } from './SystemStatusLineView.js';
 import { ToolCallRowView } from './ToolCallRowView.js';
 import { ChatHeader } from './chat/ChatHeader.js';
 import { useRestoreChat } from './chat/ChatLifecycleActions.js';
+import { MessageBody } from './chat/MessageBody.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { FollowPill } from './ui/FollowPill.js';
@@ -461,15 +462,10 @@ export function ChatPage({
         className={`message message-${message.role}`}
         data-role={message.role}
       >
-        <div className="message-bubble message-text">{message.text}</div>
+        <MessageBody messageRole={message.role} text={message.text} />
         <div className="message-meta">
           <span>{message.role}</span>
-          <time title={formatDateTime(message.createdAt)}>
-            {new Date(message.createdAt).toLocaleTimeString(undefined, {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </time>
+          <time title={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time>
         </div>
       </div>
     );
@@ -508,10 +504,11 @@ export function ChatPage({
 
           {turn.status === 'running' ? (
             <div className="message message-assistant message-streaming" data-role="assistant">
-              <div className="message-bubble message-text">
-                <span>{turn.streamingText}</span>
-                <span className="streaming-caret" aria-hidden />
-              </div>
+              <MessageBody
+                messageRole="assistant"
+                text={turn.streamingText}
+                trailing={<span className="streaming-caret" aria-hidden />}
+              />
               {turn.toolCalls.length > 0 ? (
                 <div className="tool-calls">
                   {turn.toolCalls.map((row) => (
