@@ -211,7 +211,7 @@
 
 | 波次 | 内容 | 状态 |
 |---|---|---|
-| W0 主机运维 | 遗留 70：采集器 Handle 重铸回生产默认工作区（**须在该临时验收工作区 2026-09-25 09:59 UTC 到期前**）；停 fake-llm；清孤儿入口容器与到期残留 | 待维护者放行 |
+| W0 主机运维 | 遗留 70：采集器 Handle 重铸回生产默认工作区（须在该临时验收工作区 2026-09-25 09:59 UTC 到期前）；停 fake-llm；清孤儿入口容器与到期残留 | 部分完成（2026-09-23 13:46 UTC，维护者放行）：采集器 Handle 已重铸，观测回流到生产工作区（10 分钟内 1121 条）；fake-llm 已停。孤儿入口容器清理（删除，不可逆）待维护者放行；到期残留按期清理。记录在 `docs/private/` |
 | W1 基座 | W1-A 组件地基与系统性组件（S1–S10、S12–S14 等）、W1-B UX 门槛 + 旅程测试框架、W1-C 读模型（含遗留 48） | 待做 |
 | W2 试点：旅程①"让入口 agent 能执行" | 统一授权、启动器必经启用 + 授权、启用确认与旧注册关联（遗留 73）、Worker 模板与选择器、概览执行就绪、`find_*` 匹配（遗留 71）、入口 prompt 契约（遗留 72） | 待做 |
 | W3 其余旅程与页面 | 旅程②–⑥与其余页面问题 | 待做 |
@@ -321,13 +321,13 @@
 | 67 | Task 状态的同族无条件 UPDATE 仍有：`invoke.ts` spawn 后置 `running`、`spawn_failed`、`failTaskRow` 等——v0.16.1 只加固了 complete / resume / 进入 waiting_approval 三处，其余与并发终态写入仍可能互相覆盖 | P2 | S8 W4 | 开放 |
 | 68 | 验收目录权限冲突：`accept_s3.sh` 为私有 token 把整个 `${NEXTTIME_DATA}/accept` 收成 0750 root，而 fake 覆盖层把该目录挂成 llm-proxy（uid 10001）的 `/data/state` 与 `/data/accept`——此后任何验收在 fake-provider 预检失败（v0.16.0 当日 S1 → S2 → S3 的顺序恰好躲过，S3 之后再跑 S1 必撞） | P2 | S7 收尾 | 关闭（#235，v0.16.2，主机按"S3 → S1"顺序复跑通过：私有 token 放 `accept/s3-private/`（0750），`accept_provider_up` 每次把 `accept/` 设回 0755） |
 | 69 | S7-E 的 `GET /images`（镜像清单、白名单、活动镜像解析）经 worker-supervisor 的 `docker-socket-proxy`（`IMAGES=0`）被拒 403——运行层能力在主机上自 v0.16.0 起不可用（fail closed：kernel 回 `runtime_unreachable`，不会误设）；CI 里 supervisor 不走代理故未发现 | P1 | v0.16.2 | 关闭（#237，v0.16.2：新增只读 `docker-socket-proxy-images`（`IMAGES=1`、`POST=0`、其余全 0，独立内部网络），supervisor 仅镜像读取经 `DOCKER_IMAGES_HOST`；Docker 上游错误回 502 `docker_upstream_error`；主机 `/images` 200 实测） |
-| 70 | 生产 host-inventory 采集器自 2026-09-18 起写入一个 accept-s3 临时验收工作区（09-19 以来约 19 万条观测都在那里），生产默认工作区的图谱停在 09-18，入口 agent 按 5 天前的观测回答（自测里"accept-s2-* 在运行"即由此而来）。机制推断：旧版 `accept_s3.sh` 覆盖了生产采集器 token（遗留 41 同一模式，发生在修复上主机之前）。该临时工作区 2026-09-25 09:59 UTC 到期，届时采集器失去有效 Handle | P1 | S8 W0（主机）+ W4（守卫：验收脚本改写生产 token 即失败；概览显示图谱新鲜度） | 开放 |
+| 70 | 生产 host-inventory 采集器自 2026-09-18 起写入一个 accept-s3 临时验收工作区（09-19 以来约 19 万条观测都在那里），生产默认工作区的图谱停在 09-18，入口 agent 按 5 天前的观测回答（自测里"accept-s2-* 在运行"即由此而来）。机制已证实：生产 token 文件的修改时间与该验收工作区的创建时间同为 09-18 09:59 UTC——当时的验收脚本覆盖了生产采集器 token（遗留 41 同一模式，发生在修复上主机之前） | P1 | S8 W0（主机）+ W4（守卫：验收脚本改写生产 token 即失败；概览显示图谱新鲜度） | 主机部分已处理（2026-09-23 W0：Handle 重铸、观测回流已核实）；守卫待 W4；同时发现重铸后首轮 `factsAsserted` / `factsInvalidated` 仍为 0，并入遗留 75 深查 |
 | 71 | `find_*` 以整个 `need` 做子串 ILIKE（`find-means.ts`），自然语言需求几乎不可能命中；旧路径导入的 Operation 描述全为空串，只能撞名称 | P2 | S8 W2 | 开放 |
 | 72 | 入口 prompt 契约缺口（`ontology/entry-agent.yaml`）：没有"`find_*` 全空"时该告诉用户什么（启用门 + 授权成员 + 发布 Worker，三者都要）；承诺的 ops-runner 在未发布的工作区并不存在；没有回复语言指令（真实模型出现混入俄语词、中文提问英文作答） | P2 | S8 W2 | 开放 |
 | 73 | `enable_gate_instance` 只按"本工作区是否已有该门关联"判重，`registerGatekeeperObject` 不带身份键新建：对旧 `register-gatekeeper` 路径已注册同一门的工作区，启用会生成第二个 Gatekeeper 与一套重复的已发布 Operation，内核没有撤销能力（代码确认，未在主机点击） | P2 | S8 W2 | 开放 |
 | 74 | Worker 结果契约的 `artifacts` 指向 WorkerRun 容器内路径（如 `/workspace/*.md`），容器结束即丢失：入口 agent 的读取失败，任务页也打不开 | P2 | S8 W4 | 开放 |
 | 75 | Worker 做了观测却不写回图谱（`factsToAssert` 可为空，门操作结果不作为 Observation 入图）：一次实时盘点后图谱依旧陈旧；同一盘点让 Worker 用掉约 12 万 token（单任务预算 59%），门操作原始输出未截断 | P2 | S8 W4 | 开放 |
-| 76 | `accept_s2.sh` 的 fixture 清理（`cleanup_step`）不在 EXIT trap 里，中途失败必留 accept-s2-* 容器；验收后 fake-llm 仍在运行 | P3 | S8 W0 / W4 | 开放 |
+| 76 | `accept_s2.sh` 的 fixture 清理（`cleanup_step`）不在 EXIT trap 里，中途失败必留 accept-s2-* 容器；验收后 fake-llm 仍在运行 | P3 | S8 W0 / W4 | fake-llm 已停（2026-09-23 W0）；trap 待 W4 |
 | 77 | 清除工作区不回收其入口容器：主机累积已退出的 `nexttime-entry-*`（其中一批属于已清除的工作区），运行层页把它们全标"已是最新"、无运行 / 退出状态列 | P2 | S8 W4 | 开放 |
 
 ## 5. 更新规则
