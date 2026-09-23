@@ -452,6 +452,17 @@ export interface GraphStore {
 
   getObject(client: PoolClient, workspaceId: string, objectId: string): Promise<GraphObject | null>;
 
+  /** S8 W1-C (leftover 48 "无批量 Object 读"): the batched counterpart to `getObject` — one query
+   *  for up to 200 ids, keyed by id in the returned Map; an id with no matching row (unknown, or
+   *  another workspace's — RLS-scoped like every other read here) is simply absent, never an
+   *  error. `resolve_refs`'s `object`/`gatekeeper` kinds and `traverse`'s `nodeDetails` both use
+   *  this rather than N `getObject` round trips. */
+  getObjectsByIds(
+    client: PoolClient,
+    workspaceId: string,
+    objectIds: readonly string[],
+  ): Promise<ReadonlyMap<string, GraphObject>>;
+
   /** Reads one Object by its `(object_type, identity)` upsert key (§16 identity keys) — the
    *  lookup `upsertObject`'s own partial unique index (migrations/core/0006_object_identity.sql)
    *  is built on. `null` when no Object has that identity, or when `identity` is empty (there is

@@ -77,7 +77,10 @@ export class AgentProfileValidationError extends Error {
   }
 }
 
-async function assertPrincipalExists(
+// Exported (S8 W1-C) alongside `resolveAvailableResources` below, for
+// `execution-readiness-handler.ts` to reuse the same existence check `get_agent_profile`/
+// `set_agent_profile` already apply, rather than a second, possibly-drifting copy.
+export async function assertPrincipalExists(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
@@ -100,7 +103,11 @@ async function assertPrincipalExists(
  * standing grant, so it plays no role in this "what's available to inherit" ceiling), and every
  * currently-published WorkerDefinition.
  */
-async function resolveAvailableResources(
+// Exported (S8 W1-C) for `execution-readiness-handler.ts` to reuse the exact same "what would
+// this principal's entry Handle gate scope resolve to right now" computation
+// `agent-host-runtime.ts`'s `ensureEntryHandle` performs at real Turn-start time — never a second,
+// possibly-drifting reimplementation of the same ceiling.
+export async function resolveAvailableResources(
   client: PoolClient,
   workspaceId: string,
   targetPrincipalId: string,

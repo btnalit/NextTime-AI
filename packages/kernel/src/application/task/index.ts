@@ -35,6 +35,8 @@ export {
 
 export {
   type FindMeansCaller,
+  type ListTasksFilter,
+  type TasksPage,
   type TaskWithWorkerRuns,
   type WorkerDefinitionMatch,
   type WorkerRunUsageTokens,
@@ -67,6 +69,7 @@ export {
   type ParentHandleLineage,
   EMPTY_CAPABILITY_SCOPE,
   computeChildHandleScope,
+  defaultWorkerCapabilities,
   resolveParentAuthority,
 } from './handle-mint.js';
 

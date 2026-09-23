@@ -159,15 +159,27 @@ function toWireOperationSummary(record: OperationRecord) {
 // Capability handlers
 // -------------------------------------------------------------------------------------------
 
-export const listGatekeepersHandler: CapabilityHandler = async (client, workspaceId) => {
+// S8 W1-C (selector data source, F6 item 3): `q` filters in application code, after the
+// pre-existing full read — a workspace's Gatekeeper directory is small (operator-managed
+// connections, not user-generated data), so this stays a plain in-memory substring match rather
+// than adding a SQL-level filter to `governance/gatekeepers/registry.ts`'s own query for a picker
+// list this size.
+function matchesQuery(name: string, q: string | undefined): boolean {
+  return q === undefined || name.toLowerCase().includes(q.toLowerCase());
+}
+
+export const listGatekeepersHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { q } = params as { q?: string };
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
   const entries = await listGatekeepers(client, workspaceId);
   const operationCounts = await countOperationsByGatekeeper(client, workspaceId);
   return {
     result: {
-      items: entries.map((entry) =>
-        toWireGatekeeperSummary(entry, operationCounts.get(entry.gatekeeperId) ?? 0),
-      ),
+      items: entries
+        .filter((entry) => matchesQuery(entry.name, q))
+        .map((entry) =>
+          toWireGatekeeperSummary(entry, operationCounts.get(entry.gatekeeperId) ?? 0),
+        ),
     },
   };
 };
@@ -208,12 +220,13 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
 };
 
 export const listOperationsHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { gatekeeperId } = params as { gatekeeperId?: string };
+  const { gatekeeperId, q } = params as { gatekeeperId?: string; q?: string };
   const records = await listOperations(client, workspaceId, { gatekeeperId });
   // P-B1: hide connector-disabled Operations, per gatekeeper (one deny-list read each).
   const disabledByGatekeeper = new Map<string, ReadonlySet<string>>();
   const visible = [];
   for (const record of records) {
+    if (!matchesQuery(record.name, q)) continue;
     let disabled = disabledByGatekeeper.get(record.gatekeeperId);
     if (!disabled) {
       disabled = await disabledOperationsFor(client, workspaceId, record.gatekeeperId);

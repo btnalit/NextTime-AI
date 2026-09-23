@@ -123,7 +123,14 @@ export function hostedDefinitionOf(value: unknown): GateHostedDefinitionWire | n
   return parsed.success ? parsed.data : null;
 }
 
-export function toWireGateInstance(row: GateInstanceDbRow): GateInstanceWire {
+/** S8 W1-C (leftover 48 "GateInstanceWire 只有 enabledWorkspaceCount 无工作区列表"): the bound on
+ *  `enablingWorkspaces` — `enabledWorkspaceCount` stays the true, untruncated total either way. */
+export const ENABLING_WORKSPACES_LIMIT = 20;
+
+export function toWireGateInstance(
+  row: GateInstanceDbRow,
+  enablingWorkspaces: readonly { readonly id: string; readonly name: string }[] = [],
+): GateInstanceWire {
   const operations = operationsOf(row.operations);
   return {
     gateId: row.gate_id,
@@ -139,6 +146,7 @@ export function toWireGateInstance(row: GateInstanceDbRow): GateInstanceWire {
     lastCheckedAt: row.last_checked_at ? row.last_checked_at.toISOString() : null,
     operationCount: operations.length,
     enabledWorkspaceCount: row.enabled_workspace_count,
+    enablingWorkspaces: enablingWorkspaces.map((w) => ({ id: w.id, name: w.name })),
     hosted: row.hosted,
     definition: hostedDefinitionOf(row.definition),
     operations: operations.map((op) => ({
@@ -392,6 +400,37 @@ export async function markLostGateInstances(
   return result.rows.map((row) => row.gate_id);
 }
 
+/** The workspaces that enabled each of `gateIds`, newest link first, capped at
+ *  `ENABLING_WORKSPACES_LIMIT` per gate — one query for the whole batch (never per gate id), same
+ *  "bounded query count" convention `resolve_refs` (`application/gateway/resolve-refs-handler.ts`)
+ *  follows. `[]` for a `gateIds` no link references (nothing enabled it, or every link is against
+ *  a since-purged workspace — `workspace_gate_links`/`workspaces` share no ON DELETE that would
+ *  leave a dangling row, so this is simply "no rows matched"). */
+async function listEnablingWorkspaces(
+  client: PoolClient,
+  gateIds: readonly string[],
+): Promise<ReadonlyMap<string, readonly { readonly id: string; readonly name: string }[]>> {
+  if (gateIds.length === 0) return new Map();
+  const result = await client.query<{ gate_id: string; id: string; name: string }>(
+    `select l.gate_id, w.id, w.name
+       from workspace_gate_links l
+       join workspaces w on w.id = l.workspace_id
+      where l.gate_id = any($1::text[])
+      order by l.gate_id, l.enabled_at desc`,
+    [gateIds],
+  );
+  const map = new Map<string, { readonly id: string; readonly name: string }[]>();
+  for (const row of result.rows) {
+    let bucket = map.get(row.gate_id);
+    if (!bucket) {
+      bucket = [];
+      map.set(row.gate_id, bucket);
+    }
+    if (bucket.length < ENABLING_WORKSPACES_LIMIT) bucket.push({ id: row.id, name: row.name });
+  }
+  return map;
+}
+
 export async function listGateInstances(
   client: PoolClient,
   filter: { status?: GateInstanceStatus; connector?: string } = {},
@@ -411,7 +450,11 @@ export async function listGateInstances(
       order by g.created_at, g.gate_id`,
     params,
   );
-  return result.rows.map(toWireGateInstance);
+  const enablingByGate = await listEnablingWorkspaces(
+    client,
+    result.rows.map((row) => row.gate_id),
+  );
+  return result.rows.map((row) => toWireGateInstance(row, enablingByGate.get(row.gate_id) ?? []));
 }
 
 export async function getGateInstance(
@@ -423,7 +466,9 @@ export async function getGateInstance(
     [gateId],
   );
   const row = result.rows[0];
-  return row ? toWireGateInstance(row) : null;
+  if (!row) return null;
+  const enablingByGate = await listEnablingWorkspaces(client, [gateId]);
+  return toWireGateInstance(row, enablingByGate.get(gateId) ?? []);
 }
 
 export async function updateGateInstance(

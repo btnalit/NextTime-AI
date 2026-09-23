@@ -219,12 +219,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         const ownList = await inTx(proposerId, (client) =>
           listProcedures(client, workspaceId, proposerId),
         );
-        expect(ownList.some((p) => p.name === unique)).toBe(true);
+        expect(ownList.items.some((p) => p.name === unique)).toBe(true);
 
         const otherList = await inTx(otherPrincipalId, (client) =>
           listProcedures(client, workspaceId, otherPrincipalId),
         );
-        expect(otherList.some((p) => p.name === unique)).toBe(false);
+        expect(otherList.items.some((p) => p.name === unique)).toBe(false);
       });
 
       it('after publish, the Procedure becomes visible to every principal', async () => {
@@ -237,7 +237,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         const otherList = await inTx(otherPrincipalId, (client) =>
           listProcedures(client, workspaceId, otherPrincipalId),
         );
-        expect(otherList.some((p) => p.name === unique && p.status === 'published')).toBe(true);
+        expect(otherList.items.some((p) => p.name === unique && p.status === 'published')).toBe(
+          true,
+        );
       });
     });
 
@@ -340,7 +342,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const stillDraft = await inTx(ownerId, (client) =>
           listProcedures(client, workspaceId, ownerId),
         );
-        expect(stillDraft.find((p) => p.id === draft.id)).toBeUndefined(); // draft, not owned by ownerId
+        expect(stillDraft.items.find((p) => p.id === draft.id)).toBeUndefined(); // draft, not owned by ownerId
       });
 
       it('rejects publishing a procedure whose operation step references an unpublished (draft) Operation', async () => {

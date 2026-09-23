@@ -39,6 +39,18 @@ export const SkillSummaryWireSchema = z
   .strict();
 export type SkillSummaryWire = z.infer<typeof SkillSummaryWireSchema>;
 
+/** `get_skill`'s result (S8 W1-C, leftover 48 "无 get_skill" — Skill "编辑" needs the full body to
+ *  prefill): the summary plus `markdown` and the lifecycle/authorship fields `list_skills` leaves
+ *  out (`SkillRow`'s own shape, `application/worker/skills.ts`). */
+export const SkillDetailWireSchema = SkillSummaryWireSchema.extend({
+  markdown: z.string(),
+  proposedBy: z.string(),
+  publishedBy: z.string().nullable(),
+  createdAt: z.string(),
+  publishedAt: z.string().nullable(),
+});
+export type SkillDetailWire = z.infer<typeof SkillDetailWireSchema>;
+
 /** `propose_skill`'s result. */
 export const SkillProposeResultWireSchema = SkillSummaryWireSchema.pick({
   id: true,
