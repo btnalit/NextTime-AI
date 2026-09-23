@@ -498,7 +498,9 @@ const graphCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ need: z.string() }).strict(),
     resultSchema: listEnvelope(wire.ObjectWireSchema),
     description:
-      'Traverse the platform meta-ontology for Operations matching a need, intersected with the caller’s Grant.',
+      'Find Operations whose name/description/kind (or Gatekeeper name) matches any keyword in ' +
+      '`need` (space/punctuation-separated; a blank need lists every candidate), intersected with ' +
+      'the caller’s Grant.',
   },
   {
     name: 'find_workers',
@@ -519,7 +521,8 @@ const graphCapabilities: readonly Capability[] = [
         .strict(),
     ),
     description:
-      'Traverse the platform meta-ontology for WorkerDefinition@version matching a need.',
+      'Find published WorkerDefinition@version whose name/description matches any keyword in ' +
+      '`need` (space/punctuation-separated; a blank need lists every candidate).',
   },
   {
     name: 'find_procedures',
@@ -538,7 +541,9 @@ const graphCapabilities: readonly Capability[] = [
         })
         .strict(),
     ),
-    description: 'Traverse the platform meta-ontology for Procedures matching a need.',
+    description:
+      'Find published Procedures whose name/description matches any keyword in `need` (space/' +
+      'punctuation-separated; a blank need lists every candidate).',
   },
 ];
 
