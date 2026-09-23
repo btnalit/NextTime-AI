@@ -407,6 +407,11 @@ const graphCapabilities: readonly Capability[] = [
     paramsSchema: z
       .object({
         fromId: id,
+        // S8 W1-C (leftover 48): the store-level primitive (`substrate/graph/store.ts`
+        // `TraverseDirection`) already supported `in`/`out`/`both` — only this wire layer never
+        // exposed it. Default unchanged (`both`, `DEFAULT_TRAVERSE_DIRECTION`) — omitting the
+        // param is exactly today's behavior.
+        direction: z.enum(['in', 'out', 'both']).optional(),
         linkType: z.string().optional(),
         depth: z.number().int().min(1).max(3).optional(),
       })
@@ -425,14 +430,28 @@ const graphCapabilities: readonly Capability[] = [
             })
             .strict(),
         ),
+        // S8 W1-C (leftover 48 "邻居名称 N × get_object"): one entry per `nodes[i]`, same order —
+        // additive, `nodes`/`edges` unchanged, so an existing caller reading only those two fields
+        // sees identical behavior. `name` is the same "name-like property, else identity key join"
+        // heuristic the console's own `objectDisplayName` (packages/web/src/lib/graph-view.ts)
+        // uses — `undefined` when nothing usable exists (the graph console already renders that as
+        // the bare-id fallback).
+        nodeDetails: z
+          .array(
+            z
+              .object({ id: z.string(), typeName: z.string(), name: z.string().optional() })
+              .strict(),
+          )
+          .optional(),
       })
       .strict(),
     description:
-      'Walk Links outward from `fromId` in both directions (or filtered to one `linkType`), up ' +
-      'to `depth` hops (1–3, default 1). Returns `{nodes, edges}`: the reached Object ids and ' +
-      'each traversed Link (linkId, linkType, sourceObjectId, targetObjectId, depth). Use it to ' +
-      'see what an Object is connected to; use `get_object` for an Object’s own properties, ' +
-      '`explain` for a Link’s provenance.',
+      'Walk Links outward from `fromId` in one `direction` (`in`/`out`/`both`, default `both`; ' +
+      'or filtered to one `linkType`), up to `depth` hops (1–3, default 1). Returns `{nodes, ' +
+      'edges, nodeDetails}`: the reached Object ids, each traversed Link (linkId, linkType, ' +
+      'sourceObjectId, targetObjectId, depth), and each node’s own objectType/display name ' +
+      '(nodeDetails, same order as nodes). Use it to see what an Object is connected to; use ' +
+      '`get_object` for an Object’s own properties, `explain` for a Link’s provenance.',
   },
   {
     name: 'search',
@@ -706,10 +725,14 @@ const connectionCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: noParams,
+    // S8 W1-C (selector data source, F6 item 3): `q` — case-insensitive substring on `name` — for
+    // the console's gate picker (grant/launcher flows, J6/SY2); omitted returns every Gatekeeper,
+    // exactly today's behavior.
+    paramsSchema: z.object({ q: z.string().min(1).optional() }).strict(),
     resultSchema: listEnvelope(wire.GatekeeperSummaryWireSchema),
     description:
-      'List every registered Gatekeeper instance (health/manifest not included — see get_gatekeeper).',
+      'List every registered Gatekeeper instance (health/manifest not included — see ' +
+      'get_gatekeeper), optionally narrowed by q (case-insensitive substring on name).',
   },
   {
     name: 'issue_service_handle',
@@ -791,10 +814,16 @@ const connectionCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: z.object({ gatekeeperId: id.optional() }).strict(),
+    // S8 W1-C (selector data source, F6 item 3): `q` alongside the pre-existing `gatekeeperId`
+    // filter — case-insensitive substring on `name`, for the Worker editor's Operation/gate picker
+    // (J7) and any other Operation search; omitted returns every Operation, unchanged.
+    paramsSchema: z
+      .object({ gatekeeperId: id.optional(), q: z.string().min(1).optional() })
+      .strict(),
     resultSchema: listEnvelope(wire.OperationSummaryWireSchema),
     description:
-      'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to one gate.',
+      'Human-facing Operation directory across Gatekeepers (any status), optionally filtered to ' +
+      'one gate and/or narrowed by q (case-insensitive substring on name).',
   },
   {
     // S3.12 catalog-usage follow-up (docs/development-tasks.md S3.12, 2026-09-08+): the catalog's
@@ -962,9 +991,33 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: noParams,
+    // S8 W1-C (leftover 48 pagination list): keyset-paginated, default/max match `search`
+    // (docs/wire-contract-conventions.md §3) — see `application/worker/skills.ts`'s
+    // `listSkills` own doc comment for the exact default chosen and why it is backward
+    // compatible with today's no-`limit` callers.
+    paramsSchema: z
+      .object({ limit: z.number().int().positive().optional(), cursor: z.string().optional() })
+      .strict(),
     resultSchema: listEnvelope(wire.SkillSummaryWireSchema),
-    description: 'List published Skills plus the caller’s own draft Skills.',
+    description:
+      'List published Skills plus the caller’s own draft Skills (latest version per id, newest ' +
+      'first); keyset-paginated (limit, cursor → nextCursor).',
+  },
+  {
+    // S8 W1-C (leftover 48 "list_skills 无 markdown / 无 get_skill" — Skill "编辑" needs the full
+    // body to prefill; `list_skills` stays light on purpose, mirroring `list_operations`/
+    // `get_gatekeeper`'s own summary-vs-detail split).
+    name: 'get_skill',
+    group: 'meta',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z.object({ skillId: id }).strict(),
+    resultSchema: wire.SkillDetailWireSchema.nullable(),
+    description:
+      'Read one Skill (latest version) with its full markdown body — same I16 read-privacy as ' +
+      'list_skills (published, or the caller’s own draft); null for an unknown id or a draft ' +
+      'the caller does not own.',
   },
   {
     name: 'list_procedures',
@@ -972,9 +1025,14 @@ const metaCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: noParams,
+    // S8 W1-C (leftover 48 pagination list): same shape as list_skills above.
+    paramsSchema: z
+      .object({ limit: z.number().int().positive().optional(), cursor: z.string().optional() })
+      .strict(),
     resultSchema: listEnvelope(wire.ProcedureSummaryWireSchema),
-    description: 'List published Procedures plus the caller’s own draft Procedures.',
+    description:
+      'List published Procedures plus the caller’s own draft Procedures (latest version per id, ' +
+      'newest first); keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     // S3.3: real handler (`application/gateway/fact-handlers.ts`'s `assertFactHandler`), replacing
@@ -1172,13 +1230,20 @@ const epistemicCapabilities: readonly Capability[] = [
     paramsSchema: z
       .object({
         status: ConflictStatusSchema.optional(),
+        // S8 W1-C (leftover 48 "list_conflicts 无对象 / Fact 筛选"): narrows to Conflicts touching
+        // one Object (either side's Fact starts or ends there) or naming one Fact directly
+        // (factAId/factBId) — both optional, may be combined (AND), never required.
+        objectId: id.optional(),
+        factId: id.optional(),
         limit: z.number().int().positive().optional(),
         cursor: z.string().optional(),
       })
       .strict(),
     resultSchema: listEnvelope(wire.ConflictWireSchema),
     description:
-      'List Conflicts visible to the caller (private-Source Conflicts are one-sided, §5.6).',
+      'List Conflicts visible to the caller (private-Source Conflicts are one-sided, §5.6), ' +
+      'optionally narrowed to one objectId (either side’s Fact touches it) or one factId ' +
+      '(factAId/factBId); keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     // S3.2: `application/gateway/epistemic-handlers.ts`'s `resolveConflictHandler`. `channel:
@@ -1515,9 +1580,20 @@ const governanceCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: z.object({ principalId: id.optional() }).strict(),
+    // S8 W1-C (leftover 48 pagination list): `limit`/`cursor` alongside the pre-existing
+    // `principalId` filter; omitting `limit` keeps today's "every Grant" behavior up to the new
+    // default (`governance/capability/grants.ts`'s `listGrants` own doc comment).
+    paramsSchema: z
+      .object({
+        principalId: id.optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
     resultSchema: listEnvelope(wire.CapabilityGrantWireSchema),
-    description: 'List CapabilityGrants, optionally filtered to one Principal.',
+    description:
+      'List CapabilityGrants, optionally filtered to one Principal; keyset-paginated (limit, ' +
+      'cursor → nextCursor).',
   },
   {
     name: 'list_policies',
@@ -1539,6 +1615,49 @@ const governanceCapabilities: readonly Capability[] = [
     resultSchema: listEnvelope(wire.QuotaListEntryWireSchema),
     description:
       'List the workspace’s I18 quota values (overrides merged over compiled-in defaults).',
+  },
+  {
+    // S8 W1-C (F6 item 3, "选择器数据源...能力名"): the grantable capability-name picker for the
+    // Worker editor (J7) — derived from the registry itself (`WORKER_CEILING_CAPABILITIES`, the
+    // same ceiling `application/task/handle-mint.ts`'s `computeChildHandleScope` narrows a
+    // WorkerDefinition's own declared `capabilities` against), never a hand-maintained list that
+    // could drift from what a WorkerDefinition may actually declare.
+    name: 'list_capability_names',
+    group: 'governance',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(z.object({ name: z.string(), mode: CapabilityModeSchema }).strict()),
+    description:
+      'List every capability name a published `kind=worker` WorkerDefinition may declare in its ' +
+      'own `capabilities` (the worker ceiling minus the two gate-projection patterns, which are ' +
+      'not literal registry names) — for the Worker editor’s capability picker.',
+  },
+  {
+    // S8 W1-C (F6, ui-audit-2026-09-23 J1/O1): "can this member's entry agent delegate execution
+    // work, and what is missing" — the one read the console's execution-readiness control tower
+    // (J1) and Worker-launch flows (J2) both need, derived from the exact same enforcement path
+    // `invoke_worker` uses (`application/task/handle-mint.ts`'s `computeChildHandleScope`) so this
+    // can never disagree with what a real `invoke_worker` call would do — see
+    // `application/gateway/execution-readiness-handler.ts`'s own module doc comment for the full
+    // reuse mapping.
+    name: 'execution_readiness',
+    group: 'governance',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ principalId: id.optional() }).strict(),
+    resultSchema: wire.ExecutionReadinessWireSchema,
+    description:
+      'Whether principalId’s (default: the caller’s own) entry agent can currently delegate ' +
+      'execution work — every enabled Gatekeeper in this workspace with whether this principal ' +
+      'holds a grant for it and how many published Operations it exposes; every published ' +
+      '`kind=worker` WorkerDefinition with whether it is delegable by this principal right now ' +
+      'and what blocks it when not; `ready` and a `missing[]` rollup of machine codes ' +
+      '(no_enabled_gate / no_grant / no_published_worker) with the ids involved. An operator+ ' +
+      'may pass another member’s principalId (same visibility floor as list_grants); any other ' +
+      'caller may only check their own.',
   },
 ];
 
@@ -1724,9 +1843,16 @@ const taskCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: noParams,
+    // S8 W1-C (leftover 48 pagination list): keyset-paginated on (created_at, id); omitting
+    // `limit` keeps today's "every Task" behavior up to the new default (see
+    // `application/task/service.ts`'s `listTasksForPrincipal` doc comment for the chosen value).
+    paramsSchema: z
+      .object({ limit: z.number().int().positive().optional(), cursor: z.string().optional() })
+      .strict(),
     resultSchema: listEnvelope(wire.TaskWireSchema),
-    description: "List the caller's own Tasks (newest first), each with its WorkerRuns.",
+    description:
+      "List the caller's own Tasks (newest first), each with its WorkerRuns; keyset-paginated " +
+      '(limit, cursor → nextCursor).',
   },
   {
     name: 'cancel_task',
@@ -1794,9 +1920,21 @@ const workerCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ kind: z.enum(['entry', 'worker']).optional() }).strict(),
+    // S8 W1-C (leftover 48 pagination list): `limit`/`cursor` alongside the pre-existing `kind`
+    // filter — keyset-paginated, newest first; omitting `limit` keeps today's "every published
+    // WorkerDefinition" behavior up to the new default (`application/worker/definitions.ts`'s
+    // `listWorkerDefinitions` own doc comment).
+    paramsSchema: z
+      .object({
+        kind: z.enum(['entry', 'worker']).optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
     resultSchema: listEnvelope(wire.WorkerDefinitionWireSchema),
-    description: 'List published WorkerDefinitions.',
+    description:
+      'List published WorkerDefinitions, optionally filtered by kind; keyset-paginated (limit, ' +
+      'cursor → nextCursor).',
   },
 ];
 
@@ -2000,10 +2138,23 @@ const membersCapabilities: readonly Capability[] = [
     mode: 'observe',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: noParams,
+    // S8 W1-C (selector data source, F6 item 3 + leftover 48 pagination list): `q`
+    // (case-insensitive substring on displayName) for the console's member picker (grant flows,
+    // J6/SY2); `limit`/`cursor` keyset pagination — omitting `limit` keeps today's "every
+    // Principal" behavior up to the new default (`application/gateway/members-handlers.ts`'s
+    // `listPrincipalsDetailed` own doc comment).
+    paramsSchema: z
+      .object({
+        q: z.string().min(1).optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
     resultSchema: listEnvelope(wire.PrincipalWireSchema),
     description:
-      'List every Principal in the workspace (kind/role/hasApiKey/disabledAt — never the key hash).',
+      'List every Principal in the workspace (kind/role/hasApiKey/disabledAt — never the key ' +
+      'hash), optionally narrowed by q (case-insensitive substring on displayName); ' +
+      'keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     name: 'create_principal',
@@ -2074,6 +2225,40 @@ const membersCapabilities: readonly Capability[] = [
     resultSchema: wire.WorkspaceWireSchema,
     description:
       'The calling workspace’s identity and summary counts (principals, gatekeepers), plus the resolved calling Principal’s own identity and role (caller).',
+  },
+  {
+    // S8 W1-C (leftover 48 "无批量 Object 读"; ui-audit-2026-09-23 J8/S10/O1 — RefChip degrades to
+    // the bare-id fallback whenever an id is not already in a loaded `list_*` directory,
+    // `packages/web/src/components/ui/RefChip.tsx`'s own doc comment "principle 3: id 永不裸露").
+    // Covers exactly RefChip's five existing `RefKind`s (`object`/`principal`/`gatekeeper`/
+    // `workerDefinition`/`actionRequest`) — the console's own list-loaded directories
+    // (`list_principals`/`list_gatekeepers`/`list_worker_definitions`) already cover the common
+    // case; this fills the gap for an id referenced from data the caller did not already load in
+    // full (an audit row's actor, a Conflict's Fact, a traversal neighbour outside the loaded
+    // page, …).
+    //
+    // Group placement: `members`, not `graph` — despite reading graph Objects among other things
+    // — because `governance/capability/handles.ts`'s `buildEntryCeilingCapabilityNames` sweeps
+    // every `group:'graph'` capability into the entry-agent Handle ceiling unconditionally
+    // (correct for every other row in that group, all `channel:'handle'`); a `channel:'human'`
+    // row there breaks `entryScope()`'s own `assertValidScope` round trip (a Handle scope can
+    // never legally name a human-channel capability — confirmed by `handles.test.ts`'s own
+    // registry-wide round-trip test). `members` already frames itself as the catch-all for a
+    // workspace-summary/reference read with no other natural home (this file's own `members`
+    // group doc comment, `get_workspace`/`list_models`) — the same reasoning applies here.
+    name: 'resolve_refs',
+    group: 'members',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ ids: z.array(id).min(1).max(200) }).strict(),
+    resultSchema: listEnvelope(wire.ResolvedRefWireSchema),
+    description:
+      'Batch-resolve up to 200 ids to {id, kind, name?, typeName?} across the reference kinds ' +
+      'the console renders as RefChips (graph Object incl. Gatekeeper, Principal, ' +
+      'WorkerDefinition, ActionRequest) — one bounded query per kind, never per id. An id that ' +
+      'does not exist, or that the caller may not see, is silently omitted (never 404, never ' +
+      'leaks existence across visibility, same rule get_object already follows for a single id).',
   },
   {
     name: 'list_models',

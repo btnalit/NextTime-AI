@@ -100,15 +100,99 @@ function mapPrincipalDetailRow(row: PrincipalDetailDbRow): PrincipalDetailRow {
   };
 }
 
+// -------------------------------------------------------------------------------------------
+// S8 W1-C (selector data source, F6 item 3 + leftover 48 pagination list): `list_principals`
+// keyset cursor — same `(date_trunc('milliseconds', created_at), id)` shape
+// docs/wire-contract-conventions.md §3 names, one private copy per list (this codebase's own
+// established convention — `governance/approval/reads.ts`'s own doc comment: "a fourth private
+// copy, deliberately"). `DEFAULT_LIST_PRINCIPALS_LIMIT` is chosen generously so a workspace with
+// today's realistic member counts still gets every row with no `limit` — the same "no `limit` →
+// unchanged behavior" contract every other list in this task carries.
+// -------------------------------------------------------------------------------------------
+export const DEFAULT_LIST_PRINCIPALS_LIMIT = 100;
+export const MAX_LIST_PRINCIPALS_LIMIT = 500;
+
+const PRINCIPAL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function encodeListPrincipalsCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeListPrincipalsCursor(
+  cursor: string | undefined,
+): { readonly createdAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const createdAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (!createdAt || Number.isNaN(Date.parse(createdAt)) || !PRINCIPAL_UUID_PATTERN.test(id)) {
+      return null;
+    }
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
+export interface ListPrincipalsFilter {
+  /** Case-insensitive substring on `display_name`; a principal with no display name never
+   *  matches a non-empty `q`. */
+  readonly q?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface ListPrincipalsPage {
+  readonly items: readonly PrincipalDetailRow[];
+  readonly nextCursor?: string;
+  readonly truncated?: true;
+}
+
 async function listPrincipalsDetailed(
   client: PoolClient,
   workspaceId: string,
-): Promise<readonly PrincipalDetailRow[]> {
+  filter: ListPrincipalsFilter = {},
+): Promise<ListPrincipalsPage> {
+  const requestedLimit = filter.limit ?? DEFAULT_LIST_PRINCIPALS_LIMIT;
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_PRINCIPALS_LIMIT);
+  const cursor = decodeListPrincipalsCursor(filter.cursor);
+
+  // Ascending (oldest first, `>` past the cursor) — deliberately the opposite direction of this
+  // task's other new cursors: `listPrincipalsDetailed` returned `order by created_at asc` before
+  // this change, and the console's Members/Access pages (`packages/web/src/components/
+  // MembersPage.tsx`/`AccessPage.tsx`) render that order as-is with no client-side re-sort — a
+  // `desc` default here would silently reorder those tables for every existing caller that still
+  // passes no `limit`/`cursor`. Over-fetch by one: a (limit + 1)th row proves there is a next page
+  // without a second query (same convention `governance/approval/reads.ts`'s
+  // `listActionRequestsForApprover` uses).
   const result = await client.query<PrincipalDetailDbRow>(
-    `select ${PRINCIPAL_DETAIL_COLUMNS} from principals where workspace_id = $1 order by created_at asc`,
-    [workspaceId],
+    `select ${PRINCIPAL_DETAIL_COLUMNS} from principals
+     where workspace_id = $1
+       and ($2::text is null or display_name ilike '%' || $2 || '%')
+       and (
+         $3::timestamptz is null
+         or (date_trunc('milliseconds', created_at), id) > ($3::timestamptz, $4::uuid)
+       )
+     order by date_trunc('milliseconds', created_at) asc, id asc
+     limit $5`,
+    [workspaceId, filter.q ?? null, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
   );
-  return result.rows.map(mapPrincipalDetailRow);
+
+  const rows = result.rows.slice(0, limit).map(mapPrincipalDetailRow);
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    result.rows.length > limit && last
+      ? encodeListPrincipalsCursor(last.createdAt, last.id)
+      : undefined;
+  const truncated = requestedLimit > MAX_LIST_PRINCIPALS_LIMIT ? (true as const) : undefined;
+  return {
+    items: rows,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
 }
 
 async function getPrincipalDetailed(
@@ -193,9 +277,16 @@ function toWirePrincipal(row: PrincipalDetailRow) {
 // Capability handlers
 // -------------------------------------------------------------------------------------------
 
-export const listPrincipalsHandler: CapabilityHandler = async (client, workspaceId) => {
-  const rows = await listPrincipalsDetailed(client, workspaceId);
-  return { result: { items: rows.map(toWirePrincipal) } };
+export const listPrincipalsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { q, limit, cursor } = params as { q?: string; limit?: number; cursor?: string };
+  const page = await listPrincipalsDetailed(client, workspaceId, { q, limit, cursor });
+  return {
+    result: {
+      items: page.items.map(toWirePrincipal),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
+    },
+  };
 };
 
 const CreatePrincipalParams = (params: unknown) => params as { role: Role; displayName: string };

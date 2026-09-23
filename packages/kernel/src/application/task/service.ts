@@ -75,29 +75,96 @@ export async function getTaskWithWorkerRuns(
   return { task, workerRuns: workerRunsResult.rows.map(mapWorkerRunRow) };
 }
 
+// -------------------------------------------------------------------------------------------
+// S8 W1-C (leftover 48 pagination list): `list_tasks` keyset cursor — same
+// `(date_trunc('milliseconds', created_at), id)` shape, `desc` (newest first, preserving
+// `listTasksForPrincipal`'s own pre-existing `order by created_at desc`).
+// -------------------------------------------------------------------------------------------
+export const DEFAULT_LIST_TASKS_LIMIT = 100;
+export const MAX_LIST_TASKS_LIMIT = 500;
+
+const TASK_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function encodeListTasksCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeListTasksCursor(
+  cursor: string | undefined,
+): { readonly createdAt: string; readonly id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIndex = decoded.lastIndexOf('|');
+    if (sepIndex < 0) return null;
+    const createdAt = decoded.slice(0, sepIndex);
+    const id = decoded.slice(sepIndex + 1);
+    if (!createdAt || Number.isNaN(Date.parse(createdAt)) || !TASK_UUID_PATTERN.test(id)) {
+      return null;
+    }
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
+export interface ListTasksFilter {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface TasksPage {
+  readonly items: readonly TaskWithWorkerRuns[];
+  readonly nextCursor?: string;
+  readonly truncated?: true;
+}
+
 /**
  * `list_tasks` (S2.10 addition — see packages/shared/src/capabilities.ts's own doc comment on
  * that registry entry for why one had to be added; §9.3 never defined a list capability for Task).
  * Unlike `getTaskWithWorkerRuns` above (workspace-scoped, any Task by id), this is narrowed to
  * `on_behalf_of = principalId` — "the caller's own Tasks" (the task brief's own words) — newest
- * first, each with its WorkerRuns. One query for the Task rows, one batched query for every
- * WorkerRun across all of them (`task_id = any($2)`), grouped back together in application code —
- * avoids an N+1 query per Task while staying a single, easily-read function (mirrors
- * `getTaskWithWorkerRuns`'s own per-Task WorkerRun query, just batched across the whole list).
+ * first, each with its WorkerRuns, keyset-paginated (S8 W1-C). One query for the Task page, one
+ * batched query for every WorkerRun across that page's Tasks (`task_id = any($2)`), grouped back
+ * together in application code — avoids an N+1 query per Task while staying a single, easily-read
+ * function (mirrors `getTaskWithWorkerRuns`'s own per-Task WorkerRun query, just batched across
+ * the page).
  */
 export async function listTasksForPrincipal(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
-): Promise<readonly TaskWithWorkerRuns[]> {
+  filter: ListTasksFilter = {},
+): Promise<TasksPage> {
+  const requestedLimit = filter.limit ?? DEFAULT_LIST_TASKS_LIMIT;
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIST_TASKS_LIMIT);
+  const cursor = decodeListTasksCursor(filter.cursor);
+
   const tasksResult = await client.query(
     `select ${TASK_ROW_COLUMNS} from tasks
      where workspace_id = $1 and on_behalf_of = $2
-     order by created_at desc`,
-    [workspaceId, principalId],
+       and (
+         $3::timestamptz is null
+         or (date_trunc('milliseconds', created_at), id) < ($3::timestamptz, $4::uuid)
+       )
+     order by date_trunc('milliseconds', created_at) desc, id desc
+     limit $5`,
+    [workspaceId, principalId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
   );
-  const tasks = tasksResult.rows.map(mapTaskRow);
-  if (tasks.length === 0) return [];
+  const rawTasks = tasksResult.rows.map(mapTaskRow);
+  const tasks = rawTasks.slice(0, limit);
+  const last = tasks[tasks.length - 1];
+  const nextCursor =
+    rawTasks.length > limit && last ? encodeListTasksCursor(last.createdAt, last.id) : undefined;
+  const truncated = requestedLimit > MAX_LIST_TASKS_LIMIT ? (true as const) : undefined;
+
+  if (tasks.length === 0) {
+    return {
+      items: [],
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+      ...(truncated !== undefined ? { truncated } : {}),
+    };
+  }
 
   const workerRunsResult = await client.query(
     `select ${WORKER_RUN_ROW_COLUMNS} from worker_runs
@@ -112,7 +179,11 @@ export async function listTasksForPrincipal(
     else workerRunsByTaskId.set(row.taskId, [row]);
   }
 
-  return tasks.map((task) => ({ task, workerRuns: workerRunsByTaskId.get(task.id) ?? [] }));
+  return {
+    items: tasks.map((task) => ({ task, workerRuns: workerRunsByTaskId.get(task.id) ?? [] })),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
 }
 
 /** `taskForWorkerRun` (docs/development-tasks.md S2.7 deliverable: "expose taskForWorkerRun

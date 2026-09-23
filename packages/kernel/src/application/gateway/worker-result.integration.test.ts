@@ -336,13 +336,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Owned by on_behalf_of (ownerId, per spawnWorkerRun's own `caller.principalId: ownerId`) —
       // visible to ownerId's own listSkills, and (I16 read-privacy) not to another principal.
       const ownList = await inTx(ownerId, (client) => listSkills(client, workspaceId, ownerId));
-      const draft = ownList.find((s) => s.name === skillName);
+      const draft = ownList.items.find((s) => s.name === skillName);
       expect(draft?.status).toBe('draft');
       expect(draft?.proposedBy).toBe(ownerId);
 
       const otherId = await adminInsertPrincipal('operator', `other-${taskId}`);
       const otherList = await inTx(otherId, (client) => listSkills(client, workspaceId, otherId));
-      expect(otherList.some((s) => s.name === skillName)).toBe(false);
+      expect(otherList.items.some((s) => s.name === skillName)).toBe(false);
     });
 
     it('rejects a report_task_result call from a session that is not a WorkerRun’s own session (403)', async () => {

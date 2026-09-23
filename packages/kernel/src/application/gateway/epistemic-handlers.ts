@@ -74,12 +74,20 @@ function toWireDecision(row: DecisionRow) {
 // -------------------------------------------------------------------------------------------
 
 export const listConflictsHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { status, limit, cursor } = params as {
+  const { status, objectId, factId, limit, cursor } = params as {
     status?: ConflictStatus;
+    objectId?: string;
+    factId?: string;
     limit?: number;
     cursor?: string;
   };
-  const page = await listConflicts(client, workspaceId, { status, limit, cursor });
+  const page = await listConflicts(client, workspaceId, {
+    status,
+    objectId,
+    factId,
+    limit,
+    cursor,
+  });
   return {
     result:
       page.nextCursor === undefined

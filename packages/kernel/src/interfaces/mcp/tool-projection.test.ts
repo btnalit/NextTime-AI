@@ -61,7 +61,8 @@ describe('buildToolCatalog — native projection', () => {
     const traverseTool = catalog.tools.find((t) => t.name === 'traverse');
     expect(traverseTool?.inputSchema.type).toBe('object');
     expect(Object.keys(traverseTool?.inputSchema.properties ?? {}).sort()).toEqual(
-      ['depth', 'fromId', 'linkType'].sort(),
+      // S8 W1-C: `direction` (`in`/`out`/`both`) added alongside the pre-existing params.
+      ['depth', 'direction', 'fromId', 'linkType'].sort(),
     );
   });
 

@@ -289,6 +289,128 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     });
 
+    // S8 W1-C (leftover 48 "list_conflicts 无对象 / Fact 筛选"): a second, independent open
+    // Conflict fixture — the one above resolves its own Conflict mid-test, so this test builds a
+    // fresh one rather than reusing a now-resolved fixture.
+    it('list_conflicts narrows by objectId and by factId', async () => {
+      const { objectA, objectB, unrelatedObject, factAId, factBId } = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const objA = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.host',
+            identity: { hostname: `filter-${randomUUID()}` },
+          });
+          const objB = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.service',
+            identity: { name: `filter-svc-${randomUUID()}` },
+          });
+          const unrelated = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.host',
+            identity: { hostname: `filter-unrelated-${randomUUID()}` },
+          });
+
+          const sourceS1 = await registerPrivateSource(client, workspaceId, {
+            kind: 'test.collector',
+            ownerPrincipalId: ownerId,
+          });
+          const sourceS2 = await registerPrivateSource(client, workspaceId, {
+            kind: 'test.collector',
+            ownerPrincipalId: ownerId,
+          });
+
+          const activityA = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+          await recordSourceObservation(client, workspaceId, {
+            sourceId: sourceS1.id,
+            activityId: activityA.id,
+          });
+          const factA = await store.assertFact(
+            client,
+            workspaceId,
+            { id: ownerId, kind: 'human' },
+            {
+              linkType: 'test.runs_on',
+              sourceObjectId: objB.id,
+              targetObjectId: objA.id,
+              activityId: activityA.id,
+              properties: { port: 8080 },
+            },
+          );
+
+          const activityB = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+          await recordSourceObservation(client, workspaceId, {
+            sourceId: sourceS2.id,
+            activityId: activityB.id,
+          });
+          const factB = await store.assertFact(
+            client,
+            workspaceId,
+            { id: ownerId, kind: 'human' },
+            {
+              linkType: 'test.runs_on',
+              sourceObjectId: objB.id,
+              targetObjectId: objA.id,
+              activityId: activityB.id,
+              properties: { port: 8081 },
+            },
+          );
+
+          return {
+            objectA: objA.id,
+            objectB: objB.id,
+            unrelatedObject: unrelated.id,
+            factAId: factA.id,
+            factBId: factB.id,
+          };
+        },
+      );
+
+      const caller = handleCaller(workspaceId, ownerId, READ_CAPABILITIES);
+
+      const byObjectA = (await dispatchCapability({ pool }, caller, 'list_conflicts', {
+        objectId: objectA,
+      })) as { items: Array<{ factAId: string; factBId: string }> };
+      expect(
+        byObjectA.items.some(
+          (item) =>
+            (item.factAId === factAId && item.factBId === factBId) ||
+            (item.factAId === factBId && item.factBId === factAId),
+        ),
+      ).toBe(true);
+
+      const byObjectB = (await dispatchCapability({ pool }, caller, 'list_conflicts', {
+        objectId: objectB,
+      })) as { items: Array<{ factAId: string; factBId: string }> };
+      expect(
+        byObjectB.items.some((item) => item.factAId === factAId || item.factBId === factAId),
+      ).toBe(true);
+
+      const byUnrelatedObject = (await dispatchCapability({ pool }, caller, 'list_conflicts', {
+        objectId: unrelatedObject,
+      })) as { items: Array<{ factAId: string; factBId: string }> };
+      expect(
+        byUnrelatedObject.items.some(
+          (item) => item.factAId === factAId || item.factAId === factBId,
+        ),
+      ).toBe(false);
+
+      const byFactId = (await dispatchCapability({ pool }, caller, 'list_conflicts', {
+        factId: factAId,
+      })) as { items: Array<{ factAId: string; factBId: string }> };
+      expect(
+        byFactId.items.some((item) => item.factAId === factAId || item.factBId === factAId),
+      ).toBe(true);
+
+      const byUnrelatedFactId = (await dispatchCapability({ pool }, caller, 'list_conflicts', {
+        factId: randomUUID(),
+      })) as { items: Array<{ factAId: string; factBId: string }> };
+      expect(
+        byUnrelatedFactId.items.some(
+          (item) => item.factAId === factAId || item.factBId === factAId,
+        ),
+      ).toBe(false);
+    });
+
     it('verify_fact requires Evidence on file (I3.6), then promotes epistemic_status', async () => {
       const factId = await withWorkspace(
         pool,

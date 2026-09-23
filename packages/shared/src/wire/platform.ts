@@ -455,6 +455,14 @@ export const GateInstanceWireSchema = z
     operationCount: z.number().int().nonnegative(),
     /** Workspaces that enabled this instance (`workspace_gate_links`). */
     enabledWorkspaceCount: z.number().int().nonnegative(),
+    /** S8 W1-C (leftover 48 "GateInstanceWire 只有 enabledWorkspaceCount 无工作区列表"; ui-audit
+     *  PI3): up to `ENABLING_WORKSPACES_LIMIT` (`application/gates/store.ts`) of the workspaces
+     *  that enabled this instance, newest link first — platform-admin reads only, as today
+     *  (`enabledWorkspaceCount` already was). `enabledWorkspaceCount` stays the true total even
+     *  when this list is truncated. Optional (never omitted by the real handler, always at least
+     *  `[]`) purely so a pre-existing `GateInstanceWire`-shaped fixture/literal elsewhere in the
+     *  monorepo that predates this field still type-checks without every call site changing. */
+    enablingWorkspaces: z.array(z.object({ id: z.string(), name: z.string() }).strict()).optional(),
     operations: z.array(GateOperationSummaryWireSchema),
     /** P-B2a: created by an administrator and served by the generic gate host (决定 ⑦); `false` for a
      *  packaged gate that announced itself. */

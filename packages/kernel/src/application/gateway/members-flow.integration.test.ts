@@ -608,6 +608,64 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(listed.items.some((p) => p.disabledAt !== null)).toBe(true);
     });
 
+    // S8 W1-C (leftover 48 pagination list): `limit`/`cursor`, and the boundary case docs/
+    // wire-contract-conventions.md §3's keyset cursor is specifically designed to survive — two
+    // rows sharing one millisecond `created_at` — same shape as `governance/approval/
+    // reads.integration.test.ts`'s own pagination test for `list_action_requests`.
+    it('list_principals: q narrows by displayName (case-insensitive substring), and pagination does not skip or repeat two principals sharing one millisecond created_at', async () => {
+      const marker = randomUUID().slice(0, 8);
+      const sharedInstant = new Date('2026-03-03T03:03:03.456Z');
+      const insertAt = async (displayName: string, at: Date): Promise<string> => {
+        const id = randomUUID();
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: id },
+          async (client) => {
+            await client.query(
+              `insert into principals (workspace_id, id, kind, role, display_name, created_at)
+               values ($1, $2, 'human', 'member', $3, $4)`,
+              [workspaceId, id, displayName, at],
+            );
+          },
+          { skipRoleSwitch: true },
+        );
+        return id;
+      };
+
+      const first = await insertAt(`Pagination-${marker}-Alice`, sharedInstant);
+      const second = await insertAt(`Pagination-${marker}-Bob`, sharedInstant);
+
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+
+      const filtered = (await dispatchCapability({ pool }, owner, 'list_principals', {
+        q: `pagination-${marker}`,
+      })) as { items: readonly { id: string; displayName: string | null }[] };
+      expect(new Set(filtered.items.map((p) => p.id))).toEqual(new Set([first, second]));
+
+      const page1 = (await dispatchCapability({ pool }, owner, 'list_principals', {
+        q: `pagination-${marker}`,
+        limit: 1,
+      })) as { items: readonly { id: string }[]; nextCursor?: string };
+      expect(page1.items).toHaveLength(1);
+      expect(page1.nextCursor).toBeDefined();
+
+      const page2 = (await dispatchCapability({ pool }, owner, 'list_principals', {
+        q: `pagination-${marker}`,
+        limit: 1,
+        cursor: page1.nextCursor,
+      })) as { items: readonly { id: string }[]; nextCursor?: string };
+      expect(page2.items).toHaveLength(1);
+      expect(page2.nextCursor).toBeUndefined();
+
+      // Together, both pages account for exactly the two rows, no skip and no repeat — ascending
+      // (oldest-first, this capability's own pre-existing order — see `members-handlers.ts`'s
+      // `listPrincipalsDetailed` doc comment), `id asc` breaks the same-millisecond tie.
+      const seen = [page1.items[0]?.id, page2.items[0]?.id];
+      expect(new Set(seen)).toEqual(new Set([first, second]));
+      const [lowerId, higherId] = [first, second].sort();
+      expect(seen).toEqual([lowerId, higherId]);
+    });
+
     it('list_grants / list_policies / list_quotas: {items} envelopes over an operator caller', async () => {
       const operatorId = await adminInsertPrincipal(workspaceId, 'operator', 'Grace');
       const operatorCaller = humanCaller(workspaceId, operatorId, 'operator');

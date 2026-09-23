@@ -4,6 +4,7 @@ import type {
   Role,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
+import { getCapability } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ChatMessageRow,
@@ -46,7 +47,7 @@ import {
 import {
   type WorkerDefinitionRow,
   deprecateWorkerDefinition,
-  listWorkerDefinitions,
+  listWorkerDefinitionsPage,
   proposeWorkerDefinition,
   publishWorkerDefinition,
 } from '../../application/worker/index.js';
@@ -63,6 +64,7 @@ import {
   rejectActionRequest,
 } from '../../governance/approval/index.js';
 import {
+  WORKER_CEILING_CAPABILITIES,
   grantCapability,
   hasAnyActiveGrant,
   listGrants,
@@ -78,7 +80,7 @@ import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substrate/audit/index.js';
 import { explainByNodeId } from '../../substrate/epistemic/index.js';
 import type { SearchInput, TraverseInput } from '../../substrate/graph/index.js';
-import { MAX_SEARCH_LIMIT, SqlGraphStore } from '../../substrate/graph/index.js';
+import { MAX_SEARCH_LIMIT, SqlGraphStore, objectDisplayName } from '../../substrate/graph/index.js';
 import {
   listRuntimeImagesHandler,
   piDriftHandler,
@@ -114,6 +116,10 @@ import {
   resolveConflictHandler,
   verifyFactHandler,
 } from './epistemic-handlers.js';
+// S8 W1-C (F6) — execution_readiness / resolve_refs, split into their own files (same
+// one-capability(-family)-per-file convention `export-prov-handler.ts`/`operation-manifest-
+// handlers.ts` already established), not grown inline into this file's own map body.
+import { executionReadinessHandler } from './execution-readiness-handler.js';
 // S3.5 (docs/development-tasks.md §S3.5) — `export_prov` was registered but had no handler
 // (S3.7's inventory); wired here like every other capability handler in this file.
 import { exportProvHandler } from './export-prov-handler.js';
@@ -201,6 +207,7 @@ import {
   upgradeModuleHandler,
 } from './platform-modules-handlers.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
+import { resolveRefsHandler } from './resolve-refs-handler.js';
 import {
   toWireAuditRecord,
   toWireChat,
@@ -214,6 +221,7 @@ import { issueServiceHandleHandler } from './service-handle-handler.js';
 import {
   deprecateProcedureHandler,
   deprecateSkillHandler,
+  getSkillHandler,
   listProceduresHandler,
   listSkillsHandler,
   proposeProcedureHandler,
@@ -273,10 +281,26 @@ const getObjectHandler: CapabilityHandler = async (client, workspaceId, params) 
   };
 };
 
+// S8 W1-C (leftover 48 "邻居名称 N × get_object"): `nodeDetails` is additive alongside the
+// pre-existing `nodes`/`edges` (a caller reading only those two sees identical behavior) — one
+// batched `getObjectsByIds` for every reached node, not one `get_object` per node.
 const traverseHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const input = params as TraverseInput;
   const result = await graphStore.traverse(client, workspaceId, input);
-  return { result, resourceType: 'object', resourceId: input.fromId };
+  const objectsById = await graphStore.getObjectsByIds(client, workspaceId, result.nodes);
+  const nodeDetails = result.nodes.map((nodeId) => {
+    const object = objectsById.get(nodeId);
+    // Defensive fallback only — every traversed node id names a real Object in this same
+    // workspace/transaction (a Link's source/target always does), so `object` should always be
+    // found; a generic typeName here would only ever surface a genuine data inconsistency, never
+    // an ordinary "not found" case (unlike `resolve_refs`, which omits unmatched ids entirely).
+    return {
+      id: nodeId,
+      typeName: object?.objectType ?? 'Object',
+      ...(object ? { name: objectDisplayName(object) } : {}),
+    };
+  });
+  return { result: { ...result, nodeDetails }, resourceType: 'object', resourceId: input.fromId };
 };
 
 // S3.7 wire fix (see PR body): previously a bare `GraphObject[]` — docs/wire-contract-
@@ -794,10 +818,24 @@ const deprecateWorkerDefinitionHandler: CapabilityHandler = async (client, works
   };
 };
 
+// S8 W1-C (leftover 48 pagination list): `limit`/`cursor` → `nextCursor`/`truncated`, via the
+// paginated `listWorkerDefinitionsPage` (kept separate from `listWorkerDefinitions`, which
+// `find_workers`/`resolveAvailableResources` still call unpaginated — see that function's own doc
+// comment).
 const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { kind } = params as { kind?: WorkerDefinitionKind };
-  const rows = await listWorkerDefinitions(client, workspaceId, kind);
-  return { result: { items: rows.map(toWireWorkerDefinition) } };
+  const { kind, limit, cursor } = params as {
+    kind?: WorkerDefinitionKind;
+    limit?: number;
+    cursor?: string;
+  };
+  const page = await listWorkerDefinitionsPage(client, workspaceId, { kind, limit, cursor });
+  return {
+    result: {
+      items: page.items.map(toWireWorkerDefinition),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
+    },
+  };
 };
 
 // -------------------------------------------------------------------------------------------
@@ -1079,10 +1117,42 @@ const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, p
  *  docs/wire-contract-conventions.md, so this is a direct `{items}` projection with no separate
  *  `toWireGrant` function needed (unlike ActionRequest's `toWireActionRequest`, which drops/renames
  *  fields — `CapabilityGrantRow` has nothing to drop). */
+// S8 W1-C (leftover 48 pagination list): `listGrants` now returns a keyset page (limit/cursor →
+// nextCursor); no-`limit` behavior is unchanged (`DEFAULT_LIST_GRANTS_LIMIT`, `grants.ts`'s own
+// doc comment).
 const listGrantsHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { principalId } = params as { principalId?: string };
-  const rows = await listGrants(client, workspaceId, { principalId });
-  return { result: { items: rows.map(toWireGrant) } };
+  const { principalId, limit, cursor } = params as {
+    principalId?: string;
+    limit?: number;
+    cursor?: string;
+  };
+  const page = await listGrants(client, workspaceId, { principalId, limit, cursor });
+  return {
+    result: {
+      items: page.items.map(toWireGrant),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
+    },
+  };
+};
+
+/** `list_capability_names` (S8 W1-C, F6 item 3 "选择器数据源...能力名"): every capability name a
+ *  published `kind=worker` WorkerDefinition may declare in its own `capabilities` — the worker
+ *  ceiling (`WORKER_CEILING_CAPABILITIES`, the same one `application/task/handle-mint.ts`'s
+ *  `computeChildHandleScope` narrows a declaration against) minus the two gate-projection
+ *  placeholder patterns (`<gate>.<op>`, `<gate>.<op>:execute`) — not real registry rows, never
+ *  something an author literally writes into `capabilities` (execute-class gate access is granted
+ *  through `gates` + `request_action`, not by naming the pattern itself). No IO: pure registry
+ *  data, computed once per call. */
+const GATE_PROJECTION_PATTERN_NAMES = new Set(['<gate>.<op>', '<gate>.<op>:execute']);
+
+const listCapabilityNamesHandler: CapabilityHandler = async () => {
+  const items = WORKER_CEILING_CAPABILITIES.filter(
+    (name) => !GATE_PROJECTION_PATTERN_NAMES.has(name),
+  )
+    .map((name) => ({ name, mode: getCapability(name)?.mode ?? 'observe' }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { result: { items } };
 };
 
 /** `list_policies` (S3.11) — every explicit `policies` row (`governance/policy/policies.ts`'s
@@ -1244,10 +1314,20 @@ const getTaskHandler: CapabilityHandler = async (client, workspaceId, params) =>
  *  `application/task/service.ts`'s `listTasksForPrincipal` for why one had to be added and how it
  *  is scoped). Human-channel-only, so `currentPrincipalId` (same RLS-session-variable read every
  *  other human-channel handler in this file already uses) is the caller. */
-const listTasksHandler: CapabilityHandler = async (client, workspaceId) => {
+// S8 W1-C (leftover 48 pagination list): `limit`/`cursor` → `nextCursor`/`truncated` — no-`limit`
+// behavior unchanged (`DEFAULT_LIST_TASKS_LIMIT`, `application/task/service.ts`'s own doc
+// comment).
+const listTasksHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { limit, cursor } = params as { limit?: number; cursor?: string };
   const principalId = await currentPrincipalId(client);
-  const rows = await listTasksForPrincipal(client, workspaceId, principalId);
-  return { result: { items: rows.map(({ task, workerRuns }) => toWireTask(task, workerRuns)) } };
+  const page = await listTasksForPrincipal(client, workspaceId, principalId, { limit, cursor });
+  return {
+    result: {
+      items: page.items.map(({ task, workerRuns }) => toWireTask(task, workerRuns)),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
+    },
+  };
 };
 
 const setQuotaHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -1399,6 +1479,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['upgrade_module', upgradeModuleHandler],
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
+  ['resolve_refs', resolveRefsHandler],
   ['search', searchHandler],
   ['state_at', stateAtHandler],
   ['explain', explainHandler],
@@ -1445,6 +1526,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_grants', listGrantsHandler],
   ['list_policies', listPoliciesHandler],
   ['list_quotas', listQuotasHandler],
+  // S8 W1-C (F6) — the selector/capability-picker and execution-readiness read models.
+  ['list_capability_names', listCapabilityNamesHandler],
+  ['execution_readiness', executionReadinessHandler],
   ['request_action', requestActionHandler],
   ['propose_operation', proposeOperationHandler],
   ['publish_operation', publishOperationHandler],
@@ -1454,6 +1538,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_skill', publishSkillHandler],
   ['deprecate_skill', deprecateSkillHandler],
   ['list_skills', listSkillsHandler],
+  ['get_skill', getSkillHandler],
   ['propose_procedure', proposeProcedureHandler],
   ['publish_procedure', publishProcedureHandler],
   ['deprecate_procedure', deprecateProcedureHandler],
