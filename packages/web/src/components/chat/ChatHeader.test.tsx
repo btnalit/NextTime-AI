@@ -58,20 +58,18 @@ function renderHeader(props: Partial<Parameters<typeof ChatHeader>[0]> = {}) {
     http,
     ...render(
       <PermissionsProvider>
-        <ToastProvider>
-          <ChatHeader
-            client={client}
-            http={http}
-            chat={chatRow()}
-            lookupFailed={false}
-            turnStatus="idle"
-            stopBusy={false}
-            onBack={vi.fn()}
-            onStop={vi.fn()}
-            onChatChanged={vi.fn()}
-            {...props}
-          />
-        </ToastProvider>
+        <ChatHeader
+          client={client}
+          http={http}
+          chat={chatRow()}
+          lookupFailed={false}
+          turnStatus="idle"
+          stopBusy={false}
+          onBack={vi.fn()}
+          onStop={vi.fn()}
+          onChatChanged={vi.fn()}
+          {...props}
+        />
       </PermissionsProvider>,
     ),
   };
