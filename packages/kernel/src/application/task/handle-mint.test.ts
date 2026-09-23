@@ -9,10 +9,12 @@ import {
   verifyHandle,
 } from '../../governance/capability/index.js';
 import {
+  type DeclaredGateRecord,
   EMPTY_CAPABILITY_SCOPE,
   type MintWorkerRunHandleInput,
   computeChildHandleScope,
   mintWorkerRunHandle,
+  resolveRequestedGateIds,
 } from './handle-mint.js';
 import { InvokeWorkerAttenuationError, InvokeWorkerValidationError } from './types.js';
 
@@ -202,6 +204,71 @@ describe('computeChildHandleScope', () => {
     for (const capability of scope.capabilities) {
       expect(WORKER_CEILING_CAPABILITIES).toContain(capability);
     }
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// resolveRequestedGateIds — R4 (leftover audit "invoke_worker 接受门名"): a caller-supplied gate
+// may be a declared id (unchanged) or a name that resolves to exactly one declared Gatekeeper.
+// -------------------------------------------------------------------------------------------
+
+describe('resolveRequestedGateIds', () => {
+  const docker: DeclaredGateRecord = { id: 'gk-docker-id', name: 'docker' };
+  const ragflow: DeclaredGateRecord = { id: 'gk-ragflow-id', name: 'ragflow' };
+  const dupe: DeclaredGateRecord = { id: 'gk-docker-2-id', name: 'docker' }; // same name, different id
+
+  it('id: a value that is already a declared Gatekeeper id passes through unchanged', () => {
+    expect(resolveRequestedGateIds(['gk-docker-id'], [docker, ragflow])).toEqual(['gk-docker-id']);
+  });
+
+  it('unique name: a value that names exactly one declared Gatekeeper resolves to its id', () => {
+    expect(resolveRequestedGateIds(['docker'], [docker, ragflow])).toEqual(['gk-docker-id']);
+    expect(resolveRequestedGateIds(['ragflow'], [docker, ragflow])).toEqual(['gk-ragflow-id']);
+  });
+
+  it('ambiguous name: two declared Gatekeepers share the requested name -> InvokeWorkerValidationError listing both candidates', () => {
+    expect(() => resolveRequestedGateIds(['docker'], [docker, dupe, ragflow])).toThrow(
+      InvokeWorkerValidationError,
+    );
+    try {
+      resolveRequestedGateIds(['docker'], [docker, dupe, ragflow]);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvokeWorkerValidationError);
+      const message = (err as Error).message;
+      expect(message).toContain('docker (gk-docker-id)');
+      expect(message).toContain('docker (gk-docker-2-id)');
+    }
+  });
+
+  it('unknown: a value matching neither a declared id nor any declared name -> InvokeWorkerValidationError listing every declared id+name', () => {
+    try {
+      resolveRequestedGateIds(['ssh'], [docker, ragflow]);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvokeWorkerValidationError);
+      const message = (err as Error).message;
+      expect(message).toContain('"ssh"');
+      expect(message).toContain('docker (gk-docker-id)');
+      expect(message).toContain('ragflow (gk-ragflow-id)');
+    }
+  });
+
+  it('unknown against no declared gates at all still names the requested value, not a bare "not found"', () => {
+    try {
+      resolveRequestedGateIds(['ssh'], []);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvokeWorkerValidationError);
+      expect((err as Error).message).toContain('(none declared)');
+    }
+  });
+
+  it('resolves a mix of ids and names in one call, independently', () => {
+    expect(resolveRequestedGateIds(['gk-ragflow-id', 'docker'], [docker, ragflow])).toEqual([
+      'gk-ragflow-id',
+      'gk-docker-id',
+    ]);
   });
 });
 

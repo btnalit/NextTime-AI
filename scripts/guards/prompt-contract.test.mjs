@@ -13,7 +13,10 @@ import {
   ALLOWED_NON_TOOL_WORDS,
   GATE_PLACEHOLDER,
   candidateIdentifier,
+  checkConditionalOpsRunner,
+  checkEmptyFindGuidance,
   checkPromptFile,
+  checkReplyLanguageDirective,
   extractBacktickSpans,
   extractCandidateIdentifiers,
   extractStringArrayLiteral,
@@ -152,6 +155,63 @@ test('checkPromptFile', async (t) => {
     const prompt =
       'Then `invoke_worker(definition@version, input, gates=[...])` — this issues a Handle.';
     assert.deepEqual(checkPromptFile('fixture.yaml', prompt, withInvoke, allowed), []);
+  });
+});
+
+// S8 W2-K1 (leftover 72 / audit B2, B8, R9): the three entry-prompt content rules. A minimal
+// fixture prompt carrying every required phrase for all three rules, built in-memory per this
+// task's own instruction (never by editing the real ontology/entry-agent.yaml for a test) — each
+// `it` below removes one rule's phrase to prove the corresponding checker bites, the same
+// "deliberately bad sample" shape `checkPromptFile`'s own tests above already use.
+const GOOD_ENTRY_FIXTURE_PROMPT = [
+  'Find a means with `find_operations`, `find_workers`, `find_procedures`.',
+  'If all three return nothing usable, tell the user this workspace has no published Worker and',
+  'no gate they are granted and enabled for — name the three prerequisites as owner/operator',
+  'actions in the console. Never invent a capability, and never suggest editing a Handle’s scopes.',
+  'If nothing more specific fits, check whether `find_workers` itself returned a general-purpose',
+  '`ops-runner` WorkerDefinition — use it only then; do not assume it exists.',
+  'Always answer in the language the user wrote their message in, including every intermediate',
+  'status message. When you `invoke_worker` a Worker, tell it what language to write its result',
+  'summary in.',
+].join(' ');
+
+test('checkEmptyFindGuidance', async (t) => {
+  await t.test('a prompt carrying every required phrase has no violations', () => {
+    assert.deepEqual(checkEmptyFindGuidance('fixture.yaml', GOOD_ENTRY_FIXTURE_PROMPT), []);
+  });
+
+  await t.test('catches a regressed prompt missing the empty-find guidance entirely', () => {
+    const badPrompt = 'Find a means with `find_operations`, `find_workers`, `find_procedures`.';
+    const violations = checkEmptyFindGuidance('fixture.yaml', badPrompt);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /every find_\* returned empty/);
+    assert.match(violations[0], /"no published"/);
+  });
+});
+
+test('checkConditionalOpsRunner', async (t) => {
+  await t.test('a prompt carrying every required phrase has no violations', () => {
+    assert.deepEqual(checkConditionalOpsRunner('fixture.yaml', GOOD_ENTRY_FIXTURE_PROMPT), []);
+  });
+
+  await t.test('catches a regressed prompt that promises ops-runner unconditionally', () => {
+    const badPrompt = 'If nothing fits, use the general-purpose `ops-runner` WorkerDefinition.';
+    const violations = checkConditionalOpsRunner('fixture.yaml', badPrompt);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /ops-runner mention is conditional/);
+  });
+});
+
+test('checkReplyLanguageDirective', async (t) => {
+  await t.test('a prompt carrying every required phrase has no violations', () => {
+    assert.deepEqual(checkReplyLanguageDirective('fixture.yaml', GOOD_ENTRY_FIXTURE_PROMPT), []);
+  });
+
+  await t.test('catches a regressed prompt with no reply-language directive at all', () => {
+    const badPrompt = 'Call `invoke_worker` to delegate a task.';
+    const violations = checkReplyLanguageDirective('fixture.yaml', badPrompt);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /reply in the user.s own language/);
   });
 });
 
