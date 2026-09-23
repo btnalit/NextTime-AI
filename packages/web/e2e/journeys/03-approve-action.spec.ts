@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { OWNER_API_KEY, asOwner, goToByLabel } from './helpers.js';
+import { OWNER_API_KEY, asOwner, findChatWithActionCard, goToByLabel } from './helpers.js';
 
 /**
  * Journey ③: 审批一个执行类动作 (development-tasks.md §5e F4; S2.10 acceptance, same underlying
@@ -44,10 +44,17 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   await asOwner(page);
 
   // Step 1+2: navigate by the sidebar's own visible label, not the hash, then open the row.
+  // `.press('Enter')`, not `.click()`: `DataRow`'s onClick (components/ui/DataList.tsx) bails out
+  // when the click target is inside a `<button>` — this row's `meta` includes a `RefChip`, which
+  // renders a copy `<button>` (`components/ui/CopyId.tsx`). At 768px that button can sit under
+  // Playwright's default click point (the row's bounding-box centre), silently swallowing the
+  // click; the row is a real, focusable, keyboard-activatable list item (`tabIndex`, Enter/Space
+  // handling), so pressing Enter after Playwright's own auto-focus sidesteps the ambiguity
+  // entirely instead of guessing a click position that dodges the button.
   await goToByLabel(page, '待我审批');
   const row = page.getByTestId('approval-row').filter({ hasText: scope }).first();
   await expect(row).toBeVisible({ timeout: 15_000 });
-  await row.click();
+  await row.press('Enter');
   const drawer = page.getByTestId('approval-drawer');
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole('button', { name: 'Approve' })).toBeVisible();
@@ -62,9 +69,7 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   await expect(row).toHaveCount(0, { timeout: 15_000 });
   await page.keyboard.press('Escape');
 
-  await goToByLabel(page, '对话');
-  await page.locator('.chat-list-item').first().click();
-  const chatCard = page.locator('.action-card', { hasText: scope }).first();
+  const chatCard = await findChatWithActionCard(page, scope);
   await expect(chatCard).toBeVisible({ timeout: 15_000 });
   await expect(chatCard.locator('.action-card-status')).toHaveAttribute(
     'data-status',

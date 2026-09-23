@@ -1,25 +1,26 @@
-import { type Page, expect } from '@playwright/test';
+import { type Locator, type Page, expect } from '@playwright/test';
 import { loginAsAdmin, loginAsOwner } from '../lib/auth.js';
 
 /**
- * e2e/01-journeys/helpers.ts: shared plumbing for the six S8 F4 journey specs
- * (`01-journeys/*.spec.ts`) — login as the two roles a journey typically needs, and navigation by
- * the Sidebar's own visible label rather than a hard-coded `#/...` hash (F4's own instruction: a
- * journey narrates what a person clicks, not which route that happens to be — `lib/router.ts`'s
- * hash shape is an implementation detail a journey spec should survive a change to). See
- * `01-journeys/README.md` for how a journey is specified and what "host read-only smoke" will mean
- * once one of these runs against a real host.
+ * e2e/journeys/helpers.ts: shared plumbing for the six S8 F4 journey specs (`journeys/*.spec.ts`)
+ * — login as the two roles a journey typically needs, and navigation by the Sidebar's own visible
+ * label rather than a hard-coded `#/...` hash (F4's own instruction: a journey narrates what a
+ * person clicks, not which route that happens to be — `lib/router.ts`'s hash shape is an
+ * implementation detail a journey spec should survive a change to). See `journeys/README.md` for
+ * how a journey is specified and what "host read-only smoke" will mean once one of these runs
+ * against a real host.
  *
- * Directory prefixed `01-` (like `00-gates/`'s own `00-` prefix — see `lib/determinism.ts`'s doc
- * comment) so Playwright discovers it second, right after `00-gates/` and before every other spec
- * file. Load-bearing, not cosmetic: `03-approve-action.spec.ts` sorted after `chat.spec.ts` when
- * this directory was still plain `journeys/`, and `chat.spec.ts`'s own first test creates a Chat
- * it never archives — `application/linkage/chat-targets.ts`'s "most recently created Chat" targeting then
- * resolves to *that* Chat instead of the one the seeded ActionRequests actually linked into,
- * exactly as `approvals.spec.ts`'s own doc comment already relies on. The second baseline-
- * generation CI run hit this for real (journey ③ found its approval row but never found the
- * matching chat card) — moving this whole directory ahead of `chat.spec.ts` in file order is the
- * fix, not a workaround around the chat lookup itself.
+ * Deliberately plain `journeys/`, not directory-ordering-hacked: an earlier version of this file
+ * prefixed the directory `01-` (right after `00-gates/`) specifically so it ran *before*
+ * `chat.spec.ts` — `chat.spec.ts`'s own first test creates a Chat it never archives, which would
+ * otherwise shadow `application/linkage/chat-targets.ts`'s "most recently created Chat" targeting
+ * that the seeded ActionRequests actually linked into. That ordering hack traded one bug for
+ * another: running *before* `approvals.spec.ts` too meant journey ③'s own approvals landed
+ * "approved" status lines in the same Chat that `approvals.spec.ts`'s own (unscoped, `data-
+ * status="approved"`) assertion expects to be the only one there — a real CI failure, not a
+ * hypothetical. `findChatWithActionCard` below is the actual fix: search the Chat list for the one
+ * holding the marker's card instead of assuming "most recent" points at it, which works regardless
+ * of file order and needs no directory-naming coordination with every other spec in this suite.
  */
 
 export const OWNER_API_KEY = process.env.WEB_E2E_API_KEY;
@@ -89,7 +90,7 @@ export function navItem(page: Page, labelZh: string) {
   const testId = NAV_TESTID_BY_LABEL[labelZh];
   if (testId === undefined) {
     throw new Error(
-      `no NavSection mapped for "${labelZh}" — add it to NAV_TESTID_BY_LABEL in 01-journeys/helpers.ts`,
+      `no NavSection mapped for "${labelZh}" — add it to NAV_TESTID_BY_LABEL in journeys/helpers.ts`,
     );
   }
   return page.getByTestId(`nav-${testId}`);
@@ -175,4 +176,30 @@ export async function createFreshWorkspace(page: Page): Promise<{
   await expect(wsDrawer).toBeHidden({ timeout: 20_000 });
 
   return { workspaceName, ownerLogin, ownerTemporaryPassword };
+}
+
+/**
+ * Finds the Chat holding a `system.action_pending`/`action_update` card whose text contains
+ * `scope`, by opening each Chat in the (non-archived) list in turn rather than assuming "the most
+ * recently created Chat" (`application/linkage/chat-targets.ts`'s `resolveDefaultChat` — the
+ * *linkage's own* rule for where a card lands, fixed once at the time the outbox event is
+ * processed, not something the console re-derives) still points at the right one by the time a
+ * journey runs. It usually does — this suite seeds every ActionRequest before Playwright starts,
+ * so every card lands in the one Chat that exists at that moment — but any spec that creates a
+ * *new*, non-archived Chat before this journey runs (`chat.spec.ts`'s own first test does) would
+ * silently point "most recent" at the wrong one. Bounded and cheap in practice: this workspace
+ * only ever has a small, fixed number of open Chats (`00-gates/` archives its own fixture chat
+ * specifically so it doesn't add to this list — see its own doc comment).
+ */
+export async function findChatWithActionCard(page: Page, scope: string): Promise<Locator> {
+  await goToByLabel(page, '对话');
+  const rows = page.getByTestId('chat-row');
+  const count = await rows.count();
+  for (let i = 0; i < count; i++) {
+    await rows.nth(i).click();
+    const card = page.locator('.action-card', { hasText: scope }).first();
+    if ((await card.count()) > 0) return card;
+    await page.getByRole('button', { name: 'Back to chats' }).click();
+  }
+  throw new Error(`no Chat in the list contains an action card for scope "${scope}"`);
 }

@@ -230,20 +230,25 @@ pnpm setup（本地已有）。
 
 ## UX 门槛与旅程测试（S8 W1-B）
 
-`e2e/00-gates/`（三档截图回归、axe、文案守卫）与 `e2e/01-journeys/`（六条旅程骨架）是
+`e2e/00-gates/`（三档截图回归、axe、文案守卫）与 `e2e/journeys/`（六条旅程骨架）是
 `docs/development-tasks.md` §5e 决定 F4/F5 的落地——不是另一个独立工作流，跟其余 spec 一样归
 `web-e2e` job 管，跟着一起跑、一起在 CI 的 Linux runner 上产出证据。
 
-**为什么 `00-gates/`/`01-journeys/` 目录名带数字前缀**：Playwright 按文件路径字母序发现 spec
-（`playwright.config.ts` 自己的注释里已经在依赖这一点——`login.spec.ts` 的锁定用例必须排最后）。
-`00-`/`01-` 让这两批测试排在最前、紧挨着跑，在任何别的 spec 往共享的 `ci-e2e` 工作区里写数据之前完成——
-这是"截图内容尽量确定、审批旅程找得到正确的对话"两件事共同的主要手段（`e2e/lib/determinism.ts`、
-`e2e/00-gates/surfaces.ts`、`e2e/01-journeys/helpers.ts` 各自的文档注释里有完整推理）。两个具体例子：
-1) 截图状态测试用完一个新建的对话要立刻归档——不归档会顶掉下面第 2 条依赖的"最近一个对话"；
-2) `01-journeys/` 必须排在 `chat.spec.ts` 之前——`chat.spec.ts` 自己的第一个用例会新建一个从不归档的
-对话，一旦排在它之后，`approvals.spec.ts` 和 `01-journeys/03-approve-action.spec.ts` 依赖的"最近一
-个对话"（`application/linkage/chat-targets.ts` 的 `resolveDefaultChat`）就会指向那个新对话，而不是
-种子 ActionRequest 真正写入的那一个——这是第二次基线生成 CI 实际跑到的失败，不是纸上谈兵。
+**为什么 `00-gates/` 目录名前缀 `00-`**：Playwright 按文件路径字母序发现 spec（`playwright.config.ts`
+自己的注释里已经在依赖这一点——`login.spec.ts` 的锁定用例必须排最后）。`00-` 让这一批测试排在最前，
+在任何别的 spec 往共享的 `ci-e2e` 工作区里写数据之前跑——这是"每个页面截图时内容尽量确定"的主要手段
+（`e2e/lib/determinism.ts`、`e2e/00-gates/surfaces.ts` 各自的文档注释里有完整推理，包括"为什么截图
+状态测试用完一个新建的对话要立刻归档"——不归档会顶掉 `approvals.spec.ts` 和
+`journeys/03-approve-action.spec.ts` 依赖的、"最近一个对话"这条线索）。
+
+**`journeys/` 故意不跟着用数字前缀排位**：早期版本试过给它也加前缀、排到 `chat.spec.ts` 前面——
+`chat.spec.ts` 自己的第一个用例会新建一个从不归档的对话，排在它之后会让③审批一个执行类动作的
+"哪个对话有我的卡片"猜错。但排到 `chat.spec.ts` 前面同时也排到了 `approvals.spec.ts` 前面，带来另一个
+真实 CI 失败：③自己的批准会往同一个对话里写"已批准"状态行，顶到 `approvals.spec.ts` 自己那条不限定
+文本、只按 `data-status="approved"` 找状态行的断言（两次真实的基线生成 CI 失败，不是纸上谈兵）。
+两次踩坑后的结论：排位游戏在"多个 spec 共享同一个对话"这个前提下没有稳定解——`journeys/helpers.ts`
+的 `findChatWithActionCard` 才是真正的修法：挨个打开对话列表找真正带着目标卡片的那一个，不假设
+"最近一个对话"就是它，因此也不需要跟任何其他 spec 的文件名排位协调。
 
 **三档截图基线只能在 CI 的 Linux 上生成，本机（含这台 Windows 开发机）生成的基线不能用**——字体栅格化
 在不同操作系统上不是像素级一致的，本机截图在真实 CI 跑时会稳定失败。生成/更新基线的流程：
@@ -274,7 +279,7 @@ gh pr checks <pr-number> --watch
 有真实证据（多次绿跑之间仍然抖动、且人工确认像素差异只是抗锯齿/字体微调）时才放宽，不能因为一次
 CI 红就直接调松了事。
 
-**六条旅程**（`e2e/01-journeys/README.md` 有完整的"一条旅程怎么写"约定）：今天只有 ③ 审批一个执行类
+**六条旅程**（`e2e/journeys/README.md` 有完整的"一条旅程怎么写"约定）：今天只有 ③ 审批一个执行类
 动作、⑥ 添加成员并让其可用 是真实通过的——这两条依赖的能力（`approve`、`add_member`）本来就是
 S2.10/P-A1 起的稳定能力，不是这一波新做的；其余四条（①②④⑤）产品今天还做不到（W2/W3 才补），用
 `test.fixme` 占位，body 里写了真实的操作序列，等对应功能上线后去掉 `fixme` 就是验收标准。

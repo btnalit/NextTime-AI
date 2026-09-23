@@ -68,7 +68,7 @@ test.describe('S8 W1-B screenshot gate', () => {
 
     // Archive this fixture chat immediately after capturing it. `application/linkage/
     // chat-targets.ts`'s `resolveDefaultChat` — "the most recently created Chat" —
-    // `approvals.spec.ts` and `01-journeys/03-approve-action.spec.ts` both rely on that phrase
+    // `approvals.spec.ts` and `journeys/03-approve-action.spec.ts` both rely on that phrase
     // resolving to the *pre-existing* auto-created chat their seeded ActionRequest cards were
     // linked into at seed time (before this suite ever ran). `listChats` excludes archived rows by
     // default (`archived_at is null`), same as the console's own default (non-已归档) chat list —
@@ -93,7 +93,10 @@ test.describe('S8 W1-B screenshot gate', () => {
       .filter({ hasText: E2E_GATE_PENDING_SCOPE })
       .first();
     await expect(row).toBeVisible({ timeout: 15_000 });
-    await row.click();
+    // `.press('Enter')`, not `.click()` — see journeys/03-approve-action.spec.ts's own comment on
+    // this exact row type: `DataRow`'s onClick bails when the click lands on the row's own
+    // `RefChip` copy button, which a narrow capture width can put under the default click point.
+    await row.press('Enter');
     await expect(page.getByTestId('approval-drawer')).toBeVisible();
 
     await captureWidths(page, 'state-approval-pending');
