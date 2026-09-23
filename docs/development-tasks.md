@@ -3083,6 +3083,17 @@ WorkerDefinition（`create.ts` `seedPlatformMetaOntology` / `proposeWorkerDefini
 顺序：W0 立即。W1-A 与 W1-C 文件互斥、可并行；W1-B 依赖 W1-A 的组件。W2 依赖 W1。W3 与 W4 在 W2 之后可并行（W4 大多是
 内核与脚本，与 W3 文件互斥）。
 
+**W1 拆分**（2026-09-24）。W1-A 面太大，一个 PR 无法评审；截图基线若在旧组件上建立，迁移后要整套重拍。因此：
+
+| 车道 | 内容 | 文件边界 | 依赖 |
+|---|---|---|---|
+| W1-A0 工具链地基 | Tailwind v4（`@tailwindcss/vite`，不引 preflight，`source(none)` + `@source` 只扫 `components/kit/`，旧类名不会撞上工具类）；`@theme inline` 把 §5.9 令牌映射为主题变量并清空默认色板 / 字号（`bg-red-500` 编译不出任何东西）；Radix 原语 + shadcn 式源码拷入 `src/components/kit/`（不放 `ui/`：Windows 下小写 `button.tsx` 与现有 `Button.tsx` 撞名）；`css-tokens` 守卫扩到 Tailwind 任意值类，并禁止新文件引用旧 `components/ui/*`（以现有引用者为白名单）；**零视觉变化**，不迁移任何页面 | `packages/web/**`（不含 `e2e/`、`playwright.config.ts`）、`scripts/guards/css-tokens*` | — |
+| W1-C 读模型 | `execution_readiness`（谓词复用委派执行时的授权检查，不另写一套）、`resolve_refs`（不可见 id 省略、不 404）、选择器数据源（既有 `list_*` 加 `q` 与分页）、遗留 48 读侧（`traverse` 方向与邻居名称、`list_conflicts` 筛选、观察窗口暴露、`GateInstanceWire` 工作区列表、`get_skill`、六个 `list_*` 分页）。**不做** `propose_skill` / `propose_procedure` 家族 id——那是写路径的领域变更，F6 不允许 | `packages/shared/src/**`、`packages/kernel/src/**`、`docs/contracts/**` | — |
+| W1-B UX 门槛与旅程框架 | 三档截图（基线在 CI 的 Linux 上生成、以产物回收，不在 Windows 本机生成）、axe、文案守卫、`<html lang="zh-CN">`、旅程测试骨架 | `packages/web/e2e/**`、`playwright.config.ts`、`.github/workflows/e2e.yml` | A0 合入 |
+| W1-A1… 系统性组件 | 每个系统性组件一个 PR：PageHeader（S1 / S12）→ 时间格式化（S9 / PW1）→ Markdown 与对话顶栏（C2 / C3）→ 响应式数据表（S3）→ 窄屏导航（S2）→ RefChip（S10，用 `resolve_refs`）→ 就近 ConfirmTier（S13 / RT2）→ i18n 中文为主（S4 / S7 / S14）→ 令牌对比度 / 字号 / 命中区（S5 / S6 / S8）→ 主按钮 / 语义色 / 分区 / 抽屉规则（L2 / L3 / L5 / L8） | `packages/web/src/**` | A0；RefChip 另依赖 C；截图随 B |
+
+截图认可是维护者关口：A0 之后每个带界面变化的 PR 把三档截图直接给维护者看，W1 以"三档截图基线经维护者认可"收口。
+
 **S8 验收**：六条旅程测试在 CI 通过；维护者在主机按旅程①–⑥做页面验收；审计清单 P0 / P1 全部关闭或经维护者标"不修"；
 三档截图基线经维护者认可。
 
