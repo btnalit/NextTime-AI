@@ -143,6 +143,16 @@ src/
                           usage, wired into every page (breadcrumb/title/description/actions, S8
                           risk ①'s "first component migration" milestone; see lib/nav.ts above for
                           where its breadcrumb data comes from)
+                          — S8 W1-A2 (audit C2): markdown — react-markdown + remark-gfm, restricted:
+                          never renders raw HTML (no rehype-raw; skipHtml={false} turns it into
+                          inert escaped text instead), no `<img>` (CSP `img-src 'self' data:`
+                          would block a remote one anyway — alt text only), links allowlisted to
+                          http(s)/mailto (anything else renders as plain text, not a dead `<a>`).
+                          Wired into chat via `components/chat/MessageBody.tsx`, which routes only
+                          `role: 'assistant'` through it (a user's own message is verbatim keyboard
+                          input, not Markdown-authored) and lazy-loads the kit component
+                          (`React.lazy`) since react-markdown + remark-gfm add ~185 kB raw / ~57 kB
+                          gzip that only a chat page with an assistant message ever needs
   components/shell/       AppShell, Sidebar (三组 使用 / 治理 / 平台 nav, S6-A0; nav data itself lives
                           in lib/nav.ts as of S8 W1-A1; S4.1: workspace switcher when >1 membership,
                           cookie-vs-apiKey sign-out label)
