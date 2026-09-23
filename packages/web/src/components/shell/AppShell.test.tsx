@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { WireUser } from '../../lib/auth-api.js';
@@ -147,5 +147,76 @@ describe('AppShell', () => {
     );
     await waitFor(() => expect(screen.getByText('Acme')).toBeTruthy());
     expect(screen.queryByTestId('kernel-version')).toBeNull();
+  });
+
+  /** S8 W1-A3 (audit S2): ≤960px `useNarrowViewport` reports `true` and `AppShell` swaps
+   *  `Sidebar` for `MobileTopBar` + `NavDrawer`. `window.matchMedia` does not exist in jsdom by
+   *  default (`useNarrowViewport`'s own doc comment) — stub it to force the narrow branch. */
+  describe('narrow viewport (S8 W1-A3, audit S2)', () => {
+    const originalMatchMedia = window.matchMedia;
+
+    afterEach(() => {
+      window.matchMedia = originalMatchMedia;
+    });
+
+    function stubNarrow(): void {
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes('960'),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      })) as typeof window.matchMedia;
+    }
+
+    it('renders MobileTopBar (not the wide aside) and opens the drawer from nav-open', async () => {
+      stubNarrow();
+      const http = scriptedHttp(baseHandlers());
+      renderShell(http);
+      // MobileTopBar's identity line combines product/workspace/role into one text node
+      // ("NextTime AI · Acme · owner") — a regex matches the substring where an exact string
+      // wouldn't (the wide Sidebar's `.sidebar-workspace` span, by contrast, holds only the name).
+      await waitFor(() => expect(screen.getByText(/Acme/)).toBeTruthy());
+
+      expect(document.querySelector('aside.sidebar')).toBeNull();
+      expect(screen.queryByTestId('nav-section-use')).toBeNull();
+      const opener = screen.getByTestId('nav-open');
+      expect(opener).toBeTruthy();
+      expect(screen.getByText('对话')).toBeTruthy(); // pageTitle for active="chats"
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      fireEvent.click(opener);
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByTestId('nav-chats')).toBeTruthy();
+      expect(within(dialog).getByTestId('nav-section-use')).toBeTruthy();
+    });
+
+    it('closes the drawer when `active` changes (a simulated navigation)', async () => {
+      stubNarrow();
+      const http = scriptedHttp(baseHandlers());
+      const { rerender } = renderShell(http);
+      await waitFor(() => expect(screen.getByText(/Acme/)).toBeTruthy());
+      fireEvent.click(screen.getByTestId('nav-open'));
+      await screen.findByRole('dialog');
+
+      rerender(
+        <PermissionsProvider>
+          <AppShell
+            active="tasks"
+            http={http}
+            pushes={SILENT_PUSH_SOURCE}
+            authMode="cookie"
+            onLogout={vi.fn()}
+            selectedWorkspaceId="ws-1"
+          >
+            <div data-testid="page-body">page</div>
+          </AppShell>
+        </PermissionsProvider>,
+      );
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
   });
 });

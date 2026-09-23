@@ -35,7 +35,18 @@ export type IconName =
   | 'shield'
   | 'logout'
   | 'grid'
-  | 'search';
+  | 'search'
+  // S8 W1-A3 (audit S2 "图标重复"): every lib/nav.ts destination needs a visually distinct icon —
+  // these five cover concepts nothing above already fit (智能体/Agent, 模型/Models, 平台用户/Platform
+  // users, 模块/Modules, 平台设置/Settings); `menu` and `more` are the mobile top bar's hamburger
+  // and the chat header's overflow-menu trigger (audit C3).
+  | 'bot'
+  | 'sparkle'
+  | 'badge'
+  | 'box'
+  | 'settings'
+  | 'menu'
+  | 'more';
 
 const PATHS: Readonly<Record<IconName, string>> = {
   chat: 'M4 5h16v10H9l-5 4V5z',
@@ -69,6 +80,15 @@ const PATHS: Readonly<Record<IconName, string>> = {
   logout: 'M10 4H5v16h5M14 8l5 4-5 4m5-4H9',
   grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
   search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35',
+  bot: 'M12 2v3M8 8h8a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3zM9 13v.01M15 13v.01M9 17h6',
+  sparkle: 'M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3z',
+  badge:
+    'M4 5h16v14H4zM8 9a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 17c.5-2 2-3 4-3s3.5 1 4 3M14 9h4M14 13h4',
+  box: 'M12 2 3 7v10l9 5 9-5V7l-9-5zM3 7l9 5 9-5M12 12v10',
+  settings:
+    'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1',
+  menu: 'M4 7h16M4 12h16M4 17h16',
+  more: 'M12 5v.01M12 12v.01M12 19v.01',
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {

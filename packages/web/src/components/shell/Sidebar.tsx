@@ -6,6 +6,7 @@ import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
 import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
 import type { NavSection } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
+import { Sheet, SheetContent, SheetTitle } from '../kit/sheet.js';
 import { Button } from '../ui/Button.js';
 import { Select } from '../ui/Field.js';
 import { Icon, type IconName } from '../ui/Icon.js';
@@ -65,10 +66,15 @@ export interface SidebarProps {
  * (always visible), 治理 Govern (the per-workspace owner/operator pages + the Explorer link, for a
  * non-member workspace role with a workspace in scope), 平台 Platform (platform admin only) — with
  * inline icons and the live pending-approvals badge, and at the bottom the WS connection dot, the
- * kernel version, the current user and sign-out. Collapses to an icon rail ≤1100px and a top bar
- * ≤720px (styles/shell.css) — labels/sub-labels/section headers/footer lines hide, the
- * `title`/`aria-label`s below keep every control nameable. Visibility rules are the runbook's
- * (web-console.md "角色与可见性"), unchanged by the regrouping.
+ * kernel version, the current user and sign-out. Collapses to an icon rail in the (960px, 1100px]
+ * range (styles/shell.css) — labels/sub-labels/section headers/footer lines hide, the
+ * `title`/`aria-label`s below keep every control nameable. **≤960px this component is not
+ * rendered at all** (S8 W1-A3, audit S2): `AppShell` swaps it for `MobileTopBar` + `NavDrawer`
+ * below, which render the exact same nav content (via `SidebarContent`, the shared body this
+ * component wraps in `<aside>`) inside a drawer instead of squeezing it into an ever-narrower
+ * rail — the audit's complaint was 21 unlabeled, partly-duplicate icons with the workspace, role
+ * and current user gone entirely. Visibility rules are the runbook's (web-console.md "角色与可见
+ * 性"), unchanged by the regrouping.
  *
  * Role badge: a `{kind:'known'}` role (`get_workspace.caller.role`, the authoritative source as of
  * the S3.11 coordination addendum) renders as the same `StatusChip machine="role"` the Members
@@ -77,7 +83,22 @@ export interface SidebarProps {
  * bucket-label badge (`Owner`/`Operator+`/`Member`/`—`) — those are honest uncertainty ranges, not
  * real `Role` enum values, so they never borrow the enum-backed chip's vocabulary.
  */
-export function Sidebar({
+export function Sidebar(props: SidebarProps) {
+  return (
+    <aside className="sidebar">
+      <SidebarContent {...props} />
+    </aside>
+  );
+}
+
+/**
+ * components/shell/SidebarContent (S8 W1-A3): the brand row, three nav groups and footer that
+ * `Sidebar` renders inside `<aside class="sidebar">` for the wide/rail layouts and `NavDrawer`
+ * renders inside a `kit/sheet` for the ≤960px drawer — same props, same testids, same markup;
+ * only the wrapping element differs (a fragment here, never its own DOM node, so neither caller's
+ * existing structure/tests changed by this split).
+ */
+export function SidebarContent({
   active,
   pendingCount,
   wsStatus,
@@ -99,7 +120,7 @@ export function Sidebar({
   const isAdmin = platformRole === 'admin';
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
   return (
-    <aside className="sidebar">
+    <>
       <div className="sidebar-brand">
         <div className="sidebar-mark" aria-hidden>
           N
@@ -202,7 +223,82 @@ export function Sidebar({
           </Button>
         )}
       </div>
-    </aside>
+    </>
+  );
+}
+
+export interface MobileTopBarProps {
+  /** The current page's own name (`lib/nav.ts` `breadcrumbFor(active)`'s last crumb) — `AppShell`
+   *  resolves this; kept a plain string here so this file need not import `lib/router.ts`'s
+   *  `NavSection` just to re-derive it. */
+  readonly pageTitle: string;
+  readonly workspaceName: string;
+  readonly role: WorkspaceRole;
+  /** Opens `NavDrawer`. `AppShell` owns the open/close state (both components are siblings, not
+   *  parent/child) so a route change can close the drawer without this component knowing about
+   *  routing. */
+  readonly onOpenMenu: () => void;
+}
+
+function roleText(role: WorkspaceRole): string {
+  return role.kind === 'known' ? role.role : ROLE_BADGE_LABEL[role.role];
+}
+
+/**
+ * components/shell/MobileTopBar (S8 W1-A3, audit S2 "≤960 侧栏收成 21 个无文字图标"): the ≤960px
+ * replacement for the icon rail — a single sticky row with the menu button that opens `NavDrawer`
+ * (`data-testid="nav-open"`, the hook Playwright/journey helpers use to reach the full nav at this
+ * width), the current page's title as the prominent line, and a second, smaller line carrying the
+ * three pieces of identity the old rail dropped entirely: product name, workspace name and role.
+ * Rendered by `AppShell` in place of `Sidebar` — never both at once, so there is exactly one
+ * `nav-<section>` set of testids in the DOM at any given viewport (the wide `<aside>`'s, or once
+ * opened, the drawer's).
+ */
+export function MobileTopBar({ pageTitle, workspaceName, role, onOpenMenu }: MobileTopBarProps) {
+  return (
+    <header className="mobile-topbar">
+      <Button
+        variant="ghost"
+        size="s"
+        icon="menu"
+        iconOnly
+        aria-label="打开导航菜单 Open navigation menu"
+        data-testid="nav-open"
+        onClick={onOpenMenu}
+      />
+      <div className="mobile-topbar-text">
+        <span className="mobile-topbar-title truncate">{pageTitle}</span>
+        <span className="mobile-topbar-sub truncate">
+          NextTime AI · {workspaceName} · {roleText(role)}
+        </span>
+      </div>
+    </header>
+  );
+}
+
+export interface NavDrawerProps extends SidebarProps {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * components/shell/NavDrawer (S8 W1-A3, audit S2): the ≤960px drawer `MobileTopBar`'s menu button
+ * opens — `kit/sheet` (Radix Dialog under the hood: focus trap, Esc, overlay-click-closes and
+ * focus-returns-to-trigger all come from the primitive, none hand-rolled here) holding the exact
+ * same `SidebarContent` the wide sidebar renders, so every group title, the workspace switcher,
+ * the current user and sign-out that the icon rail hid are all present and labelled. `AppShell`
+ * closes it on navigation (an effect keyed on `active`) — Radix's own auto-focus-on-close then
+ * returns focus to whatever had it before open, which is always the top bar's menu button here
+ * since nothing else can open this drawer.
+ */
+export function NavDrawer({ open, onOpenChange, ...sidebarProps }: NavDrawerProps) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="left" className="nav-drawer">
+        <SheetTitle className="visually-hidden">导航 Navigation</SheetTitle>
+        <SidebarContent {...sidebarProps} />
+      </SheetContent>
+    </Sheet>
   );
 }
 

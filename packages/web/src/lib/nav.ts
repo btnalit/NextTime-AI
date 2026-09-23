@@ -64,7 +64,7 @@ export const WORK_NAV: readonly NavItem[] = [
   // S6-D: the native 图谱 page (object browser on search / state_at / explain) replaces the
   // third-party Explorer bundle as the console's graph entry.
   { section: 'graph', label: '图谱', sub: 'Graph', icon: 'link', href: hrefs.graph() },
-  { section: 'agent', label: '我的智能体', sub: 'My Agent', icon: 'user', href: hrefs.agent() },
+  { section: 'agent', label: '我的智能体', sub: 'My Agent', icon: 'bot', href: hrefs.agent() },
   // S4.1: sits right next to 我的智能体 — both are per-user "我的" settings, not governance.
   { section: 'account', label: '我的账户', sub: 'My Account', icon: 'user', href: hrefs.account() },
 ];
@@ -86,9 +86,9 @@ export const GOVERN_NAV: readonly NavItem[] = [
     icon: 'connections',
     href: hrefs.systems(),
   },
-  { section: 'catalog', label: '能力目录', sub: 'Catalog', icon: 'grid', href: hrefs.catalog() },
-  { section: 'models', label: '模型与配额', sub: 'Models', icon: 'cpu', href: hrefs.models() },
-  { section: 'audit', label: '审计', sub: 'Audit', icon: 'search', href: hrefs.audit() },
+  { section: 'catalog', label: '能力目录', sub: 'Catalog', icon: 'inbox', href: hrefs.catalog() },
+  { section: 'models', label: '模型与配额', sub: 'Models', icon: 'sparkle', href: hrefs.models() },
+  { section: 'audit', label: '审计', sub: 'Audit', icon: 'clock', href: hrefs.audit() },
 ];
 
 /** 平台 Platform (S6-A0 §5.9) — platform-admin only (`platformRole === 'admin'`), independent of
@@ -115,14 +115,14 @@ export const PLATFORM_NAV: readonly NavItem[] = [
     section: 'platformUsers',
     label: '用户',
     sub: 'Users',
-    icon: 'users',
+    icon: 'badge',
     href: hrefs.platformUsers(),
   },
   {
     section: 'platformIntegrations',
     label: '集成',
     sub: 'Integrations',
-    icon: 'connections',
+    icon: 'send',
     href: hrefs.platformIntegrations(),
   },
   // P-B2b (design §6.4): modules — versioned domain packs, install counts, default modules.
@@ -130,7 +130,7 @@ export const PLATFORM_NAV: readonly NavItem[] = [
     section: 'platformModules',
     label: '模块',
     sub: 'Modules',
-    icon: 'grid',
+    icon: 'box',
     href: hrefs.platformModules(),
   },
   // S6-B (design §6.2): providers are platform-level; the page talks to llm-proxy's admin API.
@@ -138,14 +138,14 @@ export const PLATFORM_NAV: readonly NavItem[] = [
     section: 'platformModels',
     label: '模型与供应商',
     sub: 'Models & providers',
-    icon: 'cpu',
+    icon: 'refresh',
     href: hrefs.platformModels(),
   },
   {
     section: 'platformSettings',
     label: '平台设置',
     sub: 'Platform settings',
-    icon: 'grid',
+    icon: 'settings',
     href: hrefs.platformSettings(),
   },
   // S7-E (design §6.5 / §6.7, P-C): 运行层 / 运行状态 — which pi/image/extension version is
@@ -168,7 +168,7 @@ export const PLATFORM_NAV: readonly NavItem[] = [
     section: 'platformAudit',
     label: '平台审计',
     sub: 'Platform audit',
-    icon: 'search',
+    icon: 'copy',
     href: hrefs.platformAudit(),
   },
 ];
