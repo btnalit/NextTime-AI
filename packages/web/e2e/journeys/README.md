@@ -57,11 +57,18 @@ agent 能执行、② 接入一个新系统、③ 审批一个执行类动作、
 一件事办不办得成"。两者共用 `e2e/lib/auth.ts` 的登录辅助，`journeys/helpers.ts` 只加旅程特有的东西
 （按标签导航、`createFreshWorkspace`）。
 
-③ 审批一个执行类动作不假设种子 ActionRequest 的卡片落在"最近一个对话"里——`helpers.ts` 的
-`findChatWithActionCard` 会挨个打开对话列表里的每个对话，找真正带着这张卡片的那一个。这不是过度
-设计：`chat.spec.ts` 自己就会新建一个从不归档的对话，任何跑在它之后、又假设"最近一个对话"就是种子
-卡片所在对话的 spec，都会在文件顺序变化时说错。这条目录名没有靠玩字母序排位来绕开这个问题——早期
-版本试过给目录加数字前缀让它排到 `chat.spec.ts` 前面，结果带出另一个问题：那样一来它又排到了
-`approvals.spec.ts` 前面，③自己的批准动作会往同一个对话里写"已批准"状态行，顶到 `approvals.spec.ts`
-自己那条不限定文本、只按 `data-status="approved"` 找状态行的断言。两次真实 CI 失败换来的教训：
-把"找对哪个对话"这件事本身做扎实，比跟其他 spec 的文件名排位较劲更稳。
+③ 审批一个执行类动作不看对话卡片验证批准结果，看 ApprovalQueuePage 自己的"历史 History" tab
+（`list_action_requests`，同一页）。这不是绕开困难的捷径，是踩了两轮坑之后的结论：
+- 早期版本假设种子 ActionRequest 的卡片落在"最近一个对话"里——`chat.spec.ts` 自己会新建一个从不
+  归档的对话，排在它之后的话，"最近一个对话"就不再是种子卡片所在的那一个。
+- 改成给目录加数字前缀、排到 `chat.spec.ts` 前面，又排到了 `approvals.spec.ts` 前面，③ 自己的批准
+  动作往同一个对话里写"已批准"状态行，顶到 `approvals.spec.ts` 自己那条不限定文本、只按
+  `data-status="approved"` 找状态行的断言。
+- 改成"挨个打开对话列表找真正带卡片的那个对话"，找对了对话，但卡片的 `data-status` 停在
+  `pending_approval` 不再变化，即使强制刷新也一样。拉 CI 失败时留下的数据库快照对比才看清：同一个
+  `actionRequestId` 的批准/失败 `system.action_update` 消息分散落进了不止一个对话——`application/
+  linkage/chat-targets.ts` 的 `resolveDefaultChat`（"最近一个对话"）在两次事件处理之间解析到了不同
+  的对话。这是内核侧 linkage 的行为，`packages/kernel/**` 不在这条车道允许改的文件范围内。
+
+"历史"tab 直接读 `ActionRequest` 自己的权威状态，不经过"卡片落在哪个对话"这一层，天然绕开了上面
+三条。`journeys/helpers.ts` 里不再有专门找对话的辅助函数——找错了问题层次，函数写得再稳也没用。

@@ -81,9 +81,9 @@ test.describe('S8 W1-B screenshot gate', () => {
     // chat-card assertion. `listChats` excludes archived rows by default (`archived_at is null`),
     // same as the console's own default (non-已归档) chat list — archiving here keeps this fixture
     // chat from shadowing that lookup for every spec that runs after `00-gates/` in file order.
-    // (`journeys/03-approve-action.spec.ts` no longer needs this guarantee itself — it finds its
-    // own chat by searching, `journeys/helpers.ts`'s `findChatWithActionCard` — but
-    // `approvals.spec.ts` still does, so the archiving stays.)
+    // (`journeys/03-approve-action.spec.ts` no longer depends on "most recently created Chat" at
+    // all — it reads ApprovalQueuePage's own 历史 History tab instead, see that file's own doc
+    // comment for why — but `approvals.spec.ts` still does, so the archiving stays.)
     await page.getByRole('button', { name: 'Back to chats' }).click();
     const row = page.getByTestId('chat-row').filter({ hasText: CHAT_FIXTURE_PROMPT.slice(0, 20) });
     await expect(row).toBeVisible({ timeout: 15_000 });

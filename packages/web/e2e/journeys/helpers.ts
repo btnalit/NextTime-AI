@@ -1,4 +1,4 @@
-import { type Locator, type Page, expect } from '@playwright/test';
+import { type Page, expect } from '@playwright/test';
 import { loginAsAdmin, loginAsOwner } from '../lib/auth.js';
 
 /**
@@ -17,10 +17,15 @@ import { loginAsAdmin, loginAsOwner } from '../lib/auth.js';
  * that the seeded ActionRequests actually linked into. That ordering hack traded one bug for
  * another: running *before* `approvals.spec.ts` too meant journey ③'s own approvals landed
  * "approved" status lines in the same Chat that `approvals.spec.ts`'s own (unscoped, `data-
- * status="approved"`) assertion expects to be the only one there — a real CI failure, not a
- * hypothetical. `findChatWithActionCard` below is the actual fix: search the Chat list for the one
- * holding the marker's card instead of assuming "most recent" points at it, which works regardless
- * of file order and needs no directory-naming coordination with every other spec in this suite.
+ * status="approved"`) assertion expects to be the only one there. An even later version tried
+ * searching the Chat list for the card instead of assuming "most recent" — that avoided both
+ * ordering problems, but CI evidence (a committed database snapshot from a failing run) then
+ * showed the deeper reason to stop chasing this entirely: a single ActionRequest's `system.
+ * action_update` messages can land in more than one Chat across the approved→failed transition —
+ * a kernel-side `resolveDefaultChat` behaviour, out of this lane's file scope
+ * (`packages/kernel/**`) to change. `journeys/03-approve-action.spec.ts` now reads the decided
+ * state from `ApprovalQueuePage`'s own 历史 History tab instead — the authoritative,
+ * single-page source `list_action_requests` already is, sidestepping "which Chat" altogether.
  */
 
 export const OWNER_API_KEY = process.env.WEB_E2E_API_KEY;
@@ -176,45 +181,4 @@ export async function createFreshWorkspace(page: Page): Promise<{
   await expect(wsDrawer).toBeHidden({ timeout: 20_000 });
 
   return { workspaceName, ownerLogin, ownerTemporaryPassword };
-}
-
-/**
- * Finds the Chat holding a `system.action_pending`/`action_update` card whose text contains
- * `scope`, by opening each Chat in the (non-archived) list in turn rather than assuming "the most
- * recently created Chat" (`application/linkage/chat-targets.ts`'s `resolveDefaultChat` — the
- * *linkage's own* rule for where a card lands, fixed once at the time the outbox event is
- * processed, not something the console re-derives) still points at the right one by the time a
- * journey runs. It usually does — this suite seeds every ActionRequest before Playwright starts,
- * so every card lands in the one Chat that exists at that moment — but any spec that creates a
- * *new*, non-archived Chat before this journey runs (`chat.spec.ts`'s own first test does) would
- * silently point "most recent" at the wrong one. Bounded and cheap in practice: this workspace
- * only ever has a small, fixed number of open Chats (`00-gates/` archives its own fixture chat
- * specifically so it doesn't add to this list — see its own doc comment).
- */
-export async function findChatWithActionCard(page: Page, scope: string): Promise<Locator> {
-  await goToByLabel(page, '对话');
-  const rows = page.getByTestId('chat-row');
-  // `goToByLabel` only waits for the page's own `<h1>` — the list itself still loads
-  // asynchronously behind `components/ui/Skeleton.tsx`'s `SkeletonRows` (`.skeleton-rows`, the
-  // same generic "content loaded" signal `00-gates/surfaces.ts`'s `goToSurface` waits on). Without
-  // this, `rows.count()` right below can read 0 while the list is still loading — not "no chats
-  // exist" — and the loop below would never run, throwing immediately instead of actually
-  // searching. The first baseline-generation run after the S8 W1-A1/A2 rebase hit exactly this
-  // (both journey ③ sub-tests failed in ~1.6s, far too fast to have actually opened any chat).
-  await expect(page.locator('.skeleton-rows')).toHaveCount(0, { timeout: 15_000 });
-  const count = await rows.count();
-  for (let i = 0; i < count; i++) {
-    await rows.nth(i).click();
-    // Bounded `waitFor` (polls), not an instant `.count()`: the opened chat's own history is
-    // still an async fetch + WS subscribe (same class of race as the list above) — a chat that
-    // *does* hold the card can still read 0 matches for a moment right after navigating in.
-    const card = page.locator('.action-card', { hasText: scope }).first();
-    const found = await card
-      .waitFor({ state: 'visible', timeout: 5_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (found) return card;
-    await page.getByRole('button', { name: 'Back to chats' }).click();
-  }
-  throw new Error(`no Chat in the list contains an action card for scope "${scope}"`);
 }

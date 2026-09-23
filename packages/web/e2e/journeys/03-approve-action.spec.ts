@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { OWNER_API_KEY, asOwner, findChatWithActionCard, goToByLabel } from './helpers.js';
+import { OWNER_API_KEY, asOwner, goToByLabel } from './helpers.js';
 
 /**
  * Journey ③: 审批一个执行类动作 (development-tasks.md §5e F4; S2.10 acceptance, same underlying
@@ -12,9 +12,9 @@ import { OWNER_API_KEY, asOwner, findChatWithActionCard, goToByLabel } from './h
  *      同一行；与 approvals.spec.ts 自己的两条种子行也分开，两个套件不会抢同一行）。
  *   2. 点开这一行，看到动作详情（谁、对什么、blast radius）。
  *   3. 批准。
- *   4. 队列里这一行消失；对应的对话卡片状态更新为已批准/执行中/已执行/失败之一（种子 Gatekeeper 没有
- *      可达端点，批准后kernel 自己的执行会失败——这是"批准动作本身成立"之后的下一段，不是这条旅程的
- *      判据）。
+ *   4. 队列里这一行消失；切到同一页的"历史 History" tab，这一行状态更新为已批准/执行中/已执行/失败
+ *      之一（种子 Gatekeeper 没有可达端点，批准后 kernel 自己的执行会失败——这是"批准动作本身成立"
+ *      之后的下一段，不是这条旅程的判据）。
  * 状态覆盖:
  *   - 空: 队列为空——governance.spec.ts 已覆盖（"approvals: queue renders, empty state is fine"）。
  *   - 错: 本旅程不覆盖（批准失败的路径——网络错误/并发决定——由 approvals.spec.ts 的 holder-isolation
@@ -27,15 +27,20 @@ import { OWNER_API_KEY, asOwner, findChatWithActionCard, goToByLabel } from './h
  *   - 从"待我审批"这个侧栏标签点进去（不是硬编码 `#/work/approvals`），批准一张卡片，卡片从队列消
  *     失且状态可观察地变化——全程只看页面上的可见文字/角色，不读数据库。
  *
- * 今天可以整条走通：kernel 的 approve 能力、ApprovalQueuePage 的队列/抽屉都已经是 S2.10 起就有的
- * 稳定能力——不是 W2/W3 才补的东西，所以这是六条里 F4 点名"如果可行就做成真实通过"的那一条。
+ * 今天可以整条走通：kernel 的 approve 能力、ApprovalQueuePage 的队列/历史 tab 都已经是 S2.10/S5.5
+ * 起就有的稳定能力——不是 W2/W3 才补的东西，所以这是六条里 F4 点名"如果可行就做成真实通过"的那一条。
+ *
+ * 为什么第 4 步看"历史 History" tab（同一页），不看对话卡片：早期版本在批准后跳到 对话 页找带这张卡片
+ * 的对话，找到了正确的对话，但卡片的 `data-status` 一直卡在 `pending_approval`，即使强制刷新页面也
+ * 一样。拉 CI 的数据库快照对比才看清：这张卡片最初的 `system.action_pending` 消息落在种子创建时的那
+ * 个对话里，但批准/失败之后写入的 `system.action_update` 消息却落进了*另外*一到两个不同的对话——
+ * 同一个 `actionRequestId` 的更新消息分散在多个对话里，`resolveDefaultChat`（"最近一个对话"）在两次
+ * 事件处理之间显然解析到了不同的对话。这是内核侧 linkage 的行为，不是这条旅程该踩的坑，也不在这条
+ * 车道允许改的文件范围内（`packages/kernel/**` 不在允许列表）——见 PR 说明里的"范围外发现"。
+ * ApprovalQueuePage 自己的"历史"tab（`list_action_requests`）在同一页读同一个 `ActionRequest` 的
+ * 权威状态，不经过"对话卡片落在哪个对话"这一层，天然绕开了这个问题。
  */
 
-/** One seeded row per viewport (`.github/workflows/e2e.yml`) — not the same scope marker twice:
- *  `getByTestId('approval-row').filter({hasText}).first()` followed by `toHaveCount(0)` cannot
- *  tell "the row I approved is gone" apart from "a *different* row sharing the same marker text is
- *  still there" when two rows share one marker — the first baseline-generation run hit exactly
- *  this (desktop's `toHaveCount(0)` saw the *other* viewport's still-pending row and timed out). */
 const JOURNEY3_SCOPE_DESKTOP = 'e2e-journey3-approve-a';
 const JOURNEY3_SCOPE_NARROW = 'e2e-journey3-approve-b';
 const SEED_ACTION_REQUESTS = process.env.WEB_E2E_SEED_ACTION_REQUESTS === '1';
@@ -62,24 +67,17 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   // Step 3: approve.
   await drawer.getByRole('button', { name: 'Approve' }).click();
 
-  // Step 4: the row leaves the pending queue; the linked chat card's status chip moves off
-  // `pending_approval` (same post-decision reasoning as approvals.spec.ts's own S2.10 test — the
-  // seeded Gatekeeper has no reachable endpoint, so kernel execution itself fails right after
-  // approval; any post-decision state proves the *approval* succeeded).
+  // Step 4: the row leaves the pending queue (still page-local — DataRow's own removal, not proof
+  // by itself that the kernel's own approve() persisted); the same page's own 历史 History tab is
+  // where the durable, authoritative state lives (`list_action_requests`, unrelated to which Chat
+  // any card ended up in — see this file's own doc comment).
   await expect(row).toHaveCount(0, { timeout: 15_000 });
   await page.keyboard.press('Escape');
 
-  const chatCard = await findChatWithActionCard(page, scope);
-  await expect(chatCard).toBeVisible({ timeout: 15_000 });
-  // A reload here, not just a wait: `findChatWithActionCard` may have opened and left one or more
-  // *other* Chats along the way (searching for the right one) before landing on this one — each
-  // switch tears down and re-establishes `subscribe_chat`'s WS subscription, so the live
-  // `action.updated` push this card's status transition depends on can land while a *different*
-  // Chat is the one subscribed, and never reach this render. A reload forces a fresh
-  // `get_chat_history` fetch of the Chat's *current* server-side state instead of depending on a
-  // push this page may never have been subscribed to receive.
-  await page.reload();
-  await expect(chatCard.locator('.action-card-status')).toHaveAttribute(
+  await page.getByRole('tab', { name: '历史 History' }).click();
+  const historyRow = page.getByTestId('approval-history-row').filter({ hasText: scope }).first();
+  await expect(historyRow).toBeVisible({ timeout: 15_000 });
+  await expect(historyRow.locator('[data-status]').first()).toHaveAttribute(
     'data-status',
     /^(approved|executing|executed|failed)$/,
     { timeout: 15_000 },
@@ -92,9 +90,7 @@ test.describe('Journey ③: 审批一个执行类动作', () => {
     'set WEB_E2E_BASE_URL, WEB_E2E_API_KEY and WEB_E2E_SEED_ACTION_REQUESTS=1 (see README.md)',
   );
 
-  test('desktop: approve a pending action from the queue, see the chat card update', async ({
-    page,
-  }) => {
+  test('desktop: approve a pending action from the queue, see it in History', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await runJourney(page, JOURNEY3_SCOPE_DESKTOP);
   });
