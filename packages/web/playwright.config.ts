@@ -22,7 +22,15 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
-  expect: { timeout: 10_000 },
+  expect: {
+    timeout: 10_000,
+    // S8 W1-B (docs/development-tasks.md §5e F5, e2e/00-gates/screenshot.spec.ts's own doc
+    // comment): strict-but-not-zero — absorbs anti-aliasing/font-hinting jitter between two runs
+    // on the same `ubuntu-latest` runner image without hiding a real regression. Loosen only on
+    // evidence (a flaky-but-visually-identical run), never pre-emptively — risk ③'s own "从严到宽"
+    // ordering.
+    toHaveScreenshot: { maxDiffPixelRatio: 0.01 },
+  },
   fullyParallel: false,
   // Every spec here drives one shared kernel/Postgres (a real deployment, or the throwaway CI
   // stack) and several assume exclusive access to server-side state a second concurrent test
@@ -53,7 +61,21 @@ export default defineConfig({
     // Relaxing verification here (once, for every test) is the documented alternative to
     // importing that internal root CA into the runner's trust store.
     ignoreHTTPSErrors: true,
+    // S8 W1-B determinism (e2e/lib/determinism.ts): applies to every spec, not just 00-gates/ —
+    // harmless for the other 16 (none of them assert on animation/locale/scale-factor behaviour).
+    reducedMotion: 'reduce',
+    deviceScaleFactor: 1,
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
   },
+  // S8 W1-B: flat, greppable screenshot filenames ("page × width at a glance" — the task's own
+  // wording) instead of Playwright's default nested `<file>-snapshots/<name>-<project>-<platform>
+  // .png`. The project/platform suffix is dropped on purpose — every gate screenshot is captured
+  // by exactly one project (`chromium`) on exactly one platform (the `ubuntu-latest` CI runner;
+  // baselines are never generated locally, see 00-gates/'s own README section in
+  // docs/runbooks/web-console.md), so keeping them would only add churn-free-but-noisy path
+  // segments to every filename.
+  snapshotPathTemplate: '{testDir}/00-gates/__screenshots__/{arg}{ext}',
   // Two projects for one browser, purely to pin file order. Playwright discovers spec files
   // alphabetically (`approvals`, `chat`, `explorer`, `governance`, `login`, `workspaces`), and
   // login.spec.ts's last test deliberately locks the `admin` account for five minutes

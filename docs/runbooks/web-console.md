@@ -228,6 +228,53 @@ build` 走 compose 自身路径，没有直接的 `--cache-from/--cache-to type=
 **本地复现**：`deploy/ci/env.ci.template` 头部注释有完整命令；本质上就是上面 1-6 步去掉 checkout/
 pnpm setup（本地已有）。
 
+## UX 门槛与旅程测试（S8 W1-B）
+
+`e2e/00-gates/`（三档截图回归、axe、文案守卫）与 `e2e/journeys/`（六条旅程骨架）是
+`docs/development-tasks.md` §5e 决定 F4/F5 的落地——不是另一个独立工作流，跟其余 spec 一样归
+`web-e2e` job 管，跟着一起跑、一起在 CI 的 Linux runner 上产出证据。
+
+**为什么 `00-gates/` 目录名前缀 `00-`**：Playwright 按文件路径字母序发现 spec（`playwright.config.ts`
+自己的注释里已经在依赖这一点——`login.spec.ts` 的锁定用例必须排最后）。`00-` 让这一批测试排在最前，
+在任何别的 spec 往共享的 `ci-e2e` 工作区里写数据之前跑——这是"每个页面截图时内容尽量确定"的主要手段
+（`e2e/lib/determinism.ts`、`e2e/00-gates/surfaces.ts` 各自的文档注释里有完整推理，包括"为什么截图
+状态测试用完一个新建的对话要立刻归档"——不归档会顶掉 `approvals.spec.ts` 和
+`journeys/03-approve-action.spec.ts` 依赖的"最近一个对话"）。
+
+**三档截图基线只能在 CI 的 Linux 上生成，本机（含这台 Windows 开发机）生成的基线不能用**——字体栅格化
+在不同操作系统上不是像素级一致的，本机截图在真实 CI 跑时会稳定失败。生成/更新基线的流程：
+
+```bash
+# 1. 在要出基线的分支上手动触发一次 workflow_dispatch，update_baselines=true：
+gh workflow run e2e.yml --ref <branch> -f update_baselines=true
+
+# 2. 等它跑完（这一步等价于正常跑一遍 web-e2e，只是 Run web e2e 换成 --update-snapshots
+#    且 axe/copy-guard 换成"写基线"模式——其余 15+ 个 spec 的断言不受影响，仍然是一次完整验证）：
+gh run watch <run-id>
+
+# 3. 下载 gate-baselines 产物（screenshot PNG + 两个 *-baseline.json），解压覆盖到本地：
+gh run download <run-id> -n gate-baselines -D /tmp/gate-baselines
+cp -r /tmp/gate-baselines/00-gates/__screenshots__ packages/web/e2e/00-gates/__screenshots__
+cp /tmp/gate-baselines/00-gates/axe-baseline.json packages/web/e2e/00-gates/axe-baseline.json
+cp /tmp/gate-baselines/00-gates/copy-guard-baseline.json packages/web/e2e/00-gates/copy-guard-baseline.json
+
+# 4. 提交，推送，让同一个 PR 再跑一次*普通*的 web-e2e（不带 update_baselines）——应该绿；
+#    再手动重跑一次确认不是巧合（截图/axe/文案守卫的确定性证据）：
+gh pr checks <pr-number> --watch
+```
+
+**基线只收紧不放宽**（`e2e/00-gates/ratchet.ts` 的设计）：axe 与文案守卫的基线是"今天已知的问题"
+清单，每条对应一个会修掉它的审计条目（S5 对比度、S6 命中区、S8 字号……）；新问题会让 CI 红，旧问题
+消失/减少不会——基线本身要等对应的修复 PR 合入后，再跑一次 §"生成/更新基线"把它收窄，不能顺手在
+无关 PR 里放宽。截图基线同理：`maxDiffPixelRatio: 0.01`（`playwright.config.ts`）是起始阈值，只在
+有真实证据（多次绿跑之间仍然抖动、且人工确认像素差异只是抗锯齿/字体微调）时才放宽，不能因为一次
+CI 红就直接调松了事。
+
+**六条旅程**（`e2e/journeys/README.md` 有完整的"一条旅程怎么写"约定）：今天只有 ③ 审批一个执行类
+动作、⑥ 添加成员并让其可用 是真实通过的——这两条依赖的能力（`approve`、`add_member`）本来就是
+S2.10/P-A1 起的稳定能力，不是这一波新做的；其余四条（①②④⑤）产品今天还做不到（W2/W3 才补），用
+`test.fixme` 占位，body 里写了真实的操作序列，等对应功能上线后去掉 `fixme` 就是验收标准。
+
 ## 验证
 
 ```bash
