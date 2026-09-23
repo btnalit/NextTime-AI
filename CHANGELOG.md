@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.2](https://github.com/btnalit/NextTime-AI/compare/v0.16.1...v0.16.2) (2026-09-23)
+
+
+### Bug Fixes
+
+* **scripts:** accept_s3 private token in its own subdirectory; STATUS for v0.16.1 and leftovers 64–69 ([#235](https://github.com/btnalit/NextTime-AI/issues/235)) ([92ac887](https://github.com/btnalit/NextTime-AI/commit/92ac88749851ec7c6e6d93d191de11ebe9a959c8))
+* worker-supervisor reads images through a dedicated read-only socket proxy (v0.16.2) ([#237](https://github.com/btnalit/NextTime-AI/issues/237)) ([b8fbbec](https://github.com/btnalit/NextTime-AI/commit/b8fbbec1c82254045428dc2ad06ca87fb6f08616))
+
 ## [0.16.1](https://github.com/btnalit/NextTime-AI/compare/v0.16.0...v0.16.1) (2026-09-23)
 
 
