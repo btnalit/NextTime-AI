@@ -1,0 +1,97 @@
+/* Tailwind v4 (S8 W1-A0, docs/development-tasks.md §5e decision F3): theme + utilities layers
+ * only, imported directly (not the full `@import "tailwindcss"`, which also pulls in
+ * `tailwindcss/preflight.css`) — `base.css` already carries the app's own reset, and Preflight
+ * would restyle every existing page (it sets margins, borders, form-control appearance, etc. on
+ * bare elements with no class at all).
+ *
+ * Scanning is restricted to components/kit/: `source(none)` on the utilities import disables
+ * Tailwind's automatic project-wide source detection, then the `@source` line below re-enables
+ * scanning for only that one directory. Without this, Tailwind would scan every .tsx in the app
+ * and could start generating a utility for an old, unrelated class name that happens to look like
+ * one (`className="hidden"` / `"truncate"` / `"grid"` all exist already in pre-S8 markup) — this
+ * is S8 risk ① (docs/development-tasks.md §5e). Utilities land in the Tailwind `utilities` layer;
+ * every existing stylesheet (tokens/base/shell/ui/pages/graph) stays unlayered, and per the CSS
+ * Cascading Layers spec an unlayered declaration always wins over a layered one for the same
+ * property on the same element, regardless of source order or specificity — so an existing page
+ * is unaffected even if a kit utility and an old hand-written rule ever target the same element.
+ *
+ * The @theme block resets Tailwind's default palette/scale namespaces to empty and re-declares
+ * them as `var()` aliases onto the §5.9 design tokens (tokens.css) — `tokens.css` stays the only
+ * stylesheet holding colour/px literals (scripts/guards/css-tokens.mjs enforces this). `inline`
+ * is required for the aliasing to work: each variable below is aliased to a *same-named* custom
+ * property defined in tokens.css (`--font-sans: var(--font-sans)`, `--accent` -> `--color-accent`
+ * etc.) — with a non-inline `@theme`, generated utilities would reference the theme namespace
+ * variable itself, one indirection short of the actual token; `inline` makes Tailwind emit the
+ * `var(--bg)` / `var(--font-sans)` reference directly, which is what lets `prefers-color-scheme:
+ * dark` (tokens.css's own override of `--bg` etc.) keep working with no extra wiring here. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+
+@source "../components/kit";
+
+@theme inline {
+  /* Reset every namespace we alias below so only token-backed utilities exist — `bg-red-500`,
+   * `font-serif`, `rounded-lg`, `shadow-md` must not compile to anything. */
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+
+  /* Neutrals (§5.9) */
+  --color-bg: var(--bg);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-text-on-accent: var(--text-on-accent);
+
+  /* Accent — links/selection/focus; the ink primary button uses --color-text, not this. */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+
+  /* Overlay backdrop (dialog/sheet/drawer) — Tailwind's own `black`/`white` keywords are gone
+   * once --color-* is reset above, so overlays use this token rather than `bg-black/35`. */
+  --color-overlay: var(--overlay);
+
+  /* Governance semantics (§5.9 principle 2) — one colour, one meaning. */
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-observe: var(--observe);
+  --color-observe-soft: var(--observe-soft);
+  --color-muted: var(--muted);
+  --color-muted-soft: var(--muted-soft);
+
+  /* Fonts (self-hosted, styles/fonts.css) */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  /* Type scale (C24) — the §5.9 `--fs-*` stops as Tailwind's `--text-*` font-size namespace, so
+   * `text-13` / `text-16` / … are the only font-size utilities Tailwind can generate. */
+  --text-11: var(--fs-11);
+  --text-12: var(--fs-12);
+  --text-13: var(--fs-13);
+  --text-14: var(--fs-14);
+  --text-16: var(--fs-16);
+  --text-19: var(--fs-19);
+  --text-24: var(--fs-24);
+
+  /* Radii 6 / 8 / 12 (§5.9 principle 5: chip / control / card) */
+  --radius-s: var(--radius-s);
+  --radius-m: var(--radius-m);
+  --radius-l: var(--radius-l);
+
+  /* Shadow — floating overlays only (drawer/sheet/tooltip/toast), never for hierarchy. */
+  --shadow-1: var(--shadow-1);
+}
