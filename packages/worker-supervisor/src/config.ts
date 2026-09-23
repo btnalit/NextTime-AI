@@ -171,6 +171,21 @@ export interface SupervisorConfig {
    *  socket-proxy over the `dockerapi` network), else `dockerSocketPath` (see
    *  `parseDockerConnection`'s own doc comment). */
   readonly dockerConnection: DockerConnection;
+  /** v0.16.2 (fix/supervisor-images-proxy): the connection `resident-service.ts`'s `listImages()`
+   *  uses for `GET /images` (`docker-client.ts`'s `listImages`/`inspectImage`) — a *separate*
+   *  Docker Engine API target from `dockerConnection` above. S7-E (#229/#230) added the first
+   *  image-read calls this package ever made, but the existing `docker-socket-proxy`
+   *  (`dockerConnection`) is `IMAGES=0` on purpose: turning it on would also need `POST=1`
+   *  (already set, for container create/start/stop) to reach `/images/*`, which under
+   *  `docker-socket-proxy`'s own allowlist shape also opens image pull/delete — a privilege
+   *  increase neither this fix nor the original S7-E task asked for. `docker-socket-proxy-images`
+   *  (docker-compose.yml) is a *fourth*, disjoint proxy instance — `IMAGES=1, POST=0`, nothing
+   *  else — the same "one instance per trust boundary" pattern `docker-socket-proxy-gate`/
+   *  `-collector` already use (see docs/STATUS.md 遗留 11 for the three that predate this one).
+   *  `DOCKER_IMAGES_HOST` defaults to `DOCKER_HOST` (this same `env` value `dockerConnection`
+   *  above already parses) when unset, so dev/CI runs that never set either env var keep resolving
+   *  to the plain `dockerSocketPath` fallback unchanged. */
+  readonly dockerImagesConnection: DockerConnection;
   /** One-shot Task mode (S2.8; design doc §7.3, docs/development-tasks.md S2.8). Default runtime
    *  cap for a Worker container before the reaper kills it (`TASK_MAX_RUNTIME_SEC`) — a per-spawn
    *  `timeoutSec` in the request body overrides this. */
@@ -229,6 +244,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     egressSourceMapFile: env.EGRESS_SOURCE_MAP_FILE ?? `${localDataDir}/config/egress-sources.json`,
     dockerSocketPath,
     dockerConnection: parseDockerConnection(env.DOCKER_HOST, dockerSocketPath),
+    dockerImagesConnection: parseDockerConnection(
+      env.DOCKER_IMAGES_HOST || env.DOCKER_HOST,
+      dockerSocketPath,
+    ),
     taskMaxRuntimeSec: parseIntEnv(env.TASK_MAX_RUNTIME_SEC, 3600),
     taskWorkdirRetentionHours: parseIntEnv(env.TASK_WORKDIR_RETENTION_HOURS, 72),
     taskReapIntervalMs: parseIntEnv(env.TASK_REAP_INTERVAL_MS, 10_000),

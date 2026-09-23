@@ -21,11 +21,16 @@
  *   GET  /residents               -> 200 {items: ResidentInventoryEntry[]}       [guarded]
  *   GET  /images                  -> 200 {defaultImage: string, images: RuntimeImageInfo[],
  *                                          allowedImages: string[]}
+ *                                     | 502 {error:{code:"docker_upstream_error", message, status}}
  *                                     (images: platform-labelled only; defaultImage is this
  *                                     process's own config.workerImage — the kernel has no other
  *                                     way to learn it; allowedImages is config.taskImageAllowlist
  *                                     verbatim, P1-a hotfix — lets the kernel reject a
- *                                     set_active_runtime_image target that would 403 at spawn)
+ *                                     set_active_runtime_image target that would 403 at spawn;
+ *                                     502 (v0.16.2): the underlying Docker/proxy call — a separate
+ *                                     `docker-socket-proxy-images` connection, config.ts's
+ *                                     `dockerImagesConnection` — failed; `status` carries the real
+ *                                     upstream HTTP status when known)
  *                                                                                 [guarded]
  *   POST /task/spawn              {taskId, workerRunId, workspaceId, onBehalfOf, capabilityHandle,
  *                                   image?, model?, systemPrompt?, skillsInline?,
@@ -50,6 +55,7 @@ import {
   isImageAllowed,
 } from './config.js';
 import { IdClaimSchema, type SupervisorConfig } from './config.js';
+import { dockerErrorStatusCode } from './docker-client.js';
 import { requireInternalToken } from './internal-auth.js';
 import type { ResidentService } from './resident-service.js';
 import type { TaskService } from './task-service.js';
@@ -115,10 +121,34 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     return { items };
   });
 
-  app.get('/images', requireInternal, async (_request, reply) => {
-    const { defaultImage, images, allowedImages } = await residentService.listImages();
-    reply.code(200);
-    return { defaultImage, images, allowedImages };
+  app.get('/images', requireInternal, async (request, reply) => {
+    try {
+      const { defaultImage, images, allowedImages } = await residentService.listImages();
+      reply.code(200);
+      return { defaultImage, images, allowedImages };
+    } catch (err) {
+      // v0.16.2 (fix/supervisor-images-proxy): a Docker/proxy-level failure here (e.g.
+      // `docker-socket-proxy-images` unreachable, or 403ing an unexpected call) is an upstream
+      // failure, not this service's own auth decision — passing e.g. Docker's raw 403 straight
+      // through would read as *this* route rejecting the caller, when `requireInternal` above
+      // already accepted them. Always 502, with the real upstream status (when known) in the body
+      // — the kernel's own `TaskSupervisorError('http_error', ...)` (supervisor-client.ts) already
+      // treats any non-200 the same way (`runtime_unreachable`), so this is a clarity/diagnostic
+      // fix, not a behavior change for callers.
+      request.log?.error?.(err, 'GET /images failed');
+      const status = dockerErrorStatusCode(err);
+      reply.code(502);
+      return {
+        error: {
+          code: 'docker_upstream_error',
+          message:
+            status !== undefined
+              ? `Docker image API request failed with upstream status ${status}`
+              : `Docker image API request failed: ${err instanceof Error ? err.message : String(err)}`,
+          status,
+        },
+      };
+    }
   });
 
   app.post('/resident/stop', requireInternal, async (request, reply) => {

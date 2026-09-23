@@ -398,13 +398,23 @@ services:
         TASK_WORKDIR_RETENTION_HOURS: "${TASK_WORKDIR_RETENTION_HOURS:-72}",
         TASK_REAP_INTERVAL_MS: "${TASK_REAP_INTERVAL_MS:-10000}",
         DOCKER_HOST: tcp://docker-socket-proxy:2375,
+        # fix/supervisor-images-proxy (v0.16.2): GET /images (listImages/inspectImage) reads
+        # through this separate, IMAGES=1-only proxy instead — see `docker-socket-proxy-images`'s
+        # own comment above and `config.ts`'s `dockerImagesConnection` doc comment for why.
+        DOCKER_IMAGES_HOST: tcp://docker-socket-proxy-images:2375,
       }
-    networks: [control, dockerapi]
+    networks: [control, dockerapi, dockerapi-images]
     restart: unless-stopped
-    # docker-socket-proxy (fix/socket-proxy-and-backup-user): resident/task reconcile on startup
-    # (index.ts's `residentService.reconcile()`/`taskService.reconcile()`) both call the Docker
-    # client immediately — wait for the proxy to actually be answering first.
-    depends_on: { docker-socket-proxy: { condition: service_healthy } }
+    # docker-socket-proxy / docker-socket-proxy-images (fix/socket-proxy-and-backup-user;
+    # fix/supervisor-images-proxy v0.16.2): resident/task reconcile on startup (index.ts's
+    # `residentService.reconcile()`/`taskService.reconcile()`) both call the Docker client
+    # immediately, and `residentService.listImages()` (GET /images) calls the second, images-only
+    # client — wait for both proxies to actually be answering first.
+    depends_on:
+      {
+        docker-socket-proxy: { condition: service_healthy },
+        docker-socket-proxy-images: { condition: service_healthy },
+      }
     # Hardening (lane-7 P2 fix): runs as non-root `nexttime` (packages/worker-supervisor/
     # Dockerfile, uid 10001); the two workspaces/config mounts above are external bind mounts
     # (unaffected by `read_only`) — only /tmp needs to stay writable.
@@ -437,6 +447,93 @@ services:
       }
     image: nexttime-ai-worker-runtime
     profiles: ["build-only"]
+
+  # docker-socket-proxy-images (fix/supervisor-images-proxy, v0.16.2): a FOURTH
+  # tecnativa/docker-socket-proxy instance, dedicated to worker-supervisor's `GET /images` reads
+  # alone (docker-client.ts `listImages`/`inspectImage`, wired up by S7-E/#229/#230). Verified on
+  # the production host (v0.16.1): worker-supervisor's existing `docker-socket-proxy` connection
+  # (`dockerapi` network, above) is `IMAGES=0` — every `GET /images*` call 403s "Request forbidden
+  # by administrative rules", which fails `list_runtime_images` / `runtime_inventory` /
+  # `set_active_runtime_image` / `rollback_runtime_image` closed (the kernel already treats any
+  # non-200 as `runtime_unreachable` — see `docs/runbooks/operations.md` §13's own troubleshooting
+  # table). CI never runs worker-supervisor behind either proxy (`.github/workflows/e2e.yml`'s own
+  # comment: "none of agent-host/worker-supervisor/docker-socket-proxy/egress-proxy...is needed"),
+  # so this never showed up there.
+  #
+  # Why a FOURTH instance instead of just flipping `IMAGES=1` on the existing `docker-socket-proxy`
+  # above: that proxy already has `POST=1` (needed for container create/start/stop) — under this
+  # image's own allowlist shape, `POST=1` together with `IMAGES=1` also opens `POST /images/create`
+  # (pull) and `DELETE /images/{name}` (remove), neither of which worker-supervisor's
+  # docker-client.ts calls (grepped — only `GET /images/json` and `GET /images/{id}/json`). Turning
+  # it on there would be a privilege increase past what this fix (or the original S7-E task) asked
+  # for — one instance per trust boundary, the same pattern `docker-socket-proxy-gate`/
+  # `-collector` below already use (docs/STATUS.md 遗留 11 lists the three privilege sets that
+  # predate this one; this is the fourth, read-only). `dockerapi-images` (networks: block below) is
+  # a disjoint `internal: true` network from `dockerapi` — nothing on one can reach the proxy on
+  # the other, and this proxy grants no method this platform doesn't already read-only-expose
+  # elsewhere.
+  #
+  # Same image/tag/digest, volumes, healthcheck, and hardening as the other three instances — see
+  # `docker-socket-proxy` above for how each was verified (image Dockerfile/entrypoint read at the
+  # v0.5.0 tag; healthcheck UNVERIFIED on a real host, same caveat).
+  #
+  # Flags: IMAGES=1 (the only capability this instance grants), PING=1/VERSION=1 (image defaults,
+  # harmless, PING backs the healthcheck below). POST=0 — deliberately NOT granted: worker-
+  # supervisor's image reads are GET-only, and POST=0 alone already blocks every write-shaped verb
+  # regardless of which other flags are on (this proxy's own top-level gate, verified against the
+  # v0.5.0 haproxy.cfg — see `docker-socket-proxy`'s own comment). Every other section explicitly
+  # 0, mirroring the same explicit list the other three instances use.
+  docker-socket-proxy-images:
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    environment:
+      {
+        IMAGES: "1",
+        PING: "1",
+        VERSION: "1",
+        POST: "0",
+        CONTAINERS: "0",
+        NETWORKS: "0",
+        VOLUMES: "0",
+        INFO: "0",
+        EVENTS: "0",
+        ALLOW_RESTARTS: "0",
+        ALLOW_START: "0",
+        ALLOW_STOP: "0",
+        ALLOW_PAUSE: "0",
+        ALLOW_UNPAUSE: "0",
+        EXEC: "0",
+        BUILD: "0",
+        COMMIT: "0",
+        SWARM: "0",
+        SYSTEM: "0",
+        SECRETS: "0",
+        CONFIGS: "0",
+        PLUGINS: "0",
+        TASKS: "0",
+        SERVICES: "0",
+        NODES: "0",
+        AUTH: "0",
+        DISTRIBUTION: "0",
+        GRPC: "0",
+        SESSION: "0",
+      }
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    # No group_add/DOCKER_GID: same reasoning as the other three proxy instances — this image's
+    # own entrypoint runs as root, which already owns docker.sock's OWNER permission bits.
+    networks: [dockerapi-images]
+    healthcheck:
+      # Same UNVERIFIED-on-a-real-host caveat as the other three proxy instances (no Docker
+      # locally to confirm `wget` exists in this image's userland).
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:2375/_ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp", "/run"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # docker-socket-proxy-gate (fix/gate-docker-socket-proxy): a SECOND tecnativa/docker-socket-proxy
   # instance, dedicated to `gatekeeper-docker` alone — closes the last direct docker.sock bind
@@ -1209,6 +1306,14 @@ networks:
   # dockerapi-collector (S3.3): docker-socket-proxy-collector + collector-host-inventory only —
   # same disjoint-per-trust-boundary reasoning as dockerapi/dockerapi-gate above.
   dockerapi-collector: { internal: true }
+  # dockerapi-images (fix/supervisor-images-proxy, v0.16.2): docker-socket-proxy-images +
+  # worker-supervisor only — a *fourth* disjoint trust boundary, same reasoning as
+  # dockerapi/dockerapi-gate/dockerapi-collector above (docs/STATUS.md 遗留 11 lists the three that
+  # predate this one). worker-supervisor is also on `dockerapi` above (container lifecycle,
+  # IMAGES=0 there) — this second network gives it a second, narrower-scoped Docker Engine API
+  # path for GET /images reads only (docker-socket-proxy-images's own comment below has the full
+  # "why not just turn IMAGES=1 on the existing proxy" reasoning).
+  dockerapi-images: { internal: true }
 secrets:
   pg_password: { file: "${NEXTTIME_DATA}/secrets/pg_password" }
   handle_key: { file: "${NEXTTIME_DATA}/secrets/handle.key" } # scripts/gen-handle-keys.sh；0640 组 10001
