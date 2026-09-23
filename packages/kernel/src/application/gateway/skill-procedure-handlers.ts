@@ -1,7 +1,9 @@
 import { ProposeProcedureContentSchema, ProposeSkillContentSchema } from '@nexttime/shared';
+import type { SkillRow } from '../../application/worker/index.js';
 import {
   deprecateProcedure,
   deprecateSkill,
+  getSkill,
   listProcedures,
   listSkills,
   proposeProcedure,
@@ -67,20 +69,50 @@ const deprecateSkillHandler: CapabilityHandler = async (client, workspaceId, par
   };
 };
 
-const listSkillsHandler: CapabilityHandler = async (client, workspaceId, _params, ctx) => {
+function toWireSkillSummary(row: SkillRow) {
+  return {
+    id: row.id,
+    version: row.version,
+    status: row.status,
+    name: row.name,
+    description: row.description,
+    applicable: row.applicable,
+  };
+}
+
+// S8 W1-C (leftover 48 pagination list): `limit`/`cursor` → `nextCursor`/`truncated` — no-`limit`
+// behavior unchanged (`DEFAULT_LIST_SKILLS_LIMIT`, `application/worker/skills.ts`'s own doc
+// comment).
+const listSkillsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { limit, cursor } = params as { limit?: number; cursor?: string };
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
-  const rows = await listSkills(client, workspaceId, principalId);
+  const page = await listSkills(client, workspaceId, principalId, { limit, cursor });
   return {
     result: {
-      items: rows.map((row) => ({
-        id: row.id,
-        version: row.version,
-        status: row.status,
-        name: row.name,
-        description: row.description,
-        applicable: row.applicable,
-      })),
+      items: page.items.map(toWireSkillSummary),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },
+  };
+};
+
+// S8 W1-C (leftover 48 "无 get_skill"): the full-body counterpart to `listSkillsHandler` above.
+const getSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { skillId } = params as { skillId: string };
+  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
+  const row = await getSkill(client, workspaceId, principalId, skillId);
+  if (!row) return { result: null, resourceType: 'skill', resourceId: skillId };
+  return {
+    result: {
+      ...toWireSkillSummary(row),
+      markdown: row.markdown,
+      proposedBy: row.proposedBy,
+      publishedBy: row.publishedBy,
+      createdAt: row.createdAt.toISOString(),
+      publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+    },
+    resourceType: 'skill',
+    resourceId: skillId,
   };
 };
 
@@ -123,12 +155,14 @@ const deprecateProcedureHandler: CapabilityHandler = async (client, workspaceId,
   };
 };
 
-const listProceduresHandler: CapabilityHandler = async (client, workspaceId, _params, ctx) => {
+// S8 W1-C (leftover 48 pagination list): same shape as `listSkillsHandler` above.
+const listProceduresHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { limit, cursor } = params as { limit?: number; cursor?: string };
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
-  const rows = await listProcedures(client, workspaceId, principalId);
+  const page = await listProcedures(client, workspaceId, principalId, { limit, cursor });
   return {
     result: {
-      items: rows.map((row) => ({
+      items: page.items.map((row) => ({
         id: row.id,
         version: row.version,
         status: row.status,
@@ -136,6 +170,8 @@ const listProceduresHandler: CapabilityHandler = async (client, workspaceId, _pa
         description: row.description,
         steps: row.steps,
       })),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },
   };
 };
@@ -145,6 +181,7 @@ export {
   publishSkillHandler,
   deprecateSkillHandler,
   listSkillsHandler,
+  getSkillHandler,
   proposeProcedureHandler,
   publishProcedureHandler,
   deprecateProcedureHandler,

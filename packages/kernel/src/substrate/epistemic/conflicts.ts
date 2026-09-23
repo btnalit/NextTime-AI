@@ -211,6 +211,11 @@ export const MAX_LIST_CONFLICTS_LIMIT = 100;
 
 export interface ListConflictsInput {
   readonly status?: ConflictStatus;
+  /** S8 W1-C (leftover 48 "list_conflicts 无对象 / Fact 筛选"): matches a Conflict whose `factAId`
+   *  or `factBId` names a Fact (Link) starting or ending at this Object. */
+  readonly objectId?: string;
+  /** Matches a Conflict whose `factAId` or `factBId` is this exact Fact. */
+  readonly factId?: string;
   readonly limit?: number;
   readonly cursor?: string;
 }
@@ -257,16 +262,37 @@ export async function listConflicts(
   const cursor = decodeKeysetCursor(input.cursor);
 
   const result = await client.query<ConflictDbRow>(
-    `select ${CONFLICT_COLUMNS} from conflicts
-     where workspace_id = $1
-       and ($2::text is null or status = $2)
+    `select ${CONFLICT_COLUMNS} from conflicts c
+     where c.workspace_id = $1
+       and ($2::text is null or c.status = $2)
        and (
          $3::timestamptz is null
-         or (date_trunc('milliseconds', opened_at), id) < ($3::timestamptz, $4::uuid)
+         or (date_trunc('milliseconds', c.opened_at), c.id) < ($3::timestamptz, $4::uuid)
        )
-     order by date_trunc('milliseconds', opened_at) desc, id desc
+       and (
+         $6::uuid is null
+         or c.link_a_id = $6 or c.link_b_id = $6
+       )
+       and (
+         $7::uuid is null
+         or exists (
+           select 1 from links l
+           where l.workspace_id = c.workspace_id
+             and l.id in (c.link_a_id, c.link_b_id)
+             and (l.source_object_id = $7 or l.target_object_id = $7)
+         )
+       )
+     order by date_trunc('milliseconds', c.opened_at) desc, c.id desc
      limit $5`,
-    [workspaceId, input.status ?? null, cursor?.at ?? null, cursor?.id ?? null, limit],
+    [
+      workspaceId,
+      input.status ?? null,
+      cursor?.at ?? null,
+      cursor?.id ?? null,
+      limit,
+      input.factId ?? null,
+      input.objectId ?? null,
+    ],
   );
 
   const items = result.rows.map(mapConflictRow);
