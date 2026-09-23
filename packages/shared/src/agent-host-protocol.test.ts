@@ -192,6 +192,24 @@ describe('KernelToAgentHostFrameSchema', () => {
     expect(KernelStartTurnCommandSchema.safeParse(startTurn).success).toBe(true);
   });
 
+  it('image: accepts omitted or a non-empty string, rejects an empty string (P3 hotfix, post-v0.16.0 review)', () => {
+    const base = {
+      type: 'startTurn',
+      ...correlation(),
+      prompt: '<!--nexttime:turn_id=abc-->\nhello',
+      handle: 'jwt-token',
+      kernelLlmUrl: 'http://llm-proxy:8082',
+    };
+    expect(KernelStartTurnCommandSchema.safeParse(base).success).toBe(true);
+    expect(
+      KernelStartTurnCommandSchema.safeParse({
+        ...base,
+        image: 'nexttime-ai-worker-runtime:v1',
+      }).success,
+    ).toBe(true);
+    expect(KernelStartTurnCommandSchema.safeParse({ ...base, image: '' }).success).toBe(false);
+  });
+
   it('rejects an agent-host->kernel frame sent on the wrong channel', () => {
     expect(
       KernelToAgentHostFrameSchema.safeParse({ type: 'hello', instanceId: randomUUID() }).success,
