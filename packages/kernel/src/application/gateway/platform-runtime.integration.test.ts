@@ -582,6 +582,43 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(result.activeImageSource).toBe('env_default');
       });
 
+      // Review follow-up (PR #233): the exact state of a freshly-deployed host that has never
+      // called set_active_runtime_image — the platform setting is unset, so activeImage resolves
+      // from worker-supervisor's own raw, un-normalized defaultImage. Before normalizing
+      // resolveActiveImage/findImage, this never matched the built image's own fully-qualified
+      // ":latest" tag, so activeImageInfo stayed null and every needsRebuild stayed false forever,
+      // even on the maintainer's very first look at the 运行层 page.
+      it('resolves activeImageInfo (and needsRebuild) from an untagged defaultImage against an image tagged only ":latest"', async () => {
+        await resetActiveRuntimeImageSetting();
+        supervisor.defaultImage = 'custom-host-image-name'; // no explicit tag — the real WORKER_IMAGE default shape
+        const latestOnlyImage: RuntimeImageInfo = {
+          id: 'sha256:defaultlatest000000000000000000000000000000000000000000000000',
+          tags: ['custom-host-image-name:latest'],
+          created: '2026-09-22T00:00:00.000Z',
+          labels: {},
+        };
+        supervisor.images = [latestOnlyImage];
+        const upToDate = residentEntry({ imageId: latestOnlyImage.id });
+        const stale = residentEntry({
+          imageId: 'sha256:stale00000000000000000000000000000000000000000000000000000000',
+        });
+        supervisor.residents = [upToDate, stale];
+
+        const result = await callAsAdmin<RuntimeInventoryWire>('runtime_inventory');
+        expect(result.activeImage).toBe('custom-host-image-name:latest');
+        expect(result.activeImageSource).toBe('env_default');
+        expect(result.activeImageInfo?.id).toBe(latestOnlyImage.id);
+
+        const upToDateResult = result.residentContainers.find(
+          (c) => c.principalId === upToDate.principalId,
+        );
+        const staleResult = result.residentContainers.find(
+          (c) => c.principalId === stale.principalId,
+        );
+        expect(upToDateResult?.needsRebuild).toBe(false);
+        expect(staleResult?.needsRebuild).toBe(true);
+      });
+
       it('reports activeImageSource "unknown" (activeImage null) when the setting is unset and worker-supervisor is unreachable', async () => {
         await resetActiveRuntimeImageSetting();
         supervisor.imagesShouldThrow = true;

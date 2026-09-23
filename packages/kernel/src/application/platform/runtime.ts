@@ -128,7 +128,16 @@ async function tryListResidents(): Promise<ResidentInventoryEntry[]> {
 /** What `activeImage`/`activeImageSource` should be, given the platform setting and
  *  worker-supervisor's own reported `defaultImage` — never a kernel-side guess (see this
  *  module's own doc comment). `'unknown'` only when the setting is unset *and* worker-supervisor
- *  could not be reached to report its own default. */
+ *  could not be reached to report its own default.
+ *
+ *  Review follow-up (PR #233): the resolved value is normalized (`normalizeImageRef` — see that
+ *  function's own doc comment). `settingValue` is already normalized in practice (every write
+ *  path stores it that way as of this same follow-up), so this is a no-op for it; `defaultImage`
+ *  is worker-supervisor's own raw, un-normalized `config.workerImage` and is the case that
+ *  actually matters — without this, a host that has never called `set_active_runtime_image` (the
+ *  exact state of a freshly-deployed production host) could never resolve `activeImageInfo` via
+ *  `findImage` below, leaving `runtime_inventory` permanently unable to show an active image or
+ *  compute `needsRebuild` for anything, until the first manual `set_active_runtime_image` call. */
 function resolveActiveImage(
   settingValue: string | null,
   defaultImage: string | undefined,
@@ -136,8 +145,12 @@ function resolveActiveImage(
   activeImage: string | null;
   activeImageSource: 'setting' | 'env_default' | 'unknown';
 } {
-  if (settingValue) return { activeImage: settingValue, activeImageSource: 'setting' };
-  if (defaultImage) return { activeImage: defaultImage, activeImageSource: 'env_default' };
+  if (settingValue) {
+    return { activeImage: normalizeImageRef(settingValue), activeImageSource: 'setting' };
+  }
+  if (defaultImage) {
+    return { activeImage: normalizeImageRef(defaultImage), activeImageSource: 'env_default' };
+  }
   return { activeImage: null, activeImageSource: 'unknown' };
 }
 
@@ -175,12 +188,23 @@ function toWireRuntimeImage(
 /** `image` may be a tag (`repo:tag`) or an image id (`sha256:...`) — matches either against a
  *  known image's own `tags`/`id`. `undefined` when unresolvable (not built, or worker-supervisor
  *  unreachable — `images` is already `[]` in that case, from `tryListImages`/the caller's own
- *  fetch). */
+ *  fetch).
+ *
+ *  Review follow-up (PR #233): tag matching is normalized (`normalizeImageRef`, both sides) — an
+ *  `image` with no explicit tag (worker-supervisor's own raw `defaultImage`, `resolveActiveImage`'s
+ *  own doc comment) still resolves against an image whose only tag is the fully-qualified
+ *  `:latest` form. The `id` match is unchanged (a digest is never affected by normalization, so
+ *  there is nothing to gain by normalizing that side). */
 function findImage(
   images: readonly RuntimeImageInfo[],
   image: string,
 ): RuntimeImageInfo | undefined {
-  return images.find((candidate) => candidate.id === image || candidate.tags.includes(image));
+  const normalizedImage = normalizeImageRef(image);
+  return images.find(
+    (candidate) =>
+      candidate.id === image ||
+      candidate.tags.some((tag) => normalizeImageRef(tag) === normalizedImage),
+  );
 }
 
 // -------------------------------------------------------------------------------------------
