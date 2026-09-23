@@ -50,6 +50,7 @@ function image(overrides: Partial<RuntimeInventoryWire['images'][number]> = {}) 
     platformExtensionVersion: '1.0.0',
     builtFrom: 'v0.15.0 (abc1234)',
     labels: {},
+    allowed: true,
     ...overrides,
   };
 }
@@ -179,6 +180,28 @@ describe('PlatformRuntimePage', () => {
     await waitFor(() =>
       expect(http.calls.some((c) => c.name === 'set_active_runtime_image')).toBe(true),
     );
+  });
+
+  it('设为活动 is disabled with a hint for an image not in WORKER_IMAGE_ALLOWLIST (P1-a hotfix)', async () => {
+    const notAllowed = image({
+      id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:v2'],
+      allowed: false,
+    });
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory({ images: [image(), notAllowed] }),
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const row = await screen.findByTestId(`runtime-image-row-${notAllowed.id}`);
+    const button = within(row).getByTestId('runtime-image-activate') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(row.textContent).toContain('WORKER_IMAGE_ALLOWLIST');
+
+    fireEvent.click(button);
+    expect(http.calls.some((c) => c.name === 'set_active_runtime_image')).toBe(false);
   });
 
   it('回滚到上一个镜像 opens a medium confirm and calls rollback_runtime_image', async () => {

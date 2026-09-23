@@ -106,6 +106,9 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
   }
 
   async function activate(image: RuntimeImageWire): Promise<void> {
+    // P1-a hotfix: always the same identifier `allowed` was computed against
+    // (kernel's `toWireRuntimeImage`, `tags[0] ?? id`) — never a bare digest for an untagged
+    // image, which can never be allowlisted (see `RuntimeImageWire.allowed`'s own doc comment).
     await http.call('set_active_runtime_image', { image: image.tags[0] ?? image.id });
     await refreshAll();
   }
@@ -345,11 +348,22 @@ function RuntimeBody({
                             variant="ghost"
                             size="s"
                             onClick={() => onActivate(image)}
+                            disabled={!image.allowed}
+                            title={
+                              image.allowed
+                                ? undefined
+                                : '未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST'
+                            }
                             data-testid="runtime-image-activate"
                           >
                             设为活动 Set active
                           </Button>
                         )}
+                        {!active && !image.allowed ? (
+                          <div className="text-3 text-small" data-testid="runtime-image-not-allowed-hint">
+                            未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST
+                          </div>
+                        ) : null}
                       </td>
                     </tr>
                   );

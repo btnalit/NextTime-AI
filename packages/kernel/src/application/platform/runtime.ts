@@ -94,19 +94,24 @@ function requireSupervisorClient(): TaskSupervisorClientPort {
 
 /** Soft read for dashboard-style aggregations (`runtime_inventory`, `platform_status`,
  *  `pi_drift`) — a missing implementation or a network failure both degrade to `{defaultImage:
- *  undefined, images: []}`, never a thrown error, so one unreachable dependency never blanks out
- *  the rest of the dashboard. */
+ *  undefined, images: [], allowedImages: []}`, never a thrown error, so one unreachable dependency
+ *  never blanks out the rest of the dashboard. */
 async function tryListImages(): Promise<{
   defaultImage: string | undefined;
   images: RuntimeImageInfo[];
+  allowedImages: readonly string[];
 }> {
   try {
     const client = getConfiguredTaskRuntime().supervisorClient;
-    if (!client.listImages) return { defaultImage: undefined, images: [] };
+    if (!client.listImages) return { defaultImage: undefined, images: [], allowedImages: [] };
     const inventory = await client.listImages();
-    return { defaultImage: inventory.defaultImage, images: inventory.images };
+    return {
+      defaultImage: inventory.defaultImage,
+      images: inventory.images,
+      allowedImages: inventory.allowedImages,
+    };
   } catch {
-    return { defaultImage: undefined, images: [] };
+    return { defaultImage: undefined, images: [], allowedImages: [] };
   }
 }
 
@@ -135,7 +140,14 @@ function resolveActiveImage(
   return { activeImage: null, activeImageSource: 'unknown' };
 }
 
-function toWireRuntimeImage(image: RuntimeImageInfo): RuntimeImageWire {
+/** P1-a hotfix: `allowed` reflects whether *the exact identifier `set_active_runtime_image` would
+ *  be called with* (`tags[0] ?? id` — same expression the console's own `activate()` uses) is in
+ *  worker-supervisor's own `allowedImages`. Deliberately not "any tag or the id is allowlisted" —
+ *  an image with a stale first tag that happens not to be allowlisted while a later tag is would
+ *  be a confusing edge case this platform's build process (one tag per build) does not produce in
+ *  practice; keeping this in lockstep with what the console actually sends is simpler and never
+ *  claims "allowed" for a call that would 409. */
+function toWireRuntimeImage(image: RuntimeImageInfo, allowedImages: ReadonlySet<string>): RuntimeImageWire {
   return {
     id: image.id,
     tags: [...image.tags],
@@ -144,6 +156,7 @@ function toWireRuntimeImage(image: RuntimeImageInfo): RuntimeImageWire {
     platformExtensionVersion: image.labels[IMAGE_PLATFORM_EXTENSION_VERSION_LABEL] ?? null,
     builtFrom: image.labels[IMAGE_BUILT_FROM_LABEL] ?? null,
     labels: { ...image.labels },
+    allowed: allowedImages.has(image.tags[0] ?? image.id),
   };
 }
 
@@ -170,6 +183,7 @@ export const runtimeInventoryHandler: CapabilityHandler = async (client) => {
     imagesResult.defaultImage,
   );
   const activeImageInfo = activeImage ? findImage(imagesResult.images, activeImage) : undefined;
+  const allowedImages = new Set(imagesResult.allowedImages);
 
   const residentContainers: ResidentContainerWire[] = residents.map((resident) => ({
     principalId: resident.principalId,
@@ -191,8 +205,8 @@ export const runtimeInventoryHandler: CapabilityHandler = async (client) => {
   const result: RuntimeInventoryWire = {
     activeImage,
     activeImageSource,
-    activeImageInfo: activeImageInfo ? toWireRuntimeImage(activeImageInfo) : null,
-    images: imagesResult.images.map(toWireRuntimeImage),
+    activeImageInfo: activeImageInfo ? toWireRuntimeImage(activeImageInfo, allowedImages) : null,
+    images: imagesResult.images.map((image) => toWireRuntimeImage(image, allowedImages)),
     residentContainers,
     checkedAt: new Date().toISOString(),
   };
@@ -210,8 +224,9 @@ export const listRuntimeImagesHandler: CapabilityHandler = async () => {
       'application/platform/runtime: the configured supervisor client does not implement listImages (S7-E)',
     );
   }
-  const { images } = await supervisor.listImages();
-  return { result: { items: images.map(toWireRuntimeImage) } };
+  const { images, allowedImages } = await supervisor.listImages();
+  const allowedSet = new Set(allowedImages);
+  return { result: { items: images.map((image) => toWireRuntimeImage(image, allowedSet)) } };
 };
 
 // -------------------------------------------------------------------------------------------
@@ -232,8 +247,9 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
     );
   }
   let images: RuntimeImageInfo[];
+  let allowedImages: readonly string[];
   try {
-    ({ images } = await supervisor.listImages());
+    ({ images, allowedImages } = await supervisor.listImages());
   } catch (err) {
     throw new PlatformAdminError(
       'runtime_unreachable',
@@ -244,6 +260,18 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
     throw new PlatformAdminError(
       'image_not_in_inventory',
       `image "${image}" is not in list_runtime_images — build it on the host/CI first (docs/runbooks/operations.md §13) before setting it active`,
+    );
+  }
+  // P1-a hotfix (post-v0.16.0 review): being *built* (in the inventory above) is not being
+  // *allowlisted* — worker-supervisor's own spawn routes (`/task/spawn`, `/resident/spawn`) 403
+  // any image outside `WORKER_IMAGE_ALLOWLIST` (`config.taskImageAllowlist`, a static, exact-
+  // string, env-configured security boundary this handler must never re-implement or loosen).
+  // Before this check, setting a non-allowlisted image active would silently 403 every future
+  // spawn platform-wide the moment a Worker/entry container next tried to start.
+  if (!allowedImages.includes(image)) {
+    throw new PlatformAdminError(
+      'image_not_allowed',
+      `image "${image}" is not in worker-supervisor's WORKER_IMAGE_ALLOWLIST — allowed: ${allowedImages.join(', ') || '(none)'}`,
     );
   }
   const row = await updatePlatformSettings(
@@ -270,7 +298,17 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
  *  'null'::jsonb)`), matching an unset setting. Never re-validates the restored value against
  *  `list_runtime_images` (unlike `set_active_runtime_image`) — this is a deliberate recovery
  *  action reverting to a known-prior state; if that image has since been pruned from the host,
- *  `runtime_inventory` will show it missing and a spawn attempt will fail loudly on its own. */
+ *  `runtime_inventory` will show it missing and a spawn attempt will fail loudly on its own.
+ *
+ *  P1-a hotfix (post-v0.16.0 review): now DOES re-validate the restored value against
+ *  worker-supervisor's own allowlist (`allowedImages`/`WORKER_IMAGE_ALLOWLIST`) — the
+ *  inventory-existence skip above stands (a pruned-but-still-allowlisted image is a legitimate, if
+ *  noisy, recovery target), but rolling back to a value an operator has since removed from
+ *  `WORKER_IMAGE_ALLOWLIST` would silently 403 every future spawn platform-wide, exactly the
+ *  failure mode this hotfix closes for `set_active_runtime_image`. Skipped entirely when
+ *  `previousImage` is `null` (reverting to "unset" needs no allowlist check — worker-supervisor's
+ *  own `defaultImage` is always allowlisted, `config.ts`'s `buildTaskImageAllowlist`); an
+ *  unreachable supervisor refuses rather than guesses, same as `set_active_runtime_image`. */
 export const rollbackRuntimeImageHandler: CapabilityHandler = async (
   client,
   _workspaceId,
@@ -296,6 +334,31 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
   const previousValue = previous.settings.activeRuntimeImage;
   const previousImage: string | null =
     typeof previousValue === 'string' || previousValue === null ? previousValue : null;
+
+  if (previousImage !== null) {
+    const supervisor = requireSupervisorClient();
+    if (!supervisor.listImages) {
+      throw new Error(
+        'application/platform/runtime: the configured supervisor client does not implement listImages (S7-E)',
+      );
+    }
+    let allowedImages: readonly string[];
+    try {
+      ({ allowedImages } = await supervisor.listImages());
+    } catch (err) {
+      throw new PlatformAdminError(
+        'runtime_unreachable',
+        `could not reach worker-supervisor to validate the rollback target: ${String(err)}`,
+      );
+    }
+    if (!allowedImages.includes(previousImage)) {
+      throw new PlatformAdminError(
+        'image_not_allowed',
+        `previous image "${previousImage}" is no longer in worker-supervisor's WORKER_IMAGE_ALLOWLIST — allowed: ${allowedImages.join(', ') || '(none)'}`,
+      );
+    }
+  }
+
   const row = await updatePlatformSettings(
     client,
     { activeRuntimeImage: previousImage },

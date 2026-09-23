@@ -298,6 +298,20 @@ describe('GET /images (S7-E inventory)', () => {
         labels: { 'ai.nexttime.pi-version': '0.84.4' },
       },
     ]);
+    // P1-a hotfix (post-v0.16.0 review): `GET /images` must also report the exact allowlist
+    // `/task/spawn` and `/resident/spawn` enforce (`config.taskImageAllowlist`), so the kernel can
+    // reject a non-allowlisted `set_active_runtime_image` target instead of only 403ing at spawn.
+    expect(body.allowedImages).toEqual(config.taskImageAllowlist);
+  });
+
+  it('reports allowedImages additively from WORKER_IMAGE_ALLOWLIST (P1-a hotfix)', async () => {
+    const { app, config } = setup({ WORKER_IMAGE_ALLOWLIST: 'nexttime-ai-worker-runtime:v2' });
+    const res = await app.inject({ method: 'GET', url: '/images', headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().allowedImages).toEqual([
+      config.workerImage,
+      'nexttime-ai-worker-runtime:v2',
+    ]);
   });
 });
 

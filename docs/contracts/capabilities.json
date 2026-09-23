@@ -8719,6 +8719,9 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "allowed": {
+                "type": "boolean"
+              },
               "builtFrom": {
                 "type": [
                   "string",
@@ -8763,7 +8766,8 @@
               "piVersion",
               "platformExtensionVersion",
               "builtFrom",
-              "labels"
+              "labels",
+              "allowed"
             ],
             "type": "object"
           },
@@ -14068,6 +14072,9 @@
             {
               "additionalProperties": false,
               "properties": {
+                "allowed": {
+                  "type": "boolean"
+                },
                 "builtFrom": {
                   "type": [
                     "string",
@@ -14112,7 +14119,8 @@
                 "piVersion",
                 "platformExtensionVersion",
                 "builtFrom",
-                "labels"
+                "labels",
+                "allowed"
               ],
               "type": "object"
             },
@@ -14136,6 +14144,9 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "allowed": {
+                "type": "boolean"
+              },
               "builtFrom": {
                 "type": [
                   "string",
@@ -14180,7 +14191,8 @@
               "piVersion",
               "platformExtensionVersion",
               "builtFrom",
-              "labels"
+              "labels",
+              "allowed"
             ],
             "type": "object"
           },

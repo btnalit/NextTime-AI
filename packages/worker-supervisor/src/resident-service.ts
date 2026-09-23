@@ -217,10 +217,18 @@ export interface ResidentService {
 }
 
 /** S7-E: `GET /images`'s full response — see `ResidentService.listImages`'s own doc comment for
- *  why `defaultImage` travels alongside the image list rather than being a kernel-side guess. */
+ *  why `defaultImage` travels alongside the image list rather than being a kernel-side guess.
+ *  `allowedImages` (P1-a hotfix, post-v0.16.0 review): `config.taskImageAllowlist` verbatim — the
+ *  exact static, additive allowlist `isImageAllowed`/`/task/spawn`/`/resident/spawn` already
+ *  enforce (`config.ts`). Before this field existed, the kernel's `set_active_runtime_image` only
+ *  checked an image appeared in `images` (built), not that it was allowlisted — a non-allowlisted
+ *  active image 403s every future spawn platform-wide, discovered only once a Worker/entry
+ *  container tries to start. Exposing the same list here lets the kernel reject that target up
+ *  front, one security boundary (env-configured allowlist), never re-implemented kernel-side. */
 export interface RuntimeImageInventory {
   readonly defaultImage: string;
   readonly images: RuntimeImageInfo[];
+  readonly allowedImages: readonly string[];
 }
 
 export function createResidentService(deps: ResidentServiceDeps): ResidentService {
@@ -747,7 +755,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
     async listImages(): Promise<RuntimeImageInventory> {
       const images = await docker.listImages(IMAGE_PI_VERSION_LABEL);
-      return { defaultImage: config.workerImage, images };
+      return { defaultImage: config.workerImage, images, allowedImages: config.taskImageAllowlist };
     },
   };
 }

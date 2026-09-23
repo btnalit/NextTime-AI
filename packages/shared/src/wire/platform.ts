@@ -576,6 +576,13 @@ export const RuntimeImageWireSchema = z
     /** `ai.nexttime.built-from` label, when present (a git ref / commit the build was cut from). */
     builtFrom: z.string().nullable(),
     labels: z.record(z.string(), z.string()),
+    /** P1-a hotfix (post-v0.16.0 review): whether `tags[0] ?? id` — the exact identifier
+     *  `set_active_runtime_image` would be called with — is in worker-supervisor's own
+     *  `allowedImages` (`GET /images`, `config.taskImageAllowlist`). `false` for an untagged
+     *  image (a rebuild that overwrote its old tag, leaving only a digest — digests are never
+     *  allowlisted) as well as for a tagged-but-not-allowlisted one; the console disables "设为
+     *  活动" accordingly rather than letting the call 409 `image_not_allowed`. */
+    allowed: z.boolean(),
   })
   .strict();
 export type RuntimeImageWire = z.infer<typeof RuntimeImageWireSchema>;

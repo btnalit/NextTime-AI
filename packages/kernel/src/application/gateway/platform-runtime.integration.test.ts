@@ -118,12 +118,21 @@ const IMAGE_V2: RuntimeImageInfo = {
  *  `stoppedPrincipalIds` records every `stopResident` call for `roll_entry_containers` assertions.
  *  `defaultImage` mirrors worker-supervisor's own `config.workerImage` (S7-E review fix: the
  *  kernel must never guess this — see `application/platform/runtime.ts`'s own doc comment);
- *  `imagesShouldThrow` simulates worker-supervisor being unreachable for `listImages()`. */
+ *  `imagesShouldThrow` simulates worker-supervisor being unreachable for `listImages()`.
+ *
+ *  `allowedImages` (P1-a hotfix, post-v0.16.0 review): `undefined` (the default) means "allow
+ *  every image currently registered in `images`, plus `defaultImage`" — a reasonable stand-in for
+ *  real worker-supervisor's own `config.taskImageAllowlist` always including `config.workerImage`
+ *  (`config.ts`'s `buildTaskImageAllowlist`) that lets every existing test in this file keep
+ *  exercising `set_active_runtime_image`'s *inventory* check without separately wiring up an
+ *  allowlist for each one. Tests that exercise the allowlist itself (the "allowlist (P1-a hotfix)"
+ *  describe block below) set this explicitly, including to a strict subset of `images`. */
 class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
   images: RuntimeImageInfo[] = [];
   residents: ResidentInventoryEntry[] = [];
   defaultImage = 'nexttime-ai-worker-runtime';
   imagesShouldThrow = false;
+  allowedImages: string[] | undefined = undefined;
   readonly stoppedPrincipalIds: string[] = [];
 
   async spawn(): Promise<TaskSpawnOutcome> {
@@ -139,11 +148,17 @@ class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
     this.stoppedPrincipalIds.push(principalId);
     return true;
   }
-  async listImages(): Promise<{ defaultImage: string; images: RuntimeImageInfo[] }> {
+  async listImages(): Promise<{
+    defaultImage: string;
+    images: RuntimeImageInfo[];
+    allowedImages: readonly string[];
+  }> {
     if (this.imagesShouldThrow) {
       throw new Error('simulated: worker-supervisor unreachable');
     }
-    return { defaultImage: this.defaultImage, images: this.images };
+    const allowedImages =
+      this.allowedImages ?? [this.defaultImage, ...this.images.flatMap((image) => image.tags)];
+    return { defaultImage: this.defaultImage, images: this.images, allowedImages };
   }
   async listResidents(): Promise<ResidentInventoryEntry[]> {
     return this.residents;
@@ -343,6 +358,17 @@ describe.runIf(DATABASE_URL !== undefined)(
           platformExtensionVersion: '1.0.0',
         });
       });
+
+      // P1-a hotfix (post-v0.16.0 review): each image's own `allowed` reflects worker-supervisor's
+      // real allowlist, not merely "is it built" — the console needs this to disable "设为活动" for
+      // a built-but-not-allowlisted image (e.g. an untagged rebuild) up front.
+      it('flags each image’s own `allowed` from worker-supervisor’s allowlist (P1-a hotfix)', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V2];
+        supervisor.allowedImages = ['nexttime-ai-worker-runtime:v1'];
+        const result = await callAsAdmin<{ items: RuntimeImageWire[] }>('list_runtime_images');
+        expect(result.items.find((i) => i.id === IMAGE_V1.id)?.allowed).toBe(true);
+        expect(result.items.find((i) => i.id === IMAGE_V2.id)?.allowed).toBe(false);
+      });
     });
 
     describe('set_active_runtime_image / rollback_runtime_image', () => {
@@ -401,6 +427,54 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const second = await callAsAdmin<PlatformSettingsWire>('rollback_runtime_image');
         expect(second.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v2');
+      });
+    });
+
+    // P1-a hotfix (post-v0.16.0 review): being in the image *inventory* (built) is not being in
+    // worker-supervisor's own *allowlist* (`WORKER_IMAGE_ALLOWLIST`/`isImageAllowed`, the static
+    // exact-string security boundary `/task/spawn` and `/resident/spawn` enforce) — setting or
+    // rolling back to a non-allowlisted image used to silently 403 every future spawn
+    // platform-wide the moment a Worker/entry container next tried to start.
+    describe('set_active_runtime_image / rollback_runtime_image allowlist (P1-a hotfix)', () => {
+      it('rejects a target that is in the inventory but not in the allowlist (image_not_allowed)', async () => {
+        supervisor.images = [IMAGE_V1];
+        supervisor.allowedImages = []; // built, but nothing allowlisted
+        await expectPlatformError(
+          () => callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v1' }),
+          'image_not_allowed',
+        );
+      });
+
+      it('accepts a target that is both in the inventory and the allowlist', async () => {
+        supervisor.images = [IMAGE_V1];
+        supervisor.allowedImages = ['nexttime-ai-worker-runtime:v1'];
+        const result = await callAsAdmin<PlatformSettingsWire>('set_active_runtime_image', {
+          image: 'nexttime-ai-worker-runtime:v1',
+        });
+        expect(result.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v1');
+      });
+
+      it('refuses to set the active image when worker-supervisor is unreachable (never guesses)', async () => {
+        supervisor.imagesShouldThrow = true;
+        await expectPlatformError(
+          () => callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v1' }),
+          'runtime_unreachable',
+        );
+      });
+
+      it('refuses rollback to a previous value that has since been dropped from the allowlist (image_not_allowed)', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V2];
+        supervisor.allowedImages = ['nexttime-ai-worker-runtime:v1', 'nexttime-ai-worker-runtime:v2'];
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v1' });
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
+        // An operator tightens WORKER_IMAGE_ALLOWLIST after the fact — v1 is no longer allowed.
+        supervisor.allowedImages = ['nexttime-ai-worker-runtime:v2'];
+
+        await expectPlatformError(() => callAsAdmin('rollback_runtime_image'), 'image_not_allowed');
+
+        // The refused rollback must not have mutated the setting.
+        const settings = await callAsAdmin<PlatformSettingsWire>('get_platform_settings');
+        expect(settings.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v2');
       });
     });
 

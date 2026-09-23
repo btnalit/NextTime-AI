@@ -93,7 +93,10 @@ export type PlatformErrorCode =
   // S7-E (P-C §6.5; application/platform/runtime.ts)
   | 'image_not_in_inventory'
   | 'runtime_unreachable'
-  | 'no_previous_settings_version';
+  | 'no_previous_settings_version'
+  // P1-a hotfix (post-v0.16.0 review): a target not in worker-supervisor's own allowlist
+  // (`WORKER_IMAGE_ALLOWLIST` / `config.taskImageAllowlist`) — see runtime.ts.
+  | 'image_not_allowed';
 
 /** Mapped by interfaces/http/capability-route.ts: `*_not_found` → 404, the rest → 409. */
 export class PlatformAdminError extends Error {
