@@ -246,9 +246,16 @@ pnpm setup（本地已有）。
 "哪个对话有我的卡片"猜错。但排到 `chat.spec.ts` 前面同时也排到了 `approvals.spec.ts` 前面，带来另一个
 真实 CI 失败：③自己的批准会往同一个对话里写"已批准"状态行，顶到 `approvals.spec.ts` 自己那条不限定
 文本、只按 `data-status="approved"` 找状态行的断言（两次真实的基线生成 CI 失败，不是纸上谈兵）。
-两次踩坑后的结论：排位游戏在"多个 spec 共享同一个对话"这个前提下没有稳定解——`journeys/helpers.ts`
-的 `findChatWithActionCard` 才是真正的修法：挨个打开对话列表找真正带着目标卡片的那一个，不假设
-"最近一个对话"就是它，因此也不需要跟任何其他 spec 的文件名排位协调。
+第三版改成"挨个打开对话列表找真正带着目标卡片的那一个"（不假设"最近一个对话"就是它），排位问题
+是解决了，但拉 CI 失败时留下的数据库快照一比对，看清了更深的问题：同一个 `actionRequestId` 的
+`system.action_update`（批准/失败）消息会落进不止一个对话——`application/linkage/chat-targets.ts`
+的 `resolveDefaultChat`（"最近一个对话"）在两次事件处理之间解析到了不同的对话，是内核侧 linkage
+的行为，`packages/kernel/**` 不在这条车道允许改的文件范围内，继续在对话层面找"正确的那张卡片"
+没有稳定解。最终版本③不再看对话卡片：批准后切到 `ApprovalQueuePage` 同一页的"历史 History" tab
+（`list_action_requests`），挨个打开历史行的详情抽屉比对 `resourceScope`（历史行列表本身不渲染
+这个字段，只有详情抽屉渲染），再读 `approval-status` 的 `data-status`——同一页内的权威状态，天然
+不经过"卡片落在哪个对话"这一层，因此也不需要跟任何其他 spec 的文件名排位协调。
+`journeys/helpers.ts` 里不再有专门找对话的辅助函数（`findChatWithActionCard` 已删除）。
 
 **三档截图基线只能在 CI 的 Linux 上生成，本机（含这台 Windows 开发机）生成的基线不能用**——字体栅格化
 在不同操作系统上不是像素级一致的，本机截图在真实 CI 跑时会稳定失败。生成/更新基线的流程：
