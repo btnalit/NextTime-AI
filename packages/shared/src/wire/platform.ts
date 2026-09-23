@@ -107,6 +107,10 @@ export const PlatformSettingsWireSchema = z
      *  behavior). Set only via `set_active_runtime_image` (validated against `list_runtime_images`)
      *  or `rollback_runtime_image` — never through the generic `update_platform_settings` patch. */
     activeRuntimeImage: z.string().nullable(),
+    /** P-B2b (`set_default_modules`, design §6.4 "默认模块"): module family names
+     *  `create_workspace` installs into every new workspace, in this order. Names not currently in
+     *  `list_modules`' own index are rejected by `set_default_modules`, never silently kept. */
+    defaultModules: z.array(z.string().min(1)),
     envAdmins: z.array(z.string()),
     version: z.number().int().nonnegative(),
     updatedAt: z.string().nullable(),
@@ -707,3 +711,70 @@ export const PlatformStatusWireSchema = z
   })
   .strict();
 export type PlatformStatusWire = z.infer<typeof PlatformStatusWireSchema>;
+
+// -------------------------------------------------------------------------------------------
+// P-B2b (docs/platform-admin-design.md §6.4 模块; docs/development-tasks.md §5d S7-D 决定 D1–D4):
+// modules — versioned domain packs (`ontology/modules.yaml`, `application/platform/modules.ts`) —
+// as both the platform plane (`list_modules`: every module this deployment ships, aggregated across
+// workspaces) and the workspace plane (`list_workspace_modules`/`install_module`/`upgrade_module`:
+// one workspace's own install state) see them.
+// -------------------------------------------------------------------------------------------
+
+/** One version of a module family, exactly as `ontology/modules.yaml` declares it — no hash on the
+ *  wire (D2: hashes are never persisted or exposed, only compared server-side at call time). */
+export const ModuleVersionWireSchema = z
+  .object({
+    version: z.number().int().positive(),
+    /** The `ontology/<file>` this version's `OntologyDefinition` lives in. */
+    file: z.string(),
+    notes: z.string(),
+    /** True when upgrading *to* this version needs `confirm: true` (D3). Version 1 is never
+     *  breaking. */
+    breaking: z.boolean(),
+  })
+  .strict();
+export type ModuleVersionWire = z.infer<typeof ModuleVersionWireSchema>;
+
+/** `list_modules` (`scope:'platform'`): one module family, its full version list, and how many
+ *  workspaces have it installed / are behind the latest version. */
+export const ModuleWireSchema = z
+  .object({
+    name: z.string(),
+    /** Ascending by `version`, 1-based, dense. */
+    versions: z.array(ModuleVersionWireSchema),
+    installedWorkspaceCount: z.number().int().nonnegative(),
+    /** Of `installedWorkspaceCount`, how many sit below `versions`' latest `version` number. */
+    newerAvailableCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ModuleWire = z.infer<typeof ModuleWireSchema>;
+
+/** D2: `up_to_date` — the installed definition's hash matches the latest indexed version;
+ *  `outdated` — matches an older indexed version; `customized` — matches no indexed version at all
+ *  (the family's id was reached some other way than `install_module`/`upgrade_module`, e.g. a
+ *  hand-crafted `propose_ontology_change`); `not_installed` — no published row for this family yet. */
+export const ModuleInstallStatusWireSchema = z.enum([
+  'not_installed',
+  'up_to_date',
+  'outdated',
+  'customized',
+]);
+export type ModuleInstallStatusWire = z.infer<typeof ModuleInstallStatusWireSchema>;
+
+/** `list_workspace_modules` / the result of `install_module` / `upgrade_module`: one module
+ *  family's state in the calling workspace. */
+export const WorkspaceModuleWireSchema = z
+  .object({
+    name: z.string(),
+    versions: z.array(ModuleVersionWireSchema),
+    latestVersion: z.number().int().positive(),
+    /** The **indexed** version matching the installed definition's hash (D2) — `null` for
+     *  `not_installed` *and* for `customized` (a hash matching no indexed version has no
+     *  meaningful indexed version to report). Never the raw internal publish-count `ontology_
+     *  versions.version` row number, which is a different counter — see `application/platform/
+     *  modules.ts`'s own module doc comment. */
+    installedVersion: z.number().int().positive().nullable(),
+    status: ModuleInstallStatusWireSchema,
+  })
+  .strict();
+export type WorkspaceModuleWire = z.infer<typeof WorkspaceModuleWireSchema>;

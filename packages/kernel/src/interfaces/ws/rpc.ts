@@ -39,6 +39,12 @@ import {
   SupersedeIdentityMismatchError,
   UnauthorizedError,
 } from '../../application/gateway/index.js';
+// P-B2b: same direct-import convention as the comment above — application/platform/modules.ts is a
+// domain module, not re-exported by application/gateway/index.ts's curated surface.
+import {
+  ModuleConfirmRequiredError,
+  ModuleNotFoundError,
+} from '../../application/platform/modules.js';
 import {
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
@@ -320,6 +326,16 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // plus `details`; JSON-RPC has no per-code namespace here, so the caller's-mistake bucket with
   // the full message (which carries the same linkType / endpoints / allowed signatures).
   if (err instanceof OntologyViolationError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // P-B2b (application/platform/modules.ts) — same additions as capability-route.ts's
+  // mapCapabilityError (a named module this deployment's index does not carry; D3's "confirm the
+  // customized/breaking upgrade" 400-with-details, same INVALID_PARAMS bucket as
+  // OntologyViolationError just above).
+  if (err instanceof ModuleNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof ModuleConfirmRequiredError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.

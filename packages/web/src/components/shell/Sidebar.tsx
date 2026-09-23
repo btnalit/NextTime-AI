@@ -120,6 +120,14 @@ const PLATFORM_NAV: readonly NavItem[] = [
     icon: 'connections',
     href: hrefs.platformIntegrations(),
   },
+  // P-B2b (design §6.4): modules — versioned domain packs, install counts, default modules.
+  {
+    section: 'platformModules',
+    label: '模块',
+    sub: 'Modules',
+    icon: 'grid',
+    href: hrefs.platformModules(),
+  },
   // S6-B (design §6.2): providers are platform-level; the page talks to llm-proxy's admin API.
   {
     section: 'platformModels',

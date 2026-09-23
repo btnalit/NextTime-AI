@@ -44,6 +44,7 @@ function settings(overrides: Partial<PlatformSettingsWire> = {}): PlatformSettin
     defaultPlatformRole: 'user',
     passwordMinLength: 12,
     activeRuntimeImage: null,
+    defaultModules: [],
     envAdmins: ['root'],
     version: 3,
     updatedAt: '2026-09-09T00:00:00.000Z',

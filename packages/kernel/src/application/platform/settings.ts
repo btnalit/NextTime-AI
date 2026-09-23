@@ -26,6 +26,9 @@ export interface PlatformSettings {
    *  runtime.ts`'s `resolveActiveRuntimeImage`). Set only via `set_active_runtime_image` /
    *  `rollback_runtime_image`, never through `update_platform_settings`'s generic patch. */
   readonly activeRuntimeImage: string | null;
+  /** P-B2b (`set_default_modules`, design §6.4 "默认模块"): module family names `create_workspace`
+   *  installs into every new workspace (§5d S7-D 决定 D4). `[]` = none. */
+  readonly defaultModules: readonly string[];
 }
 
 export const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
@@ -39,6 +42,7 @@ export const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
   defaultPlatformRole: 'user',
   passwordMinLength: 8,
   activeRuntimeImage: null,
+  defaultModules: [],
 };
 
 export interface PlatformSettingsRow {
@@ -73,6 +77,7 @@ function project(raw: Record<string, unknown>): PlatformSettings {
     defaultPlatformRole: pick('defaultPlatformRole'),
     passwordMinLength: pick('passwordMinLength'),
     activeRuntimeImage: pick('activeRuntimeImage'),
+    defaultModules: pick('defaultModules'),
   };
 }
 
@@ -128,6 +133,7 @@ export function toWirePlatformSettings(
 ): PlatformSettingsWire {
   return {
     ...row.settings,
+    defaultModules: [...row.settings.defaultModules],
     envAdmins: [...envAdminLogins(env)],
     version: row.version,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,

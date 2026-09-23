@@ -1068,13 +1068,48 @@ export const createWorkspaceHandler: CapabilityHandler = async (
   await assertModelsInCatalog([...(input.entryModel ? [input.entryModel] : []), ...allowedModels]);
   assertEntryModelAllowed(input.entryModel ?? null, allowedModels);
 
+  // P-B2b (§5d S7-D 决定 D4): the platform setting `defaultModules` this new workspace installs,
+  // read here (this platform transaction can read `platform_settings`) so the bootstrap call below
+  // — which runs with no platform context at all — never has to.
+  const { settings } = await readPlatformSettings(client);
+
   // The workspace itself is created after this platform transaction commits: bootstrap needs the
-  // superuser path (`workspaces` insert, meta-ontology seed, entry WorkerDefinition —
-  // application/workspace/create.ts), which a platform transaction deliberately does not have.
+  // superuser path (`workspaces` insert, meta-ontology seed, default modules, entry WorkerDefinition
+  // — application/workspace/create.ts), which a platform transaction deliberately does not have.
   // The id is fixed here so the audit row written with this phase names the workspace; if the
   // bootstrap then fails, the caller sees the error and the audit row records an attempt with no
   // matching workspace (see development-tasks.md P-A2 实现说明).
   const workspaceId = randomUUID();
+
+  // D4: "平台审计 workspace.created 的 details 记 defaultModules，Activity 记 triggeredBy:
+  // create_workspace" — a second, hand-written audit row alongside dispatch.ts's own automatic
+  // `create_workspace` row (same pattern `purgeUserHandler`'s own `platform.user_purged` row uses
+  // for detail the generic `{channel, params}` payload cannot carry). Written here, in phase 1,
+  // like the automatic row: it records the *configured* default-module list at the moment of the
+  // call, not a post-hoc confirmation that every install actually succeeded (`afterCommit` below
+  // can still fail after this commits — the same pre-existing caveat this function's own comment
+  // above already documents for `create_workspace` itself). No separate substrate Activity object
+  // is created for the installs themselves (`application/workspace/create.ts`'s `defaultModules`
+  // branch deliberately mirrors `seedPlatformMetaOntology`'s own no-Activity precedent) —
+  // `triggeredBy` is carried on this audit row's payload instead, which is what a human or agent
+  // asking "who/what caused these OntologyVersion rows" actually reads (`platform_audit_query`),
+  // and the rows themselves already carry `proposed_by`/`published_by` = the new owner Principal so
+  // the owner side of "负责人（管理员）与名下（owner）都可回答" is answerable straight from the graph.
+  await writeAudit(client, {
+    workspaceId: null,
+    actorPrincipalId: null,
+    actorUserId: acting.id,
+    action: 'workspace.created',
+    resourceType: 'workspace',
+    resourceId: workspaceId,
+    payload: {
+      channel: 'platform',
+      actorLogin: acting.login,
+      details: { defaultModules: settings.defaultModules },
+      triggeredBy: 'create_workspace',
+    },
+  });
+
   return {
     result: { workspaceId },
     resourceType: 'workspace',
@@ -1087,6 +1122,7 @@ export const createWorkspaceHandler: CapabilityHandler = async (
         entryModel: input.entryModel,
         allowedModels,
         ontologyEnforcement: input.ontologyEnforcement,
+        defaultModules: settings.defaultModules,
       });
       return withPlatform(pool, { userId: acting.id }, (platformClient) =>
         loadPlatformWorkspace(platformClient, workspaceId),

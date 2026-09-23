@@ -18,6 +18,7 @@ import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
 import { type WorkerDefinitionSummary, definitionName } from '../lib/tasks.js';
 import { nameOf, useGatekeeperNames } from './approvals/useDirectoryNames.js';
+import { ModulesTab } from './catalog/ModulesTab.js';
 import { ProcedureEditor } from './catalog/ProcedureEditor.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerDefinitionEditor } from './catalog/WorkerDefinitionEditor.js';
@@ -44,6 +45,7 @@ const TAB_LABEL: Readonly<Record<CatalogTab, string>> = {
   skills: 'Skills',
   procedures: 'Procedures',
   workers: 'Workers',
+  modules: 'Modules',
 };
 
 /**
@@ -106,8 +108,10 @@ export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
         <SkillsTab http={http} />
       ) : tab === 'procedures' ? (
         <ProceduresTab http={http} />
-      ) : (
+      ) : tab === 'workers' ? (
         <WorkersTab http={http} />
+      ) : (
+        <ModulesTab http={http} />
       )}
     </div>
   );

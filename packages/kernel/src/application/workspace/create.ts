@@ -11,6 +11,7 @@ import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { resolveOntologyDir, seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
 import { generateApiKey, hashApiKey } from '../gateway/auth.js';
 import { ensureUserForHumanPrincipal } from '../identity/users.js';
+import { installOrUpgradeModule, loadModuleRegistry } from '../platform/modules.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 
 /**
@@ -63,6 +64,14 @@ export interface CreateWorkspaceInput {
   readonly purpose?: WorkspacePurpose;
   /** S5.3: when the workspace may be retired; only meaningful with `purpose: 'ephemeral'`. */
   readonly expiresAt?: Date | null;
+  /** P-B2b (design §6.4 "默认模块"; §5d S7-D 决定 D4): module family names to install — each at its
+   *  own **latest** index version (`installOrUpgradeModule`'s own doc comment: a fresh workspace
+   *  always takes the "family absent → publish the latest version" branch, never "v1" specifically)
+   *  — in the same transaction, right after the platform meta-ontology. Omitted/`[]` = none. The
+   *  caller (`platform-handlers.ts`'s `createWorkspaceHandler`) reads `PlatformSettings.
+   *  defaultModules` and passes it through — this module does not read platform settings itself (no
+   *  platform transaction is open here, see this file's own doc comment on `skipRoleSwitch`). */
+  readonly defaultModules?: readonly string[];
 }
 
 /**
@@ -158,6 +167,27 @@ export async function createWorkspaceWithOwner(
       }
 
       await seedPlatformMetaOntology(client, workspaceId, ownerPrincipalId, ontologyDir);
+
+      // P-B2b (决定 D4): default modules install the same way platform-meta just did — same
+      // transaction, the new owner Principal as `proposed_by`/`published_by` (`ontology_versions`'
+      // FK requires a real Principal; there is no system Principal, design §11 "不造系统 Principal").
+      // Every name here is a fresh workspace's first install of that family, so
+      // `installOrUpgradeModule` always takes its "family absent → publish the latest index
+      // version" branch — never `confirm` (nothing installed yet to be `customized`, and a fresh
+      // install is never a "breaking upgrade").
+      if (input.defaultModules && input.defaultModules.length > 0) {
+        const registry = await loadModuleRegistry(ontologyDir);
+        for (const name of input.defaultModules) {
+          await installOrUpgradeModule(
+            client,
+            workspaceId,
+            ownerPrincipalId,
+            registry,
+            { name },
+            ontologyDir,
+          );
+        }
+      }
 
       const entryTemplate = await loadWorkerDefinitionTemplate(
         path.join(ontologyDir, 'entry-agent.yaml'),

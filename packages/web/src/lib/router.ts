@@ -32,11 +32,18 @@ export type NavSection =
   | 'platformUsers'
   | 'platformWorkspaces'
   | 'platformIntegrations'
+  | 'platformModules'
   | 'platformModels'
   | 'platformSettings'
   | 'platformAudit';
 
-export const CATALOG_TAB_VALUES = ['operations', 'skills', 'procedures', 'workers'] as const;
+export const CATALOG_TAB_VALUES = [
+  'operations',
+  'skills',
+  'procedures',
+  'workers',
+  'modules',
+] as const;
 export type CatalogTab = (typeof CATALOG_TAB_VALUES)[number];
 
 export type Route =
@@ -58,6 +65,7 @@ export type Route =
   | { readonly kind: 'platformUsers' }
   | { readonly kind: 'platformWorkspaces' }
   | { readonly kind: 'platformIntegrations'; readonly gateId?: string }
+  | { readonly kind: 'platformModules' }
   | { readonly kind: 'platformModels' }
   | { readonly kind: 'platformSettings' }
   | { readonly kind: 'platformAudit' };
@@ -130,6 +138,8 @@ export function routeFromHash(fullHash: string): Route {
       ? { kind: 'platformIntegrations', gateId: decodeURIComponent(integrations[1]) }
       : { kind: 'platformIntegrations' };
   }
+  // P-B2b: platform-level 模块 (design §6.4 — module install counts + default modules).
+  if (hash === '#/platform/modules') return { kind: 'platformModules' };
   // S6-B: platform-level 模型与供应商 (providers live in llm-proxy; the page talks to /api/llm-admin).
   if (hash === '#/platform/models') return { kind: 'platformModels' };
   if (hash === '#/platform/settings') return { kind: 'platformSettings' };
@@ -175,6 +185,7 @@ export const hrefs = {
   platformWorkspaces: () => '#/platform/workspaces',
   platformIntegrations: () => '#/platform/integrations',
   platformGateInstance: (gateId: string) => `#/platform/integrations/${encodeURIComponent(gateId)}`,
+  platformModules: () => '#/platform/modules',
   platformModels: () => '#/platform/models',
   platformSettings: () => '#/platform/settings',
   platformAudit: () => '#/platform/audit',
