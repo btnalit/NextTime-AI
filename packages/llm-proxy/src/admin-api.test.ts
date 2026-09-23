@@ -424,7 +424,12 @@ describe('admin API — catalog lifecycle', () => {
 
     const restored = await request(h.port, 'DELETE', '/admin/providers/openai', { headers: admin });
     expect(restored.status).toBe(200);
-    expect(restored.body).toEqual({ id: 'openai', deleted: true, restoredFileEntry: true });
+    expect(restored.body).toEqual({
+      id: 'openai',
+      deleted: true,
+      restoredFileEntry: true,
+      secretCleared: false,
+    });
     expect(
       (
         await request(h.port, 'GET', '/openai/v1/models', {
@@ -440,6 +445,57 @@ describe('admin API — catalog lifecycle', () => {
     const refused = await request(h.port, 'DELETE', '/admin/providers/openai', { headers: admin });
     expect(refused.status).toBe(409);
     expect((refused.body as { error: { code: string } }).error.code).toBe('provider_from_file');
+  });
+
+  it('DELETE also clears the console key (P2 hotfix, post-v0.16.0 review) — recreating the id later must never silently reuse it', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    expect(
+      (await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER }))
+        .status,
+    ).toBe(201);
+    expect(
+      (
+        await request(h.port, 'PUT', '/admin/providers/acme/secret', {
+          headers: admin,
+          body: { key: 'sk-console-acme' },
+        })
+      ).status,
+    ).toBe(200);
+    expect(h.keyStore.get('acme')).toBe('sk-console-acme');
+
+    const deleted = await request(h.port, 'DELETE', '/admin/providers/acme', { headers: admin });
+    expect(deleted.status).toBe(200);
+    expect(deleted.body).toEqual({
+      id: 'acme',
+      deleted: true,
+      restoredFileEntry: false,
+      secretCleared: true,
+    });
+    expect(h.keyStore.get('acme')).toBeUndefined();
+    expect(h.kernelEvents.at(-1)).toMatchObject({ action: 'provider_secret_cleared', providerId: 'acme' });
+    expect(h.kernelEvents.some((e) => e.action === 'provider_deleted')).toBe(true);
+
+    // Recreating the same id afterward must start with no console key — the whole point of P2.
+    expect(
+      (await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER }))
+        .status,
+    ).toBe(201);
+    expect(h.keyStore.get('acme')).toBeUndefined();
+  });
+
+  it('DELETE with no console key set reports secretCleared: false and never emits provider_secret_cleared', async () => {
+    const h = await harness();
+    const admin = await h.adminHeaders();
+    expect(
+      (await request(h.port, 'POST', '/admin/providers', { headers: admin, body: NEW_PROVIDER }))
+        .status,
+    ).toBe(201);
+
+    const deleted = await request(h.port, 'DELETE', '/admin/providers/acme', { headers: admin });
+    expect(deleted.status).toBe(200);
+    expect((deleted.body as { secretCleared: boolean }).secretCleared).toBe(false);
+    expect(h.kernelEvents.some((e) => e.action === 'provider_secret_cleared')).toBe(false);
   });
 
   it('PUT on a store row audits only the fields that changed (never the store timestamps)', async () => {

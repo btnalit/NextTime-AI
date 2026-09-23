@@ -147,6 +147,12 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         ? `已删除覆盖记录，恢复为 yaml 里的 ${provider.id}`
         : `已删除 ${provider.displayName}`,
     });
+    // P2 hotfix (post-v0.16.0 review): a deleted provider's console key is now also cleared
+    // (llm-proxy's DELETE /providers/:id) — surface it separately so it is not lost inside the
+    // delete toast's own title.
+    if (result.secretCleared) {
+      toast.push({ tone: 'ok', title: '已一并清除控制台密钥 · Console key cleared as well' });
+    }
     void list.reload();
   }
 

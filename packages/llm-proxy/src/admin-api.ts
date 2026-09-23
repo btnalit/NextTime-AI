@@ -480,8 +480,29 @@ export function createAdminApi(options: AdminApiOptions): AdminHandler {
         const restoredFileEntry = existing.overridesFile;
         await options.store.remove(id);
         await rewriteModelsJson();
-        audit(claims, 'provider_deleted', id, { restoredFileEntry, modelsJsonError });
-        const body: DeleteLlmProviderResultWire = { id, deleted: true, restoredFileEntry };
+        // P2 hotfix (post-v0.16.0 review): a deleted provider's console key used to be left behind
+        // in the key store — recreating the same id later would silently reuse it against a
+        // possibly different upstream. Best-effort, same "a secondary write's failure never fails
+        // the mutation" convention `rewriteModelsJson` above already uses: the provider row is
+        // already gone (the source of truth), so an unwritable key store here is logged, not fatal.
+        let secretCleared = false;
+        try {
+          secretCleared = await options.keyStore.remove(id);
+        } catch (err) {
+          log(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'llm-proxy: could not clear the console key for a deleted provider (best-effort)',
+              providerId: id,
+              error: String(err),
+            }),
+          );
+        }
+        audit(claims, 'provider_deleted', id, { restoredFileEntry, modelsJsonError, secretCleared });
+        if (secretCleared) {
+          audit(claims, 'provider_secret_cleared', id, {});
+        }
+        const body: DeleteLlmProviderResultWire = { id, deleted: true, restoredFileEntry, secretCleared };
         return { status: 200, body };
       }
       throw new AdminApiError(405, 'method_not_allowed', 'method not allowed');

@@ -350,7 +350,10 @@ describe('PlatformModelsPage', () => {
       },
       'DELETE /providers/acme': () => {
         items = [];
-        return { status: 200, body: { id: 'acme', deleted: true, restoredFileEntry: false } };
+        return {
+          status: 200,
+          body: { id: 'acme', deleted: true, restoredFileEntry: false, secretCleared: false },
+        };
       },
     });
     renderPage(http, proxy.fetchImpl);
