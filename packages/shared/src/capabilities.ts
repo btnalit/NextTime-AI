@@ -2394,7 +2394,9 @@ const platformCapabilities: readonly Capability[] = [
         announcement: z.string().max(2000).optional(),
         instanceInstructions: z.string().max(8000).optional(),
         defaultWorkspaceId: z.string().min(1).nullable().optional(),
-        defaultEntryModel: z.string().min(1).nullable().optional(),
+        // `defaultEntryModel` is deliberately absent — `set_platform_default_model` is its only
+        // writer (validated against `list_platform_models`, S7-E E5), the same "not the generic
+        // patch" treatment E1 gives `activeRuntimeImage` (wire/platform.ts's own comment).
         defaultDailyCallLimit: z.number().int().nonnegative().nullable().optional(),
         defaultMonthlyTokenBudget: z.number().int().nonnegative().nullable().optional(),
         defaultPlatformRole: wire.PlatformRoleWireSchema.optional(),
@@ -2403,7 +2405,18 @@ const platformCapabilities: readonly Capability[] = [
       .strict(),
     resultSchema: wire.PlatformSettingsWireSchema,
     description:
-      'Partial update of the platform settings — omitted fields are left unchanged. Every write is audited and bumps `version`; the previous row is kept for rollback.',
+      'Partial update of the platform settings — omitted fields are left unchanged. Every write is audited and bumps `version`; the previous row is kept for rollback. `defaultEntryModel` is not settable here — use `set_platform_default_model`.',
+  },
+  {
+    name: 'set_platform_default_model',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ model: z.string().min(1).nullable() }).strict(),
+    resultSchema: wire.PlatformSettingsWireSchema,
+    description:
+      'Sets the platform’s default entry model (design §6.2) — what `create_workspace` (when its caller omits `entryModel`) and the bootstrap default workspace take. Must be one of `list_platform_models`’ models; `null` = pi’s own default. Audited and bumps `version`, same as `update_platform_settings`.',
   },
   {
     name: 'platform_audit_query',

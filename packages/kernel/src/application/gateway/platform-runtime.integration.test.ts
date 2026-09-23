@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
@@ -171,6 +173,13 @@ describe.runIf(DATABASE_URL !== undefined)(
     let admin: UserRow;
     let supervisor: FakeRuntimeSupervisorClient;
     let workspaceId: string;
+    /** `set_platform_default_model` (E5) validates against the same `readModelCatalog()`
+     *  `list_platform_models`/`create_workspace` read — the same temp models.json convention
+     *  `platform-workspaces.integration.test.ts` uses. */
+    let modelsJsonDir: string | undefined;
+    const originalModelsJsonFile = process.env.MODELS_JSON_FILE;
+    const MODEL_A = 'anthropic/claude-sonnet-5';
+    const MODEL_UNKNOWN = 'anthropic/claude-not-in-the-catalog';
 
     function platformCaller(user: UserRow): ResolvedCaller {
       return {
@@ -282,9 +291,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         password: 'correct horse battery staple',
       });
       workspaceId = await insertBareWorkspace('platform-runtime-test-workspace');
+
+      modelsJsonDir = await mkdtemp(path.join(tmpdir(), 'platform-runtime-models-json-'));
+      const modelsFile = path.join(modelsJsonDir, 'models.json');
+      await writeFile(
+        modelsFile,
+        JSON.stringify({
+          providers: {
+            anthropic: {
+              baseUrl: 'http://llm-proxy:8082/anthropic',
+              apiKey: '$CAPABILITY_HANDLE',
+              api: 'anthropic-messages',
+              models: [{ id: 'claude-sonnet-5' }],
+            },
+          },
+        }),
+      );
+      process.env.MODELS_JSON_FILE = modelsFile;
     }, 120_000);
 
     afterAll(async () => {
+      if (modelsJsonDir) await rm(modelsJsonDir, { recursive: true, force: true });
+      if (originalModelsJsonFile === undefined) {
+        // biome-ignore lint/performance/noDelete: process.env coerces `= undefined` to the string "undefined" instead of unsetting the var; delete is the only way to make it actually absent.
+        delete process.env.MODELS_JSON_FILE;
+      } else {
+        process.env.MODELS_JSON_FILE = originalModelsJsonFile;
+      }
       if (dropDatabase) await dropDatabase();
     });
 
@@ -514,6 +547,59 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(result.llmUsage30d.totalOutputTokens).toBeGreaterThanOrEqual(0);
         expect(Array.isArray(result.recentAudit)).toBe(true);
       }, 15_000);
+    });
+
+    // S7-E E5 (P-D 剩余): `set_platform_default_model` — validated against the same catalog
+    // `list_platform_models`/`create_workspace` read, deliberately its own capability rather than
+    // part of `update_platform_settings`'s generic patch (E1's `activeRuntimeImage` precedent).
+    describe('set_platform_default_model', () => {
+      afterEach(async () => {
+        // Global singleton — never leak a set default into a later test in this file.
+        await pool.query(
+          `update platform_settings set settings = settings - 'defaultEntryModel' where singleton`,
+        );
+      });
+
+      it('rejects a model that is not in the llm-proxy catalog', async () => {
+        await expectPlatformError(
+          () => callAsAdmin('set_platform_default_model', { model: MODEL_UNKNOWN }),
+          'unknown_model',
+        );
+      });
+
+      it('sets the default and reflects it in get_platform_settings', async () => {
+        const result = await callAsAdmin<PlatformSettingsWire>('set_platform_default_model', {
+          model: MODEL_A,
+        });
+        expect(result.defaultEntryModel).toBe(MODEL_A);
+
+        const settings = await callAsAdmin<PlatformSettingsWire>('get_platform_settings');
+        expect(settings.defaultEntryModel).toBe(MODEL_A);
+      });
+
+      it('clears the default back to null (pi’s own default)', async () => {
+        await callAsAdmin('set_platform_default_model', { model: MODEL_A });
+        const cleared = await callAsAdmin<PlatformSettingsWire>('set_platform_default_model', {
+          model: null,
+        });
+        expect(cleared.defaultEntryModel).toBeNull();
+      });
+
+      it('is audited like other settings writes', async () => {
+        await callAsAdmin('set_platform_default_model', { model: MODEL_A });
+        const audit = await pool.query<{ actor_user_id: string }>(
+          `select actor_user_id from audit_records
+             where action = 'set_platform_default_model' and workspace_id is null
+             order by created_at desc limit 1`,
+        );
+        expect(audit.rows[0]?.actor_user_id).toBe(admin.id);
+      });
+
+      it('update_platform_settings no longer accepts defaultEntryModel', async () => {
+        await expect(
+          callAsAdmin('update_platform_settings', { defaultEntryModel: MODEL_A }),
+        ).rejects.toMatchObject({ name: 'InvalidCapabilityParamsError' });
+      });
     });
   },
 );

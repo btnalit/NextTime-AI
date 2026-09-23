@@ -15402,6 +15402,140 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "set_platform_default_model",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeRuntimeImage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "announcement": {
+          "type": "string"
+        },
+        "defaultDailyCallLimit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultEntryModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultModules": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "defaultMonthlyTokenBudget": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPlatformRole": {
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "type": "string"
+        },
+        "defaultWorkspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "envAdmins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instanceInstructions": {
+          "type": "string"
+        },
+        "passwordMinLength": {
+          "maximum": 128,
+          "minimum": 8,
+          "type": "integer"
+        },
+        "siteName": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "siteName",
+        "announcement",
+        "instanceInstructions",
+        "defaultWorkspaceId",
+        "defaultEntryModel",
+        "defaultDailyCallLimit",
+        "defaultMonthlyTokenBudget",
+        "defaultPlatformRole",
+        "passwordMinLength",
+        "activeRuntimeImage",
+        "defaultModules",
+        "envAdmins",
+        "version",
+        "updatedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
     "group": "governance",
     "minRole": "owner",
     "mode": "execute",
@@ -17194,17 +17328,6 @@
             {
               "minimum": 0,
               "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "defaultEntryModel": {
-          "anyOf": [
-            {
-              "minLength": 1,
-              "type": "string"
             },
             {
               "type": "null"

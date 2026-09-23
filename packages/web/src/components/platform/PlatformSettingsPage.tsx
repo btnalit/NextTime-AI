@@ -3,6 +3,7 @@ import { type FormEvent, useState } from 'react';
 import { invalidateCapability, useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
+import { hrefs } from '../../lib/router.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -82,7 +83,6 @@ type EditableKey =
   | 'announcement'
   | 'instanceInstructions'
   | 'defaultWorkspaceId'
-  | 'defaultEntryModel'
   | 'defaultDailyCallLimit'
   | 'defaultMonthlyTokenBudget'
   | 'defaultPlatformRole'
@@ -97,7 +97,6 @@ function toFormValues(settings: PlatformSettingsWire): FormValues {
     announcement: settings.announcement,
     instanceInstructions: settings.instanceInstructions,
     defaultWorkspaceId: settings.defaultWorkspaceId ?? '',
-    defaultEntryModel: settings.defaultEntryModel ?? '',
     defaultDailyCallLimit:
       settings.defaultDailyCallLimit === null ? '' : String(settings.defaultDailyCallLimit),
     defaultMonthlyTokenBudget:
@@ -164,8 +163,6 @@ function PlatformSettingsForm({
     }
     const workspaceId = nullableText(values.defaultWorkspaceId);
     if (workspaceId !== initial.defaultWorkspaceId) patch.defaultWorkspaceId = workspaceId;
-    const entryModel = nullableText(values.defaultEntryModel);
-    if (entryModel !== initial.defaultEntryModel) patch.defaultEntryModel = entryModel;
     if (dailyLimit !== initial.defaultDailyCallLimit) patch.defaultDailyCallLimit = dailyLimit;
     if (monthlyBudget !== initial.defaultMonthlyTokenBudget) {
       patch.defaultMonthlyTokenBudget = monthlyBudget;
@@ -272,19 +269,11 @@ function PlatformSettingsForm({
             />
           </Field>
 
-          <Field
-            id="ps-default-entry-model"
-            label="默认入口模型 Default entry model"
-            hint="<provider>/<id>；留空 = 用 pi 自己的默认值。 Empty = pi's own default."
-          >
-            <Input
-              id="ps-default-entry-model"
-              value={values.defaultEntryModel}
-              onChange={(event) => set('defaultEntryModel', event.target.value)}
-              disabled={submitting}
-              mono
-            />
-          </Field>
+          <p className="text-3 text-small" data-testid="platform-settings-default-model-hint">
+            默认入口模型在"模型与供应商"页设置（经目录校验）。 The default entry model is set on the{' '}
+            <a href={hrefs.platformModels()}>模型与供应商 Models &amp; providers</a> page (validated
+            against the catalog there).
+          </p>
 
           <Field
             id="ps-default-daily-call-limit"

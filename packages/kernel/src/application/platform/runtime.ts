@@ -22,6 +22,7 @@ import type {
 } from '../../adapters/supervisor-client/index.js';
 import { listGateInstances } from '../gates/store.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from '../gateway/capability-handler.js';
+import { readModelCatalog } from '../gateway/models-catalog-handler.js';
 import { PlatformAdminError, queryPlatformAudit } from '../gateway/platform-handlers.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import {
@@ -605,4 +606,44 @@ export const platformStatusHandler: CapabilityHandler = async (client) => {
     checkedAt: new Date().toISOString(),
   };
   return { result };
+};
+
+// -------------------------------------------------------------------------------------------
+// set_platform_default_model (E5, P-D 剩余 — "与 E1 同一块 platform_settings 代码")
+// -------------------------------------------------------------------------------------------
+
+/** E5: the platform's own default entry model (design §6.2 "平台默认入口模型") — what
+ *  `create_workspace` falls back to when its caller omits `entryModel`
+ *  (`application/gateway/platform-handlers.ts`'s `createWorkspaceHandler`), the same precedence
+ *  `ensureDefaultWorkspace` already applies for the very first bootstrapped workspace
+ *  (`default-workspace.ts`). Deliberately its own capability rather than folded into
+ *  `update_platform_settings`'s generic patch (`wire/platform.ts`'s own comment on
+ *  `defaultEntryModel`) — the same "validated write only" shape E1 established for
+ *  `activeRuntimeImage`: a bare string patch could silently set a model the llm-proxy catalog
+ *  does not know, a mistake this handler catches (`unknown_model` — the exact code
+ *  `create_workspace`/`update_workspace` already throw for the identical rule; one violation, one
+ *  code, not a second one invented for the same fact). `model: null` clears it back to "pi's own
+ *  default" (design §6.2's "留空 = 用 pi 自己的默认值"). */
+export const setPlatformDefaultModelHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  context,
+) => {
+  const { model } = params as { model: string | null };
+  if (model !== null) {
+    const known = new Set((await readModelCatalog()).map((entry) => entry.id));
+    if (!known.has(model)) {
+      throw new PlatformAdminError('unknown_model', `model not in the llm-proxy catalog: ${model}`);
+    }
+  }
+  const row = await updatePlatformSettings(
+    client,
+    { defaultEntryModel: model },
+    actingUser(context).id,
+  );
+  return {
+    result: toWirePlatformSettings(row),
+    resourceType: 'platform_settings',
+  };
 };

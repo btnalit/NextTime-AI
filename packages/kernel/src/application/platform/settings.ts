@@ -16,6 +16,10 @@ export interface PlatformSettings {
   readonly announcement: string;
   readonly instanceInstructions: string;
   readonly defaultWorkspaceId: string | null;
+  /** S7-E (P-D 剩余 E5): new workspaces' entry model when `create_workspace` omits one, and the
+   *  bootstrap default workspace's (`default-workspace.ts`). Set only via
+   *  `set_platform_default_model`, never through `updatePlatformSettings`'s generic patch — same
+   *  treatment as `activeRuntimeImage` below. */
   readonly defaultEntryModel: string | null;
   readonly defaultDailyCallLimit: number | null;
   readonly defaultMonthlyTokenBudget: number | null;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { LlmProviderListWire, LlmProviderWire } from '@nexttime/shared';
+import type { LlmProviderListWire, LlmProviderWire, PlatformSettingsWire } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -50,19 +50,51 @@ function listWire(
   };
 }
 
-function scriptedHttp(): CapabilityCaller & { readonly mints: () => number } {
+function platformSettings(overrides: Partial<PlatformSettingsWire> = {}): PlatformSettingsWire {
+  return {
+    siteName: 'NextTime',
+    announcement: '',
+    instanceInstructions: '',
+    defaultWorkspaceId: null,
+    defaultEntryModel: null,
+    defaultDailyCallLimit: null,
+    defaultMonthlyTokenBudget: null,
+    defaultPlatformRole: 'user',
+    passwordMinLength: 8,
+    activeRuntimeImage: null,
+    defaultModules: [],
+    envAdmins: [],
+    version: 1,
+    updatedAt: null,
+    ...overrides,
+  };
+}
+
+/** `DefaultModelControl` (S7-E E5) shares this page's `http` prop, so every render exercises
+ *  `get_platform_settings` / `list_platform_models` too — scripted with sensible defaults here
+ *  (an empty catalog, no default model set) so the six pre-existing provider-table cases below
+ *  need no changes; `handlers` overrides one or more names for the tests that care about the
+ *  control itself (below). */
+function scriptedHttp(
+  handlers: Partial<Record<string, (params: unknown) => unknown>> = {},
+): CapabilityCaller & { readonly mints: () => number } {
   let mints = 0;
   return {
     mints: () => mints,
-    call: vi.fn(async (name: string) => {
-      if (name !== 'issue_llm_admin_token') throw new Error(`unscripted capability ${name}`);
-      mints += 1;
-      return {
-        token: 'jwt',
-        url: '/api/llm-admin',
-        jti: '11111111-2222-4333-8444-555555555555',
-        expiresAt: new Date(Date.now() + 300_000).toISOString(),
-      };
+    call: vi.fn(async (name: string, params?: unknown) => {
+      if (handlers[name]) return handlers[name]?.(params);
+      if (name === 'issue_llm_admin_token') {
+        mints += 1;
+        return {
+          token: 'jwt',
+          url: '/api/llm-admin',
+          jti: '11111111-2222-4333-8444-555555555555',
+          expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        };
+      }
+      if (name === 'get_platform_settings') return platformSettings();
+      if (name === 'list_platform_models') return { items: [] };
+      throw new Error(`unscripted capability ${name}`);
     }) as CapabilityCaller['call'],
   };
 }
@@ -377,5 +409,119 @@ describe('PlatformModelsPage', () => {
     renderPage(http, proxy.fetchImpl);
     const error = await screen.findByTestId('providers-error');
     expect(error.dataset.errorCode).toBe('store_unwritable');
+  });
+
+  // S7-E E5: 平台默认入口模型 (`DefaultModelControl`, mounted on this page — design §6.2).
+  describe('platform default entry model', () => {
+    it('lists the catalog and shows the currently-set default', async () => {
+      const http = scriptedHttp({
+        get_platform_settings: () =>
+          platformSettings({ defaultEntryModel: 'anthropic/claude-sonnet-5' }),
+        list_platform_models: () => ({
+          items: [
+            { id: 'anthropic/claude-sonnet-5', provider: 'anthropic', model: 'claude-sonnet-5' },
+            { id: 'anthropic/claude-haiku-5', provider: 'anthropic', model: 'claude-haiku-5' },
+          ],
+        }),
+      });
+      const proxy = scriptedProxy({
+        'GET /providers': () => ({ status: 200, body: listWire([]) }),
+      });
+      renderPage(http, proxy.fetchImpl);
+
+      const select = (await screen.findByTestId(
+        'platform-default-model-select',
+      )) as HTMLSelectElement;
+      expect(select.value).toBe('anthropic/claude-sonnet-5');
+      expect(
+        within(select)
+          .getAllByRole('option')
+          .map((o) => (o as HTMLOptionElement).value),
+      ).toEqual(['__pi_default__', 'anthropic/claude-sonnet-5', 'anthropic/claude-haiku-5']);
+    });
+
+    it('picking a model calls set_platform_default_model and shows Saved', async () => {
+      const calls: unknown[] = [];
+      const http = scriptedHttp({
+        get_platform_settings: () => platformSettings(),
+        list_platform_models: () => ({
+          items: [
+            { id: 'anthropic/claude-sonnet-5', provider: 'anthropic', model: 'claude-sonnet-5' },
+          ],
+        }),
+        set_platform_default_model: (params) => {
+          calls.push(params);
+          return platformSettings({ defaultEntryModel: 'anthropic/claude-sonnet-5', version: 2 });
+        },
+      });
+      const proxy = scriptedProxy({
+        'GET /providers': () => ({ status: 200, body: listWire([]) }),
+      });
+      renderPage(http, proxy.fetchImpl);
+
+      const select = (await screen.findByTestId(
+        'platform-default-model-select',
+      )) as HTMLSelectElement;
+      fireEvent.change(select, { target: { value: 'anthropic/claude-sonnet-5' } });
+
+      await screen.findByTestId('platform-default-model-saved');
+      expect(calls).toEqual([{ model: 'anthropic/claude-sonnet-5' }]);
+    });
+
+    it('picking pi 自己的默认值 clears it with model: null', async () => {
+      const calls: unknown[] = [];
+      const http = scriptedHttp({
+        get_platform_settings: () =>
+          platformSettings({ defaultEntryModel: 'anthropic/claude-sonnet-5' }),
+        list_platform_models: () => ({
+          items: [
+            { id: 'anthropic/claude-sonnet-5', provider: 'anthropic', model: 'claude-sonnet-5' },
+          ],
+        }),
+        set_platform_default_model: (params) => {
+          calls.push(params);
+          return platformSettings({ defaultEntryModel: null, version: 2 });
+        },
+      });
+      const proxy = scriptedProxy({
+        'GET /providers': () => ({ status: 200, body: listWire([]) }),
+      });
+      renderPage(http, proxy.fetchImpl);
+
+      const select = (await screen.findByTestId(
+        'platform-default-model-select',
+      )) as HTMLSelectElement;
+      fireEvent.change(select, { target: { value: '__pi_default__' } });
+
+      await screen.findByTestId('platform-default-model-saved');
+      expect(calls).toEqual([{ model: null }]);
+    });
+
+    it('a kernel refusal (e.g. unknown_model) renders inline without crashing the page', async () => {
+      const http = scriptedHttp({
+        get_platform_settings: () => platformSettings(),
+        list_platform_models: () => ({
+          items: [
+            { id: 'anthropic/claude-sonnet-5', provider: 'anthropic', model: 'claude-sonnet-5' },
+          ],
+        }),
+        set_platform_default_model: () => {
+          throw new Error('model not in the llm-proxy catalog');
+        },
+      });
+      const proxy = scriptedProxy({
+        'GET /providers': () => ({ status: 200, body: listWire([]) }),
+      });
+      renderPage(http, proxy.fetchImpl);
+
+      const select = (await screen.findByTestId(
+        'platform-default-model-select',
+      )) as HTMLSelectElement;
+      fireEvent.change(select, { target: { value: 'anthropic/claude-sonnet-5' } });
+
+      const error = await screen.findByTestId('platform-default-model-error');
+      expect(error.textContent).toContain('not in the llm-proxy catalog');
+      expect(screen.queryByTestId('platform-default-model-saved')).toBeNull();
+    });
   });
 });

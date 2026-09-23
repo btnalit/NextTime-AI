@@ -64,10 +64,11 @@ describe('PlatformSettingsPage', () => {
     expect((within(form).getByLabelText(/公告 Announcement/) as HTMLTextAreaElement).value).toBe(
       'hello',
     );
-    // A `null` nullable renders as an empty box, never the string "null".
-    expect(
-      (within(form).getByLabelText(/默认入口模型 Default entry model/) as HTMLInputElement).value,
-    ).toBe('');
+    // The default entry model moved to the 模型与供应商 page (S7-E E5) — this page only points
+    // there, it no longer has an editable field for it.
+    expect(within(form).getByTestId('platform-settings-default-model-hint').textContent).toContain(
+      '模型与供应商',
+    );
     expect(screen.getByTestId('platform-settings-env-admins').textContent).toContain('root');
     expect(screen.getByTestId('platform-settings-footer').textContent).toContain('version 3');
   });

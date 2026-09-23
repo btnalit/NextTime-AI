@@ -425,11 +425,13 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
 
 ## 13. 运行层（S7-E，P-C；docs/platform-admin-design.md §6.5 / §6.7）
 
-`docs/development-tasks.md` §5d S7-E。本节是**后端车道**（S7-E-backend）落的能力——`runtime_inventory` /
-`list_runtime_images` / `set_active_runtime_image` / `rollback_runtime_image` / `roll_entry_containers` /
-`pi_drift` / `platform_status`（`application/platform/runtime.ts`），均 `scope:'platform'`、仅管理员。**页面
-（"运行层" / "运行状态"）是后续车道（S7-E-page），本节给的是能力本身与 `curl` 调用方式**——在页面落地前，
-这是唯一的操作入口。
+`docs/development-tasks.md` §5d S7-E。本节的能力——`runtime_inventory` / `list_runtime_images` /
+`set_active_runtime_image` / `rollback_runtime_image` / `roll_entry_containers` / `pi_drift` /
+`platform_status`（`application/platform/runtime.ts`），均 `scope:'platform'`、仅管理员——现在**控制台也有页面**
+（S7-E-page）：`#/platform/runtime`「运行层」（活动镜像详情、镜像清单 + 设为活动 / 回滚、常驻容器盘点
++ 现在重建空闲的、pi 漂移面板）与 `#/platform/status`「运行状态」（服务健康、备份状态、30 天用量、最近
+平台审计，页面可见时每 30 秒自动刷新）。下面给的 `curl` 调用方式仍然有效——两条路径读写同一批能力，
+没有页面专属的逻辑；脚本化操作（CI、批量重建）继续用 `curl`，人工排查优先用页面。
 
 **构建镜像仍在主机 / CI**（已否决在页面里构建，design §11）：
 
@@ -591,3 +593,25 @@ pnpm --filter @nexttime/kernel exec vitest run src/application/platform/modules.
 | `install_module`/`upgrade_module` 返回 400 `module_confirm_required` | 该工作区当前是「已定制」，或从当前已装版本到最新版本之间（含最新版本本身）存在 `breaking: true` 的版本——升级会直接跳到最新版本，中间跨过的 breaking 版本也算 | 页面会弹确认（notes / 当前状态 / 目标版本），带 `confirm: true` 重试；CLI/脚本同理自己带上 `confirm: true` |
 | 升级后版本号（`installedVersion`）没变 | 目标（最新）版本文件内容与当前已装内容完全一致（哈希相同）——D3 的去重，`ontology_versions` 不新增一行 | 预期行为，不是 bug；要真正推进，改文件内容后发布成新的索引版本 |
 | 一个工作区显示「已定制」 | 有人绕过 `install_module`/`upgrade_module`，直接用 `propose_ontology_change`/`publish_ontology_version` 发到了这个模块 family 的 id（`deriveOntologyPackId(name)`），或同一索引版本的内容被重复发布导致 `ontology_versions.version`（DB 发布计数）与索引版本号不再一一对应——两者本来就是两套编号，见 §14 开头 | 预期能检测到的情况，不是错误；「已装版本」显示的是按哈希匹配到的**索引**版本（匹配不上就是 `null`/已定制），不是 `ontology_versions` 的行号；owner 升级时会被要求 confirm |
+
+## 15. 平台默认入口模型（P-D 剩余 E5）
+
+`docs/development-tasks.md` §5d S7-E 决定 E5；`docs/platform-admin-design.md` §6.2。`set_platform_default_model`
+（`scope:'platform'`，仅管理员）设置 `platform_settings.defaultEntryModel`——`<provider>/<id>` 或 `null`
+（用 pi 自己的默认值）；值必须在 `list_platform_models` 的目录里，否则 409 `unknown_model`（与
+`create_workspace`/`update_workspace` 校验入口模型用的同一个码）。控制台在「模型与供应商」页
+（`#/platform/models`，不在「平台设置」页——那里只留了一句指回这里的提示，避免同一个设置两个入口）。
+
+**与 `update_platform_settings` 的关系**：`defaultEntryModel` 特意**不在**那个通用 patch 的参数里——和 E1
+的 `activeRuntimeImage` 一样，只能经专门的、会做目录校验的能力写，通用 patch 传这个字段会被 zod
+`.strict()` 拒成 400 `invalid_params`。
+
+**生效范围**：只影响*之后* `create_workspace` 在调用时没有显式传 `entryModel` 的情形——显式值总是优先；
+平台首次启动时自举的默认工作区（`ensureDefaultWorkspace`）同样读这个设置。已存在的工作区不受影响（改它们
+的入口模型用 `update_workspace`）。
+
+```bash
+cap set_platform_default_model '{"model":"anthropic/claude-sonnet-5"}'   # 目录里必须有这个 id，否则 409 unknown_model
+cap set_platform_default_model '{"model":null}'                          # 清回 pi 自己的默认值
+cap get_platform_settings | jq '.defaultEntryModel'
+```

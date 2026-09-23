@@ -95,7 +95,10 @@ export const PlatformSettingsWireSchema = z
     instanceInstructions: z.string(),
     /** The workspace every page-created user joins as `member` unless the admin picks another. */
     defaultWorkspaceId: z.string().nullable(),
-    /** `<provider>/<id>` new workspaces / AgentProfiles take; `null` = pi's own default. */
+    /** `<provider>/<id>` new workspaces / AgentProfiles take; `null` = pi's own default. Set only
+     *  via `set_platform_default_model` (validated against `list_platform_models`, S7-E E5) —
+     *  never through `update_platform_settings`'s generic patch, the same treatment E1 gives
+     *  `activeRuntimeImage` below. */
     defaultEntryModel: z.string().nullable(),
     defaultDailyCallLimit: z.number().int().nonnegative().nullable(),
     defaultMonthlyTokenBudget: z.number().int().nonnegative().nullable(),

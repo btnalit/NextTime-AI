@@ -31,6 +31,8 @@ describe('routeFromHash', () => {
     expect(routeFromHash('#/platform/workspaces')).toEqual({ kind: 'platformWorkspaces' });
     expect(routeFromHash('#/platform/integrations')).toEqual({ kind: 'platformIntegrations' });
     expect(routeFromHash('#/platform/settings')).toEqual({ kind: 'platformSettings' });
+    expect(routeFromHash('#/platform/runtime')).toEqual({ kind: 'platformRuntime' });
+    expect(routeFromHash('#/platform/status')).toEqual({ kind: 'platformStatus' });
     expect(routeFromHash('#/platform/audit')).toEqual({ kind: 'platformAudit' });
   });
 
@@ -114,6 +116,8 @@ describe('hrefs', () => {
       { kind: 'platformWorkspaces' },
       { kind: 'platformIntegrations' },
       { kind: 'platformSettings' },
+      { kind: 'platformRuntime' },
+      { kind: 'platformStatus' },
       { kind: 'platformAudit' },
     ];
     for (const route of cases) {
@@ -167,6 +171,10 @@ function hrefFor(route: Route): string {
       return route.gateId ? hrefs.platformGateInstance(route.gateId) : hrefs.platformIntegrations();
     case 'platformSettings':
       return hrefs.platformSettings();
+    case 'platformRuntime':
+      return hrefs.platformRuntime();
+    case 'platformStatus':
+      return hrefs.platformStatus();
     case 'platformAudit':
       return hrefs.platformAudit();
   }

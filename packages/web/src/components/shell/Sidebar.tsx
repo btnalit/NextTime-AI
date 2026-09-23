@@ -143,6 +143,22 @@ const PLATFORM_NAV: readonly NavItem[] = [
     icon: 'grid',
     href: hrefs.platformSettings(),
   },
+  // S7-E (design §6.5 / §6.7, P-C): 运行层 / 运行状态 — which pi/image/extension version is
+  // running and whether every service is healthy.
+  {
+    section: 'platformRuntime',
+    label: '运行层',
+    sub: 'Runtime',
+    icon: 'cpu',
+    href: hrefs.platformRuntime(),
+  },
+  {
+    section: 'platformStatus',
+    label: '运行状态',
+    sub: 'Status',
+    icon: 'shield',
+    href: hrefs.platformStatus(),
+  },
   {
     section: 'platformAudit',
     label: '平台审计',
