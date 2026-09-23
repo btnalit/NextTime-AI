@@ -15,6 +15,7 @@
  * actually needs.
  */
 
+import { normalizeImageRef } from '@nexttime/shared';
 import { z } from 'zod';
 
 export const DEFAULT_SUPERVISOR_PORT = 8081;
@@ -44,12 +45,18 @@ function parseDnsSinkholeEnv(value: string | undefined): string[] | undefined {
   return entries.length > 0 ? entries : undefined;
 }
 
+/** P1-a review follow-up (post-v0.16.0, PR #233): every entry is normalized through
+ *  `normalizeImageRef` — Docker's own `docker images`/`RepoTags` always reports a built-without-
+ *  an-explicit-tag image as `<name>:latest`, so comparing the raw `WORKER_IMAGE`/
+ *  `WORKER_IMAGE_ALLOWLIST` env strings against that would never match on a real host with no
+ *  allowlist override, 403ing the one image this deployment actually built. See
+ *  `@nexttime/shared`'s `image-ref.ts` for the full rationale. */
 function buildTaskImageAllowlist(raw: string | undefined, defaultImage: string): string[] {
   const extra = (raw ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  return [...new Set([defaultImage, ...extra])];
+  return [...new Set([defaultImage, ...extra].map(normalizeImageRef))];
 }
 
 /** How `docker-client.ts` reaches the Docker Engine API — a plain Unix socket (`socketPath`, the
@@ -230,9 +237,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
 }
 
 /** `POST /task/spawn` 403s an `image` outside this list (docs/development-tasks.md S2.8
- *  acceptance: "非允许镜像 403"). */
+ *  acceptance: "非允许镜像 403"). `image` is normalized before comparing — `taskImageAllowlist`'s
+ *  own entries already are (`buildTaskImageAllowlist`), so a spawn request naming the bare,
+ *  untagged form of an allowlisted image (Docker's own `name` ≡ `name:latest`) is accepted, not
+ *  403'd on a technicality (P1-a review follow-up, PR #233). */
 export function isImageAllowed(config: SupervisorConfig, image: string): boolean {
-  return config.taskImageAllowlist.includes(image);
+  return config.taskImageAllowlist.includes(normalizeImageRef(image));
 }
 
 /** Every identifier in this codebase (`workspaceId`/`principalId`/`taskId`/`workerRunId`/...) is a

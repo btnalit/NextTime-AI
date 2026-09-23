@@ -576,13 +576,22 @@ export const RuntimeImageWireSchema = z
     /** `ai.nexttime.built-from` label, when present (a git ref / commit the build was cut from). */
     builtFrom: z.string().nullable(),
     labels: z.record(z.string(), z.string()),
-    /** P1-a hotfix (post-v0.16.0 review): whether `tags[0] ?? id` — the exact identifier
-     *  `set_active_runtime_image` would be called with — is in worker-supervisor's own
-     *  `allowedImages` (`GET /images`, `config.taskImageAllowlist`). `false` for an untagged
-     *  image (a rebuild that overwrote its old tag, leaving only a digest — digests are never
-     *  allowlisted) as well as for a tagged-but-not-allowlisted one; the console disables "设为
-     *  活动" accordingly rather than letting the call 409 `image_not_allowed`. */
+    /** P1-a hotfix, revised by review follow-up (PR #233): whether any of this image's own `tags`,
+     *  normalized (Docker's own implicit `:latest` — `normalizeImageRef`), is in worker-supervisor's
+     *  `allowedImages` (`GET /images`, `config.taskImageAllowlist`, itself normalized). Equivalent
+     *  to `activatableRef !== null`; kept as its own field since it predates `activatableRef` and
+     *  reads more directly for a simple disabled/enabled check. `false` for an untagged image (a
+     *  rebuild that overwrote its old tag, leaving only a digest — digests are never allowlisted)
+     *  as well as for a tagged-but-not-allowlisted one; the console disables "设为活动" accordingly
+     *  rather than letting the call 409 `image_not_allowed`. */
     allowed: z.boolean(),
+    /** Review follow-up (PR #233): the first of this image's own `tags` whose normalized form is
+     *  allowlisted — a literal entry of `tags`, never a synthesized/normalized string, so it always
+     *  passes `set_active_runtime_image`'s own exact-match inventory check when the console sends
+     *  it back verbatim. `null` when `allowed` is `false`. The console sends this instead of
+     *  `tags[0] ?? id` — an untagged image's `id` is a digest, which can never be allowlisted, and
+     *  `tags[0]` alone does not account for Docker's own implicit `:latest` on the allowlist side. */
+    activatableRef: z.string().nullable(),
   })
   .strict();
 export type RuntimeImageWire = z.infer<typeof RuntimeImageWireSchema>;

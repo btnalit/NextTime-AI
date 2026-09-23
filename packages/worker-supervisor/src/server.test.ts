@@ -308,7 +308,13 @@ describe('GET /images (S7-E inventory)', () => {
     const { app, config } = setup({ WORKER_IMAGE_ALLOWLIST: 'nexttime-ai-worker-runtime:v2' });
     const res = await app.inject({ method: 'GET', url: '/images', headers: AUTH });
     expect(res.statusCode).toBe(200);
-    expect(res.json().allowedImages).toEqual([config.workerImage, 'nexttime-ai-worker-runtime:v2']);
+    // P1-a review follow-up (PR #233): config.workerImage stays raw — allowedImages is the
+    // normalized form, Docker's own implicit :latest.
+    expect(config.workerImage).toBe('nexttime-ai-worker-runtime');
+    expect(res.json().allowedImages).toEqual([
+      'nexttime-ai-worker-runtime:latest',
+      'nexttime-ai-worker-runtime:v2',
+    ]);
   });
 });
 

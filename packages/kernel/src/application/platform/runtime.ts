@@ -12,6 +12,7 @@ import type {
   RuntimeInventoryWire,
   ServiceHealthWire,
 } from '@nexttime/shared';
+import { normalizeImageRef } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
 import type {
@@ -140,17 +141,24 @@ function resolveActiveImage(
   return { activeImage: null, activeImageSource: 'unknown' };
 }
 
-/** P1-a hotfix: `allowed` reflects whether *the exact identifier `set_active_runtime_image` would
- *  be called with* (`tags[0] ?? id` — same expression the console's own `activate()` uses) is in
- *  worker-supervisor's own `allowedImages`. Deliberately not "any tag or the id is allowlisted" —
- *  an image with a stale first tag that happens not to be allowlisted while a later tag is would
- *  be a confusing edge case this platform's build process (one tag per build) does not produce in
- *  practice; keeping this in lockstep with what the console actually sends is simpler and never
- *  claims "allowed" for a call that would 409. */
+/** P1-a hotfix, revised by review follow-up (PR #233): `allowedImages` is normalized
+ *  (`@nexttime/shared`'s `normalizeImageRef` — see that function's own doc comment for the full
+ *  rationale) before this comparison, defensively on the kernel's own side even though worker-
+ *  supervisor's `taskImageAllowlist` already normalizes its entries (a rolling upgrade could
+ *  briefly have the two processes at different versions). `activatableRef` is the first of this
+ *  image's own `tags` whose normalized form is allowlisted — a literal, exact entry of `tags`
+ *  (never a normalized string that might not itself be a real tag), so it always passes
+ *  `findImage`'s own exact match when the console sends it back to `set_active_runtime_image`.
+ *  `null` when no tag qualifies (including an untagged image — a digest is never allowlisted,
+ *  `image-ref.ts`'s own doc comment). `allowed` is just whether that search found anything; kept
+ *  as its own field (not inlined) because it existed before `activatableRef` and other code/tests
+ *  already read it. */
 function toWireRuntimeImage(
   image: RuntimeImageInfo,
   allowedImages: ReadonlySet<string>,
 ): RuntimeImageWire {
+  const activatableRef =
+    image.tags.find((tag) => allowedImages.has(normalizeImageRef(tag))) ?? null;
   return {
     id: image.id,
     tags: [...image.tags],
@@ -159,7 +167,8 @@ function toWireRuntimeImage(
     platformExtensionVersion: image.labels[IMAGE_PLATFORM_EXTENSION_VERSION_LABEL] ?? null,
     builtFrom: image.labels[IMAGE_BUILT_FROM_LABEL] ?? null,
     labels: { ...image.labels },
-    allowed: allowedImages.has(image.tags[0] ?? image.id),
+    allowed: activatableRef !== null,
+    activatableRef,
   };
 }
 
@@ -186,7 +195,7 @@ export const runtimeInventoryHandler: CapabilityHandler = async (client) => {
     imagesResult.defaultImage,
   );
   const activeImageInfo = activeImage ? findImage(imagesResult.images, activeImage) : undefined;
-  const allowedImages = new Set(imagesResult.allowedImages);
+  const allowedImages = new Set(imagesResult.allowedImages.map(normalizeImageRef));
 
   const residentContainers: ResidentContainerWire[] = residents.map((resident) => ({
     principalId: resident.principalId,
@@ -228,7 +237,7 @@ export const listRuntimeImagesHandler: CapabilityHandler = async () => {
     );
   }
   const { images, allowedImages } = await supervisor.listImages();
-  const allowedSet = new Set(allowedImages);
+  const allowedSet = new Set(allowedImages.map(normalizeImageRef));
   return { result: { items: images.map((image) => toWireRuntimeImage(image, allowedSet)) } };
 };
 
@@ -271,15 +280,27 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
   // string, env-configured security boundary this handler must never re-implement or loosen).
   // Before this check, setting a non-allowlisted image active would silently 403 every future
   // spawn platform-wide the moment a Worker/entry container next tried to start.
-  if (!allowedImages.includes(image)) {
+  //
+  // Review follow-up (PR #233): both sides are compared *normalized* (`normalizeImageRef` — see
+  // that function's own doc comment) — worker-supervisor's own `taskImageAllowlist` already
+  // normalizes its entries, but comparing raw here would still reject the bare, untagged form of
+  // an allowlisted image, which is exactly the default `WORKER_IMAGE` shape on a host with no
+  // `WORKER_IMAGE_ALLOWLIST` override.
+  const normalizedImage = normalizeImageRef(image);
+  const normalizedAllowedImages = new Set(allowedImages.map(normalizeImageRef));
+  if (!normalizedAllowedImages.has(normalizedImage)) {
     throw new PlatformAdminError(
       'image_not_allowed',
       `image "${image}" is not in worker-supervisor's WORKER_IMAGE_ALLOWLIST — allowed: ${allowedImages.join(', ') || '(none)'}`,
     );
   }
+  // Stored normalized (not the raw input) — the same value `resolveActiveRuntimeImage` later
+  // forwards verbatim into a spawn request's own `image` field, so it always exactly matches
+  // worker-supervisor's (already-normalized) allowlist without depending on that second process
+  // to normalize it again.
   const row = await updatePlatformSettings(
     client,
-    { activeRuntimeImage: image },
+    { activeRuntimeImage: normalizedImage },
     actingUser(context).id,
   );
   return {
@@ -311,7 +332,13 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
  *  failure mode this hotfix closes for `set_active_runtime_image`. Skipped entirely when
  *  `previousImage` is `null` (reverting to "unset" needs no allowlist check — worker-supervisor's
  *  own `defaultImage` is always allowlisted, `config.ts`'s `buildTaskImageAllowlist`); an
- *  unreachable supervisor refuses rather than guesses, same as `set_active_runtime_image`. */
+ *  unreachable supervisor refuses rather than guesses, same as `set_active_runtime_image`.
+ *
+ *  Review follow-up (PR #233): the allowlist comparison and the value actually restored are both
+ *  normalized (`normalizeImageRef` — see that function's own doc comment), same reasoning as
+ *  `set_active_runtime_image`. `previousImage` normalizes to itself when it already came from a
+ *  post-fix `set_active_runtime_image` call (idempotent); an older, pre-fix history row could
+ *  still hold a raw value, which this then normalizes on the way back out. */
 export const rollbackRuntimeImageHandler: CapabilityHandler = async (
   client,
   _workspaceId,
@@ -337,6 +364,7 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
   const previousValue = previous.settings.activeRuntimeImage;
   const previousImage: string | null =
     typeof previousValue === 'string' || previousValue === null ? previousValue : null;
+  let normalizedPreviousImage: string | null = previousImage;
 
   if (previousImage !== null) {
     const supervisor = requireSupervisorClient();
@@ -354,7 +382,9 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
         `could not reach worker-supervisor to validate the rollback target: ${String(err)}`,
       );
     }
-    if (!allowedImages.includes(previousImage)) {
+    normalizedPreviousImage = normalizeImageRef(previousImage);
+    const normalizedAllowedImages = new Set(allowedImages.map(normalizeImageRef));
+    if (!normalizedAllowedImages.has(normalizedPreviousImage)) {
       throw new PlatformAdminError(
         'image_not_allowed',
         `previous image "${previousImage}" is no longer in worker-supervisor's WORKER_IMAGE_ALLOWLIST — allowed: ${allowedImages.join(', ') || '(none)'}`,
@@ -364,7 +394,7 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
 
   const row = await updatePlatformSettings(
     client,
-    { activeRuntimeImage: previousImage },
+    { activeRuntimeImage: normalizedPreviousImage },
     actingUser(context).id,
   );
   return {

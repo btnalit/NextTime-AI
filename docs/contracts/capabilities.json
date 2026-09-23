@@ -8719,6 +8719,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "activatableRef": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "allowed": {
                 "type": "boolean"
               },
@@ -8767,7 +8773,8 @@
               "platformExtensionVersion",
               "builtFrom",
               "labels",
-              "allowed"
+              "allowed",
+              "activatableRef"
             ],
             "type": "object"
           },
@@ -14072,6 +14079,12 @@
             {
               "additionalProperties": false,
               "properties": {
+                "activatableRef": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "allowed": {
                   "type": "boolean"
                 },
@@ -14120,7 +14133,8 @@
                 "platformExtensionVersion",
                 "builtFrom",
                 "labels",
-                "allowed"
+                "allowed",
+                "activatableRef"
               ],
               "type": "object"
             },
@@ -14144,6 +14158,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "activatableRef": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "allowed": {
                 "type": "boolean"
               },
@@ -14192,7 +14212,8 @@
               "platformExtensionVersion",
               "builtFrom",
               "labels",
-              "allowed"
+              "allowed",
+              "activatableRef"
             ],
             "type": "object"
           },

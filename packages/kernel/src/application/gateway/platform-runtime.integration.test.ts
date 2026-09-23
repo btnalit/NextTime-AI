@@ -364,12 +364,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       // P1-a hotfix (post-v0.16.0 review): each image's own `allowed` reflects worker-supervisor's
       // real allowlist, not merely "is it built" — the console needs this to disable "设为活动" for
       // a built-but-not-allowlisted image (e.g. an untagged rebuild) up front.
-      it('flags each image’s own `allowed` from worker-supervisor’s allowlist (P1-a hotfix)', async () => {
+      it('flags each image’s own `allowed`/`activatableRef` from worker-supervisor’s allowlist (P1-a hotfix)', async () => {
         supervisor.images = [IMAGE_V1, IMAGE_V2];
         supervisor.allowedImages = ['nexttime-ai-worker-runtime:v1'];
         const result = await callAsAdmin<{ items: RuntimeImageWire[] }>('list_runtime_images');
-        expect(result.items.find((i) => i.id === IMAGE_V1.id)?.allowed).toBe(true);
-        expect(result.items.find((i) => i.id === IMAGE_V2.id)?.allowed).toBe(false);
+        const v1 = result.items.find((i) => i.id === IMAGE_V1.id);
+        const v2 = result.items.find((i) => i.id === IMAGE_V2.id);
+        expect(v1?.allowed).toBe(true);
+        expect(v1?.activatableRef).toBe('nexttime-ai-worker-runtime:v1');
+        expect(v2?.allowed).toBe(false);
+        expect(v2?.activatableRef).toBeNull();
       });
     });
 
@@ -454,6 +458,57 @@ describe.runIf(DATABASE_URL !== undefined)(
           image: 'nexttime-ai-worker-runtime:v1',
         });
         expect(result.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v1');
+      });
+
+      // Review follow-up (PR #233): the real-world host shape this whole hotfix exists for —
+      // WORKER_IMAGE defaults to an *untagged* name, but Docker's own RepoTags always reports the
+      // built image as `<name>:latest`. Deliberately a raw, unnormalized `allowedImages` entry
+      // here (worker-supervisor's own config.ts now normalizes this too, but this test exercises
+      // the kernel's own defensive normalization independently — it must not depend on the other
+      // process having already done its half, e.g. during a rolling upgrade).
+      it("an untagged allowlist entry (Docker's own implicit :latest) makes an image tagged only :latest activatable via that tag", async () => {
+        const latestOnlyImage: RuntimeImageInfo = {
+          id: 'sha256:latest0000000000000000000000000000000000000000000000000000',
+          tags: ['nexttime-ai-worker-runtime:latest'],
+          created: '2026-09-22T00:00:00.000Z',
+          labels: {},
+        };
+        supervisor.images = [latestOnlyImage];
+        supervisor.allowedImages = ['nexttime-ai-worker-runtime']; // raw, no explicit tag
+
+        const list = await callAsAdmin<{ items: RuntimeImageWire[] }>('list_runtime_images');
+        const wireImage = list.items.find((i) => i.id === latestOnlyImage.id);
+        expect(wireImage?.allowed).toBe(true);
+        expect(wireImage?.activatableRef).toBe('nexttime-ai-worker-runtime:latest');
+
+        // findImage still exact-matches tags — the console sends activatableRef, never the bare
+        // untagged name (which would 409 image_not_in_inventory: no image's tags array literally
+        // contains the untagged string).
+        const result = await callAsAdmin<PlatformSettingsWire>('set_active_runtime_image', {
+          image: wireImage?.activatableRef,
+        });
+        expect(result.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:latest');
+      });
+
+      it('a multi-tag image is activatable via whichever tag is allowlisted, not just tags[0]', async () => {
+        const multiTagImage: RuntimeImageInfo = {
+          id: 'sha256:multitag000000000000000000000000000000000000000000000000000',
+          tags: ['nexttime-ai-worker-runtime:stale-alias', 'nexttime-ai-worker-runtime:v3'],
+          created: '2026-09-22T00:00:00.000Z',
+          labels: {},
+        };
+        supervisor.images = [multiTagImage];
+        supervisor.allowedImages = ['nexttime-ai-worker-runtime:v3']; // only tags[1]
+
+        const list = await callAsAdmin<{ items: RuntimeImageWire[] }>('list_runtime_images');
+        const wireImage = list.items.find((i) => i.id === multiTagImage.id);
+        expect(wireImage?.allowed).toBe(true);
+        expect(wireImage?.activatableRef).toBe('nexttime-ai-worker-runtime:v3');
+
+        const result = await callAsAdmin<PlatformSettingsWire>('set_active_runtime_image', {
+          image: wireImage?.activatableRef,
+        });
+        expect(result.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v3');
       });
 
       it('refuses to set the active image when worker-supervisor is unreachable (never guesses)', async () => {
