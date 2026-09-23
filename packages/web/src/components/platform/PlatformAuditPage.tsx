@@ -3,11 +3,12 @@ import { type FormEvent, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime, prettyJson, redactSensitive } from '../../lib/format.js';
+import { breadcrumbFor } from '../../lib/nav.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input } from '../ui/Field.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 
 export interface PlatformAuditPageProps {
@@ -51,6 +52,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={breadcrumbFor('platformAudit')}
         title="平台审计 Platform audit"
         description="Every platform-scope write (workspace_id is null): who changed what, and when."
       />

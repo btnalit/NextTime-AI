@@ -27,12 +27,21 @@ caller of `components/ui/*` keeps working. The hash router is unchanged by any o
   `theme` and `utilities` layers (`@import "tailwindcss/theme.css" layer(theme); @import
   "tailwindcss/utilities.css" layer(utilities) source(none);`), never the full `"tailwindcss"`
   entry — that also pulls in `preflight.css`, which would restyle bare elements on every existing
-  page; `styles/base.css` already owns the app's own reset. Every pre-S8 stylesheet
-  (tokens/base/shell/ui/pages/graph) stays unlayered CSS, and per the CSS Cascading Layers spec an
-  unlayered declaration always beats a layered one for the same property on the same element,
-  regardless of source order or specificity — so even if a future kit utility and an old
-  hand-written rule ever target the same selector, the old page's own styling still wins until
-  that page's own migration PR removes the old rule.
+  page; `styles/base.css` already owns the app's own reset.
+- **Cascade layer order (S8 W1-A1).** `styles.css` declares `@layer legacy, theme, utilities;` up
+  front and imports every pre-S8 stylesheet (tokens/base/shell/ui/pages/graph — `tokens.css` is the
+  one exception, see below) into the `legacy` layer, *below* `theme`/`utilities`. Before W1-A1
+  every pre-S8 sheet was unlayered, and per the CSS Cascading Layers spec an unlayered declaration
+  always beats a layered one for the same property on the same element regardless of source order
+  — that was only safe as long as no `components/kit/*` component rendered a bare element legacy
+  also styles (`h1`, `a`, …). `PageHeader` (S8 W1-A1, the first "real" kit component wired into
+  every page) does, so the order had to flip: `legacy` now loses to `utilities`, meaning a kit
+  utility class always wins over a same-property legacy element rule — the reverse of the pre-
+  W1-A1 default. `tokens.css` stays **unlayered** (highest precedence of all): `tailwind.css`'s
+  `@theme inline` block below declares same-name aliases onto it (`--font-sans:
+  var(--font-sans)`, …) — if tokens.css's real values sat in a layer under `theme`, the alias's
+  self-reference would win the cascade instead and the custom property would resolve to a cyclic
+  (guaranteed-invalid) value.
 - **Scan restriction.** `source(none)` on the utilities import turns off Tailwind's automatic
   project-wide class scanning; `@source "../components/kit"` (relative to `styles/tailwind.css`)
   re-enables scanning for only that one directory. Without this, Tailwind would scan every `.tsx`
@@ -98,7 +107,12 @@ src/
     clients.ts             CapabilityCaller / PushSource — the narrow interfaces pages depend on
     status-tone.ts        status → tone/label maps typed over @nexttime/shared enums (+ grant, role)
     router.ts             hash routes: /login, /work/*, /me/agent, /me/account (S4.1), /govern/*
-                          (S3.14) — see its own doc
+                          (S3.14), /platform/* (S6-A0) — see its own doc
+    nav.ts                 S8 W1-A1: the single source of every Sidebar group/page name
+                          (WORK_NAV/GOVERN_NAV/PLATFORM_NAV, moved out of `components/shell/
+                          Sidebar.tsx`) and `breadcrumbFor(section)`, which every kit `PageHeader`
+                          breadcrumb reads — so a page's breadcrumb can never drift from the
+                          Sidebar's own wording (audit S12)
     role.ts                best-effort caller-role inference — fallback only as of S3.13; see "Roles"
     governance.ts          wire shapes for the S3.11 governance capabilities (members/grants/...)
     agent-profile.ts       wire shapes for the S3.13 AgentProfile/AgentPolicy capabilities
@@ -118,15 +132,20 @@ src/
     usePermissions.tsx    403/200-derived "may/may not call X" for the session (denied + allowed)
     useWorkspaceIdentity.ts  Sidebar's workspace name + role badge
     usePendingCount.ts    sidebar badge; useWsStatus.ts; usePushToasts.ts
-  components/ui/          Button StatusChip Card PageHeader EmptyState ErrorBanner Notice Skeleton
+  components/ui/          Button StatusChip Card EmptyState ErrorBanner Notice Skeleton
                           Field(+Input/Select/Textarea) Drawer Toast DataList Tabs Kbd CopyId Icon
                           — pre-S8; migrates to components/kit/* one page at a time (see "UI
-                          framework" above), unchanged by S8 W1-A0 itself
+                          framework" above). `PageHeader` moved to components/kit/ in S8 W1-A1
+                          (below) — it was the last file here to go, so `ui/PageHeader.tsx` and its
+                          test no longer exist
   components/kit/         S8 W1-A0: the Radix/Tailwind foundation — button dialog sheet tooltip
-                          table (+ each one's .test.tsx) — not wired into any page yet; the first
-                          real usage (PageHeader) is a later S8 W1-A lane
-  components/shell/       AppShell, Sidebar (工作 Work / 治理 Governance nav, S3.14; S4.1: workspace
-                          switcher when >1 membership, cookie-vs-apiKey sign-out label)
+                          table (+ each one's .test.tsx). S8 W1-A1: `page-header` — the first real
+                          usage, wired into every page (breadcrumb/title/description/actions, S8
+                          risk ①'s "first component migration" milestone; see lib/nav.ts above for
+                          where its breadcrumb data comes from)
+  components/shell/       AppShell, Sidebar (三组 使用 / 治理 / 平台 nav, S6-A0; nav data itself lives
+                          in lib/nav.ts as of S8 W1-A1; S4.1: workspace switcher when >1 membership,
+                          cookie-vs-apiKey sign-out label)
   components/             LoginPage (S4.1: primary login+password form, collapsed API-key
                           `<details>` via ApiKeyLoginDetails; no setup page any more — P-A1's
                           pre-created `admin` always reaches this form) ChangePasswordPage (S4.1:
@@ -301,7 +320,15 @@ S8 W1-A0 additions: `components/kit/button` (variant/size classes, `asChild` via
 `components/kit/dialog` (closed until triggered, renders, closes via `DialogClose`),
 `components/kit/sheet` (`side` variant classes, open/close), `components/kit/tooltip` (closed vs.
 open content, role="tooltip"), `components/kit/table` (renders native table roles, shell classes)
-— none of the five is imported by any page yet.
+— none of the five was imported by any page yet at that point.
+
+S8 W1-A1 additions: `components/kit/page-header` (title as the sole `h1`, breadcrumb trail with
+`aria-current="page"` on the last crumb and a link only where an earlier crumb has an `href`, no
+`<nav>` for an empty/omitted breadcrumb, `primaryAction` before `actions`, the title column's
+`min-w-56` class) — the first kit component wired into every page (all 22 former
+`components/ui/PageHeader` callers); `lib/nav.test.ts` (`breadcrumbFor` resolves every
+`NavSection` to `[{group}, {page}]` and `[]` for a section with no nav entry); `Sidebar.test.tsx`
+unchanged (nav data moved to `lib/nav.ts`, `Sidebar`'s own rendered output did not).
 
 S3.13 additions: `useWorkspaceIdentity` (known role once `get_workspace` resolves, inferred
 fallback on `not_found`/loading), `AgentProfilePage` (pre-filled form, `not_found` degrade on the

@@ -9,13 +9,14 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
+import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, readResiduePreset } from '../../lib/platform-workspaces.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Select } from '../ui/Field.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
@@ -200,6 +201,7 @@ export function PlatformWorkspacesPage({
   return (
     <div className="page" data-testid="platform-workspaces-page">
       <PageHeader
+        breadcrumb={breadcrumbFor('platformWorkspaces')}
         title="工作区 Workspaces"
         description="每个工作区是一张共享图：给谁用、agent 可用哪些模型、由谁配置。 Each workspace is one shared graph: who it is for, which models its agents may use, and who configures it."
         actions={

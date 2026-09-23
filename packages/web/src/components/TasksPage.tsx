@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useResource } from '../hooks/useResource.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { excerpt, formatDateTime, formatDuration, formatRelative } from '../lib/format.js';
-import { hrefs } from '../lib/router.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import {
   type TaskSummary,
   type WorkerDefinitionSummary,
@@ -13,6 +13,7 @@ import {
 } from '../lib/tasks.js';
 import { TaskDetail } from './TaskDetail.js';
 import { usePrincipalNames } from './approvals/useDirectoryNames.js';
+import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
@@ -20,7 +21,6 @@ import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Icon } from './ui/Icon.js';
-import { PageHeader } from './ui/PageHeader.js';
 import { RefChip } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -146,7 +146,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={[{ label: '工作 Work', href: hrefs.chats() }, { label: '任务 Tasks' }]}
+        breadcrumb={breadcrumbFor('tasks')}
         title="任务 Tasks"
         description="代表你委派给 Worker 的工作，及其运行与结果。 Work delegated to Workers on your behalf, with their runs and results."
         actions={

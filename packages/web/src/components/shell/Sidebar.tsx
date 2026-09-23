@@ -1,172 +1,15 @@
 import type { ReactNode } from 'react';
 import type { WireMembership } from '../../lib/auth-api.js';
+import type { ExternalNavItem, NavItem } from '../../lib/nav.js';
+import { EXPLORER_NAV, GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from '../../lib/nav.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
 import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
 import type { NavSection } from '../../lib/router.js';
-import { hrefs } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
 import { Button } from '../ui/Button.js';
 import { Select } from '../ui/Field.js';
 import { Icon, type IconName } from '../ui/Icon.js';
 import { StatusChip } from '../ui/StatusChip.js';
-
-interface NavItem {
-  readonly section: NavSection;
-  readonly label: string;
-  readonly sub: string;
-  readonly icon: IconName;
-  readonly href: string;
-}
-
-/** A nav entry that opens outside the console's own hash-routed shell — no `section` (it never
- *  matches `NavSection`/`aria-current`), always `target="_blank"`. Rendered separately from
- *  `NavItem`s rather than folding it into `NavSection` (`lib/router.ts`), which is one-to-one with
- *  an internal hash route. */
-interface ExternalNavItem {
-  readonly testId: string;
-  readonly label: string;
-  readonly sub: string;
-  readonly icon: IconName;
-  readonly href: string;
-}
-
-/** Explorer（第三方）— the read-only graph/decision/provenance UI (kernel `interfaces/explorer-
- *  contract`), an unmodified third-party static bundle served by caddy at `/explorer/` on this
- *  same origin. Opens in a new tab; same visibility as the 治理 group (`showGovern`) since
- *  every Explorer endpoint requires at least the same role. S6-C / S6-D: the console's own 图谱
- *  page (`WORK_NAV`) is the primary graph entry; this link is rendered only while the bundle is
- *  built (`explorerAvailable !== false`, `lib/explorer-probe.ts`). */
-const EXPLORER_NAV: ExternalNavItem = {
-  testId: 'nav-explorer',
-  label: '打开 Explorer',
-  sub: 'third-party',
-  icon: 'search',
-  href: '/explorer/',
-};
-
-/** 使用 Use (design doc §2/§5 "使用面") — always visible, every role. 我的智能体 (S3.13 placeholder)
- *  sits here rather than in a separate section: it is per-user configuration, not governance. */
-const WORK_NAV: readonly NavItem[] = [
-  { section: 'chats', label: '对话', sub: 'Chats', icon: 'chat', href: hrefs.chats() },
-  {
-    section: 'approvals',
-    label: '待我审批',
-    sub: 'Approvals',
-    icon: 'approvals',
-    href: hrefs.approvals(),
-  },
-  { section: 'tasks', label: '任务', sub: 'Tasks', icon: 'tasks', href: hrefs.tasks() },
-  // S6-D: the native 图谱 page (object browser on search / state_at / explain) replaces the
-  // third-party Explorer bundle as the console's graph entry.
-  { section: 'graph', label: '图谱', sub: 'Graph', icon: 'link', href: hrefs.graph() },
-  { section: 'agent', label: '我的智能体', sub: 'My Agent', icon: 'user', href: hrefs.agent() },
-  // S4.1: sits right next to 我的智能体 — both are per-user "我的" settings, not governance.
-  { section: 'account', label: '我的账户', sub: 'My Account', icon: 'user', href: hrefs.account() },
-];
-
-/** 治理 Govern (S6-A0 §5.9 "壳与导航": 使用 / 治理 / 平台) — the per-workspace owner/operator pages,
- *  hidden for a *proven* member (S3.11: "member 只见工作区 + 「我的智能体」"), shown otherwise
- *  (owner/operator, or role not yet known this session — see `lib/role.ts` and the runbook's
- *  "角色与可见性": show governance nav to everyone and let the kernel's 403 render as an inline
- *  state — never invent a capability) and only once a workspace is in scope (`showGovern` — an
- *  apiKey session always has one implicitly; a cookie session needs `selectedWorkspaceId`, since a
- *  platform admin with zero memberships has nothing here to configure). */
-const GOVERN_NAV: readonly NavItem[] = [
-  { section: 'members', label: '成员与授权', sub: 'Members', icon: 'users', href: hrefs.members() },
-  { section: 'access', label: '访问', sub: 'Access', icon: 'key', href: hrefs.access() },
-  {
-    section: 'systems',
-    label: '系统接入',
-    sub: 'Systems',
-    icon: 'connections',
-    href: hrefs.systems(),
-  },
-  { section: 'catalog', label: '能力目录', sub: 'Catalog', icon: 'grid', href: hrefs.catalog() },
-  { section: 'models', label: '模型与配额', sub: 'Models', icon: 'cpu', href: hrefs.models() },
-  { section: 'audit', label: '审计', sub: 'Audit', icon: 'search', href: hrefs.audit() },
-];
-
-/** 平台 Platform (S6-A0 §5.9) — platform-admin only (`platformRole === 'admin'`), independent of
- *  workspace role/selection: an administrator configures workspaces they are not a member of,
- *  manages users and platform settings with zero memberships. Overview first (the control tower
- *  of §5.9 "页面对照原型"), then the four management pages, then the platform audit stream —
- *  the former 管理 → 工作区配置 / 用户 / 平台设置 and 维护 groups folded into one labelled group. */
-const PLATFORM_NAV: readonly NavItem[] = [
-  {
-    section: 'platformOverview',
-    label: '概览',
-    sub: 'Overview',
-    icon: 'info',
-    href: hrefs.platformOverview(),
-  },
-  {
-    section: 'platformWorkspaces',
-    label: '工作区',
-    sub: 'Workspaces',
-    icon: 'grid',
-    href: hrefs.platformWorkspaces(),
-  },
-  {
-    section: 'platformUsers',
-    label: '用户',
-    sub: 'Users',
-    icon: 'users',
-    href: hrefs.platformUsers(),
-  },
-  {
-    section: 'platformIntegrations',
-    label: '集成',
-    sub: 'Integrations',
-    icon: 'connections',
-    href: hrefs.platformIntegrations(),
-  },
-  // P-B2b (design §6.4): modules — versioned domain packs, install counts, default modules.
-  {
-    section: 'platformModules',
-    label: '模块',
-    sub: 'Modules',
-    icon: 'grid',
-    href: hrefs.platformModules(),
-  },
-  // S6-B (design §6.2): providers are platform-level; the page talks to llm-proxy's admin API.
-  {
-    section: 'platformModels',
-    label: '模型与供应商',
-    sub: 'Models & providers',
-    icon: 'cpu',
-    href: hrefs.platformModels(),
-  },
-  {
-    section: 'platformSettings',
-    label: '平台设置',
-    sub: 'Platform settings',
-    icon: 'grid',
-    href: hrefs.platformSettings(),
-  },
-  // S7-E (design §6.5 / §6.7, P-C): 运行层 / 运行状态 — which pi/image/extension version is
-  // running and whether every service is healthy.
-  {
-    section: 'platformRuntime',
-    label: '运行层',
-    sub: 'Runtime',
-    icon: 'cpu',
-    href: hrefs.platformRuntime(),
-  },
-  {
-    section: 'platformStatus',
-    label: '运行状态',
-    sub: 'Status',
-    icon: 'shield',
-    href: hrefs.platformStatus(),
-  },
-  {
-    section: 'platformAudit',
-    label: '平台审计',
-    sub: 'Platform audit',
-    icon: 'search',
-    href: hrefs.platformAudit(),
-  },
-];
 
 const STATUS_LABEL: Readonly<Record<WsConnectionStatus, string>> = {
   connecting: 'Connecting',
@@ -374,7 +217,10 @@ function renderNavItem(item: NavItem, active: NavSection, pendingCount: number |
       title={`${item.label} ${item.sub}`}
       data-testid={`nav-${item.section}`}
     >
-      <Icon name={item.icon} />
+      {/* item.icon is a plain string on NavItem (lib/nav.ts — that file must not import
+       *  components/ui/Icon.js itself, scripts/guards/legacy-ui-importers.json only shrinks); cast
+       *  back to IconName at this one render call. */}
+      <Icon name={item.icon as IconName} />
       <span className="nav-label">
         {item.label}
         <span className="nav-label-sub">{item.sub}</span>
@@ -399,7 +245,7 @@ function renderExternalNavItem(item: ExternalNavItem): ReactNode {
       target="_blank"
       rel="noopener noreferrer"
     >
-      <Icon name={item.icon} />
+      <Icon name={item.icon as IconName} />
       <span className="nav-label">
         {item.label}
         <span className="nav-label-sub">{item.sub}</span>

@@ -8,9 +8,10 @@ import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
-import { hrefs } from '../lib/router.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import { type ApprovalDecisionInput, ApprovalDetail } from './approvals/ApprovalDetail.js';
 import { nameOf, useGatekeeperNames, usePrincipalNames } from './approvals/useDirectoryNames.js';
+import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
@@ -19,7 +20,6 @@ import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Select } from './ui/Field.js';
 import { Icon } from './ui/Icon.js';
-import { PageHeader } from './ui/PageHeader.js';
 import { RefChip } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -328,7 +328,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   return (
     <div className="page">
       <PageHeader
-        breadcrumb={[{ label: '工作 Work', href: hrefs.chats() }, { label: '待我审批 Approvals' }]}
+        breadcrumb={breadcrumbFor('approvals')}
         title="待我审批 Approvals"
         description="Worker 在你的授权范围内提出的执行类动作；批准后由门执行。 Execute-class actions Workers proposed within your scope. Approving lets the Gatekeeper run them."
         actions={

@@ -10,6 +10,8 @@ import { useMemo, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { breadcrumbFor } from '../../lib/nav.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { ConfirmTier } from '../ui/ConfirmTier.js';
@@ -17,7 +19,6 @@ import { CopyId } from '../ui/CopyId.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Notice } from '../ui/Notice.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { useToast } from '../ui/Toast.js';
@@ -151,7 +152,7 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
   return (
     <div className="page" data-testid="platform-runtime-page">
       <PageHeader
-        breadcrumb={[{ label: '平台 Platform' }, { label: '运行层' }]}
+        breadcrumb={breadcrumbFor('platformRuntime')}
         title="运行层 Runtime"
         description="跑的是哪个版本的 pi / 镜像 / 扩展，谁待重建，怎么升、怎么回滚。 Which pi / image / extension version is running, what is out of date, and how to roll it forward or back."
         actions={

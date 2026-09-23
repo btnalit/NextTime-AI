@@ -3,13 +3,14 @@ import { type FormEvent, useState } from 'react';
 import { invalidateCapability, useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
+import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { PlatformError } from './PlatformError.js';
 
@@ -37,6 +38,7 @@ export function PlatformSettingsPage({ http }: PlatformSettingsPageProps) {
   return (
     <div className="page">
       <PageHeader
+        breadcrumb={breadcrumbFor('platformSettings')}
         title="平台设置 Platform settings"
         description="Site name, announcement, defaults, and password policy for this platform."
       />

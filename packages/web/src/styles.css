@@ -11,11 +11,33 @@
  *   ui.css       — the primitives under components/ui/ (one class family each)
  *   pages.css    — page-specific layout (login, chat, approvals, tasks, connections)
  *   graph.css    — the S6-D 图谱 page (two-pane object browser, fact rows, SVG neighbourhood)
- */
+ *
+ * Cascade layer order (S8 W1-A1, docs/development-tasks.md §5e "W1 拆分" risk ①): declared once,
+ * up front, so it is fixed regardless of the order the imports below happen to run in. `legacy`
+ * (base/shell/ui/pages/graph — every pre-S8 hand-written sheet) sits *below* `theme` and
+ * `utilities`. Per the CSS Cascading Layers spec, an unlayered declaration always beats a layered
+ * one for the same property on the same element, regardless of source order or specificity —
+ * before this line, every legacy sheet was unlayered and therefore always won over a
+ * components/kit/* Tailwind utility class, even one written after it in the cascade. That is only
+ * safe while no kit component renders a bare element legacy also styles; `PageHeader` (the first
+ * "real" kit component wired into a page, S8 W1-A1) renders `<h1>`/`<a>`/`<nav>`, which base.css's
+ * own `h1 {}` / `a {}` element selectors also target — so from here on the two must be ordered
+ * deliberately: `legacy` loses to `utilities` so a kit utility class always wins over a same-
+ * property legacy element rule, exactly the reverse of the pre-S8-A1 default. `tokens.css` is
+ * deliberately left **unlayered** (highest precedence, above every layer): `tailwind.css`'s
+ * `@theme inline` block declares same-name aliases onto it (`--font-sans: var(--font-sans)`,
+ * `--radius-s: var(--radius-s)`, `--shadow-1: var(--shadow-1)`, …) inside the `theme` layer — if
+ * tokens.css's real values sat in a layer *below* `theme`, the alias's self-reference would win
+ * the cascade instead and the custom property would resolve to a cyclic (guaranteed-invalid)
+ * value. `fonts.css` carries only `@font-face` at-rules (imported unlayered, via base.css's own
+ * `@import "./fonts.css"`, unchanged) — `@font-face` has no selector to lose a cascade fight
+ * against a utility class, so it needs no layer of its own here. */
+@layer legacy, theme, utilities;
+
 @import "./styles/tokens.css";
 @import "./styles/tailwind.css";
-@import "./styles/base.css";
-@import "./styles/shell.css";
-@import "./styles/ui.css";
-@import "./styles/pages.css";
-@import "./styles/graph.css";
+@import "./styles/base.css" layer(legacy);
+@import "./styles/shell.css" layer(legacy);
+@import "./styles/ui.css" layer(legacy);
+@import "./styles/pages.css" layer(legacy);
+@import "./styles/graph.css" layer(legacy);

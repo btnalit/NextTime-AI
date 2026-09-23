@@ -9,14 +9,15 @@ import {
   patchMe,
 } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
+import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
-import { PageHeader } from './ui/PageHeader.js';
 
 export interface AccountPageProps {
   /** `null` in API-key mode (`GET /api/auth/me` is never called for that channel — there is no
@@ -61,7 +62,7 @@ export function AccountPage({
   if (!user) {
     return (
       <div className="page">
-        <PageHeader title="我的账户 My Account" />
+        <PageHeader breadcrumb={breadcrumbFor('account')} title="我的账户 My Account" />
         <ClaimPasswordCard apiKey={apiKey} onClaimed={onClaimed} fetchImpl={fetchImpl} />
       </div>
     );
@@ -69,7 +70,11 @@ export function AccountPage({
 
   return (
     <div className="page">
-      <PageHeader title="我的账户 My Account" description={user.login} />
+      <PageHeader
+        breadcrumb={breadcrumbFor('account')}
+        title="我的账户 My Account"
+        description={user.login}
+      />
       <DisplayNameCard user={user} onUserChanged={onUserChanged} fetchImpl={fetchImpl} />
       <PasswordCard fetchImpl={fetchImpl} />
       <MembershipsCard memberships={memberships} />

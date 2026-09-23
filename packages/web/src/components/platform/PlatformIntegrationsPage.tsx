@@ -8,15 +8,16 @@ import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { breadcrumbFor } from '../../lib/nav.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
+import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Select } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
-import { PageHeader } from '../ui/PageHeader.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { Tabs } from '../ui/Tabs.js';
@@ -83,7 +84,7 @@ export function PlatformIntegrationsPage({
       <PageHeader
         title="集成 Integrations"
         description="平台的集成目录：接入包、announce 过的门实例、以及在用它们的外部运行时。 The platform's integration catalog: connectors, the gate instances that announced themselves, and the external runtimes using them."
-        breadcrumb={[{ label: '平台 Platform' }, { label: '集成 Integrations' }]}
+        breadcrumb={breadcrumbFor('platformIntegrations')}
         primaryAction={
           <Button
             variant="primary"

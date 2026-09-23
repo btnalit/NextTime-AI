@@ -17,6 +17,7 @@ import {
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import { HttpError } from '../lib/http-client.js';
+import { breadcrumbFor } from '../lib/nav.js';
 import { statusValues } from '../lib/status-tone.js';
 import { AvailableGateInstancesSection } from './AvailableGateInstancesSection.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
@@ -25,6 +26,7 @@ import { OnboardingWizard } from './OnboardingWizard.js';
 import { GatekeeperCard } from './RegisteredSystemsSection.js';
 import { RequestConnectionForm } from './RequestConnectionForm.js';
 import { ConnectSystemLauncher } from './connect/ConnectSystemLauncher.js';
+import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
@@ -32,7 +34,6 @@ import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
-import { PageHeader } from './ui/PageHeader.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { Tabs } from './ui/Tabs.js';
@@ -192,7 +193,7 @@ export function ConnectionsPage({
       <PageHeader
         title="系统接入 Systems"
         description="把系统接到门后面、发布它的 Operation、把门授予成员的入口 agent。 Bring systems in behind a Gatekeeper, publish their operations, and grant gates to people's entry agents."
-        breadcrumb={[{ label: '治理 Govern' }, { label: '系统接入 Systems' }]}
+        breadcrumb={breadcrumbFor('systems')}
         primaryAction={
           <Button
             variant="primary"
