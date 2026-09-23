@@ -386,6 +386,20 @@ export async function installOrUpgradeModule(
 ): Promise<WorkspaceModuleState> {
   const entry = requireModule(registry, input.name);
   const packId = deriveOntologyPackId(entry.name);
+  // P2 hotfix (post-v0.16.0 review): serializes concurrent install_module/upgrade_module calls for
+  // the same (workspace, module) — same `pg_advisory_xact_lock(hashtext(...))` convention
+  // `application/gateway/gate-instance-handlers.ts`'s `enableGateInstanceHandler` and
+  // `application/task/invoke.ts` already use (a single-bigint lock key derived from `hashtext()`
+  // over a namespaced string, not the two-int `pg_advisory_xact_lock(key1, key2)` overload — one
+  // fewer thing to keep in sync across call sites that all key on a different pair of ids).
+  // Without this, two concurrent calls could both pass the `!installedRow` check below and both
+  // call `publishOntologyDomainPack`, racing to INSERT the same (workspace_id, pack_id, version)
+  // into `ontology_versions` — a raw unique-violation 500 instead of the second call cleanly
+  // re-classifying against what the first one just installed. Transaction-scoped: released
+  // automatically at commit/rollback, never needs an explicit unlock.
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `install_module:${workspaceId}:${packId}`,
+  ]);
   const installedRow = await loadInstalledPackVersion(client, workspaceId, packId);
   const target = latestVersion(entry);
 
