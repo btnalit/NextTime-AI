@@ -264,8 +264,12 @@ seed_domain_pack_step() {
 # comment). Same file-mode reasoning as scripts/demo.sh's collector_handle_mint_step: the file is
 # bind-mounted plainly (not a compose `secrets:` entry, which would re-expose it root-owned 0444
 # regardless), the collector runs as uid 10001 inside its container, so the file needs an
-# "other" read bit — 644 on a freshly created file this step fully controls; the directory is
-# 0750 (the container never traverses the host directory tree for a bind-mounted file).
+# "other" read bit — 644 on a freshly created file this step fully controls; its own directory
+# ${NEXTTIME_DATA}/accept/s3-private/ is 0750 (the container never traverses the host directory
+# tree for a bind-mounted file). Never tighten ${NEXTTIME_DATA}/accept itself: the fake-provider
+# override mounts it into llm-proxy (uid 10001) as /data/state and /data/accept, so a 0750
+# root-owned accept/ made every later acceptance run fail its fake-provider preflight
+# (2026-09-23 host run).
 collector_fixtures_step() {
   out=$(docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js issue-service-handle \
     --workspace "$WORKSPACE_ID" --name host-inventory --scope register_source,submit_observations \
@@ -278,9 +282,9 @@ collector_fixtures_step() {
   if [ -z "$collector_token" ]; then
     fail "collector-issue-service-handle" "could not parse a Handle token from output: $(printf '%s' "$out" | tail -10)"
   fi
-  mkdir -p "${NEXTTIME_DATA}/accept"
-  chmod 0750 "${NEXTTIME_DATA}/accept"
-  ACCEPT_COLLECTOR_TOKEN_FILE="${NEXTTIME_DATA}/accept/collector-s3-$(date -u +%Y%m%dT%H%M%SZ)-$$.token"
+  mkdir -p "${NEXTTIME_DATA}/accept/s3-private"
+  chmod 0750 "${NEXTTIME_DATA}/accept/s3-private"
+  ACCEPT_COLLECTOR_TOKEN_FILE="${NEXTTIME_DATA}/accept/s3-private/collector-s3-$(date -u +%Y%m%dT%H%M%SZ)-$$.token"
   printf '%s' "$collector_token" >"$ACCEPT_COLLECTOR_TOKEN_FILE"
   chmod 644 "$ACCEPT_COLLECTOR_TOKEN_FILE"
   pass "collector-issue-service-handle" "token minted into a run-private file (never \${NEXTTIME_DATA}/secrets/collector-host-inventory.token): $(redact "$collector_token")"
