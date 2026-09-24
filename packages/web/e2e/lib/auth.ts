@@ -41,7 +41,7 @@ export async function loginAsAdmin(
   initialPassword: string = ADMIN_INITIAL_PASSWORD as string,
 ): Promise<void> {
   const changedPassword = `${initialPassword}-changed`;
-  const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
+  const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
   const shell = page.getByTestId('nav-platformWorkspaces');
   const badCredentials = page.getByText('登录名或密码不正确');
 
@@ -62,7 +62,7 @@ export async function loginAsAdmin(
     await page.getByLabel(/^当前密码/).fill(initialPassword);
     await page.getByLabel(/^新密码/).fill(changedPassword);
     await page.getByLabel(/^确认新密码/).fill(changedPassword);
-    await page.getByRole('button', { name: /Change password/ }).click();
+    await page.getByRole('button', { name: /更改密码/ }).click();
   }
 
   await expect(shell).toBeVisible({ timeout: 15_000 });

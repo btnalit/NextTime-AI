@@ -154,7 +154,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     // --- 接入包 Connectors (default tab) -----------------------------------------------------
     const fixtureRow = page.getByTestId(`connector-row-${CONNECTOR}`);
     await expect(fixtureRow).toBeVisible({ timeout: 15_000 });
-    await expect(fixtureRow).toContainText('Packaged');
+    await expect(fixtureRow).toContainText('预置');
     await expect(page.getByTestId(`connector-mode-${CONNECTOR}`)).toHaveValue('platform_preset');
     await expect(page.getByTestId('connector-row-http')).toBeVisible();
 
