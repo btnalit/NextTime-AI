@@ -61,7 +61,7 @@ export function PageHeader({
     <header className="flex flex-col gap-2">
       {hasBreadcrumb ? (
         <nav aria-label="Breadcrumb" className="text-12 text-text-3">
-          <ol className="flex flex-wrap items-center gap-x-1">
+          <ol className="m-0 flex list-none flex-wrap items-center gap-x-1 p-0">
             {breadcrumb.map((crumb, index) => {
               const last = index === breadcrumb.length - 1;
               return (
@@ -99,7 +99,7 @@ export function PageHeader({
           {description !== undefined ? <p className="text-13 text-text-3">{description}</p> : null}
         </div>
         {hasActions ? (
-          <div className="flex flex-shrink-0 flex-wrap items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             {primaryAction}
             {actions}
           </div>

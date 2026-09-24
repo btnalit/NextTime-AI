@@ -446,6 +446,9 @@
 @media (max-width: 960px) {
   .shell {
     grid-template-columns: minmax(0, 1fr);
+    /* Two rows (top bar, main): without explicit rows the auto tracks share the leftover
+     * `min-height: 100vh` space, stretching the top bar's row and pushing short pages down. */
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .main {

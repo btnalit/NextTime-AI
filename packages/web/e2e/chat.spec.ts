@@ -75,6 +75,32 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
   });
 
   /**
+   * S8 W1-A2 (audit C2): assistant replies render as Markdown. The screenshot gate masks chat
+   * bubbles (the fake runtime's echo carries a random turn marker), so this asserts the rendered
+   * elements directly: the fake runtime echoes the prompt, and an ATX heading line may interrupt
+   * the preceding `echo: …` paragraph, so the prompt's `##` and `**` must come back as elements.
+   */
+  test('assistant replies render Markdown, not raw syntax', async ({ page }) => {
+    const apiKey = API_KEY as string; // guarded by test.skip above
+    await page.goto('/');
+    await reachLoginForm(page);
+    await loginWithApiKey(page, apiKey);
+    await page.locator('header').getByRole('button', { name: 'New chat' }).click();
+    await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
+
+    const marker = `md-${Date.now()}`;
+    await page.getByPlaceholder('Message…').fill(`## 标题 ${marker}\n\n**粗体 ${marker}**`);
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
+
+    const reply = page.locator('.message-assistant .message-text');
+    await expect(reply.locator('h2')).toHaveText(`标题 ${marker}`, { timeout: 15_000 });
+    await expect(reply.locator('strong')).toHaveText(`粗体 ${marker}`);
+    await expect(reply).not.toContainText('## ');
+    await expect(reply).not.toContainText('**');
+  });
+
+  /**
    * S6-A W1 (docs/console-completion-plan.md §5.1 "归档与改名"): auto-title on the first message,
    * rename from the header, archive from the list with undo, the 已归档 tab, and restore. Written
    * with the kernel contract in hand (archive_chat / unarchive_chat / rename_chat return the
