@@ -1,12 +1,10 @@
 import type { ExecutionReadinessWire } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { executionReadinessMissingCodeLabel } from '../../lib/labels.js';
+import { Button } from '../kit/button.js';
 import { DashboardCard } from '../kit/section.js';
-import { DataList, DataRow } from '../ui/DataList.js';
-import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Icon } from '../ui/Icon.js';
-import { SkeletonRows } from '../ui/Skeleton.js';
 import {
   missingCauseText,
   missingKey,
@@ -41,26 +39,32 @@ export interface ExecutionReadinessCardProps {
  * up may read their own (`execution_readiness`'s `minRole:'member'`); only an operator/owner may
  * pass another principal's id, which this card does not do (the optional member picker the task
  * brief allows is left for a follow-up — see the PR report's assumptions).
+ *
+ * `components/kit/*` boundary (S8 risk ①): this file may not import `components/ui/*`, so its own
+ * error-banner rendering is a small local replica of `ui/ErrorBanner` over the same CSS classes —
+ * not a new dependency, just no component-wrapper import (same technique `components/access/
+ * GrantGateForm.tsx` / `components/connect/EnableGateConfirm.tsx` use). No Tailwind utility class
+ * appears here that `components/kit/*` does not already use — this file is outside Tailwind's
+ * `@source` scope (`styles/tailwind.css`), so an arbitrary utility class here would silently not
+ * exist in the built CSS.
  */
 export function ExecutionReadinessCard({ http }: ExecutionReadinessCardProps) {
   const t = useT();
   const readiness = useExecutionReadiness(http);
 
   return (
-    <DashboardCard title={t('执行就绪', 'Execution readiness')} padded={false}>
+    <DashboardCard title={t('执行就绪', 'Execution readiness')}>
       {readiness.state.status === 'loading' ? (
-        <div className="p-4">
-          <SkeletonRows count={2} label={t('正在检查执行就绪…', 'Checking execution readiness')} />
-        </div>
+        <p className="text-3 text-small" data-testid="execution-readiness-loading">
+          {t('正在检查执行就绪…', 'Checking execution readiness…')}
+        </p>
       ) : readiness.state.status === 'error' ? (
-        <div className="p-4">
-          <ErrorBanner
-            error={readiness.state.error}
-            title={t('无法加载执行就绪状态', 'Could not load execution readiness')}
-            onRetry={() => void readiness.reload()}
-            testId="execution-readiness-error"
-          />
-        </div>
+        <LocalErrorBanner
+          error={readiness.state.error}
+          title={t('无法加载执行就绪状态', 'Could not load execution readiness')}
+          onRetry={() => void readiness.reload()}
+          testId="execution-readiness-error"
+        />
       ) : (
         <ExecutionReadinessBody data={readiness.state.data} />
       )}
@@ -75,8 +79,8 @@ function ExecutionReadinessBody({ data }: { readonly data: ExecutionReadinessWir
   const gateNames = new Map(data.gates.map((gate) => [gate.gateId, gate.name]));
 
   return (
-    <>
-      <dl className="definition-list p-4" data-testid="execution-readiness-counts">
+    <div className="stack" data-testid="execution-readiness-body">
+      <dl className="definition-list" data-testid="execution-readiness-counts">
         <dt>{t('可用门', 'Gates available')}</dt>
         <dd>{data.gates.length}</dd>
         <dt>{t('已授权门', 'Gates granted')}</dt>
@@ -85,35 +89,75 @@ function ExecutionReadinessBody({ data }: { readonly data: ExecutionReadinessWir
         <dd>{delegableWorkers}</dd>
       </dl>
       {data.ready ? (
-        <div className="row px-4 pb-4" data-testid="execution-readiness-ready">
-          <Icon name="check" className="text-ok" label={t('已就绪', 'Ready')} />
+        <div className="row" data-testid="execution-readiness-ready">
+          <span className="chip chip-ok chip-s">{t('已就绪', 'Ready')}</span>
           <span>
             {t('入口 agent 已经可以委派执行任务。', 'Your entry agent can already delegate work.')}
           </span>
         </div>
       ) : (
-        <DataList ariaLabel="Execution readiness gaps" testId="execution-readiness-missing">
+        <ul
+          className="stack-s"
+          style={{ listStyle: 'none', margin: 0, padding: 0 }}
+          data-testid="execution-readiness-missing"
+        >
           {data.missing.map((item) => (
-            <DataRow
+            <li
               key={missingKey(item)}
-              testId="execution-readiness-missing-item"
-              leading={
-                <Icon
-                  name="alert"
-                  className="text-warn"
-                  label={executionReadinessMissingCodeLabel(item.code, t)}
-                />
-              }
-              title={missingCauseText(item, gateNames, t)}
-              trailing={
-                <a href={missingLinkHref(item)} className="inline-flex min-h-9 items-center">
-                  {missingLinkLabel(item, t)}
-                </a>
-              }
-            />
+              className="row-wrap"
+              data-testid="execution-readiness-missing-item"
+            >
+              <span className="chip chip-warn chip-s">
+                {executionReadinessMissingCodeLabel(item.code, t)}
+              </span>
+              <span>{missingCauseText(item, gateNames, t)}</span>
+              <a href={missingLinkHref(item)}>{missingLinkLabel(item, t)}</a>
+            </li>
           ))}
-        </DataList>
+        </ul>
       )}
-    </>
+    </div>
+  );
+}
+
+/** A small local `ui/ErrorBanner` replica (with retry, over `components/kit/button`) — this file
+ *  may not import `components/ui/*`. */
+function LocalErrorBanner({
+  error,
+  title,
+  onRetry,
+  testId,
+}: {
+  readonly error: unknown;
+  readonly title?: string;
+  readonly onRetry?: () => void;
+  readonly testId?: string;
+}) {
+  const t = useT();
+  const described = describeError(error);
+  return (
+    <div
+      className="error-banner"
+      role="alert"
+      data-testid={testId}
+      data-error-code={described.code}
+    >
+      <div className="error-banner-body">
+        <div className="error-banner-title">
+          <span>{title ?? described.title}</span>
+          <code className="error-banner-code">{described.code}</code>
+        </div>
+        {described.message && described.message !== described.title ? (
+          <p className="error-banner-message">{described.message}</p>
+        ) : null}
+      </div>
+      {onRetry ? (
+        <div className="error-banner-actions">
+          <Button variant="secondary" size="s" onClick={onRetry}>
+            {t('重试', 'Retry')}
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }

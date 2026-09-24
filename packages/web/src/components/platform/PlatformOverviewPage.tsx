@@ -217,7 +217,7 @@ function PlatformOverviewBody({
               <DataRow
                 key={item.key}
                 testId="platform-attention-item"
-                leading={<Icon name="alert" className="text-warn" label={t('待处理', 'To do')} />}
+                leading={<Icon name="alert" label={t('待处理', 'To do')} />}
                 title={item.title}
                 trailing={
                   <a href={item.href} className="inline-flex min-h-9 items-center">
