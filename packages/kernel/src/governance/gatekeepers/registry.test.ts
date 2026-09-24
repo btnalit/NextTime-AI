@@ -5,7 +5,12 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { getGatekeeper, registerGatekeeper } from './registry.js';
+import {
+  findGatekeepersByEndpoint,
+  getGatekeeper,
+  normalizeGateEndpoint,
+  registerGatekeeper,
+} from './registry.js';
 
 /**
  * Integration tests (real Postgres; auto-skip without DATABASE_URL — same pattern as
@@ -134,5 +139,79 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/registry (int
   it('getGatekeeper returns null for an unknown id or a non-Gatekeeper object', async () => {
     const missing = await inTx((client) => getGatekeeper(client, workspaceId, randomUUID()));
     expect(missing).toBeNull();
+  });
+
+  describe('findGatekeepersByEndpoint (S8 W2-K2, leftover 73)', () => {
+    it('matches by endpoint only, ignoring name/target, and normalises one trailing slash', async () => {
+      const act = await activityId();
+      const { gatekeeperId } = await inTx((client) =>
+        registerGatekeeper(client, workspaceId, {
+          name: 'docker',
+          transportKind: 'cli',
+          target: 'docker',
+          endpoint: 'https://gate-endpoint.example.invalid/',
+          activityId: act,
+          registeredBy: { id: ownerId, kind: 'human' },
+        }),
+      );
+
+      const exact = await inTx((client) =>
+        findGatekeepersByEndpoint(client, workspaceId, 'https://gate-endpoint.example.invalid/'),
+      );
+      expect(exact.map((m) => m.gatekeeperId)).toEqual([gatekeeperId]);
+      expect(exact[0]).toMatchObject({ name: 'docker', target: 'docker', transportKind: 'cli' });
+
+      // The instance's own endpoint has no trailing slash — still matches (one trailing slash
+      // trimmed on either side).
+      const trimmed = await inTx((client) =>
+        findGatekeepersByEndpoint(client, workspaceId, 'https://gate-endpoint.example.invalid'),
+      );
+      expect(trimmed.map((m) => m.gatekeeperId)).toEqual([gatekeeperId]);
+
+      const noMatch = await inTx((client) =>
+        findGatekeepersByEndpoint(client, workspaceId, 'https://not-this-one.example.invalid'),
+      );
+      expect(noMatch).toEqual([]);
+    });
+
+    it('returns every match when more than one Gatekeeper shares the same endpoint', async () => {
+      const act = await activityId();
+      const sharedEndpoint = 'https://shared-endpoint.example.invalid';
+      const first = await inTx((client) =>
+        registerGatekeeper(client, workspaceId, {
+          name: 'first',
+          transportKind: 'http',
+          target: 'first-target',
+          endpoint: sharedEndpoint,
+          activityId: act,
+          registeredBy: { id: ownerId, kind: 'human' },
+        }),
+      );
+      const second = await inTx((client) =>
+        registerGatekeeper(client, workspaceId, {
+          name: 'second',
+          transportKind: 'http',
+          target: 'second-target',
+          endpoint: sharedEndpoint,
+          activityId: act,
+          registeredBy: { id: ownerId, kind: 'human' },
+        }),
+      );
+
+      const matches = await inTx((client) =>
+        findGatekeepersByEndpoint(client, workspaceId, sharedEndpoint),
+      );
+      expect(matches.map((m) => m.gatekeeperId).sort()).toEqual(
+        [first.gatekeeperId, second.gatekeeperId].sort(),
+      );
+    });
+  });
+});
+
+describe('normalizeGateEndpoint (pure)', () => {
+  it('trims exactly one trailing slash', () => {
+    expect(normalizeGateEndpoint('https://x.invalid:8080')).toBe('https://x.invalid:8080');
+    expect(normalizeGateEndpoint('https://x.invalid:8080/')).toBe('https://x.invalid:8080');
+    expect(normalizeGateEndpoint('https://x.invalid:8080//')).toBe('https://x.invalid:8080/');
   });
 });
