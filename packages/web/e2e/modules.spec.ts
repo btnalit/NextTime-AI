@@ -36,7 +36,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   const initialPassword = ADMIN_INITIAL_PASSWORD as string;
   const changedPassword = `${initialPassword}-changed`;
 
-  const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
+  const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
   const shell = page.getByTestId('nav-platformWorkspaces');
   const badCredentials = page.getByText(BAD_CREDENTIALS_MESSAGE);
 
@@ -48,16 +48,16 @@ async function signInAsAdmin(page: Page): Promise<void> {
   });
 
   if (await badCredentials.isVisible().catch(() => false)) {
-    await page.getByLabel(/密码 Password/).fill(changedPassword);
+    await page.getByLabel(/^密码$/).fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
   if (await changePasswordHeading.isVisible().catch(() => false)) {
-    await page.getByLabel(/当前密码 Current password/).fill(initialPassword);
-    await page.getByLabel(/新密码 New password/).fill(changedPassword);
-    await page.getByLabel(/确认新密码 Confirm new password/).fill(changedPassword);
-    await page.getByRole('button', { name: /Change password/ }).click();
+    await page.getByLabel(/^当前密码/).fill(initialPassword);
+    await page.getByLabel(/^新密码/).fill(changedPassword);
+    await page.getByLabel(/^确认新密码/).fill(changedPassword);
+    await page.getByRole('button', { name: /更改密码/ }).click();
   }
 
   await expect(shell).toBeVisible({ timeout: 15_000 });
@@ -111,7 +111,7 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     await createDrawer.locator('#cw-name').fill(workspaceName);
 
     await createDrawer.locator('#cw-owner-query').fill(ADMIN_LOGIN as string);
-    await createDrawer.getByRole('button', { name: /搜索 Search/ }).click();
+    await createDrawer.getByRole('button', { name: /搜索/ }).click();
     const ownerSelect = createDrawer.getByTestId('create-workspace-owner');
     await expect(ownerSelect).toBeEnabled();
     const ownerOption = ownerSelect.locator('option', { hasText: ADMIN_LOGIN as string });
@@ -120,7 +120,7 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     expect(ownerUserId ?? '').not.toBe('');
     await ownerSelect.selectOption(ownerUserId as string);
 
-    await createDrawer.getByRole('button', { name: /创建 Create/ }).click();
+    await createDrawer.getByRole('button', { name: /创建/ }).click();
     await expect(createDrawer).toBeHidden({ timeout: 20_000 });
 
     const drawer = page.getByTestId('workspace-drawer');
@@ -158,7 +158,7 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     // has 2+ memberships, so the "auto-select the only one" rule this file's own comment on
     // `signInAsAdmin` relies on no longer applies once B exists).
     await page.getByTestId('nav-catalog').click();
-    await page.getByRole('tab', { name: 'Modules' }).click();
+    await page.getByRole('tab', { name: '模块' }).click();
     const catalogTable = page.getByTestId('catalog-modules-table');
     await expect(catalogTable).toBeVisible({ timeout: 15_000 });
 

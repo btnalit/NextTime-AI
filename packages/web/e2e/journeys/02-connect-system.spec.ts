@@ -32,7 +32,7 @@ test.describe('Journey ②: 接入一个新系统', () => {
   test("step 1: 系统接入 page reaches the onboarding wizard's first step", async ({ page }) => {
     await asOwner(page);
     await goToByLabel(page, '系统接入');
-    await page.getByRole('button', { name: /Onboarding wizard/ }).click();
+    await page.getByRole('button', { name: /接入向导/ }).click();
     const drawer = page.getByTestId('onboarding-wizard-drawer');
     await expect(drawer).toBeVisible({ timeout: 15_000 });
     await expect(drawer.getByTestId('wizard-step-kind')).toBeVisible();

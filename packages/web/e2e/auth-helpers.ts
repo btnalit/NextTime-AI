@@ -15,7 +15,7 @@ import { type Page, expect } from '@playwright/test';
  */
 export async function reachLoginForm(page: Page): Promise<'shell' | 'login'> {
   const forgetKey = page.getByRole('button', { name: 'Forget key' });
-  const apiKeySummary = page.getByText('用 API key 登录 Use an API key instead');
+  const apiKeySummary = page.getByText('用 API key 登录');
   const passwordLoginButton = page.getByRole('button', { name: 'Log in' });
 
   await expect
@@ -37,7 +37,7 @@ export async function reachLoginForm(page: Page): Promise<'shell' | 'login'> {
  *  equivalent of the old, always-visible "Sign in" form every existing spec used to click
  *  directly. Assumes `reachLoginForm` has already resolved to `'login'`. */
 export async function loginWithApiKey(page: Page, apiKey: string): Promise<void> {
-  const apiKeySummary = page.getByText('用 API key 登录 Use an API key instead');
+  const apiKeySummary = page.getByText('用 API key 登录');
   if (
     !(await page
       .getByPlaceholder('sk-...')
@@ -58,7 +58,7 @@ export async function loginWithPassword(
   login: string,
   password: string,
 ): Promise<void> {
-  await page.getByLabel(/登录名 Login/).fill(login);
-  await page.getByLabel(/密码 Password/).fill(password);
+  await page.getByLabel(/^登录名/).fill(login);
+  await page.getByLabel(/^密码$/).fill(password);
   await page.getByRole('button', { name: 'Log in' }).click();
 }

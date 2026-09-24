@@ -53,15 +53,15 @@ export async function loginAsAdmin(
   });
 
   if (await badCredentials.isVisible().catch(() => false)) {
-    await page.getByLabel(/密码 Password/).fill(changedPassword);
+    await page.getByLabel(/^密码$/).fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
   if (await changePasswordHeading.isVisible().catch(() => false)) {
-    await page.getByLabel(/当前密码 Current password/).fill(initialPassword);
-    await page.getByLabel(/新密码 New password/).fill(changedPassword);
-    await page.getByLabel(/确认新密码 Confirm new password/).fill(changedPassword);
+    await page.getByLabel(/^当前密码/).fill(initialPassword);
+    await page.getByLabel(/^新密码/).fill(changedPassword);
+    await page.getByLabel(/^确认新密码/).fill(changedPassword);
     await page.getByRole('button', { name: /Change password/ }).click();
   }
 

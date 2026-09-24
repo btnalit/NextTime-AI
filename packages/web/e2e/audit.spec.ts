@@ -50,7 +50,7 @@ test.describe('audit page', () => {
     await login(page, API_KEY as string);
     await page.goto('/#/govern/audit');
     await page.locator('#explain-node-id').fill('00000000-0000-0000-0000-000000000000');
-    await page.getByRole('button', { name: /Explain/ }).click();
+    await page.getByRole('button', { name: /解释/ }).click();
     const banner = page.getByTestId('explain-error');
     await expect(banner).toBeVisible({ timeout: 15_000 });
     await expect(banner).toHaveAttribute('data-error-code', /not_found|invalid_params/);

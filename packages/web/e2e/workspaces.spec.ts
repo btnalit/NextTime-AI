@@ -62,7 +62,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   const initialPassword = ADMIN_INITIAL_PASSWORD as string;
   const changedPassword = `${initialPassword}-changed`;
 
-  const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
+  const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
   // The platform 工作区 nav item: rendered by `Sidebar` for `platformRole === 'admin'` whatever
   // route the admin lands on (including the platform-only session an admin with zero workspace
   // memberships gets), so it is the one "we are past the login screen" signal that always holds.
@@ -79,23 +79,23 @@ async function signInAsAdmin(page: Page): Promise<void> {
   if (await badCredentials.isVisible().catch(() => false)) {
     // A previous (retried) run already changed the password away from the initial one — try the
     // deterministic changed password instead, exactly as login.spec.ts does.
-    await page.getByLabel(/密码 Password/).fill(changedPassword);
+    await page.getByLabel(/^密码$/).fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
   if (await changePasswordHeading.isVisible().catch(() => false)) {
-    await page.getByLabel(/当前密码 Current password/).fill(initialPassword);
-    await page.getByLabel(/新密码 New password/).fill(changedPassword);
-    await page.getByLabel(/确认新密码 Confirm new password/).fill(changedPassword);
-    await page.getByRole('button', { name: /Change password/ }).click();
+    await page.getByLabel(/^当前密码/).fill(initialPassword);
+    await page.getByLabel(/^新密码/).fill(changedPassword);
+    await page.getByLabel(/^确认新密码/).fill(changedPassword);
+    await page.getByRole('button', { name: /更改密码/ }).click();
   }
 
   await expect(shell).toBeVisible({ timeout: 15_000 });
 }
 
 async function signOut(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /登出 Sign out/ }).click();
+  await page.getByRole('button', { name: /登出/ }).click();
   await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
 }
 
@@ -130,11 +130,11 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     await signInAsAdmin(page);
 
     await page.getByTestId('nav-platformUsers').click();
-    await expect(page.getByRole('heading', { name: '用户 Users', exact: true })).toBeVisible({
+    await expect(page.getByRole('heading', { name: '用户', exact: true })).toBeVisible({
       timeout: 15_000,
     });
 
-    await page.getByRole('button', { name: /新建用户 Create user/ }).click();
+    await page.getByRole('button', { name: /新建用户/ }).click();
     const drawer = page.getByTestId('create-user-drawer');
     await expect(drawer.getByTestId('create-user-form')).toBeVisible();
     await drawer.locator('#cu-login').fill(ownerLogin);
@@ -142,7 +142,7 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     // 工作区 is left at 默认工作区 (`create_user` with no `workspaceId`): the user joins the
     // platform default workspace as a `member`, which is what puts the workspace switcher on
     // screen for them in the third test once they also own the new workspace.
-    await drawer.getByRole('button', { name: /创建 Create/ }).click();
+    await drawer.getByRole('button', { name: /创建/ }).click();
 
     // Shown exactly once (TemporaryPasswordDialog.tsx) — capture it before the dialog is closed.
     const password = page.getByTestId('temporary-password-value');
@@ -150,7 +150,7 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     ownerTemporaryPassword = (await password.textContent())?.trim() ?? '';
     expect(ownerTemporaryPassword.length).toBeGreaterThan(0);
 
-    await page.getByRole('button', { name: /我已保存 I have saved it/ }).click();
+    await page.getByRole('button', { name: /我已保存/ }).click();
     await expect(page.getByTestId('temporary-password-dialog')).toBeHidden();
   });
 
@@ -189,7 +189,7 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     // UserPicker searches on a button press, never per keystroke, and disables its `<select>`
     // while `list_users` is in flight — so wait for the select before reading its options.
     await createDrawer.locator('#cw-owner-query').fill(ownerLogin);
-    await createDrawer.getByRole('button', { name: /搜索 Search/ }).click();
+    await createDrawer.getByRole('button', { name: /搜索/ }).click();
     const ownerSelect = createDrawer.getByTestId('create-workspace-owner');
     await expect(ownerSelect).toBeEnabled();
     const ownerOption = ownerSelect.locator('option', { hasText: ownerLogin });
@@ -209,7 +209,7 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     await expect(entryModel.locator('option')).toHaveCount(2); // 平台默认 + the one ticked model
     await entryModel.selectOption(ALLOWED_MODEL);
 
-    await createDrawer.getByRole('button', { name: /创建 Create/ }).click();
+    await createDrawer.getByRole('button', { name: /创建/ }).click();
     await expect(createDrawer).toBeHidden({ timeout: 20_000 });
 
     // PlatformWorkspacesPage opens the new workspace's own drawer as soon as `create_workspace`
@@ -252,7 +252,7 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     const newPassword = `${ownerTemporaryPassword}-changed`;
 
     const wsStatus = page.getByTestId('ws-status');
-    const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
+    const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
     const badCredentials = page.getByText(BAD_CREDENTIALS_MESSAGE);
 
     await page.goto('/');
@@ -265,16 +265,16 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     if (await badCredentials.isVisible().catch(() => false)) {
       // A previous (retried) run already changed the password away from the temporary one — try
       // the deterministic new one instead, exactly as login.spec.ts does.
-      await page.getByLabel(/密码 Password/).fill(newPassword);
+      await page.getByLabel(/^密码$/).fill(newPassword);
       await page.getByRole('button', { name: 'Log in' }).click();
       await expect(changePasswordHeading.or(wsStatus)).toBeVisible({ timeout: 15_000 });
     }
 
     if (await changePasswordHeading.isVisible().catch(() => false)) {
-      await page.getByLabel(/当前密码 Current password/).fill(ownerTemporaryPassword);
-      await page.getByLabel(/新密码 New password/).fill(newPassword);
-      await page.getByLabel(/确认新密码 Confirm new password/).fill(newPassword);
-      await page.getByRole('button', { name: /Change password/ }).click();
+      await page.getByLabel(/^当前密码/).fill(ownerTemporaryPassword);
+      await page.getByLabel(/^新密码/).fill(newPassword);
+      await page.getByLabel(/^确认新密码/).fill(newPassword);
+      await page.getByRole('button', { name: /更改密码/ }).click();
     }
     await expect(wsStatus).toHaveText('Connected', { timeout: 15_000 });
 
@@ -343,7 +343,7 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     await expect(drawer.getByTestId('workspace-detail')).toBeVisible({ timeout: 15_000 });
     await drawer.getByTestId('workspace-status-toggle').click();
     await expect(drawer.getByTestId('workspace-disable-confirm')).toBeVisible();
-    await drawer.getByRole('button', { name: /确认停用 Confirm disable/ }).click();
+    await drawer.getByRole('button', { name: /确认停用/ }).click();
     // The row is updated in place (never re-read here — the page's default filter would drop a
     // disabled row on a re-read), so it stays on screen with its new status and retention clock.
     await expect(row.getByTestId('workspace-status')).toHaveAttribute('data-status', 'disabled', {

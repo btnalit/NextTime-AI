@@ -97,7 +97,7 @@ test.describe('S4.1: Explorer cookie auth', () => {
     await login(page, ownerLogin, ownerPassword);
     expect((await page.request.get('/api/graph/nodes')).status()).toBe(200);
 
-    await page.getByRole('button', { name: /登出 Sign out/ }).click();
+    await page.getByRole('button', { name: /登出/ }).click();
     await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
 
     await expect

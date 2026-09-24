@@ -67,28 +67,28 @@ export const SURFACES: readonly Surface[] = [
     labelZh: '对话',
     hash: '#/work/chats',
     role: 'owner',
-    ready: (page) => heading(page, '对话 Chats'), // ChatListPage.tsx PageHeader title
+    ready: (page) => heading(page, '对话'), // ChatListPage.tsx PageHeader title
   },
   {
     id: 'approvals',
     labelZh: '待我审批',
     hash: '#/work/approvals',
     role: 'owner',
-    ready: (page) => heading(page, '待我审批 Approvals'), // ApprovalQueuePage.tsx
+    ready: (page) => heading(page, '待我审批'), // ApprovalQueuePage.tsx
   },
   {
     id: 'tasks',
     labelZh: '任务',
     hash: '#/work/tasks',
     role: 'owner',
-    ready: (page) => heading(page, '任务 Tasks'), // TasksPage.tsx
+    ready: (page) => heading(page, '任务'), // TasksPage.tsx
   },
   {
     id: 'graph',
     labelZh: '图谱',
     hash: '#/work/graph',
     role: 'owner',
-    ready: (page) => heading(page, '图谱 Graph'), // graph/GraphPage.tsx
+    ready: (page) => heading(page, '图谱'), // graph/GraphPage.tsx
   },
   {
     id: 'agent',
@@ -102,7 +102,7 @@ export const SURFACES: readonly Surface[] = [
     labelZh: '我的账户',
     hash: '#/me/account',
     role: 'owner',
-    ready: (page) => heading(page, '我的账户 My Account'), // AccountPage.tsx
+    ready: (page) => heading(page, '我的账户'), // AccountPage.tsx
   },
 
   // --- 治理 Govern (GOVERN_NAV) -----------------------------------------------------------------
@@ -118,14 +118,14 @@ export const SURFACES: readonly Surface[] = [
     labelZh: '访问',
     hash: '#/govern/access',
     role: 'owner',
-    ready: (page) => heading(page, '访问 Access'), // AccessPage.tsx
+    ready: (page) => heading(page, '访问'), // AccessPage.tsx
   },
   {
     id: 'systems',
     labelZh: '系统接入',
     hash: '#/govern/systems',
     role: 'owner',
-    ready: (page) => heading(page, '系统接入 Systems'), // ConnectionsPage.tsx
+    ready: (page) => heading(page, '系统接入'), // ConnectionsPage.tsx
   },
   // CatalogPage.tsx renders the same "能力目录 Catalog" heading for all five tabs — only the tab
   // body under it changes (Tabs component, `#/govern/catalog/<tab>`).
@@ -134,49 +134,49 @@ export const SURFACES: readonly Surface[] = [
     labelZh: '能力目录 · Operation',
     hash: '#/govern/catalog/operations',
     role: 'owner',
-    ready: (page) => heading(page, '能力目录 Catalog'),
+    ready: (page) => heading(page, '能力目录'),
   },
   {
     id: 'catalog-skills',
     labelZh: '能力目录 · Skill',
     hash: '#/govern/catalog/skills',
     role: 'owner',
-    ready: (page) => heading(page, '能力目录 Catalog'),
+    ready: (page) => heading(page, '能力目录'),
   },
   {
     id: 'catalog-procedures',
     labelZh: '能力目录 · Procedure',
     hash: '#/govern/catalog/procedures',
     role: 'owner',
-    ready: (page) => heading(page, '能力目录 Catalog'),
+    ready: (page) => heading(page, '能力目录'),
   },
   {
     id: 'catalog-workers',
     labelZh: '能力目录 · Worker',
     hash: '#/govern/catalog/workers',
     role: 'owner',
-    ready: (page) => heading(page, '能力目录 Catalog'),
+    ready: (page) => heading(page, '能力目录'),
   },
   {
     id: 'catalog-modules',
     labelZh: '能力目录 · Module',
     hash: '#/govern/catalog/modules',
     role: 'owner',
-    ready: (page) => heading(page, '能力目录 Catalog'),
+    ready: (page) => heading(page, '能力目录'),
   },
   {
     id: 'models',
     labelZh: '模型与配额',
     hash: '#/govern/models',
     role: 'owner',
-    ready: (page) => heading(page, '模型与配额 Models & Quotas'), // ModelsPage.tsx
+    ready: (page) => heading(page, '模型与配额'), // ModelsPage.tsx
   },
   {
     id: 'audit',
     labelZh: '审计',
     hash: '#/govern/audit',
     role: 'owner',
-    ready: (page) => heading(page, '审计 Audit'), // AuditPage.tsx
+    ready: (page) => heading(page, '审计'), // AuditPage.tsx
   },
 
   // --- 平台 Platform (PLATFORM_NAV, admin only) -------------------------------------------------
@@ -185,7 +185,7 @@ export const SURFACES: readonly Surface[] = [
     labelZh: '平台 · 概览',
     hash: '#/platform/overview',
     role: 'admin',
-    ready: (page) => heading(page, '概览 Overview'), // PlatformOverviewPage.tsx
+    ready: (page) => heading(page, '概览'), // PlatformOverviewPage.tsx
   },
   {
     id: 'platform-workspaces',
@@ -199,7 +199,7 @@ export const SURFACES: readonly Surface[] = [
     labelZh: '平台 · 用户',
     hash: '#/platform/users',
     role: 'admin',
-    ready: (page) => heading(page, '用户 Users'), // PlatformUsersPage.tsx
+    ready: (page) => heading(page, '用户'), // PlatformUsersPage.tsx
   },
   {
     id: 'platform-integrations',
@@ -227,7 +227,7 @@ export const SURFACES: readonly Surface[] = [
     labelZh: '平台 · 平台设置',
     hash: '#/platform/settings',
     role: 'admin',
-    ready: (page) => heading(page, '平台设置 Platform settings'), // PlatformSettingsPage.tsx
+    ready: (page) => heading(page, '平台设置'), // PlatformSettingsPage.tsx
   },
   {
     id: 'platform-runtime',
@@ -248,7 +248,7 @@ export const SURFACES: readonly Surface[] = [
     labelZh: '平台 · 平台审计',
     hash: '#/platform/audit',
     role: 'admin',
-    ready: (page) => heading(page, '平台审计 Platform audit'), // PlatformAuditPage.tsx
+    ready: (page) => heading(page, '平台审计'), // PlatformAuditPage.tsx
   },
 ];
 
