@@ -246,10 +246,10 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
                       <span className="meta-sep" />
                       <span className="tabular">
                         {finished
-                          ? '用时 took '
+                          ? `${t('用时', 'took')} `
                           : task.status === 'running'
-                            ? '运行中 running '
-                            : '等待中 waiting '}
+                            ? `${t('运行中', 'running')} `
+                            : `${t('等待中', 'waiting')} `}
                         {formatDuration(task.createdAt, finished)}
                       </span>
                       {task.tokenBudget ? (

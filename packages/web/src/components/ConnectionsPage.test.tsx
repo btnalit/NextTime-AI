@@ -198,7 +198,8 @@ describe('ConnectionsPage', () => {
     await waitFor(() => expect(screen.queryByTestId('cancel-request-cr-1')).toBeNull());
     fireEvent.click(screen.getByRole('tab', { name: 'All' }));
     const row = await screen.findByTestId('request-row');
-    expect(row.textContent).toContain('Cancelled');
+    // S8 W1-A10: the connectionRequest StatusChip is bilingual now; default zh-CN renders '已取消'.
+    expect(row.textContent).toContain('已取消');
     expect(within(row).queryByTestId('cancel-request-cr-1')).toBeNull();
     expect(http.calls.filter((call) => call.name === 'list_connection_requests')).toHaveLength(1);
   });

@@ -27,10 +27,12 @@ const DIRECTION_GLYPH: Readonly<Record<FactDirection, string>> = {
   self: '↺',
 };
 
-const DIRECTION_LABEL: Readonly<Record<FactDirection, string>> = {
-  out: '出 outgoing',
-  in: '入 incoming',
-  self: '自 self',
+const DIRECTION_LABEL: Readonly<
+  Record<FactDirection, { readonly zh: string; readonly en: string }>
+> = {
+  out: { zh: '出', en: 'outgoing' },
+  in: { zh: '入', en: 'incoming' },
+  self: { zh: '自', en: 'self' },
 };
 
 /**
@@ -77,16 +79,21 @@ export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenanc
       data-direction={direction}
       data-freshness={freshness.kind}
     >
-      <div className="data-row-leading graph-fact-direction" title={DIRECTION_LABEL[direction]}>
+      <div
+        className="data-row-leading graph-fact-direction"
+        title={t(DIRECTION_LABEL[direction].zh, DIRECTION_LABEL[direction].en)}
+      >
         <span aria-hidden>{DIRECTION_GLYPH[direction]}</span>
-        <span className="visually-hidden">{DIRECTION_LABEL[direction]}</span>
+        <span className="visually-hidden">
+          {t(DIRECTION_LABEL[direction].zh, DIRECTION_LABEL[direction].en)}
+        </span>
       </div>
       <div className="data-row-main">
         <div className="data-row-title row-wrap">
           <RefChip
             kind="object"
             id={otherId}
-            name={otherId === objectId ? '（自身 self）' : nameOf(otherId)}
+            name={otherId === objectId ? `（${t('自身', 'self')}）` : nameOf(otherId)}
             href={otherId === objectId ? undefined : hrefFor(otherId)}
             size="s"
             testId="graph-fact-neighbour"
@@ -94,7 +101,7 @@ export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenanc
           <FreshnessChip freshness={freshness} size="s" testId="graph-fact-freshness" />
           {inConflict ? (
             <span className="chip chip-danger chip-s" data-testid="graph-fact-conflict">
-              冲突 Conflict ×{conflicts?.length}
+              {t('冲突', 'Conflict')} ×{conflicts?.length}
             </span>
           ) : null}
         </div>

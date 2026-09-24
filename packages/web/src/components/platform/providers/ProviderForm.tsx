@@ -26,13 +26,23 @@ const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const RESERVED_IDS = new Set(['admin', 'healthz', 'internal']);
 const API_KEY_ENV_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 
-const API_KINDS: ReadonlyArray<{ value: LlmProviderApiKindWire; label: string }> = [
+const API_KINDS: ReadonlyArray<{
+  value: LlmProviderApiKindWire;
+  labelZh: string;
+  labelEn: string;
+}> = [
   {
     value: 'openai-completions',
-    label: 'OpenAI 兼容 · chat/completions（OpenAI、DeepSeek、Gemini 兼容端点…）',
+    labelZh: 'OpenAI 兼容 · chat/completions（OpenAI、DeepSeek、Gemini 兼容端点…）',
+    labelEn:
+      'OpenAI-compatible · chat/completions (OpenAI, DeepSeek, Gemini-compatible endpoints…)',
   },
-  { value: 'openai-responses', label: 'OpenAI 兼容 · responses' },
-  { value: 'anthropic-messages', label: 'Anthropic · messages' },
+  {
+    value: 'openai-responses',
+    labelZh: 'OpenAI 兼容 · responses 接口',
+    labelEn: 'OpenAI-compatible · responses',
+  },
+  { value: 'anthropic-messages', labelZh: 'Anthropic · messages', labelEn: 'Anthropic · messages' },
 ];
 
 interface ModelRowDraft {
@@ -138,7 +148,7 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
     }
   }
 
-  const mapped = llmAdminErrorMessage(error);
+  const mapped = llmAdminErrorMessage(error, t);
 
   return (
     <form
@@ -210,7 +220,7 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         >
           {API_KINDS.map((kind) => (
             <option key={kind.value} value={kind.value}>
-              {kind.label}
+              {t(kind.labelZh, kind.labelEn)}
             </option>
           ))}
         </Select>

@@ -5,6 +5,7 @@ import { AppShell } from './components/shell/AppShell.js';
 import { EmptyState } from './components/ui/EmptyState.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
+import { type Translate, useT } from './lib/i18n.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
 import type { Session } from './session/types.js';
 
@@ -170,6 +171,7 @@ export function Routed({
   onKeyBound,
   onClaimed,
 }: RoutedProps) {
+  const t = useT();
   const active = sectionOf(route);
   usePushToasts(session.ws, active);
   const openApproval = (id: string) => navigate(hrefs.approval(id));
@@ -296,10 +298,11 @@ export function Routed({
       page = requireAdmin(
         session,
         <PlatformOverviewPage http={session.http} onKeyBound={onKeyBound} />,
+        t,
       );
       break;
     case 'platformUsers':
-      page = requireAdmin(session, <PlatformUsersPage http={session.http} />);
+      page = requireAdmin(session, <PlatformUsersPage http={session.http} />, t);
       break;
     case 'platformWorkspaces':
       page = requireAdmin(
@@ -313,6 +316,7 @@ export function Routed({
             else onSwitchWorkspace(workspaceId, hrefs.members());
           }}
         />,
+        t,
       );
       break;
     case 'platformIntegrations':
@@ -325,25 +329,26 @@ export function Routed({
             navigate(id ? hrefs.platformGateInstance(id) : hrefs.platformIntegrations())
           }
         />,
+        t,
       );
       break;
     case 'platformModules':
-      page = requireAdmin(session, <PlatformModulesPage http={session.http} />);
+      page = requireAdmin(session, <PlatformModulesPage http={session.http} />, t);
       break;
     case 'platformModels':
-      page = requireAdmin(session, <PlatformModelsPage http={session.http} />);
+      page = requireAdmin(session, <PlatformModelsPage http={session.http} />, t);
       break;
     case 'platformSettings':
-      page = requireAdmin(session, <PlatformSettingsPage http={session.http} />);
+      page = requireAdmin(session, <PlatformSettingsPage http={session.http} />, t);
       break;
     case 'platformRuntime':
-      page = requireAdmin(session, <PlatformRuntimePage http={session.http} />);
+      page = requireAdmin(session, <PlatformRuntimePage http={session.http} />, t);
       break;
     case 'platformStatus':
-      page = requireAdmin(session, <PlatformStatusPage http={session.http} />);
+      page = requireAdmin(session, <PlatformStatusPage http={session.http} />, t);
       break;
     case 'platformAudit':
-      page = requireAdmin(session, <PlatformAuditPage http={session.http} />);
+      page = requireAdmin(session, <PlatformAuditPage http={session.http} />, t);
       break;
   }
 
@@ -397,13 +402,13 @@ export function isPlatformRoute(kind: Route['kind']): boolean {
  *  cookie session + admin only; an apiKey session has no `user` at all here, same denial). A
  *  non-admin who navigates here directly (a stale link, a manually-typed hash) sees a short
  *  explanation rather than a capability call that can only 403. */
-function requireAdmin(session: Session, page: JSX.Element): JSX.Element {
+function requireAdmin(session: Session, page: JSX.Element, t: Translate): JSX.Element {
   if (session.user?.platformRole === 'admin') return page;
   return (
     <div className="page">
       <EmptyState
         icon="shield"
-        title="需要管理员 Administrator only"
+        title={t('需要管理员', 'Administrator only')}
         testId="platform-admin-required"
       />
     </div>

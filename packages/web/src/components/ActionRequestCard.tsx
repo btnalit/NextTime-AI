@@ -2,7 +2,6 @@ import {
   type ActionCardData,
   DECIDABLE_STATUS,
   FALLBACK_BLAST_RADIUS,
-  actionOutcomeLabel,
   isDecidable,
 } from '../lib/action-card.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
@@ -59,7 +58,6 @@ export function ActionRequestCard({
   const outcome = (
     <div className="system-status-line" data-testid="action-outcome" data-status={status}>
       <StatusChip machine="actionRequest" status={status} size="s" className="action-card-status" />
-      <span className="system-status-text">{actionOutcomeLabel(status)}</span>
     </div>
   );
 

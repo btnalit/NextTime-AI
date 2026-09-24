@@ -110,7 +110,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                   {row.action}
                 </div>
                 <div className="data-row-meta">
-                  {formatAuditActor(row)}
+                  {formatAuditActor(row, t)}
                   {row.resourceType
                     ? ` · ${row.resourceType}${row.resourceId ? `:${row.resourceId}` : ''}`
                     : ''}

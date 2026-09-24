@@ -18,10 +18,18 @@ export interface NeighbourListProps {
  *  Containers; keeping the first page short also bounds the neighbour-name lookups. */
 export const GROUP_PREVIEW_ROWS = 8;
 
-const DIRECTION_HEADING: Readonly<Record<FactDirection, string>> = {
-  out: '→ 出 outgoing',
-  in: '← 入 incoming',
-  self: '↺ 自 self',
+const DIRECTION_GLYPH: Readonly<Record<FactDirection, string>> = {
+  out: '→',
+  in: '←',
+  self: '↺',
+};
+
+const DIRECTION_HEADING: Readonly<
+  Record<FactDirection, { readonly zh: string; readonly en: string }>
+> = {
+  out: { zh: '出', en: 'outgoing' },
+  in: { zh: '入', en: 'incoming' },
+  self: { zh: '自', en: 'self' },
 };
 
 /**
@@ -58,7 +66,11 @@ export function NeighbourList({
             <header className="graph-group-head">
               <h3 id={`graph-group-${group.key}`} className="graph-group-title">
                 <span className="mono">{group.linkType}</span>
-                <span className="text-3"> {DIRECTION_HEADING[group.direction]}</span>
+                <span className="text-3">
+                  {' '}
+                  {DIRECTION_GLYPH[group.direction]}{' '}
+                  {t(DIRECTION_HEADING[group.direction].zh, DIRECTION_HEADING[group.direction].en)}
+                </span>
               </h3>
               <span className="tag" aria-label={`${group.facts.length} facts`}>
                 {group.facts.length}

@@ -40,11 +40,13 @@ export interface ProcedureEditorProps {
 
 type View = 'form' | 'json';
 
-const STEP_KIND_LABEL: Readonly<Record<ProcedureStepKind, string>> = {
-  operation: '门 Operation',
-  worker: 'Worker',
-  approval: '审批 Approval',
-  verify: '验证 Verify',
+const STEP_KIND_LABEL: Readonly<
+  Record<ProcedureStepKind, { readonly zh: string; readonly en: string }>
+> = {
+  operation: { zh: '门', en: 'Operation' },
+  worker: { zh: 'Worker', en: 'Worker' },
+  approval: { zh: '审批', en: 'Approval' },
+  verify: { zh: '验证', en: 'Verify' },
 };
 
 /**
@@ -277,7 +279,7 @@ export function ProcedureEditor({
                       >
                         {PROCEDURE_STEP_KINDS.map((kind) => (
                           <option key={kind} value={kind}>
-                            {STEP_KIND_LABEL[kind]}
+                            {t(STEP_KIND_LABEL[kind].zh, STEP_KIND_LABEL[kind].en)}
                           </option>
                         ))}
                       </Select>

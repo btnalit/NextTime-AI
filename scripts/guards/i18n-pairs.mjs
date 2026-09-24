@@ -45,8 +45,15 @@ export const BASELINE_FILE = fileURLToPath(new URL('./i18n-pairs-baseline.json',
 
 const LATIN_TAIL_CHAR = "[A-Za-z0-9\\s,./()'’\"%:_+\\-;!?&]";
 
+/** Full-width / CJK punctuation that can directly abut an English tail with *no* space in
+ *  between (e.g. "继承（不覆盖）Inherit workspace default" — the codemod's own split heuristic and
+ *  the space-separated check below both miss this shape, see `isUnsplitPair`'s second branch). */
+const CJK_PUNCT_RE = /[（）【】《》「」『』〈〉〔〕：，。；！？、～·—]/;
+
 /** Longest-suffix split, mirroring the W1-A9 codemod's own heuristic: true iff `text` is exactly
- *  "<zh...><space><pure-Latin-tail>" with at least one CJK ideograph on the zh side. */
+ *  "<zh...><space><pure-Latin-tail>" with at least one CJK ideograph on the zh side — or
+ *  "<zh...><CJK punctuation><pure-Latin-tail>" with no space at all, the same shape written with
+ *  a closing full-width bracket/mark directly against the English half instead of a space. */
 function isUnsplitPair(text) {
   const cjkRe = /[㐀-鿿]/;
   if (!cjkRe.test(text)) return false;
@@ -60,7 +67,9 @@ function isUnsplitPair(text) {
   if (zh.length === 0 || en.length === 0) return false;
   if (!/^[A-Za-z]/.test(en)) return false;
   if (!cjkRe.test(zh)) return false;
-  return `${zh} ${en}` === text.trim();
+  const trimmed = text.trim();
+  if (`${zh} ${en}` === trimmed) return true;
+  return CJK_PUNCT_RE.test(zh[zh.length - 1]) && `${zh}${en}` === trimmed;
 }
 
 /** Blanks `//` and `/* … *\/` comments (same length, newlines kept) so a comment never trips the

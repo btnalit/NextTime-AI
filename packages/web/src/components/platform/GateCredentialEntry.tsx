@@ -112,7 +112,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await postGateCredential(phase.tokenResult, credential);
+      await postGateCredential(phase.tokenResult, credential, t);
       clearFields();
       setPhase({ kind: 'stored' });
     } catch (err) {

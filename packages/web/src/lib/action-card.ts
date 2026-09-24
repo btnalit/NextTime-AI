@@ -1,13 +1,6 @@
-import type { ActionRequestStatus, BlastRadius } from '@nexttime/shared';
+import type { BlastRadius } from '@nexttime/shared';
 import { humanizeKind } from './format.js';
-import { type ChipStyle, statusChipStyle } from './status-tone.js';
 import type { ActionPendingPush, ChatMessage } from './ws-client.js';
-
-/** `actionRequest` is still an English-only machine (out of this lane's scope), so this is always
- *  the plain-string branch at runtime — narrows `ChipStyle.label`'s S8 W1-A9 union type. */
-function chipLabelText(label: ChipStyle['label']): string {
-  return typeof label === 'string' ? label : label.en;
-}
 
 /**
  * lib/action-card: normalizes the three different shapes an ActionRequest can arrive in on the
@@ -237,33 +230,3 @@ export function isDecidable(status: string | undefined): boolean {
  *  demands none the kernel does not (`high` would); a real `high` still ends in the kernel's own
  *  400 `reason_required`, which the card renders. */
 export const FALLBACK_BLAST_RADIUS: BlastRadius = 'medium';
-
-/** S6-A "执行类动作提示" (docs/console-completion-plan.md §5.9 "页面对照原型 — 对话"): the Chinese half
- *  of the one-line outcome an inline card shows for its ActionRequest. Typed against the shared
- *  enum so a new kernel status fails `tsc` here until it has copy. The English half is the
- *  `StatusChip` label (`lib/status-tone.ts`) — one source for the chip and the line. */
-export const ACTION_OUTCOME_ZH: Readonly<Record<ActionRequestStatus, string>> = {
-  proposed: '已提出',
-  policy_evaluated: '策略已评估',
-  auto_approved: '自动批准',
-  pending_approval: '待审批',
-  approved: '已批准',
-  rejected: '已拒绝',
-  expired: '已过期',
-  denied: '策略拒绝',
-  executing: '执行中',
-  executed: '已执行',
-  failed: '执行失败',
-  verified: '已验证',
-  compensated: '已补偿',
-};
-
-/** "已执行 Executed" — the bilingual outcome line for `status` (`undefined` reads as the only
- *  state a fresh card can be in, `pending_approval`). An unknown status renders as its raw
- *  wire value, the same visible-not-mis-styled rule `StatusChip` follows. */
-export function actionOutcomeLabel(status: string | undefined): string {
-  const effective = status ?? DECIDABLE_STATUS;
-  const zh = (ACTION_OUTCOME_ZH as Readonly<Record<string, string>>)[effective];
-  const en = chipLabelText(statusChipStyle('actionRequest', effective).label);
-  return zh === undefined ? en : `${zh} ${en}`;
-}

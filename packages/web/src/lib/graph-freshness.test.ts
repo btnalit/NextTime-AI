@@ -90,7 +90,9 @@ describe('freshnessOf', () => {
     expect([...tones].sort()).toEqual(['danger', 'neutral', 'ok', 'warn']);
     // Every kind the mapper can produce is in the legend with the same tone.
     for (const row of FRESHNESS_LEGEND) {
-      expect(row.label).toMatch(/\S \S/); // bilingual: "中文 English"
+      // S8 W1-A10: bilingual as a {zh, en} pair now, not a combined "中文 English" string.
+      expect(row.label.zh.length).toBeGreaterThan(0);
+      expect(row.label.en.length).toBeGreaterThan(0);
     }
   });
 });

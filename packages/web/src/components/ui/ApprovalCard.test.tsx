@@ -58,7 +58,8 @@ describe('ApprovalCard', () => {
     expect(reason.getAttribute('aria-required')).toBe('true');
     fireEvent.click(screen.getByTestId('approval-approve'));
     expect(onApprove).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert').textContent).toContain('A reason is required');
+    // S8 W1-A10: the reason error is bilingual via t() now; default zh-CN renders the zh half.
+    expect(screen.getByRole('alert').textContent).toContain('高影响动作必须填写批准理由');
     expect(document.activeElement).toBe(reason);
 
     fireEvent.change(reason, { target: { value: '  ticket 123  ' } });

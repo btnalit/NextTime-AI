@@ -10,7 +10,7 @@ afterEach(cleanup);
 const NOW = Date.parse('2026-09-19T12:00:00Z');
 
 describe('FreshnessChip', () => {
-  it('renders the tone class, data attributes and the bilingual label from wire fields', () => {
+  it('renders the tone class, data attributes and the bilingual label (t()-picked) from wire fields', () => {
     render(
       <FreshnessChip
         input={{ lastObservedAt: '2026-09-19T11:50:00Z' }}
@@ -23,20 +23,26 @@ describe('FreshnessChip', () => {
     expect(chip.className).toBe('chip chip-ok chip-s');
     expect(chip.getAttribute('data-tone')).toBe('ok');
     expect(chip.getAttribute('data-freshness')).toBe('fresh');
-    expect(chip.textContent).toBe('新鲜 Fresh');
+    // S8 W1-A10: bilingual via t() now (no LangProvider here → default zh-CN).
+    expect(chip.textContent).toBe('新鲜');
   });
 
   it('accepts a precomputed Freshness and never colours without text', () => {
     const conflict = FRESHNESS_LEGEND.find((row) => row.kind === 'conflict');
     render(
       <FreshnessChip
-        freshness={{ kind: 'conflict', tone: 'danger', label: conflict?.label ?? '', ageMs: 0 }}
+        freshness={{
+          kind: 'conflict',
+          tone: 'danger',
+          label: conflict?.label ?? { zh: '', en: '' },
+          ageMs: 0,
+        }}
         testId="chip"
       />,
     );
     const chip = screen.getByTestId('chip');
     expect(chip.className).toContain('chip-danger');
-    expect(chip.textContent).toBe('冲突 Conflict');
+    expect(chip.textContent).toBe('冲突');
   });
 });
 

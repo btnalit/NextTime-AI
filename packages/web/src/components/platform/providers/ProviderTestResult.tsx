@@ -1,6 +1,6 @@
 import type { LlmProviderTestResultWire } from '@nexttime/shared';
 import { formatDateTime, formatRelative } from '../../../lib/format.js';
-import { useT } from '../../../lib/i18n.js';
+import { type Translate, useT } from '../../../lib/i18n.js';
 
 export interface ProviderTestResultProps {
   readonly result: LlmProviderTestResultWire;
@@ -13,10 +13,10 @@ function outcomeTone(outcome: LlmProviderTestResultWire['completion']): string {
   return 'chip-neutral';
 }
 
-function outcomeLabel(outcome: LlmProviderTestResultWire['completion']): string {
-  if (outcome === 'ok') return '通过 ok';
-  if (outcome === 'error') return '失败 error';
-  return '跳过 skipped';
+function outcomeLabel(outcome: LlmProviderTestResultWire['completion'], t: Translate): string {
+  if (outcome === 'ok') return t('通过', 'ok');
+  if (outcome === 'error') return t('失败', 'error');
+  return t('跳过', 'skipped');
 }
 
 /**
@@ -37,7 +37,7 @@ export function ProviderTestResult({ result, testId }: ProviderTestResultProps) 
           data-testid="provider-test-completion"
           data-status={result.completion}
         >
-          {outcomeLabel(result.completion)}
+          {outcomeLabel(result.completion, t)}
         </span>
         <span className="text-small text-2">{t('工具调用', 'tool call')}</span>
         <span
@@ -45,7 +45,7 @@ export function ProviderTestResult({ result, testId }: ProviderTestResultProps) 
           data-testid="provider-test-tool-call"
           data-status={result.toolCall}
         >
-          {outcomeLabel(result.toolCall)}
+          {outcomeLabel(result.toolCall, t)}
         </span>
         <span className="text-small text-3 mono">
           {result.model} · {result.latencyMs} ms ·{' '}

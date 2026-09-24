@@ -1,4 +1,5 @@
 import type { GateHostTokenWire } from '@nexttime/shared';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/gate-host: P-B2a (决定 ⑩) — posting a credential straight from the browser to the platform
@@ -46,6 +47,7 @@ function isStoredEnvelope(body: unknown): boolean {
 export async function postGateCredential(
   tokenResult: GateHostTokenWire,
   credential: Readonly<Record<string, unknown>>,
+  t: Translate,
   fetchImpl: typeof fetch = defaultFetch,
 ): Promise<void> {
   let response: Response;
@@ -66,7 +68,7 @@ export async function postGateCredential(
 
   if (response.status === 401) {
     throw new GateHostError(
-      '令牌已过期或无效，请重新获取 The token expired or is invalid — get a new one',
+      t('令牌已过期或无效，请重新获取', 'The token expired or is invalid — get a new one'),
     );
   }
   if (!response.ok) {
@@ -80,12 +82,12 @@ export async function postGateCredential(
     body = await response.json();
   } catch {
     throw new GateHostError(
-      '门宿主返回了无法识别的响应 The gate host returned an unrecognized response',
+      t('门宿主返回了无法识别的响应', 'The gate host returned an unrecognized response'),
     );
   }
   if (!isStoredEnvelope(body)) {
     throw new GateHostError(
-      '门宿主返回了意料之外的响应 The gate host returned an unexpected response',
+      t('门宿主返回了意料之外的响应', 'The gate host returned an unexpected response'),
     );
   }
 }

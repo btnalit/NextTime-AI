@@ -1,3 +1,4 @@
+import type { Translate } from './i18n.js';
 import type { Tone } from './status-tone.js';
 
 /**
@@ -52,24 +53,35 @@ export interface FreshnessInput {
   readonly inConflict?: boolean;
 }
 
+export interface BilingualText {
+  readonly zh: string;
+  readonly en: string;
+}
+
 export interface Freshness {
   readonly kind: FreshnessKind;
   readonly tone: Tone;
-  /** Bilingual chip text (B4). */
-  readonly label: string;
+  /** S8 W1-A10 (i18n remainder): bilingual — `freshnessLabel(freshness, t)` picks one. */
+  readonly label: BilingualText;
   /** Milliseconds between the last observation and `asOf` — `null` without an observation clock. */
   readonly ageMs: number | null;
 }
 
-const LABELS: Readonly<Record<FreshnessKind, string>> = {
-  fresh: '新鲜 Fresh',
-  aging: '陈旧 Aging',
-  unobserved: '无观测 No observation',
-  not_reobserved: '未再观测 Not re-observed',
-  invalidated: '已失效 Invalidated',
-  superseded: '已替代 Superseded',
-  conflict: '冲突 Conflict',
+const LABELS: Readonly<Record<FreshnessKind, BilingualText>> = {
+  fresh: { zh: '新鲜', en: 'Fresh' },
+  aging: { zh: '陈旧', en: 'Aging' },
+  unobserved: { zh: '无观测', en: 'No observation' },
+  not_reobserved: { zh: '未再观测', en: 'Not re-observed' },
+  invalidated: { zh: '已失效', en: 'Invalidated' },
+  superseded: { zh: '已替代', en: 'Superseded' },
+  conflict: { zh: '冲突', en: 'Conflict' },
 };
+
+/** Picks the active language's half of a `Freshness.label` (or a legend row's `label`/
+ *  `description`) — the one place a caller resolves the language. */
+export function freshnessLabel(entry: BilingualText, t: Translate): string {
+  return t(entry.zh, entry.en);
+}
 
 const TONES: Readonly<Record<FreshnessKind, Tone>> = {
   fresh: 'ok',
@@ -85,50 +97,56 @@ const TONES: Readonly<Record<FreshnessKind, Tone>> = {
 export const FRESHNESS_LEGEND: readonly {
   readonly kind: FreshnessKind;
   readonly tone: Tone;
-  readonly label: string;
-  readonly description: string;
+  readonly label: BilingualText;
+  readonly description: BilingualText;
 }[] = [
   {
     kind: 'fresh',
     tone: 'ok',
     label: LABELS.fresh,
-    description: '观测窗口内再次确认 Re-observed within the window',
+    description: { zh: '观测窗口内再次确认', en: 'Re-observed within the window' },
   },
   {
     kind: 'aging',
     tone: 'warn',
     label: LABELS.aging,
-    description: '仍有效，但最近观测早于窗口 Active, last observed before the window',
+    description: {
+      zh: '仍有效，但最近观测早于窗口',
+      en: 'Active, last observed before the window',
+    },
   },
   {
     kind: 'unobserved',
     tone: 'neutral',
     label: LABELS.unobserved,
-    description: '人工或 agent 断言，没有观测时钟 Asserted, no observation clock',
+    description: { zh: '人工或 agent 断言，没有观测时钟', en: 'Asserted, no observation clock' },
   },
   {
     kind: 'not_reobserved',
     tone: 'neutral',
     label: LABELS.not_reobserved,
-    description: '来源的完整视图里已不存在 Absent from the Source’s complete view',
+    description: {
+      zh: '来源的完整视图里已不存在',
+      en: 'Absent from the Source’s complete view',
+    },
   },
   {
     kind: 'invalidated',
     tone: 'neutral',
     label: LABELS.invalidated,
-    description: '被显式失效 Explicitly invalidated',
+    description: { zh: '被显式失效', en: 'Explicitly invalidated' },
   },
   {
     kind: 'superseded',
     tone: 'neutral',
     label: LABELS.superseded,
-    description: '同源更新的事实替代了它 Replaced by a newer same-origin Fact',
+    description: { zh: '同源更新的事实替代了它', en: 'Replaced by a newer same-origin Fact' },
   },
   {
     kind: 'conflict',
     tone: 'danger',
     label: LABELS.conflict,
-    description: '在未解决的冲突中或已被反驳 In an open Conflict, or contradicted',
+    description: { zh: '在未解决的冲突中或已被反驳', en: 'In an open Conflict, or contradicted' },
   },
 ];
 

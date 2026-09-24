@@ -19,7 +19,8 @@ describe('SystemStatusLineView', () => {
       />,
     );
     expect(document.querySelector('.chip')?.getAttribute('data-status')).toBe('approved');
-    expect(document.querySelector('.chip')?.textContent).toBe('Approved');
+    // S8 W1-A10: the actionRequest StatusChip is bilingual now; default zh-CN renders '已批准'.
+    expect(document.querySelector('.chip')?.textContent).toBe('已批准');
     expect(screen.getByText('ActionRequest approved')).toBeTruthy();
   });
 

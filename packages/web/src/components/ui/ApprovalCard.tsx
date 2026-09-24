@@ -44,9 +44,6 @@ export interface ApprovalCardProps {
   readonly testId?: string;
 }
 
-const REASON_REQUIRED_MESSAGE =
-  '高影响动作必须填写批准理由 A reason is required for a high-impact action';
-
 /**
  * components/ui/ApprovalCard (S6-A0, §5.9 "ApprovalCard"): the one card the chat thread and the
  * approvals page share — capability, target, on-behalf-of (a `RefChip`), policy summary, blast
@@ -87,7 +84,9 @@ export function ApprovalCard({
   async function decide(kind: 'approve' | 'reject' | 'always'): Promise<void> {
     const trimmed = reason.trim();
     if (kind === 'approve' && required && trimmed === '') {
-      setReasonError(REASON_REQUIRED_MESSAGE);
+      setReasonError(
+        t('高影响动作必须填写批准理由', 'A reason is required for a high-impact action'),
+      );
       reasonRef.current?.focus();
       return;
     }

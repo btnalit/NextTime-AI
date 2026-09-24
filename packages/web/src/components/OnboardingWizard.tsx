@@ -22,12 +22,16 @@ export interface OnboardingWizardProps {
 
 type WizardStep = 'kind' | 'connect' | 'publish' | 'review' | 'done';
 
-const STEP_LABELS: readonly { readonly step: WizardStep; readonly label: string }[] = [
-  { step: 'kind', label: '① 类型 Kind' },
-  { step: 'connect', label: '② 地址与凭证 Target & credential' },
-  { step: 'publish', label: '③ 导入清单 Import manifest' },
-  { step: 'review', label: '④ 审核 Operations Review' },
-  { step: 'done', label: '⑤ 完成 Done' },
+const STEP_LABELS: readonly {
+  readonly step: WizardStep;
+  readonly zh: string;
+  readonly en: string;
+}[] = [
+  { step: 'kind', zh: '① 类型', en: 'Kind' },
+  { step: 'connect', zh: '② 地址与凭证', en: 'Target & credential' },
+  { step: 'publish', zh: '③ 导入清单', en: 'Import manifest' },
+  { step: 'review', zh: '④ 审核', en: 'Operations Review' },
+  { step: 'done', zh: '⑤ 完成', en: 'Done' },
 ];
 
 const KIND_COPY: Readonly<Record<ConnectionKind, string>> = {
@@ -83,7 +87,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
             className={`wizard-step${entry.step === step ? ' wizard-step-active' : ''}`}
             aria-current={entry.step === step ? 'step' : undefined}
           >
-            {entry.label}
+            {t(entry.zh, entry.en)}
           </li>
         ))}
       </ol>

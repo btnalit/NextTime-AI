@@ -258,7 +258,8 @@ async function startRunningTurn(fake: FakeClient): Promise<Geometry> {
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(fake.client.sendChatMessage).toHaveBeenCalled());
-  await screen.findByText(/Agent is responding/);
+  // S8 W1-A10: TurnStatusBadge text is bilingual via t() now; default zh-CN renders '回复中'.
+  await screen.findByText('回复中');
   return geometry;
 }
 
@@ -461,7 +462,8 @@ describe('ChatPage send and stream (C22)', () => {
     await waitFor(() =>
       expect(fake.client.sendChatMessage).toHaveBeenCalledWith('chat-1', 'restart web-1'),
     );
-    await screen.findByText('回复中 Agent is responding');
+    // S8 W1-A10: TurnStatusBadge text is bilingual via t() now; default zh-CN renders '回复中'.
+    await screen.findByText('回复中');
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true);
 
     act(() => {
@@ -491,7 +493,8 @@ describe('ChatPage send and stream (C22)', () => {
       // Turn-end metadata: the reducer settles and the composer re-enables.
       handlersOf(fake).onMetadata({ turnId: 'turn-1', turnStatus: 'completed' });
     });
-    await screen.findByText('本轮完成 Turn completed');
+    // S8 W1-A10: TurnStatusBadge text is bilingual via t() now; default zh-CN renders '本轮完成'.
+    await screen.findByText('本轮完成');
     expect(document.querySelector('.message-streaming')).toBeNull();
     expect(document.querySelectorAll('.message-assistant .message-text')).toHaveLength(1);
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);

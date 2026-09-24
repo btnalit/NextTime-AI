@@ -64,9 +64,6 @@ export interface ConfirmProps {
   readonly undo?: { readonly label?: string; readonly onUndo: () => void | Promise<void> };
 }
 
-const DEFAULT_CONFIRM = '确认 Confirm';
-const DEFAULT_CANCEL = '取消 Cancel';
-
 /**
  * components/kit/confirm (S8 W1-A7, docs/console-completion-plan.md §5.9 principle 4; audit
  * S13/RT2 "确认按影响分级... 就近弹出"): the Radix/Tailwind replacement for `components/ui/
@@ -226,13 +223,16 @@ function MediumTier({
   description,
   target,
   impact,
-  confirmLabel = DEFAULT_CONFIRM,
-  cancelLabel = DEFAULT_CANCEL,
+  confirmLabel,
+  cancelLabel,
   danger = false,
   onConfirm,
   children,
   testId,
 }: ConfirmProps) {
+  const t = useT();
+  const resolvedConfirmLabel = confirmLabel ?? t('确认', 'Confirm');
+  const resolvedCancelLabel = cancelLabel ?? t('取消', 'Cancel');
   const { busy, error, run } = useConfirmRun(onConfirm, () => onOpenChange(false));
   useRestoreFocusOnClose(open);
   const titleId = useId();
@@ -303,7 +303,7 @@ function MediumTier({
                 onClick={() => void run()}
                 data-testid="confirm-button"
               >
-                {confirmLabel}
+                {resolvedConfirmLabel}
               </Button>
               <Button
                 variant="ghost"
@@ -312,7 +312,7 @@ function MediumTier({
                 disabled={busy}
                 data-testid="confirm-cancel"
               >
-                {cancelLabel}
+                {resolvedCancelLabel}
               </Button>
             </div>
           </PopoverPrimitive.Content>
@@ -330,13 +330,15 @@ function IrreversibleTier({
   description,
   target,
   impact,
-  confirmLabel = DEFAULT_CONFIRM,
-  cancelLabel = DEFAULT_CANCEL,
+  confirmLabel,
+  cancelLabel,
   onConfirm,
   children,
   testId,
 }: ConfirmProps) {
   const t = useT();
+  const resolvedConfirmLabel = confirmLabel ?? t('确认', 'Confirm');
+  const resolvedCancelLabel = cancelLabel ?? t('取消', 'Cancel');
   const { busy, error, run } = useConfirmRun(onConfirm, () => onOpenChange(false));
   useRestoreFocusOnClose(open);
   const [typed, setTyped] = useState('');
@@ -428,11 +430,11 @@ function IrreversibleTier({
                 onClick={() => void run()}
                 data-testid="confirm-button"
               >
-                {confirmLabel}
+                {resolvedConfirmLabel}
               </Button>
               <AlertDialogPrimitive.Cancel asChild>
                 <Button variant="ghost" size="s" disabled={busy} data-testid="confirm-cancel">
-                  {cancelLabel}
+                  {resolvedCancelLabel}
                 </Button>
               </AlertDialogPrimitive.Cancel>
             </div>

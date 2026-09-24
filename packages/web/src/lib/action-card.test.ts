@@ -1,11 +1,8 @@
-import { ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
-  ACTION_OUTCOME_ZH,
   actionCardFromPendingContent,
   actionCardFromPush,
   actionCardFromRow,
-  actionOutcomeLabel,
   enrichActionCard,
   humanizeActionKind,
   isPendingCardMessage,
@@ -198,24 +195,5 @@ describe('isPendingCardMessage', () => {
     expect(isPendingCardMessage(chatMessage({ kind: 'system.action_update' }))).toBe(false);
     expect(isPendingCardMessage(chatMessage({ kind: 'system.task_update' }))).toBe(false);
     expect(isPendingCardMessage(chatMessage({ kind: undefined }))).toBe(false);
-  });
-});
-
-describe('actionOutcomeLabel (S6-A 执行类动作提示)', () => {
-  it('pairs the Chinese outcome with the StatusChip label', () => {
-    expect(actionOutcomeLabel('executed')).toBe('已执行 Executed');
-    expect(actionOutcomeLabel('pending_approval')).toBe('待审批 Pending approval');
-    expect(actionOutcomeLabel('rejected')).toBe('已拒绝 Rejected');
-  });
-
-  it('reads undefined as pending_approval (a fresh card) and an unknown status as its raw value', () => {
-    expect(actionOutcomeLabel(undefined)).toBe('待审批 Pending approval');
-    expect(actionOutcomeLabel('made_up')).toBe('made_up');
-  });
-
-  it('has copy for every kernel ActionRequest status', () => {
-    for (const status of ACTION_REQUEST_STATUS_VALUES) {
-      expect(ACTION_OUTCOME_ZH[status]).toBeTruthy();
-    }
   });
 });

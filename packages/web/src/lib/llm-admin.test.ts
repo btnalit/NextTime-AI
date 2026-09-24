@@ -1,7 +1,11 @@
 import type { LlmAdminTokenWire, LlmProviderListWire } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from './clients.js';
+import type { Translate } from './i18n.js';
 import { LlmAdminClient, LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
+
+/** `llmAdminErrorMessage` is a pure helper (not a component) that takes `t` from its caller. */
+const zhT: Translate = (zh) => zh;
 
 /**
  * lib/llm-admin.test: the token burst cache (mint once, reuse until 60 s before expiry, re-mint
@@ -201,14 +205,14 @@ describe('LlmAdminClient', () => {
 
     const unwritable = await client.listProviders().catch((err: unknown) => err);
     expect(unwritable).toMatchObject({ status: 503, code: 'store_unwritable' });
-    expect(llmAdminErrorMessage(unwritable)).toContain('host-llm-proxy-init.sh');
+    expect(llmAdminErrorMessage(unwritable, zhT)).toContain('host-llm-proxy-init.sh');
 
     const missing = await client.listProviders().catch((err: unknown) => err);
-    expect(llmAdminErrorMessage(missing)).toContain('secrets/llm-proxy.env');
+    expect(llmAdminErrorMessage(missing, zhT)).toContain('secrets/llm-proxy.env');
 
     const opaque = await client.listProviders().catch((err: unknown) => err);
     expect(opaque).toMatchObject({ status: 502, code: 'http_error' });
-    expect(llmAdminErrorMessage(opaque)).toBeNull();
-    expect(llmAdminErrorMessage(new Error('x'))).toBeNull();
+    expect(llmAdminErrorMessage(opaque, zhT)).toBeNull();
+    expect(llmAdminErrorMessage(new Error('x'), zhT)).toBeNull();
   });
 });

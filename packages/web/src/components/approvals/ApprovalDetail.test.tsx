@@ -100,7 +100,9 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
   it('high blast radius: Approve without a reason is refused in place (the kernel rule, mirrored)', async () => {
     const { onApprove } = renderDetail({ blastRadius: 'high' });
     fireEvent.click(screen.getByRole('button', { name: /批准/ }));
-    await screen.findByText(/A reason is required for a high-impact action/);
+    // S8 W1-A10: ApprovalCard's reason error is bilingual via t() now; default zh-CN renders the
+    // zh half.
+    await screen.findByText('高影响动作必须填写批准理由');
     expect(onApprove).not.toHaveBeenCalled();
   });
 

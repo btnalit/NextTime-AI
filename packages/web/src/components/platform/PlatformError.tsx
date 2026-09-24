@@ -1,4 +1,5 @@
 import { describeError } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 
@@ -23,8 +24,9 @@ export interface PlatformErrorProps {
  * kernel text is empty or merely repeats the mapped copy.
  */
 export function PlatformError({ error, title, testId }: PlatformErrorProps) {
+  const t = useT();
   if (error === null || error === undefined) return null;
-  const mapped = platformErrorMessage(error);
+  const mapped = platformErrorMessage(error, t);
   if (mapped === null) return <ErrorBanner error={error} title={title} testId={testId} />;
   const described = describeError(error);
   const detail =
