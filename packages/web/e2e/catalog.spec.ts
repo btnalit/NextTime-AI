@@ -54,7 +54,7 @@ test.describe('catalog editors', () => {
     // The checklist only lists the published, policy-allowed Skills once "继承 Inherit" is
     // unchecked (S3.13: an inheriting profile has nothing to pick); a fresh publication is
     // *available* there, not auto-enabled.
-    await skillsField.getByRole('checkbox', { name: /继承工作区默认/ }).uncheck();
+    await skillsField.getByRole('checkbox', { name: /继承（不覆盖）/ }).uncheck();
     await expect(skillsField.getByText(name)).toBeVisible();
   });
 
