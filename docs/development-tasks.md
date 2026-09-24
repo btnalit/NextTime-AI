@@ -3128,6 +3128,12 @@ W1-A1 / A2 先于 W1-B 合入，基线直接在新界面上生成，首批评审
 | W2-K1 | #249 | 入口 prompt 契约：`find_*` 全空时的三项前提指引、ops-runner 条件化、回复用用户的语言，`prompt-contract` 守卫加三条断言（B2 / B8 / R9，遗留 72）；`find_*` 分词匹配（CJK 双字切分、上限 32 个 token、参数化 SQL，空 `need` 列全部，遗留 71 / B3）；`find_procedures` 复用 `find_workers` 的启用白名单（B4）；`invoke_worker` 接受唯一的门名、报错列出可见门（R4）；随包 manifest 12 个 Operation 补描述、CLI 导入要求非空、OpenAPI / MCP 导入不再产出空描述（CO1）。CO2 核实无需改码：策略引擎只让 `low` 自动批准，manifest 已声明 `low`，生产上的是旧部署数据 | `deploy/accept-s2` 夹具仍无描述（W4 顺带） |
 | W2-K2 | #251 | `enable_gate_instance` 先按 endpoint 找本工作区已有 Gatekeeper：一个 → 关联（不新建 Gatekeeper / ConnectedSystem，只导入并发布新增的 Operation，结果带 `linkedExisting` 与 `drift`）；多个 → `ambiguous_existing_gatekeeper` 且不写入；零个 → 原路径。只关联不改写旧注册与已有 Operation 的治理字段。新增只读 `preview_gate_instance_enable`（与启用共用判定函数，报告待导入与已存在 Operation，`differs` 标出治理字段与门公告不一致）。回滚写进 `runbooks/add-gatekeeper.md` §11.1。不做跨工作区数据迁移：部署后由 owner 在控制台对每个旧注册的门点一次"启用" | 遗留 79（是否刷新陈旧的治理字段）；主机：生产工作区的 docker / ragflow 门各点一次启用并核对复用了旧 Gatekeeper |
 
+**W2 UI 半段实现说明**（2026-09-25 起）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W2-U1 | #269 | 统一授权（J6 / SY2 / U2 / AX1）：`components/access/GrantGateForm` + `GrantGateDrawer`，访问页主操作与每张系统卡片打开同一个抽屉；成员（`list_principals`）与门（`list_gatekeepers`，可多选）都用选择器，不再粘贴 id / JSON；"全部门"须显式勾选并经 `medium` 确认；只指向一个门时只读列出授权覆盖的已发布 Operation（执行类仍按审批规则）。卡片列出已授权成员并可撤销（R5）；Handle 能力勾选改为分组折叠（AX1）。启用前预览（J3 / J4）：`EnableGateConfirm` 读 `preview_gate_instance_enable`，列待导入 / 已存在 Operation（`differs` 标出），关联旧注册时显示差异，候选不唯一则禁止确认。启动器必经启用 + 授权（J2），第一步先列平台目录里的可用实例（J5）。系统接入页（SY1 部分 / SY3 / SY4 / U5 / L4）：一个主操作，直接注册门（标"旧路径"）与向导收进更多菜单；两类已接入系统归到同一节 | 合入前主会话去掉了车道原有的"按 Operation 收窄"勾选：`capability_grants.scope` 只存不校验（遗留 80），勾选是一个不生效的控制；访问页已有 scope 标为"范围备注（不限制授权）"。SY1 是部分完成（平台目录行与门卡片仍是两种形状，组件注释说明取舍）。卡片"已授权成员"只列指向该门的授权，"全部门"授权只在访问页显示为"任意"。`components/ActionRequestDetail.tsx` 已无代码引用（审批详情改用 `approvals/ApprovalDetail`），W3 审批车道顺带删除 |
+
 **S8 验收**：六条旅程测试在 CI 通过；维护者在主机按旅程①–⑥做页面验收；审计清单 P0 / P1 全部关闭或经维护者标"不修"；
 三档截图基线经独立设计评审认可（2026-09-24 维护者决定，不逐个交维护者）。
 
