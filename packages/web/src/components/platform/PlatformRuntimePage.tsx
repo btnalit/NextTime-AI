@@ -11,6 +11,7 @@ import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -256,6 +257,166 @@ function RuntimeBody({
   readonly rolling: boolean;
 }) {
   const needsRebuildCount = data.residentContainers.filter((c) => c.needsRebuild).length;
+
+  // S8 W1-A4 (audit S3): both tables below stay under the 768px overflow width (809px content),
+  // so layout="card" (the default) applies. Defined here, inline, rather than a top-level
+  // xColumns(...) factory: both close over props (`onActivate`/`data.activeImageInfo`,
+  // `workspaceNames`/`selected`/`onToggleSelected`) already local to this component.
+  const imageColumns: readonly DataTableColumn<RuntimeImageWire>[] = [
+    {
+      id: 'tags',
+      header: '标签 Tags',
+      priority: 'primary',
+      cellClassName: 'mono text-small',
+      cell: (image) => image.tags.join(', ') || '—',
+    },
+    {
+      id: 'id',
+      header: '镜像 id Id',
+      cell: (image) => (
+        <span className="mono text-small" title={image.id}>
+          {shortImageId(image.id)}
+        </span>
+      ),
+    },
+    {
+      id: 'pi',
+      header: 'pi',
+      cellClassName: 'mono text-small',
+      cell: (image) => image.piVersion ?? '—',
+    },
+    {
+      id: 'platformExtension',
+      header: 'platform-extension',
+      cellClassName: 'mono text-small',
+      cell: (image) => image.platformExtensionVersion ?? '—',
+    },
+    {
+      id: 'builtFrom',
+      header: '构建来源 Built from',
+      cellClassName: 'mono text-small',
+      cell: (image) => image.builtFrom ?? '—',
+    },
+    {
+      id: 'created',
+      header: '创建 Created',
+      cellClassName: 'text-small',
+      cell: (image) => (
+        <time title={formatDateTime(image.createdAt)}>{formatRelative(image.createdAt)}</time>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      priority: 'high',
+      hideInCard: true,
+      cell: (image) => {
+        const active = image.id === data.activeImageInfo?.id;
+        return active ? (
+          <span className="chip chip-ok" data-testid="runtime-image-active-chip">
+            当前 Active
+          </span>
+        ) : (
+          <>
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => onActivate(image)}
+              disabled={!image.allowed}
+              title={
+                image.allowed
+                  ? undefined
+                  : '未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST'
+              }
+              data-testid="runtime-image-activate"
+            >
+              设为活动 Set active
+            </Button>
+            {!image.allowed ? (
+              <div className="text-3 text-small" data-testid="runtime-image-not-allowed-hint">
+                未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST
+              </div>
+            ) : null}
+          </>
+        );
+      },
+    },
+  ];
+
+  const residentColumns: readonly DataTableColumn<ResidentContainerWire>[] = [
+    {
+      id: 'select',
+      header: '',
+      priority: 'high',
+      cell: (resident) => (
+        <input
+          type="checkbox"
+          checked={selected.has(resident.principalId)}
+          onChange={() => onToggleSelected(resident.principalId)}
+          disabled={!resident.needsRebuild}
+          title={
+            resident.needsRebuild
+              ? '选中以单独重建 Select to rebuild individually'
+              : '已是最新，无需选中 Already up to date'
+          }
+          data-testid="runtime-resident-select"
+        />
+      ),
+    },
+    {
+      id: 'user',
+      header: '用户 User',
+      priority: 'primary',
+      cell: (resident) => <RefChip kind="principal" id={resident.principalId} size="s" />,
+    },
+    {
+      id: 'status',
+      header: '状态 Status',
+      priority: 'high',
+      cell: (resident) =>
+        resident.needsRebuild ? (
+          <span className="chip chip-warn" data-testid="runtime-resident-needs-rebuild">
+            待重建 Needs rebuild
+          </span>
+        ) : (
+          <span className="chip chip-ok">已是最新 Up to date</span>
+        ),
+    },
+    {
+      id: 'workspace',
+      header: '工作区 Workspace',
+      cellClassName: 'text-small',
+      cell: (resident) =>
+        workspaceNames.get(resident.workspaceId) ?? (
+          <span className="text-3">{resident.workspaceId}</span>
+        ),
+    },
+    {
+      id: 'image',
+      header: '镜像 Image',
+      cellClassName: 'mono text-small',
+      cell: (resident) => resident.image ?? '—',
+    },
+    {
+      id: 'started',
+      header: '启动 Started',
+      cellClassName: 'text-small',
+      cell: (resident) => (
+        <time title={formatDateTime(resident.startedAt)}>{formatRelative(resident.startedAt)}</time>
+      ),
+    },
+    {
+      id: 'idle',
+      header: '空闲 Idle',
+      cellClassName: 'text-small',
+      cell: (resident) => (
+        <time title={formatDateTime(resident.lastTouchedAt)}>
+          {formatRelative(resident.lastTouchedAt)}
+        </time>
+      ),
+    },
+  ];
+
   return (
     <>
       <Card
@@ -313,74 +474,14 @@ function RuntimeBody({
             testId="runtime-images-empty"
           />
         ) : (
-          <div className="table-scroll">
-            <table className="data-table" data-testid="runtime-images-table">
-              <thead>
-                <tr>
-                  <th>标签 Tags</th>
-                  <th>镜像 id Id</th>
-                  <th>pi</th>
-                  <th>platform-extension</th>
-                  <th>构建来源 Built from</th>
-                  <th>创建 Created</th>
-                  <th aria-label="Actions" />
-                </tr>
-              </thead>
-              <tbody>
-                {data.images.map((image) => {
-                  const active = image.id === data.activeImageInfo?.id;
-                  return (
-                    <tr key={image.id} data-testid={`runtime-image-row-${image.id}`}>
-                      <td className="mono text-small">{image.tags.join(', ') || '—'}</td>
-                      <td>
-                        <span className="mono text-small" title={image.id}>
-                          {shortImageId(image.id)}
-                        </span>
-                      </td>
-                      <td className="mono text-small">{image.piVersion ?? '—'}</td>
-                      <td className="mono text-small">{image.platformExtensionVersion ?? '—'}</td>
-                      <td className="mono text-small">{image.builtFrom ?? '—'}</td>
-                      <td className="text-small">
-                        <time title={formatDateTime(image.createdAt)}>
-                          {formatRelative(image.createdAt)}
-                        </time>
-                      </td>
-                      <td>
-                        {active ? (
-                          <span className="chip chip-ok" data-testid="runtime-image-active-chip">
-                            当前 Active
-                          </span>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="s"
-                            onClick={() => onActivate(image)}
-                            disabled={!image.allowed}
-                            title={
-                              image.allowed
-                                ? undefined
-                                : '未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST'
-                            }
-                            data-testid="runtime-image-activate"
-                          >
-                            设为活动 Set active
-                          </Button>
-                        )}
-                        {!active && !image.allowed ? (
-                          <div
-                            className="text-3 text-small"
-                            data-testid="runtime-image-not-allowed-hint"
-                          >
-                            未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST
-                          </div>
-                        ) : null}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={imageColumns}
+            data={data.images}
+            getRowId={(image) => image.id}
+            ariaLabel="Runtime images"
+            testId="runtime-images-table"
+            rowTestId={(image) => `runtime-image-row-${image.id}`}
+          />
         )}
       </Card>
 
@@ -410,90 +511,17 @@ function RuntimeBody({
             testId="runtime-residents-empty"
           />
         ) : (
-          <div className="table-scroll">
-            <table className="data-table" data-testid="runtime-residents-table">
-              <thead>
-                <tr>
-                  <th aria-label="Select" />
-                  <th>用户 User</th>
-                  <th>工作区 Workspace</th>
-                  <th>镜像 Image</th>
-                  <th>启动 Started</th>
-                  <th>空闲 Idle</th>
-                  <th>状态 Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.residentContainers.map((resident) => (
-                  <ResidentRow
-                    key={resident.containerId}
-                    resident={resident}
-                    workspaceName={workspaceNames.get(resident.workspaceId)}
-                    checked={selected.has(resident.principalId)}
-                    onToggle={() => onToggleSelected(resident.principalId)}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={residentColumns}
+            data={data.residentContainers}
+            getRowId={(resident) => resident.containerId}
+            ariaLabel="Resident containers"
+            testId="runtime-residents-table"
+            rowTestId={(resident) => `runtime-resident-row-${resident.principalId}`}
+          />
         )}
       </Card>
     </>
-  );
-}
-
-function ResidentRow({
-  resident,
-  workspaceName,
-  checked,
-  onToggle,
-}: {
-  readonly resident: ResidentContainerWire;
-  readonly workspaceName: string | undefined;
-  readonly checked: boolean;
-  readonly onToggle: () => void;
-}) {
-  return (
-    <tr data-testid={`runtime-resident-row-${resident.principalId}`}>
-      <td>
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={onToggle}
-          disabled={!resident.needsRebuild}
-          title={
-            resident.needsRebuild
-              ? '选中以单独重建 Select to rebuild individually'
-              : '已是最新，无需选中 Already up to date'
-          }
-          data-testid="runtime-resident-select"
-        />
-      </td>
-      <td>
-        <RefChip kind="principal" id={resident.principalId} size="s" />
-      </td>
-      <td className="text-small">
-        {workspaceName ?? <span className="text-3">{resident.workspaceId}</span>}
-      </td>
-      <td className="mono text-small">{resident.image ?? '—'}</td>
-      <td className="text-small">
-        <time title={formatDateTime(resident.startedAt)}>{formatRelative(resident.startedAt)}</time>
-      </td>
-      <td className="text-small">
-        <time title={formatDateTime(resident.lastTouchedAt)}>
-          {formatRelative(resident.lastTouchedAt)}
-        </time>
-      </td>
-      <td>
-        {resident.needsRebuild ? (
-          <span className="chip chip-warn" data-testid="runtime-resident-needs-rebuild">
-            待重建 Needs rebuild
-          </span>
-        ) : (
-          <span className="chip chip-ok">已是最新 Up to date</span>
-        )}
-      </td>
-    </tr>
   );
 }
 
