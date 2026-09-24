@@ -43,9 +43,6 @@ export const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 export const WEB_SRC_DIR = 'packages/web/src';
 export const BASELINE_FILE = fileURLToPath(new URL('./i18n-pairs-baseline.json', import.meta.url));
 
-// CJK Unified Ideographs (the codebase's own bilingual convention never uses the rarer CJK
-// extension blocks) plus the full-width punctuation the audit's sample strings use.
-const CJK = '\\u3400-\\u9fff\\u3000-\\u303f\\uff00-\\uffef';
 const LATIN_TAIL_CHAR = "[A-Za-z0-9\\s,./()'’\"%:_+\\-;!?&]";
 
 /** Longest-suffix split, mirroring the W1-A9 codemod's own heuristic: true iff `text` is exactly
