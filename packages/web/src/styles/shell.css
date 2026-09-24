@@ -1,5 +1,8 @@
-/* App shell: fixed left sidebar (240px) + main. ≤1100px the sidebar collapses to an icon rail;
- * ≤720px it becomes a top bar and the main area stacks below it. */
+/* App shell: fixed left sidebar (240px) + main. In the (960px, 1100px] range the sidebar collapses
+ * to an icon rail. ≤960px (S8 W1-A3, audit S2) `AppShell` stops rendering `.sidebar` at all and
+ * renders `.mobile-topbar` + a `NavDrawer` (`.nav-drawer`, below) instead — see that component's
+ * own doc comment for why: the old icon-rail-then-horizontal-row treatment left 21 unlabeled,
+ * partly-duplicate icons and dropped the workspace, role and current user entirely. */
 
 .shell {
   display: grid;
@@ -437,46 +440,15 @@
   }
 }
 
-@media (max-width: 720px) {
+/* S8 W1-A3 (audit S2): ≤960px `.sidebar` is not in the DOM (AppShell renders `.mobile-topbar`
+ * instead) — this block only has to re-stack `.shell` into a single column and narrow `.page`'s
+ * own padding, the same way the pre-existing ≤1100px rail rules never touched page layout. */
+@media (max-width: 960px) {
   .shell {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .sidebar {
-    position: sticky;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    z-index: 5;
-  }
-
-  .sidebar-nav {
-    flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: var(--space-1);
-    overflow-y: visible;
-  }
-
-  /* Flattens each section's items directly into the row above — two stacked columns (one per
-   * section) would otherwise sit side by side instead of one wrapping strip of icons. The
-   * section title is already hidden at this width (rule above, shared with the 1100px rail). */
-  .nav-section {
-    display: contents;
-  }
-
-  .nav-item {
-    padding: 8px;
-  }
-
-  .sidebar-footer {
-    flex-direction: row;
-    border-top: 0;
-    padding-top: 0;
+    /* Two rows (top bar, main): without explicit rows the auto tracks share the leftover
+     * `min-height: 100vh` space, stretching the top bar's row and pushing short pages down. */
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .main {
@@ -492,4 +464,60 @@
     flex-direction: column;
     align-items: stretch;
   }
+}
+
+/* `MobileTopBar` (components/shell/Sidebar.tsx) — a fixed-height sticky row so `.chat-page`'s own
+ * `calc(100vh - <this height>)` (styles/pages.css) stays exact regardless of font metrics. */
+.mobile-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 52px;
+  padding: 0 var(--space-3);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.mobile-topbar-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.mobile-topbar-title {
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mobile-topbar-sub {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+
+/* The WS connection indicator (`.conn-status`/`.conn-dot`/`.conn-status-label` — sidebar-footer's
+ * own, reused verbatim): flex-shrink:0 so a long page title never squeezes it out, and the
+ * sidebar-footer's own padding is dropped — .mobile-topbar's own padding already frames the row. */
+.mobile-topbar .conn-status {
+  flex-shrink: 0;
+  padding: 0;
+}
+
+/* `NavDrawer` (components/shell/Sidebar.tsx) — the `kit/sheet` `SheetContent` that carries the
+ * same `SidebarContent` (brand, three nav groups, footer) the wide `<aside class="sidebar">`
+ * renders; a standalone rule set rather than composing `.sidebar` itself, so the two never fight
+ * over `height`/`padding` through the unlayered-CSS-beats-Tailwind-utilities cascade rule
+ * (README.md "Cascade layer order"). */
+.nav-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  height: 100%;
+  padding: var(--space-4) var(--space-3);
+  overflow-y: auto;
 }

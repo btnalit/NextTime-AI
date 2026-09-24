@@ -12,11 +12,17 @@ import { SURFACES, VIEWPORT_HEIGHT, WIDTHS, goToSurface } from './surfaces.js';
  * per width in `WIDTHS`), `expect.soft` so a diff at one width doesn't hide diffs at the other two
  * in the same test's report.
  *
- * `test.describe.configure({ mode: 'serial' })`: the 'chats' surface must be captured with an
- * empty chat list — true only *before* the 'chat-with-reply' state below creates one. `00-gates/`
- * already runs first among spec files (directory prefix, see determinism.ts's doc comment) so
- * nothing outside this file has created a chat yet; serial mode is what keeps it true *inside*
- * this file too (declaration order = run order).
+ * Ordering: the 'chats' surface must be captured with an empty chat list — true only *before* the
+ * 'chat-with-reply' state below creates one. `00-gates/` already runs first among spec files
+ * (directory prefix, see determinism.ts's doc comment); *inside* this file, `playwright.config.ts`'s
+ * `workers: 1` + `fullyParallel: false` already run this describe block's tests one at a time, in
+ * declaration order, with no config change needed here — that ordering guarantee does not require
+ * `test.describe.configure({ mode: 'serial' })`. This file deliberately does *not* use serial mode
+ * (S8 W1-A3 follow-up): serial mode's *other* effect — skip every remaining test once one fails —
+ * turned a single real screenshot diff into "31 did not run" on a `--update-snapshots` baseline
+ * regeneration run, when the whole point of that run is to get a fresh baseline for every surface
+ * regardless of any one of them hiccuping. Default mode keeps the same run order and drops only
+ * the cascade-skip.
  *
  * `maxDiffPixelRatio: 0.01` (playwright.config.ts's `expect.toHaveScreenshot` default): strict
  * enough to catch a real regression (a moved button, a wrong color token) while absorbing
@@ -31,7 +37,6 @@ const CHAT_FIXTURE_PROMPT =
   'S8 W1-B UX gate fixture message — do not edit, baseline depends on this exact text';
 
 test.describe('S8 W1-B screenshot gate', () => {
-  test.describe.configure({ mode: 'serial' });
   test.skip(
     !OWNER_API_KEY,
     'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY (and WEB_E2E_ADMIN_LOGIN/WEB_E2E_ADMIN_INITIAL_PASSWORD for the platform surfaces) to run this suite (see README.md)',

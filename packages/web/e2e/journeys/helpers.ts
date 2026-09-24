@@ -56,13 +56,19 @@ export async function asSecondPrincipal(page: Page): Promise<void> {
  * needs an entry — only the ones a journey actually navigates to today.
  *
  * Why not click by the nav item's own accessible name (an earlier version of this file did): at
- * ≤1100px (`styles/shell.css`'s icon-rail breakpoint — 768px, the F4 narrow-screen state every
- * journey is supposed to cover, falls inside it) `.nav-label` is `display: none`, and the first
+ * the (960px, 1100px] icon-rail width `.nav-label` is `display: none`, and the first
  * baseline-generation CI run showed the link's accessible name does not reliably fall back to its
  * `title` attribute in that state — `getByRole('link', {name: …})` timed out waiting for a click
  * target that was in fact on screen (an icon-only rail item), full stop. `data-testid` is a DOM
  * attribute, unaffected by what CSS hides — the fix, not a workaround, and it's F4's actual intent
  * either way: "navigate by what the Sidebar item *is*", not by a hash route.
+ *
+ * S8 W1-A3 follow-up (audit S2): 768px — the F4 narrow-screen state every journey is supposed to
+ * cover — moved out of the icon rail entirely. `AppShell` no longer renders `Sidebar` at all at
+ * ≤960px; `nav-<section>` only exists once `MobileTopBar`'s menu button (`nav-open`) has opened
+ * `NavDrawer`. `goToByLabel` below opens it first whenever the current viewport is that narrow —
+ * every single call, not just the first, since `AppShell` closes the drawer again on the
+ * navigation this same function causes (an effect keyed on the active `NavSection`).
  */
 const NAV_TESTID_BY_LABEL: Readonly<Record<string, string>> = {
   对话: 'chats',
@@ -101,6 +107,17 @@ export function navItem(page: Page, labelZh: string) {
   return page.getByTestId(`nav-${testId}`);
 }
 
+/** ≤960px (`components/shell/AppShell.tsx`'s own breakpoint) `Sidebar` is not in the DOM — open
+ *  `NavDrawer` via `MobileTopBar`'s menu button (`nav-open`) first, so the `nav-<section>` item
+ *  `navItem` looks for actually exists to click. A no-op above 960px (`nav-open` does not exist
+ *  there, and is never queried). `page.viewportSize()` is synchronous/local — every journey spec
+ *  sets the width once with `page.setViewportSize` before running, so this never races a resize. */
+async function openNavDrawerIfNarrow(page: Page): Promise<void> {
+  const viewport = page.viewportSize();
+  if (viewport !== null && viewport.width > 960) return;
+  await page.getByTestId('nav-open').click();
+}
+
 /** Clicks the nav item and waits for the resulting page's own `<h1>` (every page uses
  *  `components/ui/PageHeader.tsx`, one per page) to carry the same label — the generic "did the
  *  click actually navigate" signal every journey step needs without each one restating it.
@@ -109,6 +126,7 @@ export function navItem(page: Page, labelZh: string) {
  *  `<h2>审计流 Audit log</h2>`) — restricting to `<h1>` is what every page's single PageHeader
  *  actually guarantees, a plain substring match on "heading, any level" does not. */
 export async function goToByLabel(page: Page, labelZh: string): Promise<void> {
+  await openNavDrawerIfNarrow(page);
   await navItem(page, labelZh).click();
   await expect(page.getByRole('heading', { level: 1, name: new RegExp(labelZh) })).toBeVisible({
     timeout: 15_000,

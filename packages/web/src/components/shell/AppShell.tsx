@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import { usePendingCount } from '../../hooks/usePendingCount.js';
 import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
@@ -7,9 +7,15 @@ import type { WireMembership, WireUser } from '../../lib/auth-api.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { useExplorerAvailable } from '../../lib/explorer-probe.js';
 import type { WorkspaceInfo } from '../../lib/governance.js';
+import { breadcrumbFor } from '../../lib/nav.js';
 import type { NavSection } from '../../lib/router.js';
-import { Sidebar } from './Sidebar.js';
+import { MobileTopBar, NavDrawer, Sidebar } from './Sidebar.js';
 import { useKernelVersion } from './useKernelVersion.js';
+import { useNarrowViewport } from './useNarrowViewport.js';
+
+/** ≤960px: `MobileTopBar` + `NavDrawer` replace `Sidebar` (S8 W1-A3, audit S2). Above it nothing
+ *  changes — the icon rail in the (960px, 1100px] range is `Sidebar`'s own CSS, untouched here. */
+const NARROW_BREAKPOINT_PX = 960;
 
 export interface AppShellProps {
   readonly active: NavSection;
@@ -34,7 +40,8 @@ export interface AppShellProps {
 
 /** components/shell/AppShell: sidebar + main. Pages render inside `main` and own their `.page`.
  *  S6-A0 (§5.9 "壳与导航"): also resolves the footer's kernel version (admin only —
- *  `useKernelVersion`) and current user for the Sidebar. */
+ *  `useKernelVersion`) and current user for the Sidebar. S8 W1-A3 (audit S2): ≤960px swaps
+ *  `Sidebar` for `MobileTopBar` + `NavDrawer` — same nav props, forwarded to whichever renders. */
 export function AppShell({
   active,
   http,
@@ -67,26 +74,49 @@ export function AppShell({
     : workspace.state.status === 'ready'
       ? { displayName: workspace.state.data.caller.displayName }
       : null;
+  const isNarrow = useNarrowViewport(NARROW_BREAKPOINT_PX);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Closes the drawer on navigation (kit/sheet's own doc comment on `NavDrawer`) — every nav link
+  // click changes `active`, whether it lands on a different section or (S3.14) the same one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only `active` should retrigger this
+  useEffect(() => setDrawerOpen(false), [active]);
+  const pageTitle = breadcrumbFor(active).at(-1)?.label ?? '';
+  const sidebarProps = {
+    active,
+    pendingCount,
+    wsStatus,
+    workspaceName,
+    role,
+    authMode,
+    onLogout,
+    memberships,
+    selectedWorkspaceId,
+    onSwitchWorkspace,
+    switchingWorkspace,
+    platformRole,
+    explorerAvailable,
+    kernelVersion,
+    currentUser,
+  };
   return (
-    <div className="shell">
-      <Sidebar
-        active={active}
-        pendingCount={pendingCount}
-        wsStatus={wsStatus}
-        workspaceName={workspaceName}
-        role={role}
-        authMode={authMode}
-        onLogout={onLogout}
-        memberships={memberships}
-        selectedWorkspaceId={selectedWorkspaceId}
-        onSwitchWorkspace={onSwitchWorkspace}
-        switchingWorkspace={switchingWorkspace}
-        platformRole={platformRole}
-        explorerAvailable={explorerAvailable}
-        kernelVersion={kernelVersion}
-        currentUser={currentUser}
-      />
-      <main className="main">{children}</main>
-    </div>
+    <>
+      <div className="shell">
+        {isNarrow ? (
+          <MobileTopBar
+            pageTitle={pageTitle}
+            workspaceName={workspaceName}
+            role={role}
+            wsStatus={wsStatus}
+            onOpenMenu={() => setDrawerOpen(true)}
+          />
+        ) : (
+          <Sidebar {...sidebarProps} />
+        )}
+        <main className="main">{children}</main>
+      </div>
+      {isNarrow ? (
+        <NavDrawer open={drawerOpen} onOpenChange={setDrawerOpen} {...sidebarProps} />
+      ) : null}
+    </>
   );
 }

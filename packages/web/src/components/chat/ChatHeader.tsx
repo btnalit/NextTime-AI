@@ -3,9 +3,16 @@ import { type ChatSummary, chatTitle, isArchived } from '../../lib/chat-lifecycl
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { TurnStatus } from '../../lib/streaming-reducer.js';
 import { TurnStatusBadge } from '../TurnStatusBadge.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../kit/dropdown-menu.js';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../kit/tooltip.js';
 import { Button } from '../ui/Button.js';
 import { ChatArchiveConfirm } from './ChatArchiveConfirm.js';
-import { ChatLifecycleActions, useRestoreChat } from './ChatLifecycleActions.js';
+import { useRestoreChat } from './ChatLifecycleActions.js';
 import { ChatRenameForm } from './ChatRenameForm.js';
 import { ModelSwitcher } from './ModelSwitcher.js';
 
@@ -28,10 +35,14 @@ export interface ChatHeaderProps {
 }
 
 /**
- * components/chat/ChatHeader (S6-A, console-completion-plan §5.1, §5.9 "页面对照原型 — 对话"): the
- * open chat's header — back, title (or the inline rename editor), the 已归档 chip, the Turn
- * status, the 模式 · 模型 · 来源 line (`ModelSwitcher`), the same 改名 / 归档 / 恢复 actions the
- * list rows have, and Stop. Archive is the page-level `ChatArchiveConfirm` (tier low + undo).
+ * components/chat/ChatHeader (S6-A, console-completion-plan §5.1, §5.9 "页面对照原型 — 对话";
+ * S8 W1-A3 audit C3 "对话顶栏 折到第二行 / 重叠"): two fixed rows instead of one wrapping one —
+ * row 1 is back, title (or the inline rename editor; truncated with a tooltip for the full text
+ * — `kit/tooltip`), the 已归档 chip, the Turn status, an overflow menu (`kit/dropdown-menu`)
+ * holding 改名 / 归档 / 恢复, and Stop; row 2 is `ModelSwitcher`'s own 模式 · 模型 · 来源 line,
+ * alone on its own row so it never has to fight row 1 for width and never wraps mid-sentence with
+ * an orphan "·" (the audit's 1280px finding). Archive stays the page-level `ChatArchiveConfirm`
+ * (tier low + undo) — only *opening* it moved into the overflow menu.
  */
 export function ChatHeader({
   client,
@@ -48,19 +59,20 @@ export function ChatHeader({
   const [archiveTarget, setArchiveTarget] = useState<ChatSummary | null>(null);
   const { restore, restoringId } = useRestoreChat(client, onChatChanged);
   const archived = chat !== null && isArchived(chat);
+  const title = chat ? chatTitle(chat) : lookupFailed ? '对话 Chat' : ' ';
 
   return (
-    <header className="chat-header">
-      <Button
-        variant="ghost"
-        size="s"
-        icon="arrow-left"
-        iconOnly
-        aria-label="Back to chats"
-        onClick={onBack}
-      />
-      <div className="grow stack-s">
-        <div className="row">
+    <TooltipProvider>
+      <header className="chat-header">
+        <div className="chat-header-row1">
+          <Button
+            variant="ghost"
+            size="s"
+            icon="arrow-left"
+            iconOnly
+            aria-label="Back to chats"
+            onClick={onBack}
+          />
           {renaming && chat ? (
             <ChatRenameForm
               client={client}
@@ -72,12 +84,17 @@ export function ChatHeader({
               onCancel={() => setRenaming(false)}
             />
           ) : (
-            <h1
-              className={`chat-header-title${chat && chat.title === null ? ' text-3' : ''}`}
-              data-testid="chat-title"
-            >
-              {chat ? chatTitle(chat) : lookupFailed ? '对话 Chat' : ' '}
-            </h1>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <h1
+                  className={`chat-header-title grow${chat && chat.title === null ? ' text-3' : ''}`}
+                  data-testid="chat-title"
+                >
+                  {title}
+                </h1>
+              </TooltipTrigger>
+              <TooltipContent>{title}</TooltipContent>
+            </Tooltip>
           )}
           {archived ? (
             <span className="chip chip-s chip-neutral" data-testid="chat-archived-chip">
@@ -85,35 +102,67 @@ export function ChatHeader({
             </span>
           ) : null}
           <TurnStatusBadge status={turnStatus} />
+          {chat ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="s"
+                  icon="more"
+                  iconOnly
+                  aria-label="更多操作 More actions"
+                  data-testid="chat-header-menu"
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {!archived ? (
+                  <DropdownMenuItem
+                    data-testid="chat-header-rename"
+                    onSelect={() => setRenaming(true)}
+                  >
+                    改名 Rename
+                  </DropdownMenuItem>
+                ) : null}
+                {archived ? (
+                  <DropdownMenuItem
+                    data-testid="chat-header-restore"
+                    disabled={restoringId === chat.id}
+                    onSelect={() => void restore(chat)}
+                  >
+                    恢复 Restore
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    data-testid="chat-header-archive"
+                    onSelect={() => setArchiveTarget(chat)}
+                  >
+                    归档 Archive
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          <Button
+            variant={turnStatus === 'running' ? 'danger' : 'ghost'}
+            size="s"
+            icon="stop"
+            onClick={onStop}
+            disabled={stopBusy}
+            title="停止当前轮 Stop the running turn"
+          >
+            停止 Stop
+          </Button>
         </div>
-        <ModelSwitcher http={http} turnRunning={turnStatus === 'running'} />
-      </div>
-      {chat ? (
-        <ChatLifecycleActions
-          chat={chat}
-          onRename={() => setRenaming(true)}
-          onArchive={() => setArchiveTarget(chat)}
-          onRestore={() => void restore(chat)}
-          restoring={restoringId === chat.id}
-          testIdPrefix="chat-header"
+        <div className="chat-header-row2">
+          <ModelSwitcher http={http} turnRunning={turnStatus === 'running'} />
+        </div>
+        <ChatArchiveConfirm
+          client={client}
+          chat={archiveTarget}
+          onChanged={onChatChanged}
+          onClose={() => setArchiveTarget(null)}
         />
-      ) : null}
-      <Button
-        variant={turnStatus === 'running' ? 'danger' : 'ghost'}
-        size="s"
-        icon="stop"
-        onClick={onStop}
-        disabled={stopBusy}
-        title="停止当前轮 Stop the running turn"
-      >
-        停止 Stop
-      </Button>
-      <ChatArchiveConfirm
-        client={client}
-        chat={archiveTarget}
-        onChanged={onChatChanged}
-        onClose={() => setArchiveTarget(null)}
-      />
-    </header>
+      </header>
+    </TooltipProvider>
   );
 }

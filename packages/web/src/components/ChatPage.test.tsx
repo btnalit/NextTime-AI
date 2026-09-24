@@ -509,6 +509,13 @@ function handlersOf(fake: FakeClient): ChatSubscriptionHandlers {
   return call[2] as ChatSubscriptionHandlers;
 }
 
+/** S8 W1-A3 (audit C3): the header's overflow menu (`kit/dropdown-menu`, Radix) opens on
+ *  `pointerdown`, not `click` (`DropdownMenuTrigger`'s own `onPointerDown` handler) — a plain
+ *  `fireEvent.click` leaves it closed in jsdom. */
+function openChatHeaderMenu(): void {
+  fireEvent.pointerDown(screen.getByTestId('chat-header-menu'), { button: 0 });
+}
+
 describe('ChatPage header (S6-A W1 / W2)', () => {
   it('looks the chat up with includeArchived and applies a chat.metadata {title} push', async () => {
     const fake = fakeClient({}, chatRow({ title: null }));
@@ -608,14 +615,19 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     const textarea = screen.getByLabelText('Message') as HTMLTextAreaElement;
     expect(textarea.disabled).toBe(true);
     expect(textarea.placeholder).toBe('已归档 Archived');
+    // S8 W1-A3 (audit C3): rename/archive/restore moved from always-visible buttons into the
+    // header's overflow menu — open it to see which items it offers.
+    openChatHeaderMenu();
     expect(screen.getByTestId('chat-header-restore')).toBeTruthy();
     expect(screen.queryByTestId('chat-header-archive')).toBeNull();
     expect(screen.queryByTestId('chat-header-rename')).toBeNull();
+    fireEvent.keyDown(document, { key: 'Escape' });
 
     fireEvent.click(screen.getByTestId('chat-composer-restore'));
     await waitFor(() => expect(screen.queryByTestId('chat-archived-notice')).toBeNull());
     expect(fake.client.call).toHaveBeenCalledWith('unarchive_chat', { chatId: 'chat-1' });
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);
+    openChatHeaderMenu();
     expect(screen.getByTestId('chat-header-archive')).toBeTruthy();
   });
 
@@ -625,8 +637,9 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     });
     renderChat(fake.client, scriptedHttp({}));
     await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
-    await screen.findByTestId('chat-header-archive');
-    fireEvent.click(screen.getByTestId('chat-header-archive'));
+    await screen.findByTestId('chat-header-menu');
+    openChatHeaderMenu();
+    fireEvent.click(await screen.findByTestId('chat-header-archive'));
     await screen.findByTestId('chat-archived-notice');
     expect(fake.client.call).toHaveBeenCalledWith('archive_chat', { chatId: 'chat-1' });
     const toast = await screen.findByTestId('toast');
@@ -643,8 +656,9 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
       rename_chat: (params) => chatRow({ title: (params as { title: string }).title }),
     });
     renderChat(fake.client, scriptedHttp({}));
-    await screen.findByTestId('chat-header-rename');
-    fireEvent.click(screen.getByTestId('chat-header-rename'));
+    await screen.findByTestId('chat-header-menu');
+    openChatHeaderMenu();
+    fireEvent.click(await screen.findByTestId('chat-header-rename'));
     const input = screen.getByTestId('chat-rename-input');
     fireEvent.change(input, { target: { value: 'Web-1 incident' } });
     fireEvent.keyDown(input, { key: 'Enter' });
