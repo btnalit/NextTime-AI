@@ -128,7 +128,11 @@
 .nav-section-title-sub {
   font-size: var(--fs-12);
   font-weight: 500;
-  opacity: 0.75;
+  /* S8 W1-A8 (audit S5): was `opacity: 0.75` on top of the inherited --text-3 — under full
+   * opacity --text-3 clears 4.5:1 everywhere (tokens-contrast.test.ts), but compositing it at
+   * 75% against --surface-1 pulled the *effective* colour down to 3.37:1 (light) / 4.43:1 (dark).
+   * The lighter font-weight (500 vs the title's 600) already reads as secondary; dropping the
+   * opacity keeps that without silently undoing the token's contrast guarantee. */
 }
 
 .nav-label-sub {
