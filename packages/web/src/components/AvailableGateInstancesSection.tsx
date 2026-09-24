@@ -10,14 +10,15 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
+import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
 import { GateCredentialEntry } from './platform/GateCredentialEntry.js';
-import { PlatformError } from './platform/PlatformError.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
+import { useToast } from './ui/Toast.js';
 
 export interface AvailableGateInstancesSectionProps {
   readonly http: CapabilityCaller;
@@ -76,9 +77,13 @@ export function AvailableGateInstancesSection({
   }
 
   return (
-    <section className="section" aria-labelledby="available-gates-title">
+    <div aria-labelledby="available-gates-title">
       <div className="section-header">
-        <h2 id="available-gates-title">{t('从平台目录启用', 'Enable from platform catalog')}</h2>
+        {/* S8 W2-U1 (audit SY1 "两套接入机制并存"): `h3` — nested under `ConnectionsPage`'s own
+         *  "已接入系统" `h2`, which now wraps this sub-group and 已注册系统 as one page section. */}
+        <h3 id="available-gates-title">
+          {t('待启用的平台实例', 'Platform instances pending enable')}
+        </h3>
         <Button
           variant="ghost"
           size="s"
@@ -147,7 +152,7 @@ export function AvailableGateInstancesSection({
           </table>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -163,25 +168,32 @@ function AvailableGateRow({
   readonly canEnable: boolean;
 }) {
   const t = useT();
-  const [enabling, setEnabling] = useState(false);
-  const [error, setError] = useState<unknown | null>(null);
+  const toast = useToast();
   const [publishedCount, setPublishedCount] = useState<number | null>(null);
 
-  async function enable(): Promise<void> {
-    if (enabling) return;
-    setEnabling(true);
-    setError(null);
-    try {
-      const result = await http.call<EnableGateInstanceResultWire>('enable_gate_instance', {
-        gateId: row.gateId,
-      });
-      setPublishedCount(result.publishedOperationNames.length);
-      onEnabled(result);
-    } catch (err) {
-      setError(err);
-    } finally {
-      setEnabling(false);
-    }
+  // S8 W2-U1 (audit J4): `EnableGateConfirm` cannot import `components/ui/Toast` itself (S8 risk
+  // ① — a new file under `components/kit`-adjacent boundaries may not reach into legacy
+  // `components/ui/*`), so this already-allowlisted caller reports `linkedExisting` instead.
+  function handleEnabled(result: EnableGateInstanceResultWire): void {
+    setPublishedCount(result.publishedOperationNames.length);
+    const skipped = result.skippedOperationNames.length;
+    toast.push({
+      tone: 'ok',
+      title: result.linkedExisting
+        ? t(
+            `已关联已有的注册（旧路径）：${row.displayName}`,
+            `Linked the existing (legacy) registration: ${row.displayName}`,
+          )
+        : t(
+            `已在本工作区启用：${row.displayName}`,
+            `Enabled in this workspace: ${row.displayName}`,
+          ),
+      description: t(
+        `已发布 ${result.publishedOperationNames.length} 个 Operation${skipped > 0 ? `，跳过 ${skipped} 个已存在的` : ''}。`,
+        `Published ${result.publishedOperationNames.length} operation(s)${skipped > 0 ? `, skipped ${skipped} already there` : ''}.`,
+      ),
+    });
+    onEnabled(result);
   }
 
   // B7: the platform side must be `enabled` for the kernel to accept a workspace enable; a row
@@ -228,21 +240,19 @@ function AvailableGateRow({
             {t('平台侧未启用', 'Not enabled on the platform')}
           </span>
         ) : canEnable ? (
-          <Button
-            variant="primary"
-            size="s"
-            onClick={() => void enable()}
-            loading={enabling}
-            data-testid={`enable-gate-${row.gateId}`}
-          >
-            {t('在本工作区启用', 'Enable here')}
-          </Button>
+          <EnableGateConfirm
+            key={row.gateId}
+            http={http}
+            gateId={row.gateId}
+            gateDisplayName={row.displayName}
+            onEnabled={handleEnabled}
+            testId={`enable-gate-${row.gateId}`}
+          />
         ) : (
           <span className="muted">
             {t('未启用（由 owner 启用）', 'Not enabled (owner enables)')}
           </span>
         )}
-        <PlatformError error={error} title={t('无法启用', 'Could not enable this instance')} />
         {publishedCount !== null ? (
           <Notice>
             {t(
