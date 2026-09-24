@@ -154,12 +154,12 @@ export function AccessPage({ http }: AccessPageProps) {
             hint={
               principals.length > 0
                 ? t(
-                    '从建议里选一个成员，或输入 principal id 后按 Enter；留空 = 全部成员。 Pick a member from the suggestions, or type a principal id and press Enter. Empty =',
-                    'all members.',
+                    '从建议里选一个成员，或输入 principal id 后按 Enter；留空 = 全部成员。',
+                    'Pick a member from the suggestions, or type a principal id and press Enter. Empty = all members.',
                   )
                 : t(
-                    'Principal id（可选），按 Enter 应用；留空 = 全部成员。 Principal id (optional) — press Enter to apply. Empty =',
-                    'all members.',
+                    'Principal id（可选），按 Enter 应用；留空 = 全部成员。',
+                    'Principal id (optional) — press Enter to apply. Empty = all members.',
                   )
             }
           >
@@ -196,7 +196,11 @@ export function AccessPage({ http }: AccessPageProps) {
         ) : null}
 
         {grants.state.status === 'loading' ? (
-          <SkeletonRows count={4} label="Loading grants" testId="grants-loading" />
+          <SkeletonRows
+            count={4}
+            label={t('正在加载授权…', 'Loading grants')}
+            testId="grants-loading"
+          />
         ) : grants.state.status === 'error' ? (
           forbidden ? (
             <EmptyState
@@ -324,15 +328,15 @@ export function AccessPage({ http }: AccessPageProps) {
         {grants.state.status === 'ready' && grants.state.data.truncated === true ? (
           <p className="text-3 text-small" data-testid="grants-truncated">
             {t(
-              '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余授权',
-              'keep loading more to see the rest.',
+              '已达到单次读取上限，继续点“加载更多”查看其余授权。',
+              'Reached the per-page limit — keep loading more to see the rest.',
             )}
           </p>
         ) : null}
         {grants.loadMoreError !== null ? (
           <ErrorBanner
             error={grants.loadMoreError}
-            title="Could not load more grants"
+            title={t('无法加载更多授权', 'Could not load more grants')}
             testId="grants-load-more-error"
           />
         ) : null}

@@ -71,7 +71,11 @@ function LinkedApprovalsList({
 
   if (linked.state.status === 'loading') {
     return (
-      <SkeletonRows count={2} label="Loading linked approvals" testId="linked-approvals-loading" />
+      <SkeletonRows
+        count={2}
+        label={t('正在加载关联审批…', 'Loading linked approvals')}
+        testId="linked-approvals-loading"
+      />
     );
   }
   if (linked.state.status === 'error') {

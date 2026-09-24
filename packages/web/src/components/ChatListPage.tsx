@@ -150,8 +150,8 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
             icon="chat"
             title={t('还没有对话', 'No chats yet')}
             body={t(
-              '开始一段对话——入口 agent 可以观察系统、提出动作并代表你派发 Worker。 Start a conversation —',
-              'the entry agent can observe systems, propose actions and spawn Workers on your behalf.',
+              '开始一段对话——入口 agent 可以观察系统、提出动作并代表你派发 Worker。',
+              'Start a conversation — the entry agent can observe systems, propose actions and spawn Workers on your behalf.',
             )}
             action={newChatButton}
             testId="chats-empty"

@@ -102,7 +102,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
     );
   }
 
-  const nameWarning = skillNamePublishWarning(form.name);
+  const nameWarning = skillNamePublishWarning(form.name, t);
 
   return (
     <form
@@ -162,7 +162,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
         label={t('描述', 'description')}
         required
         error={errors.description || null}
-        hint="一句话说明何时用它（≤ 1024 字）。 One line on when to use it (≤ 1024 chars)."
+        hint={t('一句话说明何时用它（≤ 1024 字）。', 'One line on when to use it (≤ 1024 chars).')}
       >
         <Textarea
           id="skill-description"

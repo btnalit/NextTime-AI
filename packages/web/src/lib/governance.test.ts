@@ -9,26 +9,29 @@ const zhT: Translate = (zh) => zh;
 
 describe('healthView', () => {
   it('reads a bare boolean', () => {
-    expect(healthView(true)).toEqual({ tone: 'ok', label: 'Healthy' });
-    expect(healthView(false)).toEqual({ tone: 'danger', label: 'Unhealthy' });
+    expect(healthView(true, zhT)).toEqual({ tone: 'ok', label: '健康' });
+    expect(healthView(false, zhT)).toEqual({ tone: 'danger', label: '不健康' });
   });
 
   it('reads {ok: boolean}', () => {
-    expect(healthView({ ok: true })).toEqual({ tone: 'ok', label: 'Healthy' });
-    expect(healthView({ ok: false })).toEqual({ tone: 'danger', label: 'Unhealthy' });
+    expect(healthView({ ok: true }, zhT)).toEqual({ tone: 'ok', label: '健康' });
+    expect(healthView({ ok: false }, zhT)).toEqual({ tone: 'danger', label: '不健康' });
   });
 
-  it('reads {status: string} by keyword, case-insensitively', () => {
-    expect(healthView({ status: 'Healthy' })).toEqual({ tone: 'ok', label: 'Healthy' });
-    expect(healthView({ status: 'unhealthy' })).toEqual({ tone: 'danger', label: 'unhealthy' });
-    expect(healthView({ status: 'degraded' })).toEqual({ tone: 'neutral', label: 'degraded' });
+  it('reads {status: string} by keyword, case-insensitively — the kernel-provided string is shown verbatim, not translated', () => {
+    expect(healthView({ status: 'Healthy' }, zhT)).toEqual({ tone: 'ok', label: 'Healthy' });
+    expect(healthView({ status: 'unhealthy' }, zhT)).toEqual({
+      tone: 'danger',
+      label: 'unhealthy',
+    });
+    expect(healthView({ status: 'degraded' }, zhT)).toEqual({ tone: 'neutral', label: 'degraded' });
   });
 
   it('falls back to neutral "Unknown" for anything unrecognized — never throws', () => {
-    expect(healthView(undefined)).toEqual({ tone: 'neutral', label: 'Unknown' });
-    expect(healthView(null)).toEqual({ tone: 'neutral', label: 'Unknown' });
-    expect(healthView({ foo: 'bar' })).toEqual({ tone: 'neutral', label: 'Unknown' });
-    expect(healthView('healthy')).toEqual({ tone: 'neutral', label: 'Unknown' });
+    expect(healthView(undefined, zhT)).toEqual({ tone: 'neutral', label: '未知' });
+    expect(healthView(null, zhT)).toEqual({ tone: 'neutral', label: '未知' });
+    expect(healthView({ foo: 'bar' }, zhT)).toEqual({ tone: 'neutral', label: '未知' });
+    expect(healthView('healthy', zhT)).toEqual({ tone: 'neutral', label: '未知' });
   });
 });
 

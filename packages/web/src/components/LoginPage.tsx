@@ -38,7 +38,7 @@ function loginErrorMessage(err: unknown): string | null {
     case 'disabled':
       return '此账户已停用';
     case 'sessions_unavailable':
-      return '控制台会话尚未配置签名密钥，暂时无法使用密码登录 (no Handle signing key configured on this kernel)';
+      return '控制台会话尚未配置签名密钥，暂时无法使用密码登录';
     default:
       return null;
   }
@@ -86,7 +86,9 @@ export function LoginPage({
             </div>
             <div>
               <h1 className="login-title">NextTime AI</h1>
-              <p className="login-subtitle">Sign in to the workspace console</p>
+              <p className="login-subtitle">
+                {t('登录工作区控制台', 'Sign in to the workspace console')}
+              </p>
             </div>
           </div>
 
@@ -118,7 +120,7 @@ export function LoginPage({
               {inline}
             </p>
           ) : described ? (
-            <ErrorBanner error={error} title="Could not sign in" />
+            <ErrorBanner error={error} title={t('无法登录', 'Could not sign in')} />
           ) : null}
 
           <Button

@@ -120,12 +120,15 @@ export function validateSkill(form: SkillForm): ValidationResult<ProposeSkillCon
 
 /** Publish-time name rule (pi Agent Skills: 1-64 lowercase letters / digits / single hyphens) —
  *  surfaced as a warning while drafting so the later `publish_skill` does not surprise. */
-export function skillNamePublishWarning(name: string): string | undefined {
+export function skillNamePublishWarning(name: string, t: Translate): string | undefined {
   if (name.trim() === '') return undefined;
   const parsed = PublishedSkillNameSchema.safeParse(name.trim());
   return parsed.success
     ? undefined
-    : '发布时要求：1–64 个小写字母 / 数字，单个连字符分隔，不能以连字符开头或结尾（pi Skill 命名规则）。 Publish requires 1–64 lowercase letters / digits with single hyphens, none leading or trailing (pi Agent Skills name rule).';
+    : t(
+        '发布时要求：1–64 个小写字母 / 数字，单个连字符分隔，不能以连字符开头或结尾（pi Skill 命名规则）。',
+        'Publish requires 1–64 lowercase letters / digits with single hyphens, none leading or trailing (pi Agent Skills name rule).',
+      );
 }
 
 // -------------------------------------------------------------------------------------------

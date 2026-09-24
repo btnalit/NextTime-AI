@@ -79,8 +79,8 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
         breadcrumb={breadcrumbFor('platformStatus')}
         title={t('运行状态', 'Status')}
         description={t(
-          '哪个服务不健康、队列积压、备份多久了。 Which service is unhealthy, and how stale the backup is —',
-          'auto-refreshes every 30s while this tab is visible.',
+          '哪个服务不健康、队列积压、备份多久了；这个标签页可见时每 30 秒自动刷新一次。',
+          'Which service is unhealthy, and how stale the backup is — auto-refreshes every 30s while this tab is visible.',
         )}
         actions={
           <Button
@@ -96,11 +96,15 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
       />
 
       {status.state.status === 'loading' ? (
-        <SkeletonRows count={4} label="Loading platform status" testId="status-loading" />
+        <SkeletonRows
+          count={4}
+          label={t('正在加载运行状态…', 'Loading platform status')}
+          testId="status-loading"
+        />
       ) : status.state.status === 'error' ? (
         <ErrorBanner
           error={status.state.error}
-          title="Could not load the platform status"
+          title={t('无法加载运行状态', 'Could not load the platform status')}
           onRetry={() => void status.reload()}
           testId="status-error"
         />
@@ -148,7 +152,7 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
         ) : null}
       </Card>
 
-      <Card title="30 天用量 30-day usage">
+      <Card title={t('30 天用量', '30-day usage')}>
         <dl className="definition-list" data-testid="status-llm-usage">
           <dt>{t('调用次数', 'Calls')}</dt>
           <dd>{data.llmUsage30d.callCount}</dd>
@@ -177,7 +181,10 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
             testId="status-audit-empty"
           />
         ) : (
-          <DataList ariaLabel="Recent platform audit" testId="status-audit-list">
+          <DataList
+            ariaLabel={t('最近平台审计', 'Recent platform audit')}
+            testId="status-audit-list"
+          >
             {data.recentAudit.map((row) => (
               <DataRow
                 key={row.id}

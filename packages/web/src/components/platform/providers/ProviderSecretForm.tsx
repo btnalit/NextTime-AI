@@ -114,8 +114,8 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
             }
             title={t('清除控制台密钥', 'Clear the console key')}
             description={t(
-              '回退到该供应商的环境变量（若配置了密钥环境变量名）或无凭证；可随时重新设置。 Falls back to this provider’s env var (if one is configured) or no credential —',
-              'a new key can be set again at any time.',
+              '回退到该供应商的环境变量（若配置了密钥环境变量名）或无凭证；可随时重新设置。',
+              'Falls back to this provider’s env var (if one is configured) or no credential — a new key can be set again at any time.',
             )}
             target={provider.displayName}
             confirmLabel={t('清除', 'Clear')}

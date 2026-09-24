@@ -179,11 +179,15 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
   return (
     <div className="stack" data-testid="integrations-connectors">
       {connectors.state.status === 'loading' ? (
-        <SkeletonRows count={3} label="Loading connectors" testId="connectors-loading" />
+        <SkeletonRows
+          count={3}
+          label={t('正在加载接入包…', 'Loading connectors')}
+          testId="connectors-loading"
+        />
       ) : connectors.state.status === 'error' ? (
         <ErrorBanner
           error={connectors.state.error}
-          title="Could not load the connector catalog"
+          title={t('无法加载接入包目录', 'Could not load the connector catalog')}
           onRetry={() => void connectors.reload()}
           testId="connectors-error"
         />
@@ -417,8 +421,8 @@ function ConnectorDenyList({
     >
       <Notice>
         {t(
-          '禁用后下一次调用即被拒绝；这个改动不影响已经启用它的工作区。 Disabled from the next call on —',
-          'it never affects a workspace that already enabled this instance.',
+          '禁用后下一次调用即被拒绝；这个改动不影响已经启用它的工作区。',
+          'Disabled from the next call on — it never affects a workspace that already enabled this instance.',
         )}
       </Notice>
       {instances.state.status === 'loading' ? (
@@ -531,11 +535,15 @@ function GateInstancesTab({
       </div>
 
       {instances.state.status === 'loading' ? (
-        <SkeletonRows count={3} label="Loading gate instances" testId="gate-instances-loading" />
+        <SkeletonRows
+          count={3}
+          label={t('正在加载门实例…', 'Loading gate instances')}
+          testId="gate-instances-loading"
+        />
       ) : instances.state.status === 'error' ? (
         <ErrorBanner
           error={instances.state.error}
-          title="Could not load gate instances"
+          title={t('无法加载门实例', 'Could not load gate instances')}
           onRetry={() => void instances.reload()}
           testId="gate-instances-error"
         />
@@ -653,7 +661,10 @@ function GateInstancesTab({
         open={panel.kind === 'create'}
         onClose={() => setPanel({ kind: 'closed' })}
         title={t('新建门宿主实例', 'Create hosted instance')}
-        subtitle="administrator, http/mcp; the gate host takes it over and imports its Operations."
+        subtitle={t(
+          'cli/ssh 由管理员部署；http/mcp 由门宿主接管并导入它的 Operation。',
+          'administrator, http/mcp; the gate host takes it over and imports its Operations.',
+        )}
         testId="create-gate-instance-drawer"
       >
         {panel.kind === 'create' ? (
@@ -719,13 +730,13 @@ function ExternalRuntimesTab({ http }: { readonly http: CapabilityCaller }) {
       {runtimes.state.status === 'loading' ? (
         <SkeletonRows
           count={2}
-          label="Loading external runtimes"
+          label={t('正在加载外部运行时…', 'Loading external runtimes')}
           testId="external-runtimes-loading"
         />
       ) : runtimes.state.status === 'error' ? (
         <ErrorBanner
           error={runtimes.state.error}
-          title="Could not load external runtimes"
+          title={t('无法加载外部运行时', 'Could not load external runtimes')}
           onRetry={() => void runtimes.reload()}
           testId="external-runtimes-error"
         />

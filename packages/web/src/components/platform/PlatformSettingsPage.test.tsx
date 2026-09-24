@@ -145,7 +145,7 @@ describe('PlatformSettingsPage', () => {
 
     const form = await screen.findByTestId('platform-settings-form');
     fireEvent.change(within(form).getByLabelText(/密码最短长度/), { target: { value: '4' } });
-    expect(within(form).getByText(/Must be an integer 8–128/)).toBeTruthy();
+    expect(within(form).getByText(/必须是 8–128 的整数/)).toBeTruthy();
     expect(within(form).getByRole('button', { name: '保存' }).hasAttribute('disabled')).toBe(true);
   });
 

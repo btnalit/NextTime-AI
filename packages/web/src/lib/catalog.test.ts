@@ -64,9 +64,9 @@ describe('skill form → propose_skill{skill}', () => {
   });
 
   it('warns about the publish-time pi name rule without blocking the draft', () => {
-    expect(skillNamePublishWarning('Restart Web')).toMatch(/lowercase/);
-    expect(skillNamePublishWarning('restart-web')).toBeUndefined();
-    expect(skillNamePublishWarning('')).toBeUndefined();
+    expect(skillNamePublishWarning('Restart Web', zhT)).toMatch(/小写字母/);
+    expect(skillNamePublishWarning('restart-web', zhT)).toBeUndefined();
+    expect(skillNamePublishWarning('', zhT)).toBeUndefined();
   });
 });
 

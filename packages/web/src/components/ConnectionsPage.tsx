@@ -20,7 +20,7 @@ import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
-import { statusValues } from '../lib/status-tone.js';
+import { labelText, statusChipStyle, statusValues } from '../lib/status-tone.js';
 import { AvailableGateInstancesSection } from './AvailableGateInstancesSection.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
 import { GatekeeperDetailDrawer } from './GatekeeperDetailDrawer.js';
@@ -175,8 +175,11 @@ export function ConnectionsPage({
     setDrawer({ kind: 'closed' });
     toast.push({
       tone: 'ok',
-      title: 'Gatekeeper registered',
-      description: `${result.importedOperationNames.length} operation${result.importedOperationNames.length === 1 ? '' : 's'} imported as drafts — publish the manifest to expose them.`,
+      title: t('门已注册', 'Gatekeeper registered'),
+      description: t(
+        `已导入 ${result.importedOperationNames.length} 个 Operation 为草稿，发布清单后才会生效。`,
+        `${result.importedOperationNames.length} operation${result.importedOperationNames.length === 1 ? '' : 's'} imported as drafts — publish the manifest to expose them.`,
+      ),
     });
     void requests.reload();
     reloadRegistry();
@@ -251,34 +254,49 @@ export function ConnectionsPage({
       <section className="section" aria-labelledby="connection-requests-title">
         <div className="section-header">
           <h2 id="connection-requests-title">
-            Connection requests
+            {t('连接申请', 'Connection requests')}
             {requestedCount > 0 ? <span className="nav-badge">{requestedCount}</span> : null}
           </h2>
           {!requestsForbidden ? (
             <Tabs<RequestFilter>
-              ariaLabel="Filter connection requests"
+              ariaLabel={t('筛选连接申请', 'Filter connection requests')}
               value={filter}
               onChange={setFilter}
               options={REQUEST_FILTERS.map((value) => ({
                 value,
-                label: value === 'all' ? 'All' : value.charAt(0).toUpperCase() + value.slice(1),
+                label:
+                  value === 'all'
+                    ? t('全部', 'All')
+                    : labelText(statusChipStyle('connectionRequest', value), t),
               }))}
             />
           ) : null}
         </div>
 
         {requests.state.status === 'loading' ? (
-          <SkeletonRows count={2} label="Loading connection requests" testId="requests-loading" />
+          <SkeletonRows
+            count={2}
+            label={t('正在加载连接申请…', 'Loading connection requests')}
+            testId="requests-loading"
+          />
         ) : requests.state.status === 'error' ? (
           requestsForbidden ? (
             <Notice testId="requests-forbidden">
-              Connection requests are owner-only (<code>list_connection_requests</code>). You can
-              still raise a request; the workspace owner completes it.
+              {t(
+                <>
+                  连接申请仅 owner 可见（<code>list_connection_requests</code>
+                  ）。你仍可发起申请，由工作区 owner 完成它。
+                </>,
+                <>
+                  Connection requests are owner-only (<code>list_connection_requests</code>). You
+                  can still raise a request; the workspace owner completes it.
+                </>,
+              )}
             </Notice>
           ) : (
             <ErrorBanner
               error={requests.state.error}
-              title="Could not load connection requests"
+              title={t('无法加载连接申请', 'Could not load connection requests')}
               onRetry={() => void requests.reload()}
               testId="requests-error"
             />
@@ -287,16 +305,21 @@ export function ConnectionsPage({
           <EmptyState
             icon="inbox"
             title={
-              filter === 'requested' ? 'No open connection requests' : 'No connection requests'
+              filter === 'requested'
+                ? t('没有待处理的连接申请', 'No open connection requests')
+                : t('没有连接申请', 'No connection requests')
             }
-            body="An agent (or you) proposes a system with request_connection; completing it here registers the Gatekeeper and imports its operations as drafts."
+            body={t(
+              'agent（或你自己）用 request_connection 提出一个系统；在这里完成它会注册这个门并把它的 operation 导入为草稿。',
+              'An agent (or you) proposes a system with request_connection; completing it here registers the Gatekeeper and imports its operations as drafts.',
+            )}
             action={
               <Button
                 variant="secondary"
                 icon="plus"
                 onClick={() => setDrawer({ kind: 'request' })}
               >
-                Request connection
+                {t('申请连接', 'Request connection')}
               </Button>
             }
             testId="requests-empty"
@@ -316,7 +339,9 @@ export function ConnectionsPage({
                 }
                 meta={
                   <>
-                    <span title={row.requestedBy}>by {shortId(row.requestedBy)}</span>
+                    <span title={row.requestedBy}>
+                      {t('由', 'by')} {shortId(row.requestedBy)}
+                    </span>
                     <span className="meta-sep" />
                     <time title={formatDateTime(row.requestedAt)}>
                       {formatRelative(row.requestedAt)}
@@ -324,7 +349,9 @@ export function ConnectionsPage({
                     {row.gatekeeperId ? (
                       <>
                         <span className="meta-sep" />
-                        <span title={row.gatekeeperId}>gate {shortId(row.gatekeeperId)}</span>
+                        <span title={row.gatekeeperId}>
+                          {t('门', 'gate')} {shortId(row.gatekeeperId)}
+                        </span>
                       </>
                     ) : null}
                   </>
@@ -357,8 +384,8 @@ export function ConnectionsPage({
                         }
                         title={t('取消连接申请', 'Cancel this connection request')}
                         description={t(
-                          '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。 The request becomes cancelled; nothing registered is touched. Only your own request —',
-                          'the owner may cancel any.',
+                          '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。',
+                          'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
                         )}
                         target={`${row.kind} · ${row.target}`}
                         confirmLabel={t('取消申请', 'Cancel request')}
@@ -385,7 +412,7 @@ export function ConnectionsPage({
 
       <section className="section" aria-labelledby="registered-systems-title">
         <div className="section-header">
-          <h2 id="registered-systems-title">Registered systems</h2>
+          <h2 id="registered-systems-title">{t('已注册系统', 'Registered systems')}</h2>
           <Button
             variant="ghost"
             size="s"
@@ -393,24 +420,31 @@ export function ConnectionsPage({
             onClick={reloadRegistry}
             loading={gatekeepers.state.status === 'ready' && gatekeepers.state.refreshing}
           >
-            Refresh
+            {t('刷新', 'Refresh')}
           </Button>
         </div>
 
         {gatekeepers.state.status === 'loading' ? (
-          <SkeletonRows count={2} label="Loading registered systems" testId="gatekeepers-loading" />
+          <SkeletonRows
+            count={2}
+            label={t('正在加载已注册系统…', 'Loading registered systems')}
+            testId="gatekeepers-loading"
+          />
         ) : gatekeepers.state.status === 'error' ? (
           <ErrorBanner
             error={gatekeepers.state.error}
-            title="Could not load registered systems"
+            title={t('无法加载已注册系统', 'Could not load registered systems')}
             onRetry={reloadRegistry}
             testId="gatekeepers-error"
           />
         ) : gatekeepers.state.data.length === 0 ? (
           <EmptyState
             icon="connections"
-            title="No Gatekeeper registered yet"
-            body="Complete a connection request (or connect a system directly) to register the first gate."
+            title={t('还没有注册任何门', 'No Gatekeeper registered yet')}
+            body={t(
+              '完成一个连接申请（或直接接入一个系统）来注册第一个门。',
+              'Complete a connection request (or connect a system directly) to register the first gate.',
+            )}
             testId="gatekeepers-empty"
           />
         ) : (
@@ -418,7 +452,7 @@ export function ConnectionsPage({
             {operations.state.status === 'error' ? (
               <ErrorBanner
                 error={operations.state.error}
-                title="Could not load operations"
+                title={t('无法加载 Operation', 'Could not load operations')}
                 onRetry={() => void operations.reload()}
               />
             ) : null}
@@ -448,7 +482,15 @@ export function ConnectionsPage({
             ))}
             {gatekeepers.state.data.length >= 50 ? (
               <Notice tone="warn">
-                Showing the 50 most recently updated gates — <code>search</code> has no paging yet.
+                {t(
+                  <>
+                    仅显示最近更新的 50 个门 —— <code>search</code> 还没有分页。
+                  </>,
+                  <>
+                    Showing the 50 most recently updated gates — <code>search</code> has no paging
+                    yet.
+                  </>,
+                )}
               </Notice>
             ) : null}
           </div>
@@ -458,8 +500,11 @@ export function ConnectionsPage({
       <Drawer
         open={drawer.kind === 'request'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title="Request a connection"
-        subtitle="Creates a connection-request card for the workspace owner to complete."
+        title={t('申请连接', 'Request a connection')}
+        subtitle={t(
+          '为工作区 owner 创建一张连接申请卡，由 owner 完成它。',
+          'Creates a connection-request card for the workspace owner to complete.',
+        )}
         testId="request-connection-drawer"
       >
         <RequestConnectionForm
@@ -467,7 +512,7 @@ export function ConnectionsPage({
           onCancel={() => setDrawer({ kind: 'closed' })}
           onDone={() => {
             setDrawer({ kind: 'closed' });
-            toast.push({ tone: 'ok', title: 'Connection requested' });
+            toast.push({ tone: 'ok', title: t('已发起连接申请', 'Connection requested') });
             void requests.reload();
           }}
         />
@@ -533,7 +578,10 @@ export function ConnectionsPage({
         open={drawer.kind === 'wizard'}
         onClose={() => setDrawer({ kind: 'closed' })}
         title={t('接入向导', 'Onboarding wizard')}
-        subtitle="Kind → target/credential → import manifest → review operations → done."
+        subtitle={t(
+          '类型 → 目标/凭证 → 导入清单 → 复核 Operation → 完成。',
+          'Kind → target/credential → import manifest → review operations → done.',
+        )}
         wide
         testId="onboarding-wizard-drawer"
       >
@@ -554,7 +602,7 @@ export function ConnectionsPage({
       <Drawer
         open={selectedGatekeeperId !== undefined}
         onClose={() => onSelectGatekeeper?.(null)}
-        title="Health & operations"
+        title={t('健康与操作', 'Health & operations')}
         subtitle={
           selectedGatekeeperId ? <span className="mono">{selectedGatekeeperId}</span> : undefined
         }

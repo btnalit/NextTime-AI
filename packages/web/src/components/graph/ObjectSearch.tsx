@@ -129,8 +129,8 @@ export function ObjectSearch({
           body={
             browsing
               ? t(
-                  '该工作区还没有对象；采集器或 Worker 写入后会出现在这里。 The workspace has no Objects yet —',
-                  'a collector run or a Worker result creates them.',
+                  '该工作区还没有对象；采集器或 Worker 写入后会出现在这里。',
+                  'The workspace has no Objects yet — a collector run or a Worker result creates them.',
                 )
               : t('换一个关键字或类型。', 'Try another query or type.')
           }

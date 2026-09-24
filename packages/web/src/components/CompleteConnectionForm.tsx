@@ -9,6 +9,7 @@ import {
   supportsManifestSource,
 } from '../lib/connections.js';
 import { describeError } from '../lib/errors.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from './ui/Field.js';
@@ -84,6 +85,7 @@ export function CompleteConnectionForm({
   initialKind,
   hideKindField = false,
 }: CompleteConnectionFormProps) {
+  const t = useT();
   const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? initialKind ?? 'http');
   const [target, setTarget] = useState(request?.target ?? '');
   const [endpoint, setEndpoint] = useState('');
@@ -97,19 +99,25 @@ export function CompleteConnectionForm({
 
   function validate(): FieldErrors {
     const errors: { -readonly [K in keyof FieldErrors]?: string } = {};
-    if (!target.trim()) errors.target = 'Target is required.';
+    if (!target.trim()) errors.target = t('目标是必填项。', 'Target is required.');
     if (!endpoint.trim()) {
-      errors.endpoint = 'The Gatekeeper endpoint is required.';
+      errors.endpoint = t('门端点是必填项。', 'The Gatekeeper endpoint is required.');
     } else if (!URL_LIKE_PATTERN.test(endpoint.trim())) {
       // C15: the kernel only checks non-empty, then fails the gate round trip with a far less
       // helpful `gatekeeper_error` / `gatekeeper_timeout` — say it here, on the field.
-      errors.endpoint = 'The Gatekeeper endpoint must be a URL (http://gate-host:port).';
+      errors.endpoint = t(
+        '门端点必须是一个 URL（http://gate-host:port）。',
+        'The Gatekeeper endpoint must be a URL (http://gate-host:port).',
+      );
     }
     if (credentialKind === 'connected_account' && !credentials.trim()) {
-      errors.credentials = 'A connected-account credential is required, or choose Shared.';
+      errors.credentials = t(
+        '连接账户方式需要一份凭证，否则请选择共享。',
+        'A connected-account credential is required, or choose Shared.',
+      );
     }
     if (manifestSource.trim() && !URL_LIKE_PATTERN.test(manifestSource.trim())) {
-      errors.manifestSource = 'Manifest source must be a URL.';
+      errors.manifestSource = t('清单来源必须是一个 URL。', 'Manifest source must be a URL.');
     }
     return errors;
   }
@@ -169,13 +177,21 @@ export function CompleteConnectionForm({
     >
       {request ? (
         <Notice>
-          Completing request <span className="mono">{request.id.slice(0, 8)}</span> from principal{' '}
-          <span className="mono">{request.requestedBy.slice(0, 8)}</span>.
+          {t(
+            <>
+              完成申请 <span className="mono">{request.id.slice(0, 8)}</span>，来自主体{' '}
+              <span className="mono">{request.requestedBy.slice(0, 8)}</span>。
+            </>,
+            <>
+              Completing request <span className="mono">{request.id.slice(0, 8)}</span> from
+              principal <span className="mono">{request.requestedBy.slice(0, 8)}</span>.
+            </>,
+          )}
         </Notice>
       ) : null}
 
       {hideKindField ? null : (
-        <Field id="cc-kind" label="Kind" required>
+        <Field id="cc-kind" label={t('类型', 'Kind')} required>
           <Select
             id="cc-kind"
             value={kind}
@@ -193,10 +209,13 @@ export function CompleteConnectionForm({
 
       <Field
         id="cc-target"
-        label="Target system"
+        label={t('目标系统', 'Target system')}
         required
         error={fieldErrors.target}
-        hint="What the Gatekeeper fronts — a base URL, host, or service name."
+        hint={t(
+          '门前面对接的是什么——一个 base URL、host 或服务名。',
+          'What the Gatekeeper fronts — a base URL, host, or service name.',
+        )}
       >
         <Input
           id="cc-target"
@@ -211,10 +230,13 @@ export function CompleteConnectionForm({
 
       <Field
         id="cc-endpoint"
-        label="Gatekeeper endpoint"
+        label={t('门端点', 'Gatekeeper endpoint')}
         required
         error={fieldErrors.endpoint}
-        hint="The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one)."
+        hint={t(
+          '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）。',
+          "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one).",
+        )}
       >
         <Input
           id="cc-endpoint"
@@ -233,8 +255,12 @@ export function CompleteConnectionForm({
       </Field>
 
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-        <legend className="field-label">Credential</legend>
-        <div className="radio-group" role="radiogroup" aria-label="Credential kind">
+        <legend className="field-label">{t('凭证', 'Credential')}</legend>
+        <div
+          className="radio-group"
+          role="radiogroup"
+          aria-label={t('凭证类型', 'Credential kind')}
+        >
           <label className="radio-option">
             <input
               type="radio"
@@ -244,7 +270,10 @@ export function CompleteConnectionForm({
               onChange={() => setCredentialKind('shared')}
               disabled={submitting}
             />
-            Shared — the gate already holds a credential (env/config)
+            {t(
+              '共享 —— 门已经持有一份凭证（env/config）',
+              'Shared — the gate already holds a credential (env/config)',
+            )}
           </label>
           <label className="radio-option">
             <input
@@ -255,7 +284,10 @@ export function CompleteConnectionForm({
               onChange={() => setCredentialKind('connected_account')}
               disabled={submitting}
             />
-            Connected account — send a per-user credential to the gate
+            {t(
+              '已连接账户 —— 把逐用户的凭证发给门',
+              'Connected account — send a per-user credential to the gate',
+            )}
           </label>
         </div>
       </fieldset>
@@ -264,10 +296,13 @@ export function CompleteConnectionForm({
         <>
           <Field
             id="cc-credentials"
-            label="Credentials"
+            label={t('凭证', 'Credentials')}
             required
             error={fieldErrors.credentials}
-            hint="A token, or a JSON object. Sent to the Gatekeeper's ConnectedAccount store only — the kernel never persists it and this field is cleared on submit."
+            hint={t(
+              '一个 token，或一个 JSON 对象。只送到门的 ConnectedAccount 存储——内核不会持久化它，提交后这个字段会被清空。',
+              "A token, or a JSON object. Sent to the Gatekeeper's ConnectedAccount store only — the kernel never persists it and this field is cleared on submit.",
+            )}
           >
             <Textarea
               id="cc-credentials"
@@ -288,8 +323,11 @@ export function CompleteConnectionForm({
           </Field>
           <Field
             id="cc-obo"
-            label="On behalf of (principal id)"
-            hint="Whose account this credential belongs to. Defaults to the requester, or to you."
+            label={t('代表谁（principal id）', 'On behalf of (principal id)')}
+            hint={t(
+              '这份凭证归属于谁的账户。默认是申请人，或你自己。',
+              'Whose account this credential belongs to. Defaults to the requester, or to you.',
+            )}
           >
             <Input
               id="cc-obo"
@@ -305,12 +343,18 @@ export function CompleteConnectionForm({
       {showManifest ? (
         <Field
           id="cc-manifest"
-          label="Manifest source"
+          label={t('清单来源', 'Manifest source')}
           error={fieldErrors.manifestSource}
           hint={
             kind === 'http'
-              ? 'OpenAPI document URL to import operations from. Leave empty to use the gate’s own describe_operations.'
-              : 'MCP server endpoint to import tools/list from. Leave empty to use the gate’s own describe_operations.'
+              ? t(
+                  '导入 Operation 用的 OpenAPI 文档 URL。留空则使用门自己的 describe_operations。',
+                  'OpenAPI document URL to import operations from. Leave empty to use the gate’s own describe_operations.',
+                )
+              : t(
+                  '导入 tools/list 用的 MCP 服务端点。留空则使用门自己的 describe_operations。',
+                  'MCP server endpoint to import tools/list from. Leave empty to use the gate’s own describe_operations.',
+                )
           }
         >
           <Input
@@ -335,15 +379,18 @@ export function CompleteConnectionForm({
       ) : null}
 
       {submitError !== null ? (
-        <ErrorBanner error={submitError} title="The gate did not accept this connection" />
+        <ErrorBanner
+          error={submitError}
+          title={t('门未接受这次连接', 'The gate did not accept this connection')}
+        />
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          Cancel
+          {t('取消', 'Cancel')}
         </Button>
         <Button type="submit" variant="primary" loading={submitting}>
-          Register Gatekeeper
+          {t('注册门', 'Register Gatekeeper')}
         </Button>
       </div>
     </form>

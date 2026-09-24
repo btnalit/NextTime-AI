@@ -50,7 +50,10 @@ export function PlatformSettingsPage({ http }: PlatformSettingsPageProps) {
       <PageHeader
         breadcrumb={breadcrumbFor('platformSettings')}
         title={t('平台设置', 'Platform settings')}
-        description="Site name, announcement, defaults, and password policy for this platform."
+        description={t(
+          '站点名、公告、默认值，以及这个平台的密码策略。',
+          'Site name, announcement, defaults, and password policy for this platform.',
+        )}
       />
 
       {savedVersion !== null ? (
@@ -62,13 +65,13 @@ export function PlatformSettingsPage({ http }: PlatformSettingsPageProps) {
       {settings.state.status === 'loading' ? (
         <SkeletonRows
           count={5}
-          label="Loading platform settings"
+          label={t('正在加载平台设置…', 'Loading platform settings')}
           testId="platform-settings-loading"
         />
       ) : settings.state.status === 'error' ? (
         <ErrorBanner
           error={settings.state.error}
-          title="Could not load the platform settings"
+          title={t('无法加载平台设置', 'Could not load the platform settings')}
           onRetry={() => void settings.reload()}
           testId="platform-settings-error"
         />
@@ -263,8 +266,8 @@ function PlatformSettingsForm({
               id="ps-announcement"
               label={t('公告', 'Announcement')}
               hint={t(
-                'Markdown — 显示在控制台顶部；留空表示没有公告。 Shown in the console top bar; empty =',
-                'none.',
+                'Markdown —— 显示在控制台顶部；留空表示没有公告。',
+                'Markdown — shown in the console top bar; empty = none.',
               )}
             >
               <Textarea
@@ -304,8 +307,8 @@ function PlatformSettingsForm({
               id="ps-default-workspace"
               label={t('默认工作区', 'Default workspace')}
               hint={t(
-                '新建用户默认加入的工作区；留空 = 不自动加入。 The workspace new users join; empty =',
-                'none.',
+                '新建用户默认加入的工作区；留空 = 不自动加入。',
+                'The workspace new users join; empty = none.',
               )}
             >
               <Select
@@ -348,11 +351,17 @@ function PlatformSettingsForm({
 
             <p className="text-3 text-small" data-testid="platform-settings-default-model-hint">
               {t(
-                '默认入口模型在"模型与供应商"页设置（经目录校验）。',
-                'The default entry model is set on the',
-              )}{' '}
-              <a href={hrefs.platformModels()}>{t('模型与供应商', 'Models &amp; providers')}</a>{' '}
-              page (validated against the catalog there).
+                <>
+                  默认入口模型在
+                  <a href={hrefs.platformModels()}>{t('模型与供应商', 'Models & providers')}</a>
+                  页设置（经目录校验）。
+                </>,
+                <>
+                  The default entry model is set on the{' '}
+                  <a href={hrefs.platformModels()}>{t('模型与供应商', 'Models & providers')}</a>{' '}
+                  page (validated against the catalog there).
+                </>,
+              )}
             </p>
 
             <Field
@@ -418,7 +427,9 @@ function PlatformSettingsForm({
               id="ps-password-min-length"
               label={t('密码最短长度', 'Password minimum length')}
               hint="8–128。"
-              error={passwordMinLengthValid ? null : '必须是 8–128 的整数 Must be an integer 8–128'}
+              error={
+                passwordMinLengthValid ? null : t('必须是 8–128 的整数', 'Must be an integer 8–128')
+              }
             >
               <Input
                 id="ps-password-min-length"

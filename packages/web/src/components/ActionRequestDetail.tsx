@@ -70,7 +70,7 @@ export function ActionRequestDetail({
         <div className="stack-s grow">
           <h3 className="action-detail-title">{card.title}</h3>
           <div className="row-wrap">
-            <span className="tag" title="Action kind">
+            <span className="tag" title={t('动作类型', 'Action kind')}>
               {card.actionKindTag}
             </span>
             {card.blastRadius ? (
@@ -79,9 +79,9 @@ export function ActionRequestDetail({
             {blocking ? (
               <span
                 className="chip chip-s chip-warn"
-                title="The Worker is blocked until you decide"
+                title={t('Worker 在你决定之前被阻塞', 'The Worker is blocked until you decide')}
               >
-                blocking
+                {t('阻塞中', 'blocking')}
               </span>
             ) : null}
           </div>
@@ -107,7 +107,7 @@ export function ActionRequestDetail({
             <dt>Requested by</dt>
             <dd className="row-wrap">
               {card.actorRuntime ? <span className="tag">{card.actorRuntime}</span> : null}
-              <span className="text-3">on behalf of</span>
+              <span className="text-3">{t('代表', 'on behalf of')}</span>
               <CopyId id={card.onBehalfOf} label="principal" />
             </dd>
           </>
@@ -156,7 +156,9 @@ export function ActionRequestDetail({
         </div>
       ) : null}
 
-      {blocking && decidable ? <Notice tone="warn">Awaiting your decision.</Notice> : null}
+      {blocking && decidable ? (
+        <Notice tone="warn">{t('等待你决定。', 'Awaiting your decision.')}</Notice>
+      ) : null}
 
       {decidable ? (
         <div className="stack-s" data-testid="decision-form">

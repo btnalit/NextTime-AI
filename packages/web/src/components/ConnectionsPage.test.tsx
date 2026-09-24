@@ -132,13 +132,13 @@ describe('ConnectionsPage', () => {
 
     fireEvent.click(within(wizardDrawer).getByRole('button', { name: /下一步/ }));
     const connectStep = await within(wizardDrawer).findByTestId('wizard-step-connect');
-    fireEvent.change(within(connectStep).getByLabelText(/Target system/), {
+    fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
       target: { value: 'accept_s2_mcp' },
     });
-    fireEvent.change(within(connectStep).getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
       target: { value: 'http://accept-s2-mcp:8080' },
     });
-    fireEvent.click(within(connectStep).getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
 
     const publishStep = await within(wizardDrawer).findByTestId('wizard-step-publish');
     fireEvent.click(within(publishStep).getByRole('button', { name: /暂不发布，稍后再说/ }));
@@ -194,9 +194,9 @@ describe('ConnectionsPage', () => {
     );
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() => expect(screen.queryByTestId('cancel-request-confirm')).toBeNull());
-    // The default filter is "requested" — the cancelled row leaves it; "All" still lists it.
+    // The default filter is "requested" — the cancelled row leaves it; "全部/All" still lists it.
     await waitFor(() => expect(screen.queryByTestId('cancel-request-cr-1')).toBeNull());
-    fireEvent.click(screen.getByRole('tab', { name: 'All' }));
+    fireEvent.click(screen.getByRole('tab', { name: '全部' }));
     const row = await screen.findByTestId('request-row');
     // S8 W1-A10: the connectionRequest StatusChip is bilingual now; default zh-CN renders '已取消'.
     expect(row.textContent).toContain('已取消');

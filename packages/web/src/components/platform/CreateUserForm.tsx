@@ -110,8 +110,18 @@ export function CreateUserForm({
         id="cu-login"
         label={t('登录名', 'Login')}
         required
-        hint="3–64 位 a-z 0-9 . _ -，以小写字母或数字开头。 3–64 chars of a-z 0-9 . _ -, starting with a lowercase letter or digit."
-        error={loginInvalid ? '登录名格式不合法 Invalid login — 3–64 chars of a-z 0-9 . _ -' : null}
+        hint={t(
+          '3–64 位 a-z 0-9 . _ -，以小写字母或数字开头。',
+          '3–64 chars of a-z 0-9 . _ -, starting with a lowercase letter or digit.',
+        )}
+        error={
+          loginInvalid
+            ? t(
+                '登录名格式不合法：3–64 位 a-z 0-9 . _ -，以小写字母或数字开头。',
+                'Invalid login — 3–64 chars of a-z 0-9 . _ -, starting with a lowercase letter or digit.',
+              )
+            : null
+        }
       >
         <Input
           id="cu-login"

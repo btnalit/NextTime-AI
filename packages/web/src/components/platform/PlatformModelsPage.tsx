@@ -548,7 +548,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           ) : (
             <ErrorBanner
               error={list.state.error}
-              title="Could not load the providers"
+              title={t('无法加载供应商', 'Could not load the providers')}
               onRetry={() => void list.reload()}
               testId="providers-error"
             />

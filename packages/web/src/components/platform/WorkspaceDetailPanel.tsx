@@ -497,8 +497,8 @@ export function WorkspaceDetailPanel({
               {workspace.isDefault ? (
                 <Notice testId="workspace-default-undisablable">
                   {t(
-                    '这是平台默认工作区，不能停用；先把默认工作区指到别处。 This is the platform default workspace —',
-                    'point the default at another workspace before disabling it.',
+                    '这是平台默认工作区，不能停用；先把默认工作区指到别处。',
+                    'This is the platform default workspace — point the default at another workspace before disabling it.',
                   )}
                 </Notice>
               ) : null}

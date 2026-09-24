@@ -117,11 +117,15 @@ export function ModulesTab({ http }: ModulesTabProps) {
   return (
     <div className="stack" data-testid="catalog-modules">
       {modules.state.status === 'loading' ? (
-        <SkeletonRows count={3} label="Loading modules" testId="catalog-modules-loading" />
+        <SkeletonRows
+          count={3}
+          label={t('正在加载模块…', 'Loading modules')}
+          testId="catalog-modules-loading"
+        />
       ) : modules.state.status === 'error' ? (
         <ErrorBanner
           error={modules.state.error}
-          title="Could not load modules"
+          title={t('无法加载模块', 'Could not load modules')}
           onRetry={() => void modules.reload()}
           testId="catalog-modules-error"
         />
@@ -179,12 +183,15 @@ export function ModulesTab({ http }: ModulesTabProps) {
                               {label}
                             </Button>
                           }
-                          title={`确认安装/升级 ${module.name} Confirm install/upgrade`}
+                          title={t(
+                            `确认安装/升级 ${module.name}`,
+                            `Confirm install/upgrade ${module.name}`,
+                          )}
                           description={
                             module.status === 'customized'
                               ? t(
-                                  '这个工作区的当前定义不匹配任何已知版本（已定制）；继续会替换成模块的标准内容。 The current definition does not match any known version (customized) —',
-                                  'continuing replaces it with the module’s standard content.',
+                                  '这个工作区的当前定义不匹配任何已知版本（已定制）；继续会替换成模块的标准内容。',
+                                  'The current definition does not match any known version (customized) — continuing replaces it with the module’s standard content.',
                                 )
                               : t(
                                   '升级会直接跳到最新版本，中间跨过至少一个不兼容变更（breaking）。',

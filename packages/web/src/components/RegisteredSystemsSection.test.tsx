@@ -52,7 +52,7 @@ describe('GatekeeperCard forbidden detection (C18)', () => {
       }) as CapabilityCaller['call'],
     };
     const onForbidden = renderCard(http);
-    fireEvent.click(screen.getByRole('button', { name: /Publish manifest/ }));
+    fireEvent.click(screen.getByRole('button', { name: /发布清单/ }));
     await waitFor(() => expect(onForbidden).toHaveBeenCalledWith('publish_manifest'));
   });
 
@@ -63,7 +63,7 @@ describe('GatekeeperCard forbidden detection (C18)', () => {
       }) as CapabilityCaller['call'],
     };
     const onForbidden = renderCard(http);
-    fireEvent.click(screen.getByRole('button', { name: /Publish manifest/ }));
+    fireEvent.click(screen.getByRole('button', { name: /发布清单/ }));
     await waitFor(() => expect(onForbidden).toHaveBeenCalledWith('publish_manifest'));
   });
 
@@ -74,7 +74,7 @@ describe('GatekeeperCard forbidden detection (C18)', () => {
       }) as CapabilityCaller['call'],
     };
     const onForbidden = renderCard(http);
-    fireEvent.click(screen.getByRole('button', { name: /Publish manifest/ }));
+    fireEvent.click(screen.getByRole('button', { name: /发布清单/ }));
     await screen.findByText(/gate down/);
     expect(onForbidden).not.toHaveBeenCalled();
   });

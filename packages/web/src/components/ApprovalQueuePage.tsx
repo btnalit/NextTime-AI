@@ -577,7 +577,7 @@ function ApprovalHistoryTab({
       {history.state.status === 'loading' ? (
         <SkeletonRows
           count={4}
-          label="Loading approval history"
+          label={t('正在加载审批历史…', 'Loading approval history')}
           testId="approval-history-loading"
         />
       ) : history.state.status === 'error' ? (

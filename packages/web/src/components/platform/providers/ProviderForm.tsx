@@ -160,8 +160,8 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
       {editing && initial.source === 'file' ? (
         <Notice testId="provider-form-override-notice">
           {t(
-            '这是主机 llm-providers.yaml 里的供应商；保存会在代理的存储里建一条覆盖记录，yaml 本身不改。 This provider comes from llm-providers.yaml on the host —',
-            'saving creates an override in the proxy’s store; the yaml itself is not modified.',
+            '这是主机 llm-providers.yaml 里的供应商；保存会在代理的存储里建一条覆盖记录，yaml 本身不改。',
+            'This provider comes from llm-providers.yaml on the host — saving creates an override in the proxy’s store; the yaml itself is not modified.',
           )}
         </Notice>
       ) : null}

@@ -20,7 +20,7 @@ describe('NoWorkspacePage', () => {
     const onLogout = vi.fn();
     render(<NoWorkspacePage user={USER} onOpenAccount={onOpenAccount} onLogout={onLogout} />);
 
-    expect(screen.getByText('You are not a member of any workspace yet')).toBeTruthy();
+    expect(screen.getByText('尚未加入任何工作区')).toBeTruthy();
     expect(screen.getByText('E2E Admin')).toBeTruthy();
     expect(screen.getByText('e2e-admin')).toBeTruthy();
 

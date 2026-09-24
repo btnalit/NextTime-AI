@@ -93,7 +93,7 @@ export function AvailableGateInstancesSection({
       {available.state.status === 'loading' ? (
         <SkeletonRows
           count={2}
-          label="Loading the platform catalog"
+          label={t('正在加载平台目录…', 'Loading the platform catalog')}
           testId="available-gates-loading"
         />
       ) : forbidden ? (
@@ -106,7 +106,7 @@ export function AvailableGateInstancesSection({
       ) : available.state.status === 'error' ? (
         <ErrorBanner
           error={available.state.error}
-          title="Could not load the platform catalog"
+          title={t('无法加载平台目录', 'Could not load the platform catalog')}
           onRetry={() => void available.reload()}
           testId="available-gates-error"
         />

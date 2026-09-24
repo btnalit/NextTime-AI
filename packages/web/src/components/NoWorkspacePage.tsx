@@ -27,8 +27,10 @@ export function NoWorkspacePage({ user, onOpenAccount, onLogout }: NoWorkspacePa
               N
             </div>
             <div>
-              <h1 className="login-title">你还不属于任何工作区</h1>
-              <p className="login-subtitle">You are not a member of any workspace yet</p>
+              <h1 className="login-title">{t('你还不属于任何工作区', 'No workspace yet')}</h1>
+              <p className="login-subtitle">
+                {t('尚未加入任何工作区', 'You are not a member of any workspace yet')}
+              </p>
             </div>
           </div>
 

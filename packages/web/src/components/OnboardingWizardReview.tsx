@@ -80,16 +80,23 @@ export function OnboardingWizardReview({
   return (
     <div className="stack" data-testid="wizard-review">
       {operations.state.status === 'loading' ? (
-        <SkeletonRows count={3} label="Loading operations" testId="wizard-review-loading" />
+        <SkeletonRows
+          count={3}
+          label={t('正在加载 Operation…', 'Loading operations')}
+          testId="wizard-review-loading"
+        />
       ) : operations.state.status === 'error' ? (
         <ErrorBanner
           error={operations.state.error}
-          title="Could not load this gate's operations"
+          title={t('无法加载这个门的 Operation', "Could not load this gate's operations")}
           onRetry={() => void operations.reload()}
           testId="wizard-review-error"
         />
       ) : operations.state.data.length === 0 ? (
-        <EmptyState icon="grid" title="No operations imported for this gate" />
+        <EmptyState
+          icon="grid"
+          title={t('这个门没有导入任何 Operation', 'No operations imported for this gate')}
+        />
       ) : (
         <table className="data-table" data-testid="wizard-review-table">
           <thead>
@@ -234,7 +241,10 @@ function OperationReviewRow({
               {error !== null ? (
                 <ErrorBanner
                   error={error}
-                  title="Could not propose/publish this reclassification"
+                  title={t(
+                    '无法提出/发布这次重分类',
+                    'Could not propose/publish this reclassification',
+                  )}
                 />
               ) : null}
               <div className="row" style={{ justifyContent: 'flex-end' }}>

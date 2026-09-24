@@ -98,7 +98,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
             <legend className="field-label">
               {t('选择要接入的系统类型', "Choose the system's kind")}
             </legend>
-            <div className="radio-group" role="radiogroup" aria-label="Kind">
+            <div className="radio-group" role="radiogroup" aria-label={t('类型', 'Kind')}>
               {CONNECTION_KIND_VALUES.map((option) => (
                 <label className="radio-option" key={option}>
                   <input
@@ -149,7 +149,10 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
             。发布清单后它们才会对 <code>find_operations</code> 可见（I16/I17）。
           </Notice>
           {publishError !== null ? (
-            <ErrorBanner error={publishError} title="Could not publish the manifest" />
+            <ErrorBanner
+              error={publishError}
+              title={t('无法发布清单', 'Could not publish the manifest')}
+            />
           ) : null}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={() => setStep('review')}>

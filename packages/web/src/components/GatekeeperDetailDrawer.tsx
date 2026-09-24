@@ -2,6 +2,7 @@ import { useCapability } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { type GatekeeperDetail, healthView } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { SkeletonRows } from './ui/Skeleton.js';
@@ -20,10 +21,17 @@ export interface GatekeeperDetailDrawerProps {
  * read defensively (`lib/governance.ts` `healthView`) since no schema for it exists anywhere yet.
  */
 export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailDrawerProps) {
+  const t = useT();
   const detail = useCapability<GatekeeperDetail>(http, 'get_gatekeeper', { gatekeeperId });
 
   if (detail.state.status === 'loading') {
-    return <SkeletonRows count={3} label="Loading gatekeeper" testId="gatekeeper-detail-loading" />;
+    return (
+      <SkeletonRows
+        count={3}
+        label={t('正在加载门…', 'Loading gatekeeper')}
+        testId="gatekeeper-detail-loading"
+      />
+    );
   }
   if (detail.state.status === 'error') {
     // B6 (S6-A0): a `get_gatekeeper` not_found is "no such gatekeeper", rendered by the ordinary
@@ -31,7 +39,7 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
     return (
       <ErrorBanner
         error={detail.state.error}
-        title="Could not load this gate's health and operations"
+        title={t('无法加载这个门的健康与操作', "Could not load this gate's health and operations")}
         onRetry={() => void detail.reload()}
         testId="gatekeeper-detail-error"
       />
@@ -39,22 +47,22 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
   }
 
   const gate = detail.state.data;
-  const health = healthView(gate.health);
+  const health = healthView(gate.health, t);
 
   return (
     <div className="stack" data-testid="gatekeeper-detail">
       <dl className="definition-list">
-        <dt>Health</dt>
+        <dt>{t('健康', 'Health')}</dt>
         <dd>
           <span className={`chip chip-s chip-${health.tone}`} data-testid="gatekeeper-health">
             {health.label}
           </span>
         </dd>
-        <dt>Manifest version</dt>
+        <dt>{t('清单版本', 'Manifest version')}</dt>
         <dd>{gate.manifestVersion ?? '—'}</dd>
-        <dt>Operations</dt>
+        <dt>Operation</dt>
         <dd>{gate.operationCount}</dd>
-        <dt>Created</dt>
+        <dt>{t('创建于', 'Created')}</dt>
         <dd>
           <time title={formatDateTime(gate.createdAt)}>{formatRelative(gate.createdAt)}</time>
         </dd>
@@ -63,7 +71,10 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
       <div className="divider" />
 
       {gate.operations.length === 0 ? (
-        <EmptyState icon="connections" title="No operations on this gate" />
+        <EmptyState
+          icon="connections"
+          title={t('这个门没有 Operation', 'No operations on this gate')}
+        />
       ) : (
         <div className="gatekeeper-ops">
           {gate.operations.map((operation) => (

@@ -80,11 +80,15 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
       />
 
       {modules.state.status === 'loading' ? (
-        <SkeletonRows count={3} label="Loading modules" testId="modules-loading" />
+        <SkeletonRows
+          count={3}
+          label={t('正在加载模块…', 'Loading modules')}
+          testId="modules-loading"
+        />
       ) : modules.state.status === 'error' ? (
         <ErrorBanner
           error={modules.state.error}
-          title="Could not load the module index"
+          title={t('无法加载模块索引', 'Could not load the module index')}
           onRetry={() => void modules.reload()}
           testId="modules-error"
         />

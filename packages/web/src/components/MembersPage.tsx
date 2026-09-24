@@ -198,7 +198,7 @@ export function MembersPage({ http }: MembersPageProps) {
       {principals.loadMoreError !== null ? (
         <ErrorBanner
           error={principals.loadMoreError}
-          title="Could not load more members"
+          title={t('无法加载更多成员', 'Could not load more members')}
           testId="members-load-more-error"
         />
       ) : null}
@@ -208,8 +208,8 @@ export function MembersPage({ http }: MembersPageProps) {
         onClose={() => setDrawer({ kind: 'closed' })}
         title={t('添加成员', 'Add member')}
         subtitle={t(
-          '按平台登录名添加；这里不创建账户、不签发 API key。 By platform login —',
-          'no account is created here and no API key is issued.',
+          '按平台登录名添加；这里不创建账户、不签发 API key。',
+          'By platform login — no account is created here and no API key is issued.',
         )}
         testId="add-member-drawer"
       >
@@ -219,7 +219,10 @@ export function MembersPage({ http }: MembersPageProps) {
             onCancel={() => setDrawer({ kind: 'closed' })}
             onDone={(principal) => {
               setDrawer({ kind: 'closed' });
-              toast.push({ tone: 'ok', title: `已添加 ${principal.displayName} added` });
+              toast.push({
+                tone: 'ok',
+                title: t(`已添加 ${principal.displayName}`, `${principal.displayName} added`),
+              });
               refreshList();
             }}
           />
@@ -231,8 +234,8 @@ export function MembersPage({ http }: MembersPageProps) {
         onClose={() => setDrawer({ kind: 'closed' })}
         title={t('服务凭证', 'Service credential (API key)')}
         subtitle={t(
-          "创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。 Creates a kind: 'service' Principal and its API key —",
-          'for scripts and harnesses, never for a person.',
+          "创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。",
+          "Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person.",
         )}
         testId="create-principal-drawer"
       >

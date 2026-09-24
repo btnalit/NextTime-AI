@@ -74,8 +74,8 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
         breadcrumb={breadcrumbFor('audit')}
         title={t('审计', 'Audit')}
         description={t(
-          '按 id 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。 Provenance lookups (explain, reconstruct) and the audit log, by id or filter —',
-          'reachable from tasks, approvals and facts in a chat.',
+          '按 id 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。',
+          'Provenance lookups (explain, reconstruct) and the audit log, by id or filter — reachable from tasks, approvals and facts in a chat.',
         )}
       />
       {entry.actionRequestId ? (
@@ -164,8 +164,8 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
           id="reconstruct-entity-id"
           label={t('实体 id', 'Entity id')}
           hint={t(
-            '图对象 id：从审计记录重建其历史。 A graph Object id —',
-            'its history rebuilt from the audit records.',
+            '图对象 id：从审计记录重建其历史。',
+            'A graph Object id — its history rebuilt from the audit records.',
           )}
         >
           <Input

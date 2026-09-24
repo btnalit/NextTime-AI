@@ -109,7 +109,7 @@ describe('LoginPage: password login', () => {
     fireEvent.change(screen.getByLabelText(/密码/), { target: { value: 'y' } });
     fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
 
-    expect(await screen.findByText(/no Handle signing key configured/)).toBeTruthy();
+    expect(await screen.findByText(/控制台会话尚未配置签名密钥/)).toBeTruthy();
   });
 });
 

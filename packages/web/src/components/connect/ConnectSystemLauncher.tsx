@@ -497,20 +497,31 @@ function ExistingGatePicker({
     <div className="stack-s" data-testid="launcher-existing-gates">
       <span className="section-title">{title}</span>
       {pollState === 'loading' ? (
-        <SkeletonRows count={1} label="Loading gate instances" testId="launcher-gates-loading" />
+        <SkeletonRows
+          count={1}
+          label={t('正在加载门实例…', 'Loading gate instances')}
+          testId="launcher-gates-loading"
+        />
       ) : pollState === 'error' ? (
         <Notice tone="warn" testId="launcher-gates-error">
-          读不到门实例列表（{isAdmin ? 'list_gate_instances' : 'list_available_gate_instances'}
-          {t('）；仍在重试。', 'Could not read the gate-instance list; still retrying.')}
+          {t(
+            `读不到门实例列表（${isAdmin ? 'list_gate_instances' : 'list_available_gate_instances'}）；仍在重试。`,
+            'Could not read the gate-instance list; still retrying.',
+          )}
         </Notice>
       ) : matching.length === 0 ? (
         <p className="text-3" data-testid="launcher-gates-empty">
-          {path === 'packaged'
-            ? `还没有 ${kind} 类型的门 announce${isAdmin ? '' : '（并由管理员启用、设为平台预置）'}；每 5 秒重查一次。 No ${kind} gate has announced itself${isAdmin ? '' : ' (and been enabled + preset by an administrator)'} yet — checking every 5 s.`
-            : `目录里还没有 ${kind} 类型的实例。 No ${kind} instance in the catalog yet.`}
+          {t(
+            path === 'packaged'
+              ? `还没有 ${kind} 类型的门 announce${isAdmin ? '' : '（并由管理员启用、设为平台预置）'}；每 5 秒重查一次。`
+              : `目录里还没有 ${kind} 类型的实例。`,
+            path === 'packaged'
+              ? `No ${kind} gate has announced itself${isAdmin ? '' : ' (and been enabled + preset by an administrator)'} yet — checking every 5 s.`
+              : `No ${kind} instance in the catalog yet.`,
+          )}
         </p>
       ) : (
-        <div className="radio-group" role="radiogroup" aria-label="Gate instance">
+        <div className="radio-group" role="radiogroup" aria-label={t('门实例', 'Gate instance')}>
           {matching.map((row) => (
             <label className="radio-option" key={row.gateId}>
               <input
@@ -586,8 +597,8 @@ function SelectedGateSummary({
         <Notice tone="warn" testId="launcher-awaiting-announce">
           {platform?.hosted
             ? t(
-                '等待门宿主接管：宿主下一次拉取时导入 Operation 并 announce（默认 60 秒内）。 Waiting for the gate host to take it over —',
-                'it imports the Operations and announces on its next pull.',
+                '等待门宿主接管：宿主下一次拉取时导入 Operation 并 announce（默认 60 秒内）。',
+                'Waiting for the gate host to take it over — it imports the Operations and announces on its next pull.',
               )
             : t('还没有心跳或 Operation。', 'No heartbeat or Operations yet.')}
         </Notice>
@@ -597,8 +608,8 @@ function SelectedGateSummary({
           <span className="field-label">{t('录入共享凭证', 'Enter the shared credential')}</span>
           <p className="text-3">
             {t(
-              '凭证由浏览器直接送到门宿主（经 caddy），内核不经手。 Sent from this browser straight to the gate host —',
-              'the kernel never sees it.',
+              '凭证由浏览器直接送到门宿主（经 caddy），内核不经手。',
+              'Sent from this browser straight to the gate host — the kernel never sees it.',
             )}
           </p>
           <GateCredentialEntry
@@ -829,11 +840,18 @@ function PlatformEnableSection({
       ) : connector && connector.mode !== 'platform_preset' ? (
         <div className="stack-s" data-testid="launcher-connector-preset">
           <Notice tone="warn">
-            接入包 <code>{connector.name}</code> 当前是{' '}
-            <StatusChip machine="connectorMode" status={connector.mode} size="s" />
-            ；工作区只能从目录启用<strong>平台预置</strong>
-            {t('的接入包。', 'Connector')} <code>{connector.name}</code> is not platform-preset — a
-            workspace can only enable platform-preset instances from the catalog.
+            {t(
+              <>
+                接入包 <code>{connector.name}</code> 当前是{' '}
+                <StatusChip machine="connectorMode" status={connector.mode} size="s" />
+                ；工作区只能从目录启用<strong>平台预置</strong>的接入包。
+              </>,
+              <>
+                Connector <code>{connector.name}</code> is currently{' '}
+                <StatusChip machine="connectorMode" status={connector.mode} size="s" /> — a
+                workspace can only enable platform-preset instances from the catalog.
+              </>,
+            )}
           </Notice>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button
@@ -1223,8 +1241,8 @@ function HandshakeStep({
       {gate.status === 'enabled' && gate.health === 'ok' && gate.announced ? (
         <Notice testId="launcher-handshake-ok">
           {t(
-            '该门实例可用：已 announce、已启用、健康 ok。 This gate instance is usable —',
-            'announced, enabled and healthy.',
+            '该门实例可用：已 announce、已启用、健康 ok。',
+            'This gate instance is usable — announced, enabled and healthy.',
           )}
         </Notice>
       ) : null}
