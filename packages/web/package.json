@@ -28,6 +28,7 @@
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@nexttime/shared": "workspace:*",
     "@playwright/test": "^1.49.1",
     "@tailwindcss/vite": "^4.3.3",

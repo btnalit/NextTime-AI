@@ -22,12 +22,27 @@ name: e2e
 # Keep the workflow name (`e2e`) and job name (`web-e2e`) byte-stable, and never add a `paths` /
 # `paths-ignore` filter: a required check that does not report on a PR (docs-only or otherwise)
 # blocks that PR from merging — this job is cheap enough (~2.5 min) to run unconditionally.
-
+#
+# S8 W1-B added `workflow_dispatch`: the *only* supported way to (re)generate `e2e/00-gates/`'s
+# screenshot/axe/copy-guard baselines is a CI run on this Linux runner (never this repo's own
+# Windows dev machines — font rasterisation differs enough to make a locally-generated PNG
+# baseline fail on every real CI run). `gh workflow run e2e.yml --ref <branch> -f
+# update_baselines=true`, wait for it, then `gh run download <run-id> -n gate-baselines` and copy
+# the three paths it contains over `e2e/00-gates/__screenshots__/`, `axe-baseline.json` and
+# `copy-guard-baseline.json`, then commit — see docs/runbooks/web-console.md "UX 门槛基线" for the
+# exact procedure. `update_baselines: false` (the default) is a completely ordinary run — the
+# input only changes the "Run web e2e" and "Upload gate baselines" steps below.
 on:
   pull_request:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      update_baselines:
+        description: 'Regenerate e2e/00-gates/ screenshot + axe + copy-guard baselines instead of checking against them'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -59,6 +74,16 @@ jobs:
 
       - name: Install Playwright Chromium
         run: pnpm --filter @nexttime/web exec playwright install --with-deps chromium
+
+      # S8 W1-B: `e2e/00-gates/copy-patterns.ts` imports `@nexttime/shared` (deriving the raw-enum
+      # copy-guard pattern from the wire enums directly, docs/development-tasks.md §5e F5's own
+      # instruction — see that file's doc comment) — the workspace `exports` map's `default`
+      # condition resolves to `dist/`, unlike the `development` condition Vite picks up at build
+      # time for the app itself (vitest.base.ts's own doc comment), so Playwright's plain
+      # Node-module resolution needs it actually built once, same as `pnpm ci:guards` already
+      # requires elsewhere in this repo.
+      - name: Build @nexttime/shared
+        run: pnpm --filter @nexttime/shared build
 
       # --- bring up the stack ------------------------------------------------------------------
 
@@ -302,10 +327,23 @@ jobs:
       # `action.pending`, exactly as a real `request_action` would. SQL goes in on stdin, never via
       # `-c`: psql only performs `:'var'` interpolation and `\gset` on input it parses itself (the
       # same finding scripts/accept_s2.sh's leak check records).
-      - name: Seed two pending ActionRequests (approvals.spec.ts)
+      #
+      # S8 W1-B added four more seeded rows, same shape, for `00-gates/` and `journeys/03-*`:
+      # `e2e-gate-pending` is read-only forever (screenshot.spec.ts's "an approval pending" state
+      # only ever views it — never approves it, so it stays pending across the whole run
+      # regardless of file order); `e2e-journey3-approve-a`/`-b` are journeys/03-approve-action.
+      # spec.ts's own two rows — one per viewport (1440px, 768px) it runs the same journey at.
+      # Two *distinct* scopes rather than the same one twice on purpose: that file's own `.first()`
+      # + `toHaveCount(0)` assertion needs its row uniquely identified after the other viewport's
+      # run has already approved a different row sharing the same marker text — the first
+      # baseline-generation run caught this the hard way (a real CI failure, not a hypothetical).
+      # All four kept separate from approvals.spec.ts's own two scopes so the suites can never race
+      # for the same row.
+      - name: Seed pending ActionRequests (approvals.spec.ts, 00-gates/, journeys/03-*)
         run: |
           set -euo pipefail
-          for scope in e2e-approve-flow e2e-isolation-flow; do
+          for scope in e2e-approve-flow e2e-isolation-flow e2e-gate-pending \
+            e2e-journey3-approve-a e2e-journey3-approve-b; do
             sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
               exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 \
               -v workspace_id="$E2E_WORKSPACE_ID" -v on_behalf_of="$E2E_OWNER_PRINCIPAL_ID" \
@@ -357,8 +395,21 @@ jobs:
       # playwright.config.ts runs login.spec.ts last as a dependent project (its lockout test
       # locks `admin`). playwright.config.ts gives CI one retry per test so a
       # runner hiccup shows up as "flaky" in the uploaded report instead of failing the whole gate.
+      # S8 W1-B: `update_baselines: true` (workflow_dispatch only) reruns the exact same suite with
+      # `--update-snapshots` (screenshot.spec.ts's `toHaveScreenshot` calls write instead of
+      # compare) and `E2E_GATE_UPDATE_BASELINE=1` (content.spec.ts's axe/copy-guard checks do the
+      # same, see 00-gates/ratchet.ts) — every *other* spec's assertions are unaffected by either
+      # flag, so this is still a full, meaningful run of the other 16 files, not a baseline-only
+      # shortcut.
       - name: Run web e2e
+        if: ${{ github.event.inputs.update_baselines != 'true' }}
         run: pnpm --filter @nexttime/web e2e
+
+      - name: Run web e2e (regenerate gate baselines)
+        if: ${{ github.event.inputs.update_baselines == 'true' }}
+        env:
+          E2E_GATE_UPDATE_BASELINE: '1'
+        run: pnpm --filter @nexttime/web e2e -- --update-snapshots
 
       # S1 lite (W6, STATUS leftover 7): the subset of scripts/accept_s1.sh that needs no entry
       # container — bootstrap, WorkerDefinition v2 via caddy, two chats answered by the kernel's
@@ -382,6 +433,30 @@ jobs:
             packages/web/test-results/
           retention-days: 7
           if-no-files-found: ignore
+
+      # S8 W1-B: the regenerated baselines themselves — only on the `update_baselines` dispatch.
+      # Deliberately *not* gated on the previous step's success: Playwright's own documented
+      # behaviour is that a *missing* screenshot snapshot is always reported as a test failure —
+      # even under `--update-snapshots` — specifically so a human reviews the newly-written PNG
+      # before it's trusted (verified against this workflow's own first baseline-generation run:
+      # every 00-gates/screenshot.spec.ts test "failed" with "snapshot doesn't exist ... writing
+      # actual", while the file was in fact written to the real snapshot path — the axe/copy-guard
+      # baselines in content.spec.ts, which never hit that codepath, passed outright). `!cancelled()`
+      # still skips this on an actually-cancelled run. Download with `gh run download <run-id> -n
+      # gate-baselines`, then copy `00-gates/__screenshots__/` and the two `*-baseline.json` files
+      # it contains over the matching paths under `packages/web/e2e/00-gates/` and commit — see
+      # docs/runbooks/web-console.md "UX 门槛基线".
+      - name: Upload gate baselines
+        if: ${{ github.event.inputs.update_baselines == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gate-baselines
+          path: |
+            packages/web/e2e/00-gates/__screenshots__/
+            packages/web/e2e/00-gates/axe-baseline.json
+            packages/web/e2e/00-gates/copy-guard-baseline.json
+          retention-days: 14
+          if-no-files-found: error
 
       - name: docker compose logs (on failure)
         if: failure()

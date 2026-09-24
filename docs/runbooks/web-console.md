@@ -228,6 +228,84 @@ build` 走 compose 自身路径，没有直接的 `--cache-from/--cache-to type=
 **本地复现**：`deploy/ci/env.ci.template` 头部注释有完整命令；本质上就是上面 1-6 步去掉 checkout/
 pnpm setup（本地已有）。
 
+## UX 门槛与旅程测试（S8 W1-B）
+
+`e2e/00-gates/`（三档截图回归、axe、文案守卫）与 `e2e/journeys/`（六条旅程骨架）是
+`docs/development-tasks.md` §5e 决定 F4/F5 的落地——不是另一个独立工作流，跟其余 spec 一样归
+`web-e2e` job 管，跟着一起跑、一起在 CI 的 Linux runner 上产出证据。
+
+**为什么 `00-gates/` 目录名前缀 `00-`**：Playwright 按文件路径字母序发现 spec（`playwright.config.ts`
+自己的注释里已经在依赖这一点——`login.spec.ts` 的锁定用例必须排最后）。`00-` 让这一批测试排在最前，
+在任何别的 spec 往共享的 `ci-e2e` 工作区里写数据之前跑——这是"每个页面截图时内容尽量确定"的主要手段
+（`e2e/lib/determinism.ts`、`e2e/00-gates/surfaces.ts` 各自的文档注释里有完整推理，包括"为什么截图
+状态测试用完一个新建的对话要立刻归档"——不归档会顶掉 `approvals.spec.ts` 和
+`journeys/03-approve-action.spec.ts` 依赖的、"最近一个对话"这条线索）。
+
+**`journeys/` 故意不跟着用数字前缀排位**：早期版本试过给它也加前缀、排到 `chat.spec.ts` 前面——
+`chat.spec.ts` 自己的第一个用例会新建一个从不归档的对话，排在它之后会让③审批一个执行类动作的
+"哪个对话有我的卡片"猜错。但排到 `chat.spec.ts` 前面同时也排到了 `approvals.spec.ts` 前面，带来另一个
+真实 CI 失败：③自己的批准会往同一个对话里写"已批准"状态行，顶到 `approvals.spec.ts` 自己那条不限定
+文本、只按 `data-status="approved"` 找状态行的断言（两次真实的基线生成 CI 失败，不是纸上谈兵）。
+第三版改成"挨个打开对话列表找真正带着目标卡片的那一个"（不假设"最近一个对话"就是它），排位问题
+是解决了，但拉 CI 失败时留下的数据库快照一比对，看清了更深的问题：同一个 `actionRequestId` 的
+`system.action_update`（批准/失败）消息会落进不止一个对话——`application/linkage/chat-targets.ts`
+的 `resolveDefaultChat`（"最近一个对话"）在两次事件处理之间解析到了不同的对话，是内核侧 linkage
+的行为，`packages/kernel/**` 不在这条车道允许改的文件范围内，继续在对话层面找"正确的那张卡片"
+没有稳定解。最终版本③不再看对话卡片：批准后切到 `ApprovalQueuePage` 同一页的"历史 History" tab
+（`list_action_requests`），挨个打开历史行的详情抽屉比对 `resourceScope`（历史行列表本身不渲染
+这个字段，只有详情抽屉渲染），再读 `approval-status` 的 `data-status`——同一页内的权威状态，天然
+不经过"卡片落在哪个对话"这一层，因此也不需要跟任何其他 spec 的文件名排位协调。
+`journeys/helpers.ts` 里不再有专门找对话的辅助函数（`findChatWithActionCard` 已删除）。
+
+**三档截图基线只能在 CI 的 Linux 上生成，本机（含这台 Windows 开发机）生成的基线不能用**——字体栅格化
+在不同操作系统上不是像素级一致的，本机截图在真实 CI 跑时会稳定失败。生成/更新基线的流程：
+
+```bash
+# 1. 在要出基线的分支上手动触发一次 workflow_dispatch，update_baselines=true：
+gh workflow run e2e.yml --ref <branch> -f update_baselines=true
+
+# 2. 等它跑完（这一步等价于正常跑一遍 web-e2e，只是 Run web e2e 换成 --update-snapshots
+#    且 axe/copy-guard 换成"写基线"模式——其余 15+ 个 spec 的断言不受影响，仍然是一次完整验证）：
+gh run watch <run-id>
+
+# 3. 下载 gate-baselines 产物（screenshot PNG + 两个 *-baseline.json），解压覆盖到本地：
+gh run download <run-id> -n gate-baselines -D /tmp/gate-baselines
+cp -r /tmp/gate-baselines/00-gates/__screenshots__ packages/web/e2e/00-gates/__screenshots__
+cp /tmp/gate-baselines/00-gates/axe-baseline.json packages/web/e2e/00-gates/axe-baseline.json
+cp /tmp/gate-baselines/00-gates/copy-guard-baseline.json packages/web/e2e/00-gates/copy-guard-baseline.json
+
+# 4. 提交，推送，让同一个 PR 再跑一次*普通*的 web-e2e（不带 update_baselines）——应该绿；
+#    再手动重跑一次确认不是巧合（截图/axe/文案守卫的确定性证据）：
+gh pr checks <pr-number> --watch
+```
+
+**基线只收紧不放宽**（`e2e/00-gates/ratchet.ts` 的设计）：axe 与文案守卫的基线是"今天已知的问题"
+清单，每条对应一个会修掉它的审计条目（S5 对比度、S6 命中区、S8 字号……）；新问题会让 CI 红，旧问题
+消失/减少不会——基线本身要等对应的修复 PR 合入后，再跑一次 §"生成/更新基线"把它收窄，不能顺手在
+无关 PR 里放宽。截图基线同理：`maxDiffPixelRatio: 0.01`（`playwright.config.ts`）是起始阈值，只在
+有真实证据（多次绿跑之间仍然抖动、且人工确认像素差异只是抗锯齿/字体微调）时才放宽，不能因为一次
+CI 红就直接调松了事。
+
+**六条旅程**（`e2e/journeys/README.md` 有完整的"一条旅程怎么写"约定）：今天只有 ③ 审批一个执行类
+动作、⑥ 添加成员并让其可用 是真实通过的——这两条依赖的能力（`approve`、`add_member`）本来就是
+S2.10/P-A1 起的稳定能力，不是这一波新做的；其余四条（①②④⑤）产品今天还做不到（W2/W3 才补），用
+`test.fixme` 占位，body 里写了真实的操作序列，等对应功能上线后去掉 `fixme` 就是验收标准。
+
+**后续改界面的 PR（W1-A1 PageHeader 迁移、W1-A2 Markdown/时间格式化等）怎么重新出基线**：这些 PR 改
+的正是三档截图会拍到的页面本身，在它们自己的分支上第一次跑*普通* `web-e2e`（不带 `update_baselines`）
+预期会红——旧基线拍的是迁移前的样子，这个红是"确实改了界面"的证据，不是故障。把失败任务里
+`playwright-report` 产物（`trace: retain-on-failure`，含每张截图的 expected/actual/diff 三联图）当作
+截图证据交给维护者看，跟 §5.9"截图认可是维护者关口"的约定一致——维护者认可这次视觉改动之后，在
+**这个 PR 自己的分支**（不是 main，也不是另开一个分支）上按上面 1-4 步重新出基线：
+`gh workflow run e2e.yml --ref <这个 PR 的分支> -f update_baselines=true`，下载、提交、推送，让同一个
+PR 的 `web-e2e` 转绿两次。`--ref` 必须是这个 PR 自己的分支——基线要和改动一起进这个 PR 的历史，不是
+先在别处生成好了再复制过来（那样提交记录对不上，将来 `git blame` 一张基线图会指向错误的 PR）。axe/
+文案守卫基线同一次一起重新生成，且只应该变小或不变：如果这个 PR 顺带修了对应的审计条目（比如 W1-A1
+可能顺带碰到 S1/S12，W1-A2 碰到 C2/PW1），新基线里那几条 violation/命中会自然消失；如果重新生成后
+新基线反而比旧的**更大**（多出不在这个 PR 计划内的 violation 或文案命中），先别提交——那通常意味着
+这次界面改动带来了新的无障碍或文案问题，需要维护者在 PR 里确认"这是不是预期内的"，而不是当成基线
+正常收紧一并接受。
+
 ## 验证
 
 ```bash
