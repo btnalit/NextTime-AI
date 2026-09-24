@@ -291,9 +291,13 @@ export function useCapabilityList<T = unknown>(
     setLoadMoreError(null);
     try {
       const page = await caller.call<ListEnvelope<T>>(name, { ...params, cursor });
+      // Same guard as `reloadLoadedPages`: a page that echoes the cursor it was asked for, or
+      // comes back empty, ends the walk — otherwise `autoLoadAll` would re-request it forever.
+      const next =
+        page.nextCursor === cursor || page.items.length === 0 ? undefined : page.nextCursor;
       base.mutate((data) => ({
         items: [...data.items, ...page.items],
-        ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+        ...(next !== undefined ? { nextCursor: next } : {}),
         ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
       }));
     } catch (error) {
@@ -308,8 +312,11 @@ export function useCapabilityList<T = unknown>(
     if (base.state.status !== 'ready') return;
     if (base.state.data.nextCursor === undefined) return;
     if (loadingMore) return;
+    // A failed page stops the automatic walk; a manual `loadMore()` (e.g. a retry button) is
+    // what resumes it — never an unattended retry loop against the kernel.
+    if (loadMoreError !== null) return;
     void loadMore();
-  }, [autoLoadAll, base.state, loadingMore, loadMore]);
+  }, [autoLoadAll, base.state, loadingMore, loadMoreError, loadMore]);
 
   return { ...base, loadingMore, loadMoreError, loadMore };
 }
