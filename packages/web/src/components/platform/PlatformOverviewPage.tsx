@@ -226,7 +226,17 @@ function PlatformOverviewBody({
 
 function checklistTrailing(item: ChecklistItem) {
   const href = CHECKLIST_LINKS[item.key];
-  if (href) return <a href={href}>前往 Go</a>;
+  // S8 W1-A8 (audit S6): a bare `<a>` here rendered a 45×21 hit area, under the §5.9 principle-6
+  // 36px floor. `inline-flex min-h-9 items-center` is the same already-generated Tailwind
+  // utility trio `kit/page-header.tsx`'s breadcrumb link uses for the identical problem — reused
+  // here rather than adding a one-off CSS rule, since the classes exist in the build either way.
+  if (href) {
+    return (
+      <a href={href} className="inline-flex min-h-9 items-center">
+        前往 Go
+      </a>
+    );
+  }
   if (item.key === 'providers') {
     return <span className="text-3 text-small">当前经主机配置 Configured on the host</span>;
   }
