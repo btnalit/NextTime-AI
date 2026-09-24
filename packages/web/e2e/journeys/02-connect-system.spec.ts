@@ -32,7 +32,9 @@ test.describe('Journey ②: 接入一个新系统', () => {
   test("step 1: 系统接入 page reaches the onboarding wizard's first step", async ({ page }) => {
     await asOwner(page);
     await goToByLabel(page, '系统接入');
-    await page.getByRole('button', { name: /接入向导/ }).click();
+    // S8 W2-U1 (audit SY3): 接入向导 moved into the header's overflow menu — open it first.
+    await page.getByTestId('connect-system-more').click();
+    await page.getByRole('menuitem', { name: /接入向导/ }).click();
     const drawer = page.getByTestId('onboarding-wizard-drawer');
     await expect(drawer).toBeVisible({ timeout: 15_000 });
     await expect(drawer.getByTestId('wizard-step-kind')).toBeVisible();

@@ -99,7 +99,9 @@ test.describe('CI smoke: governance surface', () => {
     await login(page, apiKey);
 
     await page.goto('/#/govern/systems');
-    await page.getByRole('button', { name: /接入向导/ }).click();
+    // S8 W2-U1 (audit SY3): 接入向导 moved into the header's overflow menu — open it first.
+    await page.getByTestId('connect-system-more').click();
+    await page.getByRole('menuitem', { name: /接入向导/ }).click();
 
     const drawer = page.getByTestId('onboarding-wizard-drawer');
     await expect(drawer).toBeVisible({ timeout: 15_000 });
