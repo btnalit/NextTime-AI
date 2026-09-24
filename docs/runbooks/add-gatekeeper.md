@@ -406,6 +406,51 @@ docker compose rm -f gatekeeper-<system>
 门实例本身在图里留下的 Gatekeeper/Operation 对象、已产生的 Fact/ActionRequest/AuditRecord 均不会
 被这几步删除——design §12"审计 append-only"，这是刻意的。
 
+### 11.1 撤销一次错误的"关联"（S8 W2-K2，leftover 73）
+
+`enable_gate_instance` 现在按 `endpoint`（内核实际调用的门地址）在本工作区找已有 Gatekeeper：
+恰好一个匹配就**关联**它（不新建 Gatekeeper/ConnectedSystem，只导入并发布该实例 announce 的、
+这个 Gatekeeper 还没有的 Operation），结果带 `linkedExisting: true` 与 `drift`（列出 name/target/
+transportKind 里和实例不一致的字段，仅供参考，从不自动改写）。多个匹配则拒绝
+`ambiguous_existing_gatekeeper`，什么都不写；建议先点"在本工作区启用"之前用 `preview_gate_instance_
+enable{gateId}` 预览（§4b "能力与策略（工作区侧）"的确认步骤）——同样的关联判断、同样的清单解析，
+不写任何东西，console 的确认弹窗即用它。
+
+**关联错了（比如以为会新建，结果关联到了不该关联的旧注册）**，撤销分两层，取决于要退多远：
+
+```bash
+# 层 1（通常够用）：只撤销"这个工作区启用了这个门实例"这件事——删 workspace_gate_links 一行。
+# 占位符：<workspace-id> <gate-id>；从 list_available_gate_instances/get_gate_instance 的
+# gatekeeperId、或本文档 §7 走 create_connection 时的 gk-uuid 对应确认。
+delete from workspace_gate_links where workspace_id = '<workspace-id>' and gate_id = '<gate-id>';
+```
+
+这一行删除**之后**：
+- 这个工作区的"系统接入"页不再显示这个门实例已启用（`list_available_gate_instances` 的
+  `gatekeeperId` 变回 `null`），成员也读不到这个 Gatekeeper 的 `trust`/deny-list 实时联动
+  （`readGateLinkPolicy` 找不到这行）。
+- **`enable_gate_instance` 这次调用导入并发布的 Operation 不会被撤销**——它们已经是这个
+  Gatekeeper 名下 `published` 状态的 Operation，仍然在能力目录里可见、可被已有 Grant 使用。按
+  §11 顶部的方式逐条 `deprecate_operation` 停用它们（弃用不影响门实例本身或其它 Operation）；
+  想连它们撤销的 Grant 一起清理，先 `list_grants` 找到指向这个 Gatekeeper 的行，再
+  `revoke_capability`。
+- **Gatekeeper/ConnectedSystem Object 本身不受影响**——关联从不新建也不删除它们（design 的
+  append-only 审计边界同 §11 顶部）；如果关联对象是旧路径注册的那一个，它继续是原来那个
+  Gatekeeper，其它可能已经指向它的 Grant/Operation 都不受这一步影响。
+- 再次点"在本工作区启用"（或再调 `enable_gate_instance`）会重新走一次关联判断——`endpoint`
+  没变，通常还是关联回同一个 Gatekeeper（这次是 `imported`/`published` 全部落空，因为上次已经
+  导入过的 Operation 现在是 `published`，`skippedOperationNames` 会列出它们）。
+
+```bash
+# 层 2（很少需要）：连关联到的 Gatekeeper 本身也不想要了。内核没有删除一个 Gatekeeper Object 的
+# 能力（design §12 append-only）——这不是"删除"，是让它在治理上失效：撤销所有指向它的 Grant，
+# 弃用它名下所有 published 的 Operation，工作区的人和 agent 就再也调不动它，即使 Object 还在。
+```
+
+**什么时候需要层 2**：`drift` 显示这次关联到的其实不是预期的那个 Gatekeeper（比如两次部署撞了
+同一个 `endpoint`，凑巧关联到了别的系统）——先层 1 撤销这次的启用，确认清楚哪个 Gatekeeper 是
+真正想要的之后，`create_connection`（§7）或走 §4/§4b 正常接入自己的那一份。
+
 ## 12. 常见问题
 
 | 现象 | 原因 | 处理 |
