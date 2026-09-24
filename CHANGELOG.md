@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.0](https://github.com/btnalit/NextTime-AI/compare/v0.17.0...v0.18.0) (2026-09-24)
+
+
+### Features
+
+* **web:** finish missing translations (S8 W1-A12, batch design review round 2) ([#267](https://github.com/btnalit/NextTime-AI/issues/267)) ([4f04810](https://github.com/btnalit/NextTime-AI/commit/4f048105dcda25d5fbe9397d5d2e342d2779c76c))
+* **web:** no internal terms or raw enum values on screen (S8 W1-A10, audit S14) + i18n remainder ([#263](https://github.com/btnalit/NextTime-AI/issues/263)) ([aad6cba](https://github.com/btnalit/NextTime-AI/commit/aad6cba3d7eaf0ec1807ae95a6cf6f1b0ca2a367))
+
+
+### Bug Fixes
+
+* **web:** console layout rules - one primary, governed chips, section shells, drawer structure (S8 W1-A11, audit L2/L3/L5/L8) ([#266](https://github.com/btnalit/NextTime-AI/issues/266)) ([5bb84ef](https://github.com/btnalit/NextTime-AI/commit/5bb84ef786549528f8b967b711556585d30784a8))
+
 ## [0.17.0](https://github.com/btnalit/NextTime-AI/compare/v0.16.2...v0.17.0) (2026-09-24)
 
 
