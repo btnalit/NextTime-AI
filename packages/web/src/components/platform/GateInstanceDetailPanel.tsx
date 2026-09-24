@@ -175,7 +175,11 @@ export function GateInstanceDetailPanel({
       <dl className="definition-list">
         <dt>Gate id</dt>
         <dd>
-          <CopyId id={instance.gateId} label="gate" />
+          {/* S8 W1-A6 (audit S10): gate ids are short human-readable slugs
+              (`gatekeeper-quickbooks`, …), not UUIDs — CopyId's default 8-char truncation turned
+              one into the meaningless "gatekeep". `full` shows it whole; slugs are already short
+              enough (migrations/core/0023_gate_instances.sql caps them at 64 chars). */}
+          <CopyId id={instance.gateId} label="gate" full />
         </dd>
         <dt>接入包 Connector</dt>
         <dd className="mono">{instance.connector}</dd>

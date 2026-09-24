@@ -14,6 +14,7 @@ import {
 import { TaskDetail } from './TaskDetail.js';
 import { usePrincipalNames } from './approvals/useDirectoryNames.js';
 import { PageHeader } from './kit/page-header.js';
+import { RefChip as KitRefChip } from './kit/ref-chip.js';
 import { Button } from './ui/Button.js';
 import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
@@ -21,7 +22,6 @@ import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Icon } from './ui/Icon.js';
-import { RefChip } from './ui/RefChip.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { Tabs } from './ui/Tabs.js';
@@ -240,7 +240,19 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
                   leading={<StatusChip machine="task" status={task.status} size="s" />}
                   title={
                     <>
-                      <span className="truncate">{name ?? task.workerDefinitionId}</span>
+                      {name !== undefined ? (
+                        <span className="truncate">{name}</span>
+                      ) : (
+                        // S8 W1-A6 (audit S10 "worker definitions shown as bare ids"): the
+                        // directory lookup above missed (still loading, denied, or an orphaned
+                        // reference) — self-resolve through resolve_refs instead of a bare id.
+                        <KitRefChip
+                          kind="workerDefinition"
+                          id={task.workerDefinitionId}
+                          http={http}
+                          size="s"
+                        />
+                      )}
                       <span className="text-3 text-small">v{task.workerDefinitionVersion}</span>
                     </>
                   }
@@ -298,7 +310,11 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
             : '任务 Task'
         }
         subtitle={
-          selectedId ? <RefChip kind="object" id={selectedId} name="Task" size="s" /> : undefined
+          // S8 W1-A6: `resolve_refs` now has a real `task` kind — no more faking it with
+          // `kind="object" name="Task"` (that hack predates this kind existing). Self-resolves
+          // (`http`) so this shows the Task's real name, not the misleading "未知 / 已删除"
+          // degrade state for a Task the reader is, self-evidently, looking straight at.
+          selectedId ? <KitRefChip kind="task" id={selectedId} http={http} size="s" /> : undefined
         }
         wide
         testId="task-drawer"

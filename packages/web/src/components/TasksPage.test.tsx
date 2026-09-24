@@ -138,6 +138,10 @@ describe('TasksPage linked approvals (C28) and push reconciliation (C7)', () => 
     const http = scriptedHttp({
       list_tasks: () => ({ items: [task()] }),
       list_worker_definitions: () => ({ items: [] }),
+      // S8 W1-A6: an empty `list_worker_definitions` directory makes both the row and the
+      // drawer-subtitle `RefChip` self-resolve via `resolve_refs` (kit/ref-chip's own `http`
+      // fallback) — this test does not assert on the resolved name, so an empty match is enough.
+      resolve_refs: () => ({ items: [] }),
       list_action_requests: (params) => {
         linkedParams.push(params);
         return {
@@ -185,6 +189,10 @@ describe('TasksPage linked approvals (C28) and push reconciliation (C7)', () => 
     const http = scriptedHttp({
       list_tasks: () => ({ items: [task()] }),
       list_worker_definitions: () => ({ items: [] }),
+      // S8 W1-A6: an empty `list_worker_definitions` directory makes both the row and the
+      // drawer-subtitle `RefChip` self-resolve via `resolve_refs` (kit/ref-chip's own `http`
+      // fallback) — this test does not assert on the resolved name, so an empty match is enough.
+      resolve_refs: () => ({ items: [] }),
       list_action_requests: () =>
         Promise.reject(new HttpError('capability_error', 'role "member"', 'forbidden')),
     });
@@ -198,6 +206,10 @@ describe('TasksPage linked approvals (C28) and push reconciliation (C7)', () => 
     const http = scriptedHttp({
       list_tasks: () => ({ items: [task()] }),
       list_worker_definitions: () => ({ items: [] }),
+      // S8 W1-A6: an empty `list_worker_definitions` directory makes both the row and the
+      // drawer-subtitle `RefChip` self-resolve via `resolve_refs` (kit/ref-chip's own `http`
+      // fallback) — this test does not assert on the resolved name, so an empty match is enough.
+      resolve_refs: () => ({ items: [] }),
       get_task: () => task({ status: 'completed', completedAt: '2026-09-03T00:01:00.000Z' }),
     });
     renderPage(http, pushes);
@@ -234,6 +246,9 @@ describe('TasksPage cancel confirmation (S6-A B2)', () => {
         ],
       }),
       list_action_requests: () => ({ items: [] }),
+      // S8 W1-A6: the drawer-subtitle `RefChip kind="task"` self-resolves via resolve_refs
+      // regardless of whether the row's own WorkerDefinition name already resolved locally.
+      resolve_refs: () => ({ items: [] }),
       cancel_task: cancel,
       get_task: () => task({ status: 'cancelled', cancelledAt: '2026-09-03T00:01:00.000Z' }),
     });

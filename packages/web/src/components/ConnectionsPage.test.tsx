@@ -29,6 +29,9 @@ function scriptedHttp(
     // The real `search` returns the W5 list envelope; the page must read `.items`.
     search: () => ({ items: [] }),
     list_available_gate_instances: () => ({ items: [] }),
+    // S8 W1-A6: every registered-system card's "Grant to principal" picker loads this once,
+    // shared across cards.
+    list_principals: () => ({ items: [] }),
     ...handlers,
   };
   return {
