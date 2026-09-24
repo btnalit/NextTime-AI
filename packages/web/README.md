@@ -203,6 +203,18 @@ src/
                           PlatformModelsPage(Providers)/PlatformRuntimePage(Images+Residents)/
                           ModelsPage(Quotas+Policies) — every table the audit's S3 row and its own
                           "plus any other page table that shows the same overflow" note named
+                          — S8 W1-A6 (audit S10 "id 永不裸露"): `ref-chip` — the kit replacement
+                          for `ui/RefChip`, covering all nine `resolve_refs` kinds (object incl.
+                          Gatekeeper/Operation, Principal, WorkerDefinition, ActionRequest, Task,
+                          Chat, Workspace). Two ways to get a name: caller-supplied (a page's own
+                          already-loaded directory) or self-resolving via an optional `http` prop,
+                          through the co-located `useResolveRefs` hook — every chip passing `http`
+                          on one page batches into one `resolve_refs` call per render tick, cached
+                          per id for the session. No name (either way) renders the chip's own
+                          degrade state (short id + "未知 / 已删除"), never a bare UUID. `ui/RefChip`
+                          stays the default for an already-migrated page with its own loaded
+                          directory; reach for the kit chip when adding a self-resolving one, or
+                          migrating a page already on `components/kit/*`
                           — S8 W1-A7 (audit S13/RT2): `confirm` — the Radix Popover/AlertDialog
                           replacement for `components/ui/ConfirmTier` (now deleted), always rendered
                           next to its own trigger instead of wherever the caller placed the JSX.

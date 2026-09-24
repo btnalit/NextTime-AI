@@ -2277,10 +2277,12 @@ const membersCapabilities: readonly Capability[] = [
     resultSchema: listEnvelope(wire.ResolvedRefWireSchema),
     description:
       'Batch-resolve up to 200 ids to {id, kind, name?, typeName?} across the reference kinds ' +
-      'the console renders as RefChips (graph Object incl. Gatekeeper, Principal, ' +
-      'WorkerDefinition, ActionRequest) — one bounded query per kind, never per id. An id that ' +
-      'does not exist, or that the caller may not see, is silently omitted (never 404, never ' +
-      'leaks existence across visibility, same rule get_object already follows for a single id).',
+      'the console renders as RefChips (graph Object incl. Gatekeeper and Operation, Principal, ' +
+      'WorkerDefinition, ActionRequest, Task, Chat, Workspace) — one bounded query per kind, ' +
+      'never per id. An id that does not exist, or that the caller may not see, is silently ' +
+      'omitted (never 404, never leaks existence across visibility, same rule get_object already ' +
+      'follows for a single id). Workspace resolves only the caller’s own workspace unless the ' +
+      'caller is a platform administrator (console-session login).',
   },
   {
     name: 'list_models',

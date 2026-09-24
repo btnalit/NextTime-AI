@@ -105,7 +105,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
       return;
     }
     // `run` already records the failure in `rowError` (rendered inline below the button) — the
-    // re-thrown rejection here is only for ConfirmTier's own `onConfirm` caller; swallow it so a
+    // re-thrown rejection here is only for `Confirm`'s own `onConfirm` caller; swallow it so a
     // direct (non-confirm) call never surfaces as an unhandled promise rejection.
     run(module.name, false).catch(() => {});
   }

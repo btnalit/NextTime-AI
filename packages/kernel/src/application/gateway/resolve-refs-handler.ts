@@ -5,12 +5,15 @@ import type { CapabilityHandler } from './capability-handler.js';
 /**
  * application/gateway/resolve-refs-handler: `resolve_refs` (S8 W1-C, leftover 48 "无批量 Object
  * 读"; ui-audit-2026-09-23 J8/S10/O1). One bounded query per reference kind — never per id, never
- * N `get_object` round trips.
+ * N `get_object` round trips. S8 W1-A6 (audit S10, kit `RefChip`) added the `operation`/`task`/
+ * `chat`/`workspace` kinds below the original five.
  *
  * **Visibility, per kind (the "never leak existence across visibility" requirement)**:
- *   - `object`/`gatekeeper` — the `objects` table's own workspace-RLS boundary, same as
- *     `get_object`/`list_gatekeepers` (both `minRole:'member'`, no per-row narrowing beyond the
- *     workspace itself).
+ *   - `object`/`gatekeeper`/`operation` — the `objects` table's own workspace-RLS boundary, same
+ *     as `get_object`/`list_gatekeepers`/`list_operations` (all `minRole:'member'`, no per-row
+ *     narrowing beyond the workspace itself). `operation` and `gatekeeper` are both typed graph
+ *     Objects (`governance/gatekeepers/registry.ts`/`manifest.ts`'s own module doc comments) —
+ *     one query already covers all three, split back out by `objectType` after the fact.
  *   - `principal` — `displayName` only (never `role`/`hasApiKey`/`disabledAt` — the fields
  *     `list_principals`, `minRole:'operator'`, actually gates), available at this capability's own
  *     `minRole:'member'` floor: the same tier `explain` (member) already surfaces a Fact/Decision's
@@ -29,13 +32,48 @@ import type { CapabilityHandler } from './capability-handler.js';
  *     already enforce, inlined into this kind's one query (never a per-row second query — that
  *     would violate "one query per kind, not per id" for up to 200 ids) so an ActionRequest a
  *     caller could not otherwise see is simply absent, never a name leak.
+ *   - `task` — `tasks`' own RLS (`tasks_workspace_isolation`, migrations/task/0001_tasks.sql) is
+ *     workspace-only, with no additional owner-narrowing rule on file for the table itself (that
+ *     migration's own comment: "no visibility rule for Task is spelled out... a stricter,
+ *     owner-only policy can be layered on later"); `list_tasks`'s "the caller's own Tasks" is a
+ *     narrowing specific to *that* capability's "browse my own Tasks" purpose, not a general Task
+ *     visibility rule — same reasoning as `workerDefinition` above (no narrower here either, a
+ *     Task's existence/definition is not itself sensitive within the workspace). `name` is the
+ *     Task's own WorkerDefinition's name (a Task has no name of its own), joined by the exact
+ *     `(workspace_id, id, version)` identity `tasks.worker_definition_id`/`worker_definition_version`
+ *     already carry.
+ *   - `chat` — relies on RLS doing the real work: this handler's `client` runs inside
+ *     `dispatch.ts`'s `withWorkspace` role-switch, so `chats_visibility`
+ *     (migrations/core/0003_chat.sql: `visibility = 'workspace' OR owner_principal_id =
+ *     app_principal()`) is already enforced by Postgres on the plain `select` below — a private
+ *     chat belonging to someone else is simply absent from the result set, never a second
+ *     application-level check.
+ *   - `workspace` — the one kind with no RLS at all to lean on (`workspaces` deliberately has
+ *     none, migrations/core/0001_identity.sql's own comment) and the one where this capability's
+ *     own `workspaceId` argument is *always* the caller's current workspace — so "the caller's own
+ *     workspace" only ever needs `id === workspaceId`, no query required; a platform administrator
+ *     (`ctx.consoleUser?.platformRole === 'admin'` — S4.1 console-session login, threaded by
+ *     `dispatch.ts`) additionally sees any other workspace by id, the same authority
+ *     `list_workspaces` (`scope:'platform'`) already grants them. The id filter runs before the
+ *     query, not after: a non-admin's query never even asks about another workspace's id.
  */
 
 const graphStore = new SqlGraphStore();
 
+type ResolvedRefKind =
+  | 'object'
+  | 'principal'
+  | 'gatekeeper'
+  | 'operation'
+  | 'workerDefinition'
+  | 'actionRequest'
+  | 'task'
+  | 'chat'
+  | 'workspace';
+
 interface ResolvedRef {
   readonly id: string;
-  readonly kind: 'object' | 'principal' | 'gatekeeper' | 'workerDefinition' | 'actionRequest';
+  readonly kind: ResolvedRefKind;
   readonly name?: string;
   readonly typeName?: string;
 }
@@ -51,14 +89,21 @@ export const resolveRefsHandler: CapabilityHandler = async (client, workspaceId,
   const resolved: ResolvedRef[] = [];
 
   // -----------------------------------------------------------------------------------------
-  // object / gatekeeper — one batched read over `objects` covers both (a Gatekeeper is a typed
-  // Object, `governance/gatekeepers/registry.ts`'s own module doc comment).
+  // object / gatekeeper / operation — one batched read over `objects` covers all three (both
+  // Gatekeeper and Operation are typed Objects, `governance/gatekeepers/registry.ts`/
+  // `manifest.ts`'s own module doc comments).
   // -----------------------------------------------------------------------------------------
   const objectsById = await graphStore.getObjectsByIds(client, workspaceId, uniqueIds);
   for (const object of objectsById.values()) {
+    const kind: ResolvedRefKind =
+      object.objectType === 'Gatekeeper'
+        ? 'gatekeeper'
+        : object.objectType === 'Operation'
+          ? 'operation'
+          : 'object';
     resolved.push({
       id: object.id,
-      kind: object.objectType === 'Gatekeeper' ? 'gatekeeper' : 'object',
+      kind,
       name: objectDisplayName(object),
       typeName: object.objectType,
     });
@@ -142,6 +187,66 @@ export const resolveRefsHandler: CapabilityHandler = async (client, workspaceId,
   );
   for (const row of actionRequestsResult.rows) {
     resolved.push({ id: row.id, kind: 'actionRequest', name: row.action_kind });
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // task — workspace-wide (see this module's own doc comment); `name` is the Task's own
+  // WorkerDefinition's name, joined on the exact (workspace_id, id, version) identity `tasks`
+  // already carries — a Task has no name of its own.
+  // -----------------------------------------------------------------------------------------
+  const tasksResult = await client.query<{ id: string; name: string | null }>(
+    `select t.id, wd.definition ->> 'name' as name
+     from tasks t
+     left join worker_definitions wd
+       on wd.workspace_id = t.workspace_id
+       and wd.id = t.worker_definition_id
+       and wd.version = t.worker_definition_version
+     where t.workspace_id = $1 and t.id = any($2::uuid[])`,
+    [workspaceId, uniqueIds],
+  );
+  for (const row of tasksResult.rows) {
+    resolved.push({
+      id: row.id,
+      kind: 'task',
+      ...(row.name !== null && row.name !== '' ? { name: row.name } : {}),
+    });
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // chat — RLS (`chats_visibility`) does the real narrowing here: `client` is already role-
+  // switched into this call's workspace/principal by `dispatch.ts`'s `withWorkspace`, so a chat
+  // belonging to someone else and not shared workspace-wide is simply absent from `chatsResult`
+  // (see this module's own doc comment).
+  // -----------------------------------------------------------------------------------------
+  const chatsResult = await client.query<{ id: string; title: string | null }>(
+    'select id, title from chats where workspace_id = $1 and id = any($2::uuid[])',
+    [workspaceId, uniqueIds],
+  );
+  for (const row of chatsResult.rows) {
+    resolved.push({
+      id: row.id,
+      kind: 'chat',
+      ...(row.title !== null && row.title !== '' ? { name: row.title } : {}),
+    });
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // workspace — no RLS to lean on (see this module's own doc comment): resolvable ids are
+  // filtered *before* the query, not after — the caller's own workspace always, any other
+  // workspace only for a platform administrator's console session.
+  // -----------------------------------------------------------------------------------------
+  const isPlatformAdmin = ctx.consoleUser?.platformRole === 'admin';
+  const workspaceIds = uniqueIds.filter(
+    (candidate) => candidate === workspaceId || isPlatformAdmin,
+  );
+  if (workspaceIds.length > 0) {
+    const workspacesResult = await client.query<{ id: string; name: string }>(
+      'select id, name from workspaces where id = any($1::uuid[])',
+      [workspaceIds],
+    );
+    for (const row of workspacesResult.rows) {
+      resolved.push({ id: row.id, kind: 'workspace', name: row.name });
+    }
   }
 
   return { result: { items: resolved } };

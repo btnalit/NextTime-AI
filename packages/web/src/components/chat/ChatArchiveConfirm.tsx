@@ -41,8 +41,8 @@ export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArc
   // still around to receive it; `notifyChatChanged` additionally reaches whichever page (this one,
   // a different one, or none) is mounted at that moment (`hooks/useChatUpdates.tsx`).
   const notifyChatChanged = useNotifyChatChanged();
-  // `ConfirmTier` low keys its effect on `open` alone and reads the callbacks through a ref; the
-  // undo closure it captures must reach the *current* chat and `onChanged` the same way.
+  // `Confirm`'s low tier keys its effect on `open` alone and reads the callbacks through a ref;
+  // the undo closure it captures must reach the *current* chat and `onChanged` the same way.
   const latest = useRef({ chat, onChanged, notifyChatChanged });
   latest.current = { chat, onChanged, notifyChatChanged };
   return (

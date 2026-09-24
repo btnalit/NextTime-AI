@@ -55,9 +55,9 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
     }
   }
 
-  // No local try/catch: ConfirmTier's own `useConfirmRun` already catches `onConfirm`'s
-  // rejection, renders it inline (`ErrorBanner`), and keeps the dialog open — duplicating that
-  // here would just show the error twice.
+  // No local try/catch: `Confirm`'s own `useConfirmRun` already catches `onConfirm`'s rejection,
+  // renders it inline, and keeps the popover open — duplicating that here would just show the
+  // error twice.
   async function clear(): Promise<void> {
     const updated = await client.clearProviderSecret(provider.id);
     onUpdated(updated);

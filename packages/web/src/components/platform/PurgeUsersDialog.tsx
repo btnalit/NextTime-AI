@@ -26,7 +26,7 @@ export interface PurgeUsersDialogProps {
  *  size so one page is one batch at most. */
 const BATCH_MAX = 200;
 
-/** Kernel 4xx with the console's bilingual copy as its message, for `ConfirmTier`'s own banner. */
+/** Kernel 4xx with the console's bilingual copy as its message, for `Confirm`'s own inline banner. */
 function friendly(err: unknown): unknown {
   const mapped = platformErrorMessage(err);
   if (mapped === null || !(err instanceof HttpError)) return err;

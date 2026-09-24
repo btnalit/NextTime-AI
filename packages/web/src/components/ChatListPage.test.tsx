@@ -109,7 +109,7 @@ describe('ChatListPage filter (W1)', () => {
   });
 });
 
-describe('ChatListPage archive / restore (W1, ConfirmTier low + undo)', () => {
+describe('ChatListPage archive / restore (W1, kit/confirm low + undo)', () => {
   it('archives on one click, splices the row out of 活跃, and undo from the toast restores it', async () => {
     const client = scriptedClient({
       list_chats: () => ({ items: FIXTURE }),

@@ -50,10 +50,13 @@ export const FIXED_NOW = new Date('2026-01-01T00:00:00.000Z');
  *    CI run but not worth pinning across baseline regenerations.
  *  - `.mono.text-small`: the two audit-timeline rows (PlatformAuditPage.tsx,
  *    PlatformStatusPage.tsx) that format a timestamp directly into a `<span>` instead of `<time>`.
+ *  - `[data-volatile]`: the convention for any other per-run value (a chat's short id in the
+ *    composer, a kit RefChip's unresolved short-id fallback) — mark the element, not this list.
  */
 export const MASK_SELECTORS = [
   'time',
   '.copy-id',
+  '[data-volatile]',
   '[data-testid="kernel-version"]',
   '[data-testid="current-user"]',
   '.mono.text-small',

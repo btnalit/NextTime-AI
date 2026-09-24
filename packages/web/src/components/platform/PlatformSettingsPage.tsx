@@ -1,6 +1,14 @@
-import type { PlatformRoleWire, PlatformSettingsWire } from '@nexttime/shared';
+import type {
+  PlatformRoleWire,
+  PlatformSettingsWire,
+  PlatformWorkspaceWire,
+} from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
-import { invalidateCapability, useCapability } from '../../hooks/useCapability.js';
+import {
+  invalidateCapability,
+  useCapability,
+  useCapabilityList,
+} from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
 import { breadcrumbFor } from '../../lib/nav.js';
@@ -108,6 +116,11 @@ function toFormValues(settings: PlatformSettingsWire): FormValues {
   };
 }
 
+/** S8 W1-A6 (audit S10 "默认工作区是 UUID 文本框"): the picker's own sentinel for "type the id
+ *  by hand" — `list_workspaces` lists every workspace regardless of status, but a value already
+ *  set to a since-purged workspace's id would otherwise not be selectable at all. */
+const OTHER_WORKSPACE = '__other__';
+
 /** `''` → `null` (clear the setting), anything else → the trimmed string. */
 function nullableText(raw: string): string | null {
   const trimmed = raw.trim();
@@ -136,6 +149,27 @@ function PlatformSettingsForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [nothingToSave, setNothingToSave] = useState(false);
+
+  // S8 W1-A6 (audit S10): the default-workspace picker's own data source — every workspace,
+  // regardless of status, so a currently-set (possibly disabled) id is still shown by name.
+  const workspacesList = useCapabilityList<PlatformWorkspaceWire>(
+    http,
+    'list_workspaces',
+    {},
+    { autoLoadAll: true },
+  );
+  const workspaceOptions =
+    workspacesList.state.status === 'ready' ? workspacesList.state.data.items : [];
+  const workspacesReady = workspacesList.state.status === 'ready';
+  const currentWorkspaceKnown =
+    values.defaultWorkspaceId === '' ||
+    workspaceOptions.some((ws) => ws.id === values.defaultWorkspaceId);
+  const [manualWorkspaceEntry, setManualWorkspaceEntry] = useState(false);
+  // Once the directory has actually loaded, an id it does not know about (a purged workspace, or
+  // one this administrator has not seen yet) forces manual-entry mode too — never silently
+  // falls back to "无 None" and loses the reader's already-set value.
+  const useManualWorkspaceInput =
+    manualWorkspaceEntry || (workspacesReady && !currentWorkspaceKnown);
 
   function set(key: EditableKey, value: string): void {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -260,16 +294,43 @@ function PlatformSettingsForm({
           <Field
             id="ps-default-workspace"
             label="默认工作区 Default workspace"
-            hint="新建用户默认加入的工作区 id；留空 = 不自动加入。 The workspace new users join; empty = none."
+            hint="新建用户默认加入的工作区；留空 = 不自动加入。 The workspace new users join; empty = none."
           >
-            <Input
+            <Select
               id="ps-default-workspace"
-              value={values.defaultWorkspaceId}
-              onChange={(event) => set('defaultWorkspaceId', event.target.value)}
+              value={useManualWorkspaceInput ? OTHER_WORKSPACE : values.defaultWorkspaceId}
+              onChange={(event) => {
+                const next = event.target.value;
+                if (next === OTHER_WORKSPACE) {
+                  setManualWorkspaceEntry(true);
+                  return;
+                }
+                setManualWorkspaceEntry(false);
+                set('defaultWorkspaceId', next);
+              }}
               disabled={submitting}
-              mono
-            />
+            >
+              <option value="">无 None</option>
+              {workspaceOptions.map((ws) => (
+                <option key={ws.id} value={ws.id}>
+                  {ws.name}
+                </option>
+              ))}
+              <option value={OTHER_WORKSPACE}>其他（输入 id）Other — type an id</option>
+            </Select>
           </Field>
+
+          {useManualWorkspaceInput ? (
+            <Field id="ps-default-workspace-other" label="工作区 id Workspace id">
+              <Input
+                id="ps-default-workspace-other"
+                value={values.defaultWorkspaceId}
+                onChange={(event) => set('defaultWorkspaceId', event.target.value)}
+                disabled={submitting}
+                mono
+              />
+            </Field>
+          ) : null}
 
           <p className="text-3 text-small" data-testid="platform-settings-default-model-hint">
             默认入口模型在"模型与供应商"页设置（经目录校验）。 The default entry model is set on the{' '}

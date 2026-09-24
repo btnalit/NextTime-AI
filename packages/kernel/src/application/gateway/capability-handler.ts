@@ -7,6 +7,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import type { PlatformRole } from '../identity/index.js';
 
 /**
  * application/gateway/capability-handler: the `CapabilityHandler` shape every capability handler
@@ -84,6 +85,18 @@ export interface CapabilityHandlerContext {
     readonly role: Role;
     readonly displayName: string | null;
   };
+  /**
+   * S8 W1-C addition (resolve_refs's `workspace` kind — ui-audit S10): the console-session
+   * administrator behind this human-channel call, when the caller authenticated with the S4.1
+   * cookie (`resolve-caller.ts`'s `caller.user`) — `undefined` on the API-key path (no
+   * `ConsoleUser` at all, same as `caller.user` itself) and on the handle channel. Distinct from
+   * `platformUser` above: that one is set only on a *`scope:'platform'` call* (no workspace, no
+   * Principal); this is set on an ordinary workspace-scoped human call made by a login that is
+   * *also* a platform administrator, so a handler can grant that one extra bit of cross-workspace
+   * authority (resolve_refs's own `workspace` kind: "the caller's own workspace, or platform
+   * admins for others") without threading a whole `ConsoleUser` through.
+   */
+  readonly consoleUser?: { readonly platformRole: PlatformRole };
 }
 
 /**

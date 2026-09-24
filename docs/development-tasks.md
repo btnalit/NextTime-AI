@@ -3104,9 +3104,23 @@ W1-A1 / A2 先于 W1-B 合入，基线直接在新界面上生成，首批评审
 | W1-C | #243 | 新增 `execution_readiness`（复用 `computeChildHandleScope` 与建入口 Handle 的同一组函数，集成测试与 `find_workers` 交叉验证）、`resolve_refs`（对象 / 门 / 成员 / Worker 定义 / 审批请求，不可见 id 省略）、`list_capability_names`、`get_skill`；`traverse` 方向与邻居名称、`list_conflicts` 对象 / Fact 筛选、`list_gatekeepers` / `list_operations` 的 `q`、`GateInstanceWire.enablingWorkspaces`；六个 `list_*` keyset 分页（缺省 100、上限 500；生产最大 21 行，今日不丢行）。无迁移 | `resolve_refs` 补 Operation / Task / Chat / 工作区（RefChip 车道）；控制台列表须能翻页（S3 数据表车道）；readiness 复刻 `ensureEntryHandle` 的步骤，后续抽共享函数；观察窗口内核无对应（窗口由每轮 `window.complete` 驱动），转 W3 图谱 G1–G3 按每个 Source 最近完整窗口判断 |
 | W1-A1 | #245 | 旧样式表进 `@layer legacy`（位于 Tailwind utilities 之下，`tokens.css` 保持不分层），511 条既有规则逐字节不变；kit `page-header`（标题列最小宽度 + 操作区整体换行、面包屑 36 px 命中区）；导航数据抽到 `lib/nav.ts`，分组名统一"使用 / 治理 / 平台"，22 页迁移、11 页首次有面包屑；旧 `ui/PageHeader` 删除 | 面包屑 `aria-label` 仍为英文（i18n 车道） |
 | W1-A2 | #246 | kit `markdown`（react-markdown + remark-gfm，不渲染原始 HTML、不出 `<img>`、链接只放 http(s) / mailto），`React.lazy` 懒加载（主包 +1 kB gzip，独立分块 57 kB gzip）；`lib/format.ts` 一套 zh-CN 格式：绝对时间带时区标注、相对时间对称（"2 天后"），PW1 到期列修正 | `MessageBody` 一处行内 `style` 归遗留 49；访问页授权到期词序同 PW1（W3） |
+| W1-B | #244 | 三档截图门槛（27 个界面 + 2 个关键状态 × 1440 / 1280 / 768 = 87 张，CI Linux 生成，冻结时间、遮罩时间 / id / 对话气泡，`maxDiffPixelRatio` 0.01）；axe（serious / critical）与文案守卫（裸 UUID、原始枚举取自 `@nexttime/shared`、内部代号、环境变量名、runbook 路径）以棘轮基线入库，只减不增——起点 axe 220 个节点（`color-contrast` 213）、文案 7 个界面；`<html lang="zh-CN">`；六条旅程骨架（③ ⑥ 真跑，①②④⑤ `test.fixme` 写明步骤）。同一提交连续两次常规 run 全绿 | 重拍命令两处缺陷在 #248 修复（见下）；旅程 ③ 暴露遗留 78 |
+| W1-A5 | #250 | 路由级拆分：各页 `React.lazy` + 共享 `RouteBoundary`（分块加载失败给"刷新页面"），`vendor-react`、平台九页合一个分块；入口 806 → 37 kB（gzip 228 → 11 kB），Vite 500 kB 警告消失；截图零差异 | 遗留 49 的字体与行内样式两部分仍开放 |
+| W1-A4 | #252 | kit `data-table`（TanStack Table 8.21，只用排序引擎，≤ 768 卡片、供应商表关键列固定）；`useCapabilityList` 加 `truncated` 与 `autoLoadAll`，六个分页列表全部接上翻页；五页迁移。主会话复审补一处：`autoLoadAll` 在出错或游标原样返回时会无限重试 / 追加（先写两条复现用例再修） | — |
+| W1-A3 | #248 | ≤ 960 顶栏 + 抽屉导航（Radix 焦点陷阱），导航图标去重；顶栏常驻连接状态（全页只有一个 `ws-status`）；对话顶栏两行 + 溢出菜单。批量设计评审后在同一 PR 修：PageHeader 操作区不再 `flex-shrink-0`（系统接入 768 下第 4 个按钮被裁，S1 收尾）、面包屑 `<ol>` 默认缩进（无 preflight）、≤ 960 外壳显式两行（短页被垂直居中）；`chat.spec.ts` 直接断言助手回复渲染出 `<h2>` / `<strong>`（截图遮罩了气泡，C2 无法目视）。W1-B 的重拍命令修正：pnpm 11 把 `--` 原样传给 Playwright 致 `--update-snapshots` 失效；截图用例去掉 `serial`（一处失败跳过其余）；改 `--update-snapshots=all`，否则阈值以下的变化不写回、漂移累积 | 管理员登录辅助函数在窄屏同样依赖侧栏导航（当前无用例触发） |
+| — | #253 | `gate-host.spec.ts` / `integrations.spec.ts` 的目录可见性断言用一次性 `count()`，#250 懒加载后竞态变成两次都失败；改 `expect.poll` | — |
+
+**W1 批量设计评审**（2026-09-24，按维护者同日的授权由 Sonnet 评审对照 §5.9 看 87 张截图）：首轮 BLOCK——系统接入 768 页头溢出；主会话复看另发现面包屑缩进与窄屏短页垂直居中。三处在 #248 修复并复看通过；其余界面与宽度符合 §5.9（对话顶栏、窄屏顶栏、表格卡片化、带时区的时间）。新的非阻断问题：集成页连接器 MODE 下拉在 768 截断（P3，并入 W3 的 S13 / PI1）。仍存在且已排后续车道：S4、PS1、S13 / PI1、L5。
+
+**W2 内核半段实现说明**（2026-09-24，UI 半段在 W1 之后）
+
+| 车道 | PR | 结果 | 跟进 |
+|---|---|---|---|
+| W2-K1 | #249 | 入口 prompt 契约：`find_*` 全空时的三项前提指引、ops-runner 条件化、回复用用户的语言，`prompt-contract` 守卫加三条断言（B2 / B8 / R9，遗留 72）；`find_*` 分词匹配（CJK 双字切分、上限 32 个 token、参数化 SQL，空 `need` 列全部，遗留 71 / B3）；`find_procedures` 复用 `find_workers` 的启用白名单（B4）；`invoke_worker` 接受唯一的门名、报错列出可见门（R4）；随包 manifest 12 个 Operation 补描述、CLI 导入要求非空、OpenAPI / MCP 导入不再产出空描述（CO1）。CO2 核实无需改码：策略引擎只让 `low` 自动批准，manifest 已声明 `low`，生产上的是旧部署数据 | `deploy/accept-s2` 夹具仍无描述（W4 顺带） |
+| W2-K2 | #251 | `enable_gate_instance` 先按 endpoint 找本工作区已有 Gatekeeper：一个 → 关联（不新建 Gatekeeper / ConnectedSystem，只导入并发布新增的 Operation，结果带 `linkedExisting` 与 `drift`）；多个 → `ambiguous_existing_gatekeeper` 且不写入；零个 → 原路径。只关联不改写旧注册与已有 Operation 的治理字段。新增只读 `preview_gate_instance_enable`（与启用共用判定函数，报告待导入与已存在 Operation，`differs` 标出治理字段与门公告不一致）。回滚写进 `runbooks/add-gatekeeper.md` §11.1。不做跨工作区数据迁移：部署后由 owner 在控制台对每个旧注册的门点一次"启用" | 遗留 79（是否刷新陈旧的治理字段）；主机：生产工作区的 docker / ragflow 门各点一次启用并核对复用了旧 Gatekeeper |
 
 **S8 验收**：六条旅程测试在 CI 通过；维护者在主机按旅程①–⑥做页面验收；审计清单 P0 / P1 全部关闭或经维护者标"不修"；
-三档截图基线经维护者认可。
+三档截图基线经独立设计评审认可（2026-09-24 维护者决定，不逐个交维护者）。
 
 **风险**：① 组件迁移面大——"先组件、后页面"，每页迁移一个 PR 并附截图对比；新旧组件并存期内以守卫禁止新代码引用旧
 `ui/*`。② 旧注册关联（J4）改的是生产治理数据——先在临时工作区复现并写可逆迁移与回滚步骤，主机应用前备份。③ 截图回归

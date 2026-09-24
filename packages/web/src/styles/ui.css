@@ -157,7 +157,7 @@
 
 .chip-s {
   height: 20px;
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   padding: 0 7px;
 }
 
@@ -218,7 +218,7 @@
   border: 1px solid var(--border);
   color: var(--text-2);
   font-family: var(--font-mono);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   white-space: nowrap;
 }
 
@@ -320,7 +320,7 @@
 
 .error-banner-code {
   font-family: var(--font-mono);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   color: var(--danger);
   background: var(--surface-1);
   border: 1px solid var(--border);
@@ -819,7 +819,7 @@
   border-bottom-width: 2px;
   background: var(--surface-2);
   font-family: var(--font-mono);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   line-height: 16px;
   color: var(--text-2);
 }
@@ -845,11 +845,21 @@
   white-space: nowrap;
 }
 
-/* Inside a 22px chip the copy button cannot honour the 28px compact floor — sized to the chip. */
+/* Inside a 22px chip the copy button cannot honour the 28px compact floor — sized to the chip.
+ * `::before` gives it an invisible 36px hit area (§5.9 principle 6, audit S6: was a bare 20×20
+ * target) without growing the visible icon — `position: relative` scopes the absolutely
+ * positioned pseudo-element to the button itself, not the whole `.copy-id` chip. */
 .copy-id .btn {
+  position: relative;
   color: var(--text-3);
   height: 20px;
   width: 20px;
+}
+
+.copy-id .btn::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
 }
 
 .copy-id .btn:hover {
@@ -922,7 +932,7 @@
 
 .ref-chip-kind {
   flex-shrink: 0;
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--text-3);
@@ -1181,7 +1191,7 @@ a.ref-chip-name {
   height: 22px;
   border-radius: 50%;
   border: 1px solid var(--border-strong);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }

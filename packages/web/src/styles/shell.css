@@ -76,7 +76,7 @@
   align-items: center;
   padding: 1px 6px;
   border-radius: 999px;
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -118,7 +118,7 @@
   align-items: baseline;
   gap: 6px;
   padding: 4px 10px;
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -126,14 +126,18 @@
 }
 
 .nav-section-title-sub {
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: 500;
-  opacity: 0.75;
+  /* S8 W1-A8 (audit S5): was `opacity: 0.75` on top of the inherited --text-3 — under full
+   * opacity --text-3 clears 4.5:1 everywhere (tokens-contrast.test.ts), but compositing it at
+   * 75% against --surface-1 pulled the *effective* colour down to 3.37:1 (light) / 4.43:1 (dark).
+   * The lighter font-weight (500 vs the title's 600) already reads as secondary; dropping the
+   * opacity keeps that without silently undoing the token's contrast guarantee. */
 }
 
 .nav-label-sub {
   display: block;
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: 400;
   color: var(--text-3);
 }
@@ -182,7 +186,7 @@
   border-radius: 999px;
   background: var(--warn-soft);
   color: var(--warn);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: 600;
   display: inline-grid;
   place-items: center;
@@ -209,7 +213,7 @@
 /* S6-A0 footer lines: kernel version next to the connection dot, current user beneath. */
 .sidebar-version {
   margin-left: auto;
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -429,7 +433,7 @@
     right: 8px;
     min-width: 16px;
     height: 16px;
-    font-size: var(--fs-11);
+    font-size: var(--fs-12);
     padding: 0 4px;
     box-shadow: 0 0 0 2px var(--surface-1);
   }
@@ -496,7 +500,7 @@
 }
 
 .mobile-topbar-sub {
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   color: var(--text-3);
 }
 

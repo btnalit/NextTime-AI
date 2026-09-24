@@ -14,6 +14,7 @@ import { breadcrumbFor } from '../../lib/nav.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
+import { RefChip as KitRefChip } from '../kit/ref-chip.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { CopyId } from '../ui/CopyId.js';
@@ -387,10 +388,19 @@ function RuntimeBody({
       id: 'workspace',
       header: '工作区 Workspace',
       cellClassName: 'text-small',
-      cell: (resident) =>
-        workspaceNames.get(resident.workspaceId) ?? (
-          <span className="text-3">{resident.workspaceId}</span>
-        ),
+      // S8 W1-A6 (audit S10 "常驻容器列显示已清除工作区的 UUID"): `workspaceNames` only has rows
+      // for a workspace `list_workspaces` still returns — a purged one is genuinely gone, so this
+      // is the chip's own degrade state ("未知 / 已删除"), not a raw id text node. `list_workspaces`
+      // is platform-scope; there is no per-workspace session here to self-resolve through
+      // `resolve_refs`, hence a caller-supplied `name` (or none) rather than the `http` prop.
+      cell: (resident) => (
+        <KitRefChip
+          kind="workspace"
+          id={resident.workspaceId}
+          name={workspaceNames.get(resident.workspaceId)}
+          size="s"
+        />
+      ),
     },
     {
       id: 'image',

@@ -16,6 +16,7 @@ import {
 } from '../lib/connections.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
+import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { statusValues } from '../lib/status-tone.js';
@@ -135,6 +136,19 @@ export function ConnectionsPage({
     {},
   );
   const availableRows = available.state.status === 'ready' ? available.state.data.items : [];
+  // S8 W1-A6 (audit S10 "授权表单要粘贴 principal UUID"): loaded once here, shared by every
+  // registered-system card's own "Grant to principal" picker (`GatekeeperCard`'s own doc
+  // comment) — the same `list_principals` directory `AccessPage`'s grant form already uses.
+  const principalsList = useCapabilityList<PrincipalRow>(
+    http,
+    'list_principals',
+    {},
+    {
+      autoLoadAll: true,
+    },
+  );
+  const principalRows =
+    principalsList.state.status === 'ready' ? principalsList.state.data.items : [];
 
   const requestRows = useMemo(() => {
     const rows = requests.state.status === 'ready' ? requests.state.data : [];
@@ -168,7 +182,8 @@ export function ConnectionsPage({
 
   /** C26: `cancel_connection_request` answers with the row itself (`status: 'cancelled'`) — spliced
    *  in place; a mapped refusal (403 not yours / 409 no longer requested) becomes bilingual copy,
-   *  anything else is the kernel's own message. Thrown so `ConfirmTier` keeps the card open. */
+   *  anything else is the kernel's own message. Thrown so the confirm (S8 W1-A7, `kit/confirm`)
+   *  keeps the popover open with the error. */
   async function cancelRequest(row: ConnectionRequestRow): Promise<void> {
     try {
       const cancelled = await http.call<CancelConnectionRequestResult>(
@@ -420,6 +435,7 @@ export function ConnectionsPage({
                   availableRows.find((row) => row.gatekeeperId === gatekeeper.id) ?? null
                 }
                 platformAdmin={platformAdmin}
+                principals={principalRows}
               />
             ))}
             {gatekeepers.state.data.length >= 50 ? (

@@ -4,12 +4,12 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import type { PrincipalRow, RotateApiKeyResult } from '../lib/governance.js';
+import { RefChip } from './kit/ref-chip.js';
 import { Button } from './ui/Button.js';
 import { CopyId } from './ui/CopyId.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Select } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
-import { RefChip } from './ui/RefChip.js';
 import { StatusChip } from './ui/StatusChip.js';
 
 export interface PrincipalDetailProps {
@@ -26,8 +26,9 @@ export interface PrincipalDetailProps {
  * step (a two-click local toggle; the drawer-based `ConfirmTier` tiers would open a second focus
  * trap inside this drawer) since it revokes every Handle/session the member holds (S3.11
  * background: "撤销其全部 Handle 与入口会话"). B3 / B4 (S6-A): the Worker-definition reference is a
- * `RefChip` (bare — this page loads no `list_worker_definitions`; the grey chip says so) and the
- * copy is bilingual.
+ * `RefChip` (S8 W1-A6, audit S10: this page loads no `list_worker_definitions` directory, so the
+ * kit chip self-resolves its own name through `resolve_refs` instead of degrading to a bare id)
+ * and the copy is bilingual.
  */
 export function PrincipalDetail({
   http,
@@ -149,6 +150,7 @@ export function PrincipalDetail({
               <RefChip
                 kind="workerDefinition"
                 id={principal.workerDefinitionId}
+                http={http}
                 size="s"
                 testId="principal-worker-definition"
               />

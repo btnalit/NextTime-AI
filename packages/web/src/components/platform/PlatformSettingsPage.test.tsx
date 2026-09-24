@@ -54,7 +54,12 @@ function settings(overrides: Partial<PlatformSettingsWire> = {}): PlatformSettin
 
 describe('PlatformSettingsPage', () => {
   it('seeds the form, shows the read-only environment administrators and the version footer', async () => {
-    const http = scriptedHttp({ get_platform_settings: () => settings() });
+    const http = scriptedHttp({
+      get_platform_settings: () => settings(),
+      // S8 W1-A6: the default-workspace picker loads `list_workspaces`; these tests do not
+      // assert on its options.
+      list_workspaces: () => ({ items: [] }),
+    });
     renderPage(http);
 
     const form = await screen.findByTestId('platform-settings-form');
@@ -74,7 +79,12 @@ describe('PlatformSettingsPage', () => {
   });
 
   it('warns that the instance instructions reach every agent system prompt', async () => {
-    const http = scriptedHttp({ get_platform_settings: () => settings() });
+    const http = scriptedHttp({
+      get_platform_settings: () => settings(),
+      // S8 W1-A6: the default-workspace picker loads `list_workspaces`; these tests do not
+      // assert on its options.
+      list_workspaces: () => ({ items: [] }),
+    });
     renderPage(http);
     await screen.findByTestId('platform-settings-form');
     expect(screen.getByText(/这会进入所有 agent 的 system prompt/)).toBeTruthy();
@@ -83,6 +93,7 @@ describe('PlatformSettingsPage', () => {
   it('saves only the changed fields and shows a success banner', async () => {
     const http = scriptedHttp({
       get_platform_settings: () => settings(),
+      list_workspaces: () => ({ items: [] }),
       update_platform_settings: (params) => {
         // Partial update: nothing the reader left alone is sent.
         expect(params).toEqual({ siteName: 'NextTime Ops' });
@@ -109,6 +120,7 @@ describe('PlatformSettingsPage', () => {
   it('clears a nullable field by emptying its box', async () => {
     const http = scriptedHttp({
       get_platform_settings: () => settings(),
+      list_workspaces: () => ({ items: [] }),
       update_platform_settings: (params) => {
         expect(params).toEqual({ defaultWorkspaceId: null, defaultDailyCallLimit: null });
         return settings({ defaultWorkspaceId: null, defaultDailyCallLimit: null, version: 4 });
@@ -127,7 +139,12 @@ describe('PlatformSettingsPage', () => {
   });
 
   it('refuses to submit an out-of-range password minimum length', async () => {
-    const http = scriptedHttp({ get_platform_settings: () => settings() });
+    const http = scriptedHttp({
+      get_platform_settings: () => settings(),
+      // S8 W1-A6: the default-workspace picker loads `list_workspaces`; these tests do not
+      // assert on its options.
+      list_workspaces: () => ({ items: [] }),
+    });
     renderPage(http);
 
     const form = await screen.findByTestId('platform-settings-form');
@@ -141,6 +158,7 @@ describe('PlatformSettingsPage', () => {
   it('maps a kernel error code to its bilingual message', async () => {
     const http = scriptedHttp({
       get_platform_settings: () => settings(),
+      list_workspaces: () => ({ items: [] }),
       update_platform_settings: () =>
         Promise.reject(
           new HttpError('capability_error', 'that workspace is disabled', 'workspace_disabled'),
