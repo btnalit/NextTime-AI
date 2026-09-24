@@ -19,8 +19,8 @@ function http(handlers: Record<string, (params: unknown) => unknown>) {
   return { caller, calls };
 }
 
-describe('WorkerDefinitionEditor (S6-A A2)', () => {
-  it('new family: submits propose_worker_definition{kind, definition} with only the declared fields, then publishes {definitionId, version}', async () => {
+describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
+  it('new family: capabilities/gates/skills pickers submit the picked names/ids; model is a dropdown; then publishes {definitionId, version}', async () => {
     const { caller, calls } = http({
       propose_worker_definition: () => ({ id: 'wd-9', version: 1, status: 'draft' }),
       publish_worker_definition: () => ({ id: 'wd-9', version: 1, status: 'published' }),
@@ -29,6 +29,36 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
       <WorkerDefinitionEditor
         http={caller}
         models={[{ id: 'p/m', provider: 'p', model: 'm' }]}
+        capabilityNames={[
+          { name: 'search', mode: 'observe' },
+          { name: 'traverse', mode: 'observe' },
+        ]}
+        gatekeepers={[
+          {
+            id: 'gk-1',
+            name: 'Docker',
+            kind: 'docker',
+            status: 'enabled',
+            operationCount: 1,
+            createdAt: '2026-01-01T00:00:00Z',
+          },
+        ]}
+        skills={[
+          {
+            id: 'sk-1',
+            version: 1,
+            status: 'published',
+            name: 'restart-web',
+            description: 'Restart web',
+          },
+          {
+            id: 'sk-2',
+            version: 1,
+            status: 'draft',
+            name: 'unpublished-skill',
+            description: 'Not yet published',
+          },
+        ]}
         onProposed={vi.fn()}
         onDone={vi.fn()}
       />,
@@ -36,11 +66,12 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
     fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Fixer' } });
     fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Fix things.' } });
     fireEvent.change(screen.getByLabelText(/^模型/), { target: { value: 'p/m' } });
-    fireEvent.change(screen.getByLabelText(/能力/), {
-      target: { value: 'search\ntraverse' },
-    });
-    fireEvent.change(screen.getByLabelText(/可作用的门/), { target: { value: 'gk-1' } });
-    fireEvent.change(screen.getByLabelText(/使用的 Skill/), { target: { value: 'restart-web' } });
+    fireEvent.click(screen.getByLabelText('search'));
+    fireEvent.click(screen.getByLabelText('traverse'));
+    fireEvent.click(screen.getByLabelText('Docker'));
+    fireEvent.click(screen.getByLabelText('restart-web'));
+    // A draft (unpublished) Skill must never appear as a pickable option.
+    expect(screen.queryByLabelText('unpublished-skill')).toBeNull();
     fireEvent.click(screen.getByTestId('worker-submit'));
     await screen.findByTestId('draft-proposed');
     expect(calls[0]).toEqual({
@@ -58,6 +89,8 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
       },
     });
     expect(screen.getByTestId('draft-private-notice').textContent).toContain('只显示已发布版本');
+    // R6: the Publish button already has focus (no list can find this draft again otherwise).
+    expect(document.activeElement).toBe(screen.getByTestId('draft-publish'));
     fireEvent.click(screen.getByTestId('draft-publish'));
     await waitFor(() =>
       expect(calls[1]).toEqual({
@@ -67,13 +100,43 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
     );
   });
 
-  it('entry kind: capabilities is always sent and worker-only fields disappear; a blank prompt is a field error', async () => {
-    const { caller, calls } = http({
-      propose_worker_definition: () => ({ id: 'wd-e', version: 1, status: 'draft' }),
-    });
+  it('a brand-new draft offers only kind=worker (no entry option) — J7 "owner 视角隐藏 kind=entry"', () => {
+    const { caller } = http({});
     render(<WorkerDefinitionEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
-    fireEvent.change(screen.getByTestId('wd-kind'), { target: { value: 'entry' } });
-    expect(screen.queryByLabelText(/gates/)).toBeNull();
+    const kindSelect = screen.getByTestId('wd-kind') as HTMLSelectElement;
+    expect(Array.from(kindSelect.options).map((option) => option.value)).toEqual(['worker']);
+    expect(kindSelect.disabled).toBe(true);
+    expect(kindSelect.value).toBe('worker');
+  });
+
+  it('entry kind is only reachable as an existing family’s next version: capabilities is always sent, worker-only fields disappear, a blank prompt is a field error, and an already-selected capability outside the loaded directory is never silently dropped', async () => {
+    const { caller, calls } = http({
+      propose_worker_definition: () => ({ id: 'wd-e', version: 2, status: 'draft' }),
+    });
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-e',
+          version: 1,
+          kind: 'entry',
+          status: 'published',
+          definition: { capabilities: ['search'] },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const kindSelect = screen.getByTestId('wd-kind') as HTMLSelectElement;
+    expect(kindSelect.disabled).toBe(true);
+    expect(kindSelect.value).toBe('entry');
+    expect(screen.queryByTestId('wd-gates')).toBeNull();
+    expect(screen.queryByTestId('wd-skills')).toBeNull();
+    // `capabilityNames` was not passed at all — the pre-selected 'search' still renders (as a
+    // fallback option outside the loaded directory) and stays checked, so it is not silently
+    // dropped from the submitted payload.
+    const searchCheckbox = screen.getByLabelText('search') as HTMLInputElement;
+    expect(searchCheckbox.checked).toBe(true);
     fireEvent.click(screen.getByTestId('worker-submit'));
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
     expect(calls).toHaveLength(0);
@@ -81,8 +144,49 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
     fireEvent.click(screen.getByTestId('worker-submit'));
     await screen.findByTestId('draft-proposed');
     expect(calls[0]?.params).toEqual({
+      definitionId: 'wd-e',
       kind: 'entry',
-      definition: { systemPrompt: 'Entry.', capabilities: [] },
+      definition: { systemPrompt: 'Entry.', capabilities: ['search'] },
+    });
+  });
+
+  it('J7/CW1 "从模板创建（ops-runner）": a template-prefilled new draft still only offers kind=worker and keeps the prefilled fields', async () => {
+    const { caller, calls } = http({
+      propose_worker_definition: () => ({ id: 'wd-t', version: 1, status: 'draft' }),
+    });
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        initialForm={{
+          kind: 'worker',
+          name: 'ops-runner',
+          description: '',
+          systemPrompt: 'You are `ops-runner`, a general-purpose Worker.',
+          model: '',
+          capabilities: '',
+          gates: '',
+          skills: '',
+          egressDeny: '',
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    expect((screen.getByLabelText(/^名称/) as HTMLInputElement).value).toBe('ops-runner');
+    expect((screen.getByLabelText(/系统提示词/) as HTMLTextAreaElement).value).toBe(
+      'You are `ops-runner`, a general-purpose Worker.',
+    );
+    const kindSelect = screen.getByTestId('wd-kind') as HTMLSelectElement;
+    expect(kindSelect.disabled).toBe(true);
+    expect(kindSelect.value).toBe('worker');
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls[0]?.params).toEqual({
+      kind: 'worker',
+      definition: {
+        systemPrompt: 'You are `ops-runner`, a general-purpose Worker.',
+        name: 'ops-runner',
+      },
     });
   });
 
