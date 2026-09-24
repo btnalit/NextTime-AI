@@ -790,7 +790,21 @@ const connectionCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
     resultSchema: wire.EnableGateInstanceResultWireSchema,
     description:
-      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate).',
+      'P-B1: enable a platform gate instance in this workspace — registers its Gatekeeper, imports and publishes its announced Operations (origin import), and links the workspace to the instance so trust and disabled Operations are read live. Idempotent per (workspace, gate). S8 W2-K2 (leftover 73): when an existing Gatekeeper in this workspace already has the same endpoint (a prior registration of the same gate process — e.g. the legacy register-gatekeeper CLI path), links it instead of registering a duplicate (result carries linkedExisting + drift); more than one match refuses 400 ambiguous_existing_gatekeeper rather than guess.',
+  },
+  {
+    // S8 W2-K2 (audit J3 "一键写入 ... 没有预览或确认"): the console ConfirmTier's read model for
+    // the capability right above — same `scope`/`minRole`, `mode:'observe'` since it writes
+    // nothing (gate-instance-handlers.ts's own doc comment has the full contract).
+    name: 'preview_gate_instance_enable',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ gateId: z.string().min(1) }).strict(),
+    resultSchema: wire.PreviewGateInstanceEnableResultWireSchema,
+    description:
+      'S8 W2-K2 (audit J3): read-only preview of what enable_gate_instance would do for this gate instance right now — whether it would link an existing Gatekeeper by endpoint (with any name/target/transportKind drift) or register a new one (or refuse as ambiguous_existing_gatekeeper), and which announced Operations would be newly imported vs. are already published/deprecated (flagging drift from the announced manifest, audit CO2). Computed by the exact same lookup and manifest-parse functions enable_gate_instance uses; writes nothing.',
   },
   {
     name: 'issue_gate_credential_token',
@@ -3232,6 +3246,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
     'revoke_external_runtime',
     'list_available_gate_instances',
     'enable_gate_instance',
+    'preview_gate_instance_enable',
     'issue_service_handle',
     'create_gate_instance',
     'delete_gate_instance',

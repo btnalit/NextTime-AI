@@ -86,6 +86,29 @@ Output: `packages/web/dist/` — copied into the caddy image by deploy/caddy/Doc
 (docs/runbooks/host-caddy.md §E8.5). `@nexttime/shared` is a real runtime import now (the status
 enums and transition tables drive the UI), resolved to its `dist/` by the production build.
 
+**Route-level code splitting (S8 W1-A5, leftover 49).** Every page `routes.tsx`'s `Routed` renders
+is a `React.lazy` chunk — the same pattern `components/chat/MessageBody.tsx` set for the Markdown
+kit component (S8 W1-A2), just applied to the route table instead of one in-page boundary. Before:
+one `index-*.js` entry chunk at 806 kB raw / 228 kB gzip (Vite's `chunkSizeWarningLimit` warning).
+After: the entry chunk carries only the shell (session machine, `AppShell`/`Sidebar`, the
+eagerly-loaded pre-session pages — `LoginPage`/`ChangePasswordPage`/`NoWorkspacePage`/
+`AccountPage`, the last of those also reachable signed-in at `#/me/account`) at ~37 kB raw / ~11 kB
+gzip; every other page is its own chunk (0.5–42 kB raw depending on the page), fetched the first
+time its route is visited. `vite.config.ts`'s `build.rollupOptions.output.manualChunks` groups two
+things beyond that: `vendor-react` (react/react-dom, always part of the eager load anyway) and
+`vendor-radix` (every `@radix-ui/*` module — empty today since nothing outside `components/kit/*`
+imports one yet, but it keeps the next kit component that lands in a page from inflating that
+page's own chunk instead of a shared one); and `platform` (all nine `components/platform/*Page`
+modules in one ~393 kB raw / ~107 kB gzip chunk — the platform section is one admin flow a reader
+moves through page to page, so the first `#/platform/*` visit pays one fetch and every later
+platform page in the same session is already cached, instead of a chunk-per-click waterfall).
+`components/RouteBoundary.tsx` wraps the routed page in a `Suspense` (fallback `null` — the shell
+chrome around it stays rendered, so there is nothing to flash) and a class-component error
+boundary, so a chunk that fails to fetch (e.g. a deploy replaced the hashed file this tab's
+`index.html` still references) shows a reload action instead of a blank page; `routes.tsx` keys it
+by `route.kind` so navigating to a different, working route after a failed one does not keep
+showing the stale error screen.
+
 ## Structure
 
 ```
@@ -93,6 +116,12 @@ src/
   App.tsx                 session (one WsClient + one HttpClient) + hash routing + providers +
                           the S4.1 pre-session state machine (boot/setup/login/changePassword/
                           noWorkspace) — see its own module doc comment for the boot sequence
+  routes.tsx               the route table (C23 split of App.tsx) — every page is `React.lazy`
+                          (S8 W1-A5, see "Route-level code splitting" above); `AccountPage` stays
+                          a static import (also reachable pre-session, App.tsx)
+  components/RouteBoundary.tsx  S8 W1-A5: Suspense (fallback `null`) + error boundary around the
+                          routed page, keyed by `route.kind` — reload action on a failed chunk
+                          fetch instead of a blank page
   lib/
     http-client.ts        POST /api/cap/<name> — `auth: {kind:'apiKey',apiKey} | {kind:'cookie',
                           workspaceId}` (S4.1); default fetch is a wrapper, never the bare global

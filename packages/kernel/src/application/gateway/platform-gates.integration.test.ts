@@ -9,6 +9,7 @@ import type {
   GateInstanceWire,
   ListEnvelope,
   Operation,
+  PreviewGateInstanceEnableResultWire,
   Role,
 } from '@nexttime/shared';
 import { internalAuthorizationHeader } from '@nexttime/shared';
@@ -19,12 +20,19 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
-import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
+import { HANDLE_SIGNING_ALG, grantCapability } from '../../governance/capability/index.js';
+import {
+  importManifest,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
 import { evaluate } from '../../governance/policy/index.js';
 import { createServer } from '../../index.js';
+import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
+import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { withAdminClient } from './auth.js';
 import { ForbiddenError } from './authorize.js';
@@ -494,6 +502,318 @@ describe.runIf(DATABASE_URL !== undefined)(
           gatekeeperId,
         });
         expect(restored.items.map((o) => o.name).sort()).toEqual(['list_things', 'restart_thing']);
+      });
+    });
+
+    // S8 W2-K2 (leftover 73, ui-audit J3/J4/B7): enabling a platform gate instance must link an
+    // existing (legacy-registered) Gatekeeper by endpoint instead of registering a duplicate.
+    describe('gate link endpoint association (S8 W2-K2, leftover 73)', () => {
+      const EXTRA_OP: Operation = {
+        name: 'list_more_things',
+        binding: { kind: 'mcp', tool_name: 'list_more_things' },
+        params_schema: { type: 'object', properties: {} },
+        mode: 'observe',
+        blast_radius: 'low',
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: [],
+        writes: [],
+        read_only_hint: true,
+      };
+      // Legacy-published with governance fields that no longer match what the gate now announces
+      // for the same name (CO2's "deployed Operation whose fields no longer match the announced
+      // manifest" case) — `differs: true` in the preview.
+      const STALE_EXECUTE_OP: Operation = {
+        ...EXECUTE_OP,
+        blast_radius: 'low',
+        auto_approvable: false,
+      };
+
+      /** Registers a Gatekeeper the same way the legacy `register-gatekeeper` CLI path does
+       *  (same three functions, not through `enable_gate_instance`), and publishes the given
+       *  Operations under it — the "already registered outside the platform catalog" fixture the
+       *  endpoint-association tests below link against. */
+      async function seedLegacyGatekeeper(input: {
+        name: string;
+        transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
+        target: string;
+        endpoint: string;
+        operations: readonly Operation[];
+      }): Promise<string> {
+        return withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'test.legacy_register_gatekeeper',
+              principalId: ownerPrincipalId,
+            });
+            const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
+              name: input.name,
+              transportKind: input.transportKind,
+              target: input.target,
+              endpoint: input.endpoint,
+              activityId: activity.id,
+              registeredBy: { id: ownerPrincipalId, kind: 'human' },
+            });
+            const imported = await importManifest(client, workspaceId, {
+              gatekeeperId,
+              operations: input.operations,
+              proposedBy: { id: ownerPrincipalId, kind: 'human' },
+              activityId: activity.id,
+            });
+            for (const record of imported.imported) {
+              await publishOperation(client, workspaceId, { gatekeeperId, name: record.name });
+            }
+            await endActivity(client, workspaceId, activity.id, 'completed');
+            return gatekeeperId;
+          },
+        );
+      }
+
+      async function countObjectsByType(objectType: string): Promise<number> {
+        return withAdminClient(pool, async (client) => {
+          const result = await client.query<{ count: string }>(
+            'select count(*)::bigint as count from objects where workspace_id = $1 and object_type = $2',
+            [workspaceId, objectType],
+          );
+          return Number(result.rows[0]?.count ?? 0);
+        });
+      }
+
+      async function countGateLinkRows(gateId: string): Promise<number> {
+        return withAdminClient(pool, async (client) => {
+          const result = await client.query<{ count: string }>(
+            'select count(*)::bigint as count from workspace_gate_links where workspace_id = $1 and gate_id = $2',
+            [workspaceId, gateId],
+          );
+          return Number(result.rows[0]?.count ?? 0);
+        });
+      }
+
+      it('links the legacy Gatekeeper by endpoint (not name/target), previews accurately, imports only the new Operation, stays idempotent, and unlocks execution_readiness', async () => {
+        const GATE_ID_LINK = 'fixture-mcp-gate-legacy-link';
+        const ENDPOINT = 'http://127.0.0.1:1/legacy-link/';
+
+        const legacyGatekeeperId = await seedLegacyGatekeeper({
+          name: 'legacy-docker-gate',
+          transportKind: 'cli',
+          target: 'docker', // short legacy target — differs from the instance's real address below
+          endpoint: ENDPOINT,
+          operations: [OBSERVE_OP, STALE_EXECUTE_OP],
+        });
+
+        const gatekeeperObjectsBefore = await countObjectsByType('Gatekeeper');
+        const connectedSystemObjectsBefore = await countObjectsByType('ConnectedSystem');
+
+        const announced = await announce({
+          gateId: GATE_ID_LINK,
+          connector: 'fixture-mcp',
+          transportKind: 'http', // differs from the legacy Object's own 'cli'
+          target: 'http://fixture-mcp-real-upstream:9000', // differs from the legacy 'docker' target
+          endpoint: ENDPOINT, // same endpoint — the only field the association key reads
+          displayName: 'Fixture MCP (real instance)', // differs from the legacy 'legacy-docker-gate' name
+          operations: [OBSERVE_OP, EXECUTE_OP, EXTRA_OP],
+        });
+        expect(announced.statusCode).toBe(200);
+        await callAsAdmin('update_gate_instance', { gateId: GATE_ID_LINK, status: 'enabled' });
+
+        // --- preview: writes nothing ---
+        const linksBeforePreview = await countGateLinkRows(GATE_ID_LINK);
+        const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: GATE_ID_LINK },
+        );
+        expect(preview.wouldLink?.gatekeeperId).toBe(legacyGatekeeperId);
+        expect(preview.wouldLink?.drift).toMatchObject({
+          name: { existing: 'legacy-docker-gate', instance: 'Fixture MCP (real instance)' },
+          target: { existing: 'docker', instance: 'http://fixture-mcp-real-upstream:9000' },
+          transportKind: { existing: 'cli', instance: 'http' },
+        });
+        expect(preview.ambiguousCandidates).toEqual([]);
+        expect(preview.operationsToImport.map((o) => o.name)).toEqual(['list_more_things']);
+        const stalePreview = preview.operationsAlreadyPresent.find(
+          (o) => o.name === 'restart_thing',
+        );
+        expect(stalePreview).toMatchObject({
+          existing: { blastRadius: 'low', autoApprovable: false, status: 'published' },
+          announced: { blastRadius: 'medium', autoApprovable: true },
+          differs: true,
+        });
+        const unchangedPreview = preview.operationsAlreadyPresent.find(
+          (o) => o.name === 'list_things',
+        );
+        expect(unchangedPreview).toMatchObject({ differs: false });
+        expect(await countGateLinkRows(GATE_ID_LINK)).toBe(linksBeforePreview); // still nothing written
+        expect(await countObjectsByType('Gatekeeper')).toBe(gatekeeperObjectsBefore);
+        expect(await countObjectsByType('ConnectedSystem')).toBe(connectedSystemObjectsBefore);
+
+        // --- enable: matches the preview exactly ---
+        const enabled = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
+          gateId: GATE_ID_LINK,
+        });
+        expect(enabled.gatekeeperId).toBe(legacyGatekeeperId);
+        expect(enabled.linkedExisting).toBe(true);
+        expect(enabled.drift).toEqual(preview.wouldLink?.drift);
+        expect(enabled.publishedOperationNames).toEqual(['list_more_things']);
+        expect(enabled.skippedOperationNames.sort()).toEqual(['list_things', 'restart_thing']);
+
+        // No second Gatekeeper, no second ConnectedSystem.
+        expect(await countObjectsByType('Gatekeeper')).toBe(gatekeeperObjectsBefore);
+        expect(await countObjectsByType('ConnectedSystem')).toBe(connectedSystemObjectsBefore);
+
+        // Operations count = legacy (2) + 1 new = 3; the legacy Operations' fields are unchanged
+        // (never rewritten by a link — the stale `restart_thing` stays stale).
+        const ops = await callAsOwner<ListEnvelope<{ name: string; status: string }>>(
+          'list_operations',
+          { gatekeeperId: legacyGatekeeperId },
+        );
+        expect(ops.items.map((o) => o.name).sort()).toEqual([
+          'list_more_things',
+          'list_things',
+          'restart_thing',
+        ]);
+        const staleAfter = await callAsOwner<
+          ListEnvelope<{ name: string; blastRadius: string; autoApprovable: boolean }>
+        >('list_operations', { gatekeeperId: legacyGatekeeperId });
+        expect(staleAfter.items.find((o) => o.name === 'restart_thing')).toMatchObject({
+          blastRadius: 'low',
+          autoApprovable: false,
+        });
+
+        expect(await countGateLinkRows(GATE_ID_LINK)).toBe(1);
+
+        // --- idempotent: a second enable call returns the same link, nothing new ---
+        const again = await callAsOwner<EnableGateInstanceResultWire>('enable_gate_instance', {
+          gateId: GATE_ID_LINK,
+        });
+        expect(again).toMatchObject({
+          gatekeeperId: legacyGatekeeperId,
+          linkedExisting: false, // short-circuited on the existing link row, no new decision made
+          publishedOperationNames: [],
+          skippedOperationNames: [],
+        });
+        expect(await countGateLinkRows(GATE_ID_LINK)).toBe(1);
+
+        // --- execution_readiness (W1-C): a member granted the linked Gatekeeper, with a
+        // published worker declaring it, is ready — mirroring the production acceptance the
+        // maintainer performs by clicking "在本工作区启用" once.
+        const memberId = randomUUID();
+        await withAdminClient(pool, (client) =>
+          client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'member', 'legacy-link-member')`,
+            [workspaceId, memberId],
+          ),
+        );
+        await withWorkspace(pool, { workspaceId, principalId: ownerPrincipalId }, (client) =>
+          grantCapability(client, workspaceId, {
+            principalId: memberId,
+            resourceType: 'gatekeeper',
+            resourceId: legacyGatekeeperId,
+            grantedBy: ownerPrincipalId,
+          }),
+        );
+        const workerDraft = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          (client) =>
+            proposeWorkerDefinition(client, workspaceId, ownerPrincipalId, {
+              kind: 'worker',
+              definition: {
+                systemPrompt: 'Acts on the linked legacy gate.',
+                name: 'legacy-link-worker',
+                capabilities: ['request_action'],
+                gates: [legacyGatekeeperId],
+              },
+            }),
+        );
+        await withWorkspace(pool, { workspaceId, principalId: ownerPrincipalId }, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerPrincipalId, {
+            definitionId: workerDraft.id,
+            version: workerDraft.version,
+          }),
+        );
+
+        const member: ResolvedCaller = {
+          channel: 'human',
+          principal: {
+            workspaceId,
+            id: memberId,
+            kind: 'human',
+            role: 'member',
+            displayName: null,
+          },
+          session: {
+            workspaceId,
+            id: randomUUID(),
+            principalId: memberId,
+            kind: 'web',
+            onBehalfOf: memberId,
+            status: 'active',
+            createdAt: new Date(),
+            expiresAt: null,
+          },
+        };
+        const readiness = (await dispatchCapability(
+          { pool },
+          member,
+          'execution_readiness',
+          {},
+        )) as { ready: boolean; workers: readonly { definitionId: string; delegable: boolean }[] };
+        expect(readiness.ready).toBe(true);
+        expect(readiness.workers.find((w) => w.definitionId === workerDraft.id)?.delegable).toBe(
+          true,
+        );
+      });
+
+      it('refuses ambiguous_existing_gatekeeper when the endpoint matches more than one Gatekeeper, and writes nothing', async () => {
+        const GATE_ID_AMBIGUOUS = 'fixture-mcp-gate-legacy-ambiguous';
+        const ENDPOINT = 'http://127.0.0.1:1/legacy-ambiguous/';
+
+        const first = await seedLegacyGatekeeper({
+          name: 'legacy-a',
+          transportKind: 'cli',
+          target: 'a',
+          endpoint: ENDPOINT,
+          operations: [OBSERVE_OP],
+        });
+        const second = await seedLegacyGatekeeper({
+          name: 'legacy-b',
+          transportKind: 'cli',
+          target: 'b',
+          endpoint: ENDPOINT,
+          operations: [OBSERVE_OP],
+        });
+
+        const announced = await announce({
+          gateId: GATE_ID_AMBIGUOUS,
+          connector: 'fixture-mcp',
+          transportKind: 'http',
+          target: 'http://fixture-mcp-ambiguous:9000',
+          endpoint: ENDPOINT,
+          displayName: 'Fixture MCP (ambiguous)',
+          operations: [OBSERVE_OP, EXECUTE_OP],
+        });
+        expect(announced.statusCode).toBe(200);
+        await callAsAdmin('update_gate_instance', { gateId: GATE_ID_AMBIGUOUS, status: 'enabled' });
+
+        const gatekeeperObjectsBefore = await countObjectsByType('Gatekeeper');
+
+        const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: GATE_ID_AMBIGUOUS },
+        );
+        expect(preview.wouldLink).toBeNull();
+        expect(preview.ambiguousCandidates.sort()).toEqual([first, second].sort());
+
+        await expect(
+          callAsOwner('enable_gate_instance', { gateId: GATE_ID_AMBIGUOUS }),
+        ).rejects.toMatchObject({ code: 'ambiguous_existing_gatekeeper' });
+
+        expect(await countGateLinkRows(GATE_ID_AMBIGUOUS)).toBe(0);
+        expect(await countObjectsByType('Gatekeeper')).toBe(gatekeeperObjectsBefore);
       });
     });
 

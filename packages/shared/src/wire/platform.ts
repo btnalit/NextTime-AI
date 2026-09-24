@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { RoleSchema } from '../enums.js';
+import {
+  BlastRadiusSchema,
+  OperationModeSchema,
+  PublishableStatusSchema,
+  RoleSchema,
+} from '../enums.js';
 
 /**
  * wire/platform: the platform-management plane's wire shapes (docs/platform-admin-design.md §5,
@@ -526,15 +531,114 @@ export const AvailableGateInstanceWireSchema = z
   .strict();
 export type AvailableGateInstanceWire = z.infer<typeof AvailableGateInstanceWireSchema>;
 
+/** One field's before/after when linking an existing Gatekeeper (S8 W2-K2, leftover 73, ui-audit
+ *  J3/J4/B7): the value the legacy Object was registered with vs. the platform gate instance's own
+ *  announced value. Present in `GateLinkDriftWireSchema` only for a field that actually differs —
+ *  `enable_gate_instance` never rewrites either side (link only), so this is presentational, for a
+ *  human to decide whether to act on it (e.g. re-register, or accept the drift). */
+export const GateLinkDriftFieldWireSchema = z
+  .object({ existing: z.string(), instance: z.string() })
+  .strict();
+export type GateLinkDriftFieldWire = z.infer<typeof GateLinkDriftFieldWireSchema>;
+
+export const GateLinkDriftWireSchema = z
+  .object({
+    name: GateLinkDriftFieldWireSchema.optional(),
+    target: GateLinkDriftFieldWireSchema.optional(),
+    transportKind: GateLinkDriftFieldWireSchema.optional(),
+  })
+  .strict();
+export type GateLinkDriftWire = z.infer<typeof GateLinkDriftWireSchema>;
+
 export const EnableGateInstanceResultWireSchema = z
   .object({
     gateId: z.string(),
     gatekeeperId: z.string(),
     publishedOperationNames: z.array(z.string()),
     skippedOperationNames: z.array(z.string()),
+    /** S8 W2-K2: `true` only when this call linked a pre-existing Gatekeeper (found by endpoint,
+     *  §"association key") instead of registering a new one — including the idempotent-relink
+     *  case. `false` for a fresh registration, and for the pre-existing-`workspace_gate_links`-row
+     *  short-circuit (this call made no link decision at all, it just returned the prior one). */
+    linkedExisting: z.boolean(),
+    /** Present only when `linkedExisting` is `true` — which of name/target/transportKind differ
+     *  between the linked Object and the instance (empty object if none do). */
+    drift: GateLinkDriftWireSchema.optional(),
   })
   .strict();
 export type EnableGateInstanceResultWire = z.infer<typeof EnableGateInstanceResultWireSchema>;
+
+// -------------------------------------------------------------------------------------------
+// preview_gate_instance_enable (S8 W2-K2, audit J3 "没有预览或确认"): the console ConfirmTier's
+// read model for `enable_gate_instance` — same decision, same `wouldLink`/manifest-classification
+// functions, writes nothing (gate-instance-handlers.ts's own doc comment has the full contract).
+// -------------------------------------------------------------------------------------------
+
+export const GateInstanceEnablePreviewOperationWireSchema = z
+  .object({
+    name: z.string(),
+    mode: OperationModeSchema,
+    blastRadius: BlastRadiusSchema,
+    autoApprovable: z.boolean(),
+    /** Absent when the announced Operation itself has no description (`OperationSchema.description`
+     *  is optional — see that schema's own doc comment). */
+    description: z.string().optional(),
+  })
+  .strict();
+export type GateInstanceEnablePreviewOperationWire = z.infer<
+  typeof GateInstanceEnablePreviewOperationWireSchema
+>;
+
+const GateInstanceEnablePreviewGovernanceFieldsWireSchema = z
+  .object({
+    mode: OperationModeSchema,
+    blastRadius: BlastRadiusSchema,
+    autoApprovable: z.boolean(),
+  })
+  .strict();
+
+export const GateInstanceEnablePreviewOperationPresentWireSchema = z
+  .object({
+    name: z.string(),
+    /** The deployed Operation's own current governance fields (plus its `status` — always
+     *  `published` or `deprecated`; `importManifest`'s own draft-vs-terminal split is exactly why
+     *  a `draft` row is never in this list — see the module doc comment on the handler). */
+    existing: GateInstanceEnablePreviewGovernanceFieldsWireSchema.extend({
+      status: PublishableStatusSchema,
+    }).strict(),
+    /** What the gate's manifest announces for the same name right now. */
+    announced: GateInstanceEnablePreviewGovernanceFieldsWireSchema,
+    /** `true` when `existing` and `announced` disagree on mode/blastRadius/autoApprovable — CO2's
+     *  "deployed Operation whose fields no longer match the announced manifest" case. Surfaced
+     *  only; refreshing `existing` to match `announced` is a separate maintainer decision, never
+     *  done by this preview or by `enable_gate_instance` itself. */
+    differs: z.boolean(),
+  })
+  .strict();
+export type GateInstanceEnablePreviewOperationPresentWire = z.infer<
+  typeof GateInstanceEnablePreviewOperationPresentWireSchema
+>;
+
+export const PreviewGateInstanceEnableResultWireSchema = z
+  .object({
+    gateId: z.string(),
+    /** `null` when enabling would register a new Gatekeeper (no endpoint match) or would refuse
+     *  as ambiguous (more than one match — see `ambiguousCandidates`). */
+    wouldLink: z
+      .object({ gatekeeperId: z.string(), drift: GateLinkDriftWireSchema })
+      .strict()
+      .nullable(),
+    /** Non-empty only when more than one existing Gatekeeper in this workspace shares the
+     *  instance's endpoint — `enable_gate_instance` would refuse with `ambiguous_existing_gatekeeper`
+     *  rather than guess; empty otherwise. */
+    ambiguousCandidates: z.array(z.string()),
+    operationsToImport: z.array(GateInstanceEnablePreviewOperationWireSchema),
+    operationsAlreadyPresent: z.array(GateInstanceEnablePreviewOperationPresentWireSchema),
+  })
+  .strict();
+export type PreviewGateInstanceEnableResultWire = z.infer<
+  typeof PreviewGateInstanceEnableResultWireSchema
+>;
 
 /** P-B2a (决定 ⑩): the 5-minute platform JWT the browser presents to the gate host when it posts a
  *  credential straight there. `url` is same-origin (Caddy `/gate-host/*`); `onBehalfOf` is the slot the
