@@ -290,6 +290,11 @@ export function AccessPage({ http }: AccessPageProps) {
                     {row.scope && Object.keys(row.scope).length > 0 ? (
                       <>
                         <span className="meta-sep" />
+                        {/* Stored and echoed back, but no authorization path reads it — the grant
+                            covers the whole resource, so this is labelled as a note, not a limit. */}
+                        <span>
+                          {t('范围备注（不限制授权）', 'Scope note (does not limit the grant)')}
+                        </span>
                         <span className="mono truncate" title={prettyJson(row.scope)}>
                           {prettyJson(row.scope)}
                         </span>
