@@ -11779,6 +11779,9 @@
               ],
               "type": "string"
             },
+            "description": {
+              "type": "string"
+            },
             "destructive_hint": {
               "type": "boolean"
             },
@@ -13434,6 +13437,9 @@
                       "medium",
                       "high"
                     ],
+                    "type": "string"
+                  },
+                  "description": {
                     "type": "string"
                   },
                   "destructive_hint": {

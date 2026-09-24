@@ -206,6 +206,14 @@ interface OpenApiParameter {
 
 interface OpenApiOperationObject {
   readonly operationId?: string;
+  /** S8 W2-K1 (leftover 71/72, audit CO1/B3): OpenAPI's own short human summary — preferred over
+   *  `description` (below) when both are present, same convention Swagger UI/most OpenAPI tooling
+   *  uses (`summary` is meant to be the short one). Neither was read here before this fix — every
+   *  imported Operation's `description` was simply absent, one root cause of "12 个 Operation 描述
+   *  全空" (CO1) and B3's `find_operations` keyword-matching failure for anything imported this
+   *  way. */
+  readonly summary?: string;
+  readonly description?: string;
   readonly parameters?: readonly OpenApiParameter[];
   readonly requestBody?: {
     readonly content?: {
@@ -265,6 +273,11 @@ export function importOpenApi(document: OpenApiDocumentLike): Operation[] {
       const mode = method === 'get' ? 'observe' : 'execute';
       operations.push({
         name: op.operationId ?? sanitizeName(path, method),
+        // S8 W2-K1 (CO1/B3): `summary` first (OpenAPI's own short human-readable field), then the
+        // longer `description`, then a synthesized fallback — never blank, so a real OpenAPI
+        // document without either still produces something `find_operations`'s keyword ranking
+        // (and any future `importManifest({requireDescription: true})` caller) can use.
+        description: op.summary ?? op.description ?? `${method.toUpperCase()} ${path}`,
         binding: { kind: 'http', method: method.toUpperCase(), path },
         params_schema: paramsSchemaFor(op),
         mode,

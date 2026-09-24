@@ -455,6 +455,23 @@ function toWorkerDefinitionMatch(object: GraphObject): WorkerDefinitionMatch | u
   };
 }
 
+/** Whether `definitionId` passes `caller`'s own `AgentProfile.enabledWorkerDefinitions` whitelist
+ *  (S3.13) — `undefined`/`null` means "no profile row, or one that never set this field", which is
+ *  "inherit"/"no filter" (see `FindMeansCaller.enabledWorkerDefinitionIds`'s own doc comment for
+ *  why that is already the caller's final effective list). Shared by `findWorkers` (below) and
+ *  `stepUsableByCaller`'s own `'worker'` branch (B4, audit leftover 71: "find_procedures 的步骤可用性
+ *  判断不套 enabledWorkerDefinitions（invoke_worker 会拒）") so the two can never independently drift
+ *  on this rule the way `invoke_worker`'s own `InvokeWorkerDefinitionNotEnabledError` check
+ *  (`application/task/invoke.ts`) already enforces at call time — a WorkerDefinition
+ *  `find_procedures` reports as usable must be one `invoke_worker` would not itself reject. */
+function isWorkerDefinitionEnabledForCaller(
+  caller: FindMeansCaller,
+  definitionId: string,
+): boolean {
+  if (caller.enabledWorkerDefinitionIds == null) return true;
+  return caller.enabledWorkerDefinitionIds.includes(definitionId);
+}
+
 /**
  * `find_workers`: every published `WorkerDefinition@version` matching `need`
  * (`substrate/graph/find-means.ts`), filtered to only those `caller` could actually successfully
@@ -511,9 +528,7 @@ export async function findWorkers(
     matches.push(match);
   }
 
-  if (caller.enabledWorkerDefinitionIds == null) return matches;
-  const enabled = new Set(caller.enabledWorkerDefinitionIds);
-  return matches.filter((match) => enabled.has(match.definitionId));
+  return matches.filter((match) => isWorkerDefinitionEnabledForCaller(caller, match.definitionId));
 }
 
 /**
@@ -606,6 +621,11 @@ async function stepUsableByCaller(
       if (err instanceof InvokeWorkerAttenuationError) return false;
       throw err;
     }
+    // B4 (leftover 71): the same enabled-WorkerDefinition whitelist `findWorkers`/`invoke_worker`
+    // apply — a step naming a WorkerDefinition that exists and is published, but that `caller`'s
+    // own AgentProfile has not enabled, is not usable either (`isWorkerDefinitionEnabledForCaller`
+    // above; reused, not re-implemented, per that function's own doc comment).
+    if (!isWorkerDefinitionEnabledForCaller(caller, step.definitionId)) return false;
     return true;
   }
 

@@ -156,6 +156,10 @@ function credentialHeaders(credential: unknown): Record<string, string> {
 
 export interface McpToolLike {
   readonly name: string;
+  /** S8 W2-K1 (leftover 71/72, audit CO1/B3): MCP's own `tools/list` tool description — was not
+   *  read here before this fix, one root cause of "12 个 Operation 描述全空" (CO1) and B3's
+   *  `find_operations` keyword-matching failure for anything imported this way. */
+  readonly description?: string;
   readonly inputSchema?: Record<string, unknown>;
   readonly annotations?: {
     readonly readOnlyHint?: boolean;
@@ -173,6 +177,8 @@ export function importMcpTools(toolsList: McpToolsListResult): Operation[] {
     const mode = tool.annotations?.readOnlyHint ? 'observe' : 'execute';
     return {
       name: tool.name,
+      // S8 W2-K1 (CO1/B3): the tool's own description, falling back to its name — never blank.
+      description: tool.description ?? tool.name,
       binding: { kind: 'mcp', tool_name: tool.name },
       params_schema: tool.inputSchema ?? {},
       mode,

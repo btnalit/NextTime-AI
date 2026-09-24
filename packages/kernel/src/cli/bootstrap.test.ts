@@ -28,7 +28,11 @@ import {
   loadHandleKeyPair,
   verifyHandle,
 } from '../governance/capability/index.js';
-import { getOperation, getPublishedOperation } from '../governance/gatekeepers/index.js';
+import {
+  OperationDescriptionRequiredError,
+  getOperation,
+  getPublishedOperation,
+} from '../governance/gatekeepers/index.js';
 import { resolveOntologyDir } from '../substrate/ontology/index.js';
 import {
   BootstrapUsageError,
@@ -420,6 +424,7 @@ function fakeGatekeeperClient(operations: readonly Operation[]): GatekeeperClien
 const SAMPLE_MANIFEST: Operation[] = [
   {
     name: 'example.observe_thing',
+    description: 'Reads one example thing.',
     binding: { kind: 'http', method: 'GET', path: '/thing' },
     params_schema: {},
     mode: 'observe',
@@ -432,6 +437,7 @@ const SAMPLE_MANIFEST: Operation[] = [
   },
   {
     name: 'example.execute_thing',
+    description: 'Changes one example thing.',
     binding: { kind: 'http', method: 'POST', path: '/thing' },
     params_schema: {},
     mode: 'execute',
@@ -700,6 +706,44 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
           ),
       );
       expect(record?.status).toBe('published');
+    });
+
+    it('S8 W2-K1 (CO1, leftover 71/72): rejects the whole import when any operation has a blank/missing description, naming it', async () => {
+      const owner = await createWorkspace(
+        pool,
+        'bootstrap-test-workspace-register-gate-no-desc',
+        'Alice',
+      );
+      const [observeOp, executeOp] = SAMPLE_MANIFEST;
+      if (!observeOp || !executeOp) throw new Error('SAMPLE_MANIFEST is missing an entry');
+      const badManifest: Operation[] = [{ ...observeOp, description: '' }, executeOp];
+      const client = fakeGatekeeperClient(badManifest);
+
+      await expect(
+        registerGatekeeperFromCli(
+          pool,
+          {
+            workspaceId: owner.workspaceId,
+            principalId: owner.ownerPrincipalId,
+            name: 'example-system-no-desc',
+            endpoint: 'https://gate-no-desc.example.invalid',
+            transportKind: 'http',
+          },
+          { gatekeeperClient: client },
+        ),
+      ).rejects.toThrow(OperationDescriptionRequiredError);
+
+      // Atomic: neither operation was imported, not even the one with a real description.
+      const gatekeepers = await withWorkspace(
+        pool,
+        { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+        (dbClient) =>
+          dbClient.query(
+            "select count(*)::int as count from objects where workspace_id = $1 and object_type = 'Operation'",
+            [owner.workspaceId],
+          ),
+      );
+      expect(gatekeepers.rows[0]?.count).toBe(0);
     });
   });
 

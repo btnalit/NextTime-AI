@@ -289,6 +289,54 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(matches.some((m) => m.procedureId === draft.id)).toBe(false);
     });
 
+    it("S8 W2-K1 (audit B4): excludes a Procedure whose worker step names a WorkerDefinition that exists, is published, and is otherwise invocable, but is outside the caller's own enabledWorkerDefinitionIds whitelist", async () => {
+      const workerDraft = await inTx((client) =>
+        proposeWorkerDefinition(client, workspaceId, ownerId, {
+          kind: 'worker',
+          definition: { systemPrompt: 'A plain worker needing no gate access.' },
+        }),
+      );
+      const workerDef = await inTx((client) =>
+        publishWorkerDefinition(client, workspaceId, ownerId, {
+          definitionId: workerDraft.id,
+          version: workerDraft.version,
+        }),
+      );
+
+      const unique = `worker-step-not-enabled-${randomUUID()}`;
+      const draft = await inTx((client) =>
+        proposeProcedure(client, workspaceId, ownerId, {
+          name: unique,
+          description: 'A worker step invocable in principle, but not enabled for this caller.',
+          steps: [{ kind: 'worker', definitionId: workerDef.id, version: workerDef.version }],
+        }),
+      );
+      await inTx((client) => publishProcedure(client, workspaceId, ownerId, draft.id));
+
+      // Without the whitelist, this worker step is fully usable (same shape as the plain-worker
+      // find_workers case) — the whitelist is what must exclude it, not attenuation/scope.
+      const includedWithoutWhitelist = await inTx((client) =>
+        findProcedures(client, workspaceId, { parentAuthority: entryScope() }, unique),
+      );
+      expect(includedWithoutWhitelist.some((m) => m.procedureId === draft.id)).toBe(true);
+
+      // A caller whose AgentProfile.enabledWorkerDefinitions is a non-null list that omits this
+      // WorkerDefinition must not see the Procedure as usable — invoke_worker would itself reject
+      // it (InvokeWorkerDefinitionNotEnabledError), so find_procedures must not report it usable.
+      const excludedWithWhitelist = await inTx((client) =>
+        findProcedures(
+          client,
+          workspaceId,
+          {
+            parentAuthority: entryScope(),
+            enabledWorkerDefinitionIds: ['some-other-definition-id'],
+          },
+          unique,
+        ),
+      );
+      expect(excludedWithWhitelist.some((m) => m.procedureId === draft.id)).toBe(false);
+    });
+
     it('is unconstrained (includes everything usable) for an "unconstrained" caller (owner, human channel)', async () => {
       const opName = await publishedOperation('execute');
       const unique = `unconstrained-${randomUUID()}`;

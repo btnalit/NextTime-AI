@@ -41,17 +41,41 @@ import type { GraphObject } from './store.js';
  * `WorkerDefinition`/`Procedure`, whose Objects carry no `status` property at all (adding the
  * filter there would silently return zero rows for every published one, not narrow correctly).
  *
+ * **Tokenised keyword matching (S8 W2-K1, leftover 71 / audit B3 — "find_* 用 need 做子串 ILIKE，
+ * 自然语言需求几乎不可能命中"):** `need` used to be ILIKE'd as one whole substring against the
+ * entire `properties` blob — a multi-word natural-language need (English or Chinese) almost never
+ * appears verbatim inside a `name`/`description`, so this almost always missed. `tokenizeNeed`
+ * (below) splits `need` into keywords; `buildFindMeansQuery` matches *any* token against `name`,
+ * `description` (and, for `Operation` only, `mode` and its Gatekeeper's own `name` — "operation
+ * kind/gate name where available"), ranked by how many *distinct* tokens hit (not one combined
+ * substring), ties broken by `updated_at desc`. This is a deliberate narrowing from the old
+ * whole-`properties::text` search to just these named fields — a token that used to coincidentally
+ * match some other property (e.g. a raw binding path) no longer does; every real field this
+ * project's own manifests/console populate for discovery (name, description, mode, gate name) is
+ * still covered. An empty/blank `need` still matches every candidate (S2.7's own "list everything
+ * of this kind" default), bounded by `limit`.
+ *
+ * **Why bigrams for CJK, not just whole runs:** Chinese has no whitespace between words, so a
+ * `need` like "重启容器" (“restart the container”) tokenises as one 4-character run with no
+ * segmenter available (no new dependency — see this task's own scope note). Matching only the
+ * whole run against a description like "重启一个容器" ("restarts a container") — which contains
+ * "重启" and "容器" but not the contiguous "重启容器" — would still miss, reproducing B3's exact
+ * complaint for the very audience ("中文为主") this fix targets. `tokenizeNeed` additionally emits
+ * every 2-character sliding-window substring of a CJK run of length ≥ 2 ("重启容器" → "重启", "启容",
+ * "容器" on top of the whole run) — each is matched (and ranked) as its own token, so "重启" and
+ * "容器" both hit "重启一个描述里有容器的描述" even though the 4-character run as a whole does not.
+ * A single CJK character is kept as its own one-character token (no shorter substring to add). Not
+ * full segmentation — a cheap, no-dependency approximation good enough to fix the reported miss;
+ * `MAX_FIND_MEANS_TOKENS` caps the total so a long pasted paragraph never blows out the query's
+ * parameter list.
+ *
  * **"one traversal" is a text search, not a graph walk, and that is deliberate for S2.7's actual
  * data shape:** a real `traverse` (`substrate/graph/store.ts`) walks Links outward from one
  * anchor Object — but "find something matching a free-text need" has no anchor to start from; the
- * anchor *is* the search itself. `search`'s own ILIKE-over-properties primitel (`queries.ts`
- * `buildSearchQuery`) is reused in spirit here (bounded to the three meta-ontology ObjectTypes,
- * with a simple match-quality ranking `search()` itself does not offer: a hit in `name` ranks
- * above a hit in `description`, which ranks above a hit only in the identity key or another
- * property). Once S2.4/S2.14 project real `exposes`/`can_act_on`/`steps` Links (design doc §5.1.2)
- * between these Objects, a genuine `traverse`-based `find_*` (e.g. "operations reachable from
- * Gatekeepers the caller can act on") can be layered on top of these same candidate queries without
- * changing this file's public shape.
+ * anchor *is* the search itself. Once S2.4/S2.14 project real `exposes`/`can_act_on`/`steps` Links
+ * (design doc §5.1.2) between these Objects, a genuine `traverse`-based `find_*` (e.g. "operations
+ * reachable from Gatekeepers the caller can act on") can be layered on top of these same candidate
+ * queries without changing this file's public shape.
  */
 
 export interface FindMeansInput {
@@ -60,6 +84,10 @@ export interface FindMeansInput {
 }
 
 export const DEFAULT_FIND_MEANS_LIMIT = 20;
+
+/** Hard cap on the number of keyword tokens one `need` can expand into (bigrams included) — bounds
+ *  the generated SQL's parameter count against a long pasted paragraph; far above any real need. */
+export const MAX_FIND_MEANS_TOKENS = 32;
 
 const OBJECT_COLUMNS =
   'workspace_id, id, object_type, identity_key, properties, created_at, updated_at, last_observed_at';
@@ -88,46 +116,163 @@ function mapObjectRow(row: ObjectRow): GraphObject {
   };
 }
 
+// -------------------------------------------------------------------------------------------
+// tokenizeNeed — pure, no IO. See this file's own module doc comment for the bigram rationale.
+// -------------------------------------------------------------------------------------------
+
+/** Any character from the CJK ideograph, Hiragana/Katakana, CJK compatibility, or Hangul syllable
+ *  blocks — "CJK-ish" in the same deliberately-broad sense this project's other Chinese-first UI
+ *  text guards use, not a strict Unicode-script boundary. */
+const CJK_CHAR_PATTERN = /[぀-ヿ㐀-䶿一-鿿가-힯豈-﫿]/u;
+
+/** A maximal run of CJK-ish characters, or a maximal run of Unicode letters/numbers (covers
+ *  accented Latin, digits, etc.) — everything else (whitespace, ASCII/CJK punctuation) is a
+ *  separator and never appears in a token. */
+const TOKEN_SPAN_PATTERN = /[぀-ヿ㐀-䶿一-鿿가-힯豈-﫿]+|[\p{L}\p{N}]+/gu;
+
 /**
- * Every meta-ontology Object of `objectType` whose `properties.name`, `properties.description`,
- * `properties` (as a whole, for anything else declared on it), or `identity_key` contains
- * `input.need` (case-insensitive substring — same ILIKE convention as `graphStore.search`), most
- * relevant first: a `name` hit ranks above a `description` hit, which ranks above any other match,
- * ties broken by most-recently-updated. An empty `need` matches every candidate (ILIKE '%%'),
- * which is a deliberate, useful default ("list everything of this kind"), not a special case.
+ * Splits `need` into keyword tokens for `buildFindMeansQuery` — see this file's own module doc
+ * comment for the full rationale. A non-CJK span becomes one lower-cased token (ILIKE is already
+ * case-insensitive at the DB level; lower-casing here only affects de-duplication). A CJK span
+ * becomes the whole span as one token, plus every 2-character sliding-window substring when the
+ * span is at least 2 characters long (a 1-character span has no shorter substring to add).
+ * Duplicate tokens are dropped, first-seen order kept, and the result is capped at
+ * `MAX_FIND_MEANS_TOKENS`. An empty/blank `need` returns `[]` (the caller's "match everything"
+ * case — see `buildFindMeansQuery`).
  */
-async function findMetaOntologyObjects(
-  client: PoolClient,
+export function tokenizeNeed(need: string): readonly string[] {
+  const trimmed = need.trim();
+  if (trimmed.length === 0) return [];
+
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+  const push = (token: string): void => {
+    if (token.length === 0 || seen.has(token)) return;
+    seen.add(token);
+    tokens.push(token);
+  };
+
+  for (const match of trimmed.matchAll(TOKEN_SPAN_PATTERN)) {
+    const span = match[0];
+    if (CJK_CHAR_PATTERN.test(span[0] ?? '')) {
+      push(span);
+      for (let i = 0; i + 2 <= span.length; i += 1) {
+        push(span.slice(i, i + 2));
+      }
+    } else {
+      push(span.toLowerCase());
+    }
+  }
+
+  return tokens.slice(0, MAX_FIND_MEANS_TOKENS);
+}
+
+// -------------------------------------------------------------------------------------------
+// buildFindMeansQuery — pure SQL-text-and-parameter builder (same "no IO, unit-testable"
+// convention `substrate/graph/queries.ts` already establishes for the rest of this layer).
+// -------------------------------------------------------------------------------------------
+
+export interface SqlQuery {
+  readonly text: string;
+  readonly values: readonly unknown[];
+}
+
+type FindMeansObjectType = 'WorkerDefinition' | 'Operation' | 'Procedure';
+
+/** The `properties ->> '<key>'` fields each object type's tokens are matched against. Every type
+ *  gets `name`/`description`; `Operation` additionally gets `mode` ("operation kind" — observe vs
+ *  execute) — its Gatekeeper's own `name` ("gate name") is matched separately below via a
+ *  correlated `exists` (it lives on a different Object, not in these properties). */
+const NAME_DESCRIPTION_FIELDS = ["properties ->> 'name'", "properties ->> 'description'"] as const;
+const OPERATION_EXTRA_FIELDS = ["properties ->> 'mode'"] as const;
+
+/**
+ * Builds the parameterised SQL for `findMetaOntologyObjects` below: every candidate `objectType`
+ * Object where *any* token in `tokens` matches `name`, `description` (Operation also: `mode`, and
+ * its Gatekeeper's own `name` via a correlated `exists`), ranked by the count of *distinct* tokens
+ * that matched (§ this file's own module doc comment), ties broken by `updated_at desc`. `tokens`
+ * empty (blank `need`) matches every candidate of this type — `where` degrades to `true` and the
+ * rank expression to the constant `0` (every row ties on rank, so `updated_at desc` alone orders
+ * them — "list everything, most recent first"). `Operation` alone gets the `properties ->>
+ * 'status' = 'published'` filter (I16/I17 — see this file's own module doc comment for why it
+ * would be *wrong* to apply to `WorkerDefinition`/`Procedure`).
+ */
+export function buildFindMeansQuery(
+  objectType: FindMeansObjectType,
   workspaceId: string,
-  objectType: 'WorkerDefinition' | 'Operation' | 'Procedure',
-  input: FindMeansInput,
-): Promise<readonly GraphObject[]> {
-  const pattern = `%${input.need}%`;
-  const limit = input.limit ?? DEFAULT_FIND_MEANS_LIMIT;
-  // S2.13: see this file's own module doc comment ("published only is free for WorkerDefinition
-  // and Procedure, not for Operation") for why this filter exists at all and why it must apply to
-  // Operation only.
+  tokens: readonly string[],
+  limit: number,
+): SqlQuery {
+  const values: unknown[] = [workspaceId, objectType];
+  const fields: readonly string[] =
+    objectType === 'Operation'
+      ? [...NAME_DESCRIPTION_FIELDS, ...OPERATION_EXTRA_FIELDS]
+      : NAME_DESCRIPTION_FIELDS;
+
+  const tokenClauses: string[] = [];
+  const rankTerms: string[] = [];
+  for (const token of tokens) {
+    values.push(`%${token}%`);
+    const p = values.length;
+    const checks = fields.map((field) => `${field} ilike $${p}`);
+    if (objectType === 'Operation') {
+      // gk.id is uuid, identity_key ->> 'gatekeeperId' is text (`->>` always returns text) —
+      // compared as text, the same convention governance/gatekeepers/manifest.ts's own
+      // `identity_key ->> 'gatekeeperId' = $n` queries already use, rather than casting the
+      // right-hand side to uuid (which would throw on any malformed value instead of simply not
+      // matching).
+      checks.push(
+        `exists (
+           select 1 from objects gk
+           where gk.workspace_id = objects.workspace_id
+             and gk.object_type = 'Gatekeeper'
+             and gk.id::text = (objects.identity_key ->> 'gatekeeperId')
+             and gk.properties ->> 'name' ilike $${p}
+         )`,
+      );
+    }
+    const clause = `(${checks.join(' or ')})`;
+    tokenClauses.push(clause);
+    rankTerms.push(`case when ${clause} then 1 else 0 end`);
+  }
+
+  const whereMatch = tokenClauses.length > 0 ? `(${tokenClauses.join(' or ')})` : 'true';
+  // Postgres's ORDER BY treats a bare integer constant (even parenthesized) as a positional
+  // column reference, not a literal value ("ORDER BY position 0 is not in select list" — caught
+  // by this lane's own CI run against real Postgres, not reproducible against sqlite/mocks). When
+  // there are no tokens (blank need), every row ties on rank anyway, so the rank term is simply
+  // omitted from ORDER BY rather than emitted as a literal `0`.
+  const rankExpr = rankTerms.length > 0 ? rankTerms.join(' + ') : null;
+
   const publishedOnly = objectType === 'Operation';
-  const result = await client.query<ObjectRow>(
-    `select ${OBJECT_COLUMNS}
+  values.push(publishedOnly);
+  const publishedParam = values.length;
+  values.push(limit);
+  const limitParam = values.length;
+
+  const orderBy = rankExpr !== null ? `(${rankExpr}) desc, updated_at desc` : 'updated_at desc';
+  const text = `select ${OBJECT_COLUMNS}
      from objects
      where workspace_id = $1
        and object_type = $2
-       and (
-         properties::text ilike $3
-         or coalesce(identity_key::text, '') ilike $3
-       )
-       and (not $5::boolean or properties ->> 'status' = 'published')
-     order by
-       case
-         when properties ->> 'name' ilike $3 then 0
-         when properties ->> 'description' ilike $3 then 1
-         else 2
-       end,
-       updated_at desc
-     limit $4`,
-    [workspaceId, objectType, pattern, limit, publishedOnly],
-  );
+       and ${whereMatch}
+       and (not $${publishedParam}::boolean or properties ->> 'status' = 'published')
+     order by ${orderBy}
+     limit $${limitParam}`;
+
+  return { text, values };
+}
+
+async function findMetaOntologyObjects(
+  client: PoolClient,
+  workspaceId: string,
+  objectType: FindMeansObjectType,
+  input: FindMeansInput,
+): Promise<readonly GraphObject[]> {
+  const tokens = tokenizeNeed(input.need);
+  const limit = input.limit ?? DEFAULT_FIND_MEANS_LIMIT;
+  const query = buildFindMeansQuery(objectType, workspaceId, tokens, limit);
+  const result = await client.query<ObjectRow>(query.text, [...query.values]);
   return result.rows.map(mapObjectRow);
 }
 

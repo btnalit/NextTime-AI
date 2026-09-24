@@ -198,6 +198,104 @@ export const ALLOWED_NON_TOOL_WORDS = {
 };
 
 // -------------------------------------------------------------------------------------------
+// Entry prompt-contract content rules (S8 W2-K1, leftover 72 / audit B2, B8, R9): three specific
+// rules the entry `systemPrompt` text must state, each checked by a small set of stable required
+// substrings — not full NLU, just specific enough that a future prose edit dropping the rule
+// itself (not merely rewording it) is caught, the same "just specific enough to catch a real
+// regression" scope the rest of this guard already follows for backtick identifiers. Each list is
+// deliberately short and reviewed by hand, same convention ALLOWED_NON_TOOL_WORDS already uses.
+// -------------------------------------------------------------------------------------------
+
+/** Rule 1 — "every find_* returned empty": must tell the user plainly (no published Worker and/or
+ *  no granted+enabled gate), name the three prerequisites as owner/operator console actions, and
+ *  never invent a capability or suggest editing a Handle's scopes. */
+const EMPTY_FIND_REQUIRED_PHRASES = [
+  'find_operations',
+  'find_workers',
+  'find_procedures',
+  'no published',
+  'Worker',
+  'granted',
+  'enabled',
+  'gate',
+  'owner/operator',
+  'console',
+  'Never invent',
+  'never suggest editing',
+  'Handle',
+];
+
+/** Rule 2 — the ops-runner mention must be conditional on `find_workers` actually returning it,
+ *  never a standing promise that one exists. */
+const CONDITIONAL_OPS_RUNNER_REQUIRED_PHRASES = [
+  'find_workers` itself returned',
+  'ops-runner',
+  'use it only then',
+  'do not assume it exists',
+];
+
+/** Rule 3 — reply in the language the user wrote in, including intermediate status messages, and
+ *  tell a delegated Worker to do the same for its result. */
+const REPLY_LANGUAGE_REQUIRED_PHRASES = [
+  'language the user wrote their message in',
+  'intermediate status message',
+  'invoke_worker',
+  'language to write its result summary',
+];
+
+/** Checks one required-phrase list against `systemPrompt`, returning a violation naming every
+ *  missing phrase (or `[]` when all are present). `ruleName` labels the violation so a failure
+ *  names *which* of the three rules regressed, not just that "something" did. */
+function checkRequiredPhrases(
+  relativePath,
+  ruleName,
+  systemPrompt,
+  requiredPhrases,
+) {
+  const missing = requiredPhrases.filter((phrase) => !systemPrompt.includes(phrase));
+  if (missing.length === 0) return [];
+  return [
+    `${relativePath}: systemPrompt is missing the "${ruleName}" rule (S8 W2-K1) — expected phrase(s) not found: ${missing.map((p) => JSON.stringify(p)).join(', ')}`,
+  ];
+}
+
+/** Rule 1 (leftover 72 / audit B2): the "every find_* came back empty" guidance. */
+export function checkEmptyFindGuidance(relativePath, systemPrompt) {
+  return checkRequiredPhrases(
+    relativePath,
+    'every find_* returned empty',
+    systemPrompt,
+    EMPTY_FIND_REQUIRED_PHRASES,
+  );
+}
+
+/** Rule 2 (leftover 72 / audit B2): the ops-runner mention must be conditional. */
+export function checkConditionalOpsRunner(relativePath, systemPrompt) {
+  return checkRequiredPhrases(
+    relativePath,
+    'ops-runner mention is conditional on find_workers returning it',
+    systemPrompt,
+    CONDITIONAL_OPS_RUNNER_REQUIRED_PHRASES,
+  );
+}
+
+/** Rule 3 (leftover 72 / audit R9): reply in the user's own language. */
+export function checkReplyLanguageDirective(relativePath, systemPrompt) {
+  return checkRequiredPhrases(
+    relativePath,
+    'reply in the user’s own language',
+    systemPrompt,
+    REPLY_LANGUAGE_REQUIRED_PHRASES,
+  );
+}
+
+const ENTRY_PROMPT_CONTENT_CHECKS = [
+  checkEmptyFindGuidance,
+  checkConditionalOpsRunner,
+  checkReplyLanguageDirective,
+];
+
+// -------------------------------------------------------------------------------------------
 // One file's check — pure, given its already-loaded tool set and allow-list (unit-testable
 // without touching the filesystem).
 // -------------------------------------------------------------------------------------------
@@ -245,6 +343,15 @@ export async function main() {
         ALLOWED_NON_TOOL_WORDS[file.path] ?? new Set(),
       ),
     );
+
+    // S8 W2-K1 (leftover 72): the three entry-prompt content rules — entry-agent.yaml only, the
+    // one file these rules are about (ops-runner.yaml has no "every find_* empty"/"reply
+    // language" concept of its own).
+    if (file.path === 'ontology/entry-agent.yaml') {
+      for (const check of ENTRY_PROMPT_CONTENT_CHECKS) {
+        violations.push(...check(file.path, systemPrompt));
+      }
+    }
   }
 
   if (violations.length > 0) {

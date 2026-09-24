@@ -20,6 +20,23 @@ describe('importMcpTools', () => {
     expect(upload?.auto_approvable).toBe(false);
     expect(upload?.await_decision).toBe(true);
   });
+
+  it("S8 W2-K1 (CO1/B3): description comes from the tool's own description, falling back to its name — never blank", () => {
+    const operations = importMcpTools({
+      tools: [
+        {
+          name: 'kb.list',
+          description: 'List knowledge bases',
+          annotations: { readOnlyHint: true },
+        },
+        { name: 'document.upload' },
+      ],
+    });
+    const list = operations.find((op) => op.name === 'kb.list');
+    const upload = operations.find((op) => op.name === 'document.upload');
+    expect(list?.description).toBe('List knowledge bases');
+    expect(upload?.description).toBe('document.upload');
+  });
 });
 
 describe('McpTransport', () => {

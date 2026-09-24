@@ -498,7 +498,9 @@ const graphCapabilities: readonly Capability[] = [
     paramsSchema: z.object({ need: z.string() }).strict(),
     resultSchema: listEnvelope(wire.ObjectWireSchema),
     description:
-      'Traverse the platform meta-ontology for Operations matching a need, intersected with the caller’s Grant.',
+      'Find Operations whose name/description/kind (or Gatekeeper name) matches any keyword in ' +
+      '`need` (space/punctuation-separated; a blank need lists every candidate), intersected with ' +
+      'the caller’s Grant.',
   },
   {
     name: 'find_workers',
@@ -519,7 +521,8 @@ const graphCapabilities: readonly Capability[] = [
         .strict(),
     ),
     description:
-      'Traverse the platform meta-ontology for WorkerDefinition@version matching a need.',
+      'Find published WorkerDefinition@version whose name/description matches any keyword in ' +
+      '`need` (space/punctuation-separated; a blank need lists every candidate).',
   },
   {
     name: 'find_procedures',
@@ -538,7 +541,9 @@ const graphCapabilities: readonly Capability[] = [
         })
         .strict(),
     ),
-    description: 'Traverse the platform meta-ontology for Procedures matching a need.',
+    description:
+      'Find published Procedures whose name/description matches any keyword in `need` (space/' +
+      'punctuation-separated; a blank need lists every candidate).',
   },
 ];
 
@@ -1762,7 +1767,10 @@ const taskCapabilities: readonly Capability[] = [
       'returns as soon as the Task exists; with `wait: true` it holds for up to `timeout` ' +
       'seconds (90 at most) and returns the terminal result if the Worker finishes in time, ' +
       'otherwise the same `{taskId, status}`. `gates` narrows the Worker’s Handle to those ' +
-      'Gatekeepers (it can only narrow, never widen). The outcome — completion, failure, or an ' +
+      'Gatekeepers (it can only narrow, never widen) — each entry is a Gatekeeper id; a ' +
+      'Gatekeeper’s name is also accepted when it names exactly one Gatekeeper this ' +
+      'WorkerDefinition declares (ambiguous or unknown names are rejected with the declared ' +
+      'ids/names listed). The outcome — completion, failure, or an ' +
       'approval that landed — is delivered later: entry agents receive it in a later turn’s ' +
       'context; other callers read it with `get_task`. The Worker acts on behalf of the calling ' +
       'principal.',

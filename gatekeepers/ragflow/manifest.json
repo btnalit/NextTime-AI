@@ -1,6 +1,7 @@
 [
   {
     "name": "kb.list",
+    "description": "List this RAGFlow instance's knowledge bases (datasets), with chunk/document counts and embedding config.",
     "binding": { "kind": "http", "method": "GET", "path": "/api/v1/datasets" },
     "params_schema": {
       "type": "object",
@@ -33,6 +34,7 @@
   },
   {
     "name": "kb.documents",
+    "description": "List the documents in one knowledge base (dataset), with size, chunk count, and parse status.",
     "binding": {
       "kind": "http",
       "method": "GET",
@@ -65,6 +67,7 @@
   },
   {
     "name": "retrieve",
+    "description": "Run a semantic-search question against one or more knowledge bases (or specific documents) and return the matching chunks.",
     "binding": { "kind": "http", "method": "POST", "path": "/api/v1/retrieval" },
     "params_schema": {
       "type": "object",
@@ -89,6 +92,7 @@
   },
   {
     "name": "document.upload",
+    "description": "Upload one document's content into a knowledge base (dataset), unparsed.",
     "binding": {
       "kind": "http",
       "method": "POST",
@@ -121,6 +125,7 @@
   },
   {
     "name": "document.parse",
+    "description": "Parse one or more already-uploaded documents into retrievable chunks.",
     "binding": { "kind": "http", "method": "POST", "path": "/api/v1/datasets/{dataset_id}/chunks" },
     "params_schema": {
       "type": "object",
