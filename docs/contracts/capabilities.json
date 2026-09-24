@@ -2971,11 +2971,68 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "drift": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "additionalProperties": false,
+              "properties": {
+                "existing": {
+                  "type": "string"
+                },
+                "instance": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "existing",
+                "instance"
+              ],
+              "type": "object"
+            },
+            "target": {
+              "additionalProperties": false,
+              "properties": {
+                "existing": {
+                  "type": "string"
+                },
+                "instance": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "existing",
+                "instance"
+              ],
+              "type": "object"
+            },
+            "transportKind": {
+              "additionalProperties": false,
+              "properties": {
+                "existing": {
+                  "type": "string"
+                },
+                "instance": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "existing",
+                "instance"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
         "gateId": {
           "type": "string"
         },
         "gatekeeperId": {
           "type": "string"
+        },
+        "linkedExisting": {
+          "type": "boolean"
         },
         "publishedOperationNames": {
           "items": {
@@ -2994,7 +3051,8 @@
         "gateId",
         "gatekeeperId",
         "publishedOperationNames",
-        "skippedOperationNames"
+        "skippedOperationNames",
+        "linkedExisting"
       ],
       "type": "object"
     }
@@ -11091,6 +11149,251 @@
         "llmUsage30d",
         "recentAudit",
         "checkedAt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "observe",
+    "name": "preview_gate_instance_enable",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "ambiguousCandidates": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gateId": {
+          "type": "string"
+        },
+        "operationsAlreadyPresent": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "announced": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "blastRadius",
+                  "autoApprovable"
+                ],
+                "type": "object"
+              },
+              "differs": {
+                "type": "boolean"
+              },
+              "existing": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "draft",
+                      "published",
+                      "deprecated"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "blastRadius",
+                  "autoApprovable",
+                  "status"
+                ],
+                "type": "object"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "existing",
+              "announced",
+              "differs"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "operationsToImport": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "autoApprovable": {
+                "type": "boolean"
+              },
+              "blastRadius": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "mode": {
+                "enum": [
+                  "observe",
+                  "execute"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "mode",
+              "blastRadius",
+              "autoApprovable"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "wouldLink": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "drift": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "existing": {
+                          "type": "string"
+                        },
+                        "instance": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "existing",
+                        "instance"
+                      ],
+                      "type": "object"
+                    },
+                    "target": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "existing": {
+                          "type": "string"
+                        },
+                        "instance": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "existing",
+                        "instance"
+                      ],
+                      "type": "object"
+                    },
+                    "transportKind": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "existing": {
+                          "type": "string"
+                        },
+                        "instance": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "existing",
+                        "instance"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                },
+                "gatekeeperId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "gatekeeperId",
+                "drift"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "gateId",
+        "wouldLink",
+        "ambiguousCandidates",
+        "operationsToImport",
+        "operationsAlreadyPresent"
       ],
       "type": "object"
     }

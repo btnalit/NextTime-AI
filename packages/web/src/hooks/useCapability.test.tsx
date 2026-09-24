@@ -274,4 +274,111 @@ describe('useCapabilityList', () => {
     ]);
     expect(caller.calls).toHaveLength(2);
   });
+
+  it('S8 W1-A4: `truncated` from the initial load is surfaced', async () => {
+    const caller = scriptedCaller([() => Promise.resolve({ items: [1], truncated: true })]);
+    const { result } = renderHook(() => useCapabilityList<number>(caller, 'list_skills'), {
+      wrapper: PermissionsProvider,
+    });
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    expect(result.current.state.status === 'ready' && result.current.state.data.truncated).toBe(
+      true,
+    );
+  });
+
+  it('S8 W1-A4: `loadMore` carries `truncated` from the page it fetched', async () => {
+    const caller = scriptedCaller([
+      () => Promise.resolve({ items: [1], nextCursor: 'c1' }),
+      () => Promise.resolve({ items: [2], truncated: true }),
+    ]);
+    const { result } = renderHook(() => useCapabilityList<number>(caller, 'list_skills'), {
+      wrapper: PermissionsProvider,
+    });
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    expect(result.current.state.status === 'ready' && result.current.state.data.truncated).toBe(
+      undefined,
+    );
+    await act(async () => {
+      await result.current.loadMore();
+    });
+    expect(result.current.state.status === 'ready' && result.current.state.data.truncated).toBe(
+      true,
+    );
+    expect(result.current.state.status === 'ready' && result.current.state.data.items).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it('S8 W1-A4: `autoLoadAll` walks every page without a manual loadMore()', async () => {
+    const caller = scriptedCaller([
+      () => Promise.resolve({ items: [1], nextCursor: 'c1' }),
+      () => Promise.resolve({ items: [2], nextCursor: 'c2' }),
+      () => Promise.resolve({ items: [3] }),
+    ]);
+    const { result } = renderHook(
+      () => useCapabilityList<number>(caller, 'list_worker_definitions', {}, { autoLoadAll: true }),
+      { wrapper: PermissionsProvider },
+    );
+    await waitFor(() =>
+      expect(result.current.state.status === 'ready' && result.current.state.data.items).toEqual([
+        1, 2, 3,
+      ]),
+    );
+    expect(
+      result.current.state.status === 'ready' && result.current.state.data.nextCursor,
+    ).toBeUndefined();
+    expect(caller.calls).toHaveLength(3);
+  });
+
+  it('autoLoadAll stops after a failed page instead of retrying in a loop', async () => {
+    const caller = scriptedCaller([
+      () => Promise.resolve({ items: [1], nextCursor: 'c1' }),
+      () => Promise.reject(new Error('kernel unavailable')),
+    ]);
+    const { result } = renderHook(
+      () => useCapabilityList<number>(caller, 'list_worker_definitions', {}, { autoLoadAll: true }),
+      { wrapper: PermissionsProvider },
+    );
+    await waitFor(() => expect(result.current.loadMoreError).not.toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(caller.calls).toHaveLength(2);
+    expect(result.current.state.status === 'ready' && result.current.state.data.items).toEqual([1]);
+  });
+
+  it('autoLoadAll stops when a page echoes the cursor it was asked for', async () => {
+    const caller = scriptedCaller([
+      () => Promise.resolve({ items: [1], nextCursor: 'c1' }),
+      () => Promise.resolve({ items: [2], nextCursor: 'c1' }),
+    ]);
+    const { result } = renderHook(
+      () => useCapabilityList<number>(caller, 'list_worker_definitions', {}, { autoLoadAll: true }),
+      { wrapper: PermissionsProvider },
+    );
+    await waitFor(() =>
+      expect(result.current.state.status === 'ready' && result.current.state.data.items).toEqual([
+        1, 2,
+      ]),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(caller.calls).toHaveLength(2);
+    expect(
+      result.current.state.status === 'ready' && result.current.state.data.nextCursor,
+    ).toBeUndefined();
+  });
+
+  it('autoLoadAll unset (default): stays on the first page until loadMore() is called', async () => {
+    const caller = scriptedCaller([
+      () => Promise.resolve({ items: [1], nextCursor: 'c1' }),
+      () => Promise.resolve({ items: [2] }),
+    ]);
+    const { result } = renderHook(
+      () => useCapabilityList<number>(caller, 'list_worker_definitions'),
+      { wrapper: PermissionsProvider },
+    );
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    // Give any stray effect a chance to fire before asserting it did not.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(result.current.state.status === 'ready' && result.current.state.data.items).toEqual([1]);
+    expect(caller.calls).toHaveLength(1);
+  });
 });

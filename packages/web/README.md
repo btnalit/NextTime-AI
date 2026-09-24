@@ -86,6 +86,29 @@ Output: `packages/web/dist/` — copied into the caddy image by deploy/caddy/Doc
 (docs/runbooks/host-caddy.md §E8.5). `@nexttime/shared` is a real runtime import now (the status
 enums and transition tables drive the UI), resolved to its `dist/` by the production build.
 
+**Route-level code splitting (S8 W1-A5, leftover 49).** Every page `routes.tsx`'s `Routed` renders
+is a `React.lazy` chunk — the same pattern `components/chat/MessageBody.tsx` set for the Markdown
+kit component (S8 W1-A2), just applied to the route table instead of one in-page boundary. Before:
+one `index-*.js` entry chunk at 806 kB raw / 228 kB gzip (Vite's `chunkSizeWarningLimit` warning).
+After: the entry chunk carries only the shell (session machine, `AppShell`/`Sidebar`, the
+eagerly-loaded pre-session pages — `LoginPage`/`ChangePasswordPage`/`NoWorkspacePage`/
+`AccountPage`, the last of those also reachable signed-in at `#/me/account`) at ~37 kB raw / ~11 kB
+gzip; every other page is its own chunk (0.5–42 kB raw depending on the page), fetched the first
+time its route is visited. `vite.config.ts`'s `build.rollupOptions.output.manualChunks` groups two
+things beyond that: `vendor-react` (react/react-dom, always part of the eager load anyway) and
+`vendor-radix` (every `@radix-ui/*` module — empty today since nothing outside `components/kit/*`
+imports one yet, but it keeps the next kit component that lands in a page from inflating that
+page's own chunk instead of a shared one); and `platform` (all nine `components/platform/*Page`
+modules in one ~393 kB raw / ~107 kB gzip chunk — the platform section is one admin flow a reader
+moves through page to page, so the first `#/platform/*` visit pays one fetch and every later
+platform page in the same session is already cached, instead of a chunk-per-click waterfall).
+`components/RouteBoundary.tsx` wraps the routed page in a `Suspense` (fallback `null` — the shell
+chrome around it stays rendered, so there is nothing to flash) and a class-component error
+boundary, so a chunk that fails to fetch (e.g. a deploy replaced the hashed file this tab's
+`index.html` still references) shows a reload action instead of a blank page; `routes.tsx` keys it
+by `route.kind` so navigating to a different, working route after a failed one does not keep
+showing the stale error screen.
+
 ## Structure
 
 ```
@@ -93,6 +116,12 @@ src/
   App.tsx                 session (one WsClient + one HttpClient) + hash routing + providers +
                           the S4.1 pre-session state machine (boot/setup/login/changePassword/
                           noWorkspace) — see its own module doc comment for the boot sequence
+  routes.tsx               the route table (C23 split of App.tsx) — every page is `React.lazy`
+                          (S8 W1-A5, see "Route-level code splitting" above); `AccountPage` stays
+                          a static import (also reachable pre-session, App.tsx)
+  components/RouteBoundary.tsx  S8 W1-A5: Suspense (fallback `null`) + error boundary around the
+                          routed page, keyed by `route.kind` — reload action on a failed chunk
+                          fetch instead of a blank page
   lib/
     http-client.ts        POST /api/cap/<name> — `auth: {kind:'apiKey',apiKey} | {kind:'cookie',
                           workspaceId}` (S4.1); default fetch is a wrapper, never the bare global
@@ -128,7 +157,14 @@ src/
   hooks/
     useResource.ts        loading / error / ready(refreshing, refreshError) state machine
     useCapability.ts       S3.14 data layer: useCapability/useCapabilityList over CapabilityCaller —
-                           cache-by-(caller,name,params), push-triggered reload, nextCursor paging
+                           cache-by-(caller,name,params), push-triggered reload, nextCursor paging.
+                           S8 W1-A4: the list envelope also carries `truncated`; `useCapabilityList`
+                           takes an `autoLoadAll` option that walks every page automatically (for a
+                           selector/directory list, where a row missing past page one is a
+                           correctness bug, not a paging UX choice) instead of the default manual
+                           `loadMore()`
+    useMediaQuery.ts       S8 W1-A4: window.matchMedia subscription; NARROW_TABLE_QUERY is the
+                           768px responsive-table breakpoint kit/data-table reads
     usePermissions.tsx    403/200-derived "may/may not call X" for the session (denied + allowed)
     useWorkspaceIdentity.ts  Sidebar's workspace name + role badge
     usePendingCount.ts    sidebar badge; useWsStatus.ts; usePushToasts.ts
@@ -155,6 +191,18 @@ src/
                           gzip that only a chat page with an assistant message ever needs
                           — S8 W1-A3 (audit C3): `dropdown-menu` — the chat header's 改名/归档
                           overflow menu, first kit component wired into `components/chat/*`
+                          — S8 W1-A4 (audit S3): data-table — `@tanstack/react-table` (pinned to
+                          the stable 8.21.3 line, not the newly-stable v9's reworked hook/feature
+                          architecture) as a sort-state engine only (headless — this component
+                          renders every pixel itself, no flexRender) over kit/table. Per-column
+                          priority (primary/high/low) drives `layout="card"` (default: a card list
+                          below 768px, hooks/useMediaQuery's NARROW_TABLE_QUERY) or `layout="sticky"`
+                          (primary/high columns pinned left, the rest scrolling — for a table too
+                          dense to ever fit one screen, e.g. Providers, which overflows even at
+                          1440). Wired into PlatformUsersPage/PlatformWorkspacesPage/
+                          PlatformModelsPage(Providers)/PlatformRuntimePage(Images+Residents)/
+                          ModelsPage(Quotas+Policies) — every table the audit's S3 row and its own
+                          "plus any other page table that shows the same overflow" note named
   components/shell/       AppShell, Sidebar (三组 使用 / 治理 / 平台 nav, S6-A0; nav data itself lives
                           in lib/nav.ts as of S8 W1-A1; S4.1: workspace switcher when >1 membership,
                           cookie-vs-apiKey sign-out label). S8 W1-A3 (audit S2): `Sidebar` now wraps
@@ -356,6 +404,17 @@ is absent, `MobileTopBar` is present, opening the drawer surfaces the nav testid
 the overflow menu's rename/archive/restore items calling the existing handlers, and the disabled
 restore item while a restore is in flight; `kit/dropdown-menu.test.tsx` (new) covers open/select/
 close the same way `kit/dialog.test.tsx` covers `Dialog`.
+
+S8 W1-A4 additions (audit S3): `components/kit/data-table` (wide-table roles/headers/rows, card
+mode at narrow width via a mocked `matchMedia`, primary/high/low column placement, sort toggle, a
+non-sortable column, `onRowClick` incl. the nested-button guard, empty data); `useMediaQuery`
+(initial match state, a `change` event, the no-`matchMedia` fallback); `useCapability` gains cases
+for `truncated` (from the initial load and from `loadMore`) and `autoLoadAll` (walks every page
+with no manual `loadMore()`, vs. staying on page one when unset). `PlatformUsersPage`,
+`PlatformWorkspacesPage`, `PlatformModelsPage`, `PlatformRuntimePage` and `ModelsPage`'s
+pre-existing suites all pass unmodified against their data-table migration (same testids, same
+`.textContent` assertions — none depended on `<tr>`/`<td>` DOM structure beyond what a real
+`<table>` still provides at the tests' default > 768px jsdom width).
 
 S3.13 additions: `useWorkspaceIdentity` (known role once `get_workspace` resolves, inferred
 fallback on `not_found`/loading), `AgentProfilePage` (pre-filled form, `not_found` degrade on the

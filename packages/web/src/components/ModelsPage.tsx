@@ -9,6 +9,7 @@ import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js
 import { breadcrumbFor } from '../lib/nav.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
+import { DataTable, type DataTableColumn } from './kit/data-table.js';
 import { PageHeader } from './kit/page-header.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -41,6 +42,111 @@ function quotaValue(row: QuotaListEntryWire): string {
   const unit = QUOTA_LABELS[row.key]?.unit ?? '';
   return unit ? `${row.value} ${unit}` : String(row.value);
 }
+
+/** S8 W1-A4 (audit S3, "配额 808" — the Quotas table overflows horizontally at 768). Module-level
+ *  (not a factory or inline in the component): every cell is pure display, no row-level callback
+ *  or component-state closure to capture. `key` is the row's own primary key ("配额 Quota", not a
+ *  human name), so it is `primary`; the effective value reads as the row's "status" here. */
+const QUOTA_COLUMNS: readonly DataTableColumn<QuotaListEntryWire>[] = [
+  {
+    id: 'key',
+    header: '配额 Quota',
+    priority: 'primary',
+    cell: (row) => (
+      <>
+        <div>{QUOTA_LABELS[row.key]?.label ?? row.key}</div>
+        <div className="mono text-3 text-small">{row.key}</div>
+      </>
+    ),
+  },
+  {
+    id: 'value',
+    header: '生效值 Effective value',
+    priority: 'high',
+    cellClassName: 'mono',
+    cell: (row) => <span data-testid="quota-value">{quotaValue(row)}</span>,
+  },
+  {
+    id: 'source',
+    header: '来源 Source',
+    cell: (row) => (
+      <span className="tag" data-testid="quota-source">
+        {row.isDefault ? '默认 default' : '工作区覆盖 override'}
+      </span>
+    ),
+  },
+  {
+    id: 'updatedBy',
+    header: '设置人 Set by',
+    cellClassName: 'mono text-3',
+    cell: (row) => (row.updatedBy ? shortId(row.updatedBy) : '—'),
+  },
+  {
+    id: 'updatedAt',
+    header: '更新 Updated',
+    cell: (row) =>
+      row.updatedAt ? (
+        <time title={formatDateTime(row.updatedAt)}>{formatRelative(row.updatedAt)}</time>
+      ) : (
+        '—'
+      ),
+  },
+];
+
+/** S8 W1-A4 (audit S3, same page as QUOTA_COLUMNS): `actionKindTag` is the row's own identity
+ *  (§1 wire vocabulary — "actionKind" is only the `{tag,label}` display object, this is the bare
+ *  tag), so it is `primary`; `blastRadius` reads as the row's "status". */
+const POLICY_COLUMNS: readonly DataTableColumn<PolicyWire>[] = [
+  {
+    id: 'actionKind',
+    header: '动作种类 Action kind',
+    priority: 'primary',
+    cellClassName: 'mono',
+    cell: (policy) => <span data-testid="policy-action-kind">{policy.actionKindTag}</span>,
+  },
+  {
+    id: 'blastRadius',
+    header: '影响 Blast radius',
+    priority: 'high',
+    cell: (policy) =>
+      policy.blastRadius ? (
+        <StatusChip machine="blastRadius" status={policy.blastRadius} size="s" />
+      ) : (
+        <span className="text-3">任意 any</span>
+      ),
+  },
+  {
+    id: 'autoApprove',
+    header: '自动批准 Auto-approve',
+    cell: (policy) => (
+      <span
+        className={`chip chip-s ${policy.autoApprove ? 'chip-ok' : 'chip-warn'}`}
+        data-testid="policy-auto-approve"
+      >
+        {policy.autoApprove ? '自动批准 auto' : '需审批 requires approval'}
+      </span>
+    ),
+  },
+  {
+    id: 'requesterCanApprove',
+    header: '申请人可自批 Requester may approve',
+    cell: (policy) =>
+      policy.requesterCanApprove === null ? '—' : policy.requesterCanApprove ? '是 yes' : '否 no',
+  },
+  {
+    id: 'setBy',
+    header: '设置人 Set by',
+    cellClassName: 'mono text-3',
+    cell: (policy) => shortId(policy.setBy),
+  },
+  {
+    id: 'updatedAt',
+    header: '更新 Updated',
+    cell: (policy) => (
+      <time title={formatDateTime(policy.updatedAt)}>{formatRelative(policy.updatedAt)}</time>
+    ),
+  },
+];
 
 export interface ModelsPageProps {
   readonly http: CapabilityCaller;
@@ -77,7 +183,9 @@ export function ModelsPage({ http }: ModelsPageProps) {
   const isOwner = role.role === 'owner';
 
   const models = useCapabilityList<ModelRow>(http, 'list_models');
-  const skills = useCapabilityList<SkillRow>(http, 'list_skills');
+  // A picker inside AgentPolicyForm, not a browsable list — autoLoadAll (S8 W1-C #243 made
+  // list_skills keyset-paginated; a missing Skill past page one would be a correctness bug here).
+  const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
   const agentPolicy = useCapability<AgentPolicy>(http, 'get_agent_policy');
   const quotas = useCapabilityList<QuotaListEntryWire>(http, 'list_quotas');
@@ -182,47 +290,14 @@ export function ModelsPage({ http }: ModelsPageProps) {
         ) : quotas.state.data.items.length === 0 ? (
           <EmptyState icon="cpu" title="No quotas set" testId="quotas-empty" />
         ) : (
-          <div className="table-scroll">
-            <table className="data-table" data-testid="quotas-table">
-              <thead>
-                <tr>
-                  <th>配额 Quota</th>
-                  <th>生效值 Effective value</th>
-                  <th>来源 Source</th>
-                  <th>设置人 Set by</th>
-                  <th>更新 Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {quotas.state.data.items.map((row) => (
-                  <tr key={row.key} data-testid={`quota-row-${row.key}`}>
-                    <td>
-                      <div>{QUOTA_LABELS[row.key]?.label ?? row.key}</div>
-                      <div className="mono text-3 text-small">{row.key}</div>
-                    </td>
-                    <td className="mono" data-testid="quota-value">
-                      {quotaValue(row)}
-                    </td>
-                    <td>
-                      <span className="tag" data-testid="quota-source">
-                        {row.isDefault ? '默认 default' : '工作区覆盖 override'}
-                      </span>
-                    </td>
-                    <td className="mono text-3">{row.updatedBy ? shortId(row.updatedBy) : '—'}</td>
-                    <td>
-                      {row.updatedAt ? (
-                        <time title={formatDateTime(row.updatedAt)}>
-                          {formatRelative(row.updatedAt)}
-                        </time>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={QUOTA_COLUMNS}
+            data={quotas.state.data.items}
+            getRowId={(row) => row.key}
+            ariaLabel="Quotas"
+            testId="quotas-table"
+            rowTestId={(row) => `quota-row-${row.key}`}
+          />
         )}
       </section>
 
@@ -251,60 +326,15 @@ export function ModelsPage({ http }: ModelsPageProps) {
         ) : policies.state.data.items.length === 0 ? (
           <EmptyState icon="cpu" title="No policy rules set" testId="policies-empty" />
         ) : (
-          <div className="table-scroll">
-            <table className="data-table" data-testid="policies-table">
-              <thead>
-                <tr>
-                  <th>动作种类 Action kind</th>
-                  <th>影响 Blast radius</th>
-                  <th>自动批准 Auto-approve</th>
-                  <th>申请人可自批 Requester may approve</th>
-                  <th>设置人 Set by</th>
-                  <th>更新 Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {policies.state.data.items.map((policy) => (
-                  <tr
-                    key={policy.id}
-                    data-testid={`policy-row-${policy.id}`}
-                    data-policy-id={policy.id}
-                  >
-                    <td className="mono" data-testid="policy-action-kind">
-                      {policy.actionKindTag}
-                    </td>
-                    <td>
-                      {policy.blastRadius ? (
-                        <StatusChip machine="blastRadius" status={policy.blastRadius} size="s" />
-                      ) : (
-                        <span className="text-3">任意 any</span>
-                      )}
-                    </td>
-                    <td data-testid="policy-auto-approve">
-                      <span
-                        className={`chip chip-s ${policy.autoApprove ? 'chip-ok' : 'chip-warn'}`}
-                      >
-                        {policy.autoApprove ? '自动批准 auto' : '需审批 requires approval'}
-                      </span>
-                    </td>
-                    <td>
-                      {policy.requesterCanApprove === null
-                        ? '—'
-                        : policy.requesterCanApprove
-                          ? '是 yes'
-                          : '否 no'}
-                    </td>
-                    <td className="mono text-3">{shortId(policy.setBy)}</td>
-                    <td>
-                      <time title={formatDateTime(policy.updatedAt)}>
-                        {formatRelative(policy.updatedAt)}
-                      </time>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={POLICY_COLUMNS}
+            data={policies.state.data.items}
+            getRowId={(policy) => policy.id}
+            ariaLabel="Policies"
+            testId="policies-table"
+            rowTestId={(policy) => `policy-row-${policy.id}`}
+            rowDataAttrs={(policy) => ({ 'data-policy-id': policy.id })}
+          />
         )}
       </section>
     </div>

@@ -66,9 +66,10 @@ const TAB_LABEL: Readonly<Record<CatalogTab, string>> = {
  * matching `publish_*`. Two kernel facts the page states rather than hides: `propose_skill` /
  * `propose_procedure` address no family, so "edit" of those two is a copy into a *new* draft
  * (new id, v1; a Skill copy re-enters the body — `list_skills` has no `markdown`), whereas
- * `propose_worker_definition{definitionId}` is a real next version. `list_skills` /
- * `list_procedures` are `noParams` and `list_worker_definitions` takes `{kind?}` only (both
- * `.strict()`): no `limit` / `cursor` exists, so the lists stay single-page (B5 does not apply).
+ * `propose_worker_definition{definitionId}` is a real next version. S8 W1-C (#243) made
+ * `list_skills` / `list_procedures` / `list_worker_definitions` keyset-paginated (this comment
+ * said "noParams … stay single-page, B5 does not apply" until S8 W1-A4); the three browsable tabs
+ * below now offer "加载更多" via `useCapabilityList`'s `loadMore`/`nextCursor`/`truncated`.
  *
  * `list_worker_definitions` only ever returns *published* rows (its own kernel-side doc comment,
  * `lib/tasks.ts`), so unlike Skills/Procedures (which also show the caller's own drafts) the
@@ -466,6 +467,30 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
           ))}
         </DataList>
       )}
+      {skills.state.status === 'ready' && skills.state.data.nextCursor !== undefined ? (
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <Button
+            variant="secondary"
+            loading={skills.loadingMore}
+            onClick={() => void skills.loadMore()}
+          >
+            加载更多 Load more
+          </Button>
+        </div>
+      ) : null}
+      {skills.state.status === 'ready' && skills.state.data.truncated === true ? (
+        <p className="text-3 text-small" data-testid="skills-truncated">
+          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余 Skill keep
+          loading more to see the rest.
+        </p>
+      ) : null}
+      {skills.loadMoreError !== null ? (
+        <ErrorBanner
+          error={skills.loadMoreError}
+          title="Could not load more skills"
+          testId="skills-load-more-error"
+        />
+      ) : null}
       {editorDrawer}
     </>
   );
@@ -615,6 +640,30 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
           ))}
         </DataList>
       )}
+      {procedures.state.status === 'ready' && procedures.state.data.nextCursor !== undefined ? (
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <Button
+            variant="secondary"
+            loading={procedures.loadingMore}
+            onClick={() => void procedures.loadMore()}
+          >
+            加载更多 Load more
+          </Button>
+        </div>
+      ) : null}
+      {procedures.state.status === 'ready' && procedures.state.data.truncated === true ? (
+        <p className="text-3 text-small" data-testid="procedures-truncated">
+          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余 Procedure keep
+          loading more to see the rest.
+        </p>
+      ) : null}
+      {procedures.loadMoreError !== null ? (
+        <ErrorBanner
+          error={procedures.loadMoreError}
+          title="Could not load more procedures"
+          testId="procedures-load-more-error"
+        />
+      ) : null}
       {editorDrawer}
     </>
   );
@@ -634,10 +683,13 @@ function ProcedureEditorHost({
   readonly onDone: () => void;
 }) {
   const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
+  // A step picker, not a browsable list — autoLoadAll so a workspace with > 100 published Worker
+  // definitions still offers every one of them, not just the first page (S8 W1-A4).
   const definitions = useCapabilityList<WorkerDefinitionSummary>(
     http,
     'list_worker_definitions',
     {},
+    { autoLoadAll: true },
   );
   return (
     <ProcedureEditor
@@ -800,6 +852,30 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
           ))}
         </DataList>
       )}
+      {workers.state.status === 'ready' && workers.state.data.nextCursor !== undefined ? (
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <Button
+            variant="secondary"
+            loading={workers.loadingMore}
+            onClick={() => void workers.loadMore()}
+          >
+            加载更多 Load more
+          </Button>
+        </div>
+      ) : null}
+      {workers.state.status === 'ready' && workers.state.data.truncated === true ? (
+        <p className="text-3 text-small" data-testid="workers-truncated">
+          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余 Worker 定义 keep
+          loading more to see the rest.
+        </p>
+      ) : null}
+      {workers.loadMoreError !== null ? (
+        <ErrorBanner
+          error={workers.loadMoreError}
+          title="Could not load more worker definitions"
+          testId="workers-load-more-error"
+        />
+      ) : null}
       {editorDrawer}
     </>
   );

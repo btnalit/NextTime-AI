@@ -8,9 +8,10 @@ import { cn } from '../../lib/cn.js';
 
 /**
  * components/kit/table (S8 W1-A0, docs/development-tasks.md §5e decision F3): a styled table
- * shell only — plain semantic `<table>` markup on the §5.9 tokens, no data-grid behaviour (S3's
- * "responsive data table" work wires TanStack Table on top of this in a later W1-A lane). Not
- * wired into any page yet.
+ * shell only — plain semantic `<table>` markup on the §5.9 tokens, no data-grid behaviour.
+ * `components/kit/data-table.tsx` (S8 W1-A4, audit S3) wires TanStack Table's sort-state engine
+ * on top of this shell and adds the responsive card/sticky-column behaviour — reach for that
+ * unless a page genuinely needs only the bare shell with hand-written `<thead>`/`<tbody>` markup.
  */
 export const Table = forwardRef<HTMLTableElement, HTMLAttributes<HTMLTableElement>>(function Table(
   { className, ...rest },

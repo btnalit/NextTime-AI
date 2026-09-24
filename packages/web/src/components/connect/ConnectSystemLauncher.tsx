@@ -926,7 +926,14 @@ function GrantMemberForm({
   readonly http: CapabilityCaller;
   readonly gatekeeperId: string;
 }) {
-  const principals = useCapabilityList<PrincipalRow>(http, 'list_principals', {});
+  // A principal picker, not a browsable list — autoLoadAll (S8 W1-C #243 made list_principals
+  // keyset-paginated; a missing member past page one would be a correctness bug here).
+  const principals = useCapabilityList<PrincipalRow>(
+    http,
+    'list_principals',
+    {},
+    { autoLoadAll: true },
+  );
   const [principalId, setPrincipalId] = useState('');
   const [granting, setGranting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);

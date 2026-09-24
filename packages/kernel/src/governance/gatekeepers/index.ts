@@ -16,6 +16,8 @@ export {
   getGatekeeper,
   listGatekeepers,
   countGatekeepers,
+  findGatekeepersByEndpoint,
+  normalizeGateEndpoint,
   GatekeeperNotFoundError,
 } from './registry.js';
 export type {
@@ -23,6 +25,7 @@ export type {
   RegisterGatekeeperResult,
   GatekeeperRecord,
   GatekeeperListEntry,
+  GatekeeperByEndpointEntry,
 } from './registry.js';
 
 export {

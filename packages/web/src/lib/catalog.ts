@@ -27,9 +27,15 @@ import {
  *     name / description / applicable but the body must be re-entered.
  *   - `propose_worker_definition{definitionId?, kind, definition}` does address a family:
  *     `definitionId` given → the next version under that id; `kind` is immutable per family.
- *   - `list_skills` / `list_procedures` are `noParams` and `list_worker_definitions` takes only
- *     `{kind?}` (both `.strict()`) — no `limit` / `cursor`, so the catalog stays single-page (B5
- *     does not apply; passing paging params would be a 400).
+ *   - S8 W1-C (#243, leftover 48 pagination list) made `list_skills` / `list_procedures` /
+ *     `list_worker_definitions` keyset-paginated (`limit?`/`cursor?`, default 100, max 500,
+ *     `{items, nextCursor?, truncated?}`) — the note this comment carried until S8 W1-A4 ("noParams
+ *     / stays single-page / passing paging params would be a 400") predates that and no longer
+ *     holds. `CatalogPage.tsx`'s three browsable tabs (Skills/Procedures/Workers) offer "加载更多"
+ *     via `useCapabilityList`'s `loadMore`; the two picker directories it also reads
+ *     (`ProcedureEditorHost`'s `list_worker_definitions`, this file's own callers via
+ *     `AgentProfilePage`/`ModelsPage`) pass `{ autoLoadAll: true }` instead, since a step/skill
+ *     picker silently missing rows past page one is a correctness bug, not a paging UX choice.
  */
 
 /** `path → message` from a failed `safeParse`, first message per path (the form shows one). */
