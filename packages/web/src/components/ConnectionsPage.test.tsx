@@ -32,6 +32,8 @@ function scriptedHttp(
     // S8 W1-A6: every registered-system card's "Grant to principal" picker loads this once,
     // shared across cards.
     list_principals: () => ({ items: [] }),
+    // S8 W2-U1 (audit R5/U2): every card's own "已授权成员" list shares this one read.
+    list_grants: () => ({ items: [] }),
     ...handlers,
   };
   return {
@@ -114,8 +116,15 @@ function gatekeeperObject(id: string, name: string) {
   };
 }
 
+/** S8 W2-U1 (audit SY3): 接入向导 / 直接注册门 moved from the header's own buttons into the
+ *  overflow menu. `fireEvent.click` alone leaves a Radix `DropdownMenu` closed under jsdom — the
+ *  trigger opens on `onPointerDown` (`kit/dropdown-menu`'s own doc comment / test). */
+function openConnectMoreMenu(): void {
+  fireEvent.pointerDown(screen.getByTestId('connect-system-more'), { button: 0 });
+}
+
 describe('ConnectionsPage', () => {
-  it('opens the onboarding wizard from its own button, and finishing it opens the gate detail drawer', async () => {
+  it('opens the onboarding wizard from the overflow menu, and finishing it opens the gate detail drawer', async () => {
     const http = scriptedHttp({
       create_connection: () => ({
         gatekeeperId: 'gk-9',
@@ -126,7 +135,8 @@ describe('ConnectionsPage', () => {
     const onSelectGatekeeper = vi.fn();
     renderPage(http, onSelectGatekeeper);
 
-    fireEvent.click(screen.getByRole('button', { name: /接入向导/ }));
+    openConnectMoreMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: /接入向导/ }));
     const wizardDrawer = await screen.findByTestId('onboarding-wizard-drawer');
     expect(within(wizardDrawer).getByTestId('onboarding-wizard')).toBeTruthy();
 
@@ -151,28 +161,43 @@ describe('ConnectionsPage', () => {
     expect(screen.queryByTestId('onboarding-wizard-drawer')).toBeNull();
   });
 
-  it('the quick "直接注册门', async () => {
+  it('the quick "直接注册门" (overflow, marked 旧路径, U5) opens the register-a-gate drawer', async () => {
     const http = scriptedHttp({});
     renderPage(http);
-    fireEvent.click(screen.getByTestId('register-gate-button'));
+    openConnectMoreMenu();
+    const item = await screen.findByTestId('register-gate-button');
+    expect(item.textContent).toContain('旧路径');
+    fireEvent.click(item);
     const drawer = await screen.findByTestId('complete-connection-drawer');
     expect(within(drawer).getByTestId('complete-connection-form')).toBeTruthy();
   });
 
   // S6-C (§5.6): the page's one primary action opens the shared launcher, mounted for the
-  // workspace plane.
-  it('"接入一个系统', async () => {
+  // workspace plane. S8 W2-U1 (SY3/L4): 申请连接 no longer duplicates in the header.
+  it('"接入一个系统" is the one primary action; 申请连接 only appears in the empty state (L4)', async () => {
     const http = scriptedHttp({});
     renderPage(http);
     const button = screen.getByTestId('connect-system-button');
     expect(button.className).toContain('btn-primary');
-    // One ink button per page (§5.9 principle 1): the older 接入向导 is a secondary now.
-    expect(screen.getByRole('button', { name: /接入向导/ }).className).toContain('btn-secondary');
+    // L4: exactly one 申请连接 affordance — inside requests-empty, not duplicated in the header.
+    const empty = await screen.findByTestId('requests-empty');
+    expect(screen.getAllByRole('button', { name: /申请连接/ })).toHaveLength(1);
+    expect(within(empty).getByRole('button', { name: /申请连接/ })).toBeTruthy();
     fireEvent.click(button);
     const drawer = await screen.findByTestId('connect-system-drawer');
     const launcher = within(drawer).getByTestId('connect-system-launcher');
     expect(launcher.getAttribute('data-step')).toBe('0');
     expect(within(launcher).getByTestId('launcher-kind-ssh')).toBeTruthy();
+  });
+
+  it('SY3: the systems page states the three execution prerequisites', async () => {
+    const http = scriptedHttp({});
+    renderPage(http);
+    const notice = await screen.findByTestId('systems-prerequisites');
+    expect(notice.textContent).toContain('门已在本工作区启用');
+    expect(notice.textContent).toContain('已授权给该成员');
+    expect(notice.textContent).toContain('已发布');
+    expect(notice.textContent).toContain('Worker');
   });
 
   // C26: cancel a `requested` row through the medium-tier confirm; the answer is spliced in place.
@@ -325,6 +350,25 @@ describe('ConnectionsPage', () => {
         }
         return [];
       },
+      // S8 W2-U1 (audit J3): the enable button now opens a preview confirm fed by this read
+      // before it ever calls enable_gate_instance.
+      preview_gate_instance_enable: (params) => {
+        expect(params).toEqual({ gateId: 'gate-1' });
+        return {
+          gateId: 'gate-1',
+          wouldLink: null,
+          ambiguousCandidates: [],
+          operationsToImport: [
+            {
+              name: 'container_restart',
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: false,
+            },
+          ],
+          operationsAlreadyPresent: [],
+        };
+      },
       enable_gate_instance: (params) => {
         expect(params).toEqual({ gateId: 'gate-1' });
         return {
@@ -332,6 +376,7 @@ describe('ConnectionsPage', () => {
           gatekeeperId: 'gk-9',
           publishedOperationNames: ['container_restart'],
           skippedOperationNames: [],
+          linkedExisting: false,
         };
       },
     });
@@ -339,6 +384,9 @@ describe('ConnectionsPage', () => {
 
     const table = await screen.findByTestId('available-gates-table');
     fireEvent.click(within(table).getByTestId('enable-gate-gate-1'));
+    const confirm = await screen.findByTestId('enable-gate-gate-1-confirm');
+    expect(confirm.textContent).toContain('container_restart');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'enable_gate_instance')).toBe(true),
