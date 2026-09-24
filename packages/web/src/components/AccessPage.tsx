@@ -9,13 +9,12 @@ import type { GatekeeperListRow, GrantRow, PrincipalRow } from '../lib/governanc
 import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
-import { GrantCapabilityForm } from './GrantCapabilityForm.js';
 import { IssueServiceHandleSection } from './IssueServiceHandleSection.js';
+import { GrantGateDrawer } from './access/GrantGateDrawer.js';
 import { PageHeader } from './kit/page-header.js';
 import { DashboardCard } from './kit/section.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
-import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input } from './ui/Field.js';
@@ -344,27 +343,15 @@ export function AccessPage({ http }: AccessPageProps) {
 
       {canManage ? <IssueServiceHandleSection http={http} principals={principals} /> : null}
 
-      <Drawer
+      <GrantGateDrawer
+        http={http}
         open={grantOpen}
-        onClose={() => setGrantOpen(false)}
-        title={t('授予能力', 'Grant capability')}
-        subtitle="grant_capability{principalId, resourceType, resourceId?, scope?}"
-        testId="grant-drawer"
-      >
-        {grantOpen ? (
-          <GrantCapabilityForm
-            http={http}
-            principals={principals}
-            defaultPrincipalId={committedFilter || undefined}
-            onCancel={() => setGrantOpen(false)}
-            onDone={() => {
-              setGrantOpen(false);
-              toast.push({ tone: 'ok', title: t('已授予', 'Grant created') });
-              refreshGrants();
-            }}
-          />
-        ) : null}
-      </Drawer>
+        onOpenChange={setGrantOpen}
+        onGranted={() => {
+          toast.push({ tone: 'ok', title: t('已授予', 'Grant created') });
+          refreshGrants();
+        }}
+      />
     </div>
   );
 }
