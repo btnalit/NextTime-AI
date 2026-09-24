@@ -14487,7 +14487,11 @@
                   "principal",
                   "gatekeeper",
                   "workerDefinition",
-                  "actionRequest"
+                  "actionRequest",
+                  "operation",
+                  "task",
+                  "chat",
+                  "workspace"
                 ],
                 "type": "string"
               },

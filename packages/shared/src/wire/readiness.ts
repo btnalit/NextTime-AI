@@ -78,6 +78,10 @@ export type ExecutionReadinessWire = z.infer<typeof ExecutionReadinessWireSchema
  * Kept in this file alongside `ExecutionReadinessWire` rather than `wire/graph.ts`: both are S8
  * W1-C read-model additions with no pre-existing home, and `resolve_refs` spans more than the
  * graph group's own resources (Principal, WorkerDefinition, ActionRequest too).
+ *
+ * S8 W1-A6 (audit S10, kit `RefChip`'s own follow-up): `operation`/`task`/`chat`/`workspace` added
+ * alongside the original five kinds — see `resolve-refs-handler.ts`'s own module doc comment for
+ * each new kind's visibility rule.
  */
 export const ResolvedRefKindSchema = z.enum([
   'object',
@@ -85,6 +89,10 @@ export const ResolvedRefKindSchema = z.enum([
   'gatekeeper',
   'workerDefinition',
   'actionRequest',
+  'operation',
+  'task',
+  'chat',
+  'workspace',
 ]);
 export type ResolvedRefKind = z.infer<typeof ResolvedRefKindSchema>;
 
