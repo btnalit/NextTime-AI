@@ -173,19 +173,23 @@ function DraftToolbar({
   readonly onRefresh: () => void;
   readonly refreshing: boolean;
   readonly testId: string;
-  /** An extra action rendered between "New draft" and "Refresh" — the Workers tab's own "从模板创建
+  /** An extra action grouped right after "New draft" — the Workers tab's own "从模板创建
    *  （ops-runner）" (J7/CW1). `undefined` for every other tab, unchanged layout. */
   readonly extra?: ReactNode;
 }) {
   const t = useT();
   return (
     <div className="page-toolbar">
-      {canPropose ? (
-        <Button variant="primary" icon="plus" onClick={onNewDraft} data-testid={testId}>
-          {t('新建草稿', 'New draft')}
-        </Button>
+      {canPropose || extra ? (
+        <div className="row-wrap">
+          {canPropose ? (
+            <Button variant="primary" icon="plus" onClick={onNewDraft} data-testid={testId}>
+              {t('新建草稿', 'New draft')}
+            </Button>
+          ) : null}
+          {extra}
+        </div>
       ) : null}
-      {extra}
       <Button variant="ghost" icon="refresh" onClick={onRefresh} loading={refreshing}>
         {t('刷新', 'Refresh')}
       </Button>
@@ -1004,7 +1008,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       />
 
       <div className="stack-s" data-testid="workers-worker-section">
-        <span className="section-title">{t('Worker', 'Worker')}</span>
+        <span className="section-title">{t('Worker 定义', 'Worker definitions')}</span>
         {workerRows.length === 0 ? (
           <EmptyState
             icon="grid"
