@@ -538,9 +538,13 @@
   flex-direction: column;
 }
 
+/* S8 W2-U1 (audit SY4 "操作 chip 截断"): a fixed 220px grid column truncated long dotted Operation
+ * names (`container.rest…`) illegibly. Chips now size to their own content and wrap — `flex-wrap`
+ * instead of a fixed-width grid — with the `title` attribute on `.op-item` still the full-name
+ * fallback for the rare name that still overflows a narrow viewport. */
 .gatekeeper-ops {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -553,16 +557,12 @@
   border-radius: var(--radius-m);
   background: var(--surface-2);
   font-size: var(--fs-13);
-  min-width: 0;
+  max-width: 100%;
 }
 
 .op-name {
   font-family: var(--font-mono);
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
 }
 
 .op-group-title {

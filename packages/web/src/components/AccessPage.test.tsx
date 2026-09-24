@@ -12,6 +12,14 @@ import {
 
 afterEach(cleanup);
 
+/** `list_principals` resolves asynchronously — setting the `<select>`'s value before its `<option
+ *  value=id>` exists is a silent no-op (no matching option), so every caller awaits it first. */
+async function selectMember(form: HTMLElement, id: string): Promise<void> {
+  const select = within(form).getByTestId('ggf-member-select');
+  await waitFor(() => expect(select.querySelector(`option[value="${id}"]`)).not.toBeNull());
+  fireEvent.change(select, { target: { value: id } });
+}
+
 function workspace(role: string) {
   return {
     id: 'ws-1',
@@ -116,11 +124,35 @@ describe('AccessPage', () => {
     await waitFor(() => expect(within(row).queryByRole('button', { name: '撤销' })).toBeNull());
   });
 
-  it('granting a capability calls grant_capability with the free-text fallback fields', async () => {
+  it('J6/SY2: 授予能力 opens the shared grant drawer — pick a member, pick a gate, submit', async () => {
     const http = scriptedHttp({
       // `list_principals` is a real operator-minRole capability now (S3.11 kernel half); a 403
       // here would be read by `inferRole` as "member" and hide the governance page under test.
-      list_principals: () => ({ items: [] }),
+      list_principals: () => ({
+        items: [
+          {
+            id: 'p-2',
+            kind: 'human',
+            role: 'member',
+            displayName: 'Bob',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: false,
+          },
+        ],
+      }),
+      list_gatekeepers: () => ({
+        items: [
+          {
+            id: 'gk-2',
+            name: 'docker-gate',
+            kind: 'cli',
+            status: 'active',
+            operationCount: 1,
+            createdAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      list_operations: () => ({ items: [] }),
       list_grants: () => ({ items: [] }),
       grant_capability: (params) => {
         expect(params).toEqual({
@@ -135,39 +167,60 @@ describe('AccessPage', () => {
     await screen.findByTestId('grants-empty');
 
     fireEvent.click(screen.getByRole('button', { name: '授予能力' }));
-    const form = await screen.findByTestId('grant-capability-form');
-    fireEvent.change(within(form).getByLabelText(/主体/), { target: { value: 'p-2' } });
-    fireEvent.change(within(form).getByLabelText(/资源 id/), { target: { value: 'gk-2' } });
-    fireEvent.click(within(form).getByRole('button', { name: '授予' }));
+    const drawer = await screen.findByTestId('grant-gate-drawer');
+    const form = within(drawer).getByTestId('grant-gate-form');
+    await selectMember(form, 'p-2');
+    fireEvent.click(await within(form).findByTestId('ggf-gate-gk-2'));
+    fireEvent.click(within(form).getByTestId('ggf-submit'));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
     );
   });
 
-  it('C19: the grant form rejects scope JSON that is not an object, before any call', async () => {
+  it('J6: "全部门" requires an explicit confirm before grant_capability omits resourceId', async () => {
     const http = scriptedHttp({
-      list_principals: () => ({ items: [] }),
+      list_principals: () => ({
+        items: [
+          {
+            id: 'p-2',
+            kind: 'human',
+            role: 'member',
+            displayName: 'Bob',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: false,
+          },
+        ],
+      }),
+      list_gatekeepers: () => ({ items: [] }),
       list_grants: () => ({ items: [] }),
-      grant_capability: () => grant(),
+      grant_capability: (params) => {
+        expect(params).toEqual({ principalId: 'p-2', resourceType: 'gatekeeper' });
+        return grant({ id: 'grant-3', principalId: 'p-2', resourceId: undefined });
+      },
     });
     renderPage(http);
     await screen.findByTestId('grants-empty');
     fireEvent.click(screen.getByRole('button', { name: '授予能力' }));
-    const form = await screen.findByTestId('grant-capability-form');
-    fireEvent.change(within(form).getByLabelText(/主体/), { target: { value: 'p-2' } });
+    const drawer = await screen.findByTestId('grant-gate-drawer');
+    const form = within(drawer).getByTestId('grant-gate-form');
+    await selectMember(form, 'p-2');
 
-    for (const bad of ['"foo"', '42', 'null', '[1,2]']) {
-      fireEvent.change(within(form).getByLabelText(/范围/), { target: { value: bad } });
-      fireEvent.click(within(form).getByRole('button', { name: '授予' }));
-      expect(await within(form).findByText(/Scope must be a JSON object/)).toBeTruthy();
-    }
-    expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(false);
+    fireEvent.click(within(form).getByTestId('ggf-all-gates-checkbox'));
+    // Not applied yet — the checkbox itself does not call grant_capability, the confirm does.
+    expect((within(form).getByTestId('ggf-all-gates-checkbox') as HTMLInputElement).checked).toBe(
+      false,
+    );
+    // The confirm popover portals to document.body — queried off `screen`, not `within(form)`.
+    const confirm = await screen.findByTestId('ggf-all-gates-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect((within(form).getByTestId('ggf-all-gates-checkbox') as HTMLInputElement).checked).toBe(
+        true,
+      ),
+    );
 
-    fireEvent.change(within(form).getByLabelText(/范围/), {
-      target: { value: '{"actionKindTag":"docker.container_restart"}' },
-    });
-    fireEvent.click(within(form).getByRole('button', { name: '授予' }));
+    fireEvent.click(within(form).getByTestId('ggf-submit'));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
     );

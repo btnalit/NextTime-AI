@@ -16,7 +16,7 @@ import {
 } from '../lib/connections.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
-import type { PrincipalRow } from '../lib/governance.js';
+import type { GrantRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
@@ -29,6 +29,12 @@ import { GatekeeperCard } from './RegisteredSystemsSection.js';
 import { RequestConnectionForm } from './RequestConnectionForm.js';
 import { ConnectSystemLauncher } from './connect/ConnectSystemLauncher.js';
 import { Confirm } from './kit/confirm.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './kit/dropdown-menu.js';
 import { PageHeader } from './kit/page-header.js';
 import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
 import { Button } from './ui/Button.js';
@@ -139,19 +145,14 @@ export function ConnectionsPage({
     {},
   );
   const availableRows = available.state.status === 'ready' ? available.state.data.items : [];
-  // S8 W1-A6 (audit S10 "授权表单要粘贴 principal UUID"): loaded once here, shared by every
-  // registered-system card's own "Grant to principal" picker (`GatekeeperCard`'s own doc
-  // comment) — the same `list_principals` directory `AccessPage`'s grant form already uses.
-  const principalsList = useCapabilityList<PrincipalRow>(
-    http,
-    'list_principals',
-    {},
-    {
-      autoLoadAll: true,
-    },
-  );
-  const principalRows =
-    principalsList.state.status === 'ready' ? principalsList.state.data.items : [];
+  // S8 W2-U1 (audit R5/U2): every card's own "已授权成员" reads from this one shared load —
+  // `list_grants` is operator+ (C9 fallback: a 403 here just means the section hides on every
+  // card, `GatekeeperCard`'s own `grants` prop stays `undefined`).
+  const grantsList = useCapabilityList<GrantRow>(http, 'list_grants', {}, { autoLoadAll: true });
+  const grantRows = grantsList.state.status === 'ready' ? grantsList.state.data.items : undefined;
+  function reloadGrants(): void {
+    void grantsList.reload();
+  }
 
   const requestRows = useMemo(() => {
     const rows = requests.state.status === 'ready' ? requests.state.data : [];
@@ -229,29 +230,48 @@ export function ConnectionsPage({
           </Button>
         }
         actions={
-          <>
-            <Button variant="secondary" icon="inbox" onClick={() => setDrawer({ kind: 'request' })}>
-              {t('申请连接', 'Request connection')}
-            </Button>
-            {canCreate ? (
-              <Button
-                variant="secondary"
-                icon="connections"
-                onClick={() => setDrawer({ kind: 'complete', request: null })}
-                data-testid="register-gate-button"
-              >
-                {t('直接注册门', 'Register a gate')}
-              </Button>
-            ) : null}
-            {canCreate ? (
-              <Button variant="secondary" icon="grid" onClick={() => setDrawer({ kind: 'wizard' })}>
-                {t('接入向导', 'Onboarding wizard')}
-              </Button>
-            ) : null}
-          </>
+          // S8 W2-U1 (audit SY3 "四个并列入口语义重叠"/U5 "旧路径没有标记"/L4 "申请连接出现两次"):
+          // one primary entry (above); the two admin-oriented alternates fold into an overflow
+          // menu, 直接注册门 explicitly marked 旧路径. 申请连接 no longer duplicates here — it stays
+          // only in the empty state below (L4).
+          canCreate ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="s"
+                  icon="more"
+                  iconOnly
+                  aria-label={t('更多接入方式', 'More ways to connect')}
+                  data-testid="connect-system-more"
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  data-testid="register-gate-button"
+                  onSelect={() => setDrawer({ kind: 'complete', request: null })}
+                >
+                  {t('直接注册门（旧路径）', 'Register a gate directly (legacy)')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setDrawer({ kind: 'wizard' })}>
+                  {t('接入向导', 'Onboarding wizard')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : undefined
         }
       />
 
+      <Notice testId="systems-prerequisites">
+        {t(
+          '执行需要三样都齐：门已在本工作区启用、门已授权给该成员、该成员的入口 agent 能用到引用它的已发布 Worker。',
+          'Execution needs all three: the gate enabled in this workspace, the gate granted to the member, and a published Worker their entry agent can reach that references it.',
+        )}
+      </Notice>
+      {/* S8 W2 U3a: the general reminder above (origin/main's W2-U1 "systems-prerequisites") is
+          static — the same text regardless of state. This one is live: it reads
+          execution_readiness for the current user and, once anything is actually missing, names
+          it and links to where to fix it; it renders nothing once this workspace is ready. */}
       <ExecutionPrerequisiteBar http={http} />
 
       <section className="section" aria-labelledby="connection-requests-title">
@@ -406,16 +426,25 @@ export function ConnectionsPage({
         )}
       </section>
 
-      <AvailableGateInstancesSection
-        http={http}
-        available={available}
-        onEnabled={reloadRegistry}
-        canEnable={canCreate}
-      />
+      {/* S8 W2-U1 (audit SY1 "合并为一张已接入系统卡片"): one page section for both sub-groups —
+       *  platform instances still pending a workspace enable, and every registered Gatekeeper
+       *  (platform-linked or legacy, marked on its own card). Not a single shared list component
+       *  (the two rows shapes — a catalog table row vs. a Gatekeeper's own Operations card —
+       *  differ enough that forcing one would lose real information), but one heading and one
+       *  visual group answers the audit's actual question: which mechanism decides what the
+       *  agent can use is this one place, not two unrelated page sections. */}
+      <section className="section" aria-labelledby="connected-systems-title">
+        <h2 id="connected-systems-title">{t('已接入系统', 'Connected systems')}</h2>
 
-      <section className="section" aria-labelledby="registered-systems-title">
+        <AvailableGateInstancesSection
+          http={http}
+          available={available}
+          onEnabled={reloadRegistry}
+          canEnable={canCreate}
+        />
+
         <div className="section-header">
-          <h2 id="registered-systems-title">{t('已注册系统', 'Registered systems')}</h2>
+          <h3 id="registered-systems-title">{t('已注册', 'Registered')}</h3>
           <Button
             variant="ghost"
             size="s"
@@ -480,7 +509,8 @@ export function ConnectionsPage({
                   availableRows.find((row) => row.gatekeeperId === gatekeeper.id) ?? null
                 }
                 platformAdmin={platformAdmin}
-                principals={principalRows}
+                grants={grantRows}
+                onGrantsChanged={reloadGrants}
               />
             ))}
             {gatekeepers.state.data.length >= 50 ? (
