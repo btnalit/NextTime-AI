@@ -260,14 +260,16 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await expandFixtureDenyList();
     await setOperationDisabled(page, CONNECTOR, EXECUTE_OP, true);
 
-    expect(await catalogHasOperation(EXECUTE_OP)).toBe(false);
-    expect(await catalogHasOperation(OBSERVE_OP)).toBe(true);
+    // Polled: the catalog can render from the previous load before the deny-list change is
+    // reflected, and `count()` does not retry — a one-shot read raced (seen failing in CI).
+    await expect.poll(() => catalogHasOperation(EXECUTE_OP), { timeout: 20_000 }).toBe(false);
+    await expect.poll(() => catalogHasOperation(OBSERVE_OP), { timeout: 20_000 }).toBe(true);
 
     // --- restore: re-enable it so a later retry (or a human) finds a clean deny list -----------
     await expandFixtureDenyList();
     await setOperationDisabled(page, CONNECTOR, EXECUTE_OP, false);
 
-    expect(await catalogHasOperation(EXECUTE_OP)).toBe(true);
+    await expect.poll(() => catalogHasOperation(EXECUTE_OP), { timeout: 20_000 }).toBe(true);
 
     await signOut(page);
   });
