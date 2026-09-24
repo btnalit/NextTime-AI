@@ -23,6 +23,7 @@ import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LangProvider } from '../../lib/i18n.js';
 import {
+  AUTO_APPROVABLE_VALUES,
   type ChipStyle,
   GATE_INSTANCE_STATUS_VALUES,
   type StatusMachine,
@@ -67,6 +68,7 @@ const MACHINES: readonly { readonly machine: StatusMachine; readonly values: rea
     // S6-A0 / C17: governance scalars + the platform plane (wire/platform.ts Zod enums).
     { machine: 'operationMode', values: OPERATION_MODE_VALUES },
     { machine: 'blastRadius', values: BLAST_RADIUS_VALUES },
+    { machine: 'autoApprovable', values: AUTO_APPROVABLE_VALUES },
     { machine: 'userStatus', values: USER_STATUS_VALUES },
     { machine: 'workspaceStatus', values: WorkspaceStatusWireSchema.options },
     { machine: 'workspacePurpose', values: WorkspacePurposeWireSchema.options },
@@ -126,6 +128,8 @@ describe('StatusChip', () => {
     expect(statusChipStyle('workspacePurpose', 'ephemeral').tone).toBe('neutral');
     expect(statusChipStyle('publishable', 'deprecated').tone).toBe('warn');
     expect(statusChipStyle('userStatus', 'disabled').tone).toBe('neutral');
+    expect(statusChipStyle('autoApprovable', 'true').tone).toBe('ok');
+    expect(statusChipStyle('autoApprovable', 'false').tone).toBe('neutral');
   });
 
   it('derives the two display-only platform states from their wire rows', () => {

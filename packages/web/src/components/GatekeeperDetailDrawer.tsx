@@ -70,7 +70,10 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
             <div className="op-item" key={operation.name} title={operation.name}>
               <span className="op-name">{operation.name}</span>
               <StatusChip machine="publishable" status={operation.status} size="s" />
-              {operation.mode ? <span className="tag">{operation.mode}</span> : null}
+              {/* S8 W1-A11 (audit L3): mode through the shared StatusChip machine, not a bare tag. */}
+              {operation.mode ? (
+                <StatusChip machine="operationMode" status={operation.mode} size="s" />
+              ) : null}
             </div>
           ))}
         </div>

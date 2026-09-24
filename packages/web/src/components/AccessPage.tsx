@@ -12,6 +12,7 @@ import { hrefs } from '../lib/router.js';
 import { GrantCapabilityForm } from './GrantCapabilityForm.js';
 import { IssueServiceHandleSection } from './IssueServiceHandleSection.js';
 import { PageHeader } from './kit/page-header.js';
+import { DashboardCard } from './kit/section.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
@@ -141,194 +142,201 @@ export function AccessPage({ http }: AccessPageProps) {
         }
       />
 
-      <div className="page-toolbar">
-        {/* C20: one control from first paint — an id input with the member directory as a
+      <DashboardCard title={t('授权', 'Grants')}>
+        <div className="page-toolbar">
+          {/* C20: one control from first paint — an id input with the member directory as a
             `<datalist>` once `list_principals` lands — rather than an `<Input>` that turned into
             a `<Select>` mid-typing and dropped whatever had been typed. Picking a suggestion
             fills (and commits) the id; an empty value is "all members". */}
-        <Field
-          id="access-principal-filter"
-          label={t('按主体筛选', 'Filter by principal')}
-          hint={
-            principals.length > 0
-              ? t(
-                  '从建议里选一个成员，或输入 principal id 后按 Enter；留空 = 全部成员。 Pick a member from the suggestions, or type a principal id and press Enter. Empty =',
-                  'all members.',
-                )
-              : t(
-                  'Principal id（可选），按 Enter 应用；留空 = 全部成员。 Principal id (optional) — press Enter to apply. Empty =',
-                  'all members.',
-                )
-          }
-        >
-          <Input
+          <Field
             id="access-principal-filter"
-            value={principalFilter}
-            onChange={(event) => handleFilterChange(event.target.value)}
-            onBlur={() => commitFilter()}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                commitFilter();
-              }
-            }}
-            placeholder={t('全部成员', 'All members')}
-            list="access-principal-suggestions"
-            mono
+            label={t('按主体筛选', 'Filter by principal')}
+            hint={
+              principals.length > 0
+                ? t(
+                    '从建议里选一个成员，或输入 principal id 后按 Enter；留空 = 全部成员。 Pick a member from the suggestions, or type a principal id and press Enter. Empty =',
+                    'all members.',
+                  )
+                : t(
+                    'Principal id（可选），按 Enter 应用；留空 = 全部成员。 Principal id (optional) — press Enter to apply. Empty =',
+                    'all members.',
+                  )
+            }
+          >
+            <Input
+              id="access-principal-filter"
+              value={principalFilter}
+              onChange={(event) => handleFilterChange(event.target.value)}
+              onBlur={() => commitFilter()}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitFilter();
+                }
+              }}
+              placeholder={t('全部成员', 'All members')}
+              list="access-principal-suggestions"
+              mono
+            />
+            <datalist id="access-principal-suggestions">
+              {principals.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.displayName}
+                </option>
+              ))}
+            </datalist>
+          </Field>
+        </div>
+
+        {revokeError !== null ? (
+          <ErrorBanner
+            error={revokeError}
+            title={t('无法撤销授权', 'Could not revoke this grant')}
           />
-          <datalist id="access-principal-suggestions">
-            {principals.map((row) => (
-              <option key={row.id} value={row.id}>
-                {row.displayName}
-              </option>
-            ))}
-          </datalist>
-        </Field>
-      </div>
+        ) : null}
 
-      {revokeError !== null ? (
-        <ErrorBanner error={revokeError} title={t('无法撤销授权', 'Could not revoke this grant')} />
-      ) : null}
-
-      {grants.state.status === 'loading' ? (
-        <SkeletonRows count={4} label="Loading grants" testId="grants-loading" />
-      ) : grants.state.status === 'error' ? (
-        forbidden ? (
+        {grants.state.status === 'loading' ? (
+          <SkeletonRows count={4} label="Loading grants" testId="grants-loading" />
+        ) : grants.state.status === 'error' ? (
+          forbidden ? (
+            <EmptyState
+              icon="shield"
+              title={t('需要 owner 权限', 'Owner role required')}
+              body={t(
+                'list_grants 仅工作区 owner 可读。',
+                'list_grants is restricted to the workspace owner.',
+              )}
+              testId="grants-forbidden"
+            />
+          ) : (
+            <ErrorBanner
+              error={grants.state.error}
+              title={t('无法加载授权', 'Could not load grants')}
+              onRetry={() => void grants.reload()}
+              testId="grants-error"
+            />
+          )
+        ) : rows.length === 0 ? (
           <EmptyState
-            icon="shield"
-            title={t('需要 owner 权限', 'Owner role required')}
+            icon="key"
+            title={t('还没有授权', 'No grants yet')}
             body={t(
-              'list_grants 仅工作区 owner 可读。',
-              'list_grants is restricted to the workspace owner.',
+              '把一个门（或其他资源）授予成员，他的入口 agent 才能使用它。',
+              'Grant a Gatekeeper (or another resource) to a member so their entry agent can use it.',
             )}
-            testId="grants-forbidden"
+            testId="grants-empty"
           />
         ) : (
-          <ErrorBanner
-            error={grants.state.error}
-            title={t('无法加载授权', 'Could not load grants')}
-            onRetry={() => void grants.reload()}
-            testId="grants-error"
-          />
-        )
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon="key"
-          title={t('还没有授权', 'No grants yet')}
-          body={t(
-            '把一个门（或其他资源）授予成员，他的入口 agent 才能使用它。',
-            'Grant a Gatekeeper (or another resource) to a member so their entry agent can use it.',
-          )}
-          testId="grants-empty"
-        />
-      ) : (
-        <DataList ariaLabel="Grants" testId="grants-list">
-          {rows.map((row) => (
-            <DataRow
-              key={row.id}
-              testId="grant-row"
-              leading={<StatusChip machine="grant" status={row.status} size="s" />}
-              title={
-                <>
-                  <span className="tag">{row.resourceType}</span>
-                  {row.resourceId === null || row.resourceId === undefined ? (
-                    <span className="text-3">{t('任意', 'any')}</span>
-                  ) : row.resourceType === 'gatekeeper' ? (
+          <DataList ariaLabel="Grants" testId="grants-list">
+            {rows.map((row) => (
+              <DataRow
+                key={row.id}
+                testId="grant-row"
+                leading={<StatusChip machine="grant" status={row.status} size="s" />}
+                title={
+                  <>
+                    <span className="tag">{row.resourceType}</span>
+                    {row.resourceId === null || row.resourceId === undefined ? (
+                      <span className="text-3">{t('任意', 'any')}</span>
+                    ) : row.resourceType === 'gatekeeper' ? (
+                      <RefChip
+                        kind="gatekeeper"
+                        id={row.resourceId}
+                        name={gatekeeperNames.get(row.resourceId)}
+                        href={hrefs.gatekeeper(row.resourceId)}
+                        size="s"
+                        testId="grant-resource"
+                      />
+                    ) : (
+                      <span className="mono truncate" data-testid="grant-resource">
+                        {row.resourceId}
+                      </span>
+                    )}
+                  </>
+                }
+                meta={
+                  <>
                     <RefChip
-                      kind="gatekeeper"
-                      id={row.resourceId}
-                      name={gatekeeperNames.get(row.resourceId)}
-                      href={hrefs.gatekeeper(row.resourceId)}
+                      kind="principal"
+                      id={row.principalId}
+                      name={principalNames.get(row.principalId)}
                       size="s"
-                      testId="grant-resource"
+                      testId="grant-principal"
                     />
-                  ) : (
-                    <span className="mono truncate" data-testid="grant-resource">
-                      {row.resourceId}
-                    </span>
-                  )}
-                </>
-              }
-              meta={
-                <>
-                  <RefChip
-                    kind="principal"
-                    id={row.principalId}
-                    name={principalNames.get(row.principalId)}
-                    size="s"
-                    testId="grant-principal"
-                  />
-                  <span className="meta-sep" />
-                  <span>{t('授予者', 'by')}</span>
-                  <RefChip
-                    kind="principal"
-                    id={row.grantedBy}
-                    name={principalNames.get(row.grantedBy)}
-                    size="s"
-                    testId="grant-granted-by"
-                  />
-                  <span className="meta-sep" />
-                  <time title={formatDateTime(row.createdAt)}>{formatRelative(row.createdAt)}</time>
-                  {row.expiresAt ? (
-                    <>
-                      <span className="meta-sep" />
-                      <span title={formatDateTime(row.expiresAt)}>
-                        {t('到期', 'expires')} {formatRelative(row.expiresAt)}
-                      </span>
-                    </>
-                  ) : null}
-                  {row.scope && Object.keys(row.scope).length > 0 ? (
-                    <>
-                      <span className="meta-sep" />
-                      <span className="mono truncate" title={prettyJson(row.scope)}>
-                        {prettyJson(row.scope)}
-                      </span>
-                    </>
-                  ) : null}
-                </>
-              }
-              trailing={
-                row.status === 'active' && canManage ? (
-                  <Button
-                    variant="danger"
-                    size="s"
-                    onClick={() => void handleRevoke(row.id)}
-                    loading={revoking === row.id}
-                  >
-                    {t('撤销', 'Revoke')}
-                  </Button>
-                ) : undefined
-              }
-            />
-          ))}
-        </DataList>
-      )}
-      {grants.state.status === 'ready' && grants.state.data.nextCursor !== undefined ? (
-        <div className="row" style={{ justifyContent: 'center' }}>
-          <Button
-            variant="secondary"
-            loading={grants.loadingMore}
-            onClick={() => void grants.loadMore()}
-          >
-            {t('加载更多', 'Load more')}
-          </Button>
-        </div>
-      ) : null}
-      {grants.state.status === 'ready' && grants.state.data.truncated === true ? (
-        <p className="text-3 text-small" data-testid="grants-truncated">
-          {t(
-            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余授权',
-            'keep loading more to see the rest.',
-          )}
-        </p>
-      ) : null}
-      {grants.loadMoreError !== null ? (
-        <ErrorBanner
-          error={grants.loadMoreError}
-          title="Could not load more grants"
-          testId="grants-load-more-error"
-        />
-      ) : null}
+                    <span className="meta-sep" />
+                    <span>{t('授予者', 'by')}</span>
+                    <RefChip
+                      kind="principal"
+                      id={row.grantedBy}
+                      name={principalNames.get(row.grantedBy)}
+                      size="s"
+                      testId="grant-granted-by"
+                    />
+                    <span className="meta-sep" />
+                    <time title={formatDateTime(row.createdAt)}>
+                      {formatRelative(row.createdAt)}
+                    </time>
+                    {row.expiresAt ? (
+                      <>
+                        <span className="meta-sep" />
+                        <span title={formatDateTime(row.expiresAt)}>
+                          {t('到期', 'expires')} {formatRelative(row.expiresAt)}
+                        </span>
+                      </>
+                    ) : null}
+                    {row.scope && Object.keys(row.scope).length > 0 ? (
+                      <>
+                        <span className="meta-sep" />
+                        <span className="mono truncate" title={prettyJson(row.scope)}>
+                          {prettyJson(row.scope)}
+                        </span>
+                      </>
+                    ) : null}
+                  </>
+                }
+                trailing={
+                  row.status === 'active' && canManage ? (
+                    <Button
+                      variant="danger"
+                      size="s"
+                      onClick={() => void handleRevoke(row.id)}
+                      loading={revoking === row.id}
+                    >
+                      {t('撤销', 'Revoke')}
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ))}
+          </DataList>
+        )}
+        {grants.state.status === 'ready' && grants.state.data.nextCursor !== undefined ? (
+          <div className="row" style={{ justifyContent: 'center' }}>
+            <Button
+              variant="secondary"
+              loading={grants.loadingMore}
+              onClick={() => void grants.loadMore()}
+            >
+              {t('加载更多', 'Load more')}
+            </Button>
+          </div>
+        ) : null}
+        {grants.state.status === 'ready' && grants.state.data.truncated === true ? (
+          <p className="text-3 text-small" data-testid="grants-truncated">
+            {t(
+              '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余授权',
+              'keep loading more to see the rest.',
+            )}
+          </p>
+        ) : null}
+        {grants.loadMoreError !== null ? (
+          <ErrorBanner
+            error={grants.loadMoreError}
+            title="Could not load more grants"
+            testId="grants-load-more-error"
+          />
+        ) : null}
+      </DashboardCard>
 
       {canManage ? <IssueServiceHandleSection http={http} principals={principals} /> : null}
 

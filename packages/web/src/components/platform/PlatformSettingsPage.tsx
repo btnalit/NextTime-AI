@@ -15,8 +15,8 @@ import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
 import { PageHeader } from '../kit/page-header.js';
+import { FormCard, FormCardSection } from '../kit/section.js';
 import { Button } from '../ui/Button.js';
-import { Card } from '../ui/Card.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
@@ -241,247 +241,253 @@ function PlatformSettingsForm({
       noValidate
       data-testid="platform-settings-form"
     >
-      <Card title={t('站点', 'Site')}>
-        <div className="stack">
-          <Field
-            id="ps-site-name"
-            label={t('站点名', 'Site name')}
-            required
-            error={siteNameValid ? null : t('不能为空', 'Cannot be empty')}
-          >
-            <Input
+      <FormCard>
+        <FormCardSection title={t('站点', 'Site')}>
+          <div className="stack">
+            <Field
               id="ps-site-name"
-              value={values.siteName}
-              onChange={(event) => set('siteName', event.target.value)}
-              disabled={submitting}
-              invalid={!siteNameValid}
-            />
-          </Field>
-
-          <Field
-            id="ps-announcement"
-            label={t('公告', 'Announcement')}
-            hint={t(
-              'Markdown — 显示在控制台顶部；留空表示没有公告。 Shown in the console top bar; empty =',
-              'none.',
-            )}
-          >
-            <Textarea
-              id="ps-announcement"
-              value={values.announcement}
-              onChange={(event) => set('announcement', event.target.value)}
-              disabled={submitting}
-              rows={3}
-            />
-          </Field>
-        </div>
-      </Card>
-
-      <Card title={t('agent 全局指令', 'Instance instructions')}>
-        <div className="stack">
-          <Notice tone="warn">
-            {t(
-              "这会进入所有 agent 的 system prompt。 Appended to every agent's system prompt — 之后启动 的容器生效。",
-              'Takes effect for containers started afterwards.',
-            )}
-          </Notice>
-          <Field id="ps-instance-instructions" label={t('附加指令', 'Appended instructions')}>
-            <Textarea
-              id="ps-instance-instructions"
-              value={values.instanceInstructions}
-              onChange={(event) => set('instanceInstructions', event.target.value)}
-              disabled={submitting}
-              rows={5}
-            />
-          </Field>
-        </div>
-      </Card>
-
-      <Card title={t('默认值', 'Defaults')}>
-        <div className="stack">
-          <Field
-            id="ps-default-workspace"
-            label={t('默认工作区', 'Default workspace')}
-            hint={t(
-              '新建用户默认加入的工作区；留空 = 不自动加入。 The workspace new users join; empty =',
-              'none.',
-            )}
-          >
-            <Select
-              id="ps-default-workspace"
-              value={useManualWorkspaceInput ? OTHER_WORKSPACE : values.defaultWorkspaceId}
-              onChange={(event) => {
-                const next = event.target.value;
-                if (next === OTHER_WORKSPACE) {
-                  setManualWorkspaceEntry(true);
-                  return;
-                }
-                setManualWorkspaceEntry(false);
-                set('defaultWorkspaceId', next);
-              }}
-              disabled={submitting}
+              label={t('站点名', 'Site name')}
+              required
+              error={siteNameValid ? null : t('不能为空', 'Cannot be empty')}
             >
-              <option value="">{t('无', 'None')}</option>
-              {workspaceOptions.map((ws) => (
-                <option key={ws.id} value={ws.id}>
-                  {ws.name}
-                </option>
-              ))}
-              <option value={OTHER_WORKSPACE}>{t('其他（输入 id）', 'Other — type an id')}</option>
-            </Select>
-          </Field>
-
-          {useManualWorkspaceInput ? (
-            <Field id="ps-default-workspace-other" label={t('工作区 id', 'Workspace id')}>
               <Input
-                id="ps-default-workspace-other"
-                value={values.defaultWorkspaceId}
-                onChange={(event) => set('defaultWorkspaceId', event.target.value)}
+                id="ps-site-name"
+                value={values.siteName}
+                onChange={(event) => set('siteName', event.target.value)}
                 disabled={submitting}
+                invalid={!siteNameValid}
+              />
+            </Field>
+
+            <Field
+              id="ps-announcement"
+              label={t('公告', 'Announcement')}
+              hint={t(
+                'Markdown — 显示在控制台顶部；留空表示没有公告。 Shown in the console top bar; empty =',
+                'none.',
+              )}
+            >
+              <Textarea
+                id="ps-announcement"
+                value={values.announcement}
+                onChange={(event) => set('announcement', event.target.value)}
+                disabled={submitting}
+                rows={3}
+              />
+            </Field>
+          </div>
+        </FormCardSection>
+
+        <FormCardSection title={t('agent 全局指令', 'Instance instructions')}>
+          <div className="stack">
+            <Notice tone="warn">
+              {t(
+                "这会进入所有 agent 的 system prompt。 Appended to every agent's system prompt — 之后启动 的容器生效。",
+                'Takes effect for containers started afterwards.',
+              )}
+            </Notice>
+            <Field id="ps-instance-instructions" label={t('附加指令', 'Appended instructions')}>
+              <Textarea
+                id="ps-instance-instructions"
+                value={values.instanceInstructions}
+                onChange={(event) => set('instanceInstructions', event.target.value)}
+                disabled={submitting}
+                rows={5}
+              />
+            </Field>
+          </div>
+        </FormCardSection>
+
+        <FormCardSection title={t('默认值', 'Defaults')}>
+          <div className="stack">
+            <Field
+              id="ps-default-workspace"
+              label={t('默认工作区', 'Default workspace')}
+              hint={t(
+                '新建用户默认加入的工作区；留空 = 不自动加入。 The workspace new users join; empty =',
+                'none.',
+              )}
+            >
+              <Select
+                id="ps-default-workspace"
+                value={useManualWorkspaceInput ? OTHER_WORKSPACE : values.defaultWorkspaceId}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (next === OTHER_WORKSPACE) {
+                    setManualWorkspaceEntry(true);
+                    return;
+                  }
+                  setManualWorkspaceEntry(false);
+                  set('defaultWorkspaceId', next);
+                }}
+                disabled={submitting}
+              >
+                <option value="">{t('无', 'None')}</option>
+                {workspaceOptions.map((ws) => (
+                  <option key={ws.id} value={ws.id}>
+                    {ws.name}
+                  </option>
+                ))}
+                <option value={OTHER_WORKSPACE}>
+                  {t('其他（输入 id）', 'Other — type an id')}
+                </option>
+              </Select>
+            </Field>
+
+            {useManualWorkspaceInput ? (
+              <Field id="ps-default-workspace-other" label={t('工作区 id', 'Workspace id')}>
+                <Input
+                  id="ps-default-workspace-other"
+                  value={values.defaultWorkspaceId}
+                  onChange={(event) => set('defaultWorkspaceId', event.target.value)}
+                  disabled={submitting}
+                  mono
+                />
+              </Field>
+            ) : null}
+
+            <p className="text-3 text-small" data-testid="platform-settings-default-model-hint">
+              {t(
+                '默认入口模型在"模型与供应商"页设置（经目录校验）。',
+                'The default entry model is set on the',
+              )}{' '}
+              <a href={hrefs.platformModels()}>{t('模型与供应商', 'Models &amp; providers')}</a>{' '}
+              page (validated against the catalog there).
+            </p>
+
+            <Field
+              id="ps-default-daily-call-limit"
+              label={t('默认每日调用上限', 'Default daily call limit')}
+              hint={t('留空 = 不限。', 'Empty = none.')}
+              error={
+                dailyLimit === undefined
+                  ? t('必须是非负整数', 'Must be a non-negative integer')
+                  : null
+              }
+            >
+              <Input
+                id="ps-default-daily-call-limit"
+                value={values.defaultDailyCallLimit}
+                onChange={(event) => set('defaultDailyCallLimit', event.target.value)}
+                disabled={submitting}
+                invalid={dailyLimit === undefined}
+                inputMode="numeric"
                 mono
               />
             </Field>
+
+            <Field
+              id="ps-default-monthly-token-budget"
+              label={t('默认每月 token 预算', 'Default monthly token budget')}
+              hint={t('留空 = 不限。', 'Empty = none.')}
+              error={
+                monthlyBudget === undefined
+                  ? t('必须是非负整数', 'Must be a non-negative integer')
+                  : null
+              }
+            >
+              <Input
+                id="ps-default-monthly-token-budget"
+                value={values.defaultMonthlyTokenBudget}
+                onChange={(event) => set('defaultMonthlyTokenBudget', event.target.value)}
+                disabled={submitting}
+                invalid={monthlyBudget === undefined}
+                inputMode="numeric"
+                mono
+              />
+            </Field>
+
+            <Field
+              id="ps-default-platform-role"
+              label={t('新用户默认平台角色', 'Default platform role')}
+            >
+              <Select
+                id="ps-default-platform-role"
+                value={values.defaultPlatformRole}
+                onChange={(event) =>
+                  set('defaultPlatformRole', event.target.value as PlatformRoleWire)
+                }
+                disabled={submitting}
+              >
+                <option value="user">user</option>
+                <option value="admin">admin</option>
+              </Select>
+            </Field>
+
+            <Field
+              id="ps-password-min-length"
+              label={t('密码最短长度', 'Password minimum length')}
+              hint="8–128。"
+              error={passwordMinLengthValid ? null : '必须是 8–128 的整数 Must be an integer 8–128'}
+            >
+              <Input
+                id="ps-password-min-length"
+                value={values.passwordMinLength}
+                onChange={(event) => set('passwordMinLength', event.target.value)}
+                disabled={submitting}
+                invalid={!passwordMinLengthValid}
+                inputMode="numeric"
+                mono
+              />
+            </Field>
+          </div>
+        </FormCardSection>
+
+        <FormCardSection title={t('环境管理员', 'Environment administrators')}>
+          <div className="stack-s">
+            <p className="text-3 text-small">
+              {t(
+                '由主机环境配置指定，只读；这些登录名始终是管理员，页面上不可停用或降级。',
+                'Set by the host configuration, read-only; these logins are always administrators and can be neither disabled nor demoted from the console.',
+              )}
+            </p>
+            {/* S8 W1-A10 (audit S14): the env var name is an implementation detail an operator who
+             *  set it already knows — never inline, behind a disclosure instead. */}
+            <details className="disclosure">
+              <summary>{t('技术细节', 'Technical details')}</summary>
+              <p className="text-3 text-small mono">NEXTTIME_PLATFORM_ADMINS</p>
+            </details>
+            <div className="row-wrap" data-testid="platform-settings-env-admins">
+              {initial.envAdmins.length === 0 ? (
+                <span className="text-3">—</span>
+              ) : (
+                initial.envAdmins.map((login) => (
+                  // C17: a login is a label, not a status — no StatusChip machine fits; the `tag`
+                  // class is what the users page's own `env` badge wears for the same logins.
+                  <span key={login} className="tag mono" data-testid="platform-settings-env-admin">
+                    {login}
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+        </FormCardSection>
+
+        <FormCardSection>
+          <PlatformError
+            error={error}
+            title={t('无法保存平台设置', 'Could not save the platform settings')}
+            testId="platform-settings-save-error"
+          />
+          {nothingToSave ? (
+            <p className="field-hint" data-testid="platform-settings-unchanged">
+              {t('没有改动', 'Nothing has changed')}
+            </p>
           ) : null}
 
-          <p className="text-3 text-small" data-testid="platform-settings-default-model-hint">
-            {t(
-              '默认入口模型在"模型与供应商"页设置（经目录校验）。',
-              'The default entry model is set on the',
-            )}{' '}
-            <a href={hrefs.platformModels()}>{t('模型与供应商', 'Models &amp; providers')}</a> page
-            (validated against the catalog there).
-          </p>
-
-          <Field
-            id="ps-default-daily-call-limit"
-            label={t('默认每日调用上限', 'Default daily call limit')}
-            hint={t('留空 = 不限。', 'Empty = none.')}
-            error={
-              dailyLimit === undefined
-                ? t('必须是非负整数', 'Must be a non-negative integer')
-                : null
-            }
-          >
-            <Input
-              id="ps-default-daily-call-limit"
-              value={values.defaultDailyCallLimit}
-              onChange={(event) => set('defaultDailyCallLimit', event.target.value)}
-              disabled={submitting}
-              invalid={dailyLimit === undefined}
-              inputMode="numeric"
-              mono
-            />
-          </Field>
-
-          <Field
-            id="ps-default-monthly-token-budget"
-            label={t('默认每月 token 预算', 'Default monthly token budget')}
-            hint={t('留空 = 不限。', 'Empty = none.')}
-            error={
-              monthlyBudget === undefined
-                ? t('必须是非负整数', 'Must be a non-negative integer')
-                : null
-            }
-          >
-            <Input
-              id="ps-default-monthly-token-budget"
-              value={values.defaultMonthlyTokenBudget}
-              onChange={(event) => set('defaultMonthlyTokenBudget', event.target.value)}
-              disabled={submitting}
-              invalid={monthlyBudget === undefined}
-              inputMode="numeric"
-              mono
-            />
-          </Field>
-
-          <Field
-            id="ps-default-platform-role"
-            label={t('新用户默认平台角色', 'Default platform role')}
-          >
-            <Select
-              id="ps-default-platform-role"
-              value={values.defaultPlatformRole}
-              onChange={(event) =>
-                set('defaultPlatformRole', event.target.value as PlatformRoleWire)
-              }
-              disabled={submitting}
-            >
-              <option value="user">user</option>
-              <option value="admin">admin</option>
-            </Select>
-          </Field>
-
-          <Field
-            id="ps-password-min-length"
-            label={t('密码最短长度', 'Password minimum length')}
-            hint="8–128。"
-            error={passwordMinLengthValid ? null : '必须是 8–128 的整数 Must be an integer 8–128'}
-          >
-            <Input
-              id="ps-password-min-length"
-              value={values.passwordMinLength}
-              onChange={(event) => set('passwordMinLength', event.target.value)}
-              disabled={submitting}
-              invalid={!passwordMinLengthValid}
-              inputMode="numeric"
-              mono
-            />
-          </Field>
-        </div>
-      </Card>
-
-      <Card title={t('环境管理员', 'Environment administrators')}>
-        <div className="stack-s">
-          <p className="text-3 text-small">
-            {t(
-              '由主机环境配置指定，只读；这些登录名始终是管理员，页面上不可停用或降级。',
-              'Set by the host configuration, read-only; these logins are always administrators and can be neither disabled nor demoted from the console.',
-            )}
-          </p>
-          {/* S8 W1-A10 (audit S14): the env var name is an implementation detail an operator who
-           *  set it already knows — never inline, behind a disclosure instead. */}
-          <details className="disclosure">
-            <summary>{t('技术细节', 'Technical details')}</summary>
-            <p className="text-3 text-small mono">NEXTTIME_PLATFORM_ADMINS</p>
-          </details>
-          <div className="row-wrap" data-testid="platform-settings-env-admins">
-            {initial.envAdmins.length === 0 ? (
-              <span className="text-3">—</span>
-            ) : (
-              initial.envAdmins.map((login) => (
-                // C17: a login is a label, not a status — no StatusChip machine fits; the `tag`
-                // class is what the users page's own `env` badge wears for the same logins.
-                <span key={login} className="tag mono" data-testid="platform-settings-env-admin">
-                  {login}
-                </span>
-              ))
-            )}
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <span className="text-3 text-small" data-testid="platform-settings-footer">
+              {t('版本', 'version')} {initial.version} ·{' '}
+              {initial.updatedAt === null
+                ? t('从未修改', 'Never updated')
+                : formatDateTime(initial.updatedAt)}
+            </span>
+            <Button type="submit" variant="primary" loading={submitting} disabled={!valid}>
+              {t('保存', 'Save')}
+            </Button>
           </div>
-        </div>
-      </Card>
-
-      <PlatformError
-        error={error}
-        title={t('无法保存平台设置', 'Could not save the platform settings')}
-        testId="platform-settings-save-error"
-      />
-      {nothingToSave ? (
-        <p className="field-hint" data-testid="platform-settings-unchanged">
-          {t('没有改动', 'Nothing has changed')}
-        </p>
-      ) : null}
-
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="text-3 text-small" data-testid="platform-settings-footer">
-          {t('版本', 'version')} {initial.version} ·{' '}
-          {initial.updatedAt === null
-            ? t('从未修改', 'Never updated')
-            : formatDateTime(initial.updatedAt)}
-        </span>
-        <Button type="submit" variant="primary" loading={submitting} disabled={!valid}>
-          {t('保存', 'Save')}
-        </Button>
-      </div>
+        </FormCardSection>
+      </FormCard>
     </form>
   );
 }

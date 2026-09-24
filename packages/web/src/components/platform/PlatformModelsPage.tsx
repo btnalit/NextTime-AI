@@ -13,6 +13,7 @@ import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../
 import { breadcrumbFor } from '../../lib/nav.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
+import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
@@ -620,70 +621,81 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         testId="provider-detail-drawer"
       >
         {drawer.kind === 'detail' && drawerProvider ? (
-          <div className="stack">
-            <dl className="definition-list">
-              <dt>API</dt>
-              <dd>{t(API_LABEL[drawerProvider.api].zh, API_LABEL[drawerProvider.api].en)}</dd>
-              <dt>Base URL</dt>
-              <dd className="mono">{drawerProvider.upstreamBaseUrl}</dd>
-              <dt>{t('鉴权头', 'Auth header')}</dt>
-              <dd className="mono">
-                {drawerProvider.authHeader}
-                {drawerProvider.authScheme ? `: ${drawerProvider.authScheme} <key>` : ': <key>'}
-              </dd>
-              <dt>{t('密钥环境变量', 'Key env var')}</dt>
-              <dd className="mono">
-                {drawerProvider.apiKeyEnv ?? <span className="text-3">（未配置 none）</span>}
-              </dd>
-              <dt>{t('来源', 'Source')}</dt>
-              <dd>
-                {drawerProvider.source === 'file'
-                  ? 'llm-providers.yaml（主机，只读 host, read-only）'
-                  : drawerProvider.overridesFile
-                    ? t('控制台覆盖 yaml 同名条目', 'console override of the yaml entry')
-                    : t('控制台', 'console store')}
-              </dd>
-              {drawerProvider.updatedAt ? (
-                <>
-                  <dt>{t('更新', 'Updated')}</dt>
-                  <dd>
-                    <time title={formatDateTime(drawerProvider.updatedAt)}>
-                      {formatRelative(drawerProvider.updatedAt)}
-                    </time>
-                  </dd>
-                </>
-              ) : null}
-            </dl>
-            <CredentialState provider={drawerProvider} withInstruction />
-            <ProviderSecretForm provider={drawerProvider} client={client} onUpdated={replaceRow} />
-            <div className="stack-s">
-              <span className="section-title">{t('模型', 'Models')}</span>
-              <ul data-testid="provider-detail-models">
-                {drawerProvider.models.map((model) => (
-                  <li key={model.id}>
-                    <span className="mono">
-                      {drawerProvider.id}/{model.id}
-                    </span>
-                    {model.displayName ? (
-                      <span className="text-2"> — {model.displayName}</span>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            {(testResults[drawerProvider.id] ?? drawerProvider.lastTest) ? (
+          // S8 W1-A11 (audit L8): the drawer's fixed sections — metadata / edit form (no
+          // related-object links here; a provider references nothing else in the console).
+          <DrawerSections>
+            <DrawerSection title={t('元数据 Metadata', 'Metadata')}>
+              <dl className="definition-list">
+                <dt>API</dt>
+                <dd>{t(API_LABEL[drawerProvider.api].zh, API_LABEL[drawerProvider.api].en)}</dd>
+                <dt>Base URL</dt>
+                <dd className="mono">{drawerProvider.upstreamBaseUrl}</dd>
+                <dt>{t('鉴权头', 'Auth header')}</dt>
+                <dd className="mono">
+                  {drawerProvider.authHeader}
+                  {drawerProvider.authScheme ? `: ${drawerProvider.authScheme} <key>` : ': <key>'}
+                </dd>
+                <dt>{t('密钥环境变量', 'Key env var')}</dt>
+                <dd className="mono">
+                  {drawerProvider.apiKeyEnv ?? <span className="text-3">（未配置 none）</span>}
+                </dd>
+                <dt>{t('来源', 'Source')}</dt>
+                <dd>
+                  {drawerProvider.source === 'file'
+                    ? 'llm-providers.yaml（主机，只读 host, read-only）'
+                    : drawerProvider.overridesFile
+                      ? t('控制台覆盖 yaml 同名条目', 'console override of the yaml entry')
+                      : t('控制台', 'console store')}
+                </dd>
+                {drawerProvider.updatedAt ? (
+                  <>
+                    <dt>{t('更新', 'Updated')}</dt>
+                    <dd>
+                      <time title={formatDateTime(drawerProvider.updatedAt)}>
+                        {formatRelative(drawerProvider.updatedAt)}
+                      </time>
+                    </dd>
+                  </>
+                ) : null}
+              </dl>
+              <CredentialState provider={drawerProvider} withInstruction />
               <div className="stack-s">
-                <span className="section-title">{t('最近测试', 'Last test')}</span>
-                <ProviderTestResult
-                  result={
-                    (testResults[drawerProvider.id] ??
-                      drawerProvider.lastTest) as LlmProviderTestResultWire
-                  }
-                  testId="provider-detail-test"
-                />
+                <span className="section-title">{t('模型', 'Models')}</span>
+                <ul data-testid="provider-detail-models">
+                  {drawerProvider.models.map((model) => (
+                    <li key={model.id}>
+                      <span className="mono">
+                        {drawerProvider.id}/{model.id}
+                      </span>
+                      {model.displayName ? (
+                        <span className="text-2"> — {model.displayName}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
               </div>
-            ) : null}
-          </div>
+              {(testResults[drawerProvider.id] ?? drawerProvider.lastTest) ? (
+                <div className="stack-s">
+                  <span className="section-title">{t('最近测试', 'Last test')}</span>
+                  <ProviderTestResult
+                    result={
+                      (testResults[drawerProvider.id] ??
+                        drawerProvider.lastTest) as LlmProviderTestResultWire
+                    }
+                    testId="provider-detail-test"
+                  />
+                </div>
+              ) : null}
+            </DrawerSection>
+
+            <DrawerSection title={t('编辑 Edit', 'Edit')}>
+              <ProviderSecretForm
+                provider={drawerProvider}
+                client={client}
+                onUpdated={replaceRow}
+              />
+            </DrawerSection>
+          </DrawerSections>
         ) : null}
       </Drawer>
     </div>

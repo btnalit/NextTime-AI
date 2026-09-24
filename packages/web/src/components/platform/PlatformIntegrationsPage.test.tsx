@@ -196,6 +196,21 @@ describe('PlatformIntegrationsPage', () => {
     expect(within(detail).getByTestId('gate-instance-workspaces')).toBeTruthy();
   });
 
+  // S8 W1-A11 (audit L2): the page header's "接入一个系统" and the 门实例 tab's own "新建门宿主
+  // 实例" both render at once on this tab — only one may be the ink primary.
+  it('L2: at most one ink primary button when the 门实例 tab is open', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [gateInstance()] }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    await screen.findByTestId('gate-instances-table');
+    const primaries = document.querySelectorAll('.btn-primary');
+    expect(primaries).toHaveLength(1);
+    expect(primaries[0]).toBe(screen.getByTestId('connect-system-button'));
+    expect(screen.getByTestId('new-gate-instance').className).not.toContain('btn-primary');
+  });
+
   // S8 W1-A7 (audit S13/PI1): the select no longer applies on change — it opens a medium confirm
   // next to itself, and `set_connector_mode` only fires once that confirm is confirmed.
   it('changing the mode opens a medium confirm next to the select; set_connector_mode fires only on confirm', async () => {

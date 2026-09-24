@@ -516,8 +516,11 @@ function GateInstancesTab({
   return (
     <div className="stack" data-testid="integrations-instances">
       <div className="row" style={{ justifyContent: 'flex-end' }}>
+        {/* S8 W1-A11 (audit L2): secondary, not primary — the page header's "接入一个系统" is
+         *  this view's one ink primary action, and both buttons are visible together whenever
+         *  this tab is open. */}
         <Button
-          variant="primary"
+          variant="secondary"
           size="s"
           icon="plus"
           onClick={() => setPanel({ kind: 'create' })}

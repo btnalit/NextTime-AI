@@ -96,6 +96,7 @@ export type StatusMachine =
   | 'role'
   | 'operationMode'
   | 'blastRadius'
+  | 'autoApprovable'
   | 'userStatus'
   | 'workspaceStatus'
   | 'workspacePurpose'
@@ -195,6 +196,18 @@ export const BLAST_RADIUS_TONES: Readonly<Record<BlastRadius, ChipStyle>> = {
   low: { tone: 'ok', label: { zh: '低影响', en: 'Low' } },
   medium: { tone: 'warn', label: { zh: '中影响', en: 'Medium' } },
   high: { tone: 'danger', label: { zh: '高影响', en: 'High' } },
+};
+
+/** `Operation.autoApprovable` (S8 W1-A11, audit L3 "影响级展示"): whether a policy-approved
+ *  `execute` operation can skip the human approval step. A boolean, not a kernel enum, so its
+ *  two string values are declared here rather than imported from `@nexttime/shared` — the same
+ *  `Record<<literal-union>, ChipStyle>` shape every other machine uses, keyed by
+ *  `String(autoApprovable)` at the call site. */
+export const AUTO_APPROVABLE_VALUES = ['true', 'false'] as const;
+export type AutoApprovableDisplay = (typeof AUTO_APPROVABLE_VALUES)[number];
+export const AUTO_APPROVABLE_TONES: Readonly<Record<AutoApprovableDisplay, ChipStyle>> = {
+  true: { tone: 'ok', label: { zh: '可自动批准', en: 'Auto-approvable' } },
+  false: { tone: 'neutral', label: { zh: '需人工审批', en: 'Needs approval' } },
 };
 
 /** `pending_activation` is a *derived* display state (`UserWire.hasPassword === false` on an
@@ -314,6 +327,7 @@ const MACHINES: Readonly<
   role: { values: ROLE_VALUES, tones: ROLE_TONES },
   operationMode: { values: OPERATION_MODE_VALUES, tones: OPERATION_MODE_TONES },
   blastRadius: { values: BLAST_RADIUS_VALUES, tones: BLAST_RADIUS_TONES },
+  autoApprovable: { values: AUTO_APPROVABLE_VALUES, tones: AUTO_APPROVABLE_TONES },
   userStatus: { values: USER_STATUS_VALUES, tones: USER_STATUS_TONES },
   workspaceStatus: { values: WorkspaceStatusWireSchema.options, tones: WORKSPACE_STATUS_TONES },
   workspacePurpose: { values: WorkspacePurposeWireSchema.options, tones: WORKSPACE_PURPOSE_TONES },
