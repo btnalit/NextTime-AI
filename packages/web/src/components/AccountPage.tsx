@@ -9,9 +9,11 @@ import {
   patchMe,
 } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
+import { LangSwitch } from './LangSwitch.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
@@ -64,6 +66,7 @@ export function AccountPage({
       <div className="page">
         <PageHeader breadcrumb={breadcrumbFor('account')} title="我的账户 My Account" />
         <ClaimPasswordCard apiKey={apiKey} onClaimed={onClaimed} fetchImpl={fetchImpl} />
+        <LanguageCard />
       </div>
     );
   }
@@ -77,9 +80,30 @@ export function AccountPage({
       />
       <DisplayNameCard user={user} onUserChanged={onUserChanged} fetchImpl={fetchImpl} />
       <PasswordCard fetchImpl={fetchImpl} />
+      <LanguageCard />
       <MembershipsCard memberships={memberships} />
       {onBound ? <BindApiKeyForm onBound={onBound} fetchImpl={fetchImpl} /> : null}
     </div>
+  );
+}
+
+/** S8 W1-A9 (audit S4/S7): the one place a signed-in user can change the console's display
+ *  language outside the sidebar footer/drawer — useful once the footer's own toggle has scrolled
+ *  out of view, and the natural "preferences" spot on this page. */
+function LanguageCard() {
+  const t = useT();
+  return (
+    <Card title={t('界面语言', 'Language')}>
+      <div className="stack">
+        <p className="page-description">
+          {t(
+            '选择控制台显示中文还是英文，选择会保存在本浏览器。',
+            'Choose whether the console shows Chinese or English. Saved in this browser.',
+          )}
+        </p>
+        <LangSwitch />
+      </div>
+    </Card>
   );
 }
 

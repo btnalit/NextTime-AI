@@ -18,8 +18,11 @@ import {
   WorkspaceStatusWireSchema,
 } from '@nexttime/shared';
 import { cleanup, render } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { LangProvider } from '../../lib/i18n.js';
 import {
+  type ChipStyle,
   GATE_INSTANCE_STATUS_VALUES,
   type StatusMachine,
   USER_STATUS_VALUES,
@@ -31,6 +34,19 @@ import {
 import { StatusChip } from './StatusChip.js';
 
 afterEach(cleanup);
+
+/** `StatusChip` now reads `useLang()` (S8 W1-A9) — every render in this file needs a
+ *  `LangProvider` ancestor, same as the real app (`main.tsx`). */
+function renderChip(ui: ReactElement) {
+  return render(<LangProvider>{ui}</LangProvider>);
+}
+
+/** The zh-CN default (`LangProvider`'s default, `lib/i18n.ts`) half of a `ChipStyle.label` — a
+ *  plain-string label (pre-S8 machines, untranslated, out of this lane's scope) resolves to
+ *  itself either way. */
+function resolveLabel(label: ChipStyle['label']): string {
+  return typeof label === 'string' ? label : label.zh;
+}
 
 /**
  * StatusChip.test.tsx: exhaustive over every value of every `@nexttime/shared` status enum the
@@ -68,24 +84,25 @@ describe('StatusChip', () => {
       expect(statusValues(machine)).toEqual(values);
       for (const status of values) {
         const style = statusChipStyle(machine, status);
+        const labelText = resolveLabel(style.label);
         expect(style.unknown, `${machine}:${status} has no tone`).toBe(false);
-        expect(style.label.length, `${machine}:${status} has no label`).toBeGreaterThan(0);
-        expect(style.label).not.toBe(status);
+        expect(labelText.length, `${machine}:${status} has no label`).toBeGreaterThan(0);
+        expect(labelText).not.toBe(status);
 
-        const { container, unmount } = render(<StatusChip machine={machine} status={status} />);
+        const { container, unmount } = renderChip(<StatusChip machine={machine} status={status} />);
         const chip = container.querySelector('.chip');
         expect(chip?.getAttribute('data-status')).toBe(status);
         expect(chip?.getAttribute('data-tone')).toBe(style.tone);
         expect(chip?.classList.contains(`chip-${style.tone}`)).toBe(true);
         expect(chip?.classList.contains('chip-unknown')).toBe(false);
-        expect(chip?.textContent).toBe(style.label);
+        expect(chip?.textContent).toBe(labelText);
         unmount();
       }
     }
   });
 
   it('renders an unknown value visibly, dashed, with the raw string — never restyled', () => {
-    const { container } = render(<StatusChip machine="task" status="teleported" />);
+    const { container } = renderChip(<StatusChip machine="task" status="teleported" />);
     const chip = container.querySelector('.chip');
     expect(chip?.classList.contains('chip-unknown')).toBe(true);
     expect(chip?.getAttribute('data-tone')).toBe('neutral');
@@ -129,11 +146,11 @@ describe('StatusChip', () => {
   });
 
   it('forwards testId as data-testid', () => {
-    const { container } = render(
+    const { container } = renderChip(
       <StatusChip machine="userStatus" status="active" testId="platform-user-status" />,
     );
     expect(container.querySelector('[data-testid="platform-user-status"]')?.textContent).toBe(
-      '活跃 Active',
+      '活跃',
     );
   });
 
@@ -141,7 +158,24 @@ describe('StatusChip', () => {
     expect(statusChipStyle('actionRequest', 'pending_approval').live).toBe(true);
     expect(statusChipStyle('task', 'running').live).toBe(true);
     expect(statusChipStyle('task', 'completed').live).toBeUndefined();
-    const { container } = render(<StatusChip machine="task" status="running" />);
+    const { container } = renderChip(<StatusChip machine="task" status="running" />);
     expect(container.querySelector('.chip-live')).toBeTruthy();
+  });
+
+  it('S8 W1-A9: a "中文 English" pair label renders only the active language', () => {
+    const zhOnly = renderChip(<StatusChip machine="userStatus" status="active" />);
+    expect(zhOnly.container.querySelector('.chip')?.textContent).toBe('活跃');
+    expect(zhOnly.container.textContent).not.toContain('Active');
+    zhOnly.unmount();
+
+    try {
+      localStorage.setItem('nexttime.lang', 'en');
+      const enOnly = renderChip(<StatusChip machine="userStatus" status="active" />);
+      expect(enOnly.container.querySelector('.chip')?.textContent).toBe('Active');
+      expect(enOnly.container.textContent).not.toContain('活跃');
+      enOnly.unmount();
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 });

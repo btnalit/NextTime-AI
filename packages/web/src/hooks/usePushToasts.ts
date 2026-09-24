@@ -3,7 +3,14 @@ import { useToast } from '../components/ui/Toast.js';
 import type { PushSource } from '../lib/clients.js';
 import { humanizeKind, shortId } from '../lib/format.js';
 import { type NavSection, hrefs, navigate } from '../lib/router.js';
-import { statusChipStyle } from '../lib/status-tone.js';
+import { type ChipStyle, statusChipStyle } from '../lib/status-tone.js';
+
+/** `actionRequest`/`task` are still English-only machines (out of this lane's scope), so this is
+ *  always the plain-string branch at runtime — narrows `ChipStyle.label`'s S8 W1-A9 union type for
+ *  the toast copy below, which stays English either way. */
+function chipLabelText(label: ChipStyle['label']): string {
+  return typeof label === 'string' ? label : label.en;
+}
 
 /**
  * hooks/usePushToasts: turns the three principal-scoped pushes into toasts. `action.pending` is
@@ -29,7 +36,7 @@ export function usePushToasts(pushes: PushSource, active: NavSection): void {
       toast.push({
         tone: style.tone === 'danger' ? 'danger' : style.tone === 'ok' ? 'ok' : 'info',
         key: `action:${event.id}`,
-        title: `Action ${shortId(event.id)}: ${style.label.toLowerCase()}`,
+        title: `Action ${shortId(event.id)}: ${chipLabelText(style.label).toLowerCase()}`,
         action: { label: 'Open', onClick: () => navigate(hrefs.approval(event.id)) },
       });
     });
@@ -40,7 +47,7 @@ export function usePushToasts(pushes: PushSource, active: NavSection): void {
       toast.push({
         tone: style.tone === 'danger' ? 'danger' : style.tone === 'ok' ? 'ok' : 'warn',
         key: `task:${event.id}`,
-        title: `Task ${shortId(event.id)} ${humanizeKind(style.label).toLowerCase()}`,
+        title: `Task ${shortId(event.id)} ${humanizeKind(chipLabelText(style.label)).toLowerCase()}`,
         action: { label: 'Open', onClick: () => navigate(hrefs.task(event.id)) },
       });
     });

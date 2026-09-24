@@ -6,6 +6,7 @@ import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
 import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
 import type { NavSection } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
+import { LangSwitch } from '../LangSwitch.js';
 import { Sheet, SheetContent, SheetTitle } from '../kit/sheet.js';
 import { Button } from '../ui/Button.js';
 import { Select } from '../ui/Field.js';
@@ -235,6 +236,7 @@ export function SidebarContent({
             Forget key
           </Button>
         )}
+        <LangSwitch />
       </div>
     </>
   );
