@@ -46,18 +46,18 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
       page,
       `Journey member ${suffix}`,
     );
-    await page.getByRole('button', { name: /登出 Sign out/ }).click();
+    await page.getByRole('button', { name: /登出/ }).click();
     await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
 
     // Step 2: owner adds them by login, from 成员与授权's own "添加成员" entry point.
     await asOwner(page);
     await goToByLabel(page, '成员与授权');
-    await page.getByRole('button', { name: /添加成员 Add member/ }).click();
+    await page.getByRole('button', { name: /添加成员/ }).click();
     const addDrawer = page.getByTestId('add-member-drawer');
     await expect(addDrawer).toBeVisible();
     await addDrawer.locator('#am-login').fill(memberLogin);
     // Role left at its default (`member`) — AddMemberForm.tsx's own initial state.
-    await addDrawer.getByRole('button', { name: '添加 Add' }).click();
+    await addDrawer.getByRole('button', { name: '添加' }).click();
     await expect(addDrawer).toBeHidden({ timeout: 15_000 });
     await expect(
       page.getByTestId('member-row').filter({ hasText: `Journey member ${suffix}` }),
@@ -73,14 +73,14 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
       await reachLoginForm(page);
     }
     await loginWithPassword(page, memberLogin, temporaryPassword);
-    await expect(page.getByRole('heading', { name: /Password change required/ })).toBeVisible({
+    await expect(page.getByRole('heading', { name: /需要更改密码/ })).toBeVisible({
       timeout: 15_000,
     });
     const newPassword = `${temporaryPassword}-changed`;
-    await page.getByLabel(/当前密码 Current password/).fill(temporaryPassword);
-    await page.getByLabel(/新密码 New password/).fill(newPassword);
-    await page.getByLabel(/确认新密码 Confirm new password/).fill(newPassword);
-    await page.getByRole('button', { name: /Change password/ }).click();
+    await page.locator('#cp-current-password').fill(temporaryPassword);
+    await page.locator('#cp-new-password').fill(newPassword);
+    await page.locator('#cp-confirm-password').fill(newPassword);
+    await page.getByRole('button', { name: /更改密码/ }).click();
 
     // Step 4: switch to this workspace (the new member also belongs to the platform default
     // workspace from account creation — `createPlatformUser`'s own doc comment) and confirm 使用
@@ -96,7 +96,7 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
     await expect(page.getByTestId('nav-chats')).toBeVisible();
     await expect(page.getByTestId('nav-section-govern')).toHaveCount(0);
     await page.getByTestId('nav-chats').click();
-    await expect(page.getByRole('heading', { name: '对话 Chats' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
   });
 
   test.fixme(

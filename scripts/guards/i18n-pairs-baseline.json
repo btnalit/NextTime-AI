@@ -1,0 +1,268 @@
+{
+  "packages/web/src/components/ModelsPage.tsx": [
+    "任意 any",
+    "派生链深度上限 Max invoke_worker depth",
+    "每用户并发 WorkerRun Concurrent WorkerRuns per user",
+    "每 Task token 预算 Per-Task token budget",
+    "每 Task 时长上限 Per-Task duration limit",
+    "每工作区日成本 Daily cost budget",
+    "不限 unlimited",
+    "配额 Quota",
+    "生效值 Effective value",
+    "来源 Source",
+    "默认 default",
+    "工作区覆盖 override",
+    "设置人 Set by",
+    "更新 Updated",
+    "动作种类 Action kind",
+    "影响 Blast radius",
+    "自动批准 Auto-approve",
+    "自动批准 auto",
+    "需审批 requires approval",
+    "申请人可自批 Requester may approve",
+    "是 yes",
+    "否 no",
+    "设置人 Set by",
+    "更新 Updated"
+  ],
+  "packages/web/src/components/OnboardingWizard.tsx": [
+    "① 类型 Kind",
+    "② 地址与凭证 Target & credential",
+    "③ 导入清单 Import manifest",
+    "④ 审核 Operations Review",
+    "⑤ 完成 Done"
+  ],
+  "packages/web/src/components/TaskDetail.tsx": [
+    "已用 used"
+  ],
+  "packages/web/src/components/TasksPage.tsx": [
+    "用时 took",
+    "运行中 running",
+    "等待中 waiting"
+  ],
+  "packages/web/src/components/TurnStatusBadge.tsx": [
+    "回复中 Agent is responding",
+    "本轮完成 Turn completed",
+    "本轮中断 Turn interrupted",
+    "本轮失败 Turn failed"
+  ],
+  "packages/web/src/components/approvals/ApprovalDetail.tsx": [
+    "低 low",
+    "中 medium",
+    "高 high",
+    "被阻塞的 Worker 将继续运行 The blocked Worker resumes",
+    "被阻塞的 Worker 将收到拒绝 The blocked Worker is told no"
+  ],
+  "packages/web/src/components/catalog/ModulesTab.tsx": [
+    "未安装 Not installed",
+    "已是最新 Up to date",
+    "有新版 Outdated",
+    "已定制 Customized"
+  ],
+  "packages/web/src/components/catalog/ProcedureEditor.tsx": [
+    "门 Operation",
+    "审批 Approval",
+    "验证 Verify"
+  ],
+  "packages/web/src/components/connect/ConnectSystemLauncher.tsx": [
+    "HTTP / OpenAPI 服务由平台门宿主承载（P-B2a）：管理员在此建实例（目标地址、OpenAPI 清单、凭证模式），凭证直接录入门宿主，工作区一键启用。 Served by the platform gate host — an administrator creates the instance here, the credential goes straight to the host, and a workspace enables it with one click.",
+    "MCP server 同样由平台门宿主承载：清单来自它的 tools/list（readOnlyHint → observe，其余 execute）；管理员可标记 vetted 以允许自动批准幂等、非破坏性的工具。 Also served by the gate host — its tools/list becomes the manifest; an administrator may mark it vetted.",
+    "SSH 主机是打包门：需要二进制与私钥，走 compose 服务 + 自注册。下一步显示部署清单，门 announce 后自动接上后续步骤。 A packaged gate — the next step shows the deployment checklist and waits for the gate to announce itself.",
+    "命令行工具是打包门：需要二进制与目标凭证，走 compose 服务 + 自注册。下一步显示部署清单，门 announce 后自动接上后续步骤。 A packaged gate — the next step shows the deployment checklist and waits for the gate to announce itself."
+  ],
+  "packages/web/src/components/graph/FactRow.tsx": [
+    "出 outgoing",
+    "入 incoming",
+    "自 self"
+  ],
+  "packages/web/src/components/graph/FreshnessChip.test.tsx": [
+    "新鲜 Fresh",
+    "冲突 Conflict"
+  ],
+  "packages/web/src/components/graph/NeighbourList.tsx": [
+    "→ 出 outgoing",
+    "← 入 incoming",
+    "↺ 自 self"
+  ],
+  "packages/web/src/components/kit/confirm.tsx": [
+    "确认 Confirm",
+    "取消 Cancel"
+  ],
+  "packages/web/src/components/platform/PlatformModelsPage.tsx": [
+    "OpenAI 兼容 · completions",
+    "OpenAI 兼容 · responses"
+  ],
+  "packages/web/src/components/platform/PlatformOverviewPage.tsx": [
+    "前往 Go",
+    "当前经主机配置 Configured on the host",
+    "模型供应商 Model providers",
+    "默认工作区 Default workspace",
+    "集成 Integrations",
+    "用户 Users",
+    "运行层 Runtime"
+  ],
+  "packages/web/src/components/platform/PlatformRuntimePage.tsx": [
+    "平台设置 platform setting",
+    "supervisor 环境变量缺省 worker-supervisor env default",
+    "未知（供应商不可达）unknown — worker-supervisor unreachable"
+  ],
+  "packages/web/src/components/platform/PlatformUsersPage.tsx": [
+    "从未 Never",
+    "平台角色 Role",
+    "工作区 Workspaces",
+    "成员资格已停用 Membership disabled",
+    "预算 Budget",
+    "默认 default",
+    "默认 default",
+    "最近登录 Last login",
+    "创建 Created"
+  ],
+  "packages/web/src/components/platform/PlatformWorkspacesPage.tsx": [
+    "默认 Default",
+    "清除 Purge",
+    "配置 Configure",
+    "平台默认 Platform default",
+    "全部 All",
+    "名称 Name",
+    "状态 Status",
+    "用途 Purpose",
+    "生命周期 Lifecycle",
+    "入口模型 Entry model",
+    "允许的模型 Allowed models",
+    "成员数 Members"
+  ],
+  "packages/web/src/components/platform/providers/CredentialState.tsx": [
+    "凭证：控制台 Credential: console",
+    "凭证：待配置 Credential: not set"
+  ],
+  "packages/web/src/components/platform/providers/ProviderForm.tsx": [
+    "OpenAI 兼容 · responses"
+  ],
+  "packages/web/src/components/platform/providers/ProviderTestResult.tsx": [
+    "通过 ok",
+    "失败 error",
+    "跳过 skipped"
+  ],
+  "packages/web/src/components/ui/ApprovalCard.tsx": [
+    "高影响动作必须填写批准理由 A reason is required for a high-impact action"
+  ],
+  "packages/web/src/components/ui/Launcher.tsx": [
+    "HTTP 门 HTTP gate",
+    "MCP 服务器 MCP server",
+    "SSH 主机 SSH host",
+    "命令行 CLI"
+  ],
+  "packages/web/src/lib/action-card.test.ts": [
+    "已执行 Executed",
+    "待审批 Pending approval",
+    "已拒绝 Rejected",
+    "待审批 Pending approval"
+  ],
+  "packages/web/src/lib/catalog.ts": [
+    "必须是一个 JSON 对象 Must be a JSON object"
+  ],
+  "packages/web/src/lib/connections.ts": [
+    "只能取消自己发起的申请；工作区 owner 可以取消任何申请 Only your own request can be cancelled — the workspace owner may cancel any",
+    "该申请已不在「已申请」状态，刷新后再看 This request is no longer in the requested state — refresh to see its current status",
+    "找不到该连接申请 No such connection request"
+  ],
+  "packages/web/src/lib/format.test.ts": [
+    "主机操作员（未署名） Host operator (unattributed)"
+  ],
+  "packages/web/src/lib/format.ts": [
+    "主机操作员（未署名） Host operator (unattributed)"
+  ],
+  "packages/web/src/lib/gate-host.ts": [
+    "令牌已过期或无效，请重新获取 The token expired or is invalid — get a new one",
+    "门宿主返回了无法识别的响应 The gate host returned an unrecognized response",
+    "门宿主返回了意料之外的响应 The gate host returned an unexpected response"
+  ],
+  "packages/web/src/lib/graph-freshness.ts": [
+    "新鲜 Fresh",
+    "陈旧 Aging",
+    "无观测 No observation",
+    "未再观测 Not re-observed",
+    "已失效 Invalidated",
+    "已替代 Superseded",
+    "冲突 Conflict",
+    "观测窗口内再次确认 Re-observed within the window",
+    "仍有效，但最近观测早于窗口 Active, last observed before the window",
+    "人工或 agent 断言，没有观测时钟 Asserted, no observation clock",
+    "来源的完整视图里已不存在 Absent from the Source’s complete view",
+    "被显式失效 Explicitly invalidated",
+    "同源更新的事实替代了它 Replaced by a newer same-origin Fact",
+    "在未解决的冲突中或已被反驳 In an open Conflict, or contradicted"
+  ],
+  "packages/web/src/lib/llm-admin.ts": [
+    "模型代理的状态目录不可写——请操作员在主机上运行 scripts/host-llm-proxy-init.sh 后重建 llm-proxy。 The model proxy cannot write its state directory — the operator must run scripts/host-llm-proxy-init.sh on the host and recreate llm-proxy.",
+    "该供应商尚未配置密钥（控制台或 secrets/llm-proxy.env 均未设置）。 This provider has no key configured (neither the console nor secrets/llm-proxy.env).",
+    "已存在同名供应商。 A provider with this id already exists.",
+    "该供应商来自主机上的 llm-providers.yaml，不能在此删除——可停用它，或由操作员改 yaml。 This provider comes from llm-providers.yaml on the host — disable it here, or have the operator edit the yaml.",
+    "该 id 为代理自身路由保留。 This id is reserved for the proxy’s own routes.",
+    "管理令牌无效或已过期，请重试。 The admin token is invalid or expired — try again."
+  ],
+  "packages/web/src/lib/nav.ts": [
+    "打开 Explorer"
+  ],
+  "packages/web/src/lib/platform-errors.ts": [
+    "找不到该用户 No such user",
+    "找不到该工作区 No such workspace",
+    "该用户不在这个工作区 That user is not a member of this workspace",
+    "这个登录名已被占用 That login is already taken",
+    "已经是该工作区的成员 Already a member of that workspace",
+    "该账户已设置密码，不能被合并 That account already has a password — it cannot be merged",
+    "不能停用或降级最后一个活跃管理员 The last active administrator cannot be disabled or demoted",
+    "不能停用自己 You cannot disable your own account",
+    "不能移出或降级工作区的最后一个 owner The last owner of a workspace cannot be removed or demoted",
+    "环境配置的管理员 Administrator by environment configuration — NEXTTIME_PLATFORM_ADMINS",
+    "密码不满足平台的最短长度要求 Password is shorter than the platform minimum",
+    "该工作区已停用 That workspace is disabled",
+    "该用户已停用，不能作为 owner That user is disabled and cannot be made an owner",
+    "默认工作区不能停用 The platform default workspace cannot be disabled — point the default at another workspace first",
+    "模型不在目录里 No such model in the catalog",
+    "允许的模型列表必须包含入口模型；限制模型前要先设置入口模型 A non-empty allowed list must contain the entry model, and an entry model must be set before restricting",
+    "该工作区仍在启用中，先停用（停用满 7 天后可清除）或等临时工作区到期 The workspace is still active — disable it first (purgeable 7 days later), or wait for an ephemeral one to expire",
+    "停用未满 7 天，还不能清除 Disabled less than 7 days ago — not purgeable yet",
+    "找不到该接入包 No such connector",
+    "通用类接入包（cli/ssh）不能设为平台预置 A generic cli/ssh connector cannot be set to platform preset",
+    "找不到该门实例 No such gate instance",
+    "只有 MCP 类型的实例可以设置信任级别 Only an MCP instance can be marked vetted",
+    "找不到该外部运行时会话 No such external runtime session",
+    "该门实例尚未启用，工作区不能启用它 That gate instance is not enabled — a workspace cannot enable it",
+    "该接入包不是平台预置模式，工作区不能从目录启用它 That connector is not in platform-preset mode — a workspace cannot enable it from the catalog",
+    "这个 gate id 已被占用 That gate id is already taken",
+    "还有工作区启用着这个实例，先禁用它们再删除 A workspace still has this instance enabled — disable it there first",
+    "只有门宿主实例才能这样操作；打包的门由它自己的容器管理 Only a gate-host instance supports this — a packaged gate manages itself",
+    "该实例不需要每人的凭证 This instance does not take a per-member credential",
+    "门宿主尚未接管该实例，请稍候 The gate host has not taken over this instance yet — wait a moment",
+    "这个工作区还没有启用该实例 This workspace has not enabled that instance",
+    "环境配置的管理员 Administrator by environment configuration"
+  ],
+  "packages/web/src/lib/platform-workspaces.ts": [
+    "临时工作区已到期 Ephemeral workspace past its expiry",
+    "会话 Sessions",
+    "任务 Tasks",
+    "Worker 运行 Worker runs",
+    "对话 Chats",
+    "消息 Messages",
+    "活动 Activities",
+    "决策 Decisions",
+    "冲突 Conflicts",
+    "关系 Links",
+    "对象 Objects",
+    "来源 Sources",
+    "观察 Observations",
+    "证据 Evidence",
+    "审计记录 Audit records",
+    "成员 Principals",
+    "找不到该用户 No such user",
+    "已设置密码，是真实账户（应停用而不是清理） Has a password — a real account; disable it instead",
+    "平台管理员 A platform administrator",
+    "曾登录过控制台 Has signed in to the console",
+    "仍有未停用的成员资格（先移除，或清除其工作区） Still holds a non-disabled membership — remove it, or purge the workspace",
+    "被审计或设置引用（审计只增不减） Referenced by an audit or settings row — audit only grows"
+  ],
+  "packages/web/src/routes.tsx": [
+    "需要管理员 Administrator only"
+  ]
+}

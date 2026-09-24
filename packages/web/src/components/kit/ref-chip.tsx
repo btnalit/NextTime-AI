@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { cn } from '../../lib/cn.js';
 import { shortId } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 
 /**
  * components/kit/ref-chip (S8 W1-A6, audit S10 "id 永不裸露", docs/console-completion-plan.md §5.9
@@ -64,6 +65,7 @@ export function RefChip({
   http,
   testId,
 }: RefChipProps) {
+  const t = useT();
   const needsResolve = (name === undefined || name === null || name === '') && http !== undefined;
   const { get } = useResolveRefs(needsResolve ? http : undefined, needsResolve ? [id] : EMPTY_IDS);
   const resolved = needsResolve ? get(id) : undefined;
@@ -95,7 +97,7 @@ export function RefChip({
           data-testid={testId ? `${testId}-fallback` : undefined}
           data-volatile=""
         >
-          {shortId(id)} · 未知 / 已删除 Unknown / deleted
+          {shortId(id)} {t('· 未知 / 已删除', 'Unknown / deleted')}
         </span>
       ) : href !== undefined ? (
         <a className="truncate text-accent hover:underline" href={href}>

@@ -130,7 +130,7 @@ describe('ModelSwitcher', () => {
     renderSwitcher(client);
     const select = (await screen.findByTestId('chat-model-select')) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'anthropic/claude-sonnet' } });
-    await screen.findByText('切换模型失败 Could not switch the model');
+    await screen.findByText('切换模型失败');
     await waitFor(() =>
       expect((screen.getByTestId('chat-model-select') as HTMLSelectElement).disabled).toBe(true),
     );

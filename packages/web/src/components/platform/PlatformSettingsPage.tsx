@@ -11,6 +11,7 @@ import {
 } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
 import { PageHeader } from '../kit/page-header.js';
@@ -40,6 +41,7 @@ export interface PlatformSettingsPageProps {
  * the new `version` rather than by syncing state in an effect.
  */
 export function PlatformSettingsPage({ http }: PlatformSettingsPageProps) {
+  const t = useT();
   const settings = useCapability<PlatformSettingsWire>(http, 'get_platform_settings');
   const [savedVersion, setSavedVersion] = useState<number | null>(null);
 
@@ -47,13 +49,13 @@ export function PlatformSettingsPage({ http }: PlatformSettingsPageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('platformSettings')}
-        title="平台设置 Platform settings"
+        title={t('平台设置', 'Platform settings')}
         description="Site name, announcement, defaults, and password policy for this platform."
       />
 
       {savedVersion !== null ? (
         <Notice testId="platform-settings-saved">
-          已保存 Saved — 版本 version {savedVersion}。
+          {t('已保存', 'Saved')} — {t('版本', 'version')} {savedVersion}。
         </Notice>
       ) : null}
 
@@ -145,6 +147,7 @@ function PlatformSettingsForm({
   readonly initial: PlatformSettingsWire;
   readonly onSaved: (next: PlatformSettingsWire) => void;
 }) {
+  const t = useT();
   const [values, setValues] = useState<FormValues>(() => toFormValues(initial));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
@@ -238,13 +241,13 @@ function PlatformSettingsForm({
       noValidate
       data-testid="platform-settings-form"
     >
-      <Card title="站点 Site">
+      <Card title={t('站点', 'Site')}>
         <div className="stack">
           <Field
             id="ps-site-name"
-            label="站点名 Site name"
+            label={t('站点名', 'Site name')}
             required
-            error={siteNameValid ? null : '不能为空 Cannot be empty'}
+            error={siteNameValid ? null : t('不能为空', 'Cannot be empty')}
           >
             <Input
               id="ps-site-name"
@@ -257,8 +260,11 @@ function PlatformSettingsForm({
 
           <Field
             id="ps-announcement"
-            label="公告 Announcement"
-            hint="Markdown — 显示在控制台顶部；留空表示没有公告。 Shown in the console top bar; empty = none."
+            label={t('公告', 'Announcement')}
+            hint={t(
+              'Markdown — 显示在控制台顶部；留空表示没有公告。 Shown in the console top bar; empty =',
+              'none.',
+            )}
           >
             <Textarea
               id="ps-announcement"
@@ -271,13 +277,15 @@ function PlatformSettingsForm({
         </div>
       </Card>
 
-      <Card title="agent 全局指令 Instance instructions">
+      <Card title={t('agent 全局指令', 'Instance instructions')}>
         <div className="stack">
           <Notice tone="warn">
-            这会进入所有 agent 的 system prompt。 Appended to every agent's system prompt — 之后启动
-            的容器生效。 Takes effect for containers started afterwards.
+            {t(
+              "这会进入所有 agent 的 system prompt。 Appended to every agent's system prompt — 之后启动 的容器生效。",
+              'Takes effect for containers started afterwards.',
+            )}
           </Notice>
-          <Field id="ps-instance-instructions" label="附加指令 Appended instructions">
+          <Field id="ps-instance-instructions" label={t('附加指令', 'Appended instructions')}>
             <Textarea
               id="ps-instance-instructions"
               value={values.instanceInstructions}
@@ -289,12 +297,15 @@ function PlatformSettingsForm({
         </div>
       </Card>
 
-      <Card title="默认值 Defaults">
+      <Card title={t('默认值', 'Defaults')}>
         <div className="stack">
           <Field
             id="ps-default-workspace"
-            label="默认工作区 Default workspace"
-            hint="新建用户默认加入的工作区；留空 = 不自动加入。 The workspace new users join; empty = none."
+            label={t('默认工作区', 'Default workspace')}
+            hint={t(
+              '新建用户默认加入的工作区；留空 = 不自动加入。 The workspace new users join; empty =',
+              'none.',
+            )}
           >
             <Select
               id="ps-default-workspace"
@@ -310,18 +321,18 @@ function PlatformSettingsForm({
               }}
               disabled={submitting}
             >
-              <option value="">无 None</option>
+              <option value="">{t('无', 'None')}</option>
               {workspaceOptions.map((ws) => (
                 <option key={ws.id} value={ws.id}>
                   {ws.name}
                 </option>
               ))}
-              <option value={OTHER_WORKSPACE}>其他（输入 id）Other — type an id</option>
+              <option value={OTHER_WORKSPACE}>{t('其他（输入 id）', 'Other — type an id')}</option>
             </Select>
           </Field>
 
           {useManualWorkspaceInput ? (
-            <Field id="ps-default-workspace-other" label="工作区 id Workspace id">
+            <Field id="ps-default-workspace-other" label={t('工作区 id', 'Workspace id')}>
               <Input
                 id="ps-default-workspace-other"
                 value={values.defaultWorkspaceId}
@@ -333,17 +344,22 @@ function PlatformSettingsForm({
           ) : null}
 
           <p className="text-3 text-small" data-testid="platform-settings-default-model-hint">
-            默认入口模型在"模型与供应商"页设置（经目录校验）。 The default entry model is set on the{' '}
-            <a href={hrefs.platformModels()}>模型与供应商 Models &amp; providers</a> page (validated
-            against the catalog there).
+            {t(
+              '默认入口模型在"模型与供应商"页设置（经目录校验）。',
+              'The default entry model is set on the',
+            )}{' '}
+            <a href={hrefs.platformModels()}>{t('模型与供应商', 'Models &amp; providers')}</a> page
+            (validated against the catalog there).
           </p>
 
           <Field
             id="ps-default-daily-call-limit"
-            label="默认每日调用上限 Default daily call limit"
-            hint="留空 = 不限。 Empty = none."
+            label={t('默认每日调用上限', 'Default daily call limit')}
+            hint={t('留空 = 不限。', 'Empty = none.')}
             error={
-              dailyLimit === undefined ? '必须是非负整数 Must be a non-negative integer' : null
+              dailyLimit === undefined
+                ? t('必须是非负整数', 'Must be a non-negative integer')
+                : null
             }
           >
             <Input
@@ -359,10 +375,12 @@ function PlatformSettingsForm({
 
           <Field
             id="ps-default-monthly-token-budget"
-            label="默认每月 token 预算 Default monthly token budget"
-            hint="留空 = 不限。 Empty = none."
+            label={t('默认每月 token 预算', 'Default monthly token budget')}
+            hint={t('留空 = 不限。', 'Empty = none.')}
             error={
-              monthlyBudget === undefined ? '必须是非负整数 Must be a non-negative integer' : null
+              monthlyBudget === undefined
+                ? t('必须是非负整数', 'Must be a non-negative integer')
+                : null
             }
           >
             <Input
@@ -376,7 +394,10 @@ function PlatformSettingsForm({
             />
           </Field>
 
-          <Field id="ps-default-platform-role" label="新用户默认平台角色 Default platform role">
+          <Field
+            id="ps-default-platform-role"
+            label={t('新用户默认平台角色', 'Default platform role')}
+          >
             <Select
               id="ps-default-platform-role"
               value={values.defaultPlatformRole}
@@ -392,7 +413,7 @@ function PlatformSettingsForm({
 
           <Field
             id="ps-password-min-length"
-            label="密码最短长度 Password minimum length"
+            label={t('密码最短长度', 'Password minimum length')}
             hint="8–128。"
             error={passwordMinLengthValid ? null : '必须是 8–128 的整数 Must be an integer 8–128'}
           >
@@ -409,12 +430,13 @@ function PlatformSettingsForm({
         </div>
       </Card>
 
-      <Card title="环境管理员 Environment administrators">
+      <Card title={t('环境管理员', 'Environment administrators')}>
         <div className="stack-s">
           <p className="text-3 text-small">
-            来自 NEXTTIME_PLATFORM_ADMINS，只读；这些登录名始终是管理员，页面上不可停用或降级。 From
-            NEXTTIME_PLATFORM_ADMINS — read-only; these logins are always administrators and can be
-            neither disabled nor demoted from the console.
+            {t(
+              '来自 NEXTTIME_PLATFORM_ADMINS，只读；这些登录名始终是管理员，页面上不可停用或降级。 From NEXTTIME_PLATFORM_ADMINS —',
+              'read-only; these logins are always administrators and can be neither disabled nor demoted from the console.',
+            )}
           </p>
           <div className="row-wrap" data-testid="platform-settings-env-admins">
             {initial.envAdmins.length === 0 ? (
@@ -434,24 +456,24 @@ function PlatformSettingsForm({
 
       <PlatformError
         error={error}
-        title="无法保存平台设置 Could not save the platform settings"
+        title={t('无法保存平台设置', 'Could not save the platform settings')}
         testId="platform-settings-save-error"
       />
       {nothingToSave ? (
         <p className="field-hint" data-testid="platform-settings-unchanged">
-          没有改动 Nothing has changed
+          {t('没有改动', 'Nothing has changed')}
         </p>
       ) : null}
 
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <span className="text-3 text-small" data-testid="platform-settings-footer">
-          版本 version {initial.version} ·{' '}
+          {t('版本', 'version')} {initial.version} ·{' '}
           {initial.updatedAt === null
-            ? '从未修改 Never updated'
+            ? t('从未修改', 'Never updated')
             : formatDateTime(initial.updatedAt)}
         </span>
         <Button type="submit" variant="primary" loading={submitting} disabled={!valid}>
-          保存 Save
+          {t('保存', 'Save')}
         </Button>
       </div>
     </form>

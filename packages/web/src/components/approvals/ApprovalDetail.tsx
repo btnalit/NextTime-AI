@@ -9,6 +9,7 @@ import {
   redactSensitive,
 } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { Confirm } from '../kit/confirm.js';
 import { ApprovalCard } from '../ui/ApprovalCard.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -95,6 +96,7 @@ export function ApprovalDetail({
   pending,
   onPendingChange,
 }: ApprovalDetailProps) {
+  const t = useT();
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   const decidable = isDecidable(row.status);
   const blocking = row.awaitDecision && decidable;
@@ -140,7 +142,7 @@ export function ApprovalDetail({
     <div className="stack" data-testid="approval-detail" data-action-request-id={row.id}>
       {blocking ? (
         <Notice tone="warn" testId="approval-blocking">
-          Worker 已暂停，等待你的决定。 The Worker is blocked until you decide.
+          {t('Worker 已暂停，等待你的决定。', 'The Worker is blocked until you decide.')}
         </Notice>
       ) : null}
 
@@ -160,7 +162,7 @@ export function ApprovalDetail({
               row.resourceScope ? (
                 <span className="mono">{row.resourceScope}</span>
               ) : (
-                <span className="text-3">未限定资源 No resource scope</span>
+                <span className="text-3">{t('未限定资源', 'No resource scope')}</span>
               )
             }
             gatekeeper={{ id: row.gatekeeperId, name: nameOf(gatekeeperNames, row.gatekeeperId) }}
@@ -176,7 +178,8 @@ export function ApprovalDetail({
                   {row.actorRuntime ? (
                     <span className="text-3">
                       {' '}
-                      · 发起自 from <span className="tag">{row.actorRuntime}</span>
+                      {t('· 发起自', 'from')}
+                      <span className="tag">{row.actorRuntime}</span>
                     </span>
                   ) : null}
                 </span>
@@ -189,7 +192,7 @@ export function ApprovalDetail({
           >
             {row.params && Object.keys(row.params).length > 0 ? (
               <div className="stack-s">
-                <span className="section-title">参数 Parameters</span>
+                <span className="section-title">{t('参数', 'Parameters')}</span>
                 <pre className="code-block params-block" data-testid="approval-params">
                   {prettyJson(redactSensitive(row.params))}
                 </pre>
@@ -197,7 +200,7 @@ export function ApprovalDetail({
             ) : null}
 
             <dl className="definition-list">
-              <dt>请求于 Requested</dt>
+              <dt>{t('请求于', 'Requested')}</dt>
               <dd>
                 <time title={formatDateTime(row.requestedAt)}>
                   {formatRelative(row.requestedAt)}
@@ -206,19 +209,19 @@ export function ApprovalDetail({
               </dd>
               {row.executedAt ? (
                 <>
-                  <dt>执行于 Executed</dt>
+                  <dt>{t('执行于', 'Executed')}</dt>
                   <dd>{formatDateTime(row.executedAt)}</dd>
                 </>
               ) : null}
               {row.failedAt ? (
                 <>
-                  <dt className="text-danger">失败于 Failed</dt>
+                  <dt className="text-danger">{t('失败于', 'Failed')}</dt>
                   <dd className="text-danger">{formatDateTime(row.failedAt)}</dd>
                 </>
               ) : null}
               {!decidable ? (
                 <>
-                  <dt>决定 Decision</dt>
+                  <dt>{t('决定', 'Decision')}</dt>
                   <dd className="stack-s" data-testid="approval-decision">
                     {decided ? (
                       <span className="row-wrap">
@@ -237,7 +240,10 @@ export function ApprovalDetail({
                       </span>
                     ) : (
                       <span className="text-3">
-                        无人工决定（自动 / 策略 / 过期） No human decision (auto / policy / expiry)
+                        {t(
+                          '无人工决定（自动 / 策略 / 过期）',
+                          'No human decision (auto / policy / expiry)',
+                        )}
                       </span>
                     )}
                     {decisionReason ? (
@@ -250,7 +256,7 @@ export function ApprovalDetail({
               ) : null}
               {row.parentWorkerRunId ? (
                 <>
-                  <dt>Worker 运行 Worker run</dt>
+                  <dt>{t('Worker 运行', 'Worker run')}</dt>
                   <dd>
                     <RefChip kind="object" id={row.parentWorkerRunId} name={null} size="s" />
                   </dd>
@@ -266,8 +272,9 @@ export function ApprovalDetail({
                   onChange={(event) => setAlwaysAllow(event.target.checked)}
                 />
                 <span>
-                  总是允许 Always allow <code>{row.actionKindTag}</code>（批准时一并写入自动批准规则
-                  — approving also writes the auto-approval rule）
+                  {t('总是允许', 'Always allow')}
+                  <code>{row.actionKindTag}</code>（批准时一并写入自动批准规则 — approving also
+                  writes the auto-approval rule）
                 </span>
               </label>
             ) : null}
@@ -288,31 +295,39 @@ export function ApprovalDetail({
         }
         description={
           pending?.kind === 'reject'
-            ? '拒绝后 Worker 不会执行该动作；请求进入历史，理由写入审计。 The Worker will not run this action; the request moves to History and the reason is audited.'
-            : '批准后门立即执行该动作，无法撤回；理由写入审计。 The Gatekeeper executes this immediately after approval; it cannot be recalled. The reason is audited.'
+            ? t(
+                '拒绝后 Worker 不会执行该动作；请求进入历史，理由写入审计。',
+                'The Worker will not run this action; the request moves to History and the reason is audited.',
+              )
+            : t(
+                '批准后门立即执行该动作，无法撤回；理由写入审计。',
+                'The Gatekeeper executes this immediately after approval; it cannot be recalled. The reason is audited.',
+              )
         }
         target={row.resourceScope ?? row.actionKindTag}
         impact={pending ? confirmImpact(pending, row, principalNames, gatekeeperNames) : undefined}
-        confirmLabel={pending?.kind === 'reject' ? '确认拒绝 Reject' : '确认批准 Approve'}
+        confirmLabel={
+          pending?.kind === 'reject' ? t('确认拒绝', 'Reject') : t('确认批准', 'Approve')
+        }
         danger={pending?.kind === 'reject' || row.blastRadius === 'high'}
         onConfirm={runConfirm}
         testId="approval-confirm"
       >
         {pending ? (
           <dl className="definition-list">
-            <dt>请求 Request</dt>
+            <dt>{t('请求', 'Request')}</dt>
             <dd>
               <RefChip kind="actionRequest" id={row.id} name={null} size="s" />
             </dd>
-            <dt>理由 Reason</dt>
+            <dt>{t('理由', 'Reason')}</dt>
             <dd className="pre-wrap" data-testid="approval-confirm-reason">
               {pending.reason ?? <span className="text-3">（无 none）</span>}
             </dd>
             {pending.kind === 'approve' && pending.alwaysAllow ? (
               <>
-                <dt>总是允许 Always allow</dt>
+                <dt>{t('总是允许', 'Always allow')}</dt>
                 <dd>
-                  <code>{row.actionKindTag}</code> 今后自动批准 will be auto-approved
+                  <code>{row.actionKindTag}</code> {t('今后自动批准', 'will be auto-approved')}
                 </dd>
               </>
             ) : null}

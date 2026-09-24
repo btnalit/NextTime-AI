@@ -126,7 +126,7 @@ describe('ModelsPage', () => {
     expect(within(row).getByTestId('policy-auto-approve').textContent).toContain(
       'requires approval',
     );
-    expect(row.textContent).toContain('High');
+    expect(row.textContent).toContain('高影响');
   });
 
   it('each section degrades to its own error banner independently on 404 not_found (B6: no "not live yet" branch)', async () => {
@@ -191,7 +191,7 @@ describe('ModelsPage', () => {
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-policy-form');
-    fireEvent.click(within(form).getByRole('button', { name: /保存策略 Save policy/ }));
+    fireEvent.click(within(form).getByRole('button', { name: /保存策略/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(true));
   });
 
@@ -214,14 +214,14 @@ describe('ModelsPage', () => {
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-policy-form');
-    const select = within(form).getByLabelText(/默认模型 Default model/) as HTMLSelectElement;
+    const select = within(form).getByLabelText(/默认模型/) as HTMLSelectElement;
     expect(select.value).toBe('anthropic/claude');
 
     const checklist = within(form).getByTestId('agent-policy-allowed-models');
     fireEvent.click(within(checklist).getByLabelText('anthropic/claude'));
     expect(select.value).toBe('openai/gpt');
 
-    fireEvent.click(within(form).getByRole('button', { name: /保存策略 Save policy/ }));
+    fireEvent.click(within(form).getByRole('button', { name: /保存策略/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(true));
   });
 });

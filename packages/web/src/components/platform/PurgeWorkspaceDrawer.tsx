@@ -2,6 +2,7 @@ import type { PlatformWorkspaceWire, PurgeWorkspaceResultWire } from '@nexttime/
 import { useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { PURGE_WORKSPACE_REASON_LABELS, purgeCountLabel } from '../../lib/platform-workspaces.js';
 import { Confirm } from '../kit/confirm.js';
@@ -59,6 +60,7 @@ export function PurgeWorkspaceDrawer({
   onClose,
   onPurged,
 }: PurgeWorkspaceDrawerProps) {
+  const t = useT();
   const [preview, setPreview] = useState<Preview>({ status: 'loading' });
   const [step, setStep] = useState<'preview' | 'confirm'>('preview');
 
@@ -112,11 +114,14 @@ export function PurgeWorkspaceDrawer({
         onOpenChange={(open) => {
           if (!open) setStep('preview');
         }}
-        title="清除工作区 Purge workspace"
-        description="行与级联数据删除，平台审计行保留（谁、何时、清了什么）。 Rows and cascaded data are deleted; the platform audit row is kept."
+        title={t('清除工作区', 'Purge workspace')}
+        description={t(
+          '行与级联数据删除，平台审计行保留（谁、何时、清了什么）。',
+          'Rows and cascaded data are deleted; the platform audit row is kept.',
+        )}
         target={workspace.name}
         impact={impact}
-        confirmLabel="确认清除 Purge"
+        confirmLabel={t('确认清除', 'Purge')}
         onConfirm={execute}
         testId="purge-workspace-confirm"
       />
@@ -127,13 +132,13 @@ export function PurgeWorkspaceDrawer({
     <Drawer
       open
       onClose={onClose}
-      title="清除工作区 Purge workspace"
+      title={t('清除工作区', 'Purge workspace')}
       subtitle={<span className="mono">{workspace.name}</span>}
       testId="purge-workspace-drawer"
       footer={
         <>
           <Button variant="ghost" onClick={onClose} data-testid="purge-workspace-cancel">
-            取消 Cancel
+            {t('取消', 'Cancel')}
           </Button>
           <Button
             variant="danger"
@@ -141,22 +146,24 @@ export function PurgeWorkspaceDrawer({
             onClick={() => setStep('confirm')}
             data-testid="purge-workspace-continue"
           >
-            继续 Continue
+            {t('继续', 'Continue')}
           </Button>
         </>
       }
     >
       <div className="stack" data-testid="purge-workspace-preview">
         <Notice>
-          第一步是预览：下面是内核将删除的内容，此刻什么都没删。 Step one is a preview — nothing is
-          deleted until the next step is confirmed.
+          {t(
+            '第一步是预览：下面是内核将删除的内容，此刻什么都没删。 Step one is a preview —',
+            'nothing is deleted until the next step is confirmed.',
+          )}
         </Notice>
         {preview.status === 'loading' ? (
           <SkeletonRows count={4} label="Loading purge preview" testId="purge-preview-loading" />
         ) : preview.status === 'error' ? (
           <PlatformError
             error={preview.error}
-            title="无法预览清除 Could not preview the purge"
+            title={t('无法预览清除', 'Could not preview the purge')}
             testId="purge-preview-error"
           />
         ) : (
@@ -168,6 +175,7 @@ export function PurgeWorkspaceDrawer({
 }
 
 function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) {
+  const t = useT();
   const counts = Object.entries(result.counts).sort(([, a], [, b]) => b - a);
   return (
     <>
@@ -176,7 +184,7 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
           <div className="stack-s">
             <strong>
               service Handle 仍在使用 A service Handle is still in use — {warning.activeHandles}{' '}
-              个有效 Handle live
+              {t('个有效', 'Handle live')}
             </strong>
             <RefChip
               kind="principal"
@@ -186,39 +194,39 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
               testId="purge-warning-principal"
             />
             <span>
-              采集器或外部运行时可能还在用这个 Principal 的 Handle：清除后那个进程立刻 401（遗留 41
-              的来源）。先把它指回正确的工作区，再回来清除。 A collector or external runtime may
-              still be calling with it — it gets 401 the moment the purge runs. Point that process
-              at the right workspace first.
+              {t(
+                '采集器或外部运行时可能还在用这个 Principal 的 Handle：清除后那个进程立刻 401（遗留 41 的来源）。先把它指回正确的工作区，再回来清除。 A collector or external runtime may still be calling with it —',
+                'it gets 401 the moment the purge runs. Point that process at the right workspace first.',
+              )}
             </span>
           </div>
         </Notice>
       ))}
 
       <dl className="definition-list">
-        <dt>原因 Reason</dt>
+        <dt>{t('原因', 'Reason')}</dt>
         <dd data-testid="purge-preview-reason">{PURGE_WORKSPACE_REASON_LABELS[result.reason]}</dd>
-        <dt>状态 Status</dt>
+        <dt>{t('状态', 'Status')}</dt>
         <dd>
           <StatusChip machine="workspaceStatus" status={result.status} size="s" />{' '}
           <StatusChip machine="workspacePurpose" status={result.purpose} size="s" />
         </dd>
-        <dt>有效 Handle Live Handles</dt>
+        <dt>{t('有效', 'Handle Live Handles')}</dt>
         <dd className="mono" data-testid="purge-preview-active-handles">
           {result.activeHandles}
         </dd>
       </dl>
 
       <div className="stack-s">
-        <span className="section-title">将删除 Will delete</span>
+        <span className="section-title">{t('将删除', 'Will delete')}</span>
         {counts.length === 0 ? (
-          <p className="text-3">没有工作区级数据行。 No workspace-scoped rows.</p>
+          <p className="text-3">{t('没有工作区级数据行。', 'No workspace-scoped rows.')}</p>
         ) : (
           <table className="data-table" data-testid="purge-preview-counts">
             <thead>
               <tr>
-                <th>表 Table</th>
-                <th className="tabular">行数 Rows</th>
+                <th>{t('表', 'Table')}</th>
+                <th className="tabular">{t('行数', 'Rows')}</th>
               </tr>
             </thead>
             <tbody>
@@ -232,7 +240,7 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
               ))}
               <tr>
                 <td>
-                  <strong>合计 Total</strong>
+                  <strong>{t('合计', 'Total')}</strong>
                 </td>
                 <td className="mono tabular" data-testid="purge-preview-total">
                   <strong>{result.totalRows}</strong>
@@ -244,11 +252,13 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
       </div>
 
       <div className="stack-s">
-        <span className="section-title">随之删除的用户 Users deleted with it</span>
+        <span className="section-title">{t('随之删除的用户', 'Users deleted with it')}</span>
         {result.purgedUsers.length === 0 ? (
           <p className="text-3">
-            没有从未激活且成员资格全在此工作区的用户。 No never-activated user has all its
-            memberships here.
+            {t(
+              '没有从未激活且成员资格全在此工作区的用户。',
+              'No never-activated user has all its memberships here.',
+            )}
           </p>
         ) : (
           <div className="row-wrap" data-testid="purge-preview-users">
@@ -263,10 +273,17 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
 
       {result.principalIds.length > 0 || result.taskIds.length > 0 ? (
         <p className="text-3 text-small" data-testid="purge-preview-host-side">
-          主机侧目录不由内核删除：{result.principalIds.length} 个 Principal 目录、
-          {result.taskIds.length} 个任务目录，按 scripts/delete-workspace.sh 清理。 Host-side
-          directories are not the kernel's to delete: {result.principalIds.length} principal and{' '}
-          {result.taskIds.length} task directories — see scripts/delete-workspace.sh.
+          {t(
+            <>
+              主机侧目录不由内核删除：{result.principalIds.length} 个 Principal 目录、
+              {result.taskIds.length} 个任务目录，按 scripts/delete-workspace.sh 清理。
+            </>,
+            <>
+              Host-side directories are not the kernel's to delete: {result.principalIds.length}{' '}
+              principal and {result.taskIds.length} task directories — see
+              scripts/delete-workspace.sh.
+            </>,
+          )}
         </p>
       ) : null}
     </>

@@ -2,6 +2,7 @@ import type { PlatformRoleWire, ResetUserPasswordResultWire, UserWire } from '@n
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
@@ -62,6 +63,7 @@ export function UserDetailPanel({
   onTemporaryPassword,
   onOpenMemberships,
 }: UserDetailPanelProps) {
+  const t = useT();
   const protectedAdmin = envAdmins.includes(user.login);
 
   const [displayName, setDisplayName] = useState(user.displayName);
@@ -186,13 +188,13 @@ export function UserDetailPanel({
   return (
     <div className="stack" data-testid="user-detail">
       <dl className="definition-list">
-        <dt>登录名 Login</dt>
+        <dt>{t('登录名', 'Login')}</dt>
         <dd className="mono">{user.login}</dd>
         <dt>Id</dt>
         <dd>
           <CopyId id={user.id} label="user" />
         </dd>
-        <dt>状态 Status</dt>
+        <dt>{t('状态', 'Status')}</dt>
         <dd>
           <StatusChip
             machine="userStatus"
@@ -201,15 +203,15 @@ export function UserDetailPanel({
             testId="user-detail-status"
           />
         </dd>
-        <dt>最近登录 Last login</dt>
+        <dt>{t('最近登录', 'Last login')}</dt>
         <dd>
           {user.lastLoginAt === null ? (
-            '从未 Never'
+            t('从未', 'Never')
           ) : (
             <time title={formatDateTime(user.lastLoginAt)}>{formatRelative(user.lastLoginAt)}</time>
           )}
         </dd>
-        <dt>创建 Created</dt>
+        <dt>{t('创建', 'Created')}</dt>
         <dd>
           <time title={formatDateTime(user.createdAt)}>{formatRelative(user.createdAt)}</time>
         </dd>
@@ -217,14 +219,17 @@ export function UserDetailPanel({
 
       {protectedAdmin ? (
         <Notice tone="warn" testId="user-detail-env-admin">
-          {ENV_ADMIN_TITLE} — 这个账户始终是管理员，不能在页面上停用或降级。 This account is always
-          an administrator and can be neither disabled nor demoted from here.
+          {ENV_ADMIN_TITLE}{' '}
+          {t(
+            '— 这个账户始终是管理员，不能在页面上停用或降级。',
+            'This account is always an administrator and can be neither disabled nor demoted from here.',
+          )}
         </Notice>
       ) : null}
 
       <div className="divider" />
 
-      <Field id="ud-display-name" label="显示名 Display name">
+      <Field id="ud-display-name" label={t('显示名', 'Display name')}>
         <Input
           id="ud-display-name"
           value={displayName}
@@ -232,7 +237,7 @@ export function UserDetailPanel({
           disabled={savingProfile}
         />
       </Field>
-      <Field id="ud-platform-role" label="平台角色 Platform role">
+      <Field id="ud-platform-role" label={t('平台角色', 'Platform role')}>
         <span title={protectedAdmin ? ENV_ADMIN_TITLE : undefined}>
           <Select
             id="ud-platform-role"
@@ -240,12 +245,12 @@ export function UserDetailPanel({
             onChange={(event) => setPlatformRole(event.target.value as PlatformRoleWire)}
             disabled={savingProfile || protectedAdmin}
           >
-            <option value="user">用户 user</option>
-            <option value="admin">管理员 admin</option>
+            <option value="user">{t('用户', 'user')}</option>
+            <option value="admin">{t('管理员', 'admin')}</option>
           </Select>
         </span>
       </Field>
-      <PlatformError error={profileError} title="无法保存 Could not update this user" />
+      <PlatformError error={profileError} title={t('无法保存', 'Could not update this user')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button
           variant="secondary"
@@ -253,7 +258,7 @@ export function UserDetailPanel({
           loading={savingProfile}
           disabled={!profileDirty}
         >
-          保存 Save
+          {t('保存', 'Save')}
         </Button>
       </div>
 
@@ -261,9 +266,11 @@ export function UserDetailPanel({
 
       <Field
         id="ud-daily-call-limit"
-        label="每日调用上限 Daily call limit"
-        hint="留空 = 用平台默认值。 Empty = the platform default."
-        error={parsedDaily === undefined ? '必须是非负整数 Must be a non-negative integer' : null}
+        label={t('每日调用上限', 'Daily call limit')}
+        hint={t('留空 = 用平台默认值。', 'Empty = the platform default.')}
+        error={
+          parsedDaily === undefined ? t('必须是非负整数', 'Must be a non-negative integer') : null
+        }
       >
         <Input
           id="ud-daily-call-limit"
@@ -272,15 +279,17 @@ export function UserDetailPanel({
           disabled={savingBudget}
           invalid={parsedDaily === undefined}
           inputMode="numeric"
-          placeholder="默认 default"
+          placeholder={t('默认', 'default')}
           mono
         />
       </Field>
       <Field
         id="ud-monthly-token-budget"
-        label="每月 token 预算 Monthly token budget"
-        hint="留空 = 用平台默认值。 Empty = the platform default."
-        error={parsedMonthly === undefined ? '必须是非负整数 Must be a non-negative integer' : null}
+        label={t('每月 token 预算', 'Monthly token budget')}
+        hint={t('留空 = 用平台默认值。', 'Empty = the platform default.')}
+        error={
+          parsedMonthly === undefined ? t('必须是非负整数', 'Must be a non-negative integer') : null
+        }
       >
         <Input
           id="ud-monthly-token-budget"
@@ -289,11 +298,11 @@ export function UserDetailPanel({
           disabled={savingBudget}
           invalid={parsedMonthly === undefined}
           inputMode="numeric"
-          placeholder="默认 default"
+          placeholder={t('默认', 'default')}
           mono
         />
       </Field>
-      <PlatformError error={budgetError} title="无法保存预算 Could not set the budget" />
+      <PlatformError error={budgetError} title={t('无法保存预算', 'Could not set the budget')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button
           variant="secondary"
@@ -301,16 +310,16 @@ export function UserDetailPanel({
           loading={savingBudget}
           disabled={!budgetDirty || !budgetValid}
         >
-          保存预算 Save budget
+          {t('保存预算', 'Save budget')}
         </Button>
       </div>
 
       <div className="divider" />
 
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span>成员资格 Memberships</span>
+        <span>{t('成员资格', 'Memberships')}</span>
         <Button variant="secondary" size="s" icon="users" onClick={onOpenMemberships}>
-          管理成员资格 Manage memberships ({user.memberships.length})
+          {t('管理成员资格', 'Manage memberships')} ({user.memberships.length})
         </Button>
       </div>
 
@@ -318,8 +327,11 @@ export function UserDetailPanel({
 
       <Field
         id="ud-password"
-        label="重置密码 Reset password"
-        hint="留空则自动生成；新密码只显示一次，且首次登录必须修改。 Empty generates one; it is shown once and must be changed on first login."
+        label={t('重置密码', 'Reset password')}
+        hint={t(
+          '留空则自动生成；新密码只显示一次，且首次登录必须修改。',
+          'Empty generates one; it is shown once and must be changed on first login.',
+        )}
       >
         <Input
           id="ud-password"
@@ -328,11 +340,11 @@ export function UserDetailPanel({
           onChange={(event) => setCustomPassword(event.target.value)}
           disabled={resetting}
           autoComplete="new-password"
-          placeholder="自动生成 Auto-generate"
+          placeholder={t('自动生成', 'Auto-generate')}
           mono
         />
       </Field>
-      <PlatformError error={resetError} title="无法重置密码 Could not reset the password" />
+      <PlatformError error={resetError} title={t('无法重置密码', 'Could not reset the password')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button
           variant="secondary"
@@ -340,13 +352,13 @@ export function UserDetailPanel({
           onClick={() => void resetPassword()}
           loading={resetting}
         >
-          重置密码 Reset password
+          {t('重置密码', 'Reset password')}
         </Button>
       </div>
 
       <div className="divider" />
 
-      <PlatformError error={statusError} title="无法修改状态 Could not change the status" />
+      <PlatformError error={statusError} title={t('无法修改状态', 'Could not change the status')} />
       {user.status === 'disabled' ? (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button
@@ -354,26 +366,27 @@ export function UserDetailPanel({
             onClick={() => void setStatus('active')}
             loading={changingStatus}
           >
-            启用 Enable
+            {t('启用', 'Enable')}
           </Button>
         </div>
       ) : confirmingDisable ? (
         <div className="stack-s" data-testid="user-disable-confirm">
           <Notice tone="warn">
-            停用会立即吊销该用户的全部控制台会话与各 Principal 的工作区会话；对话与上下文保留。
-            Disabling revokes every console and workspace session immediately; conversations and
-            context are kept.
+            {t(
+              '停用会立即吊销该用户的全部控制台会话与各 Principal 的工作区会话；对话与上下文保留。',
+              'Disabling revokes every console and workspace session immediately; conversations and context are kept.',
+            )}
           </Notice>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={() => setConfirmingDisable(false)}>
-              取消 Cancel
+              {t('取消', 'Cancel')}
             </Button>
             <Button
               variant="danger"
               onClick={() => void setStatus('disabled')}
               loading={changingStatus}
             >
-              确认停用 Confirm disable
+              {t('确认停用', 'Confirm disable')}
             </Button>
           </div>
         </div>
@@ -385,7 +398,7 @@ export function UserDetailPanel({
               onClick={() => setConfirmingDisable(true)}
               disabled={protectedAdmin}
             >
-              停用 Disable
+              {t('停用', 'Disable')}
             </Button>
           </span>
         </div>
@@ -396,8 +409,11 @@ export function UserDetailPanel({
           <div className="divider" />
           <Field
             id="ud-merge-target"
-            label="合并到 Merge into"
-            hint="把这个待激活账户的成员资格并入一个已有账户，然后删除它。 Folds this pending account's memberships into an existing one, then deletes it."
+            label={t('合并到', 'Merge into')}
+            hint={t(
+              '把这个待激活账户的成员资格并入一个已有账户，然后删除它。',
+              "Folds this pending account's memberships into an existing one, then deletes it.",
+            )}
           >
             <Select
               id="ud-merge-target"
@@ -408,7 +424,7 @@ export function UserDetailPanel({
               }}
               disabled={merging}
             >
-              <option value="">选择目标账户 Pick a target account</option>
+              <option value="">{t('选择目标账户', 'Pick a target account')}</option>
               {mergeTargets.map((candidate) => (
                 <option key={candidate.id} value={candidate.id}>
                   {candidate.login} — {candidate.displayName}
@@ -416,19 +432,21 @@ export function UserDetailPanel({
               ))}
             </Select>
           </Field>
-          <PlatformError error={mergeError} title="无法合并 Could not merge this user" />
+          <PlatformError error={mergeError} title={t('无法合并', 'Could not merge this user')} />
           {confirmingMerge ? (
             <div className="stack-s" data-testid="user-merge-confirm">
               <Notice tone="warn">
-                合并后这一行会消失，且不可撤销。 This row disappears afterwards and the merge cannot
-                be undone.
+                {t(
+                  '合并后这一行会消失，且不可撤销。',
+                  'This row disappears afterwards and the merge cannot be undone.',
+                )}
               </Notice>
               <div className="row" style={{ justifyContent: 'flex-end' }}>
                 <Button variant="ghost" onClick={() => setConfirmingMerge(false)}>
-                  取消 Cancel
+                  {t('取消', 'Cancel')}
                 </Button>
                 <Button variant="danger" onClick={() => void merge()} loading={merging}>
-                  确认合并 Confirm merge
+                  {t('确认合并', 'Confirm merge')}
                 </Button>
               </div>
             </div>
@@ -439,7 +457,7 @@ export function UserDetailPanel({
                 onClick={() => setConfirmingMerge(true)}
                 disabled={mergeTargetId === ''}
               >
-                合并 Merge
+                {t('合并', 'Merge')}
               </Button>
             </div>
           )}

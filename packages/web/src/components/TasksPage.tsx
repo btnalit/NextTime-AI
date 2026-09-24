@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useResource } from '../hooks/useResource.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { excerpt, formatDateTime, formatDuration, formatRelative } from '../lib/format.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import {
   type TaskSummary,
@@ -59,6 +60,7 @@ type Filter = 'active' | 'all' | 'done';
  * (which still throws on failure so the confirm keeps its own inline error and stays open).
  */
 export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
+  const t = useT();
   const toast = useToast();
   const load = useCallback(async () => {
     let items: readonly TaskSummary[] = [];
@@ -134,7 +136,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
     tasks.mutate((current) =>
       current.map((row) => (row.id === result.id ? { ...row, status: result.status } : row)),
     );
-    toast.push({ tone: 'info', title: '任务已取消 Task cancelled' });
+    toast.push({ tone: 'info', title: t('任务已取消', 'Task cancelled') });
     await refreshOne(task.id);
   }
 
@@ -142,8 +144,11 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('tasks')}
-        title="任务 Tasks"
-        description="代表你委派给 Worker 的工作，及其运行与结果。 Work delegated to Workers on your behalf, with their runs and results."
+        title={t('任务', 'Tasks')}
+        description={t(
+          '代表你委派给 Worker 的工作，及其运行与结果。',
+          'Work delegated to Workers on your behalf, with their runs and results.',
+        )}
         actions={
           <Button
             variant="ghost"
@@ -151,7 +156,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
             onClick={() => void tasks.reload()}
             loading={tasks.state.status === 'ready' && tasks.state.refreshing}
           >
-            刷新 Refresh
+            {t('刷新', 'Refresh')}
           </Button>
         }
       />
@@ -162,9 +167,9 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
           value={filter}
           onChange={setFilter}
           options={[
-            { value: 'all', label: '全部 All', count: allRows.length },
-            { value: 'active', label: '进行中 Active', count: activeCount },
-            { value: 'done', label: '已结束 Finished', count: allRows.length - activeCount },
+            { value: 'all', label: t('全部', 'All'), count: allRows.length },
+            { value: 'active', label: t('进行中', 'Active'), count: activeCount },
+            { value: 'done', label: t('已结束', 'Finished'), count: allRows.length - activeCount },
           ]}
         />
       </div>
@@ -174,7 +179,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
       ) : tasks.state.status === 'error' ? (
         <ErrorBanner
           error={tasks.state.error}
-          title="无法加载任务 Could not load tasks"
+          title={t('无法加载任务', 'Could not load tasks')}
           onRetry={() => void tasks.reload()}
           testId="tasks-error"
         />
@@ -183,10 +188,13 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
           icon="cpu"
           title={
             allRows.length === 0
-              ? '还没有任务 No tasks yet'
-              : '没有符合筛选的任务 No tasks match this filter'
+              ? t('还没有任务', 'No tasks yet')
+              : t('没有符合筛选的任务', 'No tasks match this filter')
           }
-          body="入口智能体把工作委派给 Worker（invoke_worker）时会创建任务；它的运行、结果契约与审批都在这里。 A Task is created when the entry agent delegates work to a Worker (invoke_worker). Its runs, result contract and approvals show up here."
+          body={t(
+            '入口智能体把工作委派给 Worker（invoke_worker）时会创建任务；它的运行、结果契约与审批都在这里。',
+            'A Task is created when the entry agent delegates work to a Worker (invoke_worker). Its runs, result contract and approvals show up here.',
+          )}
           testId="tasks-empty"
         />
       ) : (
@@ -278,8 +286,8 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
                 definitionRows,
                 selected.workerDefinitionId,
                 selected.workerDefinitionVersion,
-              ) ?? '任务 Task')
-            : '任务 Task'
+              ) ?? t('任务', 'Task'))
+            : t('任务', 'Task')
         }
         subtitle={
           // S8 W1-A6: `resolve_refs` now has a real `task` kind — no more faking it with

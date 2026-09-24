@@ -56,7 +56,7 @@ test.describe('S8 W1-B screenshot gate', () => {
     await freezeClock(page);
     await loginAsOwner(page);
 
-    await page.locator('header').getByRole('button', { name: 'New chat' }).click();
+    await page.locator('header').getByRole('button', { name: '新对话' }).click();
     await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
     await page.getByPlaceholder('Message…').fill(CHAT_FIXTURE_PROMPT);
     await page.getByRole('button', { name: 'Send' }).click();

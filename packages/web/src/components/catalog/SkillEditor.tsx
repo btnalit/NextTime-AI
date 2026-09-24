@@ -11,6 +11,7 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { SkillRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Textarea, describedBy } from '../ui/Field.js';
@@ -39,6 +40,7 @@ type BodyView = 'edit' | 'preview';
  * rule is shown as a warning while drafting. The success state offers `publish_skill`.
  */
 export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorProps) {
+  const t = useT();
   const permissions = usePermissions();
   const [form, setForm] = useState<SkillForm>(() =>
     copyOf
@@ -110,28 +112,39 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
     >
       {copyOf ? (
         <Notice tone="warn" testId="skill-copy-notice">
-          从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：内核的 propose_skill 不接受
-          skillId，提交会创建一个<strong>新的</strong> Skill（新 id、v1），不是同一 Skill
-          的新版本；list_skills 不返回正文，正文需重新填写。 Copied from {copyOf.name} v
-          {copyOf.version}: propose_skill takes no skillId, so submitting creates a{' '}
-          <strong>new</strong> Skill (new id, v1), not a new version of this one; list_skills
-          carries no body, so the Markdown must be re-entered.
+          {t(
+            <>
+              从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：内核的 propose_skill 不接受
+              skillId，提交会创建一个<strong>新的</strong> Skill（新 id、v1），不是同一 Skill
+              的新版本；list_skills 不返回正文，正文需重新填写。
+            </>,
+            <>
+              Copied from {copyOf.name} v{copyOf.version}: propose_skill takes no skillId, so
+              submitting creates a <strong>new</strong> Skill (new id, v1), not a new version of
+              this one; list_skills carries no body, so the Markdown must be re-entered.
+            </>,
+          )}
         </Notice>
       ) : (
         <Notice testId="skill-private-notice">
-          草稿只有你（提议者）可见，发布后所有成员可见（I16）。 The draft is private to you until
-          published (I16).
+          {t(
+            '草稿只有你（提议者）可见，发布后所有成员可见（I16）。',
+            'The draft is private to you until published (I16).',
+          )}
         </Notice>
       )}
 
       <Field
         id="skill-name"
-        label="名称 name"
+        label={t('名称', 'name')}
         required
         error={errors.name || null}
         hint={
           nameWarning ??
-          '将成为 SKILL.md 的 frontmatter name 与挂载目录名。 Becomes the SKILL.md frontmatter name and the mount directory.'
+          t(
+            '将成为 SKILL.md 的 frontmatter name 与挂载目录名。',
+            'Becomes the SKILL.md frontmatter name and the mount directory.',
+          )
         }
       >
         <Input
@@ -146,7 +159,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
       </Field>
       <Field
         id="skill-description"
-        label="描述 description"
+        label={t('描述', 'description')}
         required
         error={errors.description || null}
         hint="一句话说明何时用它（≤ 1024 字）。 One line on when to use it (≤ 1024 chars)."
@@ -168,8 +181,8 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
       <div className="row-wrap">
         <Field
           id="skill-gate-kinds"
-          label="适用的门类型 applicable.gateKinds"
-          hint="逗号或换行分隔，可空。 Comma / newline separated; optional."
+          label={t('适用的门类型', 'applicable.gateKinds')}
+          hint={t('逗号或换行分隔，可空。', 'Comma / newline separated; optional.')}
           error={errors['applicable.gateKinds'] || null}
         >
           <Input
@@ -183,8 +196,8 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
         </Field>
         <Field
           id="skill-object-types"
-          label="适用的对象类型 applicable.objectTypes"
-          hint="逗号或换行分隔，可空。 Comma / newline separated; optional."
+          label={t('适用的对象类型', 'applicable.objectTypes')}
+          hint={t('逗号或换行分隔，可空。', 'Comma / newline separated; optional.')}
           error={errors['applicable.objectTypes'] || null}
         >
           <Input
@@ -200,21 +213,24 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
 
       <div className="stack-s">
         <div className="row">
-          <span className="section-title grow">正文 Markdown body</span>
+          <span className="section-title grow">{t('正文', 'Markdown body')}</span>
           <Tabs<BodyView>
             ariaLabel="Body view"
             value={bodyView}
             onChange={setBodyView}
             options={[
-              { value: 'edit', label: '编辑 Edit', testId: 'skill-body-edit' },
-              { value: 'preview', label: '预览 Preview', testId: 'skill-body-preview' },
+              { value: 'edit', label: t('编辑', 'Edit'), testId: 'skill-body-edit' },
+              { value: 'preview', label: t('预览', 'Preview'), testId: 'skill-body-preview' },
             ]}
           />
         </div>
         {bodyView === 'edit' ? (
           <Field
             id="skill-markdown"
-            label="SKILL.md 正文（不含 frontmatter） Body only — the frontmatter is generated from the fields above"
+            label={t(
+              'SKILL.md 正文（不含 frontmatter） Body only —',
+              'the frontmatter is generated from the fields above',
+            )}
             required
             error={errors.markdown || null}
           >
@@ -238,17 +254,17 @@ export function SkillEditor({ http, copyOf, onProposed, onDone }: SkillEditorPro
       {error !== null ? (
         <ErrorBanner
           error={error}
-          title="无法创建草稿 Could not propose the draft"
+          title={t('无法创建草稿', 'Could not propose the draft')}
           testId="skill-editor-error"
         />
       ) : null}
 
       <div className="row">
         <Button type="submit" variant="primary" loading={busy} data-testid="skill-submit">
-          保存草稿 Save draft
+          {t('保存草稿', 'Save draft')}
         </Button>
         <Button variant="ghost" onClick={onDone} disabled={busy}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
       </div>
     </form>

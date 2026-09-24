@@ -37,7 +37,7 @@ test.describe('CI smoke: 图谱 Graph page', () => {
     await login(page, apiKey);
 
     await page.goto('/#/work/graph');
-    await expect(page.getByRole('heading', { name: '图谱 Graph' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '图谱' })).toBeVisible();
     await expect(
       page.getByTestId('graph-results').or(page.getByTestId('graph-results-empty')),
     ).toBeVisible({ timeout: 15_000 });

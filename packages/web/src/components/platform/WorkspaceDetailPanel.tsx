@@ -8,6 +8,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
+import { useT } from '../../lib/i18n.js';
 import { isExpiredEphemeral, purgeRetention } from '../../lib/platform-workspaces.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
@@ -82,6 +83,7 @@ export function WorkspaceDetailPanel({
   onOpenWorkspaceConfig,
   onPurge,
 }: WorkspaceDetailPanelProps) {
+  const t = useT();
   const [name, setName] = useState(workspace.name);
   const [savingName, setSavingName] = useState(false);
   const [nameError, setNameError] = useState<unknown | null>(null);
@@ -240,7 +242,7 @@ export function WorkspaceDetailPanel({
         <dd>
           <CopyId id={workspace.id} label="workspace" />
         </dd>
-        <dt>状态 Status</dt>
+        <dt>{t('状态', 'Status')}</dt>
         <dd>
           <StatusChip
             machine="workspaceStatus"
@@ -250,19 +252,19 @@ export function WorkspaceDetailPanel({
           />
           {workspace.isDefault ? (
             <span className="tag" data-testid="workspace-detail-default">
-              默认 Default
+              {t('默认', 'Default')}
             </span>
           ) : null}
         </dd>
-        <dt>成员数 Members</dt>
+        <dt>{t('成员数', 'Members')}</dt>
         <dd className="mono">{workspace.memberCount}</dd>
-        <dt>创建 Created</dt>
+        <dt>{t('创建', 'Created')}</dt>
         <dd>
           <time title={formatDateTime(workspace.createdAt)}>
             {formatRelative(workspace.createdAt)}
           </time>
         </dd>
-        <dt>用途 Purpose</dt>
+        <dt>{t('用途', 'Purpose')}</dt>
         <dd>
           <StatusChip
             machine="workspacePurpose"
@@ -271,7 +273,7 @@ export function WorkspaceDetailPanel({
             testId="workspace-detail-purpose"
           />
         </dd>
-        <dt>生命周期 Lifecycle</dt>
+        <dt>{t('生命周期', 'Lifecycle')}</dt>
         <dd data-testid="workspace-detail-lifecycle">
           <WorkspaceLifecycle workspace={workspace} />
         </dd>
@@ -286,19 +288,21 @@ export function WorkspaceDetailPanel({
             onClick={onOpenWorkspaceConfig}
             data-testid="open-workspace-config"
           >
-            打开工作区配置 Open workspace config
+            {t('打开工作区配置', 'Open workspace config')}
           </Button>
         ) : (
           <Notice testId="workspace-no-membership">
-            把自己加为 owner 后即可进入该工作区的配置页（成员与授权、访问、能力目录…）。 Add
-            yourself as an owner to reach this workspace's own configuration pages.
+            {t(
+              '把自己加为 owner 后即可进入该工作区的配置页（成员与授权、访问、能力目录…）。',
+              "Add yourself as an owner to reach this workspace's own configuration pages.",
+            )}
           </Notice>
         )}
       </div>
 
       <div className="divider" />
 
-      <Field id="wd-name" label="名称 Name" required>
+      <Field id="wd-name" label={t('名称', 'Name')} required>
         <Input
           id="wd-name"
           value={name}
@@ -306,7 +310,7 @@ export function WorkspaceDetailPanel({
           disabled={savingName}
         />
       </Field>
-      <PlatformError error={nameError} title="无法重命名 Could not rename this workspace" />
+      <PlatformError error={nameError} title={t('无法重命名', 'Could not rename this workspace')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button
           variant="secondary"
@@ -314,7 +318,7 @@ export function WorkspaceDetailPanel({
           loading={savingName}
           disabled={!nameDirty}
         >
-          保存 Save
+          {t('保存', 'Save')}
         </Button>
       </div>
 
@@ -331,7 +335,7 @@ export function WorkspaceDetailPanel({
       />
       <PlatformError
         error={entryModelError}
-        title="无法设置入口模型 Could not set the entry model"
+        title={t('无法设置入口模型', 'Could not set the entry model')}
       />
 
       <div className="divider" />
@@ -345,7 +349,7 @@ export function WorkspaceDetailPanel({
       />
       <PlatformError
         error={allowedError}
-        title="无法设置允许的模型 Could not set the allowed models"
+        title={t('无法设置允许的模型', 'Could not set the allowed models')}
         testId="workspace-allowed-models-error"
       />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -355,7 +359,7 @@ export function WorkspaceDetailPanel({
           loading={savingAllowed}
           disabled={!allowedDirty || !modelsReady}
         >
-          保存允许的模型 Save allowed models
+          {t('保存允许的模型', 'Save allowed models')}
         </Button>
       </div>
 
@@ -363,8 +367,11 @@ export function WorkspaceDetailPanel({
 
       <Field
         id="wd-ontology-enforcement"
-        label="本体强制 Ontology enforcement"
-        hint="写入的关系必须符合已发布本体；warn 只审计不拒绝，用于新主机推出期，看 /internal/metrics 的 I-S5-1 归零后再切回 reject。 warn only audits and lets the write through, for a new host's rollout window until I-S5-1 reads 0."
+        label={t('本体强制', 'Ontology enforcement')}
+        hint={t(
+          '写入的关系必须符合已发布本体；warn 只审计不拒绝，用于新主机推出期，看 /internal/metrics 的 I-S5-1 归零后再切回 reject。',
+          "warn only audits and lets the write through, for a new host's rollout window until I-S5-1 reads 0.",
+        )}
       >
         <Select
           id="wd-ontology-enforcement"
@@ -375,13 +382,13 @@ export function WorkspaceDetailPanel({
           disabled={savingOntologyEnforcement}
           data-testid="workspace-ontology-enforcement"
         >
-          <option value="reject">拒绝 reject</option>
-          <option value="warn">记录并放行 warn</option>
+          <option value="reject">{t('拒绝', 'reject')}</option>
+          <option value="warn">{t('记录并放行', 'warn')}</option>
         </Select>
       </Field>
       <PlatformError
         error={ontologyEnforcementError}
-        title="无法设置本体强制 Could not set the ontology enforcement"
+        title={t('无法设置本体强制', 'Could not set the ontology enforcement')}
         testId="workspace-ontology-enforcement-error"
       />
 
@@ -390,7 +397,7 @@ export function WorkspaceDetailPanel({
       <div className="stack-s">
         <span>Owners</span>
         {workspace.owners.length === 0 ? (
-          <span className="text-3">还没有 owner No owner yet</span>
+          <span className="text-3">{t('还没有 owner', 'No owner yet')}</span>
         ) : (
           <div className="row-wrap" data-testid="workspace-owners">
             {workspace.owners.map((owner) => (
@@ -410,15 +417,21 @@ export function WorkspaceDetailPanel({
       <UserPicker
         http={http}
         id="wd-delegate-owner"
-        label="委托 owner Delegate an owner"
-        hint="该用户将以 owner 身份加入这个工作区，并在「管理 → 工作区配置」里看到它。已经是成员的会就地升为 owner。 The user joins this workspace as an owner; an existing member is promoted in place."
+        label={t('委托 owner', 'Delegate an owner')}
+        hint={t(
+          '该用户将以 owner 身份加入这个工作区，并在「管理 → 工作区配置」里看到它。已经是成员的会就地升为 owner。',
+          'The user joins this workspace as an owner; an existing member is promoted in place.',
+        )}
         value={ownerUserId}
         onChange={setOwnerUserId}
         disabled={delegating}
         exclude={workspace.owners.map((owner) => owner.userId)}
         testId="delegate-owner"
       />
-      <PlatformError error={delegateError} title="无法委托 owner Could not delegate an owner" />
+      <PlatformError
+        error={delegateError}
+        title={t('无法委托 owner', 'Could not delegate an owner')}
+      />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button
           variant="primary"
@@ -427,13 +440,13 @@ export function WorkspaceDetailPanel({
           loading={delegating}
           disabled={ownerUserId === ''}
         >
-          委托 Delegate
+          {t('委托', 'Delegate')}
         </Button>
       </div>
 
       <div className="divider" />
 
-      <PlatformError error={statusError} title="无法修改状态 Could not change the status" />
+      <PlatformError error={statusError} title={t('无法修改状态', 'Could not change the status')} />
       {workspace.status === 'disabled' ? (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button
@@ -442,25 +455,27 @@ export function WorkspaceDetailPanel({
             loading={changingStatus}
             data-testid="workspace-status-toggle"
           >
-            启用 Enable
+            {t('启用', 'Enable')}
           </Button>
         </div>
       ) : confirmingDisable ? (
         <div className="stack-s" data-testid="workspace-disable-confirm">
           <Notice tone="warn">
-            该工作区所有会话立即失效、成员登录后不可见、数据保留。 Every session in it dies
-            immediately, it disappears from its members' logins, and the data is kept.
+            {t(
+              '该工作区所有会话立即失效、成员登录后不可见、数据保留。',
+              "Every session in it dies immediately, it disappears from its members' logins, and the data is kept.",
+            )}
           </Notice>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={() => setConfirmingDisable(false)}>
-              取消 Cancel
+              {t('取消', 'Cancel')}
             </Button>
             <Button
               variant="danger"
               onClick={() => void setStatus('disabled')}
               loading={changingStatus}
             >
-              确认停用 Confirm disable
+              {t('确认停用', 'Confirm disable')}
             </Button>
           </div>
         </div>
@@ -468,8 +483,10 @@ export function WorkspaceDetailPanel({
         <>
           {workspace.isDefault ? (
             <Notice testId="workspace-default-undisablable">
-              这是平台默认工作区，不能停用；先把默认工作区指到别处。 This is the platform default
-              workspace — point the default at another workspace before disabling it.
+              {t(
+                '这是平台默认工作区，不能停用；先把默认工作区指到别处。 This is the platform default workspace —',
+                'point the default at another workspace before disabling it.',
+              )}
             </Notice>
           ) : null}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -479,7 +496,7 @@ export function WorkspaceDetailPanel({
               disabled={workspace.isDefault}
               data-testid="workspace-status-toggle"
             >
-              停用 Disable
+              {t('停用', 'Disable')}
             </Button>
           </div>
         </>
@@ -490,22 +507,24 @@ export function WorkspaceDetailPanel({
           <div className="divider" />
           <div className="stack-s" data-testid="workspace-purge-section">
             <Notice tone="warn">
-              内核已接受清除：行与级联数据删除，平台审计行保留；下一步先预览计数与 service Handle
-              警告，再键入名称确认。 The kernel accepts a purge now: rows and cascaded data go, the
-              platform audit row stays. Next: preview the counts and Handle warnings, then retype
-              the name to confirm.
+              {t(
+                '内核已接受清除：行与级联数据删除，平台审计行保留；下一步先预览计数与 service Handle 警告，再键入名称确认。',
+                'The kernel accepts a purge now: rows and cascaded data go, the platform audit row stays. Next: preview the counts and Handle warnings, then retype the name to confirm.',
+              )}
             </Notice>
             <div className="row" style={{ justifyContent: 'flex-end' }}>
               <Button variant="danger" onClick={onPurge} data-testid="workspace-purge">
-                清除 Purge
+                {t('清除', 'Purge')}
               </Button>
             </div>
           </div>
         </>
       ) : workspace.status === 'disabled' && !workspace.isDefault ? (
         <p className="text-3 text-small" data-testid="workspace-purge-retention">
-          停用满 7 天后可清除（一次性工作区到期即可）。 Purgeable once disabled for 7 days (an
-          ephemeral workspace: once expired).
+          {t(
+            '停用满 7 天后可清除（一次性工作区到期即可）。',
+            'Purgeable once disabled for 7 days (an ephemeral workspace: once expired).',
+          )}
         </p>
       ) : null}
     </div>
@@ -520,6 +539,7 @@ export function WorkspaceDetailPanel({
  * 生命周期 column.
  */
 export function WorkspaceLifecycle({ workspace }: { readonly workspace: PlatformWorkspaceWire }) {
+  const t = useT();
   const parts: ReactNode[] = [];
   if (workspace.purpose === 'ephemeral' && workspace.expiresAt !== null) {
     const expired = isExpiredEphemeral(workspace);
@@ -532,9 +552,13 @@ export function WorkspaceLifecycle({ workspace }: { readonly workspace: Platform
         data-expired={expired || undefined}
       >
         {expired ? (
-          <>已到期 expired {formatRelative(workspace.expiresAt)}</>
+          <>
+            {t('已到期', 'expired')} {formatRelative(workspace.expiresAt)}
+          </>
         ) : (
-          <>{formatRelative(workspace.expiresAt)}到期 expires</>
+          <>
+            {formatRelative(workspace.expiresAt)} {t('到期', 'expires')}
+          </>
         )}
       </time>,
     );
@@ -544,17 +568,17 @@ export function WorkspaceLifecycle({ workspace }: { readonly workspace: Platform
     parts.push(
       <span key="disabled" data-testid="workspace-disabled-at">
         {workspace.disabledAt === null ? (
-          '禁用于迁移前 disabled before 0030'
+          t('禁用于迁移前', 'disabled before 0030')
         ) : (
           <time title={formatDateTime(workspace.disabledAt)}>
-            禁用于 disabled {formatRelative(workspace.disabledAt)}
+            {t('禁用于', 'disabled')} {formatRelative(workspace.disabledAt)}
           </time>
         )}
         {' · '}
         {workspace.isDefault ? (
-          <span className="text-3">默认工作区 default workspace</span>
+          <span className="text-3">{t('默认工作区', 'default workspace')}</span>
         ) : retention.daysRemaining === 0 ? (
-          <span className="text-danger">可清除 purgeable now</span>
+          <span className="text-danger">{t('可清除', 'purgeable now')}</span>
         ) : (
           <span
             title={
@@ -563,7 +587,10 @@ export function WorkspaceLifecycle({ workspace }: { readonly workspace: Platform
                 : formatDateTime(new Date(retention.purgeableAt).toISOString())
             }
           >
-            {retention.daysRemaining} 天后可清除 purgeable in {retention.daysRemaining} d
+            {t(
+              `${retention.daysRemaining} 天后可清除`,
+              `purgeable in ${retention.daysRemaining} d`,
+            )}
           </span>
         )}
       </span>,

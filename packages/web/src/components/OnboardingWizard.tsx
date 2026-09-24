@@ -5,6 +5,7 @@ import {
   type ConnectionKind,
   type CreateConnectionResult,
 } from '../lib/connections.js';
+import { useT } from '../lib/i18n.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
 import { OnboardingWizardReview } from './OnboardingWizardReview.js';
 import { Button } from './ui/Button.js';
@@ -47,6 +48,7 @@ const KIND_COPY: Readonly<Record<ConnectionKind, string>> = {
  * the whole wizard on one capability.
  */
 export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizardProps) {
+  const t = useT();
   const [step, setStep] = useState<WizardStep>('kind');
   const [kind, setKind] = useState<ConnectionKind>('http');
   const [connection, setConnection] = useState<CreateConnectionResult | null>(null);
@@ -74,7 +76,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
 
   return (
     <div className="stack" data-testid="onboarding-wizard">
-      <ol className="wizard-steps" aria-label="接入向导步骤 Onboarding steps">
+      <ol className="wizard-steps" aria-label={t('接入向导步骤', 'Onboarding steps')}>
         {STEP_LABELS.map((entry) => (
           <li
             key={entry.step}
@@ -89,7 +91,9 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
       {step === 'kind' ? (
         <div className="stack" data-testid="wizard-step-kind">
           <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend className="field-label">选择要接入的系统类型 Choose the system's kind</legend>
+            <legend className="field-label">
+              {t('选择要接入的系统类型', "Choose the system's kind")}
+            </legend>
             <div className="radio-group" role="radiogroup" aria-label="Kind">
               {CONNECTION_KIND_VALUES.map((option) => (
                 <label className="radio-option" key={option}>
@@ -111,7 +115,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
               Cancel
             </Button>
             <Button variant="primary" onClick={() => setStep('connect')}>
-              下一步 Next
+              {t('下一步', 'Next')}
             </Button>
           </div>
         </div>
@@ -145,10 +149,10 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
           ) : null}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={() => setStep('review')}>
-              暂不发布，稍后再说 Skip for now
+              {t('暂不发布，稍后再说', 'Skip for now')}
             </Button>
             <Button variant="primary" loading={publishing} onClick={() => void publish()}>
-              发布清单 Publish manifest
+              {t('发布清单', 'Publish manifest')}
             </Button>
           </div>
         </div>
@@ -158,7 +162,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
         <div data-testid="wizard-step-review">
           {publishedCount !== null ? (
             <Notice tone="info">
-              已发布 {publishedCount} 个 Operation Published {publishedCount}.
+              {t(`已发布 ${publishedCount} 个 Operation`, `Published ${publishedCount}.`)}
             </Notice>
           ) : null}
           <OnboardingWizardReview
@@ -172,15 +176,15 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
       {step === 'done' && connection ? (
         <div className="stack" data-testid="wizard-step-done">
           <Notice tone="info">
-            系统接入完成 System connected — gatekeeperId{' '}
+            {t('系统接入完成', 'System connected — gatekeeperId')}{' '}
             <code className="mono">{connection.gatekeeperId}</code>
           </Notice>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={onCancel}>
-              关闭 Close
+              {t('关闭', 'Close')}
             </Button>
             <Button variant="primary" onClick={() => onFinished(connection.gatekeeperId)}>
-              查看门详情 View gate detail
+              {t('查看门详情', 'View gate detail')}
             </Button>
           </div>
         </div>

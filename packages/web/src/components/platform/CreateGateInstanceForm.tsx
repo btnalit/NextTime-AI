@@ -1,6 +1,7 @@
 import type { GateInstanceWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input } from '../ui/Field.js';
@@ -34,6 +35,7 @@ function isValidUrl(value: string): boolean {
  * so a stale value from switching kinds can never be submitted.
  */
 export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGateInstanceFormProps) {
+  const t = useT();
   const [gateId, setGateId] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [transportKind, setTransportKind] = useState<TransportKind>('http');
@@ -88,8 +90,11 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         id="cgi-gate-id"
         label="Gate id"
         required
-        hint="小写字母/数字/连字符，成为它在门宿主上的路径（/i/<gateId>）。 Lowercase letters/digits/hyphens — becomes its gate-host path."
-        error={gateId.length > 0 && !gateIdValid ? '格式不合法 Invalid gate id' : undefined}
+        hint={t(
+          '小写字母/数字/连字符，成为它在门宿主上的路径（/i/<gateId>）。 Lowercase letters/digits/hyphens —',
+          'becomes its gate-host path.',
+        )}
+        error={gateId.length > 0 && !gateIdValid ? t('格式不合法', 'Invalid gate id') : undefined}
       >
         <Input
           id="cgi-gate-id"
@@ -101,7 +106,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         />
       </Field>
 
-      <Field id="cgi-display-name" label="名称 Display name">
+      <Field id="cgi-display-name" label={t('名称', 'Display name')}>
         <Input
           id="cgi-display-name"
           value={displayName}
@@ -112,7 +117,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
       </Field>
 
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-        <legend className="field-label">种类 Transport</legend>
+        <legend className="field-label">{t('种类', 'Transport')}</legend>
         <div className="radio-group" role="radiogroup" aria-label="Transport kind">
           <label className="radio-option">
             <input
@@ -123,7 +128,10 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
               onChange={() => setTransportKind('http')}
               disabled={submitting}
             />
-            http — 从 OpenAPI 文档导入 Operations Imports Operations from an OpenAPI document
+            {t(
+              'http — 从 OpenAPI 文档导入',
+              'Operations Imports Operations from an OpenAPI document',
+            )}
           </label>
           <label className="radio-option">
             <input
@@ -134,17 +142,22 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
               onChange={() => setTransportKind('mcp')}
               disabled={submitting}
             />
-            mcp — 在目标上跑 tools/list Lists tools on the target itself
+            {t('mcp — 在目标上跑 tools/list', 'Lists tools on the target itself')}
           </label>
         </div>
       </fieldset>
 
       <Field
         id="cgi-target"
-        label="目标 Target"
+        label={t('目标', 'Target')}
         required
-        hint="目标系统的基础 URL（http）或 MCP 端点（mcp）。 The target system's base URL (http) or MCP endpoint (mcp)."
-        error={target.length > 0 && !targetValid ? '不是合法的 URL Not a valid URL' : undefined}
+        hint={t(
+          '目标系统的基础 URL（http）或 MCP 端点（mcp）。',
+          "The target system's base URL (http) or MCP endpoint (mcp).",
+        )}
+        error={
+          target.length > 0 && !targetValid ? t('不是合法的 URL', 'Not a valid URL') : undefined
+        }
       >
         <Input
           id="cgi-target"
@@ -157,7 +170,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
       </Field>
 
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-        <legend className="field-label">凭证模式 Credential mode</legend>
+        <legend className="field-label">{t('凭证模式', 'Credential mode')}</legend>
         <div className="radio-group" role="radiogroup" aria-label="Credential mode">
           <label className="radio-option">
             <input
@@ -168,8 +181,10 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
               onChange={() => setCredentialMode('shared')}
               disabled={submitting}
             />
-            共享 Shared — 整个实例一份凭证，由管理员录入 One credential for the whole instance,
-            entered by an administrator
+            {t(
+              '共享 Shared — 整个实例一份凭证，由管理员录入',
+              'One credential for the whole instance, entered by an administrator',
+            )}
           </label>
           <label className="radio-option">
             <input
@@ -180,8 +195,10 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
               onChange={() => setCredentialMode('connected_account')}
               disabled={submitting}
             />
-            按人 Connected account — 每个成员从工作区录入自己的一份 Each member enters their own
-            from the workspace
+            {t(
+              '按人 Connected account — 每个成员从工作区录入自己的一份',
+              'Each member enters their own from the workspace',
+            )}
           </label>
         </div>
       </fieldset>
@@ -191,10 +208,13 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
           id="cgi-manifest-source"
           label="Manifest source"
           required
-          hint="必填：OpenAPI 文档 URL，门宿主从这里导入 Operation。 Required — the OpenAPI document URL the host imports Operations from."
+          hint={t(
+            '必填：OpenAPI 文档 URL，门宿主从这里导入 Operation。',
+            'Required — the OpenAPI document URL the host imports Operations from.',
+          )}
           error={
             manifestSource.length > 0 && !manifestSourceValid
-              ? '不是合法的 URL Not a valid URL'
+              ? t('不是合法的 URL', 'Not a valid URL')
               : undefined
           }
         >
@@ -213,13 +233,13 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
 
       <PlatformError
         error={error}
-        title="无法新建门宿主实例 Could not create this instance"
+        title={t('无法新建门宿主实例', 'Could not create this instance')}
         testId="create-gate-instance-error"
       />
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
         <Button
           type="submit"
@@ -228,7 +248,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
           disabled={!ready}
           data-testid="create-gate-instance-submit"
         >
-          创建 Create
+          {t('创建', 'Create')}
         </Button>
       </div>
     </form>

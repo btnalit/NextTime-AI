@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from 'react';
 import { type WireUser, changePassword } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -27,6 +28,7 @@ export function ChangePasswordPage({
   onLogout,
   fetchImpl,
 }: ChangePasswordPageProps) {
+  const t = useT();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -71,7 +73,7 @@ export function ChangePasswordPage({
               N
             </div>
             <div>
-              <h1 className="login-title">需要更改密码 Password change required</h1>
+              <h1 className="login-title">{t('需要更改密码', 'Password change required')}</h1>
               <p className="login-subtitle">
                 {user.displayName} ({user.login}) is using a temporary password.
               </p>
@@ -80,9 +82,11 @@ export function ChangePasswordPage({
 
           <Field
             id="cp-current-password"
-            label="当前密码 Current password"
+            label={t('当前密码', 'Current password')}
             required
-            error={currentPasswordWrong ? '当前密码不正确 Current password is incorrect' : null}
+            error={
+              currentPasswordWrong ? t('当前密码不正确', 'Current password is incorrect') : null
+            }
           >
             <Input
               id="cp-current-password"
@@ -97,9 +101,9 @@ export function ChangePasswordPage({
 
           <Field
             id="cp-new-password"
-            label="新密码 New password"
+            label={t('新密码', 'New password')}
             required
-            hint="至少 8 位 At least 8 characters"
+            hint={t('至少 8 位', 'At least 8 characters')}
           >
             <Input
               id="cp-new-password"
@@ -113,9 +117,9 @@ export function ChangePasswordPage({
 
           <Field
             id="cp-confirm-password"
-            label="确认新密码 Confirm new password"
+            label={t('确认新密码', 'Confirm new password')}
             required
-            error={passwordsMismatch ? '两次输入的密码不一致 Passwords do not match' : null}
+            error={passwordsMismatch ? t('两次输入的密码不一致', 'Passwords do not match') : null}
           >
             <Input
               id="cp-confirm-password"
@@ -129,11 +133,11 @@ export function ChangePasswordPage({
           </Field>
 
           {error !== null && !currentPasswordWrong ? (
-            <ErrorBanner error={error} title="无法更改密码 Could not change password" />
+            <ErrorBanner error={error} title={t('无法更改密码', 'Could not change password')} />
           ) : null}
 
           <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
-            更改密码 Change password
+            {t('更改密码', 'Change password')}
           </Button>
 
           <div className="row" style={{ justifyContent: 'center' }}>
@@ -145,7 +149,7 @@ export function ChangePasswordPage({
               onClick={onLogout}
               disabled={submitting}
             >
-              登出 Sign out
+              {t('登出', 'Sign out')}
             </Button>
           </div>
         </form>

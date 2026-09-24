@@ -2,6 +2,7 @@ import { type Capability, getCapability, listByChannel } from '@nexttime/shared'
 import { useMemo, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { PrincipalRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { PlatformError } from './platform/PlatformError.js';
 import { Button } from './ui/Button.js';
@@ -79,6 +80,7 @@ function parseNames(raw: string): readonly string[] {
  * capability (or a typo) is refused here with the reason instead of by the kernel's 400.
  */
 export function IssueServiceHandleSection({ http, principals }: IssueServiceHandleSectionProps) {
+  const t = useT();
   const servicePrincipals = principals.filter(
     (principal) => principal.kind === 'service' && !principal.disabledAt,
   );
@@ -152,13 +154,13 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
       data-testid="issue-service-handle-section"
     >
       <div className="section-header">
-        <h2 id="issue-service-handle-title">签发外部运行时凭证 Issue a service Handle</h2>
+        <h2 id="issue-service-handle-title">{t('签发外部运行时凭证', 'Issue a service Handle')}</h2>
       </div>
 
       {servicePrincipals.length === 0 ? (
         <Notice testId="issue-service-handle-no-principal">
-          还没有 service Principal — 先在<a href={hrefs.members()}>成员与授权</a>创建一个。 No
-          service Principal yet — create one on 成员与授权 Members first.
+          还没有 service Principal — 先在<a href={hrefs.members()}>成员与授权</a>
+          {t('创建一个。 No service Principal yet — create one on 成员与授权', 'Members first.')}
         </Notice>
       ) : null}
 
@@ -170,14 +172,14 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
           void submit();
         }}
       >
-        <Field id="ish-principal" label="服务主体 Service principal" required>
+        <Field id="ish-principal" label={t('服务主体', 'Service principal')} required>
           <Select
             id="ish-principal"
             value={principalId}
             onChange={(event) => setPrincipalId(event.target.value)}
             disabled={submitting || servicePrincipals.length === 0}
           >
-            <option value="">选择 Pick one</option>
+            <option value="">{t('选择', 'Pick one')}</option>
             {servicePrincipals.map((principal) => (
               <option key={principal.id} value={principal.id}>
                 {principal.displayName}
@@ -209,14 +211,16 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
 
         <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
           <legend className="field-label">
-            能力 Capabilities
+            {t('能力', 'Capabilities')}
             <span className="field-required" aria-hidden>
               *
             </span>
             <span className="field-hint" style={{ margin: 0 }}>
               {' '}
-              — 只有 handle 通道的能力可签给服务 Handle；成员管理与平台能力永远不在此列。 Only
-              handle-channel capabilities; member-management and platform ones are never offered.
+              {t(
+                '— 只有 handle 通道的能力可签给服务 Handle；成员管理与平台能力永远不在此列。',
+                'Only handle-channel capabilities; member-management and platform ones are never offered.',
+              )}
             </span>
           </legend>
           <div className="stack-s model-checklist" data-testid="ish-scope-checklist">
@@ -243,8 +247,11 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
 
         <Field
           id="ish-scope"
-          label="粘贴能力名 Paste names"
-          hint="从运行手册复制的能力名，逗号或空格分隔；与上面勾选的合并。 Names copied from a runbook, comma- or space-separated; merged with the ticks above."
+          label={t('粘贴能力名', 'Paste names')}
+          hint={t(
+            '从运行手册复制的能力名，逗号或空格分隔；与上面勾选的合并。',
+            'Names copied from a runbook, comma- or space-separated; merged with the ticks above.',
+          )}
           error={
             unknownPasted.length > 0
               ? `不是可签发的能力名 Not issuable to a service Handle: ${unknownPasted.join(', ')}`
@@ -267,11 +274,11 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
           {scope.length > 0 ? `: ${scope.join(', ')}` : ''}
         </p>
 
-        <PlatformError error={error} title="无法签发 Could not issue the Handle" />
+        <PlatformError error={error} title={t('无法签发', 'Could not issue the Handle')} />
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
-            签发 Issue
+            {t('签发', 'Issue')}
           </Button>
         </div>
       </form>
@@ -280,14 +287,16 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
         <Drawer
           open
           onClose={closeIssued}
-          title="外部运行时凭证 Service Handle"
+          title={t('外部运行时凭证', 'Service Handle')}
           subtitle={<span className="mono">{issued.sessionId}</span>}
           testId="issued-handle-dialog"
         >
           <div className="stack">
             <Notice tone="warn">
-              只显示这一次，控制台不会保存它；复制后交给要用它的运行时。 Shown once — the console
-              never stores it; copy it now and hand it to the runtime that will use it.
+              {t(
+                '只显示这一次，控制台不会保存它；复制后交给要用它的运行时。 Shown once —',
+                'the console never stores it; copy it now and hand it to the runtime that will use it.',
+              )}
             </Notice>
             <div className="code-block row" style={{ justifyContent: 'space-between' }}>
               <span className="mono" data-testid="issued-handle-token">
@@ -297,7 +306,7 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
             </div>
             <div className="row" style={{ justifyContent: 'flex-end' }}>
               <Button variant="primary" onClick={closeIssued}>
-                我已保存 I have saved it
+                {t('我已保存', 'I have saved it')}
               </Button>
             </div>
           </div>

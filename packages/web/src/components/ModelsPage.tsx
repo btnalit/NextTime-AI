@@ -6,6 +6,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
@@ -178,6 +179,7 @@ export interface ModelsPageProps {
  * providers are managed; the workspace only picks from it, "只选不配").
  */
 export function ModelsPage({ http }: ModelsPageProps) {
+  const t = useT();
   const toast = useToast();
   const { role } = useWorkspaceIdentity(http);
   const isOwner = role.role === 'owner';
@@ -195,13 +197,13 @@ export function ModelsPage({ http }: ModelsPageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('models')}
-        title="模型与配额 Models & Quotas"
+        title={t('模型与配额', 'Models & Quotas')}
         description="The llm-proxy model allow-list, workspace AgentPolicy, quotas, and policy rules."
       />
 
       <section className="section" aria-labelledby="models-title">
         <div className="section-header">
-          <h2 id="models-title">模型 Models</h2>
+          <h2 id="models-title">{t('模型', 'Models')}</h2>
         </div>
         {models.state.status === 'loading' ? (
           <SkeletonRows count={3} label="Loading models" testId="models-loading" />
@@ -249,17 +251,21 @@ export function ModelsPage({ http }: ModelsPageProps) {
         ) : (
           <div className="stack-s" data-testid="agent-policy-readonly">
             <Notice testId="agent-policy-owner-only">
-              需要 owner 权限来修改 Editing AgentPolicy requires the workspace owner role.
+              {t('需要 owner 权限来修改', 'Editing AgentPolicy requires the workspace owner role.')}
             </Notice>
             <dl className="definition-list">
-              <dt>默认模型 Default model</dt>
+              <dt>{t('默认模型', 'Default model')}</dt>
               <dd className="mono">{agentPolicy.state.data.defaultModel}</dd>
               <dt>Member 可编辑自己配置</dt>
-              <dd>{agentPolicy.state.data.memberCanEditProfile ? '是 Yes' : '否 No'}</dd>
+              <dd>
+                {agentPolicy.state.data.memberCanEditProfile ? t('是', 'Yes') : t('否', 'No')}
+              </dd>
               <dt>提示词附加字数上限</dt>
               <dd>{agentPolicy.state.data.maxPromptAddendumChars}</dd>
               <dt>允许 member 自动批准低风险</dt>
-              <dd>{agentPolicy.state.data.allowMemberAutoApproveLow ? '是 Yes' : '否 No'}</dd>
+              <dd>
+                {agentPolicy.state.data.allowMemberAutoApproveLow ? t('是', 'Yes') : t('否', 'No')}
+              </dd>
             </dl>
           </div>
         )}
@@ -267,7 +273,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
 
       <section className="section" aria-labelledby="quotas-title">
         <div className="section-header">
-          <h2 id="quotas-title">配额 Quotas</h2>
+          <h2 id="quotas-title">{t('配额', 'Quotas')}</h2>
         </div>
         {quotas.state.status === 'loading' ? (
           <SkeletonRows count={2} label="Loading quotas" testId="quotas-loading" />
@@ -303,7 +309,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
 
       <section className="section" aria-labelledby="policies-title">
         <div className="section-header">
-          <h2 id="policies-title">策略 Policies</h2>
+          <h2 id="policies-title">{t('策略', 'Policies')}</h2>
         </div>
         {policies.state.status === 'loading' ? (
           <SkeletonRows count={2} label="Loading policies" testId="policies-loading" />

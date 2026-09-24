@@ -3,6 +3,7 @@ import type { KeyboardEvent } from 'react';
 import { shortId } from '../../lib/format.js';
 import { freshnessOf } from '../../lib/graph-freshness.js';
 import { neighbourId } from '../../lib/graph-view.js';
+import { useT } from '../../lib/i18n.js';
 import { useGraphObjects, useResolvedObjects } from './GraphObjectsContext.js';
 
 export interface NeighbourhoodViewProps {
@@ -59,6 +60,7 @@ export function NeighbourhoodView({
   conflicts,
   onFocus,
 }: NeighbourhoodViewProps) {
+  const t = useT();
   const { nameOf } = useGraphObjects();
 
   const byNeighbour = new Map<string, { tone: string; count: number }>();
@@ -115,7 +117,7 @@ export function NeighbourhoodView({
         aria-label={`${centreLabel} 与 ${all.length} 个邻居 and ${all.length} neighbours`}
       >
         <title>
-          {centreLabel} — {all.length} 邻居 neighbours
+          {centreLabel} — {all.length} {t('邻居', 'neighbours')}
         </title>
         {nodes.map((node) => (
           <line
@@ -172,8 +174,13 @@ export function NeighbourhoodView({
         })}
       </svg>
       <figcaption className="text-3 text-small">
-        环上最多 {RING_MAX} 个邻居，边色 = 该邻居各事实中最差的新鲜度 · At most {RING_MAX} on the
-        ring; edge colour = the worst freshness among the Facts to that neighbour
+        {t(
+          <>环上最多 {RING_MAX} 个邻居，边色 = 该邻居各事实中最差的新鲜度</>,
+          <>
+            At most {RING_MAX} on the ring; edge colour = the worst freshness among the Facts to
+            that neighbour
+          </>,
+        )}
       </figcaption>
     </figure>
   );

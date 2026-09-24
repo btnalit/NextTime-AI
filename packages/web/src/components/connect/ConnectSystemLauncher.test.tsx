@@ -211,7 +211,7 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     expect(launcher().getAttribute('data-step')).toBe('1');
     const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.change(within(form).getByLabelText(/Gate id/), { target: { value: 'billing' } });
-    fireEvent.change(within(form).getByLabelText(/目标 Target/), {
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.internal' },
     });
     fireEvent.change(within(form).getByLabelText(/Manifest source/), {
@@ -237,7 +237,7 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     const platformSide = await screen.findByTestId('launcher-platform-enable');
     const enableButton = await within(platformSide).findByTestId('launcher-platform-enable-button');
     await waitFor(() => expect(enableButton.hasAttribute('disabled')).toBe(false));
-    expect(enableButton.textContent).toContain('启用 Enable');
+    expect(enableButton.textContent).toContain('启用');
     expect(screen.getByTestId('launcher-announced-operations').textContent).toContain(
       'invoices.void',
     );
@@ -255,7 +255,7 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
       expect(within(platformSide).queryByTestId('launcher-platform-enable-button')).toBeNull(),
     );
     expect(within(platformSide).getByTestId('launcher-platform-status').textContent).toContain(
-      '已启用 Enabled',
+      '已启用',
     );
 
     // Connector must be platform-preset before a workspace can enable from the catalog.
@@ -270,9 +270,9 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     fireEvent.click(screen.getByTestId('launcher-test-connection'));
     const result = await screen.findByTestId('launcher-test-result');
     expect(result.textContent).toContain('2');
-    expect(screen.getByTestId('launcher-handshake-health').textContent).toContain('健康 Healthy');
+    expect(screen.getByTestId('launcher-handshake-health').textContent).toContain('健康');
     expect(screen.getByTestId('launcher-handshake-ok')).toBeTruthy();
-    expect(screen.getByTestId('launcher-next').textContent).toBe('完成 Finish');
+    expect(screen.getByTestId('launcher-next').textContent).toBe('完成');
     next();
     expect(onFinished).toHaveBeenCalledWith({ gateId: 'billing', gatekeeperId: null });
   });
@@ -296,7 +296,7 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     const platformSide = await screen.findByTestId('launcher-platform-enable');
     expect(within(platformSide).queryByTestId('launcher-platform-enable-button')).toBeNull();
     expect(within(platformSide).getByTestId('launcher-platform-status').textContent).toContain(
-      '已启用 Enabled',
+      '已启用',
     );
     await screen.findByTestId('launcher-connector-ok');
 
@@ -306,12 +306,12 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     );
     next();
     const reenable = await screen.findByTestId('launcher-platform-enable-button');
-    expect(reenable.textContent).toContain('重新启用 Re-enable');
+    expect(reenable.textContent).toContain('重新启用');
   });
 });
 
 describe('ConnectSystemLauncher — hosted path from the workspace page (non-admin owner)', () => {
-  it('points at the platform 集成 page, picks the instance from the workspace catalog, enables it here, reviews and grants', async () => {
+  it('points at the platform 集成', async () => {
     const http = scriptedHttp({
       list_available_gate_instances: () => ({ items: [availableRow()] }),
       enable_gate_instance: (params) => {
@@ -368,7 +368,7 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     fireEvent.click(within(workspaceSide).getByTestId('launcher-workspace-enable-button'));
     const linked = await within(workspaceSide).findByTestId('launcher-workspace-linked');
     expect(onEnabled).toHaveBeenCalledTimes(1);
-    expect(linked.textContent).toContain('已发布 2 个 Operation');
+    expect(linked.textContent).toContain('已发布 2 个');
     expect(within(linked).getByTestId('launcher-gatekeeper-chip').getAttribute('data-ref-id')).toBe(
       'gk-9',
     );
@@ -376,7 +376,7 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     await screen.findByTestId('wizard-review');
     expect(http.calls.some((call) => call.name === 'search')).toBe(true);
     const grant = screen.getByTestId('launcher-grant');
-    const select = await within(grant).findByLabelText(/成员 Member/);
+    const select = await within(grant).findByLabelText(/成员/);
     fireEvent.change(select, { target: { value: 'p-alice' } });
     fireEvent.click(within(grant).getByTestId('launcher-grant-submit'));
     const granted = await within(grant).findByTestId('launcher-granted');
@@ -454,14 +454,12 @@ describe('ConnectSystemLauncher — packaged path (ssh / cli)', () => {
     expect(compose.textContent).toContain('secrets: [gate_token, internal_token]');
     expect(compose.textContent).toContain('KERNEL_URL: http://kernel:8080');
     expect(compose.textContent).toContain('${NEXTTIME_DATA}/secrets/<system>:/data/secrets:ro');
-    expect(within(checklist).getByTestId('packaged-gate-notice').textContent).toContain(
-      '未启用 discovered',
-    );
+    expect(within(checklist).getByTestId('packaged-gate-notice').textContent).toContain('未启用');
     expect(within(checklist).getByTestId('packaged-gate-steps').textContent).toContain(
       '不要用 ssh 这个通用名',
     );
 
-    fireEvent.change(screen.getByLabelText(/它的 GATE_ID/), {
+    fireEvent.change(screen.getByLabelText(/它的/), {
       target: { value: 'gatekeeper-ops-host' },
     });
     expect(within(checklist).getByTestId('packaged-gate-compose').textContent).toContain(

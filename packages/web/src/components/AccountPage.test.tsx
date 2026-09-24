@@ -56,15 +56,15 @@ describe('AccountPage: API-key mode (no user)', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: 'carol' } });
-    fireEvent.change(screen.getByLabelText(/显示名 Display name/), {
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'carol' } });
+    fireEvent.change(screen.getByLabelText(/显示名/), {
       target: { value: 'Carol' },
     });
-    fireEvent.change(screen.getByLabelText(/密码 Password/), { target: { value: 'password123' } });
-    fireEvent.change(screen.getByLabelText(/确认密码 Confirm password/), {
+    fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: 'password123' } });
+    fireEvent.change(screen.getByLabelText(/确认密码/), {
       target: { value: 'password123' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '设置密码 Set password' }));
+    fireEvent.click(screen.getByRole('button', { name: '设置密码' }));
 
     await waitFor(() => expect(onClaimed).toHaveBeenCalledTimes(1));
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
@@ -96,15 +96,15 @@ describe('AccountPage: API-key mode (no user)', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: 'carol' } });
-    fireEvent.change(screen.getByLabelText(/显示名 Display name/), {
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'carol' } });
+    fireEvent.change(screen.getByLabelText(/显示名/), {
       target: { value: 'Carol' },
     });
-    fireEvent.change(screen.getByLabelText(/密码 Password/), { target: { value: 'password123' } });
-    fireEvent.change(screen.getByLabelText(/确认密码 Confirm password/), {
+    fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: 'password123' } });
+    fireEvent.change(screen.getByLabelText(/确认密码/), {
       target: { value: 'password123' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '设置密码 Set password' }));
+    fireEvent.click(screen.getByRole('button', { name: '设置密码' }));
 
     await waitFor(() =>
       expect(screen.getByText(/该身份已经有密码了；请登出后用密码登录/)).toBeTruthy(),
@@ -129,20 +129,20 @@ describe('AccountPage: API-key mode (no user)', () => {
       />,
     );
     const submit = screen.getByRole('button', {
-      name: '设置密码 Set password',
+      name: '设置密码',
     }) as HTMLButtonElement;
-    fireEvent.change(screen.getByLabelText(/显示名 Display name/), { target: { value: 'Dot' } });
-    fireEvent.change(screen.getByLabelText(/^密码 Password/), { target: { value: 'password123' } });
-    fireEvent.change(screen.getByLabelText(/确认密码 Confirm password/), {
+    fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'Dot' } });
+    fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: 'password123' } });
+    fireEvent.change(screen.getByLabelText(/确认密码/), {
       target: { value: 'password123' },
     });
 
     // `.dot` passed the page's old local pattern but the kernel's `normalizeLogin` refuses it.
-    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: '.dot' } });
-    expect(screen.getByText('登录名格式不正确 Invalid login format')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: '.dot' } });
+    expect(screen.getByText('登录名格式不正确')).toBeTruthy();
     expect(submit.disabled).toBe(true);
 
-    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: 'dot' } });
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'dot' } });
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
     await waitFor(() => expect(screen.getByText(/登录名格式不正确：3–64 位/)).toBeTruthy());
@@ -164,10 +164,10 @@ describe('AccountPage: cookie mode', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/显示名 Display name/), {
+    fireEvent.change(screen.getByLabelText(/显示名/), {
       target: { value: 'New Name' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
 
     await waitFor(() =>
       expect(onUserChanged).toHaveBeenCalledWith({ ...USER, displayName: 'New Name' }),
@@ -188,18 +188,18 @@ describe('AccountPage: cookie mode', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/当前密码 Current password/), {
+    fireEvent.change(screen.getByLabelText(/当前密码/), {
       target: { value: 'old' },
     });
-    fireEvent.change(screen.getByLabelText(/新密码 New password/), {
+    fireEvent.change(screen.getByLabelText(/^新密码/), {
       target: { value: 'newnewnew' },
     });
-    fireEvent.change(screen.getByLabelText(/确认新密码 Confirm new password/), {
+    fireEvent.change(screen.getByLabelText(/确认新密码/), {
       target: { value: 'newnewnew' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Change password/ }));
+    fireEvent.click(screen.getByRole('button', { name: /更改密码/ }));
 
-    await waitFor(() => expect(screen.getByText(/Password changed/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/密码已更改/)).toBeTruthy());
     const [url] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/auth/password');
   });

@@ -14,6 +14,7 @@ import {
   operationKey,
   operationStatsKey,
 } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
@@ -90,12 +91,16 @@ const TAB_LABEL: Readonly<Record<CatalogTab, string>> = {
  * the whole tab.
  */
 export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
+  const t = useT();
   return (
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('catalog')}
-        title="能力目录 Catalog"
-        description="工作区里已发布的 Operation、Skill、Procedure 与 Worker 定义，以及你自己的草稿。 Published Operations, Skills, Procedures and Worker definitions across the workspace, plus your own drafts."
+        title={t('能力目录', 'Catalog')}
+        description={t(
+          '工作区里已发布的 Operation、Skill、Procedure 与 Worker 定义，以及你自己的草稿。',
+          'Published Operations, Skills, Procedures and Worker definitions across the workspace, plus your own drafts.',
+        )}
       />
       <div className="page-toolbar">
         <Tabs<CatalogTab>
@@ -162,15 +167,16 @@ function DraftToolbar({
   readonly refreshing: boolean;
   readonly testId: string;
 }) {
+  const t = useT();
   return (
     <div className="page-toolbar">
       {canPropose ? (
         <Button variant="primary" icon="plus" onClick={onNewDraft} data-testid={testId}>
-          新建草稿 New draft
+          {t('新建草稿', 'New draft')}
         </Button>
       ) : null}
       <Button variant="ghost" icon="refresh" onClick={onRefresh} loading={refreshing}>
-        刷新 Refresh
+        {t('刷新', 'Refresh')}
       </Button>
     </div>
   );
@@ -195,6 +201,7 @@ function DeprecateConfirm({
   readonly onConfirm: () => Promise<void>;
   readonly testId: string;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   return (
     <Confirm
@@ -209,14 +216,17 @@ function DeprecateConfirm({
           onClick={() => setOpen(true)}
           data-testid={`${testId}-trigger`}
         >
-          弃用 Deprecate
+          {t('弃用', 'Deprecate')}
         </Button>
       }
       title={`弃用 ${target} Deprecate ${target}`}
-      description="弃用后 Agent 不能再使用它；已发生的调用与审计不受影响，随时可以重新发布恢复。 Once deprecated, agents can no longer reach it; past calls and the audit trail are unaffected, and republishing brings it back at any time."
+      description={t(
+        '弃用后 Agent 不能再使用它；已发生的调用与审计不受影响，随时可以重新发布恢复。',
+        'Once deprecated, agents can no longer reach it; past calls and the audit trail are unaffected, and republishing brings it back at any time.',
+      )}
       target={target}
       impact={impact}
-      confirmLabel="弃用 Deprecate"
+      confirmLabel={t('弃用', 'Deprecate')}
       danger
       onConfirm={onConfirm}
       testId={testId}
@@ -225,6 +235,7 @@ function DeprecateConfirm({
 }
 
 function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const operations = useCapabilityList<OperationCatalogRow>(http, 'list_operations');
@@ -256,7 +267,7 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
       await http.call(action, { gatekeeperId: row.gatekeeperId, name: row.name });
       toast.push({
         tone: 'ok',
-        title: `${row.name} ${action === 'publish_operation' ? '已发布 published' : '已弃用 deprecated'}`,
+        title: `${row.name} ${action === 'publish_operation' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
       refresh();
     } catch (err) {
@@ -287,8 +298,11 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
     return (
       <EmptyState
         icon="grid"
-        title="还没有导入任何 Operation No operations imported yet"
-        body="Operation 来自系统接入的清单（publish_manifest）或接入向导的提议。 Operations come from a connected system's manifest or the onboarding wizard's proposals."
+        title={t('还没有导入任何', 'Operation No operations imported yet')}
+        body={t(
+          'Operation 来自系统接入的清单（publish_manifest）或接入向导的提议。',
+          "Operations come from a connected system's manifest or the onboarding wizard's proposals.",
+        )}
         testId="catalog-empty"
       />
     );
@@ -351,7 +365,7 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
                     loading={busy === key}
                     onClick={() => void act(row, 'publish_operation')}
                   >
-                    发布 Publish
+                    {t('发布', 'Publish')}
                   </Button>
                 ) : !permissions.isDenied('deprecate_operation') && row.status === 'published' ? (
                   <DeprecateConfirm
@@ -384,6 +398,7 @@ type EditorState<Row> =
   | null;
 
 function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const skills = useCapabilityList<SkillRow>(http, 'list_skills');
@@ -401,7 +416,7 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
       await http.call(action, { skillId: row.id });
       toast.push({
         tone: 'ok',
-        title: `${row.name} ${action === 'publish_skill' ? '已发布 published' : '已弃用 deprecated'}`,
+        title: `${row.name} ${action === 'publish_skill' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
       refresh();
     } catch (err) {
@@ -423,10 +438,13 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
       onClose={() => setEditor(null)}
       title={
         editor?.kind === 'copy'
-          ? '编辑为新草稿 Edit as new draft'
-          : '新建 Skill 草稿 New Skill draft'
+          ? t('编辑为新草稿', 'Edit as new draft')
+          : t('新建 Skill 草稿', 'New Skill draft')
       }
-      subtitle="SKILL.md：frontmatter 字段 + Markdown 正文 frontmatter fields + Markdown body"
+      subtitle={t(
+        'SKILL.md：frontmatter 字段 + Markdown 正文',
+        'frontmatter fields + Markdown body',
+      )}
       wide
       testId="skill-editor-drawer"
     >
@@ -473,8 +491,11 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
       {rows.length === 0 ? (
         <EmptyState
           icon="grid"
-          title="还没有 Skill No skills proposed yet"
-          body="用「新建草稿」写第一个 SKILL.md，或让 Worker 在结果里提议。 Write the first SKILL.md with New draft, or let a Worker propose one in its result."
+          title={t('还没有', 'Skill No skills proposed yet')}
+          body={t(
+            '用「新建草稿」写第一个 SKILL.md，或让 Worker 在结果里提议。',
+            'Write the first SKILL.md with New draft, or let a Worker propose one in its result.',
+          )}
           testId="catalog-empty"
         />
       ) : (
@@ -500,7 +521,7 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
                       onClick={() => setEditor({ kind: 'copy', row })}
                       data-testid="catalog-edit-as-draft"
                     >
-                      编辑为新草稿 Edit as new draft
+                      {t('编辑为新草稿', 'Edit as new draft')}
                     </Button>
                   ) : null}
                   {!permissions.isDenied('publish_skill') && row.status === 'draft' ? (
@@ -510,7 +531,7 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
                       loading={busy === row.id}
                       onClick={() => void act(row, 'publish_skill')}
                     >
-                      发布 Publish
+                      {t('发布', 'Publish')}
                     </Button>
                   ) : !permissions.isDenied('deprecate_skill') && row.status === 'published' ? (
                     <DeprecateConfirm
@@ -533,14 +554,16 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
             loading={skills.loadingMore}
             onClick={() => void skills.loadMore()}
           >
-            加载更多 Load more
+            {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}
       {skills.state.status === 'ready' && skills.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="skills-truncated">
-          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余 Skill keep
-          loading more to see the rest.
+          {t(
+            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余',
+            'Skill keep loading more to see the rest.',
+          )}
         </p>
       ) : null}
       {skills.loadMoreError !== null ? (
@@ -556,6 +579,7 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
 }
 
 function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const procedures = useCapabilityList<ProcedureRow>(http, 'list_procedures');
@@ -573,7 +597,7 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
       await http.call(action, { procedureId: row.id });
       toast.push({
         tone: 'ok',
-        title: `${row.name} ${action === 'publish_procedure' ? '已发布 published' : '已弃用 deprecated'}`,
+        title: `${row.name} ${action === 'publish_procedure' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
       refresh();
     } catch (err) {
@@ -595,10 +619,10 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
       onClose={() => setEditor(null)}
       title={
         editor?.kind === 'copy'
-          ? '编辑为新草稿 Edit as new draft'
-          : '新建 Procedure 草稿 New Procedure draft'
+          ? t('编辑为新草稿', 'Edit as new draft')
+          : t('新建 Procedure 草稿', 'New Procedure draft')
       }
-      subtitle="名称、描述与有序步骤 name, description and ordered steps"
+      subtitle={t('名称、描述与有序步骤', 'name, description and ordered steps')}
       wide
       testId="procedure-editor-drawer"
     >
@@ -643,8 +667,11 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
       {rows.length === 0 ? (
         <EmptyState
           icon="grid"
-          title="还没有 Procedure No procedures proposed yet"
-          body="用「新建草稿」写第一条有序步骤，或让 Worker 从成功的任务里蒸馏。 Write the first one with New draft, or let a Worker distil one from a successful Task."
+          title={t('还没有', 'Procedure No procedures proposed yet')}
+          body={t(
+            '用「新建草稿」写第一条有序步骤，或让 Worker 从成功的任务里蒸馏。',
+            'Write the first one with New draft, or let a Worker distil one from a successful Task.',
+          )}
           testId="catalog-empty"
         />
       ) : (
@@ -658,7 +685,11 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
                 <>
                   <span className="truncate">{row.name}</span>
                   <span className="text-3 text-small">v{row.version}</span>
-                  {row.steps ? <span className="tag">{row.steps.length} 步 steps</span> : null}
+                  {row.steps ? (
+                    <span className="tag">
+                      {row.steps.length} {t('步', 'steps')}
+                    </span>
+                  ) : null}
                 </>
               }
               meta={<span className="truncate">{row.description}</span>}
@@ -671,7 +702,7 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
                       onClick={() => setEditor({ kind: 'copy', row })}
                       data-testid="catalog-edit-as-draft"
                     >
-                      编辑为新草稿 Edit as new draft
+                      {t('编辑为新草稿', 'Edit as new draft')}
                     </Button>
                   ) : null}
                   {!permissions.isDenied('publish_procedure') && row.status === 'draft' ? (
@@ -681,7 +712,7 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
                       loading={busy === row.id}
                       onClick={() => void act(row, 'publish_procedure')}
                     >
-                      发布 Publish
+                      {t('发布', 'Publish')}
                     </Button>
                   ) : !permissions.isDenied('deprecate_procedure') && row.status === 'published' ? (
                     <DeprecateConfirm
@@ -704,14 +735,16 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
             loading={procedures.loadingMore}
             onClick={() => void procedures.loadMore()}
           >
-            加载更多 Load more
+            {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}
       {procedures.state.status === 'ready' && procedures.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="procedures-truncated">
-          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余 Procedure keep
-          loading more to see the rest.
+          {t(
+            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余',
+            'Procedure keep loading more to see the rest.',
+          )}
         </p>
       ) : null}
       {procedures.loadMoreError !== null ? (
@@ -763,6 +796,7 @@ function ProcedureEditorHost({
 }
 
 function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const workers = useCapabilityList<WorkerDefinitionSummary>(http, 'list_worker_definitions', {});
@@ -790,7 +824,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       if (isForbiddenError(err)) permissions.markDenied('deprecate_worker_definition');
       toast.push({
         tone: 'danger',
-        title: '无法弃用该定义 Could not deprecate this definition',
+        title: t('无法弃用该定义', 'Could not deprecate this definition'),
         description: describeError(err).message,
       });
     } finally {
@@ -804,8 +838,8 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       onClose={() => setEditor(null)}
       title={
         editor?.kind === 'copy'
-          ? '提议新版本 Propose a new version'
-          : '新建 Worker 定义草稿 New Worker definition draft'
+          ? t('提议新版本', 'Propose a new version')
+          : t('新建 Worker 定义草稿', 'New Worker definition draft')
       }
       subtitle="kind + definition（systemPrompt、model、capabilities…）"
       wide
@@ -852,8 +886,11 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       {rows.length === 0 ? (
         <EmptyState
           icon="grid"
-          title="没有已发布的 Worker 定义 No published worker definitions"
-          body="这里只列已发布的版本；草稿在编辑器里发布。 Only published versions are listed; a draft is published from the editor."
+          title={t('没有已发布的 Worker 定义', 'No published worker definitions')}
+          body={t(
+            '这里只列已发布的版本；草稿在编辑器里发布。',
+            'Only published versions are listed; a draft is published from the editor.',
+          )}
           testId="catalog-empty"
         />
       ) : (
@@ -889,7 +926,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
                       onClick={() => setEditor({ kind: 'copy', row })}
                       data-testid="catalog-edit-as-draft"
                     >
-                      编辑（新版本草稿） Edit as new draft version
+                      {t('编辑（新版本草稿）', 'Edit as new draft version')}
                     </Button>
                   ) : null}
                   {!permissions.isDenied('deprecate_worker_definition') &&
@@ -914,14 +951,16 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
             loading={workers.loadingMore}
             onClick={() => void workers.loadMore()}
           >
-            加载更多 Load more
+            {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}
       {workers.state.status === 'ready' && workers.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="workers-truncated">
-          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余 Worker 定义 keep
-          loading more to see the rest.
+          {t(
+            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余 Worker 定义',
+            'keep loading more to see the rest.',
+          )}
         </p>
       ) : null}
       {workers.loadMoreError !== null ? (

@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { parseJsonObject } from '../../lib/catalog.js';
 import { prettyJson } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { Field, Textarea } from '../ui/Field.js';
 
@@ -21,6 +22,7 @@ export interface JsonEditorProps {
  * submit (the shared Zod schemas), this only rejects non-object JSON.
  */
 export function JsonEditor({ label, value, onApply, disabled, testId }: JsonEditorProps) {
+  const t = useT();
   const id = useId();
   const serialized = prettyJson(value);
   const [text, setText] = useState(serialized);
@@ -62,7 +64,7 @@ export function JsonEditor({ label, value, onApply, disabled, testId }: JsonEdit
           }}
           data-testid={testId ? `${testId}-apply` : undefined}
         >
-          应用到表单 Apply to form
+          {t('应用到表单', 'Apply to form')}
         </Button>
       </div>
     </div>

@@ -49,8 +49,8 @@ describe('LoginPage: password login', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: 'owner' } });
-    fireEvent.change(screen.getByLabelText(/密码 Password/), { target: { value: 'password123' } });
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'owner' } });
+    fireEvent.change(screen.getByLabelText(/密码/), { target: { value: 'password123' } });
     fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
 
     await waitFor(() => expect(onLoggedIn).toHaveBeenCalledTimes(1));
@@ -81,8 +81,8 @@ describe('LoginPage: password login', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: 'x' } });
-    fireEvent.change(screen.getByLabelText(/密码 Password/), { target: { value: 'y' } });
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText(/密码/), { target: { value: 'y' } });
     fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
 
     expect(await screen.findByText(expectedText)).toBeTruthy();
@@ -105,8 +105,8 @@ describe('LoginPage: password login', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: 'x' } });
-    fireEvent.change(screen.getByLabelText(/密码 Password/), { target: { value: 'y' } });
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText(/密码/), { target: { value: 'y' } });
     fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
 
     expect(await screen.findByText(/no Handle signing key configured/)).toBeTruthy();
@@ -125,9 +125,9 @@ describe('LoginPage: API-key details', () => {
       />,
     );
 
-    const details = screen.getByText('用 API key 登录 Use an API key instead').closest('details');
+    const details = screen.getByText('用 API key 登录').closest('details');
     expect(details?.open ?? false).toBe(false);
-    fireEvent.click(screen.getByText('用 API key 登录 Use an API key instead'));
+    fireEvent.click(screen.getByText('用 API key 登录'));
     expect(screen.getByPlaceholderText('sk-...')).toBeTruthy();
 
     fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: '  sk-abc  ' } });
@@ -144,7 +144,7 @@ describe('LoginPage: API-key details', () => {
         onLoggedIn={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText('用 API key 登录 Use an API key instead'));
+    fireEvent.click(screen.getByText('用 API key 登录'));
     expect(screen.getByText('This key was not accepted by the kernel.')).toBeTruthy();
 
     rerender(

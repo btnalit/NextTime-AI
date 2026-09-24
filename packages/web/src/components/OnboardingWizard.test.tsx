@@ -70,7 +70,7 @@ describe('OnboardingWizard', () => {
 
     // Step ① kind
     fireEvent.click(screen.getByRole('radio', { name: 'mcp' }));
-    fireEvent.click(screen.getByRole('button', { name: /下一步 Next/ }));
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
     // Step ② connect (CompleteConnectionForm, kind hidden and pre-set to mcp)
     const connectStep = await screen.findByTestId('wizard-step-connect');
@@ -85,16 +85,16 @@ describe('OnboardingWizard', () => {
 
     // Step ③ publish
     const publishStep = await screen.findByTestId('wizard-step-publish');
-    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单 Publish manifest/ }));
+    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 
     // Step ④ review
     const reviewTable = await screen.findByTestId('wizard-review-table');
     expect(reviewTable.textContent).toContain('accept_s2_mcp_echo');
-    fireEvent.click(screen.getByRole('button', { name: /下一步 Next/ }));
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
     // Step ⑤ done
     const doneStep = await screen.findByTestId('wizard-step-done');
-    fireEvent.click(within(doneStep).getByRole('button', { name: /查看门详情 View gate detail/ }));
+    fireEvent.click(within(doneStep).getByRole('button', { name: /查看门详情/ }));
     expect(onFinished).toHaveBeenCalledWith('gk-1');
 
     expect(http.calls.some((c) => c.name === 'create_connection')).toBe(true);
@@ -127,7 +127,7 @@ describe('OnboardingWizard', () => {
     });
     render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /下一步 Next/ }));
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
     const connectStep = await screen.findByTestId('wizard-step-connect');
     fireEvent.change(within(connectStep).getByLabelText(/Target system/), {
       target: { value: 'accept_s2_mcp' },
@@ -137,16 +137,16 @@ describe('OnboardingWizard', () => {
     });
     fireEvent.click(within(connectStep).getByRole('button', { name: 'Register Gatekeeper' }));
     const publishStep = await screen.findByTestId('wizard-step-publish');
-    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单 Publish manifest/ }));
+    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 
     await screen.findByTestId('wizard-review-table');
-    fireEvent.click(screen.getByRole('button', { name: /提议重分类 Propose reclassification/ }));
+    fireEvent.click(screen.getByRole('button', { name: /提议重分类/ }));
     const form = await screen.findByTestId('wizard-review-reclassify-form');
     fireEvent.change(within(form).getByLabelText('Mode'), { target: { value: 'execute' } });
     fireEvent.change(within(form).getByLabelText('Blast radius'), {
       target: { value: 'medium' },
     });
-    fireEvent.click(within(form).getByRole('button', { name: /提交 Submit/ }));
+    fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
 
     await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
     const names = http.calls.map((c) => c.name);
@@ -173,7 +173,7 @@ describe('OnboardingWizard', () => {
     });
     render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /下一步 Next/ }));
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
     const connectStep = await screen.findByTestId('wizard-step-connect');
     fireEvent.change(within(connectStep).getByLabelText(/Target system/), {
       target: { value: 'accept_s2_mcp' },
@@ -183,12 +183,12 @@ describe('OnboardingWizard', () => {
     });
     fireEvent.click(within(connectStep).getByRole('button', { name: 'Register Gatekeeper' }));
     const publishStep = await screen.findByTestId('wizard-step-publish');
-    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单 Publish manifest/ }));
+    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 
     await screen.findByTestId('wizard-review-table');
-    fireEvent.click(screen.getByRole('button', { name: /提议重分类 Propose reclassification/ }));
+    fireEvent.click(screen.getByRole('button', { name: /提议重分类/ }));
     const form = await screen.findByTestId('wizard-review-reclassify-form');
-    fireEvent.click(within(form).getByRole('button', { name: /提交 Submit/ }));
+    fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
 
     const banner = await screen.findByRole('alert');
     expect(banner.getAttribute('data-error-code')).toBe('conflict');

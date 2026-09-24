@@ -15,7 +15,7 @@ import { type Page, expect } from '@playwright/test';
  */
 export async function reachLoginForm(page: Page): Promise<'shell' | 'login'> {
   const forgetKey = page.getByRole('button', { name: 'Forget key' });
-  const apiKeySummary = page.getByText('用 API key 登录 Use an API key instead');
+  const apiKeySummary = page.getByText('用 API key 登录');
   const passwordLoginButton = page.getByRole('button', { name: 'Log in' });
 
   await expect
@@ -37,7 +37,7 @@ export async function reachLoginForm(page: Page): Promise<'shell' | 'login'> {
  *  equivalent of the old, always-visible "Sign in" form every existing spec used to click
  *  directly. Assumes `reachLoginForm` has already resolved to `'login'`. */
 export async function loginWithApiKey(page: Page, apiKey: string): Promise<void> {
-  const apiKeySummary = page.getByText('用 API key 登录 Use an API key instead');
+  const apiKeySummary = page.getByText('用 API key 登录');
   if (
     !(await page
       .getByPlaceholder('sk-...')
@@ -52,13 +52,17 @@ export async function loginWithApiKey(page: Page, apiKey: string): Promise<void>
 }
 
 /** Fills/submits `LoginPage`'s primary password form. Assumes `reachLoginForm` has already
- *  resolved to `'login'`. */
+ *  resolved to `'login'`. By id (`#login-name`/`#login-password`), not `getByLabel` — S8 W1-A9's
+ *  i18n switch found `getByLabel(/^密码$/)` never resolving in CI (Chromium's computed accessible
+ *  name for `<Field required>`'s label apparently still folds in the `aria-hidden` required
+ *  asterisk in this label-association shape, so no locator matches the exact-anchored regex); the
+ *  id is unambiguous either way. */
 export async function loginWithPassword(
   page: Page,
   login: string,
   password: string,
 ): Promise<void> {
-  await page.getByLabel(/登录名 Login/).fill(login);
-  await page.getByLabel(/密码 Password/).fill(password);
+  await page.locator('#login-name').fill(login);
+  await page.locator('#login-password').fill(password);
   await page.getByRole('button', { name: 'Log in' }).click();
 }

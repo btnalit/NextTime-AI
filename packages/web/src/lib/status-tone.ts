@@ -62,9 +62,14 @@ import {
 
 export type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'info' | 'accent' | 'observe';
 
+/** S8 W1-A9 (audit S4/S7): a machine's tones were authored either English-only (pre-S8, out of
+ *  scope for this lane — "keep the existing wording, only split the pairs") or as a "中文 English"
+ *  pair. `label` carries a plain `string` for the former and a `{zh, en}` pair for the latter, so
+ *  `StatusChip` (the sole reader of `.label`) can pick the active language for a pair while an
+ *  untranslated machine keeps rendering its one string either way — no behaviour change for it. */
 export interface ChipStyle {
   readonly tone: Tone;
-  readonly label: string;
+  readonly label: string | { readonly zh: string; readonly en: string };
   /** Pulsing dot — the state is in motion (running, waiting on someone). */
   readonly live?: boolean;
 }
@@ -160,15 +165,15 @@ export const ROLE_TONES: Readonly<Record<Role, ChipStyle>> = {
 /** `Operation.mode` (design §6.3): observe is read-only reach (teal), execute changes the world
  *  and is the mode approvals exist for (amber). */
 export const OPERATION_MODE_TONES: Readonly<Record<OperationMode, ChipStyle>> = {
-  observe: { tone: 'observe', label: '观察 Observe' },
-  execute: { tone: 'warn', label: '执行 Execute' },
+  observe: { tone: 'observe', label: { zh: '观察', en: 'Observe' } },
+  execute: { tone: 'warn', label: { zh: '执行', en: 'Execute' } },
 };
 
 /** `ActionRequest.blastRadius` — the confirmation tier driver (§5.9 principle 4). */
 export const BLAST_RADIUS_TONES: Readonly<Record<BlastRadius, ChipStyle>> = {
-  low: { tone: 'ok', label: '低影响 Low' },
-  medium: { tone: 'warn', label: '中影响 Medium' },
-  high: { tone: 'danger', label: '高影响 High' },
+  low: { tone: 'ok', label: { zh: '低影响', en: 'Low' } },
+  medium: { tone: 'warn', label: { zh: '中影响', en: 'Medium' } },
+  high: { tone: 'danger', label: { zh: '高影响', en: 'High' } },
 };
 
 /** `pending_activation` is a *derived* display state (`UserWire.hasPassword === false` on an
@@ -181,9 +186,9 @@ export const USER_STATUS_VALUES: readonly UserDisplayStatus[] = [
   'pending_activation',
 ];
 export const USER_STATUS_TONES: Readonly<Record<UserDisplayStatus, ChipStyle>> = {
-  active: { tone: 'ok', label: '活跃 Active' },
-  disabled: { tone: 'neutral', label: '已停用 Disabled' },
-  pending_activation: { tone: 'warn', label: '待激活 Pending activation' },
+  active: { tone: 'ok', label: { zh: '活跃', en: 'Active' } },
+  disabled: { tone: 'neutral', label: { zh: '已停用', en: 'Disabled' } },
+  pending_activation: { tone: 'warn', label: { zh: '待激活', en: 'Pending activation' } },
 };
 
 export function deriveUserStatus(user: {
@@ -195,14 +200,14 @@ export function deriveUserStatus(user: {
 }
 
 export const WORKSPACE_STATUS_TONES: Readonly<Record<WorkspaceStatusWire, ChipStyle>> = {
-  active: { tone: 'ok', label: '活跃 Active' },
-  disabled: { tone: 'neutral', label: '已停用 Disabled' },
+  active: { tone: 'ok', label: { zh: '活跃', en: 'Active' } },
+  disabled: { tone: 'neutral', label: { zh: '已停用', en: 'Disabled' } },
 };
 
 /** `standard` is the production default (blue); `ephemeral` is acceptance residue (grey, §5.9). */
 export const WORKSPACE_PURPOSE_TONES: Readonly<Record<WorkspacePurposeWire, ChipStyle>> = {
-  standard: { tone: 'info', label: '常规 standard' },
-  ephemeral: { tone: 'neutral', label: '临时 ephemeral' },
+  standard: { tone: 'info', label: { zh: '常规', en: 'standard' } },
+  ephemeral: { tone: 'neutral', label: { zh: '临时', en: 'ephemeral' } },
 };
 
 /** `awaiting_host` is derived: a hosted instance (`create_gate_instance`) the gate host has not
@@ -213,11 +218,15 @@ export const GATE_INSTANCE_STATUS_VALUES: readonly GateInstanceDisplayStatus[] =
   'awaiting_host',
 ];
 export const GATE_INSTANCE_TONES: Readonly<Record<GateInstanceDisplayStatus, ChipStyle>> = {
-  discovered: { tone: 'neutral', label: '未启用 Discovered' },
-  enabled: { tone: 'ok', label: '已启用 Enabled' },
-  disabled: { tone: 'neutral', label: '已禁用 Disabled' },
-  lost: { tone: 'warn', label: '失联 Lost' },
-  awaiting_host: { tone: 'warn', label: '等待宿主接管 Waiting for gate host', live: true },
+  discovered: { tone: 'neutral', label: { zh: '未启用', en: 'Discovered' } },
+  enabled: { tone: 'ok', label: { zh: '已启用', en: 'Enabled' } },
+  disabled: { tone: 'neutral', label: { zh: '已禁用', en: 'Disabled' } },
+  lost: { tone: 'warn', label: { zh: '失联', en: 'Lost' } },
+  awaiting_host: {
+    tone: 'warn',
+    label: { zh: '等待宿主接管', en: 'Waiting for gate host' },
+    live: true,
+  },
 };
 
 export function deriveGateInstanceStatus(instance: {
@@ -230,38 +239,38 @@ export function deriveGateInstanceStatus(instance: {
 
 type GateHealthWire = (typeof GateHealthWireSchema.options)[number];
 export const GATE_HEALTH_TONES: Readonly<Record<GateHealthWire, ChipStyle>> = {
-  ok: { tone: 'ok', label: '健康 Healthy' },
-  unreachable: { tone: 'danger', label: '不可达 Unreachable' },
-  unauthorized: { tone: 'danger', label: '未授权 Unauthorized' },
-  unknown: { tone: 'neutral', label: '未知 Unknown' },
+  ok: { tone: 'ok', label: { zh: '健康', en: 'Healthy' } },
+  unreachable: { tone: 'danger', label: { zh: '不可达', en: 'Unreachable' } },
+  unauthorized: { tone: 'danger', label: { zh: '未授权', en: 'Unauthorized' } },
+  unknown: { tone: 'neutral', label: { zh: '未知', en: 'Unknown' } },
 };
 
 /** MCP trust mark (design §6.3): `vetted` unlocks auto-approval of non-destructive tool calls. */
 export const GATE_TRUST_TONES: Readonly<Record<GateTrustWire, ChipStyle>> = {
-  byo: { tone: 'neutral', label: '自带 BYO' },
-  vetted: { tone: 'ok', label: '已审核 Vetted' },
+  byo: { tone: 'neutral', label: { zh: '自带', en: 'BYO' } },
+  vetted: { tone: 'ok', label: { zh: '已审核', en: 'Vetted' } },
 };
 
 /** Connector three-state (design §6.3): `platform_preset` = the platform runs the instances and
  *  workspaces enable them one-click (published, green); `self_serve` = owners connect their own
  *  (the system default, blue); `disabled` = grey. */
 export const CONNECTOR_MODE_TONES: Readonly<Record<ConnectorModeWire, ChipStyle>> = {
-  disabled: { tone: 'neutral', label: '已禁用 Disabled' },
-  self_serve: { tone: 'info', label: '自助 Self-serve' },
-  platform_preset: { tone: 'ok', label: '平台预置 Platform preset' },
+  disabled: { tone: 'neutral', label: { zh: '已禁用', en: 'Disabled' } },
+  self_serve: { tone: 'info', label: { zh: '自助', en: 'Self-serve' } },
+  platform_preset: { tone: 'ok', label: { zh: '平台预置', en: 'Platform preset' } },
 };
 
 type ServiceHealthStatus = (typeof ServiceHealthWireSchema.shape.status.options)[number];
 export const SERVICE_HEALTH_TONES: Readonly<Record<ServiceHealthStatus, ChipStyle>> = {
-  ok: { tone: 'ok', label: '健康 Healthy' },
-  degraded: { tone: 'warn', label: '降级 Degraded' },
-  down: { tone: 'danger', label: '不可用 Down' },
-  unknown: { tone: 'neutral', label: '未知 Unknown' },
+  ok: { tone: 'ok', label: { zh: '健康', en: 'Healthy' } },
+  degraded: { tone: 'warn', label: { zh: '降级', en: 'Degraded' } },
+  down: { tone: 'danger', label: { zh: '不可用', en: 'Down' } },
+  unknown: { tone: 'neutral', label: { zh: '未知', en: 'Unknown' } },
 };
 
 export const PLATFORM_ROLE_TONES: Readonly<Record<PlatformRoleWire, ChipStyle>> = {
-  admin: { tone: 'accent', label: '管理员 Admin' },
-  user: { tone: 'neutral', label: '用户 User' },
+  admin: { tone: 'accent', label: { zh: '管理员', en: 'Admin' } },
+  user: { tone: 'neutral', label: { zh: '用户', en: 'User' } },
 };
 
 const MACHINES: Readonly<

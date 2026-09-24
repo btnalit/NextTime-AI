@@ -161,7 +161,7 @@ describe('PlatformRuntimePage', () => {
     expect(screen.queryByTestId('runtime-active-image')).toBeNull();
   });
 
-  it('设为活动 opens a medium confirm and calls set_active_runtime_image', async () => {
+  it('设为活动', async () => {
     const otherImage = image({
       id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
       tags: ['nexttime-ai-worker-runtime:v2'],
@@ -217,7 +217,7 @@ describe('PlatformRuntimePage', () => {
     );
   });
 
-  it('设为活动 is disabled with a hint for an image not in WORKER_IMAGE_ALLOWLIST (P1-a hotfix)', async () => {
+  it('设为活动', async () => {
     const notAllowed = image({
       id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
       tags: ['nexttime-ai-worker-runtime:v2'],
@@ -240,7 +240,7 @@ describe('PlatformRuntimePage', () => {
     expect(http.calls.some((c) => c.name === 'set_active_runtime_image')).toBe(false);
   });
 
-  it('回滚到上一个镜像 opens a medium confirm and calls rollback_runtime_image', async () => {
+  it('回滚到上一个镜像', async () => {
     const otherImage = image({
       id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
       tags: ['nexttime-ai-worker-runtime:v2'],
@@ -283,7 +283,7 @@ describe('PlatformRuntimePage', () => {
     expect(http.calls.some((c) => c.name === 'rollback_runtime_image')).toBe(false);
   });
 
-  it('resident containers show a named workspace, a bare-id principal chip and the 待重建 chip', async () => {
+  it('resident containers show a named workspace, a bare-id principal chip and the 待重建', async () => {
     const http = scriptedHttp({
       runtime_inventory: () =>
         inventory({ residentContainers: [resident({ needsRebuild: true })] }),
@@ -299,7 +299,7 @@ describe('PlatformRuntimePage', () => {
     expect(within(row).getByText('p-1')).toBeTruthy();
   });
 
-  it('现在重建空闲的 calls roll_entry_containers with no params and reports the outcome', async () => {
+  it('现在重建空闲的', async () => {
     const result: RollEntryContainersResultWire = {
       outcomes: [
         { principalId: 'p-1', workspaceId: 'ws-1', action: 'stopped' },

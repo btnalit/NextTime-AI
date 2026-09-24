@@ -83,13 +83,13 @@ describe('UserDetailPanel', () => {
     const { onOpenMemberships } = renderPanel(http, user());
     const detail = screen.getByTestId('user-detail');
     expect(within(detail).getByText('alice')).toBeTruthy();
-    expect(within(detail).getByTestId('user-detail-status').textContent).toBe('活跃 Active');
+    expect(within(detail).getByTestId('user-detail-status').textContent).toBe('活跃');
     expect((screen.getByLabelText(/每日调用上限/) as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText(/每月 token 预算/) as HTMLInputElement).value).toBe('5000');
-    fireEvent.click(screen.getByRole('button', { name: /管理成员资格 Manage memberships \(1\)/ }));
+    fireEvent.click(screen.getByRole('button', { name: /管理成员资格 \(1\)/ }));
     expect(onOpenMemberships).toHaveBeenCalledTimes(1);
     // A user with a password has no merge section.
-    expect(screen.queryByLabelText(/合并到 Merge into/)).toBeNull();
+    expect(screen.queryByLabelText(/合并到/)).toBeNull();
   });
 
   it('profile: only the changed fields go to update_user', async () => {
@@ -101,9 +101,9 @@ describe('UserDetailPanel', () => {
       },
     });
     const { onChanged } = renderPanel(http, row);
-    const save = screen.getByRole('button', { name: '保存 Save' });
+    const save = screen.getByRole('button', { name: '保存' });
     expect(save.hasAttribute('disabled')).toBe(true);
-    fireEvent.change(screen.getByLabelText(/平台角色 Platform role/), {
+    fireEvent.change(screen.getByLabelText(/平台角色/), {
       target: { value: 'admin' },
     });
     fireEvent.click(save);
@@ -119,7 +119,7 @@ describe('UserDetailPanel', () => {
       },
     });
     const { onChanged } = renderPanel(http, row);
-    const save = screen.getByRole('button', { name: '保存预算 Save budget' });
+    const save = screen.getByRole('button', { name: '保存预算' });
     fireEvent.change(screen.getByLabelText(/每日调用上限/), { target: { value: '-1' } });
     expect(screen.getByText(/必须是非负整数/)).toBeTruthy();
     expect(save.hasAttribute('disabled')).toBe(true);
@@ -138,15 +138,15 @@ describe('UserDetailPanel', () => {
       },
     });
     const { onTemporaryPassword } = renderPanel(http, user());
-    fireEvent.change(screen.getByLabelText(/重置密码 Reset password/), {
+    fireEvent.change(screen.getByLabelText(/重置密码/), {
       target: { value: 'chosen-by-admin-1' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '重置密码 Reset password' }));
+    fireEvent.click(screen.getByRole('button', { name: '重置密码' }));
     await waitFor(() =>
       expect(onTemporaryPassword).toHaveBeenCalledWith('alice', 'chosen-by-admin-1'),
     );
     // Cleared after the reset so it is never re-submitted by accident.
-    expect((screen.getByLabelText(/重置密码 Reset password/) as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText(/重置密码/) as HTMLInputElement).value).toBe('');
   });
 
   it('disable: a confirm step, then set_user_status; enable acts directly', async () => {
@@ -158,18 +158,18 @@ describe('UserDetailPanel', () => {
       }),
     });
     const { onChanged, unmount } = renderPanel(http, row);
-    fireEvent.click(screen.getByRole('button', { name: '停用 Disable' }));
+    fireEvent.click(screen.getByRole('button', { name: '停用' }));
     expect(screen.getByTestId('user-disable-confirm')).toBeTruthy();
     expect(http.calls).toHaveLength(0);
-    fireEvent.click(screen.getByRole('button', { name: '取消 Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(screen.queryByTestId('user-disable-confirm')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '停用 Disable' }));
-    fireEvent.click(screen.getByRole('button', { name: '确认停用 Confirm disable' }));
+    fireEvent.click(screen.getByRole('button', { name: '停用' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认停用' }));
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ ...row, status: 'disabled' }));
     unmount();
 
     const enabled = renderPanel(http, { ...row, status: 'disabled' });
-    fireEvent.click(screen.getByRole('button', { name: '启用 Enable' }));
+    fireEvent.click(screen.getByRole('button', { name: '启用' }));
     await waitFor(() =>
       expect(enabled.onChanged).toHaveBeenCalledWith({ ...row, status: 'active' }),
     );
@@ -183,8 +183,8 @@ describe('UserDetailPanel', () => {
         ),
     });
     renderPanel(http, user());
-    fireEvent.click(screen.getByRole('button', { name: '停用 Disable' }));
-    fireEvent.click(screen.getByRole('button', { name: '确认停用 Confirm disable' }));
+    fireEvent.click(screen.getByRole('button', { name: '停用' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认停用' }));
     const error = await screen.findByText(/不能停用自己/);
     const box = error.closest('[data-error-code]');
     expect(box?.getAttribute('data-error-code')).toBe('self_disable');
@@ -195,12 +195,10 @@ describe('UserDetailPanel', () => {
     const http = scriptedHttp({});
     renderPanel(http, user({ login: 'root', platformRole: 'admin' }), { envAdmins: ['root'] });
     expect(screen.getByTestId('user-detail-env-admin')).toBeTruthy();
-    const role = screen.getByLabelText(/平台角色 Platform role/);
+    const role = screen.getByLabelText(/平台角色/);
     expect(role.hasAttribute('disabled')).toBe(true);
     expect(role.parentElement?.getAttribute('title')).toBe(ENV_ADMIN_TITLE);
-    expect(screen.getByRole('button', { name: '停用 Disable' }).hasAttribute('disabled')).toBe(
-      true,
-    );
+    expect(screen.getByRole('button', { name: '停用' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('a pending (password-less) user can be merged into another account after a confirm', async () => {
@@ -211,17 +209,17 @@ describe('UserDetailPanel', () => {
       },
     });
     const { onMerged } = renderPanel(http, user({ hasPassword: false }));
-    expect(screen.getByTestId('user-detail-status').textContent).toBe('待激活 Pending activation');
-    const merge = screen.getByRole('button', { name: '合并 Merge' });
+    expect(screen.getByTestId('user-detail-status').textContent).toBe('待激活');
+    const merge = screen.getByRole('button', { name: '合并' });
     expect(merge.hasAttribute('disabled')).toBe(true);
-    const target = screen.getByLabelText(/合并到 Merge into/) as HTMLSelectElement;
+    const target = screen.getByLabelText(/合并到/) as HTMLSelectElement;
     // The source itself is never offered as a target.
     expect(Array.from(target.options).map((option) => option.value)).toEqual(['', 'u-2']);
     fireEvent.change(target, { target: { value: 'u-2' } });
     fireEvent.click(merge);
     expect(screen.getByTestId('user-merge-confirm')).toBeTruthy();
     expect(http.calls).toHaveLength(0);
-    fireEvent.click(screen.getByRole('button', { name: '确认合并 Confirm merge' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认合并' }));
     await waitFor(() => expect(onMerged).toHaveBeenCalledTimes(1));
   });
 });

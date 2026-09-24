@@ -3,6 +3,7 @@ import type { AgentPolicy, SetAgentPolicyParams } from '../lib/agent-profile.js'
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select, describedBy } from './ui/Field.js';
@@ -72,6 +73,7 @@ export function AgentPolicyForm({
   gatekeepers,
   onSaved,
 }: AgentPolicyFormProps) {
+  const t = useT();
   const [state, setState] = useState<FormState>(() => initialState(policy));
   const [fieldErrors, setFieldErrors] = useState<Readonly<Record<string, string>>>({});
   const [submitError, setSubmitError] = useState<unknown | null>(null);
@@ -110,7 +112,7 @@ export function AgentPolicyForm({
     // not in it; the guarded value below is what the select shows, so submit exactly that.
     if (state.allowedModels.length > 0 && defaultModelValue === '') {
       setFieldErrors({
-        defaultModel: '请先勾选至少一个模型作为默认 Pick a default from the allowed models.',
+        defaultModel: t('请先勾选至少一个模型作为默认', 'Pick a default from the allowed models.'),
       });
       return;
     }
@@ -152,10 +154,10 @@ export function AgentPolicyForm({
     >
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="field-label">
-          可选模型 Allowed models
+          {t('可选模型', 'Allowed models')}
           <span className="field-hint" style={{ margin: 0 }}>
             {' '}
-            — 空 = 不限制 empty = unrestricted
+            {t('— 空 = 不限制', 'empty = unrestricted')}
           </span>
         </legend>
         <div className="stack-s" data-testid="agent-policy-allowed-models">
@@ -178,7 +180,11 @@ export function AgentPolicyForm({
         ) : null}
       </fieldset>
 
-      <Field id="ap-default-model" label="默认模型 Default model" error={fieldErrors.defaultModel}>
+      <Field
+        id="ap-default-model"
+        label={t('默认模型', 'Default model')}
+        error={fieldErrors.defaultModel}
+      >
         <Select
           id="ap-default-model"
           value={defaultModelValue}
@@ -201,12 +207,12 @@ export function AgentPolicyForm({
           onChange={(event) => update('memberCanEditProfile', event.target.checked)}
           disabled={submitting}
         />
-        <span>Member 可编辑自己的智能体配置 Members may edit their own AgentProfile</span>
+        <span>{t('Member 可编辑自己的智能体配置', 'Members may edit their own AgentProfile')}</span>
       </label>
 
       <Field
         id="ap-max-prompt-chars"
-        label="提示词附加字数上限 Max prompt addendum length"
+        label={t('提示词附加字数上限', 'Max prompt addendum length')}
         error={fieldErrors.maxPromptAddendumChars}
       >
         <Input
@@ -227,10 +233,10 @@ export function AgentPolicyForm({
 
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="field-label">
-          可选 Skills Allowed skills
+          {t('可选', 'Skills Allowed skills')}
           <span className="field-hint" style={{ margin: 0 }}>
             {' '}
-            — 空 = 不限制 empty = unrestricted
+            {t('— 空 = 不限制', 'empty = unrestricted')}
           </span>
         </legend>
         <div className="stack-s" data-testid="agent-policy-allowed-skills">
@@ -250,10 +256,10 @@ export function AgentPolicyForm({
 
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="field-label">
-          可选系统接入 Allowed connected systems
+          {t('可选系统接入', 'Allowed connected systems')}
           <span className="field-hint" style={{ margin: 0 }}>
             {' '}
-            — 空 = 不限制 empty = unrestricted
+            {t('— 空 = 不限制', 'empty = unrestricted')}
           </span>
         </legend>
         <div className="stack-s" data-testid="agent-policy-allowed-gatekeepers">
@@ -281,7 +287,10 @@ export function AgentPolicyForm({
           disabled={submitting}
         />
         <span>
-          允许 member 自动批准低风险动作 Allow members to auto-approve low-blast-radius actions
+          {t(
+            '允许 member 自动批准低风险动作',
+            'Allow members to auto-approve low-blast-radius actions',
+          )}
         </span>
       </label>
 
@@ -290,13 +299,15 @@ export function AgentPolicyForm({
       ) : null}
 
       <Notice>
-        变更立即影响所有未显式覆盖该项的 AgentProfile Changes apply immediately to every
-        AgentProfile that has not explicitly overridden the affected field.
+        {t(
+          '变更立即影响所有未显式覆盖该项的',
+          'AgentProfile Changes apply immediately to every AgentProfile that has not explicitly overridden the affected field.',
+        )}
       </Notice>
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button type="submit" variant="primary" loading={submitting}>
-          保存策略 Save policy
+          {t('保存策略', 'Save policy')}
         </Button>
       </div>
     </form>

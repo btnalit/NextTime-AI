@@ -6,6 +6,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { type PrincipalRow, principalDisplayRole } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { AddMemberForm } from './AddMemberForm.js';
 import { CreatePrincipalForm } from './CreatePrincipalForm.js';
@@ -53,6 +54,7 @@ type DrawerState =
  * them together.
  */
 export function MembersPage({ http }: MembersPageProps) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const { role } = useWorkspaceIdentity(http);
@@ -82,8 +84,11 @@ export function MembersPage({ http }: MembersPageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('members')}
-        title="成员与授权 Members"
-        description="谁能进入这个工作区、持有什么角色、API key 的生命周期。 Who can sign in, what role they hold, and their API key lifecycle."
+        title={t('成员与授权', 'Members')}
+        description={t(
+          '谁能进入这个工作区、持有什么角色、API key 的生命周期。',
+          'Who can sign in, what role they hold, and their API key lifecycle.',
+        )}
         actions={
           canManage ? (
             <>
@@ -92,10 +97,10 @@ export function MembersPage({ http }: MembersPageProps) {
                 icon="plus"
                 onClick={() => setDrawer({ kind: 'addMember' })}
               >
-                添加成员 Add member
+                {t('添加成员', 'Add member')}
               </Button>
               <Button variant="secondary" icon="key" onClick={() => setDrawer({ kind: 'create' })}>
-                服务凭证 Service credential (API key)
+                {t('服务凭证', 'Service credential (API key)')}
               </Button>
             </>
           ) : undefined
@@ -108,14 +113,17 @@ export function MembersPage({ http }: MembersPageProps) {
         forbidden ? (
           <EmptyState
             icon="shield"
-            title="需要 owner 权限 Owner role required"
-            body="list_principals 仅工作区 owner 可读。 list_principals is restricted to the workspace owner."
+            title={t('需要 owner 权限', 'Owner role required')}
+            body={t(
+              'list_principals 仅工作区 owner 可读。',
+              'list_principals is restricted to the workspace owner.',
+            )}
             testId="members-forbidden"
           />
         ) : (
           <ErrorBanner
             error={principals.state.error}
-            title="无法加载成员 Could not load members"
+            title={t('无法加载成员', 'Could not load members')}
             onRetry={() => void principals.reload()}
             testId="members-error"
           />
@@ -123,8 +131,11 @@ export function MembersPage({ http }: MembersPageProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="users"
-          title="还没有成员 No members yet"
-          body="先添加一个成员，或创建一个服务凭证。 Add the first member, or create a service credential."
+          title={t('还没有成员', 'No members yet')}
+          body={t(
+            '先添加一个成员，或创建一个服务凭证。',
+            'Add the first member, or create a service credential.',
+          )}
           testId="members-empty"
         />
       ) : (
@@ -139,7 +150,9 @@ export function MembersPage({ http }: MembersPageProps) {
                 <>
                   <span className="truncate">{row.displayName}</span>
                   {row.kind !== 'human' ? <span className="tag">{row.kind}</span> : null}
-                  {row.disabledAt ? <span className="tag text-danger">已停用 disabled</span> : null}
+                  {row.disabledAt ? (
+                    <span className="tag text-danger">{t('已停用', 'disabled')}</span>
+                  ) : null}
                 </>
               }
               meta={
@@ -150,7 +163,7 @@ export function MembersPage({ http }: MembersPageProps) {
                   {row.hasApiKey ? (
                     <>
                       <span className="meta-sep" />
-                      <span>已签发 API key issued</span>
+                      <span>{t('已签发', 'API key issued')}</span>
                     </>
                   ) : null}
                 </>
@@ -167,14 +180,16 @@ export function MembersPage({ http }: MembersPageProps) {
             loading={principals.loadingMore}
             onClick={() => void principals.loadMore()}
           >
-            加载更多 Load more
+            {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}
       {principals.state.status === 'ready' && principals.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="members-truncated">
-          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余成员 keep loading
-          more to see the rest.
+          {t(
+            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余成员',
+            'keep loading more to see the rest.',
+          )}
         </p>
       ) : null}
       {principals.loadMoreError !== null ? (
@@ -188,8 +203,11 @@ export function MembersPage({ http }: MembersPageProps) {
       <Drawer
         open={drawer.kind === 'addMember'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title="添加成员 Add member"
-        subtitle="按平台登录名添加；这里不创建账户、不签发 API key。 By platform login — no account is created here and no API key is issued."
+        title={t('添加成员', 'Add member')}
+        subtitle={t(
+          '按平台登录名添加；这里不创建账户、不签发 API key。 By platform login —',
+          'no account is created here and no API key is issued.',
+        )}
         testId="add-member-drawer"
       >
         {drawer.kind === 'addMember' ? (
@@ -208,8 +226,11 @@ export function MembersPage({ http }: MembersPageProps) {
       <Drawer
         open={drawer.kind === 'create'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title="服务凭证 Service credential (API key)"
-        subtitle="创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。 Creates a kind: 'service' Principal and its API key — for scripts and harnesses, never for a person."
+        title={t('服务凭证', 'Service credential (API key)')}
+        subtitle={t(
+          "创建 kind: 'service' 的 Principal 及其 API key——给脚本与验收工具，不给人。 Creates a kind: 'service' Principal and its API key —",
+          'for scripts and harnesses, never for a person.',
+        )}
         testId="create-principal-drawer"
       >
         {drawer.kind === 'create' ? (
@@ -228,7 +249,7 @@ export function MembersPage({ http }: MembersPageProps) {
       <Drawer
         open={drawer.kind === 'detail'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title={drawer.kind === 'detail' ? drawer.principal.displayName : '成员 Member'}
+        title={drawer.kind === 'detail' ? drawer.principal.displayName : t('成员', 'Member')}
         subtitle={
           drawer.kind === 'detail' ? <span className="mono">{drawer.principal.id}</span> : undefined
         }

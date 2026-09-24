@@ -89,10 +89,8 @@ describe('AccessPage', () => {
     renderPage(http);
     const row = await screen.findByTestId('grant-row');
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: '授予能力 Grant capability' })).toBeNull(),
-    );
-    expect(within(row).queryByRole('button', { name: '撤销 Revoke' })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('button', { name: '授予能力' })).toBeNull());
+    expect(within(row).queryByRole('button', { name: '撤销' })).toBeNull();
     expect(screen.queryByTestId('issue-service-handle-form')).toBeNull();
   });
 
@@ -111,13 +109,11 @@ describe('AccessPage', () => {
     const row = await screen.findByTestId('grant-row');
     expect(within(row).getByText('gatekeeper')).toBeTruthy();
 
-    fireEvent.click(within(row).getByRole('button', { name: '撤销 Revoke' }));
+    fireEvent.click(within(row).getByRole('button', { name: '撤销' }));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'revoke_capability')).toBe(true),
     );
-    await waitFor(() =>
-      expect(within(row).queryByRole('button', { name: '撤销 Revoke' })).toBeNull(),
-    );
+    await waitFor(() => expect(within(row).queryByRole('button', { name: '撤销' })).toBeNull());
   });
 
   it('granting a capability calls grant_capability with the free-text fallback fields', async () => {
@@ -138,11 +134,11 @@ describe('AccessPage', () => {
     renderPage(http);
     await screen.findByTestId('grants-empty');
 
-    fireEvent.click(screen.getByRole('button', { name: '授予能力 Grant capability' }));
+    fireEvent.click(screen.getByRole('button', { name: '授予能力' }));
     const form = await screen.findByTestId('grant-capability-form');
-    fireEvent.change(within(form).getByLabelText(/Principal/), { target: { value: 'p-2' } });
-    fireEvent.change(within(form).getByLabelText(/Resource id/), { target: { value: 'gk-2' } });
-    fireEvent.click(within(form).getByRole('button', { name: '授予 Grant' }));
+    fireEvent.change(within(form).getByLabelText(/主体/), { target: { value: 'p-2' } });
+    fireEvent.change(within(form).getByLabelText(/资源 id/), { target: { value: 'gk-2' } });
+    fireEvent.click(within(form).getByRole('button', { name: '授予' }));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
@@ -157,21 +153,21 @@ describe('AccessPage', () => {
     });
     renderPage(http);
     await screen.findByTestId('grants-empty');
-    fireEvent.click(screen.getByRole('button', { name: '授予能力 Grant capability' }));
+    fireEvent.click(screen.getByRole('button', { name: '授予能力' }));
     const form = await screen.findByTestId('grant-capability-form');
-    fireEvent.change(within(form).getByLabelText(/Principal/), { target: { value: 'p-2' } });
+    fireEvent.change(within(form).getByLabelText(/主体/), { target: { value: 'p-2' } });
 
     for (const bad of ['"foo"', '42', 'null', '[1,2]']) {
-      fireEvent.change(within(form).getByLabelText(/Scope/), { target: { value: bad } });
-      fireEvent.click(within(form).getByRole('button', { name: '授予 Grant' }));
+      fireEvent.change(within(form).getByLabelText(/范围/), { target: { value: bad } });
+      fireEvent.click(within(form).getByRole('button', { name: '授予' }));
       expect(await within(form).findByText(/Scope must be a JSON object/)).toBeTruthy();
     }
     expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(false);
 
-    fireEvent.change(within(form).getByLabelText(/Scope/), {
+    fireEvent.change(within(form).getByLabelText(/范围/), {
       target: { value: '{"actionKindTag":"docker.container_restart"}' },
     });
-    fireEvent.click(within(form).getByRole('button', { name: '授予 Grant' }));
+    fireEvent.click(within(form).getByRole('button', { name: '授予' }));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
     );
@@ -187,7 +183,7 @@ describe('AccessPage', () => {
       list_grants: () => ({ items: [] }),
     });
     renderPage(http);
-    const filter = (await screen.findByLabelText(/Filter by principal/)) as HTMLInputElement;
+    const filter = (await screen.findByLabelText(/按主体筛选/)) as HTMLInputElement;
     const grantsCalls = () => http.calls.filter((call) => call.name === 'list_grants');
     await waitFor(() => expect(grantsCalls()).toHaveLength(1));
 
@@ -203,10 +199,8 @@ describe('AccessPage', () => {
       expect(document.querySelectorAll('#access-principal-suggestions option')).toHaveLength(1),
     );
     // Same element, same value — no control swap dropped the input.
-    expect((screen.getByLabelText(/Filter by principal/) as HTMLInputElement).value).toBe(
-      'p-typed',
-    );
-    expect(screen.getByLabelText(/Filter by principal/)).toBe(filter);
+    expect((screen.getByLabelText(/按主体筛选/) as HTMLInputElement).value).toBe('p-typed');
+    expect(screen.getByLabelText(/按主体筛选/)).toBe(filter);
 
     fireEvent.keyDown(filter, { key: 'Enter' });
     await waitFor(() => expect(grantsCalls()).toHaveLength(2));
@@ -257,7 +251,7 @@ describe('AccessPage', () => {
     renderPage(http);
 
     const form = await screen.findByTestId('issue-service-handle-form');
-    fireEvent.change(within(form).getByLabelText(/Service principal/), {
+    fireEvent.change(within(form).getByLabelText(/服务主体/), {
       target: { value: 'p-svc' },
     });
     expect((within(form).getByLabelText(/TTL \(days\)/) as HTMLInputElement).value).toBe('30');
@@ -270,16 +264,14 @@ describe('AccessPage', () => {
     expect(checklist.querySelector('input[data-capability="list_users"]')).toBeNull();
     fireEvent.click(checklist.querySelector('input[data-capability="search"]') as HTMLElement);
 
-    const paste = within(form).getByLabelText(/粘贴能力名 Paste names/);
+    const paste = within(form).getByLabelText(/粘贴能力名/);
     fireEvent.change(paste, { target: { value: 'get_task list_gatekeepers' } });
     expect(within(form).getByText(/不是可签发的能力名/).textContent).toContain('list_gatekeepers');
-    expect(within(form).getByRole('button', { name: '签发 Issue' }).hasAttribute('disabled')).toBe(
-      true,
-    );
+    expect(within(form).getByRole('button', { name: '签发' }).hasAttribute('disabled')).toBe(true);
     fireEvent.change(paste, { target: { value: 'get_task' } });
     expect(within(form).getByTestId('ish-scope-summary').textContent).toContain('2');
 
-    fireEvent.click(within(form).getByRole('button', { name: '签发 Issue' }));
+    fireEvent.click(within(form).getByRole('button', { name: '签发' }));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'issue_service_handle')).toBe(true),
     );

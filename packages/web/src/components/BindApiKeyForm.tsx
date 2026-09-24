@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from 'react';
 import { type MeResult, bindApiKey } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -39,6 +40,7 @@ function bindErrorMessage(err: unknown): string | null {
  * ever returns the caller's refreshed `{user, memberships}`.
  */
 export function BindApiKeyForm({ onBound, fetchImpl }: BindApiKeyFormProps) {
+  const t = useT();
   const [apiKey, setApiKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
@@ -63,7 +65,7 @@ export function BindApiKeyForm({ onBound, fetchImpl }: BindApiKeyFormProps) {
   const inline = bindErrorMessage(error);
 
   return (
-    <Card title="绑定已有 API key Bind an existing API key">
+    <Card title={t('绑定已有', 'API key Bind an existing API key')}>
       <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
         <Field
           id="bind-api-key"
@@ -89,12 +91,12 @@ export function BindApiKeyForm({ onBound, fetchImpl }: BindApiKeyFormProps) {
             {inline}
           </p>
         ) : error !== null ? (
-          <ErrorBanner error={error} title="无法绑定 Could not bind the key" />
+          <ErrorBanner error={error} title={t('无法绑定', 'Could not bind the key')} />
         ) : null}
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button type="submit" variant="primary" loading={submitting} disabled={!apiKey.trim()}>
-            绑定 Bind
+            {t('绑定', 'Bind')}
           </Button>
         </div>
       </form>

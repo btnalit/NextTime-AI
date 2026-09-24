@@ -1,5 +1,6 @@
 import { type FormEvent, type ReactNode, useState } from 'react';
 import { describeError } from '../lib/errors.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, describedBy } from './ui/Field.js';
@@ -26,6 +27,7 @@ export function ApiKeyLoginDetails({
   error,
   footerExtra,
 }: ApiKeyLoginDetailsProps) {
+  const t = useT();
   const [apiKey, setApiKey] = useState('');
   const [revealed, setRevealed] = useState(false);
 
@@ -41,7 +43,7 @@ export function ApiKeyLoginDetails({
 
   return (
     <details className="api-key-login">
-      <summary>用 API key 登录 Use an API key instead</summary>
+      <summary>{t('用 API key 登录', 'Use an API key instead')}</summary>
       <form className="stack" onSubmit={handleSubmit} noValidate>
         <Field
           id="api-key"

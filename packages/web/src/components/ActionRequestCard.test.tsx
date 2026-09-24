@@ -62,9 +62,9 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('approval-target').textContent).toBe('web-1');
     expect(screen.getByTestId('approval-blast-radius').getAttribute('data-status')).toBe('medium');
     expect(screen.getByText('Restart the web-1 container.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Approve/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Reject/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Always allow/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /批准/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /拒绝/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /总是允许/ })).toBeTruthy();
     expect(screen.getByTestId('approval-open-page').getAttribute('href')).toBe(
       '#/work/approvals/ar-1',
     );
@@ -72,13 +72,13 @@ describe('ActionRequestCard', () => {
     expect(document.querySelector('.action-card')).toBeTruthy();
     const chip = document.querySelector('.action-card-status');
     expect(chip?.getAttribute('data-status')).toBe('pending_approval');
-    expect(screen.getByTestId('action-outcome').textContent).toContain('待审批 Pending approval');
+    expect(screen.getByTestId('action-outcome').textContent).toContain('待审批');
   });
 
   it('renders a status-only line with no buttons when isHolder is false', () => {
     renderCard({ card: baseCard({ isHolder: false }) });
-    expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Reject/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /批准/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /拒绝/ })).toBeNull();
     expect(screen.queryByTestId('action-request-card')).toBeNull();
     expect(document.querySelector('.action-card-status-only')).toBeTruthy();
     expect(document.querySelector('.action-card-status')?.getAttribute('data-status')).toBe(
@@ -88,25 +88,25 @@ describe('ActionRequestCard', () => {
 
   it('goes read-only and shows the outcome line once status is no longer pending_approval', () => {
     renderCard({ card: baseCard({ status: 'executed' }) });
-    expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /批准/ })).toBeNull();
     expect(screen.queryByTestId('approval-reason')).toBeNull();
     expect(document.querySelector('.action-card-status')?.getAttribute('data-status')).toBe(
       'executed',
     );
-    expect(screen.getByTestId('action-outcome').textContent).toContain('已执行 Executed');
+    expect(screen.getByTestId('action-outcome').textContent).toContain('已执行');
     // The deep link stays available on a decided card.
     expect(screen.getByTestId('approval-open-page')).toBeTruthy();
   });
 
-  it('reads 已拒绝 for a rejected request', () => {
+  it('reads 已拒绝', () => {
     renderCard({ card: baseCard({ status: 'rejected' }) });
-    expect(screen.getByTestId('action-outcome').textContent).toContain('已拒绝 Rejected');
+    expect(screen.getByTestId('action-outcome').textContent).toContain('已拒绝');
   });
 
   it('applies the blocking style and notice when awaitDecision is true and still pending', () => {
     renderCard({ card: baseCard({ awaitDecision: true }) });
     expect(document.querySelector('.action-card-blocking')).toBeTruthy();
-    expect(screen.getByText(/Awaiting your decision/)).toBeTruthy();
+    expect(screen.getByText(/等待你的决定/)).toBeTruthy();
   });
 
   it('renders the simulated block only when present', () => {
@@ -123,7 +123,7 @@ describe('ActionRequestCard', () => {
     fireEvent.change(screen.getByTestId('approval-reason'), {
       target: { value: '  routine restart  ' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await waitFor(() =>
       expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
         reason: 'routine restart',
@@ -134,7 +134,7 @@ describe('ActionRequestCard', () => {
 
   it('"Always allow" approves with alwaysAllow: true', async () => {
     const { props } = renderCard();
-    fireEvent.click(screen.getByRole('button', { name: /Always allow/ }));
+    fireEvent.click(screen.getByRole('button', { name: /总是允许/ }));
     await waitFor(() =>
       expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
         reason: undefined,
@@ -145,14 +145,14 @@ describe('ActionRequestCard', () => {
 
   it('requires a reason to approve a high blast radius and never offers "Always allow" for it (I8)', async () => {
     const { props } = renderCard({ card: baseCard({ blastRadius: 'high' }) });
-    expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    expect(screen.queryByRole('button', { name: /总是允许/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await screen.findByRole('alert');
     expect(props.onApprove).not.toHaveBeenCalled();
     fireEvent.change(screen.getByTestId('approval-reason'), {
       target: { value: 'incident 42, approved by on-call' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await waitFor(() =>
       expect(props.onApprove).toHaveBeenCalledWith('ar-1', {
         reason: 'incident 42, approved by on-call',
@@ -163,19 +163,19 @@ describe('ActionRequestCard', () => {
 
   it('hides "Always allow" when the session may not write auto-approval rules', () => {
     renderCard({ canAlwaysAllow: false });
-    expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull();
-    expect(screen.getByRole('button', { name: /Approve/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /总是允许/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /批准/ })).toBeTruthy();
   });
 
   it('calls onReject with the trimmed reason, or undefined when blank', async () => {
     const { props } = renderCard();
-    fireEvent.click(screen.getByRole('button', { name: /Reject/ }));
+    fireEvent.click(screen.getByRole('button', { name: /拒绝/ }));
     await waitFor(() => expect(props.onReject).toHaveBeenCalledWith('ar-1', undefined));
 
     fireEvent.change(screen.getByTestId('approval-reason'), {
       target: { value: '  not needed  ' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Reject/ }));
+    fireEvent.click(screen.getByRole('button', { name: /拒绝/ }));
     await waitFor(() => expect(props.onReject).toHaveBeenLastCalledWith('ar-1', 'not needed'));
   });
 

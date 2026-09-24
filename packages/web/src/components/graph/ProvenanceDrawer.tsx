@@ -4,6 +4,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { explainToProvenance } from '../../lib/graph-view.js';
+import { useT } from '../../lib/i18n.js';
 import { Drawer } from '../ui/Drawer.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { ProvenanceChain } from '../ui/ProvenanceChain.js';
@@ -28,10 +29,11 @@ export interface ProvenanceDrawerProps {
  * so there is nothing to link to), and "在审计页打开 Open in audit" (`?nodeId=` on the audit route).
  */
 export function ProvenanceDrawer({ http, fact, asOf, conflicts, onClose }: ProvenanceDrawerProps) {
+  const t = useT();
   return (
     <Drawer
       open={fact !== null}
-      title="溯源 Provenance"
+      title={t('溯源', 'Provenance')}
       subtitle={
         fact ? (
           <span className="row-wrap">
@@ -50,7 +52,7 @@ export function ProvenanceDrawer({ http, fact, asOf, conflicts, onClose }: Prove
             href={auditHrefForNode(fact.id)}
             data-testid="graph-open-in-audit"
           >
-            在审计页打开 Open in audit
+            {t('在审计页打开', 'Open in audit')}
           </a>
         ) : undefined
       }
@@ -79,6 +81,7 @@ function ProvenanceBody({
   readonly asOf: number;
   readonly conflicts: readonly ConflictWire[];
 }) {
+  const t = useT();
   const explain = useCapability<ExplainResultWire>(http, 'explain', { nodeId: fact.id });
   const inConflict = conflicts.length > 0;
   return (
@@ -106,8 +109,12 @@ function ProvenanceBody({
         <div className="notice notice-warn" data-testid="graph-provenance-conflicts">
           <div className="grow stack-s">
             <span>
-              该事实处于 {conflicts.length} 个未解决冲突中 · In {conflicts.length} open{' '}
-              {conflicts.length === 1 ? 'Conflict' : 'Conflicts'}
+              {t(
+                <>该事实处于 {conflicts.length} 个未解决冲突中</>,
+                <>
+                  In {conflicts.length} open {conflicts.length === 1 ? 'Conflict' : 'Conflicts'}
+                </>,
+              )}
             </span>
             <span className="row-wrap">
               {conflicts.map((conflict) => (
@@ -128,7 +135,7 @@ function ProvenanceBody({
       ) : explain.state.status === 'error' ? (
         <ErrorBanner
           error={explain.state.error}
-          title="无法解释该事实 Could not explain this Fact"
+          title={t('无法解释该事实', 'Could not explain this Fact')}
           onRetry={() => void explain.reload()}
           testId="graph-provenance-error"
         />

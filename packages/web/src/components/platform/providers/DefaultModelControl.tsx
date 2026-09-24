@@ -7,6 +7,7 @@ import {
 } from '../../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import type { ModelRow } from '../../../lib/governance.js';
+import { useT } from '../../../lib/i18n.js';
 import { Card } from '../../ui/Card.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
 import { Field, Select } from '../../ui/Field.js';
@@ -37,6 +38,7 @@ const PI_DEFAULT = '__pi_default__';
  * normal `http` prop like every other governance page.
  */
 export function DefaultModelControl({ http }: DefaultModelControlProps) {
+  const t = useT();
   const settings = useCapability<PlatformSettingsWire>(http, 'get_platform_settings');
   const models = useCapabilityList<ModelRow>(http, 'list_platform_models');
   const [submitting, setSubmitting] = useState(false);
@@ -63,12 +65,13 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
   const catalog = models.state.status === 'ready' ? models.state.data.items : [];
 
   return (
-    <Card title="平台默认入口模型 Platform default entry model">
+    <Card title={t('平台默认入口模型', 'Platform default entry model')}>
       <div className="stack-s">
         <p className="text-3 text-small">
-          新工作区（未显式指定入口模型时）与新用户的 AgentProfile 取它；留空 = 用 pi 自己的默认值。
-          New workspaces (when no explicit entry model is given) and new users' AgentProfiles take
-          this; empty = pi's own default.
+          {t(
+            "新工作区（未显式指定入口模型时）与新用户的 AgentProfile 取它；留空 = 用 pi 自己的默认值。 New workspaces (when no explicit entry model is given) and new users' AgentProfiles take this; empty =",
+            "pi's own default.",
+          )}
         </p>
         {settings.state.status === 'loading' ? (
           <SkeletonRows
@@ -84,7 +87,7 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
             testId="platform-default-model-load-error"
           />
         ) : (
-          <Field id="platform-default-model" label="默认入口模型 Default model">
+          <Field id="platform-default-model" label={t('默认入口模型', 'Default model')}>
             <Select
               id="platform-default-model"
               value={settings.state.data.defaultEntryModel ?? PI_DEFAULT}
@@ -92,7 +95,7 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
               disabled={submitting}
               data-testid="platform-default-model-select"
             >
-              <option value={PI_DEFAULT}>pi 自己的默认值 pi's own default</option>
+              <option value={PI_DEFAULT}>{t('pi 自己的默认值', "pi's own default")}</option>
               {catalog.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.id}
@@ -101,11 +104,13 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
             </Select>
           </Field>
         )}
-        {saved ? <Notice testId="platform-default-model-saved">已保存 Saved</Notice> : null}
+        {saved ? (
+          <Notice testId="platform-default-model-saved">{t('已保存', 'Saved')}</Notice>
+        ) : null}
         {error !== null ? (
           <ErrorBanner
             error={error}
-            title="无法保存默认入口模型 Could not save the default entry model"
+            title={t('无法保存默认入口模型', 'Could not save the default entry model')}
             testId="platform-default-model-error"
           />
         ) : null}

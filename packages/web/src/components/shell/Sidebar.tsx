@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
 import type { WireMembership } from '../../lib/auth-api.js';
+import { useT } from '../../lib/i18n.js';
 import type { ExternalNavItem, NavItem } from '../../lib/nav.js';
 import { EXPLORER_NAV, GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from '../../lib/nav.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
 import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
 import type { NavSection } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
+import { LangSwitch } from '../LangSwitch.js';
 import { Sheet, SheetContent, SheetTitle } from '../kit/sheet.js';
 import { Button } from '../ui/Button.js';
 import { Select } from '../ui/Field.js';
@@ -125,6 +127,7 @@ export function SidebarContent({
   currentUser,
   wsStatusTestId = true,
 }: SidebarProps) {
+  const t = useT();
   const showGovern =
     !isProvenMember(role) && (authMode === 'apiKey' || selectedWorkspaceId != null);
   const isAdmin = platformRole === 'admin';
@@ -228,13 +231,14 @@ export function SidebarContent({
         ) : null}
         {authMode === 'cookie' ? (
           <Button variant="ghost" size="s" icon="logout" onClick={onLogout} title="Sign out">
-            登出 Sign out
+            {t('登出', 'Sign out')}
           </Button>
         ) : (
           <Button variant="ghost" size="s" icon="logout" onClick={onLogout} title="Forget key">
             Forget key
           </Button>
         )}
+        <LangSwitch />
       </div>
     </>
   );
@@ -282,6 +286,7 @@ export function MobileTopBar({
   wsStatus,
   onOpenMenu,
 }: MobileTopBarProps) {
+  const t = useT();
   return (
     <header className="mobile-topbar">
       <Button
@@ -289,7 +294,7 @@ export function MobileTopBar({
         size="s"
         icon="menu"
         iconOnly
-        aria-label="打开导航菜单 Open navigation menu"
+        aria-label={t('打开导航菜单', 'Open navigation menu')}
         data-testid="nav-open"
         onClick={onOpenMenu}
       />
@@ -325,10 +330,11 @@ export interface NavDrawerProps extends SidebarProps {
  * since nothing else can open this drawer.
  */
 export function NavDrawer({ open, onOpenChange, ...sidebarProps }: NavDrawerProps) {
+  const t = useT();
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="left" className="nav-drawer">
-        <SheetTitle className="visually-hidden">导航 Navigation</SheetTitle>
+        <SheetTitle className="visually-hidden">{t('导航', 'Navigation')}</SheetTitle>
         {/* wsStatusTestId={false}: MobileTopBar (always mounted at this width, unlike this
          *  drawer) already carries the DOM's one `ws-status` testid — see its own doc comment. */}
         <SidebarContent {...sidebarProps} wsStatusTestId={false} />

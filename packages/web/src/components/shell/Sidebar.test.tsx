@@ -16,7 +16,7 @@ const KNOWN_OWNER: WorkspaceRole = { kind: 'known', role: 'owner' };
 const KNOWN_MEMBER: WorkspaceRole = { kind: 'known', role: 'member' };
 
 describe('Sidebar', () => {
-  it('shows 治理 Governance for an unknown or owner/operator role, hides it only for a proven member', () => {
+  it('shows 治理', () => {
     for (const role of [INFERRED_UNKNOWN, INFERRED_OWNER, INFERRED_OPERATOR_PLUS, KNOWN_OWNER]) {
       const { unmount } = render(
         <Sidebar
@@ -92,7 +92,7 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('nav-explorer').getAttribute('href')).toBe('/explorer/');
   });
 
-  it('hides 治理 in cookie mode when no workspace is selected, even for a non-member role', () => {
+  it('hides 治理', () => {
     render(
       <Sidebar
         active="chats"
@@ -116,7 +116,7 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('nav-section-use')).toBeTruthy();
   });
 
-  it('shows the 平台 group only for a platform admin, independent of workspace role', () => {
+  it('shows the 平台', () => {
     render(
       <Sidebar
         active="chats"
@@ -296,7 +296,7 @@ describe('Sidebar', () => {
       { workspaceId: 'ws-2', workspaceName: 'Beta', principalId: 'p-2', role: 'member' },
     ];
 
-    it('labels the sign-out button "Forget key" in apiKey mode and "登出 Sign out" in cookie mode', () => {
+    it('labels the sign-out button "Forget key" in apiKey mode and "登出', () => {
       const onLogout = vi.fn();
       const { rerender } = render(
         <Sidebar
@@ -322,7 +322,7 @@ describe('Sidebar', () => {
           onLogout={onLogout}
         />,
       );
-      const signOut = screen.getByRole('button', { name: /登出 Sign out/ });
+      const signOut = screen.getByRole('button', { name: /登出/ });
       fireEvent.click(signOut);
       expect(onLogout).toHaveBeenCalledTimes(1);
     });
@@ -473,7 +473,7 @@ describe('NavDrawer', () => {
     expect(screen.getByTestId('nav-chats')).toBeTruthy();
     expect(screen.getByText('Acme')).toBeTruthy();
     expect(screen.getByTestId('current-user').textContent).toContain('Ada');
-    expect(screen.getByRole('button', { name: /登出 Sign out/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /登出/ })).toBeTruthy();
   });
 
   /** The real ≤960px pairing — `MobileTopBar` always mounted, `NavDrawer` toggled by its own

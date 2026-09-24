@@ -3,6 +3,7 @@ import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { MeResult } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
 import { hrefs } from '../../lib/router.js';
@@ -75,6 +76,7 @@ const HEALTH_CHIP_CLASS: Readonly<Record<ServiceHealth['status'], string>> = {
  * the version card is `platform_overview.version.kernel` (B1's real value lives in the kernel).
  */
 export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageProps) {
+  const t = useT();
   const overview = useCapability<PlatformOverviewWire>(http, 'platform_overview');
   const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces');
   const residue =
@@ -86,15 +88,18 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('platformOverview')}
-        title="概览 Overview"
-        description="内核版本、服务健康、首次运行清单与最近的平台审计。 Kernel version, service health, the first-run checklist, and recent platform audit."
+        title={t('概览', 'Overview')}
+        description={t(
+          '内核版本、服务健康、首次运行清单与最近的平台审计。',
+          'Kernel version, service health, the first-run checklist, and recent platform audit.',
+        )}
       />
       {residue.length > 0 ? (
         <Notice tone="warn" testId="platform-residue-banner">
           验收残留 {residue.length} 个工作区待清除（已停用或已到期的临时工作区）。 {residue.length}{' '}
           workspaces of acceptance residue await purging (disabled, or ephemeral past expiry).{' '}
           <a href={residueWorkspacesHref()} data-testid="platform-residue-link">
-            去清理 Review and purge
+            {t('去清理', 'Review and purge')}
           </a>
         </Notice>
       ) : null}
@@ -127,20 +132,21 @@ function PlatformOverviewBody({
   readonly data: PlatformOverviewWire;
   readonly onKeyBound: (result: MeResult) => void;
 }) {
+  const t = useT();
   return (
     <>
-      <Card title="版本 Version">
+      <Card title={t('版本', 'Version')}>
         <dl className="definition-list">
           <dt>Kernel</dt>
           <dd>{data.version.kernel}</dd>
-          <dt>已应用迁移 Migrations applied</dt>
+          <dt>{t('已应用迁移', 'Migrations applied')}</dt>
           <dd>{data.version.migrationsApplied}</dd>
-          <dt>最新迁移 Latest migration</dt>
+          <dt>{t('最新迁移', 'Latest migration')}</dt>
           <dd>{data.version.latestMigration ?? '—'}</dd>
         </dl>
       </Card>
 
-      <Card title="开始使用 Getting started" padded={false}>
+      <Card title={t('开始使用', 'Getting started')} padded={false}>
         <DataList ariaLabel="Getting started checklist" testId="platform-checklist">
           {data.checklist.map((item) => (
             <DataRow
@@ -149,7 +155,7 @@ function PlatformOverviewBody({
               leading={
                 <Icon
                   name={item.done ? 'check' : 'clock'}
-                  label={item.done ? '已完成 Done' : '待完成 To do'}
+                  label={item.done ? t('已完成', 'Done') : t('待完成', 'To do')}
                 />
               }
               title={CHECKLIST_LABELS[item.key]}
@@ -161,25 +167,29 @@ function PlatformOverviewBody({
       </Card>
 
       <div className="platform-tiles" data-testid="platform-counts">
-        <CountTile testId="platform-count-users" label="用户 Users" value={data.counts.users} />
+        <CountTile
+          testId="platform-count-users"
+          label={t('用户', 'Users')}
+          value={data.counts.users}
+        />
         <CountTile
           testId="platform-count-workspaces"
-          label="工作区 Workspaces"
+          label={t('工作区', 'Workspaces')}
           value={data.counts.workspaces}
         />
         <CountTile
           testId="platform-count-gatekeepers"
-          label="门实例 Gatekeepers"
+          label={t('门实例', 'Gatekeepers')}
           value={data.counts.gatekeepers}
         />
         <CountTile
           testId="platform-count-models"
-          label="可用模型 Models available"
+          label={t('可用模型', 'Models available')}
           value={data.counts.modelsAvailable}
         />
       </div>
 
-      <Card title="服务健康 Health">
+      <Card title={t('服务健康', 'Health')}>
         <div className="row-wrap" data-testid="platform-health">
           {data.health.map((entry) => (
             <span
@@ -195,14 +205,14 @@ function PlatformOverviewBody({
       </Card>
 
       <Card
-        title="最近平台审计 Recent platform audit"
-        actions={<a href={hrefs.platformAudit()}>查看全部 View all</a>}
+        title={t('最近平台审计', 'Recent platform audit')}
+        actions={<a href={hrefs.platformAudit()}>{t('查看全部', 'View all')}</a>}
         padded={false}
       >
         {data.recentAudit.length === 0 ? (
           <EmptyState
             icon="search"
-            title="暂无平台审计 No platform audit rows yet"
+            title={t('暂无平台审计', 'No platform audit rows yet')}
             testId="platform-overview-audit-empty"
           />
         ) : (

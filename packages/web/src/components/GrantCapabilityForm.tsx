@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { GrantRow, PrincipalRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select } from './ui/Field.js';
@@ -32,6 +33,7 @@ export function GrantCapabilityForm({
   onDone,
   onCancel,
 }: GrantCapabilityFormProps) {
+  const t = useT();
   const [principalId, setPrincipalId] = useState(defaultPrincipalId ?? '');
   const [resourceType, setResourceType] = useState('gatekeeper');
   const [resourceId, setResourceId] = useState('');
@@ -48,7 +50,7 @@ export function GrantCapabilityForm({
       try {
         scope = JSON.parse(scopeText);
       } catch {
-        setScopeError('Scope 必须是合法 JSON。 Scope must be valid JSON.');
+        setScopeError(t('Scope 必须是合法 JSON。', 'Scope must be valid JSON.'));
         return;
       }
       // C19: `GrantRow.scope` is read as a record everywhere (`Object.keys(row.scope)` on the
@@ -86,7 +88,7 @@ export function GrantCapabilityForm({
       noValidate
       data-testid="grant-capability-form"
     >
-      <Field id="gc-principal" label="主体 Principal" required>
+      <Field id="gc-principal" label={t('主体', 'Principal')} required>
         {principals && principals.length > 0 ? (
           <Select
             id="gc-principal"
@@ -117,9 +119,9 @@ export function GrantCapabilityForm({
 
       <Field
         id="gc-resource-type"
-        label="资源类型 Resource type"
+        label={t('资源类型', 'Resource type')}
         required
-        hint="目前只有 'gatekeeper'。 Today: 'gatekeeper'."
+        hint={t("目前只有 'gatekeeper'。", "Today: 'gatekeeper'.")}
       >
         <Input
           id="gc-resource-type"
@@ -136,8 +138,11 @@ export function GrantCapabilityForm({
 
       <Field
         id="gc-resource-id"
-        label="资源 id Resource id"
-        hint="门的 id；留空 = 授予该类型的全部资源。 The gatekeeper's id. Leave empty to grant every resource of this type."
+        label={t('资源 id', 'Resource id')}
+        hint={t(
+          '门的 id；留空 = 授予该类型的全部资源。',
+          "The gatekeeper's id. Leave empty to grant every resource of this type.",
+        )}
       >
         <Input
           id="gc-resource-id"
@@ -150,9 +155,12 @@ export function GrantCapabilityForm({
 
       <Field
         id="gc-scope"
-        label="范围 Scope (JSON)"
+        label={t('范围', 'Scope (JSON)')}
         error={scopeError}
-        hint="可选的附加限定，例如 {&quot;actionKindTag&quot;:&quot;docker.container_restart&quot;}。 Optional extra qualifiers."
+        hint={t(
+          '可选的附加限定，例如 {&quot;actionKindTag&quot;:&quot;docker.container_restart&quot;}。',
+          'Optional extra qualifiers.',
+        )}
       >
         <Input
           id="gc-scope"
@@ -165,12 +173,12 @@ export function GrantCapabilityForm({
       </Field>
 
       {error !== null ? (
-        <ErrorBanner error={error} title="无法授予 Could not grant this capability" />
+        <ErrorBanner error={error} title={t('无法授予', 'Could not grant this capability')} />
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
         <Button
           type="submit"
@@ -178,7 +186,7 @@ export function GrantCapabilityForm({
           loading={submitting}
           disabled={!principalId.trim() || !resourceType.trim()}
         >
-          授予 Grant
+          {t('授予', 'Grant')}
         </Button>
       </div>
     </form>

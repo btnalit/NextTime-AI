@@ -1,7 +1,13 @@
 import type { ActionRequestStatus, BlastRadius } from '@nexttime/shared';
 import { humanizeKind } from './format.js';
-import { statusChipStyle } from './status-tone.js';
+import { type ChipStyle, statusChipStyle } from './status-tone.js';
 import type { ActionPendingPush, ChatMessage } from './ws-client.js';
+
+/** `actionRequest` is still an English-only machine (out of this lane's scope), so this is always
+ *  the plain-string branch at runtime — narrows `ChipStyle.label`'s S8 W1-A9 union type. */
+function chipLabelText(label: ChipStyle['label']): string {
+  return typeof label === 'string' ? label : label.en;
+}
 
 /**
  * lib/action-card: normalizes the three different shapes an ActionRequest can arrive in on the
@@ -258,6 +264,6 @@ export const ACTION_OUTCOME_ZH: Readonly<Record<ActionRequestStatus, string>> = 
 export function actionOutcomeLabel(status: string | undefined): string {
   const effective = status ?? DECIDABLE_STATUS;
   const zh = (ACTION_OUTCOME_ZH as Readonly<Record<string, string>>)[effective];
-  const en = statusChipStyle('actionRequest', effective).label;
+  const en = chipLabelText(statusChipStyle('actionRequest', effective).label);
   return zh === undefined ? en : `${zh} ${en}`;
 }

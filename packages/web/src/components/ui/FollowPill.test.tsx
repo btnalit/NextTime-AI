@@ -18,7 +18,7 @@ describe('FollowPill', () => {
 
   it('renders the bare form at zero and caps the count at 99+', () => {
     const { rerender } = render(<FollowPill count={0} onClick={vi.fn()} testId="pill" />);
-    expect(screen.getByTestId('pill').textContent).toBe('跟随最新输出 Follow latest');
+    expect(screen.getByTestId('pill').textContent).toBe('跟随最新输出');
     rerender(<FollowPill count={250} onClick={vi.fn()} testId="pill" />);
     expect(screen.getByTestId('pill').textContent).toBe('跟随最新输出 · 99+ 条新消息');
   });

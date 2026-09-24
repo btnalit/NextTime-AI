@@ -31,8 +31,8 @@ test.describe('CI smoke: tasks page', () => {
     await expect(page.getByTestId('tasks-empty').or(page.getByTestId('tasks-list'))).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByRole('heading', { name: /任务 Tasks/ })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Active/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /任务/ })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /进行中/ })).toBeVisible();
   });
 
   test('tasks: a deep link to an unknown task shows the drawer without crashing', async ({

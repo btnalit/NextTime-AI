@@ -38,7 +38,7 @@ test.describe('catalog editors', () => {
 
     const proposed = drawer.getByTestId('draft-proposed');
     await expect(proposed).toBeVisible({ timeout: 15_000 });
-    await expect(proposed.getByTestId('draft-private-notice')).toContainText('private');
+    await expect(proposed.getByTestId('draft-private-notice')).toContainText('只有你');
     await drawer.getByTestId('draft-publish').click();
     await expect(drawer.getByTestId('draft-publish')).toBeHidden({ timeout: 15_000 });
     await drawer.getByTestId('draft-done').click();
@@ -54,7 +54,7 @@ test.describe('catalog editors', () => {
     // The checklist only lists the published, policy-allowed Skills once "继承 Inherit" is
     // unchecked (S3.13: an inheriting profile has nothing to pick); a fresh publication is
     // *available* there, not auto-enabled.
-    await skillsField.getByRole('checkbox', { name: /Inherit workspace default/ }).uncheck();
+    await skillsField.getByRole('checkbox', { name: /继承（不覆盖）/ }).uncheck();
     await expect(skillsField.getByText(name)).toBeVisible();
   });
 

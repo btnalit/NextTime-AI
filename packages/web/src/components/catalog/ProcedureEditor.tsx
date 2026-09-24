@@ -15,6 +15,7 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName } from '../../lib/tasks.js';
 import { Button } from '../ui/Button.js';
@@ -61,6 +62,7 @@ export function ProcedureEditor({
   onProposed,
   onDone,
 }: ProcedureEditorProps) {
+  const t = useT();
   const permissions = usePermissions();
   const [form, setForm] = useState<ProcedureForm>(() =>
     copyOf
@@ -158,15 +160,17 @@ export function ProcedureEditor({
       {copyOf ? (
         <Notice tone="warn" testId="procedure-copy-notice">
           从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：内核的 propose_procedure 不接受
-          procedureId，提交会创建一个<strong>新的</strong> Procedure（新 id、v1）。 Copied from{' '}
-          {copyOf.name} v{copyOf.version}: propose_procedure takes no procedureId, so submitting
-          creates a <strong>new</strong> Procedure (new id, v1).
+          procedureId，提交会创建一个<strong>新的</strong>{' '}
+          {t('Procedure（新 id、v1）。', 'Copied from')} {copyOf.name} v{copyOf.version}:
+          propose_procedure takes no procedureId, so submitting creates a <strong>new</strong>{' '}
+          Procedure (new id, v1).
         </Notice>
       ) : (
         <Notice testId="procedure-private-notice">
-          草稿只有你（提议者）可见，发布后所有成员可见（I16）；发布时每个 operation / worker
-          步骤引用的对象必须已发布。 The draft is private to you until published (I16); publishing
-          resolves every operation / worker step against published objects.
+          {t(
+            '草稿只有你（提议者）可见，发布后所有成员可见（I16）；发布时每个 operation / worker 步骤引用的对象必须已发布。',
+            'The draft is private to you until published (I16); publishing resolves every operation / worker step against published objects.',
+          )}
         </Notice>
       )}
 
@@ -175,14 +179,17 @@ export function ProcedureEditor({
         value={view}
         onChange={setView}
         options={[
-          { value: 'form', label: '表单 Form', testId: 'procedure-view-form' },
+          { value: 'form', label: t('表单', 'Form'), testId: 'procedure-view-form' },
           { value: 'json', label: 'JSON', testId: 'procedure-view-json' },
         ]}
       />
 
       {view === 'json' ? (
         <JsonEditor
-          label="procedure（propose_procedure 的 procedure 字段） The propose_procedure payload"
+          label={t(
+            'procedure（propose_procedure 的 procedure 字段）',
+            'The propose_procedure payload',
+          )}
           value={content}
           onApply={applyJson}
           disabled={busy}
@@ -190,7 +197,7 @@ export function ProcedureEditor({
         />
       ) : (
         <>
-          <Field id="procedure-name" label="名称 name" required error={errors.name || null}>
+          <Field id="procedure-name" label={t('名称', 'name')} required error={errors.name || null}>
             <Input
               id="procedure-name"
               value={form.name}
@@ -202,7 +209,7 @@ export function ProcedureEditor({
           </Field>
           <Field
             id="procedure-description"
-            label="描述 description"
+            label={t('描述', 'description')}
             required
             error={errors.description || null}
           >
@@ -221,7 +228,9 @@ export function ProcedureEditor({
 
           <div className="stack-s">
             <div className="row">
-              <span className="section-title grow">步骤 Steps ({form.steps.length})</span>
+              <span className="section-title grow">
+                {t('步骤', 'Steps')} ({form.steps.length})
+              </span>
               <Button
                 variant="secondary"
                 size="s"
@@ -232,7 +241,7 @@ export function ProcedureEditor({
                 }
                 data-testid="procedure-add-step"
               >
-                添加步骤 Add step
+                {t('添加步骤', 'Add step')}
               </Button>
             </div>
             {errors.steps ? (
@@ -242,7 +251,7 @@ export function ProcedureEditor({
             ) : null}
             {form.steps.length === 0 ? (
               <span className="text-3 text-small">
-                还没有步骤；一个 Procedure 至少描述一个有序动作。 No steps yet.
+                {t('还没有步骤；一个 Procedure 至少描述一个有序动作。', 'No steps yet.')}
               </span>
             ) : null}
             {form.steps.map((step, index) => {
@@ -256,7 +265,7 @@ export function ProcedureEditor({
                 >
                   <div className="row-wrap">
                     <span className="tag">{index + 1}</span>
-                    <Field id={`${prefix}-kind`} label="类型 kind">
+                    <Field id={`${prefix}-kind`} label={t('类型', 'kind')}>
                       <Select
                         id={`${prefix}-kind`}
                         value={step.kind}
@@ -281,7 +290,7 @@ export function ProcedureEditor({
                       onClick={() => moveStep(index, -1)}
                       aria-label={`Move step ${index + 1} up`}
                     >
-                      上移 Up
+                      {t('上移', 'Up')}
                     </Button>
                     <Button
                       variant="ghost"
@@ -290,7 +299,7 @@ export function ProcedureEditor({
                       onClick={() => moveStep(index, 1)}
                       aria-label={`Move step ${index + 1} down`}
                     >
-                      下移 Down
+                      {t('下移', 'Down')}
                     </Button>
                     <Button
                       variant="ghost"
@@ -305,14 +314,14 @@ export function ProcedureEditor({
                       }
                       aria-label={`Remove step ${index + 1}`}
                     >
-                      移除 Remove
+                      {t('移除', 'Remove')}
                     </Button>
                   </div>
                   {step.kind === 'operation' ? (
                     <div className="row-wrap">
                       <Field
                         id={`${prefix}-gatekeeper`}
-                        label="门 gatekeeperId"
+                        label={t('门', 'gatekeeperId')}
                         required
                         error={fieldError('gatekeeperId')}
                       >
@@ -346,7 +355,7 @@ export function ProcedureEditor({
                       </Field>
                       <Field
                         id={`${prefix}-operation`}
-                        label="Operation 名 operationName"
+                        label={t('Operation 名', 'operationName')}
                         required
                         error={fieldError('operationName')}
                       >
@@ -365,7 +374,7 @@ export function ProcedureEditor({
                     <div className="row-wrap">
                       <Field
                         id={`${prefix}-definition`}
-                        label="Worker 定义 definitionId"
+                        label={t('Worker 定义', 'definitionId')}
                         required
                         error={fieldError('definitionId')}
                       >
@@ -406,7 +415,7 @@ export function ProcedureEditor({
                       </Field>
                       <Field
                         id={`${prefix}-version`}
-                        label="版本 version"
+                        label={t('版本', 'version')}
                         required
                         error={fieldError('version')}
                       >
@@ -423,7 +432,7 @@ export function ProcedureEditor({
                   ) : null}
                   <Field
                     id={`${prefix}-description`}
-                    label="说明 description"
+                    label={t('说明', 'description')}
                     required={step.kind === 'approval' || step.kind === 'verify'}
                     error={fieldError('description')}
                   >
@@ -444,17 +453,17 @@ export function ProcedureEditor({
       {error !== null ? (
         <ErrorBanner
           error={error}
-          title="无法创建草稿 Could not propose the draft"
+          title={t('无法创建草稿', 'Could not propose the draft')}
           testId="procedure-editor-error"
         />
       ) : null}
 
       <div className="row">
         <Button type="submit" variant="primary" loading={busy} data-testid="procedure-submit">
-          保存草稿 Save draft
+          {t('保存草稿', 'Save draft')}
         </Button>
         <Button variant="ghost" onClick={onDone} disabled={busy}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
       </div>
     </form>

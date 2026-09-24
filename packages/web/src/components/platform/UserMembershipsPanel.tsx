@@ -1,6 +1,7 @@
 import { ROLE_VALUES, type Role, type UserMembershipWire, type UserWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { useT } from '../../lib/i18n.js';
 import type { WorkspaceOption } from '../../lib/platform-workspaces.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -39,6 +40,7 @@ export function UserMembershipsPanel({
   onChanged,
   onBack,
 }: UserMembershipsPanelProps) {
+  const t = useT();
   const held = new Set(user.memberships.map((membership) => membership.workspaceId));
   const [workspaceChoice, setWorkspaceChoice] = useState('');
   const [otherWorkspaceId, setOtherWorkspaceId] = useState('');
@@ -73,14 +75,14 @@ export function UserMembershipsPanel({
     <div className="stack" data-testid="user-memberships">
       <div className="row">
         <Button variant="ghost" size="s" icon="arrow-left" onClick={onBack}>
-          返回用户 Back to the user
+          {t('返回用户', 'Back to the user')}
         </Button>
       </div>
 
       {user.memberships.length === 0 ? (
         <EmptyState
           icon="users"
-          title="还不属于任何工作区 No workspace memberships yet"
+          title={t('还不属于任何工作区', 'No workspace memberships yet')}
           testId="user-memberships-empty"
         />
       ) : (
@@ -99,14 +101,14 @@ export function UserMembershipsPanel({
 
       <div className="divider" />
 
-      <Field id="um-workspace" label="加入工作区 Add to a workspace">
+      <Field id="um-workspace" label={t('加入工作区', 'Add to a workspace')}>
         <Select
           id="um-workspace"
           value={workspaceChoice}
           onChange={(event) => setWorkspaceChoice(event.target.value)}
           disabled={adding}
         >
-          <option value="">选择工作区 Pick a workspace</option>
+          <option value="">{t('选择工作区', 'Pick a workspace')}</option>
           {workspaces
             .filter((workspace) => !held.has(workspace.id))
             .map((workspace) => (
@@ -114,12 +116,12 @@ export function UserMembershipsPanel({
                 {workspace.name}
               </option>
             ))}
-          <option value={OTHER_WORKSPACE}>其他（输入 id）Other — type an id</option>
+          <option value={OTHER_WORKSPACE}>{t('其他（输入 id）', 'Other — type an id')}</option>
         </Select>
       </Field>
 
       {workspaceChoice === OTHER_WORKSPACE ? (
-        <Field id="um-workspace-id" label="工作区 id Workspace id" required>
+        <Field id="um-workspace-id" label={t('工作区 id', 'Workspace id')} required>
           <Input
             id="um-workspace-id"
             value={otherWorkspaceId}
@@ -130,7 +132,7 @@ export function UserMembershipsPanel({
         </Field>
       ) : null}
 
-      <Field id="um-role" label="角色 Role" required>
+      <Field id="um-role" label={t('角色', 'Role')} required>
         <Select
           id="um-role"
           value={role}
@@ -145,7 +147,10 @@ export function UserMembershipsPanel({
         </Select>
       </Field>
 
-      <PlatformError error={addError} title="无法加入工作区 Could not add this membership" />
+      <PlatformError
+        error={addError}
+        title={t('无法加入工作区', 'Could not add this membership')}
+      />
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button
@@ -155,7 +160,7 @@ export function UserMembershipsPanel({
           loading={adding}
           disabled={workspaceId === ''}
         >
-          加入 Add
+          {t('加入', 'Add')}
         </Button>
       </div>
     </div>
@@ -173,6 +178,7 @@ function MembershipRow({
   readonly membership: UserMembershipWire;
   readonly onChanged: () => void;
 }) {
+  const t = useT();
   const [role, setRole] = useState<Role>(membership.role);
   const [saving, setSaving] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -229,7 +235,7 @@ function MembershipRow({
         </div>
         <div className="row-wrap">
           <label className="field-label" htmlFor={roleFieldId}>
-            角色 Role
+            {t('角色', 'Role')}
           </label>
           <Select
             id={roleFieldId}
@@ -246,26 +252,30 @@ function MembershipRow({
           {confirmingRemove ? (
             <>
               <Button variant="ghost" size="s" onClick={() => setConfirmingRemove(false)}>
-                取消 Cancel
+                {t('取消', 'Cancel')}
               </Button>
               <Button variant="danger" size="s" onClick={() => void remove()} loading={removing}>
-                确认移出 Confirm remove
+                {t('确认移出', 'Confirm remove')}
               </Button>
             </>
           ) : (
             <Button variant="ghost" size="s" onClick={() => setConfirmingRemove(true)}>
-              移出 Remove
+              {t('移出', 'Remove')}
             </Button>
           )}
         </div>
         {confirmingRemove ? (
           <Notice tone="warn">
-            移出会停用该工作区的成员 Principal 并吊销其会话；Principal 行保留做审计溯源。 Removing
-            disables the membership Principal and revokes its sessions; the row is kept for audit
-            lineage.
+            {t(
+              '移出会停用该工作区的成员 Principal 并吊销其会话；Principal 行保留做审计溯源。',
+              'Removing disables the membership Principal and revokes its sessions; the row is kept for audit lineage.',
+            )}
           </Notice>
         ) : null}
-        <PlatformError error={error} title="无法修改成员资格 Could not change this membership" />
+        <PlatformError
+          error={error}
+          title={t('无法修改成员资格', 'Could not change this membership')}
+        />
       </div>
     </li>
   );

@@ -89,7 +89,7 @@ describe('ChatHeader', () => {
     expect(screen.getByTestId('chat-title').className).toContain('chat-header-title');
   });
 
-  it('overflow menu closed by default; opening it offers 改名/归档 for an active chat', async () => {
+  it('overflow menu closed by default; opening it offers 改名/归档', async () => {
     renderHeader();
     expect(screen.queryByTestId('chat-header-rename')).toBeNull();
     expect(screen.queryByTestId('chat-header-archive')).toBeNull();
@@ -99,7 +99,7 @@ describe('ChatHeader', () => {
     expect(screen.queryByTestId('chat-header-restore')).toBeNull();
   });
 
-  it('改名 opens the same inline ChatRenameForm the old always-visible button did', async () => {
+  it('改名', async () => {
     renderHeader();
     openOverflowMenu();
     fireEvent.click(await screen.findByTestId('chat-header-rename'));
@@ -107,7 +107,7 @@ describe('ChatHeader', () => {
     expect(screen.queryByTestId('chat-title')).toBeNull();
   });
 
-  it('归档 opens the page-level ChatArchiveConfirm (tier low: archive_chat fires immediately)', async () => {
+  it('归档', async () => {
     const client = fakeCaller({
       archive_chat: () => chatRow({ archivedAt: '2026-09-04T00:00:00Z' }),
     });
@@ -121,7 +121,7 @@ describe('ChatHeader', () => {
     );
   });
 
-  it('an archived chat offers 恢复 instead, disabled while a restore is already in flight, and it calls unarchive_chat', async () => {
+  it('an archived chat offers 恢复', async () => {
     const archived = chatRow({ archivedAt: '2026-09-04T00:00:00Z' });
     const client = fakeCaller({ unarchive_chat: () => chatRow({ archivedAt: null }) });
     const onChatChanged = vi.fn();

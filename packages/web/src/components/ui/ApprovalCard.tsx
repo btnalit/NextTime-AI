@@ -1,5 +1,6 @@
 import type { BlastRadius, OperationMode } from '@nexttime/shared';
 import { type ReactNode, useId, useRef, useState } from 'react';
+import { useT } from '../../lib/i18n.js';
 import { Button } from './Button.js';
 import { Field, Textarea } from './Field.js';
 import { RefChip } from './RefChip.js';
@@ -74,6 +75,7 @@ export function ApprovalCard({
   readOnly = false,
   testId,
 }: ApprovalCardProps) {
+  const t = useT();
   const required = reasonRequired ?? blastRadius === 'high';
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
@@ -111,7 +113,7 @@ export function ApprovalCard({
     >
       <header className="approval-card-header">
         <div className="approval-card-heading">
-          <span className="section-title">审批 Approval</span>
+          <span className="section-title">{t('审批', 'Approval')}</span>
           <h3 className="approval-card-title mono" id={titleId}>
             {actionKind}
           </h3>
@@ -133,11 +135,11 @@ export function ApprovalCard({
       </header>
 
       <dl className="definition-list">
-        <dt>目标 Target</dt>
+        <dt>{t('目标', 'Target')}</dt>
         <dd data-testid="approval-target">{target}</dd>
         {gatekeeper ? (
           <>
-            <dt>门 Gatekeeper</dt>
+            <dt>{t('门', 'Gatekeeper')}</dt>
             <dd>
               <RefChip
                 kind="gatekeeper"
@@ -151,7 +153,7 @@ export function ApprovalCard({
         ) : null}
         {onBehalfOf ? (
           <>
-            <dt>代表 On behalf of</dt>
+            <dt>{t('代表', 'On behalf of')}</dt>
             <dd>
               <RefChip
                 kind="principal"
@@ -166,11 +168,11 @@ export function ApprovalCard({
         ) : null}
         {policySummary !== undefined ? (
           <>
-            <dt>策略 Policy</dt>
+            <dt>{t('策略', 'Policy')}</dt>
             <dd data-testid="approval-policy">{policySummary}</dd>
           </>
         ) : null}
-        <dt>请求 Request</dt>
+        <dt>{t('请求', 'Request')}</dt>
         <dd>
           <RefChip kind="actionRequest" id={actionRequestId} name={null} size="s" />
         </dd>
@@ -182,12 +184,15 @@ export function ApprovalCard({
         <>
           <Field
             id={reasonId}
-            label="理由 Reason"
+            label={t('理由', 'Reason')}
             required={required}
             hint={
               required
-                ? '高影响：批准必须说明理由，进审计。 High impact — approval needs a reason; it is audited.'
-                : '可选；拒绝或批准时一并记入审计。 Optional; recorded with the decision.'
+                ? t(
+                    '高影响：批准必须说明理由，进审计。 High impact —',
+                    'approval needs a reason; it is audited.',
+                  )
+                : t('可选；拒绝或批准时一并记入审计。', 'Optional; recorded with the decision.')
             }
             error={reasonError}
           >
@@ -215,7 +220,7 @@ export function ApprovalCard({
                 onClick={() => void decide('approve')}
                 data-testid="approval-approve"
               >
-                批准 Approve
+                {t('批准', 'Approve')}
               </Button>
             ) : null}
             {onReject ? (
@@ -226,7 +231,7 @@ export function ApprovalCard({
                 onClick={() => void decide('reject')}
                 data-testid="approval-reject"
               >
-                拒绝 Reject
+                {t('拒绝', 'Reject')}
               </Button>
             ) : null}
             {onAlwaysAllow ? (
@@ -237,7 +242,7 @@ export function ApprovalCard({
                 onClick={() => void decide('always')}
                 data-testid="approval-always-allow"
               >
-                总是允许 Always allow
+                {t('总是允许', 'Always allow')}
               </Button>
             ) : null}
             {approvalsHref !== undefined ? (
@@ -246,14 +251,14 @@ export function ApprovalCard({
                 href={approvalsHref}
                 data-testid="approval-open-page"
               >
-                在审批页打开 Open in approvals
+                {t('在审批页打开', 'Open in approvals')}
               </a>
             ) : null}
           </div>
         </>
       ) : approvalsHref !== undefined ? (
         <a className="approval-card-link" href={approvalsHref} data-testid="approval-open-page">
-          在审批页打开 Open in approvals
+          {t('在审批页打开', 'Open in approvals')}
         </a>
       ) : null}
     </article>

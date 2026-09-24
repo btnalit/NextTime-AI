@@ -149,7 +149,7 @@ describe('ChatPage inline approval card (C8)', () => {
     });
 
     const card = await screen.findByTestId('action-request-card');
-    fireEvent.click(within(card).getByRole('button', { name: /Always allow/ }));
+    fireEvent.click(within(card).getByRole('button', { name: /总是允许/ }));
 
     await waitFor(() =>
       expect(http.decisions().map((call) => call.name)).toEqual([
@@ -187,7 +187,7 @@ describe('ChatPage inline approval card (C8)', () => {
     fireEvent.change(within(card).getByTestId('approval-reason'), {
       target: { value: 'planned maintenance' },
     });
-    fireEvent.click(within(card).getByRole('button', { name: /Approve/ }));
+    fireEvent.click(within(card).getByRole('button', { name: /批准/ }));
     await waitFor(() => expect(http.decisions()).toHaveLength(1));
     expect(http.decisions()[0]?.params).toEqual({
       actionRequestId: 'ar-1',
@@ -196,7 +196,7 @@ describe('ChatPage inline approval card (C8)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('reason_required');
     // Still decidable: the buttons stay.
-    expect(within(card).getByRole('button', { name: /Approve/ })).toBeTruthy();
+    expect(within(card).getByRole('button', { name: /批准/ })).toBeTruthy();
   });
 });
 
@@ -522,9 +522,7 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     renderChat(fake.client, scriptedHttp({}));
     await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
     expect(fake.client.call).toHaveBeenCalledWith('list_chats', { includeArchived: true });
-    await waitFor(() =>
-      expect(screen.getByTestId('chat-title').textContent).toBe('新对话 New chat'),
-    );
+    await waitFor(() => expect(screen.getByTestId('chat-title').textContent).toBe('新对话'));
     act(() => handlersOf(fake).onMetadata({ title: 'restart web-1' }));
     expect(screen.getByTestId('chat-title').textContent).toBe('restart web-1');
   });
@@ -541,7 +539,7 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     renderChat(fake.client, http);
     const line = await screen.findByTestId('chat-model-line');
     await waitFor(() => expect(within(line).getByTestId('chat-model-select')).toBeTruthy());
-    expect(line.textContent).toContain('模式 Mode：入口 agent');
+    expect(line.textContent).toContain('模式 Mode：入口');
     expect(screen.getByTestId('chat-model-source').textContent).toContain('工作区默认');
     const select = screen.getByTestId('chat-model-select') as HTMLSelectElement;
     expect(select.disabled).toBe(false);
@@ -560,7 +558,7 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
         { name: 'set_agent_profile', params: { model: 'anthropic/claude-sonnet' } },
       ]),
     );
-    await screen.findByText('下一轮生效 Takes effect next turn');
+    await screen.findByText('下一轮生效');
     await waitFor(() =>
       expect(screen.getByTestId('chat-model-source').textContent).toContain('我的覆盖'),
     );
@@ -614,7 +612,7 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     expect(screen.getByTestId('chat-archived-chip')).toBeTruthy();
     const textarea = screen.getByLabelText('Message') as HTMLTextAreaElement;
     expect(textarea.disabled).toBe(true);
-    expect(textarea.placeholder).toBe('已归档 Archived');
+    expect(textarea.placeholder).toBe('已归档');
     // S8 W1-A3 (audit C3): rename/archive/restore moved from always-visible buttons into the
     // header's overflow menu — open it to see which items it offers.
     openChatHeaderMenu();
@@ -631,7 +629,7 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     expect(screen.getByTestId('chat-header-archive')).toBeTruthy();
   });
 
-  it('归档 from the header archives in place (toast with undo) and a push can restore it', async () => {
+  it('归档', async () => {
     const fake = fakeClient({
       archive_chat: () => chatRow({ archivedAt: '2026-09-04T00:00:00.000Z' }),
     });
@@ -643,15 +641,15 @@ describe('ChatPage header (S6-A W1 / W2)', () => {
     await screen.findByTestId('chat-archived-notice');
     expect(fake.client.call).toHaveBeenCalledWith('archive_chat', { chatId: 'chat-1' });
     const toast = await screen.findByTestId('toast');
-    expect(toast.textContent).toContain('已归档 Archived · Ops chat');
-    expect(within(toast).getByRole('button', { name: '撤销 Undo' })).toBeTruthy();
+    expect(toast.textContent).toContain('已归档 ·');
+    expect(within(toast).getByRole('button', { name: '撤销' })).toBeTruthy();
     // The per-chat `chat.metadata {archivedAt: null}` push (e.g. restored from the list in
     // another tab) re-enables the composer here.
     act(() => handlersOf(fake).onMetadata({ archivedAt: null }));
     expect(screen.queryByTestId('chat-archived-notice')).toBeNull();
   });
 
-  it('改名 from the header renames through rename_chat', async () => {
+  it('改名', async () => {
     const fake = fakeClient({
       rename_chat: (params) => chatRow({ title: (params as { title: string }).title }),
     });

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { Notice } from '../ui/Notice.js';
@@ -24,6 +25,7 @@ export function TemporaryPasswordDialog({
   password,
   onClose,
 }: TemporaryPasswordDialogProps) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -47,14 +49,16 @@ export function TemporaryPasswordDialog({
     <Drawer
       open
       onClose={onClose}
-      title="临时密码 Temporary password"
+      title={t('临时密码', 'Temporary password')}
       subtitle={<span className="mono">{login}</span>}
       testId="temporary-password-dialog"
     >
       <div className="stack">
         <Notice tone="warn">
-          只显示这一次，关闭后无法再看到；对方首次登录时必须修改。 Shown once — copy it now and hand
-          it over; the console never displays it again and the user must change it on first login.
+          {t(
+            '只显示这一次，关闭后无法再看到；对方首次登录时必须修改。 Shown once —',
+            'copy it now and hand it over; the console never displays it again and the user must change it on first login.',
+          )}
         </Notice>
         <div className="code-block row" style={{ justifyContent: 'space-between' }}>
           <span className="mono" data-testid="temporary-password-value">
@@ -66,12 +70,12 @@ export function TemporaryPasswordDialog({
             icon={copied ? 'check' : 'copy'}
             onClick={() => void copy()}
           >
-            {copied ? '已复制 Copied' : '复制 Copy'}
+            {copied ? t('已复制', 'Copied') : t('复制', 'Copy')}
           </Button>
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button variant="primary" onClick={onClose}>
-            我已保存 I have saved it
+            {t('我已保存', 'I have saved it')}
           </Button>
         </div>
       </div>

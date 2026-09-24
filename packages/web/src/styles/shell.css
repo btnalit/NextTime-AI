@@ -396,6 +396,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* S8 W1-A9: the sidebar-footer/account-page language toggle — reuses .tabs/.tab (above), just in
+ * a footer-sized wrapper. */
+.lang-switch {
+  align-self: flex-start;
+}
+
 @media (max-width: 1100px) {
   .shell {
     grid-template-columns: var(--rail-w) minmax(0, 1fr);
@@ -417,6 +423,7 @@
   .conn-status-label,
   .sidebar-version,
   .sidebar-user,
+  .lang-switch,
   .sidebar-footer .btn-label {
     display: none;
   }

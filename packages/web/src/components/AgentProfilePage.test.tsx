@@ -143,7 +143,7 @@ describe('AgentProfilePage', () => {
     expect(within(effective).getByText('anthropic/claude')).toBeTruthy();
 
     const form = await screen.findByTestId('agent-profile-form');
-    expect(within(form).getByLabelText(/模型 Model/)).toHaveProperty('value', 'anthropic/claude');
+    expect(within(form).getByLabelText(/模型/)).toHaveProperty('value', 'anthropic/claude');
   });
 
   it('renders a get_agent_profile not_found as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
@@ -173,7 +173,7 @@ describe('AgentProfilePage', () => {
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-profile-form');
-    fireEvent.click(within(form).getByRole('button', { name: /保存 Save/ }));
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'set_agent_profile')).toBe(true));
   });
 
@@ -187,7 +187,7 @@ describe('AgentProfilePage', () => {
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-profile-form');
-    fireEvent.click(within(form).getByRole('button', { name: /保存 Save/ }));
+    fireEvent.click(within(form).getByRole('button', { name: /保存/ }));
     await waitFor(() => expect(screen.getByText('model not in allow-list')).toBeTruthy());
   });
 
@@ -204,7 +204,7 @@ describe('AgentProfilePage', () => {
     });
     renderPage(http);
     const form = await screen.findByTestId('agent-profile-form');
-    const select = within(form).getByLabelText(/模型 Model/) as HTMLSelectElement;
+    const select = within(form).getByLabelText(/模型/) as HTMLSelectElement;
     await waitFor(() => {
       const values = Array.from(select.options).map((o) => o.value);
       expect(values).toContain('anthropic/claude');
@@ -221,7 +221,7 @@ describe('AgentProfilePage', () => {
     await screen.findByTestId('agent-profile-edit-forbidden');
     const form = await screen.findByTestId('agent-profile-form');
     const saveButton = within(form).getByRole('button', {
-      name: /保存 Save/,
+      name: /保存/,
     }) as HTMLButtonElement;
     expect(saveButton.disabled).toBe(true);
   });

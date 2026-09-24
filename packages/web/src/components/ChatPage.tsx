@@ -16,6 +16,7 @@ import { insertChatMessage } from '../lib/chat-messages.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatTime } from '../lib/format.js';
+import { useT } from '../lib/i18n.js';
 import { initialTurnState, streamReducer } from '../lib/streaming-reducer.js';
 import { systemStatusLineFromMessage } from '../lib/system-status.js';
 import type { ChatMessage, ChatSubscriptionHandlers, WsClient } from '../lib/ws-client.js';
@@ -78,6 +79,7 @@ export function ChatPage({
   onOpenApproval,
   onOpenTask,
 }: ChatPageProps) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
@@ -344,9 +346,14 @@ export function ChatPage({
     if (!card) {
       toast.push({
         tone: 'warn',
-        title: '已批准，但未写入自动批准规则 Approved, but the auto-approval rule was not written',
-        description:
-          '这个请求的动作种类尚未到达此对话。 The action kind of this request is not known to this chat yet.',
+        title: t(
+          '已批准，但未写入自动批准规则',
+          'Approved, but the auto-approval rule was not written',
+        ),
+        description: t(
+          '这个请求的动作种类尚未到达此对话。',
+          'The action kind of this request is not known to this chat yet.',
+        ),
       });
       return;
     }
@@ -360,7 +367,10 @@ export function ChatPage({
       if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');
       toast.push({
         tone: 'warn',
-        title: '已批准，但未写入自动批准规则 Approved, but the auto-approval rule was not written',
+        title: t(
+          '已批准，但未写入自动批准规则',
+          'Approved, but the auto-approval rule was not written',
+        ),
       });
     }
   }
@@ -488,16 +498,20 @@ export function ChatPage({
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-thread" data-testid="chat-thread" ref={threadRef}>
           {subscribeError !== null ? (
-            <ErrorBanner error={subscribeError} title="无法打开对话 Could not open this chat" />
+            <ErrorBanner
+              error={subscribeError}
+              title={t('无法打开对话', 'Could not open this chat')}
+            />
           ) : null}
           {!caughtUp && subscribeError === null ? (
             <p className="chat-empty">正在加载历史… Loading history…</p>
           ) : null}
           {caughtUp && messages.length === 0 && turn.status !== 'running' ? (
             <p className="chat-empty">
-              还没有消息。问入口 agent 点什么——它可以观察系统、提出动作并委派给 Worker。 No messages
-              yet. Ask the entry agent something — it can observe systems, propose actions and
-              delegate to Workers.
+              {t(
+                '还没有消息。问入口 agent 点什么——它可以观察系统、提出动作并委派给 Worker。 No messages yet. Ask the entry agent something —',
+                'it can observe systems, propose actions and delegate to Workers.',
+              )}
             </p>
           ) : null}
           {messages.map(renderMessage)}
@@ -535,7 +549,7 @@ export function ChatPage({
           {archived && chat ? (
             <Notice tone="info" testId="chat-archived-notice">
               <span className="row-wrap">
-                <span>已归档：这个对话是只读的。 Archived — this chat is read-only.</span>
+                <span>{t('已归档：这个对话是只读的。', 'Archived — this chat is read-only.')}</span>
                 <Button
                   variant="secondary"
                   size="s"
@@ -543,7 +557,7 @@ export function ChatPage({
                   loading={restoringId === chat.id}
                   data-testid="chat-composer-restore"
                 >
-                  恢复 Restore
+                  {t('恢复', 'Restore')}
                 </Button>
               </span>
             </Notice>
@@ -557,7 +571,7 @@ export function ChatPage({
               onKeyDown={handleComposerKeyDown}
               placeholder={
                 archived
-                  ? '已归档 Archived'
+                  ? t('已归档', 'Archived')
                   : composerDisabled
                     ? '等待本轮结束… Waiting for the current turn to finish…'
                     : 'Message…'
@@ -579,7 +593,8 @@ export function ChatPage({
           </div>
           <div className="composer-hint">
             <span>
-              <Kbd>Enter</Kbd> 发送 send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> 换行 new line
+              <Kbd>Enter</Kbd> 发送 send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd>{' '}
+              {t('换行', 'new line')}
             </span>
             <span className="mono" title={chatId} data-volatile="">
               {chatId.slice(0, 8)}

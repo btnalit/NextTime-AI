@@ -63,18 +63,18 @@ test.describe('CI smoke: governance surface', () => {
 
     // P-A1: "Add member" now adds an existing platform user by login (`add_member`); the API-key
     // Principal this test creates comes from the relabelled service-credential form.
-    await page.getByRole('button', { name: /Service credential/ }).click();
+    await page.getByRole('button', { name: /服务凭证/ }).click();
     const drawer = page.getByTestId('create-principal-drawer');
     await expect(drawer).toBeVisible();
     await drawer.locator('#cp-name').fill(`ci-e2e-member-${Date.now()}`);
-    await drawer.getByRole('button', { name: 'Create' }).click();
+    await drawer.getByRole('button', { name: '创建' }).click();
 
     // Shown exactly once (CreatePrincipalForm.tsx) — must be non-empty before the drawer closes.
     const createdKey = page.getByTestId('created-api-key');
     await expect(createdKey).toBeVisible({ timeout: 15_000 });
     await expect(createdKey).not.toHaveText('');
 
-    await drawer.getByRole('button', { name: /Done/ }).click();
+    await drawer.getByRole('button', { name: /我已复制/ }).click();
     await expect(drawer).toBeHidden();
   });
 
@@ -99,7 +99,7 @@ test.describe('CI smoke: governance surface', () => {
     await login(page, apiKey);
 
     await page.goto('/#/govern/systems');
-    await page.getByRole('button', { name: /Onboarding wizard/ }).click();
+    await page.getByRole('button', { name: /接入向导/ }).click();
 
     const drawer = page.getByTestId('onboarding-wizard-drawer');
     await expect(drawer).toBeVisible({ timeout: 15_000 });

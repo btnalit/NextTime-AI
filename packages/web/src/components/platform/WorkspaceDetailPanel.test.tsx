@@ -80,10 +80,8 @@ describe('WorkspaceDetailPanel', () => {
     const http = scriptedHttp({ list_users: () => ({ items: [] }) });
     renderPanel(http, workspace());
     const detail = screen.getByTestId('workspace-detail');
-    expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('活跃 Active');
-    expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toBe(
-      '常规 standard',
-    );
+    expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('活跃');
+    expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toBe('常规');
     expect(within(detail).getByTestId('workspace-detail-lifecycle').textContent).toBe('—');
     expect(within(detail).getByTestId('workspace-owner-chip').textContent).toBe('alice');
     expect(within(detail).queryByTestId('workspace-purge')).toBeNull();
@@ -103,11 +101,11 @@ describe('WorkspaceDetailPanel', () => {
       },
     });
     const { onChanged } = renderPanel(http, row);
-    const save = screen.getByRole('button', { name: '保存 Save' });
+    const save = screen.getByRole('button', { name: '保存' });
     expect(save.hasAttribute('disabled')).toBe(true);
-    fireEvent.change(screen.getByLabelText(/名称 Name/), { target: { value: '  Beta ' } });
+    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: '  Beta ' } });
     expect(save.hasAttribute('disabled')).toBe(true); // same name after trim
-    fireEvent.change(screen.getByLabelText(/名称 Name/), { target: { value: 'Gamma' } });
+    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: 'Gamma' } });
     expect(save.hasAttribute('disabled')).toBe(false);
     fireEvent.click(save);
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ ...row, name: 'Gamma' }));
@@ -147,7 +145,7 @@ describe('WorkspaceDetailPanel', () => {
       },
     });
     const { onChanged } = renderPanel(http, row);
-    const save = screen.getByRole('button', { name: '保存允许的模型 Save allowed models' });
+    const save = screen.getByRole('button', { name: '保存允许的模型' });
     expect(save.hasAttribute('disabled')).toBe(true);
     fireEvent.click(
       within(screen.getByTestId('workspace-allowed-models')).getByLabelText('anthropic/claude-3'),
@@ -161,24 +159,20 @@ describe('WorkspaceDetailPanel', () => {
     const http = scriptedHttp({ list_users: () => ({ items: [] }) });
     renderPanel(http, workspace(), { models: [], modelsReady: false });
     expect(screen.getByTestId('workspace-entry-model').hasAttribute('disabled')).toBe(true);
-    expect(
-      screen
-        .getByRole('button', { name: '保存允许的模型 Save allowed models' })
-        .hasAttribute('disabled'),
-    ).toBe(true);
+    expect(screen.getByRole('button', { name: '保存允许的模型' }).hasAttribute('disabled')).toBe(
+      true,
+    );
   });
 
-  it('a disabled workspace shows 启用 Enable, its retention clock and the purge entry only once purgeable', () => {
+  it('a disabled workspace shows 启用', () => {
     const http = scriptedHttp({ list_users: () => ({ items: [] }) });
     const recent = workspace({
       status: 'disabled',
       disabledAt: new Date(Date.now() - 1 * DAY_MS).toISOString(),
     });
     const { unmount } = renderPanel(http, recent);
-    expect(screen.getByTestId('workspace-status-toggle').textContent).toContain('启用 Enable');
-    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain(
-      '6 天后可清除 purgeable in 6 d',
-    );
+    expect(screen.getByTestId('workspace-status-toggle').textContent).toContain('启用');
+    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain('6 天后可清除');
     expect(screen.queryByTestId('workspace-purge')).toBeNull();
     expect(screen.getByTestId('workspace-purge-retention')).toBeTruthy();
     unmount();
@@ -187,9 +181,7 @@ describe('WorkspaceDetailPanel', () => {
       http,
       workspace({ status: 'disabled', disabledAt: null, purgeable: true }),
     );
-    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain(
-      '禁用于迁移前 disabled before 0030',
-    );
+    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain('禁用于迁移前');
     expect(screen.getByTestId('workspace-purge-section')).toBeTruthy();
     fireEvent.click(screen.getByTestId('workspace-purge'));
     expect(onPurge).toHaveBeenCalledTimes(1);
@@ -213,7 +205,7 @@ describe('WorkspaceDetailPanel', () => {
         })}
       />,
     );
-    expect(screen.getByTestId('workspace-expires').textContent).toContain('到期 expires');
+    expect(screen.getByTestId('workspace-expires').textContent).toContain('到期');
     expect(screen.getByTestId('workspace-expires').hasAttribute('data-expired')).toBe(false);
     unmount();
     render(
@@ -224,7 +216,7 @@ describe('WorkspaceDetailPanel', () => {
         })}
       />,
     );
-    expect(screen.getByTestId('workspace-expires').textContent).toContain('已到期 expired');
+    expect(screen.getByTestId('workspace-expires').textContent).toContain('已到期');
     expect(screen.getByTestId('workspace-expires').getAttribute('data-expired')).toBe('true');
   });
 });

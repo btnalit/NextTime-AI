@@ -2,6 +2,7 @@ import { type FormEvent, useState } from 'react';
 import { type SessionResult, login as apiLogin } from '../lib/auth-api.js';
 import { describeError } from '../lib/errors.js';
 import { HttpError } from '../lib/http-client.js';
+import { useT } from '../lib/i18n.js';
 import { ApiKeyLoginDetails } from './ApiKeyLoginDetails.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
@@ -50,6 +51,7 @@ export function LoginPage({
   onLoggedIn,
   fetchImpl,
 }: LoginPageProps) {
+  const t = useT();
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -88,7 +90,7 @@ export function LoginPage({
             </div>
           </div>
 
-          <Field id="login-name" label="登录名 Login" required>
+          <Field id="login-name" label={t('登录名', 'Login')} required>
             <Input
               id="login-name"
               name="login"
@@ -99,7 +101,7 @@ export function LoginPage({
             />
           </Field>
 
-          <Field id="login-password" label="密码 Password" required>
+          <Field id="login-password" label={t('密码', 'Password')} required>
             <Input
               id="login-password"
               name="password"

@@ -63,19 +63,15 @@ describe('PlatformSettingsPage', () => {
     renderPage(http);
 
     const form = await screen.findByTestId('platform-settings-form');
-    expect((within(form).getByLabelText(/站点名 Site name/) as HTMLInputElement).value).toBe(
-      'NextTime',
-    );
-    expect((within(form).getByLabelText(/公告 Announcement/) as HTMLTextAreaElement).value).toBe(
-      'hello',
-    );
+    expect((within(form).getByLabelText(/站点名/) as HTMLInputElement).value).toBe('NextTime');
+    expect((within(form).getByLabelText(/公告/) as HTMLTextAreaElement).value).toBe('hello');
     // The default entry model moved to the 模型与供应商 page (S7-E E5) — this page only points
     // there, it no longer has an editable field for it.
     expect(within(form).getByTestId('platform-settings-default-model-hint').textContent).toContain(
       '模型与供应商',
     );
     expect(screen.getByTestId('platform-settings-env-admins').textContent).toContain('root');
-    expect(screen.getByTestId('platform-settings-footer').textContent).toContain('version 3');
+    expect(screen.getByTestId('platform-settings-footer').textContent).toContain('版本 3');
   });
 
   it('warns that the instance instructions reach every agent system prompt', async () => {
@@ -87,7 +83,7 @@ describe('PlatformSettingsPage', () => {
     });
     renderPage(http);
     await screen.findByTestId('platform-settings-form');
-    expect(screen.getByText(/这会进入所有 agent 的 system prompt/)).toBeTruthy();
+    expect(screen.getByText(/这会进入所有 agent 的/)).toBeTruthy();
   });
 
   it('saves only the changed fields and shows a success banner', async () => {
@@ -103,16 +99,16 @@ describe('PlatformSettingsPage', () => {
     renderPage(http);
 
     const form = await screen.findByTestId('platform-settings-form');
-    fireEvent.change(within(form).getByLabelText(/站点名 Site name/), {
+    fireEvent.change(within(form).getByLabelText(/站点名/), {
       target: { value: 'NextTime Ops' },
     });
-    fireEvent.click(within(form).getByRole('button', { name: '保存 Save' }));
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }));
 
     const saved = await screen.findByTestId('platform-settings-saved');
-    expect(saved.textContent).toContain('version 4');
+    expect(saved.textContent).toContain('版本 4');
     expect(http.calls.filter((call) => call.name === 'update_platform_settings')).toHaveLength(1);
     // Re-seeded from the saved row, so a second save sends nothing at all.
-    fireEvent.click(screen.getByRole('button', { name: '保存 Save' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await screen.findByTestId('platform-settings-unchanged');
     expect(http.calls.filter((call) => call.name === 'update_platform_settings')).toHaveLength(1);
   });
@@ -129,11 +125,11 @@ describe('PlatformSettingsPage', () => {
     renderPage(http);
 
     const form = await screen.findByTestId('platform-settings-form');
-    fireEvent.change(within(form).getByLabelText(/默认工作区 Default workspace/), {
+    fireEvent.change(within(form).getByLabelText(/默认工作区/), {
       target: { value: '' },
     });
     fireEvent.change(within(form).getByLabelText(/默认每日调用上限/), { target: { value: '' } });
-    fireEvent.click(within(form).getByRole('button', { name: '保存 Save' }));
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }));
 
     await screen.findByTestId('platform-settings-saved');
   });
@@ -150,9 +146,7 @@ describe('PlatformSettingsPage', () => {
     const form = await screen.findByTestId('platform-settings-form');
     fireEvent.change(within(form).getByLabelText(/密码最短长度/), { target: { value: '4' } });
     expect(within(form).getByText(/Must be an integer 8–128/)).toBeTruthy();
-    expect(within(form).getByRole('button', { name: '保存 Save' }).hasAttribute('disabled')).toBe(
-      true,
-    );
+    expect(within(form).getByRole('button', { name: '保存' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('maps a kernel error code to its bilingual message', async () => {
@@ -167,10 +161,10 @@ describe('PlatformSettingsPage', () => {
     renderPage(http);
 
     const form = await screen.findByTestId('platform-settings-form');
-    fireEvent.change(within(form).getByLabelText(/默认工作区 Default workspace/), {
+    fireEvent.change(within(form).getByLabelText(/默认工作区/), {
       target: { value: 'ws-off' },
     });
-    fireEvent.click(within(form).getByRole('button', { name: '保存 Save' }));
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }));
 
     const error = await screen.findByTestId('platform-settings-save-error');
     expect(error.textContent).toContain('该工作区已停用');

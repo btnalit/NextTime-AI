@@ -86,7 +86,7 @@ function settings(overrides: Partial<PlatformSettingsWire> = {}): PlatformSettin
 }
 
 describe('PlatformUsersPage', () => {
-  it('lists users with a derived 待激活 status, workspace chips and the budget default', async () => {
+  it('lists users with a derived 待激活', async () => {
     const http = scriptedHttp({
       list_users: () => ({
         items: [
@@ -121,8 +121,8 @@ describe('PlatformUsersPage', () => {
 
     const statuses = within(table).getAllByTestId('platform-user-status');
     // S6-A0 / C17: rendered through the shared userStatus StatusChip (bilingual labels).
-    expect(statuses[0]?.textContent).toBe('活跃 Active');
-    expect(statuses[1]?.textContent).toBe('待激活 Pending activation');
+    expect(statuses[0]?.textContent).toBe('活跃');
+    expect(statuses[1]?.textContent).toBe('待激活');
 
     const chips = within(table).getAllByTestId('platform-user-workspace-chip');
     expect(chips[0]?.textContent).toBe('Acme@member');
@@ -131,9 +131,9 @@ describe('PlatformUsersPage', () => {
     expect(chips[1]?.className).toContain('chip-neutral');
 
     // `null` budgets fall back to the platform default, a set one shows the number.
-    expect(rows[0]?.textContent).toContain('默认 default');
+    expect(rows[0]?.textContent).toContain('默认');
     expect(rows[1]?.textContent).toContain('20');
-    expect(rows[1]?.textContent).toContain('从未 Never');
+    expect(rows[1]?.textContent).toContain('从未');
 
     // A6: the default view hides acceptance residue.
     expect(http.calls[0]).toEqual({
@@ -173,7 +173,7 @@ describe('PlatformUsersPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-users-table');
 
-    fireEvent.change(screen.getByLabelText(/状态 Status/), { target: { value: 'disabled' } });
+    fireEvent.change(screen.getByLabelText(/状态/), { target: { value: 'disabled' } });
     await waitFor(() =>
       expect(
         http.calls.some(
@@ -185,8 +185,8 @@ describe('PlatformUsersPage', () => {
       ).toBe(true),
     );
 
-    fireEvent.change(screen.getByLabelText(/搜索 Search/), { target: { value: ' ali ' } });
-    fireEvent.click(screen.getByRole('button', { name: '应用 Apply' }));
+    fireEvent.change(screen.getByLabelText(/搜索/), { target: { value: ' ali ' } });
+    fireEvent.click(screen.getByRole('button', { name: '应用' }));
     await waitFor(() =>
       expect(
         http.calls.some(
@@ -219,20 +219,20 @@ describe('PlatformUsersPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-users-table');
 
-    fireEvent.click(screen.getByRole('button', { name: /新建用户 Create user/ }));
+    fireEvent.click(screen.getByRole('button', { name: /新建用户/ }));
     const form = await screen.findByTestId('create-user-form');
-    fireEvent.change(within(form).getByLabelText(/登录名 Login/), { target: { value: 'carol' } });
-    fireEvent.change(within(form).getByLabelText(/显示名 Display name/), {
+    fireEvent.change(within(form).getByLabelText(/登录名/), { target: { value: 'carol' } });
+    fireEvent.change(within(form).getByLabelText(/显示名/), {
       target: { value: 'Carol' },
     });
-    fireEvent.click(within(form).getByRole('button', { name: '创建 Create' }));
+    fireEvent.click(within(form).getByRole('button', { name: '创建' }));
 
     const dialog = await screen.findByTestId('temporary-password-dialog');
     expect(within(dialog).getByTestId('temporary-password-value').textContent).toBe(
       'tmp-once-fixture',
     );
 
-    fireEvent.click(within(dialog).getByRole('button', { name: '我已保存 I have saved it' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '我已保存' }));
     await waitFor(() => expect(screen.queryByTestId('temporary-password-dialog')).toBeNull());
     // Shown once: the password is nowhere in the DOM after the dialog is acknowledged.
     expect(screen.queryByText('tmp-once-fixture')).toBeNull();
@@ -247,13 +247,11 @@ describe('PlatformUsersPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-users-table');
 
-    fireEvent.click(screen.getByRole('button', { name: /新建用户 Create user/ }));
+    fireEvent.click(screen.getByRole('button', { name: /新建用户/ }));
     const form = await screen.findByTestId('create-user-form');
-    fireEvent.change(within(form).getByLabelText(/登录名 Login/), { target: { value: 'Ab' } });
+    fireEvent.change(within(form).getByLabelText(/登录名/), { target: { value: 'Ab' } });
     expect(within(form).getByText(/Invalid login/)).toBeTruthy();
-    expect(within(form).getByRole('button', { name: '创建 Create' }).hasAttribute('disabled')).toBe(
-      true,
-    );
+    expect(within(form).getByRole('button', { name: '创建' }).hasAttribute('disabled')).toBe(true);
     expect(http.calls.some((call) => call.name === 'create_user')).toBe(false);
   });
 
@@ -270,16 +268,16 @@ describe('PlatformUsersPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-users-table');
 
-    fireEvent.click(screen.getByRole('button', { name: '管理 Manage' }));
+    fireEvent.click(screen.getByRole('button', { name: '管理' }));
     const drawer = await screen.findByTestId('user-detail');
 
-    fireEvent.click(within(drawer).getByRole('button', { name: '停用 Disable' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '停用' }));
     await within(drawer).findByTestId('user-disable-confirm');
     expect(http.calls.some((call) => call.name === 'set_user_status')).toBe(false);
 
-    fireEvent.click(within(drawer).getByRole('button', { name: '确认停用 Confirm disable' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '确认停用' }));
     await waitFor(() =>
-      expect(within(drawer).getByTestId('user-detail-status').textContent).toBe('已停用 Disabled'),
+      expect(within(drawer).getByTestId('user-detail-status').textContent).toBe('已停用'),
     );
   });
 
@@ -294,12 +292,12 @@ describe('PlatformUsersPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-users-table');
 
-    fireEvent.click(screen.getByRole('button', { name: '管理 Manage' }));
+    fireEvent.click(screen.getByRole('button', { name: '管理' }));
     const drawer = await screen.findByTestId('user-detail');
-    fireEvent.change(within(drawer).getByLabelText(/平台角色 Platform role/), {
+    fireEvent.change(within(drawer).getByLabelText(/平台角色/), {
       target: { value: 'user' },
     });
-    fireEvent.click(within(drawer).getByRole('button', { name: '保存 Save' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '保存' }));
 
     await within(drawer).findByText(/最后一个活跃管理员/);
   });
@@ -316,15 +314,15 @@ describe('PlatformUsersPage', () => {
       ENV_ADMIN_TITLE,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '管理 Manage' }));
+    fireEvent.click(screen.getByRole('button', { name: '管理' }));
     const drawer = await screen.findByTestId('user-detail');
     await within(drawer).findByTestId('user-detail-env-admin');
 
-    const disable = within(drawer).getByRole('button', { name: '停用 Disable' });
+    const disable = within(drawer).getByRole('button', { name: '停用' });
     expect(disable.hasAttribute('disabled')).toBe(true);
     expect(disable.parentElement?.getAttribute('title')).toBe(ENV_ADMIN_TITLE);
 
-    const roleSelect = within(drawer).getByLabelText(/平台角色 Platform role/);
+    const roleSelect = within(drawer).getByLabelText(/平台角色/);
     expect(roleSelect.hasAttribute('disabled')).toBe(true);
     expect(roleSelect.parentElement?.getAttribute('title')).toBe(ENV_ADMIN_TITLE);
   });
@@ -368,7 +366,7 @@ describe('PlatformUsersPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-users-table');
 
-    fireEvent.click(screen.getAllByRole('button', { name: '管理 Manage' })[1] as HTMLElement);
+    fireEvent.click(screen.getAllByRole('button', { name: '管理' })[1] as HTMLElement);
     const detail = await screen.findByTestId('user-detail');
     fireEvent.click(within(detail).getByRole('button', { name: /管理成员资格/ }));
 
@@ -378,10 +376,10 @@ describe('PlatformUsersPage', () => {
     });
     // Two "角色 Role" labels are on screen (the existing membership's own role select and the
     // add form's) — name the add form's control by id.
-    fireEvent.change(within(memberships).getByLabelText(/^角色 Role/, { selector: '#um-role' }), {
+    fireEvent.change(within(memberships).getByLabelText(/^角色/, { selector: '#um-role' }), {
       target: { value: 'operator' },
     });
-    fireEvent.click(within(memberships).getByRole('button', { name: '加入 Add' }));
+    fireEvent.click(within(memberships).getByRole('button', { name: '加入' }));
 
     await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
     // The drawer survives the re-read: the row is re-derived from the refreshed list, never from
@@ -402,19 +400,19 @@ describe('PlatformUsersPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-users-table');
 
-    fireEvent.click(screen.getByRole('button', { name: '管理 Manage' }));
+    fireEvent.click(screen.getByRole('button', { name: '管理' }));
     const drawer = await screen.findByTestId('user-detail');
-    fireEvent.click(within(drawer).getByRole('button', { name: '停用 Disable' }));
-    fireEvent.click(within(drawer).getByRole('button', { name: '确认停用 Confirm disable' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '停用' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '确认停用' }));
 
     const error = await within(drawer).findByText(/不能停用自己/);
     expect(error.closest('[data-error-code]')?.getAttribute('data-error-code')).toBe(
       'self_disable',
     );
-    expect(within(drawer).getByTestId('user-detail-status').textContent).toBe('活跃 Active');
+    expect(within(drawer).getByTestId('user-detail-status').textContent).toBe('活跃');
   });
 
-  it('A6: 清理待激活用户 lists pendingOnly candidates, confirms as tier irreversible, posts purge_user and renders per-user outcomes', async () => {
+  it('A6: 清理待激活用户', async () => {
     const pendingA = user({
       id: 'u-a',
       login: 'alice-s3',

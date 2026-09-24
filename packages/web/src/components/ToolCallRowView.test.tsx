@@ -18,7 +18,7 @@ describe('ToolCallRowView', () => {
         }}
       />,
     );
-    const chip = screen.getByText('失败 failed');
+    const chip = screen.getByText('失败');
     expect(chip.getAttribute('data-tool-outcome')).toBe('failed');
   });
 
@@ -33,7 +33,7 @@ describe('ToolCallRowView', () => {
         }}
       />,
     );
-    const chip = screen.getByText('完成 done');
+    const chip = screen.getByText('完成');
     expect(chip.getAttribute('data-tool-outcome')).toBe('ok');
   });
 });

@@ -98,7 +98,7 @@ describe('ActionRequestDetail', () => {
     const { onApprove, onReject } = renderDetail({ blastRadius: 'high' });
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(onApprove).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert').textContent).toContain('A reason is required');
+    expect(screen.getByRole('alert').textContent).toContain('必须填写批准理由');
     expect(screen.getByLabelText('Decision reason').getAttribute('aria-required')).toBe('true');
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));

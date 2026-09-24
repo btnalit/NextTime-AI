@@ -57,8 +57,8 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     const initialPassword = ADMIN_INITIAL_PASSWORD as string;
     const changedPassword = `${initialPassword}-changed`;
 
-    const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
-    const overviewHeading = page.getByRole('heading', { name: '概览 Overview', exact: true });
+    const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
+    const overviewHeading = page.getByRole('heading', { name: '概览', exact: true });
     const platformOverviewNav = page.getByTestId('nav-platformOverview');
     const badCredentials = page.getByText(BAD_CREDENTIALS_MESSAGE);
 
@@ -77,7 +77,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     if (await badCredentials.isVisible().catch(() => false)) {
       // A previous (retried) run already changed the password away from the initial one — try
       // the deterministic changed password instead.
-      await page.getByLabel(/密码 Password/).fill(changedPassword);
+      await page.locator('#login-password').fill(changedPassword);
       await page.getByRole('button', { name: 'Log in' }).click();
       await expect(
         changePasswordHeading.or(overviewHeading).or(platformOverviewNav).first(),
@@ -85,10 +85,10 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     }
 
     if (await changePasswordHeading.isVisible().catch(() => false)) {
-      await page.getByLabel(/当前密码 Current password/).fill(initialPassword);
-      await page.getByLabel(/新密码 New password/).fill(changedPassword);
-      await page.getByLabel(/确认新密码 Confirm new password/).fill(changedPassword);
-      await page.getByRole('button', { name: /Change password/ }).click();
+      await page.locator('#cp-current-password').fill(initialPassword);
+      await page.locator('#cp-new-password').fill(changedPassword);
+      await page.locator('#cp-confirm-password').fill(changedPassword);
+      await page.getByRole('button', { name: /更改密码/ }).click();
     }
 
     await expect(overviewHeading.or(platformOverviewNav).first()).toBeVisible({
@@ -100,11 +100,11 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     }
 
     await page.getByTestId('nav-platformUsers').click();
-    await expect(page.getByRole('heading', { name: '用户 Users', exact: true })).toBeVisible({
+    await expect(page.getByRole('heading', { name: '用户', exact: true })).toBeVisible({
       timeout: 15_000,
     });
 
-    await page.getByRole('button', { name: /登出 Sign out/ }).click();
+    await page.getByRole('button', { name: /登出/ }).click();
     await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
   });
 
@@ -118,9 +118,9 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     await reachLoginForm(page);
     await loginWithPassword(page, ownerLogin, ownerPassword);
     await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
-    await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
 
-    await page.getByRole('button', { name: /登出 Sign out/ }).click();
+    await page.getByRole('button', { name: /登出/ }).click();
     await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
 
     const res = await page.request.get('/api/auth/me');
@@ -135,7 +135,7 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     const newPassword = `${oldPassword}-changed`;
 
     const wsStatus = page.getByTestId('ws-status');
-    const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
+    const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
     const badCredentials = page.getByText(BAD_CREDENTIALS_MESSAGE);
 
     await page.goto('/');
@@ -148,25 +148,25 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     if (await badCredentials.isVisible().catch(() => false)) {
       // A previous (retried) run already changed the password away from the original temporary
       // one — try the deterministic new one instead.
-      await page.getByLabel(/密码 Password/).fill(newPassword);
+      await page.locator('#login-password').fill(newPassword);
       await page.getByRole('button', { name: 'Log in' }).click();
       await expect(changePasswordHeading.or(wsStatus)).toBeVisible({ timeout: 15_000 });
     }
 
     if (await changePasswordHeading.isVisible().catch(() => false)) {
       // Wrong current password -> inline error, no state change.
-      await page.getByLabel(/当前密码 Current password/).fill('definitely-wrong');
-      await page.getByLabel(/新密码 New password/).fill(newPassword);
-      await page.getByLabel(/确认新密码 Confirm new password/).fill(newPassword);
-      await page.getByRole('button', { name: /Change password/ }).click();
+      await page.locator('#cp-current-password').fill('definitely-wrong');
+      await page.locator('#cp-new-password').fill(newPassword);
+      await page.locator('#cp-confirm-password').fill(newPassword);
+      await page.getByRole('button', { name: /更改密码/ }).click();
       await expect(page.getByText('当前密码不正确')).toBeVisible();
 
-      await page.getByLabel(/当前密码 Current password/).fill(oldPassword);
-      await page.getByRole('button', { name: /Change password/ }).click();
+      await page.locator('#cp-current-password').fill(oldPassword);
+      await page.getByRole('button', { name: /更改密码/ }).click();
     }
     await expect(wsStatus).toHaveText('Connected', { timeout: 15_000 });
 
-    await page.getByRole('button', { name: /登出 Sign out/ }).click();
+    await page.getByRole('button', { name: /登出/ }).click();
     await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
 
     // Sign in again with the NEW password.
@@ -186,8 +186,8 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     await reachLoginForm(page);
 
     for (let attempt = 0; attempt < 5; attempt++) {
-      await page.getByLabel(/登录名 Login/).fill(adminLogin);
-      await page.getByLabel(/密码 Password/).fill('definitely-the-wrong-password');
+      await page.locator('#login-name').fill(adminLogin);
+      await page.locator('#login-password').fill('definitely-the-wrong-password');
       await page.getByRole('button', { name: 'Log in' }).click();
       // Tolerant of an already-locked account (a retried run of this same test) — either message
       // is a valid "that attempt did not succeed" outcome.
@@ -199,8 +199,8 @@ test.describe('P-A1 acceptance: admin first login, password login, forced change
     // The correct, current password by this point in the run is the changed one (the first test
     // above always changes it away from the initial temporary password) — either is accepted as
     // "the real password" here since only the lock message matters for this assertion.
-    await page.getByLabel(/登录名 Login/).fill(adminLogin);
-    await page.getByLabel(/密码 Password/).fill(changedPassword);
+    await page.locator('#login-name').fill(adminLogin);
+    await page.locator('#login-password').fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(page.getByText(LOCKED_MESSAGE)).toBeVisible();
   });

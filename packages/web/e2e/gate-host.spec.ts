@@ -65,7 +65,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   const initialPassword = ADMIN_INITIAL_PASSWORD as string;
   const changedPassword = `${initialPassword}-changed`;
 
-  const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
+  const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
   // The platform 工作区 nav item: rendered by `Sidebar` for `platformRole === 'admin'` whatever
   // route the admin lands on, so it is the one "we are past the login screen" signal that always
   // holds (same reasoning as `integrations.spec.ts`'s own copy of this helper).
@@ -80,23 +80,23 @@ async function signInAsAdmin(page: Page): Promise<void> {
   });
 
   if (await badCredentials.isVisible().catch(() => false)) {
-    await page.getByLabel(/密码 Password/).fill(changedPassword);
+    await page.locator('#login-password').fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
   if (await changePasswordHeading.isVisible().catch(() => false)) {
-    await page.getByLabel(/当前密码 Current password/).fill(initialPassword);
-    await page.getByLabel(/新密码 New password/).fill(changedPassword);
-    await page.getByLabel(/确认新密码 Confirm new password/).fill(changedPassword);
-    await page.getByRole('button', { name: /Change password/ }).click();
+    await page.locator('#cp-current-password').fill(initialPassword);
+    await page.locator('#cp-new-password').fill(changedPassword);
+    await page.locator('#cp-confirm-password').fill(changedPassword);
+    await page.getByRole('button', { name: /更改密码/ }).click();
   }
 
   await expect(shell).toBeVisible({ timeout: 15_000 });
 }
 
 async function signOut(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /登出 Sign out/ }).click();
+  await page.getByRole('button', { name: /登出/ }).click();
   await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
 }
 
@@ -132,7 +132,7 @@ async function setOperationDisabled(
   const alreadyThere = await checkbox.isChecked();
   if (alreadyThere === disabled) return;
   await checkbox.click();
-  await list.getByRole('button', { name: /保存 Save/ }).click();
+  await list.getByRole('button', { name: /保存/ }).click();
   await expect(checkbox).toBeChecked({ checked: disabled, timeout: 15_000 });
 }
 
@@ -290,10 +290,10 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     // --- 启用: a hosted instance lands `discovered` (review decision — the administrator reviews the
     //     host's endpoint and Operations before workspaces may enable it, same as a packaged gate).
     const statusToggle = drawer.getByTestId('gate-instance-status-toggle');
-    if ((await statusToggle.textContent())?.trim() !== '禁用 Disable') {
+    if ((await statusToggle.textContent())?.trim() !== '禁用') {
       await statusToggle.click();
     }
-    await expect(statusToggle).toHaveText('禁用 Disable', { timeout: 15_000 });
+    await expect(statusToggle).toHaveText('禁用', { timeout: 15_000 });
 
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
@@ -330,7 +330,7 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     // --- 系统接入 Systems: enable it from the platform catalog (idempotent — a retry that already
     //     enabled it just finds the "已启用 Enabled" link with no button left to click). ---
     await page.getByTestId('nav-systems').click();
-    await expect(page.getByRole('heading', { name: '系统接入 Systems' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: '系统接入' })).toBeVisible({
       timeout: 15_000,
     });
     const availableRow = page.getByTestId(`available-gate-${GATE_ID}`);
@@ -338,11 +338,11 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     const enableButton = availableRow.getByTestId(`enable-gate-${GATE_ID}`);
     if (await enableButton.isVisible().catch(() => false)) {
       await enableButton.click();
-      await expect(availableRow).toContainText('已发布 2 个 Operation Published 2 operations', {
+      await expect(availableRow).toContainText('已发布 2 个 Operation', {
         timeout: 15_000,
       });
     }
-    await expect(availableRow.getByRole('link', { name: /已启用 Enabled/ })).toBeVisible({
+    await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible({
       timeout: 15_000,
     });
     await expect(page.getByTestId('gatekeeper-card').filter({ hasText: DISPLAY_NAME })).toHaveCount(
@@ -352,7 +352,7 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
 
     // --- 能力目录 Catalog: both fixture tools are published, end state either way. ---
     await page.getByTestId('nav-catalog').click();
-    await expect(page.getByRole('heading', { name: '能力目录 Catalog' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: '能力目录' })).toBeVisible({
       timeout: 15_000,
     });
     const catalogList = page.getByTestId('catalog-list');
@@ -386,10 +386,10 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     await expect(drawer.getByTestId('gate-instance-detail')).toBeVisible({ timeout: 15_000 });
     const trustToggle = drawer.getByTestId('gate-instance-trust-toggle');
     const trustLabel = (await trustToggle.textContent())?.trim();
-    if (trustLabel !== '撤销 vetted Revoke vetted') {
+    if (trustLabel !== '撤销 vetted') {
       await trustToggle.click();
     }
-    await expect(trustToggle).toHaveText('撤销 vetted Revoke vetted', { timeout: 15_000 });
+    await expect(trustToggle).toHaveText('撤销 vetted', { timeout: 15_000 });
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
 
@@ -402,12 +402,12 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
       const connectorRow = page.getByTestId(`connector-row-${CONNECTOR}`);
       await expect(connectorRow).toBeVisible({ timeout: 15_000 });
       // Fresh mount ⇒ always collapsed (`ConnectorsTab` unmounts on every tab switch) — expand it.
-      await connectorRow.getByRole('button', { name: /展开 Expand/ }).click();
+      await connectorRow.getByRole('button', { name: /展开/ }).click();
     }
 
     async function catalogHasOperation(name: string): Promise<boolean> {
       await page.getByTestId('nav-catalog').click();
-      await expect(page.getByRole('heading', { name: '能力目录 Catalog' })).toBeVisible({
+      await expect(page.getByRole('heading', { name: '能力目录' })).toBeVisible({
         timeout: 15_000,
       });
       const list = page.getByTestId('catalog-list');

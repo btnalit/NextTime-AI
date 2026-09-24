@@ -69,10 +69,10 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   await row.press('Enter');
   const drawer = page.getByTestId('approval-drawer');
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByRole('button', { name: 'Approve' })).toBeVisible();
+  await expect(drawer.getByRole('button', { name: '批准' })).toBeVisible();
 
   // Step 3: approve.
-  await drawer.getByRole('button', { name: 'Approve' }).click();
+  await drawer.getByRole('button', { name: '批准' }).click();
 
   // Step 4: the row leaves the pending queue (still page-local — DataRow's own removal, not proof
   // by itself that the kernel's own approve() persisted); the same page's own 历史 History tab is
@@ -81,7 +81,7 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   await expect(row).toHaveCount(0, { timeout: 15_000 });
   await page.keyboard.press('Escape');
 
-  await page.getByRole('tab', { name: '历史 History' }).click();
+  await page.getByRole('tab', { name: '历史' }).click();
   const historyRows = page.getByTestId('approval-history-row');
   await expect(historyRows.first()).toBeVisible({ timeout: 15_000 });
   const detail = page.getByTestId('approval-detail');

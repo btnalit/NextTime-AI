@@ -5,6 +5,7 @@ import type { AgentPolicy, AgentProfile } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, PrincipalRow, SkillRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
@@ -41,6 +42,7 @@ export interface AgentProfilePageProps {
  * the default 100 rows still offers all of them, instead of a checklist silently missing some.
  */
 export function AgentProfilePage({ http }: AgentProfilePageProps) {
+  const t = useT();
   const toast = useToast();
   const { role } = useWorkspaceIdentity(http);
   const [selectedPrincipalId, setSelectedPrincipalId] = useState<string | undefined>(undefined);
@@ -86,7 +88,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
   function handleSaved(saved: AgentProfile): void {
     invalidateCapability(http, 'get_agent_profile');
     profile.mutate(() => saved);
-    toast.push({ tone: 'ok', title: '已保存 Saved' });
+    toast.push({ tone: 'ok', title: t('已保存', 'Saved') });
   }
 
   const editForbidden =
@@ -99,17 +101,17 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('agent')}
-        title="我的智能体 My Agent"
+        title={t('我的智能体', 'My Agent')}
         description="Per-user Agent configuration — model, Skills, connected systems, prompt addendum."
         actions={
           canPickPrincipal && humanPrincipals.length > 1 ? (
-            <Field id="ap-principal" label="查看/编辑 View / edit">
+            <Field id="ap-principal" label={t('查看/编辑', 'View / edit')}>
               <Select
                 id="ap-principal"
                 value={selectedPrincipalId ?? ''}
                 onChange={(event) => setSelectedPrincipalId(event.target.value || undefined)}
               >
-                <option value="">我自己 Myself</option>
+                <option value="">{t('我自己', 'Myself')}</option>
                 {humanPrincipals.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.displayName}
@@ -186,6 +188,7 @@ function EffectivePanel({
   readonly gatekeeperNames: ReadonlyMap<string, string>;
   readonly workerDefinitionNames: ReadonlyMap<string, string>;
 }) {
+  const t = useT();
   const effective = profile.effective;
   return (
     <section
@@ -194,10 +197,10 @@ function EffectivePanel({
       data-testid="agent-profile-effective"
     >
       <div className="section-header">
-        <h2 id="agent-effective-title">当前生效 Currently effective</h2>
+        <h2 id="agent-effective-title">{t('当前生效', 'Currently effective')}</h2>
       </div>
       <dl className="definition-list">
-        <dt>模型 Model</dt>
+        <dt>{t('模型', 'Model')}</dt>
         <dd className="mono">{effective.model}</dd>
         <dt>Skills</dt>
         <dd className="row-wrap">
@@ -214,7 +217,7 @@ function EffectivePanel({
               ))
             : '—'}
         </dd>
-        <dt>系统接入 Systems</dt>
+        <dt>{t('系统接入', 'Systems')}</dt>
         <dd className="row-wrap">
           {effective.enabledGatekeepers.length > 0
             ? effective.enabledGatekeepers.map((id) => (
@@ -229,7 +232,7 @@ function EffectivePanel({
               ))
             : '—'}
         </dd>
-        <dt>Worker 定义 Worker definitions</dt>
+        <dt>{t('Worker 定义', 'Worker definitions')}</dt>
         <dd className="row-wrap">
           {effective.enabledWorkerDefinitions.length > 0
             ? effective.enabledWorkerDefinitions.map((id) => (
@@ -244,12 +247,12 @@ function EffectivePanel({
               ))
             : '—'}
         </dd>
-        <dt>提示词附加 Prompt addendum</dt>
+        <dt>{t('提示词附加', 'Prompt addendum')}</dt>
         <dd className="pre-wrap">
           {effective.promptAddendum.length > 0 ? effective.promptAddendum : '—'}
         </dd>
-        <dt>自动批准低风险 Auto-approve low risk</dt>
-        <dd>{effective.autoApproveLow ? '是 Yes' : '否 No'}</dd>
+        <dt>{t('自动批准低风险', 'Auto-approve low risk')}</dt>
+        <dd>{effective.autoApproveLow ? t('是', 'Yes') : t('否', 'No')}</dd>
       </dl>
     </section>
   );

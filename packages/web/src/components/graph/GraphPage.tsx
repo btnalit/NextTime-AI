@@ -8,6 +8,7 @@ import {
   isValidInstant,
   objectTypeOptions,
 } from '../../lib/graph-view.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { PageHeader } from '../kit/page-header.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -43,6 +44,7 @@ const CONFLICT_PAGE = 200;
  * two rows are never coloured against two different clocks.
  */
 export function GraphPage({ http }: GraphPageProps) {
+  const t = useT();
   const { query, setQuery } = useGraphQuery();
   const [sessionAt, setSessionAt] = useState(() => new Date().toISOString());
   const timeTravel = query.at !== undefined && isValidInstant(query.at);
@@ -94,8 +96,11 @@ export function GraphPage({ http }: GraphPageProps) {
     <div className="page graph-page">
       <PageHeader
         breadcrumb={breadcrumbFor('graph')}
-        title="图谱 Graph"
-        description="浏览对象、展开邻居、追溯事实来源；颜色表示新鲜度。 Browse Objects, expand neighbours, trace a Fact’s provenance; colour is freshness."
+        title={t('图谱', 'Graph')}
+        description={t(
+          '浏览对象、展开邻居、追溯事实来源；颜色表示新鲜度。',
+          'Browse Objects, expand neighbours, trace a Fact’s provenance; colour is freshness.',
+        )}
       />
       <GraphObjectsProvider http={http} identityKeys={identityKeys} baseQuery={query}>
         <div className="graph-layout" data-object-open={objectId !== undefined}>
@@ -119,8 +124,11 @@ export function GraphPage({ http }: GraphPageProps) {
             {objectId === undefined ? (
               <EmptyState
                 icon="link"
-                title="选择一个对象 Pick an Object"
-                body="左侧搜索或浏览，点击一行查看它的邻居与事实。 Search or browse on the left; open a row to see its neighbours and Facts."
+                title={t('选择一个对象', 'Pick an Object')}
+                body={t(
+                  '左侧搜索或浏览，点击一行查看它的邻居与事实。',
+                  'Search or browse on the left; open a row to see its neighbours and Facts.',
+                )}
                 testId="graph-no-object"
               />
             ) : (

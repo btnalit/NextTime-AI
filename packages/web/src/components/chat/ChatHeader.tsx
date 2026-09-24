@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { type ChatSummary, chatTitle, isArchived } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { useT } from '../../lib/i18n.js';
 import type { TurnStatus } from '../../lib/streaming-reducer.js';
 import { TurnStatusBadge } from '../TurnStatusBadge.js';
 import {
@@ -55,11 +56,12 @@ export function ChatHeader({
   onStop,
   onChatChanged,
 }: ChatHeaderProps) {
+  const t = useT();
   const [renaming, setRenaming] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<ChatSummary | null>(null);
   const { restore, restoringId } = useRestoreChat(client, onChatChanged);
   const archived = chat !== null && isArchived(chat);
-  const title = chat ? chatTitle(chat) : lookupFailed ? '对话 Chat' : ' ';
+  const title = chat ? chatTitle(chat, t) : lookupFailed ? t('对话', 'Chat') : ' ';
 
   return (
     <TooltipProvider>
@@ -98,7 +100,7 @@ export function ChatHeader({
           )}
           {archived ? (
             <span className="chip chip-s chip-neutral" data-testid="chat-archived-chip">
-              已归档 Archived
+              {t('已归档', 'Archived')}
             </span>
           ) : null}
           <TurnStatusBadge status={turnStatus} />
@@ -110,7 +112,7 @@ export function ChatHeader({
                   size="s"
                   icon="more"
                   iconOnly
-                  aria-label="更多操作 More actions"
+                  aria-label={t('更多操作', 'More actions')}
                   data-testid="chat-header-menu"
                 />
               </DropdownMenuTrigger>
@@ -120,7 +122,7 @@ export function ChatHeader({
                     data-testid="chat-header-rename"
                     onSelect={() => setRenaming(true)}
                   >
-                    改名 Rename
+                    {t('改名', 'Rename')}
                   </DropdownMenuItem>
                 ) : null}
                 {archived ? (
@@ -129,14 +131,14 @@ export function ChatHeader({
                     disabled={restoringId === chat.id}
                     onSelect={() => void restore(chat)}
                   >
-                    恢复 Restore
+                    {t('恢复', 'Restore')}
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem
                     data-testid="chat-header-archive"
                     onSelect={() => setArchiveTarget(chat)}
                   >
-                    归档 Archive
+                    {t('归档', 'Archive')}
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -148,9 +150,9 @@ export function ChatHeader({
             icon="stop"
             onClick={onStop}
             disabled={stopBusy}
-            title="停止当前轮 Stop the running turn"
+            title={t('停止当前轮', 'Stop the running turn')}
           >
-            停止 Stop
+            {t('停止', 'Stop')}
           </Button>
         </div>
         <div className="chat-header-row2">

@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
@@ -67,6 +68,7 @@ export function GateInstanceDetailPanel({
   onChanged,
   onDeleted,
 }: GateInstanceDetailPanelProps) {
+  const t = useT();
   const [displayName, setDisplayName] = useState(instance.displayName);
   const [savingName, setSavingName] = useState(false);
   const [nameError, setNameError] = useState<unknown | null>(null);
@@ -181,15 +183,15 @@ export function GateInstanceDetailPanel({
               enough (migrations/core/0023_gate_instances.sql caps them at 64 chars). */}
           <CopyId id={instance.gateId} label="gate" full />
         </dd>
-        <dt>接入包 Connector</dt>
+        <dt>{t('接入包', 'Connector')}</dt>
         <dd className="mono">{instance.connector}</dd>
-        <dt>种类 Transport</dt>
+        <dt>{t('种类', 'Transport')}</dt>
         <dd>{instance.transportKind}</dd>
-        <dt>目标 Target</dt>
+        <dt>{t('目标', 'Target')}</dt>
         <dd className="mono">{instance.target}</dd>
-        <dt>端点 Endpoint</dt>
+        <dt>{t('端点', 'Endpoint')}</dt>
         <dd className="mono">{instance.endpoint}</dd>
-        <dt>健康 Health</dt>
+        <dt>{t('健康', 'Health')}</dt>
         <dd>
           <StatusChip
             machine="gateHealth"
@@ -198,10 +200,10 @@ export function GateInstanceDetailPanel({
             testId="gate-instance-detail-health"
           />
         </dd>
-        <dt>最近心跳 Last seen</dt>
+        <dt>{t('最近心跳', 'Last seen')}</dt>
         <dd>
           {instance.lastSeenAt === null ? (
-            '从未 Never'
+            t('从未', 'Never')
           ) : (
             <time title={formatDateTime(instance.lastSeenAt)}>
               {formatRelative(instance.lastSeenAt)}
@@ -219,18 +221,18 @@ export function GateInstanceDetailPanel({
           <div className="divider" />
           <div className="stack-s" data-testid="gate-instance-hosted-definition">
             <span className="tag" data-testid="gate-instance-hosted-tag">
-              宿主 hosted
+              {t('宿主', 'hosted')}
             </span>
             <dl className="definition-list">
-              <dt>种类 Transport</dt>
+              <dt>{t('种类', 'Transport')}</dt>
               <dd>{instance.definition.transportKind}</dd>
-              <dt>目标 Target</dt>
+              <dt>{t('目标', 'Target')}</dt>
               <dd className="mono">{instance.definition.target}</dd>
-              <dt>凭证模式 Credential mode</dt>
+              <dt>{t('凭证模式', 'Credential mode')}</dt>
               <dd>
                 {instance.definition.credentialMode === 'shared'
-                  ? '共享 Shared'
-                  : '按人 Connected account'}
+                  ? t('共享', 'Shared')
+                  : t('按人', 'Connected account')}
               </dd>
               <dt>Manifest source</dt>
               <dd className="mono">{instance.definition.manifestSource ?? '—'}</dd>
@@ -238,14 +240,14 @@ export function GateInstanceDetailPanel({
 
             {instance.definition.credentialMode === 'shared' ? (
               <div className="stack-s">
-                <span className="field-label">录入共享凭证 Enter shared credential</span>
+                <span className="field-label">{t('录入共享凭证', 'Enter shared credential')}</span>
                 <GateCredentialEntry
                   requestToken={() =>
                     http.call<GateHostTokenWire>('issue_gate_host_token', {
                       gateId: instance.gateId,
                     })
                   }
-                  tokenButtonLabel="获取 5 分钟令牌 Get a 5-minute token"
+                  tokenButtonLabel={t('获取 5 分钟令牌', 'Get a 5-minute token')}
                 />
               </div>
             ) : null}
@@ -253,13 +255,13 @@ export function GateInstanceDetailPanel({
             <div className="divider" />
             <PlatformError
               error={deleteError}
-              title="无法删除 Could not delete this instance"
+              title={t('无法删除', 'Could not delete this instance')}
               testId="gate-instance-delete-error"
             />
             {confirmingDelete ? (
               <div className="row-wrap" style={{ justifyContent: 'flex-end' }}>
                 <Button variant="ghost" size="s" onClick={() => setConfirmingDelete(false)}>
-                  取消 Cancel
+                  {t('取消', 'Cancel')}
                 </Button>
                 <Button
                   variant="danger"
@@ -268,7 +270,7 @@ export function GateInstanceDetailPanel({
                   loading={deleting}
                   data-testid="gate-instance-delete-confirm"
                 >
-                  确认删除 Confirm delete
+                  {t('确认删除', 'Confirm delete')}
                 </Button>
               </div>
             ) : (
@@ -279,7 +281,7 @@ export function GateInstanceDetailPanel({
                   onClick={() => setConfirmingDelete(true)}
                   data-testid="gate-instance-delete"
                 >
-                  删除 Delete
+                  {t('删除', 'Delete')}
                 </Button>
               </div>
             )}
@@ -289,7 +291,7 @@ export function GateInstanceDetailPanel({
 
       <div className="divider" />
 
-      <Field id="gid-display-name" label="名称 Display name">
+      <Field id="gid-display-name" label={t('名称', 'Display name')}>
         <Input
           id="gid-display-name"
           value={displayName}
@@ -297,7 +299,7 @@ export function GateInstanceDetailPanel({
           disabled={savingName}
         />
       </Field>
-      <PlatformError error={nameError} title="无法重命名 Could not rename this instance" />
+      <PlatformError error={nameError} title={t('无法重命名', 'Could not rename this instance')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button
           variant="secondary"
@@ -305,13 +307,13 @@ export function GateInstanceDetailPanel({
           loading={savingName}
           disabled={!nameDirty}
         >
-          保存 Save
+          {t('保存', 'Save')}
         </Button>
       </div>
 
       <div className="divider" />
 
-      <PlatformError error={statusError} title="无法修改状态 Could not change the status" />
+      <PlatformError error={statusError} title={t('无法修改状态', 'Could not change the status')} />
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <StatusChip
           machine="gateInstance"
@@ -330,15 +332,14 @@ export function GateInstanceDetailPanel({
         <>
           <div className="divider" />
           <Notice>
-            只对 MCP 类型生效：标记为 vetted
-            后，非破坏性、幂等的工具调用可以被自动批准；随时可以撤销，
-            并且每次审批决策都会重新读取这个标记。 MCP only — marking an instance vetted allows
-            auto-approval of non-destructive, idempotent tool calls; it is revocable any time and
-            read fresh at every approval decision.
+            {t(
+              '只对 MCP 类型生效：标记为 vetted 后，非破坏性、幂等的工具调用可以被自动批准；随时可以撤销， 并且每次审批决策都会重新读取这个标记。 MCP only —',
+              'marking an instance vetted allows auto-approval of non-destructive, idempotent tool calls; it is revocable any time and read fresh at every approval decision.',
+            )}
           </Notice>
           <PlatformError
             error={trustError}
-            title="无法设置信任级别 Could not set the trust level"
+            title={t('无法设置信任级别', 'Could not set the trust level')}
           />
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <StatusChip
@@ -354,8 +355,8 @@ export function GateInstanceDetailPanel({
               data-testid="gate-instance-trust-toggle"
             >
               {instance.trust === 'vetted'
-                ? '撤销 vetted Revoke vetted'
-                : '标记为 vetted Mark vetted'}
+                ? t('撤销 vetted', 'Revoke vetted')
+                : t('标记为 vetted', 'Mark vetted')}
             </Button>
           </div>
         </>
@@ -371,18 +372,21 @@ export function GateInstanceDetailPanel({
           loading={testing}
           data-testid="gate-instance-test"
         >
-          测试连接 Test connection
+          {t('测试连接', 'Test connection')}
         </Button>
       </div>
-      <PlatformError error={testError} title="无法测试连接 Could not test this connection" />
+      <PlatformError
+        error={testError}
+        title={t('无法测试连接', 'Could not test this connection')}
+      />
       {testResult ? (
         <div className="stack-s" data-testid="gate-instance-test-result">
           <dl className="definition-list">
-            <dt>健康 Health</dt>
+            <dt>{t('健康', 'Health')}</dt>
             <dd>{testResult.health}</dd>
             <dt>描述的 Operation 数</dt>
             <dd className="mono">{testResult.describedOperationCount ?? '—'}</dd>
-            <dt>检查时间 Checked</dt>
+            <dt>{t('检查时间', 'Checked')}</dt>
             <dd>
               <time title={formatDateTime(testResult.checkedAt)}>
                 {formatRelative(testResult.checkedAt)}
@@ -398,15 +402,15 @@ export function GateInstanceDetailPanel({
         <span>Announced operations ({instance.operations.length})</span>
         {instance.operations.length === 0 ? (
           <p className="text-3">
-            这个实例还没有 announce 过任何 Operation。 No Operations announced.
+            {t('这个实例还没有 announce 过任何 Operation。', 'No Operations announced.')}
           </p>
         ) : (
           <div className="table-scroll">
             <table className="data-table" data-testid="gate-instance-operations-table">
               <thead>
                 <tr>
-                  <th>名称 Name</th>
-                  <th>模式 Mode</th>
+                  <th>{t('名称', 'Name')}</th>
+                  <th>{t('模式', 'Mode')}</th>
                   <th>Blast radius</th>
                   <th>Hints</th>
                 </tr>
@@ -419,10 +423,10 @@ export function GateInstanceDetailPanel({
                     <td>{operation.blastRadius}</td>
                     <td>
                       {[
-                        operation.readOnlyHint ? '只读 read-only' : null,
-                        operation.destructiveHint ? '破坏性 destructive' : null,
-                        operation.idempotentHint ? '幂等 idempotent' : null,
-                        operation.autoApprovable ? '可自动批准 auto-approvable' : null,
+                        operation.readOnlyHint ? t('只读', 'read-only') : null,
+                        operation.destructiveHint ? t('破坏性', 'destructive') : null,
+                        operation.idempotentHint ? t('幂等', 'idempotent') : null,
+                        operation.autoApprovable ? t('可自动批准', 'auto-approvable') : null,
                       ]
                         .filter(Boolean)
                         .join(' · ') || '—'}
@@ -449,16 +453,17 @@ function StatusToggle({
   readonly busy: boolean;
   readonly onChange: (status: 'enabled' | 'disabled') => void;
 }) {
+  const t = useT();
   const display = deriveGateInstanceStatus(instance);
   if (display === 'awaiting_host') {
     return (
       <Button
         variant="secondary"
         disabled
-        title="等待门宿主接管后再启用 Wait for the gate host to take it over"
+        title={t('等待门宿主接管后再启用', 'Wait for the gate host to take it over')}
         data-testid="gate-instance-status-toggle"
       >
-        启用 Enable
+        {t('启用', 'Enable')}
       </Button>
     );
   }
@@ -470,7 +475,7 @@ function StatusToggle({
         loading={busy}
         data-testid="gate-instance-status-toggle"
       >
-        启用 Enable
+        {t('启用', 'Enable')}
       </Button>
     );
   }
@@ -482,7 +487,7 @@ function StatusToggle({
         loading={busy}
         data-testid="gate-instance-status-toggle"
       >
-        重新启用 Re-enable
+        {t('重新启用', 'Re-enable')}
       </Button>
     );
   }
@@ -493,7 +498,7 @@ function StatusToggle({
       loading={busy}
       data-testid="gate-instance-status-toggle"
     >
-      禁用 Disable
+      {t('禁用', 'Disable')}
     </Button>
   );
 }
@@ -510,6 +515,7 @@ function WorkspacesUsingSection({
   readonly http: CapabilityCaller;
   readonly instance: GateInstanceWire;
 }) {
+  const t = useT();
   const available = useCapabilityList<AvailableGateInstanceWire>(
     http,
     'list_available_gate_instances',
@@ -521,15 +527,15 @@ function WorkspacesUsingSection({
       : undefined;
   return (
     <div className="stack-s" data-testid="gate-instance-workspaces">
-      <span className="section-title">启用它的工作区 Workspaces using it</span>
+      <span className="section-title">{t('启用它的工作区', 'Workspaces using it')}</span>
       <p className="text-2">
         {instance.enabledWorkspaceCount === 0
-          ? '还没有工作区启用它。 No workspace has enabled it yet.'
+          ? t('还没有工作区启用它。', 'No workspace has enabled it yet.')
           : `${instance.enabledWorkspaceCount} 个工作区已启用（各自的连接在该工作区的系统接入页）。 ${instance.enabledWorkspaceCount} workspace${instance.enabledWorkspaceCount === 1 ? '' : 's'} enabled it — each connection lives on that workspace's 系统接入 page.`}
       </p>
       {own?.gatekeeperId ? (
         <div className="row-wrap" data-testid="gate-instance-own-workspace">
-          <span className="text-3">当前工作区 Current workspace:</span>
+          <span className="text-3">{t('当前工作区', 'Current workspace:')}</span>
           <RefChip
             kind="gatekeeper"
             id={own.gatekeeperId}
@@ -541,7 +547,7 @@ function WorkspacesUsingSection({
         </div>
       ) : null}
       <a href={hrefs.systems()} data-testid="gate-instance-systems-link">
-        打开工作区系统接入页 Open the workspace 系统接入 page
+        {t('打开工作区系统接入页 Open the workspace 系统接入', 'page')}
       </a>
     </div>
   );

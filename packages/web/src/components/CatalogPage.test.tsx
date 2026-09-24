@@ -94,7 +94,7 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /Publish/ }));
+    fireEvent.click(within(row).getByRole('button', { name: /发布/ }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
     await waitFor(() =>
       expect(http.calls.filter((c) => c.name === 'list_operations')).toHaveLength(2),
@@ -114,7 +114,7 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /Publish/ }));
+    fireEvent.click(within(row).getByRole('button', { name: /发布/ }));
     const toast = await screen.findByTestId('toast');
     expect(toast.textContent).toContain('Could not update docker.restart');
     expect(toast.textContent).toContain('operation docker.restart is not a draft');
@@ -180,8 +180,8 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'workers');
     const row = await screen.findByTestId('catalog-row');
-    expect(within(row).queryByRole('button', { name: /Publish/ })).toBeNull();
-    expect(within(row).getByRole('button', { name: /Deprecate/ })).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: /发布/ })).toBeNull();
+    expect(within(row).getByRole('button', { name: /弃用/ })).toBeTruthy();
   });
 
   // S8 W1-A7 (audit S13): 弃用 Deprecate used to be a plain button with no confirmation at all —
@@ -203,7 +203,7 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /Deprecate/ }));
+    fireEvent.click(within(row).getByRole('button', { name: /弃用/ }));
 
     expect(http.calls.some((c) => c.name === 'deprecate_operation')).toBe(false);
     const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
@@ -239,7 +239,7 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'workers');
     const row = await screen.findByTestId('catalog-row');
-    fireEvent.click(within(row).getByRole('button', { name: /Deprecate/ }));
+    fireEvent.click(within(row).getByRole('button', { name: /弃用/ }));
 
     const confirm = await screen.findByTestId('worker-deprecate-confirm-wd-1@1');
     expect(within(confirm).getByTestId('confirm-target').textContent).toBe('Fixer');
@@ -269,10 +269,10 @@ describe('CatalogPage editors (S6-A A2)', () => {
     await screen.findByTestId('catalog-empty');
     fireEvent.click(screen.getByTestId('skills-new-draft'));
     const drawer = await screen.findByTestId('skill-editor-drawer');
-    fireEvent.change(within(drawer).getByLabelText(/^名称 name/), {
+    fireEvent.change(within(drawer).getByLabelText(/^名称/), {
       target: { value: 'restart-web' },
     });
-    fireEvent.change(within(drawer).getByLabelText(/^描述 description/), {
+    fireEvent.change(within(drawer).getByLabelText(/^描述/), {
       target: { value: 'Restart web' },
     });
     fireEvent.change(within(drawer).getByLabelText(/SKILL.md 正文/), {
@@ -309,11 +309,9 @@ describe('CatalogPage editors (S6-A A2)', () => {
     const row = await screen.findByTestId('catalog-row');
     fireEvent.click(within(row).getByTestId('catalog-edit-as-draft'));
     const drawer = await screen.findByTestId('skill-editor-drawer');
-    expect(within(drawer).getByTestId('skill-copy-notice').textContent).toContain('new');
-    expect((within(drawer).getByLabelText(/^名称 name/) as HTMLInputElement).value).toBe(
-      'restart-web',
-    );
-    expect((within(drawer).getByLabelText(/gateKinds/) as HTMLInputElement).value).toBe('http');
+    expect(within(drawer).getByTestId('skill-copy-notice').textContent).toContain('新的');
+    expect((within(drawer).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('restart-web');
+    expect((within(drawer).getByLabelText(/适用的门类型/) as HTMLInputElement).value).toBe('http');
     expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe('');
   });
 
@@ -358,14 +356,14 @@ describe('CatalogPage editors (S6-A A2)', () => {
     await screen.findByTestId('catalog-empty');
     fireEvent.click(screen.getByTestId('procedures-new-draft'));
     const drawer = await screen.findByTestId('procedure-editor-drawer');
-    fireEvent.change(within(drawer).getByLabelText(/^名称 name/), { target: { value: 'Deploy' } });
-    fireEvent.change(within(drawer).getByLabelText(/^描述 description/), {
+    fireEvent.change(within(drawer).getByLabelText(/^名称/), { target: { value: 'Deploy' } });
+    fireEvent.change(within(drawer).getByLabelText(/^描述/), {
       target: { value: 'Deploy web' },
     });
     fireEvent.click(within(drawer).getByTestId('procedure-submit'));
     const banner = await within(drawer).findByTestId('procedure-editor-error');
     expect(banner.getAttribute('data-error-code')).toBe('forbidden');
-    fireEvent.click(within(drawer).getByRole('button', { name: /Cancel/ }));
+    fireEvent.click(within(drawer).getByRole('button', { name: /取消/ }));
     await waitFor(() => expect(screen.queryByTestId('procedures-new-draft')).toBeNull());
   });
 });

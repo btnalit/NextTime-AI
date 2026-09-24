@@ -57,7 +57,7 @@ describe('ProvenanceChain', () => {
     expect(within(source).getByText('ragflow://kb/1')).toBeTruthy();
 
     const details = screen.getByTestId('prov-raw');
-    expect(details.textContent).toContain('原始证据 Raw evidence');
+    expect(details.textContent).toContain('原始证据');
     expect(details.querySelector('pre')?.textContent).toContain('"nodeType": "fact"');
   });
 
@@ -65,7 +65,7 @@ describe('ProvenanceChain', () => {
     render(<ProvenanceChain fact={{ id: 'f' }} />);
     expect(screen.getByTestId('prov-fact').getAttribute('data-present')).toBe('true');
     expect(screen.getByTestId('prov-activity').getAttribute('data-present')).toBe('false');
-    expect(screen.getByTestId('prov-activity').textContent).toContain('无 Not recorded');
+    expect(screen.getByTestId('prov-activity').textContent).toContain('无');
     expect(screen.getByTestId('prov-source').getAttribute('data-present')).toBe('false');
     expect(screen.queryByTestId('prov-raw')).toBeNull();
   });

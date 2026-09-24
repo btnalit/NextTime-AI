@@ -146,16 +146,16 @@ export async function createPlatformUser(
 ): Promise<{ readonly login: string; readonly temporaryPassword: string }> {
   const login = `journey${Date.now().toString(36)}`;
   await goToByLabel(page, '用户');
-  await page.getByRole('button', { name: /新建用户 Create user/ }).click();
+  await page.getByRole('button', { name: /新建用户/ }).click();
   const userDrawer = page.getByTestId('create-user-drawer');
   await expect(userDrawer.getByTestId('create-user-form')).toBeVisible();
   await userDrawer.locator('#cu-login').fill(login);
   await userDrawer.locator('#cu-display-name').fill(displayName);
-  await userDrawer.getByRole('button', { name: /创建 Create/ }).click();
+  await userDrawer.getByRole('button', { name: /创建/ }).click();
   const password = page.getByTestId('temporary-password-value');
   await expect(password).toBeVisible({ timeout: 15_000 });
   const temporaryPassword = (await password.textContent())?.trim() ?? '';
-  await page.getByRole('button', { name: /我已保存 I have saved it/ }).click();
+  await page.getByRole('button', { name: /我已保存/ }).click();
   await expect(page.getByTestId('temporary-password-dialog')).toBeHidden();
   return { login, temporaryPassword };
 }
@@ -188,14 +188,14 @@ export async function createFreshWorkspace(page: Page): Promise<{
   await expect(wsDrawer.getByTestId('create-workspace-form')).toBeVisible();
   await wsDrawer.locator('#cw-name').fill(workspaceName);
   await wsDrawer.locator('#cw-owner-query').fill(ownerLogin);
-  await wsDrawer.getByRole('button', { name: /搜索 Search/ }).click();
+  await wsDrawer.getByRole('button', { name: /搜索/ }).click();
   const ownerSelect = wsDrawer.getByTestId('create-workspace-owner');
   await expect(ownerSelect).toBeEnabled();
   const ownerOption = ownerSelect.locator('option', { hasText: ownerLogin });
   await expect(ownerOption).toHaveCount(1);
   const ownerUserId = await ownerOption.getAttribute('value');
   await ownerSelect.selectOption(ownerUserId as string);
-  await wsDrawer.getByRole('button', { name: /创建 Create/ }).click();
+  await wsDrawer.getByRole('button', { name: /创建/ }).click();
   await expect(wsDrawer).toBeHidden({ timeout: 20_000 });
 
   return { workspaceName, ownerLogin, ownerTemporaryPassword };

@@ -1,3 +1,4 @@
+import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { Notice } from '../ui/Notice.js';
 
@@ -34,6 +35,7 @@ export function packagedServiceName(gateId: string): string {
  * workspace sees it (design §6.3 "打包门自注册").
  */
 export function PackagedGateChecklist({ kind, gateId = '', testId }: PackagedGateChecklistProps) {
+  const t = useT();
   const trimmed = gateId.trim();
   const idValid = trimmed.length > 0 && GATE_ID_PATTERN.test(trimmed);
   const id = idValid ? trimmed : '<gate-id>';
@@ -77,32 +79,40 @@ export function PackagedGateChecklist({ kind, gateId = '', testId }: PackagedGat
         {kind === 'ssh' ? 'SSH 主机' : '命令行'}
         门带二进制与密钥，是打包门：页面不能替你创建它，请按下面的清单起一个 compose
         服务；它启动后会自注册，出现在平台「集成 → 门实例」下（未启用
-        discovered），本向导会等它出现。 {kind === 'ssh' ? 'An ssh' : 'A cli'} gate carries a binary
-        and a key, so it is a packaged gate — this page cannot create it for you. Deploy the compose
-        service below; on start it announces itself and shows up under the platform's 门实例 as
-        discovered, and this launcher waits for it.
+        discovered），本向导会等它出现。 {kind === 'ssh' ? 'An ssh' : 'A cli'}{' '}
+        {t(
+          "gate carries a binary and a key, so it is a packaged gate — this page cannot create it for you. Deploy the compose service below; on start it announces itself and shows up under the platform's 门实例",
+          'as discovered, and this launcher waits for it.',
+        )}
       </Notice>
 
       <ol className="stack-s" data-testid="packaged-gate-steps">
         <li>
           选一个稳定的 <code>GATE_ID</code>（<code>{GATE_ID_PATTERN.source}</code>
           ）和一个<strong>系统专属</strong>的 <code>GATE_CONNECTOR</code>（不要用{' '}
-          <code>{kind}</code> 这个通用名：通用类接入包不能设为平台预置，工作区就无法从目录启用）。
-          Pick a stable <code>GATE_ID</code> and a <em>system-specific</em>{' '}
-          <code>GATE_CONNECTOR</code> — never the generic <code>{kind}</code>.
+          <code>{kind}</code>{' '}
+          {t(
+            '这个通用名：通用类接入包不能设为平台预置，工作区就无法从目录启用）。',
+            'Pick a stable',
+          )}
+          <code>GATE_ID</code> and a <em>system-specific</em> <code>GATE_CONNECTOR</code> — never
+          the generic <code>{kind}</code>.
         </li>
         <li>
           写清单 <code>deploy/gatekeepers/{system}-manifest.json</code>
-          （Operation 形状见 add-gatekeeper.md §6）。 Write the manifest.
+          {t('（Operation 形状见 add-gatekeeper.md §6）。', 'Write the manifest.')}
         </li>
         <li>
           密钥只放主机 <code>&lt;NEXTTIME_DATA&gt;/secrets/{system}/</code>（
-          {kind === 'ssh' ? '私钥与 known_hosts' : '目标命令需要的凭证'}
-          ），只读挂载进容器；不进内核、不进仓库。 Secrets live only under the host's secrets
-          directory, mounted read-only — never in the kernel, never in the repository.
+          {kind === 'ssh' ? t('私钥与', 'known_hosts') : '目标命令需要的凭证'}
+          {t(
+            "），只读挂载进容器；不进内核、不进仓库。 Secrets live only under the host's secrets directory, mounted read-only —",
+            'never in the kernel, never in the repository.',
+          )}
         </li>
         <li>
-          在 <code>docker-compose.yml</code> 追加服务块（additive-only）： Append the service block:
+          在 <code>docker-compose.yml</code>{' '}
+          {t('追加服务块（additive-only）：', 'Append the service block:')}
           {/* `.table-scroll` is the one existing horizontal-scroll box; a dedicated code-block
               rule (surface-2 + border + padding, tokens only) is reported for the styles lane. */}
           <div className="table-scroll">

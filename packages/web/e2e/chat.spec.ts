@@ -37,13 +37,13 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await loginWithApiKey(page, apiKey);
 
     // --- chat list: new chat ---
-    await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
     // Scoped to the page `<header>` (components/ui/PageHeader.tsx): a fresh workspace with zero
     // chats also renders a second, identical "New chat" button inside the `chats-empty` state
     // (ChatListPage.tsx reuses the same button element in both places) — an unscoped
-    // `getByRole('button', { name: 'New chat' })` matches both and Playwright's strict mode
+    // `getByRole('button', { name: '新对话' })` matches both and Playwright's strict mode
     // rejects the ambiguity.
-    await page.locator('header').getByRole('button', { name: 'New chat' }).click();
+    await page.locator('header').getByRole('button', { name: '新对话' }).click();
 
     // --- chat page: send a message (the header's back control is an icon button) ---
     await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
@@ -85,7 +85,7 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await page.goto('/');
     await reachLoginForm(page);
     await loginWithApiKey(page, apiKey);
-    await page.locator('header').getByRole('button', { name: 'New chat' }).click();
+    await page.locator('header').getByRole('button', { name: '新对话' }).click();
     await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
 
     const marker = `md-${Date.now()}`;
@@ -113,15 +113,15 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await page.goto('/');
     await reachLoginForm(page);
     await loginWithApiKey(page, apiKey);
-    await expect(page.getByRole('heading', { name: /Chats/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /对话/ })).toBeVisible();
     await page
       .locator('header')
-      .getByRole('button', { name: /New chat/ })
+      .getByRole('button', { name: /新对话/ })
       .click();
     await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
 
     // A brand-new chat reads as the placeholder until the first message lands …
-    await expect(page.getByTestId('chat-title')).toHaveText('新对话 New chat');
+    await expect(page.getByTestId('chat-title')).toHaveText('新对话');
     const prompt = `e2e-title-${Date.now()}`;
     await page.getByPlaceholder('Message…').fill(prompt);
     await page.getByRole('button', { name: 'Send' }).click();
@@ -150,8 +150,8 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await row.getByTestId('chat-row-archive').click();
     await expect(row).toHaveCount(0);
     const toast = page.getByTestId('toast').filter({ hasText: renamed });
-    await expect(toast).toContainText('已归档 Archived');
-    await toast.getByRole('button', { name: '撤销 Undo' }).click();
+    await expect(toast).toContainText('已归档');
+    await toast.getByRole('button', { name: '撤销' }).click();
     await expect(page.getByTestId('chat-row').filter({ hasText: renamed })).toBeVisible();
 
     await page
@@ -163,12 +163,12 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await page.getByTestId('chats-tab-archived').click();
     const archivedRow = page.getByTestId('chat-row').filter({ hasText: renamed });
     await expect(archivedRow).toBeVisible();
-    await expect(archivedRow.getByTestId('chat-archived-chip')).toHaveText('已归档 Archived');
+    await expect(archivedRow.getByTestId('chat-archived-chip')).toHaveText('已归档');
 
     // Opening an archived chat is read-only; 恢复 from the composer note re-enables it.
     await archivedRow.click();
     await expect(page.getByTestId('chat-archived-notice')).toBeVisible();
-    await expect(page.getByPlaceholder('已归档 Archived')).toBeDisabled();
+    await expect(page.getByPlaceholder('已归档')).toBeDisabled();
     await page.getByTestId('chat-composer-restore').click();
     await expect(page.getByTestId('chat-archived-notice')).toHaveCount(0);
     await expect(page.getByPlaceholder('Message…')).toBeEnabled();

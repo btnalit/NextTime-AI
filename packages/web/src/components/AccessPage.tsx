@@ -6,6 +6,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, prettyJson } from '../lib/format.js';
 import type { GatekeeperListRow, GrantRow, PrincipalRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { hrefs } from '../lib/router.js';
 import { GrantCapabilityForm } from './GrantCapabilityForm.js';
@@ -45,6 +46,7 @@ export interface AccessPageProps {
  * past page one is a correctness bug, not a paging UX choice).
  */
 export function AccessPage({ http }: AccessPageProps) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const { role } = useWorkspaceIdentity(http);
@@ -109,7 +111,7 @@ export function AccessPage({ http }: AccessPageProps) {
           row.id === grantId ? { ...row, status: 'revoked' as const } : row,
         ),
       }));
-      toast.push({ tone: 'info', title: '已撤销授权 Grant revoked' });
+      toast.push({ tone: 'info', title: t('已撤销授权', 'Grant revoked') });
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('revoke_capability');
       setRevokeError(err);
@@ -125,12 +127,15 @@ export function AccessPage({ http }: AccessPageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('access')}
-        title="访问 Access"
-        description="哪个主体持有哪项能力、作用于哪个资源。 Which Principal holds which capability, over which resource."
+        title={t('访问', 'Access')}
+        description={t(
+          '哪个主体持有哪项能力、作用于哪个资源。',
+          'Which Principal holds which capability, over which resource.',
+        )}
         actions={
           canManage ? (
             <Button variant="primary" icon="plus" onClick={() => setGrantOpen(true)}>
-              授予能力 Grant capability
+              {t('授予能力', 'Grant capability')}
             </Button>
           ) : undefined
         }
@@ -143,11 +148,17 @@ export function AccessPage({ http }: AccessPageProps) {
             fills (and commits) the id; an empty value is "all members". */}
         <Field
           id="access-principal-filter"
-          label="按主体筛选 Filter by principal"
+          label={t('按主体筛选', 'Filter by principal')}
           hint={
             principals.length > 0
-              ? '从建议里选一个成员，或输入 principal id 后按 Enter；留空 = 全部成员。 Pick a member from the suggestions, or type a principal id and press Enter. Empty = all members.'
-              : 'Principal id（可选），按 Enter 应用；留空 = 全部成员。 Principal id (optional) — press Enter to apply. Empty = all members.'
+              ? t(
+                  '从建议里选一个成员，或输入 principal id 后按 Enter；留空 = 全部成员。 Pick a member from the suggestions, or type a principal id and press Enter. Empty =',
+                  'all members.',
+                )
+              : t(
+                  'Principal id（可选），按 Enter 应用；留空 = 全部成员。 Principal id (optional) — press Enter to apply. Empty =',
+                  'all members.',
+                )
           }
         >
           <Input
@@ -161,7 +172,7 @@ export function AccessPage({ http }: AccessPageProps) {
                 commitFilter();
               }
             }}
-            placeholder="全部成员 All members"
+            placeholder={t('全部成员', 'All members')}
             list="access-principal-suggestions"
             mono
           />
@@ -176,7 +187,7 @@ export function AccessPage({ http }: AccessPageProps) {
       </div>
 
       {revokeError !== null ? (
-        <ErrorBanner error={revokeError} title="无法撤销授权 Could not revoke this grant" />
+        <ErrorBanner error={revokeError} title={t('无法撤销授权', 'Could not revoke this grant')} />
       ) : null}
 
       {grants.state.status === 'loading' ? (
@@ -185,14 +196,17 @@ export function AccessPage({ http }: AccessPageProps) {
         forbidden ? (
           <EmptyState
             icon="shield"
-            title="需要 owner 权限 Owner role required"
-            body="list_grants 仅工作区 owner 可读。 list_grants is restricted to the workspace owner."
+            title={t('需要 owner 权限', 'Owner role required')}
+            body={t(
+              'list_grants 仅工作区 owner 可读。',
+              'list_grants is restricted to the workspace owner.',
+            )}
             testId="grants-forbidden"
           />
         ) : (
           <ErrorBanner
             error={grants.state.error}
-            title="无法加载授权 Could not load grants"
+            title={t('无法加载授权', 'Could not load grants')}
             onRetry={() => void grants.reload()}
             testId="grants-error"
           />
@@ -200,8 +214,11 @@ export function AccessPage({ http }: AccessPageProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="key"
-          title="还没有授权 No grants yet"
-          body="把一个门（或其他资源）授予成员，他的入口 agent 才能使用它。 Grant a Gatekeeper (or another resource) to a member so their entry agent can use it."
+          title={t('还没有授权', 'No grants yet')}
+          body={t(
+            '把一个门（或其他资源）授予成员，他的入口 agent 才能使用它。',
+            'Grant a Gatekeeper (or another resource) to a member so their entry agent can use it.',
+          )}
           testId="grants-empty"
         />
       ) : (
@@ -215,7 +232,7 @@ export function AccessPage({ http }: AccessPageProps) {
                 <>
                   <span className="tag">{row.resourceType}</span>
                   {row.resourceId === null || row.resourceId === undefined ? (
-                    <span className="text-3">任意 any</span>
+                    <span className="text-3">{t('任意', 'any')}</span>
                   ) : row.resourceType === 'gatekeeper' ? (
                     <RefChip
                       kind="gatekeeper"
@@ -242,7 +259,7 @@ export function AccessPage({ http }: AccessPageProps) {
                     testId="grant-principal"
                   />
                   <span className="meta-sep" />
-                  <span>授予者 by</span>
+                  <span>{t('授予者', 'by')}</span>
                   <RefChip
                     kind="principal"
                     id={row.grantedBy}
@@ -256,7 +273,7 @@ export function AccessPage({ http }: AccessPageProps) {
                     <>
                       <span className="meta-sep" />
                       <span title={formatDateTime(row.expiresAt)}>
-                        到期 expires {formatRelative(row.expiresAt)}
+                        {t('到期', 'expires')} {formatRelative(row.expiresAt)}
                       </span>
                     </>
                   ) : null}
@@ -278,7 +295,7 @@ export function AccessPage({ http }: AccessPageProps) {
                     onClick={() => void handleRevoke(row.id)}
                     loading={revoking === row.id}
                   >
-                    撤销 Revoke
+                    {t('撤销', 'Revoke')}
                   </Button>
                 ) : undefined
               }
@@ -293,14 +310,16 @@ export function AccessPage({ http }: AccessPageProps) {
             loading={grants.loadingMore}
             onClick={() => void grants.loadMore()}
           >
-            加载更多 Load more
+            {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}
       {grants.state.status === 'ready' && grants.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="grants-truncated">
-          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余授权 keep loading
-          more to see the rest.
+          {t(
+            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余授权',
+            'keep loading more to see the rest.',
+          )}
         </p>
       ) : null}
       {grants.loadMoreError !== null ? (
@@ -316,7 +335,7 @@ export function AccessPage({ http }: AccessPageProps) {
       <Drawer
         open={grantOpen}
         onClose={() => setGrantOpen(false)}
-        title="授予能力 Grant capability"
+        title={t('授予能力', 'Grant capability')}
         subtitle="grant_capability{principalId, resourceType, resourceId?, scope?}"
         testId="grant-drawer"
       >
@@ -328,7 +347,7 @@ export function AccessPage({ http }: AccessPageProps) {
             onCancel={() => setGrantOpen(false)}
             onDone={() => {
               setGrantOpen(false);
-              toast.push({ tone: 'ok', title: '已授予 Grant created' });
+              toast.push({ tone: 'ok', title: t('已授予', 'Grant created') });
               refreshGrants();
             }}
           />

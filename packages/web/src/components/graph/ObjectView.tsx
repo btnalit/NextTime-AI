@@ -4,6 +4,7 @@ import { useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
 import { groupFacts, isoToLocalInput, localInputToIso } from '../../lib/graph-view.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -67,6 +68,7 @@ export function ObjectView({
   onRefresh,
   onAsOfChange,
 }: ObjectViewProps) {
+  const t = useT();
   const state = useCapability<StateAtResult>(http, 'state_at', { objectId, at });
   const { prime, nameOf } = useGraphObjects();
   const asOf = useMemo(() => Date.parse(at), [at]);
@@ -106,7 +108,7 @@ export function ObjectView({
           onClick={onBack}
           data-testid="graph-back"
         >
-          {trail.length > 1 ? '返回 Back' : '返回搜索 Back to search'}
+          {trail.length > 1 ? t('返回', 'Back') : t('返回搜索', 'Back to search')}
         </Button>
         <ol className="graph-trail-list">
           {trail.map((id, index) => {
@@ -140,9 +142,12 @@ export function ObjectView({
 
       {timeTravel ? (
         <Notice tone="warn" testId="graph-as-of-notice">
-          截至 As of <time className="mono">{formatDateTime(at)}</time> —
-          显示当时有效的事实；之后被替代或失效的仍按当时状态着色。 Showing the Facts valid at that
-          instant; later supersessions / invalidations do not change their colour here.
+          {t('截至', 'As of')}
+          <time className="mono">{formatDateTime(at)}</time>{' '}
+          {t(
+            '— 显示当时有效的事实；之后被替代或失效的仍按当时状态着色。',
+            'Showing the Facts valid at that instant; later supersessions / invalidations do not change their colour here.',
+          )}
         </Notice>
       ) : null}
 
@@ -151,26 +156,28 @@ export function ObjectView({
       ) : state.state.status === 'error' ? (
         <ErrorBanner
           error={state.state.error}
-          title="无法读取对象 Could not load this Object"
+          title={t('无法读取对象', 'Could not load this Object')}
           onRetry={() => void state.reload()}
           testId="graph-object-error"
         />
       ) : state.state.data.object === null ? (
         <EmptyState
           icon="search"
-          title="对象不存在或不可见 Object not found or not visible"
+          title={t('对象不存在或不可见', 'Object not found or not visible')}
           body={
             <span className="row-wrap">
               <RefChip kind="object" id={objectId} size="s" />
               <span>
-                可能已被清除，或属于你看不到的私有来源。 It may have been purged, or belong to a
-                private Source you cannot see.
+                {t(
+                  '可能已被清除，或属于你看不到的私有来源。',
+                  'It may have been purged, or belong to a private Source you cannot see.',
+                )}
               </span>
             </span>
           }
           action={
             <Button variant="secondary" size="s" onClick={onBack}>
-              返回 Back
+              {t('返回', 'Back')}
             </Button>
           }
           testId="graph-object-missing"
@@ -185,7 +192,7 @@ export function ObjectView({
             actions={
               <>
                 <form className="graph-as-of" onSubmit={applyAsOf} data-testid="graph-as-of-form">
-                  <Field id="graph-as-of" label="截至 As of">
+                  <Field id="graph-as-of" label={t('截至', 'As of')}>
                     <Input
                       id="graph-as-of"
                       type="datetime-local"
@@ -195,7 +202,7 @@ export function ObjectView({
                     />
                   </Field>
                   <Button type="submit" size="s" variant="secondary" disabled={draftAt === ''}>
-                    应用 Apply
+                    {t('应用', 'Apply')}
                   </Button>
                   {timeTravel ? (
                     <Button
@@ -204,7 +211,7 @@ export function ObjectView({
                       onClick={() => onAsOfChange(undefined)}
                       data-testid="graph-as-of-now"
                     >
-                      现在 Now
+                      {t('现在', 'Now')}
                     </Button>
                   ) : null}
                 </form>
@@ -216,7 +223,7 @@ export function ObjectView({
                   loading={state.state.refreshing}
                   data-testid="graph-refresh"
                 >
-                  刷新 Refresh
+                  {t('刷新', 'Refresh')}
                 </Button>
               </>
             }
@@ -225,7 +232,7 @@ export function ObjectView({
           {state.state.refreshError !== null ? (
             <ErrorBanner
               error={state.state.refreshError}
-              title="刷新失败 Refresh failed"
+              title={t('刷新失败', 'Refresh failed')}
               onRetry={() => void state.reload()}
             />
           ) : null}
@@ -233,7 +240,7 @@ export function ObjectView({
           <section className="section" aria-labelledby="graph-facts-title">
             <div className="section-header">
               <h2 id="graph-facts-title">
-                邻居与事实 Neighbours & Facts{' '}
+                {t('邻居与事实', 'Neighbours & Facts')}{' '}
                 <span className="text-3 text-small" data-testid="graph-fact-count">
                   ({state.state.data.facts.length})
                 </span>
@@ -246,18 +253,21 @@ export function ObjectView({
                   aria-pressed={showPicture}
                   data-testid="graph-toggle-picture"
                 >
-                  {showPicture ? '隐藏图示 Hide picture' : '显示图示 Show picture'}
+                  {showPicture ? t('隐藏图示', 'Hide picture') : t('显示图示', 'Show picture')}
                 </Button>
               ) : null}
             </div>
             {state.state.data.facts.length === 0 ? (
               <EmptyState
                 icon="link"
-                title="没有关联事实 No Facts touch this Object"
+                title={t('没有关联事实', 'No Facts touch this Object')}
                 body={
                   timeTravel
-                    ? '在该时刻没有有效的事实。 Nothing was valid at that instant.'
-                    : '采集器或 Worker 写入的关系会出现在这里。 Relations a collector or Worker writes appear here.'
+                    ? t('在该时刻没有有效的事实。', 'Nothing was valid at that instant.')
+                    : t(
+                        '采集器或 Worker 写入的关系会出现在这里。',
+                        'Relations a collector or Worker writes appear here.',
+                      )
                 }
                 testId="graph-facts-empty"
               />

@@ -57,7 +57,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   const initialPassword = ADMIN_INITIAL_PASSWORD as string;
   const changedPassword = `${initialPassword}-changed`;
 
-  const changePasswordHeading = page.getByRole('heading', { name: /Password change required/ });
+  const changePasswordHeading = page.getByRole('heading', { name: /需要更改密码/ });
   // The platform 工作区 nav item: rendered by `Sidebar` for `platformRole === 'admin'` whatever
   // route the admin lands on, so it is the one "we are past the login screen" signal that always
   // holds (same reasoning as `workspaces.spec.ts`'s own copy of this helper).
@@ -72,23 +72,23 @@ async function signInAsAdmin(page: Page): Promise<void> {
   });
 
   if (await badCredentials.isVisible().catch(() => false)) {
-    await page.getByLabel(/密码 Password/).fill(changedPassword);
+    await page.locator('#login-password').fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
   if (await changePasswordHeading.isVisible().catch(() => false)) {
-    await page.getByLabel(/当前密码 Current password/).fill(initialPassword);
-    await page.getByLabel(/新密码 New password/).fill(changedPassword);
-    await page.getByLabel(/确认新密码 Confirm new password/).fill(changedPassword);
-    await page.getByRole('button', { name: /Change password/ }).click();
+    await page.locator('#cp-current-password').fill(initialPassword);
+    await page.locator('#cp-new-password').fill(changedPassword);
+    await page.locator('#cp-confirm-password').fill(changedPassword);
+    await page.getByRole('button', { name: /更改密码/ }).click();
   }
 
   await expect(shell).toBeVisible({ timeout: 15_000 });
 }
 
 async function signOut(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /登出 Sign out/ }).click();
+  await page.getByRole('button', { name: /登出/ }).click();
   await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
 }
 
@@ -127,7 +127,7 @@ async function setOperationDisabled(
   const alreadyThere = await checkbox.isChecked();
   if (alreadyThere === disabled) return;
   await checkbox.click();
-  await list.getByRole('button', { name: /保存 Save/ }).click();
+  await list.getByRole('button', { name: /保存/ }).click();
   await expect(checkbox).toBeChecked({ checked: disabled, timeout: 15_000 });
 }
 
@@ -154,7 +154,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     // --- 接入包 Connectors (default tab) -----------------------------------------------------
     const fixtureRow = page.getByTestId(`connector-row-${CONNECTOR}`);
     await expect(fixtureRow).toBeVisible({ timeout: 15_000 });
-    await expect(fixtureRow).toContainText('Packaged');
+    await expect(fixtureRow).toContainText('预置');
     await expect(page.getByTestId(`connector-mode-${CONNECTOR}`)).toHaveValue('platform_preset');
     await expect(page.getByTestId('connector-row-http')).toBeVisible();
 
@@ -170,10 +170,10 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
 
     const statusToggle = drawer.getByTestId('gate-instance-status-toggle');
     const statusLabel = (await statusToggle.textContent())?.trim();
-    if (statusLabel !== '禁用 Disable') {
+    if (statusLabel !== '禁用') {
       await statusToggle.click();
     }
-    await expect(statusToggle).toHaveText('禁用 Disable', { timeout: 15_000 });
+    await expect(statusToggle).toHaveText('禁用', { timeout: 15_000 });
 
     await drawer.getByTestId('gate-instance-test').click();
     await expect(drawer.getByTestId('gate-instance-test-result')).toContainText('unreachable', {
@@ -182,10 +182,10 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
 
     const trustToggle = drawer.getByTestId('gate-instance-trust-toggle');
     const trustLabel = (await trustToggle.textContent())?.trim();
-    if (trustLabel !== '撤销 vetted Revoke vetted') {
+    if (trustLabel !== '撤销 vetted') {
       await trustToggle.click();
     }
-    await expect(trustToggle).toHaveText('撤销 vetted Revoke vetted', { timeout: 15_000 });
+    await expect(trustToggle).toHaveText('撤销 vetted', { timeout: 15_000 });
 
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
@@ -200,7 +200,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await ensureOwnedWorkspaceSelected(page);
 
     await page.getByTestId('nav-systems').click();
-    await expect(page.getByRole('heading', { name: '系统接入 Systems' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: '系统接入' })).toBeVisible({
       timeout: 15_000,
     });
 
@@ -210,7 +210,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     if (await enableButton.isVisible().catch(() => false)) {
       await enableButton.click();
     }
-    await expect(availableRow.getByRole('link', { name: /已启用 Enabled/ })).toBeVisible({
+    await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible({
       timeout: 15_000,
     });
 
@@ -240,12 +240,12 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
       const row = page.getByTestId(`connector-row-${CONNECTOR}`);
       await expect(row).toBeVisible({ timeout: 15_000 });
       // Fresh mount ⇒ always collapsed — expand it.
-      await row.getByRole('button', { name: /展开 Expand/ }).click();
+      await row.getByRole('button', { name: /展开/ }).click();
     }
 
     async function catalogHasOperation(name: string): Promise<boolean> {
       await page.getByTestId('nav-catalog').click();
-      await expect(page.getByRole('heading', { name: '能力目录 Catalog' })).toBeVisible({
+      await expect(page.getByRole('heading', { name: '能力目录' })).toBeVisible({
         timeout: 15_000,
       });
       const list = page.getByTestId('catalog-list');
@@ -301,7 +301,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
 
     await ensureOwnedWorkspaceSelected(page);
     await page.getByTestId('nav-systems').click();
-    await expect(page.getByRole('heading', { name: '系统接入 Systems' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: '系统接入' })).toBeVisible({
       timeout: 15_000,
     });
     await page.getByTestId('connect-system-button').click();
@@ -354,18 +354,16 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     ) {
       const suffix = Date.now().toString(36);
       await page.getByTestId('nav-members').click();
-      await expect(
-        page.getByRole('heading', { name: '成员与授权 Members', exact: true }),
-      ).toBeVisible({
+      await expect(page.getByRole('heading', { name: '成员与授权', exact: true })).toBeVisible({
         timeout: 15_000,
       });
-      await page.getByRole('button', { name: /服务凭证 Service credential/ }).click();
+      await page.getByRole('button', { name: /服务凭证/ }).click();
       const createDrawer = page.getByTestId('create-principal-drawer');
       await expect(createDrawer.getByTestId('create-principal-form')).toBeVisible({
         timeout: 15_000,
       });
       await createDrawer.locator('#cp-name').fill(`ci-fixture-svc-${suffix}`);
-      await createDrawer.getByRole('button', { name: 'Create' }).click();
+      await createDrawer.getByRole('button', { name: '创建' }).click();
       await expect(createDrawer.getByTestId('create-principal-key')).toBeVisible({
         timeout: 15_000,
       });
@@ -385,7 +383,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     expect(principalId ?? '').not.toBe('');
     await principalSelect.selectOption(principalId as string);
     await form.locator('#ish-scope').fill('get_task');
-    await form.getByRole('button', { name: /签发 Issue/ }).click();
+    await form.getByRole('button', { name: /签发/ }).click();
 
     const issuedDrawer = page.getByTestId('issued-handle-dialog');
     await expect(issuedDrawer).toBeVisible({ timeout: 15_000 });
@@ -397,7 +395,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     // could make ambiguous) so the row/revoke lookup below is unambiguous.
     const sessionId = ((await issuedDrawer.locator('.drawer-subtitle').textContent()) ?? '').trim();
     expect(sessionId.length).toBeGreaterThan(0);
-    await issuedDrawer.getByRole('button', { name: /我已保存 I have saved it/ }).click();
+    await issuedDrawer.getByRole('button', { name: /我已保存/ }).click();
     await expect(issuedDrawer).toBeHidden();
 
     // --- 集成 → 外部运行时: the new session shows up, then gets revoked -------------------------
@@ -409,7 +407,7 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     const runtimeRow = page.getByTestId(`external-runtime-row-${sessionId}`);
     await expect(runtimeRow).toBeVisible({ timeout: 15_000 });
     await runtimeRow.getByTestId(`external-runtime-revoke-${sessionId}`).click();
-    await runtimeRow.getByRole('button', { name: /确认吊销 Confirm revoke/ }).click();
+    await runtimeRow.getByRole('button', { name: /确认吊销/ }).click();
     await expect(runtimeRow).toBeHidden({ timeout: 15_000 });
 
     await signOut(page);

@@ -2,6 +2,7 @@ import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { PrincipalRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { platformErrorMessage } from '../lib/platform-errors.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -26,6 +27,7 @@ export interface AddMemberFormProps {
  * double-click actually produces.
  */
 export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
+  const t = useT();
   const [login, setLogin] = useState('');
   const [role, setRole] = useState<Role>('member');
   const [submitting, setSubmitting] = useState(false);
@@ -57,9 +59,12 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
     >
       <Field
         id="am-login"
-        label="登录名 Login"
+        label={t('登录名', 'Login')}
         required
-        hint="平台用户的登录名；这里不创建账户，也不签发 API key。 An existing platform user's login — this creates no account and no API key."
+        hint={t(
+          "平台用户的登录名；这里不创建账户，也不签发 API key。 An existing platform user's login —",
+          'this creates no account and no API key.',
+        )}
       >
         <Input
           id="am-login"
@@ -75,9 +80,9 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
 
       <Field
         id="am-role"
-        label="角色 Role"
+        label={t('角色', 'Role')}
         required
-        hint="之后可在成员行里修改。 Can be changed later from the member's row."
+        hint={t('之后可在成员行里修改。', "Can be changed later from the member's row.")}
       >
         <Select
           id="am-role"
@@ -100,17 +105,17 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
       ) : error !== null ? (
         <ErrorBanner
           error={error}
-          title="无法添加成员 Could not add this member"
+          title={t('无法添加成员', 'Could not add this member')}
           testId="add-member-error"
         />
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
         <Button type="submit" variant="primary" loading={submitting} disabled={!login.trim()}>
-          添加 Add
+          {t('添加', 'Add')}
         </Button>
       </div>
     </form>

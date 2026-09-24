@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { Icon } from './Icon.js';
 import { RefChip } from './RefChip.js';
 
@@ -100,11 +101,12 @@ export function ProvenanceChain({
   hrefFor,
   testId,
 }: ProvenanceChainProps) {
+  const t = useT();
   const resolvedSource = source ?? fact?.lastObservation?.source ?? null;
   return (
     <div className="prov-chain" data-testid={testId}>
       <ol className="prov-segments">
-        <Segment title="事实 Fact" present={!!fact} testId="prov-fact">
+        <Segment title={t('事实', 'Fact')} present={!!fact} testId="prov-fact">
           {fact ? (
             <>
               <RefChip
@@ -117,27 +119,27 @@ export function ProvenanceChain({
               <dl className="definition-list">
                 {fact.epistemicStatus !== undefined ? (
                   <>
-                    <dt>状态 Status</dt>
+                    <dt>{t('状态', 'Status')}</dt>
                     <dd className="mono">{fact.epistemicStatus}</dd>
                   </>
                 ) : null}
-                <dt>断言者 Asserted by</dt>
+                <dt>{t('断言者', 'Asserted by')}</dt>
                 <dd>{principalChip(fact.assertedByPrincipal, hrefFor)}</dd>
                 {fact.verifiedByPrincipal ? (
                   <>
-                    <dt>验证者 Verified by</dt>
+                    <dt>{t('验证者', 'Verified by')}</dt>
                     <dd>{principalChip(fact.verifiedByPrincipal, hrefFor)}</dd>
                   </>
                 ) : null}
                 {fact.lastObservation ? (
                   <>
-                    <dt>最近观测 Last observed</dt>
+                    <dt>{t('最近观测', 'Last observed')}</dt>
                     <dd>{when(fact.lastObservation.createdAt)}</dd>
                   </>
                 ) : null}
                 {fact.invalidatedAt ? (
                   <>
-                    <dt className="text-danger">失效 Invalidated</dt>
+                    <dt className="text-danger">{t('失效', 'Invalidated')}</dt>
                     <dd>
                       {when(fact.invalidatedAt)}
                       {fact.invalidationReason ? (
@@ -150,7 +152,7 @@ export function ProvenanceChain({
             </>
           ) : null}
         </Segment>
-        <Segment title="活动 Activity" present={!!activity} testId="prov-activity">
+        <Segment title={t('活动', 'Activity')} present={!!activity} testId="prov-activity">
           {activity ? (
             <>
               <RefChip
@@ -163,23 +165,23 @@ export function ProvenanceChain({
               <dl className="definition-list">
                 {activity.status !== undefined ? (
                   <>
-                    <dt>状态 Status</dt>
+                    <dt>{t('状态', 'Status')}</dt>
                     <dd className="mono">{activity.status}</dd>
                   </>
                 ) : null}
-                <dt>发起者 Started by</dt>
+                <dt>{t('发起者', 'Started by')}</dt>
                 <dd>{principalChip(activity.startedByPrincipal, hrefFor)}</dd>
                 {activity.onBehalfOfPrincipal ? (
                   <>
-                    <dt>代表 On behalf of</dt>
+                    <dt>{t('代表', 'On behalf of')}</dt>
                     <dd>{principalChip(activity.onBehalfOfPrincipal, hrefFor)}</dd>
                   </>
                 ) : null}
-                <dt>开始 Started</dt>
+                <dt>{t('开始', 'Started')}</dt>
                 <dd>{when(activity.createdAt)}</dd>
                 {activity.endedAt ? (
                   <>
-                    <dt>结束 Ended</dt>
+                    <dt>{t('结束', 'Ended')}</dt>
                     <dd>{when(activity.endedAt)}</dd>
                   </>
                 ) : null}
@@ -187,7 +189,7 @@ export function ProvenanceChain({
             </>
           ) : null}
         </Segment>
-        <Segment title="来源 Source" present={!!resolvedSource} testId="prov-source">
+        <Segment title={t('来源', 'Source')} present={!!resolvedSource} testId="prov-source">
           {resolvedSource ? (
             <>
               <RefChip
@@ -208,13 +210,13 @@ export function ProvenanceChain({
                 ) : null}
                 {resolvedSource.visibility !== undefined ? (
                   <>
-                    <dt>可见性 Visibility</dt>
+                    <dt>{t('可见性', 'Visibility')}</dt>
                     <dd className="mono">{resolvedSource.visibility}</dd>
                   </>
                 ) : null}
                 {resolvedSource.ownerPrincipal ? (
                   <>
-                    <dt>所有者 Owner</dt>
+                    <dt>{t('所有者', 'Owner')}</dt>
                     <dd>{principalChip(resolvedSource.ownerPrincipal, hrefFor)}</dd>
                   </>
                 ) : null}
@@ -227,7 +229,7 @@ export function ProvenanceChain({
         <details className="disclosure" data-testid="prov-raw">
           <summary>
             <Icon name="chevron-right" size="s" className="icon-chevron" />
-            原始证据 Raw evidence
+            {t('原始证据', 'Raw evidence')}
           </summary>
           <div className="disclosure-body">
             <pre className="code-block">{JSON.stringify(raw, null, 2)}</pre>
@@ -249,6 +251,7 @@ function Segment({
   readonly testId: string;
   readonly children: ReactNode;
 }) {
+  const t = useT();
   return (
     <li
       className={`prov-segment${present ? '' : ' prov-segment-missing'}`}
@@ -258,7 +261,7 @@ function Segment({
       <span className="prov-segment-dot" aria-hidden />
       <div className="prov-segment-body">
         <span className="section-title">{title}</span>
-        {present ? children : <span className="text-3">无 Not recorded</span>}
+        {present ? children : <span className="text-3">{t('无', 'Not recorded')}</span>}
       </div>
     </li>
   );

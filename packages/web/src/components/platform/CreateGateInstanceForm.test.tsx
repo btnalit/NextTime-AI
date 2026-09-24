@@ -87,7 +87,7 @@ describe('CreateGateInstanceForm', () => {
       target: { value: 'billing-api' },
     });
     fireEvent.click(within(form).getByLabelText(/mcp/));
-    fireEvent.change(within(form).getByLabelText(/目标 Target/), {
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.internal' },
     });
     fireEvent.click(within(form).getByLabelText(/按人 Connected account/));
@@ -119,7 +119,7 @@ describe('CreateGateInstanceForm', () => {
     fireEvent.change(within(form).getByLabelText(/Gate id/), {
       target: { value: 'billing-api' },
     });
-    fireEvent.change(within(form).getByLabelText(/目标 Target/), {
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.internal' },
     });
     fireEvent.change(within(form).getByLabelText(/Manifest source/), {
@@ -141,7 +141,7 @@ describe('CreateGateInstanceForm', () => {
     expect(submit.disabled).toBe(true);
 
     fireEvent.change(within(form).getByLabelText(/Gate id/), { target: { value: 'Not Valid!' } });
-    fireEvent.change(within(form).getByLabelText(/目标 Target/), {
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://target.internal' },
     });
     expect(submit.disabled).toBe(true);
@@ -154,7 +154,7 @@ describe('CreateGateInstanceForm', () => {
       target: { value: 'not a url' },
     });
     expect(submit.disabled).toBe(true);
-    expect(within(form).getByText('不是合法的 URL Not a valid URL')).toBeTruthy();
+    expect(within(form).getByText('不是合法的 URL')).toBeTruthy();
 
     fireEvent.change(within(form).getByLabelText(/Manifest source/), {
       target: { value: 'https://target.internal/openapi.json' },

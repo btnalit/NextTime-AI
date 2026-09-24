@@ -11,7 +11,7 @@ describe('PlatformError (C10 client half)', () => {
     render(
       <PlatformError
         error={new HttpError('capability_error', 'cannot disable yourself', 'self_disable')}
-        title="无法停用 Could not disable"
+        title="无法停用"
         testId="err"
       />,
     );
@@ -30,7 +30,7 @@ describe('PlatformError (C10 client half)', () => {
             'last_admin',
           )
         }
-        title="无法停用 Could not disable"
+        title="无法停用"
         testId="err"
       />,
     );

@@ -2,6 +2,7 @@ import type { ModuleWire, PlatformSettingsWire } from '@nexttime/shared';
 import { useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
@@ -29,6 +30,7 @@ export interface PlatformModulesPageProps {
  * (the owner's 能力目录 模块 tab) is where a workspace actually installs one.
  */
 export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
+  const t = useT();
   const modules = useCapabilityList<ModuleWire>(http, 'list_modules', {});
   const settings = useCapability<PlatformSettingsWire>(http, 'get_platform_settings');
   const [defaultModules, setDefaultModules] = useState<readonly string[] | null>(null);
@@ -63,14 +65,17 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
   return (
     <div className="page" data-testid="platform-modules-page">
       <PageHeader
-        title="模块 Modules"
-        description="随镜像发布的版本化领域包——本部署带哪些模块、装到了几个工作区、哪些工作区有新版可用，以及新建工作区默认安装哪些。 Versioned domain packs shipped with this deployment: what's available, how many workspaces have each installed, and which install by default into a new workspace."
+        title={t('模块', 'Modules')}
+        description={t(
+          '随镜像发布的版本化领域包——本部署带哪些模块、装到了几个工作区、哪些工作区有新版可用，以及新建工作区默认安装哪些。',
+          "Versioned domain packs shipped with this deployment: what's available, how many workspaces have each installed, and which install by default into a new workspace.",
+        )}
         breadcrumb={breadcrumbFor('platformModules')}
       />
 
       <PlatformError
         error={defaultError}
-        title="无法设置默认模块 Could not set the default modules"
+        title={t('无法设置默认模块', 'Could not set the default modules')}
         testId="modules-default-error"
       />
 
@@ -86,7 +91,7 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="grid"
-          title="这个部署没有模块 No modules in this deployment"
+          title={t('这个部署没有模块', 'No modules in this deployment')}
           testId="modules-empty"
         />
       ) : (
@@ -94,11 +99,11 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
           <table className="data-table" data-testid="modules-table">
             <thead>
               <tr>
-                <th>名称 Name</th>
-                <th>最新版本 Latest</th>
-                <th>已装到 Installed in</th>
-                <th>有新版 Newer available</th>
-                <th>默认安装 Default</th>
+                <th>{t('名称', 'Name')}</th>
+                <th>{t('最新版本', 'Latest')}</th>
+                <th>{t('已装到', 'Installed in')}</th>
+                <th>{t('有新版', 'Newer available')}</th>
+                <th>{t('默认安装', 'Default')}</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -139,6 +144,7 @@ function ModuleRow({
   readonly expanded: boolean;
   readonly onToggleExpanded: () => void;
 }) {
+  const t = useT();
   const latest = module.versions[module.versions.length - 1];
   return (
     <>
@@ -173,7 +179,7 @@ function ModuleRow({
             aria-expanded={expanded}
             data-testid={`module-expand-${module.name}`}
           >
-            {expanded ? '收起 Collapse' : '版本 Versions'}
+            {expanded ? t('收起', 'Collapse') : t('版本', 'Versions')}
           </Button>
         </td>
       </tr>

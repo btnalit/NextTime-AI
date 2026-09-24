@@ -178,10 +178,10 @@ describe('AuditPage entry points', () => {
     );
     expect(row.textContent).toContain('[redacted]');
     expect(row.textContent).not.toContain('sk-1');
-    expect((screen.getByLabelText(/Resource id/) as HTMLInputElement).value).toBe('ar-1');
+    expect((screen.getByLabelText(/资源 id/) as HTMLInputElement).value).toBe('ar-1');
     expect((screen.getByTestId('audit-actor-select') as HTMLSelectElement).value).toBe('');
 
-    fireEvent.click(screen.getByRole('button', { name: /Load more/ }));
+    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
     await waitFor(() => expect(screen.getAllByTestId('audit-row')).toHaveLength(2));
     expect(queries[1]).toMatchObject({ cursor: 'c-1' });
 
@@ -301,7 +301,7 @@ describe('AuditPage degraded states', () => {
     await screen.findByTestId('audit-actor-input');
     expect(screen.queryByTestId('audit-actor-select')).toBeNull();
 
-    fireEvent.change(screen.getByLabelText(/Node id/), { target: { value: 'nope' } });
+    fireEvent.change(screen.getByLabelText(/节点 id/), { target: { value: 'nope' } });
     fireEvent.submit(screen.getByTestId('explain-form'));
     const banner = await screen.findByTestId('explain-error');
     expect(banner.getAttribute('data-error-code')).toBe('not_found');

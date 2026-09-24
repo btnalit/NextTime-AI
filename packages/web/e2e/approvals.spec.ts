@@ -96,13 +96,13 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     await page.goto('/#/work/approvals');
     await expect(queueRowByMarker(page, E2E_APPROVE_SCOPE)).toBeVisible({ timeout: 15_000 });
     const drawer = await openQueueRow(page, E2E_APPROVE_SCOPE);
-    await expect(drawer.getByRole('button', { name: 'Approve' })).toBeVisible();
-    await expect(drawer.getByRole('checkbox', { name: /Always allow/ })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: '批准' })).toBeVisible();
+    await expect(drawer.getByRole('checkbox', { name: /总是允许/ })).toBeVisible();
 
     // --- approve from the drawer; the row leaves the Pending tab optimistically and
     //     `list_pending` (pending rows only) confirms it on reconcile — the durable record of
     //     "this card, now decided" lives in the chat instead, checked below ---
-    await drawer.getByRole('button', { name: 'Approve' }).click();
+    await drawer.getByRole('button', { name: '批准' }).click();
     await expect(queueRowByMarker(page, E2E_APPROVE_SCOPE)).toHaveCount(0, { timeout: 15_000 });
     await page.keyboard.press('Escape');
 
@@ -125,7 +125,7 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
       /^(approved|executing|executed|failed)$/,
       { timeout: 15_000 },
     );
-    await expect(chatCard.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    await expect(chatCard.getByRole('button', { name: '批准' })).toHaveCount(0);
     // By test id, not the `.system-status-line` class: the chat card's own outcome row
     // (ActionRequestCard.tsx `action-outcome`) reuses that class and carries `data-status` itself,
     // so while the card sits on `approved` the class locator matches both (strict-mode violation).
@@ -197,7 +197,7 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
     await page.reload();
     await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toBeVisible({ timeout: 15_000 });
     const drawerForB = await openQueueRow(page, E2E_ISOLATION_SCOPE);
-    await drawerForB.getByRole('button', { name: 'Approve' }).click();
+    await drawerForB.getByRole('button', { name: '批准' }).click();
     await expect(queueRowByMarker(page, E2E_ISOLATION_SCOPE)).toHaveCount(0, { timeout: 15_000 });
     await page.keyboard.press('Escape');
 
@@ -214,6 +214,6 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
       /^(approved|executing|executed|failed)$/,
       { timeout: 15_000 },
     );
-    await expect(chatCardForA.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    await expect(chatCardForA.getByRole('button', { name: '批准' })).toHaveCount(0);
   });
 });

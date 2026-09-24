@@ -88,14 +88,14 @@ function renderPanel(http: CapabilityCaller, instance: GateInstanceWire) {
 
 describe('GateInstanceDetailPanel', () => {
   // B7 (§4 "接入三层"): 启用 only in `discovered`; the button's meaning follows the machine.
-  it('B7: the status button reads 启用 for discovered and lost, 禁用 for enabled, 重新启用 for disabled, and a disabled 启用 while awaiting the host', () => {
+  it('B7: the status button reads 启用 for discovered and lost, 禁用 for enabled, 重新启用 for disabled, and a disabled 启用', () => {
     const http = scriptedHttp({});
     const cases: readonly [Partial<GateInstanceWire>, string, boolean][] = [
-      [{ status: 'discovered' }, '启用 Enable', false],
-      [{ status: 'enabled' }, '禁用 Disable', false],
-      [{ status: 'disabled' }, '重新启用 Re-enable', false],
-      [{ status: 'lost' }, '启用 Enable', false],
-      [{ status: 'discovered', hosted: true, lastSeenAt: null }, '启用 Enable', true],
+      [{ status: 'discovered' }, '启用', false],
+      [{ status: 'enabled' }, '禁用', false],
+      [{ status: 'disabled' }, '重新启用', false],
+      [{ status: 'lost' }, '启用', false],
+      [{ status: 'discovered', hosted: true, lastSeenAt: null }, '启用', true],
     ];
     for (const [overrides, label, disabled] of cases) {
       renderPanel(http, gateInstance(overrides));
@@ -190,7 +190,7 @@ describe('GateInstanceDetailPanel', () => {
       }),
     );
     const definition = screen.getByTestId('gate-instance-hosted-definition');
-    expect(definition.textContent).toContain('共享 Shared');
+    expect(definition.textContent).toContain('共享');
     expect(within(definition).getByTestId('gate-credential-token-button')).toBeTruthy();
     fireEvent.click(screen.getByTestId('gate-instance-delete'));
     fireEvent.click(screen.getByTestId('gate-instance-delete-confirm'));
@@ -206,9 +206,9 @@ describe('GateInstanceDetailPanel', () => {
       },
     });
     const { onChanged } = renderPanel(http, gateInstance());
-    const save = screen.getByRole('button', { name: '保存 Save' });
+    const save = screen.getByRole('button', { name: '保存' });
     expect(save.hasAttribute('disabled')).toBe(true);
-    fireEvent.change(screen.getByLabelText(/名称 Display name/), {
+    fireEvent.change(screen.getByLabelText(/名称/), {
       target: { value: 'Docker staging' },
     });
     fireEvent.click(save);

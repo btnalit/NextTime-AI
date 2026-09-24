@@ -6,6 +6,7 @@ import {
   isDecidable,
 } from '../lib/action-card.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
+import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { ApprovalCard } from './ui/ApprovalCard.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -53,6 +54,7 @@ export function ActionRequestCard({
   onReject,
   canAlwaysAllow,
 }: ActionRequestCardProps) {
+  const t = useT();
   const status = card.status ?? DECIDABLE_STATUS;
   const outcome = (
     <div className="system-status-line" data-testid="action-outcome" data-status={status}>
@@ -113,13 +115,13 @@ export function ActionRequestCard({
         ) : null}
         {card.actorRuntime ? (
           <div className="row-wrap text-small">
-            <span className="text-3">运行时 Runtime</span>
+            <span className="text-3">{t('运行时', 'Runtime')}</span>
             <span className="tag">{card.actorRuntime}</span>
           </div>
         ) : null}
         {hasParams && card.params ? (
           <div className="stack-s">
-            <span className="section-title">参数 Parameters</span>
+            <span className="section-title">{t('参数', 'Parameters')}</span>
             <pre className="code-block params-block">
               {prettyJson(redactSensitive(card.params))}
             </pre>
@@ -127,13 +129,13 @@ export function ActionRequestCard({
         ) : null}
         {card.simulated !== undefined ? (
           <div className="stack-s">
-            <span className="section-title">模拟效果 Simulated effect</span>
+            <span className="section-title">{t('模拟效果', 'Simulated effect')}</span>
             <pre className="code-block action-card-simulated">{prettyJson(card.simulated)}</pre>
           </div>
         ) : null}
         {blocking ? (
           <Notice tone="warn">
-            等待你的决定，Worker 已阻塞。 Awaiting your decision — the Worker is blocked.
+            {t('等待你的决定，Worker 已阻塞。', 'Awaiting your decision — the Worker is blocked.')}
           </Notice>
         ) : null}
       </ApprovalCard>

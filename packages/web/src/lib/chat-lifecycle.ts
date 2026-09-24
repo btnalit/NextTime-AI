@@ -1,5 +1,6 @@
 import type { ChatWire } from '@nexttime/shared';
 import type { CapabilityCaller } from './clients.js';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/chat-lifecycle: the S6-A chat lifecycle on the client (docs/console-completion-plan.md §4
@@ -21,16 +22,16 @@ import type { CapabilityCaller } from './clients.js';
 /** The list row / open chat's identity — the full wire shape, no local subset (S6-A). */
 export type ChatSummary = ChatWire;
 
-/** What a chat with no title yet reads as: the kernel writes the auto-title when the first user
- *  message lands, so `title: null` means "nothing said yet", not "untitled forever". */
-export const NEW_CHAT_TITLE_PLACEHOLDER = '新对话 New chat';
-
 /** `rename_chat`'s ceiling (`packages/shared/src/capabilities.ts` `rename_chat.paramsSchema`). */
 export const CHAT_TITLE_MAX_CHARS = 200;
 
-export function chatTitle(chat: Pick<ChatWire, 'title'> | null | undefined): string {
+/** What a chat with no title yet reads as: the kernel writes the auto-title when the first user
+ *  message lands, so `title: null` means "nothing said yet", not "untitled forever". S8 W1-A9: a
+ *  plain lib helper (not a component/hook), so it takes `t` from its caller (every caller is a
+ *  component that already has one) rather than calling `useT()` itself. */
+export function chatTitle(chat: Pick<ChatWire, 'title'> | null | undefined, t: Translate): string {
   const title = chat?.title;
-  return title === null || title === undefined || title === '' ? NEW_CHAT_TITLE_PLACEHOLDER : title;
+  return title === null || title === undefined || title === '' ? t('新对话', 'New chat') : title;
 }
 
 /** `archivedAt` is the status. Read as "is a timestamp" rather than `!== null` so a row from a

@@ -128,7 +128,7 @@ function runtime(overrides: Partial<ExternalRuntimeWire> = {}): ExternalRuntimeW
 describe('PlatformIntegrationsPage', () => {
   // S6-C (§5.6): the page's one primary action opens the shared launcher for the platform plane;
   // the 门实例 tab keeps 新建门宿主实例 as the quick path.
-  it('"接入一个系统 Connect a system" is the primary action and opens the launcher; finishing it opens the instance drawer', async () => {
+  it('"接入一个系统', async () => {
     const instance = gateInstance({
       gateId: 'billing',
       displayName: 'Billing',
@@ -168,7 +168,7 @@ describe('PlatformIntegrationsPage', () => {
     expect(screen.getByTestId('new-gate-instance')).toBeTruthy();
   });
 
-  it('a deep-linked selectedGateId opens the 门实例 tab with that drawer; closing it reports null', async () => {
+  it('a deep-linked selectedGateId opens the 门实例', async () => {
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [gateInstance()] }),
     });
@@ -182,7 +182,7 @@ describe('PlatformIntegrationsPage', () => {
   });
 
   // B7 in the platform detail: an `enabled · ok` instance offers 禁用, never 启用.
-  it('B7: an enabled instance’s detail shows 禁用 Disable and its health chip, not a 启用 button', async () => {
+  it('B7: an enabled instance’s detail shows 禁用 Disable and its health chip, not a 启用', async () => {
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [gateInstance({ status: 'enabled', health: 'ok' })] }),
     });
@@ -191,12 +191,8 @@ describe('PlatformIntegrationsPage', () => {
     const table = await screen.findByTestId('gate-instances-table');
     fireEvent.click(within(table).getByTestId('gate-instance-open-gate-1'));
     const detail = await screen.findByTestId('gate-instance-detail');
-    expect(within(detail).getByTestId('gate-instance-status-toggle').textContent).toBe(
-      '禁用 Disable',
-    );
-    expect(within(detail).getByTestId('gate-instance-detail-health').textContent).toContain(
-      '健康 Healthy',
-    );
+    expect(within(detail).getByTestId('gate-instance-status-toggle').textContent).toBe('禁用');
+    expect(within(detail).getByTestId('gate-instance-detail-health').textContent).toContain('健康');
     expect(within(detail).getByTestId('gate-instance-workspaces')).toBeTruthy();
   });
 
@@ -318,7 +314,7 @@ describe('PlatformIntegrationsPage', () => {
 
     const table = await screen.findByTestId('connectors-table');
     const row = within(table).getByTestId('connector-row-docker');
-    fireEvent.click(within(row).getByRole('button', { name: /展开 Expand/ }));
+    fireEvent.click(within(row).getByRole('button', { name: /展开/ }));
 
     const denyList = await screen.findByTestId('connector-disabled-ops-docker');
     // The union includes the live instance's own Operation plus the already-disabled name that no
@@ -326,7 +322,7 @@ describe('PlatformIntegrationsPage', () => {
     expect(within(denyList).getByText('old_op')).toBeTruthy();
     const liveCheckbox = within(denyList).getByLabelText('container_restart');
     fireEvent.click(liveCheckbox);
-    fireEvent.click(within(denyList).getByRole('button', { name: '保存 Save' }));
+    fireEvent.click(within(denyList).getByRole('button', { name: '保存' }));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(true),
@@ -455,7 +451,7 @@ describe('PlatformIntegrationsPage', () => {
       target: { value: 'gate-new' },
     });
     fireEvent.click(within(form).getByLabelText(/mcp/));
-    fireEvent.change(within(form).getByLabelText(/目标 Target/), {
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://target.internal' },
     });
     fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
@@ -552,7 +548,7 @@ describe('PlatformIntegrationsPage', () => {
     fireEvent.click(screen.getByTestId('integrations-tab-runtimes'));
     const table = await screen.findByTestId('external-runtimes-table');
     fireEvent.click(within(table).getByTestId('external-runtime-revoke-sess-1'));
-    fireEvent.click(within(table).getByRole('button', { name: '确认吊销 Confirm revoke' }));
+    fireEvent.click(within(table).getByRole('button', { name: '确认吊销' }));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'revoke_external_runtime')).toBe(true),
