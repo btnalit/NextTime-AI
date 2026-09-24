@@ -23,11 +23,6 @@ export interface GrantGateFormProps {
   readonly testId?: string;
 }
 
-interface OperationScopeState {
-  readonly gatekeeperId: string;
-  readonly names: ReadonlySet<string>;
-}
-
 /**
  * components/access/GrantGateForm (S8 W2-U1, audit J6/SY2/R5/U2/AX1): the one grant flow the
  * Access page's primary action and every system card's own action open (`GrantGateDrawer` wraps
@@ -36,9 +31,8 @@ interface OperationScopeState {
  * page) and `RegisteredSystemsSection`'s in-card expanding form (a bare principal id/select) — a
  * member picker (`list_principals` with `q`), a gate picker (`list_gatekeepers` with `q`,
  * multi-select, hidden entirely when `lockedGatekeeper` is given), and — only while the grant
- * targets exactly one gate — a checklist of that gate's Operations to narrow the grant to
- * (`list_operations{gatekeeperId}`; empty is stated explicitly as "every Operation", never an
- * implicit default nobody chose). No id or JSON is ever shown as an editable field: everything
+ * targets exactly one gate — a read-only list of that gate's Operations the grant will cover
+ * (`list_operations{gatekeeperId}`). No id or JSON is ever shown as an editable field: everything
  * submitted comes from a picked row.
  *
  * "全部门" (every gate, including ones registered later) is a distinct, explicit choice — ticking
@@ -46,11 +40,10 @@ interface OperationScopeState {
  * 必须显式选择并走确认"); nothing here fires `grant_capability` until the caller presses 授予.
  *
  * One `grant_capability` call per selected gate (the capability takes one `resourceId` at a time);
- * `resourceId` omitted entirely for the "全部门" case. `scope` only ever carries `{operationNames}`
- * here — see the module's own note in `submit` for why: nothing in the kernel enforces it today
- * (grep confirms `capability_grants.scope` is stored and echoed back, never read by any
- * authorization check), so this is a *label*, not a technical narrowing, and the copy next to the
- * checklist says so.
+ * `resourceId` omitted entirely for the "全部门" case. `scope` is never sent: nothing in the kernel
+ * enforces `capability_grants.scope` today (it is stored and echoed back, never read by any
+ * authorization check), so a per-Operation checklist would be a control that narrows nothing. A
+ * grant covers the whole gate, and the Operations list says so instead of offering a choice.
  *
  * `components/kit/*` boundary (S8 risk ①): this file may not import `components/ui/*`, so its own
  * field/notice/error-banner/status-chip rendering are small local replicas of the `ui/*`
@@ -105,7 +98,7 @@ export function GrantGateForm({
     });
   }
 
-  // ---- Effective target(s) — drives the Operations checklist --------------------------------
+  // ---- Effective target(s) — drives the covered-Operations list --------------------------------
   const targetGateIds: readonly string[] = lockedGatekeeper
     ? [lockedGatekeeper.id]
     : allGates
@@ -113,29 +106,18 @@ export function GrantGateForm({
       : [...selectedGateIds];
   const singleTargetGateId = targetGateIds.length === 1 ? targetGateIds[0] : null;
 
-  const [scope, setScope] = useState<OperationScopeState | null>(null);
   const operations = useCapabilityList<OperationSummaryWire>(
     http,
     'list_operations',
     singleTargetGateId ? { gatekeeperId: singleTargetGateId } : { gatekeeperId: '__none__' },
     { autoLoadAll: true, load: singleTargetGateId ? undefined : async () => ({ items: [] }) },
   );
+  // `list_operations` returns every version (drafts and superseded ones too); a grant only ever
+  // lets the entry agent request the published one.
   const operationOptions =
-    singleTargetGateId && operations.state.status === 'ready' ? operations.state.data.items : [];
-  const pickedOperationNames =
-    scope && scope.gatekeeperId === singleTargetGateId ? scope.names : new Set<string>();
-
-  function toggleOperation(name: string): void {
-    if (!singleTargetGateId) return;
-    setScope((current) => {
-      const names = new Set(
-        current && current.gatekeeperId === singleTargetGateId ? current.names : [],
-      );
-      if (names.has(name)) names.delete(name);
-      else names.add(name);
-      return { gatekeeperId: singleTargetGateId, names };
-    });
-  }
+    singleTargetGateId && operations.state.status === 'ready'
+      ? operations.state.data.items.filter((operation) => operation.status === 'published')
+      : [];
 
   // ---- Submit -------------------------------------------------------------------------------
   const [submitting, setSubmitting] = useState(false);
@@ -161,17 +143,15 @@ export function GrantGateForm({
           }),
         );
       } else {
-        const operationNames =
-          targetGateIds.length === 1 && pickedOperationNames.size > 0
-            ? [...pickedOperationNames]
-            : undefined;
+        // No `scope`: `capability_grants.scope` is stored but never enforced by any authorization
+        // path, so offering an operations checklist would present a narrowing that does not exist
+        // (a grant always covers the whole gate). The list below is shown read-only instead.
         for (const gatekeeperId of targetGateIds) {
           results.push(
             await http.call<GrantRow>('grant_capability', {
               principalId,
               resourceType: 'gatekeeper',
               resourceId: gatekeeperId,
-              ...(operationNames ? { scope: { operationNames } } : {}),
             }),
           );
         }
@@ -183,7 +163,6 @@ export function GrantGateForm({
       setPrincipalId('');
       setSelectedGateIds(new Set());
       setAllGates(false);
-      setScope(null);
     } catch (err) {
       setError(err);
     } finally {
@@ -343,12 +322,12 @@ export function GrantGateForm({
       {singleTargetGateId && !allGates ? (
         <div className="stack-s" data-testid="ggf-operations-scope">
           <span className="field-label">
-            {t('收窄到部分 Operation', 'Narrow to some operations')}
+            {t('授权覆盖的 Operation', 'Operations this grant covers')}
           </span>
           <p className="field-hint">
             {t(
-              '留空 = 覆盖该门的全部 Operation（当前与未来新增的）。',
-              'Empty means every operation of this gate, now and later.',
+              '授权针对整个门：成员的入口 agent 可以请求这个门的全部已发布 Operation（包括以后新发布的）；执行类仍按审批规则处理。',
+              'A grant covers the whole gate: the member’s entry agent may request every published operation of this gate, including ones published later; execute-class ones still follow the approval rules.',
             )}
           </p>
           {operations.state.status === 'loading' ? (
@@ -358,20 +337,19 @@ export function GrantGateForm({
               {t('这个门还没有已发布的 Operation。', 'This gate has no published operations yet.')}
             </p>
           ) : (
-            operationOptions.map((operation) => (
-              <label className="checkbox" key={operation.name}>
-                <input
-                  type="checkbox"
-                  checked={pickedOperationNames.has(operation.name)}
-                  onChange={() => toggleOperation(operation.name)}
-                  disabled={submitting}
-                  data-testid={`ggf-operation-${operation.name}`}
-                />
-                <span className="mono">{operation.name}</span>
-                <LocalStatusChip machine="operationMode" status={operation.mode} />
-                <LocalStatusChip machine="blastRadius" status={operation.blastRadius} />
-              </label>
-            ))
+            <ul
+              className="stack-s"
+              style={{ listStyle: 'none', margin: 0, padding: 0 }}
+              data-testid="ggf-operations-list"
+            >
+              {operationOptions.map((operation) => (
+                <li key={operation.name} className="row-wrap">
+                  <span className="mono">{operation.name}</span>
+                  <LocalStatusChip machine="operationMode" status={operation.mode} />
+                  <LocalStatusChip machine="blastRadius" status={operation.blastRadius} />
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       ) : null}
@@ -379,8 +357,8 @@ export function GrantGateForm({
       {allGates ? (
         <LocalNotice tone="warn" testId="ggf-all-gates-notice">
           {t(
-            '已选择「全部门」——上面的 Operation 收窄不适用于这个范围。',
-            'Every gate is selected — the operations checklist above does not apply to this scope.',
+            '已选择「全部门」：成员可以请求本工作区每个门的全部 Operation，包括以后新接入的门；执行类仍按审批规则处理。',
+            'Every gate is selected: the member may request every operation of every gate in this workspace, including gates connected later; execute-class ones still follow the approval rules.',
           )}
         </LocalNotice>
       ) : null}

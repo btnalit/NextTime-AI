@@ -16,9 +16,10 @@ async function selectMember(id: string): Promise<void> {
 /**
  * GrantGateForm.test.tsx (S8 W2-U1, audit J6/SY2/AX1): the picker-based grant flow — a member
  * (`list_principals`), one or more gates (`list_gatekeepers`, hidden entirely when
- * `lockedGatekeeper` is given), and — only while the grant targets exactly one gate — an
- * Operations checklist (`list_operations{gatekeeperId}`) narrowing the grant, with the "empty ==
- * every operation" wording stated explicitly rather than left implicit.
+ * `lockedGatekeeper` is given), and — only while the grant targets exactly one gate — a read-only
+ * list of the published Operations the grant covers (`list_operations{gatekeeperId}`). `scope` is
+ * never sent: the kernel stores it but no authorization path reads it, so the form offers no
+ * per-Operation narrowing that would narrow nothing.
  */
 
 afterEach(cleanup);
@@ -80,6 +81,15 @@ function scriptedHttp(
           version: 1,
           status: 'published',
         },
+        {
+          gatekeeperId: 'gk-1',
+          name: 'container.prune',
+          mode: 'execute',
+          blastRadius: 'high',
+          autoApprovable: false,
+          version: 1,
+          status: 'draft',
+        },
       ],
     }),
     ...handlers,
@@ -96,7 +106,7 @@ function scriptedHttp(
 }
 
 describe('GrantGateForm', () => {
-  it('locked to one gate: no gate picker, no free-text id; submit grants that gate with no scope (empty checklist)', async () => {
+  it('locked to one gate: no gate picker, no free-text id; submit grants the whole gate with no scope', async () => {
     const http = scriptedHttp({
       grant_capability: (params) => {
         expect(params).toEqual({
@@ -124,11 +134,14 @@ describe('GrantGateForm', () => {
 
     expect(screen.queryByTestId('ggf-gate-picker')).toBeNull();
     expect(screen.getByTestId('ggf-locked-gate-chip').textContent).toContain('docker-gate');
-    // AX1/J6: the empty-scope wording is explicit, not an implicit default nobody chose.
+    // AX1/J6: what the grant covers is stated, read-only — the whole gate, published Operations only.
     const scope = await screen.findByTestId('ggf-operations-scope');
-    expect(scope.textContent).toContain('留空');
-    expect(scope.textContent).toContain('覆盖该门的全部');
-    expect(scope.textContent).toContain('Operation');
+    expect(scope.textContent).toContain('授权针对整个门');
+    const list = await screen.findByTestId('ggf-operations-list');
+    expect(list.textContent).toContain('container.restart');
+    expect(list.textContent).toContain('container.list');
+    expect(list.textContent).not.toContain('container.prune');
+    expect(within(scope).queryByRole('checkbox')).toBeNull();
 
     await selectMember('p-1');
     fireEvent.click(screen.getByTestId('ggf-submit'));
@@ -139,14 +152,13 @@ describe('GrantGateForm', () => {
     await waitFor(() => expect(onGranted).toHaveBeenCalledTimes(1));
   });
 
-  it('narrows to picked operations only when exactly one gate is targeted', async () => {
+  it('one picked gate: shows its covered operations read-only and never sends scope', async () => {
     const http = scriptedHttp({
       grant_capability: (params) => {
         expect(params).toEqual({
           principalId: 'p-1',
           resourceType: 'gatekeeper',
           resourceId: 'gk-1',
-          scope: { operationNames: ['container.restart'] },
         });
         return {
           id: 'grant-1',
@@ -161,7 +173,9 @@ describe('GrantGateForm', () => {
 
     await selectMember('p-1');
     fireEvent.click(await screen.findByTestId('ggf-gate-gk-1'));
-    fireEvent.click(await screen.findByTestId('ggf-operation-container.restart'));
+    const list = await screen.findByTestId('ggf-operations-list');
+    expect(list.textContent).toContain('container.restart');
+    expect(screen.queryByTestId('ggf-operation-container.restart')).toBeNull();
     fireEvent.click(screen.getByTestId('ggf-submit'));
 
     await waitFor(() =>
@@ -169,7 +183,7 @@ describe('GrantGateForm', () => {
     );
   });
 
-  it('multi-gate selection: one grant_capability call per gate, no operations checklist (more than one target)', async () => {
+  it('multi-gate selection: one grant_capability call per gate, no per-gate operations list (more than one target)', async () => {
     const calls: string[] = [];
     const http = scriptedHttp({
       grant_capability: (params) => {
