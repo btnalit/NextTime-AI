@@ -29,12 +29,6 @@ export interface ActionRequestDetailProps {
   readonly compact?: boolean;
 }
 
-const BLAST_TONE: Readonly<Record<'low' | 'medium' | 'high', string>> = {
-  low: 'chip-neutral',
-  medium: 'chip-warn',
-  high: 'chip-danger',
-};
-
 /**
  * components/ActionRequestDetail: the one rendering of an ActionRequest — used inside the
  * Approvals drawer and, via `ActionRequestCard`, inline in a chat. Governance fields first (kind,
@@ -80,9 +74,7 @@ export function ActionRequestDetail({
               {card.actionKindTag}
             </span>
             {card.blastRadius ? (
-              <span className={`chip chip-s ${BLAST_TONE[card.blastRadius]}`} title="Blast radius">
-                {card.blastRadius} blast radius
-              </span>
+              <StatusChip machine="blastRadius" status={card.blastRadius} size="s" />
             ) : null}
             {blocking ? (
               <span

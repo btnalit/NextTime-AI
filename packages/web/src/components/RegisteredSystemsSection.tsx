@@ -287,17 +287,13 @@ export function GatekeeperCard({
                 {group.operations.map((operation) => (
                   <div className="op-item" key={operation.objectId} title={operation.name}>
                     <span className="op-name">{operation.name}</span>
-                    {operation.mode ? <span className="tag">{operation.mode}</span> : null}
+                    {/* S8 W1-A11 (audit L3): mode/blastRadius through the shared StatusChip
+                     *  machines — not bare tag/coloured text — same as the target catalog page. */}
+                    {operation.mode ? (
+                      <StatusChip machine="operationMode" status={operation.mode} size="s" />
+                    ) : null}
                     {operation.blastRadius && operation.blastRadius !== 'low' ? (
-                      <span
-                        className={
-                          operation.blastRadius === 'high'
-                            ? 'text-danger text-small'
-                            : 'text-3 text-small'
-                        }
-                      >
-                        {operation.blastRadius}
-                      </span>
+                      <StatusChip machine="blastRadius" status={operation.blastRadius} size="s" />
                     ) : null}
                   </div>
                 ))}

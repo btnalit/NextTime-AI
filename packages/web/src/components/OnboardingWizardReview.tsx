@@ -17,6 +17,7 @@ import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Select } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
 import { SkeletonRows } from './ui/Skeleton.js';
+import { StatusChip } from './ui/StatusChip.js';
 
 export interface OnboardingWizardReviewProps {
   readonly http: CapabilityCaller;
@@ -163,10 +164,18 @@ function OperationReviewRow({
       <tr data-testid="wizard-review-row">
         <td className="mono">{row.name}</td>
         <td>
-          <span className="tag">{row.mode}</span>
+          <StatusChip machine="operationMode" status={row.mode} size="s" />
         </td>
-        <td className={row.blastRadius === 'high' ? 'text-danger' : ''}>{row.blastRadius}</td>
-        <td>{row.autoApprovable ? t('是', 'Yes') : t('否', 'No')}</td>
+        <td>
+          <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />
+        </td>
+        <td>
+          <StatusChip
+            machine="autoApprovable"
+            status={String(row.autoApprovable)}
+            size="s"
+          />
+        </td>
         <td>
           <details className="disclosure">
             <summary>schema</summary>

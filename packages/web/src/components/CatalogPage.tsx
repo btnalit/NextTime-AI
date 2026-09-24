@@ -328,7 +328,10 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
                   {row.mode ? (
                     <StatusChip machine="operationMode" status={row.mode} size="s" />
                   ) : null}
-                  {row.autoApprovable ? <span className="tag">auto-approvable</span> : null}
+                  {/* S8 W1-A11 (audit L3): through the shared StatusChip machine, not a bare tag. */}
+                  {row.autoApprovable ? (
+                    <StatusChip machine="autoApprovable" status="true" size="s" />
+                  ) : null}
                 </>
               }
               meta={
