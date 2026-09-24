@@ -38,11 +38,19 @@ export interface TasksPageProps {
 type Filter = 'active' | 'all' | 'done';
 
 /**
- * components/TasksPage: 任务 Tasks — the caller's own Tasks (`list_tasks`, S2.10 deliverable 4;
- * `list_tasks` takes no params — no keyset paging exists for it, B5 does not apply) with a
- * detail drawer. Live: `task.updated` re-reads that one Task (`get_task`) and swaps it into the
- * list (C7). Worker definition names come from `list_worker_definitions` (best effort — ids when
- * it fails).
+ * components/TasksPage: 任务 Tasks — the caller's own Tasks (`list_tasks`, S2.10 deliverable 4)
+ * with a detail drawer. Live: `task.updated` re-reads that one Task (`get_task`) and swaps it into
+ * the list (C7). Worker definition names come from `list_worker_definitions` (best effort — ids
+ * when it fails).
+ *
+ * S8 W1-C (#243) made both `list_tasks` and `list_worker_definitions` keyset-paginated (default
+ * 100, max 500) — the comment this carried until S8 W1-A4 ("no keyset paging exists, B5 does not
+ * apply") predates that. This page keeps its own `useResource(loader)` (per `hooks/useCapability`'s
+ * own module doc: Tasks/Approvals/Chats are additive, not migrated to `useCapabilityList`), so
+ * both loaders below walk every page themselves rather than exposing a "加载更多" button — the
+ * 全部/进行中/已结束 tabs above already promise the reader's *complete* Task history, not a
+ * browsable first page of it, and `list_worker_definitions` only ever backs the definition-name
+ * lookup, never a list of its own.
  *
  * S6-A (C28 / B2 / B4): linked approvals moved into `TaskDetail` → `approvals/LinkedApprovals`
  * (`list_action_requests{taskId}`, decided rows included, reloaded per push for the open Task
@@ -53,18 +61,33 @@ type Filter = 'active' | 'all' | 'done';
  */
 export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
   const toast = useToast();
-  const load = useCallback(
-    () => http.call<{ items: readonly TaskSummary[] }>('list_tasks').then((page) => page.items),
-    [http],
-  );
+  const load = useCallback(async () => {
+    let items: readonly TaskSummary[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await http.call<{ items: readonly TaskSummary[]; nextCursor?: string }>(
+        'list_tasks',
+        cursor ? { cursor } : {},
+      );
+      items = [...items, ...page.items];
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return items;
+  }, [http]);
   const tasks = useResource(load);
-  const loadDefinitions = useCallback(
-    () =>
-      http
-        .call<{ items: readonly WorkerDefinitionSummary[] }>('list_worker_definitions', {})
-        .then((page) => page.items),
-    [http],
-  );
+  const loadDefinitions = useCallback(async () => {
+    let items: readonly WorkerDefinitionSummary[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await http.call<{
+        items: readonly WorkerDefinitionSummary[];
+        nextCursor?: string;
+      }>('list_worker_definitions', cursor ? { cursor } : {});
+      items = [...items, ...page.items];
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return items;
+  }, [http]);
   const definitions = useResource(loadDefinitions);
   const principalNames = usePrincipalNames(http);
 

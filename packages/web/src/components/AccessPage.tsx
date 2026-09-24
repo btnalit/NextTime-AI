@@ -38,9 +38,11 @@ export interface AccessPageProps {
  * B3 (§5.8 "id → 名称"): the grant's principal, its grantor and a `gatekeeper` resource render as
  * `RefChip`s named from `list_principals` (already read for the filter / form) and
  * `list_gatekeepers` (member-readable, read here for the names alone); a missing name degrades to
- * the grey bare-id chip. B5: `list_grants` and `list_principals` take no `limit` / `cursor`
- * (`capabilities.ts`), so both stay single-page — no "加载更多" is offered because there is no
- * keyset to follow; the registry, not the page, decides when that changes.
+ * the grey bare-id chip. S8 W1-C (#243) made `list_grants` and `list_principals` keyset-paginated
+ * (B5 no longer holds — this comment said "both stay single-page" until S8 W1-A4). `grants` offers
+ * "加载更多" below the list; `principalsList` feeds the filter's `<datalist>` and
+ * `IssueServiceHandleSection`'s picker, so it auto-loads every page instead (a missing suggestion
+ * past page one is a correctness bug, not a paging UX choice).
  */
 export function AccessPage({ http }: AccessPageProps) {
   const permissions = usePermissions();
@@ -56,7 +58,12 @@ export function AccessPage({ http }: AccessPageProps) {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<unknown | null>(null);
 
-  const principalsList = useCapabilityList<PrincipalRow>(http, 'list_principals');
+  const principalsList = useCapabilityList<PrincipalRow>(
+    http,
+    'list_principals',
+    {},
+    { autoLoadAll: true },
+  );
   const principals = principalsList.state.status === 'ready' ? principalsList.state.data.items : [];
   const gatekeepersList = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
   const principalNames = useRefNames(
@@ -279,6 +286,30 @@ export function AccessPage({ http }: AccessPageProps) {
           ))}
         </DataList>
       )}
+      {grants.state.status === 'ready' && grants.state.data.nextCursor !== undefined ? (
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <Button
+            variant="secondary"
+            loading={grants.loadingMore}
+            onClick={() => void grants.loadMore()}
+          >
+            加载更多 Load more
+          </Button>
+        </div>
+      ) : null}
+      {grants.state.status === 'ready' && grants.state.data.truncated === true ? (
+        <p className="text-3 text-small" data-testid="grants-truncated">
+          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余授权 keep loading
+          more to see the rest.
+        </p>
+      ) : null}
+      {grants.loadMoreError !== null ? (
+        <ErrorBanner
+          error={grants.loadMoreError}
+          title="Could not load more grants"
+          testId="grants-load-more-error"
+        />
+      ) : null}
 
       {canManage ? <IssueServiceHandleSection http={http} principals={principals} /> : null}
 

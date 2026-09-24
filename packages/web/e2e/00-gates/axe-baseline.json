@@ -70,7 +70,7 @@
   },
   "models": {
     "color-contrast": {
-      "count": 22
+      "count": 17
     }
   },
   "platform-audit": {
@@ -121,12 +121,12 @@
   },
   "platform-users": {
     "color-contrast": {
-      "count": 16
+      "count": 8
     }
   },
   "platform-workspaces": {
     "color-contrast": {
-      "count": 17
+      "count": 9
     }
   },
   "systems": {

@@ -160,6 +160,30 @@ export function MembersPage({ http }: MembersPageProps) {
           ))}
         </DataList>
       )}
+      {principals.state.status === 'ready' && principals.state.data.nextCursor !== undefined ? (
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <Button
+            variant="secondary"
+            loading={principals.loadingMore}
+            onClick={() => void principals.loadMore()}
+          >
+            加载更多 Load more
+          </Button>
+        </div>
+      ) : null}
+      {principals.state.status === 'ready' && principals.state.data.truncated === true ? (
+        <p className="text-3 text-small" data-testid="members-truncated">
+          已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余成员 keep loading
+          more to see the rest.
+        </p>
+      ) : null}
+      {principals.loadMoreError !== null ? (
+        <ErrorBanner
+          error={principals.loadMoreError}
+          title="Could not load more members"
+          testId="members-load-more-error"
+        />
+      ) : null}
 
       <Drawer
         open={drawer.kind === 'addMember'}

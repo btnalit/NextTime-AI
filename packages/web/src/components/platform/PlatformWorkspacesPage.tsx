@@ -4,13 +4,14 @@ import type {
   WorkspacePurposeWire,
   WorkspaceStatusWire,
 } from '@nexttime/shared';
-import { type MouseEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, readResiduePreset } from '../../lib/platform-workspaces.js';
+import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
@@ -297,33 +298,19 @@ export function PlatformWorkspacesPage({
           testId="platform-workspaces-empty"
         />
       ) : (
-        <div className="table-scroll">
-          <table className="data-table" data-testid="platform-workspaces-table">
-            <thead>
-              <tr>
-                <th>名称 Name</th>
-                <th>状态 Status</th>
-                <th>用途 Purpose</th>
-                <th>生命周期 Lifecycle</th>
-                <th>入口模型 Entry model</th>
-                <th>允许的模型 Allowed models</th>
-                <th>成员数 Members</th>
-                <th>Owners</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <WorkspaceRow
-                  key={row.id}
-                  workspace={row}
-                  onOpen={() => setPanel({ kind: 'workspace', workspaceId: row.id })}
-                  onPurge={() => setPanel({ kind: 'purge', workspaceId: row.id })}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={workspaceColumns(
+            (workspaceId) => setPanel({ kind: 'workspace', workspaceId }),
+            (workspaceId) => setPanel({ kind: 'purge', workspaceId }),
+          )}
+          data={rows}
+          getRowId={(row) => row.id}
+          ariaLabel="Workspaces"
+          testId="platform-workspaces-table"
+          onRowClick={(row) => setPanel({ kind: 'workspace', workspaceId: row.id })}
+          rowTestId={(row) => `workspace-row-${row.id}`}
+          rowDataAttrs={(row) => ({ 'data-workspace-id': row.id })}
+        />
       )}
 
       <Drawer
@@ -382,73 +369,114 @@ export function PlatformWorkspacesPage({
   );
 }
 
-/** The whole row opens the drawer on click; the 配置 Configure button in the last cell is the
- *  keyboard path, and the row's own Enter/Space handler covers it while focus is anywhere inside
- *  the row. `onOpen` is idempotent (it sets the panel to the same value), so the button's click
- *  bubbling up to the row costs nothing. The 清除 Purge button is not idempotent with the row —
- *  it stops propagation so the row's `onOpen` cannot overwrite the purge panel. */
-function WorkspaceRow({
-  workspace,
-  onOpen,
-  onPurge,
-}: {
-  readonly workspace: PlatformWorkspaceWire;
-  readonly onOpen: () => void;
-  readonly onPurge: () => void;
-}) {
-  const canPurge = workspace.purgeable && !workspace.isDefault;
-  return (
-    <tr
-      className="row-clickable"
-      data-testid={`workspace-row-${workspace.id}`}
-      data-workspace-id={workspace.id}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
-    >
-      <td>
-        <span className="truncate">{workspace.name}</span>
-      </td>
-      <td>
-        <StatusChip
-          machine="workspaceStatus"
-          status={workspace.status}
-          size="s"
-          testId="workspace-status"
-        />
-        {workspace.isDefault ? (
-          <span className="tag" data-testid="workspace-default-badge">
-            默认 Default
-          </span>
-        ) : null}
-      </td>
-      <td>
+/**
+ * S8 W1-A4 (audit S3): column definitions for the responsive `DataTable`. The whole row still
+ * opens the drawer (`DataTable`'s `onRowClick`); the 配置 Configure / 清除 Purge buttons no longer
+ * need a manual `stopPropagation` — `DataTable` never fires `onRowClick` for a click that lands on
+ * a nested `<button>` (the same guard `ui/DataList`'s `DataRow` used), so the previous "make it
+ * idempotent with onOpen for Configure, stop it for Purge" split collapses into one shared rule.
+ */
+function workspaceColumns(
+  onOpen: (workspaceId: string) => void,
+  onPurge: (workspaceId: string) => void,
+): readonly DataTableColumn<PlatformWorkspaceWire>[] {
+  return [
+    {
+      id: 'name',
+      header: '名称 Name',
+      priority: 'primary',
+      cell: (workspace) => <span className="truncate">{workspace.name}</span>,
+    },
+    {
+      id: 'status',
+      header: '状态 Status',
+      priority: 'high',
+      cell: (workspace) => (
+        <>
+          <StatusChip
+            machine="workspaceStatus"
+            status={workspace.status}
+            size="s"
+            testId="workspace-status"
+          />
+          {workspace.isDefault ? (
+            <span className="tag" data-testid="workspace-default-badge">
+              默认 Default
+            </span>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      priority: 'high',
+      hideInCard: true,
+      cell: (workspace) => {
+        const canPurge = workspace.purgeable && !workspace.isDefault;
+        return (
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            {canPurge ? (
+              <Button
+                variant="danger"
+                size="s"
+                onClick={() => onPurge(workspace.id)}
+                data-testid="workspace-purge"
+              >
+                清除 Purge
+              </Button>
+            ) : null}
+            <Button variant="ghost" size="s" onClick={() => onOpen(workspace.id)}>
+              配置 Configure
+            </Button>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'purpose',
+      header: '用途 Purpose',
+      cell: (workspace) => (
         <StatusChip
           machine="workspacePurpose"
           status={workspace.purpose}
           size="s"
           testId="workspace-purpose"
         />
-      </td>
-      <td>
-        <WorkspaceLifecycle workspace={workspace} />
-      </td>
-      <td className="mono">
-        {workspace.entryModel ?? <span className="text-3">平台默认 Platform default</span>}
-      </td>
-      <td>
-        {workspace.allowedModels.length === 0 ? (
+      ),
+    },
+    {
+      id: 'lifecycle',
+      header: '生命周期 Lifecycle',
+      cell: (workspace) => <WorkspaceLifecycle workspace={workspace} />,
+    },
+    {
+      id: 'entryModel',
+      header: '入口模型 Entry model',
+      cellClassName: 'mono',
+      cell: (workspace) =>
+        workspace.entryModel ?? <span className="text-3">平台默认 Platform default</span>,
+    },
+    {
+      id: 'allowedModels',
+      header: '允许的模型 Allowed models',
+      cell: (workspace) =>
+        workspace.allowedModels.length === 0 ? (
           <span className="text-3">全部 All</span>
         ) : (
           `${workspace.allowedModels.length} 个`
-        )}
-      </td>
-      <td className="mono">{workspace.memberCount}</td>
-      <td>
+        ),
+    },
+    {
+      id: 'memberCount',
+      header: '成员数 Members',
+      cellClassName: 'mono',
+      cell: (workspace) => workspace.memberCount,
+    },
+    {
+      id: 'owners',
+      header: 'Owners',
+      cell: (workspace) => (
         <div className="row-wrap">
           {workspace.owners.length === 0 ? (
             <span className="text-3">—</span>
@@ -465,27 +493,7 @@ function WorkspaceRow({
             ))
           )}
         </div>
-      </td>
-      <td>
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
-          {canPurge ? (
-            <Button
-              variant="danger"
-              size="s"
-              onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                event.stopPropagation();
-                onPurge();
-              }}
-              data-testid="workspace-purge"
-            >
-              清除 Purge
-            </Button>
-          ) : null}
-          <Button variant="ghost" size="s" onClick={onOpen}>
-            配置 Configure
-          </Button>
-        </div>
-      </td>
-    </tr>
-  );
+      ),
+    },
+  ];
 }
