@@ -581,7 +581,7 @@ export function ChatPage({
             <span>
               <Kbd>Enter</Kbd> 发送 send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> 换行 new line
             </span>
-            <span className="mono" title={chatId}>
+            <span className="mono" title={chatId} data-volatile="">
               {chatId.slice(0, 8)}
             </span>
           </div>

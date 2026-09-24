@@ -93,6 +93,7 @@ export function RefChip({
         <span
           className="truncate font-mono"
           data-testid={testId ? `${testId}-fallback` : undefined}
+          data-volatile=""
         >
           {shortId(id)} · 未知 / 已删除 Unknown / deleted
         </span>
