@@ -405,11 +405,17 @@ jobs:
         if: ${{ github.event.inputs.update_baselines != 'true' }}
         run: pnpm --filter @nexttime/web e2e
 
+      # S8 W1-A3 follow-up: `pnpm --filter <pkg> <script> -- <args>` does NOT strip the `--`
+      # before forwarding (verified against this repo's pnpm: the child process receives literal
+      # argv `["--", "--update-snapshots"]`), so Playwright's CLI treated the whole thing as "end
+      # of options" and `--update-snapshots` never took effect — a changed screenshot failed
+      # instead of being rewritten. `pnpm --filter <pkg> exec <bin> <args>` runs the binary
+      # directly (no script-level `--` passthrough), so the flag reaches Playwright unmangled.
       - name: Run web e2e (regenerate gate baselines)
         if: ${{ github.event.inputs.update_baselines == 'true' }}
         env:
           E2E_GATE_UPDATE_BASELINE: '1'
-        run: pnpm --filter @nexttime/web e2e -- --update-snapshots
+        run: pnpm --filter @nexttime/web exec playwright test --update-snapshots
 
       # S1 lite (W6, STATUS leftover 7): the subset of scripts/accept_s1.sh that needs no entry
       # container — bootstrap, WorkerDefinition v2 via caddy, two chats answered by the kernel's
