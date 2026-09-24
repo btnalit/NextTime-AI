@@ -10,6 +10,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { isExpiredEphemeral, purgeRetention } from '../../lib/platform-workspaces.js';
+import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input, Select } from '../ui/Field.js';
@@ -237,296 +238,310 @@ export function WorkspaceDetailPanel({
 
   return (
     <div className="stack" data-testid="workspace-detail">
-      <dl className="definition-list">
-        <dt>Id</dt>
-        <dd>
-          <CopyId id={workspace.id} label="workspace" />
-        </dd>
-        <dt>{t('状态', 'Status')}</dt>
-        <dd>
-          <StatusChip
-            machine="workspaceStatus"
-            status={workspace.status}
-            size="s"
-            testId="workspace-detail-status"
-          />
-          {workspace.isDefault ? (
-            <span className="tag" data-testid="workspace-detail-default">
-              {t('默认', 'Default')}
-            </span>
-          ) : null}
-        </dd>
-        <dt>{t('成员数', 'Members')}</dt>
-        <dd className="mono">{workspace.memberCount}</dd>
-        <dt>{t('创建', 'Created')}</dt>
-        <dd>
-          <time title={formatDateTime(workspace.createdAt)}>
-            {formatRelative(workspace.createdAt)}
-          </time>
-        </dd>
-        <dt>{t('用途', 'Purpose')}</dt>
-        <dd>
-          <StatusChip
-            machine="workspacePurpose"
-            status={workspace.purpose}
-            size="s"
-            testId="workspace-detail-purpose"
-          />
-        </dd>
-        <dt>{t('生命周期', 'Lifecycle')}</dt>
-        <dd data-testid="workspace-detail-lifecycle">
-          <WorkspaceLifecycle workspace={workspace} />
-        </dd>
-      </dl>
+      {/* S8 W1-A11 (audit L8): the drawer's fixed three sections — metadata / related links /
+       *  edit form — replacing the old flat stack of dl / form / action blocks separated only by
+       *  `.divider`s. Every edit control here still saves independently (unchanged behaviour);
+       *  only the grouping and heading style change. */}
+      <DrawerSections>
+        <DrawerSection title={t('元数据 Metadata', 'Metadata')}>
+          <dl className="definition-list">
+            <dt>Id</dt>
+            <dd>
+              <CopyId id={workspace.id} label="workspace" />
+            </dd>
+            <dt>{t('状态', 'Status')}</dt>
+            <dd>
+              <StatusChip
+                machine="workspaceStatus"
+                status={workspace.status}
+                size="s"
+                testId="workspace-detail-status"
+              />
+              {workspace.isDefault ? (
+                <span className="tag" data-testid="workspace-detail-default">
+                  {t('默认', 'Default')}
+                </span>
+              ) : null}
+            </dd>
+            <dt>{t('成员数', 'Members')}</dt>
+            <dd className="mono">{workspace.memberCount}</dd>
+            <dt>{t('创建', 'Created')}</dt>
+            <dd>
+              <time title={formatDateTime(workspace.createdAt)}>
+                {formatRelative(workspace.createdAt)}
+              </time>
+            </dd>
+            <dt>{t('用途', 'Purpose')}</dt>
+            <dd>
+              <StatusChip
+                machine="workspacePurpose"
+                status={workspace.purpose}
+                size="s"
+                testId="workspace-detail-purpose"
+              />
+            </dd>
+            <dt>{t('生命周期', 'Lifecycle')}</dt>
+            <dd data-testid="workspace-detail-lifecycle">
+              <WorkspaceLifecycle workspace={workspace} />
+            </dd>
+          </dl>
 
-      <div className="row">
-        {onOpenWorkspaceConfig ? (
-          <Button
-            variant="secondary"
-            size="s"
-            icon="arrow-left"
-            onClick={onOpenWorkspaceConfig}
-            data-testid="open-workspace-config"
-          >
-            {t('打开工作区配置', 'Open workspace config')}
-          </Button>
-        ) : (
-          <Notice testId="workspace-no-membership">
-            {t(
-              '把自己加为 owner 后即可进入该工作区的配置页（成员与授权、访问、能力目录…）。',
-              "Add yourself as an owner to reach this workspace's own configuration pages.",
+          <div className="stack-s">
+            <span>Owners</span>
+            {workspace.owners.length === 0 ? (
+              <span className="text-3">{t('还没有 owner', 'No owner yet')}</span>
+            ) : (
+              <div className="row-wrap" data-testid="workspace-owners">
+                {workspace.owners.map((owner) => (
+                  <span
+                    key={owner.userId}
+                    className="chip chip-s chip-info"
+                    title={owner.displayName}
+                    data-testid="workspace-owner-chip"
+                  >
+                    {owner.login}
+                  </span>
+                ))}
+              </div>
             )}
-          </Notice>
-        )}
-      </div>
-
-      <div className="divider" />
-
-      <Field id="wd-name" label={t('名称', 'Name')} required>
-        <Input
-          id="wd-name"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          disabled={savingName}
-        />
-      </Field>
-      <PlatformError error={nameError} title={t('无法重命名', 'Could not rename this workspace')} />
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button
-          variant="secondary"
-          onClick={() => void saveName()}
-          loading={savingName}
-          disabled={!nameDirty}
-        >
-          {t('保存', 'Save')}
-        </Button>
-      </div>
-
-      <div className="divider" />
-
-      <EntryModelSelect
-        id="wd-entry-model"
-        options={entryModelOptions}
-        value={workspace.entryModel}
-        allowPlatformDefault={false}
-        onChange={(entryModel) => void saveEntryModel(entryModel)}
-        disabled={savingEntryModel || !modelsReady}
-        testId="workspace-entry-model"
-      />
-      <PlatformError
-        error={entryModelError}
-        title={t('无法设置入口模型', 'Could not set the entry model')}
-      />
-
-      <div className="divider" />
-
-      <AllowedModelsChecklist
-        models={models}
-        selected={allowedModels}
-        onChange={setAllowedModels}
-        disabled={savingAllowed || !modelsReady}
-        testId="workspace-allowed-models"
-      />
-      <PlatformError
-        error={allowedError}
-        title={t('无法设置允许的模型', 'Could not set the allowed models')}
-        testId="workspace-allowed-models-error"
-      />
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button
-          variant="secondary"
-          onClick={() => void saveAllowedModels()}
-          loading={savingAllowed}
-          disabled={!allowedDirty || !modelsReady}
-        >
-          {t('保存允许的模型', 'Save allowed models')}
-        </Button>
-      </div>
-
-      <div className="divider" />
-
-      <Field
-        id="wd-ontology-enforcement"
-        label={t('本体强制', 'Ontology enforcement')}
-        hint={t(
-          '写入的关系必须符合已发布本体；warn 只审计不拒绝，用于新主机推出期，看 /internal/metrics 的 I-S5-1 归零后再切回 reject。',
-          "warn only audits and lets the write through, for a new host's rollout window until I-S5-1 reads 0.",
-        )}
-      >
-        <Select
-          id="wd-ontology-enforcement"
-          value={workspace.ontologyEnforcement}
-          onChange={(event) =>
-            void saveOntologyEnforcement(event.target.value as OntologyEnforcementWire)
-          }
-          disabled={savingOntologyEnforcement}
-          data-testid="workspace-ontology-enforcement"
-        >
-          <option value="reject">{t('拒绝', 'reject')}</option>
-          <option value="warn">{t('记录并放行', 'warn')}</option>
-        </Select>
-      </Field>
-      <PlatformError
-        error={ontologyEnforcementError}
-        title={t('无法设置本体强制', 'Could not set the ontology enforcement')}
-        testId="workspace-ontology-enforcement-error"
-      />
-
-      <div className="divider" />
-
-      <div className="stack-s">
-        <span>Owners</span>
-        {workspace.owners.length === 0 ? (
-          <span className="text-3">{t('还没有 owner', 'No owner yet')}</span>
-        ) : (
-          <div className="row-wrap" data-testid="workspace-owners">
-            {workspace.owners.map((owner) => (
-              <span
-                key={owner.userId}
-                className="chip chip-s chip-info"
-                title={owner.displayName}
-                data-testid="workspace-owner-chip"
-              >
-                {owner.login}
-              </span>
-            ))}
           </div>
-        )}
-      </div>
+        </DrawerSection>
 
-      <UserPicker
-        http={http}
-        id="wd-delegate-owner"
-        label={t('委托 owner', 'Delegate an owner')}
-        hint={t(
-          '该用户将以 owner 身份加入这个工作区，并在「管理 → 工作区配置」里看到它。已经是成员的会就地升为 owner。',
-          'The user joins this workspace as an owner; an existing member is promoted in place.',
-        )}
-        value={ownerUserId}
-        onChange={setOwnerUserId}
-        disabled={delegating}
-        exclude={workspace.owners.map((owner) => owner.userId)}
-        testId="delegate-owner"
-      />
-      <PlatformError
-        error={delegateError}
-        title={t('无法委托 owner', 'Could not delegate an owner')}
-      />
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button
-          variant="primary"
-          icon="plus"
-          onClick={() => void delegateOwner()}
-          loading={delegating}
-          disabled={ownerUserId === ''}
-        >
-          {t('委托', 'Delegate')}
-        </Button>
-      </div>
-
-      <div className="divider" />
-
-      <PlatformError error={statusError} title={t('无法修改状态', 'Could not change the status')} />
-      {workspace.status === 'disabled' ? (
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Button
-            variant="secondary"
-            onClick={() => void setStatus('active')}
-            loading={changingStatus}
-            data-testid="workspace-status-toggle"
-          >
-            {t('启用', 'Enable')}
-          </Button>
-        </div>
-      ) : confirmingDisable ? (
-        <div className="stack-s" data-testid="workspace-disable-confirm">
-          <Notice tone="warn">
-            {t(
-              '该工作区所有会话立即失效、成员登录后不可见、数据保留。',
-              "Every session in it dies immediately, it disappears from its members' logins, and the data is kept.",
-            )}
-          </Notice>
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <Button variant="ghost" onClick={() => setConfirmingDisable(false)}>
-              {t('取消', 'Cancel')}
-            </Button>
+        <DrawerSection title={t('相关链接 Related links', 'Related links')}>
+          {onOpenWorkspaceConfig ? (
             <Button
-              variant="danger"
-              onClick={() => void setStatus('disabled')}
-              loading={changingStatus}
+              variant="secondary"
+              size="s"
+              icon="arrow-left"
+              onClick={onOpenWorkspaceConfig}
+              data-testid="open-workspace-config"
             >
-              {t('确认停用', 'Confirm disable')}
+              {t('打开工作区配置', 'Open workspace config')}
             </Button>
-          </div>
-        </div>
-      ) : (
-        <>
-          {workspace.isDefault ? (
-            <Notice testId="workspace-default-undisablable">
+          ) : (
+            <Notice testId="workspace-no-membership">
               {t(
-                '这是平台默认工作区，不能停用；先把默认工作区指到别处。 This is the platform default workspace —',
-                'point the default at another workspace before disabling it.',
+                '把自己加为 owner 后即可进入该工作区的配置页（成员与授权、访问、能力目录…）。',
+                "Add yourself as an owner to reach this workspace's own configuration pages.",
               )}
             </Notice>
-          ) : null}
+          )}
+        </DrawerSection>
+
+        <DrawerSection title={t('编辑 Edit', 'Edit')}>
+          <Field id="wd-name" label={t('名称', 'Name')} required>
+            <Input
+              id="wd-name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              disabled={savingName}
+            />
+          </Field>
+          <PlatformError
+            error={nameError}
+            title={t('无法重命名', 'Could not rename this workspace')}
+          />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button
-              variant="danger"
-              onClick={() => setConfirmingDisable(true)}
-              disabled={workspace.isDefault}
-              data-testid="workspace-status-toggle"
+              variant="secondary"
+              onClick={() => void saveName()}
+              loading={savingName}
+              disabled={!nameDirty}
             >
-              {t('停用', 'Disable')}
+              {t('保存', 'Save')}
             </Button>
           </div>
-        </>
-      )}
 
-      {workspace.purgeable && !workspace.isDefault ? (
-        <>
           <div className="divider" />
-          <div className="stack-s" data-testid="workspace-purge-section">
-            <Notice tone="warn">
-              {t(
-                '内核已接受清除：行与级联数据删除，平台审计行保留；下一步先预览计数与 service Handle 警告，再键入名称确认。',
-                'The kernel accepts a purge now: rows and cascaded data go, the platform audit row stays. Next: preview the counts and Handle warnings, then retype the name to confirm.',
-              )}
-            </Notice>
+
+          <EntryModelSelect
+            id="wd-entry-model"
+            options={entryModelOptions}
+            value={workspace.entryModel}
+            allowPlatformDefault={false}
+            onChange={(entryModel) => void saveEntryModel(entryModel)}
+            disabled={savingEntryModel || !modelsReady}
+            testId="workspace-entry-model"
+          />
+          <PlatformError
+            error={entryModelError}
+            title={t('无法设置入口模型', 'Could not set the entry model')}
+          />
+
+          <div className="divider" />
+
+          <AllowedModelsChecklist
+            models={models}
+            selected={allowedModels}
+            onChange={setAllowedModels}
+            disabled={savingAllowed || !modelsReady}
+            testId="workspace-allowed-models"
+          />
+          <PlatformError
+            error={allowedError}
+            title={t('无法设置允许的模型', 'Could not set the allowed models')}
+            testId="workspace-allowed-models-error"
+          />
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <Button
+              variant="secondary"
+              onClick={() => void saveAllowedModels()}
+              loading={savingAllowed}
+              disabled={!allowedDirty || !modelsReady}
+            >
+              {t('保存允许的模型', 'Save allowed models')}
+            </Button>
+          </div>
+
+          <div className="divider" />
+
+          <Field
+            id="wd-ontology-enforcement"
+            label={t('本体强制', 'Ontology enforcement')}
+            hint={t(
+              '写入的关系必须符合已发布本体；warn 只审计不拒绝，用于新主机推出期，看 /internal/metrics 的 I-S5-1 归零后再切回 reject。',
+              "warn only audits and lets the write through, for a new host's rollout window until I-S5-1 reads 0.",
+            )}
+          >
+            <Select
+              id="wd-ontology-enforcement"
+              value={workspace.ontologyEnforcement}
+              onChange={(event) =>
+                void saveOntologyEnforcement(event.target.value as OntologyEnforcementWire)
+              }
+              disabled={savingOntologyEnforcement}
+              data-testid="workspace-ontology-enforcement"
+            >
+              <option value="reject">{t('拒绝', 'reject')}</option>
+              <option value="warn">{t('记录并放行', 'warn')}</option>
+            </Select>
+          </Field>
+          <PlatformError
+            error={ontologyEnforcementError}
+            title={t('无法设置本体强制', 'Could not set the ontology enforcement')}
+            testId="workspace-ontology-enforcement-error"
+          />
+
+          <div className="divider" />
+
+          <UserPicker
+            http={http}
+            id="wd-delegate-owner"
+            label={t('委托 owner', 'Delegate an owner')}
+            hint={t(
+              '该用户将以 owner 身份加入这个工作区，并在「管理 → 工作区配置」里看到它。已经是成员的会就地升为 owner。',
+              'The user joins this workspace as an owner; an existing member is promoted in place.',
+            )}
+            value={ownerUserId}
+            onChange={setOwnerUserId}
+            disabled={delegating}
+            exclude={workspace.owners.map((owner) => owner.userId)}
+            testId="delegate-owner"
+          />
+          <PlatformError
+            error={delegateError}
+            title={t('无法委托 owner', 'Could not delegate an owner')}
+          />
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <Button
+              variant="primary"
+              icon="plus"
+              onClick={() => void delegateOwner()}
+              loading={delegating}
+              disabled={ownerUserId === ''}
+            >
+              {t('委托', 'Delegate')}
+            </Button>
+          </div>
+
+          <div className="divider" />
+
+          <PlatformError
+            error={statusError}
+            title={t('无法修改状态', 'Could not change the status')}
+          />
+          {workspace.status === 'disabled' ? (
             <div className="row" style={{ justifyContent: 'flex-end' }}>
-              <Button variant="danger" onClick={onPurge} data-testid="workspace-purge">
-                {t('清除', 'Purge')}
+              <Button
+                variant="secondary"
+                onClick={() => void setStatus('active')}
+                loading={changingStatus}
+                data-testid="workspace-status-toggle"
+              >
+                {t('启用', 'Enable')}
               </Button>
             </div>
-          </div>
-        </>
-      ) : workspace.status === 'disabled' && !workspace.isDefault ? (
-        <p className="text-3 text-small" data-testid="workspace-purge-retention">
-          {t(
-            '停用满 7 天后可清除（一次性工作区到期即可）。',
-            'Purgeable once disabled for 7 days (an ephemeral workspace: once expired).',
+          ) : confirmingDisable ? (
+            <div className="stack-s" data-testid="workspace-disable-confirm">
+              <Notice tone="warn">
+                {t(
+                  '该工作区所有会话立即失效、成员登录后不可见、数据保留。',
+                  "Every session in it dies immediately, it disappears from its members' logins, and the data is kept.",
+                )}
+              </Notice>
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <Button variant="ghost" onClick={() => setConfirmingDisable(false)}>
+                  {t('取消', 'Cancel')}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => void setStatus('disabled')}
+                  loading={changingStatus}
+                >
+                  {t('确认停用', 'Confirm disable')}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {workspace.isDefault ? (
+                <Notice testId="workspace-default-undisablable">
+                  {t(
+                    '这是平台默认工作区，不能停用；先把默认工作区指到别处。 This is the platform default workspace —',
+                    'point the default at another workspace before disabling it.',
+                  )}
+                </Notice>
+              ) : null}
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <Button
+                  variant="danger"
+                  onClick={() => setConfirmingDisable(true)}
+                  disabled={workspace.isDefault}
+                  data-testid="workspace-status-toggle"
+                >
+                  {t('停用', 'Disable')}
+                </Button>
+              </div>
+            </>
           )}
-        </p>
-      ) : null}
+
+          {workspace.purgeable && !workspace.isDefault ? (
+            <>
+              <div className="divider" />
+              <div className="stack-s" data-testid="workspace-purge-section">
+                <Notice tone="warn">
+                  {t(
+                    '内核已接受清除：行与级联数据删除，平台审计行保留；下一步先预览计数与 service Handle 警告，再键入名称确认。',
+                    'The kernel accepts a purge now: rows and cascaded data go, the platform audit row stays. Next: preview the counts and Handle warnings, then retype the name to confirm.',
+                  )}
+                </Notice>
+                <div className="row" style={{ justifyContent: 'flex-end' }}>
+                  <Button variant="danger" onClick={onPurge} data-testid="workspace-purge">
+                    {t('清除', 'Purge')}
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : workspace.status === 'disabled' && !workspace.isDefault ? (
+            <p className="text-3 text-small" data-testid="workspace-purge-retention">
+              {t(
+                '停用满 7 天后可清除（一次性工作区到期即可）。',
+                'Purgeable once disabled for 7 days (an ephemeral workspace: once expired).',
+              )}
+            </p>
+          ) : null}
+        </DrawerSection>
+      </DrawerSections>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { formatDateTime, formatRelative } from '../lib/format.js';
 import type { PrincipalRow, RotateApiKeyResult } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { principalKindLabel, roleLabel } from '../lib/labels.js';
+import { DrawerSection, DrawerSections } from './kit/drawer-section.js';
 import { RefChip } from './kit/ref-chip.js';
 import { Button } from './ui/Button.js';
 import { CopyId } from './ui/CopyId.js';
@@ -109,163 +110,173 @@ export function PrincipalDetail({
 
   return (
     <div className="stack" data-testid="principal-detail">
-      <dl className="definition-list">
-        <dt>Id</dt>
-        <dd>
-          <CopyId id={principal.id} label="principal" />
-        </dd>
-        <dt>{t('类型', 'Kind')}</dt>
-        <dd>
-          <span className="tag">{principalKindLabel(principal.kind, t)}</span>
-        </dd>
-        <dt>{t('状态', 'Status')}</dt>
-        <dd>
-          <span
-            className={`chip chip-s ${disabled ? 'chip-neutral' : 'chip-ok'}`}
-            data-status={disabled ? 'disabled' : 'active'}
-            data-testid="principal-status"
-          >
-            {disabled ? t('已停用', 'Disabled') : t('活跃', 'Active')}
-          </span>
-        </dd>
-        <dt>API key</dt>
-        <dd>{principal.hasApiKey ? t('已签发', 'issued') : t('无', 'none')}</dd>
-        <dt>{t('创建', 'Created')}</dt>
-        <dd>
-          <time title={formatDateTime(principal.createdAt)}>
-            {formatRelative(principal.createdAt)}
-          </time>
-        </dd>
-        {principal.disabledAt ? (
-          <>
-            <dt>{t('停用于', 'Disabled')}</dt>
+      {/* S8 W1-A11 (audit L8): the drawer's fixed three sections — metadata / related links /
+       *  edit form — replacing the old flat stack separated only by `.divider`s. */}
+      <DrawerSections>
+        <DrawerSection title={t('元数据 Metadata', 'Metadata')}>
+          <dl className="definition-list">
+            <dt>Id</dt>
             <dd>
-              <time title={formatDateTime(principal.disabledAt)}>
-                {formatRelative(principal.disabledAt)}
+              <CopyId id={principal.id} label="principal" />
+            </dd>
+            <dt>{t('类型', 'Kind')}</dt>
+            <dd>
+              <span className="tag">{principalKindLabel(principal.kind, t)}</span>
+            </dd>
+            <dt>{t('状态', 'Status')}</dt>
+            <dd>
+              <span
+                className={`chip chip-s ${disabled ? 'chip-neutral' : 'chip-ok'}`}
+                data-status={disabled ? 'disabled' : 'active'}
+                data-testid="principal-status"
+              >
+                {disabled ? t('已停用', 'Disabled') : t('活跃', 'Active')}
+              </span>
+            </dd>
+            <dt>API key</dt>
+            <dd>{principal.hasApiKey ? t('已签发', 'issued') : t('无', 'none')}</dd>
+            <dt>{t('创建', 'Created')}</dt>
+            <dd>
+              <time title={formatDateTime(principal.createdAt)}>
+                {formatRelative(principal.createdAt)}
               </time>
             </dd>
-          </>
-        ) : null}
+            {principal.disabledAt ? (
+              <>
+                <dt>{t('停用于', 'Disabled')}</dt>
+                <dd>
+                  <time title={formatDateTime(principal.disabledAt)}>
+                    {formatRelative(principal.disabledAt)}
+                  </time>
+                </dd>
+              </>
+            ) : null}
+          </dl>
+        </DrawerSection>
+
         {principal.workerDefinitionId ? (
-          <>
-            <dt>{t('Worker 定义', 'Worker definition')}</dt>
-            <dd>
-              <RefChip
-                kind="workerDefinition"
-                id={principal.workerDefinitionId}
-                http={http}
-                size="s"
-                testId="principal-worker-definition"
-              />
-            </dd>
-          </>
-        ) : null}
-      </dl>
-
-      {canManage ? (
-        <>
-          <div className="divider" />
-
-          <Field id="principal-role" label={t('角色', 'Role')}>
-            <div className="row">
-              <Select
-                id="principal-role"
-                value={role}
-                onChange={(event) => setRole(event.target.value as Role)}
-                disabled={savingRole || disabled}
-              >
-                {ROLE_VALUES.map((value) => (
-                  <option key={value} value={value}>
-                    {roleLabel(value, t)}
-                  </option>
-                ))}
-              </Select>
-              <Button
-                variant="secondary"
-                onClick={() => void saveRole()}
-                loading={savingRole}
-                disabled={role === principal.role || disabled}
-              >
-                {t('保存', 'Save')}
-              </Button>
-            </div>
-          </Field>
-          {roleError !== null ? (
-            <ErrorBanner error={roleError} title={t('无法修改角色', 'Could not change the role')} />
-          ) : null}
-
-          <div className="row-wrap">
-            <StatusChip machine="role" status={principal.role} size="s" />
-            {rotated ? null : (
-              <Button
-                variant="secondary"
-                size="s"
-                icon="key"
-                onClick={() => void rotateKey()}
-                loading={rotating}
-                disabled={disabled}
-              >
-                {t('轮换', 'API key Rotate API key')}
-              </Button>
-            )}
-          </div>
-          {rotateError !== null ? (
-            <ErrorBanner error={rotateError} title={t('无法轮换', 'Could not rotate the key')} />
-          ) : null}
-          {rotated ? (
-            <div className="stack-s" data-testid="rotated-api-key">
-              <Notice tone="warn">
-                {t(
-                  '新 API key 只显示一次；旧 key 立即失效。 New API key shown once —',
-                  'the previous key stops working immediately.',
-                )}
-              </Notice>
-              <div className="code-block row" style={{ justifyContent: 'space-between' }}>
-                <span className="mono">{rotated.apiKey}</span>
-                <CopyId id={rotated.apiKey} label="API key" full />
-              </div>
-              <div className="row" style={{ justifyContent: 'flex-end' }}>
-                <Button variant="secondary" size="s" onClick={() => setRotated(null)}>
-                  {t('我已复制', "I've copied it")}
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="divider" />
-
-          {disabled ? null : confirmingDisable ? (
-            <div className="stack-s">
-              <Notice tone="warn">
-                {t(
-                  '停用会吊销该成员持有的全部 Handle 与入口会话，且不能从这里撤销。',
-                  'Disabling revokes every Handle and entry session this member holds. This cannot be undone from here.',
-                )}
-              </Notice>
-              {disableError !== null ? (
-                <ErrorBanner
-                  error={disableError}
-                  title={t('无法停用', 'Could not disable this member')}
+          <DrawerSection title={t('相关链接 Related links', 'Related links')}>
+            <dl className="definition-list">
+              <dt>{t('Worker 定义', 'Worker definition')}</dt>
+              <dd>
+                <RefChip
+                  kind="workerDefinition"
+                  id={principal.workerDefinitionId}
+                  http={http}
+                  size="s"
+                  testId="principal-worker-definition"
                 />
-              ) : null}
-              <div className="row" style={{ justifyContent: 'flex-end' }}>
-                <Button variant="ghost" onClick={() => setConfirmingDisable(false)}>
-                  {t('取消', 'Cancel')}
-                </Button>
-                <Button variant="danger" onClick={() => void disable()} loading={disabling}>
-                  {t('确认停用', 'Confirm disable')}
+              </dd>
+            </dl>
+          </DrawerSection>
+        ) : null}
+
+        {canManage ? (
+          <DrawerSection title={t('编辑 Edit', 'Edit')}>
+            <Field id="principal-role" label={t('角色', 'Role')}>
+              <div className="row">
+                <Select
+                  id="principal-role"
+                  value={role}
+                  onChange={(event) => setRole(event.target.value as Role)}
+                  disabled={savingRole || disabled}
+                >
+                  {ROLE_VALUES.map((value) => (
+                    <option key={value} value={value}>
+                      {roleLabel(value, t)}
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  variant="secondary"
+                  onClick={() => void saveRole()}
+                  loading={savingRole}
+                  disabled={role === principal.role || disabled}
+                >
+                  {t('保存', 'Save')}
                 </Button>
               </div>
+            </Field>
+            {roleError !== null ? (
+              <ErrorBanner
+                error={roleError}
+                title={t('无法修改角色', 'Could not change the role')}
+              />
+            ) : null}
+
+            <div className="row-wrap">
+              <StatusChip machine="role" status={principal.role} size="s" />
+              {rotated ? null : (
+                <Button
+                  variant="secondary"
+                  size="s"
+                  icon="key"
+                  onClick={() => void rotateKey()}
+                  loading={rotating}
+                  disabled={disabled}
+                >
+                  {t('轮换', 'API key Rotate API key')}
+                </Button>
+              )}
             </div>
-          ) : (
-            <div className="row" style={{ justifyContent: 'flex-end' }}>
-              <Button variant="danger" onClick={() => setConfirmingDisable(true)}>
-                {t('停用成员', 'Disable member')}
-              </Button>
-            </div>
-          )}
-        </>
-      ) : null}
+            {rotateError !== null ? (
+              <ErrorBanner error={rotateError} title={t('无法轮换', 'Could not rotate the key')} />
+            ) : null}
+            {rotated ? (
+              <div className="stack-s" data-testid="rotated-api-key">
+                <Notice tone="warn">
+                  {t(
+                    '新 API key 只显示一次；旧 key 立即失效。 New API key shown once —',
+                    'the previous key stops working immediately.',
+                  )}
+                </Notice>
+                <div className="code-block row" style={{ justifyContent: 'space-between' }}>
+                  <span className="mono">{rotated.apiKey}</span>
+                  <CopyId id={rotated.apiKey} label="API key" full />
+                </div>
+                <div className="row" style={{ justifyContent: 'flex-end' }}>
+                  <Button variant="secondary" size="s" onClick={() => setRotated(null)}>
+                    {t('我已复制', "I've copied it")}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="divider" />
+
+            {disabled ? null : confirmingDisable ? (
+              <div className="stack-s">
+                <Notice tone="warn">
+                  {t(
+                    '停用会吊销该成员持有的全部 Handle 与入口会话，且不能从这里撤销。',
+                    'Disabling revokes every Handle and entry session this member holds. This cannot be undone from here.',
+                  )}
+                </Notice>
+                {disableError !== null ? (
+                  <ErrorBanner
+                    error={disableError}
+                    title={t('无法停用', 'Could not disable this member')}
+                  />
+                ) : null}
+                <div className="row" style={{ justifyContent: 'flex-end' }}>
+                  <Button variant="ghost" onClick={() => setConfirmingDisable(false)}>
+                    {t('取消', 'Cancel')}
+                  </Button>
+                  <Button variant="danger" onClick={() => void disable()} loading={disabling}>
+                    {t('确认停用', 'Confirm disable')}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <Button variant="danger" onClick={() => setConfirmingDisable(true)}>
+                  {t('停用成员', 'Disable member')}
+                </Button>
+              </div>
+            )}
+          </DrawerSection>
+        ) : null}
+      </DrawerSections>
     </div>
   );
 }

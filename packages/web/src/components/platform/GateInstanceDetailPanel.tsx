@@ -11,6 +11,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
+import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { Field, Input } from '../ui/Field.js';
@@ -174,270 +175,303 @@ export function GateInstanceDetailPanel({
 
   return (
     <div className="stack" data-testid="gate-instance-detail">
-      <dl className="definition-list">
-        <dt>Gate id</dt>
-        <dd>
-          {/* S8 W1-A6 (audit S10): gate ids are short human-readable slugs
-              (`gatekeeper-quickbooks`, …), not UUIDs — CopyId's default 8-char truncation turned
-              one into the meaningless "gatekeep". `full` shows it whole; slugs are already short
-              enough (migrations/core/0023_gate_instances.sql caps them at 64 chars). */}
-          <CopyId id={instance.gateId} label="gate" full />
-        </dd>
-        <dt>{t('接入包', 'Connector')}</dt>
-        <dd className="mono">{instance.connector}</dd>
-        <dt>{t('种类', 'Transport')}</dt>
-        <dd>{instance.transportKind}</dd>
-        <dt>{t('目标', 'Target')}</dt>
-        <dd className="mono">{instance.target}</dd>
-        <dt>{t('端点', 'Endpoint')}</dt>
-        <dd className="mono">{instance.endpoint}</dd>
-        <dt>{t('健康', 'Health')}</dt>
-        <dd>
-          <StatusChip
-            machine="gateHealth"
-            status={instance.health}
-            size="s"
-            testId="gate-instance-detail-health"
-          />
-        </dd>
-        <dt>{t('最近心跳', 'Last seen')}</dt>
-        <dd>
-          {instance.lastSeenAt === null ? (
-            t('从未', 'Never')
-          ) : (
-            <time title={formatDateTime(instance.lastSeenAt)}>
-              {formatRelative(instance.lastSeenAt)}
-            </time>
-          )}
-        </dd>
-        <dt>启用它的工作区数</dt>
-        <dd className="mono">{instance.enabledWorkspaceCount}</dd>
-      </dl>
+      {/* S8 W1-A11 (audit L8): the drawer's fixed three sections — metadata / related links /
+       *  edit form — replacing the old flat stack of dl / form / action blocks separated only by
+       *  `.divider`s in whatever order each one was written. The hosted-instance block (metadata,
+       *  credential entry, delete) is kept as one unit inside Edit form — it is dominated by its
+       *  two actions (enter the credential, delete), and its own unit test reaches the credential
+       *  entry's token button through `gate-instance-hosted-definition`, so it cannot split across
+       *  sections without breaking that lookup. */}
+      <DrawerSections>
+        <DrawerSection title={t('元数据 Metadata', 'Metadata')}>
+          <dl className="definition-list">
+            <dt>Gate id</dt>
+            <dd>
+              {/* S8 W1-A6 (audit S10): gate ids are short human-readable slugs
+                  (`gatekeeper-quickbooks`, …), not UUIDs — CopyId's default 8-char truncation
+                  turned one into the meaningless "gatekeep". `full` shows it whole; slugs are
+                  already short enough (migrations/core/0023_gate_instances.sql caps them at 64
+                  chars). */}
+              <CopyId id={instance.gateId} label="gate" full />
+            </dd>
+            <dt>{t('接入包', 'Connector')}</dt>
+            <dd className="mono">{instance.connector}</dd>
+            <dt>{t('种类', 'Transport')}</dt>
+            <dd>{instance.transportKind}</dd>
+            <dt>{t('目标', 'Target')}</dt>
+            <dd className="mono">{instance.target}</dd>
+            <dt>{t('端点', 'Endpoint')}</dt>
+            <dd className="mono">{instance.endpoint}</dd>
+            <dt>{t('健康', 'Health')}</dt>
+            <dd>
+              <StatusChip
+                machine="gateHealth"
+                status={instance.health}
+                size="s"
+                testId="gate-instance-detail-health"
+              />
+            </dd>
+            <dt>{t('最近心跳', 'Last seen')}</dt>
+            <dd>
+              {instance.lastSeenAt === null ? (
+                t('从未', 'Never')
+              ) : (
+                <time title={formatDateTime(instance.lastSeenAt)}>
+                  {formatRelative(instance.lastSeenAt)}
+                </time>
+              )}
+            </dd>
+            <dt>启用它的工作区数</dt>
+            <dd className="mono">{instance.enabledWorkspaceCount}</dd>
+          </dl>
 
-      <WorkspacesUsingSection http={http} instance={instance} />
+          {testResult ? (
+            <div className="stack-s" data-testid="gate-instance-test-result">
+              <dl className="definition-list">
+                <dt>{t('健康', 'Health')}</dt>
+                <dd>{testResult.health}</dd>
+                <dt>描述的 Operation 数</dt>
+                <dd className="mono">{testResult.describedOperationCount ?? '—'}</dd>
+                <dt>{t('检查时间', 'Checked')}</dt>
+                <dd>
+                  <time title={formatDateTime(testResult.checkedAt)}>
+                    {formatRelative(testResult.checkedAt)}
+                  </time>
+                </dd>
+              </dl>
+            </div>
+          ) : null}
 
-      {instance.hosted && instance.definition ? (
-        <>
-          <div className="divider" />
-          <div className="stack-s" data-testid="gate-instance-hosted-definition">
-            <span className="tag" data-testid="gate-instance-hosted-tag">
-              {t('宿主', 'hosted')}
-            </span>
-            <dl className="definition-list">
-              <dt>{t('种类', 'Transport')}</dt>
-              <dd>{instance.definition.transportKind}</dd>
-              <dt>{t('目标', 'Target')}</dt>
-              <dd className="mono">{instance.definition.target}</dd>
-              <dt>{t('凭证模式', 'Credential mode')}</dt>
-              <dd>
-                {instance.definition.credentialMode === 'shared'
-                  ? t('共享', 'Shared')
-                  : t('按人', 'Connected account')}
-              </dd>
-              <dt>Manifest source</dt>
-              <dd className="mono">{instance.definition.manifestSource ?? '—'}</dd>
-            </dl>
-
-            {instance.definition.credentialMode === 'shared' ? (
-              <div className="stack-s">
-                <span className="field-label">{t('录入共享凭证', 'Enter shared credential')}</span>
-                <GateCredentialEntry
-                  requestToken={() =>
-                    http.call<GateHostTokenWire>('issue_gate_host_token', {
-                      gateId: instance.gateId,
-                    })
-                  }
-                  tokenButtonLabel={t('获取 5 分钟令牌', 'Get a 5-minute token')}
-                />
-              </div>
-            ) : null}
-
-            <div className="divider" />
-            <PlatformError
-              error={deleteError}
-              title={t('无法删除', 'Could not delete this instance')}
-              testId="gate-instance-delete-error"
-            />
-            {confirmingDelete ? (
-              <div className="row-wrap" style={{ justifyContent: 'flex-end' }}>
-                <Button variant="ghost" size="s" onClick={() => setConfirmingDelete(false)}>
-                  {t('取消', 'Cancel')}
-                </Button>
-                <Button
-                  variant="danger"
-                  size="s"
-                  onClick={() => void deleteInstance()}
-                  loading={deleting}
-                  data-testid="gate-instance-delete-confirm"
-                >
-                  {t('确认删除', 'Confirm delete')}
-                </Button>
-              </div>
+          <div className="stack-s">
+            <span>Announced operations ({instance.operations.length})</span>
+            {instance.operations.length === 0 ? (
+              <p className="text-3">
+                {t('这个实例还没有 announce 过任何 Operation。', 'No Operations announced.')}
+              </p>
             ) : (
-              <div className="row" style={{ justifyContent: 'flex-end' }}>
-                <Button
-                  variant="danger"
-                  size="s"
-                  onClick={() => setConfirmingDelete(true)}
-                  data-testid="gate-instance-delete"
-                >
-                  {t('删除', 'Delete')}
-                </Button>
+              <div className="table-scroll">
+                <table className="data-table" data-testid="gate-instance-operations-table">
+                  <thead>
+                    <tr>
+                      <th>{t('名称', 'Name')}</th>
+                      <th>{t('模式', 'Mode')}</th>
+                      <th>Blast radius</th>
+                      <th>Hints</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {instance.operations.map((operation) => (
+                      <tr key={operation.name}>
+                        <td className="mono">{operation.name}</td>
+                        <td>
+                          <StatusChip machine="operationMode" status={operation.mode} size="s" />
+                        </td>
+                        <td>
+                          <div className="row-wrap">
+                            <StatusChip
+                              machine="blastRadius"
+                              status={operation.blastRadius}
+                              size="s"
+                            />
+                            {operation.autoApprovable ? (
+                              <StatusChip machine="autoApprovable" status="true" size="s" />
+                            ) : null}
+                          </div>
+                        </td>
+                        <td>
+                          {[
+                            operation.readOnlyHint ? t('只读', 'read-only') : null,
+                            operation.destructiveHint ? t('破坏性', 'destructive') : null,
+                            operation.idempotentHint ? t('幂等', 'idempotent') : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ') || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
-        </>
-      ) : null}
+        </DrawerSection>
 
-      <div className="divider" />
+        <DrawerSection title={t('相关链接 Related links', 'Related links')}>
+          <WorkspacesUsingSection http={http} instance={instance} />
+        </DrawerSection>
 
-      <Field id="gid-display-name" label={t('名称', 'Display name')}>
-        <Input
-          id="gid-display-name"
-          value={displayName}
-          onChange={(event) => setDisplayName(event.target.value)}
-          disabled={savingName}
-        />
-      </Field>
-      <PlatformError error={nameError} title={t('无法重命名', 'Could not rename this instance')} />
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button
-          variant="secondary"
-          onClick={() => void saveName()}
-          loading={savingName}
-          disabled={!nameDirty}
-        >
-          {t('保存', 'Save')}
-        </Button>
-      </div>
-
-      <div className="divider" />
-
-      <PlatformError error={statusError} title={t('无法修改状态', 'Could not change the status')} />
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <StatusChip
-          machine="gateInstance"
-          status={deriveGateInstanceStatus(instance)}
-          size="s"
-          testId="gate-instance-detail-status"
-        />
-        <StatusToggle
-          instance={instance}
-          busy={changingStatus}
-          onChange={(status) => void setStatus(status)}
-        />
-      </div>
-
-      {instance.transportKind === 'mcp' ? (
-        <>
-          <div className="divider" />
-          <Notice>
-            {t(
-              '只对 MCP 类型生效：标记为 vetted 后，非破坏性、幂等的工具调用可以被自动批准；随时可以撤销， 并且每次审批决策都会重新读取这个标记。 MCP only —',
-              'marking an instance vetted allows auto-approval of non-destructive, idempotent tool calls; it is revocable any time and read fresh at every approval decision.',
-            )}
-          </Notice>
+        <DrawerSection title={t('编辑 Edit', 'Edit')}>
+          <Field id="gid-display-name" label={t('名称', 'Display name')}>
+            <Input
+              id="gid-display-name"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              disabled={savingName}
+            />
+          </Field>
           <PlatformError
-            error={trustError}
-            title={t('无法设置信任级别', 'Could not set the trust level')}
+            error={nameError}
+            title={t('无法重命名', 'Could not rename this instance')}
+          />
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <Button
+              variant="secondary"
+              onClick={() => void saveName()}
+              loading={savingName}
+              disabled={!nameDirty}
+            >
+              {t('保存', 'Save')}
+            </Button>
+          </div>
+
+          <div className="divider" />
+
+          <PlatformError
+            error={statusError}
+            title={t('无法修改状态', 'Could not change the status')}
           />
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <StatusChip
-              machine="gateTrust"
-              status={instance.trust}
+              machine="gateInstance"
+              status={deriveGateInstanceStatus(instance)}
               size="s"
-              testId="gate-instance-detail-trust"
+              testId="gate-instance-detail-status"
             />
+            <StatusToggle
+              instance={instance}
+              busy={changingStatus}
+              onChange={(status) => void setStatus(status)}
+            />
+          </div>
+
+          {instance.transportKind === 'mcp' ? (
+            <>
+              <div className="divider" />
+              <Notice>
+                {t(
+                  '只对 MCP 类型生效：标记为 vetted 后，非破坏性、幂等的工具调用可以被自动批准；随时可以撤销， 并且每次审批决策都会重新读取这个标记。 MCP only —',
+                  'marking an instance vetted allows auto-approval of non-destructive, idempotent tool calls; it is revocable any time and read fresh at every approval decision.',
+                )}
+              </Notice>
+              <PlatformError
+                error={trustError}
+                title={t('无法设置信任级别', 'Could not set the trust level')}
+              />
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <StatusChip
+                  machine="gateTrust"
+                  status={instance.trust}
+                  size="s"
+                  testId="gate-instance-detail-trust"
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => void setTrust(instance.trust === 'vetted' ? 'byo' : 'vetted')}
+                  loading={changingTrust}
+                  data-testid="gate-instance-trust-toggle"
+                >
+                  {instance.trust === 'vetted'
+                    ? t('撤销 vetted', 'Revoke vetted')
+                    : t('标记为 vetted', 'Mark vetted')}
+                </Button>
+              </div>
+            </>
+          ) : null}
+
+          <div className="divider" />
+
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button
               variant="secondary"
-              onClick={() => void setTrust(instance.trust === 'vetted' ? 'byo' : 'vetted')}
-              loading={changingTrust}
-              data-testid="gate-instance-trust-toggle"
+              icon="refresh"
+              onClick={() => void test()}
+              loading={testing}
+              data-testid="gate-instance-test"
             >
-              {instance.trust === 'vetted'
-                ? t('撤销 vetted', 'Revoke vetted')
-                : t('标记为 vetted', 'Mark vetted')}
+              {t('测试连接', 'Test connection')}
             </Button>
           </div>
-        </>
-      ) : null}
+          <PlatformError
+            error={testError}
+            title={t('无法测试连接', 'Could not test this connection')}
+          />
 
-      <div className="divider" />
+          {instance.hosted && instance.definition ? (
+            <>
+              <div className="divider" />
+              <div className="stack-s" data-testid="gate-instance-hosted-definition">
+                <span className="tag" data-testid="gate-instance-hosted-tag">
+                  {t('宿主', 'hosted')}
+                </span>
+                <dl className="definition-list">
+                  <dt>{t('种类', 'Transport')}</dt>
+                  <dd>{instance.definition.transportKind}</dd>
+                  <dt>{t('目标', 'Target')}</dt>
+                  <dd className="mono">{instance.definition.target}</dd>
+                  <dt>{t('凭证模式', 'Credential mode')}</dt>
+                  <dd>
+                    {instance.definition.credentialMode === 'shared'
+                      ? t('共享', 'Shared')
+                      : t('按人', 'Connected account')}
+                  </dd>
+                  <dt>Manifest source</dt>
+                  <dd className="mono">{instance.definition.manifestSource ?? '—'}</dd>
+                </dl>
 
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button
-          variant="secondary"
-          icon="refresh"
-          onClick={() => void test()}
-          loading={testing}
-          data-testid="gate-instance-test"
-        >
-          {t('测试连接', 'Test connection')}
-        </Button>
-      </div>
-      <PlatformError
-        error={testError}
-        title={t('无法测试连接', 'Could not test this connection')}
-      />
-      {testResult ? (
-        <div className="stack-s" data-testid="gate-instance-test-result">
-          <dl className="definition-list">
-            <dt>{t('健康', 'Health')}</dt>
-            <dd>{testResult.health}</dd>
-            <dt>描述的 Operation 数</dt>
-            <dd className="mono">{testResult.describedOperationCount ?? '—'}</dd>
-            <dt>{t('检查时间', 'Checked')}</dt>
-            <dd>
-              <time title={formatDateTime(testResult.checkedAt)}>
-                {formatRelative(testResult.checkedAt)}
-              </time>
-            </dd>
-          </dl>
-        </div>
-      ) : null}
+                {instance.definition.credentialMode === 'shared' ? (
+                  <div className="stack-s">
+                    <span className="field-label">
+                      {t('录入共享凭证', 'Enter shared credential')}
+                    </span>
+                    <GateCredentialEntry
+                      requestToken={() =>
+                        http.call<GateHostTokenWire>('issue_gate_host_token', {
+                          gateId: instance.gateId,
+                        })
+                      }
+                      tokenButtonLabel={t('获取 5 分钟令牌', 'Get a 5-minute token')}
+                    />
+                  </div>
+                ) : null}
 
-      <div className="divider" />
-
-      <div className="stack-s">
-        <span>Announced operations ({instance.operations.length})</span>
-        {instance.operations.length === 0 ? (
-          <p className="text-3">
-            {t('这个实例还没有 announce 过任何 Operation。', 'No Operations announced.')}
-          </p>
-        ) : (
-          <div className="table-scroll">
-            <table className="data-table" data-testid="gate-instance-operations-table">
-              <thead>
-                <tr>
-                  <th>{t('名称', 'Name')}</th>
-                  <th>{t('模式', 'Mode')}</th>
-                  <th>Blast radius</th>
-                  <th>Hints</th>
-                </tr>
-              </thead>
-              <tbody>
-                {instance.operations.map((operation) => (
-                  <tr key={operation.name}>
-                    <td className="mono">{operation.name}</td>
-                    <td>{operation.mode}</td>
-                    <td>{operation.blastRadius}</td>
-                    <td>
-                      {[
-                        operation.readOnlyHint ? t('只读', 'read-only') : null,
-                        operation.destructiveHint ? t('破坏性', 'destructive') : null,
-                        operation.idempotentHint ? t('幂等', 'idempotent') : null,
-                        operation.autoApprovable ? t('可自动批准', 'auto-approvable') : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ') || '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                <div className="divider" />
+                <PlatformError
+                  error={deleteError}
+                  title={t('无法删除', 'Could not delete this instance')}
+                  testId="gate-instance-delete-error"
+                />
+                {confirmingDelete ? (
+                  <div className="row-wrap" style={{ justifyContent: 'flex-end' }}>
+                    <Button variant="ghost" size="s" onClick={() => setConfirmingDelete(false)}>
+                      {t('取消', 'Cancel')}
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="s"
+                      onClick={() => void deleteInstance()}
+                      loading={deleting}
+                      data-testid="gate-instance-delete-confirm"
+                    >
+                      {t('确认删除', 'Confirm delete')}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="row" style={{ justifyContent: 'flex-end' }}>
+                    <Button
+                      variant="danger"
+                      size="s"
+                      onClick={() => setConfirmingDelete(true)}
+                      data-testid="gate-instance-delete"
+                    >
+                      {t('删除', 'Delete')}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : null}
+        </DrawerSection>
+      </DrawerSections>
     </div>
   );
 }
