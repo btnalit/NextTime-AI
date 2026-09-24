@@ -34,7 +34,7 @@
 
 .graph-type-tag {
   font-family: var(--font-mono);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   color: var(--text-2);
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -244,13 +244,13 @@
 
 .graph-node-overflow {
   fill: var(--text-on-accent);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: 600;
 }
 
 .graph-node-label {
   fill: var(--text-2);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-family: var(--font-sans);
 }
 
