@@ -30,6 +30,7 @@ import { RequestConnectionForm } from './RequestConnectionForm.js';
 import { ConnectSystemLauncher } from './connect/ConnectSystemLauncher.js';
 import { Confirm } from './kit/confirm.js';
 import { PageHeader } from './kit/page-header.js';
+import { ExecutionPrerequisiteBar } from './readiness/ExecutionPrerequisiteBar.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
@@ -250,6 +251,8 @@ export function ConnectionsPage({
           </>
         }
       />
+
+      <ExecutionPrerequisiteBar http={http} />
 
       <section className="section" aria-labelledby="connection-requests-title">
         <div className="section-header">

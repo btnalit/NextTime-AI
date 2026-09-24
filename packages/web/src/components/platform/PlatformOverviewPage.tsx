@@ -1,5 +1,10 @@
-import type { PlatformOverviewWire, PlatformWorkspaceWire } from '@nexttime/shared';
+import type {
+  PlatformOverviewWire,
+  PlatformStatusWire,
+  PlatformWorkspaceWire,
+} from '@nexttime/shared';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
+import type { Resource } from '../../hooks/useResource.js';
 import type { MeResult } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime } from '../../lib/format.js';
@@ -118,11 +123,23 @@ const HEALTH_CHIP_CLASS: Readonly<Record<ServiceHealth['status'], string>> = {
  * and counts `isResidueWorkspace` — the same predicate the workspaces page's residue preset
  * applies — linking to `#/platform/workspaces?residue=1`. A failed read simply shows no banner;
  * the version card is `platform_overview.version.kernel` (B1's real value lives in the kernel).
+ *
+ * S8 W2 U3a (ui-audit-2026-09-23 O1, §5.9 控制塔 "待处理 / 运行中 / 图谱新鲜度 / 费用四指标、
+ * 「需要人处理」列表"): implemented against **only** capabilities that already exist — F6 forbids
+ * a kernel change in this lane. `platform_status`'s 30-day cross-workspace `llmUsage30d` backs
+ * "费用"; "需要人处理" is composed client-side from data `platform_overview` already returns
+ * (degraded/down `health` entries, `counts.pendingActivationUsers`) — no extra read. "待处理"
+ * (a cross-workspace pending-ActionRequest count), "运行中" (a cross-workspace running-Task
+ * count) and "图谱新鲜度" (`ops.collector_silent`, computed server-side but not exposed by any
+ * capability today — B1/G1's own audit rows) have no existing source and are intentionally not
+ * rendered — see this lane's PR report for the gap list, never a fake zero or a "—" standing in
+ * for real data.
  */
 export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageProps) {
   const t = useT();
   const overview = useCapability<PlatformOverviewWire>(http, 'platform_overview');
   const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces');
+  const status = useCapability<PlatformStatusWire>(http, 'platform_status');
   const residue =
     workspaces.state.status === 'ready'
       ? workspaces.state.data.items.filter((row) => isResidueWorkspace(row))
@@ -163,6 +180,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
       ) : (
         <PlatformOverviewBody
           data={overview.state.data}
+          status={status}
           onKeyBound={(result) => {
             onKeyBound?.(result);
             void overview.reload();
@@ -175,14 +193,43 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
 
 function PlatformOverviewBody({
   data,
+  status,
   onKeyBound,
 }: {
   readonly data: PlatformOverviewWire;
+  readonly status: Resource<PlatformStatusWire>;
   readonly onKeyBound: (result: MeResult) => void;
 }) {
   const t = useT();
+  const attentionItems = buildAttentionItems(data, t);
   return (
     <>
+      <DashboardCard title={t('需要人处理', 'Needs attention')} padded={false}>
+        {attentionItems.length === 0 ? (
+          <EmptyState
+            icon="check"
+            title={t('没有需要人工处理的事项', 'Nothing needs attention right now')}
+            testId="platform-attention-empty"
+          />
+        ) : (
+          <DataList ariaLabel="Needs attention" testId="platform-attention-items">
+            {attentionItems.map((item) => (
+              <DataRow
+                key={item.key}
+                testId="platform-attention-item"
+                leading={<Icon name="alert" className="text-warn" label={t('待处理', 'To do')} />}
+                title={item.title}
+                trailing={
+                  <a href={item.href} className="inline-flex min-h-9 items-center">
+                    {t('前往', 'Go')}
+                  </a>
+                }
+              />
+            ))}
+          </DataList>
+        )}
+      </DashboardCard>
+
       <DashboardCard title={t('版本', 'Version')}>
         <dl className="definition-list">
           <dt>Kernel</dt>
@@ -252,6 +299,8 @@ function PlatformOverviewBody({
         </div>
       </DashboardCard>
 
+      <CostCard status={status} />
+
       <DashboardCard
         title={t('最近平台审计', 'Recent platform audit')}
         actions={<a href={hrefs.platformAudit()}>{t('查看全部', 'View all')}</a>}
@@ -279,6 +328,88 @@ function PlatformOverviewBody({
 
       {data.counts.pendingActivationUsers > 0 ? <BindApiKeyForm onBound={onKeyBound} /> : null}
     </>
+  );
+}
+
+interface AttentionItem {
+  readonly key: string;
+  readonly title: string;
+  readonly href: string;
+}
+
+/** O1's "需要人处理" list — composed client-side from `platform_overview`'s own `health` and
+ *  `counts`, never a separate read (see this file's own module doc comment for why). A degraded
+ *  or down service and a pending-activation user count are both already surfaced elsewhere on
+ *  this page (the health chips, the checklist's `users` row) — this list exists to pull the ones
+ *  that need a *decision*, not just a status, into one place. */
+function buildAttentionItems(data: PlatformOverviewWire, t: Translate): readonly AttentionItem[] {
+  const items: AttentionItem[] = [];
+  for (const entry of data.health) {
+    if (entry.status !== 'degraded' && entry.status !== 'down') continue;
+    items.push({
+      key: `health-${entry.service}`,
+      title:
+        entry.status === 'down'
+          ? t(`${entry.service} 服务离线`, `${entry.service} is down`)
+          : t(`${entry.service} 服务异常`, `${entry.service} is degraded`),
+      href: hrefs.platformStatus(),
+    });
+  }
+  if (data.counts.pendingActivationUsers > 0) {
+    items.push({
+      key: 'pending-activation',
+      title: t(
+        `${data.counts.pendingActivationUsers} 位用户待激活`,
+        `${data.counts.pendingActivationUsers} user(s) awaiting activation`,
+      ),
+      href: hrefs.platformUsers(),
+    });
+  }
+  return items;
+}
+
+/** O1's "费用" metric — `platform_status`'s 30-day cross-workspace `llmUsage30d` rollup (the one
+ *  existing capability read this lane found backing any of §5.9's four metrics — see this file's
+ *  own module doc comment for "待处理" / "运行中" / "图谱新鲜度", which have none). A separate
+ *  `useCapability` from `platform_overview`'s own, so a `platform_status` failure degrades only
+ *  this one card, never the whole page. */
+function CostCard({ status }: { readonly status: Resource<PlatformStatusWire> }) {
+  const t = useT();
+  return (
+    <DashboardCard
+      title={t('费用（近 30 天）', 'Cost (30d)')}
+      actions={<a href={hrefs.platformStatus()}>{t('查看详情', 'View details')}</a>}
+    >
+      {status.state.status === 'loading' ? (
+        <SkeletonRows
+          count={1}
+          label={t('正在加载费用…', 'Loading cost')}
+          testId="platform-cost-loading"
+        />
+      ) : status.state.status === 'error' ? (
+        <ErrorBanner
+          error={status.state.error}
+          title={t('无法加载费用', 'Could not load cost')}
+          onRetry={() => void status.reload()}
+          testId="platform-cost-error"
+        />
+      ) : (
+        <dl className="definition-list" data-testid="platform-cost">
+          <dt>{t('调用次数', 'Calls')}</dt>
+          <dd>{status.state.data.llmUsage30d.callCount}</dd>
+          <dt>{t('输入 tokens', 'Input tokens')}</dt>
+          <dd>{status.state.data.llmUsage30d.totalInputTokens}</dd>
+          <dt>{t('输出 tokens', 'Output tokens')}</dt>
+          <dd>{status.state.data.llmUsage30d.totalOutputTokens}</dd>
+          <dt>{t('费用', 'Cost')}</dt>
+          <dd data-testid="platform-cost-value">
+            {status.state.data.llmUsage30d.totalCostUsd !== null
+              ? `$${status.state.data.llmUsage30d.totalCostUsd.toFixed(2)}`
+              : t('无费用记录', 'No cost recorded')}
+          </dd>
+        </dl>
+      )}
+    </DashboardCard>
   );
 }
 

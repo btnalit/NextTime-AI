@@ -101,6 +101,8 @@
   "packages/web/src/components/platform/providers/DefaultModelControl.tsx",
   "packages/web/src/components/platform/providers/ProviderForm.tsx",
   "packages/web/src/components/platform/providers/ProviderSecretForm.tsx",
+  "packages/web/src/components/readiness/ExecutionPrerequisiteBar.tsx",
+  "packages/web/src/components/readiness/ExecutionReadinessCard.tsx",
   "packages/web/src/components/shell/Sidebar.tsx",
   "packages/web/src/hooks/usePushToasts.ts",
   "packages/web/src/lib/audit.ts",

@@ -38,27 +38,49 @@ const FIXTURE: readonly ChatWire[] = [
   }),
 ];
 
+/** Every scripted client here answers `execution_readiness` "ready" by default (unless a test
+ *  overrides it) — `ChatListPage` now mounts `ExecutionReadinessCard` (S8 W2 U3a), which reads it
+ *  unconditionally on mount. Its own behavior is covered by `readiness/ExecutionReadinessCard.
+ *  test.tsx`; this file only needs it to not blow up the existing chat-list assertions. */
 function scriptedClient(
   handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,
 ): CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] } {
   const calls: { name: string; params: unknown }[] = [];
+  const merged: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
+    execution_readiness: () => ({
+      principalId: 'p-1',
+      ready: true,
+      missing: [],
+      gates: [],
+      workers: [],
+    }),
+    ...handlers,
+  };
   return {
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push({ name, params });
-      const handler = handlers[name];
+      const handler = merged[name];
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
     }) as CapabilityCaller['call'],
   };
 }
 
-function renderList(client: CapabilityCaller, onSelectChat = vi.fn()) {
+/** A separate `http` caller from `client` (`ws`) in every test below — mirrors the real session
+ *  (`routes.tsx` passes `session.ws`/`session.http`, two different transports) and keeps each
+ *  test's `client.calls` assertion scoped to the `chat`-group calls it already checks, unaffected
+ *  by `ExecutionReadinessCard`'s own `execution_readiness` read. */
+function renderList(
+  client: CapabilityCaller,
+  onSelectChat = vi.fn(),
+  http: CapabilityCaller = scriptedClient({}),
+) {
   return {
     onSelectChat,
     ...render(
       <ToastProvider>
-        <ChatListPage client={client} onSelectChat={onSelectChat} />
+        <ChatListPage client={client} http={http} onSelectChat={onSelectChat} />
       </ToastProvider>,
     ),
   };
@@ -182,7 +204,7 @@ describe('ChatListPage archive undo across a remount (遗留 57)', () => {
       <ToastProvider>
         <ChatUpdatesProvider>
           {showList ? (
-            <ChatListPage client={client} onSelectChat={vi.fn()} />
+            <ChatListPage client={client} http={client} onSelectChat={vi.fn()} />
           ) : (
             <div data-testid="elsewhere" />
           )}

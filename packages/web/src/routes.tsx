@@ -238,7 +238,13 @@ export function Routed({
       );
       break;
     case 'chats':
-      page = <ChatListPage client={session.ws} onSelectChat={(id) => navigate(hrefs.chat(id))} />;
+      page = (
+        <ChatListPage
+          client={session.ws}
+          http={session.http}
+          onSelectChat={(id) => navigate(hrefs.chat(id))}
+        />
+      );
       break;
     case 'agent':
       page = <AgentProfilePage http={session.http} />;

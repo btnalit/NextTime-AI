@@ -1,4 +1,8 @@
-import type { PrincipalKind, WorkerDefinitionKind } from '@nexttime/shared';
+import type {
+  ExecutionReadinessMissingCode,
+  PrincipalKind,
+  WorkerDefinitionKind,
+} from '@nexttime/shared';
 import type { AuditResourceType } from './audit.js';
 import type { Translate } from './i18n.js';
 import { labelText, statusChipStyle } from './status-tone.js';
@@ -61,6 +65,28 @@ export const WORKER_DEFINITION_KIND_LABELS: Readonly<Record<WorkerDefinitionKind
 export function workerDefinitionKindLabel(kind: string, t: Translate): string {
   const entry = (WORKER_DEFINITION_KIND_LABELS as Readonly<Record<string, BilingualLabel>>)[kind];
   return entry ? label(entry, t) : kind;
+}
+
+// -------------------------------------------------------------------------------------------
+// execution_readiness missing code (`@nexttime/shared` `ExecutionReadinessMissingCodeSchema`, S8
+// W2 U3a, ui-audit-2026-09-23 J1/O1): the short machine-code label — `components/readiness/
+// readiness-copy.ts` owns the longer per-item cause sentence and its fix-it link, this map is only
+// for a place that needs the bare short label (a chip, a title attribute).
+// -------------------------------------------------------------------------------------------
+
+export const EXECUTION_READINESS_MISSING_CODE_LABELS: Readonly<
+  Record<ExecutionReadinessMissingCode, BilingualLabel>
+> = {
+  no_enabled_gate: { zh: '没有已启用的门', en: 'No gate enabled' },
+  no_grant: { zh: '未授权', en: 'Not granted' },
+  no_published_worker: { zh: '没有已发布的 Worker 定义', en: 'No published Worker definition' },
+};
+
+export function executionReadinessMissingCodeLabel(
+  code: ExecutionReadinessMissingCode,
+  t: Translate,
+): string {
+  return label(EXECUTION_READINESS_MISSING_CODE_LABELS[code], t);
 }
 
 // -------------------------------------------------------------------------------------------
