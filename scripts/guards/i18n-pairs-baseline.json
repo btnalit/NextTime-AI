@@ -1,1 +1,5 @@
-{}
+{
+  "packages/web/src/components/AccessPage.tsx": [
+    "grant_capability{principalId, resourceType, resourceId?, scope?}"
+  ]
+}

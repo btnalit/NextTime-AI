@@ -83,3 +83,125 @@ test('blankComments', () => {
   assert.ok(!blanked.includes('关闭'));
   assert.equal(blanked.split('\n').length, src.split('\n').length);
 });
+
+// S8 W1-A12 (batch design review round 2): two shapes that slipped past the original two
+// detectors above — (c) English-only UI copy with no Chinese at all, (d) a CJK sentence with its
+// full English translation glued into the same literal instead of split across `t()`'s two
+// arguments. Both are exercised through the public `findViolations(source, { isTestFile })`, the
+// same way (a)/(b) are above — the internal helpers (`isEnglishPhrase`, `looksLikeCode`,
+// `hasGluedEnglishSentence`, `computeInsideTMap`) are deliberately not exported, same convention
+// as `isUnsplitPair`.
+test('findViolations — (c) English-only JSX text/attribute', async (t) => {
+  await t.test('flags a JSX text run of 3+ English words with no CJK', () => {
+    const src = 'function X() { return <p>No messages yet here</p>; }';
+    assert.deepEqual(findViolations(src), [{ line: 1, text: 'No messages yet here' }]);
+  });
+
+  await t.test('flags a user-facing attribute (title/aria-label/placeholder/label/description/' +
+    'hint/subtitle) that is a plain English string literal', () => {
+    const src = 'const x = <Button aria-label="Back to the chat list" />;';
+    assert.deepEqual(findViolations(src), [{ line: 1, text: 'Back to the chat list' }]);
+  });
+
+  await t.test('does not flag an attribute name outside the tracked list', () => {
+    const src = 'const x = <Button data-tip="Back to the chat list" />;';
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('does not flag an attribute whose value is a {t(...)} expression (never a plain ' +
+    'quoted string in the first place)', () => {
+    const src = "const x = <Button aria-label={t('返回', 'Back to the chat list')} />;";
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('does not flag fewer than 3 words, or a single snake_case identifier token', () => {
+    const src = [
+      'const a = <p>Load more</p>;',
+      "const b = <Button title='grant_capability_now' />;",
+    ].join('\n');
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('does not flag a JSX text run that looks like code (parens/braces/equals/dotted ' +
+    'member access) — a brace/semicolon-free span between two unrelated tags can still capture a ' +
+    'ternary chain or a TS type signature, the same false-span risk (a)/(b) guard against', () => {
+    const src =
+      "const x = <A /> ) : llmAdminErrorMessage(list.state.error, t) !== null ? ( <B />;";
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('does not flag a JSX text run that is lexically inside a t(...) call, however ' +
+    'deeply nested (JSX fragments, other elements, in between)', () => {
+    const src = [
+      'function X() {',
+      '  return (',
+      '    <Notice>',
+      '      {t(',
+      '        <>还没有连接申请</>,',
+      '        <>',
+      '          No open connection requests right now',
+      '        </>,',
+      '      )}',
+      '    </Notice>',
+      '  );',
+      '}',
+    ].join('\n');
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('skips *.test.ts(x) files entirely — assertions/fixtures are not rendered UI ' +
+    'copy', () => {
+    const src = "expect(screen.getByText('No open connection requests')).toBeTruthy();";
+    assert.deepEqual(findViolations(src, { isTestFile: true }), []);
+  });
+});
+
+test('findViolations — (d) a CJK sentence glued to its own English translation', async (t) => {
+  await t.test('flags a string whose Latin tail (after the last CJK ideograph) is a 4+ word ' +
+    'sentence, even as the first argument of a t(...) call', () => {
+    const src =
+      "const hint = t('已达到单次读取上限 Reached the per-page limit, keep loading to see more', 'x');";
+    assert.deepEqual(findViolations(src), [
+      { line: 1, text: '已达到单次读取上限 Reached the per-page limit, keep loading to see more' },
+    ]);
+  });
+
+  await t.test('flags a plain string never routed through t() at all', () => {
+    const src =
+      "const hint = '一句话说明何时用它。 One line on when to use it, kept fairly short here.';";
+    assert.deepEqual(findViolations(src), [
+      {
+        line: 1,
+        text: '一句话说明何时用它。 One line on when to use it, kept fairly short here.',
+      },
+    ]);
+  });
+
+  await t.test('does not flag a short embedded technical term (< 4 words) — the established ' +
+    '`t(\'资源 id\', \'Resource id\')` shape stays legitimate', () => {
+    const src = "const a = t('共享 Shared — 一份凭证', 'One credential');";
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('does not flag a Chinese sentence whose trailing command tail (4+ words, but a ' +
+    'path segment or a --flag, not prose) is legitimately embedded, not a translation duplicate', () => {
+    const src = [
+      // Real false-positive this guard must not repeat (PlatformModelsPage's store-unwritable
+      // notice, W1-A12): the tail is a shell command with a `--flag`, not an English sentence.
+      // Wrapped in `t(...)` like the real call site — (b)'s own short-pair check would otherwise
+      // flag the un-split "请在主机上运行 docker compose…" shape on its own merits.
+      "const a = t('请在主机上运行 docker compose up -d --force-recreate llm-proxy', 'x');",
+      // A `.ext`-shaped token in the tail.
+      "const b = t('请在主机上运行 scripts/host-llm-proxy-init.sh on the host now', 'y');",
+    ].join('\n');
+    assert.deepEqual(findViolations(src), []);
+  });
+
+  await t.test('skips *.test.ts(x) files entirely — the string is wrapped in t(...) so only ' +
+    '(d) itself would otherwise flag it (see the JSX-text test above for (a)/(b) unconditionally ' +
+    'still scanning test files)', () => {
+    const src =
+      "const a = t('已达到单次读取上限 Reached the per-page limit, keep loading to see more', 'x');";
+    assert.deepEqual(findViolations(src, { isTestFile: true }), []);
+  });
+});
