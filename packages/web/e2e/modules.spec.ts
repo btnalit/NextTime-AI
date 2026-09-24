@@ -158,7 +158,7 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     // has 2+ memberships, so the "auto-select the only one" rule this file's own comment on
     // `signInAsAdmin` relies on no longer applies once B exists).
     await page.getByTestId('nav-catalog').click();
-    await page.getByRole('tab', { name: '模块' }).click();
+    await page.getByRole('tab', { name: 'Modules' }).click();
     const catalogTable = page.getByTestId('catalog-modules-table');
     await expect(catalogTable).toBeVisible({ timeout: 15_000 });
 

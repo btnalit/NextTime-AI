@@ -38,7 +38,7 @@ test.describe('catalog editors', () => {
 
     const proposed = drawer.getByTestId('draft-proposed');
     await expect(proposed).toBeVisible({ timeout: 15_000 });
-    await expect(proposed.getByTestId('draft-private-notice')).toContainText('private');
+    await expect(proposed.getByTestId('draft-private-notice')).toContainText('只有你');
     await drawer.getByTestId('draft-publish').click();
     await expect(drawer.getByTestId('draft-publish')).toBeHidden({ timeout: 15_000 });
     await drawer.getByTestId('draft-done').click();
