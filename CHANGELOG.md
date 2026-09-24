@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.17.0](https://github.com/btnalit/NextTime-AI/compare/v0.16.2...v0.17.0) (2026-09-24)
+
+
+### Features
+
+* **kernel:** S8 W1-C read-model capabilities (execution_readiness, resolve_refs, pagination, leftover 48) ([#243](https://github.com/btnalit/NextTime-AI/issues/243)) ([a6a071f](https://github.com/btnalit/NextTime-AI/commit/a6a071ffb7134393b5f0d7a7023a7601b7ea23ae))
+* **kernel:** S8 W2-K1 entry prompt contract, find_* matching, invoke_worker gate names, Operation descriptions ([#249](https://github.com/btnalit/NextTime-AI/issues/249)) ([83ba4ea](https://github.com/btnalit/NextTime-AI/commit/83ba4eab8101585a1e8013228387f76d9d562947))
+* **web+kernel:** kit RefChip backed by resolve_refs - no raw ids in the console (S8 W1-A6, audit S10) ([#256](https://github.com/btnalit/NextTime-AI/issues/256)) ([c57041a](https://github.com/btnalit/NextTime-AI/commit/c57041a3752534cb2a49c53899df71a4aaa257d6))
+* **web:** chat Markdown rendering + zh-CN time formatter (S8 W1-A2, audit C2/S9/PW1) ([#246](https://github.com/btnalit/NextTime-AI/issues/246)) ([be5099f](https://github.com/btnalit/NextTime-AI/commit/be5099f480c4cedda416407b290cd674f12bd436))
+* **web:** Chinese-first UI with an English switch — t(zh, en) + codemod (S8 W1-A9, audit S4 / S7) ([#259](https://github.com/btnalit/NextTime-AI/issues/259)) ([b85a896](https://github.com/btnalit/NextTime-AI/commit/b85a8966edeb5c9825408d3b667cefdbb13e2a0f))
+* **web:** kit confirm anchored to its trigger (S8 W1-A7, audit S13 / RT2) ([#257](https://github.com/btnalit/NextTime-AI/issues/257)) ([db5b3db](https://github.com/btnalit/NextTime-AI/commit/db5b3db68d2bb60912bc9c52870c0af205fcf240))
+* **web:** kit PageHeader with breadcrumbs from one nav source; cascade-layer fix (S8 W1-A1) ([#245](https://github.com/btnalit/NextTime-AI/issues/245)) ([05ef343](https://github.com/btnalit/NextTime-AI/commit/05ef3437f4de96a5a4f5cd61aa19a5ef109af702))
+* **web:** narrow-screen navigation + chat top bar (S8 W1-A3, audit S2/C3) ([#248](https://github.com/btnalit/NextTime-AI/issues/248)) ([a40bf9e](https://github.com/btnalit/NextTime-AI/commit/a40bf9ed9238e02164a44f01ae78e2cd60b4b49f))
+* **web:** responsive data table + six-list cursor paging (S8 W1-A4, audit S3) ([#252](https://github.com/btnalit/NextTime-AI/issues/252)) ([39a4307](https://github.com/btnalit/NextTime-AI/commit/39a4307f34ae85b3c0eb406f830f4109f7d6caea))
+* **web:** tailwind v4 + radix kit foundation on §5.9 tokens (S8 W1-A0) ([#241](https://github.com/btnalit/NextTime-AI/issues/241)) ([156e564](https://github.com/btnalit/NextTime-AI/commit/156e56465b6823980c9781d679713b2899074189))
+
+
+### Bug Fixes
+
+* **kernel:** enable_gate_instance links an existing Gatekeeper by endpoint (S8 W2-K2, leftover 73) ([#251](https://github.com/btnalit/NextTime-AI/issues/251)) ([4542e8e](https://github.com/btnalit/NextTime-AI/commit/4542e8e595f72102fc1b26addabd211f2ceb92ce))
+* **web:** text tokens meet 4.5:1 on every surface, 12 px floor, 36 px hit areas (S8 W1-A8, audit S5 / S6 / S8) ([#255](https://github.com/btnalit/NextTime-AI/issues/255)) ([40808b0](https://github.com/btnalit/NextTime-AI/commit/40808b02751f32b2d434bb4de6bdb189f95e4285))
+
+
+### Performance Improvements
+
+* **web:** lazy-load routed pages with a shared boundary and vendor chunk (S8 W1-A5, leftover 49) ([#250](https://github.com/btnalit/NextTime-AI/issues/250)) ([33e6889](https://github.com/btnalit/NextTime-AI/commit/33e6889cd72330cd0624aa2749e98dbc460380ca))
+
 ## [0.16.2](https://github.com/btnalit/NextTime-AI/compare/v0.16.1...v0.16.2) (2026-09-23)
 
 
