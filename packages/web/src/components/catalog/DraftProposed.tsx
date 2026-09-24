@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { describeError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
@@ -23,20 +23,44 @@ export interface DraftProposedProps {
   readonly onDone: () => void;
   /** Extra caveat (e.g. "the Workers tab only lists published versions"). */
   readonly note?: string;
+  /** R6 fallback: when the caller has no `list_*` capability that can ever show this draft again
+   *  once this screen closes without publishing (today: `list_worker_definitions`, unlike
+   *  `list_skills`/`list_procedures`, never returns a caller's own draft), pass the exact
+   *  consequence of clicking "完成 Done" instead of "发布 Publish" — shown as a `warn` Notice in
+   *  place of `note`, and the Publish button receives focus on mount so Enter/Space publishes
+   *  right away. */
+  readonly unpublishedConsequence?: string;
 }
 
 /**
- * components/catalog/DraftProposed: an editor's success state — the draft's identity, the I16
+ * components/catalog/DraftProposed: an editor's success state — the draft's identity, the
  * privacy note ("草稿私有于提议者"), and the one-click "发布 Publish" that turns it into what
  * `list_*` shows every member (§5.3 "提交即 propose_*，草稿列表可 publish_*"). Publish errors
  * carry the kernel's text (C14).
  */
-export function DraftProposed({ kindLabel, draft, onPublish, onDone, note }: DraftProposedProps) {
+export function DraftProposed({
+  kindLabel,
+  draft,
+  onPublish,
+  onDone,
+  note,
+  unpublishedConsequence,
+}: DraftProposedProps) {
   const t = useT();
   const toast = useToast();
   const [status, setStatus] = useState(draft.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  const publishRef = useRef<HTMLButtonElement>(null);
+
+  // Focuses Publish once, on mount only — a later status change (e.g. after publishing) must not
+  // steal focus back.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount only, see above.
+  useEffect(() => {
+    if (unpublishedConsequence !== undefined && draft.status === 'draft' && onPublish) {
+      publishRef.current?.focus();
+    }
+  }, []);
 
   async function publish(): Promise<void> {
     if (!onPublish) return;
@@ -66,22 +90,29 @@ export function DraftProposed({ kindLabel, draft, onPublish, onDone, note }: Dra
         <span className="text-3">v{draft.version}</span>
         <CopyId id={draft.id} label={kindLabel} />
       </div>
-      <Notice testId="draft-private-notice">
+      <Notice
+        tone={unpublishedConsequence !== undefined && status === 'draft' ? 'warn' : 'info'}
+        testId="draft-private-notice"
+      >
         {status === 'draft'
           ? t(
-              '草稿只有你（提议者）可见（I16）；发布后工作区所有成员可见、可选用。',
-              'Drafts are private to you, the proposer (I16); publishing makes it visible and selectable for every member.',
+              '草稿只有你（提议者）可见；发布后工作区所有成员可见、可选用。',
+              'Drafts are private to you, the proposer; publishing makes it visible and selectable for every member.',
             )
           : t(
               '已发布：工作区所有成员现在可见。 Published —',
               'visible to every member of the workspace now.',
             )}
         {note ? ` ${note}` : ''}
+        {unpublishedConsequence !== undefined && status === 'draft'
+          ? ` ${unpublishedConsequence}`
+          : ''}
       </Notice>
       {error !== null ? <ErrorBanner error={error} testId="draft-publish-error" /> : null}
       <div className="row">
         {status === 'draft' && onPublish ? (
           <Button
+            ref={publishRef}
             variant="primary"
             loading={busy}
             onClick={() => void publish()}

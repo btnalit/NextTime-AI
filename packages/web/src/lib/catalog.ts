@@ -9,6 +9,7 @@ import {
   workerDefinitionContentSchemaFor,
 } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
+import { OPS_RUNNER_WORKER_TEMPLATE } from './templates/ops-runner.js';
 
 /**
  * lib/catalog: pure helpers behind the catalog editors (S6-A A2 — docs/console-completion-plan.md
@@ -295,6 +296,21 @@ export function workerDefinitionFormFromWire(
     gates: list('gates'),
     skills: list('skills'),
     egressDeny: list('egressDeny'),
+  };
+}
+
+/** J7/CW1 "从模板创建（ops-runner）": the checked-in `ontology/ops-runner.yaml` template
+ *  (`lib/templates/ops-runner.ts` — kept drift-checked against the real YAML by that module's own
+ *  test) as a prefilled `WorkerDefinitionForm`. `name: 'ops-runner'` is set here rather than on
+ *  the template constant itself — the raw template carries no `name` field (F1: this button only
+ *  exposes the existing template through the existing propose/publish path, it does not invent
+ *  new template content), so the editor's own "从模板创建" affordance is what chooses the name a
+ *  reader sees pre-filled, same as it would if they typed it by hand. */
+export function opsRunnerTemplateForm(): WorkerDefinitionForm {
+  const { kind, ...definition } = OPS_RUNNER_WORKER_TEMPLATE;
+  return {
+    ...workerDefinitionFormFromWire(kind, definition),
+    name: 'ops-runner',
   };
 }
 
