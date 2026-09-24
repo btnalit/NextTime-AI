@@ -210,7 +210,12 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await expect(availableRow).toBeVisible({ timeout: 15_000 });
     const enableButton = availableRow.getByTestId(`enable-gate-${GATE_ID}`);
     if (await enableButton.isVisible().catch(() => false)) {
+      // S8 W2-U1 (audit J3): 在本工作区启用 now opens a preview confirm before it calls
+      // enable_gate_instance — click the trigger, wait for the popover, then confirm.
       await enableButton.click();
+      const confirm = page.getByTestId(`enable-gate-${GATE_ID}-confirm`);
+      await expect(confirm).toBeVisible({ timeout: 15_000 });
+      await confirm.getByTestId('confirm-button').click();
     }
     await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible({
       timeout: 15_000,
@@ -295,6 +300,11 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await expect(platformLauncher).toBeVisible({ timeout: 15_000 });
     await platformLauncher.getByTestId('launcher-kind-http').check();
     await platformLauncher.getByTestId('launcher-next').click();
+    // S8 W2-U1 (audit J5): 选择已有实例 renders first now — the create form is opt-in.
+    await expect(platformLauncher.getByTestId('launcher-existing-gates')).toBeVisible({
+      timeout: 15_000,
+    });
+    await platformLauncher.getByRole('button', { name: /新建实例/ }).click();
     await expect(platformLauncher.getByTestId('create-gate-instance-form')).toBeVisible({
       timeout: 15_000,
     });

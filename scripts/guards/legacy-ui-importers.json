@@ -25,7 +25,6 @@
   "packages/web/src/components/ConnectionsPage.tsx",
   "packages/web/src/components/CreatePrincipalForm.tsx",
   "packages/web/src/components/GatekeeperDetailDrawer.tsx",
-  "packages/web/src/components/GrantCapabilityForm.tsx",
   "packages/web/src/components/IssueServiceHandleSection.tsx",
   "packages/web/src/components/LoginPage.tsx",
   "packages/web/src/components/MembersPage.tsx",
