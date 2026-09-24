@@ -89,8 +89,11 @@ test.describe('S7-E acceptance: platform runtime page, honest empty state in thi
     await expect(page.getByTestId('runtime-roll-entry-containers')).toBeDisabled();
 
     // pi_drift: no CI-produced drift file in this environment — status "unknown", not guessed.
+    // S8 W1-A10: the chip is bilingual now (default zh-CN renders '未知'); `data-status` still
+    // carries the raw wire value.
     const drift = page.getByTestId('pi-drift-body');
     await expect(drift).toBeVisible({ timeout: 15_000 });
-    await expect(drift.getByTestId('pi-drift-status')).toHaveText('unknown');
+    await expect(drift.getByTestId('pi-drift-status')).toHaveAttribute('data-status', 'unknown');
+    await expect(drift.getByTestId('pi-drift-status')).toHaveText('未知');
   });
 });

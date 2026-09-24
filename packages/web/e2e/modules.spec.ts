@@ -158,16 +158,18 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     // has 2+ memberships, so the "auto-select the only one" rule this file's own comment on
     // `signInAsAdmin` relies on no longer applies once B exists).
     await page.getByTestId('nav-catalog').click();
-    await page.getByRole('tab', { name: 'Modules' }).click();
+    // S8 W1-A10: the catalog tab label is bilingual now; default zh-CN renders '模块'.
+    await page.getByRole('tab', { name: '模块' }).click();
     const catalogTable = page.getByTestId('catalog-modules-table');
     await expect(catalogTable).toBeVisible({ timeout: 15_000 });
 
     const catalogRow = page.getByTestId('catalog-module-row-ops-assets');
     await expect(catalogRow).toBeVisible({ timeout: 15_000 });
-    await expect(catalogRow).toContainText('未安装 Not installed');
+    // S8 W1-A10: the status cell is bilingual now (t(zh, en)); default zh-CN renders one language.
+    await expect(catalogRow).toContainText('未安装');
 
     await catalogRow.getByTestId('catalog-module-action-ops-assets').click();
-    await expect(catalogRow).toContainText('已是最新 Up to date', { timeout: 15_000 });
+    await expect(catalogRow).toContainText('已是最新', { timeout: 15_000 });
     await expect(catalogRow.locator('td').nth(2)).toHaveText('v2');
 
     // --- back on the platform 模块 page: installed-in count went up by one -----------------
