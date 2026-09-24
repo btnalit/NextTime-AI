@@ -128,6 +128,7 @@ import {
   enableGateInstanceHandler,
   issueGateCredentialTokenHandler,
   listAvailableGateInstancesHandler,
+  previewGateInstanceEnableHandler,
 } from './gate-instance-handlers.js';
 import {
   getGatekeeperHandler,
@@ -1465,6 +1466,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['revoke_external_runtime', revokeExternalRuntimeHandler],
   ['list_available_gate_instances', listAvailableGateInstancesHandler],
   ['enable_gate_instance', enableGateInstanceHandler],
+  ['preview_gate_instance_enable', previewGateInstanceEnableHandler],
   ['issue_service_handle', issueServiceHandleHandler],
   // P-B2a gate-host instances
   ['create_gate_instance', createGateInstanceHandler],

@@ -195,3 +195,71 @@ export async function countGatekeepers(client: PoolClient, workspaceId: string):
   );
   return Number(result.rows[0]?.count ?? 0);
 }
+
+// -------------------------------------------------------------------------------------------
+// findGatekeepersByEndpoint (S8 W2-K2, leftover 73, ui-audit J3/J4/B7): the association key
+// `enable_gate_instance`/`preview_gate_instance_enable` use to find a Gatekeeper a *prior*
+// registration already created for the same running gate process — the legacy `register-
+// gatekeeper` CLI path (`cli/bootstrap.ts`'s `registerGatekeeperFromCli`) most concretely, but any
+// registration path converges here, since `endpoint` (the URL the kernel actually calls) is the
+// one field that identifies "the same gate process" regardless of what name/target it was
+// registered under. `name`/`target` are deliberately *not* part of this key — they are exactly the
+// fields a legacy registration and a platform gate instance are expected to disagree on (a short
+// operator-typed `target` vs. the instance's real upstream address, a renamed `name`), which is
+// what `drift` (gate-instance-handlers.ts) surfaces without touching them.
+// -------------------------------------------------------------------------------------------
+
+export interface GatekeeperByEndpointEntry {
+  readonly gatekeeperId: string;
+  readonly name: string;
+  readonly target: string;
+  readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
+  readonly endpoint: string;
+  readonly createdAt: Date;
+}
+
+/** Trims exactly one trailing `/`, nothing more (`http://x:80//` stays `http://x:80/`) — the
+ *  association key's normalisation. Exported so `findGatekeepersByEndpoint`'s caller and its own
+ *  SQL-free, single-source-of-truth comparison agree on the same rule without restating it. */
+export function normalizeGateEndpoint(endpoint: string): string {
+  return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+}
+
+/** Every `Gatekeeper` Object in `workspaceId` whose own `endpoint` property equals `endpoint`
+ *  (both sides run through `normalizeGateEndpoint` — an exact match otherwise, never a prefix/
+ *  substring match). Reads the same `objects` rows `listGatekeepers` above does; kept as its own
+ *  query (rather than filtering `listGatekeepers`' result) because that function's own
+ *  `GatekeeperListEntry` does not carry `target`, which the caller needs for `drift`. */
+export async function findGatekeepersByEndpoint(
+  client: PoolClient,
+  workspaceId: string,
+  endpoint: string,
+): Promise<readonly GatekeeperByEndpointEntry[]> {
+  const target = normalizeGateEndpoint(endpoint);
+  const result = await client.query<GatekeeperObjectRow>(
+    `select id, properties, created_at
+     from objects
+     where workspace_id = $1 and object_type = 'Gatekeeper' and properties ->> 'endpoint' is not null
+     order by created_at asc`,
+    [workspaceId],
+  );
+  const matches: GatekeeperByEndpointEntry[] = [];
+  for (const row of result.rows) {
+    const props = row.properties as {
+      transportKind?: string;
+      name?: string;
+      endpoint?: string;
+      target?: string;
+    };
+    if (!props.endpoint || normalizeGateEndpoint(props.endpoint) !== target) continue;
+    matches.push({
+      gatekeeperId: row.id,
+      name: props.name ?? row.id,
+      target: props.target ?? '',
+      transportKind: (props.transportKind as GatekeeperByEndpointEntry['transportKind']) ?? 'http',
+      endpoint: props.endpoint,
+      createdAt: row.created_at,
+    });
+  }
+  return matches;
+}
