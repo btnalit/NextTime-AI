@@ -128,7 +128,14 @@ src/
   hooks/
     useResource.ts        loading / error / ready(refreshing, refreshError) state machine
     useCapability.ts       S3.14 data layer: useCapability/useCapabilityList over CapabilityCaller —
-                           cache-by-(caller,name,params), push-triggered reload, nextCursor paging
+                           cache-by-(caller,name,params), push-triggered reload, nextCursor paging.
+                           S8 W1-A4: the list envelope also carries `truncated`; `useCapabilityList`
+                           takes an `autoLoadAll` option that walks every page automatically (for a
+                           selector/directory list, where a row missing past page one is a
+                           correctness bug, not a paging UX choice) instead of the default manual
+                           `loadMore()`
+    useMediaQuery.ts       S8 W1-A4: window.matchMedia subscription; NARROW_TABLE_QUERY is the
+                           768px responsive-table breakpoint kit/data-table reads
     usePermissions.tsx    403/200-derived "may/may not call X" for the session (denied + allowed)
     useWorkspaceIdentity.ts  Sidebar's workspace name + role badge
     usePendingCount.ts    sidebar badge; useWsStatus.ts; usePushToasts.ts
@@ -153,6 +160,18 @@ src/
                           input, not Markdown-authored) and lazy-loads the kit component
                           (`React.lazy`) since react-markdown + remark-gfm add ~185 kB raw / ~57 kB
                           gzip that only a chat page with an assistant message ever needs
+                          — S8 W1-A4 (audit S3): data-table — `@tanstack/react-table` (pinned to
+                          the stable 8.21.3 line, not the newly-stable v9's reworked hook/feature
+                          architecture) as a sort-state engine only (headless — this component
+                          renders every pixel itself, no flexRender) over kit/table. Per-column
+                          priority (primary/high/low) drives `layout="card"` (default: a card list
+                          below 768px, hooks/useMediaQuery's NARROW_TABLE_QUERY) or `layout="sticky"`
+                          (primary/high columns pinned left, the rest scrolling — for a table too
+                          dense to ever fit one screen, e.g. Providers, which overflows even at
+                          1440). Wired into PlatformUsersPage/PlatformWorkspacesPage/
+                          PlatformModelsPage(Providers)/PlatformRuntimePage(Images+Residents)/
+                          ModelsPage(Quotas+Policies) — every table the audit's S3 row and its own
+                          "plus any other page table that shows the same overflow" note named
   components/shell/       AppShell, Sidebar (三组 使用 / 治理 / 平台 nav, S6-A0; nav data itself lives
                           in lib/nav.ts as of S8 W1-A1; S4.1: workspace switcher when >1 membership,
                           cookie-vs-apiKey sign-out label)
@@ -339,6 +358,17 @@ S8 W1-A1 additions: `components/kit/page-header` (title as the sole `h1`, breadc
 `components/ui/PageHeader` callers); `lib/nav.test.ts` (`breadcrumbFor` resolves every
 `NavSection` to `[{group}, {page}]` and `[]` for a section with no nav entry); `Sidebar.test.tsx`
 unchanged (nav data moved to `lib/nav.ts`, `Sidebar`'s own rendered output did not).
+
+S8 W1-A4 additions (audit S3): `components/kit/data-table` (wide-table roles/headers/rows, card
+mode at narrow width via a mocked `matchMedia`, primary/high/low column placement, sort toggle, a
+non-sortable column, `onRowClick` incl. the nested-button guard, empty data); `useMediaQuery`
+(initial match state, a `change` event, the no-`matchMedia` fallback); `useCapability` gains cases
+for `truncated` (from the initial load and from `loadMore`) and `autoLoadAll` (walks every page
+with no manual `loadMore()`, vs. staying on page one when unset). `PlatformUsersPage`,
+`PlatformWorkspacesPage`, `PlatformModelsPage`, `PlatformRuntimePage` and `ModelsPage`'s
+pre-existing suites all pass unmodified against their data-table migration (same testids, same
+`.textContent` assertions — none depended on `<tr>`/`<td>` DOM structure beyond what a real
+`<table>` still provides at the tests' default > 768px jsdom width).
 
 S3.13 additions: `useWorkspaceIdentity` (known role once `get_workspace` resolves, inferred
 fallback on `not_found`/loading), `AgentProfilePage` (pre-filled form, `not_found` degrade on the
