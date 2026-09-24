@@ -189,6 +189,41 @@ export interface ImportManifestInput {
   readonly operations: readonly Operation[];
   readonly proposedBy: { readonly id: string; readonly kind: PrincipalKind };
   readonly activityId: string;
+  /**
+   * S8 W2-K1 (leftover 71/72, audit CO1: "12 个 Operation 描述全空 ... find_operations 自然语言检索
+   * 落空的原因之一"). When `true`, every entry in `input.operations` must carry a non-blank
+   * `description` or the whole call throws {@link OperationDescriptionRequiredError} *before*
+   * writing anything (atomic — no partial import).
+   *
+   * Deliberately **opt-in, not the default**, even though the audit's own wording reads as an
+   * unconditional rule: `importManifest` is the single choke point every registration path shares
+   * — the CLI operator path (`cli/bootstrap.ts`'s `registerGatekeeperFromCli`, which sets this),
+   * the end-user capability path (`governance/connections/service.ts`'s `completeConnection`, fed
+   * by a live OpenAPI/MCP/SSH system a real user is connecting), and the platform-preset path
+   * (`application/gateway/gate-instance-handlers.ts`'s `enable_gate_instance`, fed by whatever a
+   * running gate — including this repo's own CI fixture gate — announced). A hand-curated manifest
+   * (this repo's own `gatekeepers/<system>/manifest.json` packages, registered through the CLI
+   * path) is exactly the case an operator can be expected to have written real descriptions for; a
+   * dynamically-imported OpenAPI/MCP/announced manifest is not always under this platform's
+   * control, and rejecting a real user's legitimate system over a missing description string would
+   * turn a P2 documentation debt into a P0 "cannot connect anything" regression. See this
+   * repository's own PR body for the CI fixtures this scoping was verified against.
+   */
+  readonly requireDescription?: boolean;
+}
+
+/** Thrown by `importManifest` when `input.requireDescription` is set and `operationName` has no
+ *  (or a blank/whitespace-only) `description` — CO1's "manifest 导入时要求描述" reject, naming the
+ *  offending Operation so the caller can fix its manifest entry directly. */
+export class OperationDescriptionRequiredError extends Error {
+  readonly operationName: string;
+  constructor(operationName: string) {
+    super(
+      `import_manifest: Operation "${operationName}" has no description — every imported Operation must declare a non-blank description (CO1)`,
+    );
+    this.name = 'OperationDescriptionRequiredError';
+    this.operationName = operationName;
+  }
 }
 
 export interface SkippedOperation {
@@ -222,6 +257,17 @@ export async function importManifest(
   workspaceId: string,
   input: ImportManifestInput,
 ): Promise<ImportManifestResult> {
+  if (input.requireDescription) {
+    // Validated up front, before any write — a manifest with one bad entry imports nothing
+    // rather than a confusing partial import (same "reject atomically" shape `manifest.ts`'s own
+    // draft-isolation conditional writes already use elsewhere in this file).
+    for (const operation of input.operations) {
+      if (!operation.description || operation.description.trim().length === 0) {
+        throw new OperationDescriptionRequiredError(operation.name);
+      }
+    }
+  }
+
   const imported: OperationRecord[] = [];
   const skipped: SkippedOperation[] = [];
   for (const operation of input.operations) {

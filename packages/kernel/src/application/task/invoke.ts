@@ -7,6 +7,7 @@ import {
   readEffectiveAgentProfile,
 } from '../../governance/agent-profile/index.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
+import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import { sumTodayCostUsd } from '../../governance/llm-usage/index.js';
 import {
   composeSystemPrompt,
@@ -19,8 +20,9 @@ import {
   computeChildHandleScope,
   defaultWorkerCapabilities,
   resolveParentAuthority,
+  resolveRequestedGateIds,
 } from './handle-mint.js';
-import type { MintWorkerRunHandleInput } from './handle-mint.js';
+import type { DeclaredGateRecord, MintWorkerRunHandleInput } from './handle-mint.js';
 import { reactToSupervisorStatus } from './lifecycle.js';
 import { HARD_MAX_DEPTH, resolveQuotas } from './quotas.js';
 import type { TaskRuntimeDeps } from './runtime.js';
@@ -381,6 +383,33 @@ export async function invokeWorkerCreate(
     throw new InvokeWorkerDefinitionNotEnabledError(input.definitionId);
   }
 
+  // R4 (leftover audit "invoke_worker 接受门名"): resolve each of `input.gates` against the
+  // WorkerDefinition's own declared Gatekeepers before the attenuation pre-check below, so a
+  // caller-supplied gate *name* (not only an id) is accepted when it names exactly one declared
+  // Gatekeeper — `resolveRequestedGateIds` (handle-mint.ts) is pure and needs each declared
+  // Gatekeeper's current `name`, fetched here (this function already does its own DB reads,
+  // handle-mint.ts deliberately does not — see that module's own doc comment). Skipped entirely
+  // when `input.gates` is omitted/empty: it then defaults to every declared gate id further down,
+  // and there is nothing to resolve.
+  const resolvedRequestedGates: readonly string[] | undefined =
+    input.gates && input.gates.length > 0
+      ? resolveRequestedGateIds(
+          input.gates,
+          await withWorkspace(
+            deps.pool,
+            { workspaceId, principalId: caller.principalId },
+            async (client) => {
+              const records: DeclaredGateRecord[] = [];
+              for (const gateId of declaredGates) {
+                const gatekeeper = await getGatekeeper(client, workspaceId, gateId);
+                records.push({ id: gateId, name: gatekeeper?.name ?? gateId });
+              }
+              return records;
+            },
+          ),
+        )
+      : input.gates;
+
   // Pre-check the child-Handle scope *before* creating anything (docs/development-tasks.md S2.7
   // "quota checks (I18) before anything is created" — this is the attenuation-equivalent of that
   // same rule): a rejection here (e.g. "入口 Handle 请求含 execute 的子 Handle 被拒", S2.7
@@ -395,7 +424,7 @@ export async function invokeWorkerCreate(
     parentAuthority,
     declaredCapabilities,
     declaredGates,
-    requestedGates: input.gates,
+    requestedGates: resolvedRequestedGates,
   });
 
   // I18 quota checks (depth/concurrency/daily cost) + the Task INSERT itself, in one
@@ -424,7 +453,7 @@ export async function invokeWorkerCreate(
       parentClaimsForLineage,
       declaredCapabilities,
       declaredGates,
-      requestedGates: input.gates,
+      requestedGates: resolvedRequestedGates,
       // S3.13: falls back to the requesting principal's own effective.model only when the
       // WorkerDefinition declares none — never overrides an explicit WorkerDefinition.model.
       model: content.model ?? effectiveModel ?? undefined,

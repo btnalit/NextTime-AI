@@ -334,6 +334,11 @@ export async function registerGatekeeperFromCli(
         operations: described.operations,
         proposedBy: { id: input.principalId, kind: 'human' },
         activityId: activity.id,
+        // S8 W2-K1 (leftover 71/72, audit CO1): this operator-run CLI path is the one call site
+        // that registers this repo's own hand-curated `gatekeepers/<system>/` manifests (see
+        // docs/runbooks/host-gatekeepers.md) — see `ImportManifestInput.requireDescription`'s own
+        // doc comment for why this flag is set *here* and not made the unconditional default.
+        requireDescription: true,
       });
 
       const publishedOperationNames: string[] = [];

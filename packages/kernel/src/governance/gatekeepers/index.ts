@@ -39,6 +39,7 @@ export {
   deprecateOperation,
   OperationNotFoundError,
   OperationIdentityConflictError,
+  OperationDescriptionRequiredError,
   IllegalTransition,
 } from './manifest.js';
 export type {

@@ -1,0 +1,57 @@
+{
+  "access": {},
+  "account": {},
+  "agent": {},
+  "approvals": {},
+  "audit": {
+    "raw-enum": {
+      "samples": ["agent_profile", "worker_run"]
+    }
+  },
+  "catalog-modules": {},
+  "catalog-operations": {},
+  "catalog-procedures": {},
+  "catalog-skills": {},
+  "catalog-workers": {},
+  "chats": {},
+  "graph": {},
+  "login": {},
+  "members": {},
+  "models": {},
+  "platform-audit": {
+    "uuid": {
+      "count": 2
+    }
+  },
+  "platform-integrations": {
+    "raw-enum": {
+      "samples": ["platform_preset", "self_serve"]
+    }
+  },
+  "platform-models": {},
+  "platform-modules": {},
+  "platform-overview": {
+    "internal-codename": {
+      "samples": ["P-C"]
+    }
+  },
+  "platform-runtime": {
+    "env-var": {
+      "samples": ["PI_DRIFT_FILE"]
+    }
+  },
+  "platform-settings": {
+    "env-var": {
+      "samples": ["NEXTTIME_PLATFORM_ADMINS"]
+    }
+  },
+  "platform-status": {
+    "internal-codename": {
+      "samples": ["遗留 6"]
+    }
+  },
+  "platform-users": {},
+  "platform-workspaces": {},
+  "systems": {},
+  "tasks": {}
+}
