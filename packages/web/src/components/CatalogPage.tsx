@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { type WorkerDefinitionForm, opsRunnerTemplateForm } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatRelative } from '../lib/format.js';
 import {
+  type CapabilityNameRow,
   type GatekeeperListRow,
   type ModelRow,
   type OperationCatalogRow,
@@ -164,12 +166,16 @@ function DraftToolbar({
   onRefresh,
   refreshing,
   testId,
+  extra,
 }: {
   readonly canPropose: boolean;
   readonly onNewDraft: () => void;
   readonly onRefresh: () => void;
   readonly refreshing: boolean;
   readonly testId: string;
+  /** An extra action rendered between "New draft" and "Refresh" — the Workers tab's own "从模板创建
+   *  （ops-runner）" (J7/CW1). `undefined` for every other tab, unchanged layout. */
+  readonly extra?: ReactNode;
 }) {
   const t = useT();
   return (
@@ -179,6 +185,7 @@ function DraftToolbar({
           {t('新建草稿', 'New draft')}
         </Button>
       ) : null}
+      {extra}
       <Button variant="ghost" icon="refresh" onClick={onRefresh} loading={refreshing}>
         {t('刷新', 'Refresh')}
       </Button>
@@ -802,13 +809,94 @@ function ProcedureEditorHost({
   );
 }
 
+/** Workers tab local editor state — a superset of the shared `EditorState<Row>` used by the
+ *  Skills/Procedures tabs above: adds `'template'` for J7/CW1 "从模板创建（ops-runner）", which
+ *  prefills a brand-new draft rather than starting blank or copying a published row. */
+type WorkerEditorState =
+  | { readonly kind: 'new' }
+  | { readonly kind: 'copy'; readonly row: WorkerDefinitionSummary }
+  | { readonly kind: 'template' }
+  | null;
+
+/** CW1 (audit "唯一一行是入口定义（v1 entry），还提供'弃用'——弃用它会让本工作区入口 agent 失效"):
+ *  the entry-kind row(s) — shown separately from the delegable Worker rows, with **no** Deprecate
+ *  action at all (not even behind a confirm — the kernel's own `deprecateWorkerDefinition` has no
+ *  entry-kind special case, docs/development-tasks.md §5e F1: this page is the only guard, and
+ *  omitting the action entirely is simpler than an `irreversible`-tier confirm for an action this
+ *  page has no real reason to expose). "编辑（新版本草稿）" still proposes the next version, same
+ *  as a Worker row — an entry family is still meant to evolve, just never be deprecated from here.
+ */
+function EntrySection({
+  rows,
+  canPropose,
+  onEdit,
+}: {
+  readonly rows: readonly WorkerDefinitionSummary[];
+  readonly canPropose: boolean;
+  readonly onEdit: (row: WorkerDefinitionSummary) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="stack-s" data-testid="workers-entry-section">
+      <span className="section-title">{t('入口 Entry', 'Entry')}</span>
+      {rows.length === 0 ? (
+        <p className="text-3 text-small">
+          {t(
+            '本工作区还没有已发布的入口定义。',
+            'No published entry definition in this workspace yet.',
+          )}
+        </p>
+      ) : (
+        <DataList ariaLabel="Entry definition" testId="workers-entry-list">
+          {rows.map((row) => (
+            <DataRow
+              key={`${row.id}@${row.version}`}
+              testId="catalog-row"
+              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
+              title={
+                <>
+                  <RefChip
+                    kind="workerDefinition"
+                    id={row.id}
+                    name={definitionName([row], row.id, row.version)}
+                    size="s"
+                  />
+                  <span className="text-3 text-small">v{row.version}</span>
+                  <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+                </>
+              }
+              meta={
+                typeof row.definition.description === 'string' ? (
+                  <span className="truncate">{row.definition.description}</span>
+                ) : undefined
+              }
+              trailing={
+                canPropose ? (
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    onClick={() => onEdit(row)}
+                    data-testid="catalog-edit-as-draft"
+                  >
+                    {t('编辑（新版本草稿）', 'Edit as new draft version')}
+                  </Button>
+                ) : undefined
+              }
+            />
+          ))}
+        </DataList>
+      )}
+    </div>
+  );
+}
+
 function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const workers = useCapabilityList<WorkerDefinitionSummary>(http, 'list_worker_definitions', {});
   const [busy, setBusy] = useState<string | null>(null);
-  const [editor, setEditor] = useState<EditorState<WorkerDefinitionSummary>>(null);
+  const [editor, setEditor] = useState<WorkerEditorState>(null);
 
   function refresh(): void {
     invalidateCapability(http, 'list_worker_definitions');
@@ -839,6 +927,8 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
     }
   }
 
+  const canPropose = !permissions.isDenied('propose_worker_definition');
+
   const editorDrawer = (
     <Drawer
       open={editor !== null}
@@ -846,7 +936,9 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       title={
         editor?.kind === 'copy'
           ? t('提议新版本', 'Propose a new version')
-          : t('新建 Worker 定义草稿', 'New Worker definition draft')
+          : editor?.kind === 'template'
+            ? t('从模板创建（ops-runner）', 'Create from template (ops-runner)')
+            : t('新建 Worker 定义草稿', 'New Worker definition draft')
       }
       subtitle="kind + definition（systemPrompt、model、capabilities…）"
       wide
@@ -854,9 +946,10 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
     >
       {editor ? (
         <WorkerEditorHost
-          key={editor.kind === 'copy' ? `${editor.row.id}@${editor.row.version}` : 'new'}
+          key={editor.kind === 'copy' ? `${editor.row.id}@${editor.row.version}` : editor.kind}
           http={http}
           newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
+          initialForm={editor.kind === 'template' ? opsRunnerTemplateForm() : undefined}
           onProposed={() => void workers.reload()}
           onDone={() => {
             setEditor(null);
@@ -881,76 +974,102 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
     );
   }
   const rows = workers.state.data.items;
+  const entryRows = rows.filter((row) => row.kind === 'entry');
+  const workerRows = rows.filter((row) => row.kind !== 'entry');
   return (
     <>
       <DraftToolbar
-        canPropose={!permissions.isDenied('propose_worker_definition')}
+        canPropose={canPropose}
         onNewDraft={() => setEditor({ kind: 'new' })}
         onRefresh={refresh}
         refreshing={workers.state.refreshing}
         testId="workers-new-draft"
+        extra={
+          canPropose ? (
+            <Button
+              variant="secondary"
+              onClick={() => setEditor({ kind: 'template' })}
+              data-testid="workers-template-button"
+            >
+              {t('从模板创建（ops-runner）', 'Create from template (ops-runner)')}
+            </Button>
+          ) : null
+        }
       />
-      {rows.length === 0 ? (
-        <EmptyState
-          icon="grid"
-          title={t('没有已发布的 Worker 定义', 'No published worker definitions')}
-          body={t(
-            '这里只列已发布的版本；草稿在编辑器里发布。',
-            'Only published versions are listed; a draft is published from the editor.',
-          )}
-          testId="catalog-empty"
-        />
-      ) : (
-        <DataList ariaLabel="Worker definitions" testId="catalog-list">
-          {rows.map((row) => (
-            <DataRow
-              key={`${row.id}@${row.version}`}
-              testId="catalog-row"
-              leading={<StatusChip machine="publishable" status={row.status} size="s" />}
-              title={
-                <>
-                  <RefChip
-                    kind="workerDefinition"
-                    id={row.id}
-                    name={definitionName([row], row.id, row.version)}
-                    size="s"
-                  />
-                  <span className="text-3 text-small">v{row.version}</span>
-                  <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
-                </>
-              }
-              meta={
-                typeof row.definition.description === 'string' ? (
-                  <span className="truncate">{row.definition.description}</span>
-                ) : undefined
-              }
-              trailing={
-                <span className="row">
-                  {!permissions.isDenied('propose_worker_definition') ? (
-                    <Button
-                      variant="ghost"
+
+      <EntrySection
+        rows={entryRows}
+        canPropose={canPropose}
+        onEdit={(row) => setEditor({ kind: 'copy', row })}
+      />
+
+      <div className="stack-s" data-testid="workers-worker-section">
+        <span className="section-title">{t('Worker', 'Worker')}</span>
+        {workerRows.length === 0 ? (
+          <EmptyState
+            icon="grid"
+            title={t('本工作区还没有可委派的 Worker', 'No delegable Workers in this workspace yet')}
+            body={t(
+              '入口 agent 委派任务时找不到可用的 Worker——发布至少一个 Worker 定义，委派才能成功。可以用上面的「从模板创建（ops-runner）」快速开始。',
+              'The entry agent has nothing to delegate to — publish at least one Worker definition so delegation can succeed. Use “Create from template (ops-runner)” above to get started quickly.',
+            )}
+            testId="catalog-empty"
+          />
+        ) : (
+          <DataList ariaLabel="Worker definitions" testId="catalog-list">
+            {workerRows.map((row) => (
+              <DataRow
+                key={`${row.id}@${row.version}`}
+                testId="catalog-row"
+                leading={<StatusChip machine="publishable" status={row.status} size="s" />}
+                title={
+                  <>
+                    <RefChip
+                      kind="workerDefinition"
+                      id={row.id}
+                      name={definitionName([row], row.id, row.version)}
                       size="s"
-                      onClick={() => setEditor({ kind: 'copy', row })}
-                      data-testid="catalog-edit-as-draft"
-                    >
-                      {t('编辑（新版本草稿）', 'Edit as new draft version')}
-                    </Button>
-                  ) : null}
-                  {!permissions.isDenied('deprecate_worker_definition') &&
-                  row.status === 'published' ? (
-                    <DeprecateConfirm
-                      busy={busy === row.id}
-                      target={definitionName([row], row.id, row.version) ?? row.id}
-                      onConfirm={() => deprecate(row)}
-                      testId={`worker-deprecate-confirm-${row.id}@${row.version}`}
                     />
-                  ) : null}
-                </span>
-              }
-            />
-          ))}
-        </DataList>
-      )}
+                    <span className="text-3 text-small">v{row.version}</span>
+                    <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+                  </>
+                }
+                meta={
+                  typeof row.definition.description === 'string' ? (
+                    <span className="truncate">{row.definition.description}</span>
+                  ) : undefined
+                }
+                trailing={
+                  // CW2 (768px row actions overlapping the title's "v1 entry"-shaped chips):
+                  // `row-wrap` instead of `row` so two actions stack instead of crowding the title
+                  // out of the row at narrow widths.
+                  <span className="row-wrap">
+                    {canPropose ? (
+                      <Button
+                        variant="ghost"
+                        size="s"
+                        onClick={() => setEditor({ kind: 'copy', row })}
+                        data-testid="catalog-edit-as-draft"
+                      >
+                        {t('编辑（新版本草稿）', 'Edit as new draft version')}
+                      </Button>
+                    ) : null}
+                    {!permissions.isDenied('deprecate_worker_definition') &&
+                    row.status === 'published' ? (
+                      <DeprecateConfirm
+                        busy={busy === row.id}
+                        target={definitionName([row], row.id, row.version) ?? row.id}
+                        onConfirm={() => deprecate(row)}
+                        testId={`worker-deprecate-confirm-${row.id}@${row.version}`}
+                      />
+                    ) : null}
+                  </span>
+                }
+              />
+            ))}
+          </DataList>
+        )}
+      </div>
       {workers.state.status === 'ready' && workers.state.data.nextCursor !== undefined ? (
         <div className="row" style={{ justifyContent: 'center' }}>
           <Button
@@ -982,24 +1101,40 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
   );
 }
 
-/** Loads `list_models` for the model suggestions only while the Worker editor is open. */
+/** Loads the picker directories (`list_models`, `list_capability_names`, `list_gatekeepers`,
+ *  `list_skills`) only while the Worker editor is open — member-level reads, cached per session by
+ *  `useCapabilityList`; the editor degrades to raw ids/names without them (same convention
+ *  `ProcedureEditorHost` above already established). `list_skills` uses `autoLoadAll` (it is
+ *  keyset-paginated, S8 W1-C) so the skills picker never silently hides a published Skill past the
+ *  first page — same reasoning as `ProcedureEditorHost`'s own `list_worker_definitions` load. */
 function WorkerEditorHost({
   http,
   newVersionOf,
+  initialForm,
   onProposed,
   onDone,
 }: {
   readonly http: CapabilityCaller;
   readonly newVersionOf?: WorkerDefinitionSummary;
+  readonly initialForm?: WorkerDefinitionForm;
   readonly onProposed: () => void;
   readonly onDone: () => void;
 }) {
   const models = useCapabilityList<ModelRow>(http, 'list_models');
+  const capabilityNames = useCapabilityList<CapabilityNameRow>(http, 'list_capability_names');
+  const gatekeepers = useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers');
+  const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
   return (
     <WorkerDefinitionEditor
       http={http}
       newVersionOf={newVersionOf}
+      initialForm={initialForm}
       models={models.state.status === 'ready' ? models.state.data.items : undefined}
+      capabilityNames={
+        capabilityNames.state.status === 'ready' ? capabilityNames.state.data.items : undefined
+      }
+      gatekeepers={gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : undefined}
+      skills={skills.state.status === 'ready' ? skills.state.data.items : undefined}
       onProposed={onProposed}
       onDone={onDone}
     />
