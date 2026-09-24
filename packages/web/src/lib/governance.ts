@@ -231,6 +231,17 @@ export interface ModelRow {
   readonly model: string;
 }
 
+/** `list_capability_names` (S8 W1-C, F6 item 3 — `packages/shared/src/capabilities.ts`'s own
+ *  comment on that capability): every capability name a published `kind=worker`
+ *  WorkerDefinition may declare in its own `capabilities` — the Worker editor's capability
+ *  picker (J7). `mode` is the same `CapabilityMode` union `capabilities.ts` defines
+ *  (`observe`/`write`/`propose`/`execute`); not rendered as visible copy anywhere today, kept
+ *  on the type for a future caller that wants to group/sort by it. */
+export interface CapabilityNameRow {
+  readonly name: string;
+  readonly mode: string;
+}
+
 export interface QuotaRow {
   readonly key: string;
   readonly value: unknown;

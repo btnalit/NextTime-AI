@@ -252,6 +252,75 @@ describe('CatalogPage', () => {
       expect(http.calls.some((c) => c.name === 'deprecate_worker_definition')).toBe(true),
     );
   });
+
+  // S8 W2 U2 (audit CW1): the entry definition renders in its own section with no Deprecate
+  // action at all (deprecating it would break this workspace's entry agent) — a Worker row still
+  // gets one.
+  it('Workers tab: the entry definition has no Deprecate action; Worker rows still get one (CW1)', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-entry',
+            version: 1,
+            kind: 'entry',
+            status: 'published',
+            definition: { name: 'Entry agent' },
+          },
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'workers');
+    const entrySection = await screen.findByTestId('workers-entry-section');
+    const entryRow = within(entrySection).getByTestId('catalog-row');
+    expect(within(entryRow).queryByRole('button', { name: /弃用/ })).toBeNull();
+    expect(within(entryRow).getByRole('button', { name: /编辑（新版本草稿）/ })).toBeTruthy();
+
+    const workerSection = screen.getByTestId('workers-worker-section');
+    const workerRow = within(workerSection).getByTestId('catalog-row');
+    expect(within(workerRow).getByRole('button', { name: /弃用/ })).toBeTruthy();
+  });
+
+  // S8 W2 U2 (audit J7/CW1): "从模板创建（ops-runner）" opens the editor prefilled rather than
+  // inventing new template content — the button only exposes the checked-in ops-runner template
+  // through the existing propose/publish path (F1).
+  it('Workers tab: "从模板创建（ops-runner）" opens the editor prefilled (name ops-runner, kind worker)', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({ items: [] }),
+      list_models: () => ({ items: [] }),
+      list_capability_names: () => ({ items: [] }),
+      list_gatekeepers: () => ({ items: [] }),
+      list_skills: () => ({ items: [] }),
+      propose_worker_definition: (params) => {
+        expect(params).toEqual({
+          kind: 'worker',
+          definition: {
+            systemPrompt: expect.stringContaining('ops-runner'),
+            name: 'ops-runner',
+          },
+        });
+        return { id: 'wd-tmpl', version: 1, status: 'draft' };
+      },
+    });
+    renderPage(http, 'workers');
+    await screen.findByTestId('workers-worker-section');
+    fireEvent.click(screen.getByTestId('workers-template-button'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    expect((within(drawer).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('ops-runner');
+    const kindSelect = within(drawer).getByTestId('wd-kind') as HTMLSelectElement;
+    expect(kindSelect.value).toBe('worker');
+    expect(kindSelect.disabled).toBe(true);
+    fireEvent.click(within(drawer).getByTestId('worker-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(http.calls.some((c) => c.name === 'propose_worker_definition')).toBe(true);
+  });
 });
 
 /** S6-A A2 (console-completion-plan §5.3): the editors are reachable from each tab and the
