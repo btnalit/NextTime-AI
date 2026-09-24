@@ -69,20 +69,20 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
       <div className="stack-s">
         <p className="text-3 text-small">
           {t(
-            "新工作区（未显式指定入口模型时）与新用户的 AgentProfile 取它；留空 = 用 pi 自己的默认值。 New workspaces (when no explicit entry model is given) and new users' AgentProfiles take this; empty =",
-            "pi's own default.",
+            '新工作区（未显式指定入口模型时）与新用户的 AgentProfile 取它；留空 = 用 pi 自己的默认值。',
+            "New workspaces (when no explicit entry model is given) and new users' AgentProfiles take this; empty = pi's own default.",
           )}
         </p>
         {settings.state.status === 'loading' ? (
           <SkeletonRows
             count={1}
-            label="Loading the default model"
+            label={t('正在加载默认模型…', 'Loading the default model')}
             testId="platform-default-model-loading"
           />
         ) : settings.state.status === 'error' ? (
           <ErrorBanner
             error={settings.state.error}
-            title="Could not load the platform settings"
+            title={t('无法加载平台设置', 'Could not load the platform settings')}
             onRetry={() => void settings.reload()}
             testId="platform-default-model-load-error"
           />

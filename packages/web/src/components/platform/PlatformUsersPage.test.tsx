@@ -255,7 +255,7 @@ describe('PlatformUsersPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /新建用户/ }));
     const form = await screen.findByTestId('create-user-form');
     fireEvent.change(within(form).getByLabelText(/登录名/), { target: { value: 'Ab' } });
-    expect(within(form).getByText(/Invalid login/)).toBeTruthy();
+    expect(within(form).getByText(/登录名格式不合法/)).toBeTruthy();
     expect(within(form).getByRole('button', { name: '创建' }).hasAttribute('disabled')).toBe(true);
     expect(http.calls.some((call) => call.name === 'create_user')).toBe(false);
   });

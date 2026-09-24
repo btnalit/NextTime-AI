@@ -63,8 +63,8 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
         label={t('登录名', 'Login')}
         required
         hint={t(
-          "平台用户的登录名；这里不创建账户，也不签发 API key。 An existing platform user's login —",
-          'this creates no account and no API key.',
+          '平台用户的登录名；这里不创建账户，也不签发 API key。',
+          "An existing platform user's login — this creates no account and no API key.",
         )}
       >
         <Input

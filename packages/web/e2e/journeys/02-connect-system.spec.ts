@@ -36,7 +36,7 @@ test.describe('Journey ②: 接入一个新系统', () => {
     const drawer = page.getByTestId('onboarding-wizard-drawer');
     await expect(drawer).toBeVisible({ timeout: 15_000 });
     await expect(drawer.getByTestId('wizard-step-kind')).toBeVisible();
-    await expect(drawer.getByRole('radiogroup', { name: 'Kind' })).toBeVisible();
+    await expect(drawer.getByRole('radiogroup', { name: '类型' })).toBeVisible();
   });
 
   test.fixme(

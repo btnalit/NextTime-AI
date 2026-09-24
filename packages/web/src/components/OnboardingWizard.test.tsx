@@ -75,13 +75,13 @@ describe('OnboardingWizard', () => {
     // Step ② connect (CompleteConnectionForm, kind hidden and pre-set to mcp)
     const connectStep = await screen.findByTestId('wizard-step-connect');
     expect(within(connectStep).queryByLabelText(/^Kind/)).toBeNull();
-    fireEvent.change(within(connectStep).getByLabelText(/Target system/), {
+    fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
       target: { value: 'accept_s2_mcp' },
     });
-    fireEvent.change(within(connectStep).getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
       target: { value: 'http://accept-s2-mcp:8080' },
     });
-    fireEvent.click(within(connectStep).getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
 
     // Step ③ publish
     const publishStep = await screen.findByTestId('wizard-step-publish');
@@ -129,13 +129,13 @@ describe('OnboardingWizard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
     const connectStep = await screen.findByTestId('wizard-step-connect');
-    fireEvent.change(within(connectStep).getByLabelText(/Target system/), {
+    fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
       target: { value: 'accept_s2_mcp' },
     });
-    fireEvent.change(within(connectStep).getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
       target: { value: 'http://accept-s2-mcp:8080' },
     });
-    fireEvent.click(within(connectStep).getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
     const publishStep = await screen.findByTestId('wizard-step-publish');
     fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 
@@ -175,13 +175,13 @@ describe('OnboardingWizard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
     const connectStep = await screen.findByTestId('wizard-step-connect');
-    fireEvent.change(within(connectStep).getByLabelText(/Target system/), {
+    fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
       target: { value: 'accept_s2_mcp' },
     });
-    fireEvent.change(within(connectStep).getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
       target: { value: 'http://accept-s2-mcp:8080' },
     });
-    fireEvent.click(within(connectStep).getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
     const publishStep = await screen.findByTestId('wizard-step-publish');
     fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 

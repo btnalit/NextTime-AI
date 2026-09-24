@@ -72,7 +72,7 @@ export function ChatHeader({
             size="s"
             icon="arrow-left"
             iconOnly
-            aria-label="Back to chats"
+            aria-label={t('返回对话列表', 'Back to chats')}
             onClick={onBack}
           />
           {renaming && chat ? (

@@ -71,7 +71,7 @@ export function ApiKeyLoginDetails({
               size="s"
               icon={revealed ? 'eye-off' : 'eye'}
               iconOnly
-              aria-label={revealed ? 'Hide key' : 'Show key'}
+              aria-label={revealed ? t('隐藏密钥', 'Hide key') : t('显示密钥', 'Show key')}
               aria-pressed={revealed}
               onClick={() => setRevealed((value) => !value)}
               disabled={pending}
@@ -80,7 +80,7 @@ export function ApiKeyLoginDetails({
         </Field>
 
         {described && !unauthorized ? (
-          <ErrorBanner error={error} title="Could not sign in" />
+          <ErrorBanner error={error} title={t('无法登录', 'Could not sign in')} />
         ) : null}
 
         <Button

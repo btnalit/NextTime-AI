@@ -64,7 +64,7 @@ describe('SkillEditor (S6-A A2)', () => {
     const { caller, calls } = http({});
     render(<SkillEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
     fill(/^名称/, 'Restart Web');
-    expect(screen.getByText(/pi Agent Skills name rule/)).toBeTruthy();
+    expect(screen.getByText(/pi Skill 命名规则/)).toBeTruthy();
     fireEvent.click(screen.getByTestId('skill-submit'));
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
     expect(calls).toHaveLength(0);

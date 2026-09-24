@@ -148,11 +148,15 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
         </Notice>
       ) : null}
       {overview.state.status === 'loading' ? (
-        <SkeletonRows count={4} label="Loading overview" testId="platform-overview-loading" />
+        <SkeletonRows
+          count={4}
+          label={t('正在加载概览…', 'Loading overview')}
+          testId="platform-overview-loading"
+        />
       ) : overview.state.status === 'error' ? (
         <ErrorBanner
           error={overview.state.error}
-          title="Could not load the platform overview"
+          title={t('无法加载平台概览', 'Could not load the platform overview')}
           onRetry={() => void overview.reload()}
           testId="platform-overview-error"
         />

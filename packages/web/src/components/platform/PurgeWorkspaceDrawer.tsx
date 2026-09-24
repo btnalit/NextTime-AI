@@ -154,12 +154,16 @@ export function PurgeWorkspaceDrawer({
       <div className="stack" data-testid="purge-workspace-preview">
         <Notice>
           {t(
-            '第一步是预览：下面是内核将删除的内容，此刻什么都没删。 Step one is a preview —',
-            'nothing is deleted until the next step is confirmed.',
+            '第一步是预览：下面是内核将删除的内容，此刻什么都没删。',
+            'Step one is a preview — nothing is deleted until the next step is confirmed.',
           )}
         </Notice>
         {preview.status === 'loading' ? (
-          <SkeletonRows count={4} label="Loading purge preview" testId="purge-preview-loading" />
+          <SkeletonRows
+            count={4}
+            label={t('正在加载清除预览…', 'Loading purge preview')}
+            testId="purge-preview-loading"
+          />
         ) : preview.status === 'error' ? (
           <PlatformError
             error={preview.error}
@@ -183,8 +187,10 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
         <Notice key={warning.principalId} tone="warn" testId="purge-warning-service-handle">
           <div className="stack-s">
             <strong>
-              service Handle 仍在使用 A service Handle is still in use — {warning.activeHandles}{' '}
-              {t('个有效', 'Handle live')}
+              {t(
+                <>service Handle 仍在使用 —— {warning.activeHandles} 个有效</>,
+                <>A service Handle is still in use — {warning.activeHandles} live</>,
+              )}
             </strong>
             <RefChip
               kind="principal"
@@ -195,8 +201,8 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
             />
             <span>
               {t(
-                '采集器或外部运行时可能还在用这个 Principal 的 Handle：清除后那个进程立刻 401（遗留 41 的来源）。先把它指回正确的工作区，再回来清除。 A collector or external runtime may still be calling with it —',
-                'it gets 401 the moment the purge runs. Point that process at the right workspace first.',
+                '采集器或外部运行时可能还在用这个 Principal 的 Handle：清除后那个进程立刻 401（遗留 41 的来源）。先把它指回正确的工作区，再回来清除。',
+                'A collector or external runtime may still be calling with it — it gets 401 the moment the purge runs. Point that process at the right workspace first.',
               )}
             </span>
           </div>

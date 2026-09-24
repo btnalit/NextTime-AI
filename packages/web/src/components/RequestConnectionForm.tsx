@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { CONNECTION_KIND_VALUES, type ConnectionKind } from '../lib/connections.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select } from './ui/Field.js';
@@ -14,11 +15,12 @@ export interface RequestConnectionFormProps {
 /** components/RequestConnectionForm: `request_connection {kind, target}` — proposes a connection
  *  for the owner to complete later (the card an agent would otherwise raise from a chat). */
 export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnectionFormProps) {
+  const t = useT();
   const [kind, setKind] = useState<ConnectionKind>('http');
   const [target, setTarget] = useState('');
   const [error, setError] = useState<unknown | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const targetError = target.trim() ? null : 'Target is required.';
+  const targetError = target.trim() ? null : t('目标是必填项。', 'Target is required.');
   const [touched, setTouched] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -42,7 +44,7 @@ export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnect
 
   return (
     <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
-      <Field id="rc-kind" label="Kind" required>
+      <Field id="rc-kind" label={t('类型', 'Kind')} required>
         <Select
           id="rc-kind"
           value={kind}
@@ -56,7 +58,12 @@ export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnect
           ))}
         </Select>
       </Field>
-      <Field id="rc-target" label="Target system" required error={touched ? targetError : null}>
+      <Field
+        id="rc-target"
+        label={t('目标系统', 'Target system')}
+        required
+        error={touched ? targetError : null}
+      >
         <Input
           id="rc-target"
           value={target}
@@ -68,13 +75,15 @@ export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnect
           mono
         />
       </Field>
-      {error !== null ? <ErrorBanner error={error} title="Could not create the request" /> : null}
+      {error !== null ? (
+        <ErrorBanner error={error} title={t('无法创建申请', 'Could not create the request')} />
+      ) : null}
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          Cancel
+          {t('取消', 'Cancel')}
         </Button>
         <Button type="submit" variant="primary" loading={submitting}>
-          Request connection
+          {t('申请连接', 'Request connection')}
         </Button>
       </div>
     </form>

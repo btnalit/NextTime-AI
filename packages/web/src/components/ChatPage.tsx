@@ -504,13 +504,13 @@ export function ChatPage({
             />
           ) : null}
           {!caughtUp && subscribeError === null ? (
-            <p className="chat-empty">正在加载历史… Loading history…</p>
+            <p className="chat-empty">{t('正在加载历史…', 'Loading history…')}</p>
           ) : null}
           {caughtUp && messages.length === 0 && turn.status !== 'running' ? (
             <p className="chat-empty">
               {t(
-                '还没有消息。问入口 agent 点什么——它可以观察系统、提出动作并委派给 Worker。 No messages yet. Ask the entry agent something —',
-                'it can observe systems, propose actions and delegate to Workers.',
+                '还没有消息。问入口 agent 点什么——它可以观察系统、提出动作并委派给 Worker。',
+                'No messages yet. Ask the entry agent something — it can observe systems, propose actions and delegate to Workers.',
               )}
             </p>
           ) : null}
@@ -573,8 +573,8 @@ export function ChatPage({
                 archived
                   ? t('已归档', 'Archived')
                   : composerDisabled
-                    ? '等待本轮结束… Waiting for the current turn to finish…'
-                    : 'Message…'
+                    ? t('等待本轮结束…', 'Waiting for the current turn to finish…')
+                    : t('输入消息…', 'Message…')
               }
               disabled={composerDisabled}
               rows={Math.min(6, Math.max(1, composerText.split('\n').length))}

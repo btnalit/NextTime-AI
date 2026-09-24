@@ -57,8 +57,8 @@ test.describe('S8 W1-B screenshot gate', () => {
     await loginAsOwner(page);
 
     await page.locator('header').getByRole('button', { name: '新对话' }).click();
-    await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
-    await page.getByPlaceholder('Message…').fill(CHAT_FIXTURE_PROMPT);
+    await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
+    await page.getByPlaceholder('输入消息…').fill(CHAT_FIXTURE_PROMPT);
     await page.getByRole('button', { name: 'Send' }).click();
     await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
       timeout: 15_000,
@@ -91,7 +91,7 @@ test.describe('S8 W1-B screenshot gate', () => {
     // (`journeys/03-approve-action.spec.ts` no longer depends on "most recently created Chat" at
     // all — it reads ApprovalQueuePage's own 历史 History tab instead, see that file's own doc
     // comment for why — but `approvals.spec.ts` still does, so the archiving stays.)
-    await page.getByRole('button', { name: 'Back to chats' }).click();
+    await page.getByRole('button', { name: '返回对话列表' }).click();
     const row = page.getByTestId('chat-row').filter({ hasText: CHAT_FIXTURE_PROMPT.slice(0, 20) });
     await expect(row).toBeVisible({ timeout: 15_000 });
     await row.getByTestId('chat-row-archive').click();

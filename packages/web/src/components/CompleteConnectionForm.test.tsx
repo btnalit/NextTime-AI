@@ -35,12 +35,12 @@ describe('CompleteConnectionForm', () => {
       <CompleteConnectionForm http={http} request={request} onDone={vi.fn()} onCancel={vi.fn()} />,
     );
 
-    expect((screen.getByLabelText(/Kind/) as HTMLSelectElement).value).toBe('http');
-    expect((screen.getByLabelText(/Target system/) as HTMLInputElement).value).toBe(request.target);
+    expect((screen.getByLabelText(/^类型/) as HTMLSelectElement).value).toBe('http');
+    expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe(request.target);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
-    expect(await screen.findByText('The Gatekeeper endpoint is required.')).toBeTruthy();
-    const endpoint = screen.getByLabelText(/Gatekeeper endpoint/) as HTMLInputElement;
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    expect(await screen.findByText('门端点是必填项。')).toBeTruthy();
+    const endpoint = screen.getByLabelText(/门端点/) as HTMLInputElement;
     expect(endpoint.getAttribute('aria-invalid')).toBe('true');
     // C16: with the error shown, `Field` no longer renders the hint — the control must point
     // only at the error id, never at a `-hint` id that is not in the DOM.
@@ -52,35 +52,35 @@ describe('CompleteConnectionForm', () => {
   it('C15: rejects a Gatekeeper endpoint that is not a URL, on the field, before any call', async () => {
     const http = httpWith(async () => ({}));
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
-    const endpoint = screen.getByLabelText(/Gatekeeper endpoint/) as HTMLInputElement;
+    const endpoint = screen.getByLabelText(/门端点/) as HTMLInputElement;
     // Before any submit the hint is the only description.
     expect(endpoint.getAttribute('aria-describedby')).toBe('cc-endpoint-hint');
 
-    fireEvent.change(screen.getByLabelText(/Target system/), { target: { value: 'erp' } });
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'erp' } });
     fireEvent.change(endpoint, { target: { value: 'gate-host:8080' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
-    expect(await screen.findByText(/endpoint must be a URL/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    expect(await screen.findByText(/必须是一个 URL/)).toBeTruthy();
     expect(http.call).not.toHaveBeenCalled();
 
     fireEvent.change(endpoint, { target: { value: 'http://gate-host:8080' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     await waitFor(() => expect(http.call).toHaveBeenCalledTimes(1));
   });
 
   it('shows the credentials box only for connected_account, and requires it there', async () => {
     const http = httpWith(async () => ({}));
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.queryByLabelText(/^Credentials/)).toBeNull();
+    expect(screen.queryByLabelText(/^凭证(?!类型)/)).toBeNull();
 
-    fireEvent.click(screen.getByLabelText(/Connected account/));
-    expect(screen.getByLabelText(/^Credentials/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/已连接账户/));
+    expect(screen.getByLabelText(/^凭证(?!类型)/)).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText(/Target system/), { target: { value: 'erp' } });
-    fireEvent.change(screen.getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'erp' } });
+    fireEvent.change(screen.getByLabelText(/门端点/), {
       target: { value: 'http://gate:8080' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
-    expect(await screen.findByText(/connected-account credential is required/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    expect(await screen.findByText(/连接账户方式需要一份凭证/)).toBeTruthy();
     expect(http.call).not.toHaveBeenCalled();
   });
 
@@ -92,11 +92,11 @@ describe('CompleteConnectionForm', () => {
         onCancel={vi.fn()}
       />,
     );
-    expect(screen.getByLabelText(/Manifest source/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText(/Kind/), { target: { value: 'ssh' } });
-    expect(screen.queryByLabelText(/Manifest source/)).toBeNull();
-    fireEvent.change(screen.getByLabelText(/Kind/), { target: { value: 'mcp' } });
-    expect(screen.getByLabelText(/Manifest source/)).toBeTruthy();
+    expect(screen.getByLabelText(/清单来源/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/^类型/), { target: { value: 'ssh' } });
+    expect(screen.queryByLabelText(/清单来源/)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^类型/), { target: { value: 'mcp' } });
+    expect(screen.getByLabelText(/清单来源/)).toBeTruthy();
   });
 
   it('submits the create_connection params the registry defines, clears credentials, and reports the result', async () => {
@@ -122,16 +122,16 @@ describe('CompleteConnectionForm', () => {
       <CompleteConnectionForm http={http} request={request} onDone={onDone} onCancel={vi.fn()} />,
     );
 
-    fireEvent.change(screen.getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(screen.getByLabelText(/门端点/), {
       target: { value: 'http://gate:8080' },
     });
-    fireEvent.click(screen.getByLabelText(/Connected account/));
-    const credentials = screen.getByLabelText(/^Credentials/) as HTMLTextAreaElement;
+    fireEvent.click(screen.getByLabelText(/已连接账户/));
+    const credentials = screen.getByLabelText(/^凭证(?!类型)/) as HTMLTextAreaElement;
     fireEvent.change(credentials, { target: { value: '{"apiKey":"k"}' } });
-    fireEvent.change(screen.getByLabelText(/Manifest source/), {
+    fireEvent.change(screen.getByLabelText(/清单来源/), {
       target: { value: 'https://inventory.example.internal/openapi.json' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
 
     await waitFor(() =>
       expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ gatekeeperId: 'gk-1' })),
@@ -148,11 +148,11 @@ describe('CompleteConnectionForm', () => {
       );
     });
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText(/Target system/), { target: { value: 'x' } });
-    fireEvent.change(screen.getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText(/门端点/), {
       target: { value: 'http://gate:8080' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     const banner = await screen.findByRole('alert');
     expect(banner.getAttribute('data-error-code')).toBe('manifest_fetch_failed');
     expect(banner.textContent).toContain('failed to fetch manifestSource "https://x/openapi.json"');
@@ -166,13 +166,13 @@ describe('CompleteConnectionForm', () => {
       );
     });
     render(<CompleteConnectionForm http={http400} onDone={vi.fn()} onCancel={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText(/Target system/), { target: { value: 'x' } });
-    fireEvent.change(screen.getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText(/门端点/), {
       target: { value: 'http://gate:8080' },
     });
-    fireEvent.click(screen.getByLabelText(/Connected account/));
-    fireEvent.change(screen.getByLabelText(/^Credentials/), { target: { value: 'tok' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(screen.getByLabelText(/已连接账户/));
+    fireEvent.change(screen.getByLabelText(/^凭证(?!类型)/), { target: { value: 'tok' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     const fieldError = await screen.findByText(/no `credentials` was given/);
     expect(fieldError.getAttribute('id')).toBe('cc-credentials-error');
   });
@@ -191,17 +191,17 @@ describe('CompleteConnectionForm', () => {
         onCancel={vi.fn()}
       />,
     );
-    expect(screen.queryByLabelText(/^Kind/)).toBeNull();
+    expect(screen.queryByLabelText(/^类型/)).toBeNull();
     // mcp supports manifestSource, so that field should still render.
-    expect(screen.getByLabelText(/Manifest source/)).toBeTruthy();
+    expect(screen.getByLabelText(/清单来源/)).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText(/Target system/), {
+    fireEvent.change(screen.getByLabelText(/目标系统/), {
       target: { value: 'accept_s2_mcp' },
     });
-    fireEvent.change(screen.getByLabelText(/Gatekeeper endpoint/), {
+    fireEvent.change(screen.getByLabelText(/门端点/), {
       target: { value: 'http://accept-s2-mcp:8080' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Register Gatekeeper' }));
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     await waitFor(() => expect(http.call).toHaveBeenCalled());
   });
 

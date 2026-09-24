@@ -110,15 +110,21 @@ export interface HealthView {
 
 /** Reads `get_gatekeeper`'s `health` leniently: `{ok: boolean}`, `{status: 'healthy'|...}`, a bare
  *  boolean, or anything else it might turn out to be — never throws, never crashes the drawer on a
- *  shape this PR guessed wrong while the kernel half was still being written in parallel. */
-export function healthView(health: GatekeeperHealth): HealthView {
+ *  shape this PR guessed wrong while the kernel half was still being written in parallel. W1-A12:
+ *  takes `t` (a plain function, not a hook — `useT()`'s return value, callable outside a component)
+ *  to localize its own fixed vocabulary (`Healthy`/`Unhealthy`/`Unknown`); a `record.status` string
+ *  is the kernel's own free-text value and is shown verbatim in both languages, same as before. */
+export function healthView(health: GatekeeperHealth, t: Translate): HealthView {
+  const healthy = t('健康', 'Healthy');
+  const unhealthy = t('不健康', 'Unhealthy');
+  const unknown = t('未知', 'Unknown');
   if (typeof health === 'boolean') {
-    return health ? { tone: 'ok', label: 'Healthy' } : { tone: 'danger', label: 'Unhealthy' };
+    return health ? { tone: 'ok', label: healthy } : { tone: 'danger', label: unhealthy };
   }
   if (health && typeof health === 'object') {
     const record = health as Record<string, unknown>;
     if (typeof record.ok === 'boolean') {
-      return record.ok ? { tone: 'ok', label: 'Healthy' } : { tone: 'danger', label: 'Unhealthy' };
+      return record.ok ? { tone: 'ok', label: healthy } : { tone: 'danger', label: unhealthy };
     }
     if (typeof record.status === 'string') {
       const status = record.status.toLowerCase();
@@ -131,7 +137,7 @@ export function healthView(health: GatekeeperHealth): HealthView {
       return { tone: 'neutral', label: record.status };
     }
   }
-  return { tone: 'neutral', label: 'Unknown' };
+  return { tone: 'neutral', label: unknown };
 }
 
 // -------------------------------------------------------------------------------------------

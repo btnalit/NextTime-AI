@@ -92,8 +92,11 @@ export function GatekeeperCard({
         tone: 'ok',
         title:
           count > 0
-            ? `Published ${count} operation${count === 1 ? '' : 's'}`
-            : 'No drafts to publish',
+            ? t(
+                `已发布 ${count} 个 Operation`,
+                `Published ${count} operation${count === 1 ? '' : 's'}`,
+              )
+            : t('没有草稿可发布', 'No drafts to publish'),
         description: gatekeeper.name,
       });
       onChanged();
@@ -115,7 +118,7 @@ export function GatekeeperCard({
       await http.call('connect_gatekeeper', { gatekeeperId: gatekeeper.id, principalId: trimmed });
       toast.push({
         tone: 'ok',
-        title: 'Gatekeeper granted',
+        title: t('门已授予', 'Gatekeeper granted'),
         description: `${gatekeeper.name} → principal ${trimmed.slice(0, 8)}`,
       });
       setPrincipalId('');
@@ -146,7 +149,7 @@ export function GatekeeperCard({
               icon="search"
               onClick={() => onOpenDetail(gatekeeper.id)}
             >
-              Health & operations
+              {t('健康与操作', 'Health & operations')}
             </Button>
           ) : null}
           {canPublish ? (
@@ -156,9 +159,14 @@ export function GatekeeperCard({
               onClick={() => void publish()}
               loading={publishing}
               disabled={draftCount === 0}
-              title={draftCount === 0 ? 'No draft operations to publish' : undefined}
+              title={
+                draftCount === 0
+                  ? t('没有草稿 Operation 可发布', 'No draft operations to publish')
+                  : undefined
+              }
             >
-              Publish manifest{draftCount > 0 ? ` (${draftCount})` : ''}
+              {t('发布清单', 'Publish manifest')}
+              {draftCount > 0 ? ` (${draftCount})` : ''}
             </Button>
           ) : null}
           {canGrant ? (
@@ -169,7 +177,7 @@ export function GatekeeperCard({
               onClick={() => setGrantOpen((open) => !open)}
               aria-expanded={grantOpen}
             >
-              Grant to principal
+              {t('授予给主体', 'Grant to principal')}
             </Button>
           ) : null}
         </>
@@ -179,15 +187,15 @@ export function GatekeeperCard({
     >
       <div className="stack">
         <dl className="definition-list">
-          <dt>Gatekeeper</dt>
+          <dt>{t('门', 'Gatekeeper')}</dt>
           <dd>
             <CopyId id={gatekeeper.id} label="gatekeeper" />
           </dd>
-          <dt>Target</dt>
+          <dt>{t('目标', 'Target')}</dt>
           <dd className="mono">{gatekeeper.target || '—'}</dd>
-          <dt>Endpoint</dt>
+          <dt>{t('端点', 'Endpoint')}</dt>
           <dd className="mono">{gatekeeper.endpoint ?? '—'}</dd>
-          <dt>Updated</dt>
+          <dt>{t('更新于', 'Updated')}</dt>
           <dd>
             <time title={formatDateTime(gatekeeper.updatedAt)}>
               {formatRelative(gatekeeper.updatedAt)}
@@ -215,7 +223,10 @@ export function GatekeeperCard({
                 <StatusChip machine="gateHealth" status={platformInstance.health} size="s" />
                 {!platformAdmin ? (
                   <span className="text-3 text-small">
-                    {t('由平台管理员管理 managed on the platform 集成', 'page')}
+                    {t(
+                      '由平台管理员在「集成」页管理',
+                      'Managed by a platform administrator on Integrations',
+                    )}
                   </span>
                 ) : null}
               </dd>
@@ -227,11 +238,14 @@ export function GatekeeperCard({
           <form className="inline-form" onSubmit={(event) => void grant(event)}>
             <Field
               id={`grant-${gatekeeper.id}`}
-              label="Principal"
+              label={t('主体', 'Principal')}
               hint={
                 principals && principals.length > 0
                   ? undefined
-                  : "No principal directory loaded — paste the principal's id."
+                  : t(
+                      '还没有加载主体目录 —— 粘贴主体的 id。',
+                      "No principal directory loaded — paste the principal's id.",
+                    )
               }
             >
               {principals && principals.length > 0 ? (
@@ -242,7 +256,7 @@ export function GatekeeperCard({
                   disabled={granting}
                 >
                   <option value="" disabled>
-                    选择成员… Choose a member…
+                    {t('选择成员…', 'Choose a member…')}
                   </option>
                   {principals.map((row) => (
                     <option key={row.id} value={row.id}>
@@ -257,7 +271,7 @@ export function GatekeeperCard({
                   onChange={(event) => setPrincipalId(event.target.value)}
                   disabled={granting}
                   mono
-                  placeholder="principal id"
+                  placeholder={t('主体 id', 'principal id')}
                 />
               )}
             </Field>
@@ -267,7 +281,7 @@ export function GatekeeperCard({
               loading={granting}
               disabled={!principalId.trim()}
             >
-              Grant
+              {t('授予', 'Grant')}
             </Button>
           </form>
         ) : null}
@@ -275,7 +289,9 @@ export function GatekeeperCard({
         {error !== null ? <ErrorBanner error={error} /> : null}
 
         {operations.length === 0 ? (
-          <Notice>No operations imported for this gate yet.</Notice>
+          <Notice>
+            {t('这个门还没有导入任何 Operation。', 'No operations imported for this gate yet.')}
+          </Notice>
         ) : (
           groups.map((group) => (
             <div className="stack-s" key={group.status}>

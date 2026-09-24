@@ -70,7 +70,7 @@ describe('PlatformAuditPage', () => {
     await screen.findByTestId('platform-audit-empty');
 
     const form = screen.getByTestId('platform-audit-filter-form');
-    fireEvent.change(within(form).getByLabelText('Action'), {
+    fireEvent.change(within(form).getByLabelText('动作'), {
       target: { value: 'update_platform_settings' },
     });
     fireEvent.click(within(form).getByRole('button', { name: '应用' }));

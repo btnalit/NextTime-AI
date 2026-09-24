@@ -243,11 +243,15 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
       </form>
 
       {users.state.status === 'loading' ? (
-        <SkeletonRows count={5} label="Loading users" testId="platform-users-loading" />
+        <SkeletonRows
+          count={5}
+          label={t('正在加载用户…', 'Loading users')}
+          testId="platform-users-loading"
+        />
       ) : users.state.status === 'error' ? (
         <ErrorBanner
           error={users.state.error}
-          title="Could not load the user directory"
+          title={t('无法加载用户目录', 'Could not load the user directory')}
           onRetry={() => void users.reload()}
           testId="platform-users-error"
         />
@@ -262,7 +266,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
           columns={userColumns(envAdmins, (userId) => setPanel({ kind: 'user', userId }), t)}
           data={rows}
           getRowId={(row) => row.id}
-          ariaLabel="Users"
+          ariaLabel={t('用户', 'Users')}
           testId="platform-users-table"
           rowTestId={() => 'platform-user-row'}
           rowDataAttrs={(row) => ({ 'data-login': row.login })}
@@ -283,7 +287,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
       {users.loadMoreError !== null ? (
         <ErrorBanner
           error={users.loadMoreError}
-          title="Could not load more users"
+          title={t('无法加载更多用户', 'Could not load more users')}
           testId="platform-users-load-more-error"
         />
       ) : null}
@@ -292,7 +296,10 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
         open={panel.kind === 'create'}
         onClose={() => setPanel({ kind: 'closed' })}
         title={t('新建用户', 'Create user')}
-        subtitle="A temporary password is generated and shown once."
+        subtitle={t(
+          '会生成一个临时密码，只显示一次。',
+          'A temporary password is generated and shown once.',
+        )}
         testId="create-user-drawer"
       >
         {panel.kind === 'create' ? (

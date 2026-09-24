@@ -202,7 +202,11 @@ export function AuditLogSection({
       </form>
 
       {audit.state.status === 'loading' ? (
-        <SkeletonRows count={5} label="Loading audit log" testId="audit-loading" />
+        <SkeletonRows
+          count={5}
+          label={t('正在加载审计流…', 'Loading audit log')}
+          testId="audit-loading"
+        />
       ) : audit.state.status === 'error' ? (
         forbidden ? (
           <EmptyState

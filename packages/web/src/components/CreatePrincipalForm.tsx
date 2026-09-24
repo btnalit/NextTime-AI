@@ -59,10 +59,16 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
     return (
       <div className="stack" data-testid="create-principal-key">
         <Notice tone="warn">
-          这个 API key 只显示一次：现在复制并交给 <strong>{created.principal.displayName}</strong>
           {t(
-            '，控制台不会再显示。 This API key is shown once. Copy it now and send it to the runtime —',
-            'the console never displays it again.',
+            <>
+              这个 API key 只显示一次：现在复制并交给{' '}
+              <strong>{created.principal.displayName}</strong>，控制台不会再显示。
+            </>,
+            <>
+              This API key is shown once. Copy it now and send it to the runtime —{' '}
+              <strong>{created.principal.displayName}</strong> — the console never displays it
+              again.
+            </>,
           )}
         </Notice>
         <div className="code-block row" style={{ justifyContent: 'space-between' }}>

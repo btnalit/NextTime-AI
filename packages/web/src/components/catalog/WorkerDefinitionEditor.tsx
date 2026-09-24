@@ -285,8 +285,8 @@ export function WorkerDefinitionEditor({
               hint={
                 isWorker
                   ? t(
-                      '每行一个；留空 = 平台 Worker 上限去掉执行类能力。 One per line; blank =',
-                      'the worker ceiling minus execute-class capabilities.',
+                      '每行一个；留空 = 平台 Worker 上限去掉执行类能力。',
+                      'One per line; blank = the worker ceiling minus execute-class capabilities.',
                     )
                   : t(
                       '每行一个；必须在 entry 上限之内（内核校验）。',

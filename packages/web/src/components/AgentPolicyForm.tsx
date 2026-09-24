@@ -295,7 +295,10 @@ export function AgentPolicyForm({
       </label>
 
       {submitError !== null ? (
-        <ErrorBanner error={submitError} title="Could not save AgentPolicy" />
+        <ErrorBanner
+          error={submitError}
+          title={t('无法保存 AgentPolicy', 'Could not save AgentPolicy')}
+        />
       ) : null}
 
       <Notice>

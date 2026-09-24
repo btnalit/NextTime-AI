@@ -174,11 +174,15 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
       />
 
       {inventory.state.status === 'loading' ? (
-        <SkeletonRows count={4} label="Loading runtime inventory" testId="runtime-loading" />
+        <SkeletonRows
+          count={4}
+          label={t('正在加载运行时清单…', 'Loading runtime inventory')}
+          testId="runtime-loading"
+        />
       ) : inventory.state.status === 'error' ? (
         <ErrorBanner
           error={inventory.state.error}
-          title="Could not load the runtime inventory"
+          title={t('无法加载运行时清单', 'Could not load the runtime inventory')}
           onRetry={() => void inventory.reload()}
           testId="runtime-error"
         />
@@ -197,11 +201,15 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
 
       <Card title={t('pi 版本漂移', 'pi drift')}>
         {drift.state.status === 'loading' ? (
-          <SkeletonRows count={1} label="Loading pi drift" testId="pi-drift-loading" />
+          <SkeletonRows
+            count={1}
+            label={t('正在加载 pi 漂移…', 'Loading pi drift')}
+            testId="pi-drift-loading"
+          />
         ) : drift.state.status === 'error' ? (
           <ErrorBanner
             error={drift.state.error}
-            title="Could not load pi drift"
+            title={t('无法加载 pi 漂移', 'Could not load pi drift')}
             onRetry={() => void drift.reload()}
             testId="pi-drift-error"
           />
@@ -328,8 +336,8 @@ function RuntimeBody({
               }
               title={t('设为活动镜像', 'Set active image')}
               description={t(
-                '已运行的入口容器不会立刻重启——它们在各自下一轮对话开始时按规格漂移自然换成新镜像，进行中的对话不受影响。 Running entry containers are not restarted now —',
-                'each picks up the new image only at the start of its own next turn (spec-drift rebuild); an in-flight turn is unaffected.',
+                '已运行的入口容器不会立刻重启——它们在各自下一轮对话开始时按规格漂移自然换成新镜像，进行中的对话不受影响。',
+                'Running entry containers are not restarted now — each picks up the new image only at the start of its own next turn (spec-drift rebuild); an in-flight turn is unaffected.',
               )}
               // Shows exactly what will be sent (review follow-up, PR #233) — `activatableRef` may
               // differ from `tags[0]` for a multi-tag image where only a later tag is allowlisted.
@@ -451,8 +459,8 @@ function RuntimeBody({
                   canRollBack
                     ? undefined
                     : t(
-                        '只知道一个（或零个）镜像，没有可回滚到的不同值 Only one (or zero) images are known —',
-                        'nothing different to roll back to',
+                        '只知道一个（或零个）镜像，没有可回滚到的不同值。',
+                        'Only one (or zero) images are known — nothing different to roll back to.',
                       )
                 }
                 data-testid="runtime-rollback"
@@ -505,15 +513,19 @@ function RuntimeBody({
           <Notice tone="warn" testId="runtime-active-image-unresolved">
             {data.activeImage ? (
               <>
-                活动镜像引用 <span className="mono">{data.activeImage}</span>
-                （来源：
                 {t(
-                  ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].zh,
-                  ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].en,
-                )}
-                {t(
-                  '）不在下面的镜像清单 里——可能没打平台 label，或 worker-supervisor 不可达；此时下方"待重建"一律按 "无法判断"显示为否，不猜测。 The active image reference is not in the inventory below (missing platform labels, or worker-supervisor unreachable) —',
-                  'every "needs rebuild" below reads false rather than guessing.',
+                  <>
+                    活动镜像引用 <span className="mono">{data.activeImage}</span>（来源：
+                    {ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].zh}
+                    ）不在下面的镜像清单里——可能没打平台 label，或 worker-supervisor
+                    不可达；此时下方“待重建”一律按“无法判断”显示为否，不猜测。
+                  </>,
+                  <>
+                    The active image reference <span className="mono">{data.activeImage}</span>{' '}
+                    (source: {ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].en}) is not in the
+                    inventory below (missing platform labels, or worker-supervisor unreachable) —
+                    every "needs rebuild" below reads false rather than guessing.
+                  </>,
                 )}
               </>
             ) : (
@@ -534,8 +546,8 @@ function RuntimeBody({
             icon="cpu"
             title={t('还没有带平台 label 的镜像', 'No labelled images yet')}
             body={t(
-              '在主机 / CI 上运行 docker compose build worker-runtime（打好三个 ai.nexttime.* label）。 Build worker-runtime on the host/CI with the three ai.nexttime.*',
-              'labels.',
+              '在主机 / CI 上运行 docker compose build worker-runtime（打好三个 ai.nexttime.* label）。',
+              'Build worker-runtime on the host/CI with the three ai.nexttime.* labels.',
             )}
             testId="runtime-images-empty"
           />

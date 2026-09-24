@@ -568,15 +568,15 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
       {skills.state.status === 'ready' && skills.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="skills-truncated">
           {t(
-            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余',
-            'Skill keep loading more to see the rest.',
+            '已达到单次读取上限，继续点“加载更多”查看其余 Skill。',
+            'Reached the per-page limit — keep loading more to see the rest.',
           )}
         </p>
       ) : null}
       {skills.loadMoreError !== null ? (
         <ErrorBanner
           error={skills.loadMoreError}
-          title="Could not load more skills"
+          title={t('无法加载更多 Skill', 'Could not load more skills')}
           testId="skills-load-more-error"
         />
       ) : null}
@@ -749,15 +749,15 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
       {procedures.state.status === 'ready' && procedures.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="procedures-truncated">
           {t(
-            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余',
-            'Procedure keep loading more to see the rest.',
+            '已达到单次读取上限，继续点“加载更多”查看其余 Procedure。',
+            'Reached the per-page limit — keep loading more to see the rest.',
           )}
         </p>
       ) : null}
       {procedures.loadMoreError !== null ? (
         <ErrorBanner
           error={procedures.loadMoreError}
-          title="Could not load more procedures"
+          title={t('无法加载更多 Procedure', 'Could not load more procedures')}
           testId="procedures-load-more-error"
         />
       ) : null}
@@ -965,15 +965,15 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
       {workers.state.status === 'ready' && workers.state.data.truncated === true ? (
         <p className="text-3 text-small" data-testid="workers-truncated">
           {t(
-            '已达到单次读取上限 Reached the per-page limit — 继续点“加载更多”查看其余 Worker 定义',
-            'keep loading more to see the rest.',
+            '已达到单次读取上限，继续点“加载更多”查看其余 Worker 定义。',
+            'Reached the per-page limit — keep loading more to see the rest.',
           )}
         </p>
       ) : null}
       {workers.loadMoreError !== null ? (
         <ErrorBanner
           error={workers.loadMoreError}
-          title="Could not load more worker definitions"
+          title={t('无法加载更多 Worker 定义', 'Could not load more worker definitions')}
           testId="workers-load-more-error"
         />
       ) : null}

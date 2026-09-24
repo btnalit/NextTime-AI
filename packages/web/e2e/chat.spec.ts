@@ -46,9 +46,9 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await page.locator('header').getByRole('button', { name: '新对话' }).click();
 
     // --- chat page: send a message (the header's back control is an icon button) ---
-    await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
     const prompt = `e2e-${Date.now()}`;
-    await page.getByPlaceholder('Message…').fill(prompt);
+    await page.getByPlaceholder('输入消息…').fill(prompt);
     await page.getByRole('button', { name: 'Send' }).click();
 
     // --- the product shell is up: sidebar connection indicator reads Connected ---
@@ -89,10 +89,10 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await reachLoginForm(page);
     await loginWithApiKey(page, apiKey);
     await page.locator('header').getByRole('button', { name: '新对话' }).click();
-    await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
 
     const marker = `md-${Date.now()}`;
-    await page.getByPlaceholder('Message…').fill(`## 标题 ${marker}\n\n**粗体 ${marker}**`);
+    await page.getByPlaceholder('输入消息…').fill(`## 标题 ${marker}\n\n**粗体 ${marker}**`);
     await page.getByRole('button', { name: 'Send' }).click();
     await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
       timeout: 15_000,
@@ -123,12 +123,12 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
       .locator('header')
       .getByRole('button', { name: /新对话/ })
       .click();
-    await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
 
     // A brand-new chat reads as the placeholder until the first message lands …
     await expect(page.getByTestId('chat-title')).toHaveText('新对话');
     const prompt = `e2e-title-${Date.now()}`;
-    await page.getByPlaceholder('Message…').fill(prompt);
+    await page.getByPlaceholder('输入消息…').fill(prompt);
     await page.getByRole('button', { name: 'Send' }).click();
     // … then the `chat.metadata {title}` push (the first 40 code points of the message) names it.
     await expect(page.getByTestId('chat-title')).toHaveText(prompt, { timeout: 15_000 });
@@ -151,7 +151,7 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
 
     // Back to the list: the row carries the new title; archive it from the row (tier low → toast
     // with 撤销 Undo), undo, then archive again and find it under 已归档.
-    await page.getByRole('button', { name: 'Back to chats' }).click();
+    await page.getByRole('button', { name: '返回对话列表' }).click();
     const row = page.getByTestId('chat-row').filter({ hasText: renamed });
     await expect(row).toBeVisible();
     await row.getByTestId('chat-row-archive').click();
@@ -178,7 +178,7 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await expect(page.getByPlaceholder('已归档')).toBeDisabled();
     await page.getByTestId('chat-composer-restore').click();
     await expect(page.getByTestId('chat-archived-notice')).toHaveCount(0);
-    await expect(page.getByPlaceholder('Message…')).toBeEnabled();
+    await expect(page.getByPlaceholder('输入消息…')).toBeEnabled();
 
     // Reload: the lifecycle survived (list_chats reflects the restore and the rename).
     await page.reload();

@@ -184,8 +184,8 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
       onClose={onClose}
       title={t('清理待激活用户', 'Clean up pending users')}
       subtitle={t(
-        '验收脚本与迁移 0019 留下的、从未设置密码的账户。 Accounts that never got a password —',
-        'acceptance runs and migration 0019.',
+        '验收脚本与迁移 0019 留下的、从未设置密码的账户。',
+        'Accounts that never got a password — acceptance runs and migration 0019.',
       )}
       testId="purge-users-dialog"
       footer={
@@ -213,7 +213,11 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
         </Notice>
 
         {candidates.state.status === 'loading' ? (
-          <SkeletonRows count={4} label="Loading pending users" testId="purge-users-loading" />
+          <SkeletonRows
+            count={4}
+            label={t('正在加载待激活用户…', 'Loading pending users')}
+            testId="purge-users-loading"
+          />
         ) : candidates.state.status === 'error' ? (
           <ErrorBanner
             error={candidates.state.error}

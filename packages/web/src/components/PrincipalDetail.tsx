@@ -226,8 +226,8 @@ export function PrincipalDetail({
               <div className="stack-s" data-testid="rotated-api-key">
                 <Notice tone="warn">
                   {t(
-                    '新 API key 只显示一次；旧 key 立即失效。 New API key shown once —',
-                    'the previous key stops working immediately.',
+                    '新 API key 只显示一次；旧 key 立即失效。',
+                    'New API key shown once — the previous key stops working immediately.',
                   )}
                 </Notice>
                 <div className="code-block row" style={{ justifyContent: 'space-between' }}>

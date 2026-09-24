@@ -181,7 +181,10 @@ function ClaimPasswordCard({
           id="account-claim-login"
           label={t('登录名', 'Login')}
           required
-          hint="3–64 位，首字符为字母或数字，仅小写字母、数字、. _ - 3–64 characters, starting with a letter or digit: lowercase letters, digits, . _ -"
+          hint={t(
+            '3–64 位，首字符为字母或数字，仅小写字母、数字、. _ -',
+            '3–64 characters, starting with a letter or digit: lowercase letters, digits, . _ -',
+          )}
           error={loginInvalid ? t('登录名格式不正确', 'Invalid login format') : null}
         >
           <Input

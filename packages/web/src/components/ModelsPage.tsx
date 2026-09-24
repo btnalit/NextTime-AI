@@ -241,7 +241,11 @@ export function ModelsPage({ http }: ModelsPageProps) {
 
       <DashboardCard title={t('工作区策略', 'Workspace policy')}>
         {agentPolicy.state.status === 'loading' ? (
-          <SkeletonRows count={3} label="Loading workspace policy" testId="agent-policy-loading" />
+          <SkeletonRows
+            count={3}
+            label={t('正在加载工作区策略…', 'Loading workspace policy')}
+            testId="agent-policy-loading"
+          />
         ) : agentPolicy.state.status === 'error' ? (
           isForbiddenError(agentPolicy.state.error) ? (
             <EmptyState icon="shield" title="需要成员权限" testId="agent-policy-forbidden" />

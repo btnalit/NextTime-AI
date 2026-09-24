@@ -303,13 +303,16 @@ export function AgentProfileForm({
       ) : null}
 
       {submitError !== null ? (
-        <ErrorBanner error={submitError} title="Could not save this Agent profile" />
+        <ErrorBanner
+          error={submitError}
+          title={t('无法保存该 Agent profile', 'Could not save this Agent profile')}
+        />
       ) : null}
 
       <Notice testId="agent-profile-effective-note">
         {t(
-          '保存后下一轮对话生效（会话重签，常驻容器按需重建） Takes effect from the next turn —',
-          'the entry session re-signs and the resident container rebuilds if needed.',
+          '保存后下一轮对话生效（会话重签，常驻容器按需重建）。',
+          'Takes effect from the next turn — the entry session re-signs and the resident container rebuilds if needed.',
         )}
       </Notice>
 

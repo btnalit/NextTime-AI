@@ -56,7 +56,10 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
       <PageHeader
         breadcrumb={breadcrumbFor('platformAudit')}
         title={t('平台审计', 'Platform audit')}
-        description="Every platform-scope write (workspace_id is null): who changed what, and when."
+        description={t(
+          '每一次平台范围的写操作（workspace_id 为空）：谁改了什么、什么时候。',
+          'Every platform-scope write (workspace_id is null): who changed what, and when.',
+        )}
       />
 
       <form
@@ -64,7 +67,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
         onSubmit={handleFilterSubmit}
         data-testid="platform-audit-filter-form"
       >
-        <Field id="platform-audit-action" label="Action">
+        <Field id="platform-audit-action" label={t('动作', 'Action')}>
           <Input
             id="platform-audit-action"
             value={actionInput}
@@ -72,7 +75,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             mono
           />
         </Field>
-        <Field id="platform-audit-actor" label="Actor user id">
+        <Field id="platform-audit-actor" label={t('操作者用户 id', 'Actor user id')}>
           <Input
             id="platform-audit-actor"
             value={actorUserIdInput}
@@ -86,11 +89,15 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
       </form>
 
       {audit.state.status === 'loading' ? (
-        <SkeletonRows count={5} label="Loading platform audit" testId="platform-audit-loading" />
+        <SkeletonRows
+          count={5}
+          label={t('正在加载平台审计…', 'Loading platform audit')}
+          testId="platform-audit-loading"
+        />
       ) : audit.state.status === 'error' ? (
         <ErrorBanner
           error={audit.state.error}
-          title="Could not load the platform audit log"
+          title={t('无法加载平台审计流', 'Could not load the platform audit log')}
           onRetry={() => void audit.reload()}
           testId="platform-audit-error"
         />
@@ -101,7 +108,11 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
           testId="platform-audit-empty"
         />
       ) : (
-        <ul className="data-list" aria-label="Platform audit" data-testid="platform-audit-list">
+        <ul
+          className="data-list"
+          aria-label={t('平台审计', 'Platform audit')}
+          data-testid="platform-audit-list"
+        >
           {rows.map((row) => (
             <li className="data-row" key={row.id} data-testid="platform-audit-row">
               <div className="data-row-main">
@@ -141,7 +152,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
       {audit.loadMoreError !== null ? (
         <ErrorBanner
           error={audit.loadMoreError}
-          title="Could not load more platform audit rows"
+          title={t('无法加载更多平台审计记录', 'Could not load more platform audit rows')}
           testId="platform-audit-load-more-error"
         />
       ) : null}

@@ -300,8 +300,8 @@ export function PlatformWorkspacesPage({
           body={
             filtered
               ? t(
-                  '默认视图隐藏已停用与已到期的临时工作区；改上面的筛选可查看。 The default view hides disabled and expired ephemeral workspaces —',
-                  'widen the filters above.',
+                  '默认视图隐藏已停用与已到期的临时工作区；改上面的筛选可查看。',
+                  'The default view hides disabled and expired ephemeral workspaces — widen the filters above.',
                 )
               : undefined
           }

@@ -42,7 +42,7 @@ describe('GatekeeperDetailDrawer', () => {
     });
     renderDrawer(http);
     const health = await screen.findByTestId('gatekeeper-health');
-    expect(health.textContent).toBe('Healthy');
+    expect(health.textContent).toBe('健康');
     expect(health.className).toContain('chip-ok');
     expect(screen.getByText('docker.status')).toBeTruthy();
     expect(screen.getByText('docker.restart')).toBeTruthy();
@@ -61,9 +61,9 @@ describe('GatekeeperDetailDrawer', () => {
     });
     renderDrawer(http);
     const health = await screen.findByTestId('gatekeeper-health');
-    expect(health.textContent).toBe('Unhealthy');
+    expect(health.textContent).toBe('不健康');
     expect(health.className).toContain('chip-danger');
-    expect(screen.getByText('No operations on this gate')).toBeTruthy();
+    expect(screen.getByText('这个门没有 Operation')).toBeTruthy();
   });
 
   it('renders an unrecognized health shape as neutral "Unknown" rather than guessing', async () => {
@@ -79,7 +79,7 @@ describe('GatekeeperDetailDrawer', () => {
     });
     renderDrawer(http);
     const health = await screen.findByTestId('gatekeeper-health');
-    expect(health.textContent).toBe('Unknown');
+    expect(health.textContent).toBe('未知');
     expect(health.className).toContain('chip-neutral');
   });
 

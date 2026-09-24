@@ -102,7 +102,10 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
       <PageHeader
         breadcrumb={breadcrumbFor('agent')}
         title={t('我的智能体', 'My Agent')}
-        description="Per-user Agent configuration — model, Skills, connected systems, prompt addendum."
+        description={t(
+          '每个用户各自的 Agent 配置——模型、Skill、已接入系统、提示词附加。',
+          'Per-user Agent configuration — model, Skills, connected systems, prompt addendum.',
+        )}
         actions={
           canPickPrincipal && humanPrincipals.length > 1 ? (
             <Field id="ap-principal" label={t('查看/编辑', 'View / edit')}>
@@ -124,7 +127,11 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
       />
 
       {profile.state.status === 'loading' ? (
-        <SkeletonRows count={4} label="Loading Agent profile" testId="agent-profile-loading" />
+        <SkeletonRows
+          count={4}
+          label={t('正在加载 Agent profile…', 'Loading Agent profile')}
+          testId="agent-profile-loading"
+        />
       ) : profile.state.status === 'error' ? (
         isForbiddenError(profile.state.error) ? (
           <EmptyState
@@ -136,7 +143,7 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
         ) : (
           <ErrorBanner
             error={profile.state.error}
-            title="Could not load this Agent profile"
+            title={t('无法加载该 Agent profile', 'Could not load this Agent profile')}
             onRetry={() => void profile.reload()}
             testId="agent-profile-error"
           />
@@ -145,7 +152,10 @@ export function AgentProfilePage({ http }: AgentProfilePageProps) {
         <>
           {policy.state.status === 'error' ? (
             <Notice tone="warn" testId="agent-policy-load-warning">
-              Could not load workspace AgentPolicy — options below are shown unnarrowed.
+              {t(
+                '无法加载工作区 AgentPolicy —— 下面的选项按未收窄显示。',
+                'Could not load workspace AgentPolicy — options below are shown unnarrowed.',
+              )}
             </Notice>
           ) : null}
 
