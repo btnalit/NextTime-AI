@@ -106,6 +106,7 @@ export function AppShell({
             pageTitle={pageTitle}
             workspaceName={workspaceName}
             role={role}
+            wsStatus={wsStatus}
             onOpenMenu={() => setDrawerOpen(true)}
           />
         ) : (

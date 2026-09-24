@@ -58,6 +58,15 @@ export interface SidebarProps {
   /** S6-A0 footer: who is signed in — the cookie user's display name, or for an apiKey session
    *  the caller Principal's (`get_workspace.caller.displayName`). Omitted when unknown. */
   readonly currentUser?: { readonly displayName: string; readonly login?: string } | null;
+  /** S8 W1-A3 follow-up (audit S2, journey ③ narrow-screen fix): `false` omits the
+   *  `data-testid="ws-status"` attribute from this render's own connection-status line (the dot
+   *  and label still render — only the testid is dropped). `NavDrawer` passes `false`: at ≤960px
+   *  `MobileTopBar` — always mounted, unlike the drawer's `SidebarContent`, which only exists in
+   *  the DOM while open — already carries the one canonical `ws-status` element every spec's
+   *  `loginWithApiKey`/journey waits on; a second one inside the (occasionally also open) drawer
+   *  would make `getByTestId('ws-status')` ambiguous. Defaults `true` (`Sidebar`'s own render,
+   *  the sole copy above 960px, is unaffected). */
+  readonly wsStatusTestId?: boolean;
 }
 
 /**
@@ -114,6 +123,7 @@ export function SidebarContent({
   explorerAvailable,
   kernelVersion,
   currentUser,
+  wsStatusTestId = true,
 }: SidebarProps) {
   const showGovern =
     !isProvenMember(role) && (authMode === 'apiKey' || selectedWorkspaceId != null);
@@ -186,7 +196,10 @@ export function SidebarContent({
       <div className="sidebar-footer">
         <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus]}`}>
           <span className={`conn-dot conn-dot-${wsStatus}`} aria-hidden />
-          <span className="conn-status-label" data-testid="ws-status">
+          <span
+            className="conn-status-label"
+            data-testid={wsStatusTestId ? 'ws-status' : undefined}
+          >
             {STATUS_LABEL[wsStatus]}
           </span>
           {kernelVersion ? (
@@ -234,6 +247,13 @@ export interface MobileTopBarProps {
   readonly pageTitle: string;
   readonly workspaceName: string;
   readonly role: WorkspaceRole;
+  /** The WS connection dot + `data-testid="ws-status"` label — a product gap the S8 W1-A3 follow-up
+   *  closed, not a testing convenience: at ≤960px the wide `<aside>` (the only place this used to
+   *  render) is gone, so without it here the connection state was invisible on a narrow screen
+   *  whenever the drawer is closed, which is most of the time. This is the sole `ws-status` in the
+   *  DOM at this width — `NavDrawer` suppresses its own copy's testid (`SidebarContent`'s
+   *  `wsStatusTestId={false}`) so opening the drawer never makes the testid ambiguous. */
+  readonly wsStatus: WsConnectionStatus;
   /** Opens `NavDrawer`. `AppShell` owns the open/close state (both components are siblings, not
    *  parent/child) so a route change can close the drawer without this component knowing about
    *  routing. */
@@ -248,13 +268,20 @@ function roleText(role: WorkspaceRole): string {
  * components/shell/MobileTopBar (S8 W1-A3, audit S2 "≤960 侧栏收成 21 个无文字图标"): the ≤960px
  * replacement for the icon rail — a single sticky row with the menu button that opens `NavDrawer`
  * (`data-testid="nav-open"`, the hook Playwright/journey helpers use to reach the full nav at this
- * width), the current page's title as the prominent line, and a second, smaller line carrying the
- * three pieces of identity the old rail dropped entirely: product name, workspace name and role.
- * Rendered by `AppShell` in place of `Sidebar` — never both at once, so there is exactly one
- * `nav-<section>` set of testids in the DOM at any given viewport (the wide `<aside>`'s, or once
- * opened, the drawer's).
+ * width), the current page's title as the prominent line, a second, smaller line carrying the
+ * three pieces of identity the old rail dropped entirely (product name, workspace name, role), and
+ * the WS connection indicator (see `MobileTopBarProps.wsStatus`'s own doc comment — a follow-up
+ * fix, not part of the original S2 cut). Rendered by `AppShell` in place of `Sidebar` — never both
+ * at once, so there is exactly one `nav-<section>` set of testids in the DOM at any given viewport
+ * (the wide `<aside>`'s, or once opened, the drawer's).
  */
-export function MobileTopBar({ pageTitle, workspaceName, role, onOpenMenu }: MobileTopBarProps) {
+export function MobileTopBar({
+  pageTitle,
+  workspaceName,
+  role,
+  wsStatus,
+  onOpenMenu,
+}: MobileTopBarProps) {
   return (
     <header className="mobile-topbar">
       <Button
@@ -270,6 +297,12 @@ export function MobileTopBar({ pageTitle, workspaceName, role, onOpenMenu }: Mob
         <span className="mobile-topbar-title truncate">{pageTitle}</span>
         <span className="mobile-topbar-sub truncate">
           NextTime AI · {workspaceName} · {roleText(role)}
+        </span>
+      </div>
+      <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus]}`}>
+        <span className={`conn-dot conn-dot-${wsStatus}`} aria-hidden />
+        <span className="conn-status-label" data-testid="ws-status">
+          {STATUS_LABEL[wsStatus]}
         </span>
       </div>
     </header>
@@ -296,7 +329,9 @@ export function NavDrawer({ open, onOpenChange, ...sidebarProps }: NavDrawerProp
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="left" className="nav-drawer">
         <SheetTitle className="visually-hidden">导航 Navigation</SheetTitle>
-        <SidebarContent {...sidebarProps} />
+        {/* wsStatusTestId={false}: MobileTopBar (always mounted at this width, unlike this
+         *  drawer) already carries the DOM's one `ws-status` testid — see its own doc comment. */}
+        <SidebarContent {...sidebarProps} wsStatusTestId={false} />
       </SheetContent>
     </Sheet>
   );

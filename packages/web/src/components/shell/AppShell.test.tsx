@@ -186,12 +186,19 @@ describe('AppShell', () => {
       const opener = screen.getByTestId('nav-open');
       expect(opener).toBeTruthy();
       expect(screen.getByText('对话')).toBeTruthy(); // pageTitle for active="chats"
+      // S8 W1-A3 follow-up (audit S2, journey ③ narrow-screen fix): ws-status must stay visible
+      // at this width even though the sidebar that used to carry it is gone — SILENT_PUSH_SOURCE
+      // (this test's PushSource) reports 'closed', i.e. "Disconnected".
+      expect(screen.getByTestId('ws-status').textContent).toBe('Disconnected');
 
       expect(screen.queryByRole('dialog')).toBeNull();
       fireEvent.click(opener);
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByTestId('nav-chats')).toBeTruthy();
       expect(within(dialog).getByTestId('nav-section-use')).toBeTruthy();
+      // Still exactly one — the drawer's own connection line renders (visually complete) but
+      // does not carry the testid a second time (NavDrawer's `wsStatusTestId={false}`).
+      expect(screen.getAllByTestId('ws-status')).toHaveLength(1);
     });
 
     it('closes the drawer when `active` changes (a simulated navigation)', async () => {

@@ -479,6 +479,7 @@
 }
 
 .mobile-topbar-text {
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -494,6 +495,14 @@
 .mobile-topbar-sub {
   font-size: var(--fs-11);
   color: var(--text-3);
+}
+
+/* The WS connection indicator (`.conn-status`/`.conn-dot`/`.conn-status-label` — sidebar-footer's
+ * own, reused verbatim): flex-shrink:0 so a long page title never squeezes it out, and the
+ * sidebar-footer's own padding is dropped — .mobile-topbar's own padding already frames the row. */
+.mobile-topbar .conn-status {
+  flex-shrink: 0;
+  padding: 0;
 }
 
 /* `NavDrawer` (components/shell/Sidebar.tsx) — the `kit/sheet` `SheetContent` that carries the

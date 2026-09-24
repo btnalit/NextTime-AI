@@ -394,6 +394,7 @@ describe('MobileTopBar', () => {
         pageTitle="对话"
         workspaceName="Acme"
         role={{ kind: 'known', role: 'owner' }}
+        wsStatus="connected"
         onOpenMenu={onOpenMenu}
       />,
     );
@@ -409,10 +410,38 @@ describe('MobileTopBar', () => {
         pageTitle="对话"
         workspaceName="Acme"
         role={{ kind: 'inferred', role: 'operator+' }}
+        wsStatus="connected"
         onOpenMenu={vi.fn()}
       />,
     );
     expect(screen.getByText(/NextTime AI · Acme · Operator\+/)).toBeTruthy();
+  });
+
+  // S8 W1-A3 follow-up (audit S2, journey ③ narrow-screen fix): ws-status is invisible at ≤960px
+  // unless MobileTopBar carries its own copy — every spec's login helper and this suite's own
+  // AppShell.test.tsx both wait on it.
+  it('carries the sole ws-status testid at this width, reflecting the live connection state', () => {
+    const { rerender } = render(
+      <MobileTopBar
+        pageTitle="对话"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        wsStatus="connected"
+        onOpenMenu={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('ws-status').textContent).toBe('Connected');
+
+    rerender(
+      <MobileTopBar
+        pageTitle="对话"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        wsStatus="reconnecting"
+        onOpenMenu={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('ws-status').textContent).toBe('Reconnecting');
   });
 });
 
@@ -447,6 +476,24 @@ describe('NavDrawer', () => {
     expect(screen.getByRole('button', { name: /登出 Sign out/ })).toBeTruthy();
   });
 
+  /** The real ≤960px pairing — `MobileTopBar` always mounted, `NavDrawer` toggled by its own
+   *  `nav-open` button — the way `AppShell` actually renders them. */
+  function TopBarPlusDrawer() {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <MobileTopBar
+          pageTitle="对话"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          wsStatus="connected"
+          onOpenMenu={() => setOpen(true)}
+        />
+        <NavDrawer open={open} onOpenChange={setOpen} {...NAV_DRAWER_BASE} />
+      </>
+    );
+  }
+
   // Focus-return-to-trigger on close is Radix Dialog's own built-in behavior (NavDrawer doesn't
   // hand-roll any focus management — `kit/sheet`'s doc comment); it is not asserted here by
   // `document.activeElement` equality because it depends on `document.hasFocus()`, which jsdom
@@ -455,21 +502,7 @@ describe('NavDrawer', () => {
   // regardless of correct usage — real-browser behavior is unaffected. What *is* testable here:
   // Escape closes the drawer.
   it('closes on Escape', async () => {
-    function Harness() {
-      const [open, setOpen] = useState(false);
-      return (
-        <>
-          <MobileTopBar
-            pageTitle="对话"
-            workspaceName="Acme"
-            role={KNOWN_OWNER}
-            onOpenMenu={() => setOpen(true)}
-          />
-          <NavDrawer open={open} onOpenChange={setOpen} {...NAV_DRAWER_BASE} />
-        </>
-      );
-    }
-    render(<Harness />);
+    render(<TopBarPlusDrawer />);
     fireEvent.click(screen.getByTestId('nav-open'));
     await screen.findByRole('dialog');
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
@@ -481,5 +514,21 @@ describe('NavDrawer', () => {
     await screen.findByRole('dialog');
     rerender(<NavDrawer open={false} onOpenChange={vi.fn()} {...NAV_DRAWER_BASE} />);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  // S8 W1-A3 follow-up (audit S2): the coordinator's own success criterion — a duplicate
+  // `ws-status` would make `getByTestId('ws-status')` ambiguous for every journey/login helper
+  // that waits on it, at exactly the width (≤960px) that drawer opens.
+  it('never duplicates the ws-status testid — MobileTopBar keeps the sole one, open or closed', async () => {
+    render(<TopBarPlusDrawer />);
+    expect(screen.getAllByTestId('ws-status')).toHaveLength(1);
+    fireEvent.click(screen.getByTestId('nav-open'));
+    await screen.findByRole('dialog');
+    // Open: MobileTopBar's copy is still the only *testid*-carrying one — the drawer's own
+    // connection line (SidebarContent's footer) still renders visually (`wsStatusTestId={false}`
+    // drops only the attribute), so this also proves it didn't just vanish.
+    expect(screen.getAllByTestId('ws-status')).toHaveLength(1);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.querySelector('.conn-status-label')?.textContent).toBe('Connected');
   });
 });
