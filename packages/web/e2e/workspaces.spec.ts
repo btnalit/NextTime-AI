@@ -79,15 +79,15 @@ async function signInAsAdmin(page: Page): Promise<void> {
   if (await badCredentials.isVisible().catch(() => false)) {
     // A previous (retried) run already changed the password away from the initial one — try the
     // deterministic changed password instead, exactly as login.spec.ts does.
-    await page.getByLabel(/^密码$/).fill(changedPassword);
+    await page.locator('#login-password').fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
   if (await changePasswordHeading.isVisible().catch(() => false)) {
-    await page.getByLabel(/^当前密码/).fill(initialPassword);
-    await page.getByLabel(/^新密码/).fill(changedPassword);
-    await page.getByLabel(/^确认新密码/).fill(changedPassword);
+    await page.locator('#cp-current-password').fill(initialPassword);
+    await page.locator('#cp-new-password').fill(changedPassword);
+    await page.locator('#cp-confirm-password').fill(changedPassword);
     await page.getByRole('button', { name: /更改密码/ }).click();
   }
 
@@ -265,15 +265,15 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     if (await badCredentials.isVisible().catch(() => false)) {
       // A previous (retried) run already changed the password away from the temporary one — try
       // the deterministic new one instead, exactly as login.spec.ts does.
-      await page.getByLabel(/^密码$/).fill(newPassword);
+      await page.locator('#login-password').fill(newPassword);
       await page.getByRole('button', { name: 'Log in' }).click();
       await expect(changePasswordHeading.or(wsStatus)).toBeVisible({ timeout: 15_000 });
     }
 
     if (await changePasswordHeading.isVisible().catch(() => false)) {
-      await page.getByLabel(/^当前密码/).fill(ownerTemporaryPassword);
-      await page.getByLabel(/^新密码/).fill(newPassword);
-      await page.getByLabel(/^确认新密码/).fill(newPassword);
+      await page.locator('#cp-current-password').fill(ownerTemporaryPassword);
+      await page.locator('#cp-new-password').fill(newPassword);
+      await page.locator('#cp-confirm-password').fill(newPassword);
       await page.getByRole('button', { name: /更改密码/ }).click();
     }
     await expect(wsStatus).toHaveText('Connected', { timeout: 15_000 });

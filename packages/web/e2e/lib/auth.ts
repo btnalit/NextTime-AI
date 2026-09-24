@@ -53,15 +53,17 @@ export async function loginAsAdmin(
   });
 
   if (await badCredentials.isVisible().catch(() => false)) {
-    await page.getByLabel(/^密码$/).fill(changedPassword);
+    await page.locator('#login-password').fill(changedPassword);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(changePasswordHeading.or(shell).first()).toBeVisible({ timeout: 15_000 });
   }
 
   if (await changePasswordHeading.isVisible().catch(() => false)) {
-    await page.getByLabel(/^当前密码/).fill(initialPassword);
-    await page.getByLabel(/^新密码/).fill(changedPassword);
-    await page.getByLabel(/^确认新密码/).fill(changedPassword);
+    // By id, not getByLabel — see auth-helpers.ts's loginWithPassword doc comment (same
+    // required-field accessible-name issue affects ChangePasswordPage's fields too).
+    await page.locator('#cp-current-password').fill(initialPassword);
+    await page.locator('#cp-new-password').fill(changedPassword);
+    await page.locator('#cp-confirm-password').fill(changedPassword);
     await page.getByRole('button', { name: /更改密码/ }).click();
   }
 

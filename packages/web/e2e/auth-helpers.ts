@@ -52,13 +52,17 @@ export async function loginWithApiKey(page: Page, apiKey: string): Promise<void>
 }
 
 /** Fills/submits `LoginPage`'s primary password form. Assumes `reachLoginForm` has already
- *  resolved to `'login'`. */
+ *  resolved to `'login'`. By id (`#login-name`/`#login-password`), not `getByLabel` — S8 W1-A9's
+ *  i18n switch found `getByLabel(/^密码$/)` never resolving in CI (Chromium's computed accessible
+ *  name for `<Field required>`'s label apparently still folds in the `aria-hidden` required
+ *  asterisk in this label-association shape, so no locator matches the exact-anchored regex); the
+ *  id is unambiguous either way. */
 export async function loginWithPassword(
   page: Page,
   login: string,
   password: string,
 ): Promise<void> {
-  await page.getByLabel(/^登录名/).fill(login);
-  await page.getByLabel(/^密码$/).fill(password);
+  await page.locator('#login-name').fill(login);
+  await page.locator('#login-password').fill(password);
   await page.getByRole('button', { name: 'Log in' }).click();
 }

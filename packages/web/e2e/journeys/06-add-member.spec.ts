@@ -77,9 +77,9 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
       timeout: 15_000,
     });
     const newPassword = `${temporaryPassword}-changed`;
-    await page.getByLabel(/^当前密码/).fill(temporaryPassword);
-    await page.getByLabel(/^新密码/).fill(newPassword);
-    await page.getByLabel(/^确认新密码/).fill(newPassword);
+    await page.locator('#cp-current-password').fill(temporaryPassword);
+    await page.locator('#cp-new-password').fill(newPassword);
+    await page.locator('#cp-confirm-password').fill(newPassword);
     await page.getByRole('button', { name: /更改密码/ }).click();
 
     // Step 4: switch to this workspace (the new member also belongs to the platform default
