@@ -1,5 +1,7 @@
 import type { GrantStatus, PrincipalKind, Role } from '@nexttime/shared';
 import type { ActionRequestRowLike } from './action-card.js';
+import type { Translate } from './i18n.js';
+import { principalKindLabel, roleLabel } from './labels.js';
 
 /**
  * lib/governance: wire shapes for the S3.11 governance capabilities (docs/development-tasks.md
@@ -41,8 +43,14 @@ export interface RotateApiKeyResult {
   readonly apiKey: string;
 }
 
-export function principalDisplayRole(principal: Pick<PrincipalRow, 'role' | 'kind'>): string {
-  return principal.kind === 'human' ? principal.role : `${principal.role} · ${principal.kind}`;
+/** S8 W1-A10 (audit S14 "原始枚举…owner"): bilingual now — takes `t` (this is a pure helper, not
+ *  a component, so it cannot call `useT()` itself; the caller passes its own). */
+export function principalDisplayRole(
+  principal: Pick<PrincipalRow, 'role' | 'kind'>,
+  t: Translate,
+): string {
+  const role = roleLabel(principal.role, t);
+  return principal.kind === 'human' ? role : `${role} · ${principalKindLabel(principal.kind, t)}`;
 }
 
 // -------------------------------------------------------------------------------------------

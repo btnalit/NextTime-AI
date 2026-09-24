@@ -65,7 +65,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
     onUpdated(updated);
   }
 
-  const mapped = llmAdminErrorMessage(error);
+  const mapped = llmAdminErrorMessage(error, t);
 
   return (
     <div className="stack-s" data-testid="provider-secret-form">

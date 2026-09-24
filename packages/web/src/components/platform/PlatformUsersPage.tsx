@@ -14,8 +14,9 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { roleLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
-import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
+import { envAdminTitle } from '../../lib/platform-errors.js';
 import { deriveWorkspaceOptions } from '../../lib/platform-workspaces.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
@@ -392,7 +393,7 @@ function userColumns(
         <>
           <span className="truncate">{user.displayName}</span>
           {envAdmins.includes(user.login) ? (
-            <span className="tag" title={ENV_ADMIN_TITLE} data-testid="platform-user-env-admin">
+            <span className="tag" title={envAdminTitle(t)} data-testid="platform-user-env-admin">
               env
             </span>
           ) : null}
@@ -439,12 +440,12 @@ function userColumns(
     },
     {
       id: 'platformRole',
-      header: '平台角色 Role',
-      cell: (user) => user.platformRole,
+      header: t('平台角色', 'Role'),
+      cell: (user) => <StatusChip machine="platformRole" status={user.platformRole} size="s" />,
     },
     {
       id: 'workspaces',
-      header: '工作区 Workspaces',
+      header: t('工作区', 'Workspaces'),
       cell: (user) => (
         <div className="row-wrap">
           {user.memberships.length === 0 ? (
@@ -454,10 +455,10 @@ function userColumns(
               <span
                 key={membership.workspaceId}
                 className={`chip chip-s ${membership.disabled ? 'chip-neutral' : 'chip-info'}`}
-                title={membership.disabled ? '成员资格已停用 Membership disabled' : undefined}
+                title={membership.disabled ? t('成员资格已停用', 'Membership disabled') : undefined}
                 data-testid="platform-user-workspace-chip"
               >
-                {membership.workspaceName}@{membership.role}
+                {membership.workspaceName}@{roleLabel(membership.role, t)}
               </span>
             ))
           )}
@@ -466,28 +467,28 @@ function userColumns(
     },
     {
       id: 'budget',
-      header: '预算 Budget',
+      header: t('预算', 'Budget'),
       cellClassName: 'mono',
       cell: (user) => (
         <>
-          {user.dailyCallLimit === null ? '默认 default' : user.dailyCallLimit} /{' '}
-          {user.monthlyTokenBudget === null ? '默认 default' : user.monthlyTokenBudget}
+          {user.dailyCallLimit === null ? t('默认', 'default') : user.dailyCallLimit} /{' '}
+          {user.monthlyTokenBudget === null ? t('默认', 'default') : user.monthlyTokenBudget}
         </>
       ),
     },
     {
       id: 'lastLogin',
-      header: '最近登录 Last login',
+      header: t('最近登录', 'Last login'),
       cell: (user) =>
         user.lastLoginAt === null ? (
-          <span className="text-3">从未 Never</span>
+          <span className="text-3">{t('从未', 'Never')}</span>
         ) : (
           <time title={formatDateTime(user.lastLoginAt)}>{formatRelative(user.lastLoginAt)}</time>
         ),
     },
     {
       id: 'created',
-      header: '创建 Created',
+      header: t('创建', 'Created'),
       cell: (user) => (
         <time title={formatDateTime(user.createdAt)}>{formatRelative(user.createdAt)}</time>
       ),

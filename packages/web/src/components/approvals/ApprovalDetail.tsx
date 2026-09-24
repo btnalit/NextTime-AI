@@ -9,7 +9,8 @@ import {
   redactSensitive,
 } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { Confirm } from '../kit/confirm.js';
 import { ApprovalCard } from '../ui/ApprovalCard.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -47,12 +48,6 @@ export interface ApprovalDetailProps {
   readonly pending: PendingConfirm | null;
   readonly onPendingChange: (pending: PendingConfirm | null) => void;
 }
-
-const BLAST_LABEL: Readonly<Record<string, string>> = {
-  low: '低 low',
-  medium: '中 medium',
-  high: '高 high',
-};
 
 export type PendingConfirm =
   | {
@@ -305,7 +300,9 @@ export function ApprovalDetail({
               )
         }
         target={row.resourceScope ?? row.actionKindTag}
-        impact={pending ? confirmImpact(pending, row, principalNames, gatekeeperNames) : undefined}
+        impact={
+          pending ? confirmImpact(pending, row, principalNames, gatekeeperNames, t) : undefined
+        }
         confirmLabel={
           pending?.kind === 'reject' ? t('确认拒绝', 'Reject') : t('确认批准', 'Approve')
         }
@@ -342,27 +339,33 @@ export function ApprovalDetail({
   );
 }
 
-/** The confirm's impact lines (§5.8 "Approve 高影响时确认文案列出目标资源"). */
+/** The confirm's impact lines (§5.8 "Approve 高影响时确认文案列出目标资源"). A pure helper, not a
+ *  component — takes `t` from its caller (S8 W1-A10 i18n remainder: every line used to be a
+ *  combined "中文 English" literal, ignoring the language switch; `blastRadius` reuses
+ *  `lib/status-tone.ts`'s machine instead of a second hand-maintained low/medium/high map). */
 function confirmImpact(
   pending: PendingConfirm,
   row: ActionRequestRow,
   principalNames: ReadonlyMap<string, string> | undefined,
   gatekeeperNames: ReadonlyMap<string, string> | undefined,
+  t: Translate,
 ): readonly string[] {
   const lines: string[] = [
-    `动作 Action: ${row.actionKindTag}`,
-    `目标资源 Target: ${row.resourceScope ?? '未限定 (no resource scope)'}`,
-    `门 Gatekeeper: ${gatekeeperNames?.get(row.gatekeeperId) ?? row.gatekeeperId}`,
-    `影响范围 Blast radius: ${BLAST_LABEL[row.blastRadius] ?? row.blastRadius}`,
+    `${t('动作', 'Action')}: ${row.actionKindTag}`,
+    `${t('目标资源', 'Target')}: ${row.resourceScope ?? t('未限定', 'no resource scope')}`,
+    `${t('门', 'Gatekeeper')}: ${gatekeeperNames?.get(row.gatekeeperId) ?? row.gatekeeperId}`,
+    `${t('影响范围', 'Blast radius')}: ${labelText(statusChipStyle('blastRadius', row.blastRadius), t)}`,
   ];
   if (row.onBehalfOf) {
-    lines.push(`代表 On behalf of: ${principalNames?.get(row.onBehalfOf) ?? row.onBehalfOf}`);
+    lines.push(
+      `${t('代表', 'On behalf of')}: ${principalNames?.get(row.onBehalfOf) ?? row.onBehalfOf}`,
+    );
   }
   if (row.awaitDecision) {
     lines.push(
       pending.kind === 'approve'
-        ? '被阻塞的 Worker 将继续运行 The blocked Worker resumes'
-        : '被阻塞的 Worker 将收到拒绝 The blocked Worker is told no',
+        ? t('被阻塞的 Worker 将继续运行', 'The blocked Worker resumes')
+        : t('被阻塞的 Worker 将收到拒绝', 'The blocked Worker is told no'),
     );
   }
   return lines;

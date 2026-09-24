@@ -1,6 +1,10 @@
 import type { GateHostTokenWire } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { GateHostError, postGateCredential } from './gate-host.js';
+import type { Translate } from './i18n.js';
+
+/** `postGateCredential` is a pure async helper (not a component) that takes `t` from its caller. */
+const zhT: Translate = (zh) => zh;
 
 /**
  * gate-host.test.ts: exercises `postGateCredential` (lib/gate-host.ts) against an injected
@@ -30,7 +34,7 @@ describe('postGateCredential', () => {
   it('POSTs the credential to tokenResult.url with a bearer token and onBehalfOf, and resolves on {ok:true,result:{stored:true}}', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, result: { stored: true } }));
 
-    await postGateCredential(token(), { token: 'sk-secret' }, fetchImpl as typeof fetch);
+    await postGateCredential(token(), { token: 'sk-secret' }, zhT, fetchImpl as typeof fetch);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
@@ -48,9 +52,12 @@ describe('postGateCredential', () => {
   it('throws GateHostError with the expired-token message on 401', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(401, { ok: false, error: 'unauthorized' }));
 
-    const err = await postGateCredential(token(), { token: 'x' }, fetchImpl as typeof fetch).catch(
-      (e: unknown) => e,
-    );
+    const err = await postGateCredential(
+      token(),
+      { token: 'x' },
+      zhT,
+      fetchImpl as typeof fetch,
+    ).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(GateHostError);
     expect((err as Error).message).toContain('令牌已过期或无效');
@@ -59,9 +66,12 @@ describe('postGateCredential', () => {
   it('throws GateHostError on a non-2xx status other than 401', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(500, { ok: false, error: 'boom' }));
 
-    const err = await postGateCredential(token(), { token: 'x' }, fetchImpl as typeof fetch).catch(
-      (e: unknown) => e,
-    );
+    const err = await postGateCredential(
+      token(),
+      { token: 'x' },
+      zhT,
+      fetchImpl as typeof fetch,
+    ).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(GateHostError);
     expect((err as Error).message).toContain('500');
@@ -73,9 +83,12 @@ describe('postGateCredential', () => {
         new Response('not json', { status: 200, headers: { 'content-type': 'text/plain' } }),
     );
 
-    const err = await postGateCredential(token(), { token: 'x' }, fetchImpl as typeof fetch).catch(
-      (e: unknown) => e,
-    );
+    const err = await postGateCredential(
+      token(),
+      { token: 'x' },
+      zhT,
+      fetchImpl as typeof fetch,
+    ).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(GateHostError);
   });
@@ -83,9 +96,12 @@ describe('postGateCredential', () => {
   it('throws GateHostError when the JSON body is not the expected {ok,result:{stored}} shape', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, result: { stored: false } }));
 
-    const err = await postGateCredential(token(), { token: 'x' }, fetchImpl as typeof fetch).catch(
-      (e: unknown) => e,
-    );
+    const err = await postGateCredential(
+      token(),
+      { token: 'x' },
+      zhT,
+      fetchImpl as typeof fetch,
+    ).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(GateHostError);
   });

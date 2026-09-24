@@ -10,6 +10,7 @@ import {
 } from '../lib/auth-api.js';
 import { HttpError } from '../lib/http-client.js';
 import { useT } from '../lib/i18n.js';
+import { roleLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { LOGIN_PATTERN } from '../lib/platform-errors.js';
 import { BindApiKeyForm } from './BindApiKeyForm.js';
@@ -432,7 +433,7 @@ function MembershipsCard({ memberships }: { readonly memberships: readonly WireM
           {memberships.map((m) => (
             <li key={m.workspaceId} className="row" style={{ justifyContent: 'space-between' }}>
               <span>{m.workspaceName}</span>
-              <span className="tag">{m.role}</span>
+              <span className="tag">{roleLabel(m.role, t)}</span>
             </li>
           ))}
         </ul>

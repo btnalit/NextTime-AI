@@ -80,7 +80,12 @@ describe('PlatformOverviewPage', () => {
     renderPage(http);
 
     const checklist = await screen.findByTestId('platform-checklist');
-    expect(checklist.textContent).toContain('anthropic configured');
+    // S8 W1-A10 (audit S14): the checklist's meta line is computed client-side from `counts` now
+    // (never the kernel's own English `detail` prose, which carried "(s)" plurals and, for
+    // `runtime`, an internal design-doc section number) — only `defaultWorkspace` still reads
+    // `detail` (it alone carries the workspace's name).
+    expect(checklist.textContent).toContain('5 个可用模型');
+    expect(checklist.textContent).toContain('Acme');
     expect(checklist.textContent).toContain('当前经主机配置');
 
     const counts = screen.getByTestId('platform-counts');

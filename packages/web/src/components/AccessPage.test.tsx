@@ -254,7 +254,7 @@ describe('AccessPage', () => {
     fireEvent.change(within(form).getByLabelText(/服务主体/), {
       target: { value: 'p-svc' },
     });
-    expect((within(form).getByLabelText(/TTL \(days\)/) as HTMLInputElement).value).toBe('30');
+    expect((within(form).getByLabelText(/有效期（天）/) as HTMLInputElement).value).toBe('30');
 
     // Only handle-channel names are offered: a member-management capability is not a checkbox
     // here, and pasting it is refused with the reason before any call.
@@ -300,7 +300,7 @@ describe('AccessPage', () => {
     });
     renderPage(http);
     const form = await screen.findByTestId('issue-service-handle-form');
-    fireEvent.change(within(form).getByLabelText(/TTL \(days\)/), { target: { value: '366' } });
+    fireEvent.change(within(form).getByLabelText(/有效期（天）/), { target: { value: '366' } });
     expect(within(form).getByText(/必须是 1 到 365 的整数/)).toBeTruthy();
   });
 

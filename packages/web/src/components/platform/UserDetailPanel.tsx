@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
-import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
+import { envAdminTitle } from '../../lib/platform-errors.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
@@ -219,7 +219,7 @@ export function UserDetailPanel({
 
       {protectedAdmin ? (
         <Notice tone="warn" testId="user-detail-env-admin">
-          {ENV_ADMIN_TITLE}{' '}
+          {envAdminTitle(t)}{' '}
           {t(
             '— 这个账户始终是管理员，不能在页面上停用或降级。',
             'This account is always an administrator and can be neither disabled nor demoted from here.',
@@ -238,7 +238,7 @@ export function UserDetailPanel({
         />
       </Field>
       <Field id="ud-platform-role" label={t('平台角色', 'Platform role')}>
-        <span title={protectedAdmin ? ENV_ADMIN_TITLE : undefined}>
+        <span title={protectedAdmin ? envAdminTitle(t) : undefined}>
           <Select
             id="ud-platform-role"
             value={platformRole}
@@ -392,7 +392,7 @@ export function UserDetailPanel({
         </div>
       ) : (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <span title={protectedAdmin ? ENV_ADMIN_TITLE : undefined}>
+          <span title={protectedAdmin ? envAdminTitle(t) : undefined}>
             <Button
               variant="danger"
               onClick={() => setConfirmingDisable(true)}

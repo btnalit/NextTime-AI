@@ -434,10 +434,16 @@ function PlatformSettingsForm({
         <div className="stack-s">
           <p className="text-3 text-small">
             {t(
-              '来自 NEXTTIME_PLATFORM_ADMINS，只读；这些登录名始终是管理员，页面上不可停用或降级。 From NEXTTIME_PLATFORM_ADMINS —',
-              'read-only; these logins are always administrators and can be neither disabled nor demoted from the console.',
+              '由主机环境配置指定，只读；这些登录名始终是管理员，页面上不可停用或降级。',
+              'Set by the host configuration, read-only; these logins are always administrators and can be neither disabled nor demoted from the console.',
             )}
           </p>
+          {/* S8 W1-A10 (audit S14): the env var name is an implementation detail an operator who
+           *  set it already knows — never inline, behind a disclosure instead. */}
+          <details className="disclosure">
+            <summary>{t('技术细节', 'Technical details')}</summary>
+            <p className="text-3 text-small mono">NEXTTIME_PLATFORM_ADMINS</p>
+          </details>
           <div className="row-wrap" data-testid="platform-settings-env-admins">
             {initial.envAdmins.length === 0 ? (
               <span className="text-3">—</span>

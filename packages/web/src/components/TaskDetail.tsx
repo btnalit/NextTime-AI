@@ -164,7 +164,7 @@ export function TaskDetail({
         <dd className="stack-s">
           <span className="tabular">
             {task.tokensUsed.toLocaleString()}
-            {task.tokenBudget ? ` / ${task.tokenBudget.toLocaleString()}` : ' 已用 used'}
+            {task.tokenBudget ? ` / ${task.tokenBudget.toLocaleString()}` : ` ${t('已用', 'used')}`}
           </span>
           {budgetPct !== null ? (
             <span className={`quota-bar${budgetPct >= 80 ? ' quota-bar-warn' : ''}`}>

@@ -14,11 +14,13 @@ export interface ModulesTabProps {
   readonly http: CapabilityCaller;
 }
 
-const STATUS_LABEL: Readonly<Record<WorkspaceModuleWire['status'], string>> = {
-  not_installed: '未安装 Not installed',
-  up_to_date: '已是最新 Up to date',
-  outdated: '有新版 Outdated',
-  customized: '已定制 Customized',
+const STATUS_LABEL: Readonly<
+  Record<WorkspaceModuleWire['status'], { readonly zh: string; readonly en: string }>
+> = {
+  not_installed: { zh: '未安装', en: 'Not installed' },
+  up_to_date: { zh: '已是最新', en: 'Up to date' },
+  outdated: { zh: '有新版', en: 'Outdated' },
+  customized: { zh: '已定制', en: 'Customized' },
 };
 
 /** `install_module`/`upgrade_module` always target the module's own **latest** indexed version
@@ -155,7 +157,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
                 return (
                   <tr key={module.name} data-testid={`catalog-module-row-${module.name}`}>
                     <td className="mono">{module.name}</td>
-                    <td>{STATUS_LABEL[module.status]}</td>
+                    <td>{t(STATUS_LABEL[module.status].zh, STATUS_LABEL[module.status].en)}</td>
                     <td className="mono">
                       {module.installedVersion === null ? '—' : `v${module.installedVersion}`}
                     </td>

@@ -113,19 +113,19 @@ describe('ModelsPage', () => {
     const quotasTable = await screen.findByTestId('quotas-table');
     const depth = within(quotasTable).getByTestId('quota-row-task.max_depth');
     expect(within(depth).getByTestId('quota-value').textContent).toBe('2');
-    expect(within(depth).getByTestId('quota-source').textContent).toContain('override');
+    // S8 W1-A10: the source/value/auto-approve labels are bilingual via t() now; default zh-CN
+    // renders the zh half.
+    expect(within(depth).getByTestId('quota-source').textContent).toContain('工作区覆盖');
     const cost = within(quotasTable).getByTestId('quota-row-task.daily_cost_budget_usd');
-    expect(within(cost).getByTestId('quota-value').textContent).toContain('unlimited');
-    expect(within(cost).getByTestId('quota-source').textContent).toContain('default');
+    expect(within(cost).getByTestId('quota-value').textContent).toContain('不限');
+    expect(within(cost).getByTestId('quota-source').textContent).toContain('默认');
 
     const policies = await screen.findByTestId('policies-table');
     const row = within(policies).getByTestId('policy-row-pol-1');
     expect(within(row).getByTestId('policy-action-kind').textContent).toBe(
       'docker.restart_container',
     );
-    expect(within(row).getByTestId('policy-auto-approve').textContent).toContain(
-      'requires approval',
-    );
+    expect(within(row).getByTestId('policy-auto-approve').textContent).toContain('需审批');
     expect(row.textContent).toContain('高影响');
   });
 

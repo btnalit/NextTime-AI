@@ -208,6 +208,8 @@ describe('AccountPage: cookie mode', () => {
     render(<AccountPage user={USER} memberships={MEMBERSHIPS} onUserChanged={vi.fn()} />);
     const list = screen.getByTestId('account-memberships');
     expect(list.textContent).toContain('Acme');
-    expect(list.textContent).toContain('owner');
+    // S8 W1-A10: the role tag is a bilingual label now (lib/labels.ts roleLabel); default zh-CN
+    // renders '所有者'.
+    expect(list.textContent).toContain('所有者');
   });
 });

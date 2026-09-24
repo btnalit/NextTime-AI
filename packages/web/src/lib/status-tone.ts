@@ -7,6 +7,7 @@ import type {
   GateTrustWire,
   GrantStatus,
   OperationMode,
+  PiDriftStatusWire,
   PlatformRoleWire,
   PublishableStatus,
   Role,
@@ -27,6 +28,7 @@ import {
   GateTrustWireSchema,
   OPERATION_MODE_VALUES,
   PUBLISHABLE_STATUS_VALUES,
+  PiDriftStatusWireSchema,
   PlatformRoleWireSchema,
   ROLE_VALUES,
   ServiceHealthWireSchema,
@@ -36,6 +38,7 @@ import {
   WorkspacePurposeWireSchema,
   WorkspaceStatusWireSchema,
 } from '@nexttime/shared';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/status-tone: the one status → visual-tone map per state machine, keyed by the enums
@@ -62,16 +65,25 @@ import {
 
 export type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'info' | 'accent' | 'observe';
 
-/** S8 W1-A9 (audit S4/S7): a machine's tones were authored either English-only (pre-S8, out of
- *  scope for this lane — "keep the existing wording, only split the pairs") or as a "中文 English"
- *  pair. `label` carries a plain `string` for the former and a `{zh, en}` pair for the latter, so
- *  `StatusChip` (the sole reader of `.label`) can pick the active language for a pair while an
- *  untranslated machine keeps rendering its one string either way — no behaviour change for it. */
+/** S8 W1-A9 (audit S4/S7) left the seven pre-S8 machines (action request, task, worker run,
+ *  connection request, publishable, grant, role) English-only ("keep the existing wording, only
+ *  split the pairs" — out of scope for that lane). S8 W1-A10 (audit S14) gave every one of them a
+ *  `{zh, en}` pair, so `label` is always bilingual now; the `string` arm stays on the type only for
+ *  an `unknown` value (`statusChipStyle`'s fallback echoes the raw wire string verbatim — see its
+ *  own doc comment) and any future machine ported the same way `resolveChipLabel` already supports
+ *  either shape without a caller-visible change. */
 export interface ChipStyle {
   readonly tone: Tone;
   readonly label: string | { readonly zh: string; readonly en: string };
   /** Pulsing dot — the state is in motion (running, waiting on someone). */
   readonly live?: boolean;
+}
+
+/** S8 W1-A10 (audit S14): the one place a `ChipStyle.label` (bilingual or plain) is resolved to
+ *  the text for the active language — `StatusChip` and `lib/labels.ts`'s enum-label helpers both
+ *  read through this instead of duplicating the `typeof label === 'string'` check. */
+export function labelText(style: Pick<ChipStyle, 'label'>, t: Translate): string {
+  return typeof style.label === 'string' ? style.label : t(style.label.zh, style.label.en);
 }
 
 export type StatusMachine =
@@ -92,69 +104,78 @@ export type StatusMachine =
   | 'gateTrust'
   | 'connectorMode'
   | 'serviceHealth'
-  | 'platformRole';
+  | 'platformRole'
+  | 'piDrift';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
-  proposed: { tone: 'neutral', label: 'Proposed' },
-  policy_evaluated: { tone: 'neutral', label: 'Policy evaluated' },
-  auto_approved: { tone: 'ok', label: 'Auto-approved' },
-  pending_approval: { tone: 'warn', label: 'Pending approval', live: true },
-  approved: { tone: 'ok', label: 'Approved' },
-  rejected: { tone: 'danger', label: 'Rejected' },
-  expired: { tone: 'neutral', label: 'Expired' },
-  denied: { tone: 'danger', label: 'Denied by policy' },
-  executing: { tone: 'info', label: 'Executing', live: true },
-  executed: { tone: 'ok', label: 'Executed' },
-  failed: { tone: 'danger', label: 'Failed' },
-  verified: { tone: 'ok', label: 'Verified' },
-  compensated: { tone: 'warn', label: 'Compensated' },
+  proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
+  policy_evaluated: { tone: 'neutral', label: { zh: '策略已评估', en: 'Policy evaluated' } },
+  auto_approved: { tone: 'ok', label: { zh: '已自动批准', en: 'Auto-approved' } },
+  pending_approval: {
+    tone: 'warn',
+    label: { zh: '待审批', en: 'Pending approval' },
+    live: true,
+  },
+  approved: { tone: 'ok', label: { zh: '已批准', en: 'Approved' } },
+  rejected: { tone: 'danger', label: { zh: '已拒绝', en: 'Rejected' } },
+  expired: { tone: 'neutral', label: { zh: '已过期', en: 'Expired' } },
+  denied: { tone: 'danger', label: { zh: '策略已否决', en: 'Denied by policy' } },
+  executing: { tone: 'info', label: { zh: '执行中', en: 'Executing' }, live: true },
+  executed: { tone: 'ok', label: { zh: '已执行', en: 'Executed' } },
+  failed: { tone: 'danger', label: { zh: '已失败', en: 'Failed' } },
+  verified: { tone: 'ok', label: { zh: '已验证', en: 'Verified' } },
+  compensated: { tone: 'warn', label: { zh: '已补偿', en: 'Compensated' } },
 };
 
 export const TASK_TONES: Readonly<Record<TaskStatus, ChipStyle>> = {
-  created: { tone: 'neutral', label: 'Created' },
-  queued: { tone: 'neutral', label: 'Queued' },
-  running: { tone: 'info', label: 'Running', live: true },
-  waiting_approval: { tone: 'warn', label: 'Waiting approval', live: true },
-  completed: { tone: 'ok', label: 'Completed' },
-  failed: { tone: 'danger', label: 'Failed' },
-  cancelled: { tone: 'neutral', label: 'Cancelled' },
+  created: { tone: 'neutral', label: { zh: '已创建', en: 'Created' } },
+  queued: { tone: 'neutral', label: { zh: '排队中', en: 'Queued' } },
+  running: { tone: 'info', label: { zh: '运行中', en: 'Running' }, live: true },
+  waiting_approval: {
+    tone: 'warn',
+    label: { zh: '等待审批', en: 'Waiting approval' },
+    live: true,
+  },
+  completed: { tone: 'ok', label: { zh: '已完成', en: 'Completed' } },
+  failed: { tone: 'danger', label: { zh: '已失败', en: 'Failed' } },
+  cancelled: { tone: 'neutral', label: { zh: '已取消', en: 'Cancelled' } },
 };
 
 export const WORKER_RUN_TONES: Readonly<Record<WorkerRunStatus, ChipStyle>> = {
-  provisioning: { tone: 'neutral', label: 'Provisioning', live: true },
-  running: { tone: 'info', label: 'Running', live: true },
-  suspended: { tone: 'warn', label: 'Suspended' },
-  terminated: { tone: 'neutral', label: 'Terminated' },
+  provisioning: { tone: 'neutral', label: { zh: '准备中', en: 'Provisioning' }, live: true },
+  running: { tone: 'info', label: { zh: '运行中', en: 'Running' }, live: true },
+  suspended: { tone: 'warn', label: { zh: '已挂起', en: 'Suspended' } },
+  terminated: { tone: 'neutral', label: { zh: '已终止', en: 'Terminated' } },
 };
 
 export const CONNECTION_REQUEST_TONES: Readonly<Record<ConnectionRequestStatus, ChipStyle>> = {
-  requested: { tone: 'warn', label: 'Requested', live: true },
-  completed: { tone: 'ok', label: 'Completed' },
-  cancelled: { tone: 'neutral', label: 'Cancelled' },
+  requested: { tone: 'warn', label: { zh: '已申请', en: 'Requested' }, live: true },
+  completed: { tone: 'ok', label: { zh: '已完成', en: 'Completed' } },
+  cancelled: { tone: 'neutral', label: { zh: '已取消', en: 'Cancelled' } },
 };
 
 export const PUBLISHABLE_TONES: Readonly<Record<PublishableStatus, ChipStyle>> = {
-  draft: { tone: 'neutral', label: 'Draft' },
-  published: { tone: 'ok', label: 'Published' },
-  deprecated: { tone: 'warn', label: 'Deprecated' },
+  draft: { tone: 'neutral', label: { zh: '草稿', en: 'Draft' } },
+  published: { tone: 'ok', label: { zh: '已发布', en: 'Published' } },
+  deprecated: { tone: 'warn', label: { zh: '已弃用', en: 'Deprecated' } },
 };
 
 /** S3.11's CapabilityGrant (`enums.ts` `GRANT_STATUS_VALUES`) — the Access page's grant list. */
 export const GRANT_TONES: Readonly<Record<GrantStatus, ChipStyle>> = {
-  active: { tone: 'ok', label: 'Active' },
-  revoked: { tone: 'danger', label: 'Revoked' },
-  expired: { tone: 'neutral', label: 'Expired' },
+  active: { tone: 'ok', label: { zh: '生效中', en: 'Active' } },
+  revoked: { tone: 'danger', label: { zh: '已撤销', en: 'Revoked' } },
+  expired: { tone: 'neutral', label: { zh: '已过期', en: 'Expired' } },
 };
 
 /** Not a lifecycle machine (a Role never "transitions"), but reusing the tone vocabulary keeps the
  *  Members page's role chip and the Sidebar's role badge visually consistent with every other
  *  status in the console rather than inventing a second color system. */
 export const ROLE_TONES: Readonly<Record<Role, ChipStyle>> = {
-  owner: { tone: 'accent', label: 'Owner' },
-  operator: { tone: 'info', label: 'Operator' },
-  builder: { tone: 'info', label: 'Builder' },
-  auditor: { tone: 'neutral', label: 'Auditor' },
-  member: { tone: 'neutral', label: 'Member' },
+  owner: { tone: 'accent', label: { zh: '所有者', en: 'Owner' } },
+  operator: { tone: 'info', label: { zh: '操作员', en: 'Operator' } },
+  builder: { tone: 'info', label: { zh: '构建者', en: 'Builder' } },
+  auditor: { tone: 'neutral', label: { zh: '审计员', en: 'Auditor' } },
+  member: { tone: 'neutral', label: { zh: '成员', en: 'Member' } },
 };
 
 // -------------------------------------------------------------------------------------------
@@ -273,6 +294,14 @@ export const PLATFORM_ROLE_TONES: Readonly<Record<PlatformRoleWire, ChipStyle>> 
   user: { tone: 'neutral', label: { zh: '用户', en: 'User' } },
 };
 
+/** `platform_status`'s pi/runtime-image consistency check (design §9 P-C — never rendered as that
+ *  codename, S8 W1-A10 / audit S14): `PlatformRuntimePage`'s pi-drift card. */
+export const PI_DRIFT_TONES: Readonly<Record<PiDriftStatusWire, ChipStyle>> = {
+  consistent: { tone: 'ok', label: { zh: '一致', en: 'Consistent' } },
+  drifted: { tone: 'danger', label: { zh: '有漂移', en: 'Drifted' } },
+  unknown: { tone: 'neutral', label: { zh: '未知', en: 'Unknown' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -297,6 +326,7 @@ const MACHINES: Readonly<
     tones: SERVICE_HEALTH_TONES,
   },
   platformRole: { values: PlatformRoleWireSchema.options, tones: PLATFORM_ROLE_TONES },
+  piDrift: { values: PiDriftStatusWireSchema.options, tones: PI_DRIFT_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

@@ -8,6 +8,7 @@ import {
   type WorkerDefinitionKind,
   workerDefinitionContentSchemaFor,
 } from '@nexttime/shared';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/catalog: pure helpers behind the catalog editors (S6-A A2 — docs/console-completion-plan.md
@@ -340,13 +341,14 @@ export function validateWorkerDefinition(
 
 export function parseJsonObject(
   text: string,
+  t: Translate,
 ):
   | { readonly ok: true; readonly value: Record<string, unknown> }
   | { readonly ok: false; readonly error: string } {
   try {
     const value: unknown = JSON.parse(text);
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return { ok: false, error: '必须是一个 JSON 对象 Must be a JSON object' };
+      return { ok: false, error: t('必须是一个 JSON 对象', 'Must be a JSON object') };
     }
     return { ok: true, value: value as Record<string, unknown> };
   } catch (err) {

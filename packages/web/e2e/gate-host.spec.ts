@@ -106,7 +106,9 @@ async function signOut(page: Page): Promise<void> {
 async function ensureOwnedWorkspaceSelected(page: Page): Promise<void> {
   const switcher = page.getByTestId('workspace-switcher');
   if (!(await switcher.isVisible().catch(() => false))) return;
-  const option = switcher.locator('option', { hasText: '(owner)' });
+  // S8 W1-A10: the switcher's role suffix is bilingual now (lib/labels.ts roleLabel); default
+  // zh-CN renders '(所有者)'.
+  const option = switcher.locator('option', { hasText: '(所有者)' });
   await expect(option).toHaveCount(1);
   const workspaceId = await option.getAttribute('value');
   expect(workspaceId ?? '').not.toBe('');

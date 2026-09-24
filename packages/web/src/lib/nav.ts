@@ -43,8 +43,11 @@ export interface NavGroup {
  *  built (`explorerAvailable !== false`, `lib/explorer-probe.ts`). */
 export const EXPLORER_NAV: ExternalNavItem = {
   testId: 'nav-explorer',
-  label: '打开 Explorer',
-  sub: 'third-party',
+  // S8 W1-A10 (i18n remainder): 'label'/'sub' follow the same zh-main/en-sub convention every
+  // other nav item below uses (both always shown, not a t() language pick) — was a single merged
+  // "打开 Explorer" label with the unrelated tag "third-party" as its sub.
+  label: '打开',
+  sub: 'Explorer',
   icon: 'search',
   href: '/explorer/',
 };

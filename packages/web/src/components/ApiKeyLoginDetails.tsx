@@ -94,8 +94,10 @@ export function ApiKeyLoginDetails({
 
         <p className="login-footer">
           <span>
-            Your key is issued by the workspace owner (<code>bootstrap add-principal</code>) and is
-            kept in this tab only until you sign out.
+            {t(
+              '密钥由工作区所有者签发，只保存在本次会话里，登出后即失效。',
+              'Your key is issued by the workspace owner and is kept in this tab only until you sign out.',
+            )}
           </span>
           {footerExtra ? <span>{footerExtra}</span> : null}
         </p>

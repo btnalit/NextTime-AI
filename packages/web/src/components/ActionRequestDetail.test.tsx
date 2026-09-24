@@ -74,8 +74,9 @@ describe('ActionRequestDetail', () => {
   it('shows the requested / executed timestamps in the full variant', () => {
     renderDetail({ status: 'executed', executedAt: '2026-09-03T00:01:00.000Z' });
     expect(screen.getByText('Requested')).toBeTruthy();
-    // 'Executed' is both the status chip's label and the timestamp's <dt>.
-    expect(screen.getAllByText('Executed')).toHaveLength(2);
+    // Before S8 W1-A10 'Executed' was both the status chip's label and the timestamp's <dt>; the
+    // chip is bilingual now (default zh-CN renders '已执行'), so only the <dt> matches.
+    expect(screen.getAllByText('Executed')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
 

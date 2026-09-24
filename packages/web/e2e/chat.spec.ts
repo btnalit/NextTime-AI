@@ -59,8 +59,11 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     const expectedReply = new RegExp(
       `^echo: <!--nexttime:turn_id=[^>]+-->\\n${escapeRegExp(prompt)}$`,
     );
-    // B4 bilingual label ("本轮完成 Turn completed") — match the English half.
-    await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
+    // S8 W1-A10: the badge text is bilingual via t() now (language-dependent); `data-status` is
+    // the language-independent hook.
+    await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
+      timeout: 15_000,
+    });
     // `.message-user .message-text` / `.message-assistant .message-text`: the bubble element
     // carries both classes (components/ChatPage.tsx `renderMessage`) — stable across the redesign.
     // The user's own displayed message is the prompt as typed — the marker is only ever added to
@@ -91,7 +94,9 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     const marker = `md-${Date.now()}`;
     await page.getByPlaceholder('Message…').fill(`## 标题 ${marker}\n\n**粗体 ${marker}**`);
     await page.getByRole('button', { name: 'Send' }).click();
-    await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
+    await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
+      timeout: 15_000,
+    });
 
     const reply = page.locator('.message-assistant .message-text');
     await expect(reply.locator('h2')).toHaveText(`标题 ${marker}`, { timeout: 15_000 });
@@ -127,7 +132,9 @@ test.describe('S1.8 acceptance: login -> new chat -> send -> streamed reply -> r
     await page.getByRole('button', { name: 'Send' }).click();
     // … then the `chat.metadata {title}` push (the first 40 code points of the message) names it.
     await expect(page.getByTestId('chat-title')).toHaveText(prompt, { timeout: 15_000 });
-    await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
+    await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
+      timeout: 15_000,
+    });
 
     // Rename from the header; a rename is never overwritten by a later auto-title. S8 W1-A3
     // (audit C3): rename/archive moved into the header's overflow menu — open it first.

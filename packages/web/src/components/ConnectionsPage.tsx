@@ -196,7 +196,7 @@ export function ConnectionsPage({
       toast.push({ tone: 'ok', title: t('已取消申请', 'Connection request cancelled') });
     } catch (err) {
       const described = describeError(err);
-      const mapped = cancelConnectionRequestMessage(described.code);
+      const mapped = cancelConnectionRequestMessage(described.code, t);
       if (described.code === 'illegal_transition') void requests.reload();
       // Keep the wire code on the rethrow so `ErrorBanner` still titles it (`CODE_TITLES`).
       throw mapped ? new HttpError('capability_error', mapped, described.code) : err;

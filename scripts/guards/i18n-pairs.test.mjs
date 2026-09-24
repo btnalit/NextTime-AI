@@ -56,6 +56,24 @@ test('findViolations', async (t) => {
     const src = ['<p>', '  还没有权限\n  No permission yet', '</p>'].join('\n');
     assert.deepEqual(findViolations(src), [{ line: 1, text: '还没有权限 No permission yet' }]);
   });
+
+  await t.test('flags a zh half that ends in full-width punctuation directly against the ' +
+    'English tail, with no space (S8 W1-A10 fix)', () => {
+    const src = [
+      'function X() {',
+      '  return <span>继承（不覆盖）Inherit workspace default</span>;',
+      '}',
+    ].join('\n');
+    assert.deepEqual(findViolations(src), [
+      { line: 2, text: '继承（不覆盖）Inherit workspace default' },
+    ]);
+  });
+
+  await t.test('still does not flag a CJK label glued to a non-punctuation Latin/numeric run ' +
+    '(no language boundary implied)', () => {
+    const src = "const a = '版本v2.0.1';";
+    assert.deepEqual(findViolations(src), []);
+  });
 });
 
 test('blankComments', () => {

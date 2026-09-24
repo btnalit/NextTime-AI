@@ -9,6 +9,7 @@ import {
   GateTrustWireSchema,
   OPERATION_MODE_VALUES,
   PUBLISHABLE_STATUS_VALUES,
+  PiDriftStatusWireSchema,
   PlatformRoleWireSchema,
   ROLE_VALUES,
   ServiceHealthWireSchema,
@@ -41,9 +42,9 @@ function renderChip(ui: ReactElement) {
   return render(<LangProvider>{ui}</LangProvider>);
 }
 
-/** The zh-CN default (`LangProvider`'s default, `lib/i18n.ts`) half of a `ChipStyle.label` — a
- *  plain-string label (pre-S8 machines, untranslated, out of this lane's scope) resolves to
- *  itself either way. */
+/** The zh-CN default (`LangProvider`'s default, `lib/i18n.ts`) half of a `ChipStyle.label` —
+ *  every machine is bilingual as of S8 W1-A10 (audit S14); a plain-string label (the `unknown`
+ *  fallback's raw wire value) resolves to itself either way. */
 function resolveLabel(label: ChipStyle['label']): string {
   return typeof label === 'string' ? label : label.zh;
 }
@@ -75,6 +76,7 @@ const MACHINES: readonly { readonly machine: StatusMachine; readonly values: rea
     { machine: 'connectorMode', values: ConnectorModeWireSchema.options },
     { machine: 'serviceHealth', values: ServiceHealthWireSchema.shape.status.options },
     { machine: 'platformRole', values: PlatformRoleWireSchema.options },
+    { machine: 'piDrift', values: PiDriftStatusWireSchema.options },
   ];
 
 describe('StatusChip', () => {

@@ -190,7 +190,7 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
 
         <Field
           id="ish-ttl"
-          label="有效期（天）TTL (days)"
+          label={t('有效期（天）', 'TTL (days)')}
           hint={`默认 ${DEFAULT_TTL_DAYS}，最多 ${maxTtlDays} Default ${DEFAULT_TTL_DAYS}, max ${maxTtlDays}`}
           error={
             ttlValid

@@ -15,6 +15,7 @@ import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../../lib/format.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { auditResourceTypeLabel, roleLabel } from '../../lib/labels.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -137,7 +138,7 @@ export function AuditLogSection({
               <option value="">{t('任意', 'Any')}</option>
               {(principals ?? []).map((principal) => (
                 <option key={principal.id} value={principal.id}>
-                  {principal.displayName} · {principal.role}
+                  {principal.displayName} · {roleLabel(principal.role, t)}
                 </option>
               ))}
               {actor !== '' && !(principals ?? []).some((p) => p.id === actor) ? (
@@ -178,7 +179,7 @@ export function AuditLogSection({
             <option value="">{t('任意', 'Any')}</option>
             {AUDIT_RESOURCE_TYPES.map((type) => (
               <option key={type} value={type}>
-                {type}
+                {auditResourceTypeLabel(type, t)}
               </option>
             ))}
             {resourceType !== '' &&
@@ -252,7 +253,11 @@ export function AuditLogSection({
                         <RefChip
                           kind="object"
                           id={row.resourceId}
-                          name={row.resourceType}
+                          name={
+                            row.resourceType
+                              ? auditResourceTypeLabel(row.resourceType, t)
+                              : undefined
+                          }
                           href={resourceHref(row.resourceType, row.resourceId)}
                           size="s"
                         />
@@ -260,7 +265,7 @@ export function AuditLogSection({
                     ) : row.resourceType ? (
                       <>
                         <span className="meta-sep" />
-                        <span className="mono">{row.resourceType}</span>
+                        <span>{auditResourceTypeLabel(row.resourceType, t)}</span>
                       </>
                     ) : null}
                   </div>

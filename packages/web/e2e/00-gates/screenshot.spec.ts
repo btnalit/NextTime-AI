@@ -60,7 +60,9 @@ test.describe('S8 W1-B screenshot gate', () => {
     await expect(page.getByRole('button', { name: 'Back to chats' })).toBeVisible();
     await page.getByPlaceholder('Message…').fill(CHAT_FIXTURE_PROMPT);
     await page.getByRole('button', { name: 'Send' }).click();
-    await expect(page.locator('.turn-badge')).toHaveText(/Turn completed/, { timeout: 15_000 });
+    await expect(page.locator('.turn-badge[data-status="completed"]')).toBeVisible({
+      timeout: 15_000,
+    });
     // S8 W1-A2: the assistant bubble renders through a lazy-loaded chunk
     // (components/chat/MessageBody.tsx's `Suspense`/`React.lazy` around `components/kit/
     // markdown.tsx`) — before it resolves, the same text shows through a plain `.pre-wrap`

@@ -1,4 +1,5 @@
 import type { ModelRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { EmptyState } from './ui/EmptyState.js';
 
 export interface ModelsTableProps {
@@ -9,12 +10,16 @@ export interface ModelsTableProps {
  *  everywhere it appears (`/govern/models`'s own table and `/me/agent`'s placeholder preview,
  *  S3.13 not being built yet). No provider keys, no pricing — just what a caller may pick. */
 export function ModelsTable({ models }: ModelsTableProps) {
+  const t = useT();
   if (models.length === 0) {
     return (
       <EmptyState
         icon="cpu"
-        title="No models on the allow-list"
-        body="The workspace owner configures llm-proxy's model allow-list (config/models.json)."
+        title={t('清单里还没有模型', 'No models on the allow-list')}
+        body={t(
+          '由工作区所有者配置可用的模型。',
+          'The workspace owner configures the model allow-list.',
+        )}
         testId="models-empty"
       />
     );

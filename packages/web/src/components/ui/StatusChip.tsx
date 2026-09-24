@@ -1,5 +1,5 @@
 import { useT } from '../../lib/i18n.js';
-import { type StatusMachine, statusChipStyle } from '../../lib/status-tone.js';
+import { type StatusMachine, labelText, statusChipStyle } from '../../lib/status-tone.js';
 
 export interface StatusChipProps {
   readonly machine: StatusMachine;
@@ -21,8 +21,7 @@ export interface StatusChipProps {
 export function StatusChip({ machine, status, size = 'm', className, testId }: StatusChipProps) {
   const t = useT();
   const style = statusChipStyle(machine, status);
-  const labelText =
-    typeof style.label === 'string' ? style.label : t(style.label.zh, style.label.en);
+  const text = labelText(style, t);
   const classes = [
     'chip',
     `chip-${style.tone}`,
@@ -41,7 +40,7 @@ export function StatusChip({ machine, status, size = 'm', className, testId }: S
       data-testid={testId}
       title={style.unknown ? `Unknown ${machine} status: ${status}` : status}
     >
-      {labelText}
+      {text}
     </span>
   );
 }

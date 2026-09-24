@@ -73,7 +73,11 @@ function queueRowByMarker(page: import('@playwright/test').Page, marker: string)
 }
 
 async function openQueueRow(page: import('@playwright/test').Page, marker: string) {
-  await queueRowByMarker(page, marker).click();
+  // Click the row's title, not its geometric centre: `DataRow` deliberately ignores clicks that
+  // land on a button, and the meta line's copy buttons (36 px invisible hit area since S8 W1-A8)
+  // can sit under the centre once the copy is shorter (S8 W1-A10) — a centre click then copies
+  // an id instead of opening the drawer.
+  await queueRowByMarker(page, marker).locator('.data-row-title').click();
   const drawer = page.getByTestId('approval-drawer');
   await expect(drawer).toBeVisible();
   return drawer;

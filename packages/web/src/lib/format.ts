@@ -1,3 +1,5 @@
+import type { Translate } from './i18n.js';
+
 /**
  * lib/format: display formatting for ids, times and durations. Pure; every function takes an
  * optional `now` so tests are deterministic.
@@ -151,11 +153,16 @@ export function humanizeKind(kind: string): string {
  *  render that as a blank chip or `"null"` (a template literal would otherwise stringify it
  *  verbatim). Structurally typed (not `PlatformAuditRecordWire`) to keep this module
  *  dependency-free, same as every other helper here. */
-export function formatAuditActor(row: {
-  readonly actorLogin: string | null;
-  readonly actorUserId: string | null;
-}): string {
-  return row.actorLogin ?? row.actorUserId ?? '主机操作员（未署名） Host operator (unattributed)';
+export function formatAuditActor(
+  row: {
+    readonly actorLogin: string | null;
+    readonly actorUserId: string | null;
+  },
+  t: Translate,
+): string {
+  return (
+    row.actorLogin ?? row.actorUserId ?? t('主机操作员（未署名）', 'Host operator (unattributed)')
+  );
 }
 
 /** Pretty JSON, or the raw string when the value is not serializable. */

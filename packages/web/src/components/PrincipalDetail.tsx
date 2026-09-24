@@ -5,6 +5,7 @@ import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import type { PrincipalRow, RotateApiKeyResult } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { principalKindLabel, roleLabel } from '../lib/labels.js';
 import { RefChip } from './kit/ref-chip.js';
 import { Button } from './ui/Button.js';
 import { CopyId } from './ui/CopyId.js';
@@ -115,7 +116,7 @@ export function PrincipalDetail({
         </dd>
         <dt>{t('类型', 'Kind')}</dt>
         <dd>
-          <span className="tag">{principal.kind}</span>
+          <span className="tag">{principalKindLabel(principal.kind, t)}</span>
         </dd>
         <dt>{t('状态', 'Status')}</dt>
         <dd>
@@ -175,7 +176,7 @@ export function PrincipalDetail({
               >
                 {ROLE_VALUES.map((value) => (
                   <option key={value} value={value}>
-                    {value}
+                    {roleLabel(value, t)}
                   </option>
                 ))}
               </Select>

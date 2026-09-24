@@ -1,5 +1,5 @@
 import type { LlmProviderWire } from '@nexttime/shared';
-import { useT } from '../../../lib/i18n.js';
+import { type Translate, useT } from '../../../lib/i18n.js';
 
 export interface CredentialStateProps {
   readonly provider: Pick<LlmProviderWire, 'credentialPresent' | 'credentialSource' | 'apiKeyEnv'>;
@@ -8,16 +8,16 @@ export interface CredentialStateProps {
   readonly withInstruction?: boolean;
 }
 
-function chipLabel(provider: CredentialStateProps['provider']): string {
+function chipLabel(provider: CredentialStateProps['provider'], t: Translate): string {
   switch (provider.credentialSource) {
     case 'console':
-      return '凭证：控制台 Credential: console';
+      return t('凭证：控制台', 'Credential: console');
     case 'env':
-      return `凭证：环境变量 ${provider.apiKeyEnv} Credential: env var ${provider.apiKeyEnv}`;
+      return t(`凭证：环境变量 ${provider.apiKeyEnv}`, `Credential: env var ${provider.apiKeyEnv}`);
     case 'none':
       return provider.apiKeyEnv
-        ? `凭证：待配置 ${provider.apiKeyEnv} Credential: not set ${provider.apiKeyEnv}`
-        : '凭证：待配置 Credential: not set';
+        ? t(`凭证：待配置 ${provider.apiKeyEnv}`, `Credential: not set ${provider.apiKeyEnv}`)
+        : t('凭证：待配置', 'Credential: not set');
   }
 }
 
@@ -42,7 +42,7 @@ export function CredentialState({ provider, withInstruction = false }: Credentia
         data-source={credentialSource}
         title={provider.apiKeyEnv ?? undefined}
       >
-        {chipLabel(provider)}
+        {chipLabel(provider, t)}
       </span>
       {withInstruction ? (
         <p className="text-small text-2" data-testid="provider-credential-instruction">

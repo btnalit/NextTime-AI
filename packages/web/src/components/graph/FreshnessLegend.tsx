@@ -2,6 +2,7 @@ import {
   FRESHNESS_LEGEND,
   OBSERVATION_WINDOW_MS,
   formatWindow,
+  freshnessLabel,
 } from '../../lib/graph-freshness.js';
 import { useT } from '../../lib/i18n.js';
 import { Icon } from '../ui/Icon.js';
@@ -26,9 +27,9 @@ export function FreshnessLegend() {
           {FRESHNESS_LEGEND.map((row) => (
             <li key={row.kind} className="graph-legend-row">
               <span className={`chip chip-s chip-${row.tone}`} data-freshness={row.kind}>
-                {row.label}
+                {freshnessLabel(row.label, t)}
               </span>
-              <span className="text-2 text-small">{row.description}</span>
+              <span className="text-2 text-small">{freshnessLabel(row.description, t)}</span>
             </li>
           ))}
         </ul>

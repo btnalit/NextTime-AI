@@ -3,7 +3,7 @@ import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { MeResult } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
 import { hrefs } from '../../lib/router.js';
@@ -30,13 +30,57 @@ type ChecklistItem = PlatformOverviewWire['checklist'][number];
 type ServiceHealth = PlatformOverviewWire['health'][number];
 
 /** `ChecklistItemWire.key` → bilingual label (design doc §4's five first-run steps). */
-const CHECKLIST_LABELS: Readonly<Record<ChecklistItem['key'], string>> = {
-  providers: '模型供应商 Model providers',
-  defaultWorkspace: '默认工作区 Default workspace',
-  integrations: '集成 Integrations',
-  users: '用户 Users',
-  runtime: '运行层 Runtime',
+const CHECKLIST_LABELS: Readonly<
+  Record<ChecklistItem['key'], { readonly zh: string; readonly en: string }>
+> = {
+  providers: { zh: '模型供应商', en: 'Model providers' },
+  defaultWorkspace: { zh: '默认工作区', en: 'Default workspace' },
+  integrations: { zh: '集成', en: 'Integrations' },
+  users: { zh: '用户', en: 'Users' },
+  runtime: { zh: '运行层', en: 'Runtime' },
 };
+
+/**
+ * S8 W1-A10 (audit S14 "P-C…内部指标名…(s) 复数"): `item.detail` (`PlatformOverviewWire`) is
+ * kernel-authored English prose with "(s)" plurals and, for `runtime`, the design doc's own
+ * internal section number "P-C" — never rendered verbatim. This recomputes each key's meta line
+ * client-side from `data.counts` (already on the wire) instead; only `defaultWorkspace` still
+ * reads the kernel's own `detail` (it alone carries the workspace's *name*, not in `counts`, and
+ * its wording has no internal term to begin with).
+ */
+function checklistDetail(
+  item: ChecklistItem,
+  counts: PlatformOverviewWire['counts'],
+  t: Translate,
+): string {
+  switch (item.key) {
+    case 'providers':
+      return item.done
+        ? t(`${counts.modelsAvailable} 个可用模型`, `${counts.modelsAvailable} model(s) available`)
+        : t(
+            '还没有可用模型——请在主机上配置模型供应商',
+            'No model available yet — configure a provider on the host',
+          );
+    case 'integrations':
+      return item.done
+        ? t(
+            `已接入 ${counts.gatekeepers} 个门实例`,
+            `${counts.gatekeepers} gatekeeper(s) registered`,
+          )
+        : t('还没有接入任何系统', 'No system connected yet');
+    case 'users':
+      return item.done
+        ? t(`已有 ${counts.activeUsers} 个活跃用户`, `${counts.activeUsers} active user(s)`)
+        : t('目前只有管理员——去创建用户', 'Only the administrator so far — create users');
+    case 'runtime':
+      return t(
+        'pi / 运行时镜像一致性由 CI 检查',
+        'pi / runtime image consistency is enforced by CI',
+      );
+    case 'defaultWorkspace':
+      return item.detail;
+  }
+}
 
 /** `ChecklistItemWire.key` → where "前往 Go" sends the admin. `providers` and `runtime` have no
  *  page of their own yet (providers is host-configured; runtime is a later P-A wave) — see this
@@ -158,9 +202,9 @@ function PlatformOverviewBody({
                   label={item.done ? t('已完成', 'Done') : t('待完成', 'To do')}
                 />
               }
-              title={CHECKLIST_LABELS[item.key]}
-              meta={item.detail}
-              trailing={checklistTrailing(item)}
+              title={t(CHECKLIST_LABELS[item.key].zh, CHECKLIST_LABELS[item.key].en)}
+              meta={checklistDetail(item, data.counts, t)}
+              trailing={checklistTrailing(item, t)}
             />
           ))}
         </DataList>
@@ -222,7 +266,7 @@ function PlatformOverviewBody({
                 key={row.id}
                 testId="platform-overview-audit-row"
                 title={row.action}
-                meta={`${formatAuditActor(row)} · ${formatDateTime(row.createdAt)}`}
+                meta={`${formatAuditActor(row, t)} · ${formatDateTime(row.createdAt)}`}
               />
             ))}
           </DataList>
@@ -234,7 +278,7 @@ function PlatformOverviewBody({
   );
 }
 
-function checklistTrailing(item: ChecklistItem) {
+function checklistTrailing(item: ChecklistItem, t: Translate) {
   const href = CHECKLIST_LINKS[item.key];
   // S8 W1-A8 (audit S6): a bare `<a>` here rendered a 45×21 hit area, under the §5.9 principle-6
   // 36px floor. `inline-flex min-h-9 items-center` is the same already-generated Tailwind
@@ -243,12 +287,14 @@ function checklistTrailing(item: ChecklistItem) {
   if (href) {
     return (
       <a href={href} className="inline-flex min-h-9 items-center">
-        前往 Go
+        {t('前往', 'Go')}
       </a>
     );
   }
   if (item.key === 'providers') {
-    return <span className="text-3 text-small">当前经主机配置 Configured on the host</span>;
+    return (
+      <span className="text-3 text-small">{t('当前经主机配置', 'Configured on the host')}</span>
+    );
   }
   return undefined;
 }

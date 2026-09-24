@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { WireMembership } from '../../lib/auth-api.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { roleLabel } from '../../lib/labels.js';
 import type { ExternalNavItem, NavItem } from '../../lib/nav.js';
 import { EXPLORER_NAV, GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from '../../lib/nav.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
@@ -151,7 +152,7 @@ export function SidebarContent({
               >
                 {(memberships ?? []).map((m) => (
                   <option key={m.workspaceId} value={m.workspaceId}>
-                    {m.workspaceName} ({m.role})
+                    {m.workspaceName} ({roleLabel(m.role, t)})
                   </option>
                 ))}
               </Select>
@@ -264,8 +265,8 @@ export interface MobileTopBarProps {
   readonly onOpenMenu: () => void;
 }
 
-function roleText(role: WorkspaceRole): string {
-  return role.kind === 'known' ? role.role : ROLE_BADGE_LABEL[role.role];
+function roleText(role: WorkspaceRole, t: Translate): string {
+  return role.kind === 'known' ? roleLabel(role.role, t) : ROLE_BADGE_LABEL[role.role];
 }
 
 /**
@@ -301,7 +302,7 @@ export function MobileTopBar({
       <div className="mobile-topbar-text">
         <span className="mobile-topbar-title truncate">{pageTitle}</span>
         <span className="mobile-topbar-sub truncate">
-          NextTime AI · {workspaceName} · {roleText(role)}
+          NextTime AI · {workspaceName} · {roleText(role, t)}
         </span>
       </div>
       <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus]}`}>

@@ -128,9 +128,10 @@ describe('GraphPage', () => {
     const byId = new Map(rows.map((row) => [row.getAttribute('data-fact-id'), row]));
     expect(byId.get('f-1')?.getAttribute('data-freshness')).toBe('fresh');
     expect(byId.get('f-2')?.getAttribute('data-freshness')).toBe('conflict');
+    // S8 W1-A10: bilingual via t() now; default zh-CN renders '冲突'.
     expect(
       within(byId.get('f-2') as HTMLElement).getByTestId('graph-fact-conflict').textContent,
-    ).toBe('冲突 Conflict ×1');
+    ).toBe('冲突 ×1');
     expect(byId.get('f-3')?.getAttribute('data-freshness')).toBe('unobserved');
     expect(within(byId.get('f-3') as HTMLElement).getByText('asserted')).toBeTruthy();
     expect(within(byId.get('f-1') as HTMLElement).getByText('置信 0.95')).toBeTruthy();

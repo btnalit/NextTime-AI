@@ -10,6 +10,7 @@ import {
   redactSensitive,
   shortId,
 } from './format.js';
+import type { Translate } from './i18n.js';
 
 // Every calendar-day-sensitive assertion below needs a fixed, known zone — pin the whole file to
 // UTC so it is deterministic on any host/CI machine regardless of its own local zone, and restore
@@ -47,13 +48,14 @@ describe('format', () => {
   });
 
   it('formatAuditActor prefers login, falls back to the raw id, then to an unattributed label (遗留 54)', () => {
-    expect(formatAuditActor({ actorLogin: 'alice', actorUserId: 'u-1' })).toBe('alice');
-    expect(formatAuditActor({ actorLogin: null, actorUserId: 'u-1' })).toBe('u-1');
+    const zhT: Translate = (zh) => zh;
+    expect(formatAuditActor({ actorLogin: 'alice', actorUserId: 'u-1' }, zhT)).toBe('alice');
+    expect(formatAuditActor({ actorLogin: null, actorUserId: 'u-1' }, zhT)).toBe('u-1');
     // A CLI purge with no resolvable administrator (`platform.workspace_purged`,
     // `payload.attributedActor: false`) writes actor_user_id null — never render that as blank or
     // the literal string "null".
-    expect(formatAuditActor({ actorLogin: null, actorUserId: null })).toBe(
-      '主机操作员（未署名） Host operator (unattributed)',
+    expect(formatAuditActor({ actorLogin: null, actorUserId: null }, zhT)).toBe(
+      '主机操作员（未署名）',
     );
   });
 

@@ -208,7 +208,8 @@ describe('Sidebar', () => {
       />,
     );
     const badge = screen.getByTestId('role-badge');
-    expect(badge.textContent).toBe('Auditor');
+    // S8 W1-A10: the role StatusChip is bilingual now; default zh-CN renders '审计员'.
+    expect(badge.textContent).toBe('审计员');
   });
 
   it('renders the kernel version and current user in the footer only when known (S6-A0)', () => {
@@ -399,7 +400,8 @@ describe('MobileTopBar', () => {
       />,
     );
     expect(screen.getByText('对话')).toBeTruthy();
-    expect(screen.getByText(/NextTime AI · Acme · owner/)).toBeTruthy();
+    // S8 W1-A10: a known role is bilingual via roleLabel() now; default zh-CN renders '所有者'.
+    expect(screen.getByText(/NextTime AI · Acme · 所有者/)).toBeTruthy();
     fireEvent.click(screen.getByTestId('nav-open'));
     expect(onOpenMenu).toHaveBeenCalledTimes(1);
   });

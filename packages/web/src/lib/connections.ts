@@ -1,5 +1,6 @@
 import type { ConnectionRequestStatus, PublishableStatus } from '@nexttime/shared';
 import { PUBLISHABLE_STATUS_VALUES } from '@nexttime/shared';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/connections: wire shapes of the S2.13 connection flow as the web reads them —
@@ -234,17 +235,25 @@ export function searchItems<T>(result: unknown): readonly T[] {
  *  column — who / when is on the `connection.request_cancelled` audit row). */
 export type CancelConnectionRequestResult = ConnectionRequestRow;
 
-const CONNECTION_ERROR_MESSAGES: Readonly<Record<string, string>> = {
-  forbidden:
-    '只能取消自己发起的申请；工作区 owner 可以取消任何申请 Only your own request can be cancelled — the workspace owner may cancel any',
-  illegal_transition:
-    '该申请已不在「已申请」状态，刷新后再看 This request is no longer in the requested state — refresh to see its current status',
-  not_found: '找不到该连接申请 No such connection request',
+const CONNECTION_ERROR_MESSAGES: Readonly<
+  Record<string, { readonly zh: string; readonly en: string }>
+> = {
+  forbidden: {
+    zh: '只能取消自己发起的申请；工作区所有者可以取消任何申请',
+    en: 'Only your own request can be cancelled — the workspace owner may cancel any',
+  },
+  illegal_transition: {
+    zh: '该申请已不在「已申请」状态，刷新后再看',
+    en: 'This request is no longer in the requested state — refresh to see its current status',
+  },
+  not_found: { zh: '找不到该连接申请', en: 'No such connection request' },
 };
 
 /** The bilingual one-liner for a `cancel_connection_request` failure, or `null` when the code is
  *  not one of the three it can raise (callers then fall back to `ErrorBanner`). Takes the already
- *  normalized code so it stays transport-agnostic (`describeError(err).code`, HTTP or WS). */
-export function cancelConnectionRequestMessage(code: string): string | null {
-  return CONNECTION_ERROR_MESSAGES[code] ?? null;
+ *  normalized code so it stays transport-agnostic (`describeError(err).code`, HTTP or WS). A pure
+ *  helper — takes `t` from its caller. */
+export function cancelConnectionRequestMessage(code: string, t: Translate): string | null {
+  const entry = CONNECTION_ERROR_MESSAGES[code];
+  return entry ? t(entry.zh, entry.en) : null;
 }

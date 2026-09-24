@@ -46,10 +46,15 @@ type ConfirmState =
   | { readonly kind: 'enable'; readonly provider: LlmProviderWire }
   | { readonly kind: 'delete'; readonly provider: LlmProviderWire };
 
-const API_LABEL: Readonly<Record<LlmProviderWire['api'], string>> = {
-  'openai-completions': 'OpenAI 兼容 · completions',
-  'openai-responses': 'OpenAI 兼容 · responses',
-  'anthropic-messages': 'Anthropic · messages',
+const API_LABEL: Readonly<
+  Record<LlmProviderWire['api'], { readonly zh: string; readonly en: string }>
+> = {
+  'openai-completions': {
+    zh: 'OpenAI 兼容 · completions 接口',
+    en: 'OpenAI-compatible · completions',
+  },
+  'openai-responses': { zh: 'OpenAI 兼容 · responses 接口', en: 'OpenAI-compatible · responses' },
+  'anthropic-messages': { zh: 'Anthropic · messages', en: 'Anthropic · messages' },
 };
 
 /**
@@ -378,7 +383,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           </div>
           {rowError && rowError.id === provider.id ? (
             <div className="field-error" role="alert" data-testid="provider-row-error">
-              {llmAdminErrorMessage(rowError.error) ??
+              {llmAdminErrorMessage(rowError.error, t) ??
                 (rowError.error instanceof Error ? rowError.error.message : String(rowError.error))}
             </div>
           ) : null}
@@ -389,7 +394,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
       id: 'api',
       header: 'API',
       cellClassName: 'text-small',
-      cell: (provider) => API_LABEL[provider.api],
+      cell: (provider) => t(API_LABEL[provider.api].zh, API_LABEL[provider.api].en),
     },
     {
       id: 'baseUrl',
@@ -518,7 +523,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         {list.state.status === 'loading' ? (
           <SkeletonRows count={3} label="Loading providers" testId="providers-loading" />
         ) : list.state.status === 'error' ? (
-          llmAdminErrorMessage(list.state.error) !== null ? (
+          llmAdminErrorMessage(list.state.error, t) !== null ? (
             <div className="stack-s">
               <div
                 className="field-error"
@@ -526,7 +531,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                 data-testid="providers-error"
                 data-error-code={(list.state.error as LlmAdminError).code}
               >
-                {llmAdminErrorMessage(list.state.error)}
+                {llmAdminErrorMessage(list.state.error, t)}
               </div>
               <div>
                 <Button
@@ -618,7 +623,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           <div className="stack">
             <dl className="definition-list">
               <dt>API</dt>
-              <dd>{API_LABEL[drawerProvider.api]}</dd>
+              <dd>{t(API_LABEL[drawerProvider.api].zh, API_LABEL[drawerProvider.api].en)}</dd>
               <dt>Base URL</dt>
               <dd className="mono">{drawerProvider.upstreamBaseUrl}</dd>
               <dt>{t('鉴权头', 'Auth header')}</dt>

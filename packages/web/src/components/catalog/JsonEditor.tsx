@@ -55,7 +55,7 @@ export function JsonEditor({ label, value, onApply, disabled, testId }: JsonEdit
           size="s"
           disabled={disabled || !dirty}
           onClick={() => {
-            const parsed = parseJsonObject(text);
+            const parsed = parseJsonObject(text, t);
             if (!parsed.ok) {
               setError(parsed.error);
               return;

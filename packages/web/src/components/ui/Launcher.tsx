@@ -8,12 +8,19 @@ export type LauncherKind = 'http' | 'mcp' | 'ssh' | 'cli';
 export const LAUNCHER_KINDS: readonly LauncherKind[] = ['http', 'mcp', 'ssh', 'cli'];
 
 const KIND_LABEL: Readonly<
-  Record<LauncherKind, { readonly title: string; readonly hint: string }>
+  Record<
+    LauncherKind,
+    { readonly titleZh: string; readonly titleEn: string; readonly hint: string }
+  >
 > = {
-  http: { title: 'HTTP 门 HTTP gate', hint: 'REST / OpenAPI manifest behind a gatekeeper' },
-  mcp: { title: 'MCP 服务器 MCP server', hint: 'Model Context Protocol tools' },
-  ssh: { title: 'SSH 主机 SSH host', hint: 'Commands on a remote host' },
-  cli: { title: '命令行 CLI', hint: 'A local command-line tool' },
+  http: {
+    titleZh: 'HTTP 门',
+    titleEn: 'HTTP gate',
+    hint: 'REST / OpenAPI manifest behind a gatekeeper',
+  },
+  mcp: { titleZh: 'MCP 服务器', titleEn: 'MCP server', hint: 'Model Context Protocol tools' },
+  ssh: { titleZh: 'SSH 主机', titleEn: 'SSH host', hint: 'Commands on a remote host' },
+  cli: { titleZh: '命令行', titleEn: 'CLI', hint: 'A local command-line tool' },
 };
 
 /** §5.9 / §5.6: 选类型 → 连接与凭证 → 能力与策略 → 握手验证. */
@@ -113,7 +120,7 @@ export function Launcher({
                     data-testid={`launcher-kind-${option}`}
                   />
                   <span className="stack-s">
-                    <span>{KIND_LABEL[option].title}</span>
+                    <span>{t(KIND_LABEL[option].titleZh, KIND_LABEL[option].titleEn)}</span>
                     <span className="text-3 text-small">{KIND_LABEL[option].hint}</span>
                   </span>
                 </label>

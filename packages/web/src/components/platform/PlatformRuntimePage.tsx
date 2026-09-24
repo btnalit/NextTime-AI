@@ -24,24 +24,19 @@ import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Notice } from '../ui/Notice.js';
 import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
+import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
 
 export interface PlatformRuntimePageProps {
   readonly http: CapabilityCaller;
 }
 
-const PI_DRIFT_CHIP_CLASS: Readonly<Record<PiDriftWire['status'], string>> = {
-  consistent: 'chip-ok',
-  drifted: 'chip-danger',
-  unknown: 'chip-neutral',
-};
-
 const ACTIVE_IMAGE_SOURCE_LABEL: Readonly<
-  Record<RuntimeInventoryWire['activeImageSource'], string>
+  Record<RuntimeInventoryWire['activeImageSource'], { readonly zh: string; readonly en: string }>
 > = {
-  setting: '平台设置 platform setting',
-  env_default: 'supervisor 环境变量缺省 worker-supervisor env default',
-  unknown: '未知（供应商不可达）unknown — worker-supervisor unreachable',
+  setting: { zh: '平台设置', en: 'platform setting' },
+  env_default: { zh: 'supervisor 环境变量缺省', en: 'worker-supervisor env default' },
+  unknown: { zh: '未知（供应商不可达）', en: 'unknown — worker-supervisor unreachable' },
 };
 
 /** A digest's own display form — `RuntimeImageWire.id` is always `sha256:<64 hex>` (this platform
@@ -499,14 +494,23 @@ function RuntimeBody({
             <dt>{t('构建来源', 'Built from')}</dt>
             <dd className="mono">{data.activeImageInfo.builtFrom ?? '—'}</dd>
             <dt>{t('来源', 'Source')}</dt>
-            <dd>{ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource]}</dd>
+            <dd>
+              {t(
+                ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].zh,
+                ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].en,
+              )}
+            </dd>
           </dl>
         ) : (
           <Notice tone="warn" testId="runtime-active-image-unresolved">
             {data.activeImage ? (
               <>
                 活动镜像引用 <span className="mono">{data.activeImage}</span>
-                （来源：{ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource]}
+                （来源：
+                {t(
+                  ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].zh,
+                  ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource].en,
+                )}
                 {t(
                   '）不在下面的镜像清单 里——可能没打平台 label，或 worker-supervisor 不可达；此时下方"待重建"一律按 "无法判断"显示为否，不猜测。 The active image reference is not in the inventory below (missing platform labels, or worker-supervisor unreachable) —',
                   'every "needs rebuild" below reads false rather than guessing.',
@@ -593,9 +597,7 @@ function PiDriftBody({ data }: { readonly data: PiDriftWire }) {
     <dl className="definition-list" data-testid="pi-drift-body">
       <dt>{t('状态', 'Status')}</dt>
       <dd>
-        <span className={`chip ${PI_DRIFT_CHIP_CLASS[data.status]}`} data-testid="pi-drift-status">
-          {data.status}
-        </span>
+        <StatusChip machine="piDrift" status={data.status} size="s" testId="pi-drift-status" />
       </dd>
       <dt>{t('锁定的 pi 版本', 'Pinned pi version')}</dt>
       <dd className="mono">{data.pinnedPiVersion ?? t('未知', 'unknown')}</dd>
@@ -604,7 +606,19 @@ function PiDriftBody({ data }: { readonly data: PiDriftWire }) {
       <dt>platform-extension 版本</dt>
       <dd className="mono">{data.platformExtensionVersion ?? '—'}</dd>
       <dt>{t('详情', 'Detail')}</dt>
-      <dd>{data.detail}</dd>
+      <dd>
+        {data.status === 'unknown' ? (
+          // S8 W1-A10 (audit S14): the kernel's `unknown` detail can name PI_DRIFT_FILE and "see
+          // docs/runbooks" (application/platform/runtime.ts) — never shown inline; behind a
+          // disclosure for an operator who needs it.
+          <details className="disclosure">
+            <summary>{t('技术细节', 'Technical details')}</summary>
+            <p className="text-3 text-small">{data.detail}</p>
+          </details>
+        ) : (
+          data.detail
+        )}
+      </dd>
       <dt>{t('检查时间', 'Checked at')}</dt>
       <dd>{data.checkedAt ? formatDateTime(data.checkedAt) : '—'}</dd>
     </dl>

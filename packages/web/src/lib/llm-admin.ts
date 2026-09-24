@@ -8,6 +8,7 @@ import type {
   LlmProviderWire,
 } from '@nexttime/shared';
 import type { CapabilityCaller } from './clients.js';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/llm-admin: the console's client for S6-B provider management (docs/console-completion-
@@ -217,22 +218,34 @@ export class LlmAdminClient {
 /** The bilingual copy for the codes the page branches on; anything else shows the proxy's own
  *  message. Kept here (not in `lib/platform-errors.ts`) because these are llm-proxy codes, not
  *  kernel capability codes. */
-export function llmAdminErrorMessage(error: unknown): string | null {
+export function llmAdminErrorMessage(error: unknown, t: Translate): string | null {
   if (!(error instanceof LlmAdminError)) return null;
   switch (error.code) {
     case 'store_unwritable':
-      return '模型代理的状态目录不可写——请操作员在主机上运行 scripts/host-llm-proxy-init.sh 后重建 llm-proxy。 The model proxy cannot write its state directory — the operator must run scripts/host-llm-proxy-init.sh on the host and recreate llm-proxy.';
+      return t(
+        '模型代理的状态目录不可写——请操作员在主机上运行 scripts/host-llm-proxy-init.sh 后重建 llm-proxy。',
+        'The model proxy cannot write its state directory — the operator must run scripts/host-llm-proxy-init.sh on the host and recreate llm-proxy.',
+      );
     case 'credential_missing':
-      return '该供应商尚未配置密钥（控制台或 secrets/llm-proxy.env 均未设置）。 This provider has no key configured (neither the console nor secrets/llm-proxy.env).';
+      return t(
+        '该供应商尚未配置密钥（控制台或 secrets/llm-proxy.env 均未设置）。',
+        'This provider has no key configured (neither the console nor secrets/llm-proxy.env).',
+      );
     case 'provider_exists':
-      return '已存在同名供应商。 A provider with this id already exists.';
+      return t('已存在同名供应商。', 'A provider with this id already exists.');
     case 'provider_from_file':
-      return '该供应商来自主机上的 llm-providers.yaml，不能在此删除——可停用它，或由操作员改 yaml。 This provider comes from llm-providers.yaml on the host — disable it here, or have the operator edit the yaml.';
+      return t(
+        '该供应商来自主机上的 llm-providers.yaml，不能在此删除——可停用它，或由操作员改 yaml。',
+        'This provider comes from llm-providers.yaml on the host — disable it here, or have the operator edit the yaml.',
+      );
     case 'reserved_id':
-      return '该 id 为代理自身路由保留。 This id is reserved for the proxy’s own routes.';
+      return t('该 id 为代理自身路由保留。', 'This id is reserved for the proxy’s own routes.');
     case 'token_expired':
     case 'unauthorized':
-      return '管理令牌无效或已过期，请重试。 The admin token is invalid or expired — try again.';
+      return t(
+        '管理令牌无效或已过期，请重试。',
+        'The admin token is invalid or expired — try again.',
+      );
     default:
       return null;
   }

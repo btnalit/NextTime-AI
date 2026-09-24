@@ -14,6 +14,10 @@ import {
   workerDefinitionContentFromForm,
   workerDefinitionFormFromWire,
 } from './catalog.js';
+import type { Translate } from './i18n.js';
+
+/** `parseJsonObject` is a pure helper (not a component) that takes `t` from its caller. */
+const zhT: Translate = (zh) => zh;
 
 describe('skill form → propose_skill{skill}', () => {
   it('builds the SKILL content and omits `applicable` when both lists are empty', () => {
@@ -176,9 +180,9 @@ describe('worker definition form → propose_worker_definition{definition}', () 
 describe('helpers', () => {
   it('splitList / parseJsonObject', () => {
     expect(splitList(' a, b \n\nc ')).toEqual(['a', 'b', 'c']);
-    expect(parseJsonObject('{"a":1}')).toEqual({ ok: true, value: { a: 1 } });
-    expect(parseJsonObject('[1]').ok).toBe(false);
-    expect(parseJsonObject('{').ok).toBe(false);
+    expect(parseJsonObject('{"a":1}', zhT)).toEqual({ ok: true, value: { a: 1 } });
+    expect(parseJsonObject('[1]', zhT).ok).toBe(false);
+    expect(parseJsonObject('{', zhT).ok).toBe(false);
   });
 
   it('parseMarkdownBlocks: headings, fenced code, lists, paragraphs', () => {

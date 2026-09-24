@@ -1,4 +1,10 @@
-import { type Freshness, type FreshnessInput, freshnessOf } from '../../lib/graph-freshness.js';
+import {
+  type Freshness,
+  type FreshnessInput,
+  freshnessLabel,
+  freshnessOf,
+} from '../../lib/graph-freshness.js';
+import { useT } from '../../lib/i18n.js';
 
 export interface FreshnessChipProps {
   /** Either an already-computed `Freshness` or the wire fields to compute one from. */
@@ -20,8 +26,10 @@ export interface FreshnessChipProps {
  * for tests, the full meaning in `title`.
  */
 export function FreshnessChip({ freshness, input, asOf, size = 'm', testId }: FreshnessChipProps) {
+  const t = useT();
   const resolved =
     freshness ?? (input ? freshnessOf(input, asOf) : freshnessOf({ lastObservedAt: null }, asOf));
+  const text = freshnessLabel(resolved.label, t);
   const classes = ['chip', `chip-${resolved.tone}`, size === 's' ? 'chip-s' : '']
     .filter(Boolean)
     .join(' ');
@@ -31,9 +39,9 @@ export function FreshnessChip({ freshness, input, asOf, size = 'm', testId }: Fr
       data-tone={resolved.tone}
       data-freshness={resolved.kind}
       data-testid={testId}
-      title={resolved.label}
+      title={text}
     >
-      {resolved.label}
+      {text}
     </span>
   );
 }

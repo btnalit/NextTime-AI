@@ -94,7 +94,8 @@ describe('AppShell', () => {
 
     // The workspace name and the authoritative role badge come from get_workspace.
     await waitFor(() => expect(screen.getByText('Acme')).toBeTruthy());
-    expect(screen.getByTestId('role-badge').textContent).toContain('Owner');
+    // S8 W1-A10: the role StatusChip is bilingual now; default zh-CN renders '所有者'.
+    expect(screen.getByTestId('role-badge').textContent).toContain('所有者');
     // Pending badge from list_pending.
     await waitFor(() =>
       expect(within(screen.getByTestId('nav-approvals')).getByText('2')).toBeTruthy(),
@@ -177,7 +178,7 @@ describe('AppShell', () => {
       const http = scriptedHttp(baseHandlers());
       renderShell(http);
       // MobileTopBar's identity line combines product/workspace/role into one text node
-      // ("NextTime AI · Acme · owner") — a regex matches the substring where an exact string
+      // ("NextTime AI · Acme · 所有者") — a regex matches the substring where an exact string
       // wouldn't (the wide Sidebar's `.sidebar-workspace` span, by contrast, holds only the name).
       await waitFor(() => expect(screen.getByText(/Acme/)).toBeTruthy());
 

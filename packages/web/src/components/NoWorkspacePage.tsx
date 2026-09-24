@@ -37,8 +37,10 @@ export function NoWorkspacePage({ user, onOpenAccount, onLogout }: NoWorkspacePa
             <strong>{user.displayName}</strong> (<code>{user.login}</code>).
           </p>
           <p>
-            工作区所有者或平台管理员需要先把你加入某个工作区，你才能使用控制台。A workspace owner or
-            platform administrator must add you to a workspace before you can use the console.
+            {t(
+              '工作区所有者或平台管理员需要先把你加入某个工作区，你才能使用控制台。',
+              'A workspace owner or platform administrator must add you to a workspace before you can use the console.',
+            )}
           </p>
 
           <div className="row" style={{ justifyContent: 'flex-end' }}>
