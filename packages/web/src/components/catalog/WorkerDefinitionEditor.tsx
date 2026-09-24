@@ -20,6 +20,7 @@ import type {
   SkillRow,
 } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { workerDefinitionKindLabel } from '../../lib/labels.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName } from '../../lib/tasks.js';
 import { Button } from '../ui/Button.js';
@@ -239,8 +240,8 @@ export function WorkerDefinitionEditor({
         }
         onDone={onDone}
         unpublishedConsequence={t(
-          'Worker 目录只显示已发布版本；这份草稿没有任何列表能找回——不发布的话，只能靠你自己记下上面这行 id，以后手动续写（propose_worker_definition 的 definitionId）。建议现在点击「发布」。',
-          'The Workers tab lists published versions only; no list can find this draft again — without publishing, only the id above (kept by you) can resume it later, as propose_worker_definition’s definitionId. Publish now if this is ready.',
+          'Worker 目录只显示已发布版本，这份草稿不会出现在任何列表里——不发布的话，之后只能凭上面的 id 续写。确认无误就现在点击「发布」。',
+          'The Workers tab lists published versions only, so this draft will not appear in any list — unpublished, it can only be resumed later from the id above. Publish now if it is ready.',
         )}
       />
     );
@@ -325,8 +326,8 @@ export function WorkerDefinitionEditor({
               id="wd-kind"
               label={t('类型', 'kind')}
               hint={t(
-                'entry = 用户入口智能体（能力有上限）；worker = 被委派的 Worker。新建只能是 worker——entry 只能由已有入口定义续写下一版本。',
-                "entry = the user's entry agent (capability ceiling); worker = a delegated Worker. A new draft can only be worker — entry only continues as the next version of an existing entry definition.",
+                '入口定义 = 用户的入口智能体（能力有上限）；Worker 定义 = 被委派执行任务的 Worker。新建只能是 Worker 定义，入口定义只能由已有的入口定义续写下一版本。',
+                "Entry definition = the user's entry agent (capability ceiling); Worker definition = a Worker tasks are delegated to. A new draft can only be a Worker definition — an entry definition only continues as the next version of an existing one.",
               )}
             >
               <Select
@@ -338,7 +339,7 @@ export function WorkerDefinitionEditor({
               >
                 {kindOptions.map((kind) => (
                   <option key={kind} value={kind}>
-                    {kind}
+                    {workerDefinitionKindLabel(kind, t)}
                   </option>
                 ))}
               </Select>
@@ -433,8 +434,8 @@ export function WorkerDefinitionEditor({
               disabled={busy}
               testId="wd-capabilities"
               emptyHint={t(
-                '暂无可选能力（list_capability_names 尚未加载或为空）。',
-                'No capabilities available yet (list_capability_names has not loaded, or is empty).',
+                '暂无可选能力（能力目录尚未加载或为空）。',
+                'No capabilities available yet (the capability directory has not loaded, or is empty).',
               )}
             />
             <Field
@@ -474,7 +475,7 @@ export function WorkerDefinitionEditor({
                 disabled={busy}
                 testId="wd-gates"
                 emptyHint={t(
-                  '工作区还没有注册系统（list_gatekeepers 为空）。',
+                  '工作区还没有注册系统。',
                   'No systems registered in this workspace yet.',
                 )}
               />

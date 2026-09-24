@@ -838,7 +838,7 @@ function EntrySection({
   const t = useT();
   return (
     <div className="stack-s" data-testid="workers-entry-section">
-      <span className="section-title">{t('入口 Entry', 'Entry')}</span>
+      <span className="section-title">{t('入口定义', 'Entry definition')}</span>
       {rows.length === 0 ? (
         <p className="text-3 text-small">
           {t(
@@ -1008,7 +1008,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
         {workerRows.length === 0 ? (
           <EmptyState
             icon="grid"
-            title={t('本工作区还没有可委派的 Worker', 'No delegable Workers in this workspace yet')}
+            title={t('本工作区还没有已发布的 Worker', 'No published Workers in this workspace yet')}
             body={t(
               '入口 agent 委派任务时找不到可用的 Worker——发布至少一个 Worker 定义，委派才能成功。可以用上面的「从模板创建（ops-runner）」快速开始。',
               'The entry agent has nothing to delegate to — publish at least one Worker definition so delegation can succeed. Use “Create from template (ops-runner)” above to get started quickly.',
