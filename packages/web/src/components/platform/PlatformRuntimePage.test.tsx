@@ -241,8 +241,12 @@ describe('PlatformRuntimePage', () => {
   });
 
   it('回滚到上一个镜像 opens a medium confirm and calls rollback_runtime_image', async () => {
+    const otherImage = image({
+      id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:v2'],
+    });
     const http = scriptedHttp({
-      runtime_inventory: () => inventory(),
+      runtime_inventory: () => inventory({ images: [image(), otherImage] }),
       pi_drift: () => piDrift(),
       list_workspaces: () => ({ items: [] }),
       rollback_runtime_image: () => ({}),
@@ -251,11 +255,32 @@ describe('PlatformRuntimePage', () => {
 
     fireEvent.click(await screen.findByTestId('runtime-rollback'));
     const confirm = await screen.findByTestId('runtime-rollback-confirm');
+    // RT2: the copy renders the emphasis, not a literal `*different*`.
+    expect(confirm.textContent).not.toContain('*different*');
+    const emphasised = Array.from(confirm.querySelectorAll('em')).map((el) => el.textContent);
+    expect(emphasised).toContain('different');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
 
     await waitFor(() =>
       expect(http.calls.some((c) => c.name === 'rollback_runtime_image')).toBe(true),
     );
+  });
+
+  it('回滚到上一个镜像 (RT2) is disabled with an explanation when fewer than two images are known', async () => {
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory(), // default fixture: one image
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const button = (await screen.findByTestId('runtime-rollback')) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toContain('没有可回滚到的不同值');
+
+    fireEvent.click(button);
+    expect(screen.queryByTestId('runtime-rollback-confirm')).toBeNull();
+    expect(http.calls.some((c) => c.name === 'rollback_runtime_image')).toBe(false);
   });
 
   it('resident containers show a named workspace, a bare-id principal chip and the 待重建 chip', async () => {

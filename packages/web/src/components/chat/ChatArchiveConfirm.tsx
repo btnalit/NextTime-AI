@@ -8,7 +8,7 @@ import {
 } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
-import { ConfirmTier } from '../ui/ConfirmTier.js';
+import { Confirm } from '../kit/confirm.js';
 import { useToast } from '../ui/Toast.js';
 
 export interface ChatArchiveConfirmProps {
@@ -24,12 +24,14 @@ export interface ChatArchiveConfirmProps {
 }
 
 /**
- * components/chat/ChatArchiveConfirm (S6-A W1; console-completion-plan §5.9 principle 4 "低 ·
- * 可逆 → 直接执行 + Toast 撤销"): archive as `ConfirmTier` tier `low` — it runs the moment `chat`
- * is set and the toast offers 撤销 Undo, which is `unarchive_chat` (the exact inverse; both
+ * components/chat/ChatArchiveConfirm (S6-A W1, S8 W1-A7; console-completion-plan §5.9 principle 4
+ * "低 · 可逆 → 直接执行 + Toast 撤销"): archive as `kit/confirm` tier `low` — it runs the moment
+ * `chat` is set and the toast offers 撤销 Undo, which is `unarchive_chat` (the exact inverse; both
  * idempotent). Rendered once by the page / header that owns the list cache, never inside a row:
  * the archive splice removes the row, and a confirm mounted there would be torn down before the
- * toast is pushed (`ConfirmTier`'s low tier drops everything after an unmount).
+ * toast is pushed (`Confirm`'s low tier drops everything after an unmount). `kit/confirm` carries
+ * no toast system of its own (S8 risk ① — a new `components/kit/*` file may not import
+ * `components/ui/*`), so this caller wires its own `useToast().push` through as `notify`.
  */
 export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArchiveConfirmProps) {
   const toast = useToast();
@@ -39,14 +41,17 @@ export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArc
   // still around to receive it; `notifyChatChanged` additionally reaches whichever page (this one,
   // a different one, or none) is mounted at that moment (`hooks/useChatUpdates.tsx`).
   const notifyChatChanged = useNotifyChatChanged();
-  // `ConfirmTier` low keys its effect on `open` alone and reads the callbacks through a ref; the
-  // undo closure it captures must reach the *current* chat and `onChanged` the same way.
+  // `Confirm`'s low tier keys its effect on `open` alone and reads the callbacks through a ref;
+  // the undo closure it captures must reach the *current* chat and `onChanged` the same way.
   const latest = useRef({ chat, onChanged, notifyChatChanged });
   latest.current = { chat, onChanged, notifyChatChanged };
   return (
-    <ConfirmTier
+    <Confirm
       tier="low"
       open={chat !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
       title={`已归档 Archived · ${chatTitle(chat)}`}
       onConfirm={async () => {
         const target = latest.current.chat;
@@ -55,7 +60,7 @@ export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArc
         latest.current.onChanged(updated);
         latest.current.notifyChatChanged(updated);
       }}
-      onClose={onClose}
+      notify={toast.push}
       undo={{
         onUndo: async () => {
           const target = chat;

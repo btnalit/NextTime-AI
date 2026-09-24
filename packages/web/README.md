@@ -215,6 +215,32 @@ src/
                           stays the default for an already-migrated page with its own loaded
                           directory; reach for the kit chip when adding a self-resolving one, or
                           migrating a page already on `components/kit/*`
+                          — S8 W1-A7 (audit S13/RT2): `confirm` — the Radix Popover/AlertDialog
+                          replacement for `components/ui/ConfirmTier` (now deleted), always rendered
+                          next to its own trigger instead of wherever the caller placed the JSX.
+                          Three tiers (folded from the doc's four — see the file's own doc comment
+                          for why `medium`/`high` collapse into one): `low` (fires immediately, no
+                          surface of its own — the caller wires its own toast through `notify`,
+                          since a new kit file may not import `components/ui/*`); `medium` (a
+                          `@radix-ui/react-popover`, `modal`, anchored via `Popover.Anchor` to an
+                          `anchor` prop that is the actual trigger element — chosen over `Trigger`
+                          because several callers cannot reach the real button directly, e.g.
+                          `ui/ApprovalCard`'s own Approve/Reject with no forwarded ref, so `anchor`
+                          wraps the whole card instead); `irreversible` (a centred
+                          `@radix-ui/react-alert-dialog`, retype-the-target + acknowledge, `target`
+                          omitted skips the retype for a batch with no single name). Escape inside
+                          either calls `stopPropagation()` so a confirm nested in a still-open
+                          `components/ui/Drawer` (`ApprovalDetail`/`TaskDetail`, both now render
+                          their confirm inside the same detail drawer rather than as a page-level
+                          sibling) never also closes the drawer. Migrated every `ConfirmTier` caller;
+                          added a confirm to two places that had none at all — 接入包 mode select
+                          (`PlatformIntegrationsPage`: change no longer applies until confirmed,
+                          `medium`, or `irreversible` when switching a connector with live instances
+                          to `disabled`) and 目录 Deprecate (`CatalogPage`, all four tabs, `medium`).
+                          Runtime rollback (`PlatformRuntimePage`, RT2) fixed alongside: the
+                          unrendered `*different*` markdown asterisks now render as `<em>`, and Roll
+                          back disables with an explanation when fewer than two images are known
+                          (the wire carries no "settings history" field to check the real thing).
   components/shell/       AppShell, Sidebar (三组 使用 / 治理 / 平台 nav, S6-A0; nav data itself lives
                           in lib/nav.ts as of S8 W1-A1; S4.1: workspace switcher when >1 membership,
                           cookie-vs-apiKey sign-out label). S8 W1-A3 (audit S2): `Sidebar` now wraps
@@ -427,6 +453,28 @@ with no manual `loadMore()`, vs. staying on page one when unset). `PlatformUsers
 pre-existing suites all pass unmodified against their data-table migration (same testids, same
 `.textContent` assertions — none depended on `<tr>`/`<td>` DOM structure beyond what a real
 `<table>` still provides at the tests' default > 768px jsdom width).
+
+S8 W1-A7 additions (audit S13/RT2): `components/kit/confirm.test.tsx` (per tier: open/anchor,
+confirm, cancel, Escape closing only the popover/dialog, focus returning to the trigger — a
+`useRestoreFocusOnClose` helper, since Radix's own auto-restore only fires through a rendered
+`Trigger`'s ref and this file uses `Anchor`/a plain sibling instead — the error banner's
+`data-error-code`, and the irreversible tier's type-to-confirm gate with and without a `target`).
+Every migrated caller's own suite gained or updated a confirm-flow case: `ApprovalQueuePage`/
+`ApprovalDetail` (a kernel error on the confirmed call keeps the popover open with its own inline
+error — this surfaced a real bug in the optimistic decision flow: `ApprovalDetail` can remount for
+one render when a failed decision's row is briefly findable in neither `pendingRows` nor
+`decided`, which used to be invisible but now also drops whatever confirm was open; fixed by
+lifting the confirm's `pending` state to the page, reset on `selectedId` change, and by caching the
+last-resolved row for the current selection so that one render keeps rendering `ApprovalDetail`
+instead of swapping in a skeleton — see `ApprovalQueuePage.tsx`'s own comments on
+`lastRowForSelection`); `TaskDetail`/`TasksPage` (same "Escape closes only the confirmation"
+case, now nested in the drawer rather than a page-level sibling); `PlatformModelsPage` (disable
+reclassified `high`→`medium`); `PlatformUsersPage` (batch purge reclassified `high`→`irreversible`:
+no `target`, so the acknowledgement alone gates the button); `PlatformRuntimePage` (rollback's
+`*different*` renders as `<em>`; a new case for the disabled-with-explanation state under two
+images); `PlatformIntegrationsPage` (mode-select: change does not call `set_connector_mode` until
+confirmed, cancel restores the previous value, `disabled` while in use is `irreversible`, otherwise
+`medium`); `CatalogPage` (Deprecate on the Operations and Workers tabs, representative of all four).
 
 S3.13 additions: `useWorkspaceIdentity` (known role once `get_workspace` resolves, inferred
 fallback on `not_found`/loading), `AgentProfilePage` (pre-filled form, `not_found` degrade on the

@@ -282,11 +282,12 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
 });
 
 /**
- * S6-A B2 / C25 (docs/console-completion-plan.md §5.8 "确认态", §12 item 6): a high-blast-radius
- * Approve needs a reason (the card validates it before the kernel's own 400 `reason_required`)
- * and passes through the tier-`high` `ConfirmTier` drawer listing the target; every Reject goes
- * through the same confirmation; low / medium Approve is the card's one click. The confirmation
- * drawer is a sibling of the detail drawer — Escape inside it closes only the confirmation.
+ * S6-A B2 / C25 (docs/console-completion-plan.md §5.8 "确认态", §12 item 6), S8 W1-A7: a
+ * high-blast-radius Approve needs a reason (the card validates it before the kernel's own 400
+ * `reason_required`) and passes through `ApprovalDetail`'s own `kit/confirm` `medium` popover
+ * listing the target; every Reject goes through the same confirmation; low / medium Approve is
+ * the card's one click. The confirm is nested inside the detail drawer — Escape inside it closes
+ * only the confirmation.
  */
 describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
   function highRow(): ActionRequestRow {

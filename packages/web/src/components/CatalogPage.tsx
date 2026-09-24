@@ -23,6 +23,7 @@ import { ModulesTab } from './catalog/ModulesTab.js';
 import { ProcedureEditor } from './catalog/ProcedureEditor.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerDefinitionEditor } from './catalog/WorkerDefinitionEditor.js';
+import { Confirm } from './kit/confirm.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
 import { DataList, DataRow } from './ui/DataList.js';
@@ -58,6 +59,12 @@ const TAB_LABEL: Readonly<Record<CatalogTab, string>> = {
  * publish` capabilities already in the registry (docs/wire-contract-conventions.md: "UI 不得提供
  * '直接改分类'的捷径") — never a shortcut, each write still `channel: 'human'`-gated on its own
  * (no fixed `minRole`, so a 403 denies only that one capability — `hooks/usePermissions.tsx`).
+ * 弃用 Deprecate (all four tabs) is a `DeprecateConfirm` — `kit/confirm` `medium`, anchored to its
+ * own button (S8 W1-A7, audit S13: previously a plain text button with no confirmation at all,
+ * the one catalog-scoped gap that audit named directly). Errors from a confirmed deprecate (like
+ * publish) surface as a toast, not the confirm's own inline banner — `act`/`deprecate` already
+ * catch and toast rather than re-throw, the same path Publish already used; changing that would
+ * also change Publish's error handling, out of this lane's scope.
  *
  * S6-A A2 (docs/console-completion-plan.md §5.3 "编辑器"): the Skills / Procedures / Workers
  * tabs gain "新建草稿 New draft" and, per row, "编辑为新草稿 Edit as new draft" — the editors in
@@ -166,6 +173,54 @@ function DraftToolbar({
         刷新 Refresh
       </Button>
     </div>
+  );
+}
+
+/** S8 W1-A7 (audit S13 "目录「弃用」是普通文字按钮" — no confirm at all): the one 弃用 Deprecate
+ *  button every tab below shares — a `kit/confirm` `medium` popover anchored to the button itself
+ *  (deprecating a published Operation/Skill/Procedure/Worker stops agents from reaching it, at
+ *  least medium per the dispatch). `target`/`impact` are the one piece of data each tab already
+ *  has about what deprecating this row affects; a tab with nothing more specific than "this row"
+ *  passes `impact` as `undefined` rather than inventing a count it does not have. */
+function DeprecateConfirm({
+  busy,
+  target,
+  impact,
+  onConfirm,
+  testId,
+}: {
+  readonly busy: boolean;
+  readonly target: string;
+  readonly impact?: readonly string[];
+  readonly onConfirm: () => Promise<void>;
+  readonly testId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Confirm
+      tier="medium"
+      open={open}
+      onOpenChange={setOpen}
+      anchor={
+        <Button
+          variant="ghost"
+          size="s"
+          disabled={busy}
+          onClick={() => setOpen(true)}
+          data-testid={`${testId}-trigger`}
+        >
+          弃用 Deprecate
+        </Button>
+      }
+      title={`弃用 ${target} Deprecate ${target}`}
+      description="弃用后 Agent 不能再使用它；已发生的调用与审计不受影响，随时可以重新发布恢复。 Once deprecated, agents can no longer reach it; past calls and the audit trail are unaffected, and republishing brings it back at any time."
+      target={target}
+      impact={impact}
+      confirmLabel="弃用 Deprecate"
+      danger
+      onConfirm={onConfirm}
+      testId={testId}
+    />
   );
 }
 
@@ -299,14 +354,20 @@ function OperationsTab({ http }: { readonly http: CapabilityCaller }) {
                     发布 Publish
                   </Button>
                 ) : !permissions.isDenied('deprecate_operation') && row.status === 'published' ? (
-                  <Button
-                    variant="ghost"
-                    size="s"
-                    loading={busy === key}
-                    onClick={() => void act(row, 'deprecate_operation')}
-                  >
-                    弃用 Deprecate
-                  </Button>
+                  <DeprecateConfirm
+                    busy={busy === key}
+                    target={row.name}
+                    impact={
+                      usage
+                        ? [
+                            `${usage.calls} 次调用 calls in the trailing window`,
+                            `${usage.approved} 次批准 approved`,
+                          ]
+                        : undefined
+                    }
+                    onConfirm={() => act(row, 'deprecate_operation')}
+                    testId={`operation-deprecate-confirm-${key}`}
+                  />
                 ) : undefined
               }
             />
@@ -452,14 +513,12 @@ function SkillsTab({ http }: { readonly http: CapabilityCaller }) {
                       发布 Publish
                     </Button>
                   ) : !permissions.isDenied('deprecate_skill') && row.status === 'published' ? (
-                    <Button
-                      variant="ghost"
-                      size="s"
-                      loading={busy === row.id}
-                      onClick={() => void act(row, 'deprecate_skill')}
-                    >
-                      弃用 Deprecate
-                    </Button>
+                    <DeprecateConfirm
+                      busy={busy === row.id}
+                      target={row.name}
+                      onConfirm={() => act(row, 'deprecate_skill')}
+                      testId={`skill-deprecate-confirm-${row.id}`}
+                    />
                   ) : null}
                 </span>
               }
@@ -625,14 +684,12 @@ function ProceduresTab({ http }: { readonly http: CapabilityCaller }) {
                       发布 Publish
                     </Button>
                   ) : !permissions.isDenied('deprecate_procedure') && row.status === 'published' ? (
-                    <Button
-                      variant="ghost"
-                      size="s"
-                      loading={busy === row.id}
-                      onClick={() => void act(row, 'deprecate_procedure')}
-                    >
-                      弃用 Deprecate
-                    </Button>
+                    <DeprecateConfirm
+                      busy={busy === row.id}
+                      target={row.name}
+                      onConfirm={() => act(row, 'deprecate_procedure')}
+                      testId={`procedure-deprecate-confirm-${row.id}`}
+                    />
                   ) : null}
                 </span>
               }
@@ -837,14 +894,12 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
                   ) : null}
                   {!permissions.isDenied('deprecate_worker_definition') &&
                   row.status === 'published' ? (
-                    <Button
-                      variant="ghost"
-                      size="s"
-                      loading={busy === row.id}
-                      onClick={() => void deprecate(row)}
-                    >
-                      弃用 Deprecate
-                    </Button>
+                    <DeprecateConfirm
+                      busy={busy === row.id}
+                      target={definitionName([row], row.id, row.version) ?? row.id}
+                      onConfirm={() => deprecate(row)}
+                      testId={`worker-deprecate-confirm-${row.id}@${row.version}`}
+                    />
                   ) : null}
                 </span>
               }

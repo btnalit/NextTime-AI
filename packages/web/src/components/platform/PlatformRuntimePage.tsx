@@ -11,12 +11,12 @@ import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { RefChip as KitRefChip } from '../kit/ref-chip.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
-import { ConfirmTier } from '../ui/ConfirmTier.js';
 import { CopyId } from '../ui/CopyId.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -53,11 +53,6 @@ function shortImageId(id: string): string {
   return stripped.length > 12 ? `${stripped.slice(0, 12)}…` : stripped;
 }
 
-type ConfirmState =
-  | { readonly kind: 'none' }
-  | { readonly kind: 'activate'; readonly image: RuntimeImageWire }
-  | { readonly kind: 'rollback' };
-
 /**
  * components/platform/PlatformRuntimePage: 运行层 Runtime (`#/platform/runtime`, admin only —
  * design doc §6.5 / §6.7; docs/development-tasks.md §5d S7-E E1–E3). The console side of the
@@ -77,13 +72,21 @@ type ConfirmState =
  * flagged `needsRebuild` and has no in-flight Turn per the kernel's own bookkeeping (E2 — "加速
  * 项，仅此而已"; a busy container always comes back `skipped_in_flight`, never forced). Both
  * confirms say this plainly rather than implying a restart is about to happen.
+ *
+ * S8 W1-A7 (audit RT2): both confirms are `kit/confirm` `medium` popovers anchored to their own
+ * button (设为活动 per image row, 回滚 on the "活动镜像" card) — owned by `RuntimeBody` itself
+ * rather than this page, since that is where the buttons render; this page only hands down the
+ * two plain async mutations. Roll back is disabled with an explanation when the inventory has
+ * fewer than two known images — the kernel's own settings history is not itself on the wire
+ * (`RuntimeInventoryWire` carries no previous-value field), so "at least two images known" is the
+ * honest, checkable proxy for "there is a different value to roll back to" this page can assert
+ * without guessing.
  */
 export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
   const toast = useToast();
   const inventory = useCapability<RuntimeInventoryWire>(http, 'runtime_inventory');
   const drift = useCapability<PiDriftWire>(http, 'pi_drift');
   const workspaces = useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces');
-  const [confirm, setConfirm] = useState<ConfirmState>({ kind: 'none' });
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [rolling, setRolling] = useState(false);
 
@@ -185,8 +188,8 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
           workspaceNames={workspaceNames}
           selected={selected}
           onToggleSelected={toggleSelected}
-          onActivate={(image) => setConfirm({ kind: 'activate', image })}
-          onRollback={() => setConfirm({ kind: 'rollback' })}
+          onActivate={activate}
+          onRollback={rollback}
           onRollEntryContainers={() => void rollEntryContainers()}
           rolling={rolling}
         />
@@ -206,34 +209,6 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
           <PiDriftBody data={drift.state.data} />
         )}
       </Card>
-
-      <ConfirmTier
-        tier="medium"
-        open={confirm.kind === 'activate'}
-        title="设为活动镜像 Set active image"
-        description="已运行的入口容器不会立刻重启——它们在各自下一轮对话开始时按规格漂移自然换成新镜像，进行中的对话不受影响。 Running entry containers are not restarted now — each picks up the new image only at the start of its own next turn (spec-drift rebuild); an in-flight turn is unaffected."
-        target={
-          // Shows exactly what will be sent (review follow-up, PR #233) — `activatableRef` may
-          // differ from `tags[0]` for a multi-tag image where only a later tag is allowlisted.
-          confirm.kind === 'activate'
-            ? (confirm.image.activatableRef ?? confirm.image.tags[0] ?? confirm.image.id)
-            : undefined
-        }
-        confirmLabel="设为活动 Set active"
-        onConfirm={() => (confirm.kind === 'activate' ? activate(confirm.image) : undefined)}
-        onClose={() => setConfirm({ kind: 'none' })}
-        testId="runtime-activate-confirm"
-      />
-      <ConfirmTier
-        tier="medium"
-        open={confirm.kind === 'rollback'}
-        title="回滚到上一个镜像 Roll back to the previous image"
-        description="改回设置历史里最近一个不同的活动镜像值；再次点击会在最近两个不同值之间来回切换。已运行的入口容器同样只在各自下一轮对话时收敛，不会被强制重启。 Switches to the most recent *different* value in the settings history; calling it again toggles between the last two distinct values. Running entry containers converge the same way — at their own next turn, never forced."
-        confirmLabel="回滚 Roll back"
-        onConfirm={() => (confirm.kind === 'rollback' ? rollback() : undefined)}
-        onClose={() => setConfirm({ kind: 'none' })}
-        testId="runtime-rollback-confirm"
-      />
     </div>
   );
 }
@@ -252,12 +227,20 @@ function RuntimeBody({
   readonly workspaceNames: ReadonlyMap<string, string>;
   readonly selected: ReadonlySet<string>;
   readonly onToggleSelected: (principalId: string) => void;
-  readonly onActivate: (image: RuntimeImageWire) => void;
-  readonly onRollback: () => void;
+  readonly onActivate: (image: RuntimeImageWire) => Promise<void>;
+  readonly onRollback: () => Promise<void>;
   readonly onRollEntryContainers: () => void;
   readonly rolling: boolean;
 }) {
   const needsRebuildCount = data.residentContainers.filter((c) => c.needsRebuild).length;
+  // S8 W1-A7 (audit RT2): both confirms are anchored to their own button, so their open state is
+  // owned here rather than by the page — `activatingImageId` keys which image row's popover (if
+  // any) is open, since every row shares the same "设为活动" button and each needs its own.
+  const [activatingImageId, setActivatingImageId] = useState<string | null>(null);
+  const [rollbackOpen, setRollbackOpen] = useState(false);
+  // Roll back needs at least two known images to have a genuinely different one to switch to —
+  // see the module doc comment for why this client-side proxy, not a true "has history" field.
+  const canRollBack = data.images.length >= 2;
 
   // S8 W1-A4 (audit S3): both tables below stay under the 768px overflow width (809px content),
   // so layout="card" (the default) applies. Defined here, inline, rather than a top-level
@@ -313,26 +296,44 @@ function RuntimeBody({
       hideInCard: true,
       cell: (image) => {
         const active = image.id === data.activeImageInfo?.id;
-        return active ? (
-          <span className="chip chip-ok" data-testid="runtime-image-active-chip">
-            当前 Active
-          </span>
-        ) : (
+        if (active) {
+          return (
+            <span className="chip chip-ok" data-testid="runtime-image-active-chip">
+              当前 Active
+            </span>
+          );
+        }
+        return (
           <>
-            <Button
-              variant="ghost"
-              size="s"
-              onClick={() => onActivate(image)}
-              disabled={!image.allowed}
-              title={
-                image.allowed
-                  ? undefined
-                  : '未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST'
+            <Confirm
+              tier="medium"
+              open={activatingImageId === image.id}
+              onOpenChange={(open) => setActivatingImageId(open ? image.id : null)}
+              anchor={
+                <Button
+                  variant="ghost"
+                  size="s"
+                  onClick={() => setActivatingImageId(image.id)}
+                  disabled={!image.allowed}
+                  title={
+                    image.allowed
+                      ? undefined
+                      : '未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST'
+                  }
+                  data-testid="runtime-image-activate"
+                >
+                  设为活动 Set active
+                </Button>
               }
-              data-testid="runtime-image-activate"
-            >
-              设为活动 Set active
-            </Button>
+              title="设为活动镜像 Set active image"
+              description="已运行的入口容器不会立刻重启——它们在各自下一轮对话开始时按规格漂移自然换成新镜像，进行中的对话不受影响。 Running entry containers are not restarted now — each picks up the new image only at the start of its own next turn (spec-drift rebuild); an in-flight turn is unaffected."
+              // Shows exactly what will be sent (review follow-up, PR #233) — `activatableRef` may
+              // differ from `tags[0]` for a multi-tag image where only a later tag is allowlisted.
+              target={image.activatableRef ?? image.tags[0] ?? image.id}
+              confirmLabel="设为活动 Set active"
+              onConfirm={() => onActivate(image)}
+              testId="runtime-activate-confirm"
+            />
             {!image.allowed ? (
               <div className="text-3 text-small" data-testid="runtime-image-not-allowed-hint">
                 未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST
@@ -432,9 +433,40 @@ function RuntimeBody({
       <Card
         title="活动镜像 Active image"
         actions={
-          <Button variant="secondary" size="s" onClick={onRollback} data-testid="runtime-rollback">
-            回滚到上一个镜像 Roll back
-          </Button>
+          <Confirm
+            tier="medium"
+            open={rollbackOpen}
+            onOpenChange={setRollbackOpen}
+            anchor={
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={() => setRollbackOpen(true)}
+                disabled={!canRollBack}
+                title={
+                  canRollBack
+                    ? undefined
+                    : '只知道一个（或零个）镜像，没有可回滚到的不同值 Only one (or zero) images are known — nothing different to roll back to'
+                }
+                data-testid="runtime-rollback"
+              >
+                回滚到上一个镜像 Roll back
+              </Button>
+            }
+            title="回滚到上一个镜像 Roll back to the previous image"
+            description={
+              <>
+                改回设置历史里最近一个<em>不同</em>
+                的活动镜像值；再次点击会在最近两个不同值之间来回切换。已运行的入口容器同样只在各自下一轮对话时收敛，不会被强制重启。
+                Switches to the most recent <em>different</em> value in the settings history;
+                calling it again toggles between the last two distinct values. Running entry
+                containers converge the same way — at their own next turn, never forced.
+              </>
+            }
+            confirmLabel="回滚 Roll back"
+            onConfirm={onRollback}
+            testId="runtime-rollback-confirm"
+          />
         }
       >
         {data.activeImageInfo ? (

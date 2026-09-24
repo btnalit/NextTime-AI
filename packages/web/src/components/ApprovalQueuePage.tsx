@@ -9,11 +9,14 @@ import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { breadcrumbFor } from '../lib/nav.js';
-import { type ApprovalDecisionInput, ApprovalDetail } from './approvals/ApprovalDetail.js';
+import {
+  type ApprovalDecisionInput,
+  ApprovalDetail,
+  type PendingConfirm,
+} from './approvals/ApprovalDetail.js';
 import { nameOf, useGatekeeperNames, usePrincipalNames } from './approvals/useDirectoryNames.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
-import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -46,24 +49,9 @@ interface DecisionState {
 
 const IDLE: DecisionState = { busy: false, error: null };
 
-/** A decision waiting in the `ConfirmTier` drawer (§5.8 "确认态": Approve on a high blast
- *  radius and every Reject go through the tier-`high` confirmation listing the impact). */
-interface PendingConfirm {
-  readonly kind: 'approve' | 'reject';
-  readonly row: ActionRequestRow;
-  readonly reason: string | undefined;
-  readonly alwaysAllow: boolean;
-}
-
 function byNewest(a: ActionRequestRow, b: ActionRequestRow): number {
   return (b.requestedAt ?? '').localeCompare(a.requestedAt ?? '');
 }
-
-const BLAST_LABEL: Readonly<Record<string, string>> = {
-  low: '低 low',
-  medium: '中 medium',
-  high: '高 high',
-};
 
 /**
  * components/ApprovalQueuePage: 待我审批 Approvals — the caller's own I14-scoped queue
@@ -75,16 +63,17 @@ const BLAST_LABEL: Readonly<Record<string, string>> = {
  * `action.updated`). Decisions are optimistic — the row leaves Pending on click and comes back
  * with the kernel's error if the call fails.
  *
- * S6-A (B2 / C25 / B3 / B4, docs/console-completion-plan.md §5.8, §5.9 "待我审批"): the drawer
- * renders `approvals/ApprovalDetail` on the shared `ui/ApprovalCard`; a high-blast-radius Approve
- * and every Reject pass through `ui/ConfirmTier` (tier `high`, impact list = the target resource,
- * gate, requester, blast radius) before the call — low / medium Approve is the card's one click
- * (§5.9 principle 4). `approve{reason?}` / `reject{reason?}` carry the reason the card collected
+ * S6-A (B2 / C25 / B3 / B4, docs/console-completion-plan.md §5.8, §5.9 "待我审批"), S8 W1-A7
+ * (audit S13): the drawer renders `approvals/ApprovalDetail`, which owns its own `kit/confirm`
+ * `medium` popover (anchored to the shared `ui/ApprovalCard`) — a high-blast-radius Approve and
+ * every Reject pass through it before the call; low/medium Approve is the card's one click (§5.9
+ * principle 4). `approve{reason?}` / `reject{reason?}` carry the reason the card collected
  * (mandatory for high, validated by the card in front of the kernel's own 400 `reason_required`).
- * The `ConfirmTier` drawer is a *sibling* of the detail drawer, never nested inside it: both
- * register Escape on `document`, so the detail drawer's `onClose` is a stable callback that
- * no-ops while a confirmation is open (read through a ref — `Drawer` keys its focus-trap effect
- * on `onClose` identity). Bare ids are `RefChip`s with names from `list_principals` /
+ * This page hands `ApprovalDetail` only the two confirmed mutations (`handleApprove`/
+ * `handleReject` below) — the confirm/no-confirm decision and its popover live entirely inside
+ * `ApprovalDetail` now, nested in the same detail `Drawer` rather than a page-level sibling of it
+ * (the popover's own Escape handler stops the keydown from also reaching the drawer's — see
+ * `kit/confirm.tsx`'s own doc comment). Bare ids are `RefChip`s with names from `list_principals` /
  * `list_gatekeepers` (`approvals/useDirectoryNames`).
  *
  * "History" (S5.5 leftover 21, docs/STATUS.md row 21) — `list_action_requests` (same I14
@@ -112,8 +101,15 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   const [decision, setDecision] = useState<Readonly<Record<string, DecisionState>>>({});
   const [fetchedDetail, setFetchedDetail] = useState<ActionRequestRow | null>(null);
   const [detailError, setDetailError] = useState<unknown | null>(null);
-  const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
-
+  // The confirm's own state, owned here rather than inside `ApprovalDetail` — see that prop's own
+  // doc comment (S8 W1-A7): `ApprovalDetail` can remount mid-decision, and state kept there would
+  // be lost when it does. Reset whenever the open request changes so a stale confirm from a
+  // previous selection can never reopen against the wrong row.
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedId is the intentional reset trigger, not read in the effect body.
+  useEffect(() => {
+    setPendingConfirm(null);
+  }, [selectedId]);
   const forbidden = pending.state.status === 'error' && isForbiddenError(pending.state.error);
   useEffect(() => {
     if (forbidden) permissions.markDenied('list_pending');
@@ -190,18 +186,28 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       cancelled = true;
     };
   }, [selectedId, selectedFromList, http, pending.state.status]);
-  const selectedRow = selectedFromList ?? fetchedDetail;
-
-  // Stable for `Drawer`'s focus-trap effect; ignores Escape / overlay clicks that reach the
-  // detail drawer while the `ConfirmTier` drawer is on top of it (see the component doc).
-  const confirmOpenRef = useRef(false);
-  confirmOpenRef.current = confirm !== null;
-  const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
-  const closeDetail = useCallback(() => {
-    if (confirmOpenRef.current) return;
-    onSelectRef.current(null);
-  }, []);
+  // S8 W1-A7: an optimistic decision (`moveToDecided`) can, for one render, leave the row
+  // findable in neither `pendingRows` nor `decided` — `moveToDecided`'s removal and `revert`'s
+  // undo of it land in separate renders around the awaited kernel call. Previously that render's
+  // `selectedRow` fell all the way through to `undefined` and this page swapped in a skeleton,
+  // unmounting `ApprovalDetail` (and, now that the confirm is anchored inside it rather than a
+  // page-level sibling, whatever confirm popover happened to be open, along with its own inline
+  // error). Caching the last row resolved for the *current* `selectedId` and falling back to it
+  // keeps `ApprovalDetail` mounted through that one-render gap; a genuine selection change (a
+  // different id) never reads a stale cache, since the id guard below only matches the same one.
+  const lastRowForSelection = useRef<{
+    readonly id: string;
+    readonly row: ActionRequestRow;
+  } | null>(null);
+  if (selectedId !== undefined && selectedFromList !== undefined) {
+    lastRowForSelection.current = { id: selectedId, row: selectedFromList };
+  }
+  const selectedRow =
+    selectedFromList ??
+    fetchedDetail ??
+    (selectedId !== undefined && lastRowForSelection.current?.id === selectedId
+      ? lastRowForSelection.current.row
+      : undefined);
 
   function setBusy(id: string, busy: boolean): void {
     setDecision((prev) => ({
@@ -230,8 +236,8 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
     return rows.find((candidate) => candidate.id === id) ?? selectedRow ?? undefined;
   }
 
-  /** The `approve` call itself (optimistic; throws on failure so a `ConfirmTier` caller keeps
-   *  its drawer open with the kernel's error — the direct path catches it below). */
+  /** The `approve` call itself (optimistic; throws on failure so `ApprovalDetail`'s confirm keeps
+   *  its popover open with the kernel's error — the direct path catches it in `handleApprove`). */
   async function performApprove(row: ActionRequestRow, input: ApprovalDecisionInput) {
     const id = row.id;
     setBusy(id, true);
@@ -288,39 +294,23 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
     }
   }
 
-  /** From the card: low / medium → straight to the call (§5.9 principle 4 "中 · 可逆 → 一键批准");
-   *  high → the tier-`high` confirmation first. */
+  /** `ApprovalDetail` itself decides whether a confirm precedes the call (§5.9 principle 4: low /
+   *  medium Approve straight through, high Approve and every Reject via its own `kit/confirm`) —
+   *  this page only ever hands it the confirmed mutation, and always lets it throw: for a
+   *  confirmed call `ApprovalDetail`'s own `runConfirm` re-throws into `Confirm`'s `onConfirm`,
+   *  which shows the error inline and keeps the popover open; for the direct (no-confirm) path
+   *  `ApprovalDetail` swallows the rejection itself (its own comment explains why) and relies on
+   *  `decision[id].error` below instead. */
   async function handleApprove(input: ApprovalDecisionInput): Promise<void> {
     const row = rowFor(input.actionRequestId);
     if (!row) return;
-    if (row.blastRadius === 'high') {
-      setConfirm({ kind: 'approve', row, reason: input.reason, alwaysAllow: input.alwaysAllow });
-      return;
-    }
-    try {
-      await performApprove(row, input);
-    } catch {
-      // Shown through `decision[id].error` in the drawer.
-    }
+    await performApprove(row, input);
   }
 
   async function handleReject(input: Omit<ApprovalDecisionInput, 'alwaysAllow'>): Promise<void> {
     const row = rowFor(input.actionRequestId);
     if (!row) return;
-    setConfirm({ kind: 'reject', row, reason: input.reason, alwaysAllow: false });
-  }
-
-  async function runConfirm(): Promise<void> {
-    if (!confirm) return;
-    if (confirm.kind === 'approve') {
-      await performApprove(confirm.row, {
-        actionRequestId: confirm.row.id,
-        reason: confirm.reason,
-        alwaysAllow: confirm.alwaysAllow,
-      });
-    } else {
-      await performReject(confirm.row, confirm.reason);
-    }
+    await performReject(row, input.reason);
   }
 
   const pendingCount = pendingRows.length;
@@ -464,7 +454,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
 
       <Drawer
         open={selectedId !== undefined}
-        onClose={closeDetail}
+        onClose={() => onSelect(null)}
         title={selectedRow ? humanizeKind(selectedRow.actionKindTag) : '审批请求 Approval request'}
         subtitle={
           selectedId ? (
@@ -483,6 +473,8 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
             onApprove={handleApprove}
             onReject={handleReject}
             error={decision[selectedRow.id]?.error ?? IDLE.error}
+            pending={pendingConfirm}
+            onPendingChange={setPendingConfirm}
           />
         ) : detailError ? (
           <ErrorBanner error={detailError} title="无法加载该请求 Could not load this request" />
@@ -490,77 +482,8 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           <SkeletonRows count={2} label="Loading request" />
         )}
       </Drawer>
-
-      <ConfirmTier
-        tier="high"
-        open={confirm !== null}
-        title={
-          confirm?.kind === 'reject'
-            ? `拒绝 Reject · ${confirm ? humanizeKind(confirm.row.actionKindTag) : ''}`
-            : `批准高影响动作 Approve a high-impact action · ${confirm ? humanizeKind(confirm.row.actionKindTag) : ''}`
-        }
-        description={
-          confirm?.kind === 'reject'
-            ? '拒绝后 Worker 不会执行该动作；请求进入历史，理由写入审计。 The Worker will not run this action; the request moves to History and the reason is audited.'
-            : '批准后门立即执行该动作，无法撤回；理由写入审计。 The Gatekeeper executes this immediately after approval; it cannot be recalled. The reason is audited.'
-        }
-        target={confirm ? (confirm.row.resourceScope ?? confirm.row.actionKindTag) : undefined}
-        impact={confirm ? confirmImpact(confirm, principalNames, gatekeeperNames) : undefined}
-        confirmLabel={confirm?.kind === 'reject' ? '确认拒绝 Reject' : '确认批准 Approve'}
-        danger={confirm?.kind === 'reject' || confirm?.row.blastRadius === 'high'}
-        onConfirm={runConfirm}
-        onClose={() => setConfirm(null)}
-        testId="approval-confirm"
-      >
-        {confirm ? (
-          <dl className="definition-list">
-            <dt>请求 Request</dt>
-            <dd>
-              <RefChip kind="actionRequest" id={confirm.row.id} name={null} size="s" />
-            </dd>
-            <dt>理由 Reason</dt>
-            <dd className="pre-wrap" data-testid="approval-confirm-reason">
-              {confirm.reason ?? <span className="text-3">（无 none）</span>}
-            </dd>
-            {confirm.alwaysAllow ? (
-              <>
-                <dt>总是允许 Always allow</dt>
-                <dd>
-                  <code>{confirm.row.actionKindTag}</code> 今后自动批准 will be auto-approved
-                </dd>
-              </>
-            ) : null}
-          </dl>
-        ) : null}
-      </ConfirmTier>
     </div>
   );
-}
-
-/** The `ConfirmTier` impact lines (§5.8 "Approve 高影响时确认文案列出目标资源"). */
-function confirmImpact(
-  confirm: PendingConfirm,
-  principalNames: ReadonlyMap<string, string>,
-  gatekeeperNames: ReadonlyMap<string, string>,
-): readonly string[] {
-  const { row } = confirm;
-  const lines: string[] = [
-    `动作 Action: ${row.actionKindTag}`,
-    `目标资源 Target: ${row.resourceScope ?? '未限定 (no resource scope)'}`,
-    `门 Gatekeeper: ${gatekeeperNames.get(row.gatekeeperId) ?? row.gatekeeperId}`,
-    `影响范围 Blast radius: ${BLAST_LABEL[row.blastRadius] ?? row.blastRadius}`,
-  ];
-  if (row.onBehalfOf) {
-    lines.push(`代表 On behalf of: ${principalNames.get(row.onBehalfOf) ?? row.onBehalfOf}`);
-  }
-  if (row.awaitDecision) {
-    lines.push(
-      confirm.kind === 'approve'
-        ? '被阻塞的 Worker 将继续运行 The blocked Worker resumes'
-        : '被阻塞的 Worker 将收到拒绝 The blocked Worker is told no',
-    );
-  }
-  return lines;
 }
 
 interface ApprovalHistoryTabProps {

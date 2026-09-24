@@ -4,8 +4,8 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { PURGE_WORKSPACE_REASON_LABELS, purgeCountLabel } from '../../lib/platform-workspaces.js';
+import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
-import { ConfirmTier } from '../ui/ConfirmTier.js';
 import { Drawer } from '../ui/Drawer.js';
 import { Notice } from '../ui/Notice.js';
 import { RefChip } from '../ui/RefChip.js';
@@ -27,8 +27,8 @@ type Preview =
   | { readonly status: 'error'; readonly error: unknown }
   | { readonly status: 'ready'; readonly result: PurgeWorkspaceResultWire };
 
-/** The kernel's 409 / 404 with the console's bilingual copy as its message, so `ConfirmTier`'s
- *  own `ErrorBanner` (which prints message + code) reads the same as `PlatformError` does on the
+/** The kernel's 409 / 404 with the console's bilingual copy as its message, so `kit/confirm`'s
+ *  own inline error banner (message + code) reads the same as `PlatformError` does on the
  *  preview step. Anything unmapped is rethrown as it came. */
 function friendly(err: unknown): unknown {
   const mapped = platformErrorMessage(err);
@@ -45,13 +45,13 @@ function friendly(err: unknown): unknown {
  * `service_handle_in_use` warnings of §4 edge (a)). It is read with a plain `http.call` on mount,
  * never through `useCapability`: a cached preview re-shown on the next open would report counts
  * the kernel no longer agrees with (a failed preview is retried by closing and reopening — the
- * drawer remounts). Step 2 is `ConfirmTier tier="irreversible"` — retype the
- * workspace name + acknowledge — which sends `confirm: true`; the executed result goes back to
- * the page (`onPurged`) for the toast, the list mutation and closing the detail panel.
+ * drawer remounts). Step 2 is `kit/confirm tier="irreversible"` (S8 W1-A7, a centred `AlertDialog`)
+ * — retype the workspace name + acknowledge — which sends `confirm: true`; the executed result
+ * goes back to the page (`onPurged`) for the toast, the list mutation and closing the detail panel.
  *
- * Exactly one `Drawer` is on screen at a time: the preview drawer unmounts while the confirm
- * tier (itself a `Drawer`) is open, and cancelling the tier returns to the preview rather than
- * closing everything — the administrator can re-read the warnings before deciding again.
+ * Exactly one modal surface is on screen at a time: the preview drawer unmounts while the confirm
+ * tier is open, and cancelling the tier returns to the preview rather than closing everything —
+ * the administrator can re-read the warnings before deciding again.
  */
 export function PurgeWorkspaceDrawer({
   http,
@@ -106,16 +106,18 @@ export function PurgeWorkspaceDrawer({
       ),
     ];
     return (
-      <ConfirmTier
+      <Confirm
         tier="irreversible"
         open
+        onOpenChange={(open) => {
+          if (!open) setStep('preview');
+        }}
         title="清除工作区 Purge workspace"
         description="行与级联数据删除，平台审计行保留（谁、何时、清了什么）。 Rows and cascaded data are deleted; the platform audit row is kept."
         target={workspace.name}
         impact={impact}
         confirmLabel="确认清除 Purge"
         onConfirm={execute}
-        onClose={() => setStep('preview')}
         testId="purge-workspace-confirm"
       />
     );

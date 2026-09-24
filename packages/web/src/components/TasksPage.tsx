@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useResource } from '../hooks/useResource.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { excerpt, formatDateTime, formatDuration, formatRelative } from '../lib/format.js';
@@ -16,7 +16,6 @@ import { usePrincipalNames } from './approvals/useDirectoryNames.js';
 import { PageHeader } from './kit/page-header.js';
 import { RefChip as KitRefChip } from './kit/ref-chip.js';
 import { Button } from './ui/Button.js';
-import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -55,9 +54,9 @@ type Filter = 'active' | 'all' | 'done';
  * S6-A (C28 / B2 / B4): linked approvals moved into `TaskDetail` → `approvals/LinkedApprovals`
  * (`list_action_requests{taskId}`, decided rows included, reloaded per push for the open Task
  * only) — the page no longer holds a `list_pending` mirror or reconciles approval pushes itself.
- * Cancel goes through `ui/ConfirmTier` (tier `high`, §5.8 "确认态": Cancel task listed with the
- * confirmations) rendered as a sibling of the detail drawer — the drawer's `onClose` is a stable
- * callback that no-ops while the confirmation is open (both register Escape on `document`).
+ * Cancel is a `kit/confirm` `medium` popover owned by `TaskDetail` itself (S8 W1-A7, audit S13),
+ * anchored to its own Cancel button — this page only hands down the plain `performCancel` mutation
+ * (which still throws on failure so the confirm keeps its own inline error and stays open).
  */
 export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }: TasksPageProps) {
   const toast = useToast();
@@ -92,9 +91,6 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
   const principalNames = usePrincipalNames(http);
 
   const [filter, setFilter] = useState<Filter>('all');
-  const [cancelling, setCancelling] = useState<string | null>(null);
-  const [cancelError, setCancelError] = useState<unknown | null>(null);
-  const [confirmCancel, setConfirmCancel] = useState<TaskSummary | null>(null);
 
   const refreshOne = useCallback(
     async (taskId: string) => {
@@ -129,42 +125,18 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
     if (selectedId && !selected && tasks.state.status === 'ready') void refreshOne(selectedId);
   }, [selectedId, selected, tasks.state.status, refreshOne]);
 
-  // Stable for `Drawer`'s focus-trap effect; ignores Escape / overlay clicks that reach the
-  // detail drawer while the `ConfirmTier` drawer is on top of it.
-  const confirmOpenRef = useRef(false);
-  confirmOpenRef.current = confirmCancel !== null;
-  const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
-  const closeDetail = useCallback(() => {
-    if (confirmOpenRef.current) return;
-    onSelectRef.current(null);
-  }, []);
-
-  /** The `cancel_task` call — throws so the `ConfirmTier` keeps its drawer open with the
-   *  kernel's error (also mirrored into `cancelError` for the detail view). */
+  /** The `cancel_task` call, passed straight to `TaskDetail`'s confirm as `onConfirm` — throws so
+   *  the confirm keeps its own inline error and stays open. */
   async function performCancel(task: TaskSummary): Promise<void> {
-    setCancelling(task.id);
-    setCancelError(null);
-    try {
-      const result = await http.call<{ id: string; status: string }>('cancel_task', {
-        taskId: task.id,
-      });
-      tasks.mutate((current) =>
-        current.map((row) => (row.id === result.id ? { ...row, status: result.status } : row)),
-      );
-      toast.push({ tone: 'info', title: '任务已取消 Task cancelled' });
-      await refreshOne(task.id);
-    } catch (err) {
-      setCancelError(err);
-      throw err;
-    } finally {
-      setCancelling(null);
-    }
+    const result = await http.call<{ id: string; status: string }>('cancel_task', {
+      taskId: task.id,
+    });
+    tasks.mutate((current) =>
+      current.map((row) => (row.id === result.id ? { ...row, status: result.status } : row)),
+    );
+    toast.push({ tone: 'info', title: '任务已取消 Task cancelled' });
+    await refreshOne(task.id);
   }
-
-  const runningRuns = confirmCancel
-    ? confirmCancel.workerRuns.filter((run) => run.terminatedAt === null).length
-    : 0;
 
   return (
     <div className="page">
@@ -299,7 +271,7 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
 
       <Drawer
         open={selectedId !== undefined}
-        onClose={closeDetail}
+        onClose={() => onSelect(null)}
         title={
           selected
             ? (definitionName(
@@ -331,50 +303,12 @@ export function TasksPage({ http, pushes, selectedId, onSelect, onOpenApproval }
             pushes={pushes}
             principalNames={principalNames}
             onOpenApproval={onOpenApproval}
-            onCancel={(taskId) => {
-              const task = allRows.find((row) => row.id === taskId);
-              if (task) setConfirmCancel(task);
-            }}
-            cancelling={cancelling === selected.id}
-            cancelError={cancelError}
+            onCancel={performCancel}
           />
         ) : (
           <SkeletonRows count={3} label="Loading task" />
         )}
       </Drawer>
-
-      <ConfirmTier
-        tier="high"
-        open={confirmCancel !== null}
-        title="取消任务 Cancel task"
-        description="取消后任务进入 cancelled，正在运行的 WorkerRun 会被终止；已写入的事实与审计不受影响。 The Task becomes cancelled and its running WorkerRuns are terminated; facts already written and the audit trail stay."
-        target={
-          confirmCancel
-            ? (definitionName(
-                definitionRows,
-                confirmCancel.workerDefinitionId,
-                confirmCancel.workerDefinitionVersion,
-              ) ?? confirmCancel.id)
-            : undefined
-        }
-        impact={
-          confirmCancel
-            ? [
-                `任务 Task: ${confirmCancel.id}`,
-                `运行中的 WorkerRun Running runs: ${runningRuns}`,
-                `已用 Token Tokens used: ${confirmCancel.tokensUsed.toLocaleString()}`,
-                '取消后不能恢复；需要时重新委派 Cannot be resumed — delegate again if needed',
-              ]
-            : undefined
-        }
-        confirmLabel="确认取消 Cancel task"
-        danger
-        onConfirm={async () => {
-          if (confirmCancel) await performCancel(confirmCancel);
-        }}
-        onClose={() => setConfirmCancel(null)}
-        testId="task-cancel-confirm"
-      />
     </div>
   );
 }

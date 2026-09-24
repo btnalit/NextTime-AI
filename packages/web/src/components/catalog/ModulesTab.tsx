@@ -3,8 +3,8 @@ import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
-import { ConfirmTier } from '../ui/ConfirmTier.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
@@ -56,9 +56,10 @@ function needsConfirm(module: WorkspaceModuleWire): boolean {
  * 403 the same way every other owner-only affordance in this console already does).
  *
  * Confirmation: `needsConfirm` mirrors the kernel's own confirm rule (D3) from data this tab
- * already has, so a `customized` row or a range containing a `breaking` version opens `ConfirmTier`
- * (medium — reversible: an old OntologyVersion row is never deleted, §8 生效表 "运行中 Worker 用旧版
- * 直到结束") *before* the call, not only after the kernel's own 400 `module_confirm_required` —
+ * already has, so a `customized` row or a range containing a `breaking` version opens `kit/confirm`
+ * (medium, anchored to the row's own button — S8 W1-A7 — reversible: an old OntologyVersion row is
+ * never deleted, §8 生效表 "运行中 Worker 用旧版直到结束") *before* the call, not only after the
+ * kernel's own 400 `module_confirm_required` —
  * that 400 is still the authoritative backstop this component falls back to (rendered inline via
  * `rowError`, same as any other failed row action) if the two ever disagree (a version published
  * between page load and click).
@@ -104,7 +105,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
       return;
     }
     // `run` already records the failure in `rowError` (rendered inline below the button) — the
-    // re-thrown rejection here is only for ConfirmTier's own `onConfirm` caller; swallow it so a
+    // re-thrown rejection here is only for `Confirm`'s own `onConfirm` caller; swallow it so a
     // direct (non-confirm) call never surfaces as an unhandled promise rejection.
     run(module.name, false).catch(() => {});
   }
@@ -159,15 +160,37 @@ export function ModulesTab({ http }: ModulesTabProps) {
                     <td className="mono">v{module.latestVersion}</td>
                     <td>
                       {canWrite && label ? (
-                        <Button
-                          variant="secondary"
-                          size="s"
-                          disabled={pending === module.name}
-                          onClick={() => onAction(module)}
-                          data-testid={`catalog-module-action-${module.name}`}
-                        >
-                          {label}
-                        </Button>
+                        <Confirm
+                          tier="medium"
+                          open={confirmFor === module.name}
+                          onOpenChange={(open) => setConfirmFor(open ? module.name : null)}
+                          anchor={
+                            <Button
+                              variant="secondary"
+                              size="s"
+                              disabled={pending === module.name}
+                              onClick={() => onAction(module)}
+                              data-testid={`catalog-module-action-${module.name}`}
+                            >
+                              {label}
+                            </Button>
+                          }
+                          title={`确认安装/升级 ${module.name} Confirm install/upgrade`}
+                          description={
+                            module.status === 'customized'
+                              ? '这个工作区的当前定义不匹配任何已知版本（已定制）；继续会替换成模块的标准内容。 The current definition does not match any known version (customized) — continuing replaces it with the module’s standard content.'
+                              : '升级会直接跳到最新版本，中间跨过至少一个不兼容变更（breaking）。 Upgrading jumps straight to the latest version, crossing at least one breaking change along the way.'
+                          }
+                          target={
+                            target
+                              ? `v${target.version}${target.notes ? ` — ${target.notes}` : ''}`
+                              : undefined
+                          }
+                          confirmLabel="确认 Confirm"
+                          danger={breakingRangeCrossed(module)}
+                          onConfirm={() => run(module.name, true)}
+                          testId={`catalog-module-confirm-${module.name}`}
+                        />
                       ) : null}
                       {rowError[module.name] ? (
                         <ErrorBanner
@@ -184,33 +207,6 @@ export function ModulesTab({ http }: ModulesTabProps) {
           </table>
         </div>
       )}
-
-      {rows
-        .filter((module) => module.name === confirmFor)
-        .map((module) => {
-          const target = targetVersionOf(module);
-          return (
-            <ConfirmTier
-              key={module.name}
-              tier="medium"
-              open={confirmFor === module.name}
-              title={`确认安装/升级 ${module.name} Confirm install/upgrade`}
-              description={
-                module.status === 'customized'
-                  ? '这个工作区的当前定义不匹配任何已知版本（已定制）；继续会替换成模块的标准内容。 The current definition does not match any known version (customized) — continuing replaces it with the module’s standard content.'
-                  : '升级会直接跳到最新版本，中间跨过至少一个不兼容变更（breaking）。 Upgrading jumps straight to the latest version, crossing at least one breaking change along the way.'
-              }
-              target={
-                target ? `v${target.version}${target.notes ? ` — ${target.notes}` : ''}` : undefined
-              }
-              confirmLabel="确认 Confirm"
-              danger={breakingRangeCrossed(module)}
-              onConfirm={() => run(module.name, true)}
-              onClose={() => setConfirmFor(null)}
-              testId={`catalog-module-confirm-${module.name}`}
-            />
-          );
-        })}
     </div>
   );
 }

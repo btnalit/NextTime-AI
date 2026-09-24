@@ -2,8 +2,8 @@ import type { LlmProviderWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { LlmAdminClient } from '../../../lib/llm-admin.js';
 import { LlmAdminError, llmAdminErrorMessage } from '../../../lib/llm-admin.js';
+import { Confirm } from '../../kit/confirm.js';
 import { Button } from '../../ui/Button.js';
-import { ConfirmTier } from '../../ui/ConfirmTier.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
 import { Input } from '../../ui/Field.js';
 
@@ -21,8 +21,9 @@ export interface ProviderSecretFormProps {
  * drawer, next to `CredentialState`. `设置`/`更换` (the same button, labelled by whether a key is
  * already present) is a plain submit — no re-entry, no confirm, matching "usability first, don't
  * over-restrict": this mirrors the plain-submit posture P-B2a's own credential-entry forms already
- * use. `清除` goes through `ConfirmTier` at `medium` (reversible: falls back to the env var, or the
- * administrator can set a new console key) — a click-through inline confirm, not a retype.
+ * use. `清除` goes through `kit/confirm` at `medium` (S8 W1-A7, anchored to the Clear button itself
+ * — reversible: falls back to the env var, or the administrator can set a new console key) — a
+ * click-through popover confirm, not a retype.
  *
  * The typed key never leaves this component's own state except in the one `PUT`/`DELETE` request:
  * `key` is reset to `''` immediately after a successful submit (success or the drawer closing),
@@ -54,9 +55,9 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
     }
   }
 
-  // No local try/catch: ConfirmTier's own `useConfirmRun` already catches `onConfirm`'s
-  // rejection, renders it inline (`ErrorBanner`), and keeps the dialog open — duplicating that
-  // here would just show the error twice.
+  // No local try/catch: `Confirm`'s own `useConfirmRun` already catches `onConfirm`'s rejection,
+  // renders it inline, and keeps the popover open — duplicating that here would just show the
+  // error twice.
   async function clear(): Promise<void> {
     const updated = await client.clearProviderSecret(provider.id);
     onUpdated(updated);
@@ -93,16 +94,29 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
           {hasConsoleKey ? '更换 Replace' : '设置 Set'}
         </Button>
         {hasConsoleKey ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="s"
-            onClick={() => setConfirmClear(true)}
-            disabled={submitting}
-            data-testid="provider-secret-clear"
-          >
-            清除 Clear
-          </Button>
+          <Confirm
+            tier="medium"
+            open={confirmClear}
+            onOpenChange={setConfirmClear}
+            anchor={
+              <Button
+                type="button"
+                variant="ghost"
+                size="s"
+                onClick={() => setConfirmClear(true)}
+                disabled={submitting}
+                data-testid="provider-secret-clear"
+              >
+                清除 Clear
+              </Button>
+            }
+            title="清除控制台密钥 Clear the console key"
+            description="回退到该供应商的环境变量（若配置了密钥环境变量名）或无凭证；可随时重新设置。 Falls back to this provider’s env var (if one is configured) or no credential — a new key can be set again at any time."
+            target={provider.displayName}
+            confirmLabel="清除 Clear"
+            onConfirm={clear}
+            testId="provider-secret-clear-confirm"
+          />
         ) : null}
       </form>
       {error !== null ? (
@@ -123,17 +137,6 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
           />
         )
       ) : null}
-      <ConfirmTier
-        tier="medium"
-        open={confirmClear}
-        title="清除控制台密钥 Clear the console key"
-        description="回退到该供应商的环境变量（若配置了密钥环境变量名）或无凭证；可随时重新设置。 Falls back to this provider’s env var (if one is configured) or no credential — a new key can be set again at any time."
-        target={provider.displayName}
-        confirmLabel="清除 Clear"
-        onConfirm={clear}
-        onClose={() => setConfirmClear(false)}
-        testId="provider-secret-clear-confirm"
-      />
     </div>
   );
 }

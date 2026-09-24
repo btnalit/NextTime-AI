@@ -314,9 +314,16 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     await expect(page.getByTestId('platform-integrations-page')).toBeVisible({ timeout: 15_000 });
     await page.getByTestId('integrations-tab-connectors').click();
     await expect(page.getByTestId(`connector-row-${CONNECTOR}`)).toBeVisible({ timeout: 15_000 });
+    // S8 W1-A7 (audit S13/PI1): the select no longer applies on change — it opens a medium
+    // confirm anchored to itself (self_serve → platform_preset is not the "disabled, in use" case,
+    // so `medium`, not `irreversible`) and `set_connector_mode` only fires once that confirm is
+    // confirmed.
     const modeSelect = page.getByTestId(`connector-mode-${CONNECTOR}`);
     if ((await modeSelect.inputValue()) !== 'platform_preset') {
       await modeSelect.selectOption('platform_preset');
+      const modeConfirm = page.getByTestId(`connector-mode-confirm-${CONNECTOR}`);
+      await expect(modeConfirm).toBeVisible({ timeout: 15_000 });
+      await modeConfirm.getByTestId('confirm-button').click();
     }
     await expect(modeSelect).toHaveValue('platform_preset', { timeout: 15_000 });
 

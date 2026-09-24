@@ -227,8 +227,9 @@ describe('TasksPage linked approvals (C28) and push reconciliation (C7)', () => 
   });
 });
 
-/** S6-A B2 (§5.8 "确认态"): Cancel task confirms through the tier-`high` `ConfirmTier` drawer
- *  (a sibling of the detail drawer — Escape inside it closes only the confirmation). */
+/** S6-A B2 (§5.8 "确认态"), S8 W1-A7: Cancel task confirms through a `kit/confirm` `medium`
+ *  popover anchored to the Cancel button, owned by `TaskDetail` — Escape inside it closes only
+ *  the confirmation, never the detail drawer it is nested inside. */
 describe('TasksPage cancel confirmation (S6-A B2)', () => {
   it('Cancel opens the confirmation with the impact list; confirming calls cancel_task; Escape closes only the confirmation', async () => {
     const cancel = vi.fn(async () => ({ id: 'task-1', status: 'cancelled' }));
