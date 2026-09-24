@@ -290,6 +290,13 @@ export async function dispatchCapability(
               },
             }
           : {}),
+        // S8 W1-C addition, purely additive alongside `principal` above: only set when this
+        // human-channel call authenticated via the S4.1 console-session cookie *and* that login
+        // is a platform administrator (`capability-handler.ts`'s own `consoleUser` doc comment —
+        // resolve_refs's `workspace` kind is the first reader).
+        ...(caller.channel === 'human' && caller.user
+          ? { consoleUser: { platformRole: caller.user.platformRole } }
+          : {}),
       });
       const resourceRef = auditResourceRef(result.resourceId);
       await writeAudit(client, {

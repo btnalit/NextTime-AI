@@ -9,12 +9,13 @@ import {
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { platformGateInstanceHref } from '../lib/gate-instances.js';
+import type { PrincipalRow } from '../lib/governance.js';
 import { hrefs } from '../lib/router.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { CopyId } from './ui/CopyId.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Input } from './ui/Field.js';
+import { Field, Input, Select } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { useToast } from './ui/Toast.js';
@@ -38,14 +39,20 @@ export interface GatekeeperCardProps {
   readonly platformInstance?: AvailableGateInstanceWire | null;
   /** The reader may open the platform 集成 page — the instance row links there only then. */
   readonly platformAdmin?: boolean;
+  /** S8 W1-A6 (audit S10 "授权表单要粘贴 principal UUID"): populates the "Grant to principal"
+   *  picker; falls back to a free-text id field when empty (the same degrade
+   *  `GrantCapabilityForm`'s own principal field uses when `list_principals` has not loaded yet,
+   *  or 403s for this session's role). */
+  readonly principals?: readonly PrincipalRow[];
 }
 
 /**
  * components/RegisteredSystemsSection: one registered Gatekeeper (a `Gatekeeper` graph Object)
  * with its Operations grouped by lifecycle, plus the two owner actions of the S2.13 flow:
  * `publish_manifest` (every draft → published, I16/I17) and `connect_gatekeeper` (a
- * CapabilityGrant letting a principal's entry agent use this gate). The principal id is typed
- * in — the kernel has no list-principals capability (gap, see the PR report).
+ * CapabilityGrant letting a principal's entry agent use this gate). S8 W1-A6: the principal
+ * picker is `list_principals` (`ConnectionsPage` loads it once, passed down as `principals`) —
+ * this module's doc comment used to say the kernel had no such capability; S8 W1-C added one.
  */
 export function GatekeeperCard({
   http,
@@ -58,6 +65,7 @@ export function GatekeeperCard({
   onOpenDetail,
   platformInstance = null,
   platformAdmin = false,
+  principals,
 }: GatekeeperCardProps) {
   const toast = useToast();
   const [publishing, setPublishing] = useState(false);
@@ -216,16 +224,39 @@ export function GatekeeperCard({
           <form className="inline-form" onSubmit={(event) => void grant(event)}>
             <Field
               id={`grant-${gatekeeper.id}`}
-              label="Principal id"
-              hint="Paste the principal's id (printed by bootstrap add-principal). The kernel has no principal directory to pick from yet."
+              label="Principal"
+              hint={
+                principals && principals.length > 0
+                  ? undefined
+                  : "No principal directory loaded — paste the principal's id."
+              }
             >
-              <Input
-                id={`grant-${gatekeeper.id}`}
-                value={principalId}
-                onChange={(event) => setPrincipalId(event.target.value)}
-                disabled={granting}
-                mono
-              />
+              {principals && principals.length > 0 ? (
+                <Select
+                  id={`grant-${gatekeeper.id}`}
+                  value={principalId}
+                  onChange={(event) => setPrincipalId(event.target.value)}
+                  disabled={granting}
+                >
+                  <option value="" disabled>
+                    选择成员… Choose a member…
+                  </option>
+                  {principals.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.displayName} ({row.role})
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  id={`grant-${gatekeeper.id}`}
+                  value={principalId}
+                  onChange={(event) => setPrincipalId(event.target.value)}
+                  disabled={granting}
+                  mono
+                  placeholder="principal id"
+                />
+              )}
             </Field>
             <Button
               type="submit"
