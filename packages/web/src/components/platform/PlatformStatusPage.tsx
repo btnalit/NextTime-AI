@@ -133,9 +133,19 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
 
       <Card title={t('备份', 'Backup')}>
         <p className="text-2" data-testid="status-backup">
-          {data.backup.configured ? t('已配置', 'Configured') : t('未配置', 'Not configured')} —{' '}
-          {data.backup.detail}
+          {data.backup.configured
+            ? t('已配置', 'Configured')
+            : t('未配置备份', 'Backup not configured')}
         </p>
+        {/* S8 W1-A10 (audit S14): `data.backup.detail` is kernel-authored prose that names an
+         *  internal tracking number ("遗留 6") — never shown inline; kept available for an
+         *  operator behind a disclosure instead, matching the audit's "技术细节" pattern. */}
+        {!data.backup.configured ? (
+          <details className="disclosure">
+            <summary>{t('技术细节', 'Technical details')}</summary>
+            <p className="text-3 text-small">{data.backup.detail}</p>
+          </details>
+        ) : null}
       </Card>
 
       <Card title="30 天用量 30-day usage">
@@ -173,7 +183,7 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
                 key={row.id}
                 testId="status-audit-row"
                 title={row.action}
-                meta={`${formatAuditActor(row)} · ${formatDateTime(row.createdAt)}`}
+                meta={`${formatAuditActor(row, t)} · ${formatDateTime(row.createdAt)}`}
               />
             ))}
           </DataList>

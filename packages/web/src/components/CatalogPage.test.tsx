@@ -56,13 +56,15 @@ describe('CatalogPage', () => {
     });
     renderPage(http);
     await waitFor(() => expect(http.calls.some((c) => c.name === 'list_operations')).toBe(true));
-    expect(screen.getByRole('tab', { name: 'Operations' }).getAttribute('aria-selected')).toBe(
+    // S8 W1-A10: the tab label is bilingual now (default zh-CN keeps Operation/Skill/Procedure/
+    // Worker as English proper nouns — only Modules has an established zh term, '模块').
+    expect(screen.getByRole('tab', { name: 'Operation' }).getAttribute('aria-selected')).toBe(
       'true',
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Skills' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Skill' }));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'list_skills')).toBe(true));
-    expect(screen.getByRole('tab', { name: 'Skills' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Skill' }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('renders a not_found from a tab capability as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {

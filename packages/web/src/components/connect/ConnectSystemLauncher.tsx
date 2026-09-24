@@ -17,6 +17,7 @@ import {
 } from '../../lib/gate-instances.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { roleLabel } from '../../lib/labels.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
@@ -110,12 +111,27 @@ function fromAvailableRow(row: AvailableGateInstanceWire): TrackedGate {
   };
 }
 
-const KIND_PATH_COPY: Readonly<Record<LauncherKind, string>> = {
-  http: 'HTTP / OpenAPI 服务由平台门宿主承载（P-B2a）：管理员在此建实例（目标地址、OpenAPI 清单、凭证模式），凭证直接录入门宿主，工作区一键启用。 Served by the platform gate host — an administrator creates the instance here, the credential goes straight to the host, and a workspace enables it with one click.',
-  mcp: 'MCP server 同样由平台门宿主承载：清单来自它的 tools/list（readOnlyHint → observe，其余 execute）；管理员可标记 vetted 以允许自动批准幂等、非破坏性的工具。 Also served by the gate host — its tools/list becomes the manifest; an administrator may mark it vetted.',
-  ssh: 'SSH 主机是打包门：需要二进制与私钥，走 compose 服务 + 自注册。下一步显示部署清单，门 announce 后自动接上后续步骤。 A packaged gate — the next step shows the deployment checklist and waits for the gate to announce itself.',
-  cli: '命令行工具是打包门：需要二进制与目标凭证，走 compose 服务 + 自注册。下一步显示部署清单，门 announce 后自动接上后续步骤。 A packaged gate — the next step shows the deployment checklist and waits for the gate to announce itself.',
-};
+/** S8 W1-A10 (i18n remainder + audit S14 "内部代号": the `http` entry used to cite the design
+ *  doc's internal section number "（P-B2a）" — dropped, no user-visible meaning). */
+const KIND_PATH_COPY: Readonly<Record<LauncherKind, { readonly zh: string; readonly en: string }>> =
+  {
+    http: {
+      zh: 'HTTP / OpenAPI 服务由平台门宿主承载：管理员在此建实例（目标地址、OpenAPI 清单、凭证模式），凭证直接录入门宿主，工作区一键启用。',
+      en: 'Served by the platform gate host — an administrator creates the instance here, the credential goes straight to the host, and a workspace enables it with one click.',
+    },
+    mcp: {
+      zh: 'MCP server 同样由平台门宿主承载：清单来自它的 tools/list（readOnlyHint → observe，其余 execute）；管理员可标记 vetted 以允许自动批准幂等、非破坏性的工具。',
+      en: 'Also served by the gate host — its tools/list becomes the manifest; an administrator may mark it vetted.',
+    },
+    ssh: {
+      zh: 'SSH 主机是打包门：需要二进制与私钥，走 compose 服务 + 自注册。下一步显示部署清单，门 announce 后自动接上后续步骤。',
+      en: 'A packaged gate — the next step shows the deployment checklist and waits for the gate to announce itself.',
+    },
+    cli: {
+      zh: '命令行工具是打包门：需要二进制与目标凭证，走 compose 服务 + 自注册。下一步显示部署清单，门 announce 后自动接上后续步骤。',
+      en: 'A packaged gate — the next step shows the deployment checklist and waits for the gate to announce itself.',
+    },
+  };
 
 /**
  * components/connect/ConnectSystemLauncher: S6-C (docs/console-completion-plan.md §5.6 "一个
@@ -271,7 +287,9 @@ export function ConnectSystemLauncher({
       testId="connect-system-launcher"
     >
       {step === 0 && kind !== null ? (
-        <Notice testId="launcher-path-copy">{KIND_PATH_COPY[kind]}</Notice>
+        <Notice testId="launcher-path-copy">
+          {t(KIND_PATH_COPY[kind].zh, KIND_PATH_COPY[kind].en)}
+        </Notice>
       ) : null}
 
       {step === 1 && kind !== null && path !== null ? (
@@ -1019,7 +1037,7 @@ function GrantMemberForm({
             <option value="">— 选择 Choose —</option>
             {options.map((row) => (
               <option key={row.id} value={row.id}>
-                {row.displayName} ({row.role})
+                {row.displayName} ({roleLabel(row.role, t)})
               </option>
             ))}
           </Select>

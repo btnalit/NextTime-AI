@@ -4,6 +4,7 @@ import type {
   PurgeWorkspaceReasonWire,
   UserWire,
 } from '@nexttime/shared';
+import type { Translate } from './i18n.js';
 import { hrefs } from './router.js';
 
 export interface WorkspaceOption {
@@ -115,37 +116,48 @@ export function readResiduePreset(hash: string): boolean {
   return new URLSearchParams(hash.slice(query + 1)).get(WORKSPACES_RESIDUE_QUERY) === '1';
 }
 
-/** Why `purge_workspace` accepts the workspace (`PurgeWorkspaceResultWire.reason`). */
-export const PURGE_WORKSPACE_REASON_LABELS: Readonly<Record<PurgeWorkspaceReasonWire, string>> = {
-  disabled_retention_elapsed: `已停用满 ${WORKSPACE_PURGE_RETENTION_DAYS} 天 Disabled for ${WORKSPACE_PURGE_RETENTION_DAYS}+ days`,
-  ephemeral_expired: '临时工作区已到期 Ephemeral workspace past its expiry',
+/** Why `purge_workspace` accepts the workspace (`PurgeWorkspaceResultWire.reason`). A pure helper
+ *  (S8 W1-A10 i18n remainder) — takes `t` from its caller. */
+export function purgeWorkspaceReasonLabel(reason: PurgeWorkspaceReasonWire, t: Translate): string {
+  const entry = PURGE_WORKSPACE_REASON_LABELS[reason];
+  return t(entry.zh, entry.en);
+}
+
+const PURGE_WORKSPACE_REASON_LABELS: Readonly<
+  Record<PurgeWorkspaceReasonWire, { readonly zh: string; readonly en: string }>
+> = {
+  disabled_retention_elapsed: {
+    zh: `已停用满 ${WORKSPACE_PURGE_RETENTION_DAYS} 天`,
+    en: `Disabled for ${WORKSPACE_PURGE_RETENTION_DAYS}+ days`,
+  },
+  ephemeral_expired: { zh: '临时工作区已到期', en: 'Ephemeral workspace past its expiry' },
 };
 
 /** `PurgeWorkspaceResultWire.counts` keys — the workspace-scoped tables, camel-cased by the kernel
  *  (`wireTableKey`). The cascade order of §4 in labels; a table this map does not know (the
  *  kernel derives the set from the schema) falls back to its humanized key so nothing is hidden. */
-const PURGE_COUNT_LABELS: Readonly<Record<string, string>> = {
-  capabilityHandles: 'Handle',
-  sessions: '会话 Sessions',
-  tasks: '任务 Tasks',
-  workerRuns: 'Worker 运行 Worker runs',
-  chats: '对话 Chats',
-  chatMessages: '消息 Messages',
-  activities: '活动 Activities',
-  decisions: '决策 Decisions',
-  conflicts: '冲突 Conflicts',
-  links: '关系 Links',
-  objects: '对象 Objects',
-  sources: '来源 Sources',
-  observations: '观察 Observations',
-  evidence: '证据 Evidence',
-  auditRecords: '审计记录 Audit records',
-  principals: '成员 Principals',
+const PURGE_COUNT_LABELS: Readonly<Record<string, { readonly zh: string; readonly en: string }>> = {
+  capabilityHandles: { zh: 'Handle', en: 'Handle' },
+  sessions: { zh: '会话', en: 'Sessions' },
+  tasks: { zh: '任务', en: 'Tasks' },
+  workerRuns: { zh: 'Worker 运行', en: 'Worker runs' },
+  chats: { zh: '对话', en: 'Chats' },
+  chatMessages: { zh: '消息', en: 'Messages' },
+  activities: { zh: '活动', en: 'Activities' },
+  decisions: { zh: '决策', en: 'Decisions' },
+  conflicts: { zh: '冲突', en: 'Conflicts' },
+  links: { zh: '关系', en: 'Links' },
+  objects: { zh: '对象', en: 'Objects' },
+  sources: { zh: '来源', en: 'Sources' },
+  observations: { zh: '观察', en: 'Observations' },
+  evidence: { zh: '证据', en: 'Evidence' },
+  auditRecords: { zh: '审计记录', en: 'Audit records' },
+  principals: { zh: '成员', en: 'Principals' },
 };
 
-export function purgeCountLabel(key: string): string {
+export function purgeCountLabel(key: string, t: Translate): string {
   const known = PURGE_COUNT_LABELS[key];
-  if (known !== undefined) return known;
+  if (known !== undefined) return t(known.zh, known.en);
   const words = key
     .replace(/([A-Z])/g, ' $1')
     .trim()
@@ -155,15 +167,28 @@ export function purgeCountLabel(key: string): string {
 
 /** Why `purge_user` skipped one of the requested users (`PurgeUserOutcomeWire.reason`), as the
  *  dialog reports it next to the row. Typed on the wire enum so a new kernel reason fails `tsc`
- *  here until it has copy. */
-export const PURGE_USER_SKIP_REASON_LABELS: Readonly<Record<PurgeUserSkipReasonWire, string>> = {
-  user_not_found: '找不到该用户 No such user',
-  activated:
-    '已设置密码，是真实账户（应停用而不是清理） Has a password — a real account; disable it instead',
-  platform_admin: '平台管理员 A platform administrator',
-  has_sessions: '曾登录过控制台 Has signed in to the console',
-  active_membership:
-    '仍有未停用的成员资格（先移除，或清除其工作区） Still holds a non-disabled membership — remove it, or purge the workspace',
-  referenced:
-    '被审计或设置引用（审计只增不减） Referenced by an audit or settings row — audit only grows',
+ *  here until it has copy. A pure helper (S8 W1-A10 i18n remainder) — takes `t` from its caller. */
+export function purgeUserSkipReasonLabel(reason: PurgeUserSkipReasonWire, t: Translate): string {
+  const entry = PURGE_USER_SKIP_REASON_LABELS[reason];
+  return t(entry.zh, entry.en);
+}
+
+const PURGE_USER_SKIP_REASON_LABELS: Readonly<
+  Record<PurgeUserSkipReasonWire, { readonly zh: string; readonly en: string }>
+> = {
+  user_not_found: { zh: '找不到该用户', en: 'No such user' },
+  activated: {
+    zh: '已设置密码，是真实账户（应停用而不是清理）',
+    en: 'Has a password — a real account; disable it instead',
+  },
+  platform_admin: { zh: '平台管理员', en: 'A platform administrator' },
+  has_sessions: { zh: '曾登录过控制台', en: 'Has signed in to the console' },
+  active_membership: {
+    zh: '仍有未停用的成员资格（先移除，或清除其工作区）',
+    en: 'Still holds a non-disabled membership — remove it, or purge the workspace',
+  },
+  referenced: {
+    zh: '被审计或设置引用（审计只增不减）',
+    en: 'Referenced by an audit or settings row — audit only grows',
+  },
 };

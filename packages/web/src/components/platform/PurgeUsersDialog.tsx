@@ -4,9 +4,10 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { HttpError } from '../../lib/http-client.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { roleLabel } from '../../lib/labels.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
-import { PURGE_USER_SKIP_REASON_LABELS } from '../../lib/platform-workspaces.js';
+import { purgeUserSkipReasonLabel } from '../../lib/platform-workspaces.js';
 import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
@@ -28,8 +29,8 @@ export interface PurgeUsersDialogProps {
 const BATCH_MAX = 200;
 
 /** Kernel 4xx with the console's bilingual copy as its message, for `Confirm`'s own inline banner. */
-function friendly(err: unknown): unknown {
-  const mapped = platformErrorMessage(err);
+function friendly(err: unknown, t: Translate): unknown {
+  const mapped = platformErrorMessage(err, t);
   if (mapped === null || !(err instanceof HttpError)) return err;
   return new HttpError(err.kind, mapped, err.code);
 }
@@ -91,7 +92,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
       setResult(answered);
       onPurged(answered);
     } catch (err) {
-      throw friendly(err);
+      throw friendly(err, t);
     }
   }
 
@@ -162,7 +163,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                     <span className="text-3">—</span>
                   ) : (
                     <>
-                      {PURGE_USER_SKIP_REASON_LABELS[outcome.reason]}
+                      {purgeUserSkipReasonLabel(outcome.reason, t)}
                       {outcome.detail ? (
                         <span className="text-3 text-small"> · {outcome.detail}</span>
                       ) : null}
@@ -259,7 +260,9 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                         : row.memberships
                             .map(
                               (membership) =>
-                                `${membership.workspaceName}@${membership.role}${membership.disabled ? ' (disabled)' : ''}`,
+                                `${membership.workspaceName}@${roleLabel(membership.role, t)}${
+                                  membership.disabled ? ` (${t('已停用', 'disabled')})` : ''
+                                }`,
                             )
                             .join(', ')}
                       {' · '}

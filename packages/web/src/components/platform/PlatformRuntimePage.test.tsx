@@ -139,7 +139,11 @@ describe('PlatformRuntimePage', () => {
     expect(within(imagesTable).getByTestId('runtime-image-active-chip')).toBeTruthy();
 
     const drift = await screen.findByTestId('pi-drift-body');
-    expect(within(drift).getByTestId('pi-drift-status').textContent).toBe('consistent');
+    // S8 W1-A10: the pi-drift chip is a StatusChip now (bilingual label; default zh-CN renders
+    // '一致') — `data-status` still carries the raw wire value.
+    const driftStatus = within(drift).getByTestId('pi-drift-status');
+    expect(driftStatus.getAttribute('data-status')).toBe('consistent');
+    expect(driftStatus.textContent).toBe('一致');
   });
 
   it('shows the active image as unresolved without guessing needsRebuild', async () => {

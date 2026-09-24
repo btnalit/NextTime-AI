@@ -4,10 +4,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
-import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
+import { envAdminTitle } from '../../lib/platform-errors.js';
 import { UserDetailPanel } from './UserDetailPanel.js';
 
 afterEach(cleanup);
+
+/** `UserDetailPanel` renders under the default `LangProvider` context (zh-CN) in this file's
+ *  `renderPanel` — `envAdminTitle`'s zh half is what the DOM carries. */
+const ENV_ADMIN_TITLE = envAdminTitle((zh) => zh);
 
 function scriptedHttp(
   handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,

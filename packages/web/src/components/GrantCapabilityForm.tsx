@@ -2,6 +2,7 @@ import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { GrantRow, PrincipalRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { roleLabel } from '../lib/labels.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input, Select } from './ui/Field.js';
@@ -101,7 +102,7 @@ export function GrantCapabilityForm({
             </option>
             {principals.map((row) => (
               <option key={row.id} value={row.id}>
-                {row.displayName} ({row.role})
+                {row.displayName} ({roleLabel(row.role, t)})
               </option>
             ))}
           </Select>

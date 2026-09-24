@@ -3,6 +3,7 @@ import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { roleLabel } from '../lib/labels.js';
 import { platformErrorMessage } from '../lib/platform-errors.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -48,7 +49,7 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
     }
   }
 
-  const inline = platformErrorMessage(error);
+  const inline = platformErrorMessage(error, t);
 
   return (
     <form
@@ -92,7 +93,7 @@ export function AddMemberForm({ http, onDone, onCancel }: AddMemberFormProps) {
         >
           {ROLE_VALUES.map((value) => (
             <option key={value} value={value}>
-              {value}
+              {roleLabel(value, t)}
             </option>
           ))}
         </Select>

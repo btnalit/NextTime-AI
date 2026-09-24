@@ -307,7 +307,9 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     );
     await screen.findByTestId('approval-detail');
     fireEvent.click(screen.getByRole('button', { name: /批准/ }));
-    await screen.findByText(/A reason is required for a high-impact action/);
+    // S8 W1-A10: ApprovalCard's reason error is bilingual via t() now; default zh-CN renders the
+    // zh half.
+    await screen.findByText('高影响动作必须填写批准理由');
     expect(approve).not.toHaveBeenCalled();
     expect(screen.queryByTestId('approval-confirm')).toBeNull();
   });
@@ -338,7 +340,9 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     expect(confirm.getAttribute('role')).toBe('dialog');
     expect(screen.getByTestId('confirm-target').textContent).toBe('prod-db-1');
     expect(screen.getByTestId('confirm-impact').textContent).toContain('prod-db-1');
-    expect(screen.getByTestId('confirm-impact').textContent).toContain('high');
+    // S8 W1-A10: blastRadius reads through the shared StatusChip label now (bilingual); default
+    // zh-CN renders '高影响'.
+    expect(screen.getByTestId('confirm-impact').textContent).toContain('高影响');
     expect(screen.getByTestId('approval-confirm-reason').textContent).toBe('change window CR-42');
     expect(approve).not.toHaveBeenCalled();
     // The detail drawer stays open underneath (a sibling, not a nested drawer).

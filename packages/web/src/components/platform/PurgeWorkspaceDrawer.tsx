@@ -2,9 +2,9 @@ import type { PlatformWorkspaceWire, PurgeWorkspaceResultWire } from '@nexttime/
 import { useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
-import { PURGE_WORKSPACE_REASON_LABELS, purgeCountLabel } from '../../lib/platform-workspaces.js';
+import { purgeCountLabel, purgeWorkspaceReasonLabel } from '../../lib/platform-workspaces.js';
 import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
@@ -31,8 +31,8 @@ type Preview =
 /** The kernel's 409 / 404 with the console's bilingual copy as its message, so `kit/confirm`'s
  *  own inline error banner (message + code) reads the same as `PlatformError` does on the
  *  preview step. Anything unmapped is rethrown as it came. */
-function friendly(err: unknown): unknown {
-  const mapped = platformErrorMessage(err);
+function friendly(err: unknown, t: Translate): unknown {
+  const mapped = platformErrorMessage(err, t);
   if (mapped === null || !(err instanceof HttpError)) return err;
   return new HttpError(err.kind, mapped, err.code);
 }
@@ -88,7 +88,7 @@ export function PurgeWorkspaceDrawer({
       });
       onPurged(result);
     } catch (err) {
-      throw friendly(err);
+      throw friendly(err, t);
     }
   }
 
@@ -205,7 +205,7 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
 
       <dl className="definition-list">
         <dt>{t('原因', 'Reason')}</dt>
-        <dd data-testid="purge-preview-reason">{PURGE_WORKSPACE_REASON_LABELS[result.reason]}</dd>
+        <dd data-testid="purge-preview-reason">{purgeWorkspaceReasonLabel(result.reason, t)}</dd>
         <dt>{t('状态', 'Status')}</dt>
         <dd>
           <StatusChip machine="workspaceStatus" status={result.status} size="s" />{' '}
@@ -233,7 +233,7 @@ function PreviewBody({ result }: { readonly result: PurgeWorkspaceResultWire }) 
               {counts.map(([key, n]) => (
                 <tr key={key} data-purge-table={key}>
                   <td>
-                    {purgeCountLabel(key)} <span className="mono text-3">{key}</span>
+                    {purgeCountLabel(key, t)} <span className="mono text-3">{key}</span>
                   </td>
                   <td className="mono tabular">{n}</td>
                 </tr>

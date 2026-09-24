@@ -11,6 +11,7 @@ import { formatDateTime, formatRelative } from '../lib/format.js';
 import { platformGateInstanceHref } from '../lib/gate-instances.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { roleLabel } from '../lib/labels.js';
 import { hrefs } from '../lib/router.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
@@ -245,7 +246,7 @@ export function GatekeeperCard({
                   </option>
                   {principals.map((row) => (
                     <option key={row.id} value={row.id}>
-                      {row.displayName} ({row.role})
+                      {row.displayName} ({roleLabel(row.role, t)})
                     </option>
                   ))}
                 </Select>

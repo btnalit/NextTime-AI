@@ -178,7 +178,10 @@ export function AgentProfileForm({
         id="ap-model"
         label={t('模型', 'Model')}
         error={fieldErrors.model}
-        hint="Options are the llm-proxy allow-list, narrowed by workspace policy."
+        hint={t(
+          '可选模型来自工作区的模型清单，并按工作区策略收窄。',
+          'Options come from the workspace model allow-list, narrowed by workspace policy.',
+        )}
       >
         <Select
           id="ap-model"
@@ -284,8 +287,10 @@ export function AgentProfileForm({
           {autoApproveLowDisabled && !editForbidden ? (
             <span className="text-3 text-small">
               {' '}
-              {t('— 工作区策略不允许', 'workspace policy does not allow this')} (
-              <code>allowMemberAutoApproveLow</code>)
+              {t(
+                '— 工作区策略未开放"允许自动批准低风险动作"',
+                'workspace policy does not allow "auto-approve low-impact actions"',
+              )}
             </span>
           ) : null}
         </span>
@@ -340,6 +345,7 @@ function ChecklistField({
   readonly error?: string;
   readonly testId: string;
 }) {
+  const t = useT();
   return (
     <div className="field" data-testid={testId}>
       <span className="field-label">{title}</span>
@@ -351,7 +357,7 @@ function ChecklistField({
           onChange={(event) => onInheritChange(event.target.checked)}
           disabled={disabled}
         />
-        <span>继承（不覆盖）Inherit workspace default</span>
+        <span>{t('继承（不覆盖）', 'Inherit workspace default')}</span>
       </label>
       {!inherit ? (
         options.length === 0 ? (

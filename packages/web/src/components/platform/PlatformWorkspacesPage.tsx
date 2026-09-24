@@ -9,7 +9,7 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, readResiduePreset } from '../../lib/platform-workspaces.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
@@ -312,6 +312,7 @@ export function PlatformWorkspacesPage({
           columns={workspaceColumns(
             (workspaceId) => setPanel({ kind: 'workspace', workspaceId }),
             (workspaceId) => setPanel({ kind: 'purge', workspaceId }),
+            t,
           )}
           data={rows}
           getRowId={(row) => row.id}
@@ -392,17 +393,18 @@ export function PlatformWorkspacesPage({
 function workspaceColumns(
   onOpen: (workspaceId: string) => void,
   onPurge: (workspaceId: string) => void,
+  t: Translate,
 ): readonly DataTableColumn<PlatformWorkspaceWire>[] {
   return [
     {
       id: 'name',
-      header: '名称 Name',
+      header: t('名称', 'Name'),
       priority: 'primary',
       cell: (workspace) => <span className="truncate">{workspace.name}</span>,
     },
     {
       id: 'status',
-      header: '状态 Status',
+      header: t('状态', 'Status'),
       priority: 'high',
       cell: (workspace) => (
         <>
@@ -414,7 +416,7 @@ function workspaceColumns(
           />
           {workspace.isDefault ? (
             <span className="tag" data-testid="workspace-default-badge">
-              默认 Default
+              {t('默认', 'Default')}
             </span>
           ) : null}
         </>
@@ -436,11 +438,11 @@ function workspaceColumns(
                 onClick={() => onPurge(workspace.id)}
                 data-testid="workspace-purge"
               >
-                清除 Purge
+                {t('清除', 'Purge')}
               </Button>
             ) : null}
             <Button variant="ghost" size="s" onClick={() => onOpen(workspace.id)}>
-              配置 Configure
+              {t('配置', 'Configure')}
             </Button>
           </div>
         );
@@ -448,7 +450,7 @@ function workspaceColumns(
     },
     {
       id: 'purpose',
-      header: '用途 Purpose',
+      header: t('用途', 'Purpose'),
       cell: (workspace) => (
         <StatusChip
           machine="workspacePurpose"
@@ -460,29 +462,29 @@ function workspaceColumns(
     },
     {
       id: 'lifecycle',
-      header: '生命周期 Lifecycle',
+      header: t('生命周期', 'Lifecycle'),
       cell: (workspace) => <WorkspaceLifecycle workspace={workspace} />,
     },
     {
       id: 'entryModel',
-      header: '入口模型 Entry model',
+      header: t('入口模型', 'Entry model'),
       cellClassName: 'mono',
       cell: (workspace) =>
-        workspace.entryModel ?? <span className="text-3">平台默认 Platform default</span>,
+        workspace.entryModel ?? <span className="text-3">{t('平台默认', 'Platform default')}</span>,
     },
     {
       id: 'allowedModels',
-      header: '允许的模型 Allowed models',
+      header: t('允许的模型', 'Allowed models'),
       cell: (workspace) =>
         workspace.allowedModels.length === 0 ? (
-          <span className="text-3">全部 All</span>
+          <span className="text-3">{t('全部', 'All')}</span>
         ) : (
           `${workspace.allowedModels.length} 个`
         ),
     },
     {
       id: 'memberCount',
-      header: '成员数 Members',
+      header: t('成员数', 'Members'),
       cellClassName: 'mono',
       cell: (workspace) => workspace.memberCount,
     },

@@ -152,9 +152,8 @@ describe('MembersPage', () => {
     fireEvent.change(within(drawer).getByLabelText(/角色/), { target: { value: 'operator' } });
     fireEvent.click(within(drawer).getByRole('button', { name: '保存' }));
 
-    await waitFor(() =>
-      expect(within(drawer).getByText('Operator', { exact: false })).toBeTruthy(),
-    );
+    // S8 W1-A10: the role StatusChip is bilingual now; default zh-CN renders '操作员'.
+    await waitFor(() => expect(within(drawer).getByText('操作员', { exact: false })).toBeTruthy());
   });
 
   it('添加成员 →', async () => {

@@ -9,6 +9,7 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import { connectorModeLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
@@ -296,12 +297,12 @@ function ConnectorRow({
               >
                 {CONNECTOR_MODE_VALUES.map((mode) => (
                   <option key={mode} value={mode}>
-                    {mode}
+                    {connectorModeLabel(mode, t)}
                   </option>
                 ))}
               </Select>
             }
-            title={`切换模式为 ${pendingMode ?? connector.mode} Switch mode to ${pendingMode ?? connector.mode}`}
+            title={`${t('切换模式为', 'Switch mode to')} ${connectorModeLabel(pendingMode ?? connector.mode, t)}`}
             description={
               disablingInUse
                 ? t(

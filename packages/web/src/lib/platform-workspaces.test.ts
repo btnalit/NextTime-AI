@@ -1,20 +1,26 @@
 import { PurgeUserSkipReasonWireSchema, PurgeWorkspaceReasonWireSchema } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
+import type { Translate } from './i18n.js';
 import {
-  PURGE_USER_SKIP_REASON_LABELS,
-  PURGE_WORKSPACE_REASON_LABELS,
   WORKSPACE_PURGE_RETENTION_DAYS,
   deriveWorkspaceOptions,
   isExpiredEphemeral,
   isResidueWorkspace,
   purgeCountLabel,
   purgeRetention,
+  purgeUserSkipReasonLabel,
+  purgeWorkspaceReasonLabel,
   readResiduePreset,
   residueWorkspacesHref,
 } from './platform-workspaces.js';
 
 const NOW = Date.parse('2026-09-19T12:00:00.000Z');
 const DAY = 24 * 60 * 60 * 1000;
+
+/** These helpers are pure (not components) and take `t` from their caller — a fixed zh/en picker
+ *  each, so a test can assert on either half without a `LangProvider`. */
+const zhT: Translate = (zh) => zh;
+const enT: Translate = (_zh, en) => en;
 
 describe('platform-workspaces', () => {
   it('deriveWorkspaceOptions unions memberships and adds the default workspace', () => {
@@ -105,18 +111,20 @@ describe('platform-workspaces', () => {
   });
 
   it('purgeCountLabel knows the cascade tables and humanizes anything else', () => {
-    expect(purgeCountLabel('capabilityHandles')).toBe('Handle');
-    expect(purgeCountLabel('auditRecords')).toContain('Audit records');
-    expect(purgeCountLabel('ontologyVersions')).toBe('Ontology versions');
-    expect(purgeCountLabel('')).toBe('');
+    expect(purgeCountLabel('capabilityHandles', zhT)).toBe('Handle');
+    expect(purgeCountLabel('auditRecords', enT)).toContain('Audit records');
+    expect(purgeCountLabel('ontologyVersions', zhT)).toBe('Ontology versions');
+    expect(purgeCountLabel('', zhT)).toBe('');
   });
 
   it('every wire reason has bilingual copy', () => {
     for (const reason of PurgeWorkspaceReasonWireSchema.options) {
-      expect(PURGE_WORKSPACE_REASON_LABELS[reason].length).toBeGreaterThan(0);
+      expect(purgeWorkspaceReasonLabel(reason, zhT).length).toBeGreaterThan(0);
+      expect(purgeWorkspaceReasonLabel(reason, enT).length).toBeGreaterThan(0);
     }
     for (const reason of PurgeUserSkipReasonWireSchema.options) {
-      expect(PURGE_USER_SKIP_REASON_LABELS[reason].length).toBeGreaterThan(0);
+      expect(purgeUserSkipReasonLabel(reason, zhT).length).toBeGreaterThan(0);
+      expect(purgeUserSkipReasonLabel(reason, enT).length).toBeGreaterThan(0);
     }
   });
 });

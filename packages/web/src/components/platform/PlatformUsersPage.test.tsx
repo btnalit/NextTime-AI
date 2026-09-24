@@ -5,11 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
-import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
+import { envAdminTitle } from '../../lib/platform-errors.js';
 import { ToastProvider } from '../ui/Toast.js';
 import { PlatformUsersPage } from './PlatformUsersPage.js';
 
 afterEach(cleanup);
+
+/** `PlatformUsersPage` renders under the default `LangProvider` context (zh-CN, no explicit
+ *  provider in this file's `renderPage`) — `envAdminTitle`'s zh half is what the DOM carries. */
+const ENV_ADMIN_TITLE = envAdminTitle((zh) => zh);
 
 /** A `CapabilityCaller` whose named answers are scripted; unscripted names throw loudly instead
  *  of silently resolving `undefined` (the convention every page test in this package uses). */
@@ -125,8 +129,9 @@ describe('PlatformUsersPage', () => {
     expect(statuses[1]?.textContent).toBe('待激活');
 
     const chips = within(table).getAllByTestId('platform-user-workspace-chip');
-    expect(chips[0]?.textContent).toBe('Acme@member');
-    expect(chips[1]?.textContent).toBe('Beta@operator');
+    // S8 W1-A10: the role half is bilingual via roleLabel() now; default zh-CN renders zh.
+    expect(chips[0]?.textContent).toBe('Acme@成员');
+    expect(chips[1]?.textContent).toBe('Beta@操作员');
     // A disabled membership is greyed rather than hidden.
     expect(chips[1]?.className).toContain('chip-neutral');
 
@@ -472,7 +477,8 @@ describe('PlatformUsersPage', () => {
     const candidates = await within(dialog).findAllByTestId('purge-user-candidate');
     expect(candidates).toHaveLength(2);
     expect(listCalls.at(-1)).toEqual({ pendingOnly: true, limit: 200 });
-    expect(candidates[1]?.textContent).toContain('accept-s3@operator');
+    // S8 W1-A10: the role half is bilingual via roleLabel() now; default zh-CN renders zh.
+    expect(candidates[1]?.textContent).toContain('accept-s3@操作员');
 
     // Nothing chosen → the batch button is disabled; select all → "清理 2 个".
     const next = within(dialog).getByTestId('purge-users-continue');

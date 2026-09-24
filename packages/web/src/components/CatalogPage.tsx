@@ -15,6 +15,7 @@ import {
   operationStatsKey,
 } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { workerDefinitionKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
@@ -43,12 +44,15 @@ export interface CatalogPageProps {
   readonly onTabChange: (tab: CatalogTab) => void;
 }
 
-const TAB_LABEL: Readonly<Record<CatalogTab, string>> = {
-  operations: 'Operations',
-  skills: 'Skills',
-  procedures: 'Procedures',
-  workers: 'Workers',
-  modules: 'Modules',
+/** S8 W1-A10 (i18n remainder): `Operation`/`Skill`/`Procedure`/`Worker` stay English proper nouns
+ *  even in zh copy (the page's own description above does the same); `Module` has an established
+ *  zh term ("模块", `lib/nav.ts`'s catalog nav group). */
+const TAB_LABEL: Readonly<Record<CatalogTab, { readonly zh: string; readonly en: string }>> = {
+  operations: { zh: 'Operation', en: 'Operations' },
+  skills: { zh: 'Skill', en: 'Skills' },
+  procedures: { zh: 'Procedure', en: 'Procedures' },
+  workers: { zh: 'Worker', en: 'Workers' },
+  modules: { zh: '模块', en: 'Modules' },
 };
 
 /**
@@ -109,7 +113,7 @@ export function CatalogPage({ http, tab, onTabChange }: CatalogPageProps) {
           onChange={onTabChange}
           options={(Object.keys(TAB_LABEL) as CatalogTab[]).map((value) => ({
             value,
-            label: TAB_LABEL[value],
+            label: t(TAB_LABEL[value].zh, TAB_LABEL[value].en),
           }))}
         />
       </div>
@@ -909,7 +913,7 @@ function WorkersTab({ http }: { readonly http: CapabilityCaller }) {
                     size="s"
                   />
                   <span className="text-3 text-small">v{row.version}</span>
-                  <span className="tag">{row.kind}</span>
+                  <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
                 </>
               }
               meta={

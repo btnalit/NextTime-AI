@@ -7,6 +7,7 @@ import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { type PrincipalRow, principalDisplayRole } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { principalKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { AddMemberForm } from './AddMemberForm.js';
 import { CreatePrincipalForm } from './CreatePrincipalForm.js';
@@ -149,7 +150,9 @@ export function MembersPage({ http }: MembersPageProps) {
               title={
                 <>
                   <span className="truncate">{row.displayName}</span>
-                  {row.kind !== 'human' ? <span className="tag">{row.kind}</span> : null}
+                  {row.kind !== 'human' ? (
+                    <span className="tag">{principalKindLabel(row.kind, t)}</span>
+                  ) : null}
                   {row.disabledAt ? (
                     <span className="tag text-danger">{t('已停用', 'disabled')}</span>
                   ) : null}
@@ -157,7 +160,7 @@ export function MembersPage({ http }: MembersPageProps) {
               }
               meta={
                 <>
-                  <span className="mono">{principalDisplayRole(row)}</span>
+                  <span className="mono">{principalDisplayRole(row, t)}</span>
                   <span className="meta-sep" />
                   <time title={formatDateTime(row.createdAt)}>{formatRelative(row.createdAt)}</time>
                   {row.hasApiKey ? (
