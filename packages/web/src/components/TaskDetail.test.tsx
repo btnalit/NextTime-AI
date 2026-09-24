@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import { type CapabilityCaller, SILENT_PUSH_SOURCE } from '../lib/clients.js';
@@ -56,8 +56,8 @@ function scriptedHttp(
 function renderDetail(
   overrides: Partial<TaskSummary> = {},
   http: CapabilityCaller = scriptedHttp({ list_action_requests: () => ({ items: [] }) }),
+  onCancel = vi.fn(async () => undefined),
 ) {
-  const onCancel = vi.fn();
   const onOpenApproval = vi.fn();
   render(
     <PermissionsProvider>
@@ -69,8 +69,6 @@ function renderDetail(
         principalNames={new Map([['p-1', 'Alice']])}
         onOpenApproval={onOpenApproval}
         onCancel={onCancel}
-        cancelling={false}
-        cancelError={null}
       />
     </PermissionsProvider>,
   );
@@ -95,10 +93,17 @@ describe('TaskDetail', () => {
     expect(screen.getByText('restart web')).toBeTruthy();
   });
 
-  it('offers Cancel only while the transition table allows it, and only asks the page', () => {
+  it('offers Cancel only while the transition table allows it; Cancel opens a confirm anchored to itself (S8 W1-A7), which calls onCancel with the task', async () => {
     const { onCancel } = renderDetail();
     fireEvent.click(screen.getByTestId('task-cancel'));
-    expect(onCancel).toHaveBeenCalledWith('task-1');
+    const confirm = await screen.findByTestId('task-cancel-confirm');
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('Restarter');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain('Running runs: 1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(onCancel).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1' })),
+    );
     cleanup();
     renderDetail({ status: 'completed', completedAt: '2026-09-03T00:02:00.000Z' });
     expect(screen.queryByTestId('task-cancel')).toBeNull();
@@ -157,7 +162,20 @@ describe('TaskDetail', () => {
     expect(screen.getByText('worker refused')).toBeTruthy();
   });
 
-  it('shows the cancel error banner with its code', () => {
+  it('a thrown onCancel keeps the confirm open with its own inline error (data-error-code)', async () => {
+    const onCancel = vi.fn(async () => {
+      throw new HttpError('capability_error', 'already finished', 'illegal_transition');
+    });
+    renderDetail({}, scriptedHttp({ list_action_requests: () => ({ items: [] }) }), onCancel);
+    fireEvent.click(screen.getByTestId('task-cancel'));
+    const confirm = await screen.findByTestId('task-cancel-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const error = await within(confirm).findByTestId('confirm-error');
+    expect(error.getAttribute('data-error-code')).toBe('illegal_transition');
+    expect(screen.getByTestId('task-cancel-confirm')).toBeTruthy();
+  });
+
+  it('no definition name renders the grey bare-id fallback chip, never a blank', () => {
     render(
       <PermissionsProvider>
         <TaskDetail
@@ -166,16 +184,10 @@ describe('TaskDetail', () => {
           http={scriptedHttp({ list_action_requests: () => ({ items: [] }) })}
           pushes={SILENT_PUSH_SOURCE}
           onOpenApproval={vi.fn()}
-          onCancel={vi.fn()}
-          cancelling={false}
-          cancelError={new HttpError('capability_error', 'already finished', 'illegal_transition')}
+          onCancel={vi.fn(async () => undefined)}
         />
       </PermissionsProvider>,
     );
-    expect(screen.getByTestId('task-cancel-error').getAttribute('data-error-code')).toBe(
-      'illegal_transition',
-    );
-    // No definition name → the grey bare-id fallback chip, never a blank.
     expect(screen.getByTestId('task-definition').className).toContain('ref-chip-bare');
   });
 });

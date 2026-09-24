@@ -11,6 +11,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
+import { Confirm } from '../kit/confirm.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
@@ -207,6 +208,10 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
   );
 }
 
+/** The select's minimum width — S8 W1-A7 batch design review finding: at 768px the longest mode
+ *  value, `platform_preset`, truncated inside the (previously unconstrained) `<select>`. */
+const CONNECTOR_MODE_SELECT_STYLE = { minWidth: '11rem' } as const;
+
 function ConnectorRow({
   http,
   connector,
@@ -219,6 +224,12 @@ function ConnectorRow({
   const [expanded, setExpanded] = useState(false);
   const [savingMode, setSavingMode] = useState(false);
   const [modeError, setModeError] = useState<unknown | null>(null);
+  // S8 W1-A7 (audit S13/PI1): the select no longer applies on change — it stashes the attempted
+  // value and opens a confirm next to itself; cancelling (Escape, Cancel, outside click) leaves
+  // `pendingMode` null, so the select's own `value` falls back to `connector.mode` and visually
+  // reverts. `set_connector_mode` fires only from the confirm's own `onConfirm`.
+  const [pendingMode, setPendingMode] = useState<ConnectorModeWire | null>(null);
+  const [modeConfirmOpen, setModeConfirmOpen] = useState(false);
 
   async function changeMode(mode: ConnectorModeWire): Promise<void> {
     if (savingMode) return;
@@ -228,12 +239,27 @@ function ConnectorRow({
       onChanged(
         await http.call<ConnectorWire>('set_connector_mode', { name: connector.name, mode }),
       );
+      setPendingMode(null);
     } catch (err) {
       setModeError(err);
+      throw err;
     } finally {
       setSavingMode(false);
     }
   }
+
+  function requestModeChange(mode: ConnectorModeWire): void {
+    if (mode === connector.mode) return;
+    setPendingMode(mode);
+    setModeConfirmOpen(true);
+  }
+
+  // The rule (stated in the confirm's own description, not just chosen silently): switching a
+  // connector *to* `disabled` while it has live gate instances cuts every one of them off
+  // platform-wide at once (audit S13's own wording) — that is the one case worth the extra
+  // retype-to-confirm friction. Every other mode change (including disabling a connector with no
+  // instances yet) is reversible in effect — flip it back — so a medium popover is enough.
+  const disablingInUse = pendingMode === 'disabled' && connector.instanceCount > 0;
 
   return (
     <>
@@ -242,18 +268,44 @@ function ConnectorRow({
         <td>{connector.kind}</td>
         <td>{connector.packaged ? '预置 Packaged' : '通用 Generic'}</td>
         <td>
-          <Select
-            data-testid={`connector-mode-${connector.name}`}
-            value={connector.mode}
-            onChange={(event) => void changeMode(event.target.value as ConnectorModeWire)}
-            disabled={savingMode}
-          >
-            {CONNECTOR_MODE_VALUES.map((mode) => (
-              <option key={mode} value={mode}>
-                {mode}
-              </option>
-            ))}
-          </Select>
+          <Confirm
+            tier={disablingInUse ? 'irreversible' : 'medium'}
+            open={modeConfirmOpen}
+            onOpenChange={(open) => {
+              setModeConfirmOpen(open);
+              if (!open) setPendingMode(null);
+            }}
+            anchor={
+              <Select
+                data-testid={`connector-mode-${connector.name}`}
+                style={CONNECTOR_MODE_SELECT_STYLE}
+                value={pendingMode ?? connector.mode}
+                onChange={(event) => requestModeChange(event.target.value as ConnectorModeWire)}
+                disabled={savingMode}
+              >
+                {CONNECTOR_MODE_VALUES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode}
+                  </option>
+                ))}
+              </Select>
+            }
+            title={`切换模式为 ${pendingMode ?? connector.mode} Switch mode to ${pendingMode ?? connector.mode}`}
+            description={
+              disablingInUse
+                ? 'disabled 会立即让所有启用它的工作区都拿不到这个接入包，platform 范围生效。 disabled immediately cuts off every workspace that enabled this connector, platform-wide.'
+                : `新模式对这个接入包往后的启用/展示生效；改错了可以随时再切回来。 The new mode governs this connector's own enable/visibility from here on — switch it back at any time if this was a mistake.`
+            }
+            target={disablingInUse ? connector.name : undefined}
+            impact={[
+              `${connector.instanceCount} 个门实例 gate instances`,
+              `${connector.operationCount} 个 Operation`,
+            ]}
+            confirmLabel="切换 Switch"
+            danger={pendingMode === 'disabled'}
+            onConfirm={() => (pendingMode ? changeMode(pendingMode) : undefined)}
+            testId={`connector-mode-confirm-${connector.name}`}
+          />
           <PlatformError
             error={modeError}
             title="无法设置模式 Could not set the mode"

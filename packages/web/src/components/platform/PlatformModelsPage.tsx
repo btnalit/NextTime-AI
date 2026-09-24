@@ -10,10 +10,10 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
-import { ConfirmTier } from '../ui/ConfirmTier.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -56,8 +56,9 @@ const API_LABEL: Readonly<Record<LlmProviderWire['api'], string>> = {
  * S6-B — docs/console-completion-plan.md §5.4; docs/platform-admin-design.md §6.2). The platform
  * side of the model catalog: every provider llm-proxy knows (the operator's `llm-providers.yaml`
  * plus the console-managed store), 新增 / 编辑 in a drawer, 测试调用 (one completion + one tool-call
- * round trip, the plan's acceptance), 停用 / 启用 behind a `high` confirm and 删除 (store rows only)
- * behind an `irreversible` one, and the honest credential state per row.
+ * round trip, the plan's acceptance), 停用 / 启用 behind a `kit/confirm` `medium` popover (S8 W1-A7,
+ * anchored to the row's own button) and 删除 (store rows only) behind an `irreversible` one, and
+ * the honest credential state per row.
  *
  * Data path: `lib/llm-admin.ts` — `issue_llm_admin_token` for a 5-minute JWT, then llm-proxy's
  * admin endpoints directly through caddy `/api/llm-admin/*`. Nothing here goes through a kernel
@@ -261,36 +262,99 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
               编辑 Edit
             </Button>
             {provider.enabled ? (
-              <Button
-                variant="ghost"
-                size="s"
-                onClick={() => setConfirm({ kind: 'disable', provider })}
-                disabled={meta?.storeWritable === false}
-                data-testid="provider-disable"
-              >
-                停用 Disable
-              </Button>
+              <Confirm
+                tier="medium"
+                open={confirm.kind === 'disable' && confirm.provider.id === provider.id}
+                onOpenChange={(open) =>
+                  setConfirm(open ? { kind: 'disable', provider } : { kind: 'none' })
+                }
+                anchor={
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    onClick={() => setConfirm({ kind: 'disable', provider })}
+                    disabled={meta?.storeWritable === false}
+                    data-testid="provider-disable"
+                  >
+                    停用 Disable
+                  </Button>
+                }
+                title="停用供应商 Disable provider"
+                description="代理立即对它返回 404，它会从 models.json 消失；已在工作区里被勾选的模型对话会失败，直到重新启用。 The proxy 404s it at once and it leaves models.json; chats on its models fail until re-enabled."
+                target={provider.displayName}
+                impact={[
+                  `${provider.models.length} 个模型不再可用 models become unavailable`,
+                  provider.source === 'file'
+                    ? '在代理存储里建一条覆盖记录，yaml 不改 creates an override; the yaml is untouched'
+                    : '保留记录，可随时启用 the record is kept and can be re-enabled',
+                ]}
+                confirmLabel="停用 Disable"
+                danger
+                onConfirm={() => setEnabled(provider, false)}
+                testId="provider-disable-confirm"
+              />
             ) : (
-              <Button
-                variant="ghost"
-                size="s"
-                onClick={() => setConfirm({ kind: 'enable', provider })}
-                disabled={meta?.storeWritable === false}
-                data-testid="provider-enable"
-              >
-                启用 Enable
-              </Button>
+              <Confirm
+                tier="medium"
+                open={confirm.kind === 'enable' && confirm.provider.id === provider.id}
+                onOpenChange={(open) =>
+                  setConfirm(open ? { kind: 'enable', provider } : { kind: 'none' })
+                }
+                anchor={
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    onClick={() => setConfirm({ kind: 'enable', provider })}
+                    disabled={meta?.storeWritable === false}
+                    data-testid="provider-enable"
+                  >
+                    启用 Enable
+                  </Button>
+                }
+                title="启用供应商 Enable provider"
+                target={provider.displayName}
+                confirmLabel="启用 Enable"
+                onConfirm={() => setEnabled(provider, true)}
+                testId="provider-enable-confirm"
+              />
             )}
             {provider.source === 'store' ? (
-              <Button
-                variant="ghost"
-                size="s"
-                onClick={() => setConfirm({ kind: 'delete', provider })}
-                disabled={meta?.storeWritable === false}
-                data-testid="provider-delete"
-              >
-                {provider.overridesFile ? '删除覆盖 Drop override' : '删除 Delete'}
-              </Button>
+              <Confirm
+                tier="irreversible"
+                open={confirm.kind === 'delete' && confirm.provider.id === provider.id}
+                onOpenChange={(open) =>
+                  setConfirm(open ? { kind: 'delete', provider } : { kind: 'none' })
+                }
+                anchor={
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    onClick={() => setConfirm({ kind: 'delete', provider })}
+                    disabled={meta?.storeWritable === false}
+                    data-testid="provider-delete"
+                  >
+                    {provider.overridesFile ? '删除覆盖 Drop override' : '删除 Delete'}
+                  </Button>
+                }
+                title={
+                  provider.overridesFile
+                    ? '删除覆盖记录 Drop override'
+                    : '删除供应商 Delete provider'
+                }
+                description={
+                  provider.overridesFile
+                    ? '恢复为主机 llm-providers.yaml 里的同名条目。 The host yaml entry becomes visible again.'
+                    : '从代理存储里删除这条记录并重写 models.json；工作区里对它模型的勾选会失效。 Removes the record from the proxy store and rewrites models.json; workspace selections of its models stop working.'
+                }
+                target={provider.id}
+                impact={[
+                  `${provider.models.length} 个模型 models`,
+                  '写入平台审计 recorded in the platform audit',
+                ]}
+                confirmLabel="删除 Delete"
+                onConfirm={() => remove(provider)}
+                testId="provider-delete-confirm"
+              />
             ) : null}
           </div>
           {rowError && rowError.id === provider.id ? (
@@ -590,70 +654,6 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           </div>
         ) : null}
       </Drawer>
-
-      <ConfirmTier
-        tier="high"
-        open={confirm.kind === 'disable'}
-        title="停用供应商 Disable provider"
-        description="代理立即对它返回 404，它会从 models.json 消失；已在工作区里被勾选的模型对话会失败，直到重新启用。 The proxy 404s it at once and it leaves models.json; chats on its models fail until re-enabled."
-        target={confirm.kind === 'disable' ? confirm.provider.displayName : undefined}
-        impact={
-          confirm.kind === 'disable'
-            ? [
-                `${confirm.provider.models.length} 个模型不再可用 models become unavailable`,
-                confirm.provider.source === 'file'
-                  ? '在代理存储里建一条覆盖记录，yaml 不改 creates an override; the yaml is untouched'
-                  : '保留记录，可随时启用 the record is kept and can be re-enabled',
-              ]
-            : undefined
-        }
-        confirmLabel="停用 Disable"
-        danger
-        onConfirm={() =>
-          confirm.kind === 'disable' ? setEnabled(confirm.provider, false) : undefined
-        }
-        onClose={() => setConfirm({ kind: 'none' })}
-        testId="provider-disable-confirm"
-      />
-      <ConfirmTier
-        tier="medium"
-        open={confirm.kind === 'enable'}
-        title="启用供应商 Enable provider"
-        target={confirm.kind === 'enable' ? confirm.provider.displayName : undefined}
-        confirmLabel="启用 Enable"
-        onConfirm={() =>
-          confirm.kind === 'enable' ? setEnabled(confirm.provider, true) : undefined
-        }
-        onClose={() => setConfirm({ kind: 'none' })}
-        testId="provider-enable-confirm"
-      />
-      <ConfirmTier
-        tier="irreversible"
-        open={confirm.kind === 'delete'}
-        title={
-          confirm.kind === 'delete' && confirm.provider.overridesFile
-            ? '删除覆盖记录 Drop override'
-            : '删除供应商 Delete provider'
-        }
-        description={
-          confirm.kind === 'delete' && confirm.provider.overridesFile
-            ? '恢复为主机 llm-providers.yaml 里的同名条目。 The host yaml entry becomes visible again.'
-            : '从代理存储里删除这条记录并重写 models.json；工作区里对它模型的勾选会失效。 Removes the record from the proxy store and rewrites models.json; workspace selections of its models stop working.'
-        }
-        target={confirm.kind === 'delete' ? confirm.provider.id : undefined}
-        impact={
-          confirm.kind === 'delete'
-            ? [
-                `${confirm.provider.models.length} 个模型 models`,
-                '写入平台审计 recorded in the platform audit',
-              ]
-            : undefined
-        }
-        confirmLabel="删除 Delete"
-        onConfirm={() => (confirm.kind === 'delete' ? remove(confirm.provider) : undefined)}
-        onClose={() => setConfirm({ kind: 'none' })}
-        testId="provider-delete-confirm"
-      />
     </div>
   );
 }

@@ -26,9 +26,9 @@ import { OnboardingWizard } from './OnboardingWizard.js';
 import { GatekeeperCard } from './RegisteredSystemsSection.js';
 import { RequestConnectionForm } from './RequestConnectionForm.js';
 import { ConnectSystemLauncher } from './connect/ConnectSystemLauncher.js';
+import { Confirm } from './kit/confirm.js';
 import { PageHeader } from './kit/page-header.js';
 import { Button } from './ui/Button.js';
-import { ConfirmTier } from './ui/ConfirmTier.js';
 import { DataList, DataRow } from './ui/DataList.js';
 import { Drawer } from './ui/Drawer.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -321,14 +321,29 @@ export function ConnectionsPage({
                           完成 Complete
                         </Button>
                       ) : null}
-                      <Button
-                        variant="ghost"
-                        size="s"
-                        onClick={() => setCancelling(row)}
-                        data-testid={`cancel-request-${row.id}`}
-                      >
-                        取消 Cancel
-                      </Button>
+                      <Confirm
+                        tier="medium"
+                        open={cancelling?.id === row.id}
+                        onOpenChange={(open) => setCancelling(open ? row : null)}
+                        anchor={
+                          <Button
+                            variant="ghost"
+                            size="s"
+                            onClick={() => setCancelling(row)}
+                            data-testid={`cancel-request-${row.id}`}
+                          >
+                            取消 Cancel
+                          </Button>
+                        }
+                        title="取消连接申请 Cancel this connection request"
+                        description="申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。 The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any."
+                        target={`${row.kind} · ${row.target}`}
+                        confirmLabel="取消申请 Cancel request"
+                        cancelLabel="保留 Keep"
+                        danger
+                        onConfirm={() => cancelRequest(row)}
+                        testId="cancel-request-confirm"
+                      />
                     </span>
                   ) : undefined
                 }
@@ -336,21 +351,6 @@ export function ConnectionsPage({
             ))}
           </DataList>
         )}
-        {cancelling ? (
-          <ConfirmTier
-            tier="medium"
-            open
-            title="取消连接申请 Cancel this connection request"
-            description="申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。 The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any."
-            target={`${cancelling.kind} · ${cancelling.target}`}
-            confirmLabel="取消申请 Cancel request"
-            cancelLabel="保留 Keep"
-            danger
-            onConfirm={() => cancelRequest(cancelling)}
-            onClose={() => setCancelling(null)}
-            testId="cancel-request-confirm"
-          />
-        ) : null}
       </section>
 
       <AvailableGateInstancesSection

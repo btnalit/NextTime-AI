@@ -6,8 +6,8 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { HttpError } from '../../lib/http-client.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { PURGE_USER_SKIP_REASON_LABELS } from '../../lib/platform-workspaces.js';
+import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
-import { ConfirmTier } from '../ui/ConfirmTier.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -38,14 +38,20 @@ function friendly(err: unknown): unknown {
  * `purge_user`, §5.9 "用户页复用工作区页的筛选与清除模式"): the "清理待激活用户" batch entry.
  * Lists `list_users{pendingOnly: true}` — every user still awaiting activation, the population
  * `purge_user` can take from (the page's own default view hides the residual subset of it,
- * `hideResidual`) — with a checkbox per row, then `ConfirmTier tier="high"` listing the chosen
- * logins, then `purge_user{userIds}`. The result is rendered per user (`purged`, or `skipped` +
- * the kernel's reason in bilingual copy — a skipped user never fails the batch), and handed to
- * the page to re-read the directory.
+ * `hideResidual`) — with a checkbox per row, then `kit/confirm tier="irreversible"` listing the
+ * chosen logins, then `purge_user{userIds}`. The result is rendered per user (`purged`, or
+ * `skipped` + the kernel's reason in bilingual copy — a skipped user never fails the batch), and
+ * handed to the page to re-read the directory.
  *
- * Two modes of one `Drawer` (pick → results) plus the confirm tier, which is a `Drawer` of its
- * own: the list drawer unmounts while the tier is open so there is never more than one focus
- * trap. The result is held here, not in the tier — the tier closes itself after `onConfirm`.
+ * S8 W1-A7: reclassified from the old `ConfirmTier`'s `high` tier to `irreversible` — `purge_user`
+ * is a hard delete (no undo), so it belongs with the other unrecoverable actions even though there
+ * is no single target name to retype for a batch; `target` is omitted (the acknowledgement
+ * checkbox alone gates the danger button, the same as `PurgeWorkspaceDrawer`'s batch-less cases).
+ *
+ * Two modes of one `Drawer` (pick → results) plus the confirm tier, which is a centred
+ * `AlertDialog` of its own: the list drawer unmounts while the tier is open so there is never more
+ * than one focus trap. The result is held here, not in the tier — the tier closes itself after
+ * `onConfirm`.
  */
 export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogProps) {
   const candidates = useCapabilityList<UserWire>(http, 'list_users', {
@@ -89,16 +95,17 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
 
   if (step === 'confirm') {
     return (
-      <ConfirmTier
-        tier="high"
+      <Confirm
+        tier="irreversible"
         open
-        danger
+        onOpenChange={(open) => {
+          if (!open) setStep('pick');
+        }}
         title={`清理 ${chosen.length} 个待激活用户 Purge ${chosen.length} pending users`}
         description="从未激活且无活跃成员资格的用户会被删除；有密码、登录过、仍有成员资格或被审计引用的会被内核跳过并说明原因。 Never-activated users with no active membership are deleted; the kernel skips (and explains) any with a password, a login, a live membership or an audit reference."
         impact={chosen.map((row) => `${row.login} — ${row.displayName}`)}
         confirmLabel="确认清理 Purge"
         onConfirm={execute}
-        onClose={() => setStep('pick')}
         testId="purge-users-confirm"
       />
     );

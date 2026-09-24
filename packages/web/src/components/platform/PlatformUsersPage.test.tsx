@@ -414,7 +414,7 @@ describe('PlatformUsersPage', () => {
     expect(within(drawer).getByTestId('user-detail-status').textContent).toBe('活跃 Active');
   });
 
-  it('A6: 清理待激活用户 lists pendingOnly candidates, confirms as tier high, posts purge_user and renders per-user outcomes', async () => {
+  it('A6: 清理待激活用户 lists pendingOnly candidates, confirms as tier irreversible, posts purge_user and renders per-user outcomes', async () => {
     const pendingA = user({
       id: 'u-a',
       login: 'alice-s3',
@@ -483,14 +483,21 @@ describe('PlatformUsersPage', () => {
     expect(next.textContent).toContain('2');
     fireEvent.click(next);
 
-    // Tier high: the logins are listed; the list drawer is gone while the tier is open.
+    // Tier irreversible (S8 W1-A7 — a hard delete, no single name to retype): the logins are
+    // listed; the list drawer is gone while the tier is open; the danger button stays disabled
+    // until the acknowledgement is checked (no typed-name field — there is no single target).
     const confirm = await screen.findByTestId('purge-users-confirm');
     expect(screen.queryByTestId('purge-users-dialog')).toBeNull();
+    expect(within(confirm).queryByTestId('confirm-typed-name')).toBeNull();
     const impact = within(confirm).getByTestId('confirm-impact');
     expect(impact.textContent).toContain('alice-s3');
     expect(impact.textContent).toContain('bob-s3');
     expect(http.calls.some((call) => call.name === 'purge_user')).toBe(false);
-    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const confirmButton = within(confirm).getByTestId('confirm-button') as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    expect(confirmButton.disabled).toBe(false);
+    fireEvent.click(confirmButton);
 
     // Outcomes per user, bilingual reason for the skipped one; the directory is re-read.
     const results = await screen.findByTestId('purge-users-results');

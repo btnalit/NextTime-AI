@@ -183,6 +183,73 @@ describe('CatalogPage', () => {
     expect(within(row).queryByRole('button', { name: /Publish/ })).toBeNull();
     expect(within(row).getByRole('button', { name: /Deprecate/ })).toBeTruthy();
   });
+
+  // S8 W1-A7 (audit S13): 弃用 Deprecate used to be a plain button with no confirmation at all —
+  // now a medium `kit/confirm` anchored to itself; the capability fires only once confirmed.
+  it('Operations: Deprecate opens a medium confirm next to the button; deprecate_operation fires only on confirm', async () => {
+    let callCount = 0;
+    const http = scriptedHttp({
+      list_operations: () => {
+        callCount += 1;
+        return {
+          items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' }],
+        };
+      },
+      get_operation_stats: () => ({ items: [] }),
+      deprecate_operation: (params) => {
+        expect(params).toEqual({ gatekeeperId: 'gk-1', name: 'docker.restart' });
+        return {};
+      },
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByRole('button', { name: /Deprecate/ }));
+
+    expect(http.calls.some((c) => c.name === 'deprecate_operation')).toBe(false);
+    const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('docker.restart');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'deprecate_operation')).toBe(true),
+    );
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_operations')).toHaveLength(2),
+    );
+  });
+
+  it('Workers tab: Deprecate opens a medium confirm listing the definition name; deprecate_worker_definition fires only on confirm', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+          },
+        ],
+      }),
+      deprecate_worker_definition: (params) => {
+        expect(params).toEqual({ definitionId: 'wd-1', version: 1 });
+        return {};
+      },
+    });
+    renderPage(http, 'workers');
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByRole('button', { name: /Deprecate/ }));
+
+    const confirm = await screen.findByTestId('worker-deprecate-confirm-wd-1@1');
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('Fixer');
+    expect(http.calls.some((c) => c.name === 'deprecate_worker_definition')).toBe(false);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'deprecate_worker_definition')).toBe(true),
+    );
+  });
 });
 
 /** S6-A A2 (console-completion-plan §5.3): the editors are reachable from each tab and the

@@ -200,7 +200,9 @@ describe('PlatformIntegrationsPage', () => {
     expect(within(detail).getByTestId('gate-instance-workspaces')).toBeTruthy();
   });
 
-  it('lists connectors and changing the mode posts set_connector_mode', async () => {
+  // S8 W1-A7 (audit S13/PI1): the select no longer applies on change — it opens a medium confirm
+  // next to itself, and `set_connector_mode` only fires once that confirm is confirmed.
+  it('changing the mode opens a medium confirm next to the select; set_connector_mode fires only on confirm', async () => {
     const updated = connector({ mode: 'platform_preset' });
     const http = scriptedHttp({
       list_connectors: () => ({ items: [connector()] }),
@@ -213,18 +215,86 @@ describe('PlatformIntegrationsPage', () => {
 
     const table = await screen.findByTestId('connectors-table');
     const row = within(table).getByTestId('connector-row-docker');
-    fireEvent.change(within(row).getByTestId('connector-mode-docker'), {
-      target: { value: 'platform_preset' },
-    });
+    const select = within(row).getByTestId('connector-mode-docker') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'platform_preset' } });
+
+    expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(false);
+    const confirm = await screen.findByTestId('connector-mode-confirm-docker');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(true),
     );
+    await waitFor(() => expect(select.value).toBe('platform_preset'));
+  });
+
+  it('cancelling the mode confirm restores the previous value without calling set_connector_mode', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector({ mode: 'self_serve' })] }),
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('connectors-table');
+    const row = within(table).getByTestId('connector-row-docker');
+    const select = within(row).getByTestId('connector-mode-docker') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'platform_preset' } });
+    expect(select.value).toBe('platform_preset');
+
+    const confirm = await screen.findByTestId('connector-mode-confirm-docker');
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+
+    await waitFor(() => expect(select.value).toBe('self_serve'));
+    expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(false);
+  });
+
+  it('switching disabled for a connector already in use is an irreversible confirm requiring the connector name', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector({ mode: 'self_serve', instanceCount: 3 })] }),
+      set_connector_mode: (params) => {
+        expect(params).toEqual({ name: 'docker', mode: 'disabled' });
+        return connector({ mode: 'disabled', instanceCount: 3 });
+      },
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('connectors-table');
+    const row = within(table).getByTestId('connector-row-docker');
+    fireEvent.change(within(row).getByTestId('connector-mode-docker'), {
+      target: { value: 'disabled' },
+    });
+
+    const confirm = await screen.findByTestId('connector-mode-confirm-docker');
+    expect(confirm.getAttribute('data-tier')).toBe('irreversible');
+    const confirmButton = within(confirm).getByTestId('confirm-button') as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    fireEvent.change(within(confirm).getByTestId('confirm-typed-name'), {
+      target: { value: 'docker' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-acknowledge'));
+    expect(confirmButton.disabled).toBe(false);
+    fireEvent.click(confirmButton);
+
     await waitFor(() =>
-      expect((within(row).getByTestId('connector-mode-docker') as HTMLSelectElement).value).toBe(
-        'platform_preset',
-      ),
+      expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(true),
     );
+  });
+
+  it('switching disabled for a connector with no live instances stays a medium confirm (no retype)', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector({ mode: 'self_serve', instanceCount: 0 })] }),
+      set_connector_mode: () => connector({ mode: 'disabled', instanceCount: 0 }),
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('connectors-table');
+    const row = within(table).getByTestId('connector-row-docker');
+    fireEvent.change(within(row).getByTestId('connector-mode-docker'), {
+      target: { value: 'disabled' },
+    });
+
+    const confirm = await screen.findByTestId('connector-mode-confirm-docker');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
   });
 
   it('expanding a connector row and saving the deny-list posts disabledOperations only', async () => {

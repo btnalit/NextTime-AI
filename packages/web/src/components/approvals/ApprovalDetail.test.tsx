@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
-import { ApprovalDetail } from './ApprovalDetail.js';
+import { ApprovalDetail, type PendingConfirm } from './ApprovalDetail.js';
 
 afterEach(cleanup);
 
@@ -26,24 +27,33 @@ function row(overrides: Partial<ActionRequestRow> = {}): ActionRequestRow {
   };
 }
 
+/** `pending`/`onPendingChange` are controlled from the page in real use (S8 W1-A7 — see the
+ *  prop's own doc comment on `ApprovalDetailProps`); this harness stands in for that with plain
+ *  local state, the same shape `ApprovalQueuePage` owns. */
 function renderDetail(
   overrides: Partial<ActionRequestRow> = {},
   props: Partial<Parameters<typeof ApprovalDetail>[0]> = {},
 ) {
   const onApprove = vi.fn(async () => undefined);
   const onReject = vi.fn(async () => undefined);
-  const view = render(
-    <ApprovalDetail
-      row={row(overrides)}
-      principalNames={new Map([['principal-a', 'Alice']])}
-      gatekeeperNames={new Map([['gk-1', 'docker-prod']])}
-      canAlwaysAllow
-      onApprove={onApprove}
-      onReject={onReject}
-      error={null}
-      {...props}
-    />,
-  );
+  function Harness() {
+    const [pending, setPending] = useState<PendingConfirm | null>(null);
+    return (
+      <ApprovalDetail
+        row={row(overrides)}
+        principalNames={new Map([['principal-a', 'Alice']])}
+        gatekeeperNames={new Map([['gk-1', 'docker-prod']])}
+        canAlwaysAllow
+        onApprove={onApprove}
+        onReject={onReject}
+        error={null}
+        pending={pending}
+        onPendingChange={setPending}
+        {...props}
+      />
+    );
+  }
+  const view = render(<Harness />);
   return { ...view, onApprove, onReject };
 }
 
@@ -66,11 +76,11 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByTestId('approval-policy').textContent).toContain('require_approval');
   });
 
-  it('reports the decision with the reason and the always-allow choice; Reject carries the reason', async () => {
+  it('reports the decision with the reason and the always-allow choice; Reject opens a confirm carrying the reason (S8 W1-A7: every Reject confirms)', async () => {
     const { onApprove, onReject } = renderDetail();
     fireEvent.change(screen.getByTestId('approval-reason'), { target: { value: ' why ' } });
     fireEvent.click(screen.getByRole('checkbox', { name: /Always allow/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByTestId('approval-approve'));
     await waitFor(() =>
       expect(onApprove).toHaveBeenCalledWith({
         actionRequestId: 'ar-1',
@@ -78,7 +88,10 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
         alwaysAllow: true,
       }),
     );
-    fireEvent.click(screen.getByRole('button', { name: /Reject/ }));
+    fireEvent.click(screen.getByTestId('approval-reject'));
+    const confirm = await screen.findByTestId('approval-confirm');
+    expect(within(confirm).getByTestId('approval-confirm-reason').textContent).toBe('why');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(onReject).toHaveBeenCalledWith({ actionRequestId: 'ar-1', reason: 'why' }),
     );

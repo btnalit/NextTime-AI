@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { auditHref } from '../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { formatDateTime, formatDuration, formatRelative, prettyJson } from '../lib/format.js';
@@ -11,9 +12,9 @@ import {
 } from '../lib/tasks.js';
 import { LinkedApprovals } from './approvals/LinkedApprovals.js';
 import { nameOf } from './approvals/useDirectoryNames.js';
+import { Confirm } from './kit/confirm.js';
 import { Button } from './ui/Button.js';
 import { CopyId } from './ui/CopyId.js';
-import { ErrorBanner } from './ui/ErrorBanner.js';
 import { RefChip } from './ui/RefChip.js';
 import { StatusChip } from './ui/StatusChip.js';
 
@@ -24,10 +25,9 @@ export interface TaskDetailProps {
   readonly pushes: PushSource;
   readonly principalNames?: ReadonlyMap<string, string>;
   readonly onOpenApproval: (actionRequestId: string) => void;
-  /** Asks the page to cancel — the page confirms through `ConfirmTier` before `cancel_task`. */
-  readonly onCancel: (taskId: string) => void;
-  readonly cancelling: boolean;
-  readonly cancelError: unknown | null;
+  /** The confirmed cancel — throws so the confirm stays open with the kernel's error (`kit/confirm`
+   *  renders it inline; there is no separate parent-level error banner any more, S8 W1-A7). */
+  readonly onCancel: (task: TaskSummary) => Promise<void>;
 }
 
 /**
@@ -40,7 +40,10 @@ export interface TaskDetailProps {
  * the WorkerDefinition are `RefChip`s (names from the directory hooks / `list_worker_definitions`);
  * "查看溯源" links open the audit page pre-filtered on this Task (`resourceType: 'task'`) or on
  * one WorkerRun (`resourceType: 'worker_run'` — `application/task/transition-log.ts` writes both);
- * Cancel is a request to the page, which confirms it (tier `high`, §5.8 "确认态").
+ * Cancel is a `kit/confirm` `medium` popover (S8 W1-A7, audit S13) anchored to the Cancel button
+ * itself, owned locally — the confirmation used to be a page-level sibling of the detail drawer
+ * (tier `high`); now that `medium` is a Popover anchored to its own trigger there is no separate
+ * surface to route Escape/focus through, so the confirm lives exactly where its button does.
  */
 export function TaskDetail({
   task,
@@ -50,9 +53,8 @@ export function TaskDetail({
   principalNames,
   onOpenApproval,
   onCancel,
-  cancelling,
-  cancelError,
 }: TaskDetailProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const finished = taskFinishedAt(task);
   const contract = asResultContract(task.result);
   const need = taskNeed(task.input);
@@ -60,6 +62,7 @@ export function TaskDetail({
     task.tokenBudget && task.tokenBudget > 0
       ? Math.min(100, Math.round((task.tokensUsed / task.tokenBudget) * 100))
       : null;
+  const runningRuns = task.workerRuns.filter((run) => run.terminatedAt === null).length;
 
   return (
     <div className="stack" data-testid="task-detail" data-task-id={task.id}>
@@ -74,28 +77,39 @@ export function TaskDetail({
           testId="task-definition"
         />
         {isCancellable(task.status) ? (
-          <Button
-            variant="danger"
-            size="s"
-            icon="stop"
-            onClick={() => onCancel(task.id)}
-            loading={cancelling}
-            className="grow-0"
-            style={{ marginLeft: 'auto' }}
-            data-testid="task-cancel"
-          >
-            取消任务 Cancel task
-          </Button>
+          <Confirm
+            tier="medium"
+            open={confirmOpen}
+            onOpenChange={setConfirmOpen}
+            anchor={
+              <Button
+                variant="danger"
+                size="s"
+                icon="stop"
+                onClick={() => setConfirmOpen(true)}
+                className="grow-0"
+                style={{ marginLeft: 'auto' }}
+                data-testid="task-cancel"
+              >
+                取消任务 Cancel task
+              </Button>
+            }
+            title="取消任务 Cancel task"
+            description="取消后任务进入 cancelled，正在运行的 WorkerRun 会被终止；已写入的事实与审计不受影响。 The Task becomes cancelled and its running WorkerRuns are terminated; facts already written and the audit trail stay."
+            target={definitionName ?? task.id}
+            impact={[
+              `任务 Task: ${task.id}`,
+              `运行中的 WorkerRun Running runs: ${runningRuns}`,
+              `已用 Token Tokens used: ${task.tokensUsed.toLocaleString()}`,
+              '取消后不能恢复；需要时重新委派 Cannot be resumed — delegate again if needed',
+            ]}
+            confirmLabel="确认取消 Cancel task"
+            danger
+            onConfirm={() => onCancel(task)}
+            testId="task-cancel-confirm"
+          />
         ) : null}
       </div>
-
-      {cancelError !== null && cancelError !== undefined ? (
-        <ErrorBanner
-          error={cancelError}
-          title="无法取消 Could not cancel"
-          testId="task-cancel-error"
-        />
-      ) : null}
 
       {need ? <p className="pre-wrap">{need}</p> : null}
 

@@ -338,7 +338,7 @@ describe('PlatformModelsPage', () => {
     expect(rowError.textContent).toContain('secrets/llm-proxy.env');
   });
 
-  it('disable goes through a high-tier confirm and sends enabled:false; delete needs the retyped id', async () => {
+  it('disable goes through a medium-tier confirm and sends enabled:false; delete needs the retyped id', async () => {
     const http = scriptedHttp();
     let items = [provider({ id: 'acme', displayName: 'Acme', source: 'store' })];
     const proxy = scriptedProxy({
