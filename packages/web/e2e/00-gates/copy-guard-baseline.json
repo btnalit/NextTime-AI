@@ -5,7 +5,10 @@
   "approvals": {},
   "audit": {
     "raw-enum": {
-      "samples": ["agent_profile", "worker_run"]
+      "samples": [
+        "agent_profile",
+        "worker_run"
+      ]
     }
   },
   "catalog-modules": {},
@@ -25,29 +28,40 @@
   },
   "platform-integrations": {
     "raw-enum": {
-      "samples": ["platform_preset", "self_serve"]
+      "samples": [
+        "platform_preset",
+        "self_serve"
+      ]
     }
   },
   "platform-models": {},
   "platform-modules": {},
   "platform-overview": {
     "internal-codename": {
-      "samples": ["P-C"]
+      "samples": [
+        "P-C"
+      ]
     }
   },
   "platform-runtime": {
     "env-var": {
-      "samples": ["PI_DRIFT_FILE"]
+      "samples": [
+        "PI_DRIFT_FILE"
+      ]
     }
   },
   "platform-settings": {
     "env-var": {
-      "samples": ["NEXTTIME_PLATFORM_ADMINS"]
+      "samples": [
+        "NEXTTIME_PLATFORM_ADMINS"
+      ]
     }
   },
   "platform-status": {
     "internal-codename": {
-      "samples": ["遗留 6"]
+      "samples": [
+        "遗留 6"
+      ]
     }
   },
   "platform-users": {},
