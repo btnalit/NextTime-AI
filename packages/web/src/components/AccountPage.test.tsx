@@ -212,4 +212,25 @@ describe('AccountPage: cookie mode', () => {
     // renders '所有者'.
     expect(list.textContent).toContain('所有者');
   });
+
+  // S8 W1-A11 (audit L2 "我的账户三个表单各一个"): display name / password / bind-API-key are
+  // three independent forms on the same view — only the top-of-page display-name save stays ink
+  // primary.
+  it('L2: at most one ink primary button across the three independent forms', () => {
+    render(
+      <AccountPage
+        user={USER}
+        memberships={MEMBERSHIPS}
+        onUserChanged={vi.fn()}
+        onBound={vi.fn()}
+      />,
+    );
+    const primaries = document.querySelectorAll('.btn-primary');
+    expect(primaries).toHaveLength(1);
+    expect(primaries[0]).toBe(screen.getByRole('button', { name: '保存' }));
+    expect(screen.getByRole('button', { name: /更改密码/ }).className).not.toContain(
+      'btn-primary',
+    );
+    expect(screen.getByRole('button', { name: '绑定' }).className).not.toContain('btn-primary');
+  });
 });

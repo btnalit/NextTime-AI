@@ -411,7 +411,10 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
           <Notice tone="info">{t('密码已更改', 'Password changed')}</Notice>
         ) : null}
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
+          {/* S8 W1-A11 (audit L2): secondary — the page's three independent forms each had their
+           *  own ink primary button; `DisplayNameCard`'s "保存" (the most frequent, top-of-page
+           *  action) stays the one primary for this view. */}
+          <Button type="submit" variant="secondary" loading={submitting} disabled={!canSubmit}>
             {t('更改密码', 'Change password')}
           </Button>
         </div>
