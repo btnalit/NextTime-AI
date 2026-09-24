@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GOVERN_NAV, NAV_GROUPS, PLATFORM_NAV, WORK_NAV, breadcrumbFor } from './nav.js';
 
 describe('lib/nav', () => {
-  it('NAV_GROUPS holds the three groups in 使用/治理/平台 order, each with its NavItem array', () => {
+  it('NAV_GROUPS holds the three groups in 使用/治理/平台', () => {
     expect(NAV_GROUPS.map((g) => g.id)).toEqual(['use', 'govern', 'platform']);
     expect(NAV_GROUPS.map((g) => g.titleZh)).toEqual(['使用', '治理', '平台']);
     expect(NAV_GROUPS[0]?.items).toBe(WORK_NAV);

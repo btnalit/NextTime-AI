@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode, Suspense } from 'react';
+import { useT } from '../lib/i18n.js';
 
 export interface RouteBoundaryProps {
   readonly children: ReactNode;
@@ -16,6 +17,7 @@ interface RouteErrorFallbackProps {
  *  (its own doc comment — a later, dedicated migration lane wires it in, not this one). This stays
  *  a plain two-element fallback rather than the first premature `kit/button` call. */
 function RouteErrorFallback({ onReload }: RouteErrorFallbackProps) {
+  const t = useT();
   return (
     <div className="page">
       <div className="empty-state" data-testid="route-load-error" data-state="error">
@@ -32,13 +34,13 @@ function RouteErrorFallback({ onReload }: RouteErrorFallbackProps) {
         >
           <path d="M12 3 2.5 20h19L12 3zm0 6v5m0 3v.5" />
         </svg>
-        <p className="empty-state-title">页面加载失败 Page failed to load</p>
+        <p className="empty-state-title">{t('页面加载失败', 'Page failed to load')}</p>
         <p className="empty-state-body">
           可能是发布替换了资源文件，导致本页脚本无法获取。刷新页面即可恢复。
         </p>
         <div className="empty-state-action">
           <button type="button" className="btn btn-primary" onClick={onReload}>
-            刷新页面 Reload
+            {t('刷新页面', 'Reload')}
           </button>
         </div>
       </div>

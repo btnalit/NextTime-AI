@@ -79,7 +79,7 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
   it('reports the decision with the reason and the always-allow choice; Reject opens a confirm carrying the reason (S8 W1-A7: every Reject confirms)', async () => {
     const { onApprove, onReject } = renderDetail();
     fireEvent.change(screen.getByTestId('approval-reason'), { target: { value: ' why ' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: /Always allow/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /总是允许/ }));
     fireEvent.click(screen.getByTestId('approval-approve'));
     await waitFor(() =>
       expect(onApprove).toHaveBeenCalledWith({
@@ -99,7 +99,7 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
 
   it('high blast radius: Approve without a reason is refused in place (the kernel rule, mirrored)', async () => {
     const { onApprove } = renderDetail({ blastRadius: 'high' });
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await screen.findByText(/A reason is required for a high-impact action/);
     expect(onApprove).not.toHaveBeenCalled();
   });
@@ -112,19 +112,19 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
       decisionReason: 'looks safe',
       executedAt: '2026-09-03T00:02:00.000Z',
     });
-    expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /批准/ })).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
     const decidedBy = screen.getByTestId('approval-decided-by');
     expect(decidedBy.getAttribute('data-ref-id')).toBe('principal-a');
     expect(decidedBy.textContent).toContain('Alice');
     expect(screen.getByTestId('approval-decision-reason').textContent).toBe('looks safe');
-    expect(screen.getByText(/Executed/)).toBeTruthy();
+    expect(screen.getByText(/执行于/)).toBeTruthy();
   });
 
   it('a decided row without a human decision says so instead of rendering an empty chip', () => {
     renderDetail({ status: 'auto_approved', decidedBy: null, decisionReason: null });
     expect(screen.queryByTestId('approval-decided-by')).toBeNull();
-    expect(screen.getByTestId('approval-decision').textContent).toContain('No human decision');
+    expect(screen.getByTestId('approval-decision').textContent).toContain('无人工决定');
   });
 
   it('links to the audit page with the request id and, when decided, the decision node', () => {

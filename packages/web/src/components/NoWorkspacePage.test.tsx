@@ -24,10 +24,10 @@ describe('NoWorkspacePage', () => {
     expect(screen.getByText('E2E Admin')).toBeTruthy();
     expect(screen.getByText('e2e-admin')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /我的账户 My Account/ }));
+    fireEvent.click(screen.getByRole('button', { name: /我的账户/ }));
     expect(onOpenAccount).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /登出 Sign out/ }));
+    fireEvent.click(screen.getByRole('button', { name: /登出/ }));
     expect(onLogout).toHaveBeenCalledTimes(1);
   });
 });

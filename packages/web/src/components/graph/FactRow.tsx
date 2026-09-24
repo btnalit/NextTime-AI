@@ -2,6 +2,7 @@ import type { ConflictWire, FactWire } from '@nexttime/shared';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { freshnessOf } from '../../lib/graph-freshness.js';
 import { type FactDirection, factDirection, neighbourId } from '../../lib/graph-view.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { RefChip } from '../ui/RefChip.js';
 import { FreshnessChip } from './FreshnessChip.js';
@@ -42,6 +43,7 @@ const DIRECTION_LABEL: Readonly<Record<FactDirection, string>> = {
  * audit page.
  */
 export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenance }: FactRowProps) {
+  const t = useT();
   const { nameOf, hrefFor } = useGraphObjects();
   const direction = factDirection(fact, objectId);
   const otherId = neighbourId(fact, objectId);
@@ -97,15 +99,15 @@ export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenanc
           ) : null}
         </div>
         <div className="data-row-meta">
-          <span className="tag mono" title="认知状态 Epistemic status">
+          <span className="tag mono" title={t('认知状态', 'Epistemic status')}>
             {fact.epistemicStatus}
           </span>
           {fact.confidence !== null ? (
-            <span className="meta-sep" title="置信度 Confidence">
+            <span className="meta-sep" title={t('置信度', 'Confidence')}>
               置信 {fact.confidence.toFixed(2)}
             </span>
           ) : null}
-          <span className="meta-sep" title="有效期 Validity">
+          <span className="meta-sep" title={t('有效期', 'Validity')}>
             {validity}
           </span>
           <span className="meta-sep" title={formatDateTime(fact.lastObservedAt ?? fact.recordedAt)}>
@@ -124,7 +126,7 @@ export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenanc
           onClick={() => onProvenance(fact)}
           data-testid="graph-fact-provenance"
         >
-          溯源 Provenance
+          {t('溯源', 'Provenance')}
         </Button>
         {otherId === objectId ? null : (
           <Button
@@ -134,7 +136,7 @@ export function FactRow({ fact, objectId, asOf, conflicts, onExpand, onProvenanc
             onClick={() => onExpand(otherId)}
             data-testid="graph-fact-expand"
           >
-            展开 Expand
+            {t('展开', 'Expand')}
           </Button>
         )}
       </div>

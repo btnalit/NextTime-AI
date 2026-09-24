@@ -29,7 +29,7 @@ describe('ApprovalCard', () => {
     expect(card.getAttribute('data-blast-radius')).toBe('medium');
     expect(screen.getByRole('heading', { level: 3 }).textContent).toBe('docker.container_stop');
     expect(screen.getByTestId('approval-target').textContent).toBe('container web-1');
-    expect(screen.getByTestId('approval-blast-radius').textContent).toBe('中影响 Medium');
+    expect(screen.getByTestId('approval-blast-radius').textContent).toBe('中影响');
     expect(screen.getByTestId('approval-status').getAttribute('data-status')).toBe(
       'pending_approval',
     );

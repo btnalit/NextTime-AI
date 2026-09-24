@@ -76,20 +76,20 @@ describe('ChatListPage filter (W1)', () => {
     renderList(client);
     await screen.findByTestId('chats-list');
     expect(client.calls).toEqual([{ name: 'list_chats', params: { includeArchived: true } }]);
-    expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat']);
+    expect(rowTitles()).toEqual(['新对话', 'Ops chat']);
     expect(screen.getByTestId('chats-tab-active').textContent).toContain('2');
     expect(screen.getByTestId('chats-tab-archived').textContent).toContain('1');
     expect(screen.queryByTestId('chat-archived-chip')).toBeNull();
   });
 
-  it('the 已归档 tab lists archived chats with a relative archivedAt and a 恢复 button', async () => {
+  it('the 已归档 tab lists archived chats with a relative archivedAt and a 恢复', async () => {
     const client = scriptedClient({ list_chats: () => ({ items: FIXTURE }) });
     renderList(client);
     await screen.findByTestId('chats-list');
     fireEvent.click(screen.getByTestId('chats-tab-archived'));
     expect(rowTitles()).toEqual(['Old incident']);
     const row = screen.getByTestId('chat-row');
-    expect(within(row).getByTestId('chat-archived-chip').textContent).toBe('已归档 Archived');
+    expect(within(row).getByTestId('chat-archived-chip').textContent).toBe('已归档');
     expect(within(row).getByTestId('chat-archived-at').getAttribute('title')).toBeTruthy();
     expect(within(row).getByTestId('chat-row-restore')).toBeTruthy();
     expect(within(row).queryByTestId('chat-row-archive')).toBeNull();
@@ -127,14 +127,14 @@ describe('ChatListPage archive / restore (W1, kit/confirm low + undo)', () => {
 
     const opsRow = screen.getAllByTestId('chat-row')[1] as HTMLElement;
     fireEvent.click(within(opsRow).getByTestId('chat-row-archive'));
-    await waitFor(() => expect(rowTitles()).toEqual(['新对话 New chat']));
+    await waitFor(() => expect(rowTitles()).toEqual(['新对话']));
     expect(client.calls.at(-1)).toEqual({ name: 'archive_chat', params: { chatId: 'c-ops' } });
     expect(screen.getByTestId('chats-tab-archived').textContent).toContain('2');
 
     const toast = await screen.findByTestId('toast');
-    expect(toast.textContent).toContain('已归档 Archived · Ops chat');
-    fireEvent.click(within(toast).getByRole('button', { name: '撤销 Undo' }));
-    await waitFor(() => expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat']));
+    expect(toast.textContent).toContain('已归档 ·');
+    fireEvent.click(within(toast).getByRole('button', { name: '撤销' }));
+    await waitFor(() => expect(rowTitles()).toEqual(['新对话', 'Ops chat']));
     expect(client.calls.at(-1)).toEqual({ name: 'unarchive_chat', params: { chatId: 'c-ops' } });
     // Still one `list_chats`: every change was a splice.
     expect(client.calls.filter((call) => call.name === 'list_chats')).toHaveLength(1);
@@ -152,8 +152,8 @@ describe('ChatListPage archive / restore (W1, kit/confirm low + undo)', () => {
     await screen.findByTestId('chats-archived-empty');
     expect(client.calls.at(-1)).toEqual({ name: 'unarchive_chat', params: { chatId: 'c-old' } });
     fireEvent.click(screen.getByTestId('chats-tab-active'));
-    expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat', 'Old incident']);
-    expect((await screen.findByTestId('toast')).textContent).toContain('已恢复 Restored');
+    expect(rowTitles()).toEqual(['新对话', 'Ops chat', 'Old incident']);
+    expect((await screen.findByTestId('toast')).textContent).toContain('已恢复');
   });
 
   it('surfaces an archive failure in the toast and keeps the row', async () => {
@@ -168,8 +168,8 @@ describe('ChatListPage archive / restore (W1, kit/confirm low + undo)', () => {
     const opsRow = screen.getAllByTestId('chat-row')[1] as HTMLElement;
     fireEvent.click(within(opsRow).getByTestId('chat-row-archive'));
     const toast = await screen.findByTestId('toast');
-    expect(toast.textContent).toContain('失败 failed');
-    expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat']);
+    expect(toast.textContent).toContain('失败');
+    expect(rowTitles()).toEqual(['新对话', 'Ops chat']);
   });
 });
 
@@ -217,7 +217,7 @@ describe('ChatListPage archive undo across a remount (遗留 57)', () => {
 
     const opsRow = screen.getAllByTestId('chat-row')[1] as HTMLElement;
     fireEvent.click(within(opsRow).getByTestId('chat-row-archive'));
-    await waitFor(() => expect(rowTitles()).toEqual(['新对话 New chat']));
+    await waitFor(() => expect(rowTitles()).toEqual(['新对话']));
     const toast = await screen.findByTestId('toast');
 
     // Navigate away (unmount this ChatListPage instance — its own `onChanged` closure, and the
@@ -227,15 +227,15 @@ describe('ChatListPage archive undo across a remount (遗留 57)', () => {
     expect(screen.queryByTestId('chats-list')).toBeNull();
     rerender(<Harness client={client} showList={true} />);
     await screen.findByTestId('chats-list');
-    expect(rowTitles()).toEqual(['新对话 New chat']);
+    expect(rowTitles()).toEqual(['新对话']);
 
     // The toast (owned by the app-root ToastProvider, never unmounted) survived both transitions.
     // Its Undo still targets the *original*, now-doubly-unmounted ChatListPage's `onChanged` — but
     // the broadcast (hooks/useChatUpdates.tsx) reaches the *current* mount's own listener too, so
     // the already-rendered fresh list updates live, no further remount or `list_chats` call needed.
     const listChatsCallsBeforeUndo = client.calls.filter((c) => c.name === 'list_chats').length;
-    fireEvent.click(within(toast).getByRole('button', { name: '撤销 Undo' }));
-    await waitFor(() => expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat']));
+    fireEvent.click(within(toast).getByRole('button', { name: '撤销' }));
+    await waitFor(() => expect(rowTitles()).toEqual(['新对话', 'Ops chat']));
     expect(client.calls.filter((c) => c.name === 'list_chats')).toHaveLength(
       listChatsCallsBeforeUndo,
     );
@@ -243,7 +243,7 @@ describe('ChatListPage archive undo across a remount (遗留 57)', () => {
 });
 
 describe('ChatListPage rename (W1)', () => {
-  it('改名 opens an inline editor; Enter saves the normalized title and splices the returned row', async () => {
+  it('改名', async () => {
     const client = scriptedClient({
       list_chats: () => ({ items: FIXTURE }),
       rename_chat: (params) => chat({ ...FIXTURE[1], title: (params as { title: string }).title }),
@@ -256,7 +256,7 @@ describe('ChatListPage rename (W1)', () => {
     expect(input.value).toBe('Ops chat');
     fireEvent.change(input, { target: { value: '  Ops   chat — web-1  ' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat — web-1']));
+    await waitFor(() => expect(rowTitles()).toEqual(['新对话', 'Ops chat — web-1']));
     expect(client.calls.at(-1)).toEqual({
       name: 'rename_chat',
       params: { chatId: 'c-ops', title: 'Ops chat — web-1' },
@@ -279,7 +279,7 @@ describe('ChatListPage rename (W1)', () => {
     expect(client.calls.some((call) => call.name === 'rename_chat')).toBe(false);
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.queryByTestId('chat-rename-form')).toBeNull();
-    expect(rowTitles()).toEqual(['新对话 New chat', 'Ops chat']);
+    expect(rowTitles()).toEqual(['新对话', 'Ops chat']);
   });
 
   it('shows the kernel error inline when rename is refused', async () => {
@@ -312,7 +312,7 @@ describe('ChatListPage new chat', () => {
     const { onSelectChat } = renderList(client);
     await screen.findByTestId('chats-empty');
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: /New chat/ })[0] as HTMLElement);
+      fireEvent.click(screen.getAllByRole('button', { name: /新对话/ })[0] as HTMLElement);
     });
     await waitFor(() => expect(onSelectChat).toHaveBeenCalledWith('c-new'));
     expect(client.calls.at(-1)).toEqual({ name: 'new_chat', params: {} });

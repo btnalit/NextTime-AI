@@ -36,7 +36,7 @@ describe('BindApiKeyForm', () => {
     render(<BindApiKeyForm onBound={onBound} fetchImpl={fetchImpl as unknown as typeof fetch} />);
 
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'sk-bind' } });
-    fireEvent.click(screen.getByRole('button', { name: '绑定 Bind' }));
+    fireEvent.click(screen.getByRole('button', { name: '绑定' }));
 
     await waitFor(() => expect(onBound).toHaveBeenCalledTimes(1));
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
@@ -54,7 +54,7 @@ describe('BindApiKeyForm', () => {
     render(<BindApiKeyForm onBound={vi.fn()} fetchImpl={fetchImpl as unknown as typeof fetch} />);
 
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'sk-bad' } });
-    fireEvent.click(screen.getByRole('button', { name: '绑定 Bind' }));
+    fireEvent.click(screen.getByRole('button', { name: '绑定' }));
 
     await waitFor(() => expect(screen.getByText('这把 API key 不属于任何成员')).toBeTruthy());
   });
@@ -69,7 +69,7 @@ describe('BindApiKeyForm', () => {
     render(<BindApiKeyForm onBound={vi.fn()} fetchImpl={fetchImpl as unknown as typeof fetch} />);
 
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'sk-dup' } });
-    fireEvent.click(screen.getByRole('button', { name: '绑定 Bind' }));
+    fireEvent.click(screen.getByRole('button', { name: '绑定' }));
 
     await waitFor(() => expect(screen.getByText('你已经是该工作区的成员了')).toBeTruthy());
   });

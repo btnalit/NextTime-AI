@@ -111,7 +111,7 @@ describe('ApprovalQueuePage state machine', () => {
     expect(screen.queryByRole('alert')).toBeNull();
 
     // refresh → ready with one row (the refresh keeps the previous view, no skeleton flash)
-    fireEvent.click(screen.getByRole('button', { name: /Refresh/ }));
+    fireEvent.click(screen.getByRole('button', { name: /刷新/ }));
     const rowEl = await screen.findByTestId('approval-row');
     expect(rowEl.textContent).toContain('docker container restart');
     expect(rowEl.querySelector('.chip')?.getAttribute('data-status')).toBe('pending_approval');
@@ -149,12 +149,12 @@ describe('ApprovalQueuePage state machine', () => {
     const drawer = await screen.findByTestId('approval-drawer');
     expect(drawer.textContent).toContain('docker container restart');
 
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await waitFor(() => expect(approve).toHaveBeenCalledWith({ actionRequestId: 'ar-1' }));
     await waitFor(() => expect(screen.queryByTestId('approval-row')).toBeNull());
     expect(screen.getByTestId('approvals-empty')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     const historyRow = await screen.findByTestId('approval-history-row');
     expect(historyRow.querySelector('.chip')?.getAttribute('data-status')).toBe('approved');
     view.unmount();
@@ -173,7 +173,7 @@ describe('ApprovalQueuePage state machine', () => {
       />,
     );
     await screen.findByTestId('approval-row');
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     const alert = await screen.findByText('already decided');
     expect(alert.closest('[data-error-code]')?.getAttribute('data-error-code')).toBe(
       'illegal_transition',
@@ -192,7 +192,7 @@ describe('ApprovalQueuePage state machine', () => {
 
     act(() => pushes.emitUpdated({ id: 'ar-1', status: 'rejected' }));
     await waitFor(() => expect(screen.queryByTestId('approval-row')).toBeNull());
-    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     const historyRow = await screen.findByTestId('approval-history-row');
     expect(historyRow.querySelector('.chip')?.getAttribute('data-status')).toBe('rejected');
   });
@@ -234,13 +234,13 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
     await screen.findByTestId('approvals-empty');
     expect(calls).toHaveLength(0); // History's own capability never fires while on Pending
 
-    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     await screen.findByTestId('approval-history-row');
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ limit: 50 });
     expect(calls[0]).not.toHaveProperty('status');
 
-    fireEvent.change(screen.getByLabelText(/Status/), { target: { value: 'approved' } });
+    fireEvent.change(screen.getByLabelText(/状态/), { target: { value: 'approved' } });
     await waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[1]).toMatchObject({ limit: 50, status: 'approved' });
   });
@@ -256,7 +256,7 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
       <ApprovalQueuePage http={forbiddenHttp} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />,
     );
     await screen.findByTestId('approvals-empty');
-    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     await screen.findByTestId('approval-history-forbidden');
     forbiddenView.unmount();
 
@@ -271,13 +271,13 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
     });
     render(<ApprovalQueuePage http={pagedHttp} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
     await screen.findByTestId('approvals-empty');
-    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     await screen.findByTestId('approval-history-row');
     expect(screen.getAllByTestId('approval-history-row')).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /Load more/ }));
+    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
     await waitFor(() => expect(screen.getAllByTestId('approval-history-row')).toHaveLength(2));
-    expect(screen.queryByRole('button', { name: /Load more/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /加载更多/ })).toBeNull();
   });
 });
 
@@ -306,7 +306,7 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
       />,
     );
     await screen.findByTestId('approval-detail');
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await screen.findByText(/A reason is required for a high-impact action/);
     expect(approve).not.toHaveBeenCalled();
     expect(screen.queryByTestId('approval-confirm')).toBeNull();
@@ -332,7 +332,7 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     fireEvent.change(screen.getByTestId('approval-reason'), {
       target: { value: 'change window CR-42' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
 
     const confirm = await screen.findByTestId('approval-confirm');
     expect(confirm.getAttribute('role')).toBe('dialog');
@@ -354,7 +354,7 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     fireEvent.change(screen.getByTestId('approval-reason'), {
       target: { value: 'change window CR-42' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await screen.findByTestId('approval-confirm');
     fireEvent.click(screen.getByTestId('confirm-button'));
     await waitFor(() =>
@@ -382,7 +382,7 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     );
     await screen.findByTestId('approval-detail');
     fireEvent.change(screen.getByTestId('approval-reason'), { target: { value: 'because' } });
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await screen.findByTestId('approval-confirm');
     fireEvent.click(screen.getByTestId('confirm-button'));
     const error = await screen.findByTestId('confirm-error');
@@ -410,7 +410,7 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     );
     await screen.findByTestId('approval-detail');
     fireEvent.change(screen.getByTestId('approval-reason'), { target: { value: 'not now' } });
-    fireEvent.click(screen.getByRole('button', { name: /Reject/ }));
+    fireEvent.click(screen.getByRole('button', { name: /拒绝/ }));
     const confirm = await screen.findByTestId('approval-confirm');
     expect(confirm.textContent).toContain('拒绝');
     fireEvent.click(screen.getByTestId('confirm-button'));
@@ -430,8 +430,8 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
       />,
     );
     await screen.findByTestId('approval-detail');
-    fireEvent.click(screen.getByRole('checkbox', { name: /Always allow/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /总是允许/ }));
+    fireEvent.click(screen.getByRole('button', { name: /批准/ }));
     await waitFor(() => expect(approve).toHaveBeenCalledWith({ actionRequestId: 'ar-1' }));
     await waitFor(() =>
       expect(setAuto).toHaveBeenCalledWith({ actionKindTag: 'docker.container_restart' }),
@@ -466,7 +466,7 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     });
     render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
     await screen.findByTestId('approvals-empty');
-    fireEvent.click(screen.getByRole('tab', { name: /History/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
     const historyRow = await screen.findByTestId('approval-history-row');
     const chip = await within(historyRow).findByTestId('approval-history-decided-by');
     expect(chip.getAttribute('data-ref-id')).toBe('principal-op');

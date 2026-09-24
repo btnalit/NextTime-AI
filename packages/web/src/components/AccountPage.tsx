@@ -61,10 +61,11 @@ export function AccountPage({
   onBound,
   fetchImpl,
 }: AccountPageProps) {
+  const t = useT();
   if (!user) {
     return (
       <div className="page">
-        <PageHeader breadcrumb={breadcrumbFor('account')} title="我的账户 My Account" />
+        <PageHeader breadcrumb={breadcrumbFor('account')} title={t('我的账户', 'My Account')} />
         <ClaimPasswordCard apiKey={apiKey} onClaimed={onClaimed} fetchImpl={fetchImpl} />
         <LanguageCard />
       </div>
@@ -75,7 +76,7 @@ export function AccountPage({
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('account')}
-        title="我的账户 My Account"
+        title={t('我的账户', 'My Account')}
         description={user.login}
       />
       <DisplayNameCard user={user} onUserChanged={onUserChanged} fetchImpl={fetchImpl} />
@@ -134,6 +135,7 @@ function ClaimPasswordCard({
   readonly onClaimed?: (result: SessionResult) => void;
   readonly fetchImpl?: typeof fetch;
 }) {
+  const t = useT();
   const [login, setLogin] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
@@ -172,14 +174,14 @@ function ClaimPasswordCard({
   const inline = claimErrorMessage(error);
 
   return (
-    <Card title="设置密码以启用密码登录 Set a password to enable password login">
+    <Card title={t('设置密码以启用密码登录', 'Set a password to enable password login')}>
       <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
         <Field
           id="account-claim-login"
-          label="登录名 Login"
+          label={t('登录名', 'Login')}
           required
           hint="3–64 位，首字符为字母或数字，仅小写字母、数字、. _ - 3–64 characters, starting with a letter or digit: lowercase letters, digits, . _ -"
-          error={loginInvalid ? '登录名格式不正确 Invalid login format' : null}
+          error={loginInvalid ? t('登录名格式不正确', 'Invalid login format') : null}
         >
           <Input
             id="account-claim-login"
@@ -191,7 +193,7 @@ function ClaimPasswordCard({
           />
         </Field>
 
-        <Field id="account-claim-display-name" label="显示名 Display name" required>
+        <Field id="account-claim-display-name" label={t('显示名', 'Display name')} required>
           <Input
             id="account-claim-display-name"
             autoComplete="name"
@@ -203,9 +205,9 @@ function ClaimPasswordCard({
 
         <Field
           id="account-claim-password"
-          label="密码 Password"
+          label={t('密码', 'Password')}
           required
-          hint="至少 8 位 At least 8 characters"
+          hint={t('至少 8 位', 'At least 8 characters')}
         >
           <Input
             id="account-claim-password"
@@ -219,9 +221,9 @@ function ClaimPasswordCard({
 
         <Field
           id="account-claim-confirm-password"
-          label="确认密码 Confirm password"
+          label={t('确认密码', 'Confirm password')}
           required
-          error={passwordsMismatch ? '两次输入的密码不一致 Passwords do not match' : null}
+          error={passwordsMismatch ? t('两次输入的密码不一致', 'Passwords do not match') : null}
         >
           <Input
             id="account-claim-confirm-password"
@@ -237,12 +239,12 @@ function ClaimPasswordCard({
         {inline ? (
           <Notice tone="warn">{inline}</Notice>
         ) : error !== null ? (
-          <ErrorBanner error={error} title="无法设置密码 Could not set a password" />
+          <ErrorBanner error={error} title={t('无法设置密码', 'Could not set a password')} />
         ) : null}
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
-            设置密码 Set password
+            {t('设置密码', 'Set password')}
           </Button>
         </div>
       </form>
@@ -259,6 +261,7 @@ function DisplayNameCard({
   readonly onUserChanged: (user: WireUser) => void;
   readonly fetchImpl?: typeof fetch;
 }) {
+  const t = useT();
   const [displayName, setDisplayName] = useState(user.displayName);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
@@ -283,9 +286,9 @@ function DisplayNameCard({
   }
 
   return (
-    <Card title="显示名 Display name">
+    <Card title={t('显示名', 'Display name')}>
       <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
-        <Field id="account-display-name" label="显示名 Display name" required>
+        <Field id="account-display-name" label={t('显示名', 'Display name')} required>
           <Input
             id="account-display-name"
             value={displayName}
@@ -297,9 +300,9 @@ function DisplayNameCard({
           />
         </Field>
         {error !== null ? (
-          <ErrorBanner error={error} title="无法保存 Could not save" />
+          <ErrorBanner error={error} title={t('无法保存', 'Could not save')} />
         ) : saved ? (
-          <Notice tone="info">已保存 Saved</Notice>
+          <Notice tone="info">{t('已保存', 'Saved')}</Notice>
         ) : null}
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button
@@ -308,7 +311,7 @@ function DisplayNameCard({
             loading={submitting}
             disabled={!displayName.trim() || displayName.trim() === user.displayName}
           >
-            保存 Save
+            {t('保存', 'Save')}
           </Button>
         </div>
       </form>
@@ -317,6 +320,7 @@ function DisplayNameCard({
 }
 
 function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
+  const t = useT();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -351,13 +355,13 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
   }
 
   return (
-    <Card title="密码 Password">
+    <Card title={t('密码', 'Password')}>
       <form className="stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
         <Field
           id="account-current-password"
-          label="当前密码 Current password"
+          label={t('当前密码', 'Current password')}
           required
-          error={currentPasswordWrong ? '当前密码不正确 Current password is incorrect' : null}
+          error={currentPasswordWrong ? t('当前密码不正确', 'Current password is incorrect') : null}
         >
           <Input
             id="account-current-password"
@@ -371,9 +375,9 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
         </Field>
         <Field
           id="account-new-password"
-          label="新密码 New password"
+          label={t('新密码', 'New password')}
           required
-          hint="至少 8 位 At least 8 characters"
+          hint={t('至少 8 位', 'At least 8 characters')}
         >
           <Input
             id="account-new-password"
@@ -386,9 +390,9 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
         </Field>
         <Field
           id="account-confirm-password"
-          label="确认新密码 Confirm new password"
+          label={t('确认新密码', 'Confirm new password')}
           required
-          error={passwordsMismatch ? '两次输入的密码不一致 Passwords do not match' : null}
+          error={passwordsMismatch ? t('两次输入的密码不一致', 'Passwords do not match') : null}
         >
           <Input
             id="account-confirm-password"
@@ -401,13 +405,13 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
           />
         </Field>
         {error !== null && !currentPasswordWrong ? (
-          <ErrorBanner error={error} title="无法更改密码 Could not change password" />
+          <ErrorBanner error={error} title={t('无法更改密码', 'Could not change password')} />
         ) : saved ? (
-          <Notice tone="info">密码已更改 Password changed</Notice>
+          <Notice tone="info">{t('密码已更改', 'Password changed')}</Notice>
         ) : null}
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button type="submit" variant="primary" loading={submitting} disabled={!canSubmit}>
-            更改密码 Change password
+            {t('更改密码', 'Change password')}
           </Button>
         </div>
       </form>
@@ -416,11 +420,12 @@ function PasswordCard({ fetchImpl }: { readonly fetchImpl?: typeof fetch }) {
 }
 
 function MembershipsCard({ memberships }: { readonly memberships: readonly WireMembership[] }) {
+  const t = useT();
   return (
-    <Card title="我的工作区 My workspaces">
+    <Card title={t('我的工作区', 'My workspaces')}>
       {memberships.length === 0 ? (
         <p className="empty-state-body">
-          你还不属于任何工作区 You are not a member of any workspace.
+          {t('你还不属于任何工作区', 'You are not a member of any workspace.')}
         </p>
       ) : (
         <ul className="stack-s" data-testid="account-memberships">

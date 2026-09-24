@@ -31,10 +31,10 @@ describe('SkillEditor (S6-A A2)', () => {
     });
     const onProposed = vi.fn();
     render(<SkillEditor http={caller} onProposed={onProposed} onDone={vi.fn()} />);
-    fill(/^名称 name/, 'restart-web');
-    fill(/^描述 description/, 'Restart the web tier');
-    fill(/gateKinds/, 'http, ssh');
-    fill(/objectTypes/, 'Container');
+    fill(/^名称/, 'restart-web');
+    fill(/^描述/, 'Restart the web tier');
+    fill(/适用的门类型/, 'http, ssh');
+    fill(/适用的对象类型/, 'Container');
     fill(/SKILL.md 正文/, '# Steps\n\n1. restart');
     fireEvent.click(screen.getByTestId('skill-submit'));
     await screen.findByTestId('draft-proposed');
@@ -52,7 +52,7 @@ describe('SkillEditor (S6-A A2)', () => {
     expect(onProposed).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'sk-1', status: 'draft' }),
     );
-    expect(screen.getByTestId('draft-private-notice').textContent).toContain('private');
+    expect(screen.getByTestId('draft-private-notice').textContent).toContain('只有你');
     fireEvent.click(screen.getByTestId('draft-publish'));
     await waitFor(() =>
       expect(calls[1]).toEqual({ name: 'publish_skill', params: { skillId: 'sk-1' } }),
@@ -63,12 +63,12 @@ describe('SkillEditor (S6-A A2)', () => {
   it('blocks submission with field errors from the schema and warns about the pi name rule', async () => {
     const { caller, calls } = http({});
     render(<SkillEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
-    fill(/^名称 name/, 'Restart Web');
+    fill(/^名称/, 'Restart Web');
     expect(screen.getByText(/pi Agent Skills name rule/)).toBeTruthy();
     fireEvent.click(screen.getByTestId('skill-submit'));
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
     expect(calls).toHaveLength(0);
-    expect(screen.getByLabelText(/^描述 description/).getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByLabelText(/^描述/).getAttribute('aria-invalid')).toBe('true');
     expect(screen.getByLabelText(/SKILL.md 正文/).getAttribute('aria-invalid')).toBe('true');
   });
 

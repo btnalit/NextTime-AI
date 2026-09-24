@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
 import { PageHeader } from '../kit/page-header.js';
@@ -41,6 +42,7 @@ const AUTO_REFRESH_MS = 30_000;
  * the only place platform_status is read.
  */
 export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
+  const t = useT();
   const status = useCapability<PlatformStatusWire>(http, 'platform_status');
   const reload = status.reload;
 
@@ -75,8 +77,11 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
     <div className="page" data-testid="platform-status-page">
       <PageHeader
         breadcrumb={breadcrumbFor('platformStatus')}
-        title="运行状态 Status"
-        description="哪个服务不健康、队列积压、备份多久了。 Which service is unhealthy, and how stale the backup is — auto-refreshes every 30s while this tab is visible."
+        title={t('运行状态', 'Status')}
+        description={t(
+          '哪个服务不健康、队列积压、备份多久了。 Which service is unhealthy, and how stale the backup is —',
+          'auto-refreshes every 30s while this tab is visible.',
+        )}
         actions={
           <Button
             variant="ghost"
@@ -85,7 +90,7 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
             loading={status.state.status === 'ready' && status.state.refreshing}
             data-testid="status-refresh"
           >
-            刷新 Refresh
+            {t('刷新', 'Refresh')}
           </Button>
         }
       />
@@ -107,9 +112,10 @@ export function PlatformStatusPage({ http }: PlatformStatusPageProps) {
 }
 
 function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
+  const t = useT();
   return (
     <>
-      <Card title="服务健康 Health">
+      <Card title={t('服务健康', 'Health')}>
         <div className="row-wrap" data-testid="status-health">
           {data.health.map((entry) => (
             <span key={entry.service} className="row" title={entry.detail ?? entry.status}>
@@ -125,22 +131,22 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
         </div>
       </Card>
 
-      <Card title="备份 Backup">
+      <Card title={t('备份', 'Backup')}>
         <p className="text-2" data-testid="status-backup">
-          {data.backup.configured ? '已配置 Configured' : '未配置 Not configured'} —{' '}
+          {data.backup.configured ? t('已配置', 'Configured') : t('未配置', 'Not configured')} —{' '}
           {data.backup.detail}
         </p>
       </Card>
 
       <Card title="30 天用量 30-day usage">
         <dl className="definition-list" data-testid="status-llm-usage">
-          <dt>调用次数 Calls</dt>
+          <dt>{t('调用次数', 'Calls')}</dt>
           <dd>{data.llmUsage30d.callCount}</dd>
-          <dt>输入 tokens Input tokens</dt>
+          <dt>{t('输入 tokens', 'Input tokens')}</dt>
           <dd>{data.llmUsage30d.totalInputTokens}</dd>
-          <dt>输出 tokens Output tokens</dt>
+          <dt>{t('输出 tokens', 'Output tokens')}</dt>
           <dd>{data.llmUsage30d.totalOutputTokens}</dd>
-          <dt>费用 Cost</dt>
+          <dt>{t('费用', 'Cost')}</dt>
           <dd>
             {data.llmUsage30d.totalCostUsd !== null
               ? `$${data.llmUsage30d.totalCostUsd.toFixed(2)}`
@@ -150,14 +156,14 @@ function StatusBody({ data }: { readonly data: PlatformStatusWire }) {
       </Card>
 
       <Card
-        title="最近平台审计 Recent platform audit"
-        actions={<a href={hrefs.platformAudit()}>查看全部 View all</a>}
+        title={t('最近平台审计', 'Recent platform audit')}
+        actions={<a href={hrefs.platformAudit()}>{t('查看全部', 'View all')}</a>}
         padded={false}
       >
         {data.recentAudit.length === 0 ? (
           <EmptyState
             icon="search"
-            title="暂无平台审计 No platform audit rows yet"
+            title={t('暂无平台审计', 'No platform audit rows yet')}
             testId="status-audit-empty"
           />
         ) : (

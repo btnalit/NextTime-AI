@@ -8,6 +8,7 @@ import {
 } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { Input } from '../ui/Field.js';
 
@@ -28,6 +29,7 @@ export interface ChatRenameFormProps {
  * (`DataRow`'s Enter/Space activation) never opens the chat mid-edit.
  */
 export function ChatRenameForm({ client, chat, onSaved, onCancel }: ChatRenameFormProps) {
+  const t = useT();
   const [value, setValue] = useState(chat.title ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +43,7 @@ export function ChatRenameForm({ client, chat, onSaved, onCancel }: ChatRenameFo
   async function save(): Promise<void> {
     const title = normalizeChatTitle(value);
     if (title === null) {
-      setError('标题不能为空 Title cannot be blank');
+      setError(t('标题不能为空', 'Title cannot be blank'));
       inputRef.current?.focus();
       return;
     }
@@ -82,8 +84,8 @@ export function ChatRenameForm({ client, chat, onSaved, onCancel }: ChatRenameFo
           }}
           onKeyDown={onKeyDown}
           maxLength={CHAT_TITLE_MAX_CHARS * 2}
-          placeholder={chatTitle(chat)}
-          aria-label="对话标题 Chat title"
+          placeholder={chatTitle(chat, t)}
+          aria-label={t('对话标题', 'Chat title')}
           aria-invalid={error !== null || undefined}
           disabled={busy}
           data-testid="chat-rename-input"
@@ -95,10 +97,10 @@ export function ChatRenameForm({ client, chat, onSaved, onCancel }: ChatRenameFo
           onClick={() => void save()}
           data-testid="chat-rename-save"
         >
-          保存 Save
+          {t('保存', 'Save')}
         </Button>
         <Button variant="ghost" size="s" onClick={onCancel} disabled={busy}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
       </div>
       {error !== null ? (

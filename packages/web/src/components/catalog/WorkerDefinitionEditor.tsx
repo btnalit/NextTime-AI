@@ -12,6 +12,7 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { ModelRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName } from '../../lib/tasks.js';
 import { Button } from '../ui/Button.js';
@@ -52,6 +53,7 @@ export function WorkerDefinitionEditor({
   onProposed,
   onDone,
 }: WorkerDefinitionEditorProps) {
+  const t = useT();
   const permissions = usePermissions();
   const [form, setForm] = useState<WorkerDefinitionForm>(() =>
     newVersionOf
@@ -122,7 +124,10 @@ export function WorkerDefinitionEditor({
                 })
         }
         onDone={onDone}
-        note="Worker 列表只显示已发布版本，草稿不会出现在列表里。 The Workers tab lists published versions only — a draft does not appear there."
+        note={t(
+          'Worker 列表只显示已发布版本，草稿不会出现在列表里。',
+          'The Workers tab lists published versions only — a draft does not appear there.',
+        )}
       />
     );
   }
@@ -143,16 +148,23 @@ export function WorkerDefinitionEditor({
             {definitionName([newVersionOf], newVersionOf.id, newVersionOf.version) ??
               newVersionOf.id}
           </strong>{' '}
-          提议下一个版本（当前 v{newVersionOf.version}）：同一 definitionId，kind
-          不可更改；发布前只有你可见（I16）。 Proposing the next version of this family (current v
-          {newVersionOf.version}): same definitionId, kind is immutable; private to you until
-          published (I16).
+          {t(
+            <>
+              提议下一个版本（当前 v{newVersionOf.version}）：同一 definitionId，kind
+              不可更改；发布前只有你可见（I16）。
+            </>,
+            <>
+              Proposing the next version of this family (current v{newVersionOf.version}): same
+              definitionId, kind is immutable; private to you until published (I16).
+            </>,
+          )}
         </Notice>
       ) : (
         <Notice testId="worker-private-notice">
-          新建一个 WorkerDefinition 族（v1）。草稿只有你（提议者）可见，发布后所有成员可见（I16）。
-          Starts a new WorkerDefinition family (v1). The draft is private to you until published
-          (I16).
+          {t(
+            '新建一个 WorkerDefinition 族（v1）。草稿只有你（提议者）可见，发布后所有成员可见（I16）。',
+            'Starts a new WorkerDefinition family (v1). The draft is private to you until published (I16).',
+          )}
         </Notice>
       )}
 
@@ -161,14 +173,17 @@ export function WorkerDefinitionEditor({
         value={view}
         onChange={setView}
         options={[
-          { value: 'form', label: '表单 Form', testId: 'worker-view-form' },
+          { value: 'form', label: t('表单', 'Form'), testId: 'worker-view-form' },
           { value: 'json', label: 'JSON', testId: 'worker-view-json' },
         ]}
       />
 
       {view === 'json' ? (
         <JsonEditor
-          label="definition（propose_worker_definition 的 definition 字段） The definition record"
+          label={t(
+            'definition（propose_worker_definition 的 definition 字段）',
+            'The definition record',
+          )}
           value={content}
           onApply={applyJson}
           disabled={busy}
@@ -179,8 +194,11 @@ export function WorkerDefinitionEditor({
           <div className="row-wrap">
             <Field
               id="wd-kind"
-              label="类型 kind"
-              hint="entry = 用户入口智能体（能力有上限）；worker = 被委派的 Worker。 entry = the user's entry agent (capability ceiling); worker = a delegated Worker."
+              label={t('类型', 'kind')}
+              hint={t(
+                'entry = 用户入口智能体（能力有上限）；worker = 被委派的 Worker。',
+                "entry = the user's entry agent (capability ceiling); worker = a delegated Worker.",
+              )}
             >
               <Select
                 id="wd-kind"
@@ -196,7 +214,7 @@ export function WorkerDefinitionEditor({
                 ))}
               </Select>
             </Field>
-            <Field id="wd-name" label="名称 name" error={fieldError('name')}>
+            <Field id="wd-name" label={t('名称', 'name')} error={fieldError('name')}>
               <Input
                 id="wd-name"
                 value={form.name}
@@ -207,8 +225,11 @@ export function WorkerDefinitionEditor({
             </Field>
             <Field
               id="wd-model"
-              label="模型 model"
-              hint="<provider>/<model>；留空则由工作区策略决定。 Blank = the workspace policy's default."
+              label={t('模型', 'model')}
+              hint={t(
+                '<provider>/<model>；留空则由工作区策略决定。 Blank =',
+                "the workspace policy's default.",
+              )}
               error={fieldError('model')}
             >
               <Input
@@ -227,7 +248,11 @@ export function WorkerDefinitionEditor({
               </datalist>
             </Field>
           </div>
-          <Field id="wd-description" label="描述 description" error={fieldError('description')}>
+          <Field
+            id="wd-description"
+            label={t('描述', 'description')}
+            error={fieldError('description')}
+          >
             <Input
               id="wd-description"
               value={form.description}
@@ -238,7 +263,7 @@ export function WorkerDefinitionEditor({
           </Field>
           <Field
             id="wd-system-prompt"
-            label="系统提示词 systemPrompt"
+            label={t('系统提示词', 'systemPrompt')}
             required
             error={fieldError('systemPrompt')}
           >
@@ -255,12 +280,18 @@ export function WorkerDefinitionEditor({
           <div className="row-wrap">
             <Field
               id="wd-capabilities"
-              label="能力 capabilities"
+              label={t('能力', 'capabilities')}
               required={!isWorker}
               hint={
                 isWorker
-                  ? '每行一个；留空 = 平台 Worker 上限去掉执行类能力。 One per line; blank = the worker ceiling minus execute-class capabilities.'
-                  : '每行一个；必须在 entry 上限之内（内核校验）。 One per line; must fit the entry ceiling (kernel-checked).'
+                  ? t(
+                      '每行一个；留空 = 平台 Worker 上限去掉执行类能力。 One per line; blank =',
+                      'the worker ceiling minus execute-class capabilities.',
+                    )
+                  : t(
+                      '每行一个；必须在 entry 上限之内（内核校验）。',
+                      'One per line; must fit the entry ceiling (kernel-checked).',
+                    )
               }
               error={fieldError('capabilities')}
             >
@@ -276,8 +307,11 @@ export function WorkerDefinitionEditor({
             </Field>
             <Field
               id="wd-egress-deny"
-              label="出网拒绝 egressDeny"
-              hint="每行一个主机名或 .后缀；可空。 One hostname or .suffix per line; optional."
+              label={t('出网拒绝', 'egressDeny')}
+              hint={t(
+                '每行一个主机名或 .后缀；可空。',
+                'One hostname or .suffix per line; optional.',
+              )}
               error={fieldError('egressDeny')}
             >
               <Textarea
@@ -295,8 +329,8 @@ export function WorkerDefinitionEditor({
             <div className="row-wrap">
               <Field
                 id="wd-gates"
-                label="可作用的门 gates"
-                hint="每行一个 Gatekeeper id；可空。 One Gatekeeper id per line; optional."
+                label={t('可作用的门', 'gates')}
+                hint={t('每行一个 Gatekeeper id；可空。', 'One Gatekeeper id per line; optional.')}
                 error={fieldError('gates')}
               >
                 <Textarea
@@ -311,8 +345,11 @@ export function WorkerDefinitionEditor({
               </Field>
               <Field
                 id="wd-skills"
-                label="使用的 Skill skills"
-                hint="每行一个已发布 Skill 的名称；可空。 One published Skill name per line; optional."
+                label={t('使用的 Skill', 'skills')}
+                hint={t(
+                  '每行一个已发布 Skill 的名称；可空。',
+                  'One published Skill name per line; optional.',
+                )}
                 error={fieldError('skills')}
               >
                 <Textarea
@@ -333,17 +370,17 @@ export function WorkerDefinitionEditor({
       {error !== null ? (
         <ErrorBanner
           error={error}
-          title="无法创建草稿 Could not propose the draft"
+          title={t('无法创建草稿', 'Could not propose the draft')}
           testId="worker-editor-error"
         />
       ) : null}
 
       <div className="row">
         <Button type="submit" variant="primary" loading={busy} data-testid="worker-submit">
-          保存草稿 Save draft
+          {t('保存草稿', 'Save draft')}
         </Button>
         <Button variant="ghost" onClick={onDone} disabled={busy}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
       </div>
     </form>

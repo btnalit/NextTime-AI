@@ -10,6 +10,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { useGatekeeperNames, usePrincipalDirectory } from './approvals/useDirectoryNames.js';
 import { ApprovalContext } from './audit/ApprovalContext.js';
@@ -52,6 +53,7 @@ export interface AuditPageProps {
  * chain on to the WorkerRun — the request's `parentWorkerRunId` is shown on the card instead).
  */
 export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
+  const t = useT();
   const entry = useAuditEntry(entryProp);
   const principals = usePrincipalDirectory(http);
   const gatekeeperNames = useGatekeeperNames(http);
@@ -70,8 +72,11 @@ export function AuditPage({ http, entry: entryProp }: AuditPageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('audit')}
-        title="审计 Audit"
-        description="按 id 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。 Provenance lookups (explain, reconstruct) and the audit log, by id or filter — reachable from tasks, approvals and facts in a chat."
+        title={t('审计', 'Audit')}
+        description={t(
+          '按 id 或筛选做溯源（explain / reconstruct）与审计流查询；从任务、审批与对话中的事实一键进入。 Provenance lookups (explain, reconstruct) and the audit log, by id or filter —',
+          'reachable from tasks, approvals and facts in a chat.',
+        )}
       />
       {entry.actionRequestId ? (
         <ApprovalContext
@@ -127,6 +132,7 @@ interface LookupState {
 const IDLE: LookupState = { busy: false, error: null, result: null };
 
 function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
   const [entityId, setEntityId] = useState('');
   const [state, setState] = useState<LookupState>(IDLE);
   const forbidden = state.error !== null && isForbiddenError(state.error);
@@ -147,7 +153,7 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
   return (
     <section className="section" aria-labelledby="reconstruct-title">
       <div className="section-header">
-        <h2 id="reconstruct-title">重建 Reconstruct</h2>
+        <h2 id="reconstruct-title">{t('重建', 'Reconstruct')}</h2>
       </div>
       <form
         className="inline-form"
@@ -156,8 +162,11 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
       >
         <Field
           id="reconstruct-entity-id"
-          label="实体 id Entity id"
-          hint="图对象 id：从审计记录重建其历史。 A graph Object id — its history rebuilt from the audit records."
+          label={t('实体 id', 'Entity id')}
+          hint={t(
+            '图对象 id：从审计记录重建其历史。 A graph Object id —',
+            'its history rebuilt from the audit records.',
+          )}
         >
           <Input
             id="reconstruct-entity-id"
@@ -168,19 +177,19 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
           />
         </Field>
         <Button type="submit" variant="secondary" loading={state.busy} disabled={!entityId.trim()}>
-          重建 Reconstruct
+          {t('重建', 'Reconstruct')}
         </Button>
       </form>
       {forbidden ? (
         <EmptyState
           icon="shield"
-          title="需要 auditor 角色 Needs the auditor role"
+          title={t('需要 auditor 角色', 'Needs the auditor role')}
           testId="reconstruct-forbidden"
         />
       ) : state.error !== null ? (
         <ErrorBanner
           error={state.error}
-          title="无法重建该实体 Could not reconstruct this entity"
+          title={t('无法重建该实体', 'Could not reconstruct this entity')}
           testId="reconstruct-error"
         />
       ) : null}

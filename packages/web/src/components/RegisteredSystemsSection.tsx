@@ -10,6 +10,7 @@ import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { platformGateInstanceHref } from '../lib/gate-instances.js';
 import type { PrincipalRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
@@ -67,6 +68,7 @@ export function GatekeeperCard({
   platformAdmin = false,
   principals,
 }: GatekeeperCardProps) {
+  const t = useT();
   const toast = useToast();
   const [publishing, setPublishing] = useState(false);
   const [granting, setGranting] = useState(false);
@@ -192,7 +194,7 @@ export function GatekeeperCard({
           </dd>
           {platformInstance ? (
             <>
-              <dt>平台实例 Platform instance</dt>
+              <dt>{t('平台实例', 'Platform instance')}</dt>
               <dd className="row-wrap" data-testid="gatekeeper-platform-instance">
                 {platformAdmin ? (
                   // Deep link to the instance's own drawer on 集成 (`lib/router.ts` parses
@@ -212,7 +214,7 @@ export function GatekeeperCard({
                 <StatusChip machine="gateHealth" status={platformInstance.health} size="s" />
                 {!platformAdmin ? (
                   <span className="text-3 text-small">
-                    由平台管理员管理 managed on the platform 集成 page
+                    {t('由平台管理员管理 managed on the platform 集成', 'page')}
                   </span>
                 ) : null}
               </dd>

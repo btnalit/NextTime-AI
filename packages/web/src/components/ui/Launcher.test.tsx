@@ -51,7 +51,7 @@ describe('Launcher', () => {
     );
     const next = screen.getByTestId('launcher-next');
     expect(next.hasAttribute('disabled')).toBe(false);
-    expect(next.textContent).toBe('下一步 Next');
+    expect(next.textContent).toBe('下一步');
     fireEvent.click(next);
     expect(onNext).toHaveBeenCalledTimes(1);
   });
@@ -81,10 +81,10 @@ describe('Launcher', () => {
         onKindChange={vi.fn()}
         onNext={vi.fn()}
         onBack={onBack}
-        finishLabel="接入 Connect"
+        finishLabel="接入"
       />,
     );
-    expect(screen.getByTestId('launcher-next').textContent).toBe('接入 Connect');
+    expect(screen.getByTestId('launcher-next').textContent).toBe('接入');
     expect(screen.getByTestId('launcher-step-handshake').getAttribute('aria-current')).toBe('step');
   });
 

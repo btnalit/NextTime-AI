@@ -5,6 +5,7 @@ import type {
   LlmProviderWire,
 } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
+import { useT } from '../../../lib/i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from '../../../lib/llm-admin.js';
 import { Button } from '../../ui/Button.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
@@ -59,6 +60,7 @@ function isValidUrl(value: string): boolean {
  * endpoint that wants the other one.
  */
 export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps) {
+  const t = useT();
   const editing = initial !== undefined;
   const [id, setId] = useState(initial?.id ?? '');
   const [displayName, setDisplayName] = useState(initial?.displayName ?? '');
@@ -147,9 +149,10 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
     >
       {editing && initial.source === 'file' ? (
         <Notice testId="provider-form-override-notice">
-          这是主机 llm-providers.yaml 里的供应商；保存会在代理的存储里建一条覆盖记录，yaml
-          本身不改。 This provider comes from llm-providers.yaml on the host — saving creates an
-          override in the proxy’s store; the yaml itself is not modified.
+          {t(
+            '这是主机 llm-providers.yaml 里的供应商；保存会在代理的存储里建一条覆盖记录，yaml 本身不改。 This provider comes from llm-providers.yaml on the host —',
+            'saving creates an override in the proxy’s store; the yaml itself is not modified.',
+          )}
         </Notice>
       ) : null}
 
@@ -157,9 +160,14 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         id="provider-id"
         label="Id"
         required
-        hint="小写字母/数字/连字符；成为代理路由 /<id>/v1 与 models.json 里的 provider 名。 Lowercase slug — becomes the proxy route and the models.json provider name."
+        hint={t(
+          '小写字母/数字/连字符；成为代理路由 /<id>/v1 与 models.json 里的 provider 名。 Lowercase slug —',
+          'becomes the proxy route and the models.json provider name.',
+        )}
         error={
-          id.length > 0 && !idValid ? '格式不合法或为保留名 Invalid or reserved id' : undefined
+          id.length > 0 && !idValid
+            ? t('格式不合法或为保留名', 'Invalid or reserved id')
+            : undefined
         }
       >
         <Input
@@ -173,7 +181,7 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         />
       </Field>
 
-      <Field id="provider-display-name" label="名称 Display name">
+      <Field id="provider-display-name" label={t('名称', 'Display name')}>
         <Input
           id="provider-display-name"
           value={displayName}
@@ -186,9 +194,12 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
 
       <Field
         id="provider-api"
-        label="API 种类 API kind"
+        label={t('API 种类', 'API kind')}
         required
-        hint="Gemini 走它的 OpenAI 兼容端点（§12 第 2 项：原生适配器不排期）。 Gemini goes through its OpenAI-compatible endpoint."
+        hint={t(
+          'Gemini 走它的 OpenAI 兼容端点（§12 第 2 项：原生适配器不排期）。',
+          'Gemini goes through its OpenAI-compatible endpoint.',
+        )}
       >
         <Select
           id="provider-api"
@@ -209,10 +220,13 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         id="provider-base-url"
         label="Base URL"
         required
-        hint="供应商的源站，不带 /v1（代理自己拼路径），如 https://api.example.com。 The bare upstream origin, without /v1."
+        hint={t(
+          '供应商的源站，不带 /v1（代理自己拼路径），如 https://api.example.com。',
+          'The bare upstream origin, without /v1.',
+        )}
         error={
           upstreamBaseUrl.length > 0 && !urlValid
-            ? '需要 http(s) URL，且不能以 /v1 结尾 Needs an http(s) URL not ending in /v1'
+            ? t('需要 http(s) URL，且不能以 /v1 结尾', 'Needs an http(s) URL not ending in /v1')
             : undefined
         }
       >
@@ -229,9 +243,12 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
 
       <Field
         id="provider-auth-header"
-        label="鉴权头 Auth header"
+        label={t('鉴权头', 'Auth header')}
         required
-        hint="代理把真实密钥放进这个头发给上游：authorization 用 Bearer 前缀，x-api-key 不带前缀。 The header the proxy puts the real key in upstream."
+        hint={t(
+          '代理把真实密钥放进这个头发给上游：authorization 用 Bearer 前缀，x-api-key 不带前缀。',
+          'The header the proxy puts the real key in upstream.',
+        )}
       >
         <Select
           id="provider-auth-header"
@@ -247,10 +264,15 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
 
       <Field
         id="provider-api-key-env"
-        label="密钥环境变量名 Key env var"
-        hint="可选——只填变量名，值由操作员写进主机 secrets/llm-proxy.env 后重建 llm-proxy。留空也可以，保存后在下方为这个供应商单独设置控制台密钥（优先于环境变量）。 Optional — the variable name only, its value set by the operator in secrets/llm-proxy.env on the host. Leave it blank and set a console key for this provider after saving instead (it takes priority over the env var)."
+        label={t('密钥环境变量名', 'Key env var')}
+        hint={t(
+          '可选——只填变量名，值由操作员写进主机 secrets/llm-proxy.env 后重建 llm-proxy。留空也可以，保存后在下方为这个供应商单独设置控制台密钥（优先于环境变量）。 Optional —',
+          'the variable name only, its value set by the operator in secrets/llm-proxy.env on the host. Leave it blank and set a console key for this provider after saving instead (it takes priority over the env var).',
+        )}
         error={
-          apiKeyEnv.length > 0 && !envValid ? '大写字母、数字、下划线 UPPER_CASE only' : undefined
+          apiKeyEnv.length > 0 && !envValid
+            ? t('大写字母、数字、下划线', 'UPPER_CASE only')
+            : undefined
         }
       >
         <Input
@@ -266,14 +288,16 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
 
       <fieldset className="field" data-testid="provider-models">
         <legend className="field-label">
-          模型清单 Models{' '}
+          {t('模型清单', 'Models')}{' '}
           <span className="field-required" aria-hidden>
             *
           </span>
         </legend>
         <p className="field-hint">
-          模型 id 按供应商原样填（如 gpt-4.1-mini）；显示名可选，进 models.json 的 name。 The
-          provider’s own model id; the display name is optional.
+          {t(
+            '模型 id 按供应商原样填（如 gpt-4.1-mini）；显示名可选，进 models.json 的 name。',
+            'The provider’s own model id; the display name is optional.',
+          )}
         </p>
         <div className="stack-s">
           {models.map((row, index) => (
@@ -318,13 +342,13 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
               }}
               data-testid="provider-model-add"
             >
-              添加模型 Add model
+              {t('添加模型', 'Add model')}
             </Button>
           </div>
         </div>
         {modelIds.length > 0 && !modelsValid ? (
           <p className="field-error" role="alert">
-            模型 id 重复 Duplicate model ids
+            {t('模型 id 重复', 'Duplicate model ids')}
           </p>
         ) : null}
       </fieldset>
@@ -337,7 +361,9 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
           disabled={submitting}
           data-testid="provider-enabled"
         />
-        <span>启用（可路由、进入 models.json） Enabled — routable and listed in models.json</span>
+        <span>
+          {t('启用（可路由、进入 models.json）', 'Enabled — routable and listed in models.json')}
+        </span>
       </label>
 
       {error !== null ? (
@@ -353,7 +379,7 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
         ) : (
           <ErrorBanner
             error={error}
-            title="保存失败 Could not save the provider"
+            title={t('保存失败', 'Could not save the provider')}
             testId="provider-form-error"
           />
         )
@@ -367,10 +393,10 @@ export function ProviderForm({ initial, onSubmit, onCancel }: ProviderFormProps)
           loading={submitting}
           data-testid="provider-submit"
         >
-          {editing ? '保存 Save' : '新增 Create'}
+          {editing ? t('保存', 'Save') : t('新增', 'Create')}
         </Button>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
       </div>
     </form>

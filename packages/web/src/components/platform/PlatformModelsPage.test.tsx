@@ -269,7 +269,7 @@ describe('PlatformModelsPage', () => {
     await screen.findByTestId('provider-row-acme');
   });
 
-  it('runs 测试调用 and renders the structured result; a missing credential shows the operator step', async () => {
+  it('runs 测试调用', async () => {
     const http = scriptedHttp();
     const proxy = scriptedProxy({
       'GET /providers': () => ({
@@ -471,7 +471,7 @@ describe('PlatformModelsPage', () => {
       expect(calls).toEqual([{ model: 'anthropic/claude-sonnet-5' }]);
     });
 
-    it('picking pi 自己的默认值 clears it with model: null', async () => {
+    it('picking pi 自己的默认值', async () => {
       const calls: unknown[] = [];
       const http = scriptedHttp({
         get_platform_settings: () =>

@@ -1,6 +1,7 @@
 import type { GateHostTokenWire } from '@nexttime/shared';
 import { type ReactNode, useEffect, useId, useState } from 'react';
 import { postGateCredential } from '../../lib/gate-host.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input, Textarea } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
@@ -43,6 +44,7 @@ function formatCountdown(secondsLeft: number): string {
  * `stored` (`clearFields` below) — a re-render after that shows only the success notice.
  */
 export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCredentialEntryProps) {
+  const t = useT();
   // Unique per mount: `AvailableGateInstancesSection` renders one of these per linked row, so a
   // hardcoded id would make every row's label point at the first row's input.
   const domId = useId();
@@ -94,11 +96,11 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
       try {
         parsed = JSON.parse(rawJson);
       } catch {
-        setJsonError('不是合法的 JSON Not valid JSON');
+        setJsonError(t('不是合法的', 'JSON Not valid JSON'));
         return;
       }
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        setJsonError('必须是一个 JSON 对象 Must be a JSON object');
+        setJsonError(t('必须是一个 JSON 对象', 'Must be a JSON object'));
         return;
       }
       credential = parsed as Record<string, unknown>;
@@ -124,11 +126,11 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
     return (
       <div className="stack-s">
         <Notice testId="gate-credential-stored">
-          已存入门宿主（内核未经手） Stored on the gate host — the kernel never saw it.
+          {t('已存入门宿主（内核未经手）', 'Stored on the gate host — the kernel never saw it.')}
         </Notice>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button variant="ghost" size="s" onClick={() => setPhase({ kind: 'idle' })}>
-            再录入一份 Enter another
+            {t('再录入一份', 'Enter another')}
           </Button>
         </div>
       </div>
@@ -150,7 +152,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
         </Button>
         <PlatformError
           error={requestError}
-          title="无法获取令牌 Could not get a token"
+          title={t('无法获取令牌', 'Could not get a token')}
           testId="gate-credential-token-error"
         />
       </div>
@@ -167,13 +169,16 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
     <div className="stack-s">
       <Notice tone={expired ? 'warn' : 'info'}>
         {expired
-          ? '令牌已过期，请重新获取 The token expired — get a new one.'
-          : `令牌 ${formatCountdown(secondsLeft)} 后过期 Token expires in ${formatCountdown(secondsLeft)}`}
+          ? t('令牌已过期，请重新获取', 'The token expired — get a new one.')
+          : t(
+              `令牌 ${formatCountdown(secondsLeft)} 后过期`,
+              `Token expires in ${formatCountdown(secondsLeft)}`,
+            )}
       </Notice>
 
       {expired ? (
         <Button variant="secondary" size="s" onClick={() => void getToken()} loading={requesting}>
-          重新获取 Get a new token
+          {t('重新获取', 'Get a new token')}
         </Button>
       ) : (
         <>
@@ -192,9 +197,9 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
           ) : (
             <Field
               id={`${domId}-json`}
-              label="原始 JSON Raw JSON"
+              label={t('原始', 'JSON Raw JSON')}
               error={jsonError ?? undefined}
-              hint='任意凭证对象，例如 {"apiKey": "..."} Any credential object.'
+              hint={t('任意凭证对象，例如 {"apiKey": "..."}', 'Any credential object.')}
             >
               <Textarea
                 id={`${domId}-json`}
@@ -214,12 +219,12 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
               onChange={(event) => setAdvanced(event.target.checked)}
               disabled={submitting}
             />
-            <span>高级：原始 JSON Advanced: raw JSON</span>
+            <span>{t('高级：原始', 'JSON Advanced: raw JSON')}</span>
           </label>
 
           <PlatformError
             error={submitError}
-            title="无法存入门宿主 Could not store this on the gate host"
+            title={t('无法存入门宿主', 'Could not store this on the gate host')}
             testId="gate-credential-submit-error"
           />
           <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -231,7 +236,7 @@ export function GateCredentialEntry({ requestToken, tokenButtonLabel }: GateCred
               disabled={!advanced && bearerToken.trim().length === 0}
               data-testid="gate-credential-submit"
             >
-              存入 Submit
+              {t('存入', 'Submit')}
             </Button>
           </div>
         </>

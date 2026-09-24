@@ -21,7 +21,8 @@ export interface StatusChipProps {
 export function StatusChip({ machine, status, size = 'm', className, testId }: StatusChipProps) {
   const t = useT();
   const style = statusChipStyle(machine, status);
-  const labelText = typeof style.label === 'string' ? style.label : t(style.label.zh, style.label.en);
+  const labelText =
+    typeof style.label === 'string' ? style.label : t(style.label.zh, style.label.en);
   const classes = [
     'chip',
     `chip-${style.tone}`,

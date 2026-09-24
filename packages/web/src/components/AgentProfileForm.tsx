@@ -9,6 +9,7 @@ import {
 import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError } from '../lib/errors.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
 import { definitionName } from '../lib/tasks.js';
 import { Button } from './ui/Button.js';
@@ -91,6 +92,7 @@ export function AgentProfileForm({
   editForbidden,
   onSaved,
 }: AgentProfileFormProps) {
+  const t = useT();
   const [state, setState] = useState<FormState>(() => initialState(profile));
   const [fieldErrors, setFieldErrors] = useState<Readonly<Record<string, string>>>({});
   const [submitError, setSubmitError] = useState<unknown | null>(null);
@@ -164,15 +166,17 @@ export function AgentProfileForm({
     >
       {editForbidden ? (
         <Notice tone="warn" testId="agent-profile-edit-forbidden">
-          工作区策略不允许成员编辑自己的智能体配置 Workspace policy does not allow members to edit
-          their own Agent configuration (<code>memberCanEditProfile</code>). Ask the workspace owner
-          to change it in 模型与配额.
+          {t(
+            '工作区策略不允许成员编辑自己的智能体配置',
+            'Workspace policy does not allow members to edit their own Agent configuration (',
+          )}
+          <code>memberCanEditProfile</code>). Ask the workspace owner to change it in 模型与配额.
         </Notice>
       ) : null}
 
       <Field
         id="ap-model"
-        label="模型 Model"
+        label={t('模型', 'Model')}
         error={fieldErrors.model}
         hint="Options are the llm-proxy allow-list, narrowed by workspace policy."
       >
@@ -184,7 +188,7 @@ export function AgentProfileForm({
           invalid={!!fieldErrors.model}
           aria-describedby={describedBy('ap-model', !fieldErrors.model, !!fieldErrors.model)}
         >
-          <option value={INHERIT_MODEL}>继承工作区默认 Inherit workspace default</option>
+          <option value={INHERIT_MODEL}>{t('继承工作区默认', 'Inherit workspace default')}</option>
           {allowedModels.map((m) => (
             <option key={m.id} value={m.id}>
               {m.id}
@@ -195,7 +199,10 @@ export function AgentProfileForm({
 
       <ChecklistField
         title="Skills"
-        subtitle="已发布的 Skill，工作区策略可收窄 Published Skills, narrowed by workspace policy"
+        subtitle={t(
+          '已发布的 Skill，工作区策略可收窄',
+          'Published Skills, narrowed by workspace policy',
+        )}
         inherit={state.skillsInherit}
         onInheritChange={(value) => update('skillsInherit', value)}
         options={allowedSkills.map((s) => ({ id: s.id, label: s.name }))}
@@ -207,8 +214,11 @@ export function AgentProfileForm({
       />
 
       <ChecklistField
-        title="系统接入 Connected systems"
-        subtitle="调用方可见的门，工作区策略可收窄 Gatekeepers you can see, narrowed by workspace policy"
+        title={t('系统接入', 'Connected systems')}
+        subtitle={t(
+          '调用方可见的门，工作区策略可收窄',
+          'Gatekeepers you can see, narrowed by workspace policy',
+        )}
         inherit={state.gatekeepersInherit}
         onInheritChange={(value) => update('gatekeepersInherit', value)}
         options={allowedGatekeepers.map((g) => ({ id: g.id, label: g.name }))}
@@ -220,8 +230,8 @@ export function AgentProfileForm({
       />
 
       <ChecklistField
-        title="Worker 定义 Worker definitions"
-        subtitle="可选 Optional"
+        title={t('Worker 定义', 'Worker definitions')}
+        subtitle={t('可选', 'Optional')}
         inherit={state.workerDefsInherit}
         onInheritChange={(value) => update('workerDefsInherit', value)}
         options={workerDefinitions.map((w) => ({
@@ -237,7 +247,7 @@ export function AgentProfileForm({
 
       <Field
         id="ap-prompt"
-        label="提示词附加 Prompt addendum"
+        label={t('提示词附加', 'Prompt addendum')}
         error={fieldErrors.promptAddendum}
         hint={
           <span data-testid="agent-profile-prompt-count">
@@ -270,11 +280,11 @@ export function AgentProfileForm({
           disabled={disabled || autoApproveLowDisabled}
         />
         <span>
-          低风险动作自动批准 Auto-approve low blast-radius actions
+          {t('低风险动作自动批准', 'Auto-approve low blast-radius actions')}
           {autoApproveLowDisabled && !editForbidden ? (
             <span className="text-3 text-small">
               {' '}
-              — 工作区策略不允许 workspace policy does not allow this (
+              {t('— 工作区策略不允许', 'workspace policy does not allow this')} (
               <code>allowMemberAutoApproveLow</code>)
             </span>
           ) : null}
@@ -292,13 +302,15 @@ export function AgentProfileForm({
       ) : null}
 
       <Notice testId="agent-profile-effective-note">
-        保存后下一轮对话生效（会话重签，常驻容器按需重建） Takes effect from the next turn — the
-        entry session re-signs and the resident container rebuilds if needed.
+        {t(
+          '保存后下一轮对话生效（会话重签，常驻容器按需重建） Takes effect from the next turn —',
+          'the entry session re-signs and the resident container rebuilds if needed.',
+        )}
       </Notice>
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button type="submit" variant="primary" loading={submitting} disabled={disabled}>
-          保存 Save
+          {t('保存', 'Save')}
         </Button>
       </div>
     </form>

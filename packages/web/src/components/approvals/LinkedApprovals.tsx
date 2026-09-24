@@ -5,6 +5,7 @@ import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { DataList, DataRow } from '../ui/DataList.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -59,6 +60,7 @@ function LinkedApprovalsList({
   principalNames,
   onOpenApproval,
 }: LinkedApprovalsProps) {
+  const t = useT();
   const params = useMemo(() => ({ taskId, limit: PAGE_SIZE }), [taskId]);
   const linked = useCapabilityList<ActionRequestRow>(http, 'list_action_requests', params, {
     pushes,
@@ -84,7 +86,7 @@ function LinkedApprovalsList({
     return (
       <ErrorBanner
         error={linked.state.error}
-        title="无法加载关联审批 Could not load linked approvals"
+        title={t('无法加载关联审批', 'Could not load linked approvals')}
         onRetry={() => void linked.reload()}
         testId="linked-approvals-error"
       />
@@ -93,8 +95,10 @@ function LinkedApprovalsList({
   if (rows.length === 0) {
     return (
       <span className="text-3 text-small" data-testid="linked-approvals-empty">
-        该任务的 Worker 尚未提出任何执行类动作。 No WorkerRun of this Task has raised an
-        ActionRequest.
+        {t(
+          '该任务的 Worker 尚未提出任何执行类动作。',
+          'No WorkerRun of this Task has raised an ActionRequest.',
+        )}
       </span>
     );
   }
@@ -130,12 +134,12 @@ function LinkedApprovalsList({
                     </>
                   ) : null}
                   <time title={formatDateTime(row.requestedAt)}>
-                    请求 requested {formatRelative(row.requestedAt)}
+                    {t('请求', 'requested')} {formatRelative(row.requestedAt)}
                   </time>
                   {decidedBy ? (
                     <>
                       <span className="meta-sep" />
-                      <span className="text-3">决定 decided by</span>
+                      <span className="text-3">{t('决定', 'decided by')}</span>
                       <RefChip
                         kind="principal"
                         id={decidedBy}
@@ -167,14 +171,14 @@ function LinkedApprovalsList({
             loading={linked.loadingMore}
             onClick={() => void linked.loadMore()}
           >
-            加载更多 Load more
+            {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}
       {linked.loadMoreError !== null ? (
         <ErrorBanner
           error={linked.loadMoreError}
-          title="无法加载更多关联审批 Could not load more linked approvals"
+          title={t('无法加载更多关联审批', 'Could not load more linked approvals')}
         />
       ) : null}
     </div>

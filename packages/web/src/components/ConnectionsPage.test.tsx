@@ -126,11 +126,11 @@ describe('ConnectionsPage', () => {
     const onSelectGatekeeper = vi.fn();
     renderPage(http, onSelectGatekeeper);
 
-    fireEvent.click(screen.getByRole('button', { name: /接入向导 Onboarding wizard/ }));
+    fireEvent.click(screen.getByRole('button', { name: /接入向导/ }));
     const wizardDrawer = await screen.findByTestId('onboarding-wizard-drawer');
     expect(within(wizardDrawer).getByTestId('onboarding-wizard')).toBeTruthy();
 
-    fireEvent.click(within(wizardDrawer).getByRole('button', { name: /下一步 Next/ }));
+    fireEvent.click(within(wizardDrawer).getByRole('button', { name: /下一步/ }));
     const connectStep = await within(wizardDrawer).findByTestId('wizard-step-connect');
     fireEvent.change(within(connectStep).getByLabelText(/Target system/), {
       target: { value: 'accept_s2_mcp' },
@@ -141,19 +141,17 @@ describe('ConnectionsPage', () => {
     fireEvent.click(within(connectStep).getByRole('button', { name: 'Register Gatekeeper' }));
 
     const publishStep = await within(wizardDrawer).findByTestId('wizard-step-publish');
-    fireEvent.click(
-      within(publishStep).getByRole('button', { name: /暂不发布，稍后再说 Skip for now/ }),
-    );
+    fireEvent.click(within(publishStep).getByRole('button', { name: /暂不发布，稍后再说/ }));
 
-    fireEvent.click(within(wizardDrawer).getByRole('button', { name: /下一步 Next/ }));
+    fireEvent.click(within(wizardDrawer).getByRole('button', { name: /下一步/ }));
     const doneStep = await within(wizardDrawer).findByTestId('wizard-step-done');
-    fireEvent.click(within(doneStep).getByRole('button', { name: /查看门详情 View gate detail/ }));
+    fireEvent.click(within(doneStep).getByRole('button', { name: /查看门详情/ }));
 
     await waitFor(() => expect(onSelectGatekeeper).toHaveBeenCalledWith('gk-9'));
     expect(screen.queryByTestId('onboarding-wizard-drawer')).toBeNull();
   });
 
-  it('the quick "直接注册门 Register a gate" path still opens CompleteConnectionForm directly', async () => {
+  it('the quick "直接注册门', async () => {
     const http = scriptedHttp({});
     renderPage(http);
     fireEvent.click(screen.getByTestId('register-gate-button'));
@@ -163,15 +161,13 @@ describe('ConnectionsPage', () => {
 
   // S6-C (§5.6): the page's one primary action opens the shared launcher, mounted for the
   // workspace plane.
-  it('"接入一个系统 Connect a system" is the primary action and opens the launcher on step 1', async () => {
+  it('"接入一个系统', async () => {
     const http = scriptedHttp({});
     renderPage(http);
     const button = screen.getByTestId('connect-system-button');
     expect(button.className).toContain('btn-primary');
     // One ink button per page (§5.9 principle 1): the older 接入向导 is a secondary now.
-    expect(screen.getByRole('button', { name: /接入向导 Onboarding wizard/ }).className).toContain(
-      'btn-secondary',
-    );
+    expect(screen.getByRole('button', { name: /接入向导/ }).className).toContain('btn-secondary');
     fireEvent.click(button);
     const drawer = await screen.findByTestId('connect-system-drawer');
     const launcher = within(drawer).getByTestId('connect-system-launcher');
@@ -240,7 +236,7 @@ describe('ConnectionsPage', () => {
   // B7 (§4 "接入三层"): the catalog row shows the platform status and health as chips; the button
   // is about this workspace and is absent once linked, and absent when the platform side is not
   // `enabled` (the kernel would refuse with gate_not_enabled).
-  it('B7: an enabled · ok row already linked here shows the Gatekeeper link, not a 启用 button; a platform-disabled row shows neither', async () => {
+  it('B7: an enabled · ok row already linked here shows the Gatekeeper link, not a 启用', async () => {
     const http = scriptedHttp({
       list_available_gate_instances: () => ({
         items: [
@@ -254,10 +250,10 @@ describe('ConnectionsPage', () => {
     const table = await screen.findByTestId('available-gates-table');
     const linked = within(table).getByTestId('available-gate-gate-linked');
     expect(within(linked).getByTestId('available-gate-status-gate-linked').textContent).toContain(
-      '已启用 Enabled',
+      '已启用',
     );
     expect(within(linked).queryByTestId('enable-gate-gate-linked')).toBeNull();
-    expect(within(linked).getByRole('link', { name: /已启用 Enabled/ })).toBeTruthy();
+    expect(within(linked).getByRole('link', { name: /已启用/ })).toBeTruthy();
 
     const off = within(table).getByTestId('available-gate-gate-off');
     expect(within(off).queryByTestId('enable-gate-gate-off')).toBeNull();
@@ -265,7 +261,7 @@ describe('ConnectionsPage', () => {
 
     const fresh = within(table).getByTestId('available-gate-gate-new');
     expect(within(fresh).getByTestId('enable-gate-gate-new').textContent).toContain(
-      '在本工作区启用 Enable here',
+      '在本工作区启用',
     );
   });
 
@@ -348,10 +344,10 @@ describe('ConnectionsPage', () => {
     );
     // Registered systems is re-read (a new Gatekeeper was just registered underneath it).
     await waitFor(() => expect(searchGatekeeperCalls).toBeGreaterThanOrEqual(2));
-    await waitFor(() => expect(within(table).getByText(/已发布 1 个 Operation/)).toBeTruthy());
+    await waitFor(() => expect(within(table).getByText(/已发布 1 个/)).toBeTruthy());
   });
 
-  it('a linked instance row offers "录入我的凭证" — issue_gate_credential_token then POSTs to the gate host', async () => {
+  it('a linked instance row offers "录入我的凭证" —', async () => {
     const fetchStub = vi.fn(async () => jsonResponse(200, { ok: true, result: { stored: true } }));
     vi.stubGlobal('fetch', fetchStub);
 

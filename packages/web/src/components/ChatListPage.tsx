@@ -4,6 +4,7 @@ import { useResource } from '../hooks/useResource.js';
 import { type ChatSummary, chatTitle, isArchived, spliceChat } from '../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { ChatArchiveConfirm } from './chat/ChatArchiveConfirm.js';
 import { ChatLifecycleActions, useRestoreChat } from './chat/ChatLifecycleActions.js';
@@ -39,6 +40,7 @@ type Filter = 'active' | 'archived';
  * auto-title when the first user message lands.
  */
 export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
+  const t = useT();
   const load = useCallback(
     () =>
       client
@@ -91,7 +93,7 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
 
   const newChatButton = (
     <Button variant="primary" icon="plus" onClick={() => void handleNewChat()} loading={creating}>
-      新对话 New chat
+      {t('新对话', 'New chat')}
     </Button>
   );
 
@@ -99,8 +101,11 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('chats')}
-        title="对话 Chats"
-        description="与工作区入口 agent 的对话。 Your conversations with the workspace entry agent."
+        title={t('对话', 'Chats')}
+        description={t(
+          '与工作区入口 agent 的对话。',
+          'Your conversations with the workspace entry agent.',
+        )}
         primaryAction={newChatButton}
       />
 
@@ -112,13 +117,13 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
           options={[
             {
               value: 'active',
-              label: '活跃 Active',
+              label: t('活跃', 'Active'),
               count: all === undefined ? undefined : split.active.length,
               testId: 'chats-tab-active',
             },
             {
               value: 'archived',
-              label: '已归档 Archived',
+              label: t('已归档', 'Archived'),
               count: all === undefined ? undefined : split.archived.length,
               testId: 'chats-tab-archived',
             },
@@ -127,7 +132,7 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
       </div>
 
       {createError !== null ? (
-        <ErrorBanner error={createError} title="无法创建对话 Could not create a chat" />
+        <ErrorBanner error={createError} title={t('无法创建对话', 'Could not create a chat')} />
       ) : null}
 
       {chats.state.status === 'loading' ? (
@@ -135,7 +140,7 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
       ) : chats.state.status === 'error' ? (
         <ErrorBanner
           error={chats.state.error}
-          title="无法加载对话 Could not load chats"
+          title={t('无法加载对话', 'Could not load chats')}
           onRetry={() => void chats.reload()}
           testId="chats-error"
         />
@@ -143,16 +148,22 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
         filter === 'active' ? (
           <EmptyState
             icon="chat"
-            title="还没有对话 No chats yet"
-            body="开始一段对话——入口 agent 可以观察系统、提出动作并代表你派发 Worker。 Start a conversation — the entry agent can observe systems, propose actions and spawn Workers on your behalf."
+            title={t('还没有对话', 'No chats yet')}
+            body={t(
+              '开始一段对话——入口 agent 可以观察系统、提出动作并代表你派发 Worker。 Start a conversation —',
+              'the entry agent can observe systems, propose actions and spawn Workers on your behalf.',
+            )}
             action={newChatButton}
             testId="chats-empty"
           />
         ) : (
           <EmptyState
             icon="inbox"
-            title="没有已归档的对话 No archived chats"
-            body="归档只影响列表可见性；对话的 Turn、决定与溯源链保持可查。 Archiving only hides a chat from the list; its Turns, decisions and provenance stay resolvable."
+            title={t('没有已归档的对话', 'No archived chats')}
+            body={t(
+              '归档只影响列表可见性；对话的 Turn、决定与溯源链保持可查。',
+              'Archiving only hides a chat from the list; its Turns, decisions and provenance stay resolvable.',
+            )}
             testId="chats-archived-empty"
           />
         )
@@ -177,7 +188,7 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
                     />
                   ) : (
                     <span className={chat.title === null ? 'text-3' : undefined}>
-                      {chatTitle(chat)}
+                      {chatTitle(chat, t)}
                     </span>
                   )
                 }
@@ -185,13 +196,13 @@ export function ChatListPage({ client, onSelectChat }: ChatListPageProps) {
                   isArchived(chat) ? (
                     <span className="row-wrap">
                       <span className="chip chip-s chip-neutral" data-testid="chat-archived-chip">
-                        已归档 Archived
+                        {t('已归档', 'Archived')}
                       </span>
                       <time title={formatDateTime(chat.archivedAt)} data-testid="chat-archived-at">
                         {formatRelative(chat.archivedAt)}
                       </time>
                       <span className="text-3">
-                        · 创建于 created{' '}
+                        {t('· 创建于', 'created')}{' '}
                         <time title={formatDateTime(chat.createdAt)}>
                           {formatRelative(chat.createdAt)}
                         </time>

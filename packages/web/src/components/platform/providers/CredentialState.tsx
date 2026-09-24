@@ -1,4 +1,5 @@
 import type { LlmProviderWire } from '@nexttime/shared';
+import { useT } from '../../../lib/i18n.js';
 
 export interface CredentialStateProps {
   readonly provider: Pick<LlmProviderWire, 'credentialPresent' | 'credentialSource' | 'apiKeyEnv'>;
@@ -29,6 +30,7 @@ function chipLabel(provider: CredentialStateProps['provider']): string {
  * (`secrets/llm-proxy.env` on the host); `none` means neither.
  */
 export function CredentialState({ provider, withInstruction = false }: CredentialStateProps) {
+  const t = useT();
   const { credentialSource } = provider;
   const present = provider.credentialPresent;
   return (
@@ -45,12 +47,18 @@ export function CredentialState({ provider, withInstruction = false }: Credentia
       {withInstruction ? (
         <p className="text-small text-2" data-testid="provider-credential-instruction">
           {credentialSource === 'console'
-            ? '密钥由管理员在下方设置，存于代理自己的状态目录（keys.json），从不回显。 Set below by an administrator, held in the proxy’s own state directory (keys.json); never echoed back.'
+            ? t(
+                '密钥由管理员在下方设置，存于代理自己的状态目录（keys.json），从不回显。',
+                'Set below by an administrator, held in the proxy’s own state directory (keys.json); never echoed back.',
+              )
             : credentialSource === 'env'
               ? `密钥来自 llm-proxy 容器环境变量 ${provider.apiKeyEnv}（主机 secrets/llm-proxy.env）。也可以在下方为这个供应商单独设置控制台密钥，控制台密钥优先。 The key is read from the llm-proxy container env var ${provider.apiKeyEnv} (secrets/llm-proxy.env on the host). A console key set below takes priority over it.`
               : provider.apiKeyEnv
                 ? `尚未配置：可在下方设置控制台密钥，或由操作员在主机 secrets/llm-proxy.env 里加一行 ${provider.apiKeyEnv}=<密钥> 后重建 llm-proxy。 Not configured yet — set a console key below, or have the operator add ${provider.apiKeyEnv}=<key> to secrets/llm-proxy.env and recreate llm-proxy.`
-                : '尚未配置：可在下方设置控制台密钥（这个供应商没有配置环境变量名）。 Not configured yet — set a console key below (this provider has no env var name configured).'}
+                : t(
+                    '尚未配置：可在下方设置控制台密钥（这个供应商没有配置环境变量名）。 Not configured yet —',
+                    'set a console key below (this provider has no env var name configured).',
+                  )}
         </p>
       ) : null}
     </div>

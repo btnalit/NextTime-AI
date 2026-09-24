@@ -54,7 +54,7 @@ function scriptedClient(): {
 }
 
 describe('ProviderSecretForm', () => {
-  it('设置 label when no console key; submits the trimmed key and clears local state on success', async () => {
+  it('设置', async () => {
     const { client, setProviderSecret } = scriptedClient();
     setProviderSecret.mockResolvedValue(provider({ credentialSource: 'console' }));
     const onUpdated = vi.fn();
@@ -84,7 +84,7 @@ describe('ProviderSecretForm', () => {
     expect(document.body.textContent).not.toContain('sk-typed-key');
   });
 
-  it('更换 label plus a 清除 button when a console key is already set', async () => {
+  it('更换 label plus a 清除', async () => {
     const { client } = scriptedClient();
     render(
       <ProviderSecretForm
@@ -97,7 +97,7 @@ describe('ProviderSecretForm', () => {
     expect(screen.getByTestId('provider-secret-clear')).toBeDefined();
   });
 
-  it('清除 goes through a medium-tier confirm with no retype, then clears', async () => {
+  it('清除', async () => {
     const { client, clearProviderSecret } = scriptedClient();
     clearProviderSecret.mockResolvedValue(provider({ credentialSource: 'env' }));
     const onUpdated = vi.fn();

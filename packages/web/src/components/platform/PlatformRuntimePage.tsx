@@ -10,6 +10,7 @@ import { useMemo, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
@@ -83,6 +84,7 @@ function shortImageId(id: string): string {
  * without guessing.
  */
 export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
+  const t = useT();
   const toast = useToast();
   const inventory = useCapability<RuntimeInventoryWire>(http, 'runtime_inventory');
   const drift = useCapability<PiDriftWire>(http, 'pi_drift');
@@ -146,7 +148,7 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
     } catch (error) {
       toast.push({
         tone: 'danger',
-        title: '重建失败 Rebuild failed',
+        title: t('重建失败', 'Rebuild failed'),
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -158,8 +160,11 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
     <div className="page" data-testid="platform-runtime-page">
       <PageHeader
         breadcrumb={breadcrumbFor('platformRuntime')}
-        title="运行层 Runtime"
-        description="跑的是哪个版本的 pi / 镜像 / 扩展，谁待重建，怎么升、怎么回滚。 Which pi / image / extension version is running, what is out of date, and how to roll it forward or back."
+        title={t('运行层', 'Runtime')}
+        description={t(
+          '跑的是哪个版本的 pi / 镜像 / 扩展，谁待重建，怎么升、怎么回滚。',
+          'Which pi / image / extension version is running, what is out of date, and how to roll it forward or back.',
+        )}
         actions={
           <Button
             variant="ghost"
@@ -168,7 +173,7 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
             loading={inventory.state.status === 'ready' && inventory.state.refreshing}
             data-testid="runtime-refresh"
           >
-            刷新 Refresh
+            {t('刷新', 'Refresh')}
           </Button>
         }
       />
@@ -195,7 +200,7 @@ export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
         />
       )}
 
-      <Card title="pi 版本漂移 pi drift">
+      <Card title={t('pi 版本漂移', 'pi drift')}>
         {drift.state.status === 'loading' ? (
           <SkeletonRows count={1} label="Loading pi drift" testId="pi-drift-loading" />
         ) : drift.state.status === 'error' ? (
@@ -232,6 +237,7 @@ function RuntimeBody({
   readonly onRollEntryContainers: () => void;
   readonly rolling: boolean;
 }) {
+  const t = useT();
   const needsRebuildCount = data.residentContainers.filter((c) => c.needsRebuild).length;
   // S8 W1-A7 (audit RT2): both confirms are anchored to their own button, so their open state is
   // owned here rather than by the page — `activatingImageId` keys which image row's popover (if
@@ -249,14 +255,14 @@ function RuntimeBody({
   const imageColumns: readonly DataTableColumn<RuntimeImageWire>[] = [
     {
       id: 'tags',
-      header: '标签 Tags',
+      header: t('标签', 'Tags'),
       priority: 'primary',
       cellClassName: 'mono text-small',
       cell: (image) => image.tags.join(', ') || '—',
     },
     {
       id: 'id',
-      header: '镜像 id Id',
+      header: t('镜像 id', 'Id'),
       cell: (image) => (
         <span className="mono text-small" title={image.id}>
           {shortImageId(image.id)}
@@ -277,13 +283,13 @@ function RuntimeBody({
     },
     {
       id: 'builtFrom',
-      header: '构建来源 Built from',
+      header: t('构建来源', 'Built from'),
       cellClassName: 'mono text-small',
       cell: (image) => image.builtFrom ?? '—',
     },
     {
       id: 'created',
-      header: '创建 Created',
+      header: t('创建', 'Created'),
       cellClassName: 'text-small',
       cell: (image) => (
         <time title={formatDateTime(image.createdAt)}>{formatRelative(image.createdAt)}</time>
@@ -299,7 +305,7 @@ function RuntimeBody({
         if (active) {
           return (
             <span className="chip chip-ok" data-testid="runtime-image-active-chip">
-              当前 Active
+              {t('当前', 'Active')}
             </span>
           );
         }
@@ -318,25 +324,28 @@ function RuntimeBody({
                   title={
                     image.allowed
                       ? undefined
-                      : '未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST'
+                      : t('未在 WORKER_IMAGE_ALLOWLIST 中 ·', 'Not in WORKER_IMAGE_ALLOWLIST')
                   }
                   data-testid="runtime-image-activate"
                 >
-                  设为活动 Set active
+                  {t('设为活动', 'Set active')}
                 </Button>
               }
-              title="设为活动镜像 Set active image"
-              description="已运行的入口容器不会立刻重启——它们在各自下一轮对话开始时按规格漂移自然换成新镜像，进行中的对话不受影响。 Running entry containers are not restarted now — each picks up the new image only at the start of its own next turn (spec-drift rebuild); an in-flight turn is unaffected."
+              title={t('设为活动镜像', 'Set active image')}
+              description={t(
+                '已运行的入口容器不会立刻重启——它们在各自下一轮对话开始时按规格漂移自然换成新镜像，进行中的对话不受影响。 Running entry containers are not restarted now —',
+                'each picks up the new image only at the start of its own next turn (spec-drift rebuild); an in-flight turn is unaffected.',
+              )}
               // Shows exactly what will be sent (review follow-up, PR #233) — `activatableRef` may
               // differ from `tags[0]` for a multi-tag image where only a later tag is allowlisted.
               target={image.activatableRef ?? image.tags[0] ?? image.id}
-              confirmLabel="设为活动 Set active"
+              confirmLabel={t('设为活动', 'Set active')}
               onConfirm={() => onActivate(image)}
               testId="runtime-activate-confirm"
             />
             {!image.allowed ? (
               <div className="text-3 text-small" data-testid="runtime-image-not-allowed-hint">
-                未在 WORKER_IMAGE_ALLOWLIST 中 · Not in WORKER_IMAGE_ALLOWLIST
+                {t('未在 WORKER_IMAGE_ALLOWLIST 中 ·', 'Not in WORKER_IMAGE_ALLOWLIST')}
               </div>
             ) : null}
           </>
@@ -358,8 +367,8 @@ function RuntimeBody({
           disabled={!resident.needsRebuild}
           title={
             resident.needsRebuild
-              ? '选中以单独重建 Select to rebuild individually'
-              : '已是最新，无需选中 Already up to date'
+              ? t('选中以单独重建', 'Select to rebuild individually')
+              : t('已是最新，无需选中', 'Already up to date')
           }
           data-testid="runtime-resident-select"
         />
@@ -367,26 +376,26 @@ function RuntimeBody({
     },
     {
       id: 'user',
-      header: '用户 User',
+      header: t('用户', 'User'),
       priority: 'primary',
       cell: (resident) => <RefChip kind="principal" id={resident.principalId} size="s" />,
     },
     {
       id: 'status',
-      header: '状态 Status',
+      header: t('状态', 'Status'),
       priority: 'high',
       cell: (resident) =>
         resident.needsRebuild ? (
           <span className="chip chip-warn" data-testid="runtime-resident-needs-rebuild">
-            待重建 Needs rebuild
+            {t('待重建', 'Needs rebuild')}
           </span>
         ) : (
-          <span className="chip chip-ok">已是最新 Up to date</span>
+          <span className="chip chip-ok">{t('已是最新', 'Up to date')}</span>
         ),
     },
     {
       id: 'workspace',
-      header: '工作区 Workspace',
+      header: t('工作区', 'Workspace'),
       cellClassName: 'text-small',
       // S8 W1-A6 (audit S10 "常驻容器列显示已清除工作区的 UUID"): `workspaceNames` only has rows
       // for a workspace `list_workspaces` still returns — a purged one is genuinely gone, so this
@@ -404,13 +413,13 @@ function RuntimeBody({
     },
     {
       id: 'image',
-      header: '镜像 Image',
+      header: t('镜像', 'Image'),
       cellClassName: 'mono text-small',
       cell: (resident) => resident.image ?? '—',
     },
     {
       id: 'started',
-      header: '启动 Started',
+      header: t('启动', 'Started'),
       cellClassName: 'text-small',
       cell: (resident) => (
         <time title={formatDateTime(resident.startedAt)}>{formatRelative(resident.startedAt)}</time>
@@ -418,7 +427,7 @@ function RuntimeBody({
     },
     {
       id: 'idle',
-      header: '空闲 Idle',
+      header: t('空闲', 'Idle'),
       cellClassName: 'text-small',
       cell: (resident) => (
         <time title={formatDateTime(resident.lastTouchedAt)}>
@@ -431,7 +440,7 @@ function RuntimeBody({
   return (
     <>
       <Card
-        title="活动镜像 Active image"
+        title={t('活动镜像', 'Active image')}
         actions={
           <Confirm
             tier="medium"
@@ -446,24 +455,30 @@ function RuntimeBody({
                 title={
                   canRollBack
                     ? undefined
-                    : '只知道一个（或零个）镜像，没有可回滚到的不同值 Only one (or zero) images are known — nothing different to roll back to'
+                    : t(
+                        '只知道一个（或零个）镜像，没有可回滚到的不同值 Only one (or zero) images are known —',
+                        'nothing different to roll back to',
+                      )
                 }
                 data-testid="runtime-rollback"
               >
-                回滚到上一个镜像 Roll back
+                {t('回滚到上一个镜像', 'Roll back')}
               </Button>
             }
-            title="回滚到上一个镜像 Roll back to the previous image"
+            title={t('回滚到上一个镜像', 'Roll back to the previous image')}
             description={
               <>
                 改回设置历史里最近一个<em>不同</em>
-                的活动镜像值；再次点击会在最近两个不同值之间来回切换。已运行的入口容器同样只在各自下一轮对话时收敛，不会被强制重启。
-                Switches to the most recent <em>different</em> value in the settings history;
-                calling it again toggles between the last two distinct values. Running entry
-                containers converge the same way — at their own next turn, never forced.
+                {t(
+                  '的活动镜像值；再次点击会在最近两个不同值之间来回切换。已运行的入口容器同样只在各自下一轮对话时收敛，不会被强制重启。',
+                  'Switches to the most recent',
+                )}
+                <em>different</em> value in the settings history; calling it again toggles between
+                the last two distinct values. Running entry containers converge the same way — at
+                their own next turn, never forced.
               </>
             }
-            confirmLabel="回滚 Roll back"
+            confirmLabel={t('回滚', 'Roll back')}
             onConfirm={onRollback}
             testId="runtime-rollback-confirm"
           />
@@ -471,9 +486,9 @@ function RuntimeBody({
       >
         {data.activeImageInfo ? (
           <dl className="definition-list" data-testid="runtime-active-image">
-            <dt>标签 Tags</dt>
+            <dt>{t('标签', 'Tags')}</dt>
             <dd className="mono">{data.activeImageInfo.tags.join(', ') || '—'}</dd>
-            <dt>镜像 id Image id</dt>
+            <dt>{t('镜像 id', 'Image id')}</dt>
             <dd>
               <CopyId id={data.activeImageInfo.id} label="Image" full />
             </dd>
@@ -481,9 +496,9 @@ function RuntimeBody({
             <dd className="mono">{data.activeImageInfo.piVersion ?? '—'}</dd>
             <dt>platform-extension 版本</dt>
             <dd className="mono">{data.activeImageInfo.platformExtensionVersion ?? '—'}</dd>
-            <dt>构建来源 Built from</dt>
+            <dt>{t('构建来源', 'Built from')}</dt>
             <dd className="mono">{data.activeImageInfo.builtFrom ?? '—'}</dd>
-            <dt>来源 Source</dt>
+            <dt>{t('来源', 'Source')}</dt>
             <dd>{ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource]}</dd>
           </dl>
         ) : (
@@ -491,28 +506,33 @@ function RuntimeBody({
             {data.activeImage ? (
               <>
                 活动镜像引用 <span className="mono">{data.activeImage}</span>
-                （来源：{ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource]}）不在下面的镜像清单
-                里——可能没打平台 label，或 worker-supervisor 不可达；此时下方"待重建"一律按
-                "无法判断"显示为否，不猜测。 The active image reference is not in the inventory
-                below (missing platform labels, or worker-supervisor unreachable) — every "needs
-                rebuild" below reads false rather than guessing.
+                （来源：{ACTIVE_IMAGE_SOURCE_LABEL[data.activeImageSource]}
+                {t(
+                  '）不在下面的镜像清单 里——可能没打平台 label，或 worker-supervisor 不可达；此时下方"待重建"一律按 "无法判断"显示为否，不猜测。 The active image reference is not in the inventory below (missing platform labels, or worker-supervisor unreachable) —',
+                  'every "needs rebuild" below reads false rather than guessing.',
+                )}
               </>
             ) : (
               <>
-                未设置活动镜像，且无法读到 worker-supervisor 自身的缺省镜像。 No active image is
-                set, and worker-supervisor's own default could not be read.
+                {t(
+                  '未设置活动镜像，且无法读到 worker-supervisor 自身的缺省镜像。',
+                  "No active image is set, and worker-supervisor's own default could not be read.",
+                )}
               </>
             )}
           </Notice>
         )}
       </Card>
 
-      <Card title="镜像清单 Images" padded={false}>
+      <Card title={t('镜像清单', 'Images')} padded={false}>
         {data.images.length === 0 ? (
           <EmptyState
             icon="cpu"
-            title="还没有带平台 label 的镜像 No labelled images yet"
-            body="在主机 / CI 上运行 docker compose build worker-runtime（打好三个 ai.nexttime.* label）。 Build worker-runtime on the host/CI with the three ai.nexttime.* labels."
+            title={t('还没有带平台 label 的镜像', 'No labelled images yet')}
+            body={t(
+              '在主机 / CI 上运行 docker compose build worker-runtime（打好三个 ai.nexttime.* label）。 Build worker-runtime on the host/CI with the three ai.nexttime.*',
+              'labels.',
+            )}
             testId="runtime-images-empty"
           />
         ) : (
@@ -528,7 +548,7 @@ function RuntimeBody({
       </Card>
 
       <Card
-        title="常驻容器 Resident containers"
+        title={t('常驻容器', 'Resident containers')}
         actions={
           <Button
             variant="secondary"
@@ -541,7 +561,7 @@ function RuntimeBody({
           >
             {selected.size > 0
               ? `现在重建选中的 (${selected.size}) Rebuild selected now`
-              : '现在重建空闲的 Rebuild idle now'}
+              : t('现在重建空闲的', 'Rebuild idle now')}
           </Button>
         }
         padded={false}
@@ -549,7 +569,7 @@ function RuntimeBody({
         {data.residentContainers.length === 0 ? (
           <EmptyState
             icon="cpu"
-            title="没有常驻入口容器 No resident entry containers"
+            title={t('没有常驻入口容器', 'No resident entry containers')}
             testId="runtime-residents-empty"
           />
         ) : (
@@ -568,23 +588,24 @@ function RuntimeBody({
 }
 
 function PiDriftBody({ data }: { readonly data: PiDriftWire }) {
+  const t = useT();
   return (
     <dl className="definition-list" data-testid="pi-drift-body">
-      <dt>状态 Status</dt>
+      <dt>{t('状态', 'Status')}</dt>
       <dd>
         <span className={`chip ${PI_DRIFT_CHIP_CLASS[data.status]}`} data-testid="pi-drift-status">
           {data.status}
         </span>
       </dd>
-      <dt>锁定的 pi 版本 Pinned pi version</dt>
-      <dd className="mono">{data.pinnedPiVersion ?? '未知 unknown'}</dd>
-      <dt>活动镜像自带的 pi 版本 Active image's pi version</dt>
+      <dt>{t('锁定的 pi 版本', 'Pinned pi version')}</dt>
+      <dd className="mono">{data.pinnedPiVersion ?? t('未知', 'unknown')}</dd>
+      <dt>{t('活动镜像自带的 pi 版本', "Active image's pi version")}</dt>
       <dd className="mono">{data.activeImagePiVersion ?? '—'}</dd>
       <dt>platform-extension 版本</dt>
       <dd className="mono">{data.platformExtensionVersion ?? '—'}</dd>
-      <dt>详情 Detail</dt>
+      <dt>{t('详情', 'Detail')}</dt>
       <dd>{data.detail}</dd>
-      <dt>检查时间 Checked at</dt>
+      <dt>{t('检查时间', 'Checked at')}</dt>
       <dd>{data.checkedAt ? formatDateTime(data.checkedAt) : '—'}</dd>
     </dl>
   );

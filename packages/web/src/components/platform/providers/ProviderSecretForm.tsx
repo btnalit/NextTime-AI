@@ -1,5 +1,6 @@
 import type { LlmProviderWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
+import { useT } from '../../../lib/i18n.js';
 import type { LlmAdminClient } from '../../../lib/llm-admin.js';
 import { LlmAdminError, llmAdminErrorMessage } from '../../../lib/llm-admin.js';
 import { Confirm } from '../../kit/confirm.js';
@@ -31,6 +32,7 @@ export interface ProviderSecretFormProps {
  * `LlmProviderWire`, which has no key field at all.
  */
 export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecretFormProps) {
+  const t = useT();
   const [key, setKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -70,7 +72,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
       <form className="row" onSubmit={(event) => void submit(event)}>
         <Input
           type="password"
-          aria-label="控制台密钥 Console key"
+          aria-label={t('控制台密钥', 'Console key')}
           value={key}
           onChange={(event) => setKey(event.target.value)}
           placeholder="sk-…"
@@ -91,7 +93,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
           loading={submitting}
           data-testid="provider-secret-submit"
         >
-          {hasConsoleKey ? '更换 Replace' : '设置 Set'}
+          {hasConsoleKey ? t('更换', 'Replace') : t('设置', 'Set')}
         </Button>
         {hasConsoleKey ? (
           <Confirm
@@ -107,13 +109,16 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
                 disabled={submitting}
                 data-testid="provider-secret-clear"
               >
-                清除 Clear
+                {t('清除', 'Clear')}
               </Button>
             }
-            title="清除控制台密钥 Clear the console key"
-            description="回退到该供应商的环境变量（若配置了密钥环境变量名）或无凭证；可随时重新设置。 Falls back to this provider’s env var (if one is configured) or no credential — a new key can be set again at any time."
+            title={t('清除控制台密钥', 'Clear the console key')}
+            description={t(
+              '回退到该供应商的环境变量（若配置了密钥环境变量名）或无凭证；可随时重新设置。 Falls back to this provider’s env var (if one is configured) or no credential —',
+              'a new key can be set again at any time.',
+            )}
             target={provider.displayName}
-            confirmLabel="清除 Clear"
+            confirmLabel={t('清除', 'Clear')}
             onConfirm={clear}
             testId="provider-secret-clear-confirm"
           />
@@ -132,7 +137,7 @@ export function ProviderSecretForm({ provider, client, onUpdated }: ProviderSecr
         ) : (
           <ErrorBanner
             error={error}
-            title="密钥操作失败 Could not update the key"
+            title={t('密钥操作失败', 'Could not update the key')}
             testId="provider-secret-error"
           />
         )

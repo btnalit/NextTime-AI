@@ -2,7 +2,6 @@ import type { ChatWire } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CHAT_TITLE_MAX_CHARS,
-  NEW_CHAT_TITLE_PLACEHOLDER,
   applyChatMetadata,
   archiveChat,
   chatTitle,
@@ -12,6 +11,10 @@ import {
   spliceChat,
   unarchiveChat,
 } from './chat-lifecycle.js';
+
+/** `chatTitle` takes `t` from its (component) caller (S8 W1-A9) — a plain zh-CN picker stands in
+ *  for it here, same as every test's default-language expectation elsewhere in this lane. */
+const t = <T>(zh: T, _en: T): T => zh;
 
 function chat(overrides: Partial<ChatWire> = {}): ChatWire {
   return {
@@ -27,10 +30,10 @@ function chat(overrides: Partial<ChatWire> = {}): ChatWire {
 
 describe('chatTitle / isArchived', () => {
   it('reads a null or empty title as the new-chat placeholder', () => {
-    expect(chatTitle(chat({ title: null }))).toBe(NEW_CHAT_TITLE_PLACEHOLDER);
-    expect(chatTitle(chat({ title: '' }))).toBe(NEW_CHAT_TITLE_PLACEHOLDER);
-    expect(chatTitle(null)).toBe(NEW_CHAT_TITLE_PLACEHOLDER);
-    expect(chatTitle(chat())).toBe('Ops chat');
+    expect(chatTitle(chat({ title: null }), t)).toBe('新对话');
+    expect(chatTitle(chat({ title: '' }), t)).toBe('新对话');
+    expect(chatTitle(null, t)).toBe('新对话');
+    expect(chatTitle(chat(), t)).toBe('Ops chat');
   });
 
   it('archivedAt is the status; a row without the key (older kernel) is active', () => {

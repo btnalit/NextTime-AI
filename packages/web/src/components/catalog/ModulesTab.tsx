@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { useT } from '../../lib/i18n.js';
 import { Confirm } from '../kit/confirm.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -65,6 +66,7 @@ function needsConfirm(module: WorkspaceModuleWire): boolean {
  * between page load and click).
  */
 export function ModulesTab({ http }: ModulesTabProps) {
+  const t = useT();
   const modules = useCapabilityList<WorkspaceModuleWire>(http, 'list_workspace_modules', {});
   const permissions = usePermissions();
   const [pending, setPending] = useState<string | null>(null);
@@ -124,7 +126,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="grid"
-          title="没有可用模块 No modules available"
+          title={t('没有可用模块', 'No modules available')}
           testId="catalog-modules-empty"
         />
       ) : (
@@ -132,10 +134,10 @@ export function ModulesTab({ http }: ModulesTabProps) {
           <table className="data-table" data-testid="catalog-modules-table">
             <thead>
               <tr>
-                <th>名称 Name</th>
-                <th>状态 Status</th>
-                <th>已装版本 Installed</th>
-                <th>最新版本 Latest</th>
+                <th>{t('名称', 'Name')}</th>
+                <th>{t('状态', 'Status')}</th>
+                <th>{t('已装版本', 'Installed')}</th>
+                <th>{t('最新版本', 'Latest')}</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -144,7 +146,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
                 const target = targetVersionOf(module);
                 const label =
                   module.status === 'not_installed'
-                    ? '安装 Install'
+                    ? t('安装', 'Install')
                     : module.status === 'up_to_date'
                       ? null
                       : target
@@ -178,15 +180,21 @@ export function ModulesTab({ http }: ModulesTabProps) {
                           title={`确认安装/升级 ${module.name} Confirm install/upgrade`}
                           description={
                             module.status === 'customized'
-                              ? '这个工作区的当前定义不匹配任何已知版本（已定制）；继续会替换成模块的标准内容。 The current definition does not match any known version (customized) — continuing replaces it with the module’s standard content.'
-                              : '升级会直接跳到最新版本，中间跨过至少一个不兼容变更（breaking）。 Upgrading jumps straight to the latest version, crossing at least one breaking change along the way.'
+                              ? t(
+                                  '这个工作区的当前定义不匹配任何已知版本（已定制）；继续会替换成模块的标准内容。 The current definition does not match any known version (customized) —',
+                                  'continuing replaces it with the module’s standard content.',
+                                )
+                              : t(
+                                  '升级会直接跳到最新版本，中间跨过至少一个不兼容变更（breaking）。',
+                                  'Upgrading jumps straight to the latest version, crossing at least one breaking change along the way.',
+                                )
                           }
                           target={
                             target
                               ? `v${target.version}${target.notes ? ` — ${target.notes}` : ''}`
                               : undefined
                           }
-                          confirmLabel="确认 Confirm"
+                          confirmLabel={t('确认', 'Confirm')}
                           danger={breakingRangeCrossed(module)}
                           onConfirm={() => run(module.name, true)}
                           testId={`catalog-module-confirm-${module.name}`}
@@ -195,7 +203,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
                       {rowError[module.name] ? (
                         <ErrorBanner
                           error={rowError[module.name]}
-                          title="操作失败 Action failed"
+                          title={t('操作失败', 'Action failed')}
                           testId={`catalog-module-error-${module.name}`}
                         />
                       ) : null}

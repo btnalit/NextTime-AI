@@ -40,7 +40,7 @@ function status(overrides: Partial<PlatformStatusWire> = {}): PlatformStatusWire
       { service: 'worker-supervisor', status: 'down', detail: 'connect ECONNREFUSED' },
       { service: 'egress-proxy', status: 'unknown', detail: 'loopback-only by design' },
     ],
-    backup: { configured: false, detail: '未配置 not configured' },
+    backup: { configured: false, detail: '未配置' },
     llmUsage30d: {
       windowDays: 30,
       totalCostUsd: 12.5,
@@ -109,7 +109,7 @@ describe('PlatformStatusPage', () => {
     expect(error.textContent).toContain('kernel unreachable');
   });
 
-  it('刷新 reloads platform_status on demand', async () => {
+  it('刷新', async () => {
     const http = scriptedHttp({ platform_status: () => status() });
     renderPage(http);
     await screen.findByTestId('status-health');

@@ -8,6 +8,7 @@ import {
 } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
 import { Confirm } from '../kit/confirm.js';
 import { useToast } from '../ui/Toast.js';
 
@@ -34,6 +35,7 @@ export interface ChatArchiveConfirmProps {
  * `components/ui/*`), so this caller wires its own `useToast().push` through as `notify`.
  */
 export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArchiveConfirmProps) {
+  const t = useT();
   const toast = useToast();
   // 遗留 57: the confirm toast (and its 撤销 Undo action) is pushed through the app-root
   // `ToastProvider` and can outlive this component — the owning page may have been navigated away
@@ -52,7 +54,7 @@ export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArc
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
-      title={`已归档 Archived · ${chatTitle(chat)}`}
+      title={`${t('已归档', 'Archived')} · ${chatTitle(chat, t)}`}
       onConfirm={async () => {
         const target = latest.current.chat;
         if (!target) return;
@@ -72,7 +74,7 @@ export function ChatArchiveConfirm({ client, chat, onChanged, onClose }: ChatArc
           } catch (err) {
             toast.push({
               tone: 'danger',
-              title: '撤销失败 Could not undo the archive',
+              title: t('撤销失败', 'Could not undo the archive'),
               description: describeError(err).message,
             });
           }

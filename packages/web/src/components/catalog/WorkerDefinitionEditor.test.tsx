@@ -33,14 +33,14 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
         onDone={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByLabelText(/^名称 name/), { target: { value: 'Fixer' } });
-    fireEvent.change(screen.getByLabelText(/systemPrompt/), { target: { value: 'Fix things.' } });
-    fireEvent.change(screen.getByLabelText(/^模型 model/), { target: { value: 'p/m' } });
-    fireEvent.change(screen.getByLabelText(/capabilities/), {
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Fixer' } });
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Fix things.' } });
+    fireEvent.change(screen.getByLabelText(/^模型/), { target: { value: 'p/m' } });
+    fireEvent.change(screen.getByLabelText(/能力/), {
       target: { value: 'search\ntraverse' },
     });
-    fireEvent.change(screen.getByLabelText(/gates/), { target: { value: 'gk-1' } });
-    fireEvent.change(screen.getByLabelText(/skills/), { target: { value: 'restart-web' } });
+    fireEvent.change(screen.getByLabelText(/可作用的门/), { target: { value: 'gk-1' } });
+    fireEvent.change(screen.getByLabelText(/使用的 Skill/), { target: { value: 'restart-web' } });
     fireEvent.click(screen.getByTestId('worker-submit'));
     await screen.findByTestId('draft-proposed');
     expect(calls[0]).toEqual({
@@ -57,9 +57,7 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
         },
       },
     });
-    expect(screen.getByTestId('draft-private-notice').textContent).toContain(
-      'published versions only',
-    );
+    expect(screen.getByTestId('draft-private-notice').textContent).toContain('只显示已发布版本');
     fireEvent.click(screen.getByTestId('draft-publish'));
     await waitFor(() =>
       expect(calls[1]).toEqual({
@@ -79,7 +77,7 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
     fireEvent.click(screen.getByTestId('worker-submit'));
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
     expect(calls).toHaveLength(0);
-    fireEvent.change(screen.getByLabelText(/systemPrompt/), { target: { value: 'Entry.' } });
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'Entry.' } });
     fireEvent.click(screen.getByTestId('worker-submit'));
     await screen.findByTestId('draft-proposed');
     expect(calls[0]?.params).toEqual({
@@ -97,7 +95,7 @@ describe('WorkerDefinitionEditor (S6-A A2)', () => {
       target: { value: JSON.stringify({ systemPrompt: 'From JSON', egressDeny: ['.internal'] }) },
     });
     fireEvent.click(screen.getByTestId('worker-json-apply'));
-    expect((screen.getByLabelText(/systemPrompt/) as HTMLTextAreaElement).value).toBe('From JSON');
-    expect((screen.getByLabelText(/egressDeny/) as HTMLTextAreaElement).value).toBe('.internal');
+    expect((screen.getByLabelText(/系统提示词/) as HTMLTextAreaElement).value).toBe('From JSON');
+    expect((screen.getByLabelText(/出网拒绝/) as HTMLTextAreaElement).value).toBe('.internal');
   });
 });

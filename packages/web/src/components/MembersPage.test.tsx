@@ -90,20 +90,18 @@ describe('MembersPage', () => {
     renderPage(http);
     await screen.findByTestId('member-row');
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /添加成员 Add member/ })).toBeNull(),
-    );
-    expect(screen.queryByRole('button', { name: /服务凭证 Service credential/ })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /添加成员/ })).toBeNull());
+    expect(screen.queryByRole('button', { name: /服务凭证/ })).toBeNull();
   });
 
   it('C9: an owner session (authoritative role) keeps the owner-only buttons', async () => {
     const http = scriptedHttp({ list_principals: () => ({ items: [principal()] }) });
     renderPage(http);
     await screen.findByTestId('member-row');
-    await screen.findByRole('button', { name: /添加成员 Add member/ });
+    await screen.findByRole('button', { name: /添加成员/ });
   });
 
-  it('服务凭证 → create_principal, the API key is shown exactly once, then the list refreshes', async () => {
+  it('服务凭证 →', async () => {
     let listCallCount = 0;
     const created = principal({ id: 'p-2', displayName: 'Carol', role: 'operator' });
     const http = scriptedHttp({
@@ -119,18 +117,18 @@ describe('MembersPage', () => {
     renderPage(http);
     await screen.findByTestId('member-row');
 
-    fireEvent.click(screen.getByRole('button', { name: /Service credential/ }));
+    fireEvent.click(screen.getByRole('button', { name: /服务凭证/ }));
     const form = await screen.findByTestId('create-principal-form');
-    fireEvent.change(within(form).getByLabelText(/Display name/), {
+    fireEvent.change(within(form).getByLabelText(/显示名/), {
       target: { value: 'Carol' },
     });
-    fireEvent.change(within(form).getByLabelText(/角色 Role/), { target: { value: 'operator' } });
-    fireEvent.click(within(form).getByRole('button', { name: '创建 Create' }));
+    fireEvent.change(within(form).getByLabelText(/角色/), { target: { value: 'operator' } });
+    fireEvent.click(within(form).getByRole('button', { name: '创建' }));
 
     const keyBox = await screen.findByTestId('create-principal-key');
     expect(within(keyBox).getByTestId('created-api-key').textContent).toBe('sk-once-fixture-value');
 
-    fireEvent.click(screen.getByRole('button', { name: /Done$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /我已复制/ }));
     await waitFor(() => expect(screen.queryByTestId('create-principal-drawer')).toBeNull());
     // The key is never rendered again once the drawer is gone.
     expect(screen.queryByText('sk-once-fixture-value')).toBeNull();
@@ -151,15 +149,15 @@ describe('MembersPage', () => {
     fireEvent.click(row);
 
     const drawer = await screen.findByTestId('principal-detail');
-    fireEvent.change(within(drawer).getByLabelText(/角色 Role/), { target: { value: 'operator' } });
-    fireEvent.click(within(drawer).getByRole('button', { name: '保存 Save' }));
+    fireEvent.change(within(drawer).getByLabelText(/角色/), { target: { value: 'operator' } });
+    fireEvent.click(within(drawer).getByRole('button', { name: '保存' }));
 
     await waitFor(() =>
       expect(within(drawer).getByText('Operator', { exact: false })).toBeTruthy(),
     );
   });
 
-  it('添加成员 → add_member by platform login, with no API key of its own', async () => {
+  it('添加成员 →', async () => {
     let listCallCount = 0;
     const added = principal({ id: 'p-3', displayName: 'Dana', hasApiKey: false });
     const http = scriptedHttp({
@@ -175,11 +173,11 @@ describe('MembersPage', () => {
     renderPage(http);
     await screen.findByTestId('member-row');
 
-    fireEvent.click(screen.getByRole('button', { name: /Add member/ }));
+    fireEvent.click(screen.getByRole('button', { name: /添加成员/ }));
     const form = await screen.findByTestId('add-member-form');
-    fireEvent.change(within(form).getByLabelText(/登录名 Login/), { target: { value: 'dana' } });
-    fireEvent.change(within(form).getByLabelText(/角色 Role/), { target: { value: 'operator' } });
-    fireEvent.click(within(form).getByRole('button', { name: '添加 Add' }));
+    fireEvent.change(within(form).getByLabelText(/登录名/), { target: { value: 'dana' } });
+    fireEvent.change(within(form).getByLabelText(/角色/), { target: { value: 'operator' } });
+    fireEvent.click(within(form).getByRole('button', { name: '添加' }));
 
     await waitFor(() => expect(screen.queryByTestId('add-member-drawer')).toBeNull());
     await waitFor(() => expect(screen.getAllByTestId('member-row')).toHaveLength(2));
@@ -196,10 +194,10 @@ describe('MembersPage', () => {
     renderPage(http);
     await screen.findByTestId('member-row');
 
-    fireEvent.click(screen.getByRole('button', { name: /Add member/ }));
+    fireEvent.click(screen.getByRole('button', { name: /添加成员/ }));
     const form = await screen.findByTestId('add-member-form');
-    fireEvent.change(within(form).getByLabelText(/登录名 Login/), { target: { value: 'nobody' } });
-    fireEvent.click(within(form).getByRole('button', { name: '添加 Add' }));
+    fireEvent.change(within(form).getByLabelText(/登录名/), { target: { value: 'nobody' } });
+    fireEvent.click(within(form).getByRole('button', { name: '添加' }));
 
     const error = await screen.findByTestId('add-member-error');
     expect(error.textContent).toContain('找不到该用户');
@@ -218,11 +216,11 @@ describe('MembersPage', () => {
     fireEvent.click(await screen.findByTestId('member-row'));
     const drawer = await screen.findByTestId('principal-detail');
 
-    fireEvent.click(within(drawer).getByRole('button', { name: '停用成员 Disable member' }));
-    fireEvent.click(within(drawer).getByRole('button', { name: '确认停用 Confirm disable' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '停用成员' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: '确认停用' }));
 
     await waitFor(() =>
-      expect(within(drawer).getByTestId('principal-status').textContent).toBe('已停用 Disabled'),
+      expect(within(drawer).getByTestId('principal-status').textContent).toBe('已停用'),
     );
     expect(http.calls.some((call) => call.name === 'disable_principal')).toBe(true);
   });

@@ -9,6 +9,7 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, readResiduePreset } from '../../lib/platform-workspaces.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
@@ -122,6 +123,7 @@ export function PlatformWorkspacesPage({
   onOpenWorkspaceConfig,
   initialHash,
 }: PlatformWorkspacesPageProps) {
+  const t = useT();
   const toast = useToast();
   const [panel, setPanel] = useState<Panel>({ kind: 'closed' });
   const [filters, setFilters] = useState<Filters>(() =>
@@ -203,8 +205,11 @@ export function PlatformWorkspacesPage({
     <div className="page" data-testid="platform-workspaces-page">
       <PageHeader
         breadcrumb={breadcrumbFor('platformWorkspaces')}
-        title="工作区 Workspaces"
-        description="每个工作区是一张共享图：给谁用、agent 可用哪些模型、由谁配置。 Each workspace is one shared graph: who it is for, which models its agents may use, and who configures it."
+        title={t('工作区', 'Workspaces')}
+        description={t(
+          '每个工作区是一张共享图：给谁用、agent 可用哪些模型、由谁配置。',
+          'Each workspace is one shared graph: who it is for, which models its agents may use, and who configures it.',
+        )}
         actions={
           <Button
             variant="primary"
@@ -212,7 +217,7 @@ export function PlatformWorkspacesPage({
             onClick={() => setPanel({ kind: 'create' })}
             data-testid="new-workspace"
           >
-            新建工作区 Create workspace
+            {t('新建工作区', 'Create workspace')}
           </Button>
         }
       />
@@ -222,26 +227,26 @@ export function PlatformWorkspacesPage({
         onSubmit={(event) => event.preventDefault()}
         data-testid="platform-workspaces-filter-form"
       >
-        <Field id="platform-workspaces-status" label="状态 Status">
+        <Field id="platform-workspaces-status" label={t('状态', 'Status')}>
           <Select
             id="platform-workspaces-status"
             value={filters.status}
             onChange={(event) => patchFilters({ status: event.target.value as StatusFilter })}
           >
-            <option value="active">活跃 Active</option>
-            <option value="disabled">已停用 Disabled</option>
-            <option value="all">全部 All</option>
+            <option value="active">{t('活跃', 'Active')}</option>
+            <option value="disabled">{t('已停用', 'Disabled')}</option>
+            <option value="all">{t('全部', 'All')}</option>
           </Select>
         </Field>
-        <Field id="platform-workspaces-purpose" label="用途 Purpose">
+        <Field id="platform-workspaces-purpose" label={t('用途', 'Purpose')}>
           <Select
             id="platform-workspaces-purpose"
             value={filters.purpose}
             onChange={(event) => patchFilters({ purpose: event.target.value as PurposeFilter })}
           >
-            <option value="all">全部 All</option>
-            <option value="standard">常规 standard</option>
-            <option value="ephemeral">临时 ephemeral</option>
+            <option value="all">{t('全部', 'All')}</option>
+            <option value="standard">{t('常规', 'standard')}</option>
+            <option value="ephemeral">{t('临时', 'ephemeral')}</option>
           </Select>
         </Field>
         <label className="checkbox">
@@ -251,7 +256,7 @@ export function PlatformWorkspacesPage({
             onChange={(event) => patchFilters({ includeExpired: event.target.checked })}
             data-testid="platform-workspaces-include-expired"
           />
-          <span>含已到期的临时工作区 Include expired ephemeral</span>
+          <span>{t('含已到期的临时工作区', 'Include expired ephemeral')}</span>
         </label>
         <label className="checkbox">
           <input
@@ -269,7 +274,7 @@ export function PlatformWorkspacesPage({
       {models.state.status === 'error' ? (
         <ErrorBanner
           error={models.state.error}
-          title="无法加载模型目录 Could not load the model catalog"
+          title={t('无法加载模型目录', 'Could not load the model catalog')}
           onRetry={() => void models.reload()}
           testId="platform-models-error"
         />
@@ -280,7 +285,7 @@ export function PlatformWorkspacesPage({
       ) : workspaces.state.status === 'error' ? (
         <ErrorBanner
           error={workspaces.state.error}
-          title="无法加载工作区列表 Could not load the workspace list"
+          title={t('无法加载工作区列表', 'Could not load the workspace list')}
           onRetry={() => void workspaces.reload()}
           testId="platform-workspaces-error"
         />
@@ -288,11 +293,16 @@ export function PlatformWorkspacesPage({
         <EmptyState
           icon="grid"
           title={
-            filtered ? '没有匹配的工作区 No matching workspaces' : '还没有工作区 No workspaces yet'
+            filtered
+              ? t('没有匹配的工作区', 'No matching workspaces')
+              : t('还没有工作区', 'No workspaces yet')
           }
           body={
             filtered
-              ? '默认视图隐藏已停用与已到期的临时工作区；改上面的筛选可查看。 The default view hides disabled and expired ephemeral workspaces — widen the filters above.'
+              ? t(
+                  '默认视图隐藏已停用与已到期的临时工作区；改上面的筛选可查看。 The default view hides disabled and expired ephemeral workspaces —',
+                  'widen the filters above.',
+                )
               : undefined
           }
           testId="platform-workspaces-empty"
@@ -316,8 +326,11 @@ export function PlatformWorkspacesPage({
       <Drawer
         open={panel.kind === 'create'}
         onClose={() => setPanel({ kind: 'closed' })}
-        title="新建工作区 Create workspace"
-        subtitle="再建一张共享图，并指定它的第一个 owner。 A second shared graph, with its first owner."
+        title={t('新建工作区', 'Create workspace')}
+        subtitle={t(
+          '再建一张共享图，并指定它的第一个 owner。',
+          'A second shared graph, with its first owner.',
+        )}
         testId="create-workspace-drawer"
       >
         {panel.kind === 'create' ? (
@@ -333,7 +346,7 @@ export function PlatformWorkspacesPage({
       <Drawer
         open={panel.kind === 'workspace' && openWorkspace !== undefined}
         onClose={() => setPanel({ kind: 'closed' })}
-        title={openWorkspace?.name ?? '工作区 Workspace'}
+        title={openWorkspace?.name ?? t('工作区', 'Workspace')}
         subtitle={openWorkspace ? <span className="mono">{openWorkspace.id}</span> : undefined}
         testId="workspace-drawer"
       >

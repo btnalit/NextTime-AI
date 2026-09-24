@@ -10,6 +10,7 @@ import {
   searchItems,
 } from '../lib/connections.js';
 import { prettyJson } from '../lib/format.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -62,6 +63,7 @@ export function OnboardingWizardReview({
   onDone,
   showDone = true,
 }: OnboardingWizardReviewProps) {
+  const t = useT();
   const loadOperations = useCallback(
     () =>
       http.call<unknown>('search', { query: '', objectType: 'Operation' }).then((result) =>
@@ -115,7 +117,7 @@ export function OnboardingWizardReview({
       {showDone ? (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button variant="primary" onClick={onDone}>
-            下一步 Next
+            {t('下一步', 'Next')}
           </Button>
         </div>
       ) : null}
@@ -132,6 +134,7 @@ function OperationReviewRow({
   readonly row: OperationDetailView;
   readonly onChanged: () => void;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [mode, setMode] = useState(row.mode);
   const [blastRadius, setBlastRadius] = useState(row.blastRadius);
@@ -163,7 +166,7 @@ function OperationReviewRow({
           <span className="tag">{row.mode}</span>
         </td>
         <td className={row.blastRadius === 'high' ? 'text-danger' : ''}>{row.blastRadius}</td>
-        <td>{row.autoApprovable ? '是 Yes' : '否 No'}</td>
+        <td>{row.autoApprovable ? t('是', 'Yes') : t('否', 'No')}</td>
         <td>
           <details className="disclosure">
             <summary>schema</summary>
@@ -172,7 +175,7 @@ function OperationReviewRow({
         </td>
         <td>
           <Button variant="ghost" size="s" onClick={() => setEditing((v) => !v)}>
-            {editing ? 'Cancel' : '提议重分类 Propose reclassification'}
+            {editing ? 'Cancel' : t('提议重分类', 'Propose reclassification')}
           </Button>
         </td>
       </tr>
@@ -231,7 +234,7 @@ function OperationReviewRow({
               ) : null}
               <div className="row" style={{ justifyContent: 'flex-end' }}>
                 <Button variant="primary" size="s" loading={busy} onClick={() => void submit()}>
-                  提交 Submit
+                  {t('提交', 'Submit')}
                 </Button>
               </div>
             </div>

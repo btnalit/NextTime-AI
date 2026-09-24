@@ -73,7 +73,7 @@ function renderShell(http: CapabilityCaller, overrides: Partial<AppShellProps> =
 /** C22 (docs/console-completion-plan.md §2b, §5.9 "壳与导航"): the shell wires the sidebar's
  *  three groups, the footer version / user, and the pending badge from its own reads. */
 describe('AppShell', () => {
-  it('admin cookie session: 使用 / 治理 / 平台 groups, real kernel version and the user in the footer', async () => {
+  it('admin cookie session: 使用 / 治理 / 平台', async () => {
     const http = scriptedHttp(baseHandlers());
     renderShell(http, { platformRole: 'admin', user: ADMIN });
 
@@ -99,10 +99,10 @@ describe('AppShell', () => {
     await waitFor(() =>
       expect(within(screen.getByTestId('nav-approvals')).getByText('2')).toBeTruthy(),
     );
-    expect(screen.getByRole('button', { name: /登出 Sign out/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /登出/ })).toBeTruthy();
   });
 
-  it('non-admin user: no 平台 group and platform_overview is never read', async () => {
+  it('non-admin user: no 平台', async () => {
     const http = scriptedHttp(baseHandlers('operator'));
     renderShell(http, {
       platformRole: 'user',
@@ -116,7 +116,7 @@ describe('AppShell', () => {
     expect(screen.getByTestId('current-user').textContent).toContain('Bob');
   });
 
-  it('proven member: the 治理 group is hidden', async () => {
+  it('proven member: the 治理', async () => {
     const http = scriptedHttp(baseHandlers('member'));
     renderShell(http, { platformRole: 'user' });
     await waitFor(() => expect(screen.getByText('Acme')).toBeTruthy());

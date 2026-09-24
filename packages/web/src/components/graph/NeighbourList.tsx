@@ -1,6 +1,7 @@
 import type { ConflictWire, FactWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { FactDirection, FactGroup } from '../../lib/graph-view.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { FactRow } from './FactRow.js';
 
@@ -37,6 +38,7 @@ export function NeighbourList({
   onExpand,
   onProvenance,
 }: NeighbourListProps) {
+  const t = useT();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   return (
     <div className="stack graph-groups" data-testid="graph-neighbour-list">
@@ -83,9 +85,11 @@ export function NeighbourList({
                   onClick={() => setExpanded((prev) => new Set(prev).add(group.key))}
                   data-testid="graph-group-show-all"
                 >
-                  显示全部 Show all ({group.facts.length})
+                  {t('显示全部', 'Show all')} ({group.facts.length})
                 </Button>
-                <span className="text-3">还有 {hidden} 条 more</span>
+                <span className="text-3">
+                  还有 {hidden} {t('条', 'more')}
+                </span>
               </div>
             ) : null}
           </section>

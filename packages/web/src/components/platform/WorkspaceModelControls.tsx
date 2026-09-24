@@ -1,4 +1,5 @@
 import type { ModelRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { Field, Select } from '../ui/Field.js';
 
 /** The 入口模型 select's "no model of its own" choice — `entryModel: null` on the wire (pi's own
@@ -36,10 +37,11 @@ export function EntryModelSelect({
   testId,
   allowPlatformDefault = true,
 }: EntryModelSelectProps) {
+  const t = useT();
   return (
     <Field
       id={id}
-      label="入口模型 Entry model"
+      label={t('入口模型', 'Entry model')}
       hint="成员在「我的智能体」里没有自己选模型时用它。 Used until a member picks their own in 我的智能体."
     >
       <Select
@@ -52,10 +54,10 @@ export function EntryModelSelect({
         data-testid={testId}
       >
         {allowPlatformDefault ? (
-          <option value={PLATFORM_DEFAULT}>平台默认 Platform default</option>
+          <option value={PLATFORM_DEFAULT}>{t('平台默认', 'Platform default')}</option>
         ) : (
           <option value={PLATFORM_DEFAULT} disabled>
-            未设置 Not set — pick a model
+            {t('未设置', 'Not set — pick a model')}
           </option>
         )}
         {options.map((model) => (
@@ -85,6 +87,7 @@ export function AllowedModelsChecklist({
   disabled = false,
   testId,
 }: AllowedModelsChecklistProps) {
+  const t = useT();
   function toggle(id: string): void {
     onChange(selected.includes(id) ? selected.filter((m) => m !== id) : [...selected, id]);
   }
@@ -92,15 +95,15 @@ export function AllowedModelsChecklist({
   return (
     <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
       <legend className="field-label">
-        允许的模型 Allowed models
+        {t('允许的模型', 'Allowed models')}
         <span className="field-hint" style={{ margin: 0 }}>
           {' '}
-          — 不勾 = 目录里全部 none ticked = every catalog model
+          {t('— 不勾 = 目录里全部', 'none ticked = every catalog model')}
         </span>
       </legend>
       <div className="stack-s model-checklist" data-testid={testId}>
         {models.length === 0 ? (
-          <p className="field-hint">目录里还没有模型。 No models in the catalog yet.</p>
+          <p className="field-hint">{t('目录里还没有模型。', 'No models in the catalog yet.')}</p>
         ) : (
           models.map((model) => (
             <label className="checkbox" key={model.id}>

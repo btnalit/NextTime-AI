@@ -1,5 +1,6 @@
 import type { LlmProviderTestResultWire } from '@nexttime/shared';
 import { formatDateTime, formatRelative } from '../../../lib/format.js';
+import { useT } from '../../../lib/i18n.js';
 
 export interface ProviderTestResultProps {
   readonly result: LlmProviderTestResultWire;
@@ -26,10 +27,11 @@ function outcomeLabel(outcome: LlmProviderTestResultWire['completion']): string 
  * a three-valued test outcome (that file is another lane's — see the S6-B report).
  */
 export function ProviderTestResult({ result, testId }: ProviderTestResultProps) {
+  const t = useT();
   return (
     <div className="stack-s" data-testid={testId}>
       <div className="row-wrap">
-        <span className="text-small text-2">补全 completion</span>
+        <span className="text-small text-2">{t('补全', 'completion')}</span>
         <span
           className={`chip chip-s ${outcomeTone(result.completion)}`}
           data-testid="provider-test-completion"
@@ -37,7 +39,7 @@ export function ProviderTestResult({ result, testId }: ProviderTestResultProps) 
         >
           {outcomeLabel(result.completion)}
         </span>
-        <span className="text-small text-2">工具调用 tool call</span>
+        <span className="text-small text-2">{t('工具调用', 'tool call')}</span>
         <span
           className={`chip chip-s ${outcomeTone(result.toolCall)}`}
           data-testid="provider-test-tool-call"

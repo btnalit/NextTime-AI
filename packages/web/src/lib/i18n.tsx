@@ -53,6 +53,11 @@ export interface LangContextValue {
 
 const LangContext = createContext<LangContextValue | null>(null);
 
+/** Same convention as `components/ui/Toast.tsx`'s `NOOP_TOASTS`: a component rendered alone in a
+ *  test (no `LangProvider` ancestor) gets the default language instead of a thrown error —
+ *  `setLang` is a no-op there, since nothing renders the switch to call it. */
+const DEFAULT_LANG_CONTEXT: LangContextValue = { lang: DEFAULT_LANG, setLang: () => undefined };
+
 /** Wraps the whole app (`main.tsx`) so the language choice reaches pre-session pages
  *  (LoginPage/SetupPage/ChangePasswordPage) exactly the same as the signed-in shell. */
 export function LangProvider({ children }: { readonly children: ReactNode }) {
@@ -73,19 +78,21 @@ export function LangProvider({ children }: { readonly children: ReactNode }) {
 }
 
 /** The raw `{lang, setLang}` pair — for the language switch itself and any component that needs
- *  to branch on `lang` beyond a simple `t(zh, en)` pick. */
+ *  to branch on `lang` beyond a simple `t(zh, en)` pick. Falls back to the default language
+ *  outside a `LangProvider` (see `DEFAULT_LANG_CONTEXT`) rather than throwing. */
 export function useLang(): LangContextValue {
   const ctx = useContext(LangContext);
-  if (ctx === null) {
-    throw new Error('useLang must be used within a LangProvider');
-  }
-  return ctx;
+  return ctx ?? DEFAULT_LANG_CONTEXT;
 }
+
+/** The type `useT()` returns — for a non-component helper that needs to pick a language but
+ *  cannot call the hook itself (it takes `t` as a parameter from its component caller instead). */
+export type Translate = <T>(zh: T, en: T) => T;
 
 /** `t(zh, en)` — picks the half matching the current language. Generic over `T` rather than fixed
  *  to `string` so the same function also picks between two `ReactNode`s (e.g. an icon + JSX
  *  fragment) without a separate `t.node(...)` variant. */
-export function useT(): <T>(zh: T, en: T) => T {
+export function useT(): Translate {
   const { lang } = useLang();
   return useCallback(<T,>(zh: T, en: T): T => (lang === 'zh-CN' ? zh : en), [lang]);
 }

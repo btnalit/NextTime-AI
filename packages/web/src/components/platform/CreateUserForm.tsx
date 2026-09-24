@@ -6,6 +6,7 @@ import {
 } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { useT } from '../../lib/i18n.js';
 import { LOGIN_PATTERN } from '../../lib/platform-errors.js';
 import type { WorkspaceOption } from '../../lib/platform-workspaces.js';
 import { Button } from '../ui/Button.js';
@@ -47,6 +48,7 @@ export function CreateUserForm({
   onCreated,
   onCancel,
 }: CreateUserFormProps) {
+  const t = useT();
   const [login, setLogin] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [platformRole, setPlatformRole] = useState<PlatformRoleWire>(defaultPlatformRole);
@@ -106,7 +108,7 @@ export function CreateUserForm({
     >
       <Field
         id="cu-login"
-        label="登录名 Login"
+        label={t('登录名', 'Login')}
         required
         hint="3–64 位 a-z 0-9 . _ -，以小写字母或数字开头。 3–64 chars of a-z 0-9 . _ -, starting with a lowercase letter or digit."
         error={loginInvalid ? '登录名格式不合法 Invalid login — 3–64 chars of a-z 0-9 . _ -' : null}
@@ -124,7 +126,7 @@ export function CreateUserForm({
         />
       </Field>
 
-      <Field id="cu-display-name" label="显示名 Display name" required>
+      <Field id="cu-display-name" label={t('显示名', 'Display name')} required>
         <Input
           id="cu-display-name"
           value={displayName}
@@ -133,22 +135,25 @@ export function CreateUserForm({
         />
       </Field>
 
-      <Field id="cu-platform-role" label="平台角色 Platform role" required>
+      <Field id="cu-platform-role" label={t('平台角色', 'Platform role')} required>
         <Select
           id="cu-platform-role"
           value={platformRole}
           onChange={(event) => setPlatformRole(event.target.value as PlatformRoleWire)}
           disabled={submitting}
         >
-          <option value="user">用户 user</option>
-          <option value="admin">管理员 admin</option>
+          <option value="user">{t('用户', 'user')}</option>
+          <option value="admin">{t('管理员', 'admin')}</option>
         </Select>
       </Field>
 
       <Field
         id="cu-password-mode"
-        label="密码 Password"
-        hint="无论哪种方式，密码都只显示一次，且首次登录必须修改。 Either way it is shown once and must be changed on first login."
+        label={t('密码', 'Password')}
+        hint={t(
+          '无论哪种方式，密码都只显示一次，且首次登录必须修改。',
+          'Either way it is shown once and must be changed on first login.',
+        )}
       >
         <Select
           id="cu-password-mode"
@@ -156,13 +161,13 @@ export function CreateUserForm({
           onChange={(event) => setPasswordMode(event.target.value as 'auto' | 'custom')}
           disabled={submitting}
         >
-          <option value="auto">自动生成 Auto-generate</option>
-          <option value="custom">自定义 Set one</option>
+          <option value="auto">{t('自动生成', 'Auto-generate')}</option>
+          <option value="custom">{t('自定义', 'Set one')}</option>
         </Select>
       </Field>
 
       {passwordMode === 'custom' ? (
-        <Field id="cu-password" label="临时密码 Temporary password" required>
+        <Field id="cu-password" label={t('临时密码', 'Temporary password')} required>
           <Input
             id="cu-password"
             type="password"
@@ -177,10 +182,10 @@ export function CreateUserForm({
 
       <Field
         id="cu-workspace"
-        label="工作区 Workspace"
+        label={t('工作区', 'Workspace')}
         hint={
           defaultWorkspaceId === null
-            ? '平台还没有设置默认工作区。 No platform default workspace is set yet.'
+            ? t('平台还没有设置默认工作区。', 'No platform default workspace is set yet.')
             : `默认工作区 Default workspace: ${defaultWorkspaceId}`
         }
       >
@@ -190,19 +195,19 @@ export function CreateUserForm({
           onChange={(event) => setWorkspaceChoice(event.target.value)}
           disabled={submitting}
         >
-          <option value={DEFAULT_WORKSPACE}>默认工作区 Default workspace</option>
-          <option value={NO_WORKSPACE}>无 None</option>
+          <option value={DEFAULT_WORKSPACE}>{t('默认工作区', 'Default workspace')}</option>
+          <option value={NO_WORKSPACE}>{t('无', 'None')}</option>
           {workspaces.map((workspace) => (
             <option key={workspace.id} value={workspace.id}>
               {workspace.name}
             </option>
           ))}
-          <option value={OTHER_WORKSPACE}>其他（输入 id）Other — type an id</option>
+          <option value={OTHER_WORKSPACE}>{t('其他（输入 id）', 'Other — type an id')}</option>
         </Select>
       </Field>
 
       {needsTypedWorkspace ? (
-        <Field id="cu-workspace-id" label="工作区 id Workspace id" required>
+        <Field id="cu-workspace-id" label={t('工作区 id', 'Workspace id')} required>
           <Input
             id="cu-workspace-id"
             value={otherWorkspaceId}
@@ -214,7 +219,7 @@ export function CreateUserForm({
       ) : null}
 
       {joinsAWorkspace ? (
-        <Field id="cu-role" label="工作区角色 Workspace role" required>
+        <Field id="cu-role" label={t('工作区角色', 'Workspace role')} required>
           <Select
             id="cu-role"
             value={role}
@@ -232,16 +237,16 @@ export function CreateUserForm({
 
       <PlatformError
         error={error}
-        title="无法创建用户 Could not create this user"
+        title={t('无法创建用户', 'Could not create this user')}
         testId="create-user-error"
       />
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
         <Button type="submit" variant="primary" loading={submitting} disabled={!ready}>
-          创建 Create
+          {t('创建', 'Create')}
         </Button>
       </div>
     </form>

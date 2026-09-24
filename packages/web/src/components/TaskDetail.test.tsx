@@ -107,7 +107,7 @@ describe('TaskDetail', () => {
     cleanup();
     renderDetail({ status: 'completed', completedAt: '2026-09-03T00:02:00.000Z' });
     expect(screen.queryByTestId('task-cancel')).toBeNull();
-    expect(screen.getByText(/Finished/)).toBeTruthy();
+    expect(screen.getByText(/结束/)).toBeTruthy();
   });
 
   it('renders the S2.9 result contract summary and counts, raw JSON otherwise', () => {
@@ -123,7 +123,7 @@ describe('TaskDetail', () => {
     });
     expect(screen.getByText('Restarted web-1.')).toBeTruthy();
     expect(screen.getByText('it was slow')).toBeTruthy();
-    expect(screen.getByText(/1 条事实 facts written/)).toBeTruthy();
+    expect(screen.getByText(/1 条事实/)).toBeTruthy();
     cleanup();
     renderDetail({ status: 'completed', result: { raw: true } });
     expect(document.querySelector('.code-block')?.textContent).toContain('"raw": true');

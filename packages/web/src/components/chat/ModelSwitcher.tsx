@@ -13,6 +13,7 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { ModelRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { Select } from '../ui/Field.js';
 import { useToast } from '../ui/Toast.js';
 
@@ -48,6 +49,7 @@ function modelLabel(id: string, models: readonly ModelRow[]): string {
  * whose policy has `memberCanEditProfile: false` — `usePermissions`).
  */
 export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
+  const t = useT();
   const toast = useToast();
   const permissions = usePermissions();
   const selectId = useId();
@@ -59,7 +61,7 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
   if (profile.state.status === 'loading') {
     return (
       <div className="chat-header-meta text-small text-3" data-testid="chat-model-line">
-        模式 Mode：入口 agent Entry agent
+        {t('模式 Mode：入口 agent', 'Entry agent')}
       </div>
     );
   }
@@ -85,9 +87,15 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
   const editDenied = permissions.isDenied('set_agent_profile');
   const disabled = turnRunning || saving || editDenied;
   const disabledReason = turnRunning
-    ? 'Turn 进行中不能切换模型 — 等本轮结束。 Cannot switch while a turn is running — wait for it to finish.'
+    ? t(
+        'Turn 进行中不能切换模型 — 等本轮结束。',
+        'Cannot switch while a turn is running — wait for it to finish.',
+      )
     : editDenied
-      ? '工作区策略不允许成员修改自己的模型。 Workspace policy does not let members change their model.'
+      ? t(
+          '工作区策略不允许成员修改自己的模型。',
+          'Workspace policy does not let members change their model.',
+        )
       : undefined;
 
   async function choose(value: string): Promise<void> {
@@ -100,7 +108,7 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
       profile.mutate(() => saved);
       toast.push({
         tone: 'ok',
-        title: '下一轮生效 Takes effect next turn',
+        title: t('下一轮生效', 'Takes effect next turn'),
         description: `模型 Model：${modelLabel(saved.effective.model, models)}`,
         key: 'chat-model-switch',
       });
@@ -108,7 +116,7 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
       if (isForbiddenError(err)) permissions.markDenied('set_agent_profile');
       toast.push({
         tone: 'danger',
-        title: '切换模型失败 Could not switch the model',
+        title: t('切换模型失败', 'Could not switch the model'),
         description: describeError(err).message,
         key: 'chat-model-switch',
       });
@@ -123,7 +131,7 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
       data-testid="chat-model-line"
       data-source={override === null ? 'workspace_default' : 'override'}
     >
-      <span>模式 Mode：入口 agent Entry agent</span>
+      <span>{t('模式 Mode：入口 agent', 'Entry agent')}</span>
       <span aria-hidden>·</span>
       <label htmlFor={selectId} className="row">
         <span>模型 Model：</span>
@@ -137,7 +145,7 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
           data-testid="chat-model-select"
         >
           <option value={WORKSPACE_DEFAULT}>
-            工作区默认 Workspace default
+            {t('工作区默认', 'Workspace default')}
             {policyData?.defaultModel ? ` · ${modelLabel(policyData.defaultModel, models)}` : ''}
           </option>
           {allowed.map((m) => (
@@ -147,18 +155,19 @@ export function ModelSwitcher({ http, turnRunning }: ModelSwitcherProps) {
           ))}
           {overrideOutsideAllowList && override !== null ? (
             <option value={override} data-testid="chat-model-outside">
-              {modelLabel(override, models)} · 不在允许范围 not in the allow-list
+              {modelLabel(override, models)} {t('· 不在允许范围', 'not in the allow-list')}
             </option>
           ) : null}
         </Select>
       </label>
       <span aria-hidden>·</span>
       <span data-testid="chat-model-source">
-        来源 Source：{override === null ? '工作区默认 Workspace default' : '我的覆盖 My override'}
+        来源 Source：
+        {override === null ? t('工作区默认', 'Workspace default') : t('我的覆盖', 'My override')}
       </span>
       {overrideOutsideAllowList ? (
         <span className="chip chip-s chip-warn" data-testid="chat-model-flag">
-          不在允许范围 Not in the allow-list
+          {t('不在允许范围', 'Not in the allow-list')}
         </span>
       ) : null}
       {disabledReason ? (

@@ -39,16 +39,16 @@ describe('ChangePasswordPage', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/当前密码 Current password/), {
+    fireEvent.change(screen.getByLabelText(/当前密码/), {
       target: { value: 'temp-pass' },
     });
-    fireEvent.change(screen.getByLabelText(/新密码 New password/), {
+    fireEvent.change(screen.getByLabelText(/^新密码/), {
       target: { value: 'new-password-1' },
     });
-    fireEvent.change(screen.getByLabelText(/确认新密码 Confirm new password/), {
+    fireEvent.change(screen.getByLabelText(/确认新密码/), {
       target: { value: 'new-password-1' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Change password/ }));
+    fireEvent.click(screen.getByRole('button', { name: /更改密码/ }));
 
     await waitFor(() =>
       expect(onChanged).toHaveBeenCalledWith({ ...USER, mustChangePassword: false }),
@@ -74,24 +74,24 @@ describe('ChangePasswordPage', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/当前密码 Current password/), {
+    fireEvent.change(screen.getByLabelText(/当前密码/), {
       target: { value: 'wrong' },
     });
-    fireEvent.change(screen.getByLabelText(/新密码 New password/), {
+    fireEvent.change(screen.getByLabelText(/^新密码/), {
       target: { value: 'new-password-1' },
     });
-    fireEvent.change(screen.getByLabelText(/确认新密码 Confirm new password/), {
+    fireEvent.change(screen.getByLabelText(/确认新密码/), {
       target: { value: 'new-password-1' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Change password/ }));
+    fireEvent.click(screen.getByRole('button', { name: /更改密码/ }));
 
-    expect(await screen.findByText(/Current password is incorrect/)).toBeTruthy();
+    expect(await screen.findByText(/当前密码不正确/)).toBeTruthy();
   });
 
   it('offers only Change password and Sign out — calls onLogout', () => {
     const onLogout = vi.fn();
     render(<ChangePasswordPage user={USER} onChanged={vi.fn()} onLogout={onLogout} />);
-    fireEvent.click(screen.getByRole('button', { name: /登出 Sign out/ }));
+    fireEvent.click(screen.getByRole('button', { name: /登出/ }));
     expect(onLogout).toHaveBeenCalledTimes(1);
   });
 });

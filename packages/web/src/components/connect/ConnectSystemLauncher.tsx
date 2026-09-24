@@ -16,6 +16,7 @@ import {
   useGateInstancePoll,
 } from '../../lib/gate-instances.js';
 import type { PrincipalRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
@@ -153,6 +154,7 @@ export function ConnectSystemLauncher({
   onFinished,
   pollIntervalMs,
 }: ConnectSystemLauncherProps) {
+  const t = useT();
   const isAdmin = origin === 'platform' || platformAdmin;
   const onWorkspace = origin === 'workspace';
   const [step, setStep] = useState<LauncherStep>(0);
@@ -319,7 +321,7 @@ export function ConnectSystemLauncher({
       {step === 0 ? (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button variant="ghost" onClick={onCancel}>
-            取消 Cancel
+            {t('取消', 'Cancel')}
           </Button>
         </div>
       ) : null}
@@ -362,6 +364,7 @@ function ConnectionStep({
   readonly onIntendedGateId: (value: string) => void;
   readonly onBack: () => void;
 }) {
+  const t = useT();
   const [creating, setCreating] = useState(false);
   const showCreateForm = path === 'hosted' && isAdmin && (creating || (!selected && !ownInstance));
 
@@ -376,11 +379,14 @@ function ConnectionStep({
           />
           <Field
             id="launcher-intended-gate-id"
-            label="它的 GATE_ID Its GATE_ID"
-            hint="可选：填了以后清单里的占位符会替换成它，announce 后自动选中。 Optional — fills the placeholders above and auto-selects the gate once it announces."
+            label={t('它的', 'GATE_ID Its GATE_ID')}
+            hint={t(
+              '可选：填了以后清单里的占位符会替换成它，announce 后自动选中。 Optional —',
+              'fills the placeholders above and auto-selects the gate once it announces.',
+            )}
             error={
               intendedGateId.length > 0 && !GATE_ID_PATTERN.test(intendedGateId.trim())
-                ? '格式不合法 Invalid gate id'
+                ? t('格式不合法', 'Invalid gate id')
                 : undefined
             }
           >
@@ -396,13 +402,18 @@ function ConnectionStep({
       ) : !isAdmin ? (
         <Notice testId="launcher-needs-admin">
           需要管理员在平台<a href={hrefs.platformIntegrations()}>集成</a>
-          页创建门宿主实例并启用它；之后它会出现在下面的目录里。 An administrator creates the
-          gate-host instance on the platform <a href={hrefs.platformIntegrations()}>Integrations</a>{' '}
-          page and enables it; it then shows up in the catalog below.
+          {t(
+            '页创建门宿主实例并启用它；之后它会出现在下面的目录里。',
+            'An administrator creates the gate-host instance on the platform',
+          )}
+          <a href={hrefs.platformIntegrations()}>Integrations</a> page and enables it; it then shows
+          up in the catalog below.
         </Notice>
       ) : showCreateForm ? (
         <div className="stack-s" data-testid="launcher-create-instance">
-          <span className="section-title">新建门宿主实例 Create a hosted instance ({kind})</span>
+          <span className="section-title">
+            {t('新建门宿主实例', 'Create a hosted instance')} ({kind})
+          </span>
           <CreateGateInstanceForm
             http={http}
             onCreated={(instance) => {
@@ -417,7 +428,7 @@ function ConnectionStep({
       {path === 'hosted' && isAdmin && !showCreateForm ? (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button variant="ghost" size="s" icon="plus" onClick={() => setCreating(true)}>
-            再建一个 Create another
+            {t('再建一个', 'Create another')}
           </Button>
         </div>
       ) : null}
@@ -459,10 +470,11 @@ function ExistingGatePicker({
   readonly selectedGateId: string | null;
   readonly onSelect: (gateId: string | null) => void;
 }) {
+  const t = useT();
   const title =
     path === 'packaged'
-      ? '等待门出现 Waiting for the gate to announce'
-      : '或选择已有实例 Or pick an existing instance';
+      ? t('等待门出现', 'Waiting for the gate to announce')
+      : t('或选择已有实例', 'Or pick an existing instance');
   return (
     <div className="stack-s" data-testid="launcher-existing-gates">
       <span className="section-title">{title}</span>
@@ -471,7 +483,7 @@ function ExistingGatePicker({
       ) : pollState === 'error' ? (
         <Notice tone="warn" testId="launcher-gates-error">
           读不到门实例列表（{isAdmin ? 'list_gate_instances' : 'list_available_gate_instances'}
-          ）；仍在重试。 Could not read the gate-instance list; still retrying.
+          {t('）；仍在重试。', 'Could not read the gate-instance list; still retrying.')}
         </Notice>
       ) : matching.length === 0 ? (
         <p className="text-3" data-testid="launcher-gates-empty">
@@ -504,8 +516,10 @@ function ExistingGatePicker({
       )}
       {onWorkspace && !isAdmin && path === 'packaged' ? (
         <p className="text-3">
-          非管理员只能看到已启用且接入包为平台预置的实例。 A non-administrator only sees instances
-          an administrator has enabled and whose connector is platform-preset.
+          {t(
+            '非管理员只能看到已启用且接入包为平台预置的实例。',
+            'A non-administrator only sees instances an administrator has enabled and whose connector is platform-preset.',
+          )}
         </p>
       ) : null}
     </div>
@@ -523,17 +537,18 @@ function SelectedGateSummary({
   readonly gate: TrackedGate;
   readonly isAdmin: boolean;
 }) {
+  const t = useT();
   const platform = gate.platform;
   return (
     <div className="stack-s" data-testid="launcher-selected-gate">
       <dl className="definition-list">
         <dt>Gate id</dt>
         <dd className="mono">{gate.gateId}</dd>
-        <dt>名称 Name</dt>
+        <dt>{t('名称', 'Name')}</dt>
         <dd>{gate.displayName}</dd>
-        <dt>接入包 Connector</dt>
+        <dt>{t('接入包', 'Connector')}</dt>
         <dd className="mono">{gate.connector}</dd>
-        <dt>状态 Status</dt>
+        <dt>{t('状态', 'Status')}</dt>
         <dd>
           <StatusChip
             machine="gateInstance"
@@ -542,7 +557,7 @@ function SelectedGateSummary({
             testId="launcher-gate-status"
           />
         </dd>
-        <dt>健康 Health</dt>
+        <dt>{t('健康', 'Health')}</dt>
         <dd>
           <StatusChip machine="gateHealth" status={gate.health} size="s" />
         </dd>
@@ -552,22 +567,27 @@ function SelectedGateSummary({
       {!gate.announced ? (
         <Notice tone="warn" testId="launcher-awaiting-announce">
           {platform?.hosted
-            ? '等待门宿主接管：宿主下一次拉取时导入 Operation 并 announce（默认 60 秒内）。 Waiting for the gate host to take it over — it imports the Operations and announces on its next pull.'
-            : '还没有心跳或 Operation。 No heartbeat or Operations yet.'}
+            ? t(
+                '等待门宿主接管：宿主下一次拉取时导入 Operation 并 announce（默认 60 秒内）。 Waiting for the gate host to take it over —',
+                'it imports the Operations and announces on its next pull.',
+              )
+            : t('还没有心跳或 Operation。', 'No heartbeat or Operations yet.')}
         </Notice>
       ) : null}
       {isAdmin && platform?.hosted && platform.definition?.credentialMode === 'shared' ? (
         <div className="stack-s" data-testid="launcher-shared-credential">
-          <span className="field-label">录入共享凭证 Enter the shared credential</span>
+          <span className="field-label">{t('录入共享凭证', 'Enter the shared credential')}</span>
           <p className="text-3">
-            凭证由浏览器直接送到门宿主（经 caddy），内核不经手。 Sent from this browser straight to
-            the gate host — the kernel never sees it.
+            {t(
+              '凭证由浏览器直接送到门宿主（经 caddy），内核不经手。 Sent from this browser straight to the gate host —',
+              'the kernel never sees it.',
+            )}
           </p>
           <GateCredentialEntry
             requestToken={() =>
               http.call<GateHostTokenWire>('issue_gate_host_token', { gateId: gate.gateId })
             }
-            tokenButtonLabel="获取 5 分钟令牌 Get a 5-minute token"
+            tokenButtonLabel={t('获取 5 分钟令牌', 'Get a 5-minute token')}
           />
         </div>
       ) : null}
@@ -575,8 +595,10 @@ function SelectedGateSummary({
       platform?.hosted &&
       platform.definition?.credentialMode === 'connected_account' ? (
         <Notice>
-          按人凭证：每个成员在工作区「系统接入」页的目录行里录入自己的一份。 Per-member credential —
-          each member enters their own from the workspace 系统接入 catalog row.
+          {t(
+            '按人凭证：每个成员在工作区「系统接入」页的目录行里录入自己的一份。 Per-member credential — each member enters their own from the workspace 系统接入',
+            'catalog row.',
+          )}
         </Notice>
       ) : null}
     </div>
@@ -608,6 +630,7 @@ function PolicyStep({
   readonly onInstanceChanged: (instance: GateInstanceWire) => void;
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
 }) {
+  const t = useT();
   return (
     <div className="stack" data-testid="launcher-step-policy-body">
       {isAdmin ? (
@@ -615,7 +638,7 @@ function PolicyStep({
       ) : (
         <Notice testId="launcher-policy-needs-admin">
           平台侧的启用与接入包模式由管理员在<a href={hrefs.platformIntegrations()}>集成</a>
-          页设置。 The platform-side enable and connector mode are an administrator's, on{' '}
+          {t('页设置。', "The platform-side enable and connector mode are an administrator's, on")}{' '}
           <a href={hrefs.platformIntegrations()}>Integrations</a>.
         </Notice>
       )}
@@ -623,15 +646,16 @@ function PolicyStep({
       {gate.platform && gate.platform.operations.length > 0 ? (
         <div className="stack-s" data-testid="launcher-announced-operations">
           <span className="section-title">
-            已 announce 的 Operation Announced operations ({gate.platform.operations.length})
+            {t('已 announce 的 Operation', 'Announced operations')}{' '}
+            {`(${gate.platform.operations.length})`}
           </span>
           <div className="table-scroll">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>名称 Name</th>
-                  <th>模式 Mode</th>
-                  <th>影响 Blast radius</th>
+                  <th>{t('名称', 'Name')}</th>
+                  <th>{t('模式', 'Mode')}</th>
+                  <th>{t('影响', 'Blast radius')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -666,9 +690,12 @@ function PolicyStep({
       ) : (
         <Notice testId="launcher-policy-workspace-link">
           工作区侧的启用、Operation 分类审核与成员授权在工作区的
-          <a href={hrefs.systems()}>系统接入</a>页完成（owner）。 A workspace owner enables it,
-          reviews the classification and grants members on{' '}
-          <a href={hrefs.systems()}>系统接入 Systems</a>.
+          <a href={hrefs.systems()}>系统接入</a>
+          {t(
+            '页完成（owner）。',
+            'A workspace owner enables it, reviews the classification and grants members on',
+          )}{' '}
+          <a href={hrefs.systems()}>{t('系统接入', 'Systems')}</a>.
         </Notice>
       )}
     </div>
@@ -688,6 +715,7 @@ function PlatformEnableSection({
   readonly gate: TrackedGate;
   readonly onInstanceChanged: (instance: GateInstanceWire) => void;
 }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const connectors = useCapabilityList<ConnectorWire>(http, 'list_connectors', {});
@@ -737,7 +765,7 @@ function PlatformEnableSection({
 
   return (
     <div className="stack-s" data-testid="launcher-platform-enable">
-      <span className="section-title">平台侧 Platform side</span>
+      <span className="section-title">{t('平台侧', 'Platform side')}</span>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <span className="row-wrap">
           <StatusChip
@@ -754,10 +782,12 @@ function PlatformEnableSection({
             onClick={() => void setStatus('enabled')}
             loading={busy}
             disabled={!gate.announced}
-            title={!gate.announced ? '等待它 announce 后再启用 Wait for its announce' : undefined}
+            title={
+              !gate.announced ? t('等待它 announce 后再启用', 'Wait for its announce') : undefined
+            }
             data-testid="launcher-platform-enable-button"
           >
-            启用 Enable
+            {t('启用', 'Enable')}
           </Button>
         ) : gate.status === 'disabled' ? (
           <Button
@@ -766,16 +796,16 @@ function PlatformEnableSection({
             loading={busy}
             data-testid="launcher-platform-enable-button"
           >
-            重新启用 Re-enable
+            {t('重新启用', 'Re-enable')}
           </Button>
         ) : null}
       </div>
-      <PlatformError error={error} title="无法启用 Could not enable this instance" />
+      <PlatformError error={error} title={t('无法启用', 'Could not enable this instance')} />
 
       {connectors.state.status === 'error' ? (
         <ErrorBanner
           error={connectors.state.error}
-          title="读不到接入包目录 Could not load the connector catalog"
+          title={t('读不到接入包目录', 'Could not load the connector catalog')}
           onRetry={() => void connectors.reload()}
         />
       ) : connector && connector.mode !== 'platform_preset' ? (
@@ -783,9 +813,9 @@ function PlatformEnableSection({
           <Notice tone="warn">
             接入包 <code>{connector.name}</code> 当前是{' '}
             <StatusChip machine="connectorMode" status={connector.mode} size="s" />
-            ；工作区只能从目录启用<strong>平台预置</strong>的接入包。 Connector{' '}
-            <code>{connector.name}</code> is not platform-preset — a workspace can only enable
-            platform-preset instances from the catalog.
+            ；工作区只能从目录启用<strong>平台预置</strong>
+            {t('的接入包。', 'Connector')} <code>{connector.name}</code> is not platform-preset — a
+            workspace can only enable platform-preset instances from the catalog.
           </Notice>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button
@@ -794,12 +824,12 @@ function PlatformEnableSection({
               loading={presetting}
               data-testid="launcher-connector-preset-button"
             >
-              设为平台预置 Set platform preset
+              {t('设为平台预置', 'Set platform preset')}
             </Button>
           </div>
           <PlatformError
             error={presetError}
-            title="无法设置模式 Could not set the mode"
+            title={t('无法设置模式', 'Could not set the mode')}
             testId="launcher-connector-preset-error"
           />
         </div>
@@ -830,6 +860,7 @@ function WorkspaceEnableSection({
   readonly enabled: EnableGateInstanceResultWire | null;
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
 }) {
+  const t = useT();
   const [enabling, setEnabling] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
@@ -852,13 +883,15 @@ function WorkspaceEnableSection({
 
   return (
     <div className="stack" data-testid="launcher-workspace-enable">
-      <span className="section-title">工作区侧 Workspace side</span>
+      <span className="section-title">{t('工作区侧', 'Workspace side')}</span>
       {linkedGatekeeperId === null ? (
         canEnable ? (
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <span className="text-2">
-              在本工作区启用：注册 Gatekeeper、导入并发布它 announce 的 Operation。 Enable here —
-              registers the Gatekeeper and imports + publishes its announced Operations.
+              {t(
+                '在本工作区启用：注册 Gatekeeper、导入并发布它 announce 的 Operation。 Enable here —',
+                'registers the Gatekeeper and imports + publishes its announced Operations.',
+              )}
             </span>
             <Button
               variant="primary"
@@ -866,17 +899,17 @@ function WorkspaceEnableSection({
               loading={enabling}
               data-testid="launcher-workspace-enable-button"
             >
-              在本工作区启用 Enable here
+              {t('在本工作区启用', 'Enable here')}
             </Button>
           </div>
         ) : (
           <Notice testId="launcher-workspace-enable-owner-only">
-            在本工作区启用是 owner 专属操作。 Enabling it in this workspace is owner-only.
+            {t('在本工作区启用是 owner 专属操作。', 'Enabling it in this workspace is owner-only.')}
           </Notice>
         )
       ) : (
         <div className="row-wrap" data-testid="launcher-workspace-linked">
-          <span>已在本工作区启用 Enabled in this workspace:</span>
+          <span>{t('已在本工作区启用', 'Enabled in this workspace:')}</span>
           <RefChip
             kind="gatekeeper"
             id={linkedGatekeeperId}
@@ -887,22 +920,26 @@ function WorkspaceEnableSection({
           />
           {enabled ? (
             <span className="text-3">
-              已发布 {enabled.publishedOperationNames.length} 个 Operation Published{' '}
-              {enabled.publishedOperationNames.length}
+              {t(
+                `已发布 ${enabled.publishedOperationNames.length} 个 Operation`,
+                `Published ${enabled.publishedOperationNames.length}`,
+              )}
             </span>
           ) : null}
         </div>
       )}
       <PlatformError
         error={error}
-        title="无法启用 Could not enable this instance"
+        title={t('无法启用', 'Could not enable this instance')}
         testId="launcher-workspace-enable-error"
       />
 
       {linkedGatekeeperId !== null ? (
         <>
           <div className="stack-s">
-            <span className="section-title">审核 Operation 分类 Review classification</span>
+            <span className="section-title">
+              {t('审核 Operation 分类', 'Review classification')}
+            </span>
             <OnboardingWizardReview
               http={http}
               gatekeeperId={linkedGatekeeperId}
@@ -926,6 +963,7 @@ function GrantMemberForm({
   readonly http: CapabilityCaller;
   readonly gatekeeperId: string;
 }) {
+  const t = useT();
   // A principal picker, not a browsable list — autoLoadAll (S8 W1-C #243 made list_principals
   // keyset-paginated; a missing member past page one would be a correctness bug here).
   const principals = useCapabilityList<PrincipalRow>(
@@ -962,11 +1000,14 @@ function GrantMemberForm({
 
   return (
     <form className="stack-s" onSubmit={(event) => void grant(event)} data-testid="launcher-grant">
-      <span className="section-title">授予成员 Grant to a member</span>
+      <span className="section-title">{t('授予成员', 'Grant to a member')}</span>
       <Field
         id="launcher-grant-principal"
-        label="成员 Member"
-        hint="该成员的入口 agent 从此可以调用这个门（execute 类要下一次签发入口 Handle 后生效）。 Their entry agent may then use this gate."
+        label={t('成员', 'Member')}
+        hint={t(
+          '该成员的入口 agent 从此可以调用这个门（execute 类要下一次签发入口 Handle 后生效）。',
+          'Their entry agent may then use this gate.',
+        )}
       >
         {principals.state.status === 'ready' ? (
           <Select
@@ -995,7 +1036,7 @@ function GrantMemberForm({
       </Field>
       {granted.length > 0 ? (
         <p className="text-3" data-testid="launcher-granted">
-          已授予 Granted:{' '}
+          {t('已授予', 'Granted:')}{' '}
           {granted.map((id) => (
             <RefChip
               key={id}
@@ -1007,7 +1048,9 @@ function GrantMemberForm({
           ))}
         </p>
       ) : null}
-      {error !== null ? <ErrorBanner error={error} title="无法授予 Could not grant" /> : null}
+      {error !== null ? (
+        <ErrorBanner error={error} title={t('无法授予', 'Could not grant')} />
+      ) : null}
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button
           type="submit"
@@ -1016,7 +1059,7 @@ function GrantMemberForm({
           disabled={!principalId.trim()}
           data-testid="launcher-grant-submit"
         >
-          授予 Grant
+          {t('授予', 'Grant')}
         </Button>
       </div>
     </form>
@@ -1049,6 +1092,7 @@ function HandshakeStep({
   readonly linkedGatekeeperId: string | null;
   readonly enabled: EnableGateInstanceResultWire | null;
 }) {
+  const t = useT();
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<GateInstanceTestResult | null>(null);
   const [error, setError] = useState<unknown | null>(null);
@@ -1072,11 +1116,11 @@ function HandshakeStep({
   return (
     <div className="stack" data-testid="launcher-step-handshake-body">
       <dl className="definition-list">
-        <dt>门实例 Gate instance</dt>
+        <dt>{t('门实例', 'Gate instance')}</dt>
         <dd>
           {gate.displayName} <span className="mono text-3">{gate.gateId}</span>
         </dd>
-        <dt>状态 Status</dt>
+        <dt>{t('状态', 'Status')}</dt>
         <dd>
           <StatusChip
             machine="gateInstance"
@@ -1085,7 +1129,7 @@ function HandshakeStep({
             testId="launcher-handshake-status"
           />
         </dd>
-        <dt>健康 Health</dt>
+        <dt>{t('健康', 'Health')}</dt>
         <dd>
           <StatusChip
             machine="gateHealth"
@@ -1094,7 +1138,7 @@ function HandshakeStep({
             testId="launcher-handshake-health"
           />
         </dd>
-        <dt>本工作区 This workspace</dt>
+        <dt>{t('本工作区', 'This workspace')}</dt>
         <dd>
           {linkedGatekeeperId ? (
             <RefChip
@@ -1106,14 +1150,14 @@ function HandshakeStep({
               testId="launcher-handshake-gatekeeper"
             />
           ) : onWorkspace ? (
-            '未启用 Not enabled here'
+            t('未启用', 'Not enabled here')
           ) : (
             <a href={hrefs.systems()}>到工作区系统接入页启用 Enable on 系统接入</a>
           )}
         </dd>
         {enabled ? (
           <>
-            <dt>已发布 Published</dt>
+            <dt>{t('已发布', 'Published')}</dt>
             <dd className="mono">{enabled.publishedOperationNames.length}</dd>
           </>
         ) : null}
@@ -1129,15 +1173,18 @@ function HandshakeStep({
               loading={testing}
               data-testid="launcher-test-connection"
             >
-              测试连接 Test connection
+              {t('测试连接', 'Test connection')}
             </Button>
           </div>
-          <PlatformError error={error} title="无法测试连接 Could not test this connection" />
+          <PlatformError
+            error={error}
+            title={t('无法测试连接', 'Could not test this connection')}
+          />
           {result ? (
             <dl className="definition-list" data-testid="launcher-test-result">
               <dt>描述的 Operation 数</dt>
               <dd className="mono">{result.describedOperationCount ?? '—'}</dd>
-              <dt>检查时间 Checked</dt>
+              <dt>{t('检查时间', 'Checked')}</dt>
               <dd>
                 <time title={formatDateTime(result.checkedAt)}>
                   {formatRelative(result.checkedAt)}
@@ -1148,15 +1195,19 @@ function HandshakeStep({
         </>
       ) : (
         <Notice>
-          「测试连接」是平台侧操作；工作区里可在门详情（Health & operations）看到实时健康。 Test
-          connection is a platform action; the workspace gate detail shows live health.
+          {t(
+            '「测试连接」是平台侧操作；工作区里可在门详情（Health & operations）看到实时健康。',
+            'Test connection is a platform action; the workspace gate detail shows live health.',
+          )}
         </Notice>
       )}
 
       {gate.status === 'enabled' && gate.health === 'ok' && gate.announced ? (
         <Notice testId="launcher-handshake-ok">
-          该门实例可用：已 announce、已启用、健康 ok。 This gate instance is usable — announced,
-          enabled and healthy.
+          {t(
+            '该门实例可用：已 announce、已启用、健康 ok。 This gate instance is usable —',
+            'announced, enabled and healthy.',
+          )}
         </Notice>
       ) : null}
     </div>

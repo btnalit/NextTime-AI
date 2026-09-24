@@ -135,14 +135,14 @@ describe('PlatformWorkspacesPage', () => {
     // S6-A0 / C17: the row status is the shared workspaceStatus StatusChip (bilingual, raw value on
     // `data-status` for e2e); purpose is a column of its own.
     const firstStatus = within(first).getByTestId('workspace-status');
-    expect(firstStatus.textContent).toBe('活跃 Active');
+    expect(firstStatus.textContent).toBe('活跃');
     expect(firstStatus.getAttribute('data-status')).toBe('active');
-    expect(within(second).getByTestId('workspace-status').textContent).toBe('已停用 Disabled');
-    expect(within(first).getByTestId('workspace-purpose').textContent).toBe('常规 standard');
+    expect(within(second).getByTestId('workspace-status').textContent).toBe('已停用');
+    expect(within(first).getByTestId('workspace-purpose').textContent).toBe('常规');
 
     // `entryModel: null` reads as the platform default; `allowedModels: []` as "all".
     expect(first.textContent).toContain('平台默认');
-    expect(first.textContent).toContain('全部 All');
+    expect(first.textContent).toContain('全部');
     expect(second.textContent).toContain('openai/gpt-4o');
     expect(second.textContent).toContain('2 个');
 
@@ -191,7 +191,7 @@ describe('PlatformWorkspacesPage', () => {
 
     fireEvent.click(screen.getByTestId('new-workspace'));
     const form = await screen.findByTestId('create-workspace-form');
-    fireEvent.change(within(form).getByLabelText(/名称 Name/), { target: { value: 'Beta' } });
+    fireEvent.change(within(form).getByLabelText(/名称/), { target: { value: 'Beta' } });
 
     // The owner picker reads `list_users` on mount — i.e. only now, not with the page.
     await waitFor(() =>
@@ -209,12 +209,12 @@ describe('PlatformWorkspacesPage', () => {
       target: { value: 'openai/gpt-4o' },
     });
 
-    fireEvent.click(within(form).getByRole('button', { name: '创建 Create' }));
+    fireEvent.click(within(form).getByRole('button', { name: '创建' }));
 
     // The created row is on screen and its drawer opened on top of it.
     const detail = await screen.findByTestId('workspace-detail');
     // S6-A0 / C17: the detail panel renders status through the shared workspaceStatus StatusChip.
-    expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('活跃 Active');
+    expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('活跃');
     await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
     expect(screen.getByTestId('workspace-row-ws-2')).toBeTruthy();
   });
@@ -245,9 +245,7 @@ describe('PlatformWorkspacesPage', () => {
 
     const checklist = within(detail).getByTestId('workspace-allowed-models');
     fireEvent.click(within(checklist).getByLabelText('anthropic/claude-3'));
-    fireEvent.click(
-      within(detail).getByRole('button', { name: '保存允许的模型 Save allowed models' }),
-    );
+    fireEvent.click(within(detail).getByRole('button', { name: '保存允许的模型' }));
 
     const error = await within(detail).findByTestId('workspace-allowed-models-error');
     expect(error.textContent).toContain('允许的模型列表必须包含入口模型');
@@ -294,10 +292,8 @@ describe('PlatformWorkspacesPage', () => {
 
     fireEvent.click(screen.getByTestId('workspace-row-ws-2'));
     const detail = await screen.findByTestId('workspace-detail');
-    expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toContain(
-      'ephemeral',
-    );
-    expect(within(detail).getByTestId('workspace-expires').textContent).toContain('到期 expires');
+    expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toContain('临时');
+    expect(within(detail).getByTestId('workspace-expires').textContent).toContain('到期');
     expect(within(detail).queryByTestId('workspace-purpose-select')).toBeNull();
     // Not purgeable (still live) — no purge entry anywhere.
     expect(within(detail).queryByTestId('workspace-purge')).toBeNull();
@@ -337,7 +333,7 @@ describe('PlatformWorkspacesPage', () => {
     const detail = await screen.findByTestId('workspace-detail');
 
     const toggle = within(detail).getByTestId('workspace-status-toggle');
-    expect(toggle.textContent).toContain('停用 Disable');
+    expect(toggle.textContent).toContain('停用');
     expect(toggle.hasAttribute('disabled')).toBe(true);
     expect(within(detail).getByTestId('workspace-default-undisablable')).toBeTruthy();
 
@@ -366,11 +362,9 @@ describe('PlatformWorkspacesPage', () => {
     expect(confirm.textContent).toContain('该工作区所有会话立即失效');
     expect(http.calls.some((call) => call.name === 'set_workspace_status')).toBe(false);
 
-    fireEvent.click(within(detail).getByRole('button', { name: '确认停用 Confirm disable' }));
+    fireEvent.click(within(detail).getByRole('button', { name: '确认停用' }));
     await waitFor(() =>
-      expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe(
-        '已停用 Disabled',
-      ),
+      expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('已停用'),
     );
   });
 
@@ -407,7 +401,7 @@ describe('PlatformWorkspacesPage', () => {
       ),
     );
     fireEvent.change(within(detail).getByTestId('delegate-owner'), { target: { value: 'u-2' } });
-    fireEvent.click(within(detail).getByRole('button', { name: '委托 Delegate' }));
+    fireEvent.click(within(detail).getByRole('button', { name: '委托' }));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'add_membership')).toBe(true),
@@ -445,7 +439,7 @@ describe('PlatformWorkspacesPage', () => {
       ),
     );
     fireEvent.change(within(detail).getByTestId('delegate-owner'), { target: { value: 'u-2' } });
-    fireEvent.click(within(detail).getByRole('button', { name: '委托 Delegate' }));
+    fireEvent.click(within(detail).getByRole('button', { name: '委托' }));
 
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'set_membership_role')).toBe(true),
@@ -523,16 +517,14 @@ describe('PlatformWorkspacesPage', () => {
     await screen.findByTestId('workspace-row-ws-1');
     expect(screen.queryByTestId('workspace-row-ws-2')).toBeNull();
 
-    fireEvent.change(screen.getByLabelText(/状态 Status/), { target: { value: 'disabled' } });
+    fireEvent.change(screen.getByLabelText(/状态/), { target: { value: 'disabled' } });
     await screen.findByTestId('workspace-row-ws-2');
     expect(http.calls.at(-1)?.params).toEqual({ status: 'disabled', includeExpired: false });
     // 禁用于 … · 可清除: disabled 10 days ago, past the 7-day retention.
-    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain(
-      '可清除 purgeable now',
-    );
+    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain('可清除');
 
-    fireEvent.change(screen.getByLabelText(/状态 Status/), { target: { value: 'all' } });
-    fireEvent.change(screen.getByLabelText(/用途 Purpose/), { target: { value: 'ephemeral' } });
+    fireEvent.change(screen.getByLabelText(/状态/), { target: { value: 'all' } });
+    fireEvent.change(screen.getByLabelText(/用途/), { target: { value: 'ephemeral' } });
     fireEvent.click(screen.getByTestId('platform-workspaces-include-expired'));
     await screen.findByTestId('workspace-row-ws-3');
     expect(http.calls.at(-1)?.params).toEqual({ purpose: 'ephemeral' });
@@ -569,9 +561,7 @@ describe('PlatformWorkspacesPage', () => {
       (screen.getByTestId('platform-workspaces-residue-only') as HTMLInputElement).checked,
     ).toBe(true);
     // disabledAt null (pre-0030) reads as purgeable now.
-    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain(
-      '可清除 purgeable now',
-    );
+    expect(screen.getByTestId('workspace-disabled-at').textContent).toContain('可清除');
   });
 
   it('A1: the residue preset also applies on a hashchange while the page is mounted', async () => {
@@ -606,9 +596,7 @@ describe('PlatformWorkspacesPage', () => {
     const http = scriptedHttp(baseHandlers([recent]));
     renderPage(http);
     const row = await screen.findByTestId('workspace-row-ws-2');
-    expect(within(row).getByTestId('workspace-disabled-at').textContent).toContain(
-      '5 天后可清除 purgeable in 5 d',
-    );
+    expect(within(row).getByTestId('workspace-disabled-at').textContent).toContain('5 天后可清除');
     expect(within(row).queryByTestId('workspace-purge')).toBeNull();
 
     fireEvent.click(row);

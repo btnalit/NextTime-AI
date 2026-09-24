@@ -3,6 +3,7 @@ import { type FormEvent, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime, prettyJson, redactSensitive } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
@@ -31,6 +32,7 @@ const PAGE_SIZE = 50;
  * Reachable only for `platformRole === 'admin'` (gated in `App.tsx`'s `Routed`).
  */
 export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
+  const t = useT();
   const [actionInput, setActionInput] = useState('');
   const [actorUserIdInput, setActorUserIdInput] = useState('');
   const [applied, setApplied] = useState<AppliedFilters>({});
@@ -53,7 +55,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('platformAudit')}
-        title="平台审计 Platform audit"
+        title={t('平台审计', 'Platform audit')}
         description="Every platform-scope write (workspace_id is null): who changed what, and when."
       />
 
@@ -79,7 +81,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
           />
         </Field>
         <Button type="submit" variant="secondary">
-          应用 Apply
+          {t('应用', 'Apply')}
         </Button>
       </form>
 
@@ -95,7 +97,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="search"
-          title="没有匹配的平台审计记录 No matching platform audit rows"
+          title={t('没有匹配的平台审计记录', 'No matching platform audit rows')}
           testId="platform-audit-empty"
         />
       ) : (
@@ -114,7 +116,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                     : ''}
                 </div>
                 <details className="platform-audit-payload">
-                  <summary>负载 Payload</summary>
+                  <summary>{t('负载', 'Payload')}</summary>
                   <pre className="code-block pre-wrap">
                     {prettyJson(redactSensitive(row.payload))}
                   </pre>
@@ -132,7 +134,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             loading={audit.loadingMore}
             onClick={() => void audit.loadMore()}
           >
-            加载更多 Load more
+            {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}

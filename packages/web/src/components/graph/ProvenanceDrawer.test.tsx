@@ -49,7 +49,7 @@ describe('ProvenanceDrawer', () => {
       />,
     );
     expect(screen.getByTestId('graph-provenance-conflicts').textContent).toContain(
-      '1 open Conflict',
+      '1 个未解决冲突中',
     );
     expect(screen.getByTestId('graph-provenance-freshness').getAttribute('data-freshness')).toBe(
       'conflict',

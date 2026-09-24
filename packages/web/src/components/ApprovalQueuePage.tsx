@@ -8,6 +8,7 @@ import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, humanizeKind } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import {
   type ApprovalDecisionInput,
@@ -86,6 +87,7 @@ function byNewest(a: ActionRequestRow, b: ActionRequestRow): number {
  * to the plain `get_action` fetch below, which is workspace-scoped and not I14-narrowed (§9.3).
  */
 export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: ApprovalQueuePageProps) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const load = useCallback(
@@ -267,8 +269,10 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
         if (isForbiddenError(err)) permissions.markDenied('set_auto_approved_action_kind');
         toast.push({
           tone: 'warn',
-          title:
-            '已批准，但自动批准规则未写入 Approved, but the auto-approval rule was not written',
+          title: t(
+            '已批准，但自动批准规则未写入',
+            'Approved, but the auto-approval rule was not written',
+          ),
         });
       }
     }
@@ -319,8 +323,11 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('approvals')}
-        title="待我审批 Approvals"
-        description="Worker 在你的授权范围内提出的执行类动作；批准后由门执行。 Execute-class actions Workers proposed within your scope. Approving lets the Gatekeeper run them."
+        title={t('待我审批', 'Approvals')}
+        description={t(
+          'Worker 在你的授权范围内提出的执行类动作；批准后由门执行。',
+          'Execute-class actions Workers proposed within your scope. Approving lets the Gatekeeper run them.',
+        )}
         actions={
           filter === 'pending' ? (
             <Button
@@ -329,7 +336,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
               onClick={() => void pending.reload()}
               loading={pending.state.status === 'ready' && pending.state.refreshing}
             >
-              刷新 Refresh
+              {t('刷新', 'Refresh')}
             </Button>
           ) : undefined
         }
@@ -341,8 +348,8 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           value={filter}
           onChange={setFilter}
           options={[
-            { value: 'pending', label: '待处理 Pending', count: pendingCount },
-            { value: 'history', label: '历史 History' },
+            { value: 'pending', label: t('待处理', 'Pending'), count: pendingCount },
+            { value: 'history', label: t('历史', 'History') },
           ]}
         />
       </div>
@@ -354,14 +361,17 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           forbidden ? (
             <EmptyState
               icon="shield"
-              title="审批需要 operator 角色 Approvals need the operator role"
-              body="当前主体不能调用 list_pending；请工作区 owner 授予 operator 角色。 Your principal cannot call list_pending. Ask the workspace owner for an operator-role principal to approve actions."
+              title={t('审批需要 operator 角色', 'Approvals need the operator role')}
+              body={t(
+                '当前主体不能调用 list_pending；请工作区 owner 授予 operator 角色。',
+                'Your principal cannot call list_pending. Ask the workspace owner for an operator-role principal to approve actions.',
+              )}
               testId="approvals-forbidden"
             />
           ) : (
             <ErrorBanner
               error={pending.state.error}
-              title="无法加载审批队列 Could not load approvals"
+              title={t('无法加载审批队列', 'Could not load approvals')}
               onRetry={() => void pending.reload()}
               testId="approvals-error"
             />
@@ -369,8 +379,11 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
         ) : rows.length === 0 ? (
           <EmptyState
             icon="approvals"
-            title="没有等待你审批的请求 Nothing pending your approval"
-            body="Worker 提出策略路由给你的执行类动作时，请求会立刻出现在这里。 Requests appear here the moment a Worker proposes an execute-class action that policy routes to you."
+            title={t('没有等待你审批的请求', 'Nothing pending your approval')}
+            body={t(
+              'Worker 提出策略路由给你的执行类动作时，请求会立刻出现在这里。',
+              'Requests appear here the moment a Worker proposes an execute-class action that policy routes to you.',
+            )}
             testId="approvals-empty"
           />
         ) : (
@@ -409,7 +422,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
                       {row.onBehalfOf ? (
                         <>
                           <span className="meta-sep" />
-                          <span className="text-3">代表 for</span>
+                          <span className="text-3">{t('代表', 'for')}</span>
                           <RefChip
                             kind="principal"
                             id={row.onBehalfOf}
@@ -431,7 +444,9 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
                       {row.awaitDecision && row.status === 'pending_approval' ? (
                         <>
                           <span className="meta-sep" />
-                          <span className="text-danger">阻塞 Worker blocking a Worker</span>
+                          <span className="text-danger">
+                            {t('阻塞', 'Worker blocking a Worker')}
+                          </span>
                         </>
                       ) : null}
                     </>
@@ -455,7 +470,9 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       <Drawer
         open={selectedId !== undefined}
         onClose={() => onSelect(null)}
-        title={selectedRow ? humanizeKind(selectedRow.actionKindTag) : '审批请求 Approval request'}
+        title={
+          selectedRow ? humanizeKind(selectedRow.actionKindTag) : t('审批请求', 'Approval request')
+        }
         subtitle={
           selectedId ? (
             <RefChip kind="actionRequest" id={selectedId} name={null} size="s" />
@@ -477,7 +494,10 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
             onPendingChange={setPendingConfirm}
           />
         ) : detailError ? (
-          <ErrorBanner error={detailError} title="无法加载该请求 Could not load this request" />
+          <ErrorBanner
+            error={detailError}
+            title={t('无法加载该请求', 'Could not load this request')}
+          />
         ) : (
           <SkeletonRows count={2} label="Loading request" />
         )}
@@ -513,6 +533,7 @@ function ApprovalHistoryTab({
   principalNames,
   gatekeeperNames,
 }: ApprovalHistoryTabProps) {
+  const t = useT();
   const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>('all');
   const params = useMemo(() => {
     const next: Record<string, unknown> = { limit: HISTORY_PAGE_SIZE };
@@ -529,13 +550,13 @@ function ApprovalHistoryTab({
   return (
     <div className="stack">
       <div className="page-toolbar">
-        <Field id="approval-history-status" label="状态 Status">
+        <Field id="approval-history-status" label={t('状态', 'Status')}>
           <Select
             id="approval-history-status"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}
           >
-            <option value="all">全部 All statuses</option>
+            <option value="all">{t('全部', 'All statuses')}</option>
             {ACTION_REQUEST_STATUS_VALUES.map((status) => (
               <option key={status} value={status}>
                 {status}
@@ -549,7 +570,7 @@ function ApprovalHistoryTab({
           onClick={() => void history.reload()}
           loading={history.state.status === 'ready' && history.state.refreshing}
         >
-          刷新 Refresh
+          {t('刷新', 'Refresh')}
         </Button>
       </div>
 
@@ -563,14 +584,17 @@ function ApprovalHistoryTab({
         forbidden ? (
           <EmptyState
             icon="shield"
-            title="审批历史需要 operator 角色 Approval history needs the operator role"
-            body="当前主体不能调用 list_action_requests。 Your principal cannot call list_action_requests. Ask the workspace owner for an operator-role principal."
+            title={t('审批历史需要 operator 角色', 'Approval history needs the operator role')}
+            body={t(
+              '当前主体不能调用 list_action_requests。',
+              'Your principal cannot call list_action_requests. Ask the workspace owner for an operator-role principal.',
+            )}
             testId="approval-history-forbidden"
           />
         ) : (
           <ErrorBanner
             error={history.state.error}
-            title="无法加载审批历史 Could not load approval history"
+            title={t('无法加载审批历史', 'Could not load approval history')}
             onRetry={() => void history.reload()}
             testId="approval-history-error"
           />
@@ -578,8 +602,11 @@ function ApprovalHistoryTab({
       ) : rows.length === 0 ? (
         <EmptyState
           icon="approvals"
-          title="还没有审批历史 No approval history yet"
-          body="已决定、已执行的请求会出现在这里。 Decided and executed ActionRequests will appear here."
+          title={t('还没有审批历史', 'No approval history yet')}
+          body={t(
+            '已决定、已执行的请求会出现在这里。',
+            'Decided and executed ActionRequests will appear here.',
+          )}
           testId="approval-history-empty"
         />
       ) : (
@@ -614,7 +641,7 @@ function ApprovalHistoryTab({
                       {row.onBehalfOf ? (
                         <>
                           <span className="meta-sep" />
-                          <span className="text-3">代表 for</span>
+                          <span className="text-3">{t('代表', 'for')}</span>
                           <RefChip
                             kind="principal"
                             id={row.onBehalfOf}
@@ -625,12 +652,12 @@ function ApprovalHistoryTab({
                       ) : null}
                       <span className="meta-sep" />
                       <time title={formatDateTime(row.requestedAt)}>
-                        请求 requested {formatRelative(row.requestedAt)}
+                        {t('请求', 'requested')} {formatRelative(row.requestedAt)}
                       </time>
                       {decidedBy ? (
                         <>
                           <span className="meta-sep" />
-                          <span className="text-3">决定 decided by</span>
+                          <span className="text-3">{t('决定', 'decided by')}</span>
                           <RefChip
                             kind="principal"
                             id={decidedBy}
@@ -661,14 +688,14 @@ function ApprovalHistoryTab({
                         <>
                           <span className="meta-sep" />
                           <time title={formatDateTime(row.executedAt)}>
-                            执行 executed {formatRelative(row.executedAt)}
+                            {t('执行', 'executed')} {formatRelative(row.executedAt)}
                           </time>
                         </>
                       ) : row.failedAt ? (
                         <>
                           <span className="meta-sep" />
                           <time className="text-danger" title={formatDateTime(row.failedAt)}>
-                            失败 failed {formatRelative(row.failedAt)}
+                            {t('失败', 'failed')} {formatRelative(row.failedAt)}
                           </time>
                         </>
                       ) : null}
@@ -686,14 +713,14 @@ function ApprovalHistoryTab({
                 loading={history.loadingMore}
                 onClick={() => void history.loadMore()}
               >
-                加载更多 Load more
+                {t('加载更多', 'Load more')}
               </Button>
             </div>
           ) : null}
           {history.loadMoreError !== null ? (
             <ErrorBanner
               error={history.loadMoreError}
-              title="无法加载更多审批历史 Could not load more approval history"
+              title={t('无法加载更多审批历史', 'Could not load more approval history')}
               testId="approval-history-load-more-error"
             />
           ) : null}

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { describeError } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -31,6 +32,7 @@ export interface DraftProposedProps {
  * carry the kernel's text (C14).
  */
 export function DraftProposed({ kindLabel, draft, onPublish, onDone, note }: DraftProposedProps) {
+  const t = useT();
   const toast = useToast();
   const [status, setStatus] = useState(draft.status);
   const [busy, setBusy] = useState(false);
@@ -66,8 +68,14 @@ export function DraftProposed({ kindLabel, draft, onPublish, onDone, note }: Dra
       </div>
       <Notice testId="draft-private-notice">
         {status === 'draft'
-          ? '草稿只有你（提议者）可见（I16）；发布后工作区所有成员可见、可选用。 Drafts are private to you, the proposer (I16); publishing makes it visible and selectable for every member.'
-          : '已发布：工作区所有成员现在可见。 Published — visible to every member of the workspace now.'}
+          ? t(
+              '草稿只有你（提议者）可见（I16）；发布后工作区所有成员可见、可选用。',
+              'Drafts are private to you, the proposer (I16); publishing makes it visible and selectable for every member.',
+            )
+          : t(
+              '已发布：工作区所有成员现在可见。 Published —',
+              'visible to every member of the workspace now.',
+            )}
         {note ? ` ${note}` : ''}
       </Notice>
       {error !== null ? <ErrorBanner error={error} testId="draft-publish-error" /> : null}
@@ -79,11 +87,11 @@ export function DraftProposed({ kindLabel, draft, onPublish, onDone, note }: Dra
             onClick={() => void publish()}
             data-testid="draft-publish"
           >
-            发布 Publish
+            {t('发布', 'Publish')}
           </Button>
         ) : null}
         <Button variant="ghost" onClick={onDone} disabled={busy} data-testid="draft-done">
-          完成 Done
+          {t('完成', 'Done')}
         </Button>
       </div>
     </div>

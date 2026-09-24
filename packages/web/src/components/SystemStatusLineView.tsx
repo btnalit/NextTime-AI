@@ -1,3 +1,4 @@
+import { useT } from '../lib/i18n.js';
 import type { SystemStatusLineData } from '../lib/system-status.js';
 import { Icon } from './ui/Icon.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -11,6 +12,7 @@ export interface SystemStatusLineViewProps {
 /** components/SystemStatusLineView: the compact inline notice for `system.action_update`/
  *  `system.task_update` (S2.10 deliverable 2 — never a card, see `lib/system-status.ts`). */
 export function SystemStatusLineView({ line, onOpen }: SystemStatusLineViewProps) {
+  const t = useT();
   const chip =
     line.variant === 'action_update' ? (
       <StatusChip machine="actionRequest" status={line.status} size="s" />
@@ -35,7 +37,11 @@ export function SystemStatusLineView({ line, onOpen }: SystemStatusLineViewProps
         className="system-status-line system-status-line-button"
         onClick={onOpen}
         data-testid="system-status-line"
-        title={line.variant === 'action_update' ? '打开审批 Open approval' : '打开任务 Open task'}
+        title={
+          line.variant === 'action_update'
+            ? t('打开审批', 'Open approval')
+            : t('打开任务', 'Open task')
+        }
       >
         {body}
       </button>

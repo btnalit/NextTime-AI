@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
@@ -64,6 +65,7 @@ export function PlatformIntegrationsPage({
   selectedGateId,
   onSelectGate,
 }: PlatformIntegrationsPageProps) {
+  const t = useT();
   const [tab, setTab] = useState<Tab>(selectedGateId !== undefined ? 'instances' : 'connectors');
   const [launcherOpen, setLauncherOpen] = useState(false);
   // The instance drawer to open: the route's (deep link) or, until `lib/router.ts` carries that
@@ -83,8 +85,11 @@ export function PlatformIntegrationsPage({
   return (
     <div className="page" data-testid="platform-integrations-page">
       <PageHeader
-        title="集成 Integrations"
-        description="平台的集成目录：接入包、announce 过的门实例、以及在用它们的外部运行时。 The platform's integration catalog: connectors, the gate instances that announced themselves, and the external runtimes using them."
+        title={t('集成', 'Integrations')}
+        description={t(
+          '平台的集成目录：接入包、announce 过的门实例、以及在用它们的外部运行时。',
+          "The platform's integration catalog: connectors, the gate instances that announced themselves, and the external runtimes using them.",
+        )}
         breadcrumb={breadcrumbFor('platformIntegrations')}
         primaryAction={
           <Button
@@ -93,7 +98,7 @@ export function PlatformIntegrationsPage({
             onClick={() => setLauncherOpen(true)}
             data-testid="connect-system-button"
           >
-            接入一个系统 Connect a system
+            {t('接入一个系统', 'Connect a system')}
           </Button>
         }
       />
@@ -101,7 +106,7 @@ export function PlatformIntegrationsPage({
       <Drawer
         open={launcherOpen}
         onClose={() => setLauncherOpen(false)}
-        title="接入一个系统 Connect a system"
+        title={t('接入一个系统', 'Connect a system')}
         subtitle="选类型 → 连接与凭证 → 能力与策略 → 握手验证"
         wide
         testId="connect-system-drawer"
@@ -129,17 +134,17 @@ export function PlatformIntegrationsPage({
         options={[
           {
             value: 'connectors',
-            label: '接入包 Connectors',
+            label: t('接入包', 'Connectors'),
             testId: 'integrations-tab-connectors',
           },
           {
             value: 'instances',
-            label: '门实例 Gate instances',
+            label: t('门实例', 'Gate instances'),
             testId: 'integrations-tab-instances',
           },
           {
             value: 'runtimes',
-            label: '外部运行时 External runtimes',
+            label: t('外部运行时', 'External runtimes'),
             testId: 'integrations-tab-runtimes',
           },
         ]}
@@ -159,6 +164,7 @@ export function PlatformIntegrationsPage({
 // -------------------------------------------------------------------------------------------
 
 function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
   const connectors = useCapabilityList<ConnectorWire>(http, 'list_connectors', {});
   const rows = connectors.state.status === 'ready' ? connectors.state.data.items : [];
 
@@ -181,17 +187,21 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
           testId="connectors-error"
         />
       ) : rows.length === 0 ? (
-        <EmptyState icon="grid" title="还没有接入包 No connectors yet" testId="connectors-empty" />
+        <EmptyState
+          icon="grid"
+          title={t('还没有接入包', 'No connectors yet')}
+          testId="connectors-empty"
+        />
       ) : (
         <div className="table-scroll">
           <table className="data-table" data-testid="connectors-table">
             <thead>
               <tr>
-                <th>名称 Name</th>
-                <th>种类 Kind</th>
-                <th>来源 Origin</th>
-                <th>模式 Mode</th>
-                <th>实例数 Instances</th>
+                <th>{t('名称', 'Name')}</th>
+                <th>{t('种类', 'Kind')}</th>
+                <th>{t('来源', 'Origin')}</th>
+                <th>{t('模式', 'Mode')}</th>
+                <th>{t('实例数', 'Instances')}</th>
                 <th>Operation 数</th>
                 <th aria-label="Actions" />
               </tr>
@@ -221,6 +231,7 @@ function ConnectorRow({
   readonly connector: ConnectorWire;
   readonly onChanged: (connector: ConnectorWire) => void;
 }) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [savingMode, setSavingMode] = useState(false);
   const [modeError, setModeError] = useState<unknown | null>(null);
@@ -266,7 +277,7 @@ function ConnectorRow({
       <tr data-testid={`connector-row-${connector.name}`}>
         <td className="mono">{connector.name}</td>
         <td>{connector.kind}</td>
-        <td>{connector.packaged ? '预置 Packaged' : '通用 Generic'}</td>
+        <td>{connector.packaged ? t('预置', 'Packaged') : t('通用', 'Generic')}</td>
         <td>
           <Confirm
             tier={disablingInUse ? 'irreversible' : 'medium'}
@@ -293,7 +304,10 @@ function ConnectorRow({
             title={`切换模式为 ${pendingMode ?? connector.mode} Switch mode to ${pendingMode ?? connector.mode}`}
             description={
               disablingInUse
-                ? 'disabled 会立即让所有启用它的工作区都拿不到这个接入包，platform 范围生效。 disabled immediately cuts off every workspace that enabled this connector, platform-wide.'
+                ? t(
+                    'disabled 会立即让所有启用它的工作区都拿不到这个接入包，platform 范围生效。',
+                    'disabled immediately cuts off every workspace that enabled this connector, platform-wide.',
+                  )
                 : `新模式对这个接入包往后的启用/展示生效；改错了可以随时再切回来。 The new mode governs this connector's own enable/visibility from here on — switch it back at any time if this was a mistake.`
             }
             target={disablingInUse ? connector.name : undefined}
@@ -301,14 +315,14 @@ function ConnectorRow({
               `${connector.instanceCount} 个门实例 gate instances`,
               `${connector.operationCount} 个 Operation`,
             ]}
-            confirmLabel="切换 Switch"
+            confirmLabel={t('切换', 'Switch')}
             danger={pendingMode === 'disabled'}
             onConfirm={() => (pendingMode ? changeMode(pendingMode) : undefined)}
             testId={`connector-mode-confirm-${connector.name}`}
           />
           <PlatformError
             error={modeError}
-            title="无法设置模式 Could not set the mode"
+            title={t('无法设置模式', 'Could not set the mode')}
             testId={`connector-mode-error-${connector.name}`}
           />
         </td>
@@ -321,7 +335,7 @@ function ConnectorRow({
             onClick={() => setExpanded((value) => !value)}
             aria-expanded={expanded}
           >
-            {expanded ? '收起 Collapse' : '展开 Expand'}
+            {expanded ? t('收起', 'Collapse') : t('展开', 'Expand')}
           </Button>
         </td>
       </tr>
@@ -351,6 +365,7 @@ function ConnectorDenyList({
   readonly connector: ConnectorWire;
   readonly onChanged: (connector: ConnectorWire) => void;
 }) {
+  const t = useT();
   const instances = useCapabilityList<GateInstanceWire>(http, 'list_gate_instances', {
     connector: connector.name,
   });
@@ -400,19 +415,21 @@ function ConnectorDenyList({
       style={{ padding: '8px 0' }}
     >
       <Notice>
-        禁用后下一次调用即被拒绝；这个改动不影响已经启用它的工作区。 Disabled from the next call on
-        — it never affects a workspace that already enabled this instance.
+        {t(
+          '禁用后下一次调用即被拒绝；这个改动不影响已经启用它的工作区。 Disabled from the next call on —',
+          'it never affects a workspace that already enabled this instance.',
+        )}
       </Notice>
       {instances.state.status === 'loading' ? (
         <SkeletonRows count={2} label="Loading instances" />
       ) : instances.state.status === 'error' ? (
         <ErrorBanner
           error={instances.state.error}
-          title="无法读取实例 Could not load this connector's instances"
+          title={t('无法读取实例', "Could not load this connector's instances")}
           onRetry={() => void instances.reload()}
         />
       ) : names.length === 0 ? (
-        <p className="text-3">还没有已知的 Operation No known Operations yet</p>
+        <p className="text-3">{t('还没有已知的', 'Operation No known Operations yet')}</p>
       ) : (
         names.map((name) => (
           <label className="checkbox" key={name}>
@@ -426,10 +443,10 @@ function ConnectorDenyList({
           </label>
         ))
       )}
-      <PlatformError error={error} title="无法保存禁用列表 Could not save the deny list" />
+      <PlatformError error={error} title={t('无法保存禁用列表', 'Could not save the deny list')} />
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="secondary" onClick={() => void save()} loading={saving} disabled={!dirty}>
-          保存 Save
+          {t('保存', 'Save')}
         </Button>
       </div>
     </div>
@@ -454,6 +471,7 @@ function GateInstancesTab({
   readonly selectedGateId?: string;
   readonly onSelectGate?: (gateId: string | null) => void;
 }) {
+  const t = useT();
   const [panel, setPanelState] = useState<InstancesPanel>(() =>
     selectedGateId !== undefined ? { kind: 'gate', gateId: selectedGateId } : { kind: 'closed' },
   );
@@ -504,7 +522,7 @@ function GateInstancesTab({
           onClick={() => setPanel({ kind: 'create' })}
           data-testid="new-gate-instance"
         >
-          新建门宿主实例 Create hosted instance
+          {t('新建门宿主实例', 'Create hosted instance')}
         </Button>
       </div>
 
@@ -520,7 +538,7 @@ function GateInstancesTab({
       ) : rows.length === 0 ? (
         <EmptyState
           icon="connections"
-          title="还没有门实例announce过 No gate instance has announced itself yet"
+          title={t('还没有门实例announce过', 'No gate instance has announced itself yet')}
           testId="gate-instances-empty"
         />
       ) : (
@@ -528,12 +546,12 @@ function GateInstancesTab({
           <table className="data-table" data-testid="gate-instances-table">
             <thead>
               <tr>
-                <th>名称 Name</th>
-                <th>接入包 Connector</th>
-                <th>种类 Kind</th>
-                <th>状态 Status</th>
-                <th>健康 Health</th>
-                <th>最近心跳 Last seen</th>
+                <th>{t('名称', 'Name')}</th>
+                <th>{t('接入包', 'Connector')}</th>
+                <th>{t('种类', 'Kind')}</th>
+                <th>{t('状态', 'Status')}</th>
+                <th>{t('健康', 'Health')}</th>
+                <th>{t('最近心跳', 'Last seen')}</th>
                 <th>Operation 数</th>
                 <th>启用它的工作区数</th>
                 <th aria-label="Trust" />
@@ -568,7 +586,7 @@ function GateInstancesTab({
                         {row.displayName}
                         {row.hosted ? (
                           <span className="tag" data-testid="gate-hosted-badge">
-                            宿主 hosted
+                            {t('宿主', 'hosted')}
                           </span>
                         ) : null}
                       </span>
@@ -595,7 +613,7 @@ function GateInstancesTab({
                   </td>
                   <td>
                     {row.lastSeenAt === null ? (
-                      '从未 Never'
+                      t('从未', 'Never')
                     ) : (
                       <time title={formatDateTime(row.lastSeenAt)}>
                         {formatRelative(row.lastSeenAt)}
@@ -617,7 +635,7 @@ function GateInstancesTab({
                       onClick={() => setPanel({ kind: 'gate', gateId: row.gateId })}
                       data-testid={`gate-instance-open-${row.gateId}`}
                     >
-                      详情 Details
+                      {t('详情', 'Details')}
                     </Button>
                   </td>
                 </tr>
@@ -630,7 +648,7 @@ function GateInstancesTab({
       <Drawer
         open={panel.kind === 'create'}
         onClose={() => setPanel({ kind: 'closed' })}
-        title="新建门宿主实例 Create hosted instance"
+        title={t('新建门宿主实例', 'Create hosted instance')}
         subtitle="administrator, http/mcp; the gate host takes it over and imports its Operations."
         testId="create-gate-instance-drawer"
       >
@@ -646,7 +664,7 @@ function GateInstancesTab({
       <Drawer
         open={open !== undefined}
         onClose={() => setPanel({ kind: 'closed' })}
-        title={open?.displayName ?? '门实例 Gate instance'}
+        title={open?.displayName ?? t('门实例', 'Gate instance')}
         subtitle={open ? <span className="mono">{open.gateId}</span> : undefined}
         testId="gate-instance-drawer"
       >
@@ -669,6 +687,7 @@ function GateInstancesTab({
 // -------------------------------------------------------------------------------------------
 
 function ExternalRuntimesTab({ http }: { readonly http: CapabilityCaller }) {
+  const t = useT();
   const runtimes = useCapabilityList<ExternalRuntimeWire>(http, 'list_external_runtimes', {});
   const rows = runtimes.state.status === 'ready' ? runtimes.state.data.items : [];
 
@@ -689,7 +708,7 @@ function ExternalRuntimesTab({ http }: { readonly http: CapabilityCaller }) {
           onClick={() => void runtimes.reload()}
           loading={runtimes.state.status === 'ready' && runtimes.state.refreshing}
         >
-          刷新 Refresh
+          {t('刷新', 'Refresh')}
         </Button>
       </div>
 
@@ -709,8 +728,11 @@ function ExternalRuntimesTab({ http }: { readonly http: CapabilityCaller }) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="link"
-          title="还没有外部运行时 No external runtimes yet"
-          body="Claude Code、通过 /mcp 连接的本机 pi，或一个 collector 在签发 Handle 并建立会话后会出现在这里。 Claude Code, a local pi connected over /mcp, or a collector shows up here once it holds an issued Handle and has an open session."
+          title={t('还没有外部运行时', 'No external runtimes yet')}
+          body={t(
+            'Claude Code、通过 /mcp 连接的本机 pi，或一个 collector 在签发 Handle 并建立会话后会出现在这里。',
+            'Claude Code, a local pi connected over /mcp, or a collector shows up here once it holds an issued Handle and has an open session.',
+          )}
           testId="external-runtimes-empty"
         />
       ) : (
@@ -718,11 +740,11 @@ function ExternalRuntimesTab({ http }: { readonly http: CapabilityCaller }) {
           <table className="data-table" data-testid="external-runtimes-table">
             <thead>
               <tr>
-                <th>工作区 Workspace</th>
+                <th>{t('工作区', 'Workspace')}</th>
                 <th>Principal</th>
-                <th>会话种类 Session kind</th>
-                <th>创建时间 Created</th>
-                <th>过期 Expires</th>
+                <th>{t('会话种类', 'Session kind')}</th>
+                <th>{t('创建时间', 'Created')}</th>
+                <th>{t('过期', 'Expires')}</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -752,6 +774,7 @@ function ExternalRuntimeRow({
   readonly runtime: ExternalRuntimeWire;
   readonly onRevoked: () => void;
 }) {
+  const t = useT();
   const [confirming, setConfirming] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
@@ -789,14 +812,14 @@ function ExternalRuntimeRow({
         )}
       </td>
       <td>
-        <PlatformError error={error} title="无法吊销 Could not revoke this runtime" />
+        <PlatformError error={error} title={t('无法吊销', 'Could not revoke this runtime')} />
         {confirming ? (
           <div className="row-wrap" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" size="s" onClick={() => setConfirming(false)}>
-              取消 Cancel
+              {t('取消', 'Cancel')}
             </Button>
             <Button variant="danger" size="s" onClick={() => void revoke()} loading={revoking}>
-              确认吊销 Confirm revoke
+              {t('确认吊销', 'Confirm revoke')}
             </Button>
           </div>
         ) : (
@@ -806,7 +829,7 @@ function ExternalRuntimeRow({
             onClick={() => setConfirming(true)}
             data-testid={`external-runtime-revoke-${runtime.sessionId}`}
           >
-            吊销 Revoke
+            {t('吊销', 'Revoke')}
           </Button>
         )}
       </td>

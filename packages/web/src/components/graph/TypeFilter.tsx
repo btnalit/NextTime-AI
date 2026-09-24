@@ -1,4 +1,5 @@
 import type { OntologyObjectTypeWire } from '@nexttime/shared';
+import { useT } from '../../lib/i18n.js';
 import { Field, Input, Select } from '../ui/Field.js';
 
 export interface TypeFilterProps {
@@ -15,8 +16,9 @@ export interface TypeFilterProps {
 /** components/graph/TypeFilter: the ObjectType selector of the search form — every ObjectType of
  *  the workspace's published ontology (`list_types`), plus "全部类型 All types". */
 export function TypeFilter({ id, value, onChange, types, disabled }: TypeFilterProps) {
+  const t = useT();
   return (
-    <Field id={id} label="类型 Type">
+    <Field id={id} label={t('类型', 'Type')}>
       {types === undefined ? (
         <Input
           id={id}
@@ -35,7 +37,7 @@ export function TypeFilter({ id, value, onChange, types, disabled }: TypeFilterP
           disabled={disabled}
           data-testid="graph-type-select"
         >
-          <option value="">全部类型 All types</option>
+          <option value="">{t('全部类型', 'All types')}</option>
           {types.map((type) => (
             <option key={type.name} value={type.name} title={type.description}>
               {type.name}

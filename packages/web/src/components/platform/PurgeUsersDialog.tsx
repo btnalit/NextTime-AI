@@ -4,6 +4,7 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { HttpError } from '../../lib/http-client.js';
+import { useT } from '../../lib/i18n.js';
 import { platformErrorMessage } from '../../lib/platform-errors.js';
 import { PURGE_USER_SKIP_REASON_LABELS } from '../../lib/platform-workspaces.js';
 import { Confirm } from '../kit/confirm.js';
@@ -54,6 +55,7 @@ function friendly(err: unknown): unknown {
  * `onConfirm`.
  */
 export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogProps) {
+  const t = useT();
   const candidates = useCapabilityList<UserWire>(http, 'list_users', {
     pendingOnly: true,
     limit: BATCH_MAX,
@@ -102,9 +104,12 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
           if (!open) setStep('pick');
         }}
         title={`清理 ${chosen.length} 个待激活用户 Purge ${chosen.length} pending users`}
-        description="从未激活且无活跃成员资格的用户会被删除；有密码、登录过、仍有成员资格或被审计引用的会被内核跳过并说明原因。 Never-activated users with no active membership are deleted; the kernel skips (and explains) any with a password, a login, a live membership or an audit reference."
+        description={t(
+          '从未激活且无活跃成员资格的用户会被删除；有密码、登录过、仍有成员资格或被审计引用的会被内核跳过并说明原因。',
+          'Never-activated users with no active membership are deleted; the kernel skips (and explains) any with a password, a login, a live membership or an audit reference.',
+        )}
         impact={chosen.map((row) => `${row.login} — ${row.displayName}`)}
-        confirmLabel="确认清理 Purge"
+        confirmLabel={t('确认清理', 'Purge')}
         onConfirm={execute}
         testId="purge-users-confirm"
       />
@@ -117,21 +122,21 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
       <Drawer
         open
         onClose={onClose}
-        title="清理结果 Purge results"
+        title={t('清理结果', 'Purge results')}
         subtitle={`已清理 ${result.purgedCount} / ${result.outcomes.length} Purged ${result.purgedCount} of ${result.outcomes.length}`}
         testId="purge-users-results"
         footer={
           <Button variant="primary" onClick={onClose} data-testid="purge-users-done">
-            关闭 Close
+            {t('关闭', 'Close')}
           </Button>
         }
       >
         <table className="data-table" data-testid="purge-users-outcomes">
           <thead>
             <tr>
-              <th>登录名 Login</th>
-              <th>结果 Outcome</th>
-              <th>原因 Reason</th>
+              <th>{t('登录名', 'Login')}</th>
+              <th>{t('结果', 'Outcome')}</th>
+              <th>{t('原因', 'Reason')}</th>
             </tr>
           </thead>
           <tbody>
@@ -149,7 +154,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                   <span
                     className={`chip chip-s ${outcome.status === 'purged' ? 'chip-ok' : 'chip-neutral'}`}
                   >
-                    {outcome.status === 'purged' ? '已清理 Purged' : '已跳过 Skipped'}
+                    {outcome.status === 'purged' ? t('已清理', 'Purged') : t('已跳过', 'Skipped')}
                   </span>
                 </td>
                 <td>
@@ -176,13 +181,16 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
     <Drawer
       open
       onClose={onClose}
-      title="清理待激活用户 Clean up pending users"
-      subtitle="验收脚本与迁移 0019 留下的、从未设置密码的账户。 Accounts that never got a password — acceptance runs and migration 0019."
+      title={t('清理待激活用户', 'Clean up pending users')}
+      subtitle={t(
+        '验收脚本与迁移 0019 留下的、从未设置密码的账户。 Accounts that never got a password —',
+        'acceptance runs and migration 0019.',
+      )}
       testId="purge-users-dialog"
       footer={
         <>
           <Button variant="ghost" onClick={onClose} data-testid="purge-users-cancel">
-            取消 Cancel
+            {t('取消', 'Cancel')}
           </Button>
           <Button
             variant="danger"
@@ -190,17 +198,17 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
             onClick={() => setStep('confirm')}
             data-testid="purge-users-continue"
           >
-            清理 {chosen.length} 个 Purge {chosen.length}
+            {t(`清理 ${chosen.length} 个`, `Purge ${chosen.length}`)}
           </Button>
         </>
       }
     >
       <div className="stack">
         <Notice>
-          只有从未激活且没有活跃成员资格的用户会被删除；其余的内核会跳过并说明原因。成员资格仍在
-          一次性工作区里的，随该工作区清除即可。 Only never-activated users with no active
-          membership are deleted; the kernel skips the rest and says why. Users whose memberships
-          are all in an ephemeral workspace go with that workspace's purge instead.
+          {t(
+            '只有从未激活且没有活跃成员资格的用户会被删除；其余的内核会跳过并说明原因。成员资格仍在 一次性工作区里的，随该工作区清除即可。',
+            "Only never-activated users with no active membership are deleted; the kernel skips the rest and says why. Users whose memberships are all in an ephemeral workspace go with that workspace's purge instead.",
+          )}
         </Notice>
 
         {candidates.state.status === 'loading' ? (
@@ -208,14 +216,14 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
         ) : candidates.state.status === 'error' ? (
           <ErrorBanner
             error={candidates.state.error}
-            title="无法加载待激活用户 Could not load pending users"
+            title={t('无法加载待激活用户', 'Could not load pending users')}
             onRetry={() => void candidates.reload()}
             testId="purge-users-error"
           />
         ) : rows.length === 0 ? (
           <EmptyState
             icon="users"
-            title="没有待激活用户 No pending users"
+            title={t('没有待激活用户', 'No pending users')}
             testId="purge-users-empty"
           />
         ) : (
@@ -228,7 +236,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                 data-testid="purge-users-select-all"
               />
               <span>
-                全选 Select all ({Math.min(rows.length, BATCH_MAX)}
+                {t('全选', 'Select all')} ({Math.min(rows.length, BATCH_MAX)}
                 {rows.length > BATCH_MAX ? ` / ${rows.length}` : ''})
               </span>
             </label>
@@ -247,7 +255,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                     </span>
                     <span className="text-3 text-small">
                       {row.memberships.length === 0
-                        ? '无成员资格 no memberships'
+                        ? t('无成员资格', 'no memberships')
                         : row.memberships
                             .map(
                               (membership) =>
@@ -256,7 +264,7 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                             .join(', ')}
                       {' · '}
                       <time title={formatDateTime(row.createdAt)}>
-                        创建 created {formatRelative(row.createdAt)}
+                        {t('创建', 'created')} {formatRelative(row.createdAt)}
                       </time>
                     </span>
                   </span>
@@ -271,14 +279,14 @@ export function PurgeUsersDialog({ http, onClose, onPurged }: PurgeUsersDialogPr
                   loading={candidates.loadingMore}
                   onClick={() => void candidates.loadMore()}
                 >
-                  加载更多 Load more
+                  {t('加载更多', 'Load more')}
                 </Button>
               </div>
             ) : null}
             {candidates.loadMoreError !== null ? (
               <ErrorBanner
                 error={candidates.loadMoreError}
-                title="无法加载更多 Could not load more"
+                title={t('无法加载更多', 'Could not load more')}
               />
             ) : null}
           </>

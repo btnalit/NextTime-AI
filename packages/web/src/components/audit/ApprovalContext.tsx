@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
 import { ApprovalCard } from '../ui/ApprovalCard.js';
@@ -33,6 +34,7 @@ export function ApprovalContext({
   gatekeeperNames,
   onLoaded,
 }: ApprovalContextProps) {
+  const t = useT();
   const [row, setRow] = useState<ActionRequestRow | null>(null);
   const [error, setError] = useState<unknown | null>(null);
   // Read at load time only — a fresh `onLoaded` closure per render must not re-fetch.
@@ -65,12 +67,12 @@ export function ApprovalContext({
       data-testid="approval-context"
     >
       <div className="section-header">
-        <h2 id="approval-context-title">审批上下文 Approval context</h2>
+        <h2 id="approval-context-title">{t('审批上下文', 'Approval context')}</h2>
       </div>
       {error !== null ? (
         <ErrorBanner
           error={error}
-          title="无法加载该审批请求 Could not load this approval request"
+          title={t('无法加载该审批请求', 'Could not load this approval request')}
           testId="approval-context-error"
         />
       ) : row === null ? (
@@ -85,7 +87,7 @@ export function ApprovalContext({
             row.resourceScope ? (
               <span className="mono">{row.resourceScope}</span>
             ) : (
-              <span className="text-3">未限定资源 No resource scope</span>
+              <span className="text-3">{t('未限定资源', 'No resource scope')}</span>
             )
           }
           gatekeeper={{ id: row.gatekeeperId, name: nameOf(gatekeeperNames, row.gatekeeperId) }}
@@ -100,13 +102,13 @@ export function ApprovalContext({
           testId="approval-context-card"
         >
           <dl className="definition-list">
-            <dt>请求于 Requested</dt>
+            <dt>{t('请求于', 'Requested')}</dt>
             <dd>
               <time title={formatDateTime(row.requestedAt)}>{formatRelative(row.requestedAt)}</time>
             </dd>
             {row.decidedBy ? (
               <>
-                <dt>决定者 Decided by</dt>
+                <dt>{t('决定者', 'Decided by')}</dt>
                 <dd className="row-wrap">
                   <RefChip
                     kind="principal"
@@ -125,13 +127,13 @@ export function ApprovalContext({
             ) : null}
             {row.decisionReason ? (
               <>
-                <dt>理由 Reason</dt>
+                <dt>{t('理由', 'Reason')}</dt>
                 <dd className="pre-wrap">{row.decisionReason}</dd>
               </>
             ) : null}
             {row.parentWorkerRunId ? (
               <>
-                <dt>Worker 运行 Worker run</dt>
+                <dt>{t('Worker 运行', 'Worker run')}</dt>
                 <dd>
                   <RefChip kind="object" id={row.parentWorkerRunId} name="WorkerRun" size="s" />
                 </dd>
@@ -139,13 +141,13 @@ export function ApprovalContext({
             ) : null}
             {row.executedAt ? (
               <>
-                <dt>执行于 Executed</dt>
+                <dt>{t('执行于', 'Executed')}</dt>
                 <dd>{formatDateTime(row.executedAt)}</dd>
               </>
             ) : null}
             {row.failedAt ? (
               <>
-                <dt className="text-danger">失败于 Failed</dt>
+                <dt className="text-danger">{t('失败于', 'Failed')}</dt>
                 <dd className="text-danger">{formatDateTime(row.failedAt)}</dd>
               </>
             ) : null}

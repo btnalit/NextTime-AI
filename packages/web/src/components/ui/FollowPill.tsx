@@ -1,3 +1,4 @@
+import { useT } from '../../lib/i18n.js';
 import { Icon } from './Icon.js';
 
 export interface FollowPillProps {
@@ -14,10 +15,11 @@ export interface FollowPillProps {
  * the pill itself is the affordance, the number is the urgency.
  */
 export function FollowPill({ count, onClick, testId }: FollowPillProps) {
+  const t = useT();
   const label =
     count > 0
       ? `跟随最新输出 · ${count > 99 ? '99+' : count} 条新消息`
-      : '跟随最新输出 Follow latest';
+      : t('跟随最新输出', 'Follow latest');
   return (
     <button
       type="button"

@@ -23,14 +23,14 @@ const ROWS: readonly Row[] = [
 const COLUMNS: readonly DataTableColumn<Row>[] = [
   {
     id: 'name',
-    header: '名称 Name',
+    header: '名称',
     cell: (row) => row.name,
     priority: 'primary',
     sortable: true,
     sortValue: (row) => row.name,
   },
-  { id: 'status', header: '状态 Status', cell: (row) => row.status, priority: 'high' },
-  { id: 'note', header: '备注 Note', cell: (row) => row.note },
+  { id: 'status', header: '状态', cell: (row) => row.status, priority: 'high' },
+  { id: 'note', header: '备注', cell: (row) => row.note },
 ];
 
 /** A minimal `matchMedia` mock fixed at one match state — `data-table.tsx` only reads `.matches`
@@ -61,9 +61,9 @@ describe('kit/DataTable', () => {
     );
     expect(screen.getByRole('table')).toBeTruthy();
     expect(screen.getAllByRole('columnheader').map((el) => el.textContent)).toEqual([
-      '名称 Name',
-      '状态 Status',
-      '备注 Note',
+      '名称',
+      '状态',
+      '备注',
     ]);
     const rows = screen.getAllByRole('row');
     // header row + 2 data rows
@@ -98,7 +98,7 @@ describe('kit/DataTable', () => {
     expect(first).toBeDefined();
     expect(first?.textContent).toContain('Zebra');
     expect(first?.textContent).toContain('active');
-    expect(first?.textContent).toContain('备注 Note');
+    expect(first?.textContent).toContain('备注');
     expect(first?.textContent).toContain('z-note');
   });
 
@@ -120,14 +120,14 @@ describe('kit/DataTable', () => {
       .map((row) => row.textContent);
     expect(cells[0]).toContain('Zebra');
 
-    fireEvent.click(screen.getByRole('button', { name: /名称 Name/ }));
+    fireEvent.click(screen.getByRole('button', { name: /名称/ }));
     cells = screen
       .getAllByRole('row')
       .slice(1)
       .map((row) => row.textContent);
     expect(cells[0]).toContain('Apple');
 
-    fireEvent.click(screen.getByRole('button', { name: /名称 Name/ }));
+    fireEvent.click(screen.getByRole('button', { name: /名称/ }));
     cells = screen
       .getAllByRole('row')
       .slice(1)
@@ -146,7 +146,7 @@ describe('kit/DataTable', () => {
         testId="test-table"
       />,
     );
-    expect(screen.queryByRole('button', { name: /备注 Note/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /备注/ })).toBeNull();
   });
 
   it('calls onRowClick with the row, but not when a nested button is clicked', () => {
@@ -158,7 +158,7 @@ describe('kit/DataTable', () => {
         id: 'action',
         header: '',
         priority: 'high',
-        cell: () => <button type="button">操作 Act</button>,
+        cell: () => <button type="button">操作</button>,
       },
     ];
     render(
@@ -172,7 +172,7 @@ describe('kit/DataTable', () => {
       />,
     );
     const rowA = screen.getByTestId('row-a');
-    fireEvent.click(within(rowA).getByRole('button', { name: '操作 Act' }));
+    fireEvent.click(within(rowA).getByRole('button', { name: '操作' }));
     expect(onRowClick).not.toHaveBeenCalled();
 
     fireEvent.click(rowA);

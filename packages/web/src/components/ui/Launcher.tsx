@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useT } from '../../lib/i18n.js';
 import { Button } from './Button.js';
 
 /** The four transport kinds a system can be reached through (`GateTransportKindWireSchema`). */
@@ -57,12 +58,14 @@ export function Launcher({
   onNext,
   onBack,
   canNext,
-  finishLabel = '完成 Finish',
+  finishLabel,
   busy = false,
   kinds = LAUNCHER_KINDS,
   children,
   testId,
 }: LauncherProps) {
+  const t = useT();
+  const effectiveFinishLabel = finishLabel ?? t('完成', 'Finish');
   const last = step === LAUNCHER_STEPS.length - 1;
   const forwardEnabled = canNext ?? (step === 0 ? kind !== null : true);
   return (
@@ -70,7 +73,7 @@ export function Launcher({
       className="launcher"
       data-testid={testId}
       data-step={step}
-      aria-label="接入启动器 Launcher"
+      aria-label={t('接入启动器', 'Launcher')}
     >
       <ol className="launcher-steps">
         {LAUNCHER_STEPS.map((item, index) => {
@@ -97,7 +100,7 @@ export function Launcher({
       <div className="launcher-body">
         {step === 0 ? (
           <fieldset className="launcher-kinds">
-            <legend className="section-title">类型 Kind</legend>
+            <legend className="section-title">{t('类型', 'Kind')}</legend>
             <div className="radio-group" data-testid="launcher-kind-group">
               {kinds.map((option) => (
                 <label key={option} className="radio-option launcher-kind">
@@ -129,7 +132,7 @@ export function Launcher({
           disabled={step === 0 || busy}
           data-testid="launcher-back"
         >
-          上一步 Back
+          {t('上一步', 'Back')}
         </Button>
         <Button
           variant="primary"
@@ -138,7 +141,7 @@ export function Launcher({
           loading={busy}
           data-testid="launcher-next"
         >
-          {last ? finishLabel : '下一步 Next'}
+          {last ? effectiveFinishLabel : t('下一步', 'Next')}
         </Button>
       </div>
     </section>

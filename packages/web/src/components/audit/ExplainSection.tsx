@@ -9,6 +9,7 @@ import {
 } from '../../lib/audit.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
 import { Button } from '../ui/Button.js';
@@ -48,6 +49,7 @@ const IDLE: ExplainState = { busy: false, error: null, nodeId: null, result: nul
  * `minRole: 'member'`.
  */
 export function ExplainSection({ http, requestedNodeId, principalNames }: ExplainSectionProps) {
+  const t = useT();
   const toast = useToast();
   const [nodeId, setNodeId] = useState(requestedNodeId ?? '');
   const [state, setState] = useState<ExplainState>(IDLE);
@@ -93,8 +95,8 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
       toast.push({
         tone: saved ? 'ok' : 'warn',
         title: saved
-          ? '已导出 PROV-JSON Exported PROV-JSON'
-          : '浏览器不支持下载 Download not supported in this browser',
+          ? t('已导出', 'PROV-JSON Exported PROV-JSON')
+          : t('浏览器不支持下载', 'Download not supported in this browser'),
       });
     } catch (err) {
       setExportError(err);
@@ -108,7 +110,7 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
   return (
     <section className="section" aria-labelledby="explain-title" data-testid="explain-section">
       <div className="section-header">
-        <h2 id="explain-title">溯源 Provenance (explain)</h2>
+        <h2 id="explain-title">{t('溯源', 'Provenance (explain)')}</h2>
         {state.nodeId && state.result ? (
           <Button
             variant="secondary"
@@ -117,15 +119,15 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
             onClick={() => void handleExport()}
             data-testid="explain-export"
           >
-            导出 Export PROV-JSON
+            {t('导出', 'Export PROV-JSON')}
           </Button>
         ) : null}
       </div>
       <form className="inline-form" onSubmit={handleSubmit} data-testid="explain-form">
         <Field
           id="explain-node-id"
-          label="节点 id Node id"
-          hint="Fact、Decision 或 Activity 的 id。 A Fact, Decision, or Activity id."
+          label={t('节点 id', 'Node id')}
+          hint={t('Fact、Decision 或 Activity 的 id。', 'A Fact, Decision, or Activity id.')}
         >
           <Input
             id="explain-node-id"
@@ -136,25 +138,28 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
           />
         </Field>
         <Button type="submit" variant="primary" loading={state.busy} disabled={!nodeId.trim()}>
-          解释 Explain
+          {t('解释', 'Explain')}
         </Button>
       </form>
       {state.error !== null ? (
         <ErrorBanner
           error={state.error}
-          title="无法解释该节点 Could not explain this node"
+          title={t('无法解释该节点', 'Could not explain this node')}
           testId="explain-error"
         />
       ) : null}
       {exportError !== null ? (
         isForbiddenError(exportError) ? (
           <Notice tone="warn" testId="explain-export-forbidden">
-            导出需要 auditor 角色（export_prov）。 Export needs the auditor role (export_prov).
+            {t(
+              '导出需要 auditor 角色（export_prov）。',
+              'Export needs the auditor role (export_prov).',
+            )}
           </Notice>
         ) : (
           <ErrorBanner
             error={exportError}
-            title="无法导出 Could not export"
+            title={t('无法导出', 'Could not export')}
             testId="explain-export-error"
           />
         )
@@ -175,6 +180,7 @@ function ExplainResultView({
   readonly raw: unknown;
   readonly principalNames?: ReadonlyMap<string, string>;
 }) {
+  const t = useT();
   const { decision, links } = view;
   const hasLinks =
     links.taskId !== undefined ||
@@ -185,15 +191,15 @@ function ExplainResultView({
     <div className="stack" data-testid="explain-result" data-node-type={view.nodeType}>
       {decision ? (
         <div className="stack-s" data-testid="explain-decision">
-          <span className="section-title">决定 Decision</span>
+          <span className="section-title">{t('决定', 'Decision')}</span>
           <dl className="definition-list">
-            <dt>决定 Decision</dt>
+            <dt>{t('决定', 'Decision')}</dt>
             <dd>
               <RefChip kind="object" id={decision.id} name={decision.summary} size="s" />
             </dd>
-            <dt>状态 Status</dt>
+            <dt>{t('状态', 'Status')}</dt>
             <dd className="mono">{decision.status}</dd>
-            <dt>决定者 Decided by</dt>
+            <dt>{t('决定者', 'Decided by')}</dt>
             <dd>
               {decision.decidedByPrincipal ? (
                 <RefChip
@@ -228,11 +234,11 @@ function ExplainResultView({
       />
       {hasLinks ? (
         <div className="stack-s" data-testid="explain-links">
-          <span className="section-title">关联 Links</span>
+          <span className="section-title">{t('关联', 'Links')}</span>
           <dl className="definition-list">
             {links.taskId ? (
               <>
-                <dt>任务 Task</dt>
+                <dt>{t('任务', 'Task')}</dt>
                 <dd>
                   <RefChip
                     kind="object"
@@ -247,7 +253,7 @@ function ExplainResultView({
             ) : null}
             {links.workerRunId ? (
               <>
-                <dt>Worker 运行 Worker run</dt>
+                <dt>{t('Worker 运行', 'Worker run')}</dt>
                 <dd>
                   <RefChip
                     kind="object"
@@ -262,7 +268,7 @@ function ExplainResultView({
             ) : null}
             {links.actionRequestId ? (
               <>
-                <dt>动作请求 Action request</dt>
+                <dt>{t('动作请求', 'Action request')}</dt>
                 <dd>
                   <RefChip
                     kind="actionRequest"
@@ -277,7 +283,7 @@ function ExplainResultView({
             ) : null}
             {links.onBehalfOf && !view.activity?.onBehalfOfPrincipal ? (
               <>
-                <dt>代表 On behalf of</dt>
+                <dt>{t('代表', 'On behalf of')}</dt>
                 <dd>
                   <RefChip
                     kind="principal"

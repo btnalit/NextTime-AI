@@ -162,7 +162,7 @@ describe('StatusChip', () => {
     expect(container.querySelector('.chip-live')).toBeTruthy();
   });
 
-  it('S8 W1-A9: a "中文 English" pair label renders only the active language', () => {
+  it('S8 W1-A9: a "中文', () => {
     const zhOnly = renderChip(<StatusChip machine="userStatus" status="active" />);
     expect(zhOnly.container.querySelector('.chip')?.textContent).toBe('活跃');
     expect(zhOnly.container.textContent).not.toContain('Active');

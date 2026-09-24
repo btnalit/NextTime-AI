@@ -17,7 +17,7 @@ function Harness(props: Omit<ConfirmProps, 'open' | 'onOpenChange' | 'anchor'>) 
       onOpenChange={setOpen}
       anchor={
         <button type="button" onClick={() => setOpen(true)} data-testid="trigger">
-          触发 Trigger
+          触发
         </button>
       }
     />
@@ -31,9 +31,9 @@ function renderTier(tier: ConfirmLevel, overrides: Partial<ConfirmProps> = {}) {
     ...render(
       <Harness
         tier={tier}
-        title="批准 Approve"
+        title="批准"
         target={tier === 'irreversible' ? 'acme-prod' : 'docker.container_stop'}
-        confirmLabel="确认 Confirm"
+        confirmLabel="确认"
         testId="confirm"
         {...overrides}
         onConfirm={onConfirm}
@@ -56,10 +56,10 @@ describe('kit/Confirm — low', () => {
           onOpenChange={setOpen}
           anchor={
             <button type="button" onClick={() => setOpen(true)} data-testid="trigger">
-              归档 Archive
+              归档
             </button>
           }
-          title="已归档 Archived"
+          title="已归档"
           onConfirm={onConfirm}
           notify={notify}
           undo={{ onUndo }}
@@ -72,7 +72,7 @@ describe('kit/Confirm — low', () => {
     await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     const call = notify.mock.calls[0]?.[0];
     expect(call.tone).toBe('ok');
-    expect(call.title).toBe('已归档 Archived');
+    expect(call.title).toBe('已归档');
     call.action.onClick();
     expect(onUndo).toHaveBeenCalledTimes(1);
   });
@@ -88,10 +88,10 @@ describe('kit/Confirm — low', () => {
           onOpenChange={setOpen}
           anchor={
             <button type="button" onClick={() => setOpen(true)} data-testid="trigger">
-              归档 Archive
+              归档
             </button>
           }
-          title="已归档 Archived"
+          title="已归档"
           onConfirm={async () => {
             throw new Error('kernel said no');
           }}
@@ -109,7 +109,7 @@ describe('kit/Confirm — low', () => {
 
 describe('kit/Confirm — medium', () => {
   it('is closed until the anchor opens it, then renders next to it with the target/impact and focus on confirm', async () => {
-    renderTier('medium', { impact: ['3 个门实例 gate instances'] });
+    renderTier('medium', { impact: ['3 个门实例'] });
     expect(screen.queryByTestId('confirm')).toBeNull();
     fireEvent.click(screen.getByTestId('trigger'));
     const popover = await screen.findByTestId('confirm');
@@ -184,7 +184,7 @@ describe('kit/Confirm — irreversible', () => {
     const onConfirm = vi.fn(async () => undefined);
     renderTier('irreversible', {
       onConfirm,
-      confirmLabel: '清除 Purge',
+      confirmLabel: '清除',
       target: 'acme-prod',
     });
     fireEvent.click(screen.getByTestId('trigger'));

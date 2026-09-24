@@ -2,6 +2,7 @@ import type { PlatformWorkspaceWire } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
@@ -34,6 +35,7 @@ export function CreateWorkspaceForm({
   onCreated,
   onCancel,
 }: CreateWorkspaceFormProps) {
+  const t = useT();
   const [name, setName] = useState('');
   const [ownerUserId, setOwnerUserId] = useState('');
   const [entryModel, setEntryModel] = useState<string | null>(null);
@@ -73,7 +75,7 @@ export function CreateWorkspaceForm({
       noValidate
       data-testid="create-workspace-form"
     >
-      <Field id="cw-name" label="名称 Name" required>
+      <Field id="cw-name" label={t('名称', 'Name')} required>
         <Input
           id="cw-name"
           value={name}
@@ -86,7 +88,7 @@ export function CreateWorkspaceForm({
       <UserPicker
         http={http}
         id="cw-owner"
-        label="首位 owner First owner"
+        label={t('首位 owner', 'First owner')}
         hint="这个用户会成为该工作区的 owner，并在「管理 → 工作区配置」里看到它。 This user becomes the workspace's owner and sees it under 管理 → 工作区配置."
         value={ownerUserId}
         onChange={setOwnerUserId}
@@ -113,16 +115,16 @@ export function CreateWorkspaceForm({
 
       <PlatformError
         error={error}
-        title="无法新建工作区 Could not create this workspace"
+        title={t('无法新建工作区', 'Could not create this workspace')}
         testId="create-workspace-error"
       />
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
-          取消 Cancel
+          {t('取消', 'Cancel')}
         </Button>
         <Button type="submit" variant="primary" loading={submitting} disabled={!ready}>
-          创建 Create
+          {t('创建', 'Create')}
         </Button>
       </div>
     </form>

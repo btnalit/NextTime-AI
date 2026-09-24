@@ -8,6 +8,7 @@ import type { CapabilityListResult } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
+import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { GateCredentialEntry } from './platform/GateCredentialEntry.js';
 import { PlatformError } from './platform/PlatformError.js';
@@ -53,6 +54,7 @@ export function AvailableGateInstancesSection({
   onEnabled,
   canEnable,
 }: AvailableGateInstancesSectionProps) {
+  const t = useT();
   const permissions = usePermissions();
   const forbidden = available.state.status === 'error' && isForbiddenError(available.state.error);
   useEffect(() => {
@@ -76,7 +78,7 @@ export function AvailableGateInstancesSection({
   return (
     <section className="section" aria-labelledby="available-gates-title">
       <div className="section-header">
-        <h2 id="available-gates-title">从平台目录启用 Enable from platform catalog</h2>
+        <h2 id="available-gates-title">{t('从平台目录启用', 'Enable from platform catalog')}</h2>
         <Button
           variant="ghost"
           size="s"
@@ -84,7 +86,7 @@ export function AvailableGateInstancesSection({
           onClick={() => void available.reload()}
           loading={available.state.status === 'ready' && available.state.refreshing}
         >
-          刷新 Refresh
+          {t('刷新', 'Refresh')}
         </Button>
       </div>
 
@@ -96,7 +98,10 @@ export function AvailableGateInstancesSection({
         />
       ) : forbidden ? (
         <Notice testId="available-gates-forbidden">
-          从平台目录启用是 owner 专属操作 Enabling from the platform catalog is owner-only.
+          {t(
+            '从平台目录启用是 owner 专属操作',
+            'Enabling from the platform catalog is owner-only.',
+          )}
         </Notice>
       ) : available.state.status === 'error' ? (
         <ErrorBanner
@@ -108,8 +113,11 @@ export function AvailableGateInstancesSection({
       ) : rows.length === 0 ? (
         <EmptyState
           icon="grid"
-          title="平台目录里还没有可启用的实例 Nothing to enable yet"
-          body="An administrator sets a connector to 平台预置 platform-preset for its instances to show up here."
+          title={t('平台目录里还没有可启用的实例', 'Nothing to enable yet')}
+          body={t(
+            'An administrator sets a connector to 平台预置',
+            'platform-preset for its instances to show up here.',
+          )}
           testId="available-gates-empty"
         />
       ) : (
@@ -117,12 +125,12 @@ export function AvailableGateInstancesSection({
           <table className="data-table" data-testid="available-gates-table">
             <thead>
               <tr>
-                <th>名称 Name</th>
-                <th>接入包 Connector</th>
-                <th>平台状态 Platform status</th>
-                <th>健康 Health</th>
+                <th>{t('名称', 'Name')}</th>
+                <th>{t('接入包', 'Connector')}</th>
+                <th>{t('平台状态', 'Platform status')}</th>
+                <th>{t('健康', 'Health')}</th>
                 <th>Operation 数</th>
-                <th>本工作区 This workspace</th>
+                <th>{t('本工作区', 'This workspace')}</th>
               </tr>
             </thead>
             <tbody>
@@ -154,6 +162,7 @@ function AvailableGateRow({
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
   readonly canEnable: boolean;
 }) {
+  const t = useT();
   const [enabling, setEnabling] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [publishedCount, setPublishedCount] = useState<number | null>(null);
@@ -204,19 +213,19 @@ function AvailableGateRow({
       <td>
         {row.gatekeeperId ? (
           <div className="stack-s">
-            <a href={hrefs.gatekeeper(row.gatekeeperId)}>已启用 Enabled</a>
+            <a href={hrefs.gatekeeper(row.gatekeeperId)}>{t('已启用', 'Enabled')}</a>
             <GateCredentialEntry
               requestToken={() =>
                 http.call<GateHostTokenWire>('issue_gate_credential_token', {
                   gateId: row.gateId,
                 })
               }
-              tokenButtonLabel="录入我的凭证 Enter my credential"
+              tokenButtonLabel={t('录入我的凭证', 'Enter my credential')}
             />
           </div>
         ) : !platformEnabled ? (
           <span className="muted" data-testid={`available-gate-not-enableable-${row.gateId}`}>
-            平台侧未启用 Not enabled on the platform
+            {t('平台侧未启用', 'Not enabled on the platform')}
           </span>
         ) : canEnable ? (
           <Button
@@ -226,16 +235,20 @@ function AvailableGateRow({
             loading={enabling}
             data-testid={`enable-gate-${row.gateId}`}
           >
-            在本工作区启用 Enable here
+            {t('在本工作区启用', 'Enable here')}
           </Button>
         ) : (
-          <span className="muted">未启用（由 owner 启用） Not enabled (owner enables)</span>
+          <span className="muted">
+            {t('未启用（由 owner 启用）', 'Not enabled (owner enables)')}
+          </span>
         )}
-        <PlatformError error={error} title="无法启用 Could not enable this instance" />
+        <PlatformError error={error} title={t('无法启用', 'Could not enable this instance')} />
         {publishedCount !== null ? (
           <Notice>
-            已发布 {publishedCount} 个 Operation Published {publishedCount} operation
-            {publishedCount === 1 ? '' : 's'}
+            {t(
+              `已发布 ${publishedCount} 个 Operation`,
+              `Published ${publishedCount} operation${publishedCount === 1 ? '' : 's'}`,
+            )}
           </Notice>
         ) : null}
       </td>

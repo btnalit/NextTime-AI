@@ -7,16 +7,16 @@ afterEach(cleanup);
 
 describe('kit/PageHeader', () => {
   it('renders the title as a single h1, the description, and no breadcrumb nav when none is given', () => {
-    render(<PageHeader title="对话 Chats" description="Your conversations." />);
+    render(<PageHeader title="对话" description="Your conversations." />);
     const heading = screen.getByRole('heading', { level: 1 });
-    expect(heading.textContent).toBe('对话 Chats');
+    expect(heading.textContent).toBe('对话');
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByText('Your conversations.')).toBeTruthy();
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
   });
 
   it('renders no breadcrumb nav for an empty breadcrumb array', () => {
-    render(<PageHeader title="对话 Chats" breadcrumb={[]} />);
+    render(<PageHeader title="对话" breadcrumb={[]} />);
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
   });
 

@@ -2,6 +2,7 @@ import type { ObjectWire, OntologyObjectTypeWire } from '@nexttime/shared';
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { DataList } from '../ui/DataList.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -47,6 +48,7 @@ export function ObjectSearch({
   identityKeys,
   asOf,
 }: ObjectSearchProps) {
+  const t = useT();
   const [draftQ, setDraftQ] = useState(q);
   const [draftType, setDraftType] = useState(type);
   useEffect(() => setDraftQ(q), [q]);
@@ -83,8 +85,8 @@ export function ObjectSearch({
         <TypeFilter id="graph-type" value={draftType} onChange={setDraftType} types={types} />
         <Field
           id="graph-q"
-          label="关键字 Query"
-          hint="按属性与身份子串匹配 Substring over properties / identity"
+          label={t('关键字', 'Query')}
+          hint={t('按属性与身份子串匹配', 'Substring over properties / identity')}
         >
           <Input
             id="graph-q"
@@ -95,12 +97,14 @@ export function ObjectSearch({
           />
         </Field>
         <Button type="submit" variant="primary" icon="search" data-testid="graph-search-submit">
-          搜索 Search
+          {t('搜索', 'Search')}
         </Button>
       </form>
 
       <div className="section-header">
-        <h2 className="section-title">{browsing ? '最近更新 Recently updated' : '结果 Results'}</h2>
+        <h2 className="section-title">
+          {browsing ? t('最近更新', 'Recently updated') : t('结果', 'Results')}
+        </h2>
         {results.state.status === 'ready' ? (
           <span className="text-3 text-small" data-testid="graph-result-count">
             {results.state.data.items.length}
@@ -114,18 +118,21 @@ export function ObjectSearch({
       ) : results.state.status === 'error' ? (
         <ErrorBanner
           error={results.state.error}
-          title="无法搜索对象 Could not search Objects"
+          title={t('无法搜索对象', 'Could not search Objects')}
           onRetry={() => void results.reload()}
           testId="graph-results-error"
         />
       ) : results.state.data.items.length === 0 ? (
         <EmptyState
           icon="search"
-          title="没有匹配的对象 No matching Objects"
+          title={t('没有匹配的对象', 'No matching Objects')}
           body={
             browsing
-              ? '该工作区还没有对象；采集器或 Worker 写入后会出现在这里。 The workspace has no Objects yet — a collector run or a Worker result creates them.'
-              : '换一个关键字或类型。 Try another query or type.'
+              ? t(
+                  '该工作区还没有对象；采集器或 Worker 写入后会出现在这里。 The workspace has no Objects yet —',
+                  'a collector run or a Worker result creates them.',
+                )
+              : t('换一个关键字或类型。', 'Try another query or type.')
           }
           testId="graph-results-empty"
         />
@@ -134,7 +141,7 @@ export function ObjectSearch({
           {results.state.refreshError !== null ? (
             <ErrorBanner
               error={results.state.refreshError}
-              title="刷新失败 Refresh failed"
+              title={t('刷新失败', 'Refresh failed')}
               onRetry={() => void results.reload()}
             />
           ) : null}
@@ -152,7 +159,10 @@ export function ObjectSearch({
             ))}
           </DataList>
           {results.loadMoreError !== null ? (
-            <ErrorBanner error={results.loadMoreError} title="无法加载更多 Could not load more" />
+            <ErrorBanner
+              error={results.loadMoreError}
+              title={t('无法加载更多', 'Could not load more')}
+            />
           ) : null}
           {results.state.data.nextCursor !== undefined ? (
             <div className="row">
@@ -163,7 +173,7 @@ export function ObjectSearch({
                 onClick={() => void results.loadMore()}
                 data-testid="graph-load-more"
               >
-                加载更多 Load more
+                {t('加载更多', 'Load more')}
               </Button>
             </div>
           ) : null}

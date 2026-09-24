@@ -40,7 +40,7 @@ describe('GraphPage', () => {
     expect(screen.getByTestId('graph-results-loading')).toBeTruthy();
     const rows = await screen.findAllByTestId('graph-result-row');
     expect(rows).toHaveLength(2);
-    expect(screen.getByText('最近更新 Recently updated')).toBeTruthy();
+    expect(screen.getByText('最近更新')).toBeTruthy();
     expect(screen.getByTestId('graph-no-object')).toBeTruthy();
     expect(screen.getByTestId('graph-legend').textContent).toContain('2 小时 2 h');
     // Names come from the identity key (Host: hostname) and never a bare uuid.
@@ -76,7 +76,7 @@ describe('GraphPage', () => {
       }),
     );
     expect(window.location.hash).toBe('#/work/graph?q=linux&type=Host');
-    expect(screen.getByText('结果 Results')).toBeTruthy();
+    expect(screen.getByText('结果')).toBeTruthy();
     expect(await screen.findAllByTestId('graph-result-row')).toHaveLength(1);
   });
 
@@ -220,7 +220,7 @@ describe('GraphPage', () => {
     }
   });
 
-  it('time-travels with 截至 As of through the same state_at call, and returns to now', async () => {
+  it('time-travels with 截至', async () => {
     const { http } = await openHost();
     fireEvent.change(screen.getByTestId('graph-as-of-input'), {
       target: { value: '2026-01-02T03:04' },
@@ -259,7 +259,7 @@ describe('GraphPage', () => {
     renderPage();
     const card = await screen.findByTestId('graph-object-card');
     expect(card.getAttribute('data-object-id')).toBe(WEB.id);
-    expect(screen.getByTestId('graph-back').textContent).toContain('返回搜索 Back to search');
+    expect(screen.getByTestId('graph-back').textContent).toContain('返回搜索');
     // The Host neighbour (both Facts point at it) resolves by get_object and its chip links to
     // a deep link too.
     await waitFor(() =>

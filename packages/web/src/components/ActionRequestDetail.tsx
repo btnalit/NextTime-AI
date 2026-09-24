@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { type ActionCardData, isDecidable } from '../lib/action-card.js';
 import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../lib/format.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { CopyId } from './ui/CopyId.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -56,6 +57,7 @@ export function ActionRequestDetail({
   canAlwaysAllow,
   compact = false,
 }: ActionRequestDetailProps) {
+  const t = useT();
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
@@ -175,8 +177,11 @@ export function ActionRequestDetail({
             }}
             placeholder={
               reasonRequired
-                ? '理由（高影响：批准必填，进审计） Reason (required for a high-impact approval; audited)'
-                : '理由（可选，随决定记入审计） Reason (optional, recorded with the decision)'
+                ? t(
+                    '理由（高影响：批准必填，进审计）',
+                    'Reason (required for a high-impact approval; audited)',
+                  )
+                : t('理由（可选，随决定记入审计）', 'Reason (optional, recorded with the decision)')
             }
             aria-label="Decision reason"
             aria-required={reasonRequired || undefined}
@@ -218,7 +223,10 @@ export function ActionRequestDetail({
                 const trimmed = reason.trim();
                 if (reasonRequired && trimmed === '') {
                   setReasonError(
-                    '高影响动作必须填写批准理由 A reason is required for a high-impact action',
+                    t(
+                      '高影响动作必须填写批准理由',
+                      'A reason is required for a high-impact action',
+                    ),
                   );
                   return;
                 }

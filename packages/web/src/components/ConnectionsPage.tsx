@@ -18,6 +18,7 @@ import { describeError, isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
+import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { statusValues } from '../lib/status-tone.js';
 import { AvailableGateInstancesSection } from './AvailableGateInstancesSection.js';
@@ -92,6 +93,7 @@ export function ConnectionsPage({
   onSelectGatekeeper,
   platformAdmin = false,
 }: ConnectionsPageProps) {
+  const t = useT();
   const permissions = usePermissions();
   const toast = useToast();
   const [filter, setFilter] = useState<RequestFilter>('requested');
@@ -191,7 +193,7 @@ export function ConnectionsPage({
         { connectionRequestId: row.id },
       );
       requests.mutate((rows) => rows.map((item) => (item.id === cancelled.id ? cancelled : item)));
-      toast.push({ tone: 'ok', title: '已取消申请 Connection request cancelled' });
+      toast.push({ tone: 'ok', title: t('已取消申请', 'Connection request cancelled') });
     } catch (err) {
       const described = describeError(err);
       const mapped = cancelConnectionRequestMessage(described.code);
@@ -206,8 +208,11 @@ export function ConnectionsPage({
   return (
     <div className="page">
       <PageHeader
-        title="系统接入 Systems"
-        description="把系统接到门后面、发布它的 Operation、把门授予成员的入口 agent。 Bring systems in behind a Gatekeeper, publish their operations, and grant gates to people's entry agents."
+        title={t('系统接入', 'Systems')}
+        description={t(
+          '把系统接到门后面、发布它的 Operation、把门授予成员的入口 agent。',
+          "Bring systems in behind a Gatekeeper, publish their operations, and grant gates to people's entry agents.",
+        )}
         breadcrumb={breadcrumbFor('systems')}
         primaryAction={
           <Button
@@ -216,13 +221,13 @@ export function ConnectionsPage({
             onClick={() => setDrawer({ kind: 'launcher' })}
             data-testid="connect-system-button"
           >
-            接入一个系统 Connect a system
+            {t('接入一个系统', 'Connect a system')}
           </Button>
         }
         actions={
           <>
             <Button variant="secondary" icon="inbox" onClick={() => setDrawer({ kind: 'request' })}>
-              申请连接 Request connection
+              {t('申请连接', 'Request connection')}
             </Button>
             {canCreate ? (
               <Button
@@ -231,12 +236,12 @@ export function ConnectionsPage({
                 onClick={() => setDrawer({ kind: 'complete', request: null })}
                 data-testid="register-gate-button"
               >
-                直接注册门 Register a gate
+                {t('直接注册门', 'Register a gate')}
               </Button>
             ) : null}
             {canCreate ? (
               <Button variant="secondary" icon="grid" onClick={() => setDrawer({ kind: 'wizard' })}>
-                接入向导 Onboarding wizard
+                {t('接入向导', 'Onboarding wizard')}
               </Button>
             ) : null}
           </>
@@ -333,7 +338,7 @@ export function ConnectionsPage({
                           size="s"
                           onClick={() => setDrawer({ kind: 'complete', request: row })}
                         >
-                          完成 Complete
+                          {t('完成', 'Complete')}
                         </Button>
                       ) : null}
                       <Confirm
@@ -347,14 +352,17 @@ export function ConnectionsPage({
                             onClick={() => setCancelling(row)}
                             data-testid={`cancel-request-${row.id}`}
                           >
-                            取消 Cancel
+                            {t('取消', 'Cancel')}
                           </Button>
                         }
-                        title="取消连接申请 Cancel this connection request"
-                        description="申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。 The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any."
+                        title={t('取消连接申请', 'Cancel this connection request')}
+                        description={t(
+                          '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，owner 可取消任何申请。 The request becomes cancelled; nothing registered is touched. Only your own request —',
+                          'the owner may cancel any.',
+                        )}
                         target={`${row.kind} · ${row.target}`}
-                        confirmLabel="取消申请 Cancel request"
-                        cancelLabel="保留 Keep"
+                        confirmLabel={t('取消申请', 'Cancel request')}
+                        cancelLabel={t('保留', 'Keep')}
                         danger
                         onConfirm={() => cancelRequest(row)}
                         testId="cancel-request-confirm"
@@ -470,10 +478,13 @@ export function ConnectionsPage({
         onClose={() => setDrawer({ kind: 'closed' })}
         title={
           drawer.kind === 'complete' && drawer.request
-            ? '完成连接 Complete connection'
-            : '直接注册门 Register a gate'
+            ? t('完成连接', 'Complete connection')
+            : t('直接注册门', 'Register a gate')
         }
-        subtitle="注册一个已在跑的门实例、把清单导入为草稿；凭证只存在门里。 Registers the Gatekeeper, imports its manifest as drafts, and stores the credential in the gate only."
+        subtitle={t(
+          '注册一个已在跑的门实例、把清单导入为草稿；凭证只存在门里。',
+          'Registers the Gatekeeper, imports its manifest as drafts, and stores the credential in the gate only.',
+        )}
         wide
         testId="complete-connection-drawer"
       >
@@ -491,7 +502,7 @@ export function ConnectionsPage({
       <Drawer
         open={drawer.kind === 'launcher'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title="接入一个系统 Connect a system"
+        title={t('接入一个系统', 'Connect a system')}
         subtitle="选类型 → 连接与凭证 → 能力与策略 → 握手验证"
         wide
         testId="connect-system-drawer"
@@ -521,7 +532,7 @@ export function ConnectionsPage({
       <Drawer
         open={drawer.kind === 'wizard'}
         onClose={() => setDrawer({ kind: 'closed' })}
-        title="接入向导 Onboarding wizard"
+        title={t('接入向导', 'Onboarding wizard')}
         subtitle="Kind → target/credential → import manifest → review operations → done."
         wide
         testId="onboarding-wizard-drawer"

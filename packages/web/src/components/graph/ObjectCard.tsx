@@ -2,6 +2,7 @@ import type { ObjectWire } from '@nexttime/shared';
 import type { ReactNode } from 'react';
 import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../../lib/format.js';
 import { objectDisplayName } from '../../lib/graph-view.js';
+import { useT } from '../../lib/i18n.js';
 import { DataRow } from '../ui/DataList.js';
 import { Icon } from '../ui/Icon.js';
 import { RefChip } from '../ui/RefChip.js';
@@ -67,6 +68,7 @@ export function ObjectCard({
   actions,
   testId,
 }: ObjectCardProps & { readonly actions?: ReactNode }) {
+  const t = useT();
   const name = objectDisplayName(object, identityKeys);
   const identityEntries = object.identityKey ? Object.entries(object.identityKey) : [];
   return (
@@ -89,17 +91,17 @@ export function ObjectCard({
         {actions !== undefined ? <div className="row-wrap">{actions}</div> : null}
       </header>
       <dl className="definition-list">
-        <dt>最近观测 Last observed</dt>
+        <dt>{t('最近观测', 'Last observed')}</dt>
         <dd>
           {object.lastObservedAt ? (
             <time title={formatDateTime(object.lastObservedAt)}>
               {formatRelative(object.lastObservedAt, asOf)}
             </time>
           ) : (
-            <span className="text-3">无 Never</span>
+            <span className="text-3">{t('无', 'Never')}</span>
           )}
         </dd>
-        <dt>更新 Updated</dt>
+        <dt>{t('更新', 'Updated')}</dt>
         <dd>
           <time title={formatDateTime(object.updatedAt)}>
             {formatRelative(object.updatedAt, asOf)}
@@ -107,7 +109,7 @@ export function ObjectCard({
         </dd>
         {identityEntries.length > 0 ? (
           <>
-            <dt>身份 Identity</dt>
+            <dt>{t('身份', 'Identity')}</dt>
             <dd className="graph-identity">
               {identityEntries.map(([key, value]) => (
                 <span key={key} className="graph-identity-pair">
@@ -124,7 +126,7 @@ export function ObjectCard({
       <details className="disclosure" data-testid="graph-object-properties">
         <summary>
           <Icon name="chevron-right" size="s" className="icon-chevron" />
-          属性 Properties ({Object.keys(object.properties).length})
+          {t('属性', 'Properties')} ({Object.keys(object.properties).length})
         </summary>
         <div className="disclosure-body">
           <pre className="code-block pre-wrap">

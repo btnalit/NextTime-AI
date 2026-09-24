@@ -118,7 +118,7 @@ describe('PlatformOverviewPage', () => {
     renderPage(http);
 
     const audit = await screen.findByTestId('platform-overview-audit');
-    expect(audit.textContent).toContain('主机操作员（未署名） Host operator (unattributed)');
+    expect(audit.textContent).toContain('主机操作员（未署名）');
     expect(audit.textContent).not.toContain('null');
   });
 
@@ -135,7 +135,7 @@ describe('PlatformOverviewPage', () => {
     });
     renderPage(http);
 
-    await screen.findByText(/绑定已有 API key/);
+    await screen.findByText(/绑定已有/);
 
     // The form itself posts to /api/auth/bind-api-key (a REST route, not a capability) — stub
     // the global `fetch` (`BindApiKeyForm`'s own `fetchImpl` default) so `onBound` fires and we
@@ -149,10 +149,10 @@ describe('PlatformOverviewPage', () => {
     vi.stubGlobal('fetch', fetchImpl);
     try {
       fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'sk-test' } });
-      fireEvent.click(screen.getByRole('button', { name: '绑定 Bind' }));
+      fireEvent.click(screen.getByRole('button', { name: '绑定' }));
       await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2));
       // The second `platform_overview` read has `pendingActivationUsers: 0` — the form is gone.
-      await waitFor(() => expect(screen.queryByText(/绑定已有 API key/)).toBeNull());
+      await waitFor(() => expect(screen.queryByText(/绑定已有/)).toBeNull());
     } finally {
       vi.unstubAllGlobals();
     }
@@ -167,7 +167,7 @@ describe('PlatformOverviewPage', () => {
     await screen.findByTestId('platform-overview-error');
   });
 
-  it('A1 / A6: the 验收残留 banner counts disabled and expired-ephemeral workspaces from the unfiltered list and links to the residue preset', async () => {
+  it('A1 / A6: the 验收残留', async () => {
     const base = {
       entryModel: null,
       allowedModels: [],

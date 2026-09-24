@@ -108,12 +108,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 async function signInWithApiKey(key: string): Promise<void> {
-  fireEvent.click(await screen.findByText('用 API key 登录 Use an API key instead'));
+  fireEvent.click(await screen.findByText('用 API key 登录'));
   fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: key } });
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 }
 
-describe('App: 我的账户 wiring (C1)', () => {
+describe('App: 我的账户', () => {
   it('API-key session → account page: the claim form can submit and a successful claim swaps in the cookie session', async () => {
     authApi.getMe.mockRejectedValue(new Error('401'));
     authApi.claimIdentity.mockResolvedValue({
@@ -129,14 +129,14 @@ describe('App: 我的账户 wiring (C1)', () => {
     act(() => navigateTo('#/me/account'));
 
     const submit = (await screen.findByRole('button', {
-      name: '设置密码 Set password',
+      name: '设置密码',
     })) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
 
-    fireEvent.change(screen.getByLabelText(/登录名 Login/), { target: { value: 'carol' } });
-    fireEvent.change(screen.getByLabelText(/显示名 Display name/), { target: { value: 'Carol' } });
-    fireEvent.change(screen.getByLabelText(/^密码 Password/), { target: { value: 'password123' } });
-    fireEvent.change(screen.getByLabelText(/确认密码 Confirm password/), {
+    fireEvent.change(screen.getByLabelText(/登录名/), { target: { value: 'carol' } });
+    fireEvent.change(screen.getByLabelText(/显示名/), { target: { value: 'Carol' } });
+    fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: 'password123' } });
+    fireEvent.change(screen.getByLabelText(/确认密码/), {
       target: { value: 'password123' },
     });
     // Before C1 `apiKey` was never passed down, so this button stayed disabled forever.
@@ -150,7 +150,7 @@ describe('App: 我的账户 wiring (C1)', () => {
     // mode for the claimed user (its header shows the login), and the stored key is gone so a
     // later cookie logout cannot silently re-sign in over the key channel.
     await screen.findByText('carol');
-    expect(screen.queryByRole('button', { name: '设置密码 Set password' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '设置密码' })).toBeNull();
     expect(sessionStorage.getItem('nexttime.apiKey')).toBeNull();
   });
 

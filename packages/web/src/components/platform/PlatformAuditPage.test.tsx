@@ -73,7 +73,7 @@ describe('PlatformAuditPage', () => {
     fireEvent.change(within(form).getByLabelText('Action'), {
       target: { value: 'update_platform_settings' },
     });
-    fireEvent.click(within(form).getByRole('button', { name: '应用 Apply' }));
+    fireEvent.click(within(form).getByRole('button', { name: '应用' }));
 
     await waitFor(() =>
       expect(http.calls.at(-1)).toEqual({
@@ -93,7 +93,7 @@ describe('PlatformAuditPage', () => {
     renderPage(http);
     await screen.findByTestId('platform-audit-list');
 
-    const loadMore = screen.getByRole('button', { name: /加载更多 Load more/ });
+    const loadMore = screen.getByRole('button', { name: /加载更多/ });
     fireEvent.click(loadMore);
 
     await waitFor(() => expect(screen.getAllByTestId('platform-audit-row')).toHaveLength(2));
@@ -126,7 +126,7 @@ describe('PlatformAuditPage', () => {
     renderPage(http);
 
     const list = await screen.findByTestId('platform-audit-list');
-    expect(list.textContent).toContain('主机操作员（未署名） Host operator (unattributed)');
+    expect(list.textContent).toContain('主机操作员（未署名）');
     expect(list.textContent).not.toContain('null');
   });
 });

@@ -51,8 +51,8 @@ describe('ProcedureEditor (S6-A A2)', () => {
         onDone={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByLabelText(/^名称 name/), { target: { value: 'Deploy' } });
-    fireEvent.change(screen.getByLabelText(/^描述 description/), {
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Deploy' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), {
       target: { value: 'Deploy web' },
     });
 
@@ -66,18 +66,18 @@ describe('ProcedureEditor (S6-A A2)', () => {
     fireEvent.change(within(first).getByTestId('procedure-step-kind'), {
       target: { value: 'operation' },
     });
-    fireEvent.change(within(first).getByLabelText(/gatekeeperId/), { target: { value: 'gk-1' } });
-    fireEvent.change(within(first).getByLabelText(/operationName/), {
+    fireEvent.change(within(first).getByLabelText(/门/), { target: { value: 'gk-1' } });
+    fireEvent.change(within(first).getByLabelText(/Operation 名/), {
       target: { value: 'restart' },
     });
 
     fireEvent.change(within(second).getByTestId('procedure-step-kind'), {
       target: { value: 'worker' },
     });
-    fireEvent.change(within(second).getByLabelText(/definitionId/), { target: { value: 'wd-1' } });
-    expect((within(second).getByLabelText(/version/) as HTMLInputElement).value).toBe('2');
+    fireEvent.change(within(second).getByLabelText(/Worker 定义/), { target: { value: 'wd-1' } });
+    expect((within(second).getByLabelText(/版本/) as HTMLInputElement).value).toBe('2');
 
-    fireEvent.change(within(third).getByLabelText(/description/), {
+    fireEvent.change(within(third).getByLabelText(/说明/), {
       target: { value: 'ops signs off' },
     });
 
@@ -106,8 +106,8 @@ describe('ProcedureEditor (S6-A A2)', () => {
   it('rejects an invalid step with a field error at its path, and the JSON view round-trips into the form', async () => {
     const { caller, calls } = http({});
     render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText(/^名称 name/), { target: { value: 'X' } });
-    fireEvent.change(screen.getByLabelText(/^描述 description/), { target: { value: 'Y' } });
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'X' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Y' } });
     fireEvent.click(screen.getByTestId('procedure-add-step'));
     fireEvent.click(screen.getByTestId('procedure-submit'));
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
@@ -125,14 +125,12 @@ describe('ProcedureEditor (S6-A A2)', () => {
       },
     });
     fireEvent.click(screen.getByTestId('procedure-json-apply'));
-    expect((screen.getByLabelText(/^名称 name/) as HTMLInputElement).value).toBe('From JSON');
+    expect((screen.getByLabelText(/^名称/) as HTMLInputElement).value).toBe('From JSON');
     const step = screen.getByTestId('procedure-step');
     expect((within(step).getByTestId('procedure-step-kind') as HTMLSelectElement).value).toBe(
       'verify',
     );
-    expect((within(step).getByLabelText(/description/) as HTMLInputElement).value).toBe(
-      'health ok',
-    );
+    expect((within(step).getByLabelText(/说明/) as HTMLInputElement).value).toBe('health ok');
   });
 
   it('copy mode pre-fills the steps from the row and says the result is a new Procedure', () => {
@@ -154,6 +152,6 @@ describe('ProcedureEditor (S6-A A2)', () => {
     );
     expect(screen.getByTestId('procedure-copy-notice').textContent).toContain('new');
     expect(screen.getAllByTestId('procedure-step')).toHaveLength(1);
-    expect((screen.getByLabelText(/^名称 name/) as HTMLInputElement).value).toBe('Deploy');
+    expect((screen.getByLabelText(/^名称/) as HTMLInputElement).value).toBe('Deploy');
   });
 });

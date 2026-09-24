@@ -3,6 +3,7 @@ import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { cn } from '../../lib/cn.js';
 import { describeError } from '../../lib/errors.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from './button.js';
 
 /** §5.9 principle 4 — confirmation by impact, folded to three renderable tiers (S8 W1-A7, audit
@@ -97,13 +98,14 @@ export function Confirm(props: ConfirmProps) {
 /** Runs the action once, keeping the latest callbacks in refs so a re-render with a fresh closure
  *  never re-fires the effect (which keys on `open` alone). */
 function LowTier({ anchor, open, onOpenChange, onConfirm, notify, undo, title }: ConfirmProps) {
-  const latest = useRef({ onConfirm, onOpenChange, notify, undo, title });
-  latest.current = { onConfirm, onOpenChange, notify, undo, title };
+  const t = useT();
+  const latest = useRef({ onConfirm, onOpenChange, notify, undo, title, t });
+  latest.current = { onConfirm, onOpenChange, notify, undo, title, t };
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     void (async () => {
-      const { onConfirm, onOpenChange, notify, undo, title } = latest.current;
+      const { onConfirm, onOpenChange, notify, undo, title, t } = latest.current;
       try {
         await onConfirm();
         if (cancelled) return;
@@ -112,14 +114,14 @@ function LowTier({ anchor, open, onOpenChange, onConfirm, notify, undo, title }:
           title,
           key: `confirm-low:${title}`,
           action: undo
-            ? { label: undo.label ?? '撤销 Undo', onClick: () => void undo.onUndo() }
+            ? { label: undo.label ?? t('撤销', 'Undo'), onClick: () => void undo.onUndo() }
             : undefined,
         });
       } catch (error) {
         if (cancelled) return;
         notify?.({
           tone: 'danger',
-          title: `${title} — 失败 failed`,
+          title: `${title} — ${t('失败', 'failed')}`,
           description: error instanceof Error ? error.message : String(error),
         });
       }
@@ -152,10 +154,11 @@ function useConfirmRun(onConfirm: () => void | Promise<void>, onDone: () => void
 }
 
 function TargetLine({ target }: { readonly target: string | undefined }) {
+  const t = useT();
   if (target === undefined) return null;
   return (
     <dl className="flex flex-col gap-0.5 text-13">
-      <dt className="text-text-2">目标 Target</dt>
+      <dt className="text-text-2">{t('目标', 'Target')}</dt>
       <dd className="font-medium text-text" data-testid="confirm-target">
         {target}
       </dd>
@@ -164,10 +167,11 @@ function TargetLine({ target }: { readonly target: string | undefined }) {
 }
 
 function ImpactList({ impact }: { readonly impact: readonly string[] | undefined }) {
+  const t = useT();
   if (impact === undefined || impact.length === 0) return null;
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-12 font-medium text-text-2">影响范围 Impact</span>
+      <span className="text-12 font-medium text-text-2">{t('影响范围', 'Impact')}</span>
       <ul className="flex flex-col gap-0.5 text-13 text-text" data-testid="confirm-impact">
         {impact.map((line) => (
           <li key={line}>{line}</li>
@@ -332,6 +336,7 @@ function IrreversibleTier({
   children,
   testId,
 }: ConfirmProps) {
+  const t = useT();
   const { busy, error, run } = useConfirmRun(onConfirm, () => onOpenChange(false));
   useRestoreFocusOnClose(open);
   const [typed, setTyped] = useState('');
@@ -384,7 +389,8 @@ function IrreversibleTier({
             {target !== undefined ? (
               <div className="flex flex-col gap-1.5">
                 <label htmlFor={typedId} className="text-13 font-medium text-text">
-                  键入 "{target}" 以确认 Type the target name to confirm
+                  键入 "{target}
+                  {t('" 以确认', 'Type the target name to confirm')}
                 </label>
                 <input
                   id={typedId}
@@ -406,8 +412,10 @@ function IrreversibleTier({
                 className="mt-0.5"
               />
               <span>
-                我知道此操作不可逆，且会写入平台审计。 I understand this cannot be undone and is
-                recorded in the platform audit.
+                {t(
+                  '我知道此操作不可逆，且会写入平台审计。',
+                  'I understand this cannot be undone and is recorded in the platform audit.',
+                )}
               </span>
             </label>
             <ConfirmErrorBanner error={error} />

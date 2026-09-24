@@ -2,6 +2,7 @@ import type { UserWire } from '@nexttime/shared';
 import { type ReactNode, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input, Select } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
@@ -46,6 +47,7 @@ export function UserPicker({
   exclude,
   testId,
 }: UserPickerProps) {
+  const t = useT();
   const [queryInput, setQueryInput] = useState('');
   const [appliedQuery, setAppliedQuery] = useState('');
 
@@ -71,7 +73,7 @@ export function UserPicker({
   return (
     <>
       <div className="row-wrap">
-        <Field id={`${id}-query`} label="按登录名搜索 Search by login">
+        <Field id={`${id}-query`} label={t('按登录名搜索', 'Search by login')}>
           <Input
             id={`${id}-query`}
             value={queryInput}
@@ -97,7 +99,7 @@ export function UserPicker({
           disabled={disabled}
           loading={loading}
         >
-          搜索 Search
+          {t('搜索', 'Search')}
         </Button>
       </div>
 
@@ -109,7 +111,7 @@ export function UserPicker({
           disabled={disabled || loading}
           data-testid={testId}
         >
-          <option value="">选择用户 Pick a user</option>
+          <option value="">{t('选择用户', 'Pick a user')}</option>
           {rows.map((row) => (
             <option key={row.id} value={row.id}>
               {row.login} — {row.displayName}
@@ -121,7 +123,7 @@ export function UserPicker({
 
       <PlatformError
         error={users.state.status === 'error' ? users.state.error : null}
-        title="无法读取用户目录 Could not load the user directory"
+        title={t('无法读取用户目录', 'Could not load the user directory')}
       />
     </>
   );

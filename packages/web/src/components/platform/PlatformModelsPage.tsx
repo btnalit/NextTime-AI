@@ -8,6 +8,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useResource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { LlmAdminClient, type LlmAdminError, llmAdminErrorMessage } from '../../lib/llm-admin.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { Confirm } from '../kit/confirm.js';
@@ -77,6 +78,7 @@ const API_LABEL: Readonly<Record<LlmProviderWire['api'], string>> = {
  * capability call (no `/api/cap` cache key to invalidate).
  */
 export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps) {
+  const t = useT();
   const toast = useToast();
   const client = useMemo(() => new LlmAdminClient(http, { fetchImpl }), [http, fetchImpl]);
   const list = useResource<LlmProviderListWire>(
@@ -112,8 +114,10 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
     toast.push({
       tone: 'ok',
       title: existing ? `已保存 ${saved.displayName}` : `已新增 ${saved.displayName}`,
-      description:
-        'models.json 已重写；工作区"模型与配额"可勾选它的模型。 models.json rewritten — workspaces can now allow its models.',
+      description: t(
+        'models.json 已重写；工作区"模型与配额"可勾选它的模型。 models.json rewritten —',
+        'workspaces can now allow its models.',
+      ),
     });
     void list.reload();
   }
@@ -154,7 +158,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
     // (llm-proxy's DELETE /providers/:id) — surface it separately so it is not lost inside the
     // delete toast's own title.
     if (result.secretCleared) {
-      toast.push({ tone: 'ok', title: '已一并清除控制台密钥 · Console key cleared as well' });
+      toast.push({ tone: 'ok', title: t('已一并清除控制台密钥 ·', 'Console key cleared as well') });
     }
     void list.reload();
   }
@@ -192,7 +196,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
   const providerColumns: readonly DataTableColumn<LlmProviderWire>[] = [
     {
       id: 'provider',
-      header: '供应商 Provider',
+      header: t('供应商', 'Provider'),
       priority: 'primary',
       width: 200,
       cell: (provider) => (
@@ -206,7 +210,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
     },
     {
       id: 'status',
-      header: '状态 Status',
+      header: t('状态', 'Status'),
       priority: 'high',
       width: 110,
       cell: (provider) => (
@@ -233,7 +237,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
               onClick={() => setDrawer({ kind: 'detail', provider })}
               data-testid="provider-open"
             >
-              详情 Details
+              {t('详情', 'Details')}
             </Button>
             <Button
               variant="secondary"
@@ -246,11 +250,14 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                   ? undefined
                   : provider.apiKeyEnv
                     ? `${provider.apiKeyEnv} 未配置 — 测试会被拒绝 not set, the test will be refused`
-                    : '没有配置任何凭证 — 测试会被拒绝 no credential configured, the test will be refused'
+                    : t(
+                        '没有配置任何凭证 — 测试会被拒绝',
+                        'no credential configured, the test will be refused',
+                      )
               }
               data-testid="provider-test"
             >
-              测试调用 Test
+              {t('测试调用', 'Test')}
             </Button>
             <Button
               variant="ghost"
@@ -259,7 +266,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
               disabled={meta?.storeWritable === false}
               data-testid="provider-edit"
             >
-              编辑 Edit
+              {t('编辑', 'Edit')}
             </Button>
             {provider.enabled ? (
               <Confirm
@@ -276,19 +283,25 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                     disabled={meta?.storeWritable === false}
                     data-testid="provider-disable"
                   >
-                    停用 Disable
+                    {t('停用', 'Disable')}
                   </Button>
                 }
-                title="停用供应商 Disable provider"
-                description="代理立即对它返回 404，它会从 models.json 消失；已在工作区里被勾选的模型对话会失败，直到重新启用。 The proxy 404s it at once and it leaves models.json; chats on its models fail until re-enabled."
+                title={t('停用供应商', 'Disable provider')}
+                description={t(
+                  '代理立即对它返回 404，它会从 models.json 消失；已在工作区里被勾选的模型对话会失败，直到重新启用。',
+                  'The proxy 404s it at once and it leaves models.json; chats on its models fail until re-enabled.',
+                )}
                 target={provider.displayName}
                 impact={[
                   `${provider.models.length} 个模型不再可用 models become unavailable`,
                   provider.source === 'file'
-                    ? '在代理存储里建一条覆盖记录，yaml 不改 creates an override; the yaml is untouched'
-                    : '保留记录，可随时启用 the record is kept and can be re-enabled',
+                    ? t(
+                        '在代理存储里建一条覆盖记录，yaml 不改',
+                        'creates an override; the yaml is untouched',
+                      )
+                    : t('保留记录，可随时启用', 'the record is kept and can be re-enabled'),
                 ]}
-                confirmLabel="停用 Disable"
+                confirmLabel={t('停用', 'Disable')}
                 danger
                 onConfirm={() => setEnabled(provider, false)}
                 testId="provider-disable-confirm"
@@ -308,12 +321,12 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                     disabled={meta?.storeWritable === false}
                     data-testid="provider-enable"
                   >
-                    启用 Enable
+                    {t('启用', 'Enable')}
                   </Button>
                 }
-                title="启用供应商 Enable provider"
+                title={t('启用供应商', 'Enable provider')}
                 target={provider.displayName}
-                confirmLabel="启用 Enable"
+                confirmLabel={t('启用', 'Enable')}
                 onConfirm={() => setEnabled(provider, true)}
                 testId="provider-enable-confirm"
               />
@@ -333,25 +346,31 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                     disabled={meta?.storeWritable === false}
                     data-testid="provider-delete"
                   >
-                    {provider.overridesFile ? '删除覆盖 Drop override' : '删除 Delete'}
+                    {provider.overridesFile ? t('删除覆盖', 'Drop override') : t('删除', 'Delete')}
                   </Button>
                 }
                 title={
                   provider.overridesFile
-                    ? '删除覆盖记录 Drop override'
-                    : '删除供应商 Delete provider'
+                    ? t('删除覆盖记录', 'Drop override')
+                    : t('删除供应商', 'Delete provider')
                 }
                 description={
                   provider.overridesFile
-                    ? '恢复为主机 llm-providers.yaml 里的同名条目。 The host yaml entry becomes visible again.'
-                    : '从代理存储里删除这条记录并重写 models.json；工作区里对它模型的勾选会失效。 Removes the record from the proxy store and rewrites models.json; workspace selections of its models stop working.'
+                    ? t(
+                        '恢复为主机 llm-providers.yaml 里的同名条目。',
+                        'The host yaml entry becomes visible again.',
+                      )
+                    : t(
+                        '从代理存储里删除这条记录并重写 models.json；工作区里对它模型的勾选会失效。',
+                        'Removes the record from the proxy store and rewrites models.json; workspace selections of its models stop working.',
+                      )
                 }
                 target={provider.id}
                 impact={[
                   `${provider.models.length} 个模型 models`,
-                  '写入平台审计 recorded in the platform audit',
+                  t('写入平台审计', 'recorded in the platform audit'),
                 ]}
-                confirmLabel="删除 Delete"
+                confirmLabel={t('删除', 'Delete')}
                 onConfirm={() => remove(provider)}
                 testId="provider-delete-confirm"
               />
@@ -380,7 +399,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
     },
     {
       id: 'models',
-      header: '模型 Models',
+      header: t('模型', 'Models'),
       cell: (provider) => (
         <span className="tag" title={provider.models.map((m) => m.id).join(', ')}>
           {provider.models.length}
@@ -389,12 +408,12 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
     },
     {
       id: 'credential',
-      header: '凭证 Credential',
+      header: t('凭证', 'Credential'),
       cell: (provider) => <CredentialState provider={provider} />,
     },
     {
       id: 'lastTest',
-      header: '最近测试 Last test',
+      header: t('最近测试', 'Last test'),
       cell: (provider) => {
         const lastTest = testResults[provider.id] ?? provider.lastTest;
         return lastTest ? (
@@ -411,20 +430,20 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             testId="provider-last-test-chip"
           />
         ) : (
-          <span className="text-3 text-small">未测试 untested</span>
+          <span className="text-3 text-small">{t('未测试', 'untested')}</span>
         );
       },
     },
     {
       id: 'source',
-      header: '来源 Source',
+      header: t('来源', 'Source'),
       cell: (provider) => (
         <span className="tag" data-testid="provider-source">
           {provider.source === 'file'
             ? 'yaml'
             : provider.overridesFile
-              ? '覆盖 yaml override'
-              : '控制台 console'}
+              ? t('覆盖', 'yaml override')
+              : t('控制台', 'console')}
         </span>
       ),
     },
@@ -434,8 +453,11 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
     <div className="page" data-testid="platform-models-page">
       <PageHeader
         breadcrumb={breadcrumbFor('platformModels')}
-        title="模型与供应商 Models & providers"
-        description="llm-proxy 里的供应商：名称、API 种类、Base URL、鉴权头、密钥环境变量、模型清单、启用；测试调用含一次工具调用往返。工作区侧只从这里的投影里选。 The providers llm-proxy routes to; workspaces only pick from this projection."
+        title={t('模型与供应商', 'Models & providers')}
+        description={t(
+          'llm-proxy 里的供应商：名称、API 种类、Base URL、鉴权头、密钥环境变量、模型清单、启用；测试调用含一次工具调用往返。工作区侧只从这里的投影里选。',
+          'The providers llm-proxy routes to; workspaces only pick from this projection.',
+        )}
         primaryAction={
           <Button
             variant="primary"
@@ -444,7 +466,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             disabled={meta?.storeWritable === false}
             data-testid="provider-create"
           >
-            新增供应商 Add provider
+            {t('新增供应商', 'Add provider')}
           </Button>
         }
         actions={
@@ -455,27 +477,26 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             loading={list.state.status === 'ready' && list.state.refreshing}
             data-testid="providers-refresh"
           >
-            刷新 Refresh
+            {t('刷新', 'Refresh')}
           </Button>
         }
       />
 
       {meta && meta.storeWritable === false ? (
         <Notice tone="warn" testId="providers-store-unwritable">
-          模型代理的状态目录不可写，新增 / 编辑 / 删除都会失败——请操作员在主机上运行
-          scripts/host-llm-proxy-init.sh 后 docker compose up -d --force-recreate llm-proxy。 The
-          proxy’s state directory is not writable; run scripts/host-llm-proxy-init.sh on the host,
-          then recreate llm-proxy.
+          {t(
+            '模型代理的状态目录不可写，新增 / 编辑 / 删除都会失败——请操作员在主机上运行 scripts/host-llm-proxy-init.sh 后 docker compose up -d --force-recreate llm-proxy。',
+            'The proxy’s state directory is not writable; run scripts/host-llm-proxy-init.sh on the host, then recreate llm-proxy.',
+          )}
         </Notice>
       ) : null}
       {meta?.modelsJsonError ? (
         <Notice tone="warn" testId="providers-models-json-error">
           最近一次重写 models.json 失败（{meta.modelsJsonError}
-          ）：代理已按新目录路由，但内核投影与新 容器仍看旧文件——操作员运行
-          scripts/host-llm-proxy-init.sh（config/ 归 10001）后重建 llm-proxy，或手动 make
-          gen-models。 The last models.json rewrite failed — the proxy routes the new catalog, but
-          the kernel projection and new containers still see the old file; run
-          scripts/host-llm-proxy-init.sh and recreate llm-proxy, or make gen-models.
+          {t(
+            '）：代理已按新目录路由，但内核投影与新 容器仍看旧文件——操作员运行 scripts/host-llm-proxy-init.sh（config/ 归 10001）后重建 llm-proxy，或手动 make gen-models。 The last models.json rewrite failed —',
+            'the proxy routes the new catalog, but the kernel projection and new containers still see the old file; run scripts/host-llm-proxy-init.sh and recreate llm-proxy, or make gen-models.',
+          )}
         </Notice>
       ) : null}
 
@@ -483,14 +504,14 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
 
       <section className="section" aria-labelledby="providers-title">
         <div className="section-header">
-          <h2 id="providers-title">供应商 Providers</h2>
+          <h2 id="providers-title">{t('供应商', 'Providers')}</h2>
           {meta?.modelsJsonWrittenAt ? (
             <span className="text-small text-3" data-testid="providers-models-json-written">
               models.json 已于{' '}
               <time title={formatDateTime(meta.modelsJsonWrittenAt)}>
                 {formatRelative(meta.modelsJsonWrittenAt)}
               </time>{' '}
-              重写 rewritten
+              {t('重写', 'rewritten')}
             </span>
           ) : null}
         </div>
@@ -514,7 +535,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
                   icon="refresh"
                   onClick={() => void list.reload()}
                 >
-                  重试 Retry
+                  {t('重试', 'Retry')}
                 </Button>
               </div>
             </div>
@@ -529,8 +550,11 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
         ) : providers.length === 0 ? (
           <EmptyState
             icon="cpu"
-            title="还没有供应商 No providers yet"
-            body="点“新增供应商”，或由操作员在主机 llm-providers.yaml 里配置。 Add one here, or have the operator configure llm-providers.yaml on the host."
+            title={t('还没有供应商', 'No providers yet')}
+            body={t(
+              '点“新增供应商”，或由操作员在主机 llm-providers.yaml 里配置。',
+              'Add one here, or have the operator configure llm-providers.yaml on the host.',
+            )}
             testId="providers-empty"
           />
         ) : (
@@ -549,8 +573,11 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
 
       <Drawer
         open={drawer.kind === 'create'}
-        title="新增供应商 Add provider"
-        subtitle="保存后代理立即路由它，并重写 models.json。 Routed by the proxy and written to models.json on save."
+        title={t('新增供应商', 'Add provider')}
+        subtitle={t(
+          '保存后代理立即路由它，并重写 models.json。',
+          'Routed by the proxy and written to models.json on save.',
+        )}
         onClose={() => setDrawer({ kind: 'closed' })}
         wide
         testId="provider-create-drawer"
@@ -594,26 +621,26 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
               <dd>{API_LABEL[drawerProvider.api]}</dd>
               <dt>Base URL</dt>
               <dd className="mono">{drawerProvider.upstreamBaseUrl}</dd>
-              <dt>鉴权头 Auth header</dt>
+              <dt>{t('鉴权头', 'Auth header')}</dt>
               <dd className="mono">
                 {drawerProvider.authHeader}
                 {drawerProvider.authScheme ? `: ${drawerProvider.authScheme} <key>` : ': <key>'}
               </dd>
-              <dt>密钥环境变量 Key env var</dt>
+              <dt>{t('密钥环境变量', 'Key env var')}</dt>
               <dd className="mono">
                 {drawerProvider.apiKeyEnv ?? <span className="text-3">（未配置 none）</span>}
               </dd>
-              <dt>来源 Source</dt>
+              <dt>{t('来源', 'Source')}</dt>
               <dd>
                 {drawerProvider.source === 'file'
                   ? 'llm-providers.yaml（主机，只读 host, read-only）'
                   : drawerProvider.overridesFile
-                    ? '控制台覆盖 yaml 同名条目 console override of the yaml entry'
-                    : '控制台 console store'}
+                    ? t('控制台覆盖 yaml 同名条目', 'console override of the yaml entry')
+                    : t('控制台', 'console store')}
               </dd>
               {drawerProvider.updatedAt ? (
                 <>
-                  <dt>更新 Updated</dt>
+                  <dt>{t('更新', 'Updated')}</dt>
                   <dd>
                     <time title={formatDateTime(drawerProvider.updatedAt)}>
                       {formatRelative(drawerProvider.updatedAt)}
@@ -625,7 +652,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             <CredentialState provider={drawerProvider} withInstruction />
             <ProviderSecretForm provider={drawerProvider} client={client} onUpdated={replaceRow} />
             <div className="stack-s">
-              <span className="section-title">模型 Models</span>
+              <span className="section-title">{t('模型', 'Models')}</span>
               <ul data-testid="provider-detail-models">
                 {drawerProvider.models.map((model) => (
                   <li key={model.id}>
@@ -641,7 +668,7 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
             </div>
             {(testResults[drawerProvider.id] ?? drawerProvider.lastTest) ? (
               <div className="stack-s">
-                <span className="section-title">最近测试 Last test</span>
+                <span className="section-title">{t('最近测试', 'Last test')}</span>
                 <ProviderTestResult
                   result={
                     (testResults[drawerProvider.id] ??

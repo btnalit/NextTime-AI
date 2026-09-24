@@ -13,6 +13,7 @@ import {
 } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { ENV_ADMIN_TITLE } from '../../lib/platform-errors.js';
 import { deriveWorkspaceOptions } from '../../lib/platform-workspaces.js';
@@ -76,6 +77,7 @@ type Panel =
  * candidates and hands a selection to `purge_user`; the directory is re-read afterwards.
  */
 export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
+  const t = useT();
   const toast = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [hideResidual, setHideResidual] = useState(true);
@@ -176,11 +178,14 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
     <div className="page">
       <PageHeader
         breadcrumb={breadcrumbFor('platformUsers')}
-        title="用户 Users"
-        description="谁能登录、属于哪些工作区、预算多少。 Who can sign in, which workspaces they belong to, and their budgets."
+        title={t('用户', 'Users')}
+        description={t(
+          '谁能登录、属于哪些工作区、预算多少。',
+          'Who can sign in, which workspaces they belong to, and their budgets.',
+        )}
         primaryAction={
           <Button variant="primary" icon="plus" onClick={() => setPanel({ kind: 'create' })}>
-            新建用户 Create user
+            {t('新建用户', 'Create user')}
           </Button>
         }
         actions={
@@ -190,7 +195,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
             onClick={() => setPanel({ kind: 'purgeUsers' })}
             data-testid="purge-users-open"
           >
-            清理待激活用户 Clean up pending users
+            {t('清理待激活用户', 'Clean up pending users')}
           </Button>
         }
       />
@@ -200,21 +205,21 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
         onSubmit={handleFilterSubmit}
         data-testid="platform-users-filter-form"
       >
-        <Field id="platform-users-status" label="状态 Status">
+        <Field id="platform-users-status" label={t('状态', 'Status')}>
           <Select
             id="platform-users-status"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
           >
-            <option value="all">全部 All</option>
-            <option value="active">活跃 Active</option>
-            <option value="disabled">已停用 Disabled</option>
+            <option value="all">{t('全部', 'All')}</option>
+            <option value="active">{t('活跃', 'Active')}</option>
+            <option value="disabled">{t('已停用', 'Disabled')}</option>
           </Select>
         </Field>
         <Field
           id="platform-users-query"
-          label="搜索 Search"
-          hint="登录名或显示名 Login or display name"
+          label={t('搜索', 'Search')}
+          hint={t('登录名或显示名', 'Login or display name')}
         >
           <Input
             id="platform-users-query"
@@ -223,7 +228,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
           />
         </Field>
         <Button type="submit" variant="secondary">
-          应用 Apply
+          {t('应用', 'Apply')}
         </Button>
         <label className="checkbox">
           <input
@@ -248,12 +253,12 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
       ) : rows.length === 0 ? (
         <EmptyState
           icon="users"
-          title="没有匹配的用户 No matching users"
+          title={t('没有匹配的用户', 'No matching users')}
           testId="platform-users-empty"
         />
       ) : (
         <DataTable
-          columns={userColumns(envAdmins, (userId) => setPanel({ kind: 'user', userId }))}
+          columns={userColumns(envAdmins, (userId) => setPanel({ kind: 'user', userId }), t)}
           data={rows}
           getRowId={(row) => row.id}
           ariaLabel="Users"
@@ -270,7 +275,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
             loading={users.loadingMore}
             onClick={() => void users.loadMore()}
           >
-            加载更多 Load more
+            {t('加载更多', 'Load more')}
           </Button>
         </div>
       ) : null}
@@ -285,7 +290,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
       <Drawer
         open={panel.kind === 'create'}
         onClose={() => setPanel({ kind: 'closed' })}
-        title="新建用户 Create user"
+        title={t('新建用户', 'Create user')}
         subtitle="A temporary password is generated and shown once."
         testId="create-user-drawer"
       >
@@ -304,7 +309,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
       <Drawer
         open={panel.kind === 'user' && openUser !== undefined}
         onClose={() => setPanel({ kind: 'closed' })}
-        title={openUser?.displayName ?? '用户 User'}
+        title={openUser?.displayName ?? t('用户', 'User')}
         subtitle={openUser ? <span className="mono">{openUser.login}</span> : undefined}
         testId="user-drawer"
       >
@@ -331,7 +336,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
       <Drawer
         open={panel.kind === 'memberships' && openUser !== undefined}
         onClose={() => setPanel({ kind: 'closed' })}
-        title="成员资格 Memberships"
+        title={t('成员资格', 'Memberships')}
         subtitle={openUser ? <span className="mono">{openUser.login}</span> : undefined}
         testId="user-memberships-drawer"
       >
@@ -376,11 +381,12 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
 function userColumns(
   envAdmins: readonly string[],
   onOpen: (userId: string) => void,
+  t: Translate,
 ): readonly DataTableColumn<UserWire>[] {
   return [
     {
       id: 'displayName',
-      header: '显示名 Display name',
+      header: t('显示名', 'Display name'),
       priority: 'primary',
       cell: (user) => (
         <>
@@ -395,14 +401,14 @@ function userColumns(
     },
     {
       id: 'login',
-      header: '登录名 Login',
+      header: t('登录名', 'Login'),
       priority: 'high',
       cellClassName: 'mono',
       cell: (user) => user.login,
     },
     {
       id: 'status',
-      header: '状态 Status',
+      header: t('状态', 'Status'),
       priority: 'high',
       cell: (user) => (
         // `status` first (an explicitly disabled account is disabled whatever else is true of
@@ -427,7 +433,7 @@ function userColumns(
       hideInCard: true,
       cell: (user) => (
         <Button variant="ghost" size="s" onClick={() => onOpen(user.id)}>
-          管理 Manage
+          {t('管理', 'Manage')}
         </Button>
       ),
     },

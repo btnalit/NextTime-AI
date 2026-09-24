@@ -1,4 +1,5 @@
 import type { WireUser } from '../lib/auth-api.js';
+import { useT } from '../lib/i18n.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 
@@ -16,6 +17,7 @@ export interface NoWorkspacePageProps {
  * calls — there is no workspace to scope them to.
  */
 export function NoWorkspacePage({ user, onOpenAccount, onLogout }: NoWorkspacePageProps) {
+  const t = useT();
   return (
     <div className="login-screen">
       <Card className="login-card">
@@ -31,7 +33,8 @@ export function NoWorkspacePage({ user, onOpenAccount, onLogout }: NoWorkspacePa
           </div>
 
           <p>
-            已登录为 Signed in as <strong>{user.displayName}</strong> (<code>{user.login}</code>).
+            {t('已登录为', 'Signed in as')}
+            <strong>{user.displayName}</strong> (<code>{user.login}</code>).
           </p>
           <p>
             工作区所有者或平台管理员需要先把你加入某个工作区，你才能使用控制台。A workspace owner or
@@ -40,10 +43,10 @@ export function NoWorkspacePage({ user, onOpenAccount, onLogout }: NoWorkspacePa
 
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={onOpenAccount}>
-              我的账户 My Account
+              {t('我的账户', 'My Account')}
             </Button>
             <Button variant="secondary" icon="logout" onClick={onLogout}>
-              登出 Sign out
+              {t('登出', 'Sign out')}
             </Button>
           </div>
         </div>
