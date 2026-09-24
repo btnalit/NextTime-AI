@@ -1,5 +1,5 @@
 import type { AvailableGateInstanceWire } from '@nexttime/shared';
-import { type FormEvent, useState } from 'react';
+import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type GatekeeperView,
@@ -9,15 +9,15 @@ import {
 import { isForbiddenError } from '../lib/errors.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { platformGateInstanceHref } from '../lib/gate-instances.js';
-import type { PrincipalRow } from '../lib/governance.js';
+import type { GrantRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
-import { roleLabel } from '../lib/labels.js';
-import { hrefs } from '../lib/router.js';
+import { GrantGateDrawer } from './access/GrantGateDrawer.js';
+import { Confirm } from './kit/confirm.js';
+import { RefChip } from './kit/ref-chip.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { CopyId } from './ui/CopyId.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
-import { Field, Input, Select } from './ui/Field.js';
 import { Notice } from './ui/Notice.js';
 import { StatusChip } from './ui/StatusChip.js';
 import { useToast } from './ui/Toast.js';
@@ -41,11 +41,15 @@ export interface GatekeeperCardProps {
   readonly platformInstance?: AvailableGateInstanceWire | null;
   /** The reader may open the platform 集成 page — the instance row links there only then. */
   readonly platformAdmin?: boolean;
-  /** S8 W1-A6 (audit S10 "授权表单要粘贴 principal UUID"): populates the "Grant to principal"
-   *  picker; falls back to a free-text id field when empty (the same degrade
-   *  `GrantCapabilityForm`'s own principal field uses when `list_principals` has not loaded yet,
-   *  or 403s for this session's role). */
-  readonly principals?: readonly PrincipalRow[];
+  /** S8 W2-U1 (audit R5/U2 "卡片上看不到谁已获授权"): every active `resourceType:'gatekeeper'`
+   *  Grant in the workspace (`ConnectionsPage` loads `list_grants` once, shared across every
+   *  card) — the card filters to its own `resourceId`. `undefined` while still loading or when
+   *  the session cannot read `list_grants` (operator+ only) — the "已授权成员" section hides
+   *  rather than claiming an empty list. */
+  readonly grants?: readonly GrantRow[];
+  /** A grant or revoke happened — the caller re-reads `list_grants` (shared across cards, same
+   *  reasoning as `onChanged` for the registry read). */
+  readonly onGrantsChanged?: () => void;
 }
 
 /**
@@ -67,17 +71,29 @@ export function GatekeeperCard({
   onOpenDetail,
   platformInstance = null,
   platformAdmin = false,
-  principals,
+  grants,
+  onGrantsChanged,
 }: GatekeeperCardProps) {
   const t = useT();
   const toast = useToast();
   const [publishing, setPublishing] = useState(false);
-  const [granting, setGranting] = useState(false);
-  const [grantOpen, setGrantOpen] = useState(false);
-  const [principalId, setPrincipalId] = useState('');
+  const [grantDrawerOpen, setGrantDrawerOpen] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [revokeError, setRevokeError] = useState<unknown | null>(null);
   const [error, setError] = useState<unknown | null>(null);
   const groups = groupOperationsByStatus(operations);
   const draftCount = operations.filter((operation) => operation.status === 'draft').length;
+  // S8 W2-U1 (audit R5/U2): active grants scoped to exactly this gate — a workspace-wide "全部门"
+  // grant (`resourceId` omitted) covers this gate too but is not enumerated per card; it already
+  // shows as "任意" on the Access page. `grants` (not just the filtered result) stays `undefined`
+  // when the caller has none to offer yet — that is what gates the section below, never collapsed
+  // into an empty array here (an empty array is a real "loaded, nobody granted" answer).
+  const gateGrants = (grants ?? []).filter(
+    (row) =>
+      row.status === 'active' &&
+      row.resourceType === 'gatekeeper' &&
+      row.resourceId === gatekeeper.id,
+  );
 
   async function publish(): Promise<void> {
     setPublishing(true);
@@ -108,26 +124,17 @@ export function GatekeeperCard({
     }
   }
 
-  async function grant(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const trimmed = principalId.trim();
-    if (!trimmed) return;
-    setGranting(true);
-    setError(null);
+  async function revoke(grantId: string): Promise<void> {
+    setRevoking(grantId);
+    setRevokeError(null);
     try {
-      await http.call('connect_gatekeeper', { gatekeeperId: gatekeeper.id, principalId: trimmed });
-      toast.push({
-        tone: 'ok',
-        title: t('门已授予', 'Gatekeeper granted'),
-        description: `${gatekeeper.name} → principal ${trimmed.slice(0, 8)}`,
-      });
-      setPrincipalId('');
-      setGrantOpen(false);
+      await http.call('revoke_capability', { grantId });
+      onGrantsChanged?.();
     } catch (err) {
-      if (isForbiddenError(err)) onForbidden('connect_gatekeeper');
-      setError(err);
+      if (isForbiddenError(err)) onForbidden('revoke_capability');
+      setRevokeError(err);
     } finally {
-      setGranting(false);
+      setRevoking(null);
     }
   }
 
@@ -138,6 +145,21 @@ export function GatekeeperCard({
         <span className="row-wrap">
           <span>{gatekeeper.name}</span>
           <span className="tag">{gatekeeper.transportKind}</span>
+          {/* S8 W2-U1 (audit SY1 "两套接入机制并存，页面不说哪一套决定 agent 能不能用"): a gate with
+           *  no platform-instance link was registered through the older `create_connection` /
+           *  CLI path — mark it so, next to the "平台实例" fact below when there is one. */}
+          {platformInstance === null ? (
+            <span
+              className="tag"
+              title={t(
+                '旧注册：不经平台门实例目录接入，未来会建议迁移到「接入一个系统」',
+                'Legacy: registered outside the platform gate-instance catalog',
+              )}
+              data-testid="gatekeeper-legacy-badge"
+            >
+              {t('旧注册，未关联平台实例', 'Legacy — not linked to a platform instance')}
+            </span>
+          ) : null}
         </span>
       }
       actions={
@@ -174,10 +196,10 @@ export function GatekeeperCard({
               variant="secondary"
               size="s"
               icon="user"
-              onClick={() => setGrantOpen((open) => !open)}
-              aria-expanded={grantOpen}
+              onClick={() => setGrantDrawerOpen(true)}
+              data-testid="gatekeeper-grant-button"
             >
-              {t('授予给主体', 'Grant to principal')}
+              {t('授权给成员', 'Grant to a member')}
             </Button>
           ) : null}
         </>
@@ -234,56 +256,67 @@ export function GatekeeperCard({
           ) : null}
         </dl>
 
-        {grantOpen ? (
-          <form className="inline-form" onSubmit={(event) => void grant(event)}>
-            <Field
-              id={`grant-${gatekeeper.id}`}
-              label={t('主体', 'Principal')}
-              hint={
-                principals && principals.length > 0
-                  ? undefined
-                  : t(
-                      '还没有加载主体目录 —— 粘贴主体的 id。',
-                      "No principal directory loaded — paste the principal's id.",
-                    )
-              }
-            >
-              {principals && principals.length > 0 ? (
-                <Select
-                  id={`grant-${gatekeeper.id}`}
-                  value={principalId}
-                  onChange={(event) => setPrincipalId(event.target.value)}
-                  disabled={granting}
-                >
-                  <option value="" disabled>
-                    {t('选择成员…', 'Choose a member…')}
-                  </option>
-                  {principals.map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {row.displayName} ({roleLabel(row.role, t)})
-                    </option>
-                  ))}
-                </Select>
-              ) : (
-                <Input
-                  id={`grant-${gatekeeper.id}`}
-                  value={principalId}
-                  onChange={(event) => setPrincipalId(event.target.value)}
-                  disabled={granting}
-                  mono
-                  placeholder={t('主体 id', 'principal id')}
-                />
-              )}
-            </Field>
-            <Button
-              type="submit"
-              variant="primary"
-              loading={granting}
-              disabled={!principalId.trim()}
-            >
-              {t('授予', 'Grant')}
-            </Button>
-          </form>
+        {/* S8 W2-U1 (audit R5/U2 "卡片上看不到谁已获授权"): the gate's own access list — `grants`
+         *  is `undefined` while `ConnectionsPage`'s shared `list_grants` is still loading or 403s
+         *  for this role, so this hides rather than claiming "no one" incorrectly. */}
+        {grants !== undefined ? (
+          <div className="stack-s" data-testid="gatekeeper-access-list">
+            <span className="section-title">{t('已授权成员', 'Granted to')}</span>
+            {gateGrants.length === 0 ? (
+              <p className="text-3 text-small">{t('还没有成员被授权。', 'No one granted yet.')}</p>
+            ) : (
+              <div className="row-wrap">
+                {gateGrants.map((row) => (
+                  <span className="row-wrap" key={row.id} style={{ gap: 4 }}>
+                    <RefChip
+                      kind="principal"
+                      id={row.principalId}
+                      http={http}
+                      size="s"
+                      testId={`gatekeeper-access-chip-${row.id}`}
+                    />
+                    {canGrant ? (
+                      <Confirm
+                        tier="medium"
+                        open={revoking === row.id}
+                        onOpenChange={(open) => {
+                          if (!open) {
+                            setRevoking(null);
+                            setRevokeError(null);
+                          }
+                        }}
+                        anchor={
+                          <Button
+                            variant="ghost"
+                            size="s"
+                            onClick={() => setRevoking(row.id)}
+                            data-testid={`gatekeeper-revoke-${row.id}`}
+                          >
+                            {t('撤销', 'Revoke')}
+                          </Button>
+                        }
+                        title={t('撤销授权', 'Revoke this grant')}
+                        description={t(
+                          '该成员的入口 agent 将不再能调用这个门。',
+                          "This member's entry agent will no longer be able to call this gate.",
+                        )}
+                        danger
+                        confirmLabel={t('撤销', 'Revoke')}
+                        onConfirm={() => revoke(row.id)}
+                        testId={`gatekeeper-revoke-confirm-${row.id}`}
+                      />
+                    ) : null}
+                  </span>
+                ))}
+              </div>
+            )}
+            {revokeError !== null ? (
+              <ErrorBanner
+                error={revokeError}
+                title={t('无法撤销授权', 'Could not revoke this grant')}
+              />
+            ) : null}
+          </div>
         ) : null}
 
         {error !== null ? <ErrorBanner error={error} /> : null}
@@ -318,6 +351,16 @@ export function GatekeeperCard({
           ))
         )}
       </div>
+      <GrantGateDrawer
+        http={http}
+        open={grantDrawerOpen}
+        onOpenChange={setGrantDrawerOpen}
+        lockedGatekeeper={{ id: gatekeeper.id, name: gatekeeper.name }}
+        onGranted={() => {
+          toast.push({ tone: 'ok', title: t('已授权', 'Granted') });
+          onGrantsChanged?.();
+        }}
+      />
     </Card>
   );
 }

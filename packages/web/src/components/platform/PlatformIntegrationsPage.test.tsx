@@ -153,8 +153,9 @@ describe('PlatformIntegrationsPage', () => {
     const launcher = within(drawer).getByTestId('connect-system-launcher');
     fireEvent.click(within(launcher).getByTestId('launcher-kind-http'));
     fireEvent.click(within(launcher).getByTestId('launcher-next'));
-    // From the platform page the create form is offered; an existing instance may be picked too.
-    await within(launcher).findByTestId('create-gate-instance-form');
+    // S8 W2-U1 (audit J5): 选择已有实例 renders first now — the create form is opt-in, reached via
+    // its own 新建实例 button (not exercised here; an existing instance is picked instead).
+    expect(within(launcher).queryByTestId('create-gate-instance-form')).toBeNull();
     fireEvent.click(await within(launcher).findByTestId('launcher-gate-billing'));
     fireEvent.click(within(launcher).getByTestId('launcher-next'));
     expect(within(launcher).getByTestId('launcher-policy-workspace-link')).toBeTruthy();

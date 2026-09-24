@@ -5,7 +5,7 @@ import type {
   GateHostTokenWire,
   GateInstanceWire,
 } from '@nexttime/shared';
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
@@ -15,24 +15,26 @@ import {
   gatePathForKind,
   useGateInstancePoll,
 } from '../../lib/gate-instances.js';
-import type { PrincipalRow } from '../../lib/governance.js';
+import type { GrantRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
-import { roleLabel } from '../../lib/labels.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
 import { OnboardingWizardReview } from '../OnboardingWizardReview.js';
+import { GrantGateForm } from '../access/GrantGateForm.js';
 import { CreateGateInstanceForm } from '../platform/CreateGateInstanceForm.js';
 import { GateCredentialEntry } from '../platform/GateCredentialEntry.js';
 import { PlatformError } from '../platform/PlatformError.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Field, Input, Select } from '../ui/Field.js';
+import { Field, Input } from '../ui/Field.js';
 import { Launcher, type LauncherKind, type LauncherStep } from '../ui/Launcher.js';
 import { Notice } from '../ui/Notice.js';
 import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
+import { useToast } from '../ui/Toast.js';
+import { EnableGateConfirm } from './EnableGateConfirm.js';
 import { PackagedGateChecklist } from './PackagedGateChecklist.js';
 
 export interface ConnectSystemLauncherResult {
@@ -171,6 +173,7 @@ export function ConnectSystemLauncher({
   pollIntervalMs,
 }: ConnectSystemLauncherProps) {
   const t = useT();
+  const toast = useToast();
   const isAdmin = origin === 'platform' || platformAdmin;
   const onWorkspace = origin === 'workspace';
   const [step, setStep] = useState<LauncherStep>(0);
@@ -247,11 +250,42 @@ export function ConnectSystemLauncher({
     available.find((row) => row.gateId === selectedGateId)?.gatekeeperId ??
     null;
 
+  // S8 W2-U1 (audit J2 "不启用也能完成"): on the workspace page, step 3 → 4 (and so 完成 itself,
+  // reachable only past step 3) is blocked until both preconditions journey ① actually needs are
+  // met — enabled here, and granted to at least one member. `grantedThisSession` covers the grant
+  // this very launcher run just made (no extra round trip); `list_grants` below also catches a
+  // pre-existing grant on a gate someone re-opens the launcher for. The platform page has no such
+  // gate — it never runs the workspace half at all.
+  const [grantedThisSession, setGrantedThisSession] = useState(false);
+  const grantsList = useCapabilityList<GrantRow>(http, 'list_grants', {}, { autoLoadAll: true });
+  const hasExistingGrant = useMemo(() => {
+    if (linkedGatekeeperId === null || grantsList.state.status !== 'ready') return false;
+    return grantsList.state.data.items.some(
+      (row) =>
+        row.status === 'active' &&
+        row.resourceType === 'gatekeeper' &&
+        (row.resourceId === linkedGatekeeperId ||
+          row.resourceId === null ||
+          row.resourceId === undefined),
+    );
+  }, [grantsList.state, linkedGatekeeperId]);
+  const workspaceReady = linkedGatekeeperId !== null && (grantedThisSession || hasExistingGrant);
+
   function chooseKind(next: LauncherKind): void {
     setKind(next);
     setSelectedGateId(null);
     setOwnInstance(null);
     setEnabled(null);
+  }
+
+  /** J5 "先列「平台已提供的系统」": picking an already-connected platform instance skips straight to
+   *  能力与策略 — there is nothing to connect, it is already there. */
+  function chooseAvailableInstance(row: AvailableGateInstanceWire): void {
+    setKind(row.transportKind);
+    setSelectedGateId(row.gateId);
+    setOwnInstance(null);
+    setEnabled(null);
+    setStep(2);
   }
 
   function handleCreated(instance: GateInstanceWire): void {
@@ -266,12 +300,32 @@ export function ConnectSystemLauncher({
     void poll.refresh();
   }
 
+  // S8 W2-U1 (audit J4): `EnableGateConfirm` cannot import `components/ui/Toast` itself (S8 risk
+  // ① boundary) — this already-allowlisted caller reports `linkedExisting` instead.
   function handleEnabled(result: EnableGateInstanceResultWire): void {
     setEnabled(result);
+    const skipped = result.skippedOperationNames.length;
+    toast.push({
+      tone: 'ok',
+      title: result.linkedExisting
+        ? t('已关联已有的注册（旧路径）', 'Linked the existing (legacy) registration')
+        : t('已在本工作区启用', 'Enabled in this workspace'),
+      description: t(
+        `已发布 ${result.publishedOperationNames.length} 个 Operation${skipped > 0 ? `，跳过 ${skipped} 个已存在的` : ''}。`,
+        `Published ${result.publishedOperationNames.length} operation(s)${skipped > 0 ? `, skipped ${skipped} already there` : ''}.`,
+      ),
+    });
     onEnabled?.(result);
   }
 
-  const canNext = step === 0 ? kind !== null : step === 1 ? selected !== null : true;
+  const canNext =
+    step === 0
+      ? kind !== null
+      : step === 1
+        ? selected !== null
+        : step === 2 && onWorkspace
+          ? workspaceReady
+          : true;
 
   return (
     <Launcher
@@ -286,6 +340,50 @@ export function ConnectSystemLauncher({
       canNext={canNext}
       testId="connect-system-launcher"
     >
+      {step === 0 && onWorkspace && available.length > 0 ? (
+        <div className="stack-s" data-testid="launcher-available-instances">
+          <span className="section-title">
+            {t('使用已接入的系统', 'Use an already-connected system')}
+          </span>
+          <div
+            className="radio-group"
+            role="radiogroup"
+            aria-label={t('已接入的系统', 'Connected systems')}
+          >
+            {available.map((row) => (
+              <label className="radio-option" key={row.gateId}>
+                <input
+                  type="radio"
+                  name="launcher-available-instance"
+                  checked={selectedGateId === row.gateId && kind === row.transportKind}
+                  onChange={() => chooseAvailableInstance(row)}
+                  data-testid={`launcher-available-instance-${row.gateId}`}
+                />
+                <span className="row-wrap">
+                  <span>{row.displayName}</span>
+                  <span className="tag">{row.connector}</span>
+                  <StatusChip
+                    machine="gateInstance"
+                    status={row.gatekeeperId ? 'enabled' : row.status}
+                    size="s"
+                  />
+                  {row.gatekeeperId ? (
+                    <span className="text-3 text-small">
+                      {t('已在本工作区启用', 'Already enabled here')}
+                    </span>
+                  ) : null}
+                </span>
+              </label>
+            ))}
+          </div>
+          <p className="text-3 text-small">
+            {t(
+              '没有想要的系统？在下面按类型接入一个新的。',
+              "Don't see it? Connect a new one by type below.",
+            )}
+          </p>
+        </div>
+      ) : null}
       {step === 0 && kind !== null ? (
         <Notice testId="launcher-path-copy">
           {t(KIND_PATH_COPY[kind].zh, KIND_PATH_COPY[kind].en)}
@@ -322,6 +420,11 @@ export function ConnectSystemLauncher({
           enabled={enabled}
           onInstanceChanged={handleInstanceChanged}
           onEnabled={handleEnabled}
+          onGranted={() => {
+            setGrantedThisSession(true);
+            void grantsList.reload();
+          }}
+          workspaceReady={workspaceReady}
         />
       ) : null}
 
@@ -383,8 +486,12 @@ function ConnectionStep({
   readonly onBack: () => void;
 }) {
   const t = useT();
+  // S8 W2-U1 (audit J5 "第 2 步默认展开管理员专用的新建表单"): collapsed until an administrator
+  // explicitly asks for it — "选择已有实例" below is the default view, not folded under an
+  // auto-opened form. `ownInstance` no longer forces it open either; a freshly created instance is
+  // already `selected` and shows in `SelectedGateSummary` below without the form staying open.
   const [creating, setCreating] = useState(false);
-  const showCreateForm = path === 'hosted' && isAdmin && (creating || (!selected && !ownInstance));
+  const showCreateForm = path === 'hosted' && isAdmin && creating;
 
   return (
     <div className="stack" data-testid="launcher-step-connection-body">
@@ -427,30 +534,10 @@ function ConnectionStep({
           <a href={hrefs.platformIntegrations()}>Integrations</a> page and enables it; it then shows
           up in the catalog below.
         </Notice>
-      ) : showCreateForm ? (
-        <div className="stack-s" data-testid="launcher-create-instance">
-          <span className="section-title">
-            {t('新建门宿主实例', 'Create a hosted instance')} ({kind})
-          </span>
-          <CreateGateInstanceForm
-            http={http}
-            onCreated={(instance) => {
-              setCreating(false);
-              onCreated(instance);
-            }}
-            onCancel={creating ? () => setCreating(false) : onBack}
-          />
-        </div>
       ) : null}
 
-      {path === 'hosted' && isAdmin && !showCreateForm ? (
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Button variant="ghost" size="s" icon="plus" onClick={() => setCreating(true)}>
-            {t('再建一个', 'Create another')}
-          </Button>
-        </div>
-      ) : null}
-
+      {/* J5: "选择已有实例" always renders first — the create form (below) is opt-in, never the
+       *  default view. */}
       <ExistingGatePicker
         kind={kind}
         path={path}
@@ -461,6 +548,30 @@ function ConnectionStep({
         selectedGateId={selected?.gateId ?? null}
         onSelect={onSelect}
       />
+
+      {path === 'hosted' && isAdmin ? (
+        showCreateForm ? (
+          <div className="stack-s" data-testid="launcher-create-instance">
+            <span className="section-title">
+              {t('新建门宿主实例', 'Create a hosted instance')} ({kind})
+            </span>
+            <CreateGateInstanceForm
+              http={http}
+              onCreated={(instance) => {
+                setCreating(false);
+                onCreated(instance);
+              }}
+              onCancel={() => setCreating(false)}
+            />
+          </div>
+        ) : (
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <Button variant="ghost" size="s" icon="plus" onClick={() => setCreating(true)}>
+              {t('新建实例', 'Create a new instance')}
+            </Button>
+          </div>
+        )
+      ) : null}
 
       {selected ? <SelectedGateSummary http={http} gate={selected} isAdmin={isAdmin} /> : null}
     </div>
@@ -648,6 +759,8 @@ function PolicyStep({
   enabled,
   onInstanceChanged,
   onEnabled,
+  onGranted,
+  workspaceReady,
 }: {
   readonly http: CapabilityCaller;
   readonly gate: TrackedGate;
@@ -658,6 +771,8 @@ function PolicyStep({
   readonly enabled: EnableGateInstanceResultWire | null;
   readonly onInstanceChanged: (instance: GateInstanceWire) => void;
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
+  readonly onGranted: () => void;
+  readonly workspaceReady: boolean;
 }) {
   const t = useT();
   return (
@@ -715,6 +830,8 @@ function PolicyStep({
           linkedGatekeeperId={linkedGatekeeperId}
           enabled={enabled}
           onEnabled={onEnabled}
+          onGranted={onGranted}
+          workspaceReady={workspaceReady}
         />
       ) : (
         <Notice testId="launcher-policy-workspace-link">
@@ -888,6 +1005,8 @@ function WorkspaceEnableSection({
   linkedGatekeeperId,
   enabled,
   onEnabled,
+  onGranted,
+  workspaceReady,
 }: {
   readonly http: CapabilityCaller;
   readonly gate: TrackedGate;
@@ -895,48 +1014,45 @@ function WorkspaceEnableSection({
   readonly linkedGatekeeperId: string | null;
   readonly enabled: EnableGateInstanceResultWire | null;
   readonly onEnabled: (result: EnableGateInstanceResultWire) => void;
+  readonly onGranted: () => void;
+  readonly workspaceReady: boolean;
 }) {
   const t = useT();
-  const [enabling, setEnabling] = useState(false);
-  const [error, setError] = useState<unknown | null>(null);
-
-  async function enable(): Promise<void> {
-    if (enabling) return;
-    setEnabling(true);
-    setError(null);
-    try {
-      onEnabled(
-        await http.call<EnableGateInstanceResultWire>('enable_gate_instance', {
-          gateId: gate.gateId,
-        }),
-      );
-    } catch (err) {
-      setError(err);
-    } finally {
-      setEnabling(false);
-    }
-  }
-
   return (
     <div className="stack" data-testid="launcher-workspace-enable">
       <span className="section-title">{t('工作区侧', 'Workspace side')}</span>
+      {/* J2 (audit "第 4 步...没有醒目的完成"): what is still missing, named plainly, with the
+       *  action right below — never a silent "完成" that skipped a step. */}
+      {!workspaceReady ? (
+        <Notice tone="warn" testId="launcher-workspace-checklist">
+          <ul className="stack-s" style={{ margin: 0, paddingLeft: 18 }}>
+            <li data-testid="launcher-checklist-enable">
+              <span aria-hidden>{linkedGatekeeperId !== null ? '✓' : '○'}</span>{' '}
+              {t('在本工作区启用', 'Enabled in this workspace')}
+            </li>
+            <li data-testid="launcher-checklist-grant">
+              <span aria-hidden>{workspaceReady ? '✓' : '○'}</span>{' '}
+              {t('至少授权给一名成员', 'Granted to at least one member')}
+            </li>
+          </ul>
+        </Notice>
+      ) : null}
       {linkedGatekeeperId === null ? (
         canEnable ? (
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <span className="text-2">
               {t(
-                '在本工作区启用：注册 Gatekeeper、导入并发布它 announce 的 Operation。 Enable here —',
-                'registers the Gatekeeper and imports + publishes its announced Operations.',
+                '在本工作区启用：注册 Gatekeeper、导入并发布它 announce 的 Operation。',
+                'Enable here — registers the Gatekeeper and imports + publishes its announced Operations.',
               )}
             </span>
-            <Button
-              variant="primary"
-              onClick={() => void enable()}
-              loading={enabling}
-              data-testid="launcher-workspace-enable-button"
-            >
-              {t('在本工作区启用', 'Enable here')}
-            </Button>
+            <EnableGateConfirm
+              http={http}
+              gateId={gate.gateId}
+              gateDisplayName={gate.displayName}
+              onEnabled={onEnabled}
+              testId="launcher-workspace-enable-button"
+            />
           </div>
         ) : (
           <Notice testId="launcher-workspace-enable-owner-only">
@@ -964,11 +1080,6 @@ function WorkspaceEnableSection({
           ) : null}
         </div>
       )}
-      <PlatformError
-        error={error}
-        title={t('无法启用', 'Could not enable this instance')}
-        testId="launcher-workspace-enable-error"
-      />
 
       {linkedGatekeeperId !== null ? (
         <>
@@ -983,122 +1094,19 @@ function WorkspaceEnableSection({
               showDone={false}
             />
           </div>
-          <GrantMemberForm http={http} gatekeeperId={linkedGatekeeperId} />
+          <div className="stack-s" data-testid="launcher-grant">
+            <span className="section-title">{t('授予成员', 'Grant to a member')}</span>
+            <GrantGateForm
+              http={http}
+              lockedGatekeeper={{ id: linkedGatekeeperId, name: gate.displayName }}
+              onGranted={onGranted}
+              submitLabel={t('授予', 'Grant')}
+              testId="launcher-grant-form"
+            />
+          </div>
         </>
       ) : null}
     </div>
-  );
-}
-
-/** `connect_gatekeeper` for one member — a principal picker over `list_principals` (B3: never a
- *  bare id when the directory is readable), falling back to a typed id when it is not. */
-function GrantMemberForm({
-  http,
-  gatekeeperId,
-}: {
-  readonly http: CapabilityCaller;
-  readonly gatekeeperId: string;
-}) {
-  const t = useT();
-  // A principal picker, not a browsable list — autoLoadAll (S8 W1-C #243 made list_principals
-  // keyset-paginated; a missing member past page one would be a correctness bug here).
-  const principals = useCapabilityList<PrincipalRow>(
-    http,
-    'list_principals',
-    {},
-    { autoLoadAll: true },
-  );
-  const [principalId, setPrincipalId] = useState('');
-  const [granting, setGranting] = useState(false);
-  const [error, setError] = useState<unknown | null>(null);
-  const [granted, setGranted] = useState<readonly string[]>([]);
-  const options =
-    principals.state.status === 'ready'
-      ? principals.state.data.items.filter((row) => row.kind === 'human' && !row.disabledAt)
-      : [];
-
-  async function grant(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const trimmed = principalId.trim();
-    if (!trimmed || granting) return;
-    setGranting(true);
-    setError(null);
-    try {
-      await http.call('connect_gatekeeper', { gatekeeperId, principalId: trimmed });
-      setGranted((prev) => [...prev, trimmed]);
-      setPrincipalId('');
-    } catch (err) {
-      setError(err);
-    } finally {
-      setGranting(false);
-    }
-  }
-
-  return (
-    <form className="stack-s" onSubmit={(event) => void grant(event)} data-testid="launcher-grant">
-      <span className="section-title">{t('授予成员', 'Grant to a member')}</span>
-      <Field
-        id="launcher-grant-principal"
-        label={t('成员', 'Member')}
-        hint={t(
-          '该成员的入口 agent 从此可以调用这个门（execute 类要下一次签发入口 Handle 后生效）。',
-          'Their entry agent may then use this gate.',
-        )}
-      >
-        {principals.state.status === 'ready' ? (
-          <Select
-            id="launcher-grant-principal"
-            value={principalId}
-            onChange={(event) => setPrincipalId(event.target.value)}
-            disabled={granting}
-          >
-            <option value="">— 选择 Choose —</option>
-            {options.map((row) => (
-              <option key={row.id} value={row.id}>
-                {row.displayName} ({roleLabel(row.role, t)})
-              </option>
-            ))}
-          </Select>
-        ) : (
-          <Input
-            id="launcher-grant-principal"
-            value={principalId}
-            onChange={(event) => setPrincipalId(event.target.value)}
-            disabled={granting}
-            mono
-            placeholder="principal id"
-          />
-        )}
-      </Field>
-      {granted.length > 0 ? (
-        <p className="text-3" data-testid="launcher-granted">
-          {t('已授予', 'Granted:')}{' '}
-          {granted.map((id) => (
-            <RefChip
-              key={id}
-              kind="principal"
-              id={id}
-              name={options.find((row) => row.id === id)?.displayName}
-              size="s"
-            />
-          ))}
-        </p>
-      ) : null}
-      {error !== null ? (
-        <ErrorBanner error={error} title={t('无法授予', 'Could not grant')} />
-      ) : null}
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <Button
-          type="submit"
-          variant="secondary"
-          loading={granting}
-          disabled={!principalId.trim()}
-          data-testid="launcher-grant-submit"
-        >
-          {t('授予', 'Grant')}
-        </Button>
-      </div>
-    </form>
   );
 }
 

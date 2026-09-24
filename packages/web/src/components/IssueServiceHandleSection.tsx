@@ -206,37 +206,51 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
         </Field>
 
         <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+          {/* S8 W2-U1 (audit AX1 "标签与星号分离"): the label and its required asterisk are one
+           *  unit now — the flex gap on `.field-label` used to sit *between* them because they
+           *  were two separate flex children. */}
           <legend className="field-label">
-            {t('能力', 'Capabilities')}
-            <span className="field-required" aria-hidden>
-              *
+            <span>
+              {t('能力', 'Capabilities')}
+              <span className="field-required" aria-hidden>
+                *
+              </span>
             </span>
             <span className="field-hint" style={{ margin: 0 }}>
-              {' '}
               {t(
-                '— 只有 handle 通道的能力可签给服务 Handle；成员管理与平台能力永远不在此列。',
+                '只有 handle 通道的能力可签给服务 Handle；成员管理与平台能力永远不在此列。',
                 'Only handle-channel capabilities; member-management and platform ones are never offered.',
               )}
             </span>
           </legend>
-          <div className="stack-s model-checklist" data-testid="ish-scope-checklist">
+          {/* AX1 "能力勾选是页内嵌套滚动框": grouped `<details>` instead of a fixed-height scroll
+           *  box — a reader opens the group they need rather than scrolling a tiny inner viewport. */}
+          <div className="stack-s" data-testid="ish-scope-checklist">
             {groups.map(([group, capabilities]) => (
-              <div key={group} className="stack-s">
-                <span className="text-3 text-small">{group}</span>
-                {capabilities.map((capability) => (
-                  <label className="checkbox" key={capability.name} title={capability.description}>
-                    <input
-                      type="checkbox"
-                      checked={picked.has(capability.name)}
-                      onChange={() => toggle(capability.name)}
-                      disabled={submitting}
-                      data-capability={capability.name}
-                    />
-                    <span className="mono">{capability.name}</span>
-                    <span className="text-3 text-small">{capability.mode}</span>
-                  </label>
-                ))}
-              </div>
+              <details key={group}>
+                <summary className="text-3 text-small">
+                  {group} ({capabilities.length})
+                </summary>
+                <div className="stack-s" style={{ paddingTop: 8 }}>
+                  {capabilities.map((capability) => (
+                    <label
+                      className="checkbox"
+                      key={capability.name}
+                      title={capability.description}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={picked.has(capability.name)}
+                        onChange={() => toggle(capability.name)}
+                        disabled={submitting}
+                        data-capability={capability.name}
+                      />
+                      <span className="mono">{capability.name}</span>
+                      <span className="text-3 text-small">{capability.mode}</span>
+                    </label>
+                  ))}
+                </div>
+              </details>
             ))}
           </div>
         </fieldset>

@@ -339,7 +339,12 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     await expect(availableRow).toBeVisible({ timeout: 15_000 });
     const enableButton = availableRow.getByTestId(`enable-gate-${GATE_ID}`);
     if (await enableButton.isVisible().catch(() => false)) {
+      // S8 W2-U1 (audit J3): 在本工作区启用 now opens a preview confirm (fed by
+      // preview_gate_instance_enable) before it calls enable_gate_instance.
       await enableButton.click();
+      const confirm = page.getByTestId(`enable-gate-${GATE_ID}-confirm`);
+      await expect(confirm).toBeVisible({ timeout: 15_000 });
+      await confirm.getByTestId('confirm-button').click();
       await expect(availableRow).toContainText('已发布 2 个 Operation', {
         timeout: 15_000,
       });

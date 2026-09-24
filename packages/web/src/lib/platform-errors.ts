@@ -127,6 +127,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个工作区还没有启用该实例',
     en: 'This workspace has not enabled that instance',
   },
+  // S8 W2-U1 (audit J4): `preview_gate_instance_enable` blocks the confirm before this can fire in
+  // the ordinary flow — kept as a defense-in-depth mapping for the race (another tab enables a
+  // second matching Gatekeeper between the preview and the confirm).
+  ambiguous_existing_gatekeeper: {
+    zh: '工作区里有不止一个门与该实例端点相同，无法确定关联哪一个；先在已注册系统里合并或清理重复的注册',
+    en: 'More than one Gatekeeper in this workspace shares that endpoint — merge or clean up the duplicates in Registered systems first',
+  },
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of

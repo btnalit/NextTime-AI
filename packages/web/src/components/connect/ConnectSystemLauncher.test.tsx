@@ -27,6 +27,11 @@ function scriptedHttp(
     list_available_gate_instances: () => ({ items: [] }),
     list_connectors: () => ({ items: [] }),
     list_principals: () => ({ items: [] }),
+    // S8 W2-U1 (audit J2): the launcher's own step 3 → 4 gate reads this to know whether the
+    // gate it just enabled already has an active grant.
+    list_grants: () => ({ items: [] }),
+    list_gatekeepers: () => ({ items: [] }),
+    list_operations: () => ({ items: [] }),
     search: () => ({ items: [] }),
     ...handlers,
   };
@@ -207,8 +212,11 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     expect(screen.getByTestId('launcher-path-copy').textContent).toContain('门宿主');
     next();
 
-    // Step 2: the platform form is composed as-is.
+    // Step 2: 选择已有实例 renders first now (J5) — the create form is opt-in.
     expect(launcher().getAttribute('data-step')).toBe('1');
+    await screen.findByTestId('launcher-existing-gates');
+    expect(screen.queryByTestId('create-gate-instance-form')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /新建实例/ }));
     const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.change(within(form).getByLabelText(/Gate id/), { target: { value: 'billing' } });
     fireEvent.change(within(form).getByLabelText(/^目标/), {
@@ -314,6 +322,16 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
   it('points at the platform 集成', async () => {
     const http = scriptedHttp({
       list_available_gate_instances: () => ({ items: [availableRow()] }),
+      preview_gate_instance_enable: (params) => {
+        expect(params).toEqual({ gateId: 'docker-prod' });
+        return {
+          gateId: 'docker-prod',
+          wouldLink: null,
+          ambiguousCandidates: [],
+          operationsToImport: [],
+          operationsAlreadyPresent: [],
+        };
+      },
       enable_gate_instance: (params) => {
         expect(params).toEqual({ gateId: 'docker-prod' });
         return {
@@ -321,6 +339,7 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
           gatekeeperId: 'gk-9',
           publishedOperationNames: ['container_list', 'container_restart'],
           skippedOperationNames: [],
+          linkedExisting: false,
         };
       },
       list_principals: () => ({
@@ -335,9 +354,19 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
           },
         ],
       }),
-      connect_gatekeeper: (params) => {
-        expect(params).toEqual({ gatekeeperId: 'gk-9', principalId: 'p-alice' });
-        return { id: 'grant-1' };
+      grant_capability: (params) => {
+        expect(params).toEqual({
+          principalId: 'p-alice',
+          resourceType: 'gatekeeper',
+          resourceId: 'gk-9',
+        });
+        return {
+          id: 'grant-1',
+          principalId: 'p-alice',
+          resourceType: 'gatekeeper',
+          resourceId: 'gk-9',
+          status: 'active',
+        };
       },
     });
     const onEnabled = vi.fn();
@@ -361,11 +390,16 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     );
     expect(http.calls.some((call) => call.name === 'list_gate_instances')).toBe(false);
     fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
+    // Step 1's own gate is "a gate is selected" — J2's enable+grant gate applies to step 2 → 3,
+    // checked below once this step's own precondition (a selection) is satisfied.
     next();
 
     expect(screen.getByTestId('launcher-policy-needs-admin')).toBeTruthy();
     const workspaceSide = screen.getByTestId('launcher-workspace-enable');
+    await screen.findByTestId('launcher-workspace-checklist');
     fireEvent.click(within(workspaceSide).getByTestId('launcher-workspace-enable-button'));
+    const confirm = await screen.findByTestId('launcher-workspace-enable-button-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     const linked = await within(workspaceSide).findByTestId('launcher-workspace-linked');
     expect(onEnabled).toHaveBeenCalledTimes(1);
     expect(linked.textContent).toContain('已发布 2 个');
@@ -375,13 +409,24 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     // The composed review (search{objectType:'Operation'}) and the grant form appear.
     await screen.findByTestId('wizard-review');
     expect(http.calls.some((call) => call.name === 'search')).toBe(true);
-    const grant = screen.getByTestId('launcher-grant');
-    const select = await within(grant).findByLabelText(/成员/);
-    fireEvent.change(select, { target: { value: 'p-alice' } });
-    fireEvent.click(within(grant).getByTestId('launcher-grant-submit'));
-    const granted = await within(grant).findByTestId('launcher-granted');
-    expect(granted.textContent).toContain('Alice');
 
+    // Still blocked — enabled but not yet granted.
+    expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(true);
+
+    const grant = screen.getByTestId('launcher-grant');
+    const select = within(grant).getByTestId('ggf-member-select');
+    // `list_principals` resolves asynchronously — the `<option value="p-alice">` may not exist yet.
+    await waitFor(() => expect(select.querySelector('option[value="p-alice"]')).not.toBeNull());
+    fireEvent.change(select, { target: { value: 'p-alice' } });
+    fireEvent.click(within(grant).getByTestId('ggf-submit'));
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
+    );
+
+    // J2: both preconditions met — 完成 (reached past step 3) is unblocked now.
+    await waitFor(() =>
+      expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(false),
+    );
     next();
     expect(screen.getByTestId('launcher-handshake-gatekeeper').getAttribute('data-ref-id')).toBe(
       'gk-9',
@@ -407,6 +452,13 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
   it('shows the kernel refusal inline when enable_gate_instance rejects (connector_not_preset)', async () => {
     const http = scriptedHttp({
       list_available_gate_instances: () => ({ items: [availableRow()] }),
+      preview_gate_instance_enable: () => ({
+        gateId: 'docker-prod',
+        wouldLink: null,
+        ambiguousCandidates: [],
+        operationsToImport: [],
+        operationsAlreadyPresent: [],
+      }),
       enable_gate_instance: () => {
         throw new HttpError('capability_error', 'not preset', 'connector_not_preset');
       },
@@ -417,7 +469,9 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
     next();
     fireEvent.click(screen.getByTestId('launcher-workspace-enable-button'));
-    const error = await screen.findByTestId('launcher-workspace-enable-error');
+    const confirm = await screen.findByTestId('launcher-workspace-enable-button-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const error = await within(confirm).findByTestId('confirm-error');
     expect(error.textContent).toContain('不是平台预置模式');
   });
 });
