@@ -75,11 +75,14 @@ const DEFAULT_CANCEL = '取消 Cancel';
  * - `low`: fires `onConfirm` the moment `open` flips true, then `notify`s success (with `undo`)
  *   or failure, then closes. No visible surface of its own — `anchor` is rendered plain.
  * - `medium`: a Radix `Popover` anchored to `anchor` (`side="bottom" align="end"`, an 8px offset;
- *   Popper repositions on collision). `modal` — focus moves in on open and back to whatever had
- *   it beforehand on close (Radix's `FocusScope`, which keys off actual DOM focus at mount time,
- *   not a `Trigger` ref — works whether `anchor` is the literal clicked button or a larger
- *   wrapper around a control this file cannot reach directly, e.g. a shared card's own button).
- *   Escape/outside-click close it unless a confirm is in flight.
+ *   Popper repositions on collision). `modal` — focus moves onto the confirm button on open
+ *   (`onOpenAutoFocus`, overridden: Radix's own default targets the first focusable descendant,
+ *   not necessarily the confirm button) and back to the trigger on close via
+ *   `useRestoreFocusOnClose` below (a manual replacement for Radix's built-in restore, which only
+ *   fires through a rendered `Trigger`'s own ref — this file uses `Anchor` instead, precisely
+ *   because several callers cannot reach their real trigger element, e.g. a shared card's own
+ *   Approve/Reject button with no forwarded ref). Escape/outside-click close it unless a confirm
+ *   is in flight.
  * - `irreversible`: a centred Radix `AlertDialog` (never anchored — a destructive, unrecoverable
  *   action gets the viewport's full attention regardless of where the trigger sits). The danger
  *   button stays disabled until the target name is retyped (skipped when `target` is omitted —
