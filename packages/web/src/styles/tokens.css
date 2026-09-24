@@ -4,8 +4,20 @@
  * the governance semantics are one colour per meaning (observe = teal, pending / warn / medium =
  * amber, high / irreversible / reject / conflict / failed / purge = red, executed / published /
  * healthy = green, system / proposal / production / default = blue, archived / superseded /
- * acceptance-residue / untested = grey). Text colours keep ≥ 4.5:1 against the surface they
- * normally sit on (`--text-3` 4.7:1 on white; each `--<semantic>` ≥ 4.5:1 on its own `-soft`).
+ * acceptance-residue / untested = grey).
+ *
+ * Contrast (S8 W1-A8, audit S5): `--text`/`--text-2`/`--text-3` are general-purpose — used on any
+ * neutral surface (`--bg`, `--surface-1/2/3`) and on `--accent-soft` (the sidebar's selected-item
+ * background) — so each keeps ≥ 4.5:1 on *every one* of those plus every semantic `-soft`
+ * background, not just the surface it happens to render on today (`packages/web/src/styles/
+ * tokens-contrast.test.ts` asserts the full pair matrix and documents which pairs it checks and
+ * why). `--text-3` was `#6b7280` in light / `#8b94a5` in dark — both only verified against
+ * `--surface-1`/white; the audit's real screenshots caught it at 4.43:1 on `--bg` and 4.16:1 on
+ * `--accent-soft` (sidebar selected sub-labels, page subtitles, table headers). Darkened (light)
+ * / lightened (dark) just enough to clear 4.5:1 on the worst-case background (a semantic `-soft`
+ * chip), hue held constant. Each semantic colour (`--ok`/`--warn`/`--danger`/`--info`/`--observe`/
+ * `--muted`) keeps ≥ 4.5:1 on its own `-soft` plus `--bg`/`--surface-1` — the only backgrounds it
+ * is ever placed on (a semantic text colour never sits on a *different* semantic's `-soft`).
  *
  * The only stylesheet allowed to carry colour and px font-size literals — `scripts/guards/
  * css-tokens.mjs` (`pnpm ci:guards`) rejects them anywhere else under `styles/`. */
@@ -22,7 +34,9 @@
 
   --text: #12161c;
   --text-2: #4b5563;
-  --text-3: #6b7280;
+  /* S8 W1-A8 (audit S5): darkened from #6b7280 (4.43:1 on --bg, 4.16:1 on --accent-soft — both
+   * under 4.5:1) to clear 4.5:1 on every surface (min 4.92:1, on --danger-soft). */
+  --text-3: #5f6672;
   /* Text on a filled control — the ink primary button (`--text` background), the accent, and the
    * filled danger hover all take this. */
   --text-on-accent: #ffffff;
@@ -48,8 +62,9 @@
   --muted: #626b7b;
   --muted-soft: #f0f1f3;
 
-  /* Type scale (C24): every font-size in the console is one of these seven stops. */
-  --fs-11: 11px;
+  /* Type scale (C24; S8 W1-A8 dropped the `--fs-11` stop, audit S8: 11px text below the 12px
+   * accessible floor — every former `var(--fs-11)` use now reads `var(--fs-12)`, and the
+   * Tailwind `text-11` alias in tailwind.css is gone with it). Six stops, 12px minimum. */
   --fs-12: 12px;
   --fs-13: 13px;
   --fs-14: 14px;
@@ -96,8 +111,8 @@
   --transition: 120ms ease;
 }
 
-/* Dark: same names, same contrast intent (each text step ≥ 4.5:1 on --surface-1; each semantic
- * ≥ 4.5:1 on its own -soft). */
+/* Dark: same names, same contrast intent (each general text token ≥ 4.5:1 on --bg / --surface-1/2/3
+ * / --accent-soft / every semantic -soft; each semantic ≥ 4.5:1 on its own -soft). */
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
@@ -111,7 +126,11 @@
 
     --text: #e7eaf0;
     --text-2: #a9b1c0;
-    --text-3: #8b94a5;
+    /* S8 W1-A8 (audit S5): lightened from #8b94a5 — that passed --surface-1 (5.98:1) but fell to
+     * 4.16:1 / 4.48:1 / 4.40:1 on --warn-soft / --info-soft / --observe-soft respectively (each
+     * -soft composited over --surface-1, its usual mounting surface). Now min 4.85:1, on
+     * --warn-soft. */
+    --text-3: #98a0af;
     --text-on-accent: #0b0d12;
 
     --accent: #6ea0ff;

@@ -78,8 +78,8 @@
   --font-mono: var(--font-mono);
 
   /* Type scale (C24) — the §5.9 `--fs-*` stops as Tailwind's `--text-*` font-size namespace, so
-   * `text-13` / `text-16` / … are the only font-size utilities Tailwind can generate. */
-  --text-11: var(--fs-11);
+   * `text-12` / `text-16` / … are the only font-size utilities Tailwind can generate (S8 W1-A8,
+   * audit S8: `--fs-11` / `text-11` dropped — nothing below the 12px floor). */
   --text-12: var(--fs-12);
   --text-13: var(--fs-13);
   --text-14: var(--fs-14);
