@@ -987,11 +987,14 @@ step8_mcp_connect() {
 
   # Pre-publish half of the same I16/I17 invariant s213-find-operations-pre-publish already checks
   # for the http gate: a freshly-imported draft manifest must not be visible yet.
-  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"accept_s2_mcp\"}" "d.result.items.length")
+  # Counts only this fixture's own operations (`accept_s2_mcp_*`): since S8 W2-K1 `find_*` tokenises
+  # `need` and matches any token, so `accept_s2_mcp` also (rightly) surfaces the other accept_s2 gates'
+  # *published* operations — the invariant is "no draft of this manifest", not "no results at all".
+  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"accept_s2_mcp\"}" "d.result.items.filter((o) => String((o.properties || {}).name).startsWith('accept_s2_mcp_')).length")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-mcp-find-operations-pre-publish" "find_operations HTTP $status: $(parse_kv "$out" BODY)"
   pre_count=$(parse_kv "$out" EXTRACTED)
-  [ "$pre_count" = "0" ] || fail "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') returned $pre_count results before publish_manifest — draft manifest is visible (I16/I17 violation)"
+  [ "$pre_count" = "0" ] || fail "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') returned $pre_count of its own accept_s2_mcp_* operations before publish_manifest — draft manifest is visible (I16/I17 violation)"
   pass "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') misses before publish_manifest, as required"
 
   out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_MCP\"}" "")
@@ -999,11 +1002,11 @@ step8_mcp_connect() {
   [ "$status" = "200" ] || fail "connect-mcp-publish" "publish_manifest(mcp) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-mcp-publish" "mcp manifest published"
 
-  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"accept_s2_mcp\"}" "d.result.items.length")
+  out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"accept_s2_mcp\"}" "d.result.items.filter((o) => String((o.properties || {}).name).startsWith('accept_s2_mcp_')).length")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-mcp-find-operations-post-publish" "find_operations HTTP $status: $(parse_kv "$out" BODY)"
   post_count=$(parse_kv "$out" EXTRACTED)
-  [ "$post_count" = "2" ] || fail "connect-mcp-find-operations-post-publish" "find_operations('accept_s2_mcp') returned $post_count results after publish_manifest, expected both fixture tools (2)"
+  [ "$post_count" = "2" ] || fail "connect-mcp-find-operations-post-publish" "find_operations('accept_s2_mcp') returned $post_count of its own accept_s2_mcp_* operations after publish_manifest, expected both fixture tools (2)"
   pass "connect-mcp-find-operations-post-publish" "find_operations('accept_s2_mcp') sees both fixture tools after publish_manifest ($post_count result(s))"
 }
 
