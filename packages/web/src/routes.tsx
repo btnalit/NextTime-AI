@@ -1,33 +1,123 @@
-import { useCallback, useEffect, useState } from 'react';
-import { AccessPage } from './components/AccessPage.js';
+import { lazy, useCallback, useEffect, useState } from 'react';
 import { AccountPage } from './components/AccountPage.js';
-import { AgentProfilePage } from './components/AgentProfilePage.js';
-import { ApprovalQueuePage } from './components/ApprovalQueuePage.js';
-import { AuditPage } from './components/AuditPage.js';
-import { CatalogPage } from './components/CatalogPage.js';
-import { ChatListPage } from './components/ChatListPage.js';
-import { ChatPage } from './components/ChatPage.js';
-import { ConnectionsPage } from './components/ConnectionsPage.js';
-import { MembersPage } from './components/MembersPage.js';
-import { ModelsPage } from './components/ModelsPage.js';
-import { TasksPage } from './components/TasksPage.js';
-import { GraphPage } from './components/graph/GraphPage.js';
-import { PlatformAuditPage } from './components/platform/PlatformAuditPage.js';
-import { PlatformIntegrationsPage } from './components/platform/PlatformIntegrationsPage.js';
-import { PlatformModelsPage } from './components/platform/PlatformModelsPage.js';
-import { PlatformModulesPage } from './components/platform/PlatformModulesPage.js';
-import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage.js';
-import { PlatformRuntimePage } from './components/platform/PlatformRuntimePage.js';
-import { PlatformSettingsPage } from './components/platform/PlatformSettingsPage.js';
-import { PlatformStatusPage } from './components/platform/PlatformStatusPage.js';
-import { PlatformUsersPage } from './components/platform/PlatformUsersPage.js';
-import { PlatformWorkspacesPage } from './components/platform/PlatformWorkspacesPage.js';
+import { RouteBoundary } from './components/RouteBoundary.js';
 import { AppShell } from './components/shell/AppShell.js';
 import { EmptyState } from './components/ui/EmptyState.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
 import type { Session } from './session/types.js';
+
+/**
+ * Every page below `AccountPage` is `React.lazy` (S8 W1-A5, leftover 49: the main JS chunk was
+ * 806 kB raw / 228 kB gzip with all of them imported eagerly here — `MessageBody.tsx`'s own doc
+ * comment on `react-markdown` set the precedent this follows). `AccountPage` is the one exception:
+ * it is also reachable from `App.tsx`'s *unauthenticated* `noWorkspace` state (a cookie admin with
+ * no workspace membership can still reach `#/me/account`), so it stays a static import — same as
+ * `LoginPage`/`ChangePasswordPage`/`NoWorkspacePage`, kept eager there for fast first paint — and
+ * both call sites share the same module/chunk rather than one static and one dynamic copy of it.
+ *
+ * `vite.config.ts`'s `manualChunks` groups every `components/platform/*` module (this file's nine
+ * `platform*Page` imports) into one `platform` output chunk — the platform section is one admin
+ * flow a reader moves through page to page, so bundling it as one fetch avoids a chunk-per-click
+ * waterfall; the ten-way split still exists as separate `React.lazy` boundaries (so visiting only
+ * `#/platform/overview` never pays for `PlatformAuditPage`'s *own* code needed once its chunk is
+ * fetched, cases below just share the one physical file). `react`/`react-dom` go into their own
+ * stable `vendor-react` chunk in the same config, so a page chunk's content hash does not change
+ * (and its cache does not invalidate) on a release that only touched page code, or only bumped a
+ * dependency version — `vendor-react` is already part of the eager initial load (needed to boot
+ * at all) so this adds no extra request. The same config also carves out a `vendor-radix` chunk
+ * for every `@radix-ui/*` module; nothing on this branch imports one yet (`components/kit/button`,
+ * `dialog`, `sheet`, `tooltip` are primitives built ahead of their consumers, W1-A0) — the rule is
+ * there so the next kit component that lands in a page (W1-A3 wires tooltip; more will follow)
+ * gets its Radix code split from that page's own chunk instead of inflating it, per-page, forever.
+ */
+const AccessPage = lazy(() =>
+  import('./components/AccessPage.js').then((m) => ({ default: m.AccessPage })),
+);
+const AgentProfilePage = lazy(() =>
+  import('./components/AgentProfilePage.js').then((m) => ({ default: m.AgentProfilePage })),
+);
+const ApprovalQueuePage = lazy(() =>
+  import('./components/ApprovalQueuePage.js').then((m) => ({ default: m.ApprovalQueuePage })),
+);
+const AuditPage = lazy(() =>
+  import('./components/AuditPage.js').then((m) => ({ default: m.AuditPage })),
+);
+const CatalogPage = lazy(() =>
+  import('./components/CatalogPage.js').then((m) => ({ default: m.CatalogPage })),
+);
+const ChatListPage = lazy(() =>
+  import('./components/ChatListPage.js').then((m) => ({ default: m.ChatListPage })),
+);
+const ChatPage = lazy(() =>
+  import('./components/ChatPage.js').then((m) => ({ default: m.ChatPage })),
+);
+const ConnectionsPage = lazy(() =>
+  import('./components/ConnectionsPage.js').then((m) => ({ default: m.ConnectionsPage })),
+);
+const MembersPage = lazy(() =>
+  import('./components/MembersPage.js').then((m) => ({ default: m.MembersPage })),
+);
+const ModelsPage = lazy(() =>
+  import('./components/ModelsPage.js').then((m) => ({ default: m.ModelsPage })),
+);
+const TasksPage = lazy(() =>
+  import('./components/TasksPage.js').then((m) => ({ default: m.TasksPage })),
+);
+const GraphPage = lazy(() =>
+  import('./components/graph/GraphPage.js').then((m) => ({ default: m.GraphPage })),
+);
+const PlatformAuditPage = lazy(() =>
+  import('./components/platform/PlatformAuditPage.js').then((m) => ({
+    default: m.PlatformAuditPage,
+  })),
+);
+const PlatformIntegrationsPage = lazy(() =>
+  import('./components/platform/PlatformIntegrationsPage.js').then((m) => ({
+    default: m.PlatformIntegrationsPage,
+  })),
+);
+const PlatformModelsPage = lazy(() =>
+  import('./components/platform/PlatformModelsPage.js').then((m) => ({
+    default: m.PlatformModelsPage,
+  })),
+);
+const PlatformModulesPage = lazy(() =>
+  import('./components/platform/PlatformModulesPage.js').then((m) => ({
+    default: m.PlatformModulesPage,
+  })),
+);
+const PlatformOverviewPage = lazy(() =>
+  import('./components/platform/PlatformOverviewPage.js').then((m) => ({
+    default: m.PlatformOverviewPage,
+  })),
+);
+const PlatformRuntimePage = lazy(() =>
+  import('./components/platform/PlatformRuntimePage.js').then((m) => ({
+    default: m.PlatformRuntimePage,
+  })),
+);
+const PlatformSettingsPage = lazy(() =>
+  import('./components/platform/PlatformSettingsPage.js').then((m) => ({
+    default: m.PlatformSettingsPage,
+  })),
+);
+const PlatformStatusPage = lazy(() =>
+  import('./components/platform/PlatformStatusPage.js').then((m) => ({
+    default: m.PlatformStatusPage,
+  })),
+);
+const PlatformUsersPage = lazy(() =>
+  import('./components/platform/PlatformUsersPage.js').then((m) => ({
+    default: m.PlatformUsersPage,
+  })),
+);
+const PlatformWorkspacesPage = lazy(() =>
+  import('./components/platform/PlatformWorkspacesPage.js').then((m) => ({
+    default: m.PlatformWorkspacesPage,
+  })),
+);
 
 /**
  * routes: the route table — which page a `Route` (lib/router.ts) renders inside the shell for a
@@ -271,7 +361,7 @@ export function Routed({
       platformRole={session.user?.platformRole}
       user={session.user}
     >
-      {page}
+      <RouteBoundary key={route.kind}>{page}</RouteBoundary>
     </AppShell>
   );
 }
