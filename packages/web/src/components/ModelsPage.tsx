@@ -12,6 +12,7 @@ import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
 import { DataTable, type DataTableColumn } from './kit/data-table.js';
 import { PageHeader } from './kit/page-header.js';
+import { DashboardCard } from './kit/section.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
@@ -223,10 +224,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
         )}
       />
 
-      <section className="section" aria-labelledby="models-title">
-        <div className="section-header">
-          <h2 id="models-title">{t('模型', 'Models')}</h2>
-        </div>
+      <DashboardCard title={t('模型', 'Models')}>
         {models.state.status === 'loading' ? (
           <SkeletonRows count={3} label="Loading models" testId="models-loading" />
         ) : models.state.status === 'error' ? (
@@ -239,12 +237,9 @@ export function ModelsPage({ http }: ModelsPageProps) {
         ) : (
           <ModelsTable models={models.state.data.items} />
         )}
-      </section>
+      </DashboardCard>
 
-      <section className="section" aria-labelledby="agent-policy-title">
-        <div className="section-header">
-          <h2 id="agent-policy-title">{t('工作区策略', 'Workspace policy')}</h2>
-        </div>
+      <DashboardCard title={t('工作区策略', 'Workspace policy')}>
         {agentPolicy.state.status === 'loading' ? (
           <SkeletonRows count={3} label="Loading workspace policy" testId="agent-policy-loading" />
         ) : agentPolicy.state.status === 'error' ? (
@@ -293,12 +288,9 @@ export function ModelsPage({ http }: ModelsPageProps) {
             </dl>
           </div>
         )}
-      </section>
+      </DashboardCard>
 
-      <section className="section" aria-labelledby="quotas-title">
-        <div className="section-header">
-          <h2 id="quotas-title">{t('配额', 'Quotas')}</h2>
-        </div>
+      <DashboardCard title={t('配额', 'Quotas')}>
         {quotas.state.status === 'loading' ? (
           <SkeletonRows count={2} label="Loading quotas" testId="quotas-loading" />
         ) : quotas.state.status === 'error' ? (
@@ -336,12 +328,9 @@ export function ModelsPage({ http }: ModelsPageProps) {
             rowTestId={(row) => `quota-row-${row.key}`}
           />
         )}
-      </section>
+      </DashboardCard>
 
-      <section className="section" aria-labelledby="policies-title">
-        <div className="section-header">
-          <h2 id="policies-title">{t('策略', 'Policies')}</h2>
-        </div>
+      <DashboardCard title={t('策略', 'Policies')}>
         {policies.state.status === 'loading' ? (
           <SkeletonRows count={2} label="Loading policies" testId="policies-loading" />
         ) : policies.state.status === 'error' ? (
@@ -380,7 +369,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
             rowDataAttrs={(policy) => ({ 'data-policy-id': policy.id })}
           />
         )}
-      </section>
+      </DashboardCard>
     </div>
   );
 }

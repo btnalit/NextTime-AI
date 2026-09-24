@@ -9,7 +9,7 @@ import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-wo
 import { hrefs } from '../../lib/router.js';
 import { BindApiKeyForm } from '../BindApiKeyForm.js';
 import { PageHeader } from '../kit/page-header.js';
-import { Card } from '../ui/Card.js';
+import { DashboardCard } from '../kit/section.js';
 import { DataList, DataRow } from '../ui/DataList.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -179,7 +179,7 @@ function PlatformOverviewBody({
   const t = useT();
   return (
     <>
-      <Card title={t('版本', 'Version')}>
+      <DashboardCard title={t('版本', 'Version')}>
         <dl className="definition-list">
           <dt>Kernel</dt>
           <dd>{data.version.kernel}</dd>
@@ -188,9 +188,9 @@ function PlatformOverviewBody({
           <dt>{t('最新迁移', 'Latest migration')}</dt>
           <dd>{data.version.latestMigration ?? '—'}</dd>
         </dl>
-      </Card>
+      </DashboardCard>
 
-      <Card title={t('开始使用', 'Getting started')} padded={false}>
+      <DashboardCard title={t('开始使用', 'Getting started')} padded={false}>
         <DataList ariaLabel="Getting started checklist" testId="platform-checklist">
           {data.checklist.map((item) => (
             <DataRow
@@ -208,7 +208,7 @@ function PlatformOverviewBody({
             />
           ))}
         </DataList>
-      </Card>
+      </DashboardCard>
 
       <div className="platform-tiles" data-testid="platform-counts">
         <CountTile
@@ -233,7 +233,7 @@ function PlatformOverviewBody({
         />
       </div>
 
-      <Card title={t('服务健康', 'Health')}>
+      <DashboardCard title={t('服务健康', 'Health')}>
         <div className="row-wrap" data-testid="platform-health">
           {data.health.map((entry) => (
             <span
@@ -246,9 +246,9 @@ function PlatformOverviewBody({
             </span>
           ))}
         </div>
-      </Card>
+      </DashboardCard>
 
-      <Card
+      <DashboardCard
         title={t('最近平台审计', 'Recent platform audit')}
         actions={<a href={hrefs.platformAudit()}>{t('查看全部', 'View all')}</a>}
         padded={false}
@@ -271,7 +271,7 @@ function PlatformOverviewBody({
             ))}
           </DataList>
         )}
-      </Card>
+      </DashboardCard>
 
       {data.counts.pendingActivationUsers > 0 ? <BindApiKeyForm onBound={onKeyBound} /> : null}
     </>

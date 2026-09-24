@@ -228,9 +228,7 @@ describe('AccountPage: cookie mode', () => {
     const primaries = document.querySelectorAll('.btn-primary');
     expect(primaries).toHaveLength(1);
     expect(primaries[0]).toBe(screen.getByRole('button', { name: '保存' }));
-    expect(screen.getByRole('button', { name: /更改密码/ }).className).not.toContain(
-      'btn-primary',
-    );
+    expect(screen.getByRole('button', { name: /更改密码/ }).className).not.toContain('btn-primary');
     expect(screen.getByRole('button', { name: '绑定' }).className).not.toContain('btn-primary');
   });
 });

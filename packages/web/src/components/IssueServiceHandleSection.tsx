@@ -4,6 +4,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
+import { DashboardCard } from './kit/section.js';
 import { PlatformError } from './platform/PlatformError.js';
 import { Button } from './ui/Button.js';
 import { CopyId } from './ui/CopyId.js';
@@ -148,15 +149,10 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
   }
 
   return (
-    <section
-      className="section"
-      aria-labelledby="issue-service-handle-title"
+    <DashboardCard
+      title={t('签发外部运行时凭证', 'Issue a service Handle')}
       data-testid="issue-service-handle-section"
     >
-      <div className="section-header">
-        <h2 id="issue-service-handle-title">{t('签发外部运行时凭证', 'Issue a service Handle')}</h2>
-      </div>
-
       {servicePrincipals.length === 0 ? (
         <Notice testId="issue-service-handle-no-principal">
           还没有 service Principal — 先在<a href={hrefs.members()}>成员与授权</a>
@@ -312,6 +308,6 @@ export function IssueServiceHandleSection({ http, principals }: IssueServiceHand
           </div>
         </Drawer>
       ) : null}
-    </section>
+    </DashboardCard>
   );
 }

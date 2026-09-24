@@ -170,11 +170,7 @@ function OperationReviewRow({
           <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />
         </td>
         <td>
-          <StatusChip
-            machine="autoApprovable"
-            status={String(row.autoApprovable)}
-            size="s"
-          />
+          <StatusChip machine="autoApprovable" status={String(row.autoApprovable)} size="s" />
         </td>
         <td>
           <details className="disclosure">
