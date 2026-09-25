@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.19.0](https://github.com/btnalit/NextTime-AI/compare/v0.18.0...v0.19.0) (2026-09-25)
+
+
+### Features
+
+* **web:** grant and connect half of journey 1 (S8 W2-U1, audit J2-J6/SY1-SY4/R5/U2/U5/L4/AX1) ([#269](https://github.com/btnalit/NextTime-AI/issues/269)) ([ca55814](https://github.com/btnalit/NextTime-AI/commit/ca55814e23b3492191eb9b433b73d750dd0e3b3a))
+* **web:** Worker 编辑器选择器与模板，Workers 标签页入口/Worker 分区（S8 W2 U2, J7/R6/CW1/CW2） ([#272](https://github.com/btnalit/NextTime-AI/issues/272)) ([269185a](https://github.com/btnalit/NextTime-AI/commit/269185ac93ab6471a7429d9f7e9191f94a4e8ddf))
+* **web:** 执行就绪 card + 控制塔费用/需要人处理 (J1/O1) ([#273](https://github.com/btnalit/NextTime-AI/issues/273)) ([62a09a5](https://github.com/btnalit/NextTime-AI/commit/62a09a579cd6f2e3749fa3b02a7062beae09833b))
+* Worker 目录「我的草稿」——草稿保存后找得回了（audit R6） ([#274](https://github.com/btnalit/NextTime-AI/issues/274)) ([c9016fc](https://github.com/btnalit/NextTime-AI/commit/c9016fcf138e4d5903d50c8f62d04d48fa23cedf))
+
+
+### Bug Fixes
+
+* **kernel:** execution readiness requires a Worker that reaches a gate ([#276](https://github.com/btnalit/NextTime-AI/issues/276)) ([6aba179](https://github.com/btnalit/NextTime-AI/commit/6aba179588b22eafe4d8c73ea916cf2ac9206d11))
+
 ## [0.18.0](https://github.com/btnalit/NextTime-AI/compare/v0.17.0...v0.18.0) (2026-09-24)
 
 
