@@ -1,26 +1,21 @@
 name: auto-merge
 
-# Routes dependency-update PRs from renovate[bot] and dependabot[bot] (security-only, now that
-# .github/dependabot.yml is gone — see renovate.json's own commit — every remaining Dependabot PR
-# comes from GitHub's native "Dependabot security updates" repo setting, not a version-update
-# config). Patch/minor of a non-pi dependency: enable GitHub's native auto-merge (`gh pr merge
-# --auto --merge`) — branch protection's required checks (guards/quality/test, strict) still gate
-# the actual merge, this only flips the auto-merge switch. Major bumps, and anything in the `pi`
-# group (@earendil-works/* — must go through pi.version + the pi-drift contract, docs/runbooks/
+# Routes dependency-update PRs from dependabot[bot]. There is no version-update config: every
+# Dependabot PR comes from GitHub's native "Dependabot security updates" repo setting; routine
+# version upgrades are done deliberately in planned waves (docs/convergence-plan-2026-09-25.md
+# §6 W7 — 2026-09-25 decision, renovate.json removed, its App had never been installed).
+# Patch/minor of a non-pi dependency: enable GitHub's native auto-merge (`gh pr merge --auto
+# --merge`) — branch protection's required checks (guards/quality/test, strict) still gate the
+# actual merge, this only flips the auto-merge switch. Major bumps, and any pi dependency
+# (@earendil-works/* — must go through pi.version + the pi-drift contract, docs/runbooks/
 # pi-upgrade.md, not a routine bump): label needs-review, never auto-merge.
 #
 # `pull_request_target`, not `pull_request`: GitHub gives `pull_request`-triggered workflows a
 # read-only GITHUB_TOKEN for PRs opened by Dependabot specifically, regardless of what this
 # workflow requests — `pull_request_target` runs with the token permissions declared below
-# instead. Safe here because neither job ever checks out or executes the PR's own code, only
-# calls the GitHub API against it by number.
-#
-# renovate[bot] update kind comes from renovate.json's own labelling (`addLabels: [major]` for
-# every major bump, `pi` group's `addLabels: [pi-upgrade]`) — reading labels back here, rather
-# than re-deriving update type from the PR title/branch, keeps the "what kind of update is this"
-# decision in one place (Renovate, which already computed it). dependabot[bot] has no such
-# labelling (native security updates aren't driven by renovate.json), so that job uses
-# dependabot/fetch-metadata's own semver/dependency-name outputs instead.
+# instead. Safe here because the job never checks out or executes the PR's own code, only calls
+# the GitHub API against it by number. Update type comes from dependabot/fetch-metadata's own
+# semver/dependency-name outputs.
 
 on:
   pull_request_target:
@@ -30,41 +25,6 @@ permissions:
   contents: read
 
 jobs:
-  renovate:
-    name: renovate
-    if: github.actor == 'renovate[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Ensure the needs-review label exists
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh label create needs-review --color FBCA04 \
-            --description "Renovate/Dependabot PR that needs a human before merge (major bump, or the pi group)" \
-            --repo "${{ github.repository }}" 2>/dev/null || true
-
-      - name: Route on renovate.json's own major / pi-upgrade labels
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: |
-          set -eu
-          labels=$(gh pr view "$PR_URL" --json labels --jq '[.labels[].name] | join(",")')
-          echo "labels: $labels"
-          case ",$labels," in
-            *,major,*|*,pi-upgrade,*)
-              gh pr edit "$PR_URL" --add-label needs-review
-              echo "needs-review: major bump or pi group, not auto-merging"
-              ;;
-            *)
-              gh pr merge "$PR_URL" --auto --merge
-              echo "auto-merge enabled (patch/minor, non-pi) — required checks still gate the actual merge"
-              ;;
-          esac
-
   dependabot:
     name: dependabot
     if: github.actor == 'dependabot[bot]'
@@ -84,7 +44,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh label create needs-review --color FBCA04 \
-            --description "Renovate/Dependabot PR that needs a human before merge (major bump, or the pi group)" \
+            --description "Dependabot PR that needs a human before merge (major bump, or a pi dependency)" \
             --repo "${{ github.repository }}" 2>/dev/null || true
 
       - name: Route on Dependabot's own semver update-type / dependency names

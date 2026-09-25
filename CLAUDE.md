@@ -28,6 +28,7 @@
   Conventional Commits（release-please 据此生成 CHANGELOG 与版本）；单 commit 的 PR 用 squash。
 - 线上契约与语义：`docs/wire-contract-conventions.md`；`pnpm contract:check` 校验快照；
   `pnpm ci:guards` 含词表守卫（读 `packages/shared/dist`，先构建 shared）。
-- bot PR（release-please）的 workflow 需人工批准后再合并发版；Renovate / Dependabot 自动。
+- bot PR（release-please）的 workflow 需人工批准后再合并发版；Dependabot 安全更新 PR 由
+  `auto-merge.yml` 分流；常规依赖升级不交给 bot，按收敛方案的波次手动做（2026-09-25 决定，Renovate 已移除）。
 - 主机应用与验收：按 `docs/runbooks/` 执行，结果记 `docs/private/`，不改主机上项目目录之外
   的任何东西，不触碰主机上其他既有服务。

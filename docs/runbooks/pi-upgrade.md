@@ -122,13 +122,11 @@ list --label pi-drift` 查是否已有未关闭的，有就编辑标题/正文+�
 关闭该 issue。这个 workflow **没有** `pull_request`/`push` 触发器，永远不会出现在任何 PR 的
 required checks 里，`ci.yml` 完全不受影响。
 
-**依赖更新（`renovate.json`，取代了原来的 `.github/dependabot.yml`——见
-`docs/runbooks/automation.md`，Dependabot 的 npm 更新在这个 pnpm workspace 里会
-`ERR_PNPM_OUTDATED_LOCKFILE` 失败）**：`@earendil-works/*`（`packages/platform-extension` 下那
-两个包）单独分成一组 `pi`，`automerge: false`，打 `pi-upgrade` label，`.github/workflows/
-auto-merge.yml` 认出这个 label 就不会自动合并——仍然要走上面第 4 节的升级步骤和第 5 节的测试
-清单。`deploy/worker-runtime` 的 Docker 基础镜像（`node:24-bookworm-slim`）也由 `renovate.json`
-管，锁定在 24.x（`allowedVersions: <25`，见该文件注释），不提出 major 版本更新。
+**依赖更新**：pi（`@earendil-works/*`，`packages/platform-extension` 下那两个包）不接受任何 bot 版本更新——
+2026-09-25 起仓库不再用 Renovate，也没有 Dependabot 版本更新配置（见 `docs/runbooks/automation.md`
+"依赖更新怎么做"）；万一 Dependabot 安全更新碰到这两个包，`.github/workflows/auto-merge.yml` 会打
+`needs-review` 标签、不自动合并——仍然要走上面第 4 节的升级步骤和第 5 节的测试清单。`deploy/worker-runtime`
+的 Docker 基础镜像（`node:24-bookworm-slim`）锁定在 24.x，升级时手动改。
 
 ## 7. 回滚
 
