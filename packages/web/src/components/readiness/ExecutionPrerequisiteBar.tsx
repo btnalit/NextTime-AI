@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
 import { executionReadinessMissingCodeLabel } from '../../lib/labels.js';
+import { Notice } from '../kit/notice.js';
 import {
   missingCauseText,
   missingKey,
@@ -27,14 +27,6 @@ export interface ExecutionPrerequisiteBarProps {
  * `ready`. Only the not-ready case renders, one line per `missing[]` item — cause text plus a link
  * to the page that fixes it (`readiness-copy.ts`), gate ids resolved to names from this same
  * response's own `gates[]` (never a raw id, never the bare `code` — ui-audit S14).
- *
- * `components/kit/*` boundary (S8 risk ①): this file may not import `components/ui/*`, so its own
- * notice rendering is a small local replica of `ui/Notice` over the same CSS classes — not a new
- * dependency, just no component-wrapper import (same technique `components/access/
- * GrantGateForm.tsx` / `components/connect/EnableGateConfirm.tsx` use). No Tailwind utility class
- * appears here that `components/kit/*` does not already use — this file is outside Tailwind's
- * `@source` scope (`styles/tailwind.css`), so an arbitrary utility class here would silently not
- * exist in the built CSS.
  */
 export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps) {
   const t = useT();
@@ -45,7 +37,7 @@ export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps
   const gateNames = new Map(data.gates.map((gate) => [gate.gateId, gate.name]));
 
   return (
-    <LocalNotice tone="warn" testId="execution-prerequisite-bar">
+    <Notice tone="warn" testId="execution-prerequisite-bar">
       <div className="stack-s">
         <strong>{t('执行前提尚未满足', 'Execution prerequisites not met yet')}</strong>
         <span data-testid="execution-prerequisite-rule">
@@ -70,23 +62,6 @@ export function ExecutionPrerequisiteBar({ http }: ExecutionPrerequisiteBarProps
           ))}
         </ul>
       </div>
-    </LocalNotice>
-  );
-}
-
-/** A small local `ui/Notice` replica (no icon) — this file may not import `components/ui/*`. */
-function LocalNotice({
-  tone = 'info',
-  testId,
-  children,
-}: {
-  readonly tone?: 'info' | 'warn';
-  readonly testId?: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <div className={`notice${tone === 'warn' ? ' notice-warn' : ''}`} data-testid={testId}>
-      <div className="grow">{children}</div>
-    </div>
+    </Notice>
   );
 }

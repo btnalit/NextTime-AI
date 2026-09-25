@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PublishableStatusSchema, WorkerDefinitionKindSchema } from '../enums.js';
+import { DraftKindSchema, PublishableStatusSchema, WorkerDefinitionKindSchema } from '../enums.js';
 import { ProcedureStepSchema } from '../procedure.js';
 import { SkillApplicableSchema } from '../skill.js';
 
@@ -91,3 +91,15 @@ export const ProcedurePublishResultWireSchema = ProcedureSummaryWireSchema.pick(
   version: true,
   status: true,
 });
+
+/** `discard_draft`'s result (S8 W3 K2, leftover 82): echoes back what was deleted — never a
+ *  `status` field (the row no longer exists; there is no fourth `PublishableStatus` value for
+ *  this). */
+export const DiscardDraftResultWireSchema = z
+  .object({
+    kind: DraftKindSchema,
+    id: z.string(),
+    version: z.number().int().positive(),
+  })
+  .strict();
+export type DiscardDraftResultWire = z.infer<typeof DiscardDraftResultWireSchema>;

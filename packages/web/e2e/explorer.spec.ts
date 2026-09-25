@@ -29,7 +29,9 @@ async function login(
   // `location.hash`, and `routeFromHash('')` resolves straight to the default `chats` route. The
   // signed-in shell (Sidebar's connection indicator) is the reliable "we're past the login
   // screen" signal instead.
-  await expect(page.getByTestId('ws-status')).toHaveText('Connected', { timeout: 15_000 });
+  await expect(page.getByTestId('ws-status')).toHaveAttribute('data-status', 'connected', {
+    timeout: 15_000,
+  });
 }
 
 test.describe('S4.1: Explorer cookie auth', () => {

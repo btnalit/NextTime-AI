@@ -107,6 +107,9 @@ import {
   listConnectionRequestsHandler,
   requestConnectionHandler,
 } from './connection-handlers.js';
+// S8 W3 K2 (leftover 82) — discard_draft, same one-capability-per-file convention as
+// export-prov-handler.ts/operation-manifest-handlers.ts below.
+import { discardDraftHandler } from './discard-draft-handler.js';
 import {
   causalChainHandler,
   decisionImpactHandler,
@@ -1524,6 +1527,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_worker_definition', publishWorkerDefinitionHandler],
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],
   ['list_worker_definitions', listWorkerDefinitionsHandler],
+  // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.
+  ['discard_draft', discardDraftHandler],
   ['assert_fact', assertFactHandler],
   ['supersede_fact', supersedeFactHandler],
   ['invalidate_fact', invalidateFactHandler],

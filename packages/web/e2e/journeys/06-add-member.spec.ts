@@ -69,7 +69,7 @@ test.describe('Journey ⑥: 添加成员并让其可用', () => {
     // so sign the owner out first the same way approvals.spec.ts's `login()` helper does.
     await page.goto('/');
     if ((await reachLoginForm(page)) === 'shell') {
-      await page.getByRole('button', { name: 'Forget key' }).click();
+      await page.getByRole('button', { name: '清除密钥' }).click();
       await reachLoginForm(page);
     }
     await loginWithPassword(page, memberLogin, temporaryPassword);

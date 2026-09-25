@@ -39,6 +39,7 @@ import {
   registerActionRequestRoutingConsumer,
   runTaskReaper,
 } from './application/task/index.js';
+import { DEFAULT_DRAFT_EXPIRY_DAYS, expireDraftsOnce } from './application/worker/index.js';
 import {
   ApprovalDrainer,
   expireOverduePendingApprovals,
@@ -267,13 +268,16 @@ export interface BackgroundServices {
    * fix/invoke-worker-wait-and-outbox-prune — first tick shortly after this call, unlike the other
    * reapers here; see `OUTBOX_PRUNE_INITIAL_DELAY_MS`'s own doc comment), and the S3.8 invariant-
    * check loop (`substrate/audit`'s `runInvariantChecks` — also a short first-tick delay, same
-   * reasoning as outbox-prune; see `INVARIANT_CHECK_INITIAL_DELAY_MS`'s own doc comment).
+   * reasoning as outbox-prune; see `INVARIANT_CHECK_INITIAL_DELAY_MS`'s own doc comment), and the
+   * S8 W3 K2 draft-expiry sweep (`application/worker/draft-lifecycle.ts`'s `expireDraftsOnce` —
+   * follows the task reaper's own "wait a full interval" cadence, not outbox-prune's short-delay
+   * one; see `DEFAULT_DRAFT_EXPIRY_INTERVAL_MS`'s own doc comment).
    */
   start(): Promise<void>;
   /** Stops the poll loop, the approval-expiry reaper's interval, the outbox-prune loop, the
-   *  invariant-check loop, and unregisters the `TurnStarted` consumer. Does not wait for an
-   *  in-flight poll/reaper/prune/check tick — see OutboxDispatcher.stop()'s own doc comment for
-   *  why that is safe. */
+   *  invariant-check loop, the draft-expiry sweep, and unregisters the `TurnStarted` consumer.
+   *  Does not wait for an in-flight poll/reaper/prune/check/sweep tick — see
+   *  OutboxDispatcher.stop()'s own doc comment for why that is safe. */
   stop(): void;
 }
 
@@ -397,6 +401,25 @@ export interface CreateBackgroundServicesOptions {
    *  backlog is caught up, not worth suppressing). */
   readonly onOutboxPruneComplete?: (result: { deleted: number }) => void;
   /**
+   * S8 W3 K2 (leftover 82): `application/worker/draft-lifecycle.ts`'s `expireDraftsOnce` staleness
+   * threshold, in days — a `draft` WorkerDefinition/Skill/Procedure older than this is deleted on
+   * the periodic sweep below. Default `DEFAULT_DRAFT_EXPIRY_DAYS` (30, maintainer decision).
+   * `main()` reads this from `DRAFT_EXPIRY_DAYS`; `0` disables the sweep entirely (no timer is ever
+   * started — same deliberate-opt-out convention `outboxPruneDays === 0` already established).
+   */
+  readonly draftExpiryDays?: number;
+  /** How often the draft-expiry sweep tick runs. Default `DEFAULT_DRAFT_EXPIRY_INTERVAL_MS` (6
+   *  hours — cleanup against a 30-day-default threshold, not latency-sensitive, same cadence
+   *  reasoning as `DEFAULT_OUTBOX_PRUNE_INTERVAL_MS`). `main()` reads this from
+   *  `DRAFT_EXPIRY_INTERVAL_MS`. Ignored when `draftExpiryDays` is `0`. */
+  readonly draftExpiryIntervalMs?: number;
+  /** Called whenever a draft-expiry tick's `expireDraftsOnce` call throws — same shape as
+   *  `onApprovalReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
+  readonly onDraftExpiryError?: (error: unknown) => void;
+  /** Called after each successful draft-expiry tick with the number of drafts deleted — same shape
+   *  as `onOutboxPruneComplete`. Defaults to a no-op; `main()` logs `{ expired }` at info. */
+  readonly onDraftExpiryComplete?: (result: { expired: number }) => void;
+  /**
    * S3.8: how often `substrate/audit`'s `runInvariantChecks` runs. Default
    * `DEFAULT_INVARIANT_CHECK_INTERVAL_MS` (10 minutes); `0` disables the scheduler entirely (no
    * timer is ever started — see that constant's own doc comment). `main()` reads this from
@@ -511,6 +534,15 @@ export const DEFAULT_OUTBOX_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
  *  wait-a-full-interval treatment because its own interval (6h) would otherwise leave a
  *  freshly-started kernel's outbox unpruned for up to 6 hours after every restart. */
 export const OUTBOX_PRUNE_INITIAL_DELAY_MS = 10 * 1000;
+
+/** Default draft-expiry sweep tick interval — 6 hours (S8 W3 K2, leftover 82; cleanup against a
+ *  30-day-default threshold, not latency-sensitive — same cadence reasoning as
+ *  `DEFAULT_OUTBOX_PRUNE_INTERVAL_MS`). Unlike outbox-prune, this follows the task reaper's own
+ *  "wait a full interval for the first tick" convention (`CreateBackgroundServicesOptions.
+ *  draftExpiryDays`'s own doc comment: the task brief's explicit "follow the reaper's own
+ *  scheduling/lifecycle pattern"), not outbox-prune's short-initial-delay one — a few hours'
+ *  additional lag before the first post-restart sweep is immaterial against a 30-day threshold. */
+export const DEFAULT_DRAFT_EXPIRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /** Default S3.8 invariant-check tick interval — 10 minutes (docs/development-tasks.md S3.8
  *  deliverable 1: "`INVARIANT_CHECK_INTERVAL_MS`, default 10 min, 0 disables"). `main()` reads
@@ -639,6 +671,19 @@ export function createBackgroundServices(
   const onOutboxPruneComplete = options.onOutboxPruneComplete ?? (() => {});
   let outboxPruneInitialTimer: NodeJS.Timeout | undefined;
   let outboxPruneIntervalTimer: NodeJS.Timeout | undefined;
+
+  // S8 W3 K2 (leftover 82): same "composition root holds the timer handle, start()/stop() paired"
+  // shape as every reaper above — follows the task reaper's own cadence (a bare `setInterval`,
+  // wait a full interval for the first tick), not outbox-prune's short-initial-delay one (see
+  // `DEFAULT_DRAFT_EXPIRY_INTERVAL_MS`'s own doc comment). `draftExpiryRunning` is an explicit
+  // no-overlap guard (the task brief's own "no overlap") — no other reaper in this file needs one
+  // (each tick is comfortably faster than its own interval), but a cross-workspace sweep touching
+  // three tables per candidate is cheap insurance against a slow tick and the next one's timer
+  // firing before it returns.
+  const onDraftExpiryError = options.onDraftExpiryError ?? (() => {});
+  const onDraftExpiryComplete = options.onDraftExpiryComplete ?? (() => {});
+  let draftExpiryTimer: NodeJS.Timeout | undefined;
+  let draftExpiryRunning = false;
 
   // S3.8: same "composition root holds the timer handle, start()/stop() paired" shape as every
   // reaper above — see this file's own doc comment on `DEFAULT_INVARIANT_CHECK_INTERVAL_MS`/
@@ -783,6 +828,28 @@ export function createBackgroundServices(
         taskReaperTimer.unref?.();
       }
 
+      // S8 W3 K2 (leftover 82): the draft-expiry sweep — `draftExpiryDays === 0` is a deliberate
+      // opt-out (no timer is ever started), the same convention `outboxPruneDays === 0` already
+      // established; every other value, including the compiled-in default (30), sweeps.
+      const draftExpiryDays = options.draftExpiryDays ?? DEFAULT_DRAFT_EXPIRY_DAYS;
+      if (draftExpiryDays > 0) {
+        const draftExpiryTick = (): void => {
+          if (draftExpiryRunning) return; // no overlap — see this function's own doc comment.
+          draftExpiryRunning = true;
+          expireDraftsOnce(options.pool, { thresholdDays: draftExpiryDays })
+            .then(onDraftExpiryComplete)
+            .catch(onDraftExpiryError)
+            .finally(() => {
+              draftExpiryRunning = false;
+            });
+        };
+        draftExpiryTimer = setInterval(
+          draftExpiryTick,
+          options.draftExpiryIntervalMs ?? DEFAULT_DRAFT_EXPIRY_INTERVAL_MS,
+        );
+        draftExpiryTimer.unref?.();
+      }
+
       // fix/invoke-worker-wait-and-outbox-prune: `pruneDispatched` (PR #76) had nothing calling
       // it — wire it up the same "composition root holds the timer handle, start()/stop() paired"
       // way every reaper above does. `outboxPruneDays === 0` is a deliberate opt-out (no timer
@@ -862,6 +929,10 @@ export function createBackgroundServices(
       if (taskReaperTimer) {
         clearInterval(taskReaperTimer);
         taskReaperTimer = undefined;
+      }
+      if (draftExpiryTimer) {
+        clearInterval(draftExpiryTimer);
+        draftExpiryTimer = undefined;
       }
       if (outboxPruneInitialTimer) {
         clearTimeout(outboxPruneInitialTimer);
@@ -1123,6 +1194,15 @@ export function main(): void {
       'OUTBOX_PRUNE_INTERVAL_MS',
       process.env.OUTBOX_PRUNE_INTERVAL_MS,
     );
+    // S8 W3 K2 (leftover 82) — `0` is a deliberate opt-out, same convention as OUTBOX_PRUNE_DAYS.
+    const draftExpiryDays = parseNonNegativeIntEnvVar(
+      'DRAFT_EXPIRY_DAYS',
+      process.env.DRAFT_EXPIRY_DAYS,
+    );
+    const draftExpiryIntervalMs = parsePositiveIntEnvVar(
+      'DRAFT_EXPIRY_INTERVAL_MS',
+      process.env.DRAFT_EXPIRY_INTERVAL_MS,
+    );
     // `0` is a deliberate opt-out (same convention as OUTBOX_PRUNE_DAYS), not a misconfiguration —
     // parseNonNegativeIntEnvVar, not parsePositiveIntEnvVar.
     const invariantCheckIntervalMs = parseNonNegativeIntEnvVar(
@@ -1158,6 +1238,11 @@ export function main(): void {
       onOutboxPruneError: (err: unknown) => app.log.error(err),
       onOutboxPruneComplete: ({ deleted }: { deleted: number }) =>
         app.log.info({ deleted }, 'outbox prune complete'),
+      draftExpiryDays,
+      draftExpiryIntervalMs,
+      onDraftExpiryError: (err: unknown) => app.log.error(err),
+      onDraftExpiryComplete: ({ expired }: { expired: number }) =>
+        app.log.info({ expired }, 'draft expiry sweep complete'),
       invariantCheckIntervalMs,
       invariantMetrics,
       onInvariantCheckError: (err: unknown) => app.log.error(err),

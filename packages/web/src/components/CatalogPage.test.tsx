@@ -484,16 +484,93 @@ describe('CatalogPage', () => {
       const workerSection = screen.getByTestId('workers-worker-section');
       expect(within(workerSection).getByText('Patcher')).toBeTruthy();
     });
+
+    // S8 W3 K2 (leftover 82): "丢弃" opens a medium confirm; discard_draft fires only on confirm,
+    // and the row disappears from "我的草稿" once discarded.
+    it('Discard opens a medium confirm listing the definition name; discard_draft fires only on confirm and removes the draft', async () => {
+      let discarded = false;
+      const http = scriptedHttp({
+        list_worker_definitions: (params) => {
+          const { includeOwnDrafts } = (params ?? {}) as { includeOwnDrafts?: boolean };
+          if (discarded) return { items: [] };
+          const row = {
+            id: 'wd-3',
+            version: 1,
+            kind: 'worker',
+            status: 'draft',
+            definition: { name: 'Throwaway' },
+          };
+          return { items: includeOwnDrafts ? [row] : [] };
+        },
+        discard_draft: (params) => {
+          expect(params).toEqual({ kind: 'worker_definition', id: 'wd-3', version: 1 });
+          discarded = true;
+          return { kind: 'worker_definition', id: 'wd-3', version: 1 };
+        },
+      });
+      renderPage(http, 'workers');
+      const section = await screen.findByTestId('workers-my-drafts-section');
+      fireEvent.click(within(section).getByRole('button', { name: /丢弃/ }));
+
+      const confirm = await screen.findByTestId('worker-draft-discard-wd-3@1');
+      expect(confirm.getAttribute('data-tier')).toBe('medium');
+      expect(within(confirm).getByTestId('confirm-target').textContent).toBe('Throwaway');
+      expect(http.calls.some((c) => c.name === 'discard_draft')).toBe(false);
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+      await waitFor(() => expect(http.calls.some((c) => c.name === 'discard_draft')).toBe(true));
+      await waitFor(() => expect(screen.queryByTestId('workers-my-drafts-section')).toBeNull());
+    });
+
+    it('shows the auto-cleanup note next to the drafts list', async () => {
+      const http = scriptedHttp({
+        list_worker_definitions: (params) => {
+          const { includeOwnDrafts } = (params ?? {}) as { includeOwnDrafts?: boolean };
+          const row = {
+            id: 'wd-4',
+            version: 1,
+            kind: 'worker',
+            status: 'draft',
+            definition: { name: 'Noted' },
+          };
+          return { items: includeOwnDrafts ? [row] : [] };
+        },
+      });
+      renderPage(http, 'workers');
+      const note = await screen.findByTestId('workers-my-drafts-expiry-note');
+      expect(note.textContent).toMatch(/30/);
+    });
   });
 
   // S8 W2 U2 (audit J7/CW1): "从模板创建（ops-runner）" opens the editor prefilled rather than
   // inventing new template content — the button only exposes the checked-in ops-runner template
   // through the existing propose/publish path (F1).
-  it('Workers tab: "从模板创建（ops-runner）" opens the editor prefilled (name ops-runner, kind worker)', async () => {
+  //
+  // S8 W3 K2 (leftover 84): the button stays disabled until `list_capability_names` has loaded
+  // (so an incomplete list is never submitted), and the prefilled `capabilities` is every
+  // non-execute-class name from that directory plus `request_action` — never omitted
+  // (the kernel default for omitted `capabilities` silently drops `request_action`) and never
+  // `['request_action']` alone (that would drop every observe capability).
+  it('Workers tab: "从模板创建（ops-runner）" is disabled until list_capability_names loads, then opens the editor prefilled with the full non-execute set plus request_action', async () => {
+    let resolveCapabilityNames: (() => void) | undefined;
+    const capabilityNamesGate = new Promise<void>((resolve) => {
+      resolveCapabilityNames = resolve;
+    });
     const http = scriptedHttp({
       list_worker_definitions: () => ({ items: [] }),
       list_models: () => ({ items: [] }),
-      list_capability_names: () => ({ items: [] }),
+      list_capability_names: async () => {
+        await capabilityNamesGate;
+        return {
+          items: [
+            { name: 'assert_fact', mode: 'write' },
+            { name: 'find_workers', mode: 'observe' },
+            { name: 'get_object', mode: 'observe' },
+            { name: 'propose_skill', mode: 'propose' },
+            { name: 'request_action', mode: 'execute' },
+          ],
+        };
+      },
       list_gatekeepers: () => ({ items: [] }),
       list_skills: () => ({ items: [] }),
       propose_worker_definition: (params) => {
@@ -502,6 +579,13 @@ describe('CatalogPage', () => {
           definition: {
             systemPrompt: expect.stringContaining('ops-runner'),
             name: 'ops-runner',
+            capabilities: [
+              'assert_fact',
+              'find_workers',
+              'get_object',
+              'propose_skill',
+              'request_action',
+            ],
           },
         });
         return { id: 'wd-tmpl', version: 1, status: 'draft' };
@@ -509,15 +593,87 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'workers');
     await screen.findByTestId('workers-worker-section');
-    fireEvent.click(screen.getByTestId('workers-template-button'));
+
+    const templateButton = screen.getByTestId('workers-template-button') as HTMLButtonElement;
+    expect(templateButton.disabled).toBe(true);
+
+    resolveCapabilityNames?.();
+    await waitFor(() => expect(templateButton.disabled).toBe(false));
+
+    fireEvent.click(templateButton);
     const drawer = await screen.findByTestId('worker-editor-drawer');
     expect((within(drawer).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('ops-runner');
     const kindSelect = within(drawer).getByTestId('wd-kind') as HTMLSelectElement;
     expect(kindSelect.value).toBe('worker');
     expect(kindSelect.disabled).toBe(true);
+    const capabilitiesField = within(drawer).getByTestId('wd-capabilities');
+    // Every non-execute name is checked, plus request_action — nothing execute-class besides it.
+    for (const name of [
+      'assert_fact',
+      'find_workers',
+      'get_object',
+      'propose_skill',
+      'request_action',
+    ]) {
+      expect((within(capabilitiesField).getByLabelText(name) as HTMLInputElement).checked).toBe(
+        true,
+      );
+    }
     fireEvent.click(within(drawer).getByTestId('worker-submit'));
     await within(drawer).findByTestId('draft-proposed');
     expect(http.calls.some((c) => c.name === 'propose_worker_definition')).toBe(true);
+  });
+
+  // S8 W3 K2 (leftover 82): the Skills/Procedures tabs get the same "丢弃" action inline on a
+  // draft row (Workers' own "我的草稿" version is covered above) — one representative test each,
+  // the underlying wiring (`discardSkillDraft`/`discardProcedureDraft`) mirrors `act` exactly.
+  it('Skills tab: a draft row offers "丢弃"; discard_draft{kind:skill} fires only on confirm and removes the row', async () => {
+    let discarded = false;
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: discarded
+          ? []
+          : [{ id: 'sk-1', version: 1, status: 'draft', name: 'diagnose-net', description: 'd' }],
+      }),
+      discard_draft: (params) => {
+        expect(params).toEqual({ kind: 'skill', id: 'sk-1', version: 1 });
+        discarded = true;
+        return { kind: 'skill', id: 'sk-1', version: 1 };
+      },
+    });
+    renderPage(http, 'skills');
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByRole('button', { name: /丢弃/ }));
+
+    const confirm = await screen.findByTestId('skill-discard-confirm-sk-1');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    expect(http.calls.some((c) => c.name === 'discard_draft')).toBe(false);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'discard_draft')).toBe(true));
+    await waitFor(() => expect(screen.queryByTestId('catalog-row')).toBeNull());
+  });
+
+  it('Procedures tab: a draft row offers "丢弃"; discard_draft{kind:procedure} fires only on confirm', async () => {
+    const http = scriptedHttp({
+      list_procedures: () => ({
+        items: [
+          { id: 'pr-1', version: 1, status: 'draft', name: 'restart-verify', description: 'd' },
+        ],
+      }),
+      discard_draft: (params) => {
+        expect(params).toEqual({ kind: 'procedure', id: 'pr-1', version: 1 });
+        return { kind: 'procedure', id: 'pr-1', version: 1 };
+      },
+    });
+    renderPage(http, 'procedures');
+    const row = await screen.findByTestId('catalog-row');
+    fireEvent.click(within(row).getByRole('button', { name: /丢弃/ }));
+
+    const confirm = await screen.findByTestId('procedure-discard-confirm-pr-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'discard_draft')).toBe(true));
   });
 });
 

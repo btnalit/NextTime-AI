@@ -49,13 +49,25 @@ const CHECKLIST_LABELS: Readonly<
  * S8 W1-A10 (audit S14 "P-C…内部指标名…(s) 复数"): `item.detail` (`PlatformOverviewWire`) is
  * kernel-authored English prose with "(s)" plurals and, for `runtime`, the design doc's own
  * internal section number "P-C" — never rendered verbatim. This recomputes each key's meta line
- * client-side from `data.counts` (already on the wire) instead; only `defaultWorkspace` still
- * reads the kernel's own `detail` (it alone carries the workspace's *name*, not in `counts`, and
- * its wording has no internal term to begin with).
+ * client-side from `data.counts` (already on the wire) instead.
+ *
+ * `defaultWorkspace` (S8 W3 F1, leftover 85 "default workspace …" mixed-language line): W1-A10
+ * left this one key reading the kernel's own `detail` verbatim — it alone carries the workspace's
+ * *name*, not in `counts`. This page already loads `list_workspaces` for the residue banner
+ * above, and `PlatformWorkspaceWire.isDefault` marks the same row the kernel's `detail` string
+ * describes, so `defaultWorkspaceRow` (passed down from `PlatformOverviewPage`, found by
+ * `isDefault`) recomputes the same message bilingually instead. `list_workspaces` is a second,
+ * independent read from `platform_overview` and may still be loading when this renders —
+ * `defaultWorkspaceRowsReady` distinguishes "not found because it hasn't loaded yet" (fall back to
+ * the kernel's own `detail`, the pre-existing text, rather than flash a wrong "no default
+ * workspace" line) from "loaded and genuinely none" (the kernel invariant says this cannot happen,
+ * but the translated line is still correct if it ever does).
  */
 function checklistDetail(
   item: ChecklistItem,
   counts: PlatformOverviewWire['counts'],
+  defaultWorkspaceRow: PlatformWorkspaceWire | undefined,
+  defaultWorkspaceRowsReady: boolean,
   t: Translate,
 ): string {
   switch (item.key) {
@@ -83,7 +95,18 @@ function checklistDetail(
         'pi / runtime image consistency is enforced by CI',
       );
     case 'defaultWorkspace':
-      return item.detail;
+      if (defaultWorkspaceRow) {
+        return t(
+          `默认工作区「${defaultWorkspaceRow.name}」${defaultWorkspaceRow.status === 'active' ? '' : '（已停用）'}`,
+          `default workspace "${defaultWorkspaceRow.name}"${defaultWorkspaceRow.status === 'active' ? '' : ' (disabled)'}`,
+        );
+      }
+      return defaultWorkspaceRowsReady
+        ? t(
+            '还没有默认工作区——请在平台设置中选择一个',
+            'No default workspace — pick one in platform settings',
+          )
+        : item.detail;
   }
 }
 
@@ -144,6 +167,10 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
     workspaces.state.status === 'ready'
       ? workspaces.state.data.items.filter((row) => isResidueWorkspace(row))
       : [];
+  const defaultWorkspaceRow =
+    workspaces.state.status === 'ready'
+      ? workspaces.state.data.items.find((row) => row.isDefault)
+      : undefined;
 
   return (
     <div className="page">
@@ -181,6 +208,8 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
         <PlatformOverviewBody
           data={overview.state.data}
           status={status}
+          defaultWorkspaceRow={defaultWorkspaceRow}
+          defaultWorkspaceRowsReady={workspaces.state.status === 'ready'}
           onKeyBound={(result) => {
             onKeyBound?.(result);
             void overview.reload();
@@ -194,10 +223,14 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
 function PlatformOverviewBody({
   data,
   status,
+  defaultWorkspaceRow,
+  defaultWorkspaceRowsReady,
   onKeyBound,
 }: {
   readonly data: PlatformOverviewWire;
   readonly status: Resource<PlatformStatusWire>;
+  readonly defaultWorkspaceRow: PlatformWorkspaceWire | undefined;
+  readonly defaultWorkspaceRowsReady: boolean;
   readonly onKeyBound: (result: MeResult) => void;
 }) {
   const t = useT();
@@ -254,7 +287,13 @@ function PlatformOverviewBody({
                 />
               }
               title={t(CHECKLIST_LABELS[item.key].zh, CHECKLIST_LABELS[item.key].en)}
-              meta={checklistDetail(item, data.counts, t)}
+              meta={checklistDetail(
+                item,
+                data.counts,
+                defaultWorkspaceRow,
+                defaultWorkspaceRowsReady,
+                t,
+              )}
               trailing={checklistTrailing(item, t)}
             />
           ))}

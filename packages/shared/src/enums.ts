@@ -181,6 +181,17 @@ export const PUBLISHABLE_STATUS_VALUES = ['draft', 'published', 'deprecated'] as
 export type PublishableStatus = (typeof PUBLISHABLE_STATUS_VALUES)[number];
 export const PublishableStatusSchema = asEnum(PUBLISHABLE_STATUS_VALUES);
 
+/**
+ * Draft kind (S8 W3 K2, leftover 82): the three `Publishable`-lifecycle registries whose `draft`
+ * rows are proposer-private (I16) and can be discarded (`discard_draft`, manual) or expired
+ * (periodic kernel sweep) — see `packages/kernel/src/application/worker/draft-lifecycle.ts`. Not
+ * a fourth `PublishableStatus` value: discard/expiry delete the row outright rather than adding a
+ * `discarded`/`expired` terminal status.
+ */
+export const DRAFT_KIND_VALUES = ['worker_definition', 'skill', 'procedure'] as const;
+export type DraftKind = (typeof DRAFT_KIND_VALUES)[number];
+export const DraftKindSchema = asEnum(DRAFT_KIND_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 CapabilityGrant
 // ---------------------------------------------------------------------------------------------

@@ -43,11 +43,12 @@ async function login(page: import('@playwright/test').Page, apiKey: string): Pro
   // The isolation scenario below signs in as A, then B, then A again in the *same tab*. A previous
   // login survives in `sessionStorage` (`lib/session.ts`) and App.tsx auto-connects with it on
   // load, so `reachLoginForm` (e2e/auth-helpers.ts) may first resolve to `'shell'` rather than
-  // `'login'` — sign the old session out through the product's own "Forget key" (clearing storage
-  // under an in-flight connect is not enough — `connectApiKey()` re-saves the key once the WS
-  // authenticate resolves) and re-resolve.
+  // `'login'` — sign the old session out through the product's own "清除密钥 / Forget key" (S8 W3
+  // F1: now routed through `t()`, zh-CN default) button (clearing storage under an in-flight
+  // connect is not enough — `connectApiKey()` re-saves the key once the WS authenticate resolves)
+  // and re-resolve.
   if ((await reachLoginForm(page)) === 'shell') {
-    await page.getByRole('button', { name: 'Forget key' }).click();
+    await page.getByRole('button', { name: '清除密钥' }).click();
     await reachLoginForm(page);
   }
   await loginWithApiKey(page, apiKey);

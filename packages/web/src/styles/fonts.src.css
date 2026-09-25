@@ -1,0 +1,30 @@
+/* styles/fonts.src.css — the console's self-hosted web fonts, SOURCE list (S6-A0,
+ * docs/console-completion-plan.md §5.9 "字体", §12 第 7 项; C21). Every face below is an
+ * `@fontsource/*` package bundled by Vite: the woff2 files land in `dist/assets/` and nothing
+ * loads from an external origin, which is what the strict `font-src 'self'` in
+ * deploy/caddy/Caddyfile and the no-internet host both require.
+ *
+ * Weights: IBM Plex Sans 400 / 500 / 600 (body, labels, headings), IBM Plex Mono 400 / 500
+ * (ids, code), Noto Sans SC 400 / 500 (CJK). Plex is imported as its latin subset only (~100 KB
+ * for the five files); Noto Sans SC is the unicode-range-sliced build (102 slices per weight,
+ * ~35 KB each) — the browser fetches only the slices whose characters a page renders, which is
+ * how the ≤ ~600 KB first-paint budget of §12 item 7 is met without hand-subsetting. A 600-weight
+ * CJK heading falls back to the 500 face (no synthetic bold is needed for Han glyphs).
+ *
+ * S8 W3 F1 (leftover 49): this file is no longer imported directly (`base.css` still
+ * `@import`s the sibling `fonts.css`, unchanged) — it is now only the *list* of which
+ * `@fontsource/*` weights/subsets to load, read by `vite-plugins/woff2-only-fonts.ts` at
+ * `buildStart`. That plugin generates the actual `fonts.css` on disk (gitignored) by reading each
+ * package's own CSS straight from `node_modules` and dropping the unused `.woff` fallback every
+ * `@fontsource` `@font-face` ships alongside its `.woff2` (both used to land in `dist/assets/`).
+ * Edit this file to add/remove a weight or subset — `fonts.css` regenerates from it automatically
+ * on the next `vite build` / `vite dev` start. See that plugin's own doc comment for why
+ * generating a file on disk, rather than intercepting the import in Vite's own plugin pipeline,
+ * is what actually works for a file reached only through a nested CSS `@import` chain. */
+@import "@fontsource/ibm-plex-sans/latin-400.css";
+@import "@fontsource/ibm-plex-sans/latin-500.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+@import "@fontsource/noto-sans-sc/400.css";
+@import "@fontsource/noto-sans-sc/500.css";
