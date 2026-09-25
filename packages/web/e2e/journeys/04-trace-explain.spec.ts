@@ -172,7 +172,7 @@ test.describe('Journey ④: 追溯"agent 为什么这么说"', () => {
     // API-key storage (see this file's own header comment).
     const { ownerLogin, ownerTemporaryPassword } = await createFreshWorkspace(page);
     await page.getByRole('button', { name: /登出/ }).click();
-    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
     await signInAsFreshOwner(page, ownerLogin, ownerTemporaryPassword);
     await selectOwnedWorkspace(page);
     await expect(page.getByTestId('nav-chats')).toBeVisible();
